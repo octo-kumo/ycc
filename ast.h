@@ -50,6 +50,10 @@ typedef enum {
     EXPR_EDECLARATION,
     EXPR_ECALL,
     EXPR_EBLOCK,
+    EXPR_EWHILE,
+    EXPR_EFOR,
+    EXPR_EFOREACH,
+    EXPR_EFORRANGE,
 } ExprKind;
 
 typedef enum {
@@ -132,6 +136,31 @@ typedef struct {
     LIST(EMapEntry) entries;
 } EMap;
 
+typedef struct {
+    struct Expr *cond;
+    struct Expr *body;
+} EWhile;
+
+typedef struct {
+    struct Expr *init; // can be NULL
+    struct Expr *cond; // can be NULL (infinite loop)
+    struct Expr *step; // can be NULL
+    struct Expr *body;
+} EFor;
+
+typedef struct {
+    char *var_name;
+    struct Expr *iterable;
+    struct Expr *body;
+} EForEach;
+
+typedef struct {
+    char *var_name;
+    struct Expr *start;
+    struct Expr *end;
+    struct Expr *body;
+} EForRange;
+
 typedef struct Expr {
     ExprKind kind;
     union {
@@ -151,6 +180,10 @@ typedef struct Expr {
         EArrayIdx array_idx_node;
         EArrayIdxRange array_idx_range_node;
         EMap map_node;
+        EWhile while_node;
+        EFor for_node;
+        EForEach foreach_node;
+        EForRange forrange_node;
     } as;
 } Expr;
 

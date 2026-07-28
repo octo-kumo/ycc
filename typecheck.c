@@ -381,6 +381,68 @@ typecheck_result_t tc_expr(Expr *expr, TCVarTypeScope *scope) {
     case EXPR_EMAP: return tc_map(expr, scope);
     case EXPR_EARRAY_IDX: return tc_array_idx(expr, scope);
     case EXPR_EARRAY_IDX_RANGE: return tc_array_idx_range(expr, scope);
+    case EXPR_EWHILE: {
+        typecheck_result_t cond_res = tc_expr(expr->as.while_node.cond, scope);
+        if (!cond_res.is_ok) return cond_res;
+        if (cond_res.type->base != VAL_BOOL)
+            return TC_ERR("While condition must be boolean", expr);
+        return tc_expr(expr->as.while_node.body, scope);
+    }
+    case EXPR_EFOR: {
+        TCVarTypeScope for_scope = {0};
+        map_init(&for_scope.variables);
+        for_scope.parent = scope;
+        typecheck_result_t r = TC_OK(TYPE_NULL);
+        if (expr->as.for_node.init) {
+            r = tc_expr(expr->as.for_node.init, &for_scope);
+            if (!r.is_ok) { map_free(&for_scope.variables); return r; }
+        }
+        if (expr->as.for_node.cond) {
+            r = tc_expr(expr->as.for_node.cond, &for_scope);
+            if (!r.is_ok) { map_free(&for_scope.variables); return r; }
+            if (r.type->base != VAL_BOOL) {
+                map_free(&for_scope.variables);
+                return TC_ERR("For condition must be boolean", expr);
+            }
+        }
+        if (expr->as.for_node.step) {
+            r = tc_expr(expr->as.for_node.step, &for_scope);
+            if (!r.is_ok) { map_free(&for_scope.variables); return r; }
+        }
+        r = tc_expr(expr->as.for_node.body, &for_scope);
+        map_free(&for_scope.variables);
+        return r;
+    }
+    case EXPR_EFOREACH: {
+        typecheck_result_t iter_res =
+            tc_expr(expr->as.foreach_node.iterable, scope);
+        if (!iter_res.is_ok) return iter_res;
+        if (iter_res.type->base != VAL_ARR)
+            return TC_ERR("foreach requires an array", expr);
+        TCVarTypeScope fe_scope = {0};
+        map_init(&fe_scope.variables);
+        fe_scope.parent = scope;
+        tc_scope_set(&fe_scope, expr->as.foreach_node.var_name,
+                     iter_res.type->as.array.element_type);
+        typecheck_result_t r = tc_expr(expr->as.foreach_node.body, &fe_scope);
+        map_free(&fe_scope.variables);
+        return r;
+    }
+    case EXPR_EFORRANGE: {
+        typecheck_result_t s = tc_expr(expr->as.forrange_node.start, scope);
+        if (!s.is_ok) return s;
+        typecheck_result_t e = tc_expr(expr->as.forrange_node.end, scope);
+        if (!e.is_ok) return e;
+        if (s.type->base != VAL_LONG || e.type->base != VAL_LONG)
+            return TC_ERR("for range bounds must be longs", expr);
+        TCVarTypeScope fr_scope = {0};
+        map_init(&fr_scope.variables);
+        fr_scope.parent = scope;
+        tc_scope_set(&fr_scope, expr->as.forrange_node.var_name, TYPE_LONG);
+        typecheck_result_t r = tc_expr(expr->as.forrange_node.body, &fr_scope);
+        map_free(&fr_scope.variables);
+        return r;
+    }
     }
     // assume typecheck ok
     return TC_OK(TYPE_NULL);

@@ -129,7 +129,7 @@ YValue *y_scope_get(YScope *scope, const char *name) {
 }
 
 void y_scope_set(YScope *scope, const char *name, YValue *value) {
-    /* Update existing binding in this scope or parent */
+    /* Walk up the scope chain to find an existing binding to update */
     for (YScope *s = scope; s; s = s->parent) {
         for (YScopeEntry *e = s->entries; e; e = e->next) {
             if (strcmp(e->name, name) == 0) {

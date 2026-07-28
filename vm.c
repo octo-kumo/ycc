@@ -284,8 +284,16 @@ VMValue *vm_scope_get(VMVariableScope *scope, const char *name) {
     return vm_scope_get(scope->parent, name);
 }
 void vm_scope_set(VMVariableScope *scope, const char *name, VMValue *value) {
-    VMValue *existing = map_get(&scope->variables, name);
-    if (existing) { val_free(existing); }
+    /* Walk up the scope chain to find an existing binding to update */
+    for (VMVariableScope *s = scope; s; s = s->parent) {
+        VMValue *existing = map_get(&s->variables, name);
+        if (existing) {
+            val_free(existing);
+            map_set(&s->variables, name, val_clone(value));
+            return;
+        }
+    }
+    /* No existing binding — create in current scope */
     map_set(&scope->variables, name, val_clone(value));
 }
 
@@ -691,6 +699,94 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
         val_free(start_val);
         val_free(end_val);
         return val;
+    }
+    case EXPR_EWHILE: {
+        VMValue *last = nval(VAL_NULL);
+        while (1) {
+            VMValue *cond = vm_execute(scope, expr->as.while_node.cond);
+            if (cond->type != VAL_BOOL) {
+                fprintf(stderr, "While condition must be a boolean\n");
+                exit(1);
+            }
+            bool c = cond->data.b;
+            val_free(cond);
+            if (!c) break;
+            val_free(last);
+            last = vm_execute(scope, expr->as.while_node.body);
+        }
+        return last;
+    }
+    case EXPR_EFOR: {
+        VMVariableScope for_scope;
+        map_init(&for_scope.variables);
+        for_scope.parent = scope;
+        if (expr->as.for_node.init)
+            vm_execute(&for_scope, expr->as.for_node.init);
+        VMValue *last = nval(VAL_NULL);
+        while (1) {
+            if (expr->as.for_node.cond) {
+                VMValue *cond = vm_execute(&for_scope, expr->as.for_node.cond);
+                if (cond->type != VAL_BOOL) {
+                    fprintf(stderr, "For condition must be a boolean\n");
+                    exit(1);
+                }
+                bool c = cond->data.b;
+                val_free(cond);
+                if (!c) break;
+            }
+            val_free(last);
+            last = vm_execute(&for_scope, expr->as.for_node.body);
+            if (expr->as.for_node.step)
+                vm_execute(&for_scope, expr->as.for_node.step);
+        }
+        vm_scope_free(&for_scope);
+        return last;
+    }
+    case EXPR_EFOREACH: {
+        VMValue *iterable = vm_execute(scope, expr->as.foreach_node.iterable);
+        if (iterable->type != VAL_ARR) {
+            fprintf(stderr, "foreach requires an array\n");
+            exit(1);
+        }
+        VMVariableScope fe_scope;
+        map_init(&fe_scope.variables);
+        fe_scope.parent = scope;
+        VMValue *last = nval(VAL_NULL);
+        for (size_t i = 0; i < iterable->data.arr->count; i++) {
+            vm_scope_set(&fe_scope, expr->as.foreach_node.var_name,
+                         iterable->data.arr->elements[i]);
+            val_free(last);
+            last = vm_execute(&fe_scope, expr->as.foreach_node.body);
+        }
+        vm_scope_free(&fe_scope);
+        val_free(iterable);
+        return last;
+    }
+    case EXPR_EFORRANGE: {
+        VMValue *start_val = vm_execute(scope, expr->as.forrange_node.start);
+        VMValue *end_val = vm_execute(scope, expr->as.forrange_node.end);
+        if (start_val->type != VAL_LONG || end_val->type != VAL_LONG) {
+            fprintf(stderr, "for range bounds must be longs\n");
+            exit(1);
+        }
+        long s = start_val->data.l;
+        long e = end_val->data.l;
+        val_free(start_val);
+        val_free(end_val);
+        VMVariableScope fr_scope;
+        map_init(&fr_scope.variables);
+        fr_scope.parent = scope;
+        VMValue *last = nval(VAL_NULL);
+        for (long i = s; i < e; i++) {
+            VMValue *iv = nval(VAL_LONG);
+            iv->data.l = i;
+            vm_scope_set(&fr_scope, expr->as.forrange_node.var_name, iv);
+            val_free(iv);
+            val_free(last);
+            last = vm_execute(&fr_scope, expr->as.forrange_node.body);
+        }
+        vm_scope_free(&fr_scope);
+        return last;
     }
     }
     fprintf(stderr, "Unsupported expression kind: %d\n", expr->kind);

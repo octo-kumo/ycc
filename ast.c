@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-const char *OPERATORS[] = {"<=", ">=", "&&", "||", "==", "!=", "+", "-", "*",
+const char *OPERATORS[] = {">=", "<=", "&&", "||", "==", "!=", "+", "-", "*",
                            "/",  "=",  "<",  ">",  "::", ".",  "%", NULL};
 
 Operator operator_from_str(const char *op) {
@@ -23,8 +23,9 @@ const char *operator_to_str(Operator op) {
 }
 // const char *TYPE_STRS[] = {"null", "long", "float", "bool", "str",
 //                            "func", "arr",  "map",   NULL};
-const char *KEYWORDS[] = {"let",   "const", "def",    "if", "else",
-                          "while", "for",   "return", NULL};
+const char *KEYWORDS[] = {"let",   "const", "def",    "if",   "else",
+                          "while", "for",   "return", "in",   "foreach",
+                          NULL};
 
 void ast_free(Expr *expr) {
     if (!expr) return;
@@ -96,6 +97,27 @@ void ast_free(Expr *expr) {
         ast_free(expr->as.array_idx_range_node.array);
         ast_free(expr->as.array_idx_range_node.start);
         ast_free(expr->as.array_idx_range_node.end);
+        break;
+    case EXPR_EWHILE:
+        ast_free(expr->as.while_node.cond);
+        ast_free(expr->as.while_node.body);
+        break;
+    case EXPR_EFOR:
+        ast_free(expr->as.for_node.init);
+        ast_free(expr->as.for_node.cond);
+        ast_free(expr->as.for_node.step);
+        ast_free(expr->as.for_node.body);
+        break;
+    case EXPR_EFOREACH:
+        free((char *)expr->as.foreach_node.var_name);
+        ast_free(expr->as.foreach_node.iterable);
+        ast_free(expr->as.foreach_node.body);
+        break;
+    case EXPR_EFORRANGE:
+        free((char *)expr->as.forrange_node.var_name);
+        ast_free(expr->as.forrange_node.start);
+        ast_free(expr->as.forrange_node.end);
+        ast_free(expr->as.forrange_node.body);
         break;
     }
     free(expr);
@@ -193,6 +215,31 @@ Expr *ast_clone(Expr *expr) {
             ast_clone(expr->as.array_idx_range_node.start);
         copy->as.array_idx_range_node.end =
             ast_clone(expr->as.array_idx_range_node.end);
+        break;
+    case EXPR_EWHILE:
+        copy->as.while_node.cond = ast_clone(expr->as.while_node.cond);
+        copy->as.while_node.body = ast_clone(expr->as.while_node.body);
+        break;
+    case EXPR_EFOR:
+        copy->as.for_node.init = ast_clone(expr->as.for_node.init);
+        copy->as.for_node.cond = ast_clone(expr->as.for_node.cond);
+        copy->as.for_node.step = ast_clone(expr->as.for_node.step);
+        copy->as.for_node.body = ast_clone(expr->as.for_node.body);
+        break;
+    case EXPR_EFOREACH:
+        copy->as.foreach_node.var_name =
+            strdup(expr->as.foreach_node.var_name);
+        copy->as.foreach_node.iterable =
+            ast_clone(expr->as.foreach_node.iterable);
+        copy->as.foreach_node.body = ast_clone(expr->as.foreach_node.body);
+        break;
+    case EXPR_EFORRANGE:
+        copy->as.forrange_node.var_name =
+            strdup(expr->as.forrange_node.var_name);
+        copy->as.forrange_node.start =
+            ast_clone(expr->as.forrange_node.start);
+        copy->as.forrange_node.end = ast_clone(expr->as.forrange_node.end);
+        copy->as.forrange_node.body = ast_clone(expr->as.forrange_node.body);
         break;
     }
     return copy;

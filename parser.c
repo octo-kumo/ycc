@@ -489,6 +489,10 @@ ast_parser_result_t ast_parse_number(const char *input) {
         // It's an integer, not a float
         return asome(expr, res.remaining);
     }
+    // Don't treat ".." as a float decimal point (range operator)
+    if (res.remaining[1] == '.') {
+        return asome(expr, res.remaining);
+    }
     res.remaining++;
     // It's a float!
     expr->kind = EXPR_EFLOAT;
@@ -581,6 +585,10 @@ ast_parser_result_t ast_parse_string(const char *input) {
                 input += i + 1;
                 Expr *expr = (Expr *)malloc(sizeof(Expr));
                 expr->kind = EXPR_ESTR;
+                if (!chars) {
+                    chars = (char *)malloc(1);
+                    chars[0] = '\0';
+                }
                 expr->as.estr.data = chars;
                 expr->as.estr.length = len;
                 return asome(expr, input);
@@ -884,6 +892,179 @@ ast_parser_result_t ast_parse_var_or_paren_expr(const char *input) {
     return ast_parse_paren_expr(input);
 }
 
+/* ── Loop parsers ───────────────────────────────────────────────────────── */
+
+ast_parser_result_t ast_parse_while(const char *input) {
+    const char *original_input = input;
+    EXPECT_KEYWORD(while);
+    ast_parser_result_t ast_cond = ast_parse_paren_expr(input);
+    if (!ast_cond.is_some) { return anone(original_input); }
+    input = ast_cond.remaining;
+    ast_parser_result_t ast_body = ast_parse_brace_block(input);
+    if (!ast_body.is_some) {
+        ast_free(ast_cond.value);
+        return anone(original_input);
+    }
+    input = ast_body.remaining;
+    Expr *node = (Expr *)malloc(sizeof(Expr));
+    node->kind = EXPR_EWHILE;
+    node->as.while_node.cond = ast_cond.value;
+    node->as.while_node.body = ast_body.value;
+    return asome(node, input);
+}
+
+ast_parser_result_t ast_parse_foreach(const char *input) {
+    const char *original_input = input;
+    EXPECT_KEYWORD(foreach);
+    EXPECT_SYMBOL('(', return anone(original_input););
+    parser_result_t var_res = parse_identifier(input);
+    if (!var_res.is_some) { return anone(original_input); }
+    char *var_name = (char *)var_res.value;
+    input = var_res.remaining;
+    EXPECT_KEYWORD(in);
+    ast_parser_result_t iter_res = ast__parse_expr(input);
+    if (!iter_res.is_some) {
+        free(var_name);
+        return anone(original_input);
+    }
+    input = iter_res.remaining;
+    EXPECT_SYMBOL(')', {
+        free(var_name);
+        ast_free(iter_res.value);
+    });
+    ast_parser_result_t body_res = ast_parse_brace_block(input);
+    if (!body_res.is_some) {
+        free(var_name);
+        ast_free(iter_res.value);
+        return anone(original_input);
+    }
+    input = body_res.remaining;
+    Expr *node = (Expr *)malloc(sizeof(Expr));
+    node->kind = EXPR_EFOREACH;
+    node->as.foreach_node.var_name = var_name;
+    node->as.foreach_node.iterable = iter_res.value;
+    node->as.foreach_node.body = body_res.value;
+    return asome(node, input);
+}
+
+ast_parser_result_t ast_parse_for(const char *input) {
+    const char *original_input = input;
+    EXPECT_KEYWORD(for);
+
+    /* Try range form first: for i in start..end { body } */
+    {
+        const char *save = input;
+        parser_result_t var_res = parse_identifier(input);
+        if (var_res.is_some) {
+            char *var_name = (char *)var_res.value;
+            input = var_res.remaining;
+            SKIP_SPACES;
+            parser_result_t in_res =
+                parse_keyword(input, (const char *[]){"in", NULL});
+            if (in_res.is_some) {
+                input = in_res.remaining;
+                ast_parser_result_t start_res = ast__parse_expr(input);
+                if (start_res.is_some) {
+                    input = start_res.remaining;
+                    SKIP_SPACES;
+                    /* expect .. */
+                    if (input[0] == '.' && input[1] == '.') {
+                        input += 2;
+                        ast_parser_result_t end_res = ast__parse_expr(input);
+                        if (end_res.is_some) {
+                            input = end_res.remaining;
+                            ast_parser_result_t body_res =
+                                ast_parse_brace_block(input);
+                            if (body_res.is_some) {
+                                input = body_res.remaining;
+                                Expr *node = (Expr *)malloc(sizeof(Expr));
+                                node->kind = EXPR_EFORRANGE;
+                                node->as.forrange_node.var_name = var_name;
+                                node->as.forrange_node.start = start_res.value;
+                                node->as.forrange_node.end = end_res.value;
+                                node->as.forrange_node.body = body_res.value;
+                                return asome(node, input);
+                            }
+                            ast_free(end_res.value);
+                        }
+                        ast_free(start_res.value);
+                        free(var_name);
+                        return anone(original_input);
+                    }
+                    ast_free(start_res.value);
+                }
+                free(var_name);
+                return anone(original_input);
+            }
+            free(var_name);
+            input = save;
+        }
+    }
+
+    /* C-style for: for (init; cond; step) { body } */
+    EXPECT_SYMBOL('(', return anone(original_input););
+
+    /* init (optional) */
+    Expr *init = NULL;
+    SKIP_SPACES;
+    if (input[0] != ';') {
+        ast_parser_result_t init_res = ast__parse_expr(input);
+        if (init_res.is_some) {
+            init = init_res.value;
+            input = init_res.remaining;
+        }
+    }
+    EXPECT_SYMBOL(';', { ast_free(init); });
+
+    /* cond (optional) */
+    Expr *cond = NULL;
+    SKIP_SPACES;
+    if (input[0] != ';') {
+        ast_parser_result_t cond_res = ast__parse_expr(input);
+        if (cond_res.is_some) {
+            cond = cond_res.value;
+            input = cond_res.remaining;
+        }
+    }
+    EXPECT_SYMBOL(';', {
+        ast_free(init);
+        ast_free(cond);
+    });
+
+    /* step (optional) */
+    Expr *step = NULL;
+    SKIP_SPACES;
+    if (input[0] != ')') {
+        ast_parser_result_t step_res = ast__parse_expr(input);
+        if (step_res.is_some) {
+            step = step_res.value;
+            input = step_res.remaining;
+        }
+    }
+    EXPECT_SYMBOL(')', {
+        ast_free(init);
+        ast_free(cond);
+        ast_free(step);
+    });
+
+    ast_parser_result_t body_res = ast_parse_brace_block(input);
+    if (!body_res.is_some) {
+        ast_free(init);
+        ast_free(cond);
+        ast_free(step);
+        return anone(original_input);
+    }
+    input = body_res.remaining;
+
+    Expr *node = (Expr *)malloc(sizeof(Expr));
+    node->kind = EXPR_EFOR;
+    node->as.for_node.init = init;
+    node->as.for_node.cond = cond;
+    node->as.for_node.step = step;
+    node->as.for_node.body = body_res.value;
+    return asome(node, input);
+}
+
 ast_parser_result_t ast_parse_function_call(const char *input) {
     const char *original_input = input;
     ast_parser_result_t ast_callee = ast_parse_var_or_paren_expr(input);
@@ -1021,6 +1202,7 @@ ast_parser_result_t ast__parse_first(const ast_parser_t *parsers,
 #define __EXPR_INLINE_PARSERS                                                  \
     ast_parse_function, ast_parse_map, ast_parse_array, ast_parse_binary_op,   \
         ast_parse_function_call, ast_parse_paren_expr, ast_parse_if,           \
+        ast_parse_while, ast_parse_foreach, ast_parse_for,                     \
         ast_parse_declaration, ast_parse_number, ast_parse_string,             \
         ast_parse_array_idx, ast_parse_true_false, ast_parse_variable
 

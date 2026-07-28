@@ -97,6 +97,10 @@ static char *sanitize_ident(const char *name) {
 /* ── Forward declarations ───────────────────────────────────────────────── */
 
 static char *emit_expr(CodegenCtx *ctx, Expr *expr);
+static char *emit_while(CodegenCtx *ctx, EWhile *w);
+static char *emit_for(CodegenCtx *ctx, EFor *f);
+static char *emit_foreach(CodegenCtx *ctx, EForEach *fe);
+static char *emit_forrange(CodegenCtx *ctx, EForRange *fr);
 
 /* ── Function definition emission ───────────────────────────────────────── */
 
@@ -278,7 +282,7 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
         /* let / const binding */
         char *val = emit_expr(ctx, expr->as.declaration_node.value);
         char *r = fmt(
-            "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); _v; })",
+            "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); y_clone(_v); })",
             val, expr->as.declaration_node.name);
         free(val);
         return r;
@@ -287,7 +291,7 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     case EXPR_EASSIGNMENT: {
         char *val = emit_expr(ctx, expr->as.assignment_node.value);
         char *r = fmt(
-            "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); _v; })",
+            "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); y_clone(_v); })",
             val, expr->as.assignment_node.var_name);
         free(val);
         return r;
@@ -378,10 +382,104 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
         return r;
     }
 
+    case EXPR_EWHILE: return emit_while(ctx, &expr->as.while_node);
+    case EXPR_EFOR: return emit_for(ctx, &expr->as.for_node);
+    case EXPR_EFOREACH: return emit_foreach(ctx, &expr->as.foreach_node);
+    case EXPR_EFORRANGE: return emit_forrange(ctx, &expr->as.forrange_node);
+
     default:
         fprintf(stderr, "codegen: unsupported expr kind %d\n", expr->kind);
         return fmt("y_mk_null()");
     }
+}
+
+/* ── Loop statement emission ────────────────────────────────────────────── */
+
+/* Loops are statements, not expressions. They execute for side effects
+ * and return the last body value (or null). We emit them as GCC statement
+ * expressions containing C loops. */
+
+static char *emit_while(CodegenCtx *ctx, EWhile *w) {
+    char *c = emit_expr(ctx, w->cond);
+    char *b = emit_expr(ctx, w->body);
+    char *r = fmt(
+        "({ YValue *_last = y_mk_null(); "
+        "while (1) { YValue *_c = %s; if (!_c->data.b) break; "
+        "y_free(_last); _last = %s; } _last; })",
+        c, b);
+    free(c); free(b);
+    return r;
+}
+
+static char *emit_for(CodegenCtx *ctx, EFor *f) {
+    char *init = f->init ? emit_expr(ctx, f->init) : NULL;
+    char *cond = f->cond ? emit_expr(ctx, f->cond) : NULL;
+    char *step = f->step ? emit_expr(ctx, f->step) : NULL;
+    char *body = emit_expr(ctx, f->body);
+
+    /* Build the loop body piece by piece */
+    char *r = fmt(
+        "({ YScope *_outer = scope; "
+        "YScope *scope = malloc(sizeof(YScope)); "
+        "y_scope_init(scope, _outer); ");
+    if (init) {
+        char *next = fmt("%s%s; ", r, init);
+        free(r); r = next;
+    }
+    char *next = fmt("%sYValue *_last = y_mk_null(); while (1) { ", r);
+    free(r); r = next;
+    if (cond) {
+        next = fmt("%sYValue *_c = %s; if (!_c->data.b) break; ", r, cond);
+        free(r); r = next;
+    }
+    next = fmt("%sy_free(_last); _last = %s; ", r, body);
+    free(r); r = next;
+    if (step) {
+        next = fmt("%s%s; ", r, step);
+        free(r); r = next;
+    }
+    next = fmt("%s} _last; })", r);
+    free(r); r = next;
+
+    free(init); free(cond); free(step); free(body);
+    return r;
+}
+
+static char *emit_foreach(CodegenCtx *ctx, EForEach *fe) {
+    char *iter = emit_expr(ctx, fe->iterable);
+    char *body = emit_expr(ctx, fe->body);
+    char *r = fmt(
+        "({ YValue *_arr = %s; "
+        "YScope *_outer = scope; "
+        "YScope *scope = malloc(sizeof(YScope)); "
+        "y_scope_init(scope, _outer); "
+        "YValue *_last = y_mk_null(); "
+        "for (size_t _i = 0; _i < _arr->data.arr->count; _i++) { "
+        "y_scope_set(scope, \"%s\", y_clone(_arr->data.arr->elements[_i])); "
+        "y_free(_last); _last = %s; } _last; })",
+        iter, fe->var_name, body);
+    free(iter); free(body);
+    return r;
+}
+
+static char *emit_forrange(CodegenCtx *ctx, EForRange *fr) {
+    char *s = emit_expr(ctx, fr->start);
+    char *e = emit_expr(ctx, fr->end);
+    char *body = emit_expr(ctx, fr->body);
+    char *r = fmt(
+        "({ YValue *_sv = %s; YValue *_ev = %s; "
+        "long _s = _sv->data.l; long _e = _ev->data.l; "
+        "y_free(_sv); y_free(_ev); "
+        "YScope *_outer = scope; "
+        "YScope *scope = malloc(sizeof(YScope)); "
+        "y_scope_init(scope, _outer); "
+        "YValue *_last = y_mk_null(); "
+        "for (long _i = _s; _i < _e; _i++) { "
+        "y_scope_set(scope, \"%s\", y_mk_long(_i)); "
+        "y_free(_last); _last = %s; } _last; })",
+        s, e, fr->var_name, body);
+    free(s); free(e); free(body);
+    return r;
 }
 
 /* ── Public API ─────────────────────────────────────────────────────────── */

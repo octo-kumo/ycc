@@ -254,6 +254,37 @@ void ast_walk(Expr *expr, int indent) {
                          indent + 1);
         ast_walk_labeled("end:", expr->as.array_idx_range_node.end, indent + 1);
         break;
+    case EXPR_EWHILE:
+        printf(ANSI_RED "EWhile" ANSI_RESET "\n");
+        ast_walk_labeled("cond:", expr->as.while_node.cond, indent + 1);
+        ast_walk_labeled("body:", expr->as.while_node.body, indent + 1);
+        break;
+    case EXPR_EFOR:
+        printf(ANSI_RED "EFor" ANSI_RESET "\n");
+        if (expr->as.for_node.init)
+            ast_walk_labeled("init:", expr->as.for_node.init, indent + 1);
+        if (expr->as.for_node.cond)
+            ast_walk_labeled("cond:", expr->as.for_node.cond, indent + 1);
+        if (expr->as.for_node.step)
+            ast_walk_labeled("step:", expr->as.for_node.step, indent + 1);
+        ast_walk_labeled("body:", expr->as.for_node.body, indent + 1);
+        break;
+    case EXPR_EFOREACH:
+        printf(ANSI_RED "EForEach" ANSI_RESET "  " ANSI_DIM
+                         "var=" ANSI_RESET ANSI_BOLD "%s" ANSI_RESET "\n",
+               expr->as.foreach_node.var_name);
+        ast_walk_labeled("iterable:", expr->as.foreach_node.iterable,
+                         indent + 1);
+        ast_walk_labeled("body:", expr->as.foreach_node.body, indent + 1);
+        break;
+    case EXPR_EFORRANGE:
+        printf(ANSI_RED "EForRange" ANSI_RESET "  " ANSI_DIM
+                         "var=" ANSI_RESET ANSI_BOLD "%s" ANSI_RESET "\n",
+               expr->as.forrange_node.var_name);
+        ast_walk_labeled("start:", expr->as.forrange_node.start, indent + 1);
+        ast_walk_labeled("end:", expr->as.forrange_node.end, indent + 1);
+        ast_walk_labeled("body:", expr->as.forrange_node.body, indent + 1);
+        break;
     }
 }
 
