@@ -1,0 +1,145 @@
+#ifndef YRUNTIME_H
+#define YRUNTIME_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* ── Value types ─────────────────────────────────────────────────────────── */
+
+typedef enum {
+    Y_LONG,
+    Y_FLOAT,
+    Y_BOOL,
+    Y_STR,
+    Y_NULL,
+    Y_ARR,
+    Y_MAP,
+    Y_FUNC,
+} YType;
+
+typedef struct YValue YValue;
+
+typedef struct {
+    size_t count;
+    YValue **elements;
+} YArray;
+
+typedef struct {
+    char *key;
+    YValue *value;
+} YMapEntry;
+
+typedef struct {
+    size_t count;
+    YMapEntry *entries;
+} YMap;
+
+/* Compiled function signature: takes closure scope + args array */
+struct YScope;
+typedef YValue *(*YFuncPtr)(struct YScope *closure, YValue **args,
+                            size_t argc);
+
+typedef struct {
+    YFuncPtr fn;
+    size_t arity;
+    struct YScope *closure; /* captured scope, ref-counted */
+} YFunc;
+
+struct YValue {
+    YType type;
+    union {
+        long l;
+        double f;
+        bool b;
+        char *s;
+        YArray *arr;
+        YMap *map;
+        YFunc *func;
+    } data;
+};
+
+/* ── Scope (linked list, ref-counted for closures) ──────────────────────── */
+
+typedef struct YScopeEntry {
+    char *name;
+    YValue *value;
+    struct YScopeEntry *next;
+} YScopeEntry;
+
+typedef struct YScope {
+    YScopeEntry *entries;
+    struct YScope *parent;
+    int refcount;
+} YScope;
+
+/* ── Constructors ───────────────────────────────────────────────────────── */
+
+YValue *y_mk_long(long v);
+YValue *y_mk_float(double v);
+YValue *y_mk_bool(bool v);
+YValue *y_mk_str(const char *s);
+YValue *y_mk_str_n(const char *s, size_t len);
+YValue *y_mk_null(void);
+YValue *y_mk_arr(YValue **elements, size_t count);
+YValue *y_mk_map(YMapEntry *entries, size_t count);
+YValue *y_mk_func(YFuncPtr fn, size_t arity, YScope *closure);
+
+/* ── Scope operations ───────────────────────────────────────────────────── */
+
+void y_scope_init(YScope *scope, YScope *parent);
+YScope *y_scope_retain(YScope *scope);
+void y_scope_release(YScope *scope);
+YValue *y_scope_get(YScope *scope, const char *name);
+void y_scope_set(YScope *scope, const char *name, YValue *value);
+
+/* ── Value operations ───────────────────────────────────────────────────── */
+
+YValue *y_clone(YValue *val);
+void y_free(YValue *val);
+char *y_to_str(YValue *val); /* caller must free */
+void y_print(YValue *val);
+bool y_equals(YValue *a, YValue *b);
+
+/* ── Arithmetic / logic ─────────────────────────────────────────────────── */
+
+YValue *y_add(YValue *a, YValue *b);
+YValue *y_sub(YValue *a, YValue *b);
+YValue *y_mul(YValue *a, YValue *b);
+YValue *y_div(YValue *a, YValue *b);
+YValue *y_mod(YValue *a, YValue *b);
+YValue *y_lt(YValue *a, YValue *b);
+YValue *y_gt(YValue *a, YValue *b);
+YValue *y_lte(YValue *a, YValue *b);
+YValue *y_gte(YValue *a, YValue *b);
+YValue *y_eq(YValue *a, YValue *b);
+YValue *y_neq(YValue *a, YValue *b);
+YValue *y_and(YValue *a, YValue *b);
+YValue *y_or(YValue *a, YValue *b);
+YValue *y_neg(YValue *a);
+
+/* ── Array / map operations ─────────────────────────────────────────────── */
+
+YValue *y_arr_index(YValue *arr, YValue *idx);
+YValue *y_arr_slice(YValue *arr, YValue *start, YValue *end);
+YValue *y_map_get(YValue *map, const char *key);
+YValue *y_cons(YValue *head, YValue *tail);
+
+/* ── Function calls ─────────────────────────────────────────────────────── */
+
+YValue *y_call(YValue *callee, YValue **args, size_t argc);
+
+/* ── Built-in functions ─────────────────────────────────────────────────── */
+
+YValue *y_builtin_print(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_tostring(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_range(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_typeof(YScope *closure, YValue **args, size_t argc);
+
+/* ── String escaping (for codegen string literals) ──────────────────────── */
+
+char *y_escape_c_string(const char *s, size_t len);
+
+#endif /* YRUNTIME_H */

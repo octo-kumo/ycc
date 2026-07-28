@@ -1,0 +1,487 @@
+#define _GNU_SOURCE
+#include "codegen.h"
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+/* ── Context ────────────────────────────────────────────────────────────── */
+
+/* Deferred function definitions: collected during expression emission,
+ * written out after all expressions are done. This avoids the problem of
+ * nested function definitions being interleaved inside outer function bodies. */
+typedef struct {
+    char **defs;
+    size_t count;
+    size_t cap;
+} FuncQueue;
+
+typedef struct {
+    FuncQueue queue;
+    int func_id; /* global counter for unique C function names */
+} CodegenCtx;
+
+static void fq_init(FuncQueue *q) {
+    q->cap = 32;
+    q->count = 0;
+    q->defs = malloc(sizeof(char *) * q->cap);
+}
+
+static void fq_push(FuncQueue *q, char *def) {
+    if (q->count >= q->cap) {
+        q->cap *= 2;
+        q->defs = realloc(q->defs, sizeof(char *) * q->cap);
+    }
+    q->defs[q->count++] = def;
+}
+
+static void fq_free(FuncQueue *q) {
+    for (size_t i = 0; i < q->count; i++) free(q->defs[i]);
+    free(q->defs);
+}
+
+/* ── Helpers ────────────────────────────────────────────────────────────── */
+
+static char *fmt(const char *format, ...) {
+    char *buf;
+    va_list ap;
+    va_start(ap, format);
+    if (vasprintf(&buf, format, ap) < 0) {
+        fprintf(stderr, "codegen: out of memory\n");
+        exit(1);
+    }
+    va_end(ap);
+    return buf;
+}
+
+/* Escape a byte string into a C string literal body (no surrounding quotes).
+ * Uses octal escapes for non-printable bytes to avoid \x greedy-digit issues. */
+static char *escape_c_str(const char *s, size_t len) {
+    char *out = malloc(len * 4 + 1);
+    size_t j = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
+        case '\\': out[j++] = '\\'; out[j++] = '\\'; break;
+        case '"':  out[j++] = '\\'; out[j++] = '"';  break;
+        case '\n': out[j++] = '\\'; out[j++] = 'n';  break;
+        case '\t': out[j++] = '\\'; out[j++] = 't';  break;
+        case '\r': out[j++] = '\\'; out[j++] = 'r';  break;
+        default:
+            if (c < 32 || c > 126)
+                j += sprintf(out + j, "\\%03o", c);
+            else
+                out[j++] = (char)c;
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+/* Make a string safe for use as a C identifier fragment. */
+static char *sanitize_ident(const char *name) {
+    char *out = strdup(name);
+    for (char *p = out; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_'))
+            *p = '_';
+    }
+    if (out[0] >= '0' && out[0] <= '9') {
+        char *tmp = fmt("_%s", out);
+        free(out);
+        out = tmp;
+    }
+    return out;
+}
+
+/* ── Forward declarations ───────────────────────────────────────────────── */
+
+static char *emit_expr(CodegenCtx *ctx, Expr *expr);
+
+/* ── Function definition emission ───────────────────────────────────────── */
+
+/* Emit a complete C function definition into the deferred queue.
+ * Returns the C function name (malloc'd, caller frees).
+ * Each call gets a globally unique name via ctx->func_id. */
+static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
+    char *safe = sanitize_ident(hint);
+    char *cname = fmt("yfn_%s_%d", safe, ctx->func_id++);
+    free(safe);
+
+    /* Build the function body into a string buffer */
+    char *body_buf;
+    size_t body_len;
+    FILE *f = open_memstream(&body_buf, &body_len);
+
+    fprintf(f, "static YValue *%s(YScope *closure, YValue **args, size_t argc) {\n", cname);
+    fprintf(f, "    (void)argc;\n");
+    fprintf(f, "    YScope *scope = malloc(sizeof(YScope));\n");
+    fprintf(f, "    y_scope_init(scope, closure);\n");
+
+    for (size_t i = 0; i < func->param_count; i++)
+        fprintf(f, "    y_scope_set(scope, \"%s\", args[%zu]);\n",
+                func->param_names[i], i);
+
+    /* self-reference for recursion */
+    fprintf(f, "    y_scope_set(scope, \"self\", y_mk_func(%s, %zu, closure));\n",
+            cname, func->param_count);
+
+    char *body = emit_expr(ctx, func->body);
+    fprintf(f, "    YValue *_result = %s;\n", body);
+    free(body);
+    fprintf(f, "    return _result;\n");
+    fprintf(f, "}\n\n");
+
+    fclose(f);
+
+    /* Defer: the definition is appended to the queue AFTER any nested
+     * function definitions that emit_expr may have pushed. We insert
+     * at the current position so nested defs come first (they must be
+     * defined before the outer function references them). */
+    /* Actually, we need nested defs to appear BEFORE the outer function.
+     * Since emit_expr already pushed nested defs into the queue, we just
+     * append this one after them. */
+    fq_push(&ctx->queue, body_buf);
+
+    return cname;
+}
+
+/* ── Operator mapping ───────────────────────────────────────────────────── */
+
+static const char *op_fn(Operator op) {
+    switch (op) {
+    case O_ADD:  return "y_add";
+    case O_SUB:  return "y_sub";
+    case O_MUL:  return "y_mul";
+    case O_DIV:  return "y_div";
+    case O_MOD:  return "y_mod";
+    case O_LT:   return "y_lt";
+    case O_GT:   return "y_gt";
+    case O_LTE:  return "y_lte";
+    case O_GTE:  return "y_gte";
+    case O_EQ:   return "y_eq";
+    case O_NEQ:  return "y_neq";
+    case O_AND:  return "y_and";
+    case O_OR:   return "y_or";
+    case O_CONS: return "y_cons";
+    default:     return NULL;
+    }
+}
+
+/* ── Expression emission ────────────────────────────────────────────────── */
+
+/* Returns a malloc'd C expression string of type (YValue *).
+ * The returned value is always OWNED by the caller. */
+static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
+    switch (expr->kind) {
+
+    case EXPR_ELONG:
+        return fmt("y_mk_long(%ldL)", expr->as.elong);
+
+    case EXPR_EFLOAT:
+        return fmt("y_mk_float(%.17g)", expr->as.efloat);
+
+    case EXPR_EBOOL:
+        return fmt("y_mk_bool(%d)", expr->as.ebool ? 1 : 0);
+
+    case EXPR_ESTR: {
+        char *esc = escape_c_str(expr->as.estr.data, (size_t)expr->as.estr.length);
+        char *r = fmt("y_mk_str_n(\"%s\", %d)", esc, expr->as.estr.length);
+        free(esc);
+        return r;
+    }
+
+    case EXPR_EVAR:
+        return fmt("y_clone(y_scope_get(scope, \"%s\"))", expr->as.evar);
+
+    case EXPR_EOP: {
+        if (expr->as.op_node.op == O_DOT) {
+            char *left = emit_expr(ctx, expr->as.op_node.left);
+            if (expr->as.op_node.right &&
+                expr->as.op_node.right->kind == EXPR_EVAR) {
+                const char *key = expr->as.op_node.right->as.evar;
+                char *r = fmt(
+                    "({ YValue *_m = %s; "
+                    "YValue *_v = y_map_get(_m, \"%s\"); "
+                    "if (!_v) { fprintf(stderr, \"runtime error: key '%s' not found\\n\"); exit(1); } "
+                    "y_clone(_v); })",
+                    left, key, key);
+                free(left);
+                return r;
+            }
+            free(left);
+            return fmt("y_mk_null()");
+        }
+
+        const char *fn = op_fn(expr->as.op_node.op);
+        if (!fn) {
+            fprintf(stderr, "codegen: unsupported operator %d\n",
+                    expr->as.op_node.op);
+            return fmt("y_mk_null()");
+        }
+        char *l = emit_expr(ctx, expr->as.op_node.left);
+        char *r = emit_expr(ctx, expr->as.op_node.right);
+        char *res = fmt("%s(%s, %s)", fn, l, r);
+        free(l);
+        free(r);
+        return res;
+    }
+
+    case EXPR_EIF: {
+        char *c  = emit_expr(ctx, expr->as.if_node.cond);
+        char *tb = emit_expr(ctx, expr->as.if_node.then_branch);
+        char *eb = expr->as.if_node.else_branch
+                       ? emit_expr(ctx, expr->as.if_node.else_branch)
+                       : fmt("y_mk_null()");
+        char *r = fmt(
+            "({ YValue *_c = %s; YValue *_r; "
+            "if (_c->data.b) { _r = %s; } else { _r = %s; } _r; })",
+            c, tb, eb);
+        free(c); free(tb); free(eb);
+        return r;
+    }
+
+    case EXPR_EBLOCK: {
+        char *body = fmt("");
+        for (size_t i = 0; i < expr->as.block_node.count; i++) {
+            char *stmt = emit_expr(ctx, expr->as.block_node.exprs[i]);
+            char *next;
+            if (i + 1 == expr->as.block_node.count)
+                next = fmt("%s YValue *_r = %s;", body, stmt);
+            else
+                next = fmt("%s %s;", body, stmt);
+            free(body);
+            free(stmt);
+            body = next;
+        }
+        char *r = fmt(
+            "({ YScope *_outer = scope; "
+            "YScope *scope = malloc(sizeof(YScope)); "
+            "y_scope_init(scope, _outer);%s _r; })",
+            body);
+        free(body);
+        return r;
+    }
+
+    case EXPR_EDECLARATION: {
+        /* Named function declaration */
+        if (expr->as.declaration_node.kind == DECL_FUNC &&
+            expr->as.declaration_node.value &&
+            expr->as.declaration_node.value->kind == EXPR_EFUNC) {
+            EFunc *fn = &expr->as.declaration_node.value->as.efunc;
+            char *cname = emit_func_def(ctx, fn, expr->as.declaration_node.name);
+            char *r = fmt("y_scope_set(scope, \"%s\", y_mk_func(%s, %zu, scope))",
+                          expr->as.declaration_node.name, cname, fn->param_count);
+            free(cname);
+            return r;
+        }
+        /* let / const binding */
+        char *val = emit_expr(ctx, expr->as.declaration_node.value);
+        char *r = fmt(
+            "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); _v; })",
+            val, expr->as.declaration_node.name);
+        free(val);
+        return r;
+    }
+
+    case EXPR_EASSIGNMENT: {
+        char *val = emit_expr(ctx, expr->as.assignment_node.value);
+        char *r = fmt(
+            "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); _v; })",
+            val, expr->as.assignment_node.var_name);
+        free(val);
+        return r;
+    }
+
+    case EXPR_ECALL: {
+        char *callee = emit_expr(ctx, expr->as.call_node.callee);
+        if (expr->as.call_node.arg_count == 0) {
+            char *r = fmt("y_call(%s, NULL, 0)", callee);
+            free(callee);
+            return r;
+        }
+        char *args = fmt("");
+        for (size_t i = 0; i < expr->as.call_node.arg_count; i++) {
+            char *a = emit_expr(ctx, expr->as.call_node.args[i]);
+            char *next = fmt("%s %s,", args, a);
+            free(args);
+            free(a);
+            args = next;
+        }
+        char *r = fmt("({ YValue *_a[] = {%s}; y_call(%s, _a, %zu); })",
+                      args, callee, expr->as.call_node.arg_count);
+        free(args);
+        free(callee);
+        return r;
+    }
+
+    case EXPR_EFUNC: {
+        char *name = fmt("anon_%d", ctx->func_id);
+        char *cname = emit_func_def(ctx, &expr->as.efunc, name);
+        free(name);
+        char *r = fmt("y_mk_func(%s, %zu, scope)", cname,
+                      expr->as.efunc.param_count);
+        free(cname);
+        return r;
+    }
+
+    case EXPR_EARRAY: {
+        if (expr->as.array_node.count == 0)
+            return fmt("y_mk_arr(NULL, 0)");
+        char *elems = fmt("");
+        for (size_t i = 0; i < expr->as.array_node.count; i++) {
+            char *e = emit_expr(ctx, expr->as.array_node.elements[i]);
+            char *next = fmt("%s %s,", elems, e);
+            free(elems);
+            free(e);
+            elems = next;
+        }
+        char *r = fmt("({ YValue *_e[] = {%s}; y_mk_arr(_e, %zu); })",
+                      elems, expr->as.array_node.count);
+        free(elems);
+        return r;
+    }
+
+    case EXPR_EARRAY_IDX: {
+        char *arr = emit_expr(ctx, expr->as.array_idx_node.array);
+        char *idx = emit_expr(ctx, expr->as.array_idx_node.idx);
+        char *r = fmt("y_arr_index(%s, %s)", arr, idx);
+        free(arr);
+        free(idx);
+        return r;
+    }
+
+    case EXPR_EARRAY_IDX_RANGE: {
+        char *arr = emit_expr(ctx, expr->as.array_idx_range_node.array);
+        char *s   = emit_expr(ctx, expr->as.array_idx_range_node.start);
+        char *e   = emit_expr(ctx, expr->as.array_idx_range_node.end);
+        char *r = fmt("y_arr_slice(%s, %s, %s)", arr, s, e);
+        free(arr); free(s); free(e);
+        return r;
+    }
+
+    case EXPR_EMAP: {
+        if (expr->as.map_node.count == 0)
+            return fmt("y_mk_map(NULL, 0)");
+        char *entries = fmt("");
+        for (size_t i = 0; i < expr->as.map_node.count; i++) {
+            char *v = emit_expr(ctx, expr->as.map_node.entries[i].value);
+            char *next = fmt("%s {\"%s\", %s},", entries,
+                             expr->as.map_node.entries[i].key, v);
+            free(entries);
+            free(v);
+            entries = next;
+        }
+        char *r = fmt("({ YMapEntry _e[] = {%s}; y_mk_map(_e, %zu); })",
+                      entries, expr->as.map_node.count);
+        free(entries);
+        return r;
+    }
+
+    default:
+        fprintf(stderr, "codegen: unsupported expr kind %d\n", expr->kind);
+        return fmt("y_mk_null()");
+    }
+}
+
+/* ── Public API ─────────────────────────────────────────────────────────── */
+
+int codegen_emit(Expr *ast, FILE *out) {
+    CodegenCtx ctx = {0};
+    fq_init(&ctx.queue);
+
+    /* Buffer for main body */
+    char *main_buf;
+    size_t main_len;
+    FILE *main_stream = open_memstream(&main_buf, &main_len);
+    if (!main_stream) {
+        perror("codegen: open_memstream");
+        fq_free(&ctx.queue);
+        return 1;
+    }
+
+    /* Emit top-level statements (this populates ctx.queue with func defs) */
+    if (ast->kind == EXPR_EBLOCK) {
+        for (size_t i = 0; i < ast->as.block_node.count; i++) {
+            char *s = emit_expr(&ctx, ast->as.block_node.exprs[i]);
+            fprintf(main_stream, "    %s;\n", s);
+            free(s);
+        }
+    } else {
+        char *s = emit_expr(&ctx, ast);
+        fprintf(main_stream, "    %s;\n", s);
+        free(s);
+    }
+
+    fclose(main_stream);
+
+    /* Assemble final output */
+    fprintf(out, "/* Generated by y compiler — C backend */\n");
+    fprintf(out, "#include \"runtime.h\"\n\n");
+
+    /* Write all deferred function definitions (nested defs come before
+     * their parents because emit_func_def appends after emit_expr
+     * has already pushed nested defs). */
+    if (ctx.queue.count > 0) {
+        fprintf(out, "/* ── function definitions ── */\n\n");
+        for (size_t i = 0; i < ctx.queue.count; i++)
+            fputs(ctx.queue.defs[i], out);
+    }
+
+    fprintf(out, "/* ── entry point ── */\n\n");
+    fprintf(out, "int main(void) {\n");
+    fprintf(out, "    YScope *scope = malloc(sizeof(YScope));\n");
+    fprintf(out, "    y_scope_init(scope, NULL);\n\n");
+    fprintf(out, "    /* builtins */\n");
+    fprintf(out, "    y_scope_set(scope, \"print\",    y_mk_func(y_builtin_print,    1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"tostring\", y_mk_func(y_builtin_tostring, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"typeof\",   y_mk_func(y_builtin_typeof,   1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"range\",    y_mk_func(y_builtin_range,    1, NULL));\n\n");
+    fwrite(main_buf, 1, main_len, out);
+    fprintf(out, "\n    return 0;\n");
+    fprintf(out, "}\n");
+
+    free(main_buf);
+    fq_free(&ctx.queue);
+    return 0;
+}
+
+#ifndef RUNTIME_DIR
+#define RUNTIME_DIR "."
+#endif
+
+int codegen_compile(Expr *ast, const char *output_path) {
+    char tmpdir[] = "/tmp/ycompile_XXXXXX";
+    if (!mkdtemp(tmpdir)) {
+        perror("codegen: mkdtemp");
+        return 1;
+    }
+
+    char c_path[512];
+    snprintf(c_path, sizeof(c_path), "%s/program.c", tmpdir);
+    FILE *f = fopen(c_path, "w");
+    if (!f) {
+        perror("codegen: fopen");
+        return 1;
+    }
+    codegen_emit(ast, f);
+    fclose(f);
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+             "cc -O2 -std=gnu99 -I'%s' -o '%s' '%s' '%s/runtime.c' -lm 2>&1",
+             RUNTIME_DIR, output_path, c_path, RUNTIME_DIR);
+
+    printf("[codegen] compiling → %s\n", output_path);
+    int ret = system(cmd);
+
+    if (ret != 0) {
+        fprintf(stderr, "[codegen] compilation failed (exit %d)\n", ret);
+        fprintf(stderr, "[codegen] C source kept at: %s\n", c_path);
+        return 1;
+    }
+
+    printf("[codegen] success: %s\n", output_path);
+    printf("[codegen] C source: %s\n", c_path);
+    return 0;
+}

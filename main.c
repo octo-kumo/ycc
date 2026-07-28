@@ -1,5 +1,6 @@
 #include "ast.h"
 #include "ast_debug.h"
+#include "codegen.h"
 #include "lib.h"
 #include "parser.h"
 #include "parser_debug.h"
@@ -7,8 +8,7 @@
 #include "vm.h"
 #include <stdint.h>
 #include <stdio.h>
-
-#include <stdio.h>
+#include <string.h>
 
 void run_tc(Expr *expr) {
     TCVarTypeScope global_scope = {0};
@@ -82,8 +82,38 @@ char *read_stdin() {
     return buffer;
 }
 
+static void usage(const char *prog) {
+    printf("Usage: %s [OPTIONS] [FILE]\n\n", prog);
+    printf("Options:\n");
+    printf("  -c, --compile [OUTPUT]  Compile to native binary (default: a.out)\n");
+    printf("  -S, --emit-c [OUTPUT]   Emit C source only (default: stdout)\n");
+    printf("  -h, --help              Show this help\n");
+    printf("\nWithout options, runs the program in the built-in VM.\n");
+}
+
 int main(int argc, char *argv[]) {
-    char *file = argc > 1 ? argv[1] : NULL;
+    /* Parse options */
+    enum { MODE_VM, MODE_COMPILE, MODE_EMIT_C } mode = MODE_VM;
+    const char *output_path = NULL;
+    const char *file = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            usage(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 < argc) output_path = argv[++i];
+        } else if (strcmp(argv[i], "-c") == 0 ||
+                   strcmp(argv[i], "--compile") == 0) {
+            mode = MODE_COMPILE;
+        } else if (strcmp(argv[i], "-S") == 0 ||
+                   strcmp(argv[i], "--emit-c") == 0) {
+            mode = MODE_EMIT_C;
+        } else {
+            file = argv[i];
+        }
+    }
+
     char *input = NULL;
     if (file) {
         printf("Reading file: %s\n", file);
@@ -99,43 +129,59 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     }
-    ast_parser_result_t res = ast_parse_expr_block(input);
-    if (res.is_some) {
-        printf("success\n");
-        ast_walk(res.value, 0);
-        ast_print_code(stdout, res.value, 0);
-        printf("\n\n");
-        run_tc(res.value);
-        run_vm(res.value);
 
-        if (res.remaining[0] != '\0') {
-            printf("Warning: Unparsed input remaining: '%s'\n", res.remaining);
-        }
-    } else {
+    ast_parser_result_t res = ast_parse_expr_block(input);
+    if (!res.is_some) {
         printf("failed :: remaining='%s'\n", res.remaining);
+        free(input);
+        return 1;
     }
+
+    printf("success\n");
+
+    if (mode == MODE_COMPILE) {
+        /* Type-check first */
+        run_tc(res.value);
+        printf("\n");
+
+        const char *out = output_path ? output_path : "a.out";
+        int ret = codegen_compile(res.value, out);
+        ast_free(res.value);
+        free(input);
+        return ret;
+    }
+
+    if (mode == MODE_EMIT_C) {
+        FILE *out = stdout;
+        if (output_path) {
+            out = fopen(output_path, "w");
+            if (!out) {
+                perror("fopen");
+                ast_free(res.value);
+                free(input);
+                return 1;
+            }
+        }
+        codegen_emit(res.value, out);
+        if (out != stdout) fclose(out);
+        ast_free(res.value);
+        free(input);
+        return 0;
+    }
+
+    /* Default: VM mode (original behavior) */
+    ast_walk(res.value, 0);
+    ast_print_code(stdout, res.value, 0);
+    printf("\n\n");
+    run_tc(res.value);
+    run_vm(res.value);
+
+    if (res.remaining[0] != '\0') {
+        printf("Warning: Unparsed input remaining: '%s'\n", res.remaining);
+    }
+
     printf("\ncomplete\n");
     ast_free(res.value);
-}
-
-void test_parser() {
-    char *input = "-12 -455";
-
-    parser_result_t num = parse_long(input);
-    printf("res=%ld rem='%s'\n", (long)(uintptr_t)num.value, num.remaining);
-    parser_result_t num2 = parse_long(num.remaining);
-    printf("res=%ld rem='%s'\n", (long)(uintptr_t)num2.value, num2.remaining);
-    parser_result_t num3 = parse_long(num2.remaining);
-    printf("res.is_some=%d res.value=%ld rem='%s'\n\n", num3.is_some,
-           (long)(uintptr_t)num3.value, num3.remaining);
-
-    parser_result_t res_many = parse_many(parse_long, input);
-    if (res_many.is_some) {
-        char *s = long_list_to_str(res_many.value);
-        printf("Parsed many numbers: %s\n", s);
-        free(s);
-        free_list(res_many.value);
-    } else {
-        printf("Failed to parse many numbers.\n");
-    }
+    free(input);
+    return 0;
 }
