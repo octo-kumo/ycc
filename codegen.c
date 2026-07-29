@@ -317,7 +317,8 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     case EXPR_ECALL: {
         char *callee = emit_expr(ctx, expr->as.call_node.callee);
         if (expr->as.call_node.arg_count == 0) {
-            char *r = fmt("y_call(%s, NULL, 0)", callee);
+            /* free the (cloned) callee after the call to avoid leaking it */
+            char *r = fmt("({ YValue *_fn = %s; YValue *_r = y_call(_fn, NULL, 0); y_free(_fn); _r; })", callee);
             free(callee);
             return r;
         }
@@ -329,7 +330,8 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
             free(a);
             args = next;
         }
-        char *r = fmt("({ YValue *_a[] = {%s}; y_call(%s, _a, %zu); })",
+        /* free the (cloned) callee after the call to avoid leaking it */
+        char *r = fmt("({ YValue *_a[] = {%s}; YValue *_fn = %s; YValue *_r = y_call(_fn, _a, %zu); y_free(_fn); _r; })",
                       args, callee, expr->as.call_node.arg_count);
         free(args);
         free(callee);
