@@ -331,34 +331,10 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     }
 
     case EXPR_EASSIGNMENT: {
-        const char *var_name = expr->as.assignment_node.var_name;
-        Expr *val_expr = expr->as.assignment_node.value;
-        
-        // Optimize: name = push(name, ...) -> use y_scope_take to avoid COW
-        if (val_expr->kind == EXPR_ECALL &&
-            val_expr->as.call_node.callee->kind == EXPR_EVAR &&
-            strcmp(val_expr->as.call_node.callee->as.evar, "push") == 0 &&
-            val_expr->as.call_node.arg_count == 2 &&
-            val_expr->as.call_node.args[0]->kind == EXPR_EVAR &&
-            strcmp(val_expr->as.call_node.args[0]->as.evar, var_name) == 0) {
-            
-            char *arg1 = emit_expr(ctx, val_expr->as.call_node.args[1]);
-            char *r = fmt(
-                "({ YValue *_arr = y_scope_take(scope, \"%s\"); "
-                "if (!_arr) _arr = y_clone(y_scope_get(scope, \"%s\")); "
-                "YValue *_a[] = { _arr, %s }; "
-                "YValue *_fn = y_clone(y_scope_get(scope, \"push\")); "
-                "YValue *_v = y_call(_fn, _a, 2); y_free(_fn); "
-                "y_scope_set(scope, \"%s\", _v); y_clone(_v); })",
-                var_name, var_name, arg1, var_name);
-            free(arg1);
-            return r;
-        }
-        
-        char *val = emit_expr(ctx, val_expr);
+        char *val = emit_expr(ctx, expr->as.assignment_node.value);
         char *r = fmt(
             "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); y_clone(_v); })",
-            val, var_name);
+            val, expr->as.assignment_node.var_name);
         free(val);
         return r;
     }

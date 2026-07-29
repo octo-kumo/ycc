@@ -354,6 +354,11 @@ static void y_to_buf(YValue *val, char *buf, size_t sz) {
 }
 
 char *y_to_str(YValue *val) {
+    /* Strings are returned as a fresh copy (caller frees) so arbitrarily long
+     * strings survive — the old fixed 4096-byte buffer silently truncated
+     * long elements in join()/tostring(), corrupting source-to-source tools. */
+    if (val && val->type == Y_STR)
+        return strdup(val->data.s);
     char *buf = malloc(4096);
     buf[0] = '\0';
     y_to_buf(val, buf, 4096);

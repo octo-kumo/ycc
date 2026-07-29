@@ -415,7 +415,8 @@ def emit_program(ast) -> str {
 
     // main
     parts = push(parts, "/* ── entry point ── */\n\n");
-    parts = push(parts, "int main(void) {\n");
+    parts = push(parts, "int main(int argc, char **argv) {\n");
+    parts = push(parts, "    y_set_argv(argc, argv);\n");
     parts = push(parts, "    YScope *scope = malloc(sizeof(YScope));\n");
     parts = push(parts, "    y_scope_init(scope, NULL);\n\n");
     parts = push(parts, "    /* builtins */\n");
@@ -438,7 +439,8 @@ def emit_program(ast) -> str {
     parts = push(parts, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n\n");
+    parts = push(parts, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"argv\", y_mk_func(y_builtin_argv, 0, NULL));\n\n");
     parts = push(parts, body);
     parts = push(parts, "\n    return 0;\n");
     parts = push(parts, "}\n");
