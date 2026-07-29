@@ -376,6 +376,13 @@ typecheck_result_t tc_expr(Expr *expr, TCVarTypeScope *scope) {
         return TC_OK(var_type);
     }
     case EXPR_EIF: return tc_if(expr, scope);
+    case EXPR_EUNARY: {
+        typecheck_result_t operand_res = tc_expr(expr->as.unary_node.operand, scope);
+        if (!operand_res.is_ok) return operand_res;
+        if (operand_res.type->base != VAL_BOOL)
+            return TC_ERR("Operand of '!' must be boolean", expr);
+        return TC_OK(TYPE_BOOL);
+    }
     case EXPR_EOP: return tc_binary_op(expr, scope);
     case EXPR_EASSIGNMENT: return tc_assignment(expr, scope);
     case EXPR_EDECLARATION: return tc_declaration(expr, scope);

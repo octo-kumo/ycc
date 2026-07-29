@@ -389,6 +389,17 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             return val;
         }
     }
+    case EXPR_EUNARY: {
+        VMValue *operand = vm_execute(scope, expr->as.unary_node.operand);
+        VMValue *val = nval(VAL_BOOL);
+        if (operand->type != VAL_BOOL) {
+            fprintf(stderr, "Operand of '!' must be boolean\n");
+            exit(1);
+        }
+        val->data.b = !operand->data.b;
+        val_free(operand);
+        return val;
+    }
     case EXPR_EOP: {
         VMValue *left = vm_execute(scope, expr->as.op_node.left);
         VMValue *right = expr->as.op_node.op == O_DOT

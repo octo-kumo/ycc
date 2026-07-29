@@ -16,6 +16,7 @@ Operator operator_from_str(const char *op) {
 }
 
 const char *operator_to_str(Operator op) {
+    if (op == O_NOT) { return "!"; }
     if (op < 0 || (size_t)op >= sizeof(OPERATORS) / sizeof(OPERATORS[0]) - 1) {
         return "<invalid operator>";
     }
@@ -42,6 +43,9 @@ void ast_free(Expr *expr) {
     case EXPR_EOP:
         ast_free(expr->as.op_node.left);
         ast_free(expr->as.op_node.right);
+        break;
+    case EXPR_EUNARY:
+        ast_free(expr->as.unary_node.operand);
         break;
     case EXPR_EASSIGNMENT:
         free((char *)(expr->as.assignment_node.var_name));
@@ -147,6 +151,10 @@ Expr *ast_clone(Expr *expr) {
         copy->as.op_node.op = expr->as.op_node.op;
         copy->as.op_node.left = ast_clone(expr->as.op_node.left);
         copy->as.op_node.right = ast_clone(expr->as.op_node.right);
+        break;
+    case EXPR_EUNARY:
+        copy->as.unary_node.op = expr->as.unary_node.op;
+        copy->as.unary_node.operand = ast_clone(expr->as.unary_node.operand);
         break;
     case EXPR_EASSIGNMENT:
         copy->as.assignment_node.var_name =

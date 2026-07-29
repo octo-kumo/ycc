@@ -131,6 +131,13 @@ void ast_walk(Expr *expr, int indent) {
                bool_str(expr->as.ebool));
         break;
 
+    case EXPR_EUNARY:
+        printf(ANSI_MAGENTA "EUnary" ANSI_RESET "  " ANSI_DIM
+                            "op=" ANSI_RESET ANSI_BOLD "'%s'" ANSI_RESET "\n",
+               operator_to_str(expr->as.unary_node.op));
+        ast_walk_labeled("operand:", expr->as.unary_node.operand, indent + 1);
+        break;
+
     case EXPR_EOP:
         printf(ANSI_MAGENTA "EOp" ANSI_RESET "  " ANSI_DIM
                             "op=" ANSI_RESET ANSI_BOLD "'%s'" ANSI_RESET "\n",
@@ -338,6 +345,13 @@ void ast_print_code(FILE *out, Expr *expr, int indent) {
     case EXPR_EBOOL:
         fprintf(out, ANSI_YELLOW "%s" ANSI_RESET,
                 expr->as.ebool ? "true" : "false");
+        break;
+
+    case EXPR_EUNARY:
+        fprintf(out, "(" ANSI_MAGENTA "%s" ANSI_RESET " ",
+                operator_to_str(expr->as.unary_node.op));
+        ast_print_code(out, expr->as.unary_node.operand, indent);
+        fprintf(out, ")");
         break;
 
     case EXPR_EOP:

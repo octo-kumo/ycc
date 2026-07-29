@@ -201,6 +201,16 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     case EXPR_EVAR:
         return fmt("y_clone(y_scope_get(scope, \"%s\"))", expr->as.evar);
 
+    case EXPR_EUNARY: {
+        char *operand = emit_expr(ctx, expr->as.unary_node.operand);
+        char *res = fmt(
+            "({ YValue *_u = %s; "
+            "if (_u->type != Y_BOOL) { fprintf(stderr, \"runtime error: '!' requires bool\\n\"); exit(1); } "
+            "YValue *_r = y_mk_bool(!_u->data.b); y_free(_u); _r; })",
+            operand);
+        free(operand);
+        return res;
+    }
     case EXPR_EOP: {
         if (expr->as.op_node.op == O_DOT) {
             char *left = emit_expr(ctx, expr->as.op_node.left);

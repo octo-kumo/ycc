@@ -673,6 +673,22 @@ ast_parser_result_t ast_parse_paren_expr(const char *input) {
     return asome(inner.value, input);
 }
 
+/* Unary logical NOT: !expr. Binds tighter than binary ops; the operand is a
+ * full inline expression so `!a && b` parses as `(!a) && b`. */
+ast_parser_result_t ast_parse_unary(const char *input) {
+    const char *original_input = input;
+    SKIP_SPACES;
+    if (input[0] != '!' || input[1] == '=') { return anone(original_input); }
+    input++; /* consume '!' */
+    ast_parser_result_t operand = ast__parse_inside_binary_op(input);
+    if (!operand.is_some) { return anone(original_input); }
+    Expr *node = (Expr *)malloc(sizeof(Expr));
+    node->kind = EXPR_EUNARY;
+    node->as.unary_node.op = O_NOT;
+    node->as.unary_node.operand = operand.value;
+    return asome(node, operand.remaining);
+}
+
 ast_parser_result_t ast_parse_brace_block(const char *input) {
     const char *original_input = input;
 
@@ -1367,7 +1383,8 @@ ast_parser_result_t ast__parse_first(const ast_parser_t *parsers,
 #define __EXPR_BLOCK_PARSERS ast_parse_brace_block
 
 #define __EXPR_INLINE_PARSERS                                                  \
-    ast_parse_function, ast_parse_map, ast_parse_array, ast_parse_binary_op,   \
+    ast_parse_function, ast_parse_map, ast_parse_brace_block,                  \
+        ast_parse_array, ast_parse_binary_op, ast_parse_unary,                 \
         ast_parse_function_call, ast_parse_paren_expr, ast_parse_if,           \
         ast_parse_while, ast_parse_foreach, ast_parse_for,                     \
         ast_parse_declaration, ast_parse_number, ast_parse_string,             \
@@ -1377,7 +1394,8 @@ const ast_parser_t EXPR_BLOCK_PARSERS[] = {__EXPR_BLOCK_PARSERS, NULL};
 const ast_parser_t EXPR_INLINE_PARSERS[] = {__EXPR_INLINE_PARSERS, NULL};
 const ast_parser_t EXPR_PARSERS[] = {__EXPR_INLINE_PARSERS,
                                      __EXPR_BLOCK_PARSERS, NULL};
-const ast_parser_t EXPR_ALLOWED_BIN_OPS[] = {ast_parse_paren_expr,
+const ast_parser_t EXPR_ALLOWED_BIN_OPS[] = {ast_parse_unary,
+                                             ast_parse_paren_expr,
                                              ast_parse_function_call,
                                              ast_parse_array_idx,
                                              ast_parse_map,

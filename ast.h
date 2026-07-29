@@ -28,6 +28,7 @@ typedef enum {
     O_CONS, // ::
     O_DOT,  // .   // for accessing fields of map or array length
     O_MOD,  // %
+    O_NOT,  // !   // logical NOT (unary)
 } Operator;
 
 Operator operator_from_str(const char *op);
@@ -56,6 +57,7 @@ typedef enum {
     EXPR_EFORRANGE,
     EXPR_EARRAY_ASSIGN,
     EXPR_ENULL,
+    EXPR_EUNARY,
 } ExprKind;
 
 typedef enum {
@@ -92,6 +94,11 @@ typedef struct {
     struct Expr *left;
     struct Expr *right;
 } EOp;
+
+typedef struct {
+    Operator op;
+    struct Expr *operand;
+} EUnary;
 
 typedef struct {
     char *var_name;
@@ -180,6 +187,7 @@ typedef struct Expr {
         EFunc efunc;
         EIf if_node;
         EOp op_node;
+        EUnary unary_node;
         EAssignment assignment_node;
         EDeclaration declaration_node;
         ECall call_node;
