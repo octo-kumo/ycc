@@ -268,7 +268,9 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
             if (i + 1 == expr->as.block_node.count)
                 next = fmt("%s YValue *_r = %s;", body, stmt);
             else
-                next = fmt("%s %s;", body, stmt);
+                /* Non-final statement: its value is discarded, so free it
+                 * to avoid leaking every intermediate result in a block. */
+                next = fmt("%s y_free((YValue *)(%s));", body, stmt);
             free(body);
             free(stmt);
             body = next;
@@ -458,22 +460,25 @@ static char *emit_for(CodegenCtx *ctx, EFor *f) {
     /* Build the loop body piece by piece */
     char *r = fmt(
         "({ YScope *_outer = scope; "
-        "YScope *scope __attribute__((cleanup(y_scope_autorelease))) = malloc(sizeof(YScope)); "
+        "YScope *scope = malloc(sizeof(YScope)); "
         "y_scope_init(scope, _outer); ");
     if (init) {
-        char *next = fmt("%s%s; ", r, init);
+        /* init value is discarded — free it (the scope keeps its own copy) */
+        char *next = fmt("%sy_free((YValue *)(%s)); ", r, init);
         free(r); r = next;
     }
     char *next = fmt("%sYValue *_last = y_mk_null(); while (1) { ", r);
     free(r); r = next;
     if (cond) {
-        next = fmt("%sYValue *_c = %s; if (!_c->data.b) break; ", r, cond);
+        /* free the condition result every iteration to avoid a per-iter leak */
+        next = fmt("%sYValue *_c = %s; bool _cb = _c->data.b; y_free(_c); if (!_cb) break; ", r, cond);
         free(r); r = next;
     }
     next = fmt("%sy_free(_last); _last = %s; ", r, body);
     free(r); r = next;
     if (step) {
-        next = fmt("%s%s; ", r, step);
+        /* step value is discarded — free it */
+        next = fmt("%sy_free((YValue *)(%s)); ", r, step);
         free(r); r = next;
     }
     next = fmt("%s} y_scope_release(scope); _last; })", r);
