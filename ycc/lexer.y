@@ -94,27 +94,43 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
             };
             toks = push(toks, mk_tok(ty, word));
         } else if (c == "\"") {
-            // string literal with escapes
+            // string literal with escapes.
+            // Fast path: scan to the closing quote (respecting escapes), extract
+            // the raw content with ONE substr, then process escapes only if any
+            // backslash is present. Avoids O(n^2) char-by-char concatenation.
             i = i + 1;
-            let buf = "";
+            let start = i;
             let open = true;
+            let has_esc = false;
             while (open && i < n) {
                 let ch = substr(src, i, 1);
-                if (ch == "\\") {
-                    let esc = substr(src, i + 1, 1);
-                    if (esc == "n") { buf = buf + "\n"; i = i + 2; }
-                    else if (esc == "t") { buf = buf + "\t"; i = i + 2; }
-                    else if (esc == "r") { buf = buf + "\r"; i = i + 2; }
-                    else if (esc == "\\") { buf = buf + "\\"; i = i + 2; }
-                    else if (esc == "\"") { buf = buf + "\""; i = i + 2; }
-                    else { buf = buf + esc; i = i + 2; };
-                } else if (ch == "\"") {
-                    i = i + 1;
-                    open = false;
-                } else {
-                    buf = buf + ch;
-                    i = i + 1;
+                if (ch == "\\") { has_esc = true; i = i + 2; }
+                else if (ch == "\"") { open = false; }
+                else { i = i + 1; };
+            };
+            let raw = substr(src, start, i - start);
+            i = i + 1;  // skip closing quote
+            let buf = raw;
+            if (has_esc) {
+                // process escapes into a chunk list + join (O(n))
+                let chunks = [];
+                let k = 0;
+                let rn = len(raw);
+                while (k < rn) {
+                    let rc = substr(raw, k, 1);
+                    if (rc == "\\") {
+                        let esc = substr(raw, k + 1, 1);
+                        if (esc == "n") { chunks = push(chunks, "\n"); }
+                        else if (esc == "t") { chunks = push(chunks, "\t"); }
+                        else if (esc == "r") { chunks = push(chunks, "\r"); }
+                        else { chunks = push(chunks, esc); };
+                        k = k + 2;
+                    } else {
+                        chunks = push(chunks, rc);
+                        k = k + 1;
+                    };
                 };
+                buf = join(chunks, "");
             };
             toks = push(toks, mk_tok("str", buf));
         } else {
