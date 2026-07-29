@@ -88,12 +88,18 @@ def parse_postfix(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos:
             node = { k: "call", callee: node, args: a.node };
             pos = a.pos + 1;  // skip ')'
         } else if (is_punct(toks, pos, "[")) {
-            // index or slice: arr[i], arr[lo:hi], arr[lo:], arr[:hi]
+            // index or slice: arr[i], arr[lo:hi], arr[lo:], arr[:hi], arr[:]
             if (is_punct(toks, pos + 1, ":")) {
-                // arr[:hi] — no lo
-                let second = parse_expr(toks, pos + 2);
-                node = { k: "slice", arr: node, lo: { k: "null" }, hi: second.node };
-                pos = second.pos + 1;  // skip ']'
+                if (is_punct(toks, pos + 2, "]")) {
+                    // arr[:] — full slice
+                    node = { k: "slice", arr: node, lo: { k: "null" }, hi: { k: "null" } };
+                    pos = pos + 3;  // skip '[', ':', ']'
+                } else {
+                    // arr[:hi] — no lo
+                    let second = parse_expr(toks, pos + 2);
+                    node = { k: "slice", arr: node, lo: { k: "null" }, hi: second.node };
+                    pos = second.pos + 1;  // skip ']'
+                };
             } else {
                 let first = parse_expr(toks, pos + 1);
                 if (is_punct(toks, first.pos, ":")) {
@@ -190,10 +196,13 @@ def parse_array(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: l
     } else {
         let go = true;
         while (go) {
-            let e = parse_expr(toks, pos);
-            elems = push(elems, e.node);
-            pos = e.pos;
-            if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+            // trailing comma: ']' right after ',' ends the list
+            if (is_punct(toks, pos, "]")) { go = false; } else {
+                let e = parse_expr(toks, pos);
+                elems = push(elems, e.node);
+                pos = e.pos;
+                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+            };
         };
         res({ k: "array", elems: elems }, pos + 1)  // skip ']'
     }
@@ -208,13 +217,16 @@ def parse_map(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: lon
     } else {
         let go = true;
         while (go) {
-            let key = tv(toks, pos);
-            pos = pos + 2;  // skip key and ':'
-            let e = parse_expr(toks, pos);
-            keys = push(keys, key);
-            vals = push(vals, e.node);
-            pos = e.pos;
-            if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+            // trailing comma: '}' right after ',' ends the map
+            if (is_punct(toks, pos, "}")) { go = false; } else {
+                let key = tv(toks, pos);
+                pos = pos + 2;  // skip key and ':'
+                let e = parse_expr(toks, pos);
+                keys = push(keys, key);
+                vals = push(vals, e.node);
+                pos = e.pos;
+                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+            };
         };
         res({ k: "map", keys: keys, vals: vals }, pos + 1)  // skip '}'
     }
@@ -236,8 +248,11 @@ def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
         if (!is_punct(toks, pos, ")")) {
             let go = true;
             while (go) {
-                pos = parse_type(toks, pos);
-                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+                // trailing comma: ')' right after ',' ends the param list
+                if (is_punct(toks, pos, ")")) { go = false; } else {
+                    pos = parse_type(toks, pos);
+                    if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+                };
             };
         };
         pos = pos + 1;  // skip ')'
@@ -250,10 +265,13 @@ def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
         if (!is_punct(toks, pos, "}")) {
             let go = true;
             while (go) {
-                pos = pos + 1;  // skip field name
-                pos = pos + 1;  // skip ':'
-                pos = parse_type(toks, pos);  // skip field type
-                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+                // trailing comma: '}' right after ',' ends the record
+                if (is_punct(toks, pos, "}")) { go = false; } else {
+                    pos = pos + 1;  // skip field name
+                    pos = pos + 1;  // skip ':'
+                    pos = parse_type(toks, pos);  // skip field type
+                    if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+                };
             };
         };
         pos = pos + 1;  // skip '}'
