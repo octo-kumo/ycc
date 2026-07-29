@@ -388,15 +388,20 @@ YValue *y_add(YValue *a, YValue *b) {
         strcat(result, bs);
         if (a->type != Y_STR) free(as);
         if (b->type != Y_STR) free(bs);
+        y_free(a); y_free(b); /* take ownership of cloned operands */
         YValue *v = malloc(sizeof(YValue));
         v->type = Y_STR;
         v->data.s = result;
         return v;
     }
-    if (a->type == Y_LONG && b->type == Y_LONG)
-        return y_mk_long(a->data.l + b->data.l);
+    if (a->type == Y_LONG && b->type == Y_LONG) {
+        long r = a->data.l + b->data.l;
+        y_free(a); y_free(b);
+        return y_mk_long(r);
+    }
     double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;
     double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;
+    y_free(a); y_free(b);
     return y_mk_float(av + bv);
 }
 
@@ -406,10 +411,13 @@ YValue *y_div(YValue *a, YValue *b) {
             fprintf(stderr, "runtime error: division by zero\n");
             exit(1);
         }
-        return y_mk_long(a->data.l / b->data.l);
+        long r = a->data.l / b->data.l;
+        y_free(a); y_free(b);
+        return y_mk_long(r);
     }
     double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;
     double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;
+    y_free(a); y_free(b);
     return y_mk_float(av / bv);
 }
 
@@ -422,16 +430,23 @@ YValue *y_mod(YValue *a, YValue *b) {
         fprintf(stderr, "runtime error: modulo by zero\n");
         exit(1);
     }
-    return y_mk_long(a->data.l % b->data.l);
+    long r = a->data.l % b->data.l;
+    y_free(a); y_free(b);
+    return y_mk_long(r);
 }
 
 #define CMP_BINOP(name, op)                                                    \
     YValue *name(YValue *a, YValue *b) {                                      \
+        bool res;                                                             \
         if (a->type == Y_LONG && b->type == Y_LONG)                           \
-            return y_mk_bool(a->data.l op b->data.l);                         \
-        double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;        \
-        double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;        \
-        return y_mk_bool(av op bv);                                           \
+            res = a->data.l op b->data.l;                                     \
+        else {                                                                \
+            double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;    \
+            double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;    \
+            res = av op bv;                                                   \
+        }                                                                     \
+        y_free(a); y_free(b);                                                 \
+        return y_mk_bool(res);                                                \
     }
 
 CMP_BINOP(y_lt, <)
@@ -439,27 +454,31 @@ CMP_BINOP(y_gt, >)
 CMP_BINOP(y_lte, <=)
 CMP_BINOP(y_gte, >=)
 
-YValue *y_eq(YValue *a, YValue *b) { return y_mk_bool(y_equals(a, b)); }
-YValue *y_neq(YValue *a, YValue *b) { return y_mk_bool(!y_equals(a, b)); }
+YValue *y_eq(YValue *a, YValue *b) { bool r = y_equals(a, b); y_free(a); y_free(b); return y_mk_bool(r); }
+YValue *y_neq(YValue *a, YValue *b) { bool r = !y_equals(a, b); y_free(a); y_free(b); return y_mk_bool(r); }
 
 YValue *y_and(YValue *a, YValue *b) {
     if (a->type != Y_BOOL || b->type != Y_BOOL) {
         fprintf(stderr, "runtime error: && requires boolean operands\n");
         exit(1);
     }
-    return y_mk_bool(a->data.b && b->data.b);
+    bool r = a->data.b && b->data.b;
+    y_free(a); y_free(b);
+    return y_mk_bool(r);
 }
 YValue *y_or(YValue *a, YValue *b) {
     if (a->type != Y_BOOL || b->type != Y_BOOL) {
         fprintf(stderr, "runtime error: || requires boolean operands\n");
         exit(1);
     }
-    return y_mk_bool(a->data.b || b->data.b);
+    bool r = a->data.b || b->data.b;
+    y_free(a); y_free(b);
+    return y_mk_bool(r);
 }
 
 YValue *y_neg(YValue *a) {
-    if (a->type == Y_LONG) return y_mk_long(-a->data.l);
-    return y_mk_float(-a->data.f);
+    if (a->type == Y_LONG) { long r = -a->data.l; y_free(a); return y_mk_long(r); }
+    double r = -a->data.f; y_free(a); return y_mk_float(r);
 }
 
 /* ── Array / map operations ─────────────────────────────────────────────── */
