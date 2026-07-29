@@ -122,9 +122,11 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
     fprintf(f, "    YScope *scope = malloc(sizeof(YScope));\n");
     fprintf(f, "    y_scope_init(scope, closure);\n");
 
-    for (size_t i = 0; i < func->param_count; i++)
+    for (size_t i = 0; i < func->param_count; i++) {
         fprintf(f, "    y_scope_set(scope, \"%s\", args[%zu]);\n",
                 func->param_names[i], i);
+        fprintf(f, "    args[%zu] = NULL; /* transfer ownership to scope */\n", i);
+    }
 
     /* self-reference for recursion */
     fprintf(f, "    y_scope_set(scope, \"self\", y_mk_func(%s, %zu, closure));\n",
@@ -152,9 +154,11 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
         fprintf(f, "    YValue *_result = %s;\n", body);
         free(body);
     }
-    fprintf(f, "    YValue *_ret = y_clone(_result);\n");
+    /* _result is a fresh owned value (not stored in the scope), so return it
+     * directly. Releasing the scope first frees params/locals/closures without
+     * touching _result. */
     fprintf(f, "    y_scope_release(scope);\n");
-    fprintf(f, "    return _ret;\n");
+    fprintf(f, "    return _result;\n");
     fprintf(f, "}\n\n");
 
     fclose(f);
@@ -272,8 +276,8 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
                        ? emit_expr(ctx, expr->as.if_node.else_branch)
                        : fmt("y_mk_null()");
         char *r = fmt(
-            "({ YValue *_c = %s; YValue *_r; "
-            "if (_c->data.b) { _r = %s; } else { _r = %s; } _r; })",
+            "({ YValue *_c = %s; bool _cb = _c->data.b; y_free(_c); YValue *_r; "
+            "if (_cb) { _r = %s; } else { _r = %s; } _r; })",
             c, tb, eb);
         free(c); free(tb); free(eb);
         return r;
@@ -297,7 +301,7 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
         char *r = fmt(
             "({ YScope *_outer = scope; "
             "YScope *scope = malloc(sizeof(YScope)); "
-            "y_scope_init(scope, _outer);%s YValue *_ret = y_clone(_r); y_scope_release(scope); _ret; })",
+            "y_scope_init(scope, _outer);%s y_scope_release(scope); _r; })",
             body);
         free(body);
         return r;
@@ -351,11 +355,20 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
             free(a);
             args = next;
         }
-        /* free the (cloned) callee after the call to avoid leaking it */
-        char *r = fmt("({ YValue *_a[] = {%s}; YValue *_fn = %s; YValue *_r = y_call(_fn, _a, %zu); y_free(_fn); _r; })",
-                      args, callee, expr->as.call_node.arg_count);
+        /* Free the (cloned) callee and all arguments after the call.
+         * Builtins that keep an argument (e.g. push keeps args[1]) must set
+         * that slot to NULL so it isn't double-freed here. */
+        char *free_args = fmt("");
+        for (size_t i = 0; i < expr->as.call_node.arg_count; i++) {
+            char *next = fmt("%s y_free(_a[%zu]);", free_args, i);
+            free(free_args);
+            free_args = next;
+        }
+        char *r = fmt("({ YValue *_a[] = {%s}; YValue *_fn = %s; YValue *_r = y_call(_fn, _a, %zu); y_free(_fn);%s _r; })",
+                      args, callee, expr->as.call_node.arg_count, free_args);
         free(args);
         free(callee);
+        free(free_args);
         return r;
     }
 
@@ -465,9 +478,11 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
 static char *emit_while(CodegenCtx *ctx, EWhile *w) {
     char *c = emit_expr(ctx, w->cond);
     char *b = emit_expr(ctx, w->body);
+    /* Free the condition result every iteration (including the break
+     * iteration) to avoid leaking one bool per loop pass. */
     char *r = fmt(
         "({ YValue *_last = y_mk_null(); "
-        "while (1) { YValue *_c = %s; if (!_c->data.b) break; "
+        "while (1) { YValue *_c = %s; bool _cb = _c->data.b; y_free(_c); if (!_cb) break; "
         "y_free(_last); _last = %s; } _last; })",
         c, b);
     free(c); free(b);
@@ -568,12 +583,13 @@ int codegen_emit(Expr *ast, FILE *out) {
     if (ast->kind == EXPR_EBLOCK) {
         for (size_t i = 0; i < ast->as.block_node.count; i++) {
             char *s = emit_expr(&ctx, ast->as.block_node.exprs[i]);
-            fprintf(main_stream, "    %s;\n", s);
+            /* Free the value yielded by each top-level statement */
+            fprintf(main_stream, "    y_free((YValue *)(%s));\n", s);
             free(s);
         }
     } else {
         char *s = emit_expr(&ctx, ast);
-        fprintf(main_stream, "    %s;\n", s);
+        fprintf(main_stream, "    y_free((YValue *)(%s));\n", s);
         free(s);
     }
 
@@ -620,7 +636,8 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"getenv\",   y_mk_func(y_builtin_getenv,   1, NULL));\n\n");
     fwrite(main_buf, 1, main_len, out);
-    fprintf(out, "\n    return 0;\n");
+    fprintf(out, "\n    y_scope_release(scope);\n");
+    fprintf(out, "    return 0;\n");
     fprintf(out, "}\n");
 
     free(main_buf);

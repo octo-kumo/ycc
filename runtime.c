@@ -367,11 +367,16 @@ bool y_equals(YValue *a, YValue *b) {
 
 #define NUMERIC_BINOP(name, op)                                                \
     YValue *name(YValue *a, YValue *b) {                                      \
+        YValue *_res;                                                         \
         if (a->type == Y_LONG && b->type == Y_LONG)                           \
-            return y_mk_long(a->data.l op b->data.l);                         \
-        double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;        \
-        double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;        \
-        return y_mk_float(av op bv);                                          \
+            _res = y_mk_long(a->data.l op b->data.l);                         \
+        else {                                                                \
+            double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;    \
+            double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;    \
+            _res = y_mk_float(av op bv);                                      \
+        }                                                                     \
+        y_free(a); y_free(b);                                                 \
+        return _res;                                                          \
     }
 
 NUMERIC_BINOP(y_sub, -)
@@ -854,7 +859,10 @@ YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc) {
     a->elements = realloc(a->elements, sizeof(YValue *) * (a->count + 1));
     a->elements[a->count] = args[1]; /* take ownership of the already-cloned arg */
     a->count++;
-    return args[0];
+    args[1] = NULL; /* prevent double-free by call site */
+    YValue *result = args[0];
+    args[0] = NULL; /* transfer ownership to caller */
+    return result;
 }
 
 /* substr(s, start, len) -> str */
