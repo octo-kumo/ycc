@@ -23,6 +23,7 @@ typedef enum {
 typedef struct YValue YValue;
 
 typedef struct {
+    int refcount;
     size_t count;
     YValue **elements;
 } YArray;
@@ -33,6 +34,7 @@ typedef struct {
 } YMapEntry;
 
 typedef struct {
+    int refcount;
     size_t count;
     YMapEntry *entries;
 } YMap;

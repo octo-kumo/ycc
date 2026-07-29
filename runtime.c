@@ -51,6 +51,7 @@ YValue *y_mk_arr(YValue **elements, size_t count) {
     YValue *val = malloc(sizeof(YValue));
     val->type = Y_ARR;
     YArray *arr = malloc(sizeof(YArray));
+    arr->refcount = 1;
     arr->count = count;
     /* Copy the pointer array to the heap — the caller's array may be
      * stack-allocated (e.g. from a GCC statement expression). */
@@ -68,6 +69,7 @@ YValue *y_mk_map(YMapEntry *entries, size_t count) {
     YValue *val = malloc(sizeof(YValue));
     val->type = Y_MAP;
     YMap *map = malloc(sizeof(YMap));
+    map->refcount = 1;
     if (count > 0 && entries) {
         map->entries = malloc(sizeof(YMapEntry) * count);
         /* Dedup keys, last value wins (matches VM semantics). */
@@ -129,7 +131,13 @@ YScope *y_scope_retain(YScope *scope) {
 void y_scope_release(YScope *scope) {
     if (!scope) return;
     if (--scope->refcount > 0) return;
+    if (scope->refcount < 0) return; /* cycle guard: already being freed */
+    scope->refcount = -1;            /* mark as being freed */
+    /* Detach entries BEFORE freeing them so any recursive y_scope_release
+     * triggered by a closure that references this scope sees an empty scope
+     * and the cycle guard above prevents a double-free. */
     YScopeEntry *e = scope->entries;
+    scope->entries = NULL;
     while (e) {
         YScopeEntry *next = e->next;
         free(e->name);
@@ -170,6 +178,38 @@ void y_scope_set(YScope *scope, const char *name, YValue *value) {
     scope->entries = e;
 }
 
+/* ── Copy-on-write helpers ──────────────────────────────────────────────── */
+
+static void y_arr_cow(YValue *arr) {
+    if (arr->data.arr->refcount > 1) {
+        YArray *old = arr->data.arr;
+        YArray *new = malloc(sizeof(YArray));
+        new->refcount = 1;
+        new->count = old->count;
+        new->elements = malloc(sizeof(YValue *) * old->count);
+        for (size_t i = 0; i < old->count; i++)
+            new->elements[i] = y_clone(old->elements[i]);
+        old->refcount--;
+        arr->data.arr = new;
+    }
+}
+
+static void y_map_cow(YValue *map) {
+    if (map->data.map->refcount > 1) {
+        YMap *old = map->data.map;
+        YMap *new = malloc(sizeof(YMap));
+        new->refcount = 1;
+        new->count = old->count;
+        new->entries = malloc(sizeof(YMapEntry) * old->count);
+        for (size_t i = 0; i < old->count; i++) {
+            new->entries[i].key = strdup(old->entries[i].key);
+            new->entries[i].value = y_clone(old->entries[i].value);
+        }
+        old->refcount--;
+        map->data.map = new;
+    }
+}
+
 /* ── Value operations ───────────────────────────────────────────────────── */
 
 YValue *y_clone(YValue *val) {
@@ -181,19 +221,20 @@ YValue *y_clone(YValue *val) {
     case Y_STR: return y_mk_str(val->data.s);
     case Y_NULL: return y_mk_null();
     case Y_ARR: {
-        YValue **elems = malloc(sizeof(YValue *) * val->data.arr->count);
-        for (size_t i = 0; i < val->data.arr->count; i++)
-            elems[i] = y_clone(val->data.arr->elements[i]);
-        return y_mk_arr(elems, val->data.arr->count);
+        /* Copy-on-write: share the underlying array, increment refcount */
+        YValue *v = malloc(sizeof(YValue));
+        v->type = Y_ARR;
+        v->data.arr = val->data.arr;
+        v->data.arr->refcount++;
+        return v;
     }
     case Y_MAP: {
-        YMapEntry *entries =
-            malloc(sizeof(YMapEntry) * val->data.map->count);
-        for (size_t i = 0; i < val->data.map->count; i++) {
-            entries[i].key = strdup(val->data.map->entries[i].key);
-            entries[i].value = y_clone(val->data.map->entries[i].value);
-        }
-        return y_mk_map(entries, val->data.map->count);
+        /* Copy-on-write: share the underlying map, increment refcount */
+        YValue *v = malloc(sizeof(YValue));
+        v->type = Y_MAP;
+        v->data.map = val->data.map;
+        v->data.map->refcount++;
+        return v;
     }
     case Y_FUNC: {
         /* Functions are shared, not deep-cloned */
@@ -215,18 +256,22 @@ void y_free(YValue *val) {
     switch (val->type) {
     case Y_STR: free(val->data.s); break;
     case Y_ARR:
-        for (size_t i = 0; i < val->data.arr->count; i++)
-            y_free(val->data.arr->elements[i]);
-        free(val->data.arr->elements);
-        free(val->data.arr);
+        if (--val->data.arr->refcount == 0) {
+            for (size_t i = 0; i < val->data.arr->count; i++)
+                y_free(val->data.arr->elements[i]);
+            free(val->data.arr->elements);
+            free(val->data.arr);
+        }
         break;
     case Y_MAP:
-        for (size_t i = 0; i < val->data.map->count; i++) {
-            free(val->data.map->entries[i].key);
-            y_free(val->data.map->entries[i].value);
+        if (--val->data.map->refcount == 0) {
+            for (size_t i = 0; i < val->data.map->count; i++) {
+                free(val->data.map->entries[i].key);
+                y_free(val->data.map->entries[i].value);
+            }
+            free(val->data.map->entries);
+            free(val->data.map);
         }
-        free(val->data.map->entries);
-        free(val->data.map);
         break;
     case Y_FUNC:
         y_scope_release(val->data.func->closure);
@@ -783,10 +828,9 @@ YValue *y_builtin_join(YScope *closure, YValue **args, size_t argc) {
 YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
     if (argc < 2 || args[0]->type != Y_ARR) return y_mk_arr(NULL, 0);
-    /* The runtime clones on every scope_get/assignment, so args[0] is an
-     * exclusively-owned fresh clone here. Grow it in place (realloc) instead
-     * of deep-cloning every element — turns O(n) per push into O(1) amortized,
-     * which is critical for parser loops that build large node arrays. */
+    /* Copy-on-write: if the array is shared, deep-copy it first.
+     * Then grow in place (realloc) — O(1) amortized per push. */
+    y_arr_cow(args[0]);
     YArray *a = args[0]->data.arr;
     a->elements = realloc(a->elements, sizeof(YValue *) * (a->count + 1));
     a->elements[a->count] = args[1]; /* take ownership of the already-cloned arg */
@@ -883,6 +927,7 @@ void y_arr_set(YValue *arr, YValue *idx, YValue *val) {
         fprintf(stderr, "runtime error: arr_set target is not an array\n");
         exit(1);
     }
+    y_arr_cow(arr); /* copy-on-write before mutating */
     long i = idx->data.l;
     long count = (long)arr->data.arr->count;
     if (count == 0) {

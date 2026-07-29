@@ -133,7 +133,9 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
     char *body = emit_expr(ctx, func->body);
     fprintf(f, "    YValue *_result = %s;\n", body);
     free(body);
-    fprintf(f, "    return _result;\n");
+    fprintf(f, "    YValue *_ret = y_clone(_result);\n");
+    fprintf(f, "    y_scope_release(scope);\n");
+    fprintf(f, "    return _ret;\n");
     fprintf(f, "}\n\n");
 
     fclose(f);
@@ -274,7 +276,7 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
         char *r = fmt(
             "({ YScope *_outer = scope; "
             "YScope *scope = malloc(sizeof(YScope)); "
-            "y_scope_init(scope, _outer);%s _r; })",
+            "y_scope_init(scope, _outer);%s YValue *_ret = y_clone(_r); y_scope_release(scope); _ret; })",
             body);
         free(body);
         return r;
@@ -456,7 +458,7 @@ static char *emit_for(CodegenCtx *ctx, EFor *f) {
     /* Build the loop body piece by piece */
     char *r = fmt(
         "({ YScope *_outer = scope; "
-        "YScope *scope = malloc(sizeof(YScope)); "
+        "YScope *scope __attribute__((cleanup(y_scope_autorelease))) = malloc(sizeof(YScope)); "
         "y_scope_init(scope, _outer); ");
     if (init) {
         char *next = fmt("%s%s; ", r, init);
@@ -474,7 +476,7 @@ static char *emit_for(CodegenCtx *ctx, EFor *f) {
         next = fmt("%s%s; ", r, step);
         free(r); r = next;
     }
-    next = fmt("%s} _last; })", r);
+    next = fmt("%s} y_scope_release(scope); _last; })", r);
     free(r); r = next;
 
     free(init); free(cond); free(step); free(body);
@@ -492,7 +494,7 @@ static char *emit_foreach(CodegenCtx *ctx, EForEach *fe) {
         "YValue *_last = y_mk_null(); "
         "for (size_t _i = 0; _i < _arr->data.arr->count; _i++) { "
         "y_scope_set(scope, \"%s\", y_clone(_arr->data.arr->elements[_i])); "
-        "y_free(_last); _last = %s; } _last; })",
+        "y_free(_last); _last = %s; } y_scope_release(scope); _last; })",
         iter, fe->var_name, body);
     free(iter); free(body);
     return r;
@@ -512,7 +514,7 @@ static char *emit_forrange(CodegenCtx *ctx, EForRange *fr) {
         "YValue *_last = y_mk_null(); "
         "for (long _i = _s; _i < _e; _i++) { "
         "y_scope_set(scope, \"%s\", y_mk_long(_i)); "
-        "y_free(_last); _last = %s; } _last; })",
+        "y_free(_last); _last = %s; } y_scope_release(scope); _last; })",
         s, e, fr->var_name, body);
     free(s); free(e); free(body);
     return r;
