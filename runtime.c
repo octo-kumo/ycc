@@ -759,15 +759,15 @@ YValue *y_builtin_join(YScope *closure, YValue **args, size_t argc) {
 YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
     if (argc < 2 || args[0]->type != Y_ARR) return y_mk_arr(NULL, 0);
-    YArray *src = args[0]->data.arr;
-    size_t n = src->count + 1;
-    YValue **elems = malloc(sizeof(YValue *) * n);
-    for (size_t i = 0; i < src->count; i++)
-        elems[i] = y_clone(src->elements[i]);
-    elems[src->count] = y_clone(args[1]);
-    YValue *arr = y_mk_arr(elems, n);
-    free(elems);
-    return arr;
+    /* The runtime clones on every scope_get/assignment, so args[0] is an
+     * exclusively-owned fresh clone here. Grow it in place (realloc) instead
+     * of deep-cloning every element — turns O(n) per push into O(1) amortized,
+     * which is critical for parser loops that build large node arrays. */
+    YArray *a = args[0]->data.arr;
+    a->elements = realloc(a->elements, sizeof(YValue *) * (a->count + 1));
+    a->elements[a->count] = args[1]; /* take ownership of the already-cloned arg */
+    a->count++;
+    return args[0];
 }
 
 /* substr(s, start, len) -> str */

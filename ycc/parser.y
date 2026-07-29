@@ -327,7 +327,7 @@ def parse_foreach(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos:
     // foreach ( x in iterable ) { body }
     let name = tv(toks, p + 2);
     let it = parse_expr(toks, p + 4);  // skip 'foreach' '(' name 'in'
-    let body = parse_block(toks, it.pos);
+    let body = parse_block(toks, it.pos + 1);  // skip ')'
     res({ k: "foreach", name: name, iter: it.node, body: body.node }, body.pos)
 };
 

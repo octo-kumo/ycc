@@ -124,7 +124,7 @@ def emit_expr(node) -> str {
         emit_decl(node)
     } else if (k == "assign") {
         let v = emit_expr(node.v);
-        "y_scope_set(scope, \"" + node.name + "\", " + v + ")"
+        "({ YValue *_v = " + v + "; y_scope_set(scope, \"" + node.name + "\", _v); y_clone(_v); })"
     } else if (k == "idxassign") {
         let arr = emit_expr(node.arr);
         let idx = emit_expr(node.idx);
@@ -344,7 +344,9 @@ def emit_block(node) -> str {
 
 def emit_decl(node) -> str {
     let v = emit_expr(node.v);
-    "y_scope_set(scope, \"" + node.name + "\", " + v + ")"
+    // Wrap so the declaration yields a value (y_scope_set is void; a block's
+    // last statement must produce a value for the GCC statement expression).
+    "({ YValue *_v = " + v + "; y_scope_set(scope, \"" + node.name + "\", _v); y_clone(_v); })"
 };
 
 // ── top-level program emission ───────────────────────────────────────────
