@@ -154,6 +154,7 @@ YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ord(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_getenv(YScope *closure, YValue **args, size_t argc);
 
 /* arr_set(arr, idx, val) — mutate array element in place */
 void y_arr_set(YValue *arr, YValue *idx, YValue *val);

@@ -169,7 +169,10 @@ def main(cmdline: [str]) -> long {
                 let c_src = codegen.emit_program(ast);
                 write_file(c_path, c_src);
                 // compile with cc, linking runtime.c directly (like the C compiler)
-                let runtime_dir = base_dir + "/..";
+                let runtime_dir = getenv("YCC_RUNTIME_DIR");
+                if (runtime_dir == null) {
+                    runtime_dir = base_dir + "/..";
+                };
                 let cmd = "cc -O2 -std=gnu99 -I" + runtime_dir + " -o " + out_path + " " + c_path + " " + runtime_dir + "/runtime.c -lm";
                 let ret = exec(cmd);
                 if (ret != 0) {

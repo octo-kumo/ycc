@@ -81,9 +81,15 @@ YValue *y_mk_map(YMapEntry *entries, size_t count) {
                 }
             }
             if (existing < n) {
+                /* Duplicate key: last value wins. Free the displaced value
+                 * and the incoming (duplicate) key, keep the stored key. */
+                y_free(map->entries[existing].value);
                 map->entries[existing].value = entries[i].value;
             } else {
-                map->entries[n] = entries[i];
+                /* Copy the key so the map owns it uniformly (callers pass
+                 * string literals; y_free will free() every key). */
+                map->entries[n].key = strdup(entries[i].key);
+                map->entries[n].value = entries[i].value;
                 n++;
             }
         }
@@ -835,6 +841,16 @@ YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc) {
     const char *hit = strstr(args[0]->data.s, args[1]->data.s);
     if (!hit) return y_mk_long(-1);
     return y_mk_long((long)(hit - args[0]->data.s));
+}
+
+/* getenv(name) -> str|null — read an environment variable */
+YValue *y_builtin_getenv(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_STR)
+        return y_mk_null();
+    const char *val = getenv(args[0]->data.s);
+    if (!val) return y_mk_null();
+    return y_mk_str(val);
 }
 
 /* arr_set(arr, idx, val) — mutate array element in place */

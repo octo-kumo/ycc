@@ -982,22 +982,27 @@ _L_FREE_ALL_AND_RETURN_NONE:
 _L_CONTINUE:
 
     while (1) {
-        // parse parameter name and type, the syntax is "name: type"
+        // parse parameter name and optional type, the syntax is "name" or "name: type"
         parser_result_t param_res = parse_identifier(input);
         if (!param_res.is_some) { break; }
         input = param_res.remaining;
-        EXPECT_SYMBOL(':', {
-            free(param_res.value);
-            goto _L_FREE_ALL_AND_RETURN_NONE;
-        });
-        parser_result_t type_res = parse_type(input, true);
-        if (!type_res.is_some) {
-            free(param_res.value);
-            goto _L_FREE_ALL_AND_RETURN_NONE;
+        
+        type_t *param_type = _TYPE_INFERRED;
+        parser_result_t colon_res = parse_symbol(input, ':');
+        if (colon_res.is_some) {
+            input = colon_res.remaining;
+            parser_result_t type_res = parse_type(input, true);
+            if (!type_res.is_some) {
+                free(param_res.value);
+                goto _L_FREE_ALL_AND_RETURN_NONE;
+            }
+            param_type = (type_t *)type_res.value;
+            input = type_res.remaining;
         }
+        
         list_push(char *, param_names, param_res.value);
-        list_push(type_t *, param_types, (type_t *)type_res.value);
-        input = type_res.remaining;
+        list_push(type_t *, param_types, param_type);
+        
         parser_result_t comma_res = parse_symbol(input, ',');
         if (comma_res.is_some) {
             input = comma_res.remaining;

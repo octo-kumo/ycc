@@ -134,6 +134,8 @@ def emit_expr(node) -> str {
     } else if (k == "ret") {
         // return is handled by the block emitter wrapping in _result
         emit_expr(node.e)
+    } else if (k == "dot") {
+        emit_dot(node)
     } else {
         "y_mk_null() /* unknown: " + k + " */"
     }
@@ -145,7 +147,7 @@ def emit_dot(node) -> str {
     "({ YValue *_m = " + obj + "; " +
     "YValue *_v = y_map_get(_m, \"" + key + "\"); " +
     "if (!_v) { fprintf(stderr, \"runtime error: key '" + key + "' not found\\n\"); exit(1); } " +
-    "y_clone(_v); })"
+    "YValue *_r = y_clone(_v); y_free(_m); _r; })"
 };
 
 def emit_call(node) -> str {

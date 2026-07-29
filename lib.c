@@ -445,6 +445,16 @@ DEFINE_EXTERNAL_FUNC(chr, x, _VAL_INFERRED, VAL_STR, {
     return result;
 });
 
+/* getenv(name) -> str|null (read an environment variable) */
+DEFINE_EXTERNAL_FUNC(getenv, x, _VAL_INFERRED, _VAL_INFERRED, {
+    if (!x || x->type != VAL_STR) { return nval(VAL_NULL); }
+    const char *val = getenv(x->data.s);
+    if (!val) { return nval(VAL_NULL); }
+    VMValue *result = nval(VAL_STR);
+    result->data.s = strdup(val);
+    return result;
+});
+
 /* index_of(s, sub) -> long (first index of sub in s, -1 if not found) */
 DEFINE_EXTERNAL_FUNC2(index_of, s, sub, {
     VMValue *result = nval(VAL_LONG);
@@ -477,6 +487,7 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "ord", ord_type);
     map_set(&scope->variables, "chr", chr_type);
     map_set(&scope->variables, "index_of", index_of_type);
+    map_set(&scope->variables, "getenv", getenv_type);
 }
 void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "print", __external_print_func);
@@ -499,4 +510,5 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "ord", __external_ord_func);
     map_set(&scope->variables, "chr", __external_chr_func);
     map_set(&scope->variables, "index_of", __external_index_of_func);
+    map_set(&scope->variables, "getenv", __external_getenv_func);
 }
