@@ -573,11 +573,13 @@ ast_parser_result_t ast_parse_string(const char *input) {
 
     for (int i = 0; input[i]; i++) {
         if (input[i] == '\\') {
-            // Handle escape sequences, supportes \n \t \" \xhh
+            // Handle escape sequences, supportes \n \t \r \" \xhh
             if (input[i + 1] == 'n') {
                 P_STR_APPEND_CHAR('\n');
             } else if (input[i + 1] == 't') {
                 P_STR_APPEND_CHAR('\t');
+            } else if (input[i + 1] == 'r') {
+                P_STR_APPEND_CHAR('\r');
             } else if (input[i + 1] == '"') {
                 P_STR_APPEND_CHAR('"');
             } else if (input[i + 1] == 'x' && isxdigit(input[i + 2]) &&
