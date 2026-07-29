@@ -128,8 +128,8 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
         fprintf(f, "    args[%zu] = NULL; /* transfer ownership to scope */\n", i);
     }
 
-    /* self-reference for recursion */
-    fprintf(f, "    y_scope_set(scope, \"self\", y_mk_func(%s, %zu, closure));\n",
+    /* self-reference for recursion (local-only: don't clobber a parent's self) */
+    fprintf(f, "    y_scope_set_local(scope, \"self\", y_mk_func(%s, %zu, closure));\n",
             cname, func->param_count);
 
     /* Emit function body. If it's a block, emit statements directly into the
@@ -658,6 +658,7 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"getenv\",   y_mk_func(y_builtin_getenv,   1, NULL));\n\n");
     fwrite(main_buf, 1, main_len, out);
     fprintf(out, "\n    y_scope_release(scope);\n");

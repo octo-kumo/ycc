@@ -195,6 +195,23 @@ void y_scope_set(YScope *scope, const char *name, YValue *value) {
     scope->entries = e;
 }
 
+/* Set a binding in the CURRENT scope only (never walks up the chain).
+ * Used for 'self' so a nested function's self doesn't clobber the parent's. */
+void y_scope_set_local(YScope *scope, const char *name, YValue *value) {
+    for (YScopeEntry *e = scope->entries; e; e = e->next) {
+        if (strcmp(e->name, name) == 0) {
+            y_free(e->value);
+            e->value = value;
+            return;
+        }
+    }
+    YScopeEntry *e = malloc(sizeof(YScopeEntry));
+    e->name = strdup(name);
+    e->value = value;
+    e->next = scope->entries;
+    scope->entries = e;
+}
+
 /* ── Copy-on-write helpers ──────────────────────────────────────────────── */
 
 static void y_arr_cow(YValue *arr) {
@@ -953,6 +970,22 @@ YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc) {
     const char *hit = strstr(args[0]->data.s, args[1]->data.s);
     if (!hit) return y_mk_long(-1);
     return y_mk_long((long)(hit - args[0]->data.s));
+}
+
+/* last_index_of(s, sub) -> long  (last index of sub in s, -1 if not found) */
+YValue *y_builtin_last_index_of(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_STR)
+        return y_mk_long(-1);
+    const char *hay = args[0]->data.s;
+    const char *needle = args[1]->data.s;
+    size_t nlen = strlen(needle);
+    if (nlen == 0) return y_mk_long((long)strlen(hay));
+    const char *last = NULL;
+    for (const char *p = hay; (p = strstr(p, needle)) != NULL; p++)
+        last = p;
+    if (!last) return y_mk_long(-1);
+    return y_mk_long((long)(last - hay));
 }
 
 /* getenv(name) -> str|null — read an environment variable */

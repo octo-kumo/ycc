@@ -265,7 +265,7 @@ def emit_func_expr(node) -> str {
         "    YScope *scope = malloc(sizeof(YScope));\n" +
         "    y_scope_init(scope, closure);\n" +
         param_bind +
-        "    y_scope_set(scope, \"self\", y_mk_func(" + cname + ", " + tostring(nparams) + ", scope));\n" +
+        "    y_scope_set_local(scope, \"self\", y_mk_func(" + cname + ", " + tostring(nparams) + ", scope));\n" +
         "    YValue *_result = " + body + ";\n" +
         "    y_scope_release(scope);\n" +
         "    return _result;\n" +
@@ -437,7 +437,8 @@ def emit_program(ast) -> str {
     parts = push(parts, "    y_scope_set(scope, \"write_file\", y_mk_func(y_builtin_write_file, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n\n");
+    parts = push(parts, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n\n");
     parts = push(parts, body);
     parts = push(parts, "\n    return 0;\n");
     parts = push(parts, "}\n");

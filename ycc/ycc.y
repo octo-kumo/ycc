@@ -82,9 +82,11 @@ def resolve_imports(src: str, base_dir: str, depth: long) -> str {
                             mod_dir = base_dir + "/" + substr(path, 0, last_slash);
                         };
                         let processed = resolve_imports(mod_src, mod_dir, depth + 1);
-                        out_lines = push(out_lines, "let " + name + " = {");
+                        // Wrap module in an IIFE so defs live in a scope and the
+                        // export map is the returned value: let mod = (def(){ ... })();
+                        out_lines = push(out_lines, "let " + name + " = (def() {");
                         out_lines = push(out_lines, processed);
-                        out_lines = push(out_lines, "};");
+                        out_lines = push(out_lines, "})();");
                     };
                 } else {
                     out_lines = push(out_lines, line);
@@ -137,8 +139,8 @@ def main(cmdline: [str]) -> long {
             puts("error: cannot read file '" + file + "'\n");
             1
         } else {
-            // get base dir from file path
-            let last_slash = index_of(file, "/");
+            // get base dir from file path (use last slash, like C compiler's strrchr)
+            let last_slash = last_index_of(file, "/");
             let base_dir = ".";
             if (last_slash >= 0) {
                 base_dir = substr(file, 0, last_slash);

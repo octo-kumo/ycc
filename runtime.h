@@ -97,6 +97,7 @@ void y_scope_release(YScope *scope);
 YValue *y_scope_get(YScope *scope, const char *name);
 YValue *y_scope_take(YScope *scope, const char *name);
 void y_scope_set(YScope *scope, const char *name, YValue *value);
+void y_scope_set_local(YScope *scope, const char *name, YValue *value);
 
 /* ── Value operations ───────────────────────────────────────────────────── */
 
@@ -158,6 +159,7 @@ YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ord(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_last_index_of(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_getenv(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_tok_type(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_tok_value(YScope *closure, YValue **args, size_t argc);
