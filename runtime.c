@@ -159,6 +159,23 @@ YValue *y_scope_get(YScope *scope, const char *name) {
     exit(1);
 }
 
+/* Take ownership of a value from scope (transfers ownership, leaves a null
+ * placeholder so y_scope_set can still find and update the binding in the
+ * correct scope). Returns NULL if not found. Use for reassignment patterns
+ * like arr = push(arr, x) to avoid COW copies. */
+YValue *y_scope_take(YScope *scope, const char *name) {
+    for (YScope *s = scope; s; s = s->parent) {
+        for (YScopeEntry *e = s->entries; e; e = e->next) {
+            if (strcmp(e->name, name) == 0) {
+                YValue *val = e->value;
+                e->value = y_mk_null(); /* placeholder keeps the binding alive */
+                return val;
+            }
+        }
+    }
+    return NULL;
+}
+
 void y_scope_set(YScope *scope, const char *name, YValue *value) {
     /* Walk up the scope chain to find an existing binding to update */
     for (YScope *s = scope; s; s = s->parent) {
