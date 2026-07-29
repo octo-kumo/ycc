@@ -88,15 +88,30 @@ def parse_postfix(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos:
             node = { k: "call", callee: node, args: a.node };
             pos = a.pos + 1;  // skip ')'
         } else if (is_punct(toks, pos, "[")) {
-            // index or slice
-            let first = parse_expr(toks, pos + 1);
-            if (is_op(toks, first.pos, ":")) {
-                let second = parse_expr(toks, first.pos + 1);
-                node = { k: "slice", arr: node, lo: first.node, hi: second.node };
+            // index or slice: arr[i], arr[lo:hi], arr[lo:], arr[:hi]
+            if (is_punct(toks, pos + 1, ":")) {
+                // arr[:hi] — no lo
+                let second = parse_expr(toks, pos + 2);
+                node = { k: "slice", arr: node, lo: { k: "null" }, hi: second.node };
                 pos = second.pos + 1;  // skip ']'
             } else {
-                node = { k: "index", arr: node, idx: first.node };
-                pos = first.pos + 1;  // skip ']'
+                let first = parse_expr(toks, pos + 1);
+                if (is_punct(toks, first.pos, ":")) {
+                    if (is_punct(toks, first.pos + 1, "]")) {
+                        // arr[lo:] — no hi
+                        node = { k: "slice", arr: node, lo: first.node, hi: { k: "null" } };
+                        pos = first.pos + 2;  // skip ':' and ']'
+                    } else {
+                        // arr[lo:hi]
+                        let second = parse_expr(toks, first.pos + 1);
+                        node = { k: "slice", arr: node, lo: first.node, hi: second.node };
+                        pos = second.pos + 1;  // skip ']'
+                    };
+                } else {
+                    // arr[i] — index
+                    node = { k: "index", arr: node, idx: first.node };
+                    pos = first.pos + 1;  // skip ']'
+                };
             };
         } else if (is_op(toks, pos, ".")) {
             let name = tv(toks, pos + 1);
@@ -205,6 +220,37 @@ def parse_map(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: lon
     }
 };
 
+// ── type parsing ─────────────────────────────────────────────────────────
+
+def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
+    // Parse a type annotation and return the position after it.
+    // Types: long, str, bool, [T], (T, T) -> T
+    let pos = p;
+    if (is_punct(toks, pos, "[")) {
+        // array type: [T]
+        pos = parse_type(toks, pos + 1);
+        pos = pos + 1;  // skip ']'
+    } else if (is_punct(toks, pos, "(")) {
+        // function type: (T, T) -> T
+        pos = pos + 1;  // skip '('
+        if (!is_punct(toks, pos, ")")) {
+            let go = true;
+            while (go) {
+                pos = parse_type(toks, pos);
+                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+            };
+        };
+        pos = pos + 1;  // skip ')'
+        if (is_op(toks, pos, "->")) {
+            pos = parse_type(toks, pos + 1);
+        };
+    } else {
+        // simple type: long, str, bool, etc.
+        pos = pos + 1;
+    };
+    pos
+};
+
 // ── function literal ─────────────────────────────────────────────────────
 
 def parse_func(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: long } {
@@ -226,14 +272,14 @@ def parse_func(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: lo
             names = push(names, nm);
             pos = pos + 1;  // name
             if (is_punct(toks, pos, ":")) {
-                pos = pos + 2;  // skip ':' and type
+                pos = parse_type(toks, pos + 1);  // skip ':' and parse full type
             };
             if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
         };
     };
     pos = pos + 1;  // skip ')'
     // optional return type '-> type'
-    if (is_op(toks, pos, "->")) { pos = pos + 2; };
+    if (is_op(toks, pos, "->")) { pos = parse_type(toks, pos + 1); };
     let body = parse_block(toks, pos);
     let func = { k: "func", params: names, body: body.node };
     if (fname == "") {
@@ -287,7 +333,7 @@ def parse_decl(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: lo
     let name = tv(toks, p + 1);
     let pos = p + 2;
     // optional ': type'
-    if (is_punct(toks, pos, ":")) { pos = pos + 2; };
+    if (is_punct(toks, pos, ":")) { pos = parse_type(toks, pos + 1); };
     // '='
     pos = pos + 1;
     let e = parse_expr(toks, pos);

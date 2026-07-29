@@ -69,7 +69,12 @@ def next_fid() -> long {
 def emit_expr(node) -> str {
     let k = node.k;
     if (k == "num") {
-        "y_mk_long(" + node.v + ")"
+        // detect float: contains '.'
+        if (index_of(node.v, ".") >= 0) {
+            "y_mk_float(" + node.v + ")"
+        } else {
+            "y_mk_long(" + node.v + ")"
+        }
     } else if (k == "str") {
         "y_mk_str(\"" + esc(node.v) + "\")"
     } else if (k == "id") {
@@ -80,9 +85,15 @@ def emit_expr(node) -> str {
         "y_mk_null()"
     } else if (k == "un") {
         let operand = emit_expr(node.e);
-        "({ YValue *_u = " + operand + "; " +
-        "if (_u->type != Y_BOOL) { fprintf(stderr, \"runtime error: '!' requires bool\\n\"); exit(1); } " +
-        "YValue *_r = y_mk_bool(!_u->data.b); y_free(_u); _r; })"
+        if (node.op == "-") {
+            // arithmetic negation
+            "y_neg(" + operand + ")"
+        } else {
+            // logical NOT
+            "({ YValue *_u = " + operand + "; " +
+            "if (_u->type != Y_BOOL) { fprintf(stderr, \"runtime error: '!' requires bool\\n\"); exit(1); } " +
+            "YValue *_r = y_mk_bool(!_u->data.b); y_free(_u); _r; })"
+        }
     } else if (k == "bin") {
         if (node.op == ".") {
             emit_dot(node)
@@ -108,8 +119,9 @@ def emit_expr(node) -> str {
         }
     } else if (k == "slice") {
         let arr = emit_expr(node.arr);
-        let lo = emit_expr(node.lo);
-        let hi = emit_expr(node.hi);
+        // null lo -> 0, null hi -> -1 (wraps to last element)
+        let lo = if (node.lo.k == "null") { "y_mk_long(0)" } else { emit_expr(node.lo) };
+        let hi = if (node.hi.k == "null") { "y_mk_long(-1)" } else { emit_expr(node.hi) };
         "y_arr_slice(" + arr + ", " + lo + ", " + hi + ")"
     } else if (k == "array") {
         emit_array(node)
@@ -244,7 +256,8 @@ def emit_func_expr(node) -> str {
     let i = 0;
     while (i < nparams) {
         let pi = params[i];
-        param_bind = param_bind + "    y_scope_set(scope, \"" + pi + "\", y_clone(args[" + tostring(i) + "]));\n";
+        // bind arg into scope, then NULL it so the call site's y_free is a no-op
+        param_bind = param_bind + "    y_scope_set(scope, \"" + pi + "\", args[" + tostring(i) + "]); args[" + tostring(i) + "] = NULL;\n";
         i = i + 1;
     };
     let fdef = "static YValue *" + cname + "(YScope *closure, YValue **args, size_t argc) {\n" +
@@ -252,7 +265,9 @@ def emit_func_expr(node) -> str {
         "    YScope *scope = malloc(sizeof(YScope));\n" +
         "    y_scope_init(scope, closure);\n" +
         param_bind +
+        "    y_scope_set(scope, \"self\", y_mk_func(" + cname + ", " + tostring(nparams) + ", scope));\n" +
         "    YValue *_result = " + body + ";\n" +
+        "    y_scope_release(scope);\n" +
         "    return _result;\n" +
         "}\n";
     g_funcs = push(g_funcs, fdef);
@@ -304,7 +319,7 @@ def emit_foreach(node) -> str {
     "YValue *_last = y_mk_null(); " +
     "for (size_t _i = 0; _i < _arr->data.arr->count; _i++) { " +
     "y_scope_set(scope, \"" + name + "\", y_clone(_arr->data.arr->elements[_i])); " +
-    "y_free(_last); _last = " + b + "; } _last; })"
+    "y_free(_last); _last = " + b + "; } y_scope_release(scope); _last; })"
 };
 
 def emit_forrange(node) -> str {
@@ -321,7 +336,7 @@ def emit_forrange(node) -> str {
     "YValue *_last = y_mk_null(); " +
     "for (long _i = _s; _i < _e; _i++) { " +
     "y_scope_set(scope, \"" + name + "\", y_mk_long(_i)); " +
-    "y_free(_last); _last = " + b + "; } _last; })"
+    "y_free(_last); _last = " + b + "; } y_scope_release(scope); _last; })"
 };
 
 def emit_block(node) -> str {
@@ -339,16 +354,19 @@ def emit_block(node) -> str {
         };
         // wrap in a statement expression with a new scope.
         // Build the "stmt; stmt; ... last" body via a chunk list + join (O(n)).
+        // Non-final statements are freed; the block result is cloned out before
+        // the scope is released (it may reference a scope value).
         let chunks = [];
         let j = 0;
         while (j < n - 1) {
-            chunks = push(chunks, " " + parts[j] + ";");
+            chunks = push(chunks, " y_free((YValue *)(" + parts[j] + "));");
             j = j + 1;
         };
         let body = join(chunks, "");
         let last = parts[n - 1];
         "({ YScope *_outer = scope; YScope *scope = malloc(sizeof(YScope)); " +
-        "y_scope_init(scope, _outer);" + body + " " + last + "; })"
+        "y_scope_init(scope, _outer);" + body + " YValue *_r = " + last + "; " +
+        "YValue *_ret = y_clone(_r); y_scope_release(scope); _ret; })"
     }
 };
 
