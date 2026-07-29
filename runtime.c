@@ -686,6 +686,28 @@ YValue *y_builtin_exec(YScope *closure, YValue **args, size_t argc) {
     return y_mk_long(WIFEXITED(ret) ? WEXITSTATUS(ret) : -1);
 }
 
+/* argv() -> [str]  (command-line arguments) */
+static int g_argc = 0;
+static char **g_argv = NULL;
+
+void y_set_argv(int argc, char **argv) {
+    g_argc = argc;
+    g_argv = argv;
+}
+
+YValue *y_builtin_argv(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    (void)args;
+    (void)argc;
+    YValue **elements = malloc(sizeof(YValue *) * (g_argc > 0 ? g_argc : 1));
+    for (int i = 0; i < g_argc; i++) {
+        elements[i] = y_mk_str(g_argv[i]);
+    }
+    YValue *arr = y_mk_arr(elements, g_argc);
+    free(elements);
+    return arr;
+}
+
 /* tonum(s) -> long  (parse integer from string, 0 on failure) */
 YValue *y_builtin_tonum(YScope *closure, YValue **args, size_t argc) {
     (void)closure;

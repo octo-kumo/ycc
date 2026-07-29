@@ -196,6 +196,7 @@ int main(int argc, char *argv[]) {
     ast_print_code(stdout, res.value, 0);
     printf("\n\n");
     run_tc(res.value);
+    vm_set_argv(argc, argv);
     run_vm(res.value);
 
     if (res.remaining[0] != '\0') {

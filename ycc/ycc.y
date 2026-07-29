@@ -20,26 +20,18 @@ def parse_args(argv: [str]) -> { mode: str, out: str, file: str } {
         let a = argv[i];
         if (a == "--compile" || a == "-c") {
             mode = "compile";
-            // optional output path
-            if (i + 1 < n && substr(argv[i + 1], 0, 1) != "-") {
-                i = i + 1;
-                out = argv[i];
-            };
         } else if (a == "--emit-c" || a == "-S") {
             mode = "emit-c";
-            if (i + 1 < n && substr(argv[i + 1], 0, 1) != "-") {
-                i = i + 1;
-                out = argv[i];
-            };
         } else if (a == "-o") {
             if (i + 1 < n) {
                 i = i + 1;
                 out = argv[i];
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [--compile OUTPUT] [--emit-c OUTPUT] FILE\n");
-            puts("  --compile OUT   compile FILE to native binary OUT (default: a.out)\n");
-            puts("  --emit-c OUT    emit C source to OUT (default: stdout)\n");
+            puts("Usage: ycc [--compile|-c] [--emit-c|-S] [-o OUTPUT] FILE\n");
+            puts("  -c, --compile   compile FILE to a native binary\n");
+            puts("  -S, --emit-c    emit C source only\n");
+            puts("  -o OUTPUT       output path (default: a.out, or stdout for -S)\n");
             puts("  (no flags)      run FILE in the built-in VM\n");
         } else {
             file = a;
@@ -130,8 +122,8 @@ def resolve_imports(src: str, base_dir: str, depth: long) -> str {
 
 // ── main ─────────────────────────────────────────────────────────────────
 
-def main(argv: [str]) -> long {
-    let args = parse_args(argv);
+def main(cmdline: [str]) -> long {
+    let args = parse_args(cmdline);
     let mode = args.mode;
     let out = args.out;
     let file = args.file;
@@ -176,11 +168,12 @@ def main(argv: [str]) -> long {
                 let c_path = "/tmp/ycc_tmp.c";
                 let c_src = codegen.emit_program(ast);
                 write_file(c_path, c_src);
-                // compile with gcc
-                let cmd = "gcc -o " + out_path + " " + c_path + " -I" + base_dir + "/.. -L" + base_dir + "/.. -lyruntime";
+                // compile with cc, linking runtime.c directly (like the C compiler)
+                let runtime_dir = base_dir + "/..";
+                let cmd = "cc -O2 -std=gnu99 -I" + runtime_dir + " -o " + out_path + " " + c_path + " " + runtime_dir + "/runtime.c -lm";
                 let ret = exec(cmd);
                 if (ret != 0) {
-                    puts("error: gcc failed with exit code " + tostring(ret) + "\n");
+                    puts("error: cc failed with exit code " + tostring(ret) + "\n");
                     ret
                 } else {
                     0
@@ -193,12 +186,5 @@ def main(argv: [str]) -> long {
     }
 };
 
-// entry point
-let argv = ["ycc"];
-// In a real compiler, argv would come from the runtime. For now, we hardcode
-// a test invocation. The C compiler's main() will call this with real args.
-// For bootstrap testing, we'll compile a simple program.
-let test_src = "def add(a: long, b: long) { a + b }; print(add(3, 4));";
-write_file("/tmp/ycc_test.y", test_src);
-let result = main(["ycc", "--emit-c", "/tmp/ycc_test.c", "/tmp/ycc_test.y"]);
-print("ycc exit code: " + tostring(result));
+// entry point — use real command-line arguments
+let result = main(argv());

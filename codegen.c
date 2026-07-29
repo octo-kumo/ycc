@@ -563,7 +563,8 @@ int codegen_emit(Expr *ast, FILE *out) {
     }
 
     fprintf(out, "/* ── entry point ── */\n\n");
-    fprintf(out, "int main(void) {\n");
+    fprintf(out, "int main(int argc, char **argv) {\n");
+    fprintf(out, "    y_set_argv(argc, argv);\n");
     fprintf(out, "    YScope *scope = malloc(sizeof(YScope));\n");
     fprintf(out, "    y_scope_init(scope, NULL);\n\n");
     fprintf(out, "    /* builtins */\n");
@@ -577,6 +578,7 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"len\",      y_mk_func(y_builtin_len,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"trim\",     y_mk_func(y_builtin_trim,     1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"exec\",     y_mk_func(y_builtin_exec,     1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"argv\",     y_mk_func(y_builtin_argv,     0, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"tonum\",    y_mk_func(y_builtin_tonum,    1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"join\",     y_mk_func(y_builtin_join,     2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"push\",     y_mk_func(y_builtin_push,     2, NULL));\n");

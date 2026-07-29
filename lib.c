@@ -41,6 +41,45 @@
     VMValue *__external_##name##_func = &(VMValue){                          \
         .type = VAL_FUNC, .data.closure = &__ext_cl_##name};
 
+/* Zero-argument external builtin. */
+#define DEFINE_EXTERNAL_FUNC0(name, return_type_base, body_code)             \
+    VMValue *external_##name(VMVariableScope *scope) {                       \
+        (void)scope;                                                         \
+        body_code                                                            \
+    }                                                                        \
+    type_t *name##_type = &(type_t){                                         \
+        .base = VAL_FUNC,                                                    \
+        .as.func =                                                           \
+            {                                                                \
+                .param_count = 0,                                            \
+                .param_types = NULL,                                         \
+                .return_type = &(type_t){.base = return_type_base},          \
+            },                                                               \
+    };                                                                       \
+    static Expr __ext_expr0_##name = {                                       \
+        .kind = EXPR_EFUNC,                                                  \
+        .as.efunc =                                                          \
+            {                                                                \
+                .param_count = 0,                                            \
+                .param_names = NULL,                                         \
+                .param_types = NULL,                                         \
+                .body = (void *)external_##name,                             \
+                .external = true,                                            \
+            },                                                               \
+    };                                                                       \
+    static VMClosure __ext_cl0_##name = {                                    \
+        .func = &__ext_expr0_##name, .scope = NULL};                         \
+    VMValue *__external_##name##_func = &(VMValue){                          \
+        .type = VAL_FUNC, .data.closure = &__ext_cl0_##name};
+
+/* Program argv, set by main() before running the VM. */
+static int g_vm_argc = 0;
+static char **g_vm_argv = NULL;
+void vm_set_argv(int argc, char **argv) {
+    g_vm_argc = argc;
+    g_vm_argv = argv;
+}
+
 DEFINE_EXTERNAL_FUNC(print, x, _VAL_INFERRED, VAL_NULL, {
     if (x) {
         printf("[print] ");
@@ -235,6 +274,20 @@ DEFINE_EXTERNAL_FUNC(exec, x, _VAL_INFERRED, VAL_LONG, {
     return result;
 });
 
+/* argv() -> [str]  (command-line arguments) */
+DEFINE_EXTERNAL_FUNC0(argv, VAL_ARR, {
+    VMValue *result = nval(VAL_ARR);
+    VMArray *arr = malloc(sizeof(VMArray));
+    arr->count = g_vm_argc > 0 ? (size_t)g_vm_argc : 0;
+    arr->elements = malloc(sizeof(VMValue *) * (arr->count > 0 ? arr->count : 1));
+    for (int i = 0; i < g_vm_argc; i++) {
+        arr->elements[i] = nval(VAL_STR);
+        arr->elements[i]->data.s = strdup(g_vm_argv[i]);
+    }
+    result->data.arr = arr;
+    return result;
+});
+
 /* tonum(s) -> long */
 DEFINE_EXTERNAL_FUNC(tonum, x, _VAL_INFERRED, VAL_LONG, {
     VMValue *result = nval(VAL_LONG);
@@ -414,6 +467,7 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "len", len_type);
     map_set(&scope->variables, "trim", trim_type);
     map_set(&scope->variables, "exec", exec_type);
+    map_set(&scope->variables, "argv", argv_type);
     map_set(&scope->variables, "tonum", tonum_type);
     map_set(&scope->variables, "join", join_type);
     map_set(&scope->variables, "push", push_type);
@@ -435,6 +489,7 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "len", __external_len_func);
     map_set(&scope->variables, "trim", __external_trim_func);
     map_set(&scope->variables, "exec", __external_exec_func);
+    map_set(&scope->variables, "argv", __external_argv_func);
     map_set(&scope->variables, "tonum", __external_tonum_func);
     map_set(&scope->variables, "join", __external_join_func);
     map_set(&scope->variables, "push", __external_push_func);

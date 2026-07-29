@@ -143,6 +143,8 @@ YValue *y_builtin_split(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_len(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_trim(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_exec(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_argv(YScope *closure, YValue **args, size_t argc);
+void y_set_argv(int argc, char **argv);
 YValue *y_builtin_tonum(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_join(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc);
