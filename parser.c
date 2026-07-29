@@ -547,6 +547,13 @@ ast_parser_result_t ast_parse_true_false(const char *input) {
         expr->as.ebool = false;
         return asome(expr, false_res.remaining);
     }
+    parser_result_t null_res =
+        parse_keyword(input, (const char *[]){"null", NULL});
+    if (null_res.is_some) {
+        Expr *expr = (Expr *)malloc(sizeof(Expr));
+        expr->kind = EXPR_ENULL;
+        return asome(expr, null_res.remaining);
+    }
     return anone(original_input);
 }
 
@@ -773,25 +780,40 @@ ast_parser_result_t ast_parse_binary_op(const char *input) {
         return anone(original_input);
     }
 
-    /* Assignment: x = expr (right side is a full inline expression) */
+    /* Assignment: x = expr or arr[i] = expr */
     Operator first_op = (Operator)(uintptr_t)op_check.value;
     if (first_op == O_ASSIGN) {
-        if (left.value->kind != EXPR_EVAR) {
-            ast_free(left.value);
-            return anone(original_input);
+        if (left.value->kind == EXPR_EVAR) {
+            ast_parser_result_t right =
+                ast__parse_inline_expr(op_check.remaining);
+            if (!right.is_some) {
+                ast_free(left.value);
+                return anone(original_input);
+            }
+            Expr *assign_node = (Expr *)malloc(sizeof(Expr));
+            assign_node->kind = EXPR_EASSIGNMENT;
+            assign_node->as.assignment_node.var_name = left.value->as.evar;
+            assign_node->as.assignment_node.value = right.value;
+            free(left.value);
+            return asome(assign_node, right.remaining);
         }
-        ast_parser_result_t right =
-            ast__parse_inline_expr(op_check.remaining);
-        if (!right.is_some) {
-            ast_free(left.value);
-            return anone(original_input);
+        if (left.value->kind == EXPR_EARRAY_IDX) {
+            ast_parser_result_t right =
+                ast__parse_inline_expr(op_check.remaining);
+            if (!right.is_some) {
+                ast_free(left.value);
+                return anone(original_input);
+            }
+            Expr *node = (Expr *)malloc(sizeof(Expr));
+            node->kind = EXPR_EARRAY_ASSIGN;
+            node->as.array_assign_node.array = left.value->as.array_idx_node.array;
+            node->as.array_assign_node.idx = left.value->as.array_idx_node.idx;
+            node->as.array_assign_node.value = right.value;
+            free(left.value); /* free the shell, children moved */
+            return asome(node, right.remaining);
         }
-        Expr *assign_node = (Expr *)malloc(sizeof(Expr));
-        assign_node->kind = EXPR_EASSIGNMENT;
-        assign_node->as.assignment_node.var_name = left.value->as.evar;
-        assign_node->as.assignment_node.value = right.value;
-        free(left.value);
-        return asome(assign_node, right.remaining);
+        ast_free(left.value);
+        return anone(original_input);
     }
 
     /* Precedence-climbing loop for binary operators */
@@ -857,6 +879,25 @@ ast_parser_result_t ast_parse_array_idx(const char *input) {
             ast_end_idx.is_some ? ast_end_idx.value : ast_of_long(-1);
         return asome(slice_node, input);
     } else if (ast_idx.is_some) {
+        // Check for array assignment: arr[i] = val
+        SKIP_SPACES;
+        parser_result_t assign_res = parse_symbol(input, '=');
+        if (assign_res.is_some && assign_res.remaining[0] != '=') {
+            // It's arr[i] = val (not ==)
+            input = assign_res.remaining;
+            ast_parser_result_t val_res = ast__parse_inline_expr(input);
+            if (!val_res.is_some) {
+                ast_free(ast_arr.value);
+                ast_free(ast_idx.value);
+                return anone(original_input);
+            }
+            Expr *node = (Expr *)malloc(sizeof(Expr));
+            node->kind = EXPR_EARRAY_ASSIGN;
+            node->as.array_assign_node.array = ast_arr.value;
+            node->as.array_assign_node.idx = ast_idx.value;
+            node->as.array_assign_node.value = val_res.value;
+            return asome(node, val_res.remaining);
+        }
         // Handle normal index
         Expr *idx_node = (Expr *)malloc(sizeof(Expr));
         idx_node->kind = EXPR_EARRAY_IDX;
@@ -1292,6 +1333,7 @@ const ast_parser_t EXPR_PARSERS[] = {__EXPR_INLINE_PARSERS,
                                      __EXPR_BLOCK_PARSERS, NULL};
 const ast_parser_t EXPR_ALLOWED_BIN_OPS[] = {ast_parse_paren_expr,
                                              ast_parse_function_call,
+                                             ast_parse_array_idx,
                                              ast_parse_map,
                                              ast_parse_array,
 

@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include <inttypes.h>
+#include <sys/wait.h>
 
 /* ── Constructors ───────────────────────────────────────────────────────── */
 
@@ -570,6 +571,181 @@ YValue *y_builtin_typeof(YScope *closure, YValue **args, size_t argc) {
     v->type = Y_STR;
     v->data.s = strdup(buf);
     return v;
+}
+
+/* readline() -> str | null on EOF */
+YValue *y_builtin_readline(YScope *closure, YValue **args, size_t argc) {
+    (void)closure; (void)args; (void)argc;
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n = getline(&line, &cap, stdin);
+    if (n < 0) { free(line); return y_mk_null(); }
+    if (n > 0 && line[n - 1] == '\n') line[--n] = '\0';
+    YValue *v = malloc(sizeof(YValue));
+    v->type = Y_STR;
+    v->data.s = line;
+    return v;
+}
+
+/* puts(s) — print without [print] prefix and without trailing newline */
+YValue *y_builtin_puts(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc > 0) {
+        char *s = y_to_str(args[0]);
+        fputs(s, stdout);
+        fflush(stdout);
+        free(s);
+    }
+    return y_mk_null();
+}
+
+/* split(s, delim) -> [str] */
+YValue *y_builtin_split(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_STR)
+        return y_mk_arr(NULL, 0);
+    const char *s = args[0]->data.s;
+    const char *delim = args[1]->data.s;
+    size_t dlen = strlen(delim);
+    if (dlen == 0) return y_mk_arr(NULL, 0);
+    /* Count tokens first */
+    size_t count = 0;
+    const char *p = s;
+    while (*p) {
+        count++;
+        const char *next = strstr(p, delim);
+        p = next ? next + dlen : p + strlen(p);
+    }
+    if (count == 0) return y_mk_arr(NULL, 0);
+    YValue **elems = malloc(sizeof(YValue *) * count);
+    size_t i = 0;
+    p = s;
+    while (*p) {
+        const char *next = strstr(p, delim);
+        size_t len = next ? (size_t)(next - p) : strlen(p);
+        elems[i++] = y_mk_str_n(p, len);
+        p = next ? next + dlen : p + strlen(p);
+    }
+    YValue *arr = y_mk_arr(elems, count);
+    free(elems);
+    return arr;
+}
+
+/* len(x) -> long  (string length or array count) */
+YValue *y_builtin_len(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1) return y_mk_long(0);
+    switch (args[0]->type) {
+    case Y_STR: return y_mk_long((long)strlen(args[0]->data.s));
+    case Y_ARR: return y_mk_long((long)args[0]->data.arr->count);
+    default: return y_mk_long(0);
+    }
+}
+
+/* trim(s) -> str  (strip leading/trailing whitespace) */
+YValue *y_builtin_trim(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_STR) return y_mk_str("");
+    const char *s = args[0]->data.s;
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    size_t len = strlen(s);
+    while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' ||
+                       s[len-1] == '\n' || s[len-1] == '\r'))
+        len--;
+    return y_mk_str_n(s, len);
+}
+
+/* exec(cmd) -> long  (system() call, returns exit code) */
+YValue *y_builtin_exec(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_STR) return y_mk_long(-1);
+    int ret = system(args[0]->data.s);
+    return y_mk_long(WIFEXITED(ret) ? WEXITSTATUS(ret) : -1);
+}
+
+/* tonum(s) -> long  (parse integer from string, 0 on failure) */
+YValue *y_builtin_tonum(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1) return y_mk_long(0);
+    if (args[0]->type == Y_LONG) return y_mk_long(args[0]->data.l);
+    if (args[0]->type == Y_FLOAT) return y_mk_long((long)args[0]->data.f);
+    if (args[0]->type != Y_STR) return y_mk_long(0);
+    char *end;
+    long v = strtol(args[0]->data.s, &end, 10);
+    if (end == args[0]->data.s) return y_mk_long(0);
+    return y_mk_long(v);
+}
+
+/* join(arr, delim) -> str */
+YValue *y_builtin_join(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_ARR || args[1]->type != Y_STR)
+        return y_mk_str("");
+    YArray *arr = args[0]->data.arr;
+    const char *delim = args[1]->data.s;
+    size_t total = 0;
+    char **parts = malloc(sizeof(char *) * (arr->count > 0 ? arr->count : 1));
+    for (size_t i = 0; i < arr->count; i++) {
+        parts[i] = y_to_str(arr->elements[i]);
+        total += strlen(parts[i]);
+    }
+    total += strlen(delim) * (arr->count > 0 ? arr->count - 1 : 0) + 1;
+    char *result = malloc(total);
+    result[0] = '\0';
+    for (size_t i = 0; i < arr->count; i++) {
+        if (i > 0) strcat(result, delim);
+        strcat(result, parts[i]);
+        free(parts[i]);
+    }
+    free(parts);
+    YValue *v = malloc(sizeof(YValue));
+    v->type = Y_STR;
+    v->data.s = result;
+    return v;
+}
+
+/* push(arr, val) -> arr  (append, returns new array) */
+YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_ARR) return y_mk_arr(NULL, 0);
+    YArray *src = args[0]->data.arr;
+    size_t n = src->count + 1;
+    YValue **elems = malloc(sizeof(YValue *) * n);
+    for (size_t i = 0; i < src->count; i++)
+        elems[i] = y_clone(src->elements[i]);
+    elems[src->count] = y_clone(args[1]);
+    YValue *arr = y_mk_arr(elems, n);
+    free(elems);
+    return arr;
+}
+
+/* substr(s, start, len) -> str */
+YValue *y_builtin_substr(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 3 || args[0]->type != Y_STR) return y_mk_str("");
+    const char *s = args[0]->data.s;
+    long slen = (long)strlen(s);
+    long start = args[1]->data.l;
+    long count = args[2]->data.l;
+    if (start < 0) start = 0;
+    if (start >= slen) return y_mk_str("");
+    if (count < 0 || start + count > slen) count = slen - start;
+    return y_mk_str_n(s + start, (size_t)count);
+}
+
+/* arr_set(arr, idx, val) — mutate array element in place */
+void y_arr_set(YValue *arr, YValue *idx, YValue *val) {
+    if (arr->type != Y_ARR) {
+        fprintf(stderr, "runtime error: arr_set target is not an array\n");
+        exit(1);
+    }
+    long i = idx->data.l;
+    if (i < 0 || (size_t)i >= arr->data.arr->count) {
+        fprintf(stderr, "runtime error: array index out of bounds\n");
+        exit(1);
+    }
+    y_free(arr->data.arr->elements[i]);
+    arr->data.arr->elements[i] = val;
 }
 
 /* ── String escaping ────────────────────────────────────────────────────── */

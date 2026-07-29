@@ -367,6 +367,7 @@ typecheck_result_t tc_expr(Expr *expr, TCVarTypeScope *scope) {
     case EXPR_ELONG: return TC_OK(TYPE_LONG);
     case EXPR_EFLOAT: return TC_OK(TYPE_FLOAT);
     case EXPR_EBOOL: return TC_OK(TYPE_BOOL);
+    case EXPR_ENULL: return TC_OK(TYPE_NULL);
     case EXPR_ESTR: return TC_OK(TYPE_STR);
     case EXPR_EFUNC: return tc_function(expr, scope);
     case EXPR_EVAR: {
@@ -445,6 +446,19 @@ typecheck_result_t tc_expr(Expr *expr, TCVarTypeScope *scope) {
         typecheck_result_t r = tc_expr(expr->as.forrange_node.body, &fr_scope);
         map_free(&fr_scope.variables);
         return r;
+    }
+    case EXPR_EARRAY_ASSIGN: {
+        typecheck_result_t arr_res =
+            tc_expr(expr->as.array_assign_node.array, scope);
+        if (!arr_res.is_ok) return arr_res;
+        if (arr_res.type->base != VAL_ARR)
+            return TC_ERR("Array assignment target must be an array", expr);
+        typecheck_result_t idx_res =
+            tc_expr(expr->as.array_assign_node.idx, scope);
+        if (!idx_res.is_ok) return idx_res;
+        if (idx_res.type->base != VAL_LONG)
+            return TC_ERR("Array index must be a long", expr);
+        return tc_expr(expr->as.array_assign_node.value, scope);
     }
     }
     // assume typecheck ok

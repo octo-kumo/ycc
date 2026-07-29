@@ -3,6 +3,7 @@
 #include "typecheck.h"
 #include "vm.h"
 #include <stdio.h>
+#include <sys/wait.h>
 
 #define DEFINE_EXTERNAL_FUNC(name, param_name, param_type_base,                \
                              return_type_base, body_code)                      \
@@ -95,15 +96,262 @@ DEFINE_EXTERNAL_FUNC(range, x, VAL_LONG, VAL_ARR, {
     }
 });
 
+/* ── Multi-param builtins (manual, macro only supports 1 param) ─────────── */
+
+#define DEFINE_EXTERNAL_FUNC2(name, p1, p2, body_code)                         \
+    VMValue *external_##name(VMVariableScope *scope) {                         \
+        VMValue *p1 = vm_scope_get(scope, #p1);                               \
+        VMValue *p2 = vm_scope_get(scope, #p2);                               \
+        body_code                                                              \
+    }                                                                          \
+    type_t *name##_type = &(type_t){                                           \
+        .base = VAL_FUNC,                                                      \
+        .as.func =                                                             \
+            {                                                                  \
+                .param_count = 2,                                              \
+                .param_types =                                                 \
+                    (type_t *[]){&(type_t){.base = _VAL_INFERRED},             \
+                                 &(type_t){.base = _VAL_INFERRED}},            \
+                .return_type = &(type_t){.base = _VAL_INFERRED},               \
+            },                                                                 \
+    };                                                                         \
+    VMValue *__external_##name##_func = &(VMValue){                            \
+        .type = VAL_FUNC,                                                      \
+        .data.func = &(Expr){                                                  \
+            .kind = EXPR_EFUNC,                                                \
+            .as.efunc =                                                        \
+                {                                                              \
+                    .param_count = 2,                                          \
+                    .param_names = (char *[]){#p1, #p2},                       \
+                    .param_types =                                             \
+                        (type_t *[]){&(type_t){.base = _VAL_INFERRED},         \
+                                     &(type_t){.base = _VAL_INFERRED}},        \
+                    .body = (void *)external_##name,                           \
+                    .external = true,                                          \
+                },                                                             \
+        }};
+
+#define DEFINE_EXTERNAL_FUNC3(name, p1, p2, p3, body_code)                     \
+    VMValue *external_##name(VMVariableScope *scope) {                         \
+        VMValue *p1 = vm_scope_get(scope, #p1);                               \
+        VMValue *p2 = vm_scope_get(scope, #p2);                               \
+        VMValue *p3 = vm_scope_get(scope, #p3);                               \
+        body_code                                                              \
+    }                                                                          \
+    type_t *name##_type = &(type_t){                                           \
+        .base = VAL_FUNC,                                                      \
+        .as.func =                                                             \
+            {                                                                  \
+                .param_count = 3,                                              \
+                .param_types =                                                 \
+                    (type_t *[]){&(type_t){.base = _VAL_INFERRED},             \
+                                 &(type_t){.base = _VAL_INFERRED},             \
+                                 &(type_t){.base = _VAL_INFERRED}},            \
+                .return_type = &(type_t){.base = _VAL_INFERRED},               \
+            },                                                                 \
+    };                                                                         \
+    VMValue *__external_##name##_func = &(VMValue){                            \
+        .type = VAL_FUNC,                                                      \
+        .data.func = &(Expr){                                                  \
+            .kind = EXPR_EFUNC,                                                \
+            .as.efunc =                                                        \
+                {                                                              \
+                    .param_count = 3,                                          \
+                    .param_names = (char *[]){#p1, #p2, #p3},                  \
+                    .param_types =                                             \
+                        (type_t *[]){&(type_t){.base = _VAL_INFERRED},         \
+                                     &(type_t){.base = _VAL_INFERRED},         \
+                                     &(type_t){.base = _VAL_INFERRED}},        \
+                    .body = (void *)external_##name,                           \
+                    .external = true,                                          \
+                },                                                             \
+        }};
+
+/* readline() -> str | null */
+DEFINE_EXTERNAL_FUNC(readline, x, _VAL_INFERRED, VAL_STR, {
+    (void)x;
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n = getline(&line, &cap, stdin);
+    if (n < 0) { free(line); return nval(VAL_NULL); }
+    if (n > 0 && line[n - 1] == '\n') line[--n] = '\0';
+    VMValue *result = nval(VAL_STR);
+    result->data.s = line;
+    return result;
+});
+
+/* puts(s) — raw output, no prefix, no newline */
+DEFINE_EXTERNAL_FUNC(puts, x, _VAL_INFERRED, VAL_NULL, {
+    if (x) {
+        fputs(val_to_str(x), stdout);
+        fflush(stdout);
+    }
+    return nval(VAL_NULL);
+});
+
+/* len(x) -> long */
+DEFINE_EXTERNAL_FUNC(len, x, _VAL_INFERRED, VAL_LONG, {
+    VMValue *result = nval(VAL_LONG);
+    if (!x) { result->data.l = 0; return result; }
+    switch (x->type) {
+    case VAL_STR: result->data.l = (long)strlen(x->data.s); break;
+    case VAL_ARR: result->data.l = (long)x->data.arr->count; break;
+    default: result->data.l = 0;
+    }
+    return result;
+});
+
+/* trim(s) -> str */
+DEFINE_EXTERNAL_FUNC(trim, x, _VAL_INFERRED, VAL_STR, {
+    if (!x || x->type != VAL_STR) {
+        VMValue *r = nval(VAL_STR); r->data.s = strdup(""); return r;
+    }
+    const char *s = x->data.s;
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    size_t slen = strlen(s);
+    while (slen > 0 && (s[slen-1]==' '||s[slen-1]=='\t'||s[slen-1]=='\n'||s[slen-1]=='\r'))
+        slen--;
+    VMValue *result = nval(VAL_STR);
+    result->data.s = strndup(s, slen);
+    return result;
+});
+
+/* exec(cmd) -> long */
+DEFINE_EXTERNAL_FUNC(exec, x, _VAL_INFERRED, VAL_LONG, {
+    VMValue *result = nval(VAL_LONG);
+    if (!x || x->type != VAL_STR) { result->data.l = -1; return result; }
+    int ret = system(x->data.s);
+    result->data.l = WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
+    return result;
+});
+
+/* tonum(s) -> long */
+DEFINE_EXTERNAL_FUNC(tonum, x, _VAL_INFERRED, VAL_LONG, {
+    VMValue *result = nval(VAL_LONG);
+    if (!x) { result->data.l = 0; return result; }
+    if (x->type == VAL_LONG) { result->data.l = x->data.l; return result; }
+    if (x->type == VAL_FLOAT) { result->data.l = (long)x->data.f; return result; }
+    if (x->type != VAL_STR) { result->data.l = 0; return result; }
+    char *end;
+    result->data.l = strtol(x->data.s, &end, 10);
+    if (end == x->data.s) result->data.l = 0;
+    return result;
+});
+
+/* split(s, delim) -> [str] */
+DEFINE_EXTERNAL_FUNC2(split, s, delim, {
+    if (!s || s->type != VAL_STR || !delim || delim->type != VAL_STR) {
+        VMValue *r = nval(VAL_ARR);
+        VMArray *a = malloc(sizeof(VMArray)); a->count = 0; a->elements = NULL;
+        r->data.arr = a; return r;
+    }
+    const char *str = s->data.s;
+    const char *d = delim->data.s;
+    size_t dlen = strlen(d);
+    if (dlen == 0) {
+        VMValue *r = nval(VAL_ARR);
+        VMArray *a = malloc(sizeof(VMArray)); a->count = 0; a->elements = NULL;
+        r->data.arr = a; return r;
+    }
+    size_t count = 0;
+    const char *p = str;
+    while (*p) { count++; const char *nx = strstr(p, d); p = nx ? nx + dlen : p + strlen(p); }
+    VMValue **elems = malloc(sizeof(VMValue *) * (count > 0 ? count : 1));
+    size_t i = 0; p = str;
+    while (*p) {
+        const char *nx = strstr(p, d);
+        size_t len = nx ? (size_t)(nx - p) : strlen(p);
+        elems[i] = nval(VAL_STR); elems[i]->data.s = strndup(p, len); i++;
+        p = nx ? nx + dlen : p + strlen(p);
+    }
+    VMValue *result = nval(VAL_ARR);
+    VMArray *arr = malloc(sizeof(VMArray));
+    arr->count = count; arr->elements = elems;
+    result->data.arr = arr;
+    return result;
+});
+
+/* join(arr, delim) -> str */
+DEFINE_EXTERNAL_FUNC2(join, arr, delim, {
+    VMValue *result = nval(VAL_STR);
+    if (!arr || arr->type != VAL_ARR || !delim || delim->type != VAL_STR) {
+        result->data.s = strdup(""); return result;
+    }
+    size_t total = 1;
+    for (size_t i = 0; i < arr->data.arr->count; i++)
+        total += strlen(val_to_str(arr->data.arr->elements[i])) + strlen(delim->data.s);
+    char *buf = malloc(total);
+    buf[0] = '\0';
+    for (size_t i = 0; i < arr->data.arr->count; i++) {
+        if (i > 0) strcat(buf, delim->data.s);
+        strcat(buf, val_to_str(arr->data.arr->elements[i]));
+    }
+    result->data.s = buf;
+    return result;
+});
+
+/* push(arr, val) -> arr */
+DEFINE_EXTERNAL_FUNC2(push, arr, val, {
+    if (!arr || arr->type != VAL_ARR) {
+        VMValue *r = nval(VAL_ARR);
+        VMArray *a = malloc(sizeof(VMArray)); a->count = 0; a->elements = NULL;
+        r->data.arr = a; return r;
+    }
+    size_t n = arr->data.arr->count + 1;
+    VMValue **elems = malloc(sizeof(VMValue *) * n);
+    for (size_t i = 0; i < arr->data.arr->count; i++)
+        elems[i] = val_clone(arr->data.arr->elements[i]);
+    elems[arr->data.arr->count] = val_clone(val);
+    VMValue *result = nval(VAL_ARR);
+    VMArray *a = malloc(sizeof(VMArray));
+    a->count = n; a->elements = elems;
+    result->data.arr = a;
+    return result;
+});
+
+/* substr(s, start, len) -> str */
+DEFINE_EXTERNAL_FUNC3(substr, s, start, count, {
+    VMValue *result = nval(VAL_STR);
+    if (!s || s->type != VAL_STR) { result->data.s = strdup(""); return result; }
+    long slen = (long)strlen(s->data.s);
+    long st = start ? start->data.l : 0;
+    long cnt = count ? count->data.l : slen;
+    if (st < 0) st = 0;
+    if (st >= slen) { result->data.s = strdup(""); return result; }
+    if (cnt < 0 || st + cnt > slen) cnt = slen - st;
+    result->data.s = strndup(s->data.s + st, (size_t)cnt);
+    return result;
+});
+
 void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "print", print_type);
     map_set(&scope->variables, "tostring", tostring_type);
     map_set(&scope->variables, "typeof", typeof_type);
     map_set(&scope->variables, "range", range_type);
+    map_set(&scope->variables, "readline", readline_type);
+    map_set(&scope->variables, "puts", puts_type);
+    map_set(&scope->variables, "split", split_type);
+    map_set(&scope->variables, "len", len_type);
+    map_set(&scope->variables, "trim", trim_type);
+    map_set(&scope->variables, "exec", exec_type);
+    map_set(&scope->variables, "tonum", tonum_type);
+    map_set(&scope->variables, "join", join_type);
+    map_set(&scope->variables, "push", push_type);
+    map_set(&scope->variables, "substr", substr_type);
 }
 void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "print", __external_print_func);
     map_set(&scope->variables, "tostring", __external_tostring_func);
     map_set(&scope->variables, "typeof", __external_typeof_func);
     map_set(&scope->variables, "range", __external_range_func);
+    map_set(&scope->variables, "readline", __external_readline_func);
+    map_set(&scope->variables, "puts", __external_puts_func);
+    map_set(&scope->variables, "split", __external_split_func);
+    map_set(&scope->variables, "len", __external_len_func);
+    map_set(&scope->variables, "trim", __external_trim_func);
+    map_set(&scope->variables, "exec", __external_exec_func);
+    map_set(&scope->variables, "tonum", __external_tonum_func);
+    map_set(&scope->variables, "join", __external_join_func);
+    map_set(&scope->variables, "push", __external_push_func);
+    map_set(&scope->variables, "substr", __external_substr_func);
 }

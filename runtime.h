@@ -137,6 +137,19 @@ YValue *y_builtin_print(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_tostring(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_range(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_typeof(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_readline(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_puts(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_split(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_len(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_trim(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_exec(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_tonum(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_join(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_substr(YScope *closure, YValue **args, size_t argc);
+
+/* arr_set(arr, idx, val) — mutate array element in place */
+void y_arr_set(YValue *arr, YValue *idx, YValue *val);
 
 /* ── String escaping (for codegen string literals) ──────────────────────── */
 

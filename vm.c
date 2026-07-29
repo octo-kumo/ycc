@@ -323,6 +323,9 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
         val->data.b = expr->as.ebool;
         return val;
     }
+    case EXPR_ENULL: {
+        return nval(VAL_NULL);
+    }
     case EXPR_EVAR: {
         VMValue *val = vm_scope_get(scope, expr->as.evar);
         if (!val) {
@@ -810,6 +813,35 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
         }
         vm_scope_free(&fr_scope);
         return last;
+    }
+    case EXPR_EARRAY_ASSIGN: {
+        VMValue *array_val = vm_execute(scope, expr->as.array_assign_node.array);
+        if (array_val->type != VAL_ARR) {
+            fprintf(stderr, "Array assignment target must be an array\n");
+            exit(1);
+        }
+        VMValue *idx_val = vm_execute(scope, expr->as.array_assign_node.idx);
+        if (idx_val->type != VAL_LONG) {
+            fprintf(stderr, "Array index must be a long\n");
+            exit(1);
+        }
+        long idx = idx_val->data.l;
+        if (idx < 0 || (size_t)idx >= array_val->data.arr->count) {
+            fprintf(stderr, "Array index out of bounds\n");
+            exit(1);
+        }
+        VMValue *value = vm_execute(scope, expr->as.array_assign_node.value);
+        /* Mutate the clone, then write it back to scope */
+        val_free(array_val->data.arr->elements[idx]);
+        array_val->data.arr->elements[idx] = value;
+        /* Write modified array back if the target was a variable */
+        if (expr->as.array_assign_node.array->kind == EXPR_EVAR) {
+            vm_scope_set(scope, expr->as.array_assign_node.array->as.evar,
+                         array_val);
+        }
+        val_free(array_val);
+        val_free(idx_val);
+        return nval(VAL_NULL);
     }
     }
     fprintf(stderr, "Unsupported expression kind: %d\n", expr->kind);

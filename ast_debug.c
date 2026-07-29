@@ -285,6 +285,15 @@ void ast_walk(Expr *expr, int indent) {
         ast_walk_labeled("end:", expr->as.forrange_node.end, indent + 1);
         ast_walk_labeled("body:", expr->as.forrange_node.body, indent + 1);
         break;
+    case EXPR_EARRAY_ASSIGN:
+        printf(ANSI_BLUE "EArrayAssign" ANSI_RESET "\n");
+        ast_walk_labeled("array:", expr->as.array_assign_node.array, indent + 1);
+        ast_walk_labeled("idx:", expr->as.array_assign_node.idx, indent + 1);
+        ast_walk_labeled("value:", expr->as.array_assign_node.value, indent + 1);
+        break;
+    case EXPR_ENULL:
+        printf(ANSI_DIM "ENull" ANSI_RESET "\n");
+        break;
     }
 }
 

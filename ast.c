@@ -25,7 +25,7 @@ const char *operator_to_str(Operator op) {
 //                            "func", "arr",  "map",   NULL};
 const char *KEYWORDS[] = {"let",   "const", "def",    "if",   "else",
                           "while", "for",   "return", "in",   "foreach",
-                          NULL};
+                          "null",  NULL};
 
 void ast_free(Expr *expr) {
     if (!expr) return;
@@ -119,6 +119,12 @@ void ast_free(Expr *expr) {
         ast_free(expr->as.forrange_node.end);
         ast_free(expr->as.forrange_node.body);
         break;
+    case EXPR_EARRAY_ASSIGN:
+        ast_free(expr->as.array_assign_node.array);
+        ast_free(expr->as.array_assign_node.idx);
+        ast_free(expr->as.array_assign_node.value);
+        break;
+    case EXPR_ENULL: break;
     }
     free(expr);
 }
@@ -241,6 +247,15 @@ Expr *ast_clone(Expr *expr) {
         copy->as.forrange_node.end = ast_clone(expr->as.forrange_node.end);
         copy->as.forrange_node.body = ast_clone(expr->as.forrange_node.body);
         break;
+    case EXPR_EARRAY_ASSIGN:
+        copy->as.array_assign_node.array =
+            ast_clone(expr->as.array_assign_node.array);
+        copy->as.array_assign_node.idx =
+            ast_clone(expr->as.array_assign_node.idx);
+        copy->as.array_assign_node.value =
+            ast_clone(expr->as.array_assign_node.value);
+        break;
+    case EXPR_ENULL: break;
     }
     return copy;
 }

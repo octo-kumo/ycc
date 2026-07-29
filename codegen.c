@@ -188,6 +188,9 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     case EXPR_EBOOL:
         return fmt("y_mk_bool(%d)", expr->as.ebool ? 1 : 0);
 
+    case EXPR_ENULL:
+        return fmt("y_mk_null()");
+
     case EXPR_ESTR: {
         char *esc = escape_c_str(expr->as.estr.data, (size_t)expr->as.estr.length);
         char *r = fmt("y_mk_str_n(\"%s\", %d)", esc, expr->as.estr.length);
@@ -387,6 +390,29 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     case EXPR_EFOREACH: return emit_foreach(ctx, &expr->as.foreach_node);
     case EXPR_EFORRANGE: return emit_forrange(ctx, &expr->as.forrange_node);
 
+    case EXPR_EARRAY_ASSIGN: {
+        /* arr[i] = val  →  mutate the array in scope */
+        char *arr = emit_expr(ctx, expr->as.array_assign_node.array);
+        char *idx = emit_expr(ctx, expr->as.array_assign_node.idx);
+        char *val = emit_expr(ctx, expr->as.array_assign_node.value);
+        char *r;
+        if (expr->as.array_assign_node.array->kind == EXPR_EVAR) {
+            /* Variable target: get from scope, mutate, write back */
+            r = fmt(
+                "({ YValue *_a = y_scope_get(scope, \"%s\"); "
+                "YValue *_i = %s; YValue *_v = %s; "
+                "y_arr_set(_a, _i, _v); y_mk_null(); })",
+                expr->as.array_assign_node.array->as.evar, idx, val);
+        } else {
+            r = fmt(
+                "({ YValue *_a = %s; YValue *_i = %s; YValue *_v = %s; "
+                "y_arr_set(_a, _i, _v); y_mk_null(); })",
+                arr, idx, val);
+        }
+        free(arr); free(idx); free(val);
+        return r;
+    }
+
     default:
         fprintf(stderr, "codegen: unsupported expr kind %d\n", expr->kind);
         return fmt("y_mk_null()");
@@ -534,7 +560,17 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"print\",    y_mk_func(y_builtin_print,    1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"tostring\", y_mk_func(y_builtin_tostring, 1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"typeof\",   y_mk_func(y_builtin_typeof,   1, NULL));\n");
-    fprintf(out, "    y_scope_set(scope, \"range\",    y_mk_func(y_builtin_range,    1, NULL));\n\n");
+    fprintf(out, "    y_scope_set(scope, \"range\",    y_mk_func(y_builtin_range,    1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"readline\", y_mk_func(y_builtin_readline, 0, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"puts\",     y_mk_func(y_builtin_puts,     1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"split\",    y_mk_func(y_builtin_split,    2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"len\",      y_mk_func(y_builtin_len,      1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"trim\",     y_mk_func(y_builtin_trim,     1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"exec\",     y_mk_func(y_builtin_exec,     1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"tonum\",    y_mk_func(y_builtin_tonum,    1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"join\",     y_mk_func(y_builtin_join,     2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"push\",     y_mk_func(y_builtin_push,     2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"substr\",   y_mk_func(y_builtin_substr,   3, NULL));\n\n");
     fwrite(main_buf, 1, main_len, out);
     fprintf(out, "\n    return 0;\n");
     fprintf(out, "}\n");

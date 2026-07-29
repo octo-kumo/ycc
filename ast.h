@@ -54,6 +54,8 @@ typedef enum {
     EXPR_EFOR,
     EXPR_EFOREACH,
     EXPR_EFORRANGE,
+    EXPR_EARRAY_ASSIGN,
+    EXPR_ENULL,
 } ExprKind;
 
 typedef enum {
@@ -161,6 +163,12 @@ typedef struct {
     struct Expr *body;
 } EForRange;
 
+typedef struct {
+    struct Expr *array;
+    struct Expr *idx;
+    struct Expr *value;
+} EArrayAssign;
+
 typedef struct Expr {
     ExprKind kind;
     union {
@@ -184,6 +192,7 @@ typedef struct Expr {
         EFor for_node;
         EForEach foreach_node;
         EForRange forrange_node;
+        EArrayAssign array_assign_node;
     } as;
 } Expr;
 
