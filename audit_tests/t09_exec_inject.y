@@ -1,0 +1,1 @@
+exec("echo pwned > /tmp/audit_pwned; echo injected")

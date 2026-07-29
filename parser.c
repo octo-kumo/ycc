@@ -1215,6 +1215,28 @@ ast_parser_result_t ast_parse_function_call(const char *input) {
     ast_parser_result_t ast_callee = ast_parse_var_or_paren_expr(input);
     if (!ast_callee.is_some) { return anone(original_input); }
     input = ast_callee.remaining;
+
+    /* Allow a dot-access chain as the callee so that `m.f(args)` parses as
+     * a call of the field `f` on `m`, rather than `m . (f(args))`. */
+    while (1) {
+        const char *save = input;
+        SKIP_SPACES;
+        if (input[0] != '.') { input = save; break; }
+        const char *after_dot = input + 1;
+        parser_result_t field = parse_identifier(after_dot);
+        if (!field.is_some) { input = save; break; }
+        Expr *field_node = (Expr *)malloc(sizeof(Expr));
+        field_node->kind = EXPR_EVAR;
+        field_node->as.evar = (char *)field.value;
+        Expr *dot_node = (Expr *)malloc(sizeof(Expr));
+        dot_node->kind = EXPR_EOP;
+        dot_node->as.op_node.op = O_DOT;
+        dot_node->as.op_node.left = ast_callee.value;
+        dot_node->as.op_node.right = field_node;
+        ast_callee.value = dot_node;
+        input = field.remaining;
+    }
+
     EXPECT_SYMBOL('(', {
         ast_free(ast_callee.value);
         return anone(original_input);

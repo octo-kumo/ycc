@@ -23,21 +23,23 @@
                 .return_type = &(type_t){.base = return_type_base},            \
             },                                                                 \
     };                                                                         \
-    /* 3. The VMValue Function Object */                                       \
-    VMValue *__external_##name##_func = &(VMValue){                            \
-        .type = VAL_FUNC,                                                      \
-        .data.func = &(Expr){                                                  \
-            .kind = EXPR_EFUNC,                                                \
-            .as.efunc =                                                        \
-                {                                                              \
-                    .param_count = 1,                                          \
-                    .param_names = (char *[]){#param_name},                    \
-                    .param_types =                                             \
-                        (type_t *[]){&(type_t){.base = param_type_base}},      \
-                    .body = (void *)external_##name,                           \
-                    .external = true,                                          \
-                },                                                             \
-        }};
+    /* 3. The VMValue Function Object (external: closure with NULL scope) */  \
+    static Expr __ext_expr_##name = {                                        \
+        .kind = EXPR_EFUNC,                                                  \
+        .as.efunc =                                                          \
+            {                                                                \
+                .param_count = 1,                                            \
+                .param_names = (char *[]){#param_name},                      \
+                .param_types =                                               \
+                    (type_t *[]){&(type_t){.base = param_type_base}},        \
+                .body = (void *)external_##name,                             \
+                .external = true,                                            \
+            },                                                               \
+    };                                                                       \
+    static VMClosure __ext_cl_##name = {                                     \
+        .func = &__ext_expr_##name, .scope = NULL};                          \
+    VMValue *__external_##name##_func = &(VMValue){                          \
+        .type = VAL_FUNC, .data.closure = &__ext_cl_##name};
 
 DEFINE_EXTERNAL_FUNC(print, x, _VAL_INFERRED, VAL_NULL, {
     if (x) {
@@ -115,21 +117,23 @@ DEFINE_EXTERNAL_FUNC(range, x, VAL_LONG, VAL_ARR, {
                 .return_type = &(type_t){.base = _VAL_INFERRED},               \
             },                                                                 \
     };                                                                         \
-    VMValue *__external_##name##_func = &(VMValue){                            \
-        .type = VAL_FUNC,                                                      \
-        .data.func = &(Expr){                                                  \
-            .kind = EXPR_EFUNC,                                                \
-            .as.efunc =                                                        \
-                {                                                              \
-                    .param_count = 2,                                          \
-                    .param_names = (char *[]){#p1, #p2},                       \
-                    .param_types =                                             \
-                        (type_t *[]){&(type_t){.base = _VAL_INFERRED},         \
-                                     &(type_t){.base = _VAL_INFERRED}},        \
-                    .body = (void *)external_##name,                           \
-                    .external = true,                                          \
-                },                                                             \
-        }};
+    static Expr __ext_expr_##name = {                                        \
+        .kind = EXPR_EFUNC,                                                  \
+        .as.efunc =                                                          \
+            {                                                                \
+                .param_count = 2,                                            \
+                .param_names = (char *[]){#p1, #p2},                         \
+                .param_types =                                               \
+                    (type_t *[]){&(type_t){.base = _VAL_INFERRED},           \
+                                 &(type_t){.base = _VAL_INFERRED}},          \
+                .body = (void *)external_##name,                             \
+                .external = true,                                            \
+            },                                                               \
+    };                                                                       \
+    static VMClosure __ext_cl_##name = {                                     \
+        .func = &__ext_expr_##name, .scope = NULL};                          \
+    VMValue *__external_##name##_func = &(VMValue){                          \
+        .type = VAL_FUNC, .data.closure = &__ext_cl_##name};
 
 #define DEFINE_EXTERNAL_FUNC3(name, p1, p2, p3, body_code)                     \
     VMValue *external_##name(VMVariableScope *scope) {                         \
@@ -150,22 +154,24 @@ DEFINE_EXTERNAL_FUNC(range, x, VAL_LONG, VAL_ARR, {
                 .return_type = &(type_t){.base = _VAL_INFERRED},               \
             },                                                                 \
     };                                                                         \
-    VMValue *__external_##name##_func = &(VMValue){                            \
-        .type = VAL_FUNC,                                                      \
-        .data.func = &(Expr){                                                  \
-            .kind = EXPR_EFUNC,                                                \
-            .as.efunc =                                                        \
-                {                                                              \
-                    .param_count = 3,                                          \
-                    .param_names = (char *[]){#p1, #p2, #p3},                  \
-                    .param_types =                                             \
-                        (type_t *[]){&(type_t){.base = _VAL_INFERRED},         \
-                                     &(type_t){.base = _VAL_INFERRED},         \
-                                     &(type_t){.base = _VAL_INFERRED}},        \
-                    .body = (void *)external_##name,                           \
-                    .external = true,                                          \
-                },                                                             \
-        }};
+    static Expr __ext_expr_##name = {                                        \
+        .kind = EXPR_EFUNC,                                                  \
+        .as.efunc =                                                          \
+            {                                                                \
+                .param_count = 3,                                            \
+                .param_names = (char *[]){#p1, #p2, #p3},                    \
+                .param_types =                                               \
+                    (type_t *[]){&(type_t){.base = _VAL_INFERRED},           \
+                                 &(type_t){.base = _VAL_INFERRED},           \
+                                 &(type_t){.base = _VAL_INFERRED}},          \
+                .body = (void *)external_##name,                             \
+                .external = true,                                            \
+            },                                                               \
+    };                                                                       \
+    static VMClosure __ext_cl_##name = {                                     \
+        .func = &__ext_expr_##name, .scope = NULL};                          \
+    VMValue *__external_##name##_func = &(VMValue){                          \
+        .type = VAL_FUNC, .data.closure = &__ext_cl_##name};
 
 /* readline() -> str | null */
 DEFINE_EXTERNAL_FUNC(readline, x, _VAL_INFERRED, VAL_STR, {

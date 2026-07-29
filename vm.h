@@ -28,7 +28,7 @@ typedef struct VMValue {
         double f;
         bool b;
         char *s;
-        Expr *func;
+        struct VMClosure *closure;
         VMArray *arr;
         VMMap *map;
         type_t *type;
@@ -44,12 +44,24 @@ struct VMVariableScope;
 typedef struct VMVariableScope {
     struct VMVariableScope *parent;
     map_t variables; // Map of variable name to Variable
+    int refcount;    // heap-allocated, reference-counted (for closures)
 } VMVariableScope;
+
+/* A closure pairs a function's AST with the lexical scope it was defined in. */
+typedef struct VMClosure {
+    Expr *func;             /* EXPR_EFUNC node (not owned) */
+    VMVariableScope *scope; /* captured defining scope (retained) */
+} VMClosure;
+
 VMValue *vm_scope_get(VMVariableScope *scope, const char *name);
 void vm_scope_set(VMVariableScope *scope, const char *name, VMValue *value);
+VMVariableScope *vm_scope_new(VMVariableScope *parent);
+VMVariableScope *vm_scope_retain(VMVariableScope *scope);
+void vm_scope_release(VMVariableScope *scope);
+VMValue *vm_mk_external_func(Expr *func_expr);
 
 typedef struct {
-    VMVariableScope globals;
+    VMVariableScope *globals;
 } VM;
 void val_print(const VMValue *val);
 char *val_to_str(const VMValue *val);

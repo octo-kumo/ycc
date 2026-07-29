@@ -35,7 +35,7 @@ bool val_equals(VMValue *left, VMValue *right) {
         return left->data.type ==
                right->data.type; // TODO: two different type_t might be equal
                                  // too, handle in future
-    case VAL_FUNC: return left->data.func == right->data.func;
+    case VAL_FUNC: return left->data.closure == right->data.closure;
     case VAL_ARR: {
         if (left->data.arr->count != right->data.arr->count) { return false; }
         for (size_t i = 0; i < left->data.arr->count; i++) {
@@ -85,19 +85,19 @@ void val_to_buf(const VMValue *val, char *buf, size_t buf_size) {
         break;
     case VAL_FUNC: {
         char param_types_str[256] = "";
-        for (size_t i = 0; i < val->data.func->as.efunc.param_count; i++) {
+        for (size_t i = 0; i < val->data.closure->func->as.efunc.param_count; i++) {
             char type_str[64];
-            type_t_to_buf(val->data.func->as.efunc.param_types[i], type_str,
+            type_t_to_buf(val->data.closure->func->as.efunc.param_types[i], type_str,
                           sizeof(type_str));
             strncat(param_types_str, type_str,
                     sizeof(param_types_str) - strlen(param_types_str) - 1);
-            if (i < val->data.func->as.efunc.param_count - 1) {
+            if (i < val->data.closure->func->as.efunc.param_count - 1) {
                 strncat(param_types_str, ", ",
                         sizeof(param_types_str) - strlen(param_types_str) - 1);
             }
         }
         char return_type_str[64] = "";
-        type_t_to_buf(val->data.func->as.efunc.return_type, return_type_str,
+        type_t_to_buf(val->data.closure->func->as.efunc.return_type, return_type_str,
                       sizeof(return_type_str));
         snprintf(buf, buf_size, "<function (%s)->(%s)>", param_types_str,
                  return_type_str);
@@ -156,9 +156,9 @@ type_t *val_type(const VMValue *val) {
     case VAL_STR: return TYPE_STR;
     case VAL_FUNC: {
         type_t *func_type = tc_make_t(VAL_FUNC);
-        func_type->as.func.param_count = val->data.func->as.efunc.param_count;
-        func_type->as.func.param_types = val->data.func->as.efunc.param_types;
-        func_type->as.func.return_type = val->data.func->as.efunc.return_type;
+        func_type->as.func.param_count = val->data.closure->func->as.efunc.param_count;
+        func_type->as.func.param_types = val->data.closure->func->as.efunc.param_types;
+        func_type->as.func.return_type = val->data.closure->func->as.efunc.return_type;
         return func_type;
     }
     case VAL_TYPE: {
@@ -195,8 +195,7 @@ type_t *val_type(const VMValue *val) {
     return NULL; // should never reach here
 }
 VMValue *val_clone(const VMValue *src) {
-    if (src->type == VAL_FUNC && src->data.func->kind == EXPR_EFUNC &&
-        src->data.func->as.efunc.external) {
+    if (src->type == VAL_FUNC && src->data.closure->scope == NULL) {
         // external functions are singletons, so we just return the same pointer
         return (VMValue *)src;
     }
@@ -205,7 +204,13 @@ VMValue *val_clone(const VMValue *src) {
     case VAL_LONG: dst->data.l = src->data.l; break;
     case VAL_BOOL: dst->data.b = src->data.b; break;
     case VAL_STR: dst->data.s = strdup(src->data.s); break;
-    case VAL_FUNC: dst->data.func = src->data.func; break;
+    case VAL_FUNC: {
+        VMClosure *c = malloc(sizeof(VMClosure));
+        c->func = src->data.closure->func;
+        c->scope = vm_scope_retain(src->data.closure->scope);
+        dst->data.closure = c;
+        break;
+    }
     case VAL_NULL: break;
     case VAL_TYPE:
         dst->data.type = src->data.type;
@@ -241,13 +246,15 @@ void val_free(VMValue *val) {
     switch (val->type) {
     case VAL_STR: free(val->data.s); break;
 
-    case _VAL_INFERRED:
+    case _VAL_INFERRED: break;
     case VAL_FUNC: {
-        if (val->data.func->kind == EXPR_EFUNC &&
-            val->data.func->as.efunc.external) {
-            // external functions don't own their data, so we don't free them
+        if (val->data.closure->scope == NULL) {
+            // external functions are static singletons; never free them
             return;
         }
+        vm_scope_release(val->data.closure->scope);
+        free(val->data.closure);
+        break;
     }
     case VAL_LONG:
     case VAL_BOOL:
@@ -298,11 +305,36 @@ void vm_scope_set(VMVariableScope *scope, const char *name, VMValue *value) {
     map_set(&scope->variables, name, val_clone(value));
 }
 
-void vm_init(VM *vm) {
-    vm->globals = (VMVariableScope){0};
-    map_init(&vm->globals.variables);
-    populate_scope(&vm->globals);
+VMVariableScope *vm_scope_new(VMVariableScope *parent) {
+    VMVariableScope *s = malloc(sizeof(VMVariableScope));
+    s->parent = parent;
+    s->refcount = 1;
+    map_init(&s->variables);
+    return s;
 }
+
+VMVariableScope *vm_scope_retain(VMVariableScope *scope) {
+    if (scope) scope->refcount++;
+    return scope;
+}
+
+void vm_scope_release(VMVariableScope *scope) {
+    if (!scope) return;
+    if (--scope->refcount > 0) return;
+    for (size_t i = 0; i < scope->variables.len; i++) {
+        val_free(scope->variables.items[i].value);
+    }
+    map_free(&scope->variables);
+    free(scope);
+}
+
+void vm_init(VM *vm) {
+    vm->globals = vm_scope_new(NULL);
+    populate_scope(vm->globals);
+}
+
+/* Compatibility wrapper: release a heap scope (drops one reference). */
+void vm_scope_free(VMVariableScope *scope) { vm_scope_release(scope); }
 
 size_t byte_len(const char *s) { return strlen(s); }
 
@@ -555,15 +587,13 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         return val;
     }
     case EXPR_EBLOCK: {
-        VMVariableScope nested_scope;
-        map_init(&nested_scope.variables);
-        nested_scope.parent = scope;
+        VMVariableScope *nested_scope = vm_scope_new(scope);
         VMValue *last = nval(VAL_NULL);
         for (size_t i = 0; i < expr->as.block_node.count; i++) {
             val_free(last);
-            last = vm_execute(&nested_scope, expr->as.block_node.exprs[i]);
+            last = vm_execute(nested_scope, expr->as.block_node.exprs[i]);
         }
-        vm_scope_free(&nested_scope);
+        vm_scope_release(nested_scope);
         return last;
     }
     case EXPR_ECALL: {
@@ -572,35 +602,41 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             fprintf(stderr, "Attempting to call a non-function value\n");
             exit(1);
         }
-        Expr *func = callee_val->data.func;
+        VMClosure *cl = callee_val->data.closure;
+        Expr *func = cl->func;
         if (func->kind != EXPR_EFUNC) {
             fprintf(stderr, "Attempting to call a non-function value\n");
             exit(1);
         }
-        VMVariableScope func_scope;
-        map_init(&func_scope.variables);
-        func_scope.parent = scope;
         if (func->as.efunc.param_count != expr->as.call_node.arg_count) {
             fprintf(stderr, "Argument count mismatch in function call\n");
             exit(1);
         }
+        /* Lexical scoping: the call scope's parent is the closure's captured
+         * defining scope (or the caller scope for external builtins, which
+         * have no captured scope). */
+        VMVariableScope *func_scope =
+            vm_scope_new(cl->scope ? cl->scope : scope);
         for (size_t i = 0; i < func->as.efunc.param_count; i++) {
             VMValue *arg_val = vm_execute(scope, expr->as.call_node.args[i]);
-            map_set(&func_scope.variables, func->as.efunc.param_names[i],
+            map_set(&func_scope->variables, func->as.efunc.param_names[i],
                     arg_val);
         }
-        map_set(&func_scope.variables, "self", callee_val);
+        map_set(&func_scope->variables, "self", val_clone(callee_val));
         VMValue *result = func->as.efunc.external
                               ? ((VMValue * (*)(VMVariableScope *))
-                                     func->as.efunc.body)(&func_scope)
-                              : vm_execute(&func_scope, func->as.efunc.body);
-        vm_scope_free(&func_scope);
-        // val_free(callee_val);
+                                     func->as.efunc.body)(func_scope)
+                              : vm_execute(func_scope, func->as.efunc.body);
+        vm_scope_release(func_scope);
+        val_free(callee_val);
         return result;
     }
     case EXPR_EFUNC: {
         VMValue *val = nval(VAL_FUNC);
-        val->data.func = expr;
+        VMClosure *cl = malloc(sizeof(VMClosure));
+        cl->func = expr;
+        cl->scope = vm_scope_retain(scope); /* capture lexical environment */
+        val->data.closure = cl;
         return val;
     }
     case EXPR_ESTR: {
@@ -767,15 +803,13 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         return last;
     }
     case EXPR_EFOR: {
-        VMVariableScope for_scope;
-        map_init(&for_scope.variables);
-        for_scope.parent = scope;
+        VMVariableScope *for_scope = vm_scope_new(scope);
         if (expr->as.for_node.init)
-            vm_execute(&for_scope, expr->as.for_node.init);
+            vm_execute(for_scope, expr->as.for_node.init);
         VMValue *last = nval(VAL_NULL);
         while (1) {
             if (expr->as.for_node.cond) {
-                VMValue *cond = vm_execute(&for_scope, expr->as.for_node.cond);
+                VMValue *cond = vm_execute(for_scope, expr->as.for_node.cond);
                 if (cond->type != VAL_BOOL) {
                     fprintf(stderr, "For condition must be a boolean\n");
                     exit(1);
@@ -785,11 +819,11 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
                 if (!c) break;
             }
             val_free(last);
-            last = vm_execute(&for_scope, expr->as.for_node.body);
+            last = vm_execute(for_scope, expr->as.for_node.body);
             if (expr->as.for_node.step)
-                vm_execute(&for_scope, expr->as.for_node.step);
+                vm_execute(for_scope, expr->as.for_node.step);
         }
-        vm_scope_free(&for_scope);
+        vm_scope_release(for_scope);
         return last;
     }
     case EXPR_EFOREACH: {
@@ -798,17 +832,15 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             fprintf(stderr, "foreach requires an array\n");
             exit(1);
         }
-        VMVariableScope fe_scope;
-        map_init(&fe_scope.variables);
-        fe_scope.parent = scope;
+        VMVariableScope *fe_scope = vm_scope_new(scope);
         VMValue *last = nval(VAL_NULL);
         for (size_t i = 0; i < iterable->data.arr->count; i++) {
-            vm_scope_set(&fe_scope, expr->as.foreach_node.var_name,
+            vm_scope_set(fe_scope, expr->as.foreach_node.var_name,
                          iterable->data.arr->elements[i]);
             val_free(last);
-            last = vm_execute(&fe_scope, expr->as.foreach_node.body);
+            last = vm_execute(fe_scope, expr->as.foreach_node.body);
         }
-        vm_scope_free(&fe_scope);
+        vm_scope_release(fe_scope);
         val_free(iterable);
         return last;
     }
@@ -823,19 +855,17 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         long e = end_val->data.l;
         val_free(start_val);
         val_free(end_val);
-        VMVariableScope fr_scope;
-        map_init(&fr_scope.variables);
-        fr_scope.parent = scope;
+        VMVariableScope *fr_scope = vm_scope_new(scope);
         VMValue *last = nval(VAL_NULL);
         for (long i = s; i < e; i++) {
             VMValue *iv = nval(VAL_LONG);
             iv->data.l = i;
-            vm_scope_set(&fr_scope, expr->as.forrange_node.var_name, iv);
+            vm_scope_set(fr_scope, expr->as.forrange_node.var_name, iv);
             val_free(iv);
             val_free(last);
-            last = vm_execute(&fr_scope, expr->as.forrange_node.body);
+            last = vm_execute(fr_scope, expr->as.forrange_node.body);
         }
-        vm_scope_free(&fr_scope);
+        vm_scope_release(fr_scope);
         return last;
     }
     case EXPR_EARRAY_ASSIGN: {
@@ -872,10 +902,4 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
     }
     fprintf(stderr, "Unsupported expression kind: %d\n", expr->kind);
     exit(1);
-}
-void vm_scope_free(VMVariableScope *scope) {
-    for (size_t i = 0; i < scope->variables.len; i++) {
-        val_free(scope->variables.items[i].value);
-    }
-    map_free(&scope->variables);
 }

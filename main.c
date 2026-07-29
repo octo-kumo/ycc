@@ -2,6 +2,7 @@
 #include "ast_debug.h"
 #include "codegen.h"
 #include "lib.h"
+#include "module.h"
 #include "parser.h"
 #include "parser_debug.h"
 #include "typecheck.h"
@@ -28,10 +29,10 @@ void run_tc(Expr *expr) {
 void run_vm(Expr *expr) {
     VM vm;
     vm_init(&vm);
-    VMValue *output = vm_execute(&vm.globals, expr);
+    VMValue *output = vm_execute(vm.globals, expr);
     printf("\n\nResult: ");
     val_print(output);
-    vm_scope_free(&vm.globals);
+    vm_scope_release(vm.globals);
     val_free(output);
 }
 
@@ -115,12 +116,23 @@ int main(int argc, char *argv[]) {
     }
 
     char *input = NULL;
+    const char *base_dir = ".";
+    char *base_dir_alloc = NULL;
     if (file) {
         printf("Reading file: %s\n", file);
         input = read_file(file);
         if (!input) {
             fprintf(stderr, "Failed to read file: %s\n", file);
             return 1;
+        }
+        /* derive base dir for import resolution */
+        const char *slash = strrchr(file, '/');
+        if (slash) {
+            size_t n = (size_t)(slash - file);
+            base_dir_alloc = malloc(n + 1);
+            memcpy(base_dir_alloc, file, n);
+            base_dir_alloc[n] = '\0';
+            base_dir = base_dir_alloc;
         }
     } else {
         input = read_stdin();
@@ -129,6 +141,16 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     }
+
+    /* Resolve imports / exports (source-to-source, before parsing). */
+    char *processed = module_preprocess(input, base_dir, 0);
+    free(input);
+    free(base_dir_alloc);
+    if (!processed) {
+        fprintf(stderr, "Module preprocessing failed\n");
+        return 1;
+    }
+    input = processed;
 
     ast_parser_result_t res = ast_parse_expr_block(input);
     if (!res.is_some) {
