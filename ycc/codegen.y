@@ -440,7 +440,8 @@ def emit_program(ast) -> str {
     parts = push(parts, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"argv\", y_mk_func(y_builtin_argv, 0, NULL));\n\n");
+    parts = push(parts, "    y_scope_set(scope, \"argv\", y_mk_func(y_builtin_argv, 0, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"getenv\", y_mk_func(y_builtin_getenv, 1, NULL));\n\n");
     parts = push(parts, body);
     parts = push(parts, "\n    return 0;\n");
     parts = push(parts, "}\n");

@@ -224,7 +224,7 @@ def parse_map(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: lon
 
 def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
     // Parse a type annotation and return the position after it.
-    // Types: long, str, bool, [T], (T, T) -> T
+    // Types: long, str, bool, [T], (T, T) -> T, { field: T, ... }
     let pos = p;
     if (is_punct(toks, pos, "[")) {
         // array type: [T]
@@ -244,6 +244,19 @@ def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
         if (is_op(toks, pos, "->")) {
             pos = parse_type(toks, pos + 1);
         };
+    } else if (is_punct(toks, pos, "{")) {
+        // record type: { field: T, field: T, ... }
+        pos = pos + 1;  // skip '{'
+        if (!is_punct(toks, pos, "}")) {
+            let go = true;
+            while (go) {
+                pos = pos + 1;  // skip field name
+                pos = pos + 1;  // skip ':'
+                pos = parse_type(toks, pos);  // skip field type
+                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+            };
+        };
+        pos = pos + 1;  // skip '}'
     } else {
         // simple type: long, str, bool, etc.
         pos = pos + 1;
