@@ -482,6 +482,7 @@ ast_parser_result_t ast_parse_number(const char *input) {
     parser_result_t res = parse_long(input);
     if (!res.is_some) { return anone(input); }
     long value = (long)(uintptr_t)res.value;
+    int negative = value < 0 || (value == 0 && input[0] == '-');
     Expr *expr = (Expr *)malloc(sizeof(Expr));
     expr->kind = EXPR_ELONG;
     expr->as.elong = value;
@@ -496,11 +497,11 @@ ast_parser_result_t ast_parse_number(const char *input) {
     res.remaining++;
     // It's a float!
     expr->kind = EXPR_EFLOAT;
-    expr->as.efloat = (double)value;
     res = parse_many(parse_digit, res.remaining);
     if (!res.is_some) {
         // no more digits, so its like "123." which is valid and should be
         // treated as 123.0
+        expr->as.efloat = (double)value;
         return asome(expr, res.remaining);
     }
     double fraction = 0.0;
@@ -511,8 +512,10 @@ ast_parser_result_t ast_parse_number(const char *input) {
         divisor *= 10.0;
         digits = digits->next;
     }
-    expr->as.efloat += fraction;
     free_list((list_t *)res.value);
+    // Apply sign to the combined value, not just the integer part
+    double abs_val = (double)(negative ? -value : value) + fraction;
+    expr->as.efloat = negative ? -abs_val : abs_val;
     return asome(expr, res.remaining);
 }
 
@@ -599,7 +602,7 @@ ast_parser_result_t ast_parse_string(const char *input) {
     }
     fprintf(stderr, "Unterminated string literal\n");
     free(chars);
-    exit(1);
+    return anone(original_input);
 }
 ast_parser_result_t ast_parse_declaration(const char *input) {
     const char *original_input = input;
@@ -698,47 +701,124 @@ ast_parser_result_t ast_parse_if(const char *input) {
     if_node->as.if_node.else_branch = NULL;
     MAYBE_KEYWORD(else, { return asome(if_node, input); });
 
-    ast_parser_result_t ast_else = ast_parse_brace_block(input);
+    // Support "else if" chains: try parsing another if first
+    ast_parser_result_t ast_else = ast_parse_if(input);
+    if (!ast_else.is_some) {
+        ast_else = ast_parse_brace_block(input);
+    }
     if_node->as.if_node.else_branch = ast_else.value;
     input = ast_else.remaining;
     return asome(if_node, input);
 }
 
+/* ── Operator precedence ────────────────────────────────────────────────── */
+
+static int op_precedence(Operator op) {
+    switch (op) {
+    case O_OR:  return 1;
+    case O_AND: return 2;
+    case O_EQ: case O_NEQ: return 3;
+    case O_LT: case O_GT: case O_LTE: case O_GTE: return 4;
+    case O_ADD: case O_SUB: return 5;
+    case O_MUL: case O_DIV: case O_MOD: return 6;
+    case O_CONS: return 7;
+    case O_DOT:  return 8;
+    default:     return 0;
+    }
+}
+
+/* Parse an expression with minimum precedence min_prec (precedence climbing).
+ * Left-associative ops use min_prec+1 for the RHS; right-assoc (::) uses
+ * min_prec so it chains to the right. */
+static ast_parser_result_t ast_parse_prec_rhs(const char *input, int min_prec) {
+    ast_parser_result_t left = ast__parse_inside_binary_op(input);
+    if (!left.is_some) { return anone(input); }
+
+    while (1) {
+        parser_result_t op_res = parse_operator(left.remaining, OPERATORS);
+        if (!op_res.is_some) { break; }
+        Operator op = (Operator)(uintptr_t)op_res.value;
+        if (op == O_ASSIGN) { break; }
+        int prec = op_precedence(op);
+        if (prec < min_prec || prec == 0) { break; }
+
+        int next_min = (op == O_CONS) ? prec : prec + 1;
+        ast_parser_result_t right =
+            ast_parse_prec_rhs(op_res.remaining, next_min);
+        if (!right.is_some) {
+            ast_free(left.value);
+            return anone(input);
+        }
+        Expr *node = (Expr *)malloc(sizeof(Expr));
+        node->kind = EXPR_EOP;
+        node->as.op_node.op = op;
+        node->as.op_node.left = left.value;
+        node->as.op_node.right = right.value;
+        left.value = node;
+        left.remaining = right.remaining;
+    }
+    return left;
+}
+
 ast_parser_result_t ast_parse_binary_op(const char *input) {
     const char *original_input = input;
-    ast_parser_result_t ast_left = ast__parse_inside_binary_op(input);
-    if (!ast_left.is_some) { return anone(original_input); }
-    input = ast_left.remaining;
-    parser_result_t op_res = parse_operator(input, OPERATORS);
-    if (!op_res.is_some) {
-        ast_free(ast_left.value);
-        return anone(original_input);
-    }
-    Operator op = (Operator)(uintptr_t)op_res.value;
-    input = op_res.remaining;
-    ast_parser_result_t ast_right = ast__parse_inline_expr(input);
-    if (!ast_right.is_some) {
-        ast_free(ast_left.value);
-        return anone(original_input);
-    }
-    input = ast_right.remaining;
 
-    // special case, if op is =, and left is a variable, then it's an assignment
-    if (op == O_ASSIGN && ast_left.value->kind == EXPR_EVAR) {
+    ast_parser_result_t left = ast__parse_inside_binary_op(input);
+    if (!left.is_some) { return anone(original_input); }
+
+    /* Require at least one operator so we don't shadow plain atoms */
+    parser_result_t op_check = parse_operator(left.remaining, OPERATORS);
+    if (!op_check.is_some) {
+        ast_free(left.value);
+        return anone(original_input);
+    }
+
+    /* Assignment: x = expr (right side is a full inline expression) */
+    Operator first_op = (Operator)(uintptr_t)op_check.value;
+    if (first_op == O_ASSIGN) {
+        if (left.value->kind != EXPR_EVAR) {
+            ast_free(left.value);
+            return anone(original_input);
+        }
+        ast_parser_result_t right =
+            ast__parse_inline_expr(op_check.remaining);
+        if (!right.is_some) {
+            ast_free(left.value);
+            return anone(original_input);
+        }
         Expr *assign_node = (Expr *)malloc(sizeof(Expr));
         assign_node->kind = EXPR_EASSIGNMENT;
-        assign_node->as.assignment_node.var_name = ast_left.value->as.evar;
-        assign_node->as.assignment_node.value = ast_right.value;
-        free(ast_left.value);
-        return asome(assign_node, input);
+        assign_node->as.assignment_node.var_name = left.value->as.evar;
+        assign_node->as.assignment_node.value = right.value;
+        free(left.value);
+        return asome(assign_node, right.remaining);
     }
 
-    Expr *op_node = (Expr *)malloc(sizeof(Expr));
-    op_node->kind = EXPR_EOP;
-    op_node->as.op_node.op = op;
-    op_node->as.op_node.left = ast_left.value;
-    op_node->as.op_node.right = ast_right.value;
-    return asome(op_node, input);
+    /* Precedence-climbing loop for binary operators */
+    while (1) {
+        parser_result_t op_res = parse_operator(left.remaining, OPERATORS);
+        if (!op_res.is_some) { break; }
+        Operator op = (Operator)(uintptr_t)op_res.value;
+        if (op == O_ASSIGN) { break; }
+        int prec = op_precedence(op);
+        if (prec == 0) { break; }
+
+        int next_min = (op == O_CONS) ? prec : prec + 1;
+        ast_parser_result_t right =
+            ast_parse_prec_rhs(op_res.remaining, next_min);
+        if (!right.is_some) {
+            ast_free(left.value);
+            return anone(original_input);
+        }
+        Expr *node = (Expr *)malloc(sizeof(Expr));
+        node->kind = EXPR_EOP;
+        node->as.op_node.op = op;
+        node->as.op_node.left = left.value;
+        node->as.op_node.right = right.value;
+        left.value = node;
+        left.remaining = right.remaining;
+    }
+    return left;
 }
 
 ast_parser_result_t ast_parse_array_idx(const char *input) {

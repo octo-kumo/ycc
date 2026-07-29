@@ -246,6 +246,66 @@ inline_test "loop building array result" \
     'let s = 0; for i in 1..6 { s = s + i * i; }; print(s);' \
     '[print] 55'
 
+# ── Regression tests: audit findings ──
+echo ""
+echo "── Audit regression tests ──"
+
+inline_test "precedence: mul before add" \
+    'print(2 * 3 + 4);' \
+    '[print] 10'
+
+inline_test "precedence: left-assoc subtraction" \
+    'print(10 - 2 - 3);' \
+    '[print] 5'
+
+inline_test "precedence: left-assoc division" \
+    'print(100 / 10 / 2);' \
+    '[print] 5'
+
+inline_test "precedence: mixed" \
+    'print(2 + 3 * 4 - 1);' \
+    '[print] 13'
+
+inline_test "precedence: comparison lower than arithmetic" \
+    'print(2 + 3 > 4);' \
+    '[print] true'
+
+inline_test "precedence: parens override" \
+    'print((2 + 3) * 4);' \
+    '[print] 20'
+
+inline_test "negative float" \
+    'print(-3.14);' \
+    '[print] -3.14'
+
+inline_test "negative float: -0.5" \
+    'print(-0.5);' \
+    '[print] -0.5'
+
+inline_test "else if chain" \
+    'let x = 2; if (x == 1) { print("one"); } else if (x == 2) { print("two"); } else { print("other"); };' \
+    '[print] two'
+
+inline_test "else if: falls to else" \
+    'let x = 9; if (x == 1) { print("one"); } else if (x == 2) { print("two"); } else { print("other"); };' \
+    '[print] other'
+
+inline_test "if without else" \
+    'if (true) { print("yes"); };' \
+    '[print] yes'
+
+inline_test "cons operator" \
+    'print(0 :: [1, 2, 3]);' \
+    '[print] [0, 1, 2, 3]'
+
+inline_test "empty array slice" \
+    'let a = []; print(a[0:1]);' \
+    '[print] []'
+
+inline_test "modulo precedence" \
+    'print(10 % 3 + 1);' \
+    '[print] 2'
+
 # ── Summary ──
 echo ""
 echo "═══════════════════════════════════════════"

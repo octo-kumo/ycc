@@ -83,6 +83,9 @@ typecheck_result_t tc_if(Expr *expr, TCVarTypeScope *scope) {
     }
     typecheck_result_t then_res = tc_expr(expr->as.if_node.then_branch, scope);
     if (!then_res.is_ok) { return then_res; }
+    if (!expr->as.if_node.else_branch) {
+        return TC_OK(TYPE_NULL);
+    }
     typecheck_result_t else_res = tc_expr(expr->as.if_node.else_branch, scope);
     if (!else_res.is_ok) { return else_res; }
     if (then_res.type->base != else_res.type->base) {

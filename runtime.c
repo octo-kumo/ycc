@@ -375,9 +375,17 @@ YValue *y_eq(YValue *a, YValue *b) { return y_mk_bool(y_equals(a, b)); }
 YValue *y_neq(YValue *a, YValue *b) { return y_mk_bool(!y_equals(a, b)); }
 
 YValue *y_and(YValue *a, YValue *b) {
+    if (a->type != Y_BOOL || b->type != Y_BOOL) {
+        fprintf(stderr, "runtime error: && requires boolean operands\n");
+        exit(1);
+    }
     return y_mk_bool(a->data.b && b->data.b);
 }
 YValue *y_or(YValue *a, YValue *b) {
+    if (a->type != Y_BOOL || b->type != Y_BOOL) {
+        fprintf(stderr, "runtime error: || requires boolean operands\n");
+        exit(1);
+    }
     return y_mk_bool(a->data.b || b->data.b);
 }
 
@@ -409,6 +417,9 @@ YValue *y_arr_slice(YValue *arr, YValue *start_v, YValue *end_v) {
         exit(1);
     }
     long count = (long)arr->data.arr->count;
+    if (count == 0) {
+        return y_mk_arr(NULL, 0);
+    }
     long start = start_v->data.l;
     long end = end_v->data.l;
 
@@ -564,7 +575,7 @@ YValue *y_builtin_typeof(YScope *closure, YValue **args, size_t argc) {
 /* ── String escaping ────────────────────────────────────────────────────── */
 
 char *y_escape_c_string(const char *s, size_t len) {
-    /* Worst case: every char becomes \xNN (4 chars) */
+    /* Worst case: every char becomes \NNN (4 chars) */
     char *out = malloc(len * 4 + 1);
     size_t j = 0;
     for (size_t i = 0; i < len; i++) {
@@ -577,7 +588,7 @@ char *y_escape_c_string(const char *s, size_t len) {
         case '\r': out[j++] = '\\'; out[j++] = 'r'; break;
         default:
             if (c < 32 || c > 126) {
-                j += sprintf(out + j, "\\x%02x", c);
+                j += sprintf(out + j, "\\%03o", c);
             } else {
                 out[j++] = (char)c;
             }

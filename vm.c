@@ -170,8 +170,9 @@ type_t *val_type(const VMValue *val) {
     case VAL_ARR: {
         type_t *arr_type = tc_make_t(VAL_ARR);
         arr_type->as.array.element_type =
-            val_type(val->data.arr->elements[0]); // assume all elements have
-                                                  // the same type
+            val->data.arr->count > 0
+                ? val_type(val->data.arr->elements[0])
+                : _TYPE_INFERRED;
         return arr_type;
     }
     case VAL_MAP: {
@@ -469,6 +470,11 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
             break;
         }
         case O_DIV: {
+            if (left->type == VAL_LONG && right->type == VAL_LONG &&
+                right->data.l == 0) {
+                fprintf(stderr, "Division by zero\n");
+                exit(1);
+            }
             __ISCALCULATION(/);
             break;
         }
@@ -499,6 +505,7 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
             }
             val->type = VAL_ARR;
             val->data.arr = new_arr;
+            break;
         }
         case O_DOT: {
             if (left->type == VAL_MAP &&
@@ -623,6 +630,10 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
             fprintf(stderr, "Attempting to index a non-array value\n");
             exit(1);
         }
+        if (array_val->data.arr->count == 0) {
+            fprintf(stderr, "Array index out of bounds (empty array)\n");
+            exit(1);
+        }
         VMValue *idx_val = vm_execute(scope, expr->as.array_idx_node.idx);
         if (idx_val->type != VAL_LONG) {
             fprintf(stderr, "Array index must be a long\n");
@@ -654,6 +665,18 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
         long start = start_val->data.l;
         long end = end_val->data.l;
         long count = array_val->data.arr->count;
+        // handle empty arrays
+        if (count == 0) {
+            VMArray *new_arr = malloc(sizeof(VMArray));
+            new_arr->count = 0;
+            new_arr->elements = NULL;
+            VMValue *val = nval(VAL_ARR);
+            val->data.arr = new_arr;
+            val_free(array_val);
+            val_free(start_val);
+            val_free(end_val);
+            return val;
+        }
         // handle negative indices
         if (count <= 1 && start >= 1) {
             // return empty array coz well
