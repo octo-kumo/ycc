@@ -570,7 +570,12 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"tonum\",    y_mk_func(y_builtin_tonum,    1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"join\",     y_mk_func(y_builtin_join,     2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"push\",     y_mk_func(y_builtin_push,     2, NULL));\n");
-    fprintf(out, "    y_scope_set(scope, \"substr\",   y_mk_func(y_builtin_substr,   3, NULL));\n\n");
+    fprintf(out, "    y_scope_set(scope, \"substr\",   y_mk_func(y_builtin_substr,   3, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"read_file\", y_mk_func(y_builtin_read_file, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"write_file\", y_mk_func(y_builtin_write_file, 2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n\n");
     fwrite(main_buf, 1, main_len, out);
     fprintf(out, "\n    return 0;\n");
     fprintf(out, "}\n");

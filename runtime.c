@@ -756,6 +756,65 @@ YValue *y_builtin_substr(YScope *closure, YValue **args, size_t argc) {
     return y_mk_str_n(s + start, (size_t)count);
 }
 
+/* read_file(path) -> str | null on error */
+YValue *y_builtin_read_file(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_STR) return y_mk_null();
+    FILE *f = fopen(args[0]->data.s, "rb");
+    if (!f) return y_mk_null();
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); return y_mk_null(); }
+    char *buf = malloc((size_t)sz + 1);
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    buf[rd] = '\0';
+    fclose(f);
+    YValue *v = malloc(sizeof(YValue));
+    v->type = Y_STR;
+    v->data.s = buf;
+    return v;
+}
+
+/* write_file(path, content) -> bool (success) */
+YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_STR)
+        return y_mk_bool(false);
+    FILE *f = fopen(args[0]->data.s, "wb");
+    if (!f) return y_mk_bool(false);
+    size_t n = strlen(args[1]->data.s);
+    size_t wr = fwrite(args[1]->data.s, 1, n, f);
+    fclose(f);
+    return y_mk_bool(wr == n);
+}
+
+/* ord(s) -> long  (code point of first char, -1 if empty) */
+YValue *y_builtin_ord(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_STR || args[0]->data.s[0] == '\0')
+        return y_mk_long(-1);
+    return y_mk_long((long)(unsigned char)args[0]->data.s[0]);
+}
+
+/* chr(n) -> str  (single-byte string from code point) */
+YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1) return y_mk_str("");
+    char buf[2] = { (char)(args[0]->data.l & 0xFF), '\0' };
+    return y_mk_str_n(buf, 1);
+}
+
+/* index_of(s, sub) -> long  (first index of sub in s, -1 if not found) */
+YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_STR)
+        return y_mk_long(-1);
+    const char *hit = strstr(args[0]->data.s, args[1]->data.s);
+    if (!hit) return y_mk_long(-1);
+    return y_mk_long((long)(hit - args[0]->data.s));
+}
+
 /* arr_set(arr, idx, val) — mutate array element in place */
 void y_arr_set(YValue *arr, YValue *idx, YValue *val) {
     if (arr->type != Y_ARR) {

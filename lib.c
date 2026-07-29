@@ -332,6 +332,71 @@ DEFINE_EXTERNAL_FUNC3(substr, s, start, count, {
     return result;
 });
 
+/* read_file(path) -> str | null */
+DEFINE_EXTERNAL_FUNC(read_file, x, _VAL_INFERRED, VAL_STR, {
+    if (!x || x->type != VAL_STR) return nval(VAL_NULL);
+    FILE *f = fopen(x->data.s, "rb");
+    if (!f) return nval(VAL_NULL);
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); return nval(VAL_NULL); }
+    char *buf = malloc((size_t)sz + 1);
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    buf[rd] = '\0';
+    fclose(f);
+    VMValue *result = nval(VAL_STR);
+    result->data.s = buf;
+    return result;
+});
+
+/* write_file(path, content) -> bool */
+DEFINE_EXTERNAL_FUNC2(write_file, path, content, {
+    VMValue *result = nval(VAL_BOOL);
+    if (!path || path->type != VAL_STR || !content || content->type != VAL_STR) {
+        result->data.b = false; return result;
+    }
+    FILE *f = fopen(path->data.s, "wb");
+    if (!f) { result->data.b = false; return result; }
+    size_t n = strlen(content->data.s);
+    size_t wr = fwrite(content->data.s, 1, n, f);
+    fclose(f);
+    result->data.b = (wr == n);
+    return result;
+});
+
+/* ord(s) -> long (code point of first char, -1 if empty) */
+DEFINE_EXTERNAL_FUNC(ord, x, _VAL_INFERRED, VAL_LONG, {
+    VMValue *result = nval(VAL_LONG);
+    if (!x || x->type != VAL_STR || x->data.s[0] == '\0') {
+        result->data.l = -1; return result;
+    }
+    result->data.l = (long)(unsigned char)x->data.s[0];
+    return result;
+});
+
+/* chr(n) -> str (single-byte string from code point) */
+DEFINE_EXTERNAL_FUNC(chr, x, _VAL_INFERRED, VAL_STR, {
+    VMValue *result = nval(VAL_STR);
+    if (!x) { result->data.s = strdup(""); return result; }
+    char buf[2];
+    buf[0] = (char)(x->data.l & 0xFF);
+    buf[1] = '\0';
+    result->data.s = strndup(buf, 1);
+    return result;
+});
+
+/* index_of(s, sub) -> long (first index of sub in s, -1 if not found) */
+DEFINE_EXTERNAL_FUNC2(index_of, s, sub, {
+    VMValue *result = nval(VAL_LONG);
+    if (!s || s->type != VAL_STR || !sub || sub->type != VAL_STR) {
+        result->data.l = -1; return result;
+    }
+    const char *hit = strstr(s->data.s, sub->data.s);
+    result->data.l = hit ? (long)(hit - s->data.s) : -1;
+    return result;
+});
+
 void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "print", print_type);
     map_set(&scope->variables, "tostring", tostring_type);
@@ -347,6 +412,11 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "join", join_type);
     map_set(&scope->variables, "push", push_type);
     map_set(&scope->variables, "substr", substr_type);
+    map_set(&scope->variables, "read_file", read_file_type);
+    map_set(&scope->variables, "write_file", write_file_type);
+    map_set(&scope->variables, "ord", ord_type);
+    map_set(&scope->variables, "chr", chr_type);
+    map_set(&scope->variables, "index_of", index_of_type);
 }
 void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "print", __external_print_func);
@@ -363,4 +433,9 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "join", __external_join_func);
     map_set(&scope->variables, "push", __external_push_func);
     map_set(&scope->variables, "substr", __external_substr_func);
+    map_set(&scope->variables, "read_file", __external_read_file_func);
+    map_set(&scope->variables, "write_file", __external_write_file_func);
+    map_set(&scope->variables, "ord", __external_ord_func);
+    map_set(&scope->variables, "chr", __external_chr_func);
+    map_set(&scope->variables, "index_of", __external_index_of_func);
 }
