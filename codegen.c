@@ -130,9 +130,28 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
     fprintf(f, "    y_scope_set(scope, \"self\", y_mk_func(%s, %zu, closure));\n",
             cname, func->param_count);
 
-    char *body = emit_expr(ctx, func->body);
-    fprintf(f, "    YValue *_result = %s;\n", body);
-    free(body);
+    /* Emit function body. If it's a block, emit statements directly into the
+     * parameter scope (not a nested block scope) so closures capture a scope
+     * that lives as long as the function value. */
+    if (func->body->kind == EXPR_EBLOCK) {
+        EBlock *blk = &func->body->as.block_node;
+        for (size_t i = 0; i < blk->count; i++) {
+            char *stmt = emit_expr(ctx, blk->exprs[i]);
+            if (i + 1 == blk->count) {
+                /* Last statement: its value is the return value */
+                fprintf(f, "    YValue *_result = %s;\n", stmt);
+            } else {
+                /* Non-final statement: free its value */
+                fprintf(f, "    y_free((YValue *)(%s));\n", stmt);
+            }
+            free(stmt);
+        }
+    } else {
+        /* Non-block body: single expression */
+        char *body = emit_expr(ctx, func->body);
+        fprintf(f, "    YValue *_result = %s;\n", body);
+        free(body);
+    }
     fprintf(f, "    YValue *_ret = y_clone(_result);\n");
     fprintf(f, "    y_scope_release(scope);\n");
     fprintf(f, "    return _ret;\n");
@@ -285,13 +304,15 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     }
 
     case EXPR_EDECLARATION: {
-        /* Named function declaration */
+        /* Named function declaration.
+         * Wrap in a statement expression that yields a YValue (null) so it
+         * can be uniformly y_free'd when used as a non-final block statement. */
         if (expr->as.declaration_node.kind == DECL_FUNC &&
             expr->as.declaration_node.value &&
             expr->as.declaration_node.value->kind == EXPR_EFUNC) {
             EFunc *fn = &expr->as.declaration_node.value->as.efunc;
             char *cname = emit_func_def(ctx, fn, expr->as.declaration_node.name);
-            char *r = fmt("y_scope_set(scope, \"%s\", y_mk_func(%s, %zu, scope))",
+            char *r = fmt("({ y_scope_set(scope, \"%s\", y_mk_func(%s, %zu, scope)); y_mk_null(); })",
                           expr->as.declaration_node.name, cname, fn->param_count);
             free(cname);
             return r;
