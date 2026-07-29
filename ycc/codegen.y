@@ -94,9 +94,17 @@ def emit_expr(node) -> str {
     } else if (k == "call") {
         emit_call(node)
     } else if (k == "index") {
-        let arr = emit_expr(node.arr);
         let idx = emit_expr(node.idx);
-        "y_arr_index(" + arr + ", " + idx + ")"
+        // Fast path: when indexing a plain identifier (e.g. toks[i] in a tight
+        // parser loop), borrow the array from scope instead of cloning the
+        // whole array on every access. y_arr_index_borrow does NOT free the
+        // array (scope still owns it); it only frees idx and clones the elem.
+        if (node.arr.k == "id") {
+            "y_arr_index_borrow(y_scope_get(scope, \"" + node.arr.v + "\"), " + idx + ")"
+        } else {
+            let arr = emit_expr(node.arr);
+            "y_arr_index(" + arr + ", " + idx + ")"
+        }
     } else if (k == "slice") {
         let arr = emit_expr(node.arr);
         let lo = emit_expr(node.lo);

@@ -123,6 +123,7 @@ YValue *y_neg(YValue *a);
 /* ── Array / map operations ─────────────────────────────────────────────── */
 
 YValue *y_arr_index(YValue *arr, YValue *idx);
+YValue *y_arr_index_borrow(YValue *arr, YValue *idx);
 YValue *y_arr_slice(YValue *arr, YValue *start, YValue *end);
 YValue *y_map_get(YValue *map, const char *key);
 YValue *y_cons(YValue *head, YValue *tail);

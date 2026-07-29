@@ -431,7 +431,31 @@ YValue *y_arr_index(YValue *arr, YValue *idx) {
         exit(1);
     }
     i = ((i % count) + count) % count;
-    return y_clone(arr->data.arr->elements[i]);
+    YValue *elem = y_clone(arr->data.arr->elements[i]);
+    y_free(idx);
+    y_free(arr); /* take ownership of the (cloned) array argument */
+    return elem;
+}
+
+/* Index an array WITHOUT cloning the array itself. The caller passes a
+ * borrowed (non-owned) array reference; only the element is cloned.
+ * This avoids the catastrophic O(n) clone-per-index when code does
+ * `arr[i]` in a tight loop (e.g. the parser indexing the token array). */
+YValue *y_arr_index_borrow(YValue *arr, YValue *idx) {
+    if (arr->type != Y_ARR) {
+        fprintf(stderr, "runtime error: indexing a non-array\n");
+        exit(1);
+    }
+    long i = idx->data.l;
+    long count = (long)arr->data.arr->count;
+    if (count == 0) {
+        fprintf(stderr, "runtime error: index out of bounds (empty array)\n");
+        exit(1);
+    }
+    i = ((i % count) + count) % count;
+    YValue *elem = y_clone(arr->data.arr->elements[i]);
+    y_free(idx); /* owns idx, but NOT the borrowed array */
+    return elem;
 }
 
 YValue *y_arr_slice(YValue *arr, YValue *start_v, YValue *end_v) {
