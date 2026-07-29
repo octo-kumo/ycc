@@ -607,7 +607,13 @@ ast_parser_result_t ast_parse_string(const char *input) {
             }
         }
     }
-    fprintf(stderr, "Unterminated string literal\n");
+    /* Only report once — multiple parser alternatives may each reach here
+     * while backtracking over the same unterminated literal. */
+    static int reported_unterminated = 0;
+    if (!reported_unterminated) {
+        fprintf(stderr, "Unterminated string literal\n");
+        reported_unterminated = 1;
+    }
     free(chars);
     return anone(original_input);
 }
@@ -848,68 +854,86 @@ ast_parser_result_t ast_parse_array_idx(const char *input) {
     ast_parser_result_t ast_arr = ast_parse_var_or_paren_expr(input);
     if (!ast_arr.is_some) { return anone(original_input); }
     input = ast_arr.remaining;
-    EXPECT_SYMBOL('[', {
-        ast_free(ast_arr.value);
-        return anone(original_input);
-    });
-    ast_parser_result_t ast_idx = ast__parse_expr(input);
-    input = ast_idx.remaining;
-    parser_result_t mid_res = parse_symbol(input, ':');
-    input = mid_res.remaining;
-    ast_parser_result_t ast_end_idx =
-        mid_res.is_some ? ast__parse_expr(input) : anone(input);
-    input = ast_end_idx.remaining;
-    EXPECT_SYMBOL(']', {
-        ast_free(ast_arr.value);
-        if (ast_idx.is_some) { ast_free(ast_idx.value); }
-        if (ast_end_idx.is_some) { ast_free(ast_end_idx.value); }
-        return anone(original_input);
-    });
 
-    if (mid_res.is_some) {
-        // Handle slice
-        Expr *slice_node = (Expr *)malloc(sizeof(Expr));
-        slice_node->kind = EXPR_EARRAY_IDX_RANGE;
-        slice_node->as.array_idx_range_node.array = ast_arr.value;
-        // start defaults to 0
-        slice_node->as.array_idx_range_node.start =
-            ast_idx.is_some ? ast_idx.value : ast_of_long(0);
-        // end defaults to -1, which means the end of the array
-        slice_node->as.array_idx_range_node.end =
-            ast_end_idx.is_some ? ast_end_idx.value : ast_of_long(-1);
-        return asome(slice_node, input);
-    } else if (ast_idx.is_some) {
-        // Check for array assignment: arr[i] = val
+    Expr *current = ast_arr.value;
+    int indexed = 0;
+
+    /* Loop to support chained indexing: x[1][0], x[0][1:3], etc. */
+    while (1) {
+        SKIP_SPACES;
+        if (input[0] != '[') { break; }
+        const char *after_bracket = input + 1;
+
+        ast_parser_result_t ast_idx = ast__parse_expr(after_bracket);
+        const char *p = ast_idx.remaining;
+        parser_result_t mid_res = parse_symbol(p, ':');
+        p = mid_res.remaining;
+        ast_parser_result_t ast_end_idx =
+            mid_res.is_some ? ast__parse_expr(p) : anone(p);
+        p = ast_end_idx.remaining;
+        p = skip_spaces(p);
+        if (p[0] != ']') {
+            if (ast_idx.is_some) { ast_free(ast_idx.value); }
+            if (ast_end_idx.is_some) { ast_free(ast_end_idx.value); }
+            break; /* not a valid index suffix; stop chaining */
+        }
+        p++; /* consume ']' */
+
+        if (mid_res.is_some) {
+            Expr *slice_node = (Expr *)malloc(sizeof(Expr));
+            slice_node->kind = EXPR_EARRAY_IDX_RANGE;
+            slice_node->as.array_idx_range_node.array = current;
+            slice_node->as.array_idx_range_node.start =
+                ast_idx.is_some ? ast_idx.value : ast_of_long(0);
+            slice_node->as.array_idx_range_node.end =
+                ast_end_idx.is_some ? ast_end_idx.value : ast_of_long(-1);
+            current = slice_node;
+        } else if (ast_idx.is_some) {
+            Expr *idx_node = (Expr *)malloc(sizeof(Expr));
+            idx_node->kind = EXPR_EARRAY_IDX;
+            idx_node->as.array_idx_node.array = current;
+            idx_node->as.array_idx_node.idx = ast_idx.value;
+            if (ast_end_idx.is_some) { ast_free(ast_end_idx.value); }
+            current = idx_node;
+        } else {
+            if (ast_end_idx.is_some) { ast_free(ast_end_idx.value); }
+            break;
+        }
+        input = p;
+        indexed = 1;
+    }
+
+    if (!indexed) {
+        ast_free(current);
+        return anone(original_input);
+    }
+
+    /* Array assignment: only supported for a single-level index target
+     * (arr[i] = val). Deeper chains (arr[i][j] = val) are left as a normal
+     * indexed-read expression; the '=' is handled by the binary-op parser. */
+    if (current->kind == EXPR_EARRAY_IDX) {
         SKIP_SPACES;
         parser_result_t assign_res = parse_symbol(input, '=');
         if (assign_res.is_some && assign_res.remaining[0] != '=') {
-            // It's arr[i] = val (not ==)
-            input = assign_res.remaining;
-            ast_parser_result_t val_res = ast__parse_inline_expr(input);
+            const char *ainput = assign_res.remaining;
+            ast_parser_result_t val_res = ast__parse_inline_expr(ainput);
             if (!val_res.is_some) {
-                ast_free(ast_arr.value);
-                ast_free(ast_idx.value);
+                ast_free(current);
                 return anone(original_input);
             }
+            Expr *arr_expr = current->as.array_idx_node.array;
+            Expr *idx_expr = current->as.array_idx_node.idx;
+            free(current); /* reuse children, drop the EARRAY_IDX shell */
             Expr *node = (Expr *)malloc(sizeof(Expr));
             node->kind = EXPR_EARRAY_ASSIGN;
-            node->as.array_assign_node.array = ast_arr.value;
-            node->as.array_assign_node.idx = ast_idx.value;
+            node->as.array_assign_node.array = arr_expr;
+            node->as.array_assign_node.idx = idx_expr;
             node->as.array_assign_node.value = val_res.value;
             return asome(node, val_res.remaining);
         }
-        // Handle normal index
-        Expr *idx_node = (Expr *)malloc(sizeof(Expr));
-        idx_node->kind = EXPR_EARRAY_IDX;
-        idx_node->as.array_idx_node.array = ast_arr.value;
-        idx_node->as.array_idx_node.idx = ast_idx.value;
-        if (ast_end_idx.is_some) { ast_free(ast_end_idx.value); }
-        return asome(idx_node, input);
-    } else {
-        if (ast_idx.is_some) { ast_free(ast_idx.value); }
-        if (ast_end_idx.is_some) { ast_free(ast_end_idx.value); }
-        return anone(original_input);
     }
+
+    return asome(current, input);
 }
 
 ast_parser_result_t ast_parse_function(const char *input) {

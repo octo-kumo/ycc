@@ -55,6 +55,7 @@ void val_print(const VMValue *val);
 char *val_to_str(const VMValue *val);
 type_t *val_type(const VMValue *val);
 void val_free(VMValue *val);
+VMValue *val_clone(const VMValue *val);
 void vm_init(VM *vm);
 VMValue *vm_execute(VMVariableScope *scope, Expr *expr);
 void vm_scope_free(VMVariableScope *scope);

@@ -69,7 +69,7 @@ bool val_equals(VMValue *left, VMValue *right) {
     }
     return false;
 }
-void val_print(const VMValue *val) { printf("%s", val_to_str(val)); }
+void val_print(const VMValue *val) { char *s = val_to_str(val); printf("%s", s); free(s); }
 void val_to_buf(const VMValue *val, char *buf, size_t buf_size) {
     if (buf_size <= 1) return; // Safety check
 
@@ -143,9 +143,9 @@ void val_to_buf(const VMValue *val, char *buf, size_t buf_size) {
     }
 }
 char *val_to_str(const VMValue *val) {
-    static char buf[1024];
+    char *buf = malloc(4096);
     buf[0] = '\0';
-    val_to_buf(val, buf, sizeof(buf));
+    val_to_buf(val, buf, 4096);
     return buf;
 }
 type_t *val_type(const VMValue *val) {
@@ -306,7 +306,13 @@ void vm_init(VM *vm) {
 
 size_t byte_len(const char *s) { return strlen(s); }
 
+static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr);
+
 VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
+    return vm_execute_inner(scope, expr);
+}
+
+static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
     switch (expr->kind) {
     case EXPR_ELONG: {
         VMValue *val = nval(VAL_LONG);
@@ -430,12 +436,12 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
             // special case, if any one side is string, this is string
             // concat operator
             if (left->type == VAL_STR || right->type == VAL_STR) {
-                char *left_str = left->type == VAL_STR
-                                     ? left->data.s
-                                     : strdup(val_to_str(left));
-                char *right_str = right->type == VAL_STR
-                                      ? right->data.s
-                                      : strdup(val_to_str(right));
+                char *left_str;
+                if (left->type == VAL_STR) { left_str = strdup(left->data.s); }
+                else { left_str = val_to_str(left); }
+                char *right_str;
+                if (right->type == VAL_STR) { right_str = strdup(right->data.s); }
+                else { right_str = val_to_str(right); }
                 size_t concat_len = strlen(left_str) + strlen(right_str) + 1;
                 char *concat_str = malloc(concat_len);
                 strcpy(concat_str, left_str);
@@ -443,8 +449,8 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
                         concat_len - strlen(concat_str) - 1);
                 val->type = VAL_STR;
                 val->data.s = concat_str;
-                if (left->type != VAL_STR) { free(left_str); }
-                if (right->type != VAL_STR) { free(right_str); }
+                free(left_str);
+                free(right_str);
                 break;
             }
             __ISCALCULATION(+);
@@ -552,7 +558,7 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
         VMVariableScope nested_scope;
         map_init(&nested_scope.variables);
         nested_scope.parent = scope;
-        VMValue *last = NULL;
+        VMValue *last = nval(VAL_NULL);
         for (size_t i = 0; i < expr->as.block_node.count; i++) {
             val_free(last);
             last = vm_execute(&nested_scope, expr->as.block_node.exprs[i]);
@@ -618,11 +624,29 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
         VMMap *map = malloc(sizeof(VMMap));
         map->count = expr->as.map_node.count;
         map->entries = malloc(sizeof(VMMapEntry) * map->count);
-        for (size_t i = 0; i < map->count; i++) {
-            map->entries[i].key = strdup(expr->as.map_node.entries[i].key);
-            map->entries[i].value =
+        size_t n = 0;
+        for (size_t i = 0; i < expr->as.map_node.count; i++) {
+            const char *key = expr->as.map_node.entries[i].key;
+            VMValue *value =
                 vm_execute(scope, expr->as.map_node.entries[i].value);
+            /* Duplicate keys: last value wins (overwrite in place). */
+            size_t existing = n;
+            for (size_t j = 0; j < n; j++) {
+                if (strcmp(map->entries[j].key, key) == 0) {
+                    existing = j;
+                    break;
+                }
+            }
+            if (existing < n) {
+                val_free(map->entries[existing].value);
+                map->entries[existing].value = value;
+            } else {
+                map->entries[n].key = strdup(key);
+                map->entries[n].value = value;
+                n++;
+            }
         }
+        map->count = n;
         VMValue *val = nval(VAL_MAP);
         val->data.map = map;
         return val;
@@ -643,8 +667,8 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
             exit(1);
         }
         long idx = idx_val->data.l;
-        idx = (idx % array_val->data.arr->count + array_val->data.arr->count) %
-              array_val->data.arr->count; // handle negative indices
+        long count = (long)array_val->data.arr->count;
+        idx = (idx % count + count) % count; // handle negative indices
         VMValue *result = val_clone(array_val->data.arr->elements[idx]);
         val_free(array_val);
         val_free(idx_val);
@@ -826,10 +850,12 @@ VMValue *vm_execute(VMVariableScope *scope, Expr *expr) {
             exit(1);
         }
         long idx = idx_val->data.l;
-        if (idx < 0 || (size_t)idx >= array_val->data.arr->count) {
-            fprintf(stderr, "Array index out of bounds\n");
+        long count = (long)array_val->data.arr->count;
+        if (count == 0) {
+            fprintf(stderr, "Array index out of bounds (empty array)\n");
             exit(1);
         }
+        idx = (idx % count + count) % count; // normalize negative indices
         VMValue *value = vm_execute(scope, expr->as.array_assign_node.value);
         /* Mutate the clone, then write it back to scope */
         val_free(array_val->data.arr->elements[idx]);

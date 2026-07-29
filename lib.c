@@ -52,7 +52,7 @@ DEFINE_EXTERNAL_FUNC(print, x, _VAL_INFERRED, VAL_NULL, {
 DEFINE_EXTERNAL_FUNC(tostring, x, _VAL_INFERRED, VAL_STR, {
     if (x) {
         VMValue *result = nval(VAL_STR);
-        result->data.s = strdup(val_to_str(x));
+        result->data.s = val_to_str(x);
         return result;
     } else {
         printf("tostring: missing argument 'x'\n");
@@ -183,8 +183,10 @@ DEFINE_EXTERNAL_FUNC(readline, x, _VAL_INFERRED, VAL_STR, {
 /* puts(s) — raw output, no prefix, no newline */
 DEFINE_EXTERNAL_FUNC(puts, x, _VAL_INFERRED, VAL_NULL, {
     if (x) {
-        fputs(val_to_str(x), stdout);
+        char *s = val_to_str(x);
+        fputs(s, stdout);
         fflush(stdout);
+        free(s);
     }
     return nval(VAL_NULL);
 });
@@ -216,7 +218,9 @@ DEFINE_EXTERNAL_FUNC(trim, x, _VAL_INFERRED, VAL_STR, {
     return result;
 });
 
-/* exec(cmd) -> long */
+/* exec(cmd) -> long — SECURITY: passes cmd to /bin/sh -c via system().
+ * Shell metacharacters are interpreted. Intentional escape hatch; do not
+ * feed it untrusted input unsanitized. See runtime.c for full note. */
 DEFINE_EXTERNAL_FUNC(exec, x, _VAL_INFERRED, VAL_LONG, {
     VMValue *result = nval(VAL_LONG);
     if (!x || x->type != VAL_STR) { result->data.l = -1; return result; }
@@ -278,13 +282,18 @@ DEFINE_EXTERNAL_FUNC2(join, arr, delim, {
         result->data.s = strdup(""); return result;
     }
     size_t total = 1;
-    for (size_t i = 0; i < arr->data.arr->count; i++)
-        total += strlen(val_to_str(arr->data.arr->elements[i])) + strlen(delim->data.s);
+    for (size_t i = 0; i < arr->data.arr->count; i++) {
+        char *s = val_to_str(arr->data.arr->elements[i]);
+        total += strlen(s) + strlen(delim->data.s);
+        free(s);
+    }
     char *buf = malloc(total);
     buf[0] = '\0';
     for (size_t i = 0; i < arr->data.arr->count; i++) {
         if (i > 0) strcat(buf, delim->data.s);
-        strcat(buf, val_to_str(arr->data.arr->elements[i]));
+        char *s = val_to_str(arr->data.arr->elements[i]);
+        strcat(buf, s);
+        free(s);
     }
     result->data.s = buf;
     return result;

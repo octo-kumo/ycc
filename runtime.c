@@ -68,13 +68,29 @@ YValue *y_mk_map(YMapEntry *entries, size_t count) {
     YValue *val = malloc(sizeof(YValue));
     val->type = Y_MAP;
     YMap *map = malloc(sizeof(YMap));
-    map->count = count;
-    /* Copy entries to the heap — the caller's array may be stack-allocated. */
     if (count > 0 && entries) {
         map->entries = malloc(sizeof(YMapEntry) * count);
-        memcpy(map->entries, entries, sizeof(YMapEntry) * count);
+        /* Dedup keys, last value wins (matches VM semantics). */
+        size_t n = 0;
+        for (size_t i = 0; i < count; i++) {
+            size_t existing = n;
+            for (size_t j = 0; j < n; j++) {
+                if (strcmp(map->entries[j].key, entries[i].key) == 0) {
+                    existing = j;
+                    break;
+                }
+            }
+            if (existing < n) {
+                map->entries[existing].value = entries[i].value;
+            } else {
+                map->entries[n] = entries[i];
+                n++;
+            }
+        }
+        map->count = n;
     } else {
         map->entries = NULL;
+        map->count = 0;
     }
     val->data.map = map;
     return val;
@@ -552,11 +568,11 @@ static void y_type_name(YValue *val, char *buf, size_t sz) {
     case Y_FUNC: {
         snprintf(buf, sz, "(");
         for (size_t i = 0; i < val->data.func->arity; i++) {
-            strncat(buf, "?", sz - strlen(buf) - 1);
+            strncat(buf, "<inferred>", sz - strlen(buf) - 1);
             if (i + 1 < val->data.func->arity)
                 strncat(buf, ", ", sz - strlen(buf) - 1);
         }
-        strncat(buf, ")->?", sz - strlen(buf) - 1);
+        strncat(buf, ")-><inferred>", sz - strlen(buf) - 1);
         break;
     }
     }
@@ -655,7 +671,14 @@ YValue *y_builtin_trim(YScope *closure, YValue **args, size_t argc) {
     return y_mk_str_n(s, len);
 }
 
-/* exec(cmd) -> long  (system() call, returns exit code) */
+/* exec(cmd) -> long  (system() call, returns exit code)
+ *
+ * SECURITY: This passes `cmd` verbatim to /bin/sh -c via system(). Any
+ * shell metacharacters in the string (;, |, &&, $(), backticks, etc.) are
+ * interpreted by the shell. This is intentional — exec() is the escape hatch
+ * that lets y programs drive the host system (see examples/shell.y). Do NOT
+ * pass untrusted input into exec() without sanitizing; treat it like C's
+ * system(). There is deliberately no sandboxing. */
 YValue *y_builtin_exec(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
     if (argc < 1 || args[0]->type != Y_STR) return y_mk_long(-1);
@@ -740,10 +763,12 @@ void y_arr_set(YValue *arr, YValue *idx, YValue *val) {
         exit(1);
     }
     long i = idx->data.l;
-    if (i < 0 || (size_t)i >= arr->data.arr->count) {
-        fprintf(stderr, "runtime error: array index out of bounds\n");
+    long count = (long)arr->data.arr->count;
+    if (count == 0) {
+        fprintf(stderr, "runtime error: array index out of bounds (empty)\n");
         exit(1);
     }
+    i = (i % count + count) % count; /* normalize negative indices */
     y_free(arr->data.arr->elements[i]);
     arr->data.arr->elements[i] = val;
 }
