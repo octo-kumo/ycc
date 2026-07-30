@@ -80,6 +80,9 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                     i = i + 1;
                 };
             };
+            if (open) {
+                puts("error: unterminated block comment\n");
+            };
         } else if (is_digit(c)) {
             let start = i;
             while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; };
@@ -116,6 +119,9 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 if (ch == "\\") { has_esc = true; i = i + 2; }
                 else if (ch == "\"") { open = false; }
                 else { i = i + 1; };
+            };
+            if (open) {
+                puts("error: unterminated string literal\n");
             };
             let raw = substr(src, start, i - start);
             i = i + 1;  // skip closing quote
