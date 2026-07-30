@@ -1,6 +1,6 @@
 // check_main.y — CLI driver: read a Y file, print diagnostics as JSON lines.
 // Usage: check_main <file.y>
-// Output: one JSON object per line: {"line":N,"col":N,"severity":"...","message":"..."}
+// Output: one JSON object per line: {"line":N,"col":N,"severity":"...","message":"...","text":"..."}
 // Compiled to wasm for the playground's live diagnostics.
 import check from "./check.y";
 
@@ -12,6 +12,7 @@ if (len(args) < 2) {
     let diags = check.check(src);
     foreach (d in diags) {
         print("{\"line\":" + tostring(d.line) + ",\"col\":" + tostring(d.col) +
-              ",\"severity\":\"" + d.severity + "\",\"message\":\"" + d.message + "\"}");
+              ",\"severity\":\"" + d.severity + "\",\"message\":\"" + d.message +
+              "\",\"text\":\"" + d.text + "\"}");
     };
 };

@@ -11,8 +11,8 @@ import parser from "../../ycc/parser.y";
 
 // ── diagnostics ──────────────────────────────────────────────────────────
 
-def mk_diag(line: long, col: long, severity: str, message: str) {
-    { line: line, col: col, severity: severity, message: message }
+def mk_diag(line: long, col: long, severity: str, message: str, text: str) {
+    { line: line, col: col, severity: severity, message: message, text: text }
 };
 
 // ── AST walker ───────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ def check_expr(node, scope, diags) {
     let k = node.k;
     if (k == "id") {
         if (scope_find(scope, node.v) < 0) {
-            diags = push(diags, mk_diag(node.line, node.col, "error", "undefined variable '" + node.v + "'"));
+            diags = push(diags, mk_diag(node.line, node.col, "error", "undefined variable '" + node.v + "'", node.v));
         };
     } else if (k == "bin") {
         diags = check_expr(node.l, scope, diags);
@@ -67,7 +67,7 @@ def check_stmt(node, scope, diags) {
         diags = check_expr(node.v, scope, diags);
     } else if (k == "assign") {
         if (scope_find(scope, node.name) < 0) {
-            diags = push(diags, mk_diag(node.line, node.col, "error", "undefined variable '" + node.name + "'"));
+            diags = push(diags, mk_diag(node.line, node.col, "error", "undefined variable '" + node.name + "'", node.name));
         };
         diags = check_expr(node.v, scope, diags);
     } else if (k == "idxassign") {
@@ -129,10 +129,12 @@ def check(src: str) {
     let toks = lexer.tokenize(src);
     let ast = parser.parse_program(toks);
     let scope = scope_new(-1);
-    // predefine builtins
+    // predefine builtins (keep in sync with codegen.c's registration list)
     foreach (b in ["print", "puts", "len", "substr", "push", "tostring", "tonum", "typeof",
                    "range", "index_of", "arr_index_of", "last_index_of", "ord", "chr",
-                   "join", "split", "trim", "map_set", "map_get", "self"]) {
+                   "join", "split", "trim", "map_set", "map_get", "self",
+                   "readline", "argv", "getenv", "read_file", "write_file", "exec",
+                   "global_get", "scope_new", "scope_def", "scope_find", "scope_get", "scope_set"]) {
         scope_def(scope, b, null);
     };
     check_block(ast, scope, [])
