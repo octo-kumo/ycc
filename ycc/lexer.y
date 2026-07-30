@@ -30,6 +30,15 @@ def mk_tok(t: str, v: str) -> { t: str, v: str } {
     { t: t, v: v }
 };
 
+// Value of a single hex digit char (0-15), or -1 if not a hex digit.
+def hexval(c: str) -> long {
+    let o = ord(c);
+    if (o >= 48 && o <= 57) { o - 48 }
+    else if (o >= 65 && o <= 70) { o - 65 + 10 }
+    else if (o >= 97 && o <= 102) { o - 97 + 10 }
+    else { -1 }
+};
+
 // Try to read a two-char operator at position i. Returns the operator or "".
 def two_char_op(src: str, i: long) -> str {
     let two = substr(src, i, 2);
@@ -120,11 +129,22 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                     let rc = substr(raw, k, 1);
                     if (rc == "\\") {
                         let esc = substr(raw, k + 1, 1);
-                        if (esc == "n") { chunks = push(chunks, "\n"); }
-                        else if (esc == "t") { chunks = push(chunks, "\t"); }
-                        else if (esc == "r") { chunks = push(chunks, "\r"); }
-                        else { chunks = push(chunks, esc); };
-                        k = k + 2;
+                        if (esc == "n") { chunks = push(chunks, "\n"); k = k + 2; }
+                        else if (esc == "t") { chunks = push(chunks, "\t"); k = k + 2; }
+                        else if (esc == "r") { chunks = push(chunks, "\r"); k = k + 2; }
+                        else if (esc == "x") {
+                            // \xHH — two hex digits
+                            let h1 = hexval(substr(raw, k + 2, 1));
+                            let h2 = hexval(substr(raw, k + 3, 1));
+                            if (h1 >= 0 && h2 >= 0) {
+                                chunks = push(chunks, chr(h1 * 16 + h2));
+                                k = k + 4;
+                            } else {
+                                chunks = push(chunks, esc);
+                                k = k + 2;
+                            };
+                        }
+                        else { chunks = push(chunks, esc); k = k + 2; };
                     } else {
                         chunks = push(chunks, rc);
                         k = k + 1;

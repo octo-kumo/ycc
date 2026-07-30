@@ -234,21 +234,21 @@ def parse_map(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: lon
 
 // ── type parsing ─────────────────────────────────────────────────────────
 
-def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
-    // Parse a type annotation and return the position after it.
-    // Types: long, str, bool, [T], (T, T) -> T, { field: T, ... }
+def parse_type_atom(toks: [{ t: str, v: str }], p: long) -> long {
+    // Parse a single non-arrow type and return the position after it.
+    // Atoms: long, str, bool, [T], (T, T), { field: T, ... }
     let pos = p;
     if (is_punct(toks, pos, "[")) {
         // array type: [T]
         pos = parse_type(toks, pos + 1);
         pos = pos + 1;  // skip ']'
     } else if (is_punct(toks, pos, "(")) {
-        // function type: (T, T) -> T
+        // parenthesized / function-param list: (T, T)
         pos = pos + 1;  // skip '('
         if (!is_punct(toks, pos, ")")) {
             let go = true;
             while (go) {
-                // trailing comma: ')' right after ',' ends the param list
+                // trailing comma: ')' right after ',' ends the list
                 if (is_punct(toks, pos, ")")) { go = false; } else {
                     pos = parse_type(toks, pos);
                     if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
@@ -256,9 +256,6 @@ def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
             };
         };
         pos = pos + 1;  // skip ')'
-        if (is_op(toks, pos, "->")) {
-            pos = parse_type(toks, pos + 1);
-        };
     } else if (is_punct(toks, pos, "{")) {
         // record type: { field: T, field: T, ... }
         pos = pos + 1;  // skip '{'
@@ -278,6 +275,17 @@ def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
     } else {
         // simple type: long, str, bool, etc.
         pos = pos + 1;
+    };
+    pos
+};
+
+def parse_type(toks: [{ t: str, v: str }], p: long) -> long {
+    // Parse a type annotation and return the position after it.
+    // Types: long, str, bool, [T], (T, T), { field: T }, and function types
+    // A -> B (right-associative, so A -> B -> C = A -> (B -> C)).
+    let pos = parse_type_atom(toks, p);
+    if (is_op(toks, pos, "->")) {
+        pos = parse_type(toks, pos + 1);
     };
     pos
 };
