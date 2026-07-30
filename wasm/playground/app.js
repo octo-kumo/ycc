@@ -288,7 +288,9 @@ async function runDiagnostics() {
     checkOutput = "";
     m.FS.writeFile("/check.y", src);
     m.callMain(["/check.y"]);
+    // The C runtime's print() prepends "[print] " to each line — strip it.
     const diags = checkOutput.trim().split("\n")
+      .map((l) => l.startsWith("[print] ") ? l.slice(8) : l)
       .filter((l) => l.startsWith("{"))
       .map((l) => JSON.parse(l));
     renderDiagnostics(diags);
