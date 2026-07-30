@@ -199,6 +199,52 @@ static const char *op_fn(Operator op) {
 
 /* ── Expression emission ────────────────────────────────────────────────── */
 
+/* Does this expression tree contain a reference to variable `name`?
+ * Used to guard the y_scope_take optimization: we can only move a variable
+ * out of scope before evaluating the RHS if the RHS doesn't read it. */
+static bool expr_references_var(Expr *expr, const char *name) {
+    if (!expr) return false;
+    switch (expr->kind) {
+    case EXPR_EVAR:
+        return strcmp(expr->as.evar, name) == 0;
+    case EXPR_EOP:
+        return expr_references_var(expr->as.op_node.left, name) ||
+               expr_references_var(expr->as.op_node.right, name);
+    case EXPR_EUNARY:
+        return expr_references_var(expr->as.unary_node.operand, name);
+    case EXPR_ECALL:
+        if (expr_references_var(expr->as.call_node.callee, name)) return true;
+        for (size_t i = 0; i < expr->as.call_node.arg_count; i++)
+            if (expr_references_var(expr->as.call_node.args[i], name)) return true;
+        return false;
+    case EXPR_EARRAY:
+        for (size_t i = 0; i < expr->as.array_node.count; i++)
+            if (expr_references_var(expr->as.array_node.elements[i], name)) return true;
+        return false;
+    case EXPR_EARRAY_IDX:
+        return expr_references_var(expr->as.array_idx_node.array, name) ||
+               expr_references_var(expr->as.array_idx_node.idx, name);
+    case EXPR_EARRAY_IDX_RANGE:
+        return expr_references_var(expr->as.array_idx_range_node.array, name) ||
+               expr_references_var(expr->as.array_idx_range_node.start, name) ||
+               expr_references_var(expr->as.array_idx_range_node.end, name);
+    case EXPR_EMAP:
+        for (size_t i = 0; i < expr->as.map_node.count; i++)
+            if (expr_references_var(expr->as.map_node.entries[i].value, name)) return true;
+        return false;
+    case EXPR_EIF:
+        return expr_references_var(expr->as.if_node.cond, name) ||
+               expr_references_var(expr->as.if_node.then_branch, name) ||
+               expr_references_var(expr->as.if_node.else_branch, name);
+    case EXPR_EBLOCK:
+        for (size_t i = 0; i < expr->as.block_node.count; i++)
+            if (expr_references_var(expr->as.block_node.exprs[i], name)) return true;
+        return false;
+    default:
+        return false;  /* literals, null, etc. */
+    }
+}
+
 /* Returns a malloc'd C expression string of type (YValue *).
  * The returned value is always OWNED by the caller. */
 static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
@@ -335,13 +381,17 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
         Expr *val_expr = expr->as.assignment_node.value;
 
         /* Optimize 'name = push(name, ...)' with y_scope_take to avoid the
-         * O(n) COW deep-copy that scope_get's clone would otherwise trigger. */
+         * O(n) COW deep-copy that scope_get's clone would otherwise trigger.
+         * Only safe when the pushed value (arg1) does NOT reference 'name' —
+         * otherwise taking it out of scope first would break the read
+         * (e.g. 'c = push(c, c[0])' would index a null placeholder). */
         if (val_expr->kind == EXPR_ECALL &&
             val_expr->as.call_node.callee->kind == EXPR_EVAR &&
             strcmp(val_expr->as.call_node.callee->as.evar, "push") == 0 &&
             val_expr->as.call_node.arg_count == 2 &&
             val_expr->as.call_node.args[0]->kind == EXPR_EVAR &&
-            strcmp(val_expr->as.call_node.args[0]->as.evar, var_name) == 0) {
+            strcmp(val_expr->as.call_node.args[0]->as.evar, var_name) == 0 &&
+            !expr_references_var(val_expr->as.call_node.args[1], var_name)) {
             char *arg1 = emit_expr(ctx, val_expr->as.call_node.args[1]);
             char *r = fmt(
                 "({ YValue *_arr = y_scope_take(scope, \"%s\"); "
