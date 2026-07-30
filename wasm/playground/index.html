@@ -56,6 +56,7 @@
   <span class="tag">Y compiler → WASM · runs in your browser</span>
   <span class="spacer"></span>
   <span id="status">loading compiler…</span>
+  <button class="btn btn-ghost" id="export-btn" disabled onclick="exportWasm()">⬇ Export native wasm</button>
   <button class="btn" id="run-btn" disabled onclick="runActive()">▶ Run</button>
 </header>
 <main>
@@ -80,6 +81,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
 <script src="y-mode.js"></script>
 <script src="ycc-single.js"></script>
+<script src="emit-as.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
