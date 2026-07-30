@@ -26,12 +26,14 @@ void run_tc(Expr *expr) {
     map_free(&global_scope.variables);
 }
 
-void run_vm(Expr *expr) {
+void run_vm(Expr *expr, int quiet) {
     VM vm;
     vm_init(&vm);
     VMValue *output = vm_execute(vm.globals, expr);
-    printf("\n\nResult: ");
-    val_print(output);
+    if (!quiet) {
+        printf("\n\nResult: ");
+        val_print(output);
+    }
     vm_scope_release(vm.globals);
     val_free(output);
 }
@@ -97,6 +99,7 @@ int main(int argc, char *argv[]) {
     enum { MODE_VM, MODE_COMPILE, MODE_EMIT_C } mode = MODE_VM;
     const char *output_path = NULL;
     const char *file = NULL;
+    int quiet = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -110,6 +113,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-S") == 0 ||
                    strcmp(argv[i], "--emit-c") == 0) {
             mode = MODE_EMIT_C;
+        } else if (strcmp(argv[i], "-q") == 0 ||
+                   strcmp(argv[i], "--quiet") == 0) {
+            quiet = 1;
         } else {
             file = argv[i];
         }
@@ -119,7 +125,7 @@ int main(int argc, char *argv[]) {
     const char *base_dir = ".";
     char *base_dir_alloc = NULL;
     if (file) {
-        printf("Reading file: %s\n", file);
+        if (!quiet) printf("Reading file: %s\n", file);
         input = read_file(file);
         if (!input) {
             fprintf(stderr, "Failed to read file: %s\n", file);
@@ -159,7 +165,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("success\n");
+    if (!quiet) printf("success\n");
 
     if (mode == MODE_COMPILE) {
         /* Type-check first */
@@ -192,18 +198,20 @@ int main(int argc, char *argv[]) {
     }
 
     /* Default: VM mode (original behavior) */
-    ast_walk(res.value, 0);
-    ast_print_code(stdout, res.value, 0);
-    printf("\n\n");
-    run_tc(res.value);
+    if (!quiet) {
+        ast_walk(res.value, 0);
+        ast_print_code(stdout, res.value, 0);
+        printf("\n\n");
+        run_tc(res.value);
+    }
     vm_set_argv(argc, argv);
-    run_vm(res.value);
+    run_vm(res.value, quiet);
 
     if (res.remaining[0] != '\0') {
         printf("Warning: Unparsed input remaining: '%s'\n", res.remaining);
     }
 
-    printf("\ncomplete\n");
+    if (!quiet) printf("\ncomplete\n");
     ast_free(res.value);
     free(input);
     return 0;
