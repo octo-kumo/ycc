@@ -48,6 +48,15 @@
   /* resize handle */
   #resize { height: 4px; cursor: ns-resize; background: var(--border); flex-shrink: 0; }
   #resize:hover { background: var(--accent); }
+  /* diagnostics */
+  #diagnostics-wrap { height: 120px; border-top: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  #diagnostics-wrap .head { padding: 4px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: #888; background: var(--bg2); display: flex; justify-content: space-between; align-items: center; }
+  #diag-count { font-size: 10px; color: var(--accent); }
+  #diagnostics { flex: 1; overflow-y: auto; padding: 4px 12px; font: 11px/1.5 'SF Mono', 'Fira Code', 'Consolas', monospace; background: #1a1a1a; }
+  .diag-item { padding: 2px 0; color: var(--text); }
+  .diag-item.error { color: var(--red); }
+  .diag-item.warning { color: #d7ba7d; }
+  .diag-item .loc { color: #888; margin-right: 8px; }
 </style>
 </head>
 <body>
@@ -74,6 +83,10 @@
       <div class="head"><span>Output</span><button class="btn btn-sm btn-ghost" onclick="clearOutput()">Clear</button></div>
       <div id="output"></div>
     </div>
+    <div id="diagnostics-wrap">
+      <div class="head"><span>Diagnostics</span><span id="diag-count"></span></div>
+      <div id="diagnostics"></div>
+    </div>
   </div>
 </main>
 
@@ -82,6 +95,7 @@
 <script src="y-mode.js"></script>
 <script src="ycc-single.js"></script>
 <script src="emit-as.js"></script>
+<script src="check.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -9,3 +9,5 @@ wasm/ycc.wasm
 wasm/test-single.js
 wasm/playground/ycc-single.js
 wasm/playground/emit-as.js
+wasm/playground/check.js
+tools/lsp/check.js

@@ -243,6 +243,65 @@ async function exportWasm() {
   }
 }
 
+// ── live diagnostics (LSP checker) ───────────────────────────────────────
+let checkModule = null;
+let checkOutput = "";
+let diagTimer = null;
+
+async function loadCheckModule() {
+  if (checkModule) return checkModule;
+  checkModule = await createCheck({
+    print: (t) => { checkOutput += t + "\n"; },
+    printErr: () => {},
+  });
+  return checkModule;
+}
+
+function renderDiagnostics(diags) {
+  const el = document.getElementById("diagnostics");
+  const countEl = document.getElementById("diag-count");
+  el.textContent = "";
+  if (!diags.length) {
+    countEl.textContent = "✓ no issues";
+    countEl.style.color = "var(--green)";
+    return;
+  }
+  countEl.textContent = diags.length + " issue" + (diags.length > 1 ? "s" : "");
+  countEl.style.color = "var(--red)";
+  diags.forEach((d) => {
+    const item = document.createElement("div");
+    item.className = "diag-item " + d.severity;
+    const loc = document.createElement("span");
+    loc.className = "loc";
+    loc.textContent = d.line + ":" + d.col;
+    item.appendChild(loc);
+    item.appendChild(document.createTextNode(d.message));
+    el.appendChild(item);
+  });
+}
+
+async function runDiagnostics() {
+  if (!activePath || !editor) return;
+  const src = editor.getValue();
+  try {
+    const m = await loadCheckModule();
+    checkOutput = "";
+    m.FS.writeFile("/check.y", src);
+    m.callMain(["/check.y"]);
+    const diags = checkOutput.trim().split("\n")
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l));
+    renderDiagnostics(diags);
+  } catch (e) {
+    renderDiagnostics([]);
+  }
+}
+
+function scheduleDiagnostics() {
+  if (diagTimer) clearTimeout(diagTimer);
+  diagTimer = setTimeout(runDiagnostics, 400);
+}
+
 // ── boot ─────────────────────────────────────────────────────────────────
 editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
   mode: "y",
@@ -257,6 +316,8 @@ editor.setOption("extraKeys", {
   "Ctrl-Enter": runActive,
   "Cmd-Enter": runActive,
 });
+editor.on("change", scheduleDiagnostics);
+window.editor = editor;  // expose for debugging/testing
 
 Object.assign(files, DEFAULT_FILES);
 activePath = "main.y";
@@ -272,6 +333,7 @@ createYcc({
   statusEl.textContent = "compiler ready";
   document.getElementById("run-btn").disabled = false;
   document.getElementById("export-btn").disabled = false;
+  runDiagnostics();  // initial diagnostics
 }).catch((e) => {
   statusEl.textContent = "failed to load compiler";
   appendOutput("Failed to load compiler: " + e + "\n", "err");
