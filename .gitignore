@@ -7,3 +7,4 @@ wasm/ycc-single.js
 wasm/ycc.js
 wasm/ycc.wasm
 wasm/test-single.js
+wasm/playground/ycc-single.js
