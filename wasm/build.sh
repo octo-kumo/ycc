@@ -18,3 +18,7 @@ emcc -O2 -s WASM=1 -s MODULARIZE=1 -s EXPORT_NAME=createYcc \
   -o wasm/ycc-single.js
 
 echo "built wasm/ycc-single.js ($(stat -c%s wasm/ycc-single.js) bytes, $(gzip -c wasm/ycc-single.js | wc -c) gzipped)"
+
+# Deploy into the playground (single self-contained page).
+cp wasm/ycc-single.js wasm/playground/ycc-single.js
+echo "deployed to wasm/playground/ — serve with: (cd wasm/playground && python3 -m http.server 8765)"
