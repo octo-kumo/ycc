@@ -367,7 +367,7 @@ char *y_to_str(YValue *val) {
 
 void y_print(YValue *val) {
     char *s = y_to_str(val);
-    printf("[print] %s\n", s);
+    printf("%s\n", s);
     free(s);
 }
 
@@ -875,7 +875,7 @@ YValue *y_builtin_readline(YScope *closure, YValue **args, size_t argc) {
     return v;
 }
 
-/* puts(s) — print without [print] prefix and without trailing newline */
+/* puts(s) — print without a trailing newline (and flush, for interactive use) */
 YValue *y_builtin_puts(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
     if (argc > 0) {

@@ -17,8 +17,8 @@ run_test() {
     local name="$1"
     local file="$2"
 
-    # Run VM
-    vm_out=$(timeout 10 $COMPILER "$file" 2>&1 | grep '^\[print\]')
+    # Run VM (quiet: only program output)
+    vm_out=$(timeout 10 $COMPILER -q "$file" 2>&1)
     vm_exit=$?
 
     # Compile
@@ -33,7 +33,7 @@ run_test() {
     fi
 
     # Run compiled binary
-    bin_out=$(timeout 10 /tmp/test_bin 2>&1 | grep '^\[print\]')
+    bin_out=$(timeout 10 /tmp/test_bin 2>&1)
     bin_exit=$?
 
     if [ $vm_exit -ne 0 ] && [ $vm_exit -ne 1 ]; then
@@ -74,20 +74,20 @@ inline_test() {
     tmpfile=$(mktemp /tmp/ytest_XXXXXX.y)
     echo "$code" > "$tmpfile"
 
-    # VM
-    vm_out=$(timeout 10 $COMPILER "$tmpfile" 2>&1 | grep '^\[print\]')
+    # VM (quiet: only program output)
+    vm_out=$(timeout 10 $COMPILER -q "$tmpfile" 2>&1)
 
     # Compiled
     $COMPILER --compile "$tmpfile" -o /tmp/test_bin >/dev/null 2>&1
-    bin_out=$(timeout 10 /tmp/test_bin 2>&1 | grep '^\[print\]')
+    bin_out=$(timeout 10 /tmp/test_bin 2>&1)
 
     rm -f "$tmpfile"
 
     vm_ok=0
     bin_ok=0
 
-    if echo "$vm_out" | grep -qF "$expected"; then vm_ok=1; fi
-    if echo "$bin_out" | grep -qF "$expected"; then bin_ok=1; fi
+    if echo "$vm_out" | grep -qF -- "$expected"; then vm_ok=1; fi
+    if echo "$bin_out" | grep -qF -- "$expected"; then bin_ok=1; fi
 
     if [ $vm_ok -eq 1 ] && [ $bin_ok -eq 1 ]; then
         echo -e "${GREEN}PASS${NC} $name"
@@ -124,19 +124,19 @@ echo "── while loop tests ──"
 
 inline_test "while: basic counter" \
     'let i = 0; while (i < 5) { i = i + 1; }; print(i);' \
-    '[print] 5'
+    '5'
 
 inline_test "while: accumulator" \
     'let s = 0; let i = 1; while (i <= 100) { s = s + i; i = i + 1; }; print(s);' \
-    '[print] 5050'
+    '5050'
 
 inline_test "while: zero iterations" \
     'let x = 42; while (false) { x = 0; }; print(x);' \
-    '[print] 42'
+    '42'
 
 inline_test "while: nested" \
     'let total = 0; let i = 0; while (i < 3) { let j = 0; while (j < 3) { total = total + 1; j = j + 1; }; i = i + 1; }; print(total);' \
-    '[print] 9'
+    '9'
 
 # ── Inline tests: for (C-style) ──
 echo ""
@@ -144,27 +144,27 @@ echo "── for loop tests ──"
 
 inline_test "for: basic" \
     'let s = 0; for (let i = 0; i < 5; i = i + 1) { s = s + i; }; print(s);' \
-    '[print] 10'
+    '10'
 
 inline_test "for: countdown" \
     'let s = ""; for (let i = 5; i > 0; i = i - 1) { s = s + tostring(i); }; print(s);' \
-    '[print] 54321'
+    '54321'
 
 inline_test "for: step by 3" \
     'let c = 0; for (let i = 0; i < 10; i = i + 3) { c = c + 1; }; print(c);' \
-    '[print] 4'
+    '4'
 
 inline_test "for: no init" \
     'let i = 3; let s = 0; for (; i > 0; i = i - 1) { s = s + i; }; print(s);' \
-    '[print] 6'
+    '6'
 
 inline_test "for: zero iterations" \
     'let x = 99; for (let i = 10; i < 5; i = i + 1) { x = 0; }; print(x);' \
-    '[print] 99'
+    '99'
 
 inline_test "for: nested" \
     'let s = 0; for (let i = 0; i < 4; i = i + 1) { for (let j = 0; j < 4; j = j + 1) { s = s + 1; }; }; print(s);' \
-    '[print] 16'
+    '16'
 
 # ── Inline tests: foreach ──
 echo ""
@@ -172,27 +172,27 @@ echo "── foreach loop tests ──"
 
 inline_test "foreach: sum array" \
     'let s = 0; foreach (x in [10, 20, 30]) { s = s + x; }; print(s);' \
-    '[print] 60'
+    '60'
 
 inline_test "foreach: string concat" \
     'let r = ""; foreach (w in ["a", "b", "c"]) { r = r + w; }; print(r);' \
-    '[print] abc'
+    'abc'
 
 inline_test "foreach: empty array" \
     'let x = 42; foreach (i in []) { x = 0; }; print(x);' \
-    '[print] 42'
+    '42'
 
 inline_test "foreach: over range()" \
     'let s = 0; foreach (i in range(5)) { s = s + i; }; print(s);' \
-    '[print] 10'
+    '10'
 
 inline_test "foreach: nested" \
     'let s = 0; foreach (a in [1, 2]) { foreach (b in [10, 20]) { s = s + a * b; }; }; print(s);' \
-    '[print] 90'
+    '90'
 
 inline_test "foreach: single element" \
     'let s = 0; foreach (x in [7]) { s = x; }; print(s);' \
-    '[print] 7'
+    '7'
 
 # ── Inline tests: for..in range ──
 echo ""
@@ -200,31 +200,31 @@ echo "── for..in range tests ──"
 
 inline_test "range: 0..5" \
     'let s = 0; for i in 0..5 { s = s + i; }; print(s);' \
-    '[print] 10'
+    '10'
 
 inline_test "range: 3..7" \
     'let s = 0; for i in 3..7 { s = s + i; }; print(s);' \
-    '[print] 18'
+    '18'
 
 inline_test "range: empty (start==end)" \
     'let x = 42; for i in 5..5 { x = 0; }; print(x);' \
-    '[print] 42'
+    '42'
 
 inline_test "range: empty (start>end)" \
     'let x = 42; for i in 10..3 { x = 0; }; print(x);' \
-    '[print] 42'
+    '42'
 
 inline_test "range: nested" \
     'let s = 0; for i in 0..3 { for j in 0..3 { s = s + i + j; }; }; print(s);' \
-    '[print] 18'
+    '18'
 
 inline_test "range: expression bounds" \
     'let n = 3; let s = 0; for i in 0..n*2 { s = s + 1; }; print(s);' \
-    '[print] 6'
+    '6'
 
 inline_test "range: variable used after loop" \
     'let last = 0; for i in 0..10 { last = i; }; print(last);' \
-    '[print] 9'
+    '9'
 
 # ── Inline tests: loops + functions ──
 echo ""
@@ -232,19 +232,19 @@ echo "── loops + functions ──"
 
 inline_test "loop in function" \
     'def sum_to(n: long) -> long { let s = 0; for i in 0..n+1 { s = s + i; }; s }; print(sum_to(10));' \
-    '[print] 55'
+    '55'
 
 inline_test "function with while" \
     'def fib(n: long) -> long { let a = 0; let b = 1; let i = 0; while (i < n) { let t = a + b; a = b; b = t; i = i + 1; }; a }; print(fib(10));' \
-    '[print] 55'
+    '55'
 
 inline_test "foreach with function call" \
     'def double(x: long) -> long { x * 2 }; let s = 0; foreach (v in [1, 2, 3]) { s = s + double(v); }; print(s);' \
-    '[print] 12'
+    '12'
 
 inline_test "loop building array result" \
     'let s = 0; for i in 1..6 { s = s + i * i; }; print(s);' \
-    '[print] 55'
+    '55'
 
 # ── Regression tests: audit findings ──
 echo ""
@@ -252,59 +252,59 @@ echo "── Audit regression tests ──"
 
 inline_test "precedence: mul before add" \
     'print(2 * 3 + 4);' \
-    '[print] 10'
+    '10'
 
 inline_test "precedence: left-assoc subtraction" \
     'print(10 - 2 - 3);' \
-    '[print] 5'
+    '5'
 
 inline_test "precedence: left-assoc division" \
     'print(100 / 10 / 2);' \
-    '[print] 5'
+    '5'
 
 inline_test "precedence: mixed" \
     'print(2 + 3 * 4 - 1);' \
-    '[print] 13'
+    '13'
 
 inline_test "precedence: comparison lower than arithmetic" \
     'print(2 + 3 > 4);' \
-    '[print] true'
+    'true'
 
 inline_test "precedence: parens override" \
     'print((2 + 3) * 4);' \
-    '[print] 20'
+    '20'
 
 inline_test "negative float" \
     'print(-3.14);' \
-    '[print] -3.14'
+    '-3.14'
 
 inline_test "negative float: -0.5" \
     'print(-0.5);' \
-    '[print] -0.5'
+    '-0.5'
 
 inline_test "else if chain" \
     'let x = 2; if (x == 1) { print("one"); } else if (x == 2) { print("two"); } else { print("other"); };' \
-    '[print] two'
+    'two'
 
 inline_test "else if: falls to else" \
     'let x = 9; if (x == 1) { print("one"); } else if (x == 2) { print("two"); } else { print("other"); };' \
-    '[print] other'
+    'other'
 
 inline_test "if without else" \
     'if (true) { print("yes"); };' \
-    '[print] yes'
+    'yes'
 
 inline_test "cons operator" \
     'print(0 :: [1, 2, 3]);' \
-    '[print] [0, 1, 2, 3]'
+    '[0, 1, 2, 3]'
 
 inline_test "empty array slice" \
     'let a = []; print(a[0:1]);' \
-    '[print] []'
+    '[]'
 
 inline_test "modulo precedence" \
     'print(10 % 3 + 1);' \
-    '[print] 2'
+    '2'
 
 # ── Summary ──
 echo ""

@@ -82,7 +82,6 @@ void vm_set_argv(int argc, char **argv) {
 
 DEFINE_EXTERNAL_FUNC(print, x, _VAL_INFERRED, VAL_NULL, {
     if (x) {
-        printf("[print] ");
         val_print(x);
         printf("\n");
     } else {
@@ -213,8 +212,7 @@ DEFINE_EXTERNAL_FUNC(range, x, VAL_LONG, VAL_ARR, {
         .type = VAL_FUNC, .data.closure = &__ext_cl_##name};
 
 /* readline() -> str | null */
-DEFINE_EXTERNAL_FUNC(readline, x, _VAL_INFERRED, VAL_STR, {
-    (void)x;
+DEFINE_EXTERNAL_FUNC0(readline, VAL_STR, {
     char *line = NULL;
     size_t cap = 0;
     ssize_t n = getline(&line, &cap, stdin);
