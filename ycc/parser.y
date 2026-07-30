@@ -351,13 +351,15 @@ def parse_stmt(toks: [{ t: str, v: str }], p: long) -> { node: {k: str}, pos: lo
         let e = parse_expr(toks, p + 1);
         res({ k: "ret", e: e.node }, e.pos)
     } else {
-        // expression, possibly an assignment: id = expr  or  arr[i] = expr
+        // expression, possibly an assignment: id = expr, arr[i] = expr, or obj.key = expr
         let e = parse_expr(toks, p);
         if (is_op(toks, e.pos, "=")) {
             let rhs = parse_expr(toks, e.pos + 1);
             let target = e.node;
             if (target.k == "index") {
                 res({ k: "idxassign", arr: target.arr, idx: target.idx, v: rhs.node }, rhs.pos)
+            } else if (target.k == "dot") {
+                res({ k: "dotassign", obj: target.obj, key: target.key, v: rhs.node }, rhs.pos)
             } else {
                 res({ k: "assign", name: target.v, v: rhs.node }, rhs.pos)
             }

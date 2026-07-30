@@ -618,6 +618,140 @@ YValue *y_map_get(YValue *map, const char *key) {
     return NULL;
 }
 
+/* map_set(map, key, value) -> map  — set/overwrite a key, COW-safe, returns
+ * the map for chaining. Enables dynamic map-key assignment from Y code. */
+YValue *y_builtin_map_set(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 3 || args[0]->type != Y_MAP || args[1]->type != Y_STR)
+        return argc >= 1 ? args[0] : y_mk_null();
+    YValue *map = args[0];
+    const char *key = args[1]->data.s;
+    y_map_cow(map);
+    YMap *m = map->data.map;
+    for (size_t i = 0; i < m->count; i++) {
+        if (strcmp(m->entries[i].key, key) == 0) {
+            y_free(m->entries[i].value);
+            m->entries[i].value = y_clone(args[2]);
+            return map;
+        }
+    }
+    m->entries = realloc(m->entries, sizeof(YMapEntry) * (m->count + 1));
+    m->entries[m->count].key = strdup(key);
+    m->entries[m->count].value = y_clone(args[2]);
+    m->count++;
+    return map;
+}
+
+/* map_get(map, key) -> value|null — read a key from a map (null if absent). */
+YValue *y_builtin_map_get(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_MAP || args[1]->type != Y_STR)
+        return y_mk_null();
+    YValue *v = y_map_get(args[0], args[1]->data.s);
+    return v ? y_clone(v) : y_mk_null();
+}
+
+/* global_get(name) -> value|null — look up a name in the *enclosing C scope*.
+ * Registered with the global scope as its closure, so the Y VM (whose own
+ * scope chain is separate Y-maps) can fall back to host builtins/globals.
+ * Returns null (not an error) when the name is absent. */
+YValue *y_builtin_global_get(YScope *closure, YValue **args, size_t argc) {
+    if (argc < 1 || args[0]->type != Y_STR) return y_mk_null();
+    const char *name = args[0]->data.s;
+    for (YScope *s = closure; s; s = s->parent) {
+        for (YScopeEntry *e = s->entries; e; e = e->next) {
+            if (strcmp(e->name, name) == 0) return y_clone(e->value);
+        }
+    }
+    return y_mk_null();
+}
+
+/* ── Native scope registry for the Y VM ──────────────────────────────────
+ * The Y VM needs mutable scopes, but Y's COW semantics make nested-structure
+ * mutation unreliable. These builtins manage real C YScopes in a global
+ * registry, indexed by integer ID, so the VM can create/define/lookup scopes
+ * with correct mutation semantics. */
+static YScope **g_vm_scopes = NULL;
+static size_t g_vm_scope_count = 0;
+static size_t g_vm_scope_cap = 0;
+
+/* scope_new(parent_id) -> long — create a scope, return its ID. parent_id -1 = root. */
+YValue *y_builtin_scope_new(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    long parent_id = (argc >= 1 && args[0]->type == Y_LONG) ? args[0]->data.l : -1;
+    if (g_vm_scope_count >= g_vm_scope_cap) {
+        g_vm_scope_cap = g_vm_scope_cap ? g_vm_scope_cap * 2 : 16;
+        g_vm_scopes = realloc(g_vm_scopes, sizeof(YScope *) * g_vm_scope_cap);
+    }
+    YScope *s = malloc(sizeof(YScope));
+    YScope *parent = (parent_id >= 0 && (size_t)parent_id < g_vm_scope_count)
+                         ? g_vm_scopes[parent_id] : NULL;
+    y_scope_init(s, parent);
+    long id = (long)g_vm_scope_count++;
+    g_vm_scopes[id] = s;
+    return y_mk_long(id);
+}
+
+/* scope_def(id, name, val) -> null — define a new binding in scope id. */
+YValue *y_builtin_scope_def(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 3 || args[0]->type != Y_LONG || args[1]->type != Y_STR) return y_mk_null();
+    long id = args[0]->data.l;
+    if (id < 0 || (size_t)id >= g_vm_scope_count) return y_mk_null();
+    y_scope_set(g_vm_scopes[id], args[1]->data.s, y_clone(args[2]));
+    return y_mk_null();
+}
+
+/* scope_find(id, name) -> long — find scope id defining name (walking parents), or -1. */
+YValue *y_builtin_scope_find(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_LONG || args[1]->type != Y_STR) return y_mk_long(-1);
+    long id = args[0]->data.l;
+    const char *name = args[1]->data.s;
+    while (id >= 0 && (size_t)id < g_vm_scope_count) {
+        YScope *s = g_vm_scopes[id];
+        for (YScopeEntry *e = s->entries; e; e = e->next) {
+            if (strcmp(e->name, name) == 0) return y_mk_long(id);
+        }
+        /* find this scope's parent id */
+        long pid = -1;
+        for (size_t i = 0; i < g_vm_scope_count; i++) {
+            if (g_vm_scopes[i] == s->parent) { pid = (long)i; break; }
+        }
+        id = pid;
+    }
+    return y_mk_long(-1);
+}
+
+/* scope_get(id, name) -> value|null — get a variable from scope id or its parents.
+ * Returns null (not an error) when absent, so the VM can detect undefined vars. */
+YValue *y_builtin_scope_get(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_LONG || args[1]->type != Y_STR) return y_mk_null();
+    YValue *find_args[2] = { args[0], args[1] };
+    YValue *found = y_builtin_scope_find(closure, find_args, 2);
+    if (found->data.l < 0) { y_free(found); return y_mk_null(); }
+    long sid = found->data.l;
+    y_free(found);
+    YValue *v = y_scope_get(g_vm_scopes[sid], args[1]->data.s);
+    return v ? y_clone(v) : y_mk_null();
+}
+
+/* scope_set(id, name, val) -> null — set a variable in the nearest scope defining
+ * it (walking parents); if none defines it, define in scope id. */
+YValue *y_builtin_scope_set(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 3 || args[0]->type != Y_LONG || args[1]->type != Y_STR) return y_mk_null();
+    YValue *find_args[2] = { args[0], args[1] };
+    YValue *found = y_builtin_scope_find(closure, find_args, 2);
+    long sid = found->data.l;
+    y_free(found);
+    if (sid < 0) sid = args[0]->data.l;  // not found: define in the given scope
+    if (sid < 0 || (size_t)sid >= g_vm_scope_count) return y_mk_null();
+    y_scope_set(g_vm_scopes[sid], args[1]->data.s, y_clone(args[2]));
+    return y_mk_null();
+}
+
 YValue *y_cons(YValue *head, YValue *tail) {
     if (tail->type != Y_ARR) {
         fprintf(stderr, "runtime error: :: requires array on right\n");
@@ -975,6 +1109,19 @@ YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc) {
     const char *hit = strstr(args[0]->data.s, args[1]->data.s);
     if (!hit) return y_mk_long(-1);
     return y_mk_long((long)(hit - args[0]->data.s));
+}
+
+/* arr_index_of(arr, val) -> long  (first index where arr[i] == val, or -1) */
+YValue *y_builtin_arr_index_of(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_ARR)
+        return y_mk_long(-1);
+    YArray *arr = args[0]->data.arr;
+    for (size_t i = 0; i < arr->count; i++) {
+        if (y_equals(arr->elements[i], args[1]))
+            return y_mk_long((long)i);
+    }
+    return y_mk_long(-1);
 }
 
 /* last_index_of(s, sub) -> long  (last index of sub in s, -1 if not found) */

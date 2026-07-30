@@ -159,8 +159,17 @@ YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ord(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_arr_index_of(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_last_index_of(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_getenv(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_map_set(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_map_get(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_global_get(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_scope_new(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_scope_def(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_scope_find(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_scope_get(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_scope_set(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_tok_type(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_tok_value(YScope *closure, YValue **args, size_t argc);
 

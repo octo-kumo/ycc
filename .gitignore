@@ -2,7 +2,8 @@
 *.o
 vgcore.*
 compiler
-.vscode/wasm/ycc-single.js
+.vscode/
+wasm/ycc-single.js
 wasm/ycc.js
 wasm/ycc.wasm
 wasm/test-single.js

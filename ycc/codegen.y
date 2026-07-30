@@ -147,11 +147,32 @@ def emit_expr(node) -> str {
         let v = emit_expr(node.v);
         "({ YValue *_v = " + v + "; y_scope_set(scope, \"" + node.name + "\", _v); y_clone(_v); })"
     } else if (k == "idxassign") {
-        let arr = emit_expr(node.arr);
         let idx = emit_expr(node.idx);
         let v = emit_expr(node.v);
-        "({ YValue *_a = " + arr + "; YValue *_i = " + idx + "; YValue *_v = " + v + "; " +
-        "y_arr_set(_a, _i, _v); y_mk_null(); })"
+        // For a simple variable target, mutate the scope's array in place
+        // (non-cloned, refcount 1) so y_arr_set's COW writes through. A complex
+        // target falls back to a clone (best-effort; rare in practice).
+        if (node.arr.k == "id") {
+            "({ YValue *_a = y_scope_get(scope, \"" + node.arr.v + "\"); YValue *_i = " + idx + "; YValue *_v = " + v + "; " +
+            "y_arr_set(_a, _i, _v); y_mk_null(); })"
+        } else {
+            let arr = emit_expr(node.arr);
+            "({ YValue *_a = " + arr + "; YValue *_i = " + idx + "; YValue *_v = " + v + "; " +
+            "y_arr_set(_a, _i, _v); y_mk_null(); })"
+        }
+    } else if (k == "dotassign") {
+        let v = emit_expr(node.v);
+        // For a simple variable target, mutate the scope's map in place
+        // (non-cloned, refcount 1) so map_set's COW writes through. A complex
+        // target falls back to a clone (best-effort; rare in practice).
+        if (node.obj.k == "id") {
+            "({ YValue *_o = y_scope_get(scope, \"" + node.obj.v + "\"); YValue *_v = " + v + "; " +
+            "y_builtin_map_set(NULL, (YValue *[]){ _o, y_mk_str(\"" + esc(node.key) + "\"), _v }, 3); y_mk_null(); })"
+        } else {
+            let obj = emit_expr(node.obj);
+            "({ YValue *_o = " + obj + "; YValue *_v = " + v + "; " +
+            "y_builtin_map_set(NULL, (YValue *[]){ _o, y_mk_str(\"" + esc(node.key) + "\"), _v }, 3); y_mk_null(); })"
+        }
     } else if (k == "ret") {
         // return is handled by the block emitter wrapping in _result
         emit_expr(node.e)
@@ -439,9 +460,18 @@ def emit_program(ast) -> str {
     parts = push(parts, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"arr_index_of\", y_mk_func(y_builtin_arr_index_of, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"argv\", y_mk_func(y_builtin_argv, 0, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"getenv\", y_mk_func(y_builtin_getenv, 1, NULL));\n\n");
+    parts = push(parts, "    y_scope_set(scope, \"getenv\", y_mk_func(y_builtin_getenv, 1, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"map_set\", y_mk_func(y_builtin_map_set, 3, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"map_get\", y_mk_func(y_builtin_map_get, 2, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"global_get\", y_mk_func(y_builtin_global_get, 1, scope));\n");
+    parts = push(parts, "    y_scope_set(scope, \"scope_new\", y_mk_func(y_builtin_scope_new, 1, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"scope_def\", y_mk_func(y_builtin_scope_def, 3, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"scope_find\", y_mk_func(y_builtin_scope_find, 2, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"scope_get\", y_mk_func(y_builtin_scope_get, 2, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"scope_set\", y_mk_func(y_builtin_scope_set, 3, NULL));\n\n");
     parts = push(parts, body);
     parts = push(parts, "\n    return 0;\n");
     parts = push(parts, "}\n");

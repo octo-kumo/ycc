@@ -708,8 +708,17 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"arr_index_of\", y_mk_func(y_builtin_arr_index_of, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");
-    fprintf(out, "    y_scope_set(scope, \"getenv\",   y_mk_func(y_builtin_getenv,   1, NULL));\n\n");
+    fprintf(out, "    y_scope_set(scope, \"getenv\",   y_mk_func(y_builtin_getenv,   1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"map_set\",  y_mk_func(y_builtin_map_set,  3, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"map_get\",  y_mk_func(y_builtin_map_get,  2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"global_get\", y_mk_func(y_builtin_global_get, 1, scope));\n");
+    fprintf(out, "    y_scope_set(scope, \"scope_new\", y_mk_func(y_builtin_scope_new, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"scope_def\", y_mk_func(y_builtin_scope_def, 3, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"scope_find\", y_mk_func(y_builtin_scope_find, 2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"scope_get\", y_mk_func(y_builtin_scope_get, 2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"scope_set\", y_mk_func(y_builtin_scope_set, 3, NULL));\n\n");
     fwrite(main_buf, 1, main_len, out);
     fprintf(out, "\n    y_scope_release(scope);\n");
     fprintf(out, "    return 0;\n");
