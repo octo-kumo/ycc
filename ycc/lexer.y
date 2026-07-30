@@ -1,5 +1,5 @@
 // lexer.y — tokenize a Y source string into a list of token maps.
-// Each token is { t: <type>, v: <lexeme/value> }.
+// Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based> }.
 // Token types: id, num, str, op, punct, kw, eof.
 
 def is_digit(c: str) -> bool {
@@ -26,8 +26,8 @@ def is_punct(c: str) -> bool {
     c == "," || c == ";" || c == ":"
 };
 
-def mk_tok(t: str, v: str) -> { t: str, v: str } {
-    { t: t, v: v }
+def mk_tok(t: str, v: str, line: long, col: long) -> { t: str, v: str, line: long, col: long } {
+    { t: t, v: v, line: line, col: col }
 };
 
 // Value of a single hex digit char (0-15), or -1 if not a hex digit.
@@ -56,27 +56,37 @@ def is_single_op(c: str) -> bool {
     c == "<" || c == ">" || c == "=" || c == "." || c == "!"
 };
 
-def tokenize(src: str) -> [{ t: str, v: str }] {
+def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
     let toks = [];
     let i = 0;
     let n = len(src);
+    let line = 1;
+    let col = 1;
     while (i < n) {
         let c = substr(src, i, 1);
         if (is_space(c)) {
+            if (c == "\n") { line = line + 1; col = 1; }
+            else { col = col + 1; };
             i = i + 1;
         } else if (c == "/" && substr(src, i + 1, 1) == "/") {
             // line comment
             i = i + 2;
-            while (i < n && substr(src, i, 1) != "\n") { i = i + 1; };
+            col = col + 2;
+            while (i < n && substr(src, i, 1) != "\n") { i = i + 1; col = col + 1; };
         } else if (c == "/" && substr(src, i + 1, 1) == "*") {
             // block comment
             i = i + 2;
+            col = col + 2;
             let open = true;
             while (open && i + 1 < n) {
                 if (substr(src, i, 2) == "*/") {
                     i = i + 2;
+                    col = col + 2;
                     open = false;
                 } else {
+                    let ch = substr(src, i, 1);
+                    if (ch == "\n") { line = line + 1; col = 1; }
+                    else { col = col + 1; };
                     i = i + 1;
                 };
             };
@@ -85,16 +95,19 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
             };
         } else if (is_digit(c)) {
             let start = i;
-            while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; };
+            let start_col = col;
+            while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; col = col + 1; };
             // optional fractional part (but not '..' range)
             if (substr(src, i, 1) == "." && substr(src, i + 1, 1) != ".") {
                 i = i + 1;
-                while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; };
+                col = col + 1;
+                while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; col = col + 1; };
             };
-            toks = push(toks, mk_tok("num", substr(src, start, i - start)));
+            toks = push(toks, mk_tok("num", substr(src, start, i - start), line, start_col));
         } else if (is_alpha(c)) {
             let start = i;
-            while (i < n && is_alnum(substr(src, i, 1))) { i = i + 1; };
+            let start_col = col;
+            while (i < n && is_alnum(substr(src, i, 1))) { i = i + 1; col = col + 1; };
             let word = substr(src, start, i - start);
             let ty = "id";
             if (word == "let" || word == "const" || word == "def" ||
@@ -104,27 +117,35 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 word == "null") {
                 ty = "kw";
             };
-            toks = push(toks, mk_tok(ty, word));
+            toks = push(toks, mk_tok(ty, word, line, start_col));
         } else if (c == "\"") {
             // string literal with escapes.
             // Fast path: scan to the closing quote (respecting escapes), extract
             // the raw content with ONE substr, then process escapes only if any
             // backslash is present. Avoids O(n^2) char-by-char concatenation.
+            let start_line = line;
+            let start_col = col;
             i = i + 1;
+            col = col + 1;
             let start = i;
             let open = true;
             let has_esc = false;
             while (open && i < n) {
                 let ch = substr(src, i, 1);
-                if (ch == "\\") { has_esc = true; i = i + 2; }
+                if (ch == "\\") { has_esc = true; i = i + 2; col = col + 2; }
                 else if (ch == "\"") { open = false; }
-                else { i = i + 1; };
+                else {
+                    if (ch == "\n") { line = line + 1; col = 1; }
+                    else { col = col + 1; };
+                    i = i + 1;
+                };
             };
             if (open) {
                 puts("error: unterminated string literal\n");
             };
             let raw = substr(src, start, i - start);
             i = i + 1;  // skip closing quote
+            col = col + 1;
             let buf = raw;
             if (has_esc) {
                 // process escapes into a chunk list + join (O(n))
@@ -158,25 +179,29 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 };
                 buf = join(chunks, "");
             };
-            toks = push(toks, mk_tok("str", buf));
+            toks = push(toks, mk_tok("str", buf, start_line, start_col));
         } else {
             let two = two_char_op(src, i);
             if (two != "") {
-                toks = push(toks, mk_tok("op", two));
+                toks = push(toks, mk_tok("op", two, line, col));
                 i = i + 2;
+                col = col + 2;
             } else if (is_single_op(c)) {
-                toks = push(toks, mk_tok("op", c));
+                toks = push(toks, mk_tok("op", c, line, col));
                 i = i + 1;
+                col = col + 1;
             } else if (is_punct(c)) {
-                toks = push(toks, mk_tok("punct", c));
+                toks = push(toks, mk_tok("punct", c, line, col));
                 i = i + 1;
+                col = col + 1;
             } else {
                 // unknown char — skip
                 i = i + 1;
+                col = col + 1;
             };
         };
     };
-    toks = push(toks, mk_tok("eof", ""));
+    toks = push(toks, mk_tok("eof", "", line, col));
     toks
 };
 
