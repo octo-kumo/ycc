@@ -207,7 +207,7 @@ int main(int argc, char *argv[]) {
     vm_set_argv(argc, argv);
     run_vm(res.value, quiet);
 
-    if (res.remaining[0] != '\0') {
+    if (res.remaining[0] != '\0' && !quiet) {
         printf("Warning: Unparsed input remaining: '%s'\n", res.remaining);
     }
 
