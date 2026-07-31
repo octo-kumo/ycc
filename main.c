@@ -90,6 +90,8 @@ static void usage(const char *prog) {
     printf("Options:\n");
     printf("  -c, --compile [OUTPUT]  Compile to native binary (default: a.out)\n");
     printf("  -S, --emit-c [OUTPUT]   Emit C source only (default: stdout)\n");
+    printf("      --no-exec           Disable the exec() builtin (no shell access)\n");
+    printf("  -q, --quiet             Suppress progress output\n");
     printf("  -h, --help              Show this help\n");
     printf("\nWithout options, runs the program in the built-in VM.\n");
 }
@@ -116,6 +118,8 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-q") == 0 ||
                    strcmp(argv[i], "--quiet") == 0) {
             quiet = 1;
+        } else if (strcmp(argv[i], "--no-exec") == 0) {
+            set_exec_disabled(1);
         } else {
             file = argv[i];
         }

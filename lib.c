@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <sys/wait.h>
 
+/* Security switch: disables the `exec` builtin (see lib.h). */
+int g_exec_disabled = 0;
+void set_exec_disabled(int disabled) { g_exec_disabled = disabled; }
+
 #define DEFINE_EXTERNAL_FUNC(name, param_name, param_type_base,                \
                              return_type_base, body_code)                      \
     /* 1. The actual C implementation */                                       \
@@ -474,7 +478,7 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "split", split_type);
     map_set(&scope->variables, "len", len_type);
     map_set(&scope->variables, "trim", trim_type);
-    map_set(&scope->variables, "exec", exec_type);
+    if (!g_exec_disabled) map_set(&scope->variables, "exec", exec_type);
     map_set(&scope->variables, "argv", argv_type);
     map_set(&scope->variables, "tonum", tonum_type);
     map_set(&scope->variables, "join", join_type);
@@ -497,7 +501,7 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "split", __external_split_func);
     map_set(&scope->variables, "len", __external_len_func);
     map_set(&scope->variables, "trim", __external_trim_func);
-    map_set(&scope->variables, "exec", __external_exec_func);
+    if (!g_exec_disabled) map_set(&scope->variables, "exec", __external_exec_func);
     map_set(&scope->variables, "argv", __external_argv_func);
     map_set(&scope->variables, "tonum", __external_tonum_func);
     map_set(&scope->variables, "join", __external_join_func);

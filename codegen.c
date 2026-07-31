@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "codegen.h"
+#include "lib.h"
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -697,7 +698,8 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"split\",    y_mk_func(y_builtin_split,    2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"len\",      y_mk_func(y_builtin_len,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"trim\",     y_mk_func(y_builtin_trim,     1, NULL));\n");
-    fprintf(out, "    y_scope_set(scope, \"exec\",     y_mk_func(y_builtin_exec,     1, NULL));\n");
+    if (!g_exec_disabled)
+        fprintf(out, "    y_scope_set(scope, \"exec\",     y_mk_func(y_builtin_exec,     1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"argv\",     y_mk_func(y_builtin_argv,     0, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"tonum\",    y_mk_func(y_builtin_tonum,    1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"join\",     y_mk_func(y_builtin_join,     2, NULL));\n");
