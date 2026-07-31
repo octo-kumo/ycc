@@ -6,30 +6,33 @@
 
 def esc(s: str) -> str {
     // escape a string for embedding in a C string literal.
-    // Build a chunk list + join (O(n)) instead of repeated concatenation (O(n^2)).
-    let chunks = [];
+    // Direct concatenation (one malloc+memcpy per char) — far cheaper than the
+    // push-into-array-then-join approach, which is O(n^2) with high constants
+    // (realloc without geometric growth + a substr allocation per char) and
+    // hangs on large strings like the embedded runtime.c.
+    let buf = "";
     let i = 0;
     let n = len(s);
     while (i < n) {
         let c = substr(s, i, 1);
         let o = ord(c);
-        if (c == "\\") { chunks = push(chunks, "\\\\"); }
-        else if (c == "\"") { chunks = push(chunks, "\\\""); }
-        else if (c == "\n") { chunks = push(chunks, "\\n"); }
-        else if (c == "\t") { chunks = push(chunks, "\\t"); }
-        else if (c == "\r") { chunks = push(chunks, "\\r"); }
+        if (c == "\\") { buf = buf + "\\\\"; }
+        else if (c == "\"") { buf = buf + "\\\""; }
+        else if (c == "\n") { buf = buf + "\\n"; }
+        else if (c == "\t") { buf = buf + "\\t"; }
+        else if (c == "\r") { buf = buf + "\\r"; }
         else if (o < 32 || o > 126) {
             // octal escape
             let d2 = o / 64;
             let d1 = (o / 8) % 8;
             let d0 = o % 8;
-            chunks = push(chunks, "\\" + tostring(d2) + tostring(d1) + tostring(d0));
+            buf = buf + "\\" + tostring(d2) + tostring(d1) + tostring(d0);
         } else {
-            chunks = push(chunks, c);
+            buf = buf + c;
         };
         i = i + 1;
     };
-    join(chunks, "")
+    buf
 };
 
 def op_fn(op: str) -> str {
@@ -98,14 +101,10 @@ def emit_expr(node) -> str {
             "YValue *_r = y_mk_bool(!_u->data.b); y_free(_u); _r; })"
         }
     } else if (k == "bin") {
-        if (node.op == ".") {
-            emit_dot(node)
-        } else {
-            let fn = op_fn(node.op);
-            let l = emit_expr(node.l);
-            let r = emit_expr(node.r);
-            fn + "(" + l + ", " + r + ")"
-        }
+        let fn = op_fn(node.op);
+        let l = emit_expr(node.l);
+        let r = emit_expr(node.r);
+        fn + "(" + l + ", " + r + ")"
     } else if (k == "call") {
         emit_call(node)
     } else if (k == "index") {
@@ -231,21 +230,16 @@ def emit_array(node) -> str {
     if (n == 0) {
         "y_mk_arr(NULL, 0)"
     } else {
+        // Build the per-element assignments as a list + join (O(n)); naive
+        // string concatenation here is O(n^2) and chokes on large literals
+        // like the embedded runtime byte arrays.
         let parts = [];
         let i = 0;
         while (i < n) {
-            let e = elems[i];
-            parts = push(parts, emit_expr(e));
+            parts = push(parts, " _e[" + tostring(i) + "] = " + emit_expr(elems[i]) + ";");
             i = i + 1;
         };
-        let init = "";
-        let j = 0;
-        while (j < n) {
-            let pj = parts[j];
-            init = init + " _e[" + tostring(j) + "] = " + pj + ";";
-            j = j + 1;
-        };
-        "({ YValue **_e = malloc(sizeof(YValue*) * " + tostring(n) + ");" + init + " " +
+        "({ YValue **_e = malloc(sizeof(YValue*) * " + tostring(n) + ");" + join(parts, "") + " " +
         "y_mk_arr(_e, " + tostring(n) + "); })"
     }
 };
@@ -284,8 +278,11 @@ def emit_func_expr(node) -> str {
     let i = 0;
     while (i < nparams) {
         let pi = params[i];
-        // bind arg into scope, then NULL it so the call site's y_free is a no-op
-        param_bind = param_bind + "    y_scope_set(scope, \"" + pi + "\", args[" + tostring(i) + "]); args[" + tostring(i) + "] = NULL;\n";
+        // bind arg into the function's OWN scope (set_local, not set — set
+        // walks up the scope chain and would overwrite a recursive caller's
+        // parameter of the same name, corrupting self-recursion).
+        // NULL the slot so the call site's y_free is a no-op.
+        param_bind = param_bind + "    y_scope_set_local(scope, \"" + pi + "\", args[" + tostring(i) + "]); args[" + tostring(i) + "] = NULL;\n";
         i = i + 1;
     };
     let fdef = "static YValue *" + cname + "(YScope *closure, YValue **args, size_t argc) {\n" +
@@ -468,6 +465,9 @@ def emit_program(ast) -> str {
     parts = push(parts, "    y_scope_set(scope, \"write_file\", y_mk_func(y_builtin_write_file, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"bytes_to_str\", y_mk_func(y_builtin_bytes_to_str, 1, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"ensure_runtime\", y_mk_func(y_builtin_ensure_runtime, 0, NULL));\n");
+    parts = push(parts, "    y_scope_set(scope, \"gen_embedded_runtime\", y_mk_func(y_builtin_gen_embedded_runtime, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"arr_index_of\", y_mk_func(y_builtin_arr_index_of, 2, NULL));\n");
     parts = push(parts, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");

@@ -25,6 +25,7 @@ typedef struct YValue YValue;
 typedef struct {
     int refcount;
     size_t count;
+    size_t capacity;   /* allocated slots (>= count); enables O(1) amortized push */
     YValue **elements;
 } YArray;
 
@@ -158,6 +159,14 @@ YValue *y_builtin_read_file(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ord(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_ord_at(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_bytes_to_str(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_ensure_runtime(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_gen_embedded_runtime(YScope *closure, YValue **args, size_t argc);
+
+/* Self-contained runtime embedding (C layer). */
+const char *y_ensure_runtime(void);
+int y_gen_embedded_runtime(const char *src_dir, const char *out_dir);
 YValue *y_builtin_index_of(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_arr_index_of(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_last_index_of(YScope *closure, YValue **args, size_t argc);

@@ -10,11 +10,12 @@ import codegen from "./codegen.y";
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_args(argv: [str]) -> { mode: str, out: str, file: str, no_exec: bool } {
+def parse_args(argv: [str]) -> { mode: str, out: str, file: str, no_exec: bool, self_contained: bool } {
     let mode = "vm";
     let out = "";
     let file = "";
     let no_exec = false;
+    let self_contained = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -25,24 +26,27 @@ def parse_args(argv: [str]) -> { mode: str, out: str, file: str, no_exec: bool }
             mode = "emit-c";
         } else if (a == "--no-exec") {
             no_exec = true;
+        } else if (a == "--self-contained") {
+            self_contained = true;
         } else if (a == "-o") {
             if (i + 1 < n) {
                 i = i + 1;
                 out = argv[i];
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [--compile|-c] [--emit-c|-S] [--no-exec] [-o OUTPUT] FILE\n");
-            puts("  -c, --compile   compile FILE to a native binary\n");
-            puts("  -S, --emit-c    emit C source only\n");
-            puts("      --no-exec   disable the exec() builtin (no shell access)\n");
-            puts("  -o OUTPUT       output path (default: a.out, or stdout for -S)\n");
-            puts("  (no flags)      run FILE in the built-in VM\n");
+            puts("Usage: ycc [--compile|-c] [--emit-c|-S] [--no-exec] [--self-contained] [-o OUTPUT] FILE\n");
+            puts("  -c, --compile        compile FILE to a native binary\n");
+            puts("  -S, --emit-c         emit C source only\n");
+            puts("      --no-exec        disable the exec() builtin (no shell access)\n");
+            puts("      --self-contained embed runtime.c/h into the binary (no YCC_RUNTIME_DIR needed)\n");
+            puts("  -o OUTPUT            output path (default: a.out, or stdout for -S)\n");
+            puts("  (no flags)           run FILE in the built-in VM\n");
         } else {
             file = a;
         };
         i = i + 1;
     };
-    { mode: mode, out: out, file: file, no_exec: no_exec }
+    { mode: mode, out: out, file: file, no_exec: no_exec, self_contained: self_contained }
 };
 
 // ── import resolution (source-to-source, like the C compiler's module.c) ─
@@ -79,8 +83,9 @@ def resolve_imports(src: str, base_dir: str, depth: long) -> str {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
                         out_lines = push(out_lines, line);
                     } else {
-                        // get module dir
-                        let last_slash = index_of(path, "/");
+                        // get module dir (use LAST slash so nested paths like
+                        // "a/b/c.y" resolve their dir to "a/b", not "a")
+                        let last_slash = last_index_of(path, "/");
                         let mod_dir = base_dir;
                         if (last_slash >= 0) {
                             mod_dir = base_dir + "/" + substr(path, 0, last_slash);
@@ -186,12 +191,24 @@ def main(cmdline: [str]) -> long {
                 let c_src = codegen.emit_program(ast);
                 exec("rm -f " + c_path);
                 write_file(c_path, c_src);
-                // compile with cc, linking runtime.c directly (like the C compiler)
-                let runtime_dir = getenv("YCC_RUNTIME_DIR");
-                if (runtime_dir == null) {
-                    runtime_dir = base_dir + "/..";
+                // Locate the runtime source. If --self-contained, use the
+                // embedded runtime (extracted to a temp dir by ensure_runtime()).
+                // Otherwise, use YCC_RUNTIME_DIR or the source tree.
+                let runtime_dir = "";
+                let embed_flags = "";
+                if (args.self_contained) {
+                    runtime_dir = ensure_runtime();
+                    // Regenerate embedded_runtime.inc so the output binary is
+                    // also self-contained (propagates across self-compilation).
+                    let inc_dir = "/tmp/ycc_inc";
+                    exec("mkdir -p " + inc_dir);
+                    gen_embedded_runtime(runtime_dir, inc_dir);
+                    embed_flags = " -DY_EMBED_RUNTIME -I" + inc_dir;
+                } else {
+                    runtime_dir = getenv("YCC_RUNTIME_DIR");
+                    if (runtime_dir == null) { runtime_dir = base_dir + "/.."; };
                 };
-                let cmd = "cc -O2 -std=gnu99 -I" + runtime_dir + " -o " + out_path + " " + c_path + " " + runtime_dir + "/runtime.c -lm";
+                let cmd = "cc -O2 -std=gnu99 -I" + runtime_dir + embed_flags + " -o " + out_path + " " + c_path + " " + runtime_dir + "/runtime.c -lm";
                 let ret = exec(cmd);
                 if (ret != 0) {
                     puts("error: cc failed with exit code " + tostring(ret) + "\n");

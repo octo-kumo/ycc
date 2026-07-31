@@ -709,6 +709,9 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"write_file\", y_mk_func(y_builtin_write_file, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"bytes_to_str\", y_mk_func(y_builtin_bytes_to_str, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"ensure_runtime\", y_mk_func(y_builtin_ensure_runtime, 0, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"gen_embedded_runtime\", y_mk_func(y_builtin_gen_embedded_runtime, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"arr_index_of\", y_mk_func(y_builtin_arr_index_of, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");

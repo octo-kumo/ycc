@@ -7,6 +7,107 @@
 #include <unistd.h>
 #include <signal.h>
 
+/* ── Self-contained runtime embedding (C layer) ──────────────────────────
+ * When compiled with -DY_EMBED_RUNTIME, the runtime source (runtime.c/h) is
+ * baked into the binary as C string constants (embedded_runtime.inc, generated
+ * at build time). y_ensure_runtime() extracts them to a temp dir so a compiled
+ * program can recompile Y code with no source tree / YCC_RUNTIME_DIR. The Y
+ * layer never handles these bytes — it just calls the builtins below. */
+#ifdef Y_EMBED_RUNTIME
+#include "embedded_runtime.inc"
+#else
+static const char y_embedded_runtime_c[] = "";
+static const char y_embedded_runtime_h[] = "";
+#endif
+
+#ifndef RUNTIME_DIR
+#define RUNTIME_DIR "."
+#endif
+
+/* Extract the embedded runtime to a temp dir; return the dir (static buffer).
+ * Falls back to RUNTIME_DIR (the source tree) when not built with embedding. */
+const char *y_ensure_runtime(void) {
+    static char dir[256];
+    if (y_embedded_runtime_c[0] != '\0') {
+        snprintf(dir, sizeof(dir), "/tmp/ycc_runtime_%d", (int)getpid());
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "mkdir -p '%s'", dir);
+        if (system(cmd) != 0) return RUNTIME_DIR;
+        char path[300];
+        snprintf(path, sizeof(path), "%s/runtime.c", dir);
+        FILE *f = fopen(path, "w");
+        if (f) { fputs(y_embedded_runtime_c, f); fclose(f); }
+        snprintf(path, sizeof(path), "%s/runtime.h", dir);
+        f = fopen(path, "w");
+        if (f) { fputs(y_embedded_runtime_h, f); fclose(f); }
+        return dir;
+    }
+    return RUNTIME_DIR;
+}
+
+/* Emit a C string-literal body (escaped) for a file's contents. */
+static void emit_c_escaped(FILE *out, const char *s) {
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        unsigned char c = *p;
+        switch (c) {
+        case '\\': fputs("\\\\", out); break;
+        case '"':  fputs("\\\"", out); break;
+        case '\n': fputs("\\n", out); break;
+        case '\t': fputs("\\t", out); break;
+        case '\r': fputs("\\r", out); break;
+        default:
+            if (c < 32 || c > 126) fprintf(out, "\\%03o", c);
+            else fputc(c, out);
+        }
+    }
+}
+
+/* Generate embedded_runtime.inc in out_dir from the runtime source in
+ * src_dir. Lets a self-contained binary regenerate the embedding when it
+ * recompiles, so self-containment propagates across self-compilation. */
+int y_gen_embedded_runtime(const char *src_dir, const char *out_dir) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/embedded_runtime.inc", out_dir);
+    FILE *out = fopen(path, "w");
+    if (!out) return -1;
+    const char *files[2] = { "runtime.c", "runtime.h" };
+    const char *vars[2] = { "y_embedded_runtime_c", "y_embedded_runtime_h" };
+    for (int i = 0; i < 2; i++) {
+        char src[512];
+        snprintf(src, sizeof(src), "%s/%s", src_dir, files[i]);
+        FILE *f = fopen(src, "rb");
+        if (!f) { fclose(out); return -1; }
+        fseek(f, 0, SEEK_END);
+        long sz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        char *buf = malloc((size_t)sz + 1);
+        size_t rd = fread(buf, 1, (size_t)sz, f);
+        buf[rd] = '\0';
+        fclose(f);
+        fprintf(out, "static const char %s[] = \"", vars[i]);
+        emit_c_escaped(out, buf);
+        fprintf(out, "\";\n");
+        free(buf);
+    }
+    fclose(out);
+    return 0;
+}
+
+/* ── builtins wrapping the above (callable from Y) ─────────────────────── */
+
+YValue *y_builtin_ensure_runtime(YScope *closure, YValue **args, size_t argc) {
+    (void)closure; (void)args; (void)argc;
+    return y_mk_str(y_ensure_runtime());
+}
+
+YValue *y_builtin_gen_embedded_runtime(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_STR)
+        return y_mk_long(-1);
+    return y_mk_long(y_gen_embedded_runtime(args[0]->data.s, args[1]->data.s));
+}
+
+
 /* Ignore SIGPIPE so tcp_write to a closed socket returns an error instead of
  * killing the process. Installed once at first tcp_listen call. */
 static int g_sigpipe_ignored = 0;
@@ -68,13 +169,13 @@ YValue *y_mk_arr(YValue **elements, size_t count) {
     YArray *arr = malloc(sizeof(YArray));
     arr->refcount = 1;
     arr->count = count;
+    /* capacity >= count; leave headroom so early pushes don't realloc */
+    arr->capacity = count < 8 ? 8 : count;
     /* Copy the pointer array to the heap — the caller's array may be
      * stack-allocated (e.g. from a GCC statement expression). */
+    arr->elements = malloc(sizeof(YValue *) * arr->capacity);
     if (count > 0 && elements) {
-        arr->elements = malloc(sizeof(YValue *) * count);
         memcpy(arr->elements, elements, sizeof(YValue *) * count);
-    } else {
-        arr->elements = NULL;
     }
     val->data.arr = arr;
     return val;
@@ -235,7 +336,8 @@ static void y_arr_cow(YValue *arr) {
         YArray *new = malloc(sizeof(YArray));
         new->refcount = 1;
         new->count = old->count;
-        new->elements = malloc(sizeof(YValue *) * old->count);
+        new->capacity = old->capacity < old->count + 8 ? old->count + 8 : old->capacity;
+        new->elements = malloc(sizeof(YValue *) * new->capacity);
         for (size_t i = 0; i < old->count; i++)
             new->elements[i] = y_clone(old->elements[i]);
         old->refcount--;
@@ -1052,7 +1154,12 @@ YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc) {
      * Then grow in place (realloc) — O(1) amortized per push. */
     y_arr_cow(args[0]);
     YArray *a = args[0]->data.arr;
-    a->elements = realloc(a->elements, sizeof(YValue *) * (a->count + 1));
+    /* geometric growth → O(1) amortized push (no realloc per element) */
+    if (a->count + 1 > a->capacity) {
+        size_t newcap = a->capacity < 8 ? 8 : a->capacity * 2;
+        a->elements = realloc(a->elements, sizeof(YValue *) * newcap);
+        a->capacity = newcap;
+    }
     a->elements[a->count] = args[1]; /* take ownership of the already-cloned arg */
     a->count++;
     args[1] = NULL; /* prevent double-free by call site */
@@ -1122,6 +1229,37 @@ YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc) {
     if (argc < 1) return y_mk_str("");
     char buf[2] = { (char)(args[0]->data.l & 0xFF), '\0' };
     return y_mk_str_n(buf, 1);
+}
+
+/* ord_at(s, i) -> long  (byte value at index i, O(1), no allocation —
+ * unlike substr(s,i,1)+ord which allocates a string per char) */
+YValue *y_builtin_ord_at(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_LONG)
+        return y_mk_long(0);
+    const char *s = args[0]->data.s;
+    long i = args[1]->data.l;
+    long n = (long)strlen(s);
+    if (i < 0 || i >= n) return y_mk_long(0);
+    return y_mk_long((long)(unsigned char)s[i]);
+}
+
+/* bytes_to_str(arr) -> str  (build a string from an array of byte longs;
+ * O(n) single allocation — used to materialize embedded binary data) */
+YValue *y_builtin_bytes_to_str(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_ARR) return y_mk_str("");
+    YArray *a = args[0]->data.arr;
+    char *buf = malloc(a->count + 1);
+    for (size_t i = 0; i < a->count; i++) {
+        YValue *e = a->elements[i];
+        buf[i] = (char)(e && e->type == Y_LONG ? (e->data.l & 0xFF) : 0);
+    }
+    buf[a->count] = '\0';
+    YValue *v = malloc(sizeof(YValue));
+    v->type = Y_STR;
+    v->data.s = buf;
+    return v;
 }
 
 /* index_of(s, sub) -> long  (first index of sub in s, -1 if not found) */

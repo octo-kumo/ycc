@@ -11,3 +11,5 @@ wasm/playground/ycc-single.js
 wasm/playground/emit-as.js
 wasm/playground/check.js
 tools/lsp/check.js
+embedded_runtime.inc
+ycc-selfcontained
