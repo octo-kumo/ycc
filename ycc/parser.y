@@ -25,6 +25,28 @@ def res(node: {k: str}, p: long) -> { node: {k: str}, pos: long } {
     { node: node, pos: p }
 };
 
+// sep_by(one, close): parse a comma-separated list of `one(toks, pos)` results
+// (each returning { node, pos }) until the `close` punct. Handles trailing
+// commas. Returns { node: [nodes], pos } with pos AT the close punct (caller
+// skips it). Replaces 6 copy-pasted comma-list loops.
+def sep_by(toks, p: long, close: str, one) -> { node: [{k: str}], pos: long } {
+    let xs = [];
+    let pos = p;
+    let go = !is_punct(toks, pos, close);
+    while (go) {
+        let r = one(toks, pos);
+        xs = push(xs, r.node);
+        pos = r.pos;
+        if (is_punct(toks, pos, ",")) {
+            pos = pos + 1;
+            if (is_punct(toks, pos, close)) { go = false; };
+        } else {
+            go = false;
+        };
+    };
+    { node: xs, pos: pos }
+};
+
 // ── operator precedence ──────────────────────────────────────────────────
 
 def op_prec(op: str) -> long {
@@ -135,24 +157,7 @@ def parse_postfix(toks, p: long) -> { node: {k: str}, pos: long } {
 };
 
 def parse_args(toks, p: long) -> { node: [{k: str}], pos: long } {
-    let args = [];
-    let pos = p;
-    if (is_punct(toks, pos, ")")) {
-        { node: args, pos: pos }
-    } else {
-        let go = true;
-        while (go) {
-            let e = parse_expr(toks, pos);
-            args = push(args, e.node);
-            pos = e.pos;
-            if (is_punct(toks, pos, ",")) {
-                pos = pos + 1;
-            } else {
-                go = false;
-            };
-        };
-        { node: args, pos: pos }
-    }
+    sep_by(toks, p, ")", parse_expr)
 };
 
 // ── binary expressions (precedence climbing) ─────────────────────────────
@@ -193,23 +198,8 @@ def parse_expr(toks, p: long) -> { node: {k: str}, pos: long } {
 // ── compound literals ────────────────────────────────────────────────────
 
 def parse_array(toks, p: long) -> { node: {k: str}, pos: long } {
-    let elems = [];
-    let pos = p;
-    if (is_punct(toks, pos, "]")) {
-        res({ k: "array", elems: elems }, pos + 1)
-    } else {
-        let go = true;
-        while (go) {
-            // trailing comma: ']' right after ',' ends the list
-            if (is_punct(toks, pos, "]")) { go = false; } else {
-                let e = parse_expr(toks, pos);
-                elems = push(elems, e.node);
-                pos = e.pos;
-                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
-            };
-        };
-        res({ k: "array", elems: elems }, pos + 1)  // skip ']'
-    }
+    let r = sep_by(toks, p, "]", parse_expr);
+    res({ k: "array", elems: r.node }, r.pos + 1)  // skip ']'
 };
 
 def parse_map(toks, p: long) -> { node: {k: str}, pos: long } {
