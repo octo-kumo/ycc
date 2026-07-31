@@ -1,6 +1,10 @@
 #include "runtime.h"
 #include <inttypes.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
 /* ── Constructors ───────────────────────────────────────────────────────── */
 
@@ -1192,4 +1196,91 @@ char *y_escape_c_string(const char *s, size_t len) {
     }
     out[j] = '\0';
     return out;
+}
+
+/* ── TCP networking builtins ─────────────────────────────────────────────
+ * A deliberately tiny socket API so Y programs can implement their own
+ * HTTP server. File descriptors are passed around as longs.
+ *   tcp_listen(port)            -> long listen fd, or -1
+ *   tcp_accept(listen_fd)       -> long client fd, or -1
+ *   tcp_read(fd, max)           -> str of up to max bytes ("" on EOF/error)
+ *   tcp_write(fd, data)         -> long bytes written, or -1
+ *   tcp_close(fd)               -> null
+ */
+
+YValue *y_builtin_tcp_listen(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_LONG) return y_mk_long(-1);
+    int port = (int)args[0]->data.l;
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return y_mk_long(-1);
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return y_mk_long(-1);
+    }
+    if (listen(fd, 16) < 0) {
+        close(fd);
+        return y_mk_long(-1);
+    }
+    return y_mk_long(fd);
+}
+
+YValue *y_builtin_tcp_accept(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_LONG) return y_mk_long(-1);
+    int lfd = (int)args[0]->data.l;
+    int cfd = accept(lfd, NULL, NULL);
+    return y_mk_long(cfd);  // -1 on error
+}
+
+YValue *y_builtin_tcp_read(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_LONG || args[1]->type != Y_LONG)
+        return y_mk_str("");
+    int fd = (int)args[0]->data.l;
+    long max = args[1]->data.l;
+    if (max <= 0) max = 65536;
+    if (max > 1048576) max = 1048576;
+    char *buf = malloc((size_t)max + 1);
+    ssize_t n = read(fd, buf, (size_t)max);
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+    YValue *v = y_mk_str_n(buf, (size_t)n);
+    free(buf);
+    return v;
+}
+
+YValue *y_builtin_tcp_write(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_LONG || args[1]->type != Y_STR)
+        return y_mk_long(-1);
+    int fd = (int)args[0]->data.l;
+    const char *data = args[1]->data.s;
+    size_t total = strlen(data);
+    size_t sent = 0;
+    while (sent < total) {
+        ssize_t n = write(fd, data + sent, total - sent);
+        if (n <= 0) break;
+        sent += (size_t)n;
+    }
+    return y_mk_long((long)sent);
+}
+
+YValue *y_builtin_tcp_close(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc >= 1 && args[0]->type == Y_LONG) {
+        close((int)args[0]->data.l);
+    }
+    return y_mk_null();
 }

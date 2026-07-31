@@ -10,10 +10,11 @@ import codegen from "./codegen.y";
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_args(argv: [str]) -> { mode: str, out: str, file: str } {
+def parse_args(argv: [str]) -> { mode: str, out: str, file: str, no_exec: bool } {
     let mode = "vm";
     let out = "";
     let file = "";
+    let no_exec = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -22,15 +23,18 @@ def parse_args(argv: [str]) -> { mode: str, out: str, file: str } {
             mode = "compile";
         } else if (a == "--emit-c" || a == "-S") {
             mode = "emit-c";
+        } else if (a == "--no-exec") {
+            no_exec = true;
         } else if (a == "-o") {
             if (i + 1 < n) {
                 i = i + 1;
                 out = argv[i];
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [--compile|-c] [--emit-c|-S] [-o OUTPUT] FILE\n");
+            puts("Usage: ycc [--compile|-c] [--emit-c|-S] [--no-exec] [-o OUTPUT] FILE\n");
             puts("  -c, --compile   compile FILE to a native binary\n");
             puts("  -S, --emit-c    emit C source only\n");
+            puts("      --no-exec   disable the exec() builtin (no shell access)\n");
             puts("  -o OUTPUT       output path (default: a.out, or stdout for -S)\n");
             puts("  (no flags)      run FILE in the built-in VM\n");
         } else {
@@ -38,7 +42,7 @@ def parse_args(argv: [str]) -> { mode: str, out: str, file: str } {
         };
         i = i + 1;
     };
-    { mode: mode, out: out, file: file }
+    { mode: mode, out: out, file: file, no_exec: no_exec }
 };
 
 // ── import resolution (source-to-source, like the C compiler's module.c) ─
@@ -148,6 +152,9 @@ def main(cmdline: [str]) -> long {
 
             // resolve imports
             let resolved = resolve_imports(src, base_dir, 0);
+
+            // honor --no-exec: omit the exec() builtin from emitted C
+            if (args.no_exec) { codegen.set_no_exec(true); };
 
             // tokenize
             let toks = lexer.tokenize(resolved);

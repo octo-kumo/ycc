@@ -457,6 +457,27 @@ DEFINE_EXTERNAL_FUNC(getenv, x, _VAL_INFERRED, _VAL_INFERRED, {
     return result;
 });
 
+/* ── TCP networking builtins ─────────────────────────────────────────────
+ * Real socket implementations live in runtime.c (used by the compiled
+ * native path). These VM-side stubs exist so the typechecker recognizes the
+ * names and so VM-mode programs get a clean "unsupported" error rather than
+ * "undefined variable". The challenge server uses the compiled path. */
+DEFINE_EXTERNAL_FUNC(tcp_listen, port, _VAL_INFERRED, VAL_LONG, {
+    (void)port; VMValue *r = nval(VAL_LONG); r->data.l = -1; return r;
+});
+DEFINE_EXTERNAL_FUNC(tcp_accept, fd, _VAL_INFERRED, VAL_LONG, {
+    (void)fd; VMValue *r = nval(VAL_LONG); r->data.l = -1; return r;
+});
+DEFINE_EXTERNAL_FUNC2(tcp_read, fd, max, {
+    (void)fd; (void)max; VMValue *r = nval(VAL_STR); r->data.s = strdup(""); return r;
+});
+DEFINE_EXTERNAL_FUNC2(tcp_write, fd, data, {
+    (void)fd; (void)data; VMValue *r = nval(VAL_LONG); r->data.l = -1; return r;
+});
+DEFINE_EXTERNAL_FUNC(tcp_close, fd, _VAL_INFERRED, VAL_NULL, {
+    (void)fd; return nval(VAL_NULL);
+});
+
 /* index_of(s, sub) -> long (first index of sub in s, -1 if not found) */
 DEFINE_EXTERNAL_FUNC2(index_of, s, sub, {
     VMValue *result = nval(VAL_LONG);
@@ -490,6 +511,11 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "chr", chr_type);
     map_set(&scope->variables, "index_of", index_of_type);
     map_set(&scope->variables, "getenv", getenv_type);
+    map_set(&scope->variables, "tcp_listen", tcp_listen_type);
+    map_set(&scope->variables, "tcp_accept", tcp_accept_type);
+    map_set(&scope->variables, "tcp_read", tcp_read_type);
+    map_set(&scope->variables, "tcp_write", tcp_write_type);
+    map_set(&scope->variables, "tcp_close", tcp_close_type);
 }
 void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "print", __external_print_func);
@@ -513,4 +539,9 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "chr", __external_chr_func);
     map_set(&scope->variables, "index_of", __external_index_of_func);
     map_set(&scope->variables, "getenv", __external_getenv_func);
+    map_set(&scope->variables, "tcp_listen", __external_tcp_listen_func);
+    map_set(&scope->variables, "tcp_accept", __external_tcp_accept_func);
+    map_set(&scope->variables, "tcp_read", __external_tcp_read_func);
+    map_set(&scope->variables, "tcp_write", __external_tcp_write_func);
+    map_set(&scope->variables, "tcp_close", __external_tcp_close_func);
 }

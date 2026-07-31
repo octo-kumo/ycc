@@ -713,6 +713,11 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"arr_index_of\", y_mk_func(y_builtin_arr_index_of, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"getenv\",   y_mk_func(y_builtin_getenv,   1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"tcp_listen\", y_mk_func(y_builtin_tcp_listen, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"tcp_accept\", y_mk_func(y_builtin_tcp_accept, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"tcp_read\",   y_mk_func(y_builtin_tcp_read,   2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"tcp_write\",  y_mk_func(y_builtin_tcp_write,  2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"tcp_close\",  y_mk_func(y_builtin_tcp_close,  1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"map_set\",  y_mk_func(y_builtin_map_set,  3, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"map_get\",  y_mk_func(y_builtin_map_get,  2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"global_get\", y_mk_func(y_builtin_global_get, 1, scope));\n");
