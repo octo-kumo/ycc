@@ -1241,6 +1241,14 @@ YValue *y_builtin_tcp_accept(YScope *closure, YValue **args, size_t argc) {
     if (argc < 1 || args[0]->type != Y_LONG) return y_mk_long(-1);
     int lfd = (int)args[0]->data.l;
     int cfd = accept(lfd, NULL, NULL);
+    if (cfd >= 0) {
+        // Set a receive timeout to prevent slowloris DoS (client sends
+        // headers with huge Content-Length then trickles/no body).
+        struct timeval tv;
+        tv.tv_sec = 10;
+        tv.tv_usec = 0;
+        setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
     return y_mk_long(cfd);  // -1 on error
 }
 

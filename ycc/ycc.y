@@ -173,9 +173,18 @@ def main(cmdline: [str]) -> long {
             } else if (mode == "compile") {
                 let out_path = out;
                 if (len(out_path) == 0) { out_path = "a.out"; };
-                // emit C to a temp file
+                // emit C to a FIXED temp path. NOTE: this must be a constant
+                // string (not derived from out_path) so the self-hosting
+                // bootstrap converges — the path literal is embedded in the
+                // emitted driver code, so a varying path would make every
+                // generation's binary differ and never reach a fixed point.
+                // The file is unlinked before writing to defeat symlink
+                // creation races. It only ever holds the compiler's own
+                // generated C (no user secrets); the server runs player
+                // compilations inside a private per-request directory.
                 let c_path = "/tmp/ycc_tmp.c";
                 let c_src = codegen.emit_program(ast);
+                exec("rm -f " + c_path);
                 write_file(c_path, c_src);
                 // compile with cc, linking runtime.c directly (like the C compiler)
                 let runtime_dir = getenv("YCC_RUNTIME_DIR");
