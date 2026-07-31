@@ -391,14 +391,34 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
     }
     case EXPR_EUNARY: {
         VMValue *operand = vm_execute(scope, expr->as.unary_node.operand);
-        VMValue *val = nval(VAL_BOOL);
-        if (operand->type != VAL_BOOL) {
-            fprintf(stderr, "Operand of '!' must be boolean\n");
+        if (expr->as.unary_node.op == O_NOT) {
+            if (operand->type != VAL_BOOL) {
+                fprintf(stderr, "Operand of '!' must be boolean\n");
+                exit(1);
+            }
+            VMValue *val = nval(VAL_BOOL);
+            val->data.b = !operand->data.b;
+            val_free(operand);
+            return val;
+        } else if (expr->as.unary_node.op == O_NEG) {
+            if (operand->type == VAL_LONG) {
+                VMValue *val = nval(VAL_LONG);
+                val->data.l = -operand->data.l;
+                val_free(operand);
+                return val;
+            } else if (operand->type == VAL_FLOAT) {
+                VMValue *val = nval(VAL_FLOAT);
+                val->data.f = -operand->data.f;
+                val_free(operand);
+                return val;
+            } else {
+                fprintf(stderr, "Operand of unary '-' must be numeric\n");
+                exit(1);
+            }
+        } else {
+            fprintf(stderr, "Unknown unary operator\n");
             exit(1);
         }
-        val->data.b = !operand->data.b;
-        val_free(operand);
-        return val;
     }
     case EXPR_EOP: {
         VMValue *left = vm_execute(scope, expr->as.op_node.left);
@@ -735,60 +755,42 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             fprintf(stderr, "Array slice indices must be longs\n");
             exit(1);
         }
-        bool reversed = false;
         long start = start_val->data.l;
         long end = end_val->data.l;
         long count = array_val->data.arr->count;
-        // handle empty arrays
-        if (count == 0) {
-            VMArray *new_arr = malloc(sizeof(VMArray));
-            new_arr->count = 0;
-            new_arr->elements = NULL;
-            VMValue *val = nval(VAL_ARR);
-            val->data.arr = new_arr;
-            val_free(array_val);
-            val_free(start_val);
-            val_free(end_val);
-            return val;
-        }
-        // handle negative indices
-        if (count <= 1 && start >= 1) {
-            // return empty array coz well
-            VMArray *new_arr = malloc(sizeof(VMArray));
-            new_arr->count = 0;
-            new_arr->elements = NULL;
-            VMValue *val = nval(VAL_ARR);
-            val->data.arr = new_arr;
-            val_free(array_val);
-            val_free(start_val);
-            val_free(end_val);
-            return val;
-        }
-        start = (start % count + count) % count;
-        end = (end % count + count) % count;
 
-        if (end < start) {
-            reversed = true;
-            long temp = start;
-            start = end;
-            end = temp;
+        // Handle LONG_MIN sentinel for "to the end"
+        if (end == -9223372036854775807) end = count;
+
+        // Handle negative indices (count from end)
+        if (start < 0) start = count + start;
+        if (end < 0) end = count + end;
+
+        // Clamp to bounds
+        if (start < 0) start = 0;
+        if (start > count) start = count;
+        if (end < 0) end = 0;
+        if (end > count) end = count;
+
+        // Empty slice if start >= end
+        if (start >= end) {
+            VMArray *new_arr = malloc(sizeof(VMArray));
+            new_arr->count = 0;
+            new_arr->elements = NULL;
+            VMValue *val = nval(VAL_ARR);
+            val->data.arr = new_arr;
+            val_free(array_val);
+            val_free(start_val);
+            val_free(end_val);
+            return val;
         }
+
         VMArray *new_arr = malloc(sizeof(VMArray));
-        new_arr->count = end - start + 1;
+        new_arr->count = end - start;
         new_arr->elements = malloc(sizeof(VMValue *) * new_arr->count);
         for (size_t i = 0; i < new_arr->count; i++) {
-            long idx = (start + i) % count;
             new_arr->elements[i] =
-                val_clone(array_val->data.arr->elements[idx]);
-        }
-        if (reversed) {
-            // reverse the new array in place
-            for (size_t i = 0; i < new_arr->count / 2; i++) {
-                VMValue *temp = new_arr->elements[i];
-                new_arr->elements[i] =
-                    new_arr->elements[new_arr->count - 1 - i];
-                new_arr->elements[new_arr->count - 1 - i] = temp;
-            }
+                val_clone(array_val->data.arr->elements[start + (long)i]);
         }
         VMValue *val = nval(VAL_ARR);
         val->data.arr = new_arr;

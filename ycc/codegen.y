@@ -177,9 +177,9 @@ def emit_expr(node) -> str {
         }
     } else if (k == "slice") {
         let arr = emit_expr(node.arr);
-        // null lo -> 0, null hi -> -1 (wraps to last element)
+        // null lo -> 0, null hi -> LONG_MIN (sentinel for "to the end")
         let lo = if (node.lo.k == "null") { "y_mk_long(0)" } else { emit_expr(node.lo) };
-        let hi = if (node.hi.k == "null") { "y_mk_long(-1)" } else { emit_expr(node.hi) };
+        let hi = if (node.hi.k == "null") { "y_mk_long(-9223372036854775807)" } else { emit_expr(node.hi) };
         "y_arr_slice(" + arr + ", " + lo + ", " + hi + ")"
     } else if (k == "array") {
         emit_array(node)

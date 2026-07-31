@@ -680,13 +680,15 @@ ast_parser_result_t ast_parse_paren_expr(const char *input) {
 ast_parser_result_t ast_parse_unary(const char *input) {
     const char *original_input = input;
     SKIP_SPACES;
-    if (input[0] != '!' || input[1] == '=') { return anone(original_input); }
-    input++; /* consume '!' */
+    if (input[0] != '!' && input[0] != '-') { return anone(original_input); }
+    if (input[0] == '!' && input[1] == '=') { return anone(original_input); }
+    char op_char = input[0];
+    input++; /* consume '!' or '-' */
     ast_parser_result_t operand = ast__parse_inside_binary_op(input);
     if (!operand.is_some) { return anone(original_input); }
     Expr *node = (Expr *)malloc(sizeof(Expr));
     node->kind = EXPR_EUNARY;
-    node->as.unary_node.op = O_NOT;
+    node->as.unary_node.op = (op_char == '!') ? O_NOT : O_NEG;
     node->as.unary_node.operand = operand.value;
     return asome(node, operand.remaining);
 }
@@ -904,7 +906,7 @@ ast_parser_result_t ast_parse_array_idx(const char *input) {
             slice_node->as.array_idx_range_node.start =
                 ast_idx.is_some ? ast_idx.value : ast_of_long(0);
             slice_node->as.array_idx_range_node.end =
-                ast_end_idx.is_some ? ast_end_idx.value : ast_of_long(-1);
+                ast_end_idx.is_some ? ast_end_idx.value : ast_of_long(-9223372036854775807);
             current = slice_node;
         } else if (ast_idx.is_some) {
             Expr *idx_node = (Expr *)malloc(sizeof(Expr));

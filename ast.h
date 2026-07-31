@@ -29,6 +29,7 @@ typedef enum {
     O_DOT,  // .   // for accessing fields of map or array length
     O_MOD,  // %
     O_NOT,  // !   // logical NOT (unary)
+    O_NEG,  // -   // arithmetic negation (unary)
 } Operator;
 
 Operator operator_from_str(const char *op);

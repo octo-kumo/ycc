@@ -275,11 +275,16 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
 
     case EXPR_EUNARY: {
         char *operand = emit_expr(ctx, expr->as.unary_node.operand);
-        char *res = fmt(
-            "({ YValue *_u = %s; "
-            "if (_u->type != Y_BOOL) { fprintf(stderr, \"runtime error: '!' requires bool\\n\"); exit(1); } "
-            "YValue *_r = y_mk_bool(!_u->data.b); y_free(_u); _r; })",
-            operand);
+        char *res;
+        if (expr->as.unary_node.op == O_NOT) {
+            res = fmt(
+                "({ YValue *_u = %s; "
+                "if (_u->type != Y_BOOL) { fprintf(stderr, \"runtime error: '!' requires bool\\n\"); exit(1); } "
+                "YValue *_r = y_mk_bool(!_u->data.b); y_free(_u); _r; })",
+                operand);
+        } else {
+            res = fmt("y_neg(%s)", operand);
+        }
         free(operand);
         return res;
     }

@@ -689,41 +689,32 @@ YValue *y_arr_slice(YValue *arr, YValue *start_v, YValue *end_v) {
         exit(1);
     }
     long count = (long)arr->data.arr->count;
-    if (count == 0) {
-        y_free(arr); y_free(start_v); y_free(end_v);
-        return y_mk_arr(NULL, 0);
-    }
     long start = start_v->data.l;
     long end = end_v->data.l;
 
-    if (count <= 1 && start >= 1) {
+    // Handle LONG_MIN sentinel for "to the end"
+    if (end == -9223372036854775807) end = count;
+
+    // Handle negative indices (count from end)
+    if (start < 0) start = count + start;
+    if (end < 0) end = count + end;
+
+    // Clamp to bounds
+    if (start < 0) start = 0;
+    if (start > count) start = count;
+    if (end < 0) end = 0;
+    if (end > count) end = count;
+
+    // Empty slice if start >= end
+    if (start >= end) {
         y_free(arr); y_free(start_v); y_free(end_v);
         return y_mk_arr(NULL, 0);
     }
 
-    start = ((start % count) + count) % count;
-    end = ((end % count) + count) % count;
-
-    bool reversed = false;
-    if (end < start) {
-        reversed = true;
-        long tmp = start;
-        start = end;
-        end = tmp;
-    }
-
-    size_t n = (size_t)(end - start + 1);
+    size_t n = (size_t)(end - start);
     YValue **elems = malloc(sizeof(YValue *) * n);
     for (size_t i = 0; i < n; i++) {
-        long idx = (start + (long)i) % count;
-        elems[i] = y_clone(arr->data.arr->elements[idx]);
-    }
-    if (reversed) {
-        for (size_t i = 0; i < n / 2; i++) {
-            YValue *tmp = elems[i];
-            elems[i] = elems[n - 1 - i];
-            elems[n - 1 - i] = tmp;
-        }
+        elems[i] = y_clone(arr->data.arr->elements[start + (long)i]);
     }
     YValue *result = y_mk_arr(elems, n);
     free(elems);

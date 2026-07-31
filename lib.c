@@ -489,6 +489,74 @@ DEFINE_EXTERNAL_FUNC2(index_of, s, sub, {
     return result;
 });
 
+/* last_index_of(s, sub) -> long (last index of sub in s, -1 if not found) */
+DEFINE_EXTERNAL_FUNC2(last_index_of, s, sub, {
+    VMValue *result = nval(VAL_LONG);
+    if (!s || s->type != VAL_STR || !sub || sub->type != VAL_STR) {
+        result->data.l = -1; return result;
+    }
+    const char *last = NULL;
+    const char *p = s->data.s;
+    while ((p = strstr(p, sub->data.s)) != NULL) {
+        last = p;
+        p++;
+    }
+    result->data.l = last ? (long)(last - s->data.s) : -1;
+    return result;
+});
+
+/* arr_index_of(arr, val) -> long (first index where arr[i] == val, -1 if not found) */
+DEFINE_EXTERNAL_FUNC2(arr_index_of, arr, val, {
+    VMValue *result = nval(VAL_LONG);
+    if (!arr || arr->type != VAL_ARR) {
+        result->data.l = -1; return result;
+    }
+    long idx = -1;
+    for (size_t i = 0; i < arr->data.arr->count; i++) {
+        VMValue *elem = arr->data.arr->elements[i];
+        bool eq = false;
+        if (elem->type == VAL_LONG && val->type == VAL_LONG) eq = (elem->data.l == val->data.l);
+        else if (elem->type == VAL_STR && val->type == VAL_STR) eq = (strcmp(elem->data.s, val->data.s) == 0);
+        else if (elem->type == VAL_BOOL && val->type == VAL_BOOL) eq = (elem->data.b == val->data.b);
+        if (eq) { idx = (long)i; break; }
+    }
+    result->data.l = idx;
+    return result;
+});
+
+/* map_get(map, key) -> value (null if not found) */
+DEFINE_EXTERNAL_FUNC2(map_get, m, key, {
+    if (!m || m->type != VAL_MAP || !key || key->type != VAL_STR) {
+        return nval(VAL_NULL);
+    }
+    VMMap *vm = m->data.map;
+    for (size_t i = 0; i < vm->count; i++) {
+        if (strcmp(vm->entries[i].key, key->data.s) == 0) {
+            return val_clone(vm->entries[i].value);
+        }
+    }
+    return nval(VAL_NULL);
+});
+
+/* map_set(map, key, val) -> null (mutates map in place) */
+DEFINE_EXTERNAL_FUNC3(map_set, m, key, val, {
+    if (m && m->type == VAL_MAP && key && key->type == VAL_STR) {
+        VMMap *vm = m->data.map;
+        for (size_t i = 0; i < vm->count; i++) {
+            if (strcmp(vm->entries[i].key, key->data.s) == 0) {
+                val_free(vm->entries[i].value);
+                vm->entries[i].value = val_clone(val);
+                return nval(VAL_NULL);
+            }
+        }
+        vm->entries = realloc(vm->entries, sizeof(VMMapEntry) * (vm->count + 1));
+        vm->entries[vm->count].key = strdup(key->data.s);
+        vm->entries[vm->count].value = val_clone(val);
+        vm->count++;
+    }
+    return nval(VAL_NULL);
+});
+
 void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "print", print_type);
     map_set(&scope->variables, "tostring", tostring_type);
@@ -510,6 +578,10 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "ord", ord_type);
     map_set(&scope->variables, "chr", chr_type);
     map_set(&scope->variables, "index_of", index_of_type);
+    map_set(&scope->variables, "last_index_of", last_index_of_type);
+    map_set(&scope->variables, "arr_index_of", arr_index_of_type);
+    map_set(&scope->variables, "map_get", map_get_type);
+    map_set(&scope->variables, "map_set", map_set_type);
     map_set(&scope->variables, "getenv", getenv_type);
     map_set(&scope->variables, "tcp_listen", tcp_listen_type);
     map_set(&scope->variables, "tcp_accept", tcp_accept_type);
@@ -538,6 +610,10 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "ord", __external_ord_func);
     map_set(&scope->variables, "chr", __external_chr_func);
     map_set(&scope->variables, "index_of", __external_index_of_func);
+    map_set(&scope->variables, "last_index_of", __external_last_index_of_func);
+    map_set(&scope->variables, "arr_index_of", __external_arr_index_of_func);
+    map_set(&scope->variables, "map_get", __external_map_get_func);
+    map_set(&scope->variables, "map_set", __external_map_set_func);
     map_set(&scope->variables, "getenv", __external_getenv_func);
     map_set(&scope->variables, "tcp_listen", __external_tcp_listen_func);
     map_set(&scope->variables, "tcp_accept", __external_tcp_accept_func);
