@@ -6,18 +6,18 @@
 
 // ── token helpers ────────────────────────────────────────────────────────
 
-def tt(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> str { toks[p].t };
-def tv(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> str { toks[p].v };
-def tline(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long { toks[p].line };
-def tcol(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long { toks[p].col };
+def tt(toks, p: long) -> str { toks[p].t };
+def tv(toks, p: long) -> str { toks[p].v };
+def tline(toks, p: long) -> long { toks[p].line };
+def tcol(toks, p: long) -> long { toks[p].col };
 
-def is_kw(toks: [{ t: str, v: str, line: long, col: long }], p: long, w: str) -> bool {
+def is_kw(toks, p: long, w: str) -> bool {
     toks[p].t == "kw" && toks[p].v == w
 };
-def is_punct(toks: [{ t: str, v: str, line: long, col: long }], p: long, w: str) -> bool {
+def is_punct(toks, p: long, w: str) -> bool {
     toks[p].t == "punct" && toks[p].v == w
 };
-def is_op(toks: [{ t: str, v: str, line: long, col: long }], p: long, w: str) -> bool {
+def is_op(toks, p: long, w: str) -> bool {
     toks[p].t == "op" && toks[p].v == w
 };
 
@@ -40,7 +40,7 @@ def op_prec(op: str) -> long {
 
 // ── primary expressions ──────────────────────────────────────────────────
 
-def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_primary(toks, p: long) -> { node: {k: str}, pos: long } {
     let t = tt(toks, p);
     let v = tv(toks, p);
     let ln = tline(toks, p);
@@ -81,7 +81,7 @@ def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
 
 // ── postfix: call, index, slice, dot ─────────────────────────────────────
 
-def parse_postfix(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_postfix(toks, p: long) -> { node: {k: str}, pos: long } {
     let base = parse_primary(toks, p);
     let node = base.node;
     let pos = base.pos;
@@ -134,7 +134,7 @@ def parse_postfix(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
     res(node, pos)
 };
 
-def parse_args(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: [{k: str}], pos: long } {
+def parse_args(toks, p: long) -> { node: [{k: str}], pos: long } {
     let args = [];
     let pos = p;
     if (is_punct(toks, pos, ")")) {
@@ -157,7 +157,7 @@ def parse_args(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
 
 // ── binary expressions (precedence climbing) ─────────────────────────────
 
-def parse_binary(toks: [{ t: str, v: str, line: long, col: long }], p: long, min_prec: long) -> { node: {k: str}, pos: long } {
+def parse_binary(toks, p: long, min_prec: long) -> { node: {k: str}, pos: long } {
     let left_r = parse_unary(toks, p);
     let left = left_r.node;
     let pos = left_r.pos;
@@ -177,7 +177,7 @@ def parse_binary(toks: [{ t: str, v: str, line: long, col: long }], p: long, min
     res(left, pos)
 };
 
-def parse_unary(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_unary(toks, p: long) -> { node: {k: str}, pos: long } {
     if (is_op(toks, p, "-") || is_op(toks, p, "!")) {
         let inner = parse_unary(toks, p + 1);
         res({ k: "un", op: tv(toks, p), e: inner.node }, inner.pos)
@@ -186,13 +186,13 @@ def parse_unary(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
     }
 };
 
-def parse_expr(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_expr(toks, p: long) -> { node: {k: str}, pos: long } {
     parse_binary(toks, p, 1)
 };
 
 // ── compound literals ────────────────────────────────────────────────────
 
-def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_array(toks, p: long) -> { node: {k: str}, pos: long } {
     let elems = [];
     let pos = p;
     if (is_punct(toks, pos, "]")) {
@@ -212,7 +212,7 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
     }
 };
 
-def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_map(toks, p: long) -> { node: {k: str}, pos: long } {
     let keys = [];
     let vals = [];
     let pos = p;
@@ -238,7 +238,7 @@ def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { n
 
 // ── type parsing ─────────────────────────────────────────────────────────
 
-def parse_type_atom(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long {
+def parse_type_atom(toks, p: long) -> long {
     // Parse a single non-arrow type and return the position after it.
     // Atoms: long, str, bool, [T], (T, T), { field: T, ... }
     let pos = p;
@@ -283,7 +283,7 @@ def parse_type_atom(toks: [{ t: str, v: str, line: long, col: long }], p: long) 
     pos
 };
 
-def parse_type(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long {
+def parse_type(toks, p: long) -> long {
     // Parse a type annotation and return the position after it.
     // Types: long, str, bool, [T], (T, T), { field: T }, and function types
     // A -> B (right-associative, so A -> B -> C = A -> (B -> C)).
@@ -296,7 +296,7 @@ def parse_type(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> lo
 
 // ── function literal ─────────────────────────────────────────────────────
 
-def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_func(toks, p: long) -> { node: {k: str}, pos: long } {
     // Named:    def name(params) -> ret { body }   (top-level declaration)
     // Anonymous: def(params) -> ret { body }        (function expression)
     let ln = tline(toks, p);
@@ -336,7 +336,7 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
 
 // ── block { stmt; stmt; ... } ────────────────────────────────────────────
 
-def parse_block(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_block(toks, p: long) -> { node: {k: str}, pos: long } {
     let pos = p + 1;  // skip '{'
     let stmts = [];
     while (!is_punct(toks, pos, "}") && tt(toks, pos) != "eof") {
@@ -350,7 +350,7 @@ def parse_block(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
 
 // ── statements ───────────────────────────────────────────────────────────
 
-def parse_stmt(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_stmt(toks, p: long) -> { node: {k: str}, pos: long } {
     if (is_kw(toks, p, "let") || is_kw(toks, p, "const")) {
         parse_decl(toks, p)
     } else if (is_kw(toks, p, "return")) {
@@ -377,7 +377,7 @@ def parse_stmt(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
     }
 };
 
-def parse_decl(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_decl(toks, p: long) -> { node: {k: str}, pos: long } {
     let kind = tv(toks, p);
     let name = tv(toks, p + 1);
     let ln = tline(toks, p);
@@ -393,7 +393,7 @@ def parse_decl(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
 
 // ── control flow ─────────────────────────────────────────────────────────
 
-def parse_if(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_if(toks, p: long) -> { node: {k: str}, pos: long } {
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
     let cond = parse_expr(toks, p + 1);
@@ -416,13 +416,13 @@ def parse_if(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { no
     res({ k: "if", cond: cond.node, then: then_b.node, els: else_b, has_else: has_else, line: ln, col: cl }, pos)
 };
 
-def parse_while(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_while(toks, p: long) -> { node: {k: str}, pos: long } {
     let cond = parse_expr(toks, p + 1);
     let body = parse_block(toks, cond.pos);
     res({ k: "while", cond: cond.node, body: body.node, line: tline(toks, p), col: tcol(toks, p) }, body.pos)
 };
 
-def parse_foreach(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_foreach(toks, p: long) -> { node: {k: str}, pos: long } {
     // foreach ( x in iterable ) { body }
     let name = tv(toks, p + 2);
     let it = parse_expr(toks, p + 4);  // skip 'foreach' '(' name 'in'
@@ -430,7 +430,7 @@ def parse_foreach(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
     res({ k: "foreach", name: name, iter: it.node, body: body.node, line: tline(toks, p), col: tcol(toks, p) }, body.pos)
 };
 
-def parse_for_or_range(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+def parse_for_or_range(toks, p: long) -> { node: {k: str}, pos: long } {
     // for i in a..b { body }   OR   for (init; cond; step) { body }
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
@@ -467,7 +467,7 @@ def parse_for_or_range(toks: [{ t: str, v: str, line: long, col: long }], p: lon
 
 // ── top level: a program is a block of statements (no surrounding braces) ─
 
-def parse_program(toks: [{ t: str, v: str, line: long, col: long }]) -> {k: str} {
+def parse_program(toks) -> {k: str} {
     let stmts = [];
     let pos = 0;
     while (tt(toks, pos) != "eof") {
