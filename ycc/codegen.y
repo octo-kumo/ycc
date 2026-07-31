@@ -216,8 +216,12 @@ def emit_call(node) -> str {
             arr_init = arr_init + " _a[" + tostring(j) + "] = " + aj + ";";
             j = j + 1;
         };
+        // Capture result, free args (user functions NULL them; builtins don't),
+        // return result. Fixes systemic arg leak (#7).
         "({ YValue *_a[" + tostring(n) + "];" + arr_init + " " +
-        "y_call(" + callee + ", _a, " + tostring(n) + "); })"
+        "YValue *_r = y_call(" + callee + ", _a, " + tostring(n) + "); " +
+        "for (int _i = 0; _i < " + tostring(n) + "; _i++) if (_a[_i]) y_free(_a[_i]); " +
+        "_r; })"
     }
 };
 

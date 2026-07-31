@@ -5,6 +5,17 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <signal.h>
+
+/* Ignore SIGPIPE so tcp_write to a closed socket returns an error instead of
+ * killing the process. Installed once at first tcp_listen call. */
+static int g_sigpipe_ignored = 0;
+static void ignore_sigpipe_once(void) {
+    if (!g_sigpipe_ignored) {
+        signal(SIGPIPE, SIG_IGN);
+        g_sigpipe_ignored = 1;
+    }
+}
 
 /* ── Constructors ───────────────────────────────────────────────────────── */
 
@@ -577,12 +588,14 @@ YValue *y_arr_slice(YValue *arr, YValue *start_v, YValue *end_v) {
     }
     long count = (long)arr->data.arr->count;
     if (count == 0) {
+        y_free(arr); y_free(start_v); y_free(end_v);
         return y_mk_arr(NULL, 0);
     }
     long start = start_v->data.l;
     long end = end_v->data.l;
 
     if (count <= 1 && start >= 1) {
+        y_free(arr); y_free(start_v); y_free(end_v);
         return y_mk_arr(NULL, 0);
     }
 
@@ -610,7 +623,10 @@ YValue *y_arr_slice(YValue *arr, YValue *start_v, YValue *end_v) {
             elems[n - 1 - i] = tmp;
         }
     }
-    return y_mk_arr(elems, n);
+    YValue *result = y_mk_arr(elems, n);
+    free(elems);
+    y_free(arr); y_free(start_v); y_free(end_v);
+    return result;
 }
 
 YValue *y_map_get(YValue *map, const char *key) {
@@ -766,7 +782,10 @@ YValue *y_cons(YValue *head, YValue *tail) {
     elems[0] = y_clone(head);
     for (size_t i = 0; i < tail->data.arr->count; i++)
         elems[i + 1] = y_clone(tail->data.arr->elements[i]);
-    return y_mk_arr(elems, n);
+    YValue *result = y_mk_arr(elems, n);
+    free(elems);
+    y_free(head); y_free(tail);
+    return result;
 }
 
 /* ── Function calls ─────────────────────────────────────────────────────── */
@@ -1210,6 +1229,7 @@ char *y_escape_c_string(const char *s, size_t len) {
 
 YValue *y_builtin_tcp_listen(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
+    ignore_sigpipe_once();
     if (argc < 1 || args[0]->type != Y_LONG) return y_mk_long(-1);
     int port = (int)args[0]->data.l;
 
