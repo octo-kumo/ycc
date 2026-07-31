@@ -2,6 +2,62 @@
 // Targets the runtime.h ABI: YValue tagged union, y_mk_* constructors,
 // y_scope_get/set, y_add/y_sub/... operators, GCC statement expressions.
 
+// ── functional helpers ───────────────────────────────────────────────────
+// (names avoid a leading underscore — Y identifiers can't start with '_')
+
+def mapx_go(f, xs, i, acc) {
+    if (i >= len(xs)) { acc } else { mapx_go(f, xs, i + 1, push(acc, f(xs[i]))) }
+};
+def mapx(f, xs) { mapx_go(f, xs, 0, []) };
+
+def filterx_go(p, xs, i, acc) {
+    if (i >= len(xs)) { acc }
+    else if (p(xs[i])) { filterx_go(p, xs, i + 1, push(acc, xs[i])) }
+    else { filterx_go(p, xs, i + 1, acc) }
+};
+def filterx(p, xs) { filterx_go(p, xs, 0, []) };
+
+def mapix_go(f, n, i, acc) {
+    if (i >= n) { acc } else { mapix_go(f, n, i + 1, push(acc, f(i))) }
+};
+def mapix(f, n) { mapix_go(f, n, 0, []) };
+
+// ── C codegen string combinators ─────────────────────────────────────────
+
+def gnu(body) -> str { "({ " + body + " })" };
+def c_call(fn, args) -> str { fn + "(" + join(args, ", ") + ")" };
+def fill(name, parts) -> str {
+    join(mapix(def(i) { " " + name + "[" + tostring(i) + "] = " + parts[i] + ";" }, len(parts)), "")
+};
+
+// ── builtin registration table ───────────────────────────────────────────
+// Each entry: [name, arity, closure]. closure is "NULL" for almost all;
+// "scope" for global_get. The exec entry is filtered out when g_no_exec.
+let BUILTINS = [
+    ["print", 1, "NULL"], ["tostring", 1, "NULL"], ["typeof", 1, "NULL"],
+    ["range", 1, "NULL"], ["readline", 0, "NULL"], ["puts", 1, "NULL"],
+    ["split", 2, "NULL"], ["len", 1, "NULL"], ["trim", 1, "NULL"],
+    ["exec", 1, "NULL"],
+    ["tonum", 1, "NULL"], ["join", 2, "NULL"], ["push", 2, "NULL"],
+    ["substr", 3, "NULL"], ["read_file", 1, "NULL"], ["write_file", 2, "NULL"],
+    ["ord", 1, "NULL"], ["chr", 1, "NULL"],
+    ["bytes_to_str", 1, "NULL"],
+    ["ensure_runtime", 0, "NULL"], ["gen_embedded_runtime", 2, "NULL"],
+    ["index_of", 2, "NULL"], ["arr_index_of", 2, "NULL"], ["last_index_of", 2, "NULL"],
+    ["argv", 0, "NULL"], ["getenv", 1, "NULL"],
+    ["tcp_listen", 1, "NULL"], ["tcp_accept", 1, "NULL"],
+    ["tcp_read", 2, "NULL"], ["tcp_write", 2, "NULL"], ["tcp_close", 1, "NULL"],
+    ["map_set", 3, "NULL"], ["map_get", 2, "NULL"],
+    ["global_get", 1, "scope"],
+    ["scope_new", 1, "NULL"], ["scope_def", 3, "NULL"], ["scope_find", 2, "NULL"],
+    ["scope_get", 2, "NULL"], ["scope_set", 3, "NULL"],
+];
+
+def reg(b) -> str {
+    "    y_scope_set(scope, \"" + b[0] + "\", y_mk_func(y_builtin_" + b[0] +
+    ", " + tostring(b[1]) + ", " + b[2] + "));\n"
+};
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 def esc(s: str) -> str {
@@ -196,51 +252,24 @@ def emit_dot(node) -> str {
 
 def emit_call(node) -> str {
     let callee = emit_expr(node.callee);
-    let args = node.args;
-    let n = len(args);
+    let n = len(node.args);
     if (n == 0) {
-        "y_call(" + callee + ", NULL, 0)"
+        c_call("y_call", [callee, "NULL", "0"])
     } else {
-        let arg_strs = [];
-        let i = 0;
-        while (i < n) {
-            let a = args[i];
-            arg_strs = push(arg_strs, emit_expr(a));
-            i = i + 1;
-        };
-        let arr_init = "";
-        let j = 0;
-        while (j < n) {
-            let aj = arg_strs[j];
-            arr_init = arr_init + " _a[" + tostring(j) + "] = " + aj + ";";
-            j = j + 1;
-        };
-        // Capture result, free args (user functions NULL them; builtins don't),
-        // return result. Fixes systemic arg leak (#7).
-        "({ YValue *_a[" + tostring(n) + "];" + arr_init + " " +
-        "YValue *_r = y_call(" + callee + ", _a, " + tostring(n) + "); " +
-        "for (int _i = 0; _i < " + tostring(n) + "; _i++) if (_a[_i]) y_free(_a[_i]); " +
-        "_r; })"
+        let as = mapx(emit_expr, node.args);
+        gnu("YValue *_a[" + tostring(n) + "];" + fill("_a", as) +
+            " YValue *_r = y_call(" + callee + ", _a, " + tostring(n) + "); " +
+            "for (int _i = 0; _i < " + tostring(n) + "; _i++) if (_a[_i]) y_free(_a[_i]); _r;")
     }
 };
 
 def emit_array(node) -> str {
-    let elems = node.elems;
-    let n = len(elems);
+    let n = len(node.elems);
     if (n == 0) {
         "y_mk_arr(NULL, 0)"
     } else {
-        // Build the per-element assignments as a list + join (O(n)); naive
-        // string concatenation here is O(n^2) and chokes on large literals
-        // like the embedded runtime byte arrays.
-        let parts = [];
-        let i = 0;
-        while (i < n) {
-            parts = push(parts, " _e[" + tostring(i) + "] = " + emit_expr(elems[i]) + ";");
-            i = i + 1;
-        };
-        "({ YValue **_e = malloc(sizeof(YValue*) * " + tostring(n) + ");" + join(parts, "") + " " +
-        "y_mk_arr(_e, " + tostring(n) + "); })"
+        gnu("YValue **_e = malloc(sizeof(YValue*) * " + tostring(n) + ");" +
+            fill("_e", mapx(emit_expr, node.elems)) + " y_mk_arr(_e, " + tostring(n) + ");")
     }
 };
 
@@ -365,20 +394,11 @@ def emit_forrange(node) -> str {
 };
 
 def emit_block(node) -> str {
-    let stmts = node.stmts;
-    let n = len(stmts);
+    let n = len(node.stmts);
     if (n == 0) {
         "y_mk_null()"
     } else {
-        let parts = [];
-        let i = 0;
-        while (i < n) {
-            let s = stmts[i];
-            parts = push(parts, emit_expr(s));
-            i = i + 1;
-        };
-        // wrap in a statement expression with a new scope.
-        // Build the "stmt; stmt; ... last" body via a chunk list + join (O(n)).
+        let parts = mapx(emit_expr, node.stmts);
         // Non-final statements are freed; the block result is cloned out before
         // the scope is released (it may reference a scope value).
         let chunks = [];
@@ -387,11 +407,9 @@ def emit_block(node) -> str {
             chunks = push(chunks, " y_free((YValue *)(" + parts[j] + "));");
             j = j + 1;
         };
-        let body = join(chunks, "");
-        let last = parts[n - 1];
-        "({ YScope *_outer = scope; YScope *scope = malloc(sizeof(YScope)); " +
-        "y_scope_init(scope, _outer);" + body + " YValue *_r = " + last + "; " +
-        "YValue *_ret = y_clone(_r); y_scope_release(scope); _ret; })"
+        gnu("YScope *_outer = scope; YScope *scope = malloc(sizeof(YScope)); " +
+            "y_scope_init(scope, _outer);" + join(chunks, "") + " YValue *_r = " + parts[n-1] + "; " +
+            "YValue *_ret = y_clone(_r); y_scope_release(scope); _ret;")
     }
 };
 
@@ -410,17 +428,7 @@ def emit_program(ast) -> str {
     g_fid = 0;
 
     // emit the main body — accumulate chunks in a list, join once (O(n) not O(n^2))
-    let stmts = ast.stmts;
-    let n = len(stmts);
-    let body_parts = [];
-    let i = 0;
-    while (i < n) {
-        let s = stmts[i];
-        let e = emit_expr(s);
-        body_parts = push(body_parts, "    " + e + ";\n");
-        i = i + 1;
-    };
-    let body = join(body_parts, "");
+    let body = join(mapx(def(s) { "    " + emit_expr(s) + ";\n" }, ast.stmts), "");
 
     // assemble the full C program as a chunk list
     let parts = [];
@@ -431,11 +439,7 @@ def emit_program(ast) -> str {
     let nf = len(g_funcs);
     if (nf > 0) {
         parts = push(parts, "/* ── function definitions ── */\n\n");
-        let fi = 0;
-        while (fi < nf) {
-            parts = push(parts, g_funcs[fi] + "\n");
-            fi = fi + 1;
-        };
+        parts = push(parts, join(mapx(def(f) { f + "\n" }, g_funcs), ""));
     };
 
     // main
@@ -445,47 +449,9 @@ def emit_program(ast) -> str {
     parts = push(parts, "    YScope *scope = malloc(sizeof(YScope));\n");
     parts = push(parts, "    y_scope_init(scope, NULL);\n\n");
     parts = push(parts, "    /* builtins */\n");
-    parts = push(parts, "    y_scope_set(scope, \"print\",    y_mk_func(y_builtin_print,    1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"tostring\", y_mk_func(y_builtin_tostring, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"typeof\",   y_mk_func(y_builtin_typeof,   1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"range\",    y_mk_func(y_builtin_range,    1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"readline\", y_mk_func(y_builtin_readline, 0, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"puts\",     y_mk_func(y_builtin_puts,     1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"split\",    y_mk_func(y_builtin_split,    2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"len\",      y_mk_func(y_builtin_len,      1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"trim\",     y_mk_func(y_builtin_trim,     1, NULL));\n");
-    if (!g_no_exec) {
-        parts = push(parts, "    y_scope_set(scope, \"exec\",     y_mk_func(y_builtin_exec,     1, NULL));\n");
-    };
-    parts = push(parts, "    y_scope_set(scope, \"tonum\",    y_mk_func(y_builtin_tonum,    1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"join\",     y_mk_func(y_builtin_join,     2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"push\",     y_mk_func(y_builtin_push,     2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"substr\",   y_mk_func(y_builtin_substr,   3, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"read_file\", y_mk_func(y_builtin_read_file, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"write_file\", y_mk_func(y_builtin_write_file, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"bytes_to_str\", y_mk_func(y_builtin_bytes_to_str, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"ensure_runtime\", y_mk_func(y_builtin_ensure_runtime, 0, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"gen_embedded_runtime\", y_mk_func(y_builtin_gen_embedded_runtime, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"index_of\", y_mk_func(y_builtin_index_of, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"arr_index_of\", y_mk_func(y_builtin_arr_index_of, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"last_index_of\", y_mk_func(y_builtin_last_index_of, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"argv\", y_mk_func(y_builtin_argv, 0, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"getenv\", y_mk_func(y_builtin_getenv, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"tcp_listen\", y_mk_func(y_builtin_tcp_listen, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"tcp_accept\", y_mk_func(y_builtin_tcp_accept, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"tcp_read\", y_mk_func(y_builtin_tcp_read, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"tcp_write\", y_mk_func(y_builtin_tcp_write, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"tcp_close\", y_mk_func(y_builtin_tcp_close, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"map_set\", y_mk_func(y_builtin_map_set, 3, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"map_get\", y_mk_func(y_builtin_map_get, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"global_get\", y_mk_func(y_builtin_global_get, 1, scope));\n");
-    parts = push(parts, "    y_scope_set(scope, \"scope_new\", y_mk_func(y_builtin_scope_new, 1, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"scope_def\", y_mk_func(y_builtin_scope_def, 3, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"scope_find\", y_mk_func(y_builtin_scope_find, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"scope_get\", y_mk_func(y_builtin_scope_get, 2, NULL));\n");
-    parts = push(parts, "    y_scope_set(scope, \"scope_set\", y_mk_func(y_builtin_scope_set, 3, NULL));\n\n");
+    let bs = if (g_no_exec) { filterx(def(b) { b[0] != "exec" }, BUILTINS) } else { BUILTINS };
+    parts = push(parts, join(mapx(reg, bs), ""));
+    parts = push(parts, "\n");
     parts = push(parts, body);
     parts = push(parts, "\n    return 0;\n");
     parts = push(parts, "}\n");
