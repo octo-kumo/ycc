@@ -1,4 +1,4 @@
-import lexer from "./lexer.y";
+import lexer from "../../../src/y/lexer.y";
 let src = "let x = \"hi\\n\";";
 print("calling tokenize...");
 let toks = lexer.tokenize(src);

@@ -8,8 +8,8 @@ let Y = ANSI + "33m";
 let BL = ANSI + "34m";
 let M = ANSI + "35m";
 let C = ANSI + "36m";
-def w(s: str, color: str) {
-    color + s + RS
+def w(s: str, color: str) -> str {
+    color + s + "\x1b[0m"
 };
 let side = w("\\\\\\\\", R + B);
 let face = w("(", BL) + side + w(" \xCF\x89 ", G + B) + side + w(")", BL);

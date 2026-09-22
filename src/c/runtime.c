@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include <inttypes.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -1003,6 +1004,15 @@ YValue *y_builtin_puts(YScope *closure, YValue **args, size_t argc) {
     return y_mk_null();
 }
 
+/* exit(code): terminate the process (allows drivers to propagate failures). */
+YValue *y_builtin_exit(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    int c = 0;
+    if (argc > 0 && args[0]->type == Y_LONG) c = (int)(args[0]->data.l & 0xff);
+    exit(c);
+    return y_mk_null();
+}
+
 /* split(s, delim) -> [str] */
 YValue *y_builtin_split(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
@@ -1193,7 +1203,36 @@ YValue *y_builtin_read_file(YScope *closure, YValue **args, size_t argc) {
     return v;
 }
 
-/* write_file(path, content) -> bool (success) */
+/* some(v) -> v — options are value-or-null on this toolchain (no wrapper):
+ * some is the identity (cloned for ownership safety). */
+YValue *y_builtin_some(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || !args[0]) return y_mk_null();
+    return y_clone(args[0]);
+}
+
+/* is_some(v) -> bool — true unless v is null. */
+YValue *y_builtin_is_some(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || !args[0]) return y_mk_bool(false);
+    return y_mk_bool(args[0]->type != Y_NULL);
+}
+
+/* unwrap(v) -> v — identity (cloned); LOUD failure on null (programmer
+ * error: forgot the `== null` check). Matches native gen_unwrap (trap). */
+YValue *y_builtin_unwrap(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || !args[0] || args[0]->type == Y_NULL) {
+        fprintf(stderr, "runtime error: unwrap of null\n");
+        exit(1);
+    }
+    return y_clone(args[0]);
+}
+
+/* write_file(path, content) -> bool (success).
+ * NOTE: C strings cannot carry NUL bytes, so this writes strlen(content)
+ * bytes (text only). For binary data (ELF bytes with NULs), use
+ * write_bytes(path, arr, mode) below. */
 YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
     if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_STR)
@@ -1204,6 +1243,35 @@ YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc) {
     size_t wr = fwrite(args[1]->data.s, 1, n, f);
     fclose(f);
     return y_mk_bool(wr == n);
+}
+
+/* write_bytes(path, bytes, mode) -> bool: write a byte array to a file
+ * (binary-safe: NULs included) and chmod it to mode (use -1 to skip).
+ * Mirrors tinycc's tcc_write_elf_file output step (open/write/chmod), minus
+ * the buffered FILE layer — one open(2)+write(2)+chmod pass. Y strings
+ * cannot carry NUL, so bytes arrive as [long] (0-255), like elf.y output. */
+YValue *y_builtin_write_bytes(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 2 || args[0]->type != Y_STR || args[1]->type != Y_ARR)
+        return y_mk_bool(false);
+    long mode = (argc >= 3 && args[2]->type == Y_LONG) ? args[2]->data.l : -1;
+    YArray *a = args[1]->data.arr;
+    char *buf = malloc(a->count ? a->count : 1);
+    if (!buf) return y_mk_bool(false);
+    for (size_t i = 0; i < a->count; i++) {
+        YValue *e = a->elements[i];
+        buf[i] = (char)(e && e->type == Y_LONG ? (e->data.l & 0xFF) : 0);
+    }
+    FILE *f = fopen(args[0]->data.s, "wb");
+    if (!f) { free(buf); return y_mk_bool(false); }
+    size_t wr = fwrite(buf, 1, a->count, f);
+    fclose(f);
+    free(buf);
+    if (wr != a->count) return y_mk_bool(false);
+    if (mode >= 0) {
+        if (chmod(args[0]->data.s, (mode_t)mode) != 0) return y_mk_bool(false);
+    }
+    return y_mk_bool(true);
 }
 
 /* ord(s) -> long  (code point of first char, -1 if empty) */

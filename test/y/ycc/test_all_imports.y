@@ -1,10 +1,11 @@
-import lexer from "./lexer.y";
-import parser from "./parser.y";
-import codegen from "./codegen.y";
+import lexer from "../../../src/y/lexer.y";
+import parser from "../../../src/y/parser.y";
+import native from "../../../src/y/native.y";
 print("all imports loaded");
 let toks = lexer.tokenize("let x = 5;");
 print("tokens = " + tostring(len(toks)));
 let ast = parser.parse_program(toks);
 print("parsed kind = " + ast.k);
-let c = codegen.emit_program(ast);
-print("C length = " + tostring(len(c)));
+let r = native.emit_program(ast, []);
+print("asm ok = " + tostring(r.ok));
+print("asm length = " + tostring(len(r.asm)));

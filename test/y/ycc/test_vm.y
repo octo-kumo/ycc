@@ -1,7 +1,7 @@
 // Test driver: run Y source through ycc's lexer -> parser -> Y VM.
 // NOTE: ycc only supports double-quoted strings, so inner quotes are escaped.
-import lexer from "./lexer.y";
-import parser from "./parser.y";
+import lexer from "../../../src/y/lexer.y";
+import parser from "../../../src/y/parser.y";
 import vm from "./vm.y";
 
 // Builtins the VM exposes to user programs (native Y functions, passed by ref).

@@ -55,6 +55,8 @@ typedef struct VMClosure {
 
 VMValue *vm_scope_get(VMVariableScope *scope, const char *name);
 void vm_scope_set(VMVariableScope *scope, const char *name, VMValue *value);
+void vm_scope_set_local(VMVariableScope *scope, const char *name,
+                        VMValue *value);
 VMVariableScope *vm_scope_new(VMVariableScope *parent);
 VMVariableScope *vm_scope_retain(VMVariableScope *scope);
 void vm_scope_release(VMVariableScope *scope);

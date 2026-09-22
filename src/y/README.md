@@ -1,41 +1,41 @@
-# ycc — the Y-lang to C compiler, written in Y
+# ycc — the Y compiler, written in Y
 
-`ycc` is a **self-hosting** compiler for the Y language. It reads Y source,
-and emits C that links against the same `runtime.c`/`runtime.h` ABI as the
-reference compiler's codegen — so its output binaries are interchangeable
-with those produced by the C-implemented compiler.
+`ycc` compiles Y source **straight to native assembly** (Linux x86_64):
+unboxed values, static types, no C involved, no runtime to link.
+`ycc` itself is built by the reference C compiler (`make ycc-selfcontained`).
 
-The defining property: **ycc can compile its own source.**
-
-    # build ycc using the reference C compiler (bootstrap seed)
-    ../compiler --compile ycc.y -o ycc
-
-    # now ycc compiles itself
-    ./ycc --compile ycc.y -o ycc2
-
-    # ycc2 is behaviourally identical; it too can compile ycc.y
-    ./ycc2 --compile ycc.y -o ycc3
+```bash
+ycc -o hello prog.y   # compile to a native executable (no cc/as/ld/libc)
+./hello
+ycc -S prog.y         # print assembly to stdout
+ycc -S -o prog.s prog.y
+```
 
 ## Layout
 
 | file          | role                                                        |
 |---------------|-------------------------------------------------------------|
-| `ycc.y`       | driver: arg parsing, import resolution, pipeline, gcc exec  |
+| `ycc.y`       | driver: flags, import splicing, pipeline, direct ELF output |
 | `lexer.y`     | source string → token list                                  |
-| `parser.y`    | token list → AST (nested maps)                              |
-| `codegen.y`   | AST → C source string (targets `runtime.h`)                 |
+| `parser.y`    | token list → AST (nested maps) + type nodes                 |
+| `rename.y`    | uniquify pass: no scopes/shadowing downstream               |
+| `types.y`     | static checker (errors are fatal)                           |
+| `arch_x64.y`  | x86_64 emitters + Linux syscall ABI + asm prelude (incl. heap) |
+| `enc64.y`     | instruction encoding for our subset                         |
+| `asm.y`       | two-pass assembler over our asm dialect                     |
+| `elf.y`       | minimal ELF64 writer (static, no libc)                      |
+| `native.y`    | AST → assembly text (splice → strip → rename → check → emit)|
+| `std/`        | standard library in Y (`io.y`: files over raw syscalls)     |
 
-## Language subset supported
+See `NATIVE.md` for the backend roadmap (representations, pipeline stages,
+pointers, stack arrays, what's next).
 
-ycc implements the subset of Y it is itself written in (which is enough to
-write a compiler): `let`/`const`/`def`, typed params, `if`/`else if`/`else`,
-`while`, `for`, `foreach`, `for i in a..b`, arrays, maps, string concat,
-indexing/slicing, index assignment, chained indexing `a[i][j]`, dot access
-`m.k` and dot-call `m.f(x)`, closures, the full operator-precedence ladder,
-and all builtins. `import`/`export` are resolved by the driver before the
-lexer sees them (source-to-source, same as the reference compiler).
+## Language subset supported (native target)
 
-## Target ABI
-
-Emitted C uses GCC statement expressions and the `YValue` tagged union from
-`runtime.h`. See `codegen.y` for the exact emission patterns.
+Statically-typed Y with unboxed values: `let`/`const`/`def` (annotations
+required on `def` params/returns), `if`/`else`, `while`, `long`/`int`
+(same), `bool`, `str`, `*T`, `[T; N]`, `[T]`, `T?`, `&x`, `*p`, `*p = v`,
+`a[i]`, `&a[i]`, `len(a)`, fixed arrays `[v; n]`, heap arrays `[v, ...]` +
+`push`, options `some(v)`/`none`/`is_some`/`unwrap`, `print`, `syscall`,
+top-level `def` plus capture-free hoisting. Imports are spliced
+inline (no runtime maps); see `NATIVE.md` for the rejection list and why.

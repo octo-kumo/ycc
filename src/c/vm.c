@@ -305,6 +305,16 @@ void vm_scope_set(VMVariableScope *scope, const char *name, VMValue *value) {
     map_set(&scope->variables, name, val_clone(value));
 }
 
+/* Bind in the CURRENT scope only (never walks up). Used for `let`/`const`/
+ * `def` declarations so a local never clobbers an outer binding with the
+ * same name (true shadowing; reads and `=` still walk up). */
+void vm_scope_set_local(VMVariableScope *scope, const char *name,
+                        VMValue *value) {
+    VMValue *existing = map_get(&scope->variables, name);
+    if (existing) val_free(existing);
+    map_set(&scope->variables, name, val_clone(value));
+}
+
 VMVariableScope *vm_scope_new(VMVariableScope *parent) {
     VMVariableScope *s = malloc(sizeof(VMVariableScope));
     s->parent = parent;
@@ -609,7 +619,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
     }
     case EXPR_EDECLARATION: {
         VMValue *val = vm_execute(scope, expr->as.declaration_node.value);
-        vm_scope_set(scope, expr->as.declaration_node.name, val);
+        vm_scope_set_local(scope, expr->as.declaration_node.name, val);
         return val;
     }
     case EXPR_EASSIGNMENT: {
@@ -629,6 +639,34 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
     }
     case EXPR_ECALL: {
         VMValue *callee_val = vm_execute(scope, expr->as.call_node.callee);
+        if (callee_val->type == VAL_MAP &&
+            expr->as.call_node.callee->kind == EXPR_EOP &&
+            expr->as.call_node.callee->as.op_node.op == O_DOT) {
+            /* Method-style call m.f(args): f must be a function stored in
+             * map m under key f. (Dot chains on call results misparse in
+             * user code, but the module system generates m.f(...) calls
+             * for every imported function — this is the core dispatch.) */
+            Expr *dot = expr->as.call_node.callee;
+            char *key = dot->as.op_node.right->kind == EXPR_EVAR
+                            ? dot->as.op_node.right->as.evar
+                            : NULL;
+            VMValue *func_val = NULL;
+            if (key) {
+                for (size_t i = 0; i < callee_val->data.map->count; i++) {
+                    if (strcmp(callee_val->data.map->entries[i].key, key) ==
+                        0) {
+                        func_val = callee_val->data.map->entries[i].value;
+                        break;
+                    }
+                }
+            }
+            if (!func_val || func_val->type != VAL_FUNC) {
+                fprintf(stderr, "Attempting to call a non-function value\n");
+                exit(1);
+            }
+            val_free(callee_val);
+            callee_val = val_clone(func_val);
+        }
         if (callee_val->type != VAL_FUNC) {
             fprintf(stderr, "Attempting to call a non-function value\n");
             exit(1);

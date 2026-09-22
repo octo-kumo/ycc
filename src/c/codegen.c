@@ -368,7 +368,7 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
             expr->as.declaration_node.value->kind == EXPR_EFUNC) {
             EFunc *fn = &expr->as.declaration_node.value->as.efunc;
             char *cname = emit_func_def(ctx, fn, expr->as.declaration_node.name);
-            char *r = fmt("({ y_scope_set(scope, \"%s\", y_mk_func(%s, %zu, scope)); y_mk_null(); })",
+            char *r = fmt("({ y_scope_set_local(scope, \"%s\", y_mk_func(%s, %zu, scope)); y_mk_null(); })",
                           expr->as.declaration_node.name, cname, fn->param_count);
             free(cname);
             return r;
@@ -376,7 +376,7 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
         /* let / const binding */
         char *val = emit_expr(ctx, expr->as.declaration_node.value);
         char *r = fmt(
-            "({ YValue *_v = %s; y_scope_set(scope, \"%s\", _v); y_clone(_v); })",
+            "({ YValue *_v = %s; y_scope_set_local(scope, \"%s\", _v); y_clone(_v); })",
             val, expr->as.declaration_node.name);
         free(val);
         return r;
@@ -420,6 +420,40 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     }
 
     case EXPR_ECALL: {
+        /* Method-style call m.f(args): the C parser reads `f().y` shapes
+         * as field access, but the module system generates m.f(...) for
+         * every imported function — resolve the field at runtime. */
+        if (expr->as.call_node.callee->kind == EXPR_EOP &&
+            expr->as.call_node.callee->as.op_node.op == O_DOT &&
+            expr->as.call_node.callee->as.op_node.right &&
+            expr->as.call_node.callee->as.op_node.right->kind ==
+                EXPR_EVAR) {
+            char *left = emit_expr(ctx, expr->as.call_node.callee->as.op_node.left);
+            const char *key = expr->as.call_node.callee->as.op_node.right->as.evar;
+            char *args = fmt("");
+            for (size_t i = 0; i < expr->as.call_node.arg_count; i++) {
+                char *a = emit_expr(ctx, expr->as.call_node.args[i]);
+                char *next = fmt("%s %s,", args, a);
+                free(args);
+                free(a);
+                args = next;
+            }
+            char *free_args = fmt("");
+            for (size_t i = 0; i < expr->as.call_node.arg_count; i++) {
+                char *next = fmt("%s y_free(_a[%zu]);", free_args, i);
+                free(free_args);
+                free_args = next;
+            }
+            char *r = fmt("({ YValue *_m = %s; YValue *_v = y_map_get(_m, \"%s\"); "
+                          "if (!_v || _v->type != Y_FUNC) { fprintf(stderr, \"runtime error: '%%s' is not a function\\n\", \"%s\"); exit(1); } "
+                          "YValue *_a[] = {%s}; YValue *_fn = y_clone(_v); YValue *_r = y_call(_fn, _a, %zu); "
+                          "y_free(_fn); y_free(_m);%s _r; })",
+                          left, key, key, args, expr->as.call_node.arg_count, free_args);
+            free(args);
+            free(left);
+            free(free_args);
+            return r;
+        }
         char *callee = emit_expr(ctx, expr->as.call_node.callee);
         if (expr->as.call_node.arg_count == 0) {
             /* free the (cloned) callee after the call to avoid leaking it */
@@ -700,6 +734,7 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"range\",    y_mk_func(y_builtin_range,    1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"readline\", y_mk_func(y_builtin_readline, 0, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"puts\",     y_mk_func(y_builtin_puts,     1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"exit\",     y_mk_func(y_builtin_exit,     1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"split\",    y_mk_func(y_builtin_split,    2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"len\",      y_mk_func(y_builtin_len,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"trim\",     y_mk_func(y_builtin_trim,     1, NULL));\n");
@@ -711,7 +746,11 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"push\",     y_mk_func(y_builtin_push,     2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"substr\",   y_mk_func(y_builtin_substr,   3, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"read_file\", y_mk_func(y_builtin_read_file, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"some\", y_mk_func(y_builtin_some, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"is_some\", y_mk_func(y_builtin_is_some, 1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"unwrap\", y_mk_func(y_builtin_unwrap, 1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"write_file\", y_mk_func(y_builtin_write_file, 2, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"write_bytes\", y_mk_func(y_builtin_write_bytes, 3, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"bytes_to_str\", y_mk_func(y_builtin_bytes_to_str, 1, NULL));\n");

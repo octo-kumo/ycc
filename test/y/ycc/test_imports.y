@@ -1,6 +1,6 @@
-import lexer from "./lexer.y";
-import parser from "./parser.y";
-import codegen from "./codegen.y";
+import lexer from "../../../src/y/lexer.y";
+import parser from "../../../src/y/parser.y";
+import native from "../../../src/y/native.y";
 
 print("imports loaded");
 let src = "let x = 5;";

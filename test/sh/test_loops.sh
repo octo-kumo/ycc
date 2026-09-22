@@ -5,7 +5,8 @@
 
 PASS=0
 FAIL=0
-COMPILER="./compiler"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+YBOOT="$ROOT/yboot"
 
 # Colors
 RED='\033[0;31m'
@@ -18,11 +19,11 @@ run_test() {
     local file="$2"
 
     # Run VM (quiet: only program output)
-    vm_out=$(timeout 10 $COMPILER -q "$file" 2>&1)
+    vm_out=$(timeout 10 $YBOOT -q "$file" 2>&1)
     vm_exit=$?
 
     # Compile
-    compile_out=$($COMPILER --compile "$file" -o /tmp/test_bin 2>&1)
+    compile_out=$($YBOOT --compile "$file" -o /tmp/test_bin 2>&1)
     compile_exit=$?
 
     if [ $compile_exit -ne 0 ]; then
@@ -75,10 +76,10 @@ inline_test() {
     echo "$code" > "$tmpfile"
 
     # VM (quiet: only program output)
-    vm_out=$(timeout 10 $COMPILER -q "$tmpfile" 2>&1)
+    vm_out=$(timeout 10 $YBOOT -q "$tmpfile" 2>&1)
 
     # Compiled
-    $COMPILER --compile "$tmpfile" -o /tmp/test_bin >/dev/null 2>&1
+    $YBOOT --compile "$tmpfile" -o /tmp/test_bin >/dev/null 2>&1
     bin_out=$(timeout 10 /tmp/test_bin 2>&1)
 
     rm -f "$tmpfile"
@@ -107,14 +108,14 @@ echo ""
 
 # ── File-based tests ──
 echo "── File-based tests ──"
-for f in examples/test_while.y examples/test_for.y examples/test_foreach.y examples/test_forrange.y; do
+for f in test/y/examples/test_while.y test/y/examples/test_for.y test/y/examples/test_foreach.y test/y/examples/test_forrange.y; do
     run_test "$(basename $f)" "$f"
 done
 
 # Regression: existing examples
 echo ""
 echo "── Regression tests ──"
-for f in examples/helloworld.y examples/pi.y examples/array.y examples/leftfold.y; do
+for f in test/y/examples/helloworld.y test/y/examples/pi.y test/y/examples/array.y test/y/examples/leftfold.y; do
     run_test "$(basename $f)" "$f"
 done
 

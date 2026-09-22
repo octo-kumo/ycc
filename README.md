@@ -13,15 +13,15 @@ A compiler and VM for a simple C-like programming language with first-class func
 
 ```bash
 make
-./compiler examples/pi.y              # Run in VM
-./compiler --compile examples/pi.y -o pi_bin  # Compile to native binary
+./yboot test/y/examples/pi.y              # Run in VM
+./yboot --compile test/y/examples/pi.y -o pi_bin  # Compile to native binary
 ./pi_bin                              # Run the compiled binary
 ```
 
 ## Usage
 
 ```
-Usage: ./compiler [OPTIONS] [FILE]
+Usage: ./yboot [OPTIONS] [FILE]
 
 Options:
   -c, --compile [OUTPUT]  Compile to native binary (default: a.out)
@@ -36,18 +36,18 @@ Without options, runs the program in the built-in VM.
 
 ```bash
 # Run in VM (shows AST, type check, and result)
-./compiler examples/helloworld.y
+./yboot test/y/examples/helloworld.y
 
 # Compile to native binary
-./compiler --compile examples/helloworld.y -o hello
+./yboot --compile test/y/examples/helloworld.y -o hello
 ./hello
 
 # Emit C source for inspection
-./compiler -S examples/math.y > math.c
+./yboot -S test/y/examples/math.y > math.c
 
 # Compile all examples
-for f in examples/*.y; do
-  ./compiler --compile "$f" -o "$(basename $f .y)_bin"
+for f in test/y/examples/*.y; do
+  ./yboot --compile "$f" -o "$(basename $f .y)_bin"
 done
 ```
 
@@ -110,11 +110,11 @@ See `lang.md` for the full language specification.
 - **typecheck.c**: Type inference and checking
 - **vm.c**: Tree-walking interpreter
 - **codegen.c**: C code generation backend (NEW)
-- **runtime.c/h**: Runtime library for compiled programs (NEW)
+- **src/c/runtime.c/h**: Runtime library for compiled programs (NEW)
 
 ### Code generation
 
-The compiler translates the AST into C source code that links against `runtime.c`. The generated code uses:
+The compiler translates the AST into C source code that links against `src/c/runtime.c`. The generated code uses:
 
 - **GCC statement expressions** `({ ... })` for expression-oriented semantics
 - **Heap-allocated values** with a tagged union (`YValue`)
@@ -132,22 +132,39 @@ The runtime provides:
 
 - No garbage collection (manual memory management in runtime)
 - Limited error messages
-- No module system (single-file programs only)
+- Modules via source-to-source imports (`import m from "./x.y"`, paths relative
+  to the importing file; `export {...}` must be the last statement)
 - Type inference is incomplete for some edge cases
 - Closures capture entire scopes, not individual variables
 
 ## Testing
 
 ```bash
-make test              # Run leftfold example in VM
-make test-compile      # Compile and run helloworld
-
-# Test all examples
-for f in examples/*.y; do
-  echo "=== $f ==="
-  ./compiler --compile "$f" -o /tmp/test_bin && /tmp/test_bin
-done
+make test         # everything: full yboot→cycc→ycc chain + all suites
+make test-fast    # all suites except the ycc chain (ycc suites self-skip)
+make test-ycc     # full ycc chain + self-hosted check only
+make test-compile # tiny smoke: compile + run helloworld
 ```
+
+Suites live in `test/sh/` (run `./test/sh/run_all.sh [suite ...]` to pick a
+subset — e.g. `./test/sh/run_all.sh audit examples`):
+
+| suite          | script                    | what it checks                              |
+|----------------|---------------------------|---------------------------------------------|
+| loops          | `test_loops.sh`           | loops + precedence/audit regressions        |
+| comprehensive  | `test_comprehensive.sh`   | builtins, operators, functions, error cases |
+| examples       | `test_examples.sh`        | every `test/y/examples/*.y`, VM vs compiled |
+| audit          | `test_audit.sh`           | all 65 `test/y/audit/t*.y`, VM vs compiled  |
+| ycc-units      | `test_ycc_units.sh`       | every `test/y/ycc/test_*.y` runs in the VM  |
+| ycc            | `test_ycc.sh`             | self-hosted `ycc` matches `yboot` output    |
+| native         | `test_native.sh`          | `test/y/native/*.y` → static ELF → run (no toolchain) |
+
+Every suite compares VM (`-q`) vs compiled-binary behavior — a change must
+pass in **both**. `test_audit.sh` documents its known divergences inline
+(`expect_for`); don't extend that allowlist to hide a new divergence.
+The `native` suite instead compiles to real x86_64 assembly
+(`ycc -S`, no C, no `YValue`) and checks program output — see
+`src/y/NATIVE.md` for the backend roadmap and `test/y/native/` for the corpus.
 
 ## Implementation notes
 

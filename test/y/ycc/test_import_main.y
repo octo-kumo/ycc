@@ -1,4 +1,4 @@
-import lexer from "./lexer.y";
+import lexer from "../../../src/y/lexer.y";
 def main(args: [str]) -> long {
     puts("main called, argc=" + tostring(len(args)) + "\n");
     0

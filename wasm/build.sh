@@ -13,8 +13,8 @@ emcc -O2 -s WASM=1 -s MODULARIZE=1 -s EXPORT_NAME=createYcc \
   -s ALLOW_MEMORY_GROWTH=1 -s ENVIRONMENT=web,node \
   -s EXPORTED_RUNTIME_METHODS='["FS","callMain"]' \
   -s INVOKE_RUN=0 \
-  main.c parser.c codegen.c vm.c ast.c typecheck.c module.c map.c lib.c \
-  runtime.c type.c ast_debug.c parser_debug.c \
+  src/c/main.c src/c/parser.c src/c/codegen.c src/c/vm.c src/c/ast.c src/c/typecheck.c src/c/module.c src/c/map.c src/c/lib.c \
+  src/c/runtime.c src/c/type.c src/c/ast_debug.c src/c/parser_debug.c \
   -o wasm/ycc-single.js
 
 echo "built wasm/ycc-single.js ($(stat -c%s wasm/ycc-single.js) bytes, $(gzip -c wasm/ycc-single.js | wc -c) gzipped)"

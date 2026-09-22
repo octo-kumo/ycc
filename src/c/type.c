@@ -6,11 +6,11 @@
 // ill never free them, they will be freed when the program exits, and this is a
 // small compiler, so its fine
 
-type_t type_t_registry[10000];
+type_t type_t_registry[100000];
 size_t type_t_registry_count = 0;
 
 type_t *tc_make_t(ValueType base) {
-    if (type_t_registry_count >= 1000) {
+    if (type_t_registry_count >= 100000) {
         fprintf(stderr, "Type registry overflow\n");
         exit(1);
     }

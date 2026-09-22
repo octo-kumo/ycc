@@ -1,4 +1,4 @@
-import lexer from "./lexer.y";
+import lexer from "../../../src/y/lexer.y";
 
 let src = "def add(a: long, b: long) { a + b };\nprint(add(3, 4));\n// comment\nlet x = \"hi\\n\";";
 let toks = lexer.tokenize(src);

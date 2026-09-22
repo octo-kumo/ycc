@@ -1,7 +1,15 @@
 .cache/
+src/c/*.o
 *.o
+a.out
 vgcore.*
-compiler
+yboot
+cycc
+ycc1
+ycc2
+ycc3
+ycc
+_ycc
 .vscode/
 wasm/ycc-single.js
 wasm/ycc.js
@@ -12,4 +20,3 @@ wasm/playground/emit-as.js
 wasm/playground/check.js
 tools/lsp/check.js
 embedded_runtime.inc
-ycc-selfcontained

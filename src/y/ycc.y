@@ -1,224 +1,164 @@
-// ycc.y — driver for the Y-lang to C compiler.
-// Usage: ycc [--compile OUTPUT] [--emit-c OUTPUT] FILE
-//   (no flags)        run in the built-in VM (not yet supported by ycc)
-//   --compile OUT     compile FILE to a native binary OUT (default: a.out)
-//   --emit-c OUT      emit C source to OUT (default: stdout)
+// ycc — the Y compiler. Compiles Y source straight to a native
+// executable (Linux x86_64) with no toolchain: no cc, no as, no ld,
+// no libc. Usage: ycc [-o OUTPUT] [-S] [-h] FILE
+//   (no flags)   compile FILE to a native executable (default output: a.out)
+//   -o OUTPUT    output path (executable, or .s file with -S)
+//   -S           emit assembly only (stdout, or the -o file)
+//   -h, --help   show this text and exit
 
 import lexer from "./lexer.y";
 import parser from "./parser.y";
-import codegen from "./codegen.y";
+import nasm from "./asm.y";
+import nativelib from "./native.y";
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_args(argv: [str]) -> { mode: str, out: str, file: str, no_exec: bool, self_contained: bool } {
-    let mode = "vm";
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool } {
     let out = "";
-    let file = "";
-    let no_exec = false;
-    let self_contained = false;
+    let files = [];
+    let asm_only = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
         let a = argv[i];
-        if (a == "--compile" || a == "-c") {
-            mode = "compile";
-        } else if (a == "--emit-c" || a == "-S") {
-            mode = "emit-c";
-        } else if (a == "--no-exec") {
-            no_exec = true;
-        } else if (a == "--self-contained") {
-            self_contained = true;
-        } else if (a == "-o") {
+        if (a == "-o") {
             if (i + 1 < n) {
                 i = i + 1;
                 out = argv[i];
+                0
+            } else {
+                puts("ycc: -o needs an argument\n");
+                exit(1);
+                0
             };
+        } else if (a == "-S") {
+            asm_only = true;
+            0
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [--compile|-c] [--emit-c|-S] [--no-exec] [--self-contained] [-o OUTPUT] FILE\n");
-            puts("  -c, --compile        compile FILE to a native binary\n");
-            puts("  -S, --emit-c         emit C source only\n");
-            puts("      --no-exec        disable the exec() builtin (no shell access)\n");
-            puts("      --self-contained embed runtime.c/h into the binary (no YCC_RUNTIME_DIR needed)\n");
-            puts("  -o OUTPUT            output path (default: a.out, or stdout for -S)\n");
-            puts("  (no flags)           run FILE in the built-in VM\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-h] FILE\n");
+            puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
+            puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
+            puts("  -S           emit assembly only (stdout, or the -o file)\n");
+            puts("  -h, --help   show this text and exit\n");
+            exit(0);
+            0
+        } else if (substr(a, 0, 1) == "-") {
+            puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
+            exit(1);
+            0
         } else {
-            file = a;
+            files = push(files, a);
+            0
         };
         i = i + 1;
     };
-    { mode: mode, out: out, file: file, no_exec: no_exec, self_contained: self_contained }
-};
-
-// ── import resolution (source-to-source, like the C compiler's module.c) ─
-
-def resolve_imports(src: str, base_dir: str, depth: long) -> str {
-    if (depth > 32) {
-        puts("error: import depth exceeded (cycle?)\n");
-        ""
-    } else {
-        let lines = split(src, "\n");
-        let out_lines = [];
-        let i = 0;
-        let n = len(lines);
-        while (i < n) {
-            let line = lines[i];
-            let trimmed = trim(line);
-            if (substr(trimmed, 0, 7) == "import ") {
-                // import NAME from "PATH";
-                let rest = substr(trimmed, 7, len(trimmed) - 7);
-                let from_idx = index_of(rest, " from ");
-                if (from_idx >= 0) {
-                    let name = trim(substr(rest, 0, from_idx));
-                    let path_part = trim(substr(rest, from_idx + 6, len(rest) - from_idx - 6));
-                    // strip trailing ;
-                    if (substr(path_part, len(path_part) - 1, 1) == ";") {
-                        path_part = substr(path_part, 0, len(path_part) - 1);
-                    };
-                    // strip quotes
-                    let path = substr(path_part, 1, len(path_part) - 2);
-                    // resolve relative to base_dir
-                    let full = base_dir + "/" + path;
-                    let mod_src = read_file(full);
-                    if (mod_src == null) {
-                        puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
-                        out_lines = push(out_lines, line);
-                    } else {
-                        // get module dir (use LAST slash so nested paths like
-                        // "a/b/c.y" resolve their dir to "a/b", not "a")
-                        let last_slash = last_index_of(path, "/");
-                        let mod_dir = base_dir;
-                        if (last_slash >= 0) {
-                            mod_dir = base_dir + "/" + substr(path, 0, last_slash);
-                        };
-                        let processed = resolve_imports(mod_src, mod_dir, depth + 1);
-                        // Wrap module in an IIFE so defs live in a scope and the
-                        // export map is the returned value: let mod = (def(){ ... })();
-                        out_lines = push(out_lines, "let " + name + " = (def() {");
-                        out_lines = push(out_lines, processed);
-                        out_lines = push(out_lines, "})();");
-                    };
-                } else {
-                    out_lines = push(out_lines, line);
-                };
-            } else if (substr(trimmed, 0, 7) == "export ") {
-                // export { a, b };  ->  { a: a, b: b }
-                let rest = substr(trimmed, 7, len(trimmed) - 7);
-                let brace_start = index_of(rest, "{");
-                let brace_end = index_of(rest, "}");
-                if (brace_start >= 0 && brace_end >= 0) {
-                    let names_str = substr(rest, brace_start + 1, brace_end - brace_start - 1);
-                    let names = split(names_str, ",");
-                    let pairs = [];
-                    let j = 0;
-                    let nn = len(names);
-                    while (j < nn) {
-                        let nm = trim(names[j]);
-                        if (len(nm) > 0) {
-                            pairs = push(pairs, nm + ": " + nm);
-                        };
-                        j = j + 1;
-                    };
-                    out_lines = push(out_lines, "{ " + join(pairs, ", ") + " }");
-                } else {
-                    out_lines = push(out_lines, line);
-                };
-            } else {
-                out_lines = push(out_lines, line);
-            };
-            i = i + 1;
-        };
-        join(out_lines, "\n")
-    }
+    { out: out, files: files, asm_only: asm_only }
 };
 
 // ── main ─────────────────────────────────────────────────────────────────
 
-def main(cmdline: [str]) -> long {
-    let args = parse_args(cmdline);
-    let mode = args.mode;
-    let out = args.out;
-    let file = args.file;
+def print_native_errors(errors: [{ msg: str, line: long, col: long }]) -> long {
+    // NOTE: bound once — `errors[i]` inline misparses on the CVM backend.
+    let all = errors;
+    let i = 0;
+    while (i < len(all)) {
+        let e = all[i];
+        puts(tostring(e.line) + ":" + tostring(e.col) + ": error: " + e.msg + "\n");
+        i = i + 1;
+    };
+    0
+};
 
-    if (len(file) == 0) {
-        puts("error: no input file\n");
+def main(cmdline: [str]) -> long {
+    let args = parse_cli_args(cmdline);
+    // NOTE: bound once — `args.out` inline misparses on the C backend.
+    let pargs = args;
+    let out = pargs.out;
+    let files = pargs.files;
+
+    if (len(files) == 0) {
+        puts("error: no input file (see ycc -h)\n");
+        exit(1);
+        1
+    } else if (len(files) > 1) {
+        puts("error: ycc compiles one program; use imports to combine files\n");
+        exit(1);
         1
     } else {
+        let file = files[0];
         let src = read_file(file);
         if (src == null) {
             puts("error: cannot read file '" + file + "'\n");
+            exit(1);
             1
         } else {
+            // src is str? (read_file returns null on missing file); the
+            // null case exited above, so unwrap here (loud on null).
+            let src2 = unwrap(src);
             // get base dir from file path (use last slash, like C compiler's strrchr)
             let last_slash = last_index_of(file, "/");
             let base_dir = ".";
             if (last_slash >= 0) {
                 base_dir = substr(file, 0, last_slash);
-            };
+                0
+            } else { 0; };
 
-            // resolve imports
-            let resolved = resolve_imports(src, base_dir, 0);
-
-            // honor --no-exec: omit the exec() builtin from emitted C
-            if (args.no_exec) { codegen.set_no_exec(true); };
-
-            // tokenize
-            let toks = lexer.tokenize(resolved);
-
-            // parse
+            // splice imports, tokenize, parse, compile to assembly
+            // NOTE: each bound once — `x.y` on a call result misparses on
+            // the C backend (it reads `f().y` as `f(.y)`).
+            let nr = nativelib.native_resolve(src2, base_dir, 0);
+            let nrsrc = nr.src;
+            let nrimports = nr.imports;
+            let toks = lexer.tokenize(nrsrc);
             let ast = parser.parse_program(toks);
-
-            if (mode == "emit-c") {
-                let c_src = codegen.emit_program(ast);
+            let r = nativelib.emit_program(ast, nrimports);
+            // NOTE: `!(r.ok)` with parens — the C parser reads `!r.ok`
+            // as `(!r).ok`.
+            let rok = r.ok;
+            if (!(rok)) {
+                print_native_errors(r.errors);
+                exit(1);
+                1
+            } else if (pargs.asm_only) {
+                let rasm = r.asm;
                 if (len(out) == 0) {
-                    puts(c_src);
+                    puts(rasm);
+                    0
                 } else {
-                    write_file(out, c_src);
+                    write_file(out, rasm);
+                    0
                 };
                 0
-            } else if (mode == "compile") {
-                let out_path = out;
-                if (len(out_path) == 0) { out_path = "a.out"; };
-                // emit C to a FIXED temp path. NOTE: this must be a constant
-                // string (not derived from out_path) so the self-hosting
-                // bootstrap converges — the path literal is embedded in the
-                // emitted driver code, so a varying path would make every
-                // generation's binary differ and never reach a fixed point.
-                // The file is unlinked before writing to defeat symlink
-                // creation races. It only ever holds the compiler's own
-                // generated C (no user secrets); the server runs player
-                // compilations inside a private per-request directory.
-                let c_path = "/tmp/ycc_tmp.c";
-                let c_src = codegen.emit_program(ast);
-                exec("rm -f " + c_path);
-                write_file(c_path, c_src);
-                // Locate the runtime source. If --self-contained, use the
-                // embedded runtime (extracted to a temp dir by ensure_runtime()).
-                // Otherwise, use YCC_RUNTIME_DIR or the source tree.
-                let runtime_dir = "";
-                let embed_flags = "";
-                if (args.self_contained) {
-                    runtime_dir = ensure_runtime();
-                    // Regenerate embedded_runtime.inc so the output binary is
-                    // also self-contained (propagates across self-compilation).
-                    let inc_dir = "/tmp/ycc_inc";
-                    exec("mkdir -p " + inc_dir);
-                    gen_embedded_runtime(runtime_dir, inc_dir);
-                    embed_flags = " -DY_EMBED_RUNTIME -I" + inc_dir;
-                } else {
-                    runtime_dir = getenv("YCC_RUNTIME_DIR");
-                    if (runtime_dir == null) { runtime_dir = base_dir + "/.."; };
-                };
-                let cmd = "cc -O2 -std=gnu99 -I" + runtime_dir + embed_flags + " -o " + out_path + " " + c_path + " " + runtime_dir + "/runtime.c -lm";
-                let ret = exec(cmd);
-                if (ret != 0) {
-                    puts("error: cc failed with exit code " + tostring(ret) + "\n");
-                    ret
-                } else {
-                    0
-                }
             } else {
-                puts("error: VM mode not yet supported by ycc\n");
-                1
+                // Assemble to bytes in-process (no as/ld/cc) and write the
+                // executable DIRECTLY with the write_bytes builtin
+                // (binary-safe open/write/chmod, tinycc-style — NULs pass
+                // through as array elements, no shell, no exec/printf).
+                // No `&x`, no `*T`, no `syscall` here: the C bootstrap
+                // parser cannot parse any of them (see lexer OPERATORS).
+                let rasm2 = r.asm;
+                let ab = nasm.ycc_assemble(rasm2);
+                let abok = ab.ok;
+                if (!(abok)) {
+                    puts("error: assemble: " + ab.error + "\n");
+                    exit(1);
+                    1
+                } else {
+                    let out_path = out;
+                    if (len(out_path) == 0) { out_path = "a.out"; 0; } else { 0; };
+                    // NOTE: bound once — `x.y` on a call result
+                    // misparses on the C backend.
+                    let abbytes = ab.bytes;
+                    // 493 = 0755 executable (chmod applied by write_bytes).
+                    let ok = write_bytes(out_path, abbytes, 493);
+                    if (!(ok)) {
+                        puts("error: writing '" + out_path + "' failed\n");
+                        exit(1);
+                        1
+                    } else {
+                        0
+                    }
+                }
             }
         }
     }

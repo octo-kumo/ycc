@@ -1,5 +1,5 @@
-import lexer from "./lexer.y";
-import parser from "./parser.y";
+import lexer from "../../../src/y/lexer.y";
+import parser from "../../../src/y/parser.y";
 
 let src = "def add(a: long, b: long) { a + b }; print(add(3, 4 * 2));";
 let toks = lexer.tokenize(src);

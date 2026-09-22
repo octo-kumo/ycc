@@ -52,16 +52,19 @@ def eval(node, scope) {
     } else if (k == "array") {
         let out = [];
         let i = 0;
-        while (i < len(node.elems)) {
-            out = push(out, eval(node.elems[i], scope));
+        let elems = node.elems;
+        while (i < len(elems)) {
+            out = push(out, eval(elems[i], scope));
             i = i + 1;
         };
         out
     } else if (k == "map") {
         let m = {};
         let i = 0;
-        while (i < len(node.keys)) {
-            m = map_set(m, node.keys[i], eval(node.vals[i], scope));
+        let keys = node.keys;
+        let vals = node.vals;
+        while (i < len(keys)) {
+            m = map_set(m, keys[i], eval(vals[i], scope));
             i = i + 1;
         };
         m
@@ -151,9 +154,10 @@ def eval_if(node, scope) {
 def eval_call(node, scope) {
     let callee = eval(node.callee, scope);
     let argv = [];
+    let cargs = node.args;
     let i = 0;
-    while (i < len(node.args)) {
-        argv = push(argv, eval(node.args[i], scope));
+    while (i < len(cargs)) {
+        argv = push(argv, eval(cargs[i], scope));
         i = i + 1;
     };
     let ct = typeof(callee);
@@ -174,10 +178,11 @@ def call_closure(clos, argv) {
     let scope = scope_new(clos.env);
     let i = 0;
     let np = len(clos.params);
+    let cparams = clos.params;
     while (i < np) {
         let arg = null;
         if (i < len(argv)) { arg = argv[i]; };
-        scope_def(scope, clos.params[i], arg);
+        scope_def(scope, cparams[i], arg);
         i = i + 1;
     };
     scope_def(scope, "self", clos);
@@ -209,9 +214,10 @@ def exec(node, scope) {
         let last = null;
         let i = 0;
         let ns = len(node.stmts);
+        let bstmts = node.stmts;
         while (i < ns) {
             if (!g_ret) {
-                last = exec(node.stmts[i], scope);
+                last = exec(bstmts[i], scope);
             };
             i = i + 1;
         };

@@ -5,7 +5,8 @@
 
 PASS=0
 FAIL=0
-COMPILER="./compiler"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+YBOOT="$ROOT/yboot"
 
 # Colors
 RED='\033[0;31m'
@@ -24,11 +25,11 @@ run_test() {
     echo "$code" > "$tmpfile"
 
     # VM (quiet: only program output)
-    vm_out=$(timeout 10 $COMPILER -q "$tmpfile" 2>&1)
+    vm_out=$(timeout 10 $YBOOT -q "$tmpfile" 2>&1)
     vm_exit=$?
 
     # Compiled
-    $COMPILER --compile "$tmpfile" -o "$binfile" >/dev/null 2>&1
+    $YBOOT --compile "$tmpfile" -o "$binfile" >/dev/null 2>&1
     bin_out=$(timeout 10 "$binfile" 2>&1)
     bin_exit=$?
 
@@ -61,11 +62,11 @@ run_error_test() {
     echo "$code" > "$tmpfile"
 
     # VM should fail
-    vm_out=$(timeout 10 $COMPILER -q "$tmpfile" 2>&1)
+    vm_out=$(timeout 10 $YBOOT -q "$tmpfile" 2>&1)
     vm_exit=$?
 
     # Compiled should fail
-    $COMPILER --compile "$tmpfile" -o "$binfile" >/dev/null 2>&1
+    $YBOOT --compile "$tmpfile" -o "$binfile" >/dev/null 2>&1
     bin_exit=$?
 
     rm -f "$tmpfile" "$binfile"
@@ -361,32 +362,11 @@ run_test "undefined variable" 'print(undefined_var);' 'undefined_var'
 run_test "type error: call non-function" 'let x = 42; x();' 'non-function'
 
 # ── Self-hosted compiler ──
-# The self-hosted ycc (ycc/ycc.y) must emit C that matches the C compiler's
-# output for representative programs. Skipped if no self-contained binary built.
+# Lives in test/sh/test_ycc.sh now (needs ./ycc); run via
+# `make test` or `./test/sh/test_ycc.sh`. Skipped here to avoid running it twice. to avoid running it twice.
 echo ""
 echo "── Self-hosted compiler ──"
-if [ -f ./ycc-selfcontained ]; then
-    for prog in 'def f(n: long) -> long { if (n < 2) { n } else { self(n-1) + self(n-2) } }; print(f(10));' \
-                'let m = {a: 1, b: 2}; print(m.a + m.b);' \
-                'let a = [1,2,3]; print(a[0] + a[2]);' \
-                'foreach (x in [10,20,30]) { print(x); }'; do
-        echo "$prog" > /tmp/sh.y
-        c_out=$(timeout 10 ./compiler -q /tmp/sh.y 2>&1)
-        rm -rf /tmp/ycc_runtime_* /tmp/ycc_inc
-        y_out=$(env -u YCC_RUNTIME_DIR timeout 30 ./ycc-selfcontained --self-contained -c -o /tmp/sh_bin /tmp/sh.y >/dev/null 2>&1; timeout 10 /tmp/sh_bin 2>&1)
-        if [ "$c_out" = "$y_out" ]; then
-            echo -e "${GREEN}PASS${NC} self-hosted: $(echo $prog | cut -c1-40)..."
-            PASS=$((PASS + 1))
-        else
-            echo -e "${RED}FAIL${NC} self-hosted: $(echo $prog | cut -c1-40)..."
-            echo "  C compiler: $c_out"
-            echo "  self-hosted: $y_out"
-            FAIL=$((FAIL + 1))
-        fi
-    done
-else
-    echo "  (skipped: run 'make ycc-selfcontained' first)"
-fi
+echo "  (see tests/test_ycc.sh)"
 
 # ── Summary ──
 echo ""

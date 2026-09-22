@@ -3,6 +3,8 @@
 #include "typecheck.h"
 #include "vm.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
 /* Security switch: disables the `exec` builtin (see lib.h). */
@@ -238,6 +240,14 @@ DEFINE_EXTERNAL_FUNC(puts, x, _VAL_INFERRED, VAL_NULL, {
     return nval(VAL_NULL);
 });
 
+/* exit(code) -> ! (process exit; an FFI necessity, not library bloat) */
+DEFINE_EXTERNAL_FUNC(exit, code, VAL_LONG, VAL_NULL, {
+    int c = 0;
+    if (code && code->type == VAL_LONG) c = (int)(code->data.l & 0xff);
+    exit(c);
+    return nval(VAL_NULL);
+});
+
 /* len(x) -> long */
 DEFINE_EXTERNAL_FUNC(len, x, _VAL_INFERRED, VAL_LONG, {
     VMValue *result = nval(VAL_LONG);
@@ -411,6 +421,30 @@ DEFINE_EXTERNAL_FUNC(read_file, x, _VAL_INFERRED, VAL_STR, {
     return result;
 });
 
+/* some(v) -> v — options are value-or-null on this toolchain (no wrapper):
+ * some is the identity (cloned for ownership safety). */
+DEFINE_EXTERNAL_FUNC(some, x, _VAL_INFERRED, _VAL_INFERRED, {
+    if (!x) return nval(VAL_NULL);
+    return val_clone(x);
+});
+
+/* is_some(v) -> bool — true unless v is null. */
+DEFINE_EXTERNAL_FUNC(is_some, x, _VAL_INFERRED, VAL_BOOL, {
+    VMValue *result = nval(VAL_BOOL);
+    result->data.b = (x && x->type != VAL_NULL);
+    return result;
+});
+
+/* unwrap(v) -> v — identity (cloned); LOUD failure on null (programmer
+ * error: forgot the `== null` check). Matches native gen_unwrap (trap). */
+DEFINE_EXTERNAL_FUNC(unwrap, x, _VAL_INFERRED, _VAL_INFERRED, {
+    if (!x || x->type == VAL_NULL) {
+        fprintf(stderr, "runtime error: unwrap of null\n");
+        exit(1);
+    }
+    return val_clone(x);
+});
+
 /* write_file(path, content) -> bool */
 DEFINE_EXTERNAL_FUNC2(write_file, path, content, {
     VMValue *result = nval(VAL_BOOL);
@@ -423,6 +457,38 @@ DEFINE_EXTERNAL_FUNC2(write_file, path, content, {
     size_t wr = fwrite(content->data.s, 1, n, f);
     fclose(f);
     result->data.b = (wr == n);
+    return result;
+});
+
+/* write_bytes(path, bytes, mode) -> bool: binary-safe file write + chmod.
+ * Like tinycc's tcc_write_elf_file output step (open/write/chmod): bytes
+ * arrive as [long] (0-255, NULs included — Y strings cannot carry NUL);
+ * mode is applied via chmod(2), -1 skips. The ycc driver uses this to emit
+ * executables (elf.y byte arrays) with no shell/exec. */
+DEFINE_EXTERNAL_FUNC3(write_bytes, path, bytes, mode, {
+    VMValue *result = nval(VAL_BOOL);
+    result->data.b = false;
+    if (!path || path->type != VAL_STR || !bytes || bytes->type != VAL_ARR) {
+        return result;
+    }
+    long m = (mode && mode->type == VAL_LONG) ? mode->data.l : -1;
+    size_t n = bytes->data.arr->count;
+    char *buf = malloc(n ? n : 1);
+    if (!buf) return result;
+    for (size_t i = 0; i < n; i++) {
+        VMValue *e = bytes->data.arr->elements[i];
+        buf[i] = (char)(e && e->type == VAL_LONG ? (e->data.l & 0xFF) : 0);
+    }
+    FILE *f = fopen(path->data.s, "wb");
+    if (!f) { free(buf); return result; }
+    size_t wr = fwrite(buf, 1, n, f);
+    fclose(f);
+    free(buf);
+    if (wr != n) return result;
+    if (m >= 0) {
+        if (chmod(path->data.s, (mode_t)m) != 0) return result;
+    }
+    result->data.b = true;
     return result;
 });
 
@@ -564,6 +630,7 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "range", range_type);
     map_set(&scope->variables, "readline", readline_type);
     map_set(&scope->variables, "puts", puts_type);
+    map_set(&scope->variables, "exit", exit_type);
     map_set(&scope->variables, "split", split_type);
     map_set(&scope->variables, "len", len_type);
     map_set(&scope->variables, "trim", trim_type);
@@ -575,6 +642,7 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "substr", substr_type);
     map_set(&scope->variables, "read_file", read_file_type);
     map_set(&scope->variables, "write_file", write_file_type);
+    map_set(&scope->variables, "write_bytes", write_bytes_type);
     map_set(&scope->variables, "ord", ord_type);
     map_set(&scope->variables, "chr", chr_type);
     map_set(&scope->variables, "index_of", index_of_type);
@@ -596,6 +664,7 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "range", __external_range_func);
     map_set(&scope->variables, "readline", __external_readline_func);
     map_set(&scope->variables, "puts", __external_puts_func);
+    map_set(&scope->variables, "exit", __external_exit_func);
     map_set(&scope->variables, "split", __external_split_func);
     map_set(&scope->variables, "len", __external_len_func);
     map_set(&scope->variables, "trim", __external_trim_func);
@@ -606,7 +675,11 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "push", __external_push_func);
     map_set(&scope->variables, "substr", __external_substr_func);
     map_set(&scope->variables, "read_file", __external_read_file_func);
+    map_set(&scope->variables, "some", __external_some_func);
+    map_set(&scope->variables, "is_some", __external_is_some_func);
+    map_set(&scope->variables, "unwrap", __external_unwrap_func);
     map_set(&scope->variables, "write_file", __external_write_file_func);
+    map_set(&scope->variables, "write_bytes", __external_write_bytes_func);
     map_set(&scope->variables, "ord", __external_ord_func);
     map_set(&scope->variables, "chr", __external_chr_func);
     map_set(&scope->variables, "index_of", __external_index_of_func);
