@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <malloc.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -1072,6 +1073,20 @@ YValue *y_builtin_eputs(YScope *closure, YValue **args, size_t argc) {
         fputs(s, stderr);
         fflush(stderr);
         free(s);
+    }
+    return y_mk_null();
+}
+
+/* sleep(ms) -> null: suspend the caller for ms milliseconds. */
+YValue *y_builtin_sleep(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    struct timespec req;
+    long ms = 0;
+    if (argc > 0 && args[0]->type == Y_LONG && args[0]->data.l > 0)
+        ms = args[0]->data.l;
+    req.tv_sec = (time_t)(ms / 1000);
+    req.tv_nsec = (long)(ms % 1000) * 1000000L;
+    while (nanosleep(&req, &req) != 0 && errno == EINTR) {
     }
     return y_mk_null();
 }

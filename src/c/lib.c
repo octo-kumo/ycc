@@ -3,6 +3,7 @@
 #include "typecheck.h"
 #include "vm.h"
 #include <malloc.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -687,6 +688,22 @@ DEFINE_EXTERNAL_FUNC(eputs, x, _VAL_INFERRED, VAL_NULL, {
     return nval(VAL_NULL);
 });
 
+/* sleep(ms) -> null: suspend the calling program for ms milliseconds.
+ * Backed by nanosleep(2); a signal interruption sleeps out the remainder. */
+DEFINE_EXTERNAL_FUNC(sleep, ms, VAL_LONG, VAL_NULL, {
+    struct timespec req;
+    if (ms && ms->type == VAL_LONG && ms->data.l > 0) {
+        req.tv_sec = (time_t)(ms->data.l / 1000);
+        req.tv_nsec = (long)(ms->data.l % 1000) * 1000000L;
+    } else {
+        req.tv_sec = 0;
+        req.tv_nsec = 0;
+    }
+    while (nanosleep(&req, &req) != 0 && errno == EINTR) {
+    }
+    return nval(VAL_NULL);
+});
+
 /* clock_us() -> long: monotonic microseconds. Only differences are
  * meaningful (the origin is arbitrary). */
 DEFINE_EXTERNAL_FUNC0(clock_us, VAL_LONG, {
@@ -747,6 +764,7 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "tcp_write", tcp_write_type);
     map_set(&scope->variables, "tcp_close", tcp_close_type);
     map_set(&scope->variables, "eputs", eputs_type);
+    map_set(&scope->variables, "sleep", sleep_type);
     map_set(&scope->variables, "clock_us", clock_us_type);
     map_set(&scope->variables, "heap_used", heap_used_type);
 }
@@ -790,6 +808,7 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "tcp_write", __external_tcp_write_func);
     map_set(&scope->variables, "tcp_close", __external_tcp_close_func);
     map_set(&scope->variables, "eputs", __external_eputs_func);
+    map_set(&scope->variables, "sleep", __external_sleep_func);
     map_set(&scope->variables, "clock_us", __external_clock_us_func);
     map_set(&scope->variables, "heap_used", __external_heap_used_func);
 }

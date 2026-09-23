@@ -608,6 +608,8 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             { k: "tlong" }
         } else if (name == "clock_us" || name == "heap_used") {
             { k: "tlong" }
+        } else if (name == "sleep") {
+            { k: "tnull" }
         } else if (name == "split" || name == "argv") {
             { k: "tarr", of: { k: "tstr" } }
         } else if (name == "range") {
@@ -817,7 +819,7 @@ def is_intrinsic_name(n: str) -> bool {
     name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "substr", "trim", "ord", "chr", "tonum", "tostring", "index_of",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
-             "heap_used", "exit", "argv", "read_file", "write_file",
+             "sleep", "heap_used", "exit", "argv", "read_file", "write_file",
              "write_bytes", "range", "typeof", "bytes",
              "from_bytes", "ptr_addr", "self", "none"], n)
 };
@@ -1834,6 +1836,8 @@ def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             gen_eputs(st, node)
         } else if (name == "clock_us") {
             gen_clock_us(st, node)
+        } else if (name == "sleep") {
+            gen_sleep(st, node)
         } else if (name == "heap_used") {
             gen_heap_used(st, node)
         } else if (name == "exit") {
@@ -3252,7 +3256,20 @@ def gen_heap_used(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     emit(st, "    call y_heap_used")
 };
 
+def gen_sleep(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    // sleep(ms): suspend the caller for ms milliseconds (nanosleep, EINTR
+    // cannot happen in single-threaded code, so one syscall is enough).
+    // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
+    let sargs = node.args;
+    let sa = sargs[0];
+    st = gen(st, sa);
+    st = emit(st, "    mov %rax, %rdi");
+    emit(st, "    call y_sleep")
+};
+
+
 def gen_exit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    // exit(code): terminate the process with the exit-code syscall.
     // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
     let eargs = node.args;
     let ea = eargs[0];

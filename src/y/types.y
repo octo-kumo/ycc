@@ -1507,6 +1507,17 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 { typ: { k: "tlong" }, st: st }
             }
+        } else if (name == "sleep") {
+            // sleep(ms): suspend the caller for ms milliseconds.
+            if (len(cargs) != 1) {
+                st = fail(st, "sleep takes exactly 1 argument (milliseconds)", node.line, node.col);
+                { typ: { k: "tnull" }, st: st }
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                st = expect_type(st, r.typ, { k: "tlong" }, "sleep duration", node.line, node.col);
+                { typ: { k: "tnull" }, st: st }
+            }
         } else if (name == "puts") {
             if (len(cargs) != 1) {
                 st = fail(st, "puts takes exactly 1 argument", node.line, node.col);

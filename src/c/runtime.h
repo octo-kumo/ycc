@@ -169,6 +169,7 @@ YValue *y_builtin_bytes(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_from_bytes(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ord_at(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_eputs(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_sleep(YScope *closure, YValue **args, size_t argc);
 /* Map construction helpers (used by spread: `{a: 1, ...b}`). */
 void y_map_put(YValue *map, const char *key, YValue *val);
 void y_map_merge(YValue *dst, YValue *src);

@@ -864,6 +864,7 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"scope_get\", y_mk_func(y_builtin_scope_get, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"scope_set\", y_mk_func(y_builtin_scope_set, 3, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"eputs\",    y_mk_func(y_builtin_eputs,    1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"sleep\",     y_mk_func(y_builtin_sleep,     1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"clock_us\", y_mk_func(y_builtin_clock_us, 0, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"heap_used\", y_mk_func(y_builtin_heap_used, 0, NULL));\n\n");
     /* A top-level `return` stops the program, matching the VM (which stops
