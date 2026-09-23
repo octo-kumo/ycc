@@ -39,7 +39,7 @@ int is_alpha(char c) {
            is_digit(c);
 }
 int is_number_sign(char c) { return c == '+' || c == '-'; }
-int is_space(char c) { return c == ' ' || c == '\t' || c == '\n'; }
+int is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
 char *skip_spaces(const char *input) {
     while (*input) {
@@ -91,12 +91,15 @@ MAKE_MAP_PARSER(number_sign, is_number_sign, char_to_sign);
 MAKE_TAKE_PARSER(alpha, is_alpha);
 
 long digit_list_to_long(list_t *digits) {
-    long number = 0;
+    /* Unsigned accumulation: a literal wider than long wraps (two's
+     * complement) instead of being signed-overflow UB. The observable
+     * result is unchanged; only the undefined behaviour is gone. */
+    unsigned long number = 0;
     while (digits) {
-        number = number * 10 + (uintptr_t)digits->value;
+        number = number * 10UL + (unsigned long)(uintptr_t)digits->value;
         digits = digits->next;
     }
-    return number;
+    return (long)number;
 }
 
 char *char_list_to_str(list_t *chars) {
@@ -328,10 +331,14 @@ parser_result_t __parse_type(const char *input, bool allow_complex_types) {
         if (func_res.is_some) return func_res;
     }
     input = original_input;
-    const char *built_in_types[] = {"long", "float", "bool", "str", NULL};
+    const char *built_in_types[] = {"long", "float", "bool", "str", "byte", NULL};
     parser_result_t kw_res = parse_keyword(input, built_in_types);
     if (kw_res.is_some) {
         if (strcmp((char *)kw_res.value, "long") == 0) {
+            return some(TYPE_LONG, kw_res.remaining);
+        } else if (strcmp((char *)kw_res.value, "byte") == 0) {
+            /* The VM has no 8-bit storage class: a byte is a long in
+             * 0..255. Only the native backend packs [byte] arrays. */
             return some(TYPE_LONG, kw_res.remaining);
         } else if (strcmp((char *)kw_res.value, "float") == 0) {
             return some(TYPE_FLOAT, kw_res.remaining);
@@ -478,7 +485,74 @@ Expr *ast_of_long(long v) {
     return expr;
 }
 ast_parser_result_t ast_parse_var_or_paren_expr(const char *input);
+/* Digit value for a radix literal, or -1 if `c` is not a digit in `base`.
+ * Underscores are handled by the caller as separators. */
+static int radix_digit(char c, int base) {
+    int v;
+    if (c >= '0' && c <= '9') v = c - '0';
+    else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+    else return -1;
+    return v < base ? v : -1;
+}
+
+/* 0x.. / 0X.. (hex) and 0b.. / 0B.. (binary) integer literals. Returns
+ * anone() when the input is not a radix literal, so the caller falls back
+ * to the decimal/float path. Digits accumulate in unsigned (wrapping is
+ * defined; signed overflow would not be). */
+static ast_parser_result_t ast_parse_radix_number(const char *input) {
+    const char *p = skip_spaces(input);
+    int negative = 0;
+    if (*p == '+' || *p == '-') {
+        negative = (*p == '-');
+        p++;
+    }
+    if (p[0] != '0') return anone(input);
+    int base;
+    if (p[1] == 'x' || p[1] == 'X') base = 16;
+    else if (p[1] == 'b' || p[1] == 'B') base = 2;
+    else return anone(input);
+
+    const char *d = p + 2;
+    if (radix_digit(*d, base) < 0) return anone(input); /* "0x" with no digits */
+    unsigned long value = 0;
+    while (*d == '_' || radix_digit(*d, base) >= 0) {
+        if (*d != '_') value = value * (unsigned long)base + (unsigned long)radix_digit(*d, base);
+        d++;
+    }
+    Expr *expr = (Expr *)malloc(sizeof(Expr));
+    expr->kind = EXPR_ELONG;
+    expr->as.elong = negative ? (long)(0UL - value) : (long)value;
+    return asome(expr, (char *)d);
+}
+
+/* Scientific notation suffix: e/E, optional sign, one or more digits.
+ * Applied to an already-parsed number, which becomes a float. */
+static ast_parser_result_t apply_exponent(Expr *expr, char *rest, double mantissa) {
+    if (rest[0] != 'e' && rest[0] != 'E') return asome(expr, rest);
+    const char *e = rest + 1;
+    int esign = 1;
+    if (*e == '+' || *e == '-') {
+        if (*e == '-') esign = -1;
+        e++;
+    }
+    if (*e < '0' || *e > '9') return asome(expr, rest); /* not an exponent */
+    long exp = 0;
+    while (*e >= '0' && *e <= '9') {
+        exp = exp * 10 + (*e - '0');
+        if (exp > 10000) exp = 10000; /* clamp: the result saturates anyway */
+        e++;
+    }
+    double scale = 1.0;
+    for (long i = 0; i < exp; i++) scale *= 10.0;
+    expr->kind = EXPR_EFLOAT;
+    expr->as.efloat = esign > 0 ? mantissa * scale : mantissa / scale;
+    return asome(expr, (char *)e);
+}
+
 ast_parser_result_t ast_parse_number(const char *input) {
+    ast_parser_result_t radix = ast_parse_radix_number(input);
+    if (radix.is_some) return radix;
     parser_result_t res = parse_long(input);
     if (!res.is_some) { return anone(input); }
     long value = (long)(uintptr_t)res.value;
@@ -487,8 +561,8 @@ ast_parser_result_t ast_parse_number(const char *input) {
     expr->kind = EXPR_ELONG;
     expr->as.elong = value;
     if (res.remaining[0] != '.') {
-        // It's an integer, not a float
-        return asome(expr, res.remaining);
+        // Integer, unless a scientific-notation suffix follows (1e10).
+        return apply_exponent(expr, res.remaining, (double)value);
     }
     // Don't treat ".." as a float decimal point (range operator)
     if (res.remaining[1] == '.') {
@@ -502,7 +576,7 @@ ast_parser_result_t ast_parse_number(const char *input) {
         // no more digits, so its like "123." which is valid and should be
         // treated as 123.0
         expr->as.efloat = (double)value;
-        return asome(expr, res.remaining);
+        return apply_exponent(expr, res.remaining, (double)value);
     }
     double fraction = 0.0;
     double divisor = 10.0;
@@ -516,7 +590,7 @@ ast_parser_result_t ast_parse_number(const char *input) {
     // Apply sign to the combined value, not just the integer part
     double abs_val = (double)(negative ? -value : value) + fraction;
     expr->as.efloat = negative ? -abs_val : abs_val;
-    return asome(expr, res.remaining);
+    return apply_exponent(expr, res.remaining, expr->as.efloat);
 }
 
 ast_parser_result_t ast_parse_variable(const char *input) {
@@ -573,23 +647,29 @@ ast_parser_result_t ast_parse_string(const char *input) {
 
     for (int i = 0; input[i]; i++) {
         if (input[i] == '\\') {
+            /* A backslash as the final byte would make the `i++` below step
+             * PAST the NUL, so the loop condition then reads out of bounds
+             * (ASan: heap-buffer-overflow). An unterminated escape can only
+             * be an unterminated string, so stop here. */
+            char next = input[i + 1];
+            if (next == '\0') break;
             // Handle escape sequences, supportes \n \t \r \" \xhh
-            if (input[i + 1] == 'n') {
+            if (next == 'n') {
                 P_STR_APPEND_CHAR('\n');
-            } else if (input[i + 1] == 't') {
+            } else if (next == 't') {
                 P_STR_APPEND_CHAR('\t');
-            } else if (input[i + 1] == 'r') {
+            } else if (next == 'r') {
                 P_STR_APPEND_CHAR('\r');
-            } else if (input[i + 1] == '"') {
+            } else if (next == '"') {
                 P_STR_APPEND_CHAR('"');
-            } else if (input[i + 1] == 'x' && isxdigit(input[i + 2]) &&
-                       isxdigit(input[i + 3])) {
+            } else if (next == 'x' && isxdigit((unsigned char)input[i + 2]) &&
+                       isxdigit((unsigned char)input[i + 3])) {
                 char hex[3] = {input[i + 2], input[i + 3], '\0'};
                 P_STR_APPEND_CHAR((char)strtol(hex, NULL, 16));
                 i += 2;
             } else {
                 // Invalid escape sequence, treat as literal
-                P_STR_APPEND_CHAR(input[i + 1]);
+                P_STR_APPEND_CHAR(next);
             }
             i++;
         } else {
@@ -744,6 +824,27 @@ ast_parser_result_t ast_parse_if(const char *input) {
     return asome(if_node, input);
 }
 
+/* `return expr;` / `return;` — early exit from the enclosing function.
+ * The value (null for a bare return) becomes the function's result. */
+ast_parser_result_t ast_parse_return(const char *input) {
+    const char *original_input = input;
+    EXPECT_KEYWORD(return);
+
+    Expr *node = (Expr *)malloc(sizeof(Expr));
+    node->kind = EXPR_ERETURN;
+    node->as.return_value = NULL;
+
+    /* A bare `return` is followed by `;` or the end of the block. */
+    const char *after = skip_spaces(input);
+    if (*after == ';' || *after == '}' || *after == '\0')
+        return asome(node, input);
+
+    ast_parser_result_t val = ast__parse_inline_expr(input);
+    if (!val.is_some) return asome(node, input); /* bare return */
+    node->as.return_value = val.value;
+    return asome(node, val.remaining);
+}
+
 /* ── Operator precedence ────────────────────────────────────────────────── */
 
 static int op_precedence(Operator op) {
@@ -798,6 +899,43 @@ ast_parser_result_t ast_parse_binary_op(const char *input) {
 
     ast_parser_result_t left = ast__parse_inside_binary_op(input);
     if (!left.is_some) { return anone(original_input); }
+
+    /* Compound assignment: `x += e` desugars to `x = x + e` (same for
+     * -=, *=, /=). Handled before the generic operator scan, which would
+     * otherwise see a bare `+` followed by `=`. Variable targets only. */
+    {
+        const char *q = skip_spaces(left.remaining);
+        char cop = 0;
+        if ((q[0] == '+' || q[0] == '-' || q[0] == '*' || q[0] == '/') &&
+            q[1] == '=' && q[2] != '=')
+            cop = q[0];
+        if (cop && left.value->kind == EXPR_EVAR) {
+            ast_parser_result_t rhs = ast__parse_inline_expr(q + 2);
+            if (!rhs.is_some) {
+                ast_free(left.value);
+                return anone(original_input);
+            }
+            Expr *var_ref = (Expr *)malloc(sizeof(Expr));
+            var_ref->kind = EXPR_EVAR;
+            var_ref->as.evar = strdup(left.value->as.evar);
+
+            Expr *binop = (Expr *)malloc(sizeof(Expr));
+            binop->kind = EXPR_EOP;
+            binop->as.op_node.op = cop == '+'   ? O_ADD
+                                   : cop == '-' ? O_SUB
+                                   : cop == '*' ? O_MUL
+                                                : O_DIV;
+            binop->as.op_node.left = var_ref;
+            binop->as.op_node.right = rhs.value;
+
+            Expr *assign_node = (Expr *)malloc(sizeof(Expr));
+            assign_node->kind = EXPR_EASSIGNMENT;
+            assign_node->as.assignment_node.var_name = left.value->as.evar;
+            assign_node->as.assignment_node.value = binop;
+            free(left.value); /* name ownership moved into assign_node */
+            return asome(assign_node, rhs.remaining);
+        }
+    }
 
     /* Require at least one operator so we don't shadow plain atoms */
     parser_result_t op_check = parse_operator(left.remaining, OPERATORS);
@@ -878,9 +1016,39 @@ ast_parser_result_t ast_parse_array_idx(const char *input) {
     Expr *current = ast_arr.value;
     int indexed = 0;
 
-    /* Loop to support chained indexing: x[1][0], x[0][1:3], etc. */
+    /* Loop to support chained postfix suffixes: x[1][0], x[0][1:3], and
+     * field access x.y. Dot is postfix here, NOT a binary operator: as a
+     * binary operator its right side was parsed as a full expression, so
+     * `x.y[i]` became `x.(y[i])` -- the reason src/y/*.y binds `let t =
+     * x.y;` before every indexed field read. Postfix chaining also makes
+     * `!x.y` mean `!(x.y)`, since the unary parser takes this operand. */
     while (1) {
         SKIP_SPACES;
+        if (input[0] == '.' && input[1] != '.') {
+            const char *after_dot = skip_spaces(input + 1);
+            parser_result_t name = parse_identifier(after_dot);
+            if (!name.is_some) break; /* not a field access */
+            char *field = (char *)name.value;
+            /* `x.f(...)` stays a method-style call for the call parser and
+             * codegen to resolve, so only take plain field reads here. */
+            const char *after_name = skip_spaces(name.remaining);
+            if (after_name[0] == '(') {
+                free(field);
+                break;
+            }
+            Expr *fld = (Expr *)malloc(sizeof(Expr));
+            fld->kind = EXPR_EVAR;
+            fld->as.evar = field;
+            Expr *dot = (Expr *)malloc(sizeof(Expr));
+            dot->kind = EXPR_EOP;
+            dot->as.op_node.op = O_DOT;
+            dot->as.op_node.left = current;
+            dot->as.op_node.right = fld;
+            current = dot;
+            input = name.remaining;
+            indexed = 1;
+            continue;
+        }
         if (input[0] != '[') { break; }
         const char *after_bracket = input + 1;
 
@@ -948,6 +1116,39 @@ ast_parser_result_t ast_parse_array_idx(const char *input) {
             node->kind = EXPR_EARRAY_ASSIGN;
             node->as.array_assign_node.array = arr_expr;
             node->as.array_assign_node.idx = idx_expr;
+            node->as.array_assign_node.value = val_res.value;
+            return asome(node, val_res.remaining);
+        }
+    }
+
+    /* Field assignment: `s.f = v`. Reuses the array-assign node with a
+     * string key, so the engines dispatch on the target's runtime type --
+     * which also makes `m["k"] = v` work. Only a single-level target is
+     * taken here; deeper chains stay reads. */
+    if (current->kind == EXPR_EOP && current->as.op_node.op == O_DOT &&
+        current->as.op_node.right &&
+        current->as.op_node.right->kind == EXPR_EVAR) {
+        SKIP_SPACES;
+        parser_result_t assign_res = parse_symbol(input, '=');
+        if (assign_res.is_some && assign_res.remaining[0] != '=') {
+            const char *ainput = assign_res.remaining;
+            ast_parser_result_t val_res = ast__parse_inline_expr(ainput);
+            if (!val_res.is_some) {
+                ast_free(current);
+                return anone(original_input);
+            }
+            Expr *obj_expr = current->as.op_node.left;
+            Expr *key_node = current->as.op_node.right;
+            Expr *key_expr = (Expr *)malloc(sizeof(Expr));
+            key_expr->kind = EXPR_ESTR;
+            key_expr->as.estr.data = strdup(key_node->as.evar);
+            key_expr->as.estr.length = (int)strlen(key_node->as.evar);
+            ast_free(key_node);
+            free(current); /* reuse the object, drop the EOp shell */
+            Expr *node = (Expr *)malloc(sizeof(Expr));
+            node->kind = EXPR_EARRAY_ASSIGN;
+            node->as.array_assign_node.array = obj_expr;
+            node->as.array_assign_node.idx = key_expr;
             node->as.array_assign_node.value = val_res.value;
             return asome(node, val_res.remaining);
         }
@@ -1310,6 +1511,26 @@ _L_PARSE_MAP_FAILED:
 
 _L_TRY_PARSE:
     while (1) {
+        /* Spread: `{a: 1, ...b}` / `{...c, ...d}`. Stored as an entry with
+         * a NULL key; the engines splice the spread map's entries in at
+         * this position, so later keys win. */
+        {
+            const char *sp = skip_spaces(input);
+            if (sp[0] == '.' && sp[1] == '.' && sp[2] == '.') {
+                ast_parser_result_t src_res = ast__parse_expr(sp + 3);
+                if (!src_res.is_some) goto _L_PARSE_MAP_FAILED;
+                EMapEntry spread = {.key = NULL, .value = src_res.value};
+                list_push(EMapEntry, entries, spread);
+                input = src_res.remaining;
+                parser_result_t sc = parse_symbol(input, ',');
+                if (sc.is_some) {
+                    input = sc.remaining;
+                    continue;
+                }
+                input = sc.remaining;
+                break;
+            }
+        }
         parser_result_t key_res = parse_identifier(input);
         if (!key_res.is_some) { break; }
         input = key_res.remaining;
@@ -1392,10 +1613,10 @@ ast_parser_result_t ast__parse_first(const ast_parser_t *parsers,
 #define __EXPR_BLOCK_PARSERS ast_parse_brace_block
 
 #define __EXPR_INLINE_PARSERS                                                  \
-    ast_parse_function, ast_parse_map, ast_parse_brace_block,                  \
-        ast_parse_array, ast_parse_binary_op, ast_parse_unary,                 \
-        ast_parse_function_call, ast_parse_paren_expr, ast_parse_if,           \
-        ast_parse_while, ast_parse_foreach, ast_parse_for,                     \
+    ast_parse_return, ast_parse_function, ast_parse_binary_op,                 \
+        ast_parse_map, ast_parse_brace_block, ast_parse_array,                 \
+        ast_parse_unary, ast_parse_function_call, ast_parse_paren_expr,        \
+        ast_parse_if, ast_parse_while, ast_parse_foreach, ast_parse_for,       \
         ast_parse_declaration, ast_parse_number, ast_parse_string,             \
         ast_parse_array_idx, ast_parse_true_false, ast_parse_variable
 

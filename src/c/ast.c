@@ -47,6 +47,9 @@ void ast_free(Expr *expr) {
     case EXPR_EUNARY:
         ast_free(expr->as.unary_node.operand);
         break;
+    case EXPR_ERETURN:
+        ast_free(expr->as.return_value);
+        break;
     case EXPR_EASSIGNMENT:
         free((char *)(expr->as.assignment_node.var_name));
         ast_free(expr->as.assignment_node.value);
@@ -156,6 +159,9 @@ Expr *ast_clone(Expr *expr) {
         copy->as.unary_node.op = expr->as.unary_node.op;
         copy->as.unary_node.operand = ast_clone(expr->as.unary_node.operand);
         break;
+    case EXPR_ERETURN:
+        copy->as.return_value = ast_clone(expr->as.return_value);
+        break;
     case EXPR_EASSIGNMENT:
         copy->as.assignment_node.var_name =
             strdup(expr->as.assignment_node.var_name);
@@ -212,7 +218,10 @@ Expr *ast_clone(Expr *expr) {
             (EMapEntry *)malloc(sizeof(EMapEntry) * expr->as.map_node.count);
         for (size_t i = 0; i < expr->as.map_node.count; i++) {
             copy->as.map_node.entries[i] = (EMapEntry){
-                .key = strdup(expr->as.map_node.entries[i].key),
+                /* NULL key = spread entry (`...src`) */
+                .key = expr->as.map_node.entries[i].key
+                           ? strdup(expr->as.map_node.entries[i].key)
+                           : NULL,
                 .value = ast_clone(expr->as.map_node.entries[i].value),
             };
         }

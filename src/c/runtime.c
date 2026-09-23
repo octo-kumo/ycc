@@ -1,5 +1,7 @@
 #include "runtime.h"
 #include <inttypes.h>
+#include <limits.h>
+#include <malloc.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -7,6 +9,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <signal.h>
+#include <time.h>
 
 /* ── Self-contained runtime embedding (C layer) ──────────────────────────
  * When compiled with -DY_EMBED_RUNTIME, the runtime source (runtime.c/h) is
@@ -329,37 +332,21 @@ void y_scope_set_local(YScope *scope, const char *name, YValue *value) {
     scope->entries = e;
 }
 
-/* ── Copy-on-write helpers ──────────────────────────────────────────────── */
-
-static void y_arr_cow(YValue *arr) {
-    if (arr->data.arr->refcount > 1) {
-        YArray *old = arr->data.arr;
-        YArray *new = malloc(sizeof(YArray));
-        new->refcount = 1;
-        new->count = old->count;
-        new->capacity = old->capacity < old->count + 8 ? old->count + 8 : old->capacity;
-        new->elements = malloc(sizeof(YValue *) * new->capacity);
-        for (size_t i = 0; i < old->count; i++)
-            new->elements[i] = y_clone(old->elements[i]);
-        old->refcount--;
-        arr->data.arr = new;
-    }
-}
+/* ── Aliasing model ─────────────────────────────────────────────────────
+ * Arrays and maps are REFERENCE values: a clone shares the underlying
+ * YArray/YMap (refcount++), and the mutating builtins (push, map_set,
+ * arr_set) mutate that shared object in place. This is exactly what the
+ * native backend does (`y_arr_push` grows a shared buffer and returns the
+ * same pointer), so all three engines — VM, compiled C, native — agree.
+ *
+ * The previous copy-on-write behaviour made every `push(st.field, x)` on a
+ * record field deep-copy the whole array (the record still holds a
+ * reference, so the refcount is always >= 2). The compiler threads its
+ * emitter state that way, which turned every emit into an O(n) copy and the
+ * whole compile into O(n^2) — the reason the bootstrap took ~20 minutes. */
 
 static void y_map_cow(YValue *map) {
-    if (map->data.map->refcount > 1) {
-        YMap *old = map->data.map;
-        YMap *new = malloc(sizeof(YMap));
-        new->refcount = 1;
-        new->count = old->count;
-        new->entries = malloc(sizeof(YMapEntry) * old->count);
-        for (size_t i = 0; i < old->count; i++) {
-            new->entries[i].key = strdup(old->entries[i].key);
-            new->entries[i].value = y_clone(old->entries[i].value);
-        }
-        old->refcount--;
-        map->data.map = new;
-    }
+    (void)map; /* reference semantics: mutate the shared map in place */
 }
 
 /* ── Value operations ───────────────────────────────────────────────────── */
@@ -526,7 +513,9 @@ bool y_equals(YValue *a, YValue *b) {
     YValue *name(YValue *a, YValue *b) {                                      \
         YValue *_res;                                                         \
         if (a->type == Y_LONG && b->type == Y_LONG)                           \
-            _res = y_mk_long(a->data.l op b->data.l);                         \
+            /* Wrap through unsigned: signed overflow is UB (see vm.c). */    \
+            _res = y_mk_long((long)((unsigned long)a->data.l op(unsigned long) \
+                                        b->data.l));                          \
         else {                                                                \
             double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;    \
             double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;    \
@@ -540,6 +529,27 @@ NUMERIC_BINOP(y_sub, -)
 NUMERIC_BINOP(y_mul, *)
 
 YValue *y_add(YValue *a, YValue *b) {
+    /* Arrays win over strings: `arr + arr` concatenates, `arr + x` appends
+     * and `x + arr` prepends, always producing a NEW array (the operands
+     * are untouched -- the explicit-copy counterpart of in-place `push`). */
+    if (a->type == Y_ARR || b->type == Y_ARR) {
+        size_t ln = a->type == Y_ARR ? a->data.arr->count : 1;
+        size_t rn = b->type == Y_ARR ? b->data.arr->count : 1;
+        YValue **elems = malloc(sizeof(YValue *) * (ln + rn ? ln + rn : 1));
+        size_t k = 0;
+        if (a->type == Y_ARR)
+            for (size_t i = 0; i < ln; i++) elems[k++] = y_clone(a->data.arr->elements[i]);
+        else
+            elems[k++] = y_clone(a);
+        if (b->type == Y_ARR)
+            for (size_t i = 0; i < rn; i++) elems[k++] = y_clone(b->data.arr->elements[i]);
+        else
+            elems[k++] = y_clone(b);
+        YValue *v = y_mk_arr(elems, ln + rn);
+        free(elems);
+        y_free(a); y_free(b);
+        return v;
+    }
     /* String concatenation if either side is a string */
     if (a->type == Y_STR || b->type == Y_STR) {
         char *as = a->type == Y_STR ? a->data.s : y_to_str(a);
@@ -557,7 +567,8 @@ YValue *y_add(YValue *a, YValue *b) {
         return v;
     }
     if (a->type == Y_LONG && b->type == Y_LONG) {
-        long r = a->data.l + b->data.l;
+        /* Wrap through unsigned: signed overflow is UB (see vm.c). */
+        long r = (long)((unsigned long)a->data.l + (unsigned long)b->data.l);
         y_free(a); y_free(b);
         return y_mk_long(r);
     }
@@ -573,7 +584,9 @@ YValue *y_div(YValue *a, YValue *b) {
             fprintf(stderr, "runtime error: division by zero\n");
             exit(1);
         }
-        long r = a->data.l / b->data.l;
+        long r = (a->data.l == LONG_MIN && b->data.l == -1)
+                     ? LONG_MIN /* overflows; both other engines wrap */
+                     : a->data.l / b->data.l;
         y_free(a); y_free(b);
         return y_mk_long(r);
     }
@@ -592,7 +605,9 @@ YValue *y_mod(YValue *a, YValue *b) {
         fprintf(stderr, "runtime error: modulo by zero\n");
         exit(1);
     }
-    long r = a->data.l % b->data.l;
+    long r = (a->data.l == LONG_MIN && b->data.l == -1)
+                 ? 0 /* mathematically 0, but idiv traps on this pair */
+                 : a->data.l % b->data.l;
     y_free(a); y_free(b);
     return y_mk_long(r);
 }
@@ -600,7 +615,10 @@ YValue *y_mod(YValue *a, YValue *b) {
 #define CMP_BINOP(name, op)                                                    \
     YValue *name(YValue *a, YValue *b) {                                      \
         bool res;                                                             \
-        if (a->type == Y_LONG && b->type == Y_LONG)                           \
+        if (a->type == Y_STR && b->type == Y_STR)                             \
+            /* Lexicographic, matching the VM. */                             \
+            res = strcmp(a->data.s, b->data.s) op 0;                          \
+        else if (a->type == Y_LONG && b->type == Y_LONG)                      \
             res = a->data.l op b->data.l;                                     \
         else {                                                                \
             double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;    \
@@ -639,7 +657,8 @@ YValue *y_or(YValue *a, YValue *b) {
 }
 
 YValue *y_neg(YValue *a) {
-    if (a->type == Y_LONG) { long r = -a->data.l; y_free(a); return y_mk_long(r); }
+    /* Negate through unsigned: -LONG_MIN is signed-overflow UB. */
+    if (a->type == Y_LONG) { long r = (long)(0UL - (unsigned long)a->data.l); y_free(a); return y_mk_long(r); }
     double r = -a->data.f; y_free(a); return y_mk_float(r);
 }
 
@@ -754,6 +773,39 @@ YValue *y_builtin_map_set(YScope *closure, YValue **args, size_t argc) {
     m->entries[m->count].value = y_clone(args[2]);
     m->count++;
     return map;
+}
+
+/* Set a key, taking ownership of `val`. Last write wins, position kept. */
+void y_map_put(YValue *map, const char *key, YValue *val) {
+    if (map->type != Y_MAP) {
+        fprintf(stderr, "runtime error: map target is not a map\n");
+        exit(1);
+    }
+    YMap *m = map->data.map;
+    for (size_t i = 0; i < m->count; i++) {
+        if (strcmp(m->entries[i].key, key) == 0) {
+            y_free(m->entries[i].value);
+            m->entries[i].value = val;
+            return;
+        }
+    }
+    m->entries = realloc(m->entries, sizeof(YMapEntry) * (m->count + 1));
+    m->entries[m->count].key = strdup(key);
+    m->entries[m->count].value = val;
+    m->count++;
+}
+
+/* `{...src}` — splice src's entries into dst (later keys win). Consumes
+ * src, which is a temporary produced by the spread expression. */
+void y_map_merge(YValue *dst, YValue *src) {
+    if (src->type != Y_MAP) {
+        fprintf(stderr, "runtime error: spread source must be a map\n");
+        exit(1);
+    }
+    YMap *s = src->data.map;
+    for (size_t i = 0; i < s->count; i++)
+        y_map_put(dst, s->entries[i].key, y_clone(s->entries[i].value));
+    y_free(src);
 }
 
 /* map_get(map, key) -> value|null — read a key from a map (null if absent). */
@@ -978,13 +1030,20 @@ YValue *y_builtin_typeof(YScope *closure, YValue **args, size_t argc) {
     return v;
 }
 
-/* readline() -> str | null on EOF */
+/* readline() -> str | null on EOF
+ * EOF is NOT latched (see lib.c): clearerr() leaves the stream readable so a
+ * later call picks up new input, which is how the native backend's raw
+ * read(2) on fd 0 already behaves. */
 YValue *y_builtin_readline(YScope *closure, YValue **args, size_t argc) {
     (void)closure; (void)args; (void)argc;
     char *line = NULL;
     size_t cap = 0;
     ssize_t n = getline(&line, &cap, stdin);
-    if (n < 0) { free(line); return y_mk_null(); }
+    if (n < 0) {
+        free(line);
+        clearerr(stdin);
+        return y_mk_null();
+    }
     if (n > 0 && line[n - 1] == '\n') line[--n] = '\0';
     YValue *v = malloc(sizeof(YValue));
     v->type = Y_STR;
@@ -1002,6 +1061,41 @@ YValue *y_builtin_puts(YScope *closure, YValue **args, size_t argc) {
         free(s);
     }
     return y_mk_null();
+}
+
+/* eputs(s) — raw output to stderr, no prefix, no newline. Diagnostics go
+ * here so they never mix into a program's stdout (or into `-S` output). */
+YValue *y_builtin_eputs(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc > 0) {
+        char *s = y_to_str(args[0]);
+        fputs(s, stderr);
+        fflush(stderr);
+        free(s);
+    }
+    return y_mk_null();
+}
+
+/* clock_us() -> long: monotonic microseconds (only differences are
+ * meaningful — the origin is arbitrary). */
+YValue *y_builtin_clock_us(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    (void)args;
+    (void)argc;
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return y_mk_long(0);
+    return y_mk_long((long)ts.tv_sec * 1000000L + (long)ts.tv_nsec / 1000L);
+}
+
+/* heap_used() -> long: bytes of heap currently handed out. The native
+ * backend reports its arena break, so across engines only deltas between
+ * two samples are comparable. */
+YValue *y_builtin_heap_used(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    (void)args;
+    (void)argc;
+    struct mallinfo2 mi = mallinfo2();
+    return y_mk_long((long)mi.uordblks);
 }
 
 /* exit(code): terminate the process (allows drivers to propagate failures). */
@@ -1151,9 +1245,8 @@ YValue *y_builtin_join(YScope *closure, YValue **args, size_t argc) {
 YValue *y_builtin_push(YScope *closure, YValue **args, size_t argc) {
     (void)closure;
     if (argc < 2 || args[0]->type != Y_ARR) return y_mk_arr(NULL, 0);
-    /* Copy-on-write: if the array is shared, deep-copy it first.
-     * Then grow in place (realloc) — O(1) amortized per push. */
-    y_arr_cow(args[0]);
+    /* Reference semantics: grow the shared array in place (realloc),
+     * O(1) amortized — never copy. Matches the native `y_arr_push`. */
     YArray *a = args[0]->data.arr;
     /* geometric growth → O(1) amortized push (no realloc per element) */
     if (a->count + 1 > a->capacity) {
@@ -1290,6 +1383,45 @@ YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc) {
     return y_mk_str_n(buf, 1);
 }
 
+/* clear_eof() -> null  (see lib.c: clear the EOF condition so a later
+ * readline() reads again; examples/ysh.y uses it to keep its REPL alive
+ * after draining stdin for a multi-line body) */
+YValue *y_builtin_clear_eof(YScope *closure, YValue **args, size_t argc) {
+    (void)closure; (void)args; (void)argc;
+    clearerr(stdin);
+    return y_mk_null();
+}
+
+/* bytes(s) -> [byte]  (raw bytes of a string; a plain long array here —
+ * only the native backend packs them one byte per element) */
+YValue *y_builtin_bytes(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_STR) return y_mk_arr(NULL, 0);
+    const char *s = args[0]->data.s;
+    size_t n = strlen(s);
+    YValue **elems = malloc(sizeof(YValue *) * (n > 0 ? n : 1));
+    for (size_t i = 0; i < n; i++) elems[i] = y_mk_long((unsigned char)s[i]);
+    YValue *arr = y_mk_arr(elems, n);
+    free(elems);
+    return arr;
+}
+
+/* from_bytes(b) -> str  (inverse of bytes()) */
+YValue *y_builtin_from_bytes(YScope *closure, YValue **args, size_t argc) {
+    (void)closure;
+    if (argc < 1 || args[0]->type != Y_ARR) return y_mk_str("");
+    size_t n = args[0]->data.arr->count;
+    char *buf = malloc(n + 1);
+    for (size_t i = 0; i < n; i++) {
+        YValue *e = args[0]->data.arr->elements[i];
+        buf[i] = (char)((e && e->type == Y_LONG) ? (e->data.l & 0xFF) : 0);
+    }
+    buf[n] = '\0';
+    YValue *r = y_mk_str_n(buf, n);
+    free(buf);
+    return r;
+}
+
 /* ord_at(s, i) -> long  (byte value at index i, O(1), no allocation —
  * unlike substr(s,i,1)+ord which allocates a string per char) */
 YValue *y_builtin_ord_at(YScope *closure, YValue **args, size_t argc) {
@@ -1370,13 +1502,32 @@ YValue *y_builtin_getenv(YScope *closure, YValue **args, size_t argc) {
     return y_mk_str(val);
 }
 
-/* arr_set(arr, idx, val) — mutate array element in place */
+/* arr_set(arr, idx, val) — mutate an array element, or a map entry when
+ * the target is a map with a string key (`s.f = v` and `m["k"] = v`). */
 void y_arr_set(YValue *arr, YValue *idx, YValue *val) {
+    if (arr->type == Y_MAP) {
+        if (idx->type != Y_STR) {
+            fprintf(stderr, "runtime error: map key must be a string\n");
+            exit(1);
+        }
+        YMap *m = arr->data.map;
+        for (size_t i = 0; i < m->count; i++) {
+            if (strcmp(m->entries[i].key, idx->data.s) == 0) {
+                y_free(m->entries[i].value);
+                m->entries[i].value = val;
+                return;
+            }
+        }
+        m->entries = realloc(m->entries, sizeof(YMapEntry) * (m->count + 1));
+        m->entries[m->count].key = strdup(idx->data.s);
+        m->entries[m->count].value = val;
+        m->count++;
+        return;
+    }
     if (arr->type != Y_ARR) {
         fprintf(stderr, "runtime error: arr_set target is not an array\n");
         exit(1);
     }
-    y_arr_cow(arr); /* copy-on-write before mutating */
     long i = idx->data.l;
     long count = (long)arr->data.arr->count;
     if (count == 0) {

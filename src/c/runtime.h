@@ -164,7 +164,16 @@ YValue *y_builtin_write_file(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_write_bytes(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ord(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_chr(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_clear_eof(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_bytes(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_from_bytes(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ord_at(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_eputs(YScope *closure, YValue **args, size_t argc);
+/* Map construction helpers (used by spread: `{a: 1, ...b}`). */
+void y_map_put(YValue *map, const char *key, YValue *val);
+void y_map_merge(YValue *dst, YValue *src);
+YValue *y_builtin_clock_us(YScope *closure, YValue **args, size_t argc);
+YValue *y_builtin_heap_used(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_bytes_to_str(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_ensure_runtime(YScope *closure, YValue **args, size_t argc);
 YValue *y_builtin_gen_embedded_runtime(YScope *closure, YValue **args, size_t argc);

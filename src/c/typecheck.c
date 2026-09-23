@@ -172,6 +172,14 @@ typecheck_result_t tc_binary_op(Expr *expr, TCVarTypeScope *scope) {
         (left_res.type->base != VAL_BOOL || right_res.type->base != VAL_BOOL)) {
         return TC_ERR("Operands of boolean operator must be boolean", expr);
     }
+    bool ordering_op =
+        expr->as.op_node.op == O_LT || expr->as.op_node.op == O_GT ||
+        expr->as.op_node.op == O_LTE || expr->as.op_node.op == O_GTE;
+    /* str < str is lexicographic ordering, not arithmetic. */
+    bool both_strings =
+        left_res.type->base == VAL_STR && right_res.type->base == VAL_STR;
+    if (ordering_op && both_strings) { return TC_OK(TYPE_BOOL); }
+
     if (input_numeric && (!(left_res.type->base == VAL_LONG ||
                             left_res.type->base == VAL_FLOAT) ||
                           !(right_res.type->base == VAL_LONG ||
@@ -243,7 +251,13 @@ typecheck_result_t tc_call(Expr *expr, TCVarTypeScope *scope) {
         if (!arg_res.is_ok) { return arg_res; }
         if (func_type->as.func.param_types[i]->base != _VAL_INFERRED &&
             arg_res.type->base != func_type->as.func.param_types[i]->base) {
-            char error_msg[256];
+            /* Every other TC_ERR message is a string literal and nothing
+             * frees error_message, so this formatted one lives in a static
+             * buffer. A local array would dangle: the result travels up to
+             * main and is printed long after tc_call returns
+             * (ASan: stack-use-after-return). Errors propagate straight to
+             * the top and are reported once, so one buffer is enough. */
+            static char error_msg[256];
             char expected_type_str[64];
             char actual_type_str[64];
             char callee_str[64];
@@ -306,6 +320,7 @@ typecheck_result_t tc_map(Expr *expr, TCVarTypeScope *scope) {
     map_type->as.map.entries = (type_map_entry_t *)malloc(
         sizeof(type_map_entry_t) * expr->as.map_node.count);
 
+    size_t n = 0;
     for (size_t i = 0; i < expr->as.map_node.count; i++) {
         EMapEntry entry = expr->as.map_node.entries[i];
         typecheck_result_t value_res = tc_expr(entry.value, scope);
@@ -313,14 +328,20 @@ typecheck_result_t tc_map(Expr *expr, TCVarTypeScope *scope) {
             free(map_type->as.map.entries);
             return value_res;
         }
+        /* Spread (`...src`, NULL key): the source's keys are only known at
+         * runtime, so the literal's static shape is whatever the explicit
+         * keys contribute. */
+        if (!entry.key) continue;
         if (strlen(entry.key) >= 32) {
             free(map_type->as.map.entries);
             return TC_ERR("Map entry key exceeds maximum length of 32", expr);
         }
-        map_type->as.map.entries[i].key[0] = 0;
-        strncpy(map_type->as.map.entries[i].key, entry.key, 32);
-        map_type->as.map.entries[i].value = value_res.type;
+        map_type->as.map.entries[n].key[0] = 0;
+        strncpy(map_type->as.map.entries[n].key, entry.key, 32);
+        map_type->as.map.entries[n].value = value_res.type;
+        n++;
     }
+    map_type->as.map.count = n;
     return TC_OK(map_type);
 }
 
@@ -382,6 +403,12 @@ typecheck_result_t tc_expr(Expr *expr, TCVarTypeScope *scope) {
         if (operand_res.type->base != VAL_BOOL)
             return TC_ERR("Operand of '!' must be boolean", expr);
         return TC_OK(TYPE_BOOL);
+    }
+    case EXPR_ERETURN: {
+        /* The returned value's type is the function's result type; the
+         * checker is advisory here and simply checks the operand. */
+        if (!expr->as.return_value) return TC_OK(TYPE_NULL);
+        return tc_expr(expr->as.return_value, scope);
     }
     case EXPR_EOP: return tc_binary_op(expr, scope);
     case EXPR_EASSIGNMENT: return tc_assignment(expr, scope);

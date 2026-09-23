@@ -257,7 +257,11 @@ while (running) {
         puts("\n");
         running = false;
     } else {
-        let result = dispatch(line);
+        // unwrap(): readline() is typed str?, and the native checker is
+        // flow-insensitive, so the `== null` guard above does not narrow
+        // it. The VM treats unwrap() as the identity on a non-null value,
+        // so one spelling works on every engine.
+        let result = dispatch(unwrap(line));
         if (result == 1) {
             running = false;
         };

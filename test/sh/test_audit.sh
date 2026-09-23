@@ -35,11 +35,11 @@ expect_for() {
         t62_chained_idx.y)
             echo "both1:same wording split as t48 (chained index into non-array)" ;;
         t01_empty_block.y)
-            echo "div:0:134:KNOWN BUG — value of empty block '{}' is double-freed; compiled binary aborts (SIGABRT) while VM prints nothing" ;;
+            echo "parity" ;;
         t06_div_by_zero.y)
             echo "div:1:0:KNOWN BUG — 'array / number' errors in the VM ('Operands must be numbers') but compiled code coerces and prints 0.000000" ;;
         t10_deep_recursion.y)
-            echo "div:139:0:KNOWN LIMIT — f(100000) overflows the VM's C stack (SIGSEGV); compiled binary survives (long overflow wraps, prints 0)" ;;
+            echo "div:1:0:KNOWN LIMIT — f(100000) exhausts the VM's C stack; the VM now reports 'Maximum recursion depth exceeded' and exits 1 (it used to SIGSEGV), while the compiled binary survives (long overflow wraps, prints 0)" ;;
         *) echo "parity" ;;
     esac
 }

@@ -62,12 +62,21 @@ def reg_num(name: str) -> long {
     else if (name == "%r14d") { 14 }
     else if (name == "%r15") { 15 }
     else if (name == "%r15d") { 15 }
+    else if (name == "%xmm0") { 0 }
+    else if (name == "%xmm1") { 1 }
+    else if (name == "%xmm2") { 2 }
+    else if (name == "%xmm3") { 3 }
+    else if (name == "%xmm4") { 4 }
+    else if (name == "%xmm5") { 5 }
     else { -1 }
 };
 
 def reg_size(name: str) -> long {
     let c = substr(name, 1, 1);
-    if (c == "r") {
+    if (c == "x") {
+        // %xmmN: SSE register (size 128 marks the class apart from GPRs)
+        128
+    } else if (c == "r") {
         // %r..: 64-bit, unless ends in d/b
         let last = substr(name, len(name) - 1, 1);
         if (last == "d") { 32 } else if (last == "b") { 8 } else { 64 }
@@ -546,6 +555,91 @@ def enc_shr(dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: s
     }
 };
 
+// ── SSE scalar-double encodings ────────────────────────────────────────
+// Floats travel in %rax as their raw IEEE754 bits; only arithmetic and
+// comparison move them into %xmmN, so the rest of the backend (slots,
+// pushes, calls) is unchanged.
+
+def enc_sse_arith(mn: str, dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+    // F2 0F <op> /r  — addsd 58, subsd 5C, mulsd 59, divsd 5E
+    if (dst.k != "reg") {
+        { bytes: [], fix: [], err: "sse dst" }
+    } else if (src.k != "reg") {
+        { bytes: [], fix: [], err: "sse src" }
+    } else {
+        let op = 88;
+        if (mn == "subsd") { op = 92; 0; } else { 0; };
+        if (mn == "mulsd") { op = 89; 0; } else { 0; };
+        if (mn == "divsd") { op = 94; 0; } else { 0; };
+        let r = rex(false, dst.n, -1, src.n);
+        let tail = [15, op, modrm(3, dst.n, src.n)];
+        if (r < 0) {
+            { bytes: concat([242], tail), fix: [], err: "" }
+        } else {
+            { bytes: concat([242, r], tail), fix: [], err: "" }
+        }
+    }
+};
+
+def enc_ucomisd(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+    // 66 0F 2E /r
+    if (dst.k != "reg") {
+        { bytes: [], fix: [], err: "ucomisd dst" }
+    } else if (src.k != "reg") {
+        { bytes: [], fix: [], err: "ucomisd src" }
+    } else {
+        let r = rex(false, dst.n, -1, src.n);
+        let tail = [15, 46, modrm(3, dst.n, src.n)];
+        if (r < 0) {
+            { bytes: concat([102], tail), fix: [], err: "" }
+        } else {
+            { bytes: concat([102, r], tail), fix: [], err: "" }
+        }
+    }
+};
+
+def enc_cvtsi2sd(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+    // F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
+    if (dst.k != "reg") {
+        { bytes: [], fix: [], err: "cvtsi2sd dst" }
+    } else if (src.k != "reg") {
+        { bytes: [], fix: [], err: "cvtsi2sd src" }
+    } else {
+        let r = rex(true, dst.n, -1, src.n);
+        { bytes: concat([242, r], [15, 42, modrm(3, dst.n, src.n)]), fix: [], err: "" }
+    }
+};
+
+def enc_cvttsd2si(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+    // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating)
+    if (dst.k != "reg") {
+        { bytes: [], fix: [], err: "cvttsd2si dst" }
+    } else if (src.k != "reg") {
+        { bytes: [], fix: [], err: "cvttsd2si src" }
+    } else {
+        let r = rex(true, dst.n, -1, src.n);
+        { bytes: concat([242, r], [15, 44, modrm(3, dst.n, src.n)]), fix: [], err: "" }
+    }
+};
+
+def enc_movq(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+    // 66 REX.W 0F 6E /r  — movq %gpr, %xmm   (gpr -> xmm)
+    // 66 REX.W 0F 7E /r  — movq %xmm, %gpr   (xmm -> gpr)
+    if (dst.k != "reg") {
+        { bytes: [], fix: [], err: "movq dst" }
+    } else if (src.k != "reg") {
+        { bytes: [], fix: [], err: "movq src" }
+    } else if (op_size(dst) == 128) {
+        // into an xmm: the xmm is the reg field, the gpr the rm field
+        let r = rex(true, dst.n, -1, src.n);
+        { bytes: concat([102, r], [15, 110, modrm(3, dst.n, src.n)]), fix: [], err: "" }
+    } else {
+        // out of an xmm: the xmm is still the reg field
+        let r = rex(true, src.n, -1, dst.n);
+        { bytes: concat([102, r], [15, 126, modrm(3, src.n, dst.n)]), fix: [], err: "" }
+    }
+};
+
 def enc_imul(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 64) {
         let r = rex(true, dst.n, -1, src.n);
@@ -585,7 +679,12 @@ def enc_jmp(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: s
 };
 
 def enc_call(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
-    if (o.k != "lbl") {
+    if (o.k == "ind") {
+        // call *%reg — FF /2, used for closure code pointers.
+        let r = rex(false, 0, -1, o.n);
+        let b = [255, modrm(3, 2, o.n)];
+        { bytes: with_rex(r, b), fix: [], err: "" }
+    } else if (o.k != "lbl") {
         { bytes: [], fix: [], err: "call target" }
     } else {
         { bytes: [232, 0, 0, 0, 0], fix: [fixup(1, "rel32", o.name, "")], err: "" }
@@ -705,6 +804,21 @@ def enc_insn(mn: str, ops) -> {bytes: [long], fix: [{off: long, kind: str, lbl: 
         } else {
             enc_shr(ops[1], ops[0].v)
         }
+    } else if (mn == "addsd" || mn == "subsd" || mn == "mulsd" || mn == "divsd") {
+        let e = need2(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_sse_arith(mn, ops[1], ops[0]) }
+    } else if (mn == "ucomisd") {
+        let e = need2(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_ucomisd(ops[1], ops[0]) }
+    } else if (mn == "cvtsi2sd") {
+        let e = need2(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_cvtsi2sd(ops[1], ops[0]) }
+    } else if (mn == "cvttsd2si") {
+        let e = need2(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_cvttsd2si(ops[1], ops[0]) }
+    } else if (mn == "movq") {
+        let e = need2(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_movq(ops[1], ops[0]) }
     } else if (mn == "imul") {
         let e = need2(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_imul(ops[1], ops[0]) }
@@ -720,7 +834,7 @@ def enc_insn(mn: str, ops) -> {bytes: [long], fix: [{off: long, kind: str, lbl: 
     } else if (mn == "jz" || mn == "je") {
         let e = need1(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(132, ops[0]) }
-    } else if (mn == "jnz") {
+    } else if (mn == "jnz" || mn == "jne") {
         let e = need1(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(133, ops[0]) }
     } else if (mn == "js") {
@@ -762,6 +876,19 @@ def enc_insn(mn: str, ops) -> {bytes: [long], fix: [{off: long, kind: str, lbl: 
     } else if (mn == "setne") {
         let e = need1(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(149, ops[0]) }
+    } else if (mn == "seta") {
+        // unsigned >: the correct condition after ucomisd (floats)
+        let e = need1(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(151, ops[0]) }
+    } else if (mn == "setae") {
+        let e = need1(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(147, ops[0]) }
+    } else if (mn == "setb") {
+        let e = need1(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(146, ops[0]) }
+    } else if (mn == "setbe") {
+        let e = need1(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(150, ops[0]) }
     } else if (mn == "cmpb") {
         let e = need2(mn, ops);
         if (e != "") {

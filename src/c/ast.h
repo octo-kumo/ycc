@@ -59,6 +59,7 @@ typedef enum {
     EXPR_EARRAY_ASSIGN,
     EXPR_ENULL,
     EXPR_EUNARY,
+    EXPR_ERETURN,
 } ExprKind;
 
 typedef enum {
@@ -202,6 +203,8 @@ typedef struct Expr {
         EForEach foreach_node;
         EForRange forrange_node;
         EArrayAssign array_assign_node;
+        /* `return expr;` — NULL for a bare `return;` (yields null). */
+        struct Expr *return_value;
     } as;
 } Expr;
 

@@ -138,7 +138,105 @@ def rn_prepass_decl(s, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) ->
     }
 };
 
+// Redefinition shadows, exactly as it does in the VM: `def f ... def f ...`
+// keeps the LAST definition, and every reference (before or after, since
+// defs hoist) binds to it. rename.y resolves def names through the prepass
+// binding, so two same-named defs would otherwise collapse onto one unique
+// name; give the earlier ones a dead name instead. They are still checked
+// and emitted — only unreachable.
+def rn_shadow_dups(stmts: [{k: str}]) -> [{k: str}] {
+    let out: [{k: str}] = [];
+    let i = 0;
+    while (i < len(stmts)) {
+        out = push(out, rn_shadow_one(stmts[i], stmts, i));
+        i = i + 1;
+        0
+    };
+    out
+};
+
+def rn_shadow_one(s, stmts: [{k: str}], i: long) -> {k: str} {
+    if (s.k == "decl") {
+        rn_shadow_decl(s, stmts, i)
+    } else {
+        s
+    }
+};
+
+def rn_shadow_decl(s, stmts: [{k: str}], i: long) -> {k: str} {
+    // NOTE: one `s.v.k` read per body (see rn_prepass_decl note).
+    if (s.kind == "def") {
+        rn_shadow_go(s, stmts, i)
+    } else if (s.v.k == "func") {
+        rn_shadow_go(s, stmts, i)
+    } else {
+        s
+    }
+};
+
+def rn_shadow_go(s, stmts: [{k: str}], i: long) -> {k: str} {
+    if (rn_redefined_later(stmts, i, s.name)) {
+        rn_rebuild_decl(s, s.name + "$shadow" + tostring(i))
+    } else {
+        s
+    }
+};
+
+def rn_redefined_later(stmts: [{k: str}], i: long, name: str) -> bool {
+    let j = i + 1;
+    let found = false;
+    while (j < len(stmts)) {
+        if (rn_decl_name(stmts[j]) == name) {
+            found = true;
+            0
+        } else { 0; };
+        j = j + 1;
+        0
+    };
+    found
+};
+
+// The name a statement binds as a hoisted def, or "" when it binds none.
+def rn_decl_name(s) -> str {
+    if (s.k == "decl") {
+        rn_decl_name_go(s)
+    } else {
+        ""
+    }
+};
+
+def rn_decl_name_go(s) -> str {
+    // NOTE: one `s.v.k` read per body (see rn_prepass_decl note).
+    if (s.kind == "def") {
+        s.name
+    } else if (s.v.k == "func") {
+        s.name
+    } else {
+        ""
+    }
+};
+
+def rn_rebuild_decl(s, newname: str) -> {k: str} {
+    // NOTE: one literal per arm would merge two key sets through the same
+    // `if` (see parse_type_arrow note) — dispatch to single-call arms so
+    // each shape unifies against the {k}-hole return type instead.
+    if (s.kind == "def") {
+        rn_rebuild_def(s, newname)
+    } else {
+        rn_rebuild_let(s, newname)
+    }
+};
+
+def rn_rebuild_def(s, newname: str) -> {k: str} {
+    { k: "decl", kind: "def", name: newname, v: s.v, line: s.line, col: s.col }
+};
+
+def rn_rebuild_let(s, newname: str) -> {k: str} {
+    { k: "decl", kind: s.kind, name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col }
+};
+
 def rn_block(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, stmts: [{k: str}] } {
+    stmts = rn_shadow_dups(stmts);
     st = rn_push(st);
     st = rn_prepass(stmts, st);
     let r = rn_list(stmts, st);

@@ -119,6 +119,13 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
     FILE *f = open_memstream(&body_buf, &body_len);
 
     fprintf(f, "static YValue *%s(YScope *closure, YValue **args, size_t argc) {\n", cname);
+    /* Arity check, as the VM does before binding parameters: without it a
+     * short call reads args[] past the end and the binary segfaults (the
+     * typechecker is advisory, so it cannot stop codegen on its own). */
+    fprintf(f, "    if (argc != %zu) {\n", func->param_count);
+    fprintf(f, "        fprintf(stderr, \"Argument count mismatch in function call\\n\");\n");
+    fprintf(f, "        exit(1);\n");
+    fprintf(f, "    }\n");
     fprintf(f, "    (void)argc;\n");
     fprintf(f, "    YScope *scope = malloc(sizeof(YScope));\n");
     fprintf(f, "    y_scope_init(scope, closure);\n");
@@ -129,9 +136,19 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
         fprintf(f, "    args[%zu] = NULL; /* transfer ownership to scope */\n", i);
     }
 
-    /* self-reference for recursion (local-only: don't clobber a parent's self) */
-    fprintf(f, "    y_scope_set_local(scope, \"self\", y_mk_func(%s, %zu, closure));\n",
-            cname, func->param_count);
+    /* self-reference for recursion (local-only: don't clobber a parent's
+     * self). A parameter named `self` is the programmer's, so leave it. */
+    int self_is_param = 0;
+    for (size_t i = 0; i < func->param_count; i++)
+        if (strcmp(func->param_names[i], "self") == 0) self_is_param = 1;
+    if (!self_is_param)
+        fprintf(f, "    y_scope_set_local(scope, \"self\", y_mk_func(%s, %zu, closure));\n",
+                cname, func->param_count);
+
+    /* Early `return`: statements jump to _yret_lbl with the value in _yret.
+     * Both are declared up front so a jump can never skip an initializer. */
+    fprintf(f, "    YValue *_yret = NULL;\n");
+    fprintf(f, "    YValue *_result = NULL;\n");
 
     /* Emit function body. If it's a block, emit statements directly into the
      * parameter scope (not a nested block scope) so closures capture a scope
@@ -142,7 +159,7 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
             char *stmt = emit_expr(ctx, blk->exprs[i]);
             if (i + 1 == blk->count) {
                 /* Last statement: its value is the return value */
-                fprintf(f, "    YValue *_result = %s;\n", stmt);
+                fprintf(f, "    _result = %s;\n", stmt);
             } else {
                 /* Non-final statement: free its value */
                 fprintf(f, "    y_free((YValue *)(%s));\n", stmt);
@@ -152,14 +169,16 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
     } else {
         /* Non-block body: single expression */
         char *body = emit_expr(ctx, func->body);
-        fprintf(f, "    YValue *_result = %s;\n", body);
+        fprintf(f, "    _result = %s;\n", body);
         free(body);
     }
     /* _result is a fresh owned value (not stored in the scope), so return it
      * directly. Releasing the scope first frees params/locals/closures without
-     * touching _result. */
+     * touching _result. An empty body leaves both NULL -> null, like the VM. */
+    fprintf(f, "_yret_lbl: ;\n");
     fprintf(f, "    y_scope_release(scope);\n");
-    fprintf(f, "    return _result;\n");
+    fprintf(f, "    if (_yret) { y_free(_result); return _yret; }\n");
+    fprintf(f, "    return _result ? _result : y_mk_null();\n");
     fprintf(f, "}\n\n");
 
     fclose(f);
@@ -288,6 +307,18 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
         free(operand);
         return res;
     }
+    case EXPR_ERETURN: {
+        /* Early return: stash the value and jump to the function epilogue,
+         * which releases the scope and hands _yret back. Jumping out of a
+         * statement expression is legal in GNU C; enclosing block scopes
+         * are not released on that path (they leak, they never dangle). */
+        char *val = expr->as.return_value
+                        ? emit_expr(ctx, expr->as.return_value)
+                        : fmt("y_mk_null()");
+        char *r = fmt("({ _yret = %s; goto _yret_lbl; (YValue *)NULL; })", val);
+        free(val);
+        return r;
+    }
     case EXPR_EOP: {
         if (expr->as.op_node.op == O_DOT) {
             char *left = emit_expr(ctx, expr->as.op_node.left);
@@ -305,6 +336,28 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
             }
             free(left);
             return fmt("y_mk_null()");
+        }
+
+        /* Short-circuit: emit a conditional so the right operand is only
+         * evaluated when the left does not already decide the result
+         * (matching the VM). y_and/y_or stay for nothing else to use. */
+        if (expr->as.op_node.op == O_AND || expr->as.op_node.op == O_OR) {
+            char *l = emit_expr(ctx, expr->as.op_node.left);
+            char *r = emit_expr(ctx, expr->as.op_node.right);
+            int is_and = expr->as.op_node.op == O_AND;
+            char *res = fmt(
+                "({ YValue *_l = %s; "
+                "if (_l->type != Y_BOOL) { fprintf(stderr, \"runtime error: '%s' requires bool\\n\"); exit(1); } "
+                "bool _lb = _l->data.b; y_free(_l); YValue *_r; "
+                "if (%s_lb) { _r = y_mk_bool(_lb); } else { "
+                "YValue *_rv = %s; "
+                "if (_rv->type != Y_BOOL) { fprintf(stderr, \"runtime error: '%s' requires bool\\n\"); exit(1); } "
+                "_r = y_mk_bool(_rv->data.b); y_free(_rv); } _r; })",
+                l, is_and ? "&&" : "||", is_and ? "!" : "", r,
+                is_and ? "&&" : "||");
+            free(l);
+            free(r);
+            return res;
         }
 
         const char *fn = op_fn(expr->as.op_node.op);
@@ -336,6 +389,17 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     }
 
     case EXPR_EBLOCK: {
+        /* An empty block has no statement to define _r, and the trailing
+         * `_r;` would then resolve to an enclosing (uninitialized) _r --
+         * e.g. the `_r` of a surrounding if -- which the caller then frees.
+         * `if (true) {}` aborted with "double free or corruption" for
+         * exactly this reason. An empty block evaluates to null, matching
+         * the VM. */
+        if (expr->as.block_node.count == 0)
+            return fmt("({ YScope *_outer = scope; "
+                       "YScope *scope = malloc(sizeof(YScope)); "
+                       "y_scope_init(scope, _outer); "
+                       "y_scope_release(scope); y_mk_null(); })");
         char *body = fmt("");
         for (size_t i = 0; i < expr->as.block_node.count; i++) {
             char *stmt = emit_expr(ctx, expr->as.block_node.exprs[i]);
@@ -534,6 +598,29 @@ static char *emit_expr(CodegenCtx *ctx, Expr *expr) {
     case EXPR_EMAP: {
         if (expr->as.map_node.count == 0)
             return fmt("y_mk_map(NULL, 0)");
+        /* Spread (`{a: 1, ...b}`) needs entries the compiler cannot lay out
+         * statically, so build the map incrementally in that case. */
+        int has_spread = 0;
+        for (size_t i = 0; i < expr->as.map_node.count; i++)
+            if (!expr->as.map_node.entries[i].key) has_spread = 1;
+        if (has_spread) {
+            char *body = fmt("");
+            for (size_t i = 0; i < expr->as.map_node.count; i++) {
+                char *v = emit_expr(ctx, expr->as.map_node.entries[i].value);
+                char *next;
+                if (expr->as.map_node.entries[i].key)
+                    next = fmt("%s y_map_put(_m, \"%s\", %s);", body,
+                               expr->as.map_node.entries[i].key, v);
+                else
+                    next = fmt("%s y_map_merge(_m, %s);", body, v);
+                free(body);
+                free(v);
+                body = next;
+            }
+            char *r = fmt("({ YValue *_m = y_mk_map(NULL, 0);%s _m; })", body);
+            free(body);
+            return r;
+        }
         char *entries = fmt("");
         for (size_t i = 0; i < expr->as.map_node.count; i++) {
             char *v = emit_expr(ctx, expr->as.map_node.entries[i].value);
@@ -753,6 +840,9 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"write_bytes\", y_mk_func(y_builtin_write_bytes, 3, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"ord\",      y_mk_func(y_builtin_ord,      1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"chr\",      y_mk_func(y_builtin_chr,      1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"clear_eof\", y_mk_func(y_builtin_clear_eof, 0, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"bytes\",    y_mk_func(y_builtin_bytes,    1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"from_bytes\", y_mk_func(y_builtin_from_bytes, 1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"bytes_to_str\", y_mk_func(y_builtin_bytes_to_str, 1, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"ensure_runtime\", y_mk_func(y_builtin_ensure_runtime, 0, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"gen_embedded_runtime\", y_mk_func(y_builtin_gen_embedded_runtime, 2, NULL));\n");
@@ -772,9 +862,17 @@ int codegen_emit(Expr *ast, FILE *out) {
     fprintf(out, "    y_scope_set(scope, \"scope_def\", y_mk_func(y_builtin_scope_def, 3, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"scope_find\", y_mk_func(y_builtin_scope_find, 2, NULL));\n");
     fprintf(out, "    y_scope_set(scope, \"scope_get\", y_mk_func(y_builtin_scope_get, 2, NULL));\n");
-    fprintf(out, "    y_scope_set(scope, \"scope_set\", y_mk_func(y_builtin_scope_set, 3, NULL));\n\n");
+    fprintf(out, "    y_scope_set(scope, \"scope_set\", y_mk_func(y_builtin_scope_set, 3, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"eputs\",    y_mk_func(y_builtin_eputs,    1, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"clock_us\", y_mk_func(y_builtin_clock_us, 0, NULL));\n");
+    fprintf(out, "    y_scope_set(scope, \"heap_used\", y_mk_func(y_builtin_heap_used, 0, NULL));\n\n");
+    /* A top-level `return` stops the program, matching the VM (which stops
+     * executing statements once the return flag is set). */
+    fprintf(out, "    YValue *_yret = NULL;\n");
     fwrite(main_buf, 1, main_len, out);
-    fprintf(out, "\n    y_scope_release(scope);\n");
+    fprintf(out, "\n_yret_lbl: ;\n");
+    fprintf(out, "    y_free(_yret);\n");
+    fprintf(out, "    y_scope_release(scope);\n");
     fprintf(out, "    return 0;\n");
     fprintf(out, "}\n");
 

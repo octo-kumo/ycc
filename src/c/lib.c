@@ -2,10 +2,12 @@
 #include "type.h"
 #include "typecheck.h"
 #include "vm.h"
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 
 /* Security switch: disables the `exec` builtin (see lib.h). */
 int g_exec_disabled = 0;
@@ -127,7 +129,7 @@ DEFINE_EXTERNAL_FUNC(range, x, VAL_LONG, VAL_ARR, {
             return nval(VAL_NULL);
         }
         VMValue *result = nval(VAL_ARR);
-        VMArray *arr = malloc(sizeof(VMArray));
+        VMArray *arr = vm_arr_alloc();
         result->data.arr = arr;
         result->data.arr->count = n;
         result->data.arr->elements = malloc(sizeof(VMValue *) * n);
@@ -217,12 +219,20 @@ DEFINE_EXTERNAL_FUNC(range, x, VAL_LONG, VAL_ARR, {
     VMValue *__external_##name##_func = &(VMValue){                          \
         .type = VAL_FUNC, .data.closure = &__ext_cl_##name};
 
-/* readline() -> str | null */
+/* readline() -> str | null
+ * EOF is NOT latched: clearerr() puts the stream back in a readable state so
+ * a later readline() sees new input (Ctrl-D in a REPL, a reopened FIFO).
+ * That matches the native backend, which reads fd 0 directly and has no
+ * sticky EOF flag to begin with. */
 DEFINE_EXTERNAL_FUNC0(readline, VAL_STR, {
     char *line = NULL;
     size_t cap = 0;
     ssize_t n = getline(&line, &cap, stdin);
-    if (n < 0) { free(line); return nval(VAL_NULL); }
+    if (n < 0) {
+        free(line);
+        clearerr(stdin);
+        return nval(VAL_NULL);
+    }
     if (n > 0 && line[n - 1] == '\n') line[--n] = '\0';
     VMValue *result = nval(VAL_STR);
     result->data.s = line;
@@ -289,7 +299,7 @@ DEFINE_EXTERNAL_FUNC(exec, x, _VAL_INFERRED, VAL_LONG, {
 /* argv() -> [str]  (command-line arguments) */
 DEFINE_EXTERNAL_FUNC0(argv, VAL_ARR, {
     VMValue *result = nval(VAL_ARR);
-    VMArray *arr = malloc(sizeof(VMArray));
+    VMArray *arr = vm_arr_alloc();
     arr->count = g_vm_argc > 0 ? (size_t)g_vm_argc : 0;
     arr->elements = malloc(sizeof(VMValue *) * (arr->count > 0 ? arr->count : 1));
     for (int i = 0; i < g_vm_argc; i++) {
@@ -317,7 +327,7 @@ DEFINE_EXTERNAL_FUNC(tonum, x, _VAL_INFERRED, VAL_LONG, {
 DEFINE_EXTERNAL_FUNC2(split, s, delim, {
     if (!s || s->type != VAL_STR || !delim || delim->type != VAL_STR) {
         VMValue *r = nval(VAL_ARR);
-        VMArray *a = malloc(sizeof(VMArray)); a->count = 0; a->elements = NULL;
+        VMArray *a = vm_arr_alloc(); a->count = 0; a->elements = NULL;
         r->data.arr = a; return r;
     }
     const char *str = s->data.s;
@@ -325,7 +335,7 @@ DEFINE_EXTERNAL_FUNC2(split, s, delim, {
     size_t dlen = strlen(d);
     if (dlen == 0) {
         VMValue *r = nval(VAL_ARR);
-        VMArray *a = malloc(sizeof(VMArray)); a->count = 0; a->elements = NULL;
+        VMArray *a = vm_arr_alloc(); a->count = 0; a->elements = NULL;
         r->data.arr = a; return r;
     }
     size_t count = 0;
@@ -340,7 +350,7 @@ DEFINE_EXTERNAL_FUNC2(split, s, delim, {
         p = nx ? nx + dlen : p + strlen(p);
     }
     VMValue *result = nval(VAL_ARR);
-    VMArray *arr = malloc(sizeof(VMArray));
+    VMArray *arr = vm_arr_alloc();
     arr->count = count; arr->elements = elems;
     result->data.arr = arr;
     return result;
@@ -370,23 +380,25 @@ DEFINE_EXTERNAL_FUNC2(join, arr, delim, {
     return result;
 });
 
-/* push(arr, val) -> arr */
+/* push(arr, val) -> arr — grows the array IN PLACE (reference semantics,
+ * matching the compiled runtime and the native backend) and returns it.
+ * Callers rebind (`a = push(a, v)`); aliases observe the new element. */
 DEFINE_EXTERNAL_FUNC2(push, arr, val, {
     if (!arr || arr->type != VAL_ARR) {
         VMValue *r = nval(VAL_ARR);
-        VMArray *a = malloc(sizeof(VMArray)); a->count = 0; a->elements = NULL;
-        r->data.arr = a; return r;
+        r->data.arr = vm_arr_alloc();
+        return r;
     }
-    size_t n = arr->data.arr->count + 1;
-    VMValue **elems = malloc(sizeof(VMValue *) * n);
-    for (size_t i = 0; i < arr->data.arr->count; i++)
-        elems[i] = val_clone(arr->data.arr->elements[i]);
-    elems[arr->data.arr->count] = val_clone(val);
-    VMValue *result = nval(VAL_ARR);
-    VMArray *a = malloc(sizeof(VMArray));
-    a->count = n; a->elements = elems;
-    result->data.arr = a;
-    return result;
+    VMArray *a = arr->data.arr;
+    if (a->count + 1 > a->capacity) {
+        size_t newcap = a->capacity < 8 ? 8 : a->capacity * 2;
+        if (newcap < a->count + 1) newcap = a->count + 1;
+        a->elements = realloc(a->elements, sizeof(VMValue *) * newcap);
+        a->capacity = newcap;
+    }
+    a->elements[a->count] = val_clone(val);
+    a->count++;
+    return val_clone(arr);
 });
 
 /* substr(s, start, len) -> str */
@@ -513,6 +525,46 @@ DEFINE_EXTERNAL_FUNC(chr, x, _VAL_INFERRED, VAL_STR, {
     return result;
 });
 
+/* clear_eof() -> null
+ * Clear the end-of-input condition so a later readline() reads again.
+ * examples/ysh.y drains stdin to EOF to collect a multi-line body, then
+ * calls this to keep the REPL alive. Harmless when stdin is not at EOF. */
+DEFINE_EXTERNAL_FUNC0(clear_eof, VAL_NULL, {
+    clearerr(stdin);
+    return nval(VAL_NULL);
+});
+
+/* bytes(s) -> [byte]  (raw bytes of a string; a plain long array here —
+ * only the native backend packs them one byte per element) */
+DEFINE_EXTERNAL_FUNC(bytes, x, _VAL_INFERRED, VAL_ARR, {
+    VMValue *result = nval(VAL_ARR);
+    VMArray *arr = vm_arr_alloc();
+    size_t n = (x && x->type == VAL_STR) ? strlen(x->data.s) : 0;
+    arr->count = n;
+    arr->elements = malloc(sizeof(VMValue *) * (n > 0 ? n : 1));
+    for (size_t i = 0; i < n; i++) {
+        arr->elements[i] = nval(VAL_LONG);
+        arr->elements[i]->data.l = (unsigned char)x->data.s[i];
+    }
+    result->data.arr = arr;
+    return result;
+});
+
+/* from_bytes(b) -> str  (inverse of bytes()) */
+DEFINE_EXTERNAL_FUNC(from_bytes, x, _VAL_INFERRED, VAL_STR, {
+    VMValue *result = nval(VAL_STR);
+    if (!x || x->type != VAL_ARR) { result->data.s = strdup(""); return result; }
+    size_t n = x->data.arr->count;
+    char *buf = malloc(n + 1);
+    for (size_t i = 0; i < n; i++) {
+        VMValue *e = x->data.arr->elements[i];
+        buf[i] = (char)((e && e->type == VAL_LONG) ? (e->data.l & 0xFF) : 0);
+    }
+    buf[n] = '\0';
+    result->data.s = buf;
+    return result;
+});
+
 /* getenv(name) -> str|null (read an environment variable) */
 DEFINE_EXTERNAL_FUNC(getenv, x, _VAL_INFERRED, _VAL_INFERRED, {
     if (!x || x->type != VAL_STR) { return nval(VAL_NULL); }
@@ -623,6 +675,41 @@ DEFINE_EXTERNAL_FUNC3(map_set, m, key, val, {
     return nval(VAL_NULL);
 });
 
+/* eputs(s) — raw output to stderr, no prefix, no newline. Diagnostics go
+ * here so they never mix into a program's stdout (or into `-S` output). */
+DEFINE_EXTERNAL_FUNC(eputs, x, _VAL_INFERRED, VAL_NULL, {
+    if (x) {
+        char *s = val_to_str(x);
+        fputs(s, stderr);
+        fflush(stderr);
+        free(s);
+    }
+    return nval(VAL_NULL);
+});
+
+/* clock_us() -> long: monotonic microseconds. Only differences are
+ * meaningful (the origin is arbitrary). */
+DEFINE_EXTERNAL_FUNC0(clock_us, VAL_LONG, {
+    VMValue *result = nval(VAL_LONG);
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        result->data.l = 0;
+        return result;
+    }
+    result->data.l = (long)ts.tv_sec * 1000000L + (long)ts.tv_nsec / 1000L;
+    return result;
+});
+
+/* heap_used() -> long: bytes of heap currently handed out. The native
+ * backend reports its arena break, so across engines only deltas between
+ * two samples are comparable. */
+DEFINE_EXTERNAL_FUNC0(heap_used, VAL_LONG, {
+    VMValue *result = nval(VAL_LONG);
+    struct mallinfo2 mi = mallinfo2();
+    result->data.l = (long)mi.uordblks;
+    return result;
+});
+
 void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "print", print_type);
     map_set(&scope->variables, "tostring", tostring_type);
@@ -645,6 +732,9 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "write_bytes", write_bytes_type);
     map_set(&scope->variables, "ord", ord_type);
     map_set(&scope->variables, "chr", chr_type);
+    map_set(&scope->variables, "clear_eof", clear_eof_type);
+    map_set(&scope->variables, "bytes", bytes_type);
+    map_set(&scope->variables, "from_bytes", from_bytes_type);
     map_set(&scope->variables, "index_of", index_of_type);
     map_set(&scope->variables, "last_index_of", last_index_of_type);
     map_set(&scope->variables, "arr_index_of", arr_index_of_type);
@@ -656,6 +746,9 @@ void populate_types(TCVarTypeScope *scope) {
     map_set(&scope->variables, "tcp_read", tcp_read_type);
     map_set(&scope->variables, "tcp_write", tcp_write_type);
     map_set(&scope->variables, "tcp_close", tcp_close_type);
+    map_set(&scope->variables, "eputs", eputs_type);
+    map_set(&scope->variables, "clock_us", clock_us_type);
+    map_set(&scope->variables, "heap_used", heap_used_type);
 }
 void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "print", __external_print_func);
@@ -682,6 +775,9 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "write_bytes", __external_write_bytes_func);
     map_set(&scope->variables, "ord", __external_ord_func);
     map_set(&scope->variables, "chr", __external_chr_func);
+    map_set(&scope->variables, "clear_eof", __external_clear_eof_func);
+    map_set(&scope->variables, "bytes", __external_bytes_func);
+    map_set(&scope->variables, "from_bytes", __external_from_bytes_func);
     map_set(&scope->variables, "index_of", __external_index_of_func);
     map_set(&scope->variables, "last_index_of", __external_last_index_of_func);
     map_set(&scope->variables, "arr_index_of", __external_arr_index_of_func);
@@ -693,4 +789,7 @@ void populate_scope(VMVariableScope *scope) {
     map_set(&scope->variables, "tcp_read", __external_tcp_read_func);
     map_set(&scope->variables, "tcp_write", __external_tcp_write_func);
     map_set(&scope->variables, "tcp_close", __external_tcp_close_func);
+    map_set(&scope->variables, "eputs", __external_eputs_func);
+    map_set(&scope->variables, "clock_us", __external_clock_us_func);
+    map_set(&scope->variables, "heap_used", __external_heap_used_func);
 }

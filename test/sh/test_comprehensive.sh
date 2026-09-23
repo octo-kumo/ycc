@@ -6,7 +6,14 @@
 PASS=0
 FAIL=0
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="$ROOT/yboot"
+YBOOT="${YBOOT:-$ROOT/yboot}"  # overridable: make test-asan points this at yboot-asan
+
+# A sanitized toolchain runs roughly 15x slower (see lib.sh).
+YTIMEOUT_SCALE=1
+case "$YBOOT" in
+    *asan* | *msan* | *ubsan*) YTIMEOUT_SCALE=15 ;;
+esac
+VM_TO=$(( 10 * YTIMEOUT_SCALE ))
 
 # Colors
 RED='\033[0;31m'
@@ -25,7 +32,7 @@ run_test() {
     echo "$code" > "$tmpfile"
 
     # VM (quiet: only program output)
-    vm_out=$(timeout 10 $YBOOT -q "$tmpfile" 2>&1)
+    vm_out=$(timeout $VM_TO $YBOOT -q "$tmpfile" 2>&1)
     vm_exit=$?
 
     # Compiled
@@ -62,7 +69,7 @@ run_error_test() {
     echo "$code" > "$tmpfile"
 
     # VM should fail
-    vm_out=$(timeout 10 $YBOOT -q "$tmpfile" 2>&1)
+    vm_out=$(timeout $VM_TO $YBOOT -q "$tmpfile" 2>&1)
     vm_exit=$?
 
     # Compiled should fail
@@ -173,6 +180,69 @@ run_test "map_get: missing" 'let m = {a: 1}; print(map_get(m, "b"));' 'null'
 # NOTE: map_set mutation is a known VM limitation (VM passes clones to builtins)
 # and has a double-free in the compiled runtime. Skipping mutation tests.
 
+# ── Records: spread ──
+echo ""
+echo "── Records: spread ──"
+run_test "spread: after explicit keys" 'let b = {x: 1, y: 2}; print({a: 0, ...b});' '{a: 0, x: 1, y: 2}'
+run_test "spread: two sources, later wins" 'let b = {x: 1, y: 2}; let c = {y: 9, z: 3}; print({...b, ...c});' '{x: 1, y: 9, z: 3}'
+run_test "spread: explicit key after spread wins" 'let b = {x: 1, y: 2}; print({...b, y: 100});' '{x: 1, y: 100}'
+run_test "spread: copy" 'let b = {x: 1, y: 2}; print({...b});' '{x: 1, y: 2}'
+run_test "spread: source untouched" 'let b = {x: 1}; let d = {...b, w: 4}; print(b);' '{x: 1}'
+run_test "spread: field read from result" 'let b = {x: 1}; let d = {...b, w: 4}; print(d.w);' '4'
+
+# ── Records: field assignment ──
+echo ""
+echo "── Records: field assignment ──"
+run_test "dot-assign: overwrite" 'let s = {a: 1, b: 2}; s.a = 9; print(s.a);' '9'
+run_test "dot-assign: leaves others" 'let s = {a: 1, b: 2}; s.a = 9; print(s.b);' '2'
+run_test "dot-assign: new key" 'let s = {a: 1}; s.c = 7; print(s.c);' '7'
+run_test "dot-assign: string key form" 'let m = {k: "v"}; m["k"] = "w"; print(m.k);' 'w'
+run_test "dot-assign: visible through an alias" 'let n = {inner: {n: 1}}; let t = n.inner; t.n = 5; print(n.inner.n);' '5'
+run_test "index-assign still works" 'let a = [1,2,3]; a[1] = 20; print(a);' '[1, 20, 3]'
+
+# ── Postfix: field access binds tighter than unary and index ──
+echo ""
+echo "── Postfix: field access ──"
+run_test "dot then index" 'let m = { xs: [10, 20, 30] }; print(m.xs[1]);' '20'
+run_test "dot then index in arithmetic" 'let m = { xs: [10, 20, 30] }; print(m.xs[0] + m.xs[2]);' '40'
+run_test "not of a field" 'let m = { flag: false }; print(!m.flag);' 'true'
+run_test "negate a field" 'let m = { n: 5 }; print(-m.n);' '-5'
+run_test "index then dot" 'let arr = [{v: 7}, {v: 8}]; print(arr[1].v);' '8'
+run_test "nested fields" 'let n = { inner: { deep: 5 } }; print(n.inner.deep);' '5'
+run_test "field of a string" 'let m = { name: "hi" }; print(m.name);' 'hi'
+
+# ── Operators: short-circuit logic ──
+echo ""
+echo "── Operators: short-circuit logic ──"
+run_test "and: truth table TT" 'print(true && true);' 'true'
+run_test "and: truth table TF" 'print(true && false);' 'false'
+run_test "or: truth table FT" 'print(false || true);' 'true'
+run_test "or: truth table FF" 'print(false || false);' 'false'
+run_test "and: right side not evaluated" 'def boom() -> bool { print(999); true }; if (false && boom()) { print("bad"); } else { print("ok"); };' 'ok'
+run_test "or: right side not evaluated" 'def boom() -> bool { print(999); true }; if (true || boom()) { print("ok"); };' 'ok'
+run_test "and: guards an out-of-range index" 'let a = [1,2]; let i = 5; if (i < len(a) && a[i] == 1) { print("bad"); } else { print("guarded"); };' 'guarded'
+run_test "or: guards an out-of-range index" 'let a = [1,2]; let i = 5; if (i >= len(a) || a[i] == 1) { print("guarded"); };' 'guarded'
+
+# ── Operators: array concat and compound assignment ──
+echo ""
+echo "── Operators: array concat and compound assignment ──"
+run_test "array + array" 'let a = [1,2]; let b = [3,4]; print(a + b);' '[1, 2, 3, 4]'
+run_test "array + element" 'let a = [1,2]; print(a + 9);' '[1, 2, 9]'
+run_test "element + array" 'let a = [1,2]; print(0 + a);' '[0, 1, 2]'
+run_test "array literals on both sides" 'print([1,2] + [3]);' '[1, 2, 3]'
+run_test "array + leaves operands alone" 'let a = [1,2]; let b = a + 3; print(a);' '[1, 2]'
+run_test "array + with strings stays an array" 'let s = ["x"]; print(s + "y");' '[x, y]'
+run_test "empty array + element" 'print([] + 1);' '[1]'
+run_test "array + empty array" 'let a = [1]; print(a + []);' '[1]'
+run_test "compound: array append" 'let a = [1,2]; a += 3; print(a);' '[1, 2, 3]'
+run_test "compound: array concat" 'let a = [1]; a += [2,3]; print(a);' '[1, 2, 3]'
+run_test "compound: numeric add" 'let n = 10; n += 5; print(n);' '15'
+run_test "compound: numeric sub" 'let n = 10; n -= 3; print(n);' '7'
+run_test "compound: numeric mul" 'let n = 10; n *= 3; print(n);' '30'
+run_test "compound: numeric div" 'let n = 12; n /= 4; print(n);' '3'
+run_test "compound: string append" 'let s = "ab"; s += "cd"; print(s);' 'abcd'
+run_test "compound: in a loop" 'let i = 0; while (i < 3) { i += 1; }; print(i);' '3'
+
 # ── Operators: arithmetic ──
 echo ""
 echo "── Operators: arithmetic ──"
@@ -185,6 +255,18 @@ run_test "precedence: mul before add" 'print(2 + 3 * 4);' '14'
 run_test "precedence: parens" 'print((2 + 3) * 4);' '20'
 run_test "precedence: left-assoc div" 'print(100 / 10 / 2);' '5'
 run_test "precedence: left-assoc sub" 'print(10 - 2 - 3);' '5'
+# Signed division: the VM used to wrap operands through unsigned (to dodge
+# signed-overflow UB in + - *), which silently turned / and % into UNSIGNED
+# division -- 7 / -2 gave 0 and -7 / 2 gave 9223372036854775804.
+run_test "divide: negative divisor" 'print(7 / -2);' '-3'
+run_test "divide: negative dividend" 'print(-7 / 2);' '-3'
+run_test "divide: both negative" 'print(-7 / -2);' '3'
+run_test "modulo: negative divisor" 'print(7 % -2);' '1'
+run_test "modulo: negative dividend" 'print(-7 % 2);' '-1'
+# LONG_MIN / -1 overflows: idiv raises #DE, so all three engines wrap to
+# LONG_MIN (and LONG_MIN % -1 is 0) instead of trapping.
+run_test "divide: LONG_MIN by -1" 'let mn = -9223372036854775807 - 1; print(mn / -1);' '-9223372036854775808'
+run_test "modulo: LONG_MIN by -1" 'let mn = -9223372036854775807 - 1; print(mn % -1);' '0'
 
 # ── Operators: comparison ──
 echo ""
@@ -195,6 +277,30 @@ run_test "greater than: true" 'print(3 > 2);' 'true'
 run_test "greater than: false" 'print(2 > 3);' 'false'
 run_test "less or equal: true" 'print(2 <= 2);' 'true'
 run_test "greater or equal: true" 'print(3 >= 3);' 'true'
+# Lexicographic string ordering (all three engines; strcmp semantics).
+run_test "str less than: true" 'print("a" < "b");' 'true'
+run_test "str less than: false" 'print("b" < "a");' 'false'
+run_test "str prefix is smaller" 'print("ab" < "abc");' 'true'
+run_test "str empty is smallest" 'print("" < "a");' 'true'
+run_test "str case: upper before lower" 'print("Z" < "a");' 'true'
+run_test "str greater or equal" 'print("apple" >= "apple");' 'true'
+
+# ── byte type and byte/string conversion ──
+echo ""
+echo "── byte type and byte/string conversion ──"
+run_test "bytes: length" 'print(len(bytes("Hello")));' '5'
+run_test "bytes: first element" 'let b = bytes("Hello"); print(b[0]);' '72'
+run_test "bytes: round trip" 'print(from_bytes(bytes("round trip")));' 'round trip'
+run_test "bytes: empty string" 'print(len(bytes("")));' '0'
+run_test "from_bytes: literal" 'let b: [byte] = [104, 105]; print(from_bytes(b));' 'hi'
+run_test "byte: annotated array literal" 'let b: [byte] = [1, 2, 3]; print(tostring(b));' '[1, 2, 3]'
+run_test "byte: widens to long" 'let b: [byte] = [41]; let n = b[0] + 1; print(n);' '42'
+run_test "byte: unsigned above 127" 'let b: [byte] = [200]; print(b[0]);' '200'
+run_test "byte: push and index" 'let b: [byte] = []; b = push(b, 65); b = push(b, 66); print(from_bytes(b));' 'AB'
+run_test "byte: slice" 'let b: [byte] = [97, 98, 99, 100]; print(from_bytes(b[1:3]));' 'bc'
+run_test "tostring: array of long" 'print(tostring([1, 2, 3]));' '[1, 2, 3]'
+run_test "tostring: array of str" 'print(tostring(["a", "b"]));' '[a, b]'
+run_test "tostring: nested array" 'print(tostring([[1, 2], [3]]));' '[[1, 2], [3]]'
 run_test "equal: true" 'print(5 == 5);' 'true'
 run_test "equal: false" 'print(5 == 6);' 'false'
 run_test "not equal: true" 'print(5 != 6);' 'true'
@@ -237,6 +343,23 @@ run_test "slice: to end" 'let a = [1,2,3,4]; print(a[2:]);' '[3, 4]'
 run_test "slice: all" 'let a = [1,2,3,4]; print(a[:]);' '[1, 2, 3, 4]'
 run_test "slice: empty result" 'let a = [1,2,3]; print(a[2:1]);' '[]'
 
+# ── Literals: numeric formats ──
+echo ""
+echo "── Literals: numeric formats ──"
+run_test "hex literal" 'print(0xff);' '255'
+run_test "hex literal: uppercase" 'print(0xFFAB);' '65451'
+run_test "hex literal: mixed case prefix" 'print(0XFF);' '255'
+run_test "binary literal" 'print(0b101);' '5'
+run_test "binary literal: uppercase prefix" 'print(0B1111);' '15'
+run_test "radix: arithmetic" 'print(0x10 + 0b10);' '18'
+run_test "radix: underscores" 'print(0xdead_beef);' '3735928559'
+run_test "radix: negative" 'print(-0x10);' '-16'
+run_test "exponent: integer mantissa" 'print(1e3);' '1000.000000'
+run_test "exponent: float mantissa" 'print(1.5e2);' '150.000000'
+run_test "exponent: negative exponent" 'print(2.5e-2);' '0.025000'
+run_test "decimal still works" 'print(42);' '42'
+run_test "float still works" 'print(1.25);' '1.250000'
+
 # ── Functions: basic ──
 echo ""
 echo "── Functions: basic ──"
@@ -250,6 +373,20 @@ echo "── Functions: recursion ──"
 run_test "recursion: factorial" 'def fact(n: long) -> long { if (n <= 1) { 1 } else { n * self(n - 1) } }; print(fact(5));' '120'
 run_test "recursion: fibonacci" 'def fib(n: long) -> long { if (n < 2) { n } else { self(n-1) + self(n-2) } }; print(fib(10));' '55'
 run_test "recursion: countdown" 'def count(n: long) -> str { if (n <= 0) { "done" } else { tostring(n) + " " + self(n-1) } }; print(count(3));' '3 2 1 done'
+run_test "self: still the recursion handle" 'def fact(n: long) -> long { if (n <= 1) { 1 } else { n * self(n - 1) } }; print(fact(5));' '120'
+run_test "self: usable as a parameter name" 'def f(self: long) -> long { self + 1 }; print(f(41));' '42'
+run_test "self: usable as a local name" 'def g() -> long { let self = 5; self * 2 }; print(g());' '10'
+
+# ── Functions: early return ──
+echo ""
+echo "── Functions: early return ──"
+run_test "return: guard clause" 'def f(n: long) -> long { if (n < 0) { return 0 - n; }; n * 2 }; print(f(-5));' '5'
+run_test "return: falls through" 'def f(n: long) -> long { if (n < 0) { return 0 - n; }; n * 2 }; print(f(3));' '6'
+run_test "return: skips rest of body" 'def f() -> long { return 1; 999 }; print(f());' '1'
+run_test "return: out of a while loop" 'def f(xs: [long]) -> long { let i = 0; while (i < len(xs)) { if (xs[i] > 10) { return xs[i]; }; i = i + 1; }; 0 - 1 }; print(f([1, 2, 42, 7]));' '42'
+run_test "return: loop finishes without returning" 'def f(xs: [long]) -> long { let i = 0; while (i < len(xs)) { if (xs[i] > 10) { return xs[i]; }; i = i + 1; }; 0 - 1 }; print(f([1, 2]));' '-1'
+run_test "return: bare return is null" 'def f() -> long { return; 999 }; print(f());' 'null'
+run_test "return: nested in inner function" 'def outer() -> long { def inner(n: long) -> long { if (n > 0) { return 7; }; 0 }; inner(1) + 1 }; print(outer());' '8'
 
 # ── Functions: closures ──
 echo ""
@@ -360,6 +497,12 @@ echo ""
 echo "── Error cases ──"
 run_test "undefined variable" 'print(undefined_var);' 'undefined_var'
 run_test "type error: call non-function" 'let x = 42; x();' 'non-function'
+# Arity is enforced at run time in BOTH engines: the typechecker is advisory,
+# so without the generated check a short call read args[] past the end and the
+# compiled binary segfaulted (test/y/native/e05_badcall.y).
+run_test "arity: too few args" 'def add(a: long, b: long) -> long { a + b }; print(add(1));' 'Argument count mismatch'
+run_test "arity: too many args" 'def one(a: long) -> long { a }; print(one(1, 2));' 'Argument count mismatch'
+run_test "arity: args to a no-arg function" 'def z() -> long { 7 }; print(z(1));' 'Argument count mismatch'
 
 # ── Self-hosted compiler ──
 # Lives in test/sh/test_ycc.sh now (needs ./ycc); run via

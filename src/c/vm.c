@@ -4,9 +4,59 @@
 #include "lib.h"
 #include "map.h"
 #include "type.h"
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
+
+/* The tree-walking VM recurses on the C stack (several frames per Y call),
+ * so runaway recursion must be caught before the guard page is. Frame sizes
+ * vary too much for a fixed call count to be safe, so the guard measures
+ * actual stack use against the process limit. */
+static char *g_vm_stack_base = NULL;
+static char *g_vm_stack_floor = NULL;
+
+/* Set by `return`, cleared by the call that catches it. While set, blocks
+ * and loops stop iterating so the value unwinds to the function boundary. */
+static int g_vm_returning = 0;
+
+/* ASan must not instrument these two: with its fake stack the `probe`
+ * locals move off the real stack, and the guard then compares unrelated
+ * addresses (it either never fires or fires immediately). */
+#if defined(__GNUC__)
+#define VM_STACK_PROBE __attribute__((no_sanitize_address, noinline))
+#else
+#define VM_STACK_PROBE
+#endif
+
+static VM_STACK_PROBE void vm_stack_guard_init(void) {
+    char *here = (char *)__builtin_frame_address(0);
+    size_t lim = 8u * 1024 * 1024; /* default if RLIMIT_STACK is unavailable */
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY &&
+        rl.rlim_cur > 0)
+        lim = (size_t)rl.rlim_cur;
+    /* Leave headroom: the error path itself needs stack, and libc/ASan
+     * frames are bigger than ours. The floor is an ADDRESS, so the check is
+     * a pointer comparison — subtracting from a base captured in a deeper
+     * frame than the one being checked would wrap around instead. */
+    g_vm_stack_base = here;
+    g_vm_stack_floor = here - (lim - lim / 4);
+}
+
+static VM_STACK_PROBE void vm_stack_check(void) {
+    if (!g_vm_stack_floor) return;
+    char *here = (char *)__builtin_frame_address(0);
+    if (here < g_vm_stack_floor) {
+        ptrdiff_t used = g_vm_stack_base - here;
+        if (used < 0) used = 0;
+        fprintf(stderr, "Maximum recursion depth exceeded (call stack "
+                        "exhausted after %zu KB)\n",
+                (size_t)used / 1024);
+        exit(1);
+    }
+}
 
 VMValue *nval(ValueType type) {
     VMValue *val = malloc(sizeof(VMValue));
@@ -194,6 +244,28 @@ type_t *val_type(const VMValue *val) {
     }
     return NULL; // should never reach here
 }
+VMArray *vm_arr_alloc(void) {
+    VMArray *a = malloc(sizeof(VMArray));
+    a->refcount = 1;
+    a->count = 0;
+    a->capacity = 0;
+    a->elements = NULL;
+    return a;
+}
+
+VMMap *vm_map_alloc(void) {
+    VMMap *m = malloc(sizeof(VMMap));
+    m->refcount = 1;
+    m->count = 0;
+    m->entries = NULL;
+    return m;
+}
+
+/* Arrays and maps are REFERENCE values: cloning shares the body and bumps
+ * the refcount, and the mutating builtins (push, map_set) mutate in place.
+ * The compiled C runtime and the native backend behave the same way, so all
+ * three engines agree. Deep-copying here instead made every `push` on a
+ * record field O(n) and whole compiles O(n^2). */
 VMValue *val_clone(const VMValue *src) {
     if (src->type == VAL_FUNC && src->data.closure->scope == NULL) {
         // external functions are singletons, so we just return the same pointer
@@ -218,24 +290,13 @@ VMValue *val_clone(const VMValue *src) {
     case _VAL_INFERRED: break;
     case VAL_FLOAT: dst->data.f = src->data.f; break;
     case VAL_ARR: {
-        VMArray *arr = malloc(sizeof(VMArray));
-        arr->count = src->data.arr->count;
-        arr->elements = malloc(sizeof(VMValue *) * arr->count);
-        for (size_t i = 0; i < arr->count; i++) {
-            arr->elements[i] = val_clone(src->data.arr->elements[i]);
-        }
-        dst->data.arr = arr;
+        dst->data.arr = src->data.arr;
+        dst->data.arr->refcount++;
         break;
     }
     case VAL_MAP: {
-        VMMap *map = malloc(sizeof(VMMap));
-        map->count = src->data.map->count;
-        map->entries = malloc(sizeof(VMMapEntry) * map->count);
-        for (size_t i = 0; i < map->count; i++) {
-            map->entries[i].key = strdup(src->data.map->entries[i].key);
-            map->entries[i].value = val_clone(src->data.map->entries[i].value);
-        }
-        dst->data.map = map;
+        dst->data.map = src->data.map;
+        dst->data.map->refcount++;
         break;
     }
     }
@@ -261,6 +322,7 @@ void val_free(VMValue *val) {
     case VAL_NULL:
     case VAL_FLOAT: break;
     case VAL_ARR: {
+        if (--val->data.arr->refcount > 0) break;
         for (size_t i = 0; i < val->data.arr->count; i++) {
             val_free(val->data.arr->elements[i]);
         }
@@ -269,6 +331,7 @@ void val_free(VMValue *val) {
         break;
     }
     case VAL_MAP: {
+        if (--val->data.map->refcount > 0) break;
         for (size_t i = 0; i < val->data.map->count; i++) {
             free(val->data.map->entries[i].key);
             val_free(val->data.map->entries[i].value);
@@ -286,10 +349,13 @@ void val_free(VMValue *val) {
 }
 
 VMValue *vm_scope_get(VMVariableScope *scope, const char *name) {
-    if (!scope) return NULL;
-    VMValue *val = map_get(&scope->variables, name);
-    if (val) return val;
-    return vm_scope_get(scope->parent, name);
+    /* Iterative: the scope chain is as deep as the call stack, so recursing
+     * here could exhaust the stack between two vm_stack_check() probes. */
+    for (VMVariableScope *s = scope; s; s = s->parent) {
+        VMValue *val = map_get(&s->variables, name);
+        if (val) return val;
+    }
+    return NULL;
 }
 void vm_scope_set(VMVariableScope *scope, const char *name, VMValue *value) {
     /* Walk up the scope chain to find an existing binding to update */
@@ -339,6 +405,7 @@ void vm_scope_release(VMVariableScope *scope) {
 }
 
 void vm_init(VM *vm) {
+    vm_stack_guard_init();
     vm->globals = vm_scope_new(NULL);
     populate_scope(vm->globals);
 }
@@ -413,7 +480,9 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         } else if (expr->as.unary_node.op == O_NEG) {
             if (operand->type == VAL_LONG) {
                 VMValue *val = nval(VAL_LONG);
-                val->data.l = -operand->data.l;
+                /* Negate through unsigned: -LONG_MIN is signed-overflow UB,
+                 * and wrapping back to LONG_MIN is the documented result. */
+                val->data.l = (long)(0UL - (unsigned long)operand->data.l);
                 val_free(operand);
                 return val;
             } else if (operand->type == VAL_FLOAT) {
@@ -431,6 +500,33 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         }
     }
     case EXPR_EOP: {
+        /* Short-circuit: `&&` and `||` must not evaluate the right operand
+         * when the left already decides the result. Guards like
+         * `if (i < len(a) && a[i] == x)` depend on it; evaluating both
+         * sides eagerly is why src/y/*.y is full of nested ifs. */
+        if (expr->as.op_node.op == O_AND || expr->as.op_node.op == O_OR) {
+            VMValue *lhs = vm_execute(scope, expr->as.op_node.left);
+            if (lhs->type != VAL_BOOL) {
+                fprintf(stderr, "Operands must be booleans\n");
+                exit(1);
+            }
+            bool lb = lhs->data.b;
+            val_free(lhs);
+            bool decided = expr->as.op_node.op == O_AND ? !lb : lb;
+            VMValue *res = nval(VAL_BOOL);
+            if (decided) {
+                res->data.b = lb;
+                return res;
+            }
+            VMValue *rhs = vm_execute(scope, expr->as.op_node.right);
+            if (rhs->type != VAL_BOOL) {
+                fprintf(stderr, "Operands must be booleans\n");
+                exit(1);
+            }
+            res->data.b = rhs->data.b;
+            val_free(rhs);
+            return res;
+        }
         VMValue *left = vm_execute(scope, expr->as.op_node.left);
         VMValue *right = expr->as.op_node.op == O_DOT
                              ? NULL
@@ -448,21 +544,31 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         exit(1);                                                               \
     }
 #define __ISCOMPARISON(op)                                                     \
-    __REQUIRES_NUMERIC();                                                      \
-    if (left->type == VAL_LONG && right->type == VAL_LONG) {                   \
-        val->data.b = left->data.l op right->data.l;                           \
+    if (left->type == VAL_STR && right->type == VAL_STR) {                     \
+        /* Lexicographic, byte by byte — the ordering `str` needs for         \
+         * sorting. strcmp's sign is all that is portable, so compare it. */   \
+        val->data.b = strcmp(left->data.s, right->data.s) op 0;                \
     } else {                                                                   \
-        double left_val =                                                      \
-            left->type == VAL_LONG ? left->data.l : left->data.f;              \
-        double right_val =                                                     \
-            right->type == VAL_LONG ? right->data.l : right->data.f;           \
-        val->data.b = left_val op right_val;                                   \
+        __REQUIRES_NUMERIC();                                                  \
+        if (left->type == VAL_LONG && right->type == VAL_LONG) {               \
+            val->data.b = left->data.l op right->data.l;                       \
+        } else {                                                               \
+            double left_val =                                                  \
+                left->type == VAL_LONG ? left->data.l : left->data.f;          \
+            double right_val =                                                 \
+                right->type == VAL_LONG ? right->data.l : right->data.f;       \
+            val->data.b = left_val op right_val;                               \
+        }                                                                      \
     }                                                                          \
     val->type = VAL_BOOL;
 #define __ISCALCULATION(op)                                                    \
     __REQUIRES_NUMERIC();                                                      \
     if (left->type == VAL_LONG && right->type == VAL_LONG) {                   \
-        val->data.l = left->data.l op right->data.l;                           \
+        /* Wrap through unsigned: signed overflow is UB, and two's            \
+         * complement wrapping is the behaviour the compiled backend and      \
+         * the native backend already have (audit t37_long_overflow). */      \
+        val->data.l = (long)((unsigned long)left->data.l op(unsigned long)     \
+                                 right->data.l);                              \
         val->type = VAL_LONG;                                                  \
     } else {                                                                   \
         double left_val =                                                      \
@@ -508,6 +614,32 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         case O_ADD: {
             // special case, if any one side is string, this is string
             // concat operator
+            // Arrays win over strings: `arr + arr` concatenates, `arr + x`
+            // appends and `x + arr` prepends, always producing a NEW array
+            // (the operands are untouched -- that is what makes `+` the
+            // explicit-copy counterpart of the in-place `push`).
+            if (left->type == VAL_ARR || right->type == VAL_ARR) {
+                size_t ln = left->type == VAL_ARR ? left->data.arr->count : 1;
+                size_t rn = right->type == VAL_ARR ? right->data.arr->count : 1;
+                VMArray *out = vm_arr_alloc();
+                out->count = ln + rn;
+                out->capacity = out->count;
+                out->elements = malloc(sizeof(VMValue *) * (out->count ? out->count : 1));
+                size_t k = 0;
+                if (left->type == VAL_ARR)
+                    for (size_t i = 0; i < ln; i++)
+                        out->elements[k++] = val_clone(left->data.arr->elements[i]);
+                else
+                    out->elements[k++] = val_clone(left);
+                if (right->type == VAL_ARR)
+                    for (size_t i = 0; i < rn; i++)
+                        out->elements[k++] = val_clone(right->data.arr->elements[i]);
+                else
+                    out->elements[k++] = val_clone(right);
+                val->type = VAL_ARR;
+                val->data.arr = out;
+                break;
+            }
             if (left->type == VAL_STR || right->type == VAL_STR) {
                 char *left_str;
                 if (left->type == VAL_STR) { left_str = strdup(left->data.s); }
@@ -547,7 +679,11 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
                 fprintf(stderr, "Division by zero in modulus operator\n");
                 exit(1);
             }
-            val->data.l = left->data.l % right->data.l;
+            /* LONG_MIN % -1 is UB in C and traps on x86 (#DE) even though
+             * the answer is 0; special-case it rather than divide. */
+            val->data.l = (left->data.l == LONG_MIN && right->data.l == -1)
+                              ? 0
+                              : left->data.l % right->data.l;
             val->type = VAL_LONG;
             break;
         }
@@ -557,7 +693,25 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
                 fprintf(stderr, "Division by zero\n");
                 exit(1);
             }
-            __ISCALCULATION(/);
+            /* NOT __ISCALCULATION: that wraps operands through unsigned to
+             * dodge signed-overflow UB, which is right for + - * but turns
+             * division into UNSIGNED division (7 / -2 gave 0, -7 / 2 gave
+             * 9223372036854775804). Only LONG_MIN / -1 actually overflows,
+             * and both backends wrap it to LONG_MIN. */
+            __REQUIRES_NUMERIC();
+            if (left->type == VAL_LONG && right->type == VAL_LONG) {
+                val->data.l = (left->data.l == LONG_MIN && right->data.l == -1)
+                                  ? LONG_MIN
+                                  : left->data.l / right->data.l;
+                val->type = VAL_LONG;
+            } else {
+                double lv =
+                    left->type == VAL_LONG ? (double)left->data.l : left->data.f;
+                double rv = right->type == VAL_LONG ? (double)right->data.l
+                                                    : right->data.f;
+                val->data.f = lv / rv;
+                val->type = VAL_FLOAT;
+            }
             break;
         }
         case O_ASSIGN: {
@@ -577,7 +731,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
                 fprintf(stderr, "Right operand of :: must be an array\n");
                 exit(1);
             }
-            VMArray *new_arr = malloc(sizeof(VMArray));
+            VMArray *new_arr = vm_arr_alloc();
             new_arr->count = right->data.arr->count + 1;
             new_arr->elements = malloc(sizeof(VMValue *) * new_arr->count);
             new_arr->elements[0] = val_clone(left);
@@ -633,9 +787,19 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         for (size_t i = 0; i < expr->as.block_node.count; i++) {
             val_free(last);
             last = vm_execute(nested_scope, expr->as.block_node.exprs[i]);
+            /* `return` unwinds: stop running statements and hand the value
+             * up. The enclosing call clears the flag. */
+            if (g_vm_returning) break;
         }
         vm_scope_release(nested_scope);
         return last;
+    }
+    case EXPR_ERETURN: {
+        VMValue *val = expr->as.return_value
+                           ? vm_execute(scope, expr->as.return_value)
+                           : nval(VAL_NULL);
+        g_vm_returning = 1;
+        return val;
     }
     case EXPR_ECALL: {
         VMValue *callee_val = vm_execute(scope, expr->as.call_node.callee);
@@ -691,11 +855,26 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             map_set(&func_scope->variables, func->as.efunc.param_names[i],
                     arg_val);
         }
-        map_set(&func_scope->variables, "self", val_clone(callee_val));
+        /* `self` is the recursion handle, but a parameter (or local) of
+         * that name is the programmer's, so only bind it when it is free.
+         * Otherwise a param named `self` was silently replaced by the
+         * function value. */
+        int self_is_param = 0;
+        for (size_t i = 0; i < func->as.efunc.param_count; i++)
+            if (strcmp(func->as.efunc.param_names[i], "self") == 0)
+                self_is_param = 1;
+        if (!self_is_param)
+            map_set(&func_scope->variables, "self", val_clone(callee_val));
+        /* Recursion guard: the VM recurses on the C stack, so unbounded Y
+         * recursion used to SIGSEGV (audit t10_deep_recursion). Report it
+         * as a normal error instead of dying on a guard page. */
+        vm_stack_check();
         VMValue *result = func->as.efunc.external
                               ? ((VMValue * (*)(VMVariableScope *))
                                      func->as.efunc.body)(func_scope)
                               : vm_execute(func_scope, func->as.efunc.body);
+        /* The function boundary catches `return`: the unwind stops here. */
+        g_vm_returning = 0;
         vm_scope_release(func_scope);
         val_free(callee_val);
         return result;
@@ -714,7 +893,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         return val;
     }
     case EXPR_EARRAY: {
-        VMArray *arr = malloc(sizeof(VMArray));
+        VMArray *arr = vm_arr_alloc();
         arr->count = expr->as.array_node.count;
         arr->elements = malloc(sizeof(VMValue *) * arr->count);
         for (size_t i = 0; i < arr->count; i++) {
@@ -726,31 +905,54 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
         return val;
     }
     case EXPR_EMAP: {
-        VMMap *map = malloc(sizeof(VMMap));
-        map->count = expr->as.map_node.count;
-        map->entries = malloc(sizeof(VMMapEntry) * map->count);
+        VMMap *map = vm_map_alloc();
+        size_t cap = expr->as.map_node.count;
+        map->entries = malloc(sizeof(VMMapEntry) * (cap ? cap : 1));
         size_t n = 0;
+        /* Insert (or overwrite) one key; duplicates keep position, last
+         * value wins -- the rule spread relies on. */
+#define VM_MAP_PUT(k, v)                                                       \
+    do {                                                                       \
+        size_t existing = n;                                                   \
+        for (size_t j = 0; j < n; j++)                                         \
+            if (strcmp(map->entries[j].key, (k)) == 0) {                       \
+                existing = j;                                                  \
+                break;                                                         \
+            }                                                                  \
+        if (existing < n) {                                                    \
+            val_free(map->entries[existing].value);                            \
+            map->entries[existing].value = (v);                                \
+        } else {                                                               \
+            if (n == cap) {                                                    \
+                cap = cap ? cap * 2 : 4;                                       \
+                map->entries = realloc(map->entries, sizeof(VMMapEntry) * cap);\
+            }                                                                  \
+            map->entries[n].key = strdup(k);                                   \
+            map->entries[n].value = (v);                                       \
+            n++;                                                               \
+        }                                                                      \
+    } while (0)
         for (size_t i = 0; i < expr->as.map_node.count; i++) {
             const char *key = expr->as.map_node.entries[i].key;
             VMValue *value =
                 vm_execute(scope, expr->as.map_node.entries[i].value);
-            /* Duplicate keys: last value wins (overwrite in place). */
-            size_t existing = n;
-            for (size_t j = 0; j < n; j++) {
-                if (strcmp(map->entries[j].key, key) == 0) {
-                    existing = j;
-                    break;
+            if (!key) {
+                /* `...src`: splice src's entries in at this position. */
+                if (value->type != VAL_MAP) {
+                    fprintf(stderr, "Spread source must be a map\n");
+                    exit(1);
                 }
+                VMMap *src = value->data.map;
+                for (size_t s = 0; s < src->count; s++) {
+                    VMValue *copy = val_clone(src->entries[s].value);
+                    VM_MAP_PUT(src->entries[s].key, copy);
+                }
+                val_free(value);
+                continue;
             }
-            if (existing < n) {
-                val_free(map->entries[existing].value);
-                map->entries[existing].value = value;
-            } else {
-                map->entries[n].key = strdup(key);
-                map->entries[n].value = value;
-                n++;
-            }
+            VM_MAP_PUT(key, value);
         }
+#undef VM_MAP_PUT
         map->count = n;
         VMValue *val = nval(VAL_MAP);
         val->data.map = map;
@@ -812,7 +1014,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
 
         // Empty slice if start >= end
         if (start >= end) {
-            VMArray *new_arr = malloc(sizeof(VMArray));
+            VMArray *new_arr = vm_arr_alloc();
             new_arr->count = 0;
             new_arr->elements = NULL;
             VMValue *val = nval(VAL_ARR);
@@ -823,7 +1025,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             return val;
         }
 
-        VMArray *new_arr = malloc(sizeof(VMArray));
+        VMArray *new_arr = vm_arr_alloc();
         new_arr->count = end - start;
         new_arr->elements = malloc(sizeof(VMValue *) * new_arr->count);
         for (size_t i = 0; i < new_arr->count; i++) {
@@ -850,6 +1052,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             if (!c) break;
             val_free(last);
             last = vm_execute(scope, expr->as.while_node.body);
+            if (g_vm_returning) break; /* `return` inside the loop body */
         }
         return last;
     }
@@ -871,6 +1074,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             }
             val_free(last);
             last = vm_execute(for_scope, expr->as.for_node.body);
+            if (g_vm_returning) break; /* `return` inside the loop body */
             if (expr->as.for_node.step)
                 vm_execute(for_scope, expr->as.for_node.step);
         }
@@ -890,6 +1094,7 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
                          iterable->data.arr->elements[i]);
             val_free(last);
             last = vm_execute(fe_scope, expr->as.foreach_node.body);
+            if (g_vm_returning) break; /* `return` inside the loop body */
         }
         vm_scope_release(fe_scope);
         val_free(iterable);
@@ -915,17 +1120,47 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             val_free(iv);
             val_free(last);
             last = vm_execute(fr_scope, expr->as.forrange_node.body);
+            if (g_vm_returning) break; /* `return` inside the loop body */
         }
         vm_scope_release(fr_scope);
         return last;
     }
     case EXPR_EARRAY_ASSIGN: {
         VMValue *array_val = vm_execute(scope, expr->as.array_assign_node.array);
+        VMValue *idx_val = vm_execute(scope, expr->as.array_assign_node.idx);
+        /* Field/key assignment: `s.f = v` (and `m["k"] = v`) reach here as
+         * a map target with a string key. Maps are reference values, so the
+         * write is visible through every binding -- no write-back needed. */
+        if (array_val->type == VAL_MAP) {
+            if (idx_val->type != VAL_STR) {
+                fprintf(stderr, "Map key must be a string\n");
+                exit(1);
+            }
+            VMValue *value = vm_execute(scope, expr->as.array_assign_node.value);
+            VMMap *m = array_val->data.map;
+            int found = 0;
+            for (size_t i = 0; i < m->count; i++) {
+                if (strcmp(m->entries[i].key, idx_val->data.s) == 0) {
+                    val_free(m->entries[i].value);
+                    m->entries[i].value = value;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                m->entries = realloc(m->entries, sizeof(VMMapEntry) * (m->count + 1));
+                m->entries[m->count].key = strdup(idx_val->data.s);
+                m->entries[m->count].value = value;
+                m->count++;
+            }
+            val_free(array_val);
+            val_free(idx_val);
+            return nval(VAL_NULL);
+        }
         if (array_val->type != VAL_ARR) {
             fprintf(stderr, "Array assignment target must be an array\n");
             exit(1);
         }
-        VMValue *idx_val = vm_execute(scope, expr->as.array_assign_node.idx);
         if (idx_val->type != VAL_LONG) {
             fprintf(stderr, "Array index must be a long\n");
             exit(1);

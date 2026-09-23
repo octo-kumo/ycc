@@ -6,7 +6,7 @@
 PASS=0
 FAIL=0
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="$ROOT/yboot"
+YBOOT="${YBOOT:-$ROOT/yboot}"
 
 # Colors
 RED='\033[0;31m'

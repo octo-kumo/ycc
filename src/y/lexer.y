@@ -42,6 +42,31 @@ def isalnum(c: str) -> bool {
     if (isdigit(c)) { true } else { isalpha(c) }
 };
 
+// Digit of a radix literal (0x.. / 0b..), including `_` separators.
+// NOTE: nested ifs, not `||` (see isalnum note).
+def is_radix_ch(c: str, radix: long) -> bool {
+    let ok = false;
+    if (c == "_") { ok = true; 0; } else { 0; };
+    if (radix == 2) {
+        if (c == "0") { ok = true; 0; } else { 0; };
+        if (c == "1") { ok = true; 0; } else { 0; };
+        0
+    } else {
+        if (isdigit(c)) { ok = true; 0; } else { 0; };
+        let o = ord(c);
+        if (o >= 97) {
+            if (o <= 102) { ok = true; 0; } else { 0; };
+            0
+        } else { 0; };
+        if (o >= 65) {
+            if (o <= 70) { ok = true; 0; } else { 0; };
+            0
+        } else { 0; };
+        0
+    };
+    ok
+};
+
 def isspace(c: str) -> bool {
     if (c == " ") { true }
     else if (c == "\t") { true }
@@ -162,6 +187,30 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
         } else if (isdigit(c)) {
             let start = i;
             let startcol = col;
+            // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
+            // NOTE: nested ifs, not `||` (see isalnum note).
+            let radix = 0;
+            if (c == "0") {
+                let nxt = substr(src, i + 1, 1);
+                if (nxt == "x") { radix = 16; 0; } else { 0; };
+                if (nxt == "X") { radix = 16; 0; } else { 0; };
+                if (nxt == "b") { radix = 2; 0; } else { 0; };
+                if (nxt == "B") { radix = 2; 0; } else { 0; };
+                0
+            } else { 0; };
+            if (radix > 0) {
+                i = i + 2;
+                col = col + 2;
+                let rdone = false;
+                while (rdone == false) {
+                    if (i < n) {
+                        if (is_radix_ch(substr(src, i, 1), radix)) { i = i + 1; col = col + 1; 0; }
+                        else { rdone = true; 0; };
+                        0
+                    } else { rdone = true; 0 };
+                };
+                0
+            } else {
             let ind = false;
             while (ind == false) {
                 if (i < n) {
@@ -189,6 +238,35 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 } else { 0 };
                 0
             } else { 0 };
+            // optional exponent: e / E, an optional sign, then digits. Only
+            // consumed when at least one digit follows, so `1e` stays a
+            // number followed by an identifier rather than a bad literal.
+            let ec = substr(src, i, 1);
+            let is_e = false;
+            if (ec == "e") { is_e = true; 0; } else { 0; };
+            if (ec == "E") { is_e = true; 0; } else { 0; };
+            if (is_e) {
+                let esign = 0;
+                let sc = substr(src, i + 1, 1);
+                if (sc == "+") { esign = 1; 0; } else { 0; };
+                if (sc == "-") { esign = 1; 0; } else { 0; };
+                if (isdigit(substr(src, i + 1 + esign, 1))) {
+                    i = i + 1 + esign;
+                    col = col + 1 + esign;
+                    let exd = false;
+                    while (exd == false) {
+                        if (i < n) {
+                            if (isdigit(substr(src, i, 1))) { i = i + 1; col = col + 1; 0; }
+                            else { exd = true; 0; };
+                            0
+                        } else { exd = true; 0 };
+                    };
+                    0
+                } else { 0 };
+                0
+            } else { 0 };
+            0
+            };
             toks = push(toks, mktok("num", substr(src, start, i - start), line, startcol));
             0
         } else if (isalpha(c)) {

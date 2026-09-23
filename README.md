@@ -27,10 +27,19 @@ Options:
   -c, --compile [OUTPUT]  Compile to native binary (default: a.out)
   -S, --emit-c [OUTPUT]   Emit C source only (default: stdout)
   -o OUTPUT               Output file path
+      --no-exec           Disable the exec() builtin (no shell access)
+  -q, --quiet             Suppress progress output
+  -t, --time              Print per-phase timings to stderr
+      --strict            Treat type errors as fatal (exit 1)
   -h, --help              Show this help
 
 Without options, runs the program in the built-in VM.
 ```
+
+Type checking is **advisory by default**: the checker is still incomplete, so
+a failed check prints a diagnostic but the program still runs or compiles.
+`--strict` makes a type error fatal (non-zero exit, nothing emitted) — what
+you want in a build script.
 
 ### Examples
 
@@ -130,12 +139,38 @@ The runtime provides:
 
 ## Limitations
 
-- No garbage collection (manual memory management in runtime)
+- No garbage collection (the native backend uses an arena that never frees;
+  the C runtime and VM reference-count)
 - Limited error messages
 - Modules via source-to-source imports (`import m from "./x.y"`, paths relative
   to the importing file; `export {...}` must be the last statement)
 - Type inference is incomplete for some edge cases
 - Closures capture entire scopes, not individual variables
+
+## Value semantics
+
+Numbers, booleans and strings are values. **Arrays, maps and records are
+references**: binding one to a second name shares it, and `push`, `map_set`,
+`a[i] = v` and `s.f = v` are observable through every binding. All three
+engines — the VM, compiled C, and the native backend — agree on this, which
+is what lets `ycc` compile itself to a byte-identical binary. Rebind the
+result of `push` (`a = push(a, v)`), since growing may move the array.
+
+## Profiling
+
+Both compilers can report where a compile spends time and memory:
+
+```bash
+./ycc --time -o prog prog.y     # per-phase table on stderr
+./yboot --time -q prog.y
+```
+
+`ycc --time` prints one row per phase (resolve, tokenize, parse, strip_ns,
+rename, typecheck, emit_fns, emit_start, asm_text, assemble — split into
+a:split/a:encode/a:link and l:labmap/l:patch/l:elf — and write) with elapsed
+milliseconds, heap bytes consumed by that phase, plus counters. The Y-level
+builtins behind it (`clock_us()`, `heap_used()`, `eputs(v)`) are available to
+any program, in every engine.
 
 ## Testing
 
@@ -144,7 +179,13 @@ make test         # everything: full yboot→cycc→ycc chain + all suites
 make test-fast    # all suites except the ycc chain (ycc suites self-skip)
 make test-ycc     # full ycc chain + self-hosted check only
 make test-compile # tiny smoke: compile + run helloworld
+make asan         # build yboot-asan (ASan + UBSan)
+make test-asan    # run every suite against the sanitized toolchain
 ```
+
+`make test-asan` is expected to be clean: no sanitizer report, no failure.
+The suites scale their timeouts automatically when `$YBOOT` names a
+sanitized binary (it runs roughly 15× slower).
 
 Suites live in `test/sh/` (run `./test/sh/run_all.sh [suite ...]` to pick a
 subset — e.g. `./test/sh/run_all.sh audit examples`):
@@ -157,7 +198,9 @@ subset — e.g. `./test/sh/run_all.sh audit examples`):
 | audit          | `test_audit.sh`           | all 65 `test/y/audit/t*.y`, VM vs compiled  |
 | ycc-units      | `test_ycc_units.sh`       | every `test/y/ycc/test_*.y` runs in the VM  |
 | ycc            | `test_ycc.sh`             | self-hosted `ycc` matches `yboot` output    |
+| fixpoint       | `test_fixpoint.sh`        | `ycc` rebuilds itself byte-identically (3 generations) and the self-built binary works |
 | native         | `test_native.sh`          | `test/y/native/*.y` → static ELF → run (no toolchain) |
+| native-examples| `test_native_examples.sh` | every `test/y/examples/*.y` under real `ycc`, vs the VM |
 
 Every suite compares VM (`-q`) vs compiled-binary behavior — a change must
 pass in **both**. `test_audit.sh` documents its known divergences inline
@@ -165,6 +208,9 @@ pass in **both**. `test_audit.sh` documents its known divergences inline
 The `native` suite instead compiles to real x86_64 assembly
 (`ycc -S`, no C, no `YValue`) and checks program output — see
 `src/y/NATIVE.md` for the backend roadmap and `test/y/native/` for the corpus.
+`native-examples` is a ratchet: every example the native compiler accepts
+must match the VM, and its `UNSUPPORTED` list (with a reason per entry)
+fails the suite as soon as an entry starts compiling.
 
 ## Implementation notes
 

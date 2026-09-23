@@ -1,0 +1,13 @@
+{a: 1, b: hi, c: true, d: 2.500000}
+{a: long, b: str, c: bool, d: float}
+<function (long, long)->(long)>
+(long, long)->long
+long
+float
+bool
+str
+[long]
+{n: 7, f: <function (long, long)->(long)>}
+42
+via field = 12
+101

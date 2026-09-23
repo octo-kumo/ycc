@@ -8,7 +8,9 @@
 #include <stddef.h>
 
 typedef struct VMArray {
+    int refcount;      /* shared: clones share this array (see val_clone) */
     size_t count;
+    size_t capacity;   /* allocated slots (>= count); O(1) amortized push */
     struct VMValue **elements;
 } VMArray;
 
@@ -17,6 +19,7 @@ typedef struct VMMapEntry {
     struct VMValue *value;
 } VMMapEntry;
 typedef struct VMMap {
+    int refcount;      /* shared: clones share this map (see val_clone) */
     size_t count;
     VMMapEntry *entries;
 } VMMap;
@@ -70,6 +73,10 @@ char *val_to_str(const VMValue *val);
 type_t *val_type(const VMValue *val);
 void val_free(VMValue *val);
 VMValue *val_clone(const VMValue *val);
+/* Allocate a fresh (unshared) array/map body: refcount 1, empty. Every
+ * VMArray/VMMap must come from these so the refcount is always valid. */
+VMArray *vm_arr_alloc(void);
+VMMap *vm_map_alloc(void);
 void vm_init(VM *vm);
 VMValue *vm_execute(VMVariableScope *scope, Expr *expr);
 void vm_scope_free(VMVariableScope *scope);

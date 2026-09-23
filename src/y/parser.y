@@ -115,6 +115,14 @@ def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: st
             if (is_punct(toks, pos, close)) { go = false; 0; } else { 0; };
             0
         } else {
+            // Neither a separator nor the closer: the token stream is
+            // malformed. parser.y has no error channel, so plant a node the
+            // checker rejects — dropping the leftovers silently compiled
+            // `print(1 zzz)` into `print(1)`.
+            if (is_punct(toks, pos, close)) { 0; } else {
+                xs = push(xs, { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or '" + close + "')", line: tline(toks, pos), col: tcol(toks, pos) });
+                0;
+            };
             go = false;
             0
         };
@@ -167,7 +175,7 @@ def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
     } else if (is_punct(toks, p, "[")) {
         parse_array(toks, p)
     } else if (is_punct(toks, p, "{")) {
-        parse_map(toks, p)
+        if (brace_is_map(toks, p)) { parse_map(toks, p) } else { parse_block(toks, p) }
     } else if (is_kw(toks, p, "def")) {
         parse_func(toks, p)
     } else if (is_kw(toks, p, "if")) {
@@ -348,7 +356,36 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
                     0
                 };
             };
+            // Same guard as sep_by: a token that is neither ',' nor ']'
+            // means the stream is malformed, and dropping it silently would
+            // compile `[1, 2 zzz]` as `[1, 2]`.
+            if (is_punct(toks, pos, "]")) { 0; } else {
+                elems = push(elems, { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or ']')", line: tline(toks, pos), col: tcol(toks, pos) });
+                0;
+            };
             res({ k: "array", elems: elems, line: ln, col: cl }, pos + 1)  // skip ']'
+        }
+    }
+};
+
+// `{` in expression position is ambiguous: a record literal (`{a: 1}`) or a
+// block expression (`{ let t = 1; t + 1 }`). Only `{}`, `{key: ...}` and
+// `{"key": ...}` are records; everything else is a block.
+def brace_is_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> bool {
+    if (is_punct(toks, p + 1, "}")) {
+        true
+    } else {
+        let k = tt(toks, p + 1);
+        if (k == "id") {
+            is_punct(toks, p + 2, ":")
+        } else if (k == "str") {
+            is_punct(toks, p + 2, ":")
+        } else if (k == "kw") {
+            is_punct(toks, p + 2, ":")
+        } else if (k == "num") {
+            is_punct(toks, p + 2, ":")
+        } else {
+            false
         }
     }
 };
@@ -498,8 +535,10 @@ def parse_type_atom2(toks: [{ t: str, v: str, line: long, col: long }], p: long)
     let nm = tv(toks, p);
     if (nm == "long") { parse_type_tail(toks, p + 1, { k: "tlong" }) }
     else if (nm == "int") { parse_type_tail(toks, p + 1, { k: "tlong" }) }
+    else if (nm == "byte") { parse_type_tail(toks, p + 1, { k: "tbyte" }) }
     else if (nm == "bool") { parse_type_tail(toks, p + 1, { k: "tbool" }) }
     else if (nm == "str") { parse_type_tail(toks, p + 1, { k: "tstr" }) }
+    else if (nm == "float") { parse_type_tail(toks, p + 1, { k: "tfloat" }) }
     else if (nm == "null") { parse_type_tail(toks, p + 1, { k: "tnull" }) }
     else { parse_type_tail(toks, p + 1, { k: "tname", name: nm }) }
 };

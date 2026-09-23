@@ -140,10 +140,24 @@ def parse_operand_empty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, 
 };
 
 def parse_operand_nonempty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
-    if (substr(t, 0, 1) == "%") {
+    // `*%reg` — register-indirect call/jump target (closure code pointers).
+    if (substr(t, 0, 1) == "*") {
+        parse_operand_ind(t)
+    } else if (substr(t, 0, 1) == "%") {
         parse_operand_reg(t)
     } else {
         parse_operand_noreg(t)
+    }
+};
+
+def parse_operand_ind(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+    // (split: *-gate above narrows; the rest must be a 64-bit register.)
+    let r = substr(t, 1, len(t) - 1);
+    let n = enc.reg_num(r);
+    if (n < 0) {
+        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + r + "'" }
+    } else {
+        { ok: true, op: { k: "ind", n: n, size: enc.reg_size(r), v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -530,8 +544,12 @@ def label_addr(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: l
 
 // ── pass 1: parse lines into items ─────────────────────────────────────
 
-def asm_assemble(text: str) -> {ok: bool, bytes: [long], error: str} {
+def asm_assemble(text: str) -> {ok: bool, bytes: [long], error: str, times: [{ name: str, us: long, heap: long }]} {
+    let t0 = clock_us();
+    let h0 = heap_used();
     let lines = split(text, "\n");
+    let t1 = clock_us();
+    let h1 = heap_used();
     let items = [];
     let labels = [];
     let sec = 0;
@@ -559,10 +577,28 @@ def asm_assemble(text: str) -> {ok: bool, bytes: [long], error: str} {
         li = li + 1;
         0
     };
+    let t2 = clock_us();
+    let h2 = heap_used();
     if (err != "") {
-        { ok: false, bytes: [], error: err }
+        { ok: false, bytes: [], error: err,
+          times: [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
+                   { name: "a:encode", us: t2 - t1, heap: h2 - h1 } ] }
     } else {
-        asm_link(items, labels)
+        let lk = asm_link(items, labels);
+        let t3 = clock_us();
+        let h3 = heap_used();
+        let tl: [{ name: str, us: long, heap: long }] =
+            [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
+              { name: "a:encode", us: t2 - t1, heap: h2 - h1 },
+              { name: "a:link", us: t3 - t2, heap: h3 - h2 } ];
+        let lsub = lk.times;
+        let k = 0;
+        while (k < len(lsub)) {
+            let le = lsub[k];
+            tl = push(tl, le);
+            k = k + 1;
+        };
+        { ok: lk.ok, bytes: lk.bytes, error: lk.error, times: tl }
     }
 };
 
@@ -892,8 +928,10 @@ def asm_encode(mn: str, ops, lno: long, sec: long, offs: [long]) -> {err: str, s
 
 // ── pass 2: layout, fixups, ELF ────────────────────────────────────────
 
-def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], labels: [{name: str, sec: long, off: long}]) -> {ok: bool, bytes: [long], error: str} {
+def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], labels: [{name: str, sec: long, off: long}]) -> {ok: bool, bytes: [long], error: str, times: [{ name: str, us: long, heap: long }]} {
     // section sizes
+    let lt0 = clock_us();
+    let lh0 = heap_used();
     let code_len = 0;
     let ro_len = 0;
     // NOTE: `0;` tails (see parser.y parse_binary note). `it.len` reads go
@@ -907,12 +945,16 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long],
         0
     };
     let lm = labmap_build(labels);
+    let lt1 = clock_us();
+    let lh1 = heap_used();
     let lmap = lm.map;
     let start = labmap_get(lmap, "_start");
     if (lm.dup != "") {
-        { ok: false, bytes: [], error: "duplicate label '" + lm.dup + "'" }
+        { ok: false, bytes: [], error: "duplicate label '" + lm.dup + "'",
+          times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else if (start.sec != 0) {
-        { ok: false, bytes: [], error: "no _start label (empty program?)" }
+        { ok: false, bytes: [], error: "no _start label (empty program?)",
+          times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else {
         // pad code to a page so rodata lands page-aligned (mirrors elf.y)
         let pad = 0;
@@ -955,9 +997,18 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long],
             };
         };
         if (err != "") {
-            { ok: false, bytes: [], error: err }
+            { ok: false, bytes: [], error: err,
+              times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
         } else {
-            { ok: true, bytes: elf.elf_build(code, ro, start.off), error: "" }
+            let lt2 = clock_us();
+            let lh2 = heap_used();
+            let eb = elf.elf_build(code, ro, start.off);
+            let lt3 = clock_us();
+            let lh3 = heap_used();
+            { ok: true, bytes: eb, error: "",
+              times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 },
+                       { name: "l:patch", us: lt2 - lt1, heap: lh2 - lh1 },
+                       { name: "l:elf", us: lt3 - lt2, heap: lh3 - lh2 } ] }
         }
     }
 };
@@ -1091,12 +1142,12 @@ def concat_bytes(a: [long], b: [long]) -> [long] {
 // bytes straight through the write syscall (NUL-safe). The old `octal`
 // debugging field was REMOVED: rendering it cost O(n^2) string building
 // (one malloc+copy per byte) and nothing reads it — it dominated -o time.
-def ycc_assemble(asm_text: str) -> {ok: bool, bytes: [long], octal: str, error: str} {
+def ycc_assemble(asm_text: str) -> {ok: bool, bytes: [long], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
     let r = asm_assemble(asm_text);
     if (!(r.ok)) {
-        { ok: false, bytes: [], octal: "", error: r.error }
+        { ok: false, bytes: [], octal: "", error: r.error, times: r.times }
     } else {
-        { ok: true, bytes: r.bytes, octal: "", error: "" }
+        { ok: true, bytes: r.bytes, octal: "", error: "", times: r.times }
     }
 };
 

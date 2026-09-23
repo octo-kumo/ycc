@@ -5,7 +5,15 @@
 # pass/fail/skip reporters, run_parity(), print_summary().
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-YBOOT="$ROOT/yboot"
+YBOOT="${YBOOT:-$ROOT/yboot}"  # overridable: make test-asan points this at yboot-asan
+
+# A sanitized toolchain runs roughly 15x slower, so the default timeouts
+# below would flag heavy tests (audit/t45_fib) as hangs. Scale them instead
+# of weakening the limits for everyone.
+YTIMEOUT_SCALE=1
+case "$YBOOT" in
+    *asan* | *msan* | *ubsan*) YTIMEOUT_SCALE=15 ;;
+esac
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,7 +38,9 @@ skip() { echo -e "${YELLOW}SKIP${NC} $1${2:+ ($2)}"; SKIP=$((SKIP + 1)); }
 # Returns 0 on parity, 1 otherwise; sets RUN_VM_OUT/RUN_BIN_OUT/RUN_VMEC/RUN_BINEC.
 run_parity() {
     local name="$1" file="$2"
-    local vm_to="${3:-10}" cc_to="${4:-60}" bin_to="${5:-10}"
+    local vm_to=$(( ${3:-10} * YTIMEOUT_SCALE ))
+    local cc_to=$(( ${4:-60} * YTIMEOUT_SCALE ))
+    local bin_to="${5:-10}"
 
     RUN_VM_OUT=$(timeout "$vm_to" "$YBOOT" -q "$file" </dev/null 2>&1)
     RUN_VMEC=$?

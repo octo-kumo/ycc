@@ -138,6 +138,12 @@ void ast_walk(Expr *expr, int indent) {
         ast_walk_labeled("operand:", expr->as.unary_node.operand, indent + 1);
         break;
 
+    case EXPR_ERETURN:
+        printf(ANSI_MAGENTA "EReturn" ANSI_RESET "\n");
+        if (expr->as.return_value)
+            ast_walk_labeled("value:", expr->as.return_value, indent + 1);
+        break;
+
     case EXPR_EOP:
         printf(ANSI_MAGENTA "EOp" ANSI_RESET "  " ANSI_DIM
                             "op=" ANSI_RESET ANSI_BOLD "'%s'" ANSI_RESET "\n",
@@ -237,6 +243,13 @@ void ast_walk(Expr *expr, int indent) {
         } else {
             for (size_t i = 0; i < expr->as.map_node.count; i++) {
                 ast_indent(indent + 1);
+                if (!expr->as.map_node.entries[i].key) {
+                    printf(ANSI_DIM "spread" ANSI_RESET "\n");
+                    ast_walk_labeled("source:",
+                                     expr->as.map_node.entries[i].value,
+                                     indent + 2);
+                    continue;
+                }
                 char *escaped_key =
                     escape_str(expr->as.map_node.entries[i].key);
                 printf(ANSI_DIM "key=" ANSI_RESET ANSI_BOLD "\"%s\"" ANSI_RESET
@@ -354,6 +367,14 @@ void ast_print_code(FILE *out, Expr *expr, int indent) {
         fprintf(out, ")");
         break;
 
+    case EXPR_ERETURN:
+        fprintf(out, ANSI_MAGENTA "return" ANSI_RESET);
+        if (expr->as.return_value) {
+            fprintf(out, " ");
+            ast_print_code(out, expr->as.return_value, indent);
+        }
+        break;
+
     case EXPR_EOP:
         fprintf(out, "(");
         ast_print_code(out, expr->as.op_node.left, indent);
@@ -446,6 +467,11 @@ void ast_print_code(FILE *out, Expr *expr, int indent) {
         fprintf(out, ANSI_CYAN "{" ANSI_RESET);
         for (size_t i = 0; i < expr->as.map_node.count; i++) {
             if (i > 0) { fprintf(out, ", "); }
+            if (!expr->as.map_node.entries[i].key) {
+                fprintf(out, ANSI_MAGENTA "..." ANSI_RESET);
+                ast_print_code(out, expr->as.map_node.entries[i].value, indent);
+                continue;
+            }
             fprintf(out,
                     ANSI_GREEN "%s" ANSI_RESET ANSI_MAGENTA ":" ANSI_RESET " ",
                     expr->as.map_node.entries[i].key);

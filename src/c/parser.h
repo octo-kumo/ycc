@@ -29,6 +29,8 @@ typedef struct list_t {
 } list_t;
 
 void free_list(list_t *list);
+/* Advance past whitespace and both comment forms (line and block). */
+char *skip_spaces(const char *input);
 parser_result_t parse_long(const char *input);
 parser_result_t parse_many(parser_t p, const char *input);
 ast_parser_result_t ast__parse_expr(const char *input);
