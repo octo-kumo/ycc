@@ -9,13 +9,23 @@
   static type into every access (`movzbq`/`movb`), into the allocation
   size, and into `push`/`slice`/`==`/`join`/`foreach`, which now take it
   as a parameter. `bytes(s)` / `from_bytes(b)` convert to and from `str`.)
-- bench the hot primitives and decide (the workflow in AGENTS.md):
-  `bench/compare.sh` against `ae6cff1` shows the runtime move cost ~17-25%
-  compile time and up to 2x on string-heavy output (tostring/index_of in
-  loops), in exchange for 33-50% smaller binaries. Decide per helper:
-  cheaper Y forms (y_long_tostr can fill a fixed [byte; 24] instead of
-  pushing per digit) or back to asm as a byte primitive (y_str_index,
-  y_str_trim are the ones the compiler itself hammers).
+- the optimizer's loop paid the runtime-in-Y trade down (SCORE 110.78,
+  bench/compare.sh of `6a753ae` against `ea83b05`: self-compile +21%,
+  string-heavy output +30.8%, heap -18.7%). What the loop left open, in
+  order of measured size:
+  - `y_alloc` costs two `brk` syscalls per allocation and sits under
+    every string/array operation. Caching the break needs a home: %r12
+    was rejected (the prelude helpers push/pop it, which would rewind the
+    cache and hand out overlapping blocks) and the ELF has no writable
+    segment — so this wants either a .data segment in asm.y/elf.y or a
+    helper rework that frees a callee-saved register. Measured upside is
+    the largest remaining lever.
+  - `y_str_join` builds with push-per-byte (the asm_text joins move MBs
+    per self-compile); either it returns to being a byte mover in
+    arch_x64.y or the emit path stops joining into one string at all.
+  - `from_bytes` could accept a fixed `[byte; N]` (the runtime already
+    reads the same header), which would drop an allocation from
+    y_long_tostr and y_str_chr.
 
 - add type aliasing (type a = [int])
 - DONE: reduce raw assembly embeded inside ycc, try to do more with y code in std.

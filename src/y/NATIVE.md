@@ -226,6 +226,19 @@ Nothing reaches the binary that the program does not reach itself:
   blocks, so an internal loop label travels with its own references and dead
   code is dropped even mid-function.
 
+Measured cost, and what was paid back: the move cost compile time and
+string-heavy output when it landed (17-25% slower compiles, up to 2x on
+`tostring`/`index_of` loops). The optimization loop documented in
+AGENTS.md has since paid most of it back — same benchmarks, loop start
+(`6a753ae`) against loop end: SCORE 110.78, self-compile +21.3%
+(2.46 s -> 1.93 s), string-heavy output +30.8% (100 -> 69 ms), arena
+-18.7%, output sizes unchanged. What made the difference: `byte_at`
+(the string byte primitive) so the Y string helpers scan instead of
+copying, plus allocation-free character classification in the lexers.
+What remains on the table is written up in TODO.md — chiefly the
+allocator's second `brk` per allocation, which needs a writable segment
+or a free register first.
+
 Measured against the pre-tree-shaking compiler (bench/compare.sh of this
 work against commit `ae6cff1`, same benchmark programs on both sides):
 output is 33–50% smaller and the asm is 55–79% smaller for small
