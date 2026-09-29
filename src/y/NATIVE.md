@@ -271,6 +271,46 @@ only: the program that runs has no use for the file.
 (`http_response`, `http_serve_one`, `listen_http`), all Y over `syscall`.
 A `ui` module would land the same way.
 
+## Profiling compiled output (`ycc --prof`)
+
+`--prof` compiles the program instrumented: every function body gets an
+enter/exit hook and a report lands on **stderr** when the process exits.
+
+```
+prof: 8 fns 18 calls 359838 ns cpu 1320 B alloc
+     calls      total_ns       self_ns      avg_ns      max_ns  name
+         1        359838           849         849      359838  _start
+         4        346907        346907       86726      180719  leaf
+```
+
+per function: calls (exact), total cpu ns (callees included — for a
+recursive function the nesting counts once per level), self ns, the
+average ns per call in the function's own body, and the longest single
+call. Rows are sorted worst-first by total; the summary's ns is the sum
+of self times, i.e. the process's own cpu time.
+
+The runtime is Y (`src/y/std/prof.y`, embedded through the generated
+`prof_lines.y` and spliced only for `--prof` builds). State lives in one
+record the emitter parks in `%r13`: a zeroed slot table, the names, the
+clock scratch and the starting heap break. A guard word makes re-entry
+harmless — the profiler's own calls are measured with their hooks
+skipped symmetrically — and the table builder may only use intrinsics,
+because `%r13` is not live until it returns.
+
+Cost: two `clock_gettime` calls per function call, ~200 ns on a quiet
+machine. A function whose body is a few instructions therefore looks
+slower than it is; call counts are exact and the overhead is identical on
+both sides of a branch comparison, so ratios stay meaningful.
+
+## Benchmarks
+
+`bench/` holds benchmarks for the compiler and for what it produces —
+none of it runs in the test suites. `bench/compare.sh BASE_YCC NEW_YCC`
+scores two builds (100 = unchanged) over compile time, run time, binary
+size and asm size, and joins their `--prof` reports function by function.
+The workflow for a performance-affecting change (propose → branch →
+bench → decide) is in AGENTS.md; the details are in `bench/README.md`.
+
 ## Testing
 
 `test/sh/test_native.sh` compiles `test/y/native/*.y` → `.s` → binary via the

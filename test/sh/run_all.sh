@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run the full y test suite (or a subset).
 # Usage: ./test/sh/run_all.sh [suite ...]
-# Suites: loops comprehensive examples audit ycc-units ycc fixpoint native native-examples stdin-eof
+# Suites: loops comprehensive examples audit ycc-units ycc fixpoint native native-examples prof stdin-eof
 # Default (no args): all suites. The ycc suite skips itself when
 # ./ycc is not built (build it via `make ycc`).
 # The native and native-examples suites need it too (hard error, not a skip).
@@ -15,7 +15,7 @@ if [ ! -x "$ROOT/yboot" ]; then
     exit 1
 fi
 
-SUITES="${*:-loops comprehensive examples audit ycc-units ycc fixpoint native native-examples stdin-eof}"
+SUITES="${*:-loops comprehensive examples audit ycc-units ycc fixpoint native native-examples prof stdin-eof}"
 declare -A SCRIPT_FOR=(
     [loops]="test_loops.sh"
     [comprehensive]="test_comprehensive.sh"
@@ -26,6 +26,7 @@ declare -A SCRIPT_FOR=(
     [fixpoint]="test_fixpoint.sh"
     [native]="test_native.sh"
     [native-examples]="test_native_examples.sh"
+    [prof]="test_prof.sh"
     [stdin-eof]="test_stdin_eof.sh"
 )
 
@@ -33,11 +34,11 @@ OVERALL=0
 for s in $SUITES; do
     script="${SCRIPT_FOR[$s]}"
     if [ -z "$script" ]; then
-        echo "error: unknown suite '$s' (pick from: loops comprehensive examples audit ycc-units ycc fixpoint native native-examples stdin-eof)" >&2
+        echo "error: unknown suite '$s' (pick from: loops comprehensive examples audit ycc-units ycc fixpoint native native-examples prof stdin-eof)" >&2
         exit 2
     fi
     # native needs the bootstrap binary; test-fast may not have built it.
-    if [ "$s" = "native" ] || [ "$s" = "native-examples" ]; then
+    if [ "$s" = "native" ] || [ "$s" = "native-examples" ] || [ "$s" = "prof" ]; then
         if [ ! -x "$ROOT/ycc" ]; then
             echo ""
             echo "################################################################"

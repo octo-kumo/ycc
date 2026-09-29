@@ -16,7 +16,7 @@ C (gnu99/gcc) compiler + tree-walking VM for the `.y` language, plus the self-ho
 - Program output only (use for all output comparisons): `./yboot -q <file>`
 - Compile: `./yboot --compile <file> -o /tmp/t_bin && /tmp/t_bin`
 - Emit C: `./yboot -S <file> > /tmp/t.c`
-- `make test` runs **everything**: the full bootstrap chain (`yboot → cycc → ycc`, ~2 min) + all `test/sh/*.sh` suites. `make test-fast` builds only `yboot` and skips the ycc/native suites; `make test-ycc` runs only the self-hosted check; `./test/sh/run_all.sh [suite ...]` runs a subset (`loops comprehensive examples audit ycc-units ycc fixpoint native native-examples`).
+- `make test` runs **everything**: the full bootstrap chain (`yboot → cycc → ycc`, ~2 min) + all `test/sh/*.sh` suites. `make test-fast` builds only `yboot` and skips the ycc/native suites; `make test-ycc` runs only the self-hosted check; `./test/sh/run_all.sh [suite ...]` runs a subset (`loops comprehensive examples audit ycc-units ycc fixpoint native native-examples prof stdin-eof`).
 - Profiling: `./ycc --time` / `./yboot --time` print a per-phase table (elapsed ms + heap bytes + counters) to **stderr**. Use it before optimizing anything — it is how the O(n²) copy-on-store and the byte-at-a-time writer were found. Y-level builtins: `clock_us()`, `heap_used()`, `eputs(v)` (all three engines).
 - Suites (all compare VM `-q` vs compiled binary — a change must pass in **both**):
   - `test/sh/test_loops.sh` — loops + precedence/audit regressions
@@ -28,8 +28,38 @@ C (gnu99/gcc) compiler + tree-walking VM for the `.y` language, plus the self-ho
   - `test/sh/test_fixpoint.sh` — `ycc` rebuilds itself byte-identically (3 generations) and the self-built binary still compiles working programs (skips if `./ycc` absent)
   - `test/sh/test_native.sh` — `test/y/native/*.y` via real `ycc` → static ELF → run: `t*` assert stdout/exit (`.expected`/`.exit`, stdin from `.stdin`), `e*` assert rejection (first-line `// expect-error:` marker); needs `./ycc` (`run_all.sh` skips it with a warning if absent)
   - `test/sh/test_native_examples.sh` — every `test/y/examples/*.y` compiled by the real `ycc` and diffed against the VM. A ratchet: the `UNSUPPORTED` map lists the examples the native backend cannot take yet **with a reason each**, and fails as soon as one starts compiling. Lines where the VM prints `<inferred>`/`<function …>` are compared leniently (the VM has no return-type inference)
+  - `test/sh/test_prof.sh` — `ycc --prof`: instrumentation leaves stdout alone, the report is framed and named, and call counts are exact (times are never asserted). Needs `./ycc`
+  - `test/sh/test_stdin_eof.sh` — stdin/EOF behaviour across the engines
 - Single focused check: `echo 'print(2 + 3 * 4);' > /tmp/t.y && ./yboot -q /tmp/t.y && ./yboot --compile /tmp/t.y -o /tmp/t_bin && /tmp/t_bin`
 - If new flags (`-q`, `--no-exec`) seem ignored, the `./yboot` binary is stale — rebuild with `make`. Always feed `</dev/null` in scripts (some programs read stdin).
+
+## Performance: bench before merging (mandatory workflow)
+
+Anything that can move compile time, output size, or the speed of
+compiled programs — codegen, the runtime, arch_x64.y, std/*.y, the
+assembler — is **proposed, benchmarked on a branch, then decided**.
+Never merge one on taste:
+
+1. **Propose**: say what the change should move (e.g. "y_str_cat call
+   count", "self compile time", "binary size").
+2. **Branch**: `git switch -c bench/whatever` — never benchmark in place.
+3. **Build both sides**: `make ycc` on master, `cp ycc /tmp/ycc-base`,
+   then `make ycc` on the branch.
+4. **Bench**: `bench/compare.sh /tmp/ycc-base ./ycc` — it scores the two
+   builds (100 = unchanged), prints per-benchmark deltas for compile
+   time, run time, binary size and asm size, and joins the `ycc --prof`
+   reports function by function.
+5. **Decide**: merge or revert from the numbers, and put the numbers in
+   the commit message. A deliberate trade (faster compile / bigger
+   binary) is fine — an unnoticed one is not.
+
+`bench/y/*.y` are benchmarks, **not tests**: they never run in the
+suites, so making them heavier never slows `make test`. Add one by
+dropping a `.y` file there (rules in `bench/README.md`). `ycc --prof`
+instruments a compiled program and reports per-function call counts and
+cpu times on stderr — use it to explain a regression, not just to spot
+it. Numbers are noisy at the few-percent level; `bench/compare.sh ... 9`
+takes more samples.
 
 ## Pipeline (main.c)
 
