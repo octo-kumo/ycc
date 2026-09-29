@@ -4,14 +4,29 @@
 
 // NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
 def isdigit(c: str) -> bool {
+    // Range compares on the 1-char string, not ord(c): ord goes through
+    // bytes(), which allocates a copy of the string per character, and the
+    // lexer classifies every character of the source. Comparisons land in
+    // y_str_eq/y_str_cmp — byte primitives, no allocation.
     // NOTE: nested ifs, not `&&` (see isalnum note below): the C VM
     // evaluates both sides eagerly AND the native checker rejects `&&`
     // whose operand shapes disagree (comparison-bool vs map-field access
     // both poison through `&&`; plain comparison pairs are fine, but the
     // uniform nested-if style keeps both toolchains quiet everywhere).
-    let o = ord(c);
-    if (o >= 48) {
-        if (o <= 57) { true } else { false }
+    if (c >= "0") {
+        if (c <= "9") { true } else { false }
+    } else { false }
+};
+
+def isupper(c: str) -> bool {
+    if (c >= "A") {
+        if (c <= "Z") { true } else { false }
+    } else { false }
+};
+
+def islower(c: str) -> bool {
+    if (c >= "a") {
+        if (c <= "z") { true } else { false }
     } else { false }
 };
 
@@ -20,19 +35,10 @@ def isalpha(c: str) -> bool {
     // "t0"/"r64" contain digits; the C backend's take_alpha accepts them too
     // via is_alpha... precisely: parser.c is_alpha includes is_digit, so
     // "t0" lexes as one id there as well — parity).
-    let o = ord(c);
-    if (o >= 65) {
-        if (o <= 90) { true }
-        else if (o >= 97) {
-            if (o <= 122) { true } else { false }
-        } else if (o == 95) { true }
-        else if (o >= 48) {
-            if (o <= 57) { true } else { false }
-        } else { false }
-    } else if (o == 95) { true }
-    else if (o >= 48) {
-        if (o <= 57) { true } else { false }
-    } else { false }
+    if (islower(c)) { true }
+    else if (isupper(c)) { true }
+    else if (c == "_") { true }
+    else { isdigit(c) }
 };
 
 def isalnum(c: str) -> bool {
@@ -53,13 +59,12 @@ def is_radix_ch(c: str, radix: long) -> bool {
         0
     } else {
         if (isdigit(c)) { ok = true; 0; } else { 0; };
-        let o = ord(c);
-        if (o >= 97) {
-            if (o <= 102) { ok = true; 0; } else { 0; };
+        if (c >= "a") {
+            if (c <= "f") { ok = true; 0; } else { 0; };
             0
         } else { 0; };
-        if (o >= 65) {
-            if (o <= 70) { ok = true; 0; } else { 0; };
+        if (c >= "A") {
+            if (c <= "F") { ok = true; 0; } else { 0; };
             0
         } else { 0; };
         0
