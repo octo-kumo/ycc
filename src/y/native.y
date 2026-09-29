@@ -1286,7 +1286,7 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             { k: "tstr" }
         } else if (name == "ptr_addr") {
             { k: "tlong" }
-        } else if (name == "tonum" || name == "ord" || name == "index_of" || name == "last_index_of") {
+        } else if (name == "tonum" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
             { k: "tlong" }
         } else if (name == "clock_us" || name == "heap_used") {
             { k: "tlong" }
@@ -1499,7 +1499,7 @@ def name_in(xs: [str], n: str) -> bool {
 // Builtins are resolved by name at the call site, never captured.
 def is_intrinsic_name(n: str) -> bool {
     name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
-             "substr", "trim", "ord", "chr", "tonum", "tostring", "index_of",
+             "substr", "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "sleep", "heap_used", "exit", "argv", "read_file", "write_file",
              "write_bytes", "range", "typeof", "bytes",
@@ -2519,6 +2519,8 @@ def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             gen_substr(st, node)
         } else if (name == "trim") {
             gen_trim(st, node)
+        } else if (name == "byte_at") {
+            gen_byte_at(st, node)
         } else if (name == "ord") {
             gen_ord(st, node)
         } else if (name == "chr") {
@@ -3760,6 +3762,24 @@ def gen_trim(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_trim");
     emit(st, "    add $8, %rsp")
+};
+
+// byte_at(s, i): byte i of string s, trapped when out of bounds. This is
+// the primitive every string helper is built on — reading one byte must
+// not copy the string the way bytes() does. Inline, four instructions,
+// because scanning loops call it per character.
+def gen_byte_at(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let args = node.args;
+    st = gen(st, args[0]);
+    st = emit(st, "    push %rax");
+    st = gen(st, args[1]);
+    st = emit(st, "    pop %rcx");
+    st = emit(st, "    mov (%rcx), %rdx");
+    st = emit(st, "    test %rax, %rax");
+    st = emit(st, "    js y_oob");
+    st = emit(st, "    cmp %rdx, %rax");
+    st = emit(st, "    jge y_oob");
+    emit(st, "    movzbq 8(%rcx,%rax,1), %rax")
 };
 
 def gen_ord(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {

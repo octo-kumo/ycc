@@ -115,16 +115,16 @@ def sib(scale: long, index: long, base: long) -> long {
 };
 
 def le16(v: long) -> [long] {
-    [byte_at(v, 0), byte_at(v, 1)]
+    [byte_of(v, 0), byte_of(v, 1)]
 };
 
 def le32(v: long) -> [long] {
-    [byte_at(v, 0), byte_at(v, 1), byte_at(v, 2), byte_at(v, 3)]
+    [byte_of(v, 0), byte_of(v, 1), byte_of(v, 2), byte_of(v, 3)]
 };
 
 def le64(v: long) -> [long] {
-    [byte_at(v, 0), byte_at(v, 1), byte_at(v, 2), byte_at(v, 3),
-     byte_at(v, 4), byte_at(v, 5), byte_at(v, 6), byte_at(v, 7)]
+    [byte_of(v, 0), byte_of(v, 1), byte_of(v, 2), byte_of(v, 3),
+     byte_of(v, 4), byte_of(v, 5), byte_of(v, 6), byte_of(v, 7)]
 };
 
 // Exact byte i (0 = least significant) of a signed long. Y division
@@ -161,13 +161,13 @@ def div_floor(v: long, d: long) -> long {
     q
 };
 
-def byte_at(v: long, i: long) -> long {
+def byte_of(v: long, i: long) -> long {
     let q = div_floor(v, pow256(i));
     q - div_floor(q, 256) * 256
 };
 
 def u8(v: long) -> long {
-    byte_at(v, 0)
+    byte_of(v, 0)
 };
 
 // fits in a signed 8-bit immediate?
@@ -909,4 +909,4 @@ def enc_insn(mn: str, ops) -> {bytes: [long], fix: [{off: long, kind: str, lbl: 
     }
 };
 
-export { r64, reg_num, reg_size, enc_insn, concat, fixup, byte_at, le16, le32, le64 };
+export { r64, reg_num, reg_size, enc_insn, concat, fixup, byte_of, le16, le32, le64 };

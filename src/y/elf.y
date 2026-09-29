@@ -90,28 +90,28 @@ def push_bytes(out: [long], bytes: [long]) -> [long] {
 };
 
 def push_le16(out: [long], v: long) -> [long] {
-    out = push(out, elfenc.byte_at(v, 0));
-    out = push(out, elfenc.byte_at(v, 1));
+    out = push(out, elfenc.byte_of(v, 0));
+    out = push(out, elfenc.byte_of(v, 1));
     out
 };
 
 def push_le32(out: [long], v: long) -> [long] {
-    out = push(out, elfenc.byte_at(v, 0));
-    out = push(out, elfenc.byte_at(v, 1));
-    out = push(out, elfenc.byte_at(v, 2));
-    out = push(out, elfenc.byte_at(v, 3));
+    out = push(out, elfenc.byte_of(v, 0));
+    out = push(out, elfenc.byte_of(v, 1));
+    out = push(out, elfenc.byte_of(v, 2));
+    out = push(out, elfenc.byte_of(v, 3));
     out
 };
 
 def push_le64(out: [long], v: long) -> [long] {
-    out = push(out, elfenc.byte_at(v, 0));
-    out = push(out, elfenc.byte_at(v, 1));
-    out = push(out, elfenc.byte_at(v, 2));
-    out = push(out, elfenc.byte_at(v, 3));
-    out = push(out, elfenc.byte_at(v, 4));
-    out = push(out, elfenc.byte_at(v, 5));
-    out = push(out, elfenc.byte_at(v, 6));
-    out = push(out, elfenc.byte_at(v, 7));
+    out = push(out, elfenc.byte_of(v, 0));
+    out = push(out, elfenc.byte_of(v, 1));
+    out = push(out, elfenc.byte_of(v, 2));
+    out = push(out, elfenc.byte_of(v, 3));
+    out = push(out, elfenc.byte_of(v, 4));
+    out = push(out, elfenc.byte_of(v, 5));
+    out = push(out, elfenc.byte_of(v, 6));
+    out = push(out, elfenc.byte_of(v, 7));
     out
 };
 

@@ -1378,6 +1378,20 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = expect_type(st, r.typ, { k: "tstr" }, "ord string", node.line, node.col);
                 { typ: { k: "tlong" }, st: st }
             }
+        } else if (name == "byte_at") {
+            // byte_at(s, i) -> long (byte i of s, trapped out of bounds)
+            if (len(cargs) != 2) {
+                st = fail(st, "byte_at takes exactly 2 arguments", node.line, node.col);
+                { typ: t_unk(), st: st }
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                st = expect_type(st, r.typ, { k: "tstr" }, "byte_at string", node.line, node.col);
+                let r2 = typeof_expr(st, cargs[1]);
+                st = r2.st;
+                st = expect_type(st, r2.typ, { k: "tlong" }, "byte_at index", node.line, node.col);
+                { typ: { k: "tlong" }, st: st }
+            }
         } else if (name == "chr") {
             if (len(cargs) != 1) {
                 st = fail(st, "chr takes exactly 1 argument", node.line, node.col);
