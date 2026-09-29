@@ -160,7 +160,7 @@ def issingleop(c: str) -> bool {
 // dispatch reasoning above, so every slash reference goes through this one
 // helper (chr(47)). Single source of truth, zero literal slashes outside
 // strings in this file.
-def slash() -> str { chr(47) };
+def slash() -> str { "/" };
 
 def isdigitch(c: str) -> bool {
     // single-char predicate on a 1-char string (native-safe: no ord()).
