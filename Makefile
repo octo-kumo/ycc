@@ -15,7 +15,7 @@ YBOOT=yboot
 #   ycc   = ycc compiled by cycc, natively (static ELF bytes, no toolchain).
 #   _ycc  = ycc compiled by ycc; must be byte-identical to ycc, then deleted.
 # Bootstrap chain: yboot -> cycc -> ycc -> _ycc (fixpoint check).
-YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/prelude.y
+YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/prelude.y src/y/std/rt.y
 
 all: $(YBOOT)
 
@@ -94,7 +94,7 @@ ycc: cycc $(YCC_SRCS)
 	@echo "stage-4: _ycc built by ycc"
 	cmp ycc _ycc
 	rm -f _ycc
-	@echo "fixpoint verified: ycc == _ycc (byte-identical) — ycc compiled by ycc"
+	@echo "fixpoint verified: ycc == _ycc (byte-identical) - ycc compiled by ycc"
 
 
 .PHONY: all clean valgrind test test-fast test-ycc test-compile asan test-asan

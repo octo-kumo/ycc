@@ -18,6 +18,7 @@ import arch from "./arch_x64.y";
 import types from "./types.y";
 import rename from "./rename.y";
 import prelude from "./std/prelude.y";
+import yrt from "./std/rt.y";
 
 // ── native import resolution ───────────────────────────────────────────
 // Unlike the C backend (which wraps modules in IIFEs returning maps —
@@ -48,6 +49,13 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     let rsrc = r.src;
     let rimports = r.imports;
     let pre = 0;
+    // The runtime library (std/rt.y) is spliced in front of EVERY program:
+    // generated code calls into it by fixed label (`call y_print_long`), so
+    // there is no name to test for. Unused helpers cost nothing in the
+    // output — prune_bodies drops them at emit time.
+    let rtl = yrt.rt_lines();
+    rsrc = join(rtl, "\n") + "\n" + rsrc;
+    pre = pre + len(rtl);
     // Prelude chunks go in front of the resolved text, but only when the
     // program actually mentions one of their names — otherwise every binary
     // would carry code it never calls (there is no dead-code pass).
@@ -125,6 +133,60 @@ def seen_has(seen: [str], full: str) -> bool {
     found
 };
 
+// ── optional std modules ───────────────────────────────────────────────
+// `import net;` (no `from`) pulls in a module by NAME instead of by path:
+// an optional std library (net, ui, ...) or a project-local one. A file
+// next to the importer wins (so a project can vendor or shadow a module),
+// then the compiler's own std library:
+//     <importer dir>/<name>.y        <importer dir>/std/<name>.y
+//     ./std/<name>.y                 ./src/y/std/<name>.y
+//     <ycc dir>/std/<name>.y         <ycc dir>/src/y/std/<name>.y
+//     <ycc dir>/../src/y/std/<name>.y
+// The file found is spliced exactly like `import x from "path"` and its
+// defs are called through the namespace: `net.listen_tcp(...)` and friends.
+
+def dir_of(p: str) -> str {
+    let s = last_index_of(p, "/");
+    if (s < 0) { "" } else { substr(p, 0, s) }
+};
+
+def std_resolve(name: str, base_dir: str) -> str {
+    let cands = [];
+    cands = push(cands, base_dir + "/" + name + ".y");
+    cands = push(cands, base_dir + "/std/" + name + ".y");
+    cands = push(cands, "std/" + name + ".y");
+    cands = push(cands, "src/y/std/" + name + ".y");
+    let av = argv();
+    if (len(av) > 0) {
+        let exe: str = av[0];
+        let d = dir_of(exe);
+        if (len(d) > 0) {
+            cands = push(cands, d + "/std/" + name + ".y");
+            cands = push(cands, d + "/src/y/std/" + name + ".y");
+            cands = push(cands, d + "/../src/y/std/" + name + ".y");
+            0
+        } else { 0; };
+        0
+    } else { 0; };
+    let found = "";
+    let i = 0;
+    while (i < len(cands)) {
+        if (len(found) == 0) {
+            let c: str = cands[i];
+            if (read_file(c) == null) {
+                0
+            } else {
+                found = norm_path(c);
+                0
+            };
+            0
+        } else { 0; };
+        i = i + 1;
+        0
+    };
+    found
+};
+
 def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { src: str, imports: [str], seen: [str] } {
     if (depth > 32) {
         puts("error: native import depth exceeded (cycle?)\n");
@@ -141,19 +203,43 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
             if (substr(trimmed, 0, 7) == "import ") {
                 let rest = substr(trimmed, 7, len(trimmed) - 7);
                 let from_idx = index_of(rest, " from ");
+                let name = "";
+                let full = "";
+                let path = "";
                 if (from_idx >= 0) {
-                    let name = trim(substr(rest, 0, from_idx));
+                    name = trim(substr(rest, 0, from_idx));
                     let path_part = trim(substr(rest, from_idx + 6, len(rest) - from_idx - 6));
                     if (substr(path_part, len(path_part) - 1, 1) == ";") {
                         path_part = substr(path_part, 0, len(path_part) - 1);
                         0
                     } else { 0 };
-                    let path = substr(path_part, 1, len(path_part) - 2);
+                    path = substr(path_part, 1, len(path_part) - 2);
                     // NOTE: normalized (see norm_path): nested base dirs
                     // accumulate "/." segments, so raw joins of the same file
                     // differ per depth and seen-dedup would never hit.
-                    let full = norm_path(base_dir + "/" + path);
+                    full = norm_path(base_dir + "/" + path);
                     if (substr(path, 0, 1) == "/") { full = norm_path(path); 0; } else { 0 };
+                    0
+                } else {
+                    // bare `import name;`: an optional std module (net, ui,
+                    // ...) or a project-local one — see std_resolve above.
+                    name = trim(rest);
+                    if (substr(name, len(name) - 1, 1) == ";") {
+                        name = trim(substr(name, 0, len(name) - 1));
+                        0
+                    } else { 0 };
+                    path = name;
+                    full = std_resolve(name, base_dir);
+                    0
+                };
+                if (len(name) == 0) {
+                    out_lines = push(out_lines, line);
+                    0
+                } else if (len(full) == 0) {
+                    puts("error: cannot find module '" + name + "' (import name; looks next to the importer and in std/)\n");
+                    out_lines = push(out_lines, line);
+                    0
+                } else {
                     let mod_src = read_file(full);
                     if (mod_src == null) {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
@@ -167,10 +253,10 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                         0
                     } else {
                         seen = push(seen, full);
-                        let last_slash = last_index_of(path, "/");
+                        let last_slash = last_index_of(full, "/");
                         let mod_dir = base_dir;
                         if (last_slash >= 0) {
-                            mod_dir = base_dir + "/" + substr(path, 0, last_slash);
+                            mod_dir = substr(full, 0, last_slash);
                             0
                         } else { 0 };
                         // mod_src is str? (read_file returns null on missing
@@ -202,9 +288,6 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                         0
                     };
                     0
-                } else {
-                    out_lines = push(out_lines, line);
-                    0
                 };
                 0
             } else {
@@ -223,6 +306,591 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
         { src: join(out_lines, "\n"), imports: imports, seen: seen }
     }
 };
+
+// ── tree shaking ────────────────────────────────────────────────────────
+// The arch prelude is a pile of labelled blocks (helpers + rodata blobs) of
+// which a typical program uses a handful. Shake keeps exactly the blocks a
+// program reaches and drops the rest, so a hello world stops carrying the
+// string splitter. Reachability is the obvious one:
+//
+//   - a block is entered when a kept block (or the program's own code)
+//     references its label — `call`, `lea`, a jump, or an immediate like
+//     `$ystr_end-ystr` (which names both), and
+//   - when the previous block FALLS THROUGH into it: a block whose last
+//     instruction is not a transfer (`ret`, `jmp`, `syscall` — the traps
+//     end in an exit syscall) runs into the next one.
+//
+// Labels therefore never merge blocks: an internal loop label is a block
+// kept by its own jump references, unreferenced dead code is dropped even
+// in the middle of a function, and `ystr_*` rodata comes along exactly when
+// some kept block names it. prune_bodies applies the same rule one level
+// up, to whole function bodies.
+//
+// The scanners walk a `bytes()` COPY of the text and only materialize the
+// symbols they reference: per-character substr() would cost an allocation
+// (two syscalls in y_alloc) per character, which dominated compiles.
+
+def is_id_b(c: long) -> bool {
+    let ok = false;
+    if (c >= 48) {
+        if (c <= 57) { ok = true; 0; } else { 0; };
+        0
+    } else { 0; };
+    if (c >= 97) {
+        if (c <= 122) { ok = true; 0; } else { 0; };
+        0
+    } else { 0; };
+    if (c >= 65) {
+        if (c <= 90) { ok = true; 0; } else { 0; };
+        0
+    } else { 0; };
+    if (c == 95) { ok = true; 0; } else { 0; };
+    if (c == 36) { ok = true; 0; } else { 0; };
+    ok
+};
+
+// First non-blank offset in [i, hi); blank means space (the asm dialect
+// indents with spaces) or end of range.
+def skip_sp(b: [byte], i: long, hi: long) -> long {
+    let p = i;
+    let go = true;
+    while (go) {
+        if (p >= hi) {
+            go = false;
+            0
+        } else {
+            if (b[p] == 32) {
+                p = p + 1;
+                0
+            } else {
+                go = false;
+                0
+            };
+            0
+        };
+        0
+    };
+    p
+};
+
+// End of the identifier at offset `i` (a leading `$` — an assembly
+// immediate like `$ystr_end-ystr` — is not part of the name).
+def tok_end_b(b: [byte], i: long, hi: long) -> long {
+    let p = i;
+    if (p < hi) {
+        if (b[p] == 36) { p = p + 1; 0; } else { 0; };
+        0
+    } else { 0; };
+    let go = true;
+    while (go) {
+        if (p >= hi) {
+            go = false;
+            0
+        } else {
+            if (is_id_b(b[p])) {
+                p = p + 1;
+                0
+            } else {
+                go = false;
+                0
+            };
+            0
+        };
+        0
+    };
+    p
+};
+
+// The identifier at offset `i`, or "".
+def tok_at_b(text: str, b: [byte], i: long, hi: long) -> str {
+    let s = i;
+    if (s < hi) {
+        if (b[s] == 36) { s = s + 1; 0; } else { 0; };
+        0
+    } else { 0; };
+    let e = tok_end_b(b, i, hi);
+    if (e > s) { substr(text, s, e - s) } else { "" }
+};
+
+def tok_push(out: [str], t: str) -> [str] {
+    if (len(t) == 0) { out } else { push(out, t) }
+};
+
+// Every symbol one line [lo, hi) references: call/lea/jump operands and
+// both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
+// mnemonic — this walks every line of the emitted text, so no searching.
+def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps: bool) -> [str] {
+    let p = skip_sp(b, lo, hi);
+    if (p >= hi) {
+        out
+    } else {
+        let w = tok_at_b(text, b, p, hi);
+        let we = tok_end_b(b, p, hi);
+        let op = skip_sp(b, we, hi);
+        if (w == "call") {
+            out = tok_push(out, tok_at_b(text, b, op, hi));
+            0
+        } else if (w == "lea") {
+            out = tok_push(out, tok_at_b(text, b, op, hi));
+            0
+        } else if (w == "mov") {
+            let q = p;
+            let go = true;
+            while (go) {
+                if (q >= hi) {
+                    go = false;
+                    0
+                } else {
+                    if (b[q] == 36) {
+                        go = false;
+                        0
+                    } else {
+                        q = q + 1;
+                        0
+                    };
+                    0
+                };
+                0
+            };
+            if (q < hi) {
+                let t = tok_at_b(text, b, q, hi);
+                out = tok_push(out, t);
+                let after = tok_end_b(b, q, hi);
+                if (after < hi) {
+                    if (b[after] == 45) {
+                        out = tok_push(out, tok_at_b(text, b, after + 1, hi));
+                        0
+                    } else { 0; };
+                    0
+                } else { 0; };
+                0
+            } else { 0; };
+            0
+        } else {
+            if (want_jumps) {
+                if (substr(w, 0, 1) == "j") {
+                    out = tok_push(out, tok_at_b(text, b, op, hi));
+                    0
+                } else { 0; };
+                0
+            } else { 0; };
+            0
+        };
+        out
+    }
+};
+
+// Every symbol a byte range references, line by line.
+def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps: bool) -> [str] {
+    let ls = lo;
+    let i = lo;
+    let res = out;
+    while (i < hi) {
+        if (b[i] == 10) {
+            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            ls = i + 1;
+            0
+        } else { 0; };
+        i = i + 1;
+        0
+    };
+    if (ls < hi) {
+        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        0
+    } else { 0; };
+    res
+};
+
+// Every symbol a whole asm text references.
+def text_refs(text: str, want_jumps: bool) -> [str] {
+    let b = bytes(text);
+    refs_range(text, b, 0, len(b), [], want_jumps)
+};
+
+// The label a line [lo, hi) defines, or "".
+def label_at(text: str, b: [byte], lo: long, hi: long) -> str {
+    let p = skip_sp(b, lo, hi);
+    let e = tok_end_b(b, p, hi);
+    let lab = "";
+    if (e > p) {
+        if (e < hi) {
+            if (b[e] == 58) {
+                let s = p;
+                if (b[s] == 36) { s = s + 1; 0; } else { 0; };
+                lab = substr(text, s, e - s);
+                0
+            } else { 0; };
+            0
+        } else { 0; };
+        0
+    } else { 0; };
+    lab
+};
+
+// The label a body starts with (`label: ...`).
+def body_label(body: str) -> str {
+    let b = bytes(body);
+    label_at(body, b, 0, len(b))
+};
+
+// A line that is data, not code: blank lines, directives, or a bare label
+// (possibly followed by data on the same line).
+def is_data_line_b(text: str, b: [byte], lo: long, hi: long) -> bool {
+    let lab = label_at(text, b, lo, hi);
+    let p = skip_sp(b, lo, hi);
+    if (len(lab) > 0) {
+        p = skip_sp(b, p + 1 + len(lab), hi);
+        0
+    } else { 0; };
+    if (p >= hi) {
+        true
+    } else {
+        b[p] == 46
+    }
+};
+
+// Does a block [lo, hi) run into the next one? Only when its last
+// instruction is not a transfer; `ret`/`jmp`/`syscall` end the block (the
+// trap stubs end in an exit syscall and must not drag the file along).
+def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
+    let end = hi;
+    let falls = true;
+    let go = true;
+    while (go) {
+        // start of the last line in [lo, end)
+        let p = lo;
+        let i = lo;
+        while (i < end) {
+            if (b[i] == 10) {
+                p = i + 1;
+                0
+            } else { 0; };
+            i = i + 1;
+            0
+        };
+        let s = skip_sp(b, p, end);
+        if (s >= end) {
+            // blank line: drop it and look at the line before
+            if (p > lo) {
+                end = p - 1;
+                0
+            } else {
+                go = false;
+                0
+            };
+            0
+        } else {
+            go = false;
+            let w = tok_at_b(text, b, s, end);
+            if (w == "ret") { falls = false; 0; }
+            else if (w == "jmp") { falls = false; 0; }
+            else if (w == "syscall") { falls = false; 0; }
+            else { 0; };
+            0
+        };
+        0
+    };
+    falls
+};
+
+// Index of `tok` in `names`, or -1 (length first: most misses are free).
+def name_index(names: [str], tok: str) -> long {
+    let tl = len(tok);
+    let i = 0;
+    let found = -1;
+    while (i < len(names)) {
+        if (found < 0) {
+            let nm: str = names[i];
+            if (len(nm) == tl) {
+                if (nm == tok) { found = i; 0; } else { 0; };
+                0
+            } else { 0; };
+            0
+        } else { 0; };
+        i = i + 1;
+        0
+    };
+    found
+};
+
+// Mark every names[i] some entry of `roots` points at, then close over kept
+// blocks: their own references and (for code that runs into the next block)
+// their successor. `falls[i]` says block i falls through to block i+1.
+def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: [str]) -> [bool] {
+    let n = len(names);
+    let r = 0;
+    while (r < len(roots)) {
+        let idx = name_index(names, roots[r]);
+        if (idx >= 0) { keep[idx] = true; 0; } else { 0; };
+        r = r + 1;
+        0
+    };
+    let scanned = [];
+    let i = 0;
+    while (i < n) {
+        scanned = push(scanned, false);
+        i = i + 1;
+        0
+    };
+    let more = true;
+    while (more) {
+        more = false;
+        let b = 0;
+        while (b < n) {
+            if (keep[b]) {
+                if (!(scanned[b])) {
+                    scanned[b] = true;
+                    more = true;
+                    if (falls[b]) {
+                        if (b + 1 < n) {
+                            if (!(keep[b + 1])) { keep[b + 1] = true; 0; } else { 0; };
+                            0
+                        } else { 0; };
+                        0
+                    } else { 0; };
+                    let rs = refs[b];
+                    let j = 0;
+                    while (j < len(rs)) {
+                        let idx = name_index(names, rs[j]);
+                        if (idx >= 0) {
+                            if (!(keep[idx])) { keep[idx] = true; 0; } else { 0; };
+                            0
+                        } else { 0; };
+                        j = j + 1;
+                        0
+                    };
+                    0
+                } else { 0; };
+                0
+            } else { 0; };
+            b = b + 1;
+            0
+        };
+        0
+    };
+    keep
+};
+
+// Keep only the blocks of `text` that `root_refs` (the program's own
+// references) or another kept block reaches. Output order matches input.
+def shake_refs(text: str, root_refs: [str]) -> str {
+    let b = bytes(text);
+    let n = len(b);
+    // every label starts a block; lines before the first label (directives)
+    // form a head block that is always kept
+    let names = [];
+    let starts = [];
+    let i = 0;
+    let ls = 0;
+    while (i < n) {
+        if (b[i] == 10) {
+            let lab = label_at(text, b, ls, i);
+            if (len(lab) > 0) {
+                names = push(names, lab);
+                starts = push(starts, ls);
+                0
+            } else {
+                if (len(starts) == 0) {
+                    names = push(names, "");
+                    starts = push(starts, 0);
+                    0
+                } else { 0; };
+                0
+            };
+            ls = i + 1;
+            0
+        } else { 0; };
+        i = i + 1;
+        0
+    };
+    if (ls < n) {
+        let lab = label_at(text, b, ls, n);
+        if (len(lab) > 0) {
+            names = push(names, lab);
+            starts = push(starts, ls);
+            0
+        } else {
+            if (len(starts) == 0) {
+                names = push(names, "");
+                starts = push(starts, 0);
+                0
+            } else { 0; };
+            0
+        };
+        0
+    } else { 0; };
+    let nb = len(starts);
+    if (nb == 0) {
+        text
+    } else {
+        // per-block references + fall-through flags
+        let refs = [];
+        let falls = [];
+        let k = 0;
+        while (k < nb) {
+            let lo = starts[k];
+            let hi = n;
+            if (k + 1 < nb) { hi = starts[k + 1]; 0; } else { 0; };
+            refs = push(refs, refs_range(text, b, lo, hi, [], true));
+            if (block_falls_b(text, b, lo, hi)) {
+                if (is_data_line_b(text, b, lo, hi)) {
+                    falls = push(falls, false);
+                    0
+                } else {
+                    falls = push(falls, true);
+                    0
+                };
+                0
+            } else {
+                falls = push(falls, false);
+                0
+            };
+            k = k + 1;
+            0
+        };
+        let keep = [];
+        k = 0;
+        while (k < nb) {
+            if (len(names[k]) == 0) {
+                keep = push(keep, true);
+                0
+            } else {
+                keep = push(keep, false);
+                0
+            };
+            k = k + 1;
+            0
+        };
+        keep = shake_keep(names, refs, falls, keep, root_refs);
+        // reassemble kept blocks (their byte ranges), in order
+        let pieces = [];
+        k = 0;
+        while (k < nb) {
+            if (keep[k]) {
+                let lo = starts[k];
+                let hi = n;
+                if (k + 1 < nb) { hi = starts[k + 1]; 0; } else { 0; };
+                pieces = push(pieces, substr(text, lo, hi - lo));
+                0
+            } else { 0; };
+            k = k + 1;
+            0
+        };
+        join(pieces, "")
+    }
+};
+
+// Drop function bodies nothing reaches: dead stdlib code the program never
+// calls. Bodies are referenced by label from other bodies AND from the arch
+// prelude (y_float_tostr's block calls the Y-side y_long_tostr), so
+// `asm_roots` is the prelude text. Returns the kept bodies plus everything
+// they reference — the roots for shaking the arch prelude itself.
+def prune_bodies(bodies: [str], asm_roots: str) -> { bodies: [str], refs: [str] } {
+    let nb = len(bodies);
+    let labels = [];
+    let refs = [];
+    let i = 0;
+    while (i < nb) {
+        let b = bodies[i];
+        labels = push(labels, body_label(b));
+        refs = push(refs, text_refs(b, true));
+        i = i + 1;
+        0
+    };
+    let keep = [];
+    let falls = [];
+    i = 0;
+    while (i < nb) {
+        keep = push(keep, false);
+        falls = push(falls, false);
+        i = i + 1;
+        0
+    };
+    let roots = text_refs(asm_roots, true);
+    let root = name_index(labels, "_start");
+    if (root >= 0) {
+        roots = push(roots, "_start");
+        0
+    } else { 0; };
+    keep = shake_keep(labels, refs, falls, keep, roots);
+    let out = [];
+    let outrefs = [];
+    i = 0;
+    while (i < nb) {
+        if (keep[i]) {
+            let b = bodies[i];
+            out = push(out, b);
+            let rs = refs[i];
+            let j = 0;
+            while (j < len(rs)) {
+                outrefs = push(outrefs, rs[j]);
+                j = j + 1;
+                0
+            };
+            0
+        } else { 0; };
+        i = i + 1;
+        0
+    };
+    { bodies: out, refs: outrefs }
+};
+
+
+// ── runtime helper labels ──────────────────────────────────────────────
+// Generated code calls the runtime by FIXED label (`call y_print_long`), so
+// a helper defined in std/rt.y must be emitted under its bare name even
+// though rename suffixes every binding with `$N`. `y_` is therefore
+// reserved for the runtime: a `y_*` def whose name is `base` or `base$N`
+// (rename's uniquifier) is labelled `base`, and one shadowed by a later
+// def (`base$shadowK`) falls back to a normal uid label — the later def
+// wins the bare name, so a program may override any runtime helper.
+
+def is_all_digits(s: str) -> bool {
+    if (len(s) == 0) {
+        false
+    } else {
+        let i = 0;
+        let ok = true;
+        while (i < len(s)) {
+            if (index_of("0123456789", substr(s, i, 1)) < 0) { ok = false; 0; } else { 0; };
+            i = i + 1;
+            0
+        };
+        ok
+    }
+};
+
+// The bare runtime name behind `name`, or "" when it is not one.
+def runtime_base(name: str) -> str {
+    if (len(name) < 3) {
+        ""
+    } else {
+        if (substr(name, 0, 2) != "y_") {
+            ""
+        } else {
+            let dollar = index_of(name, "$");
+            if (dollar < 0) {
+                name
+            } else {
+                if (is_all_digits(substr(name, dollar + 1, len(name) - dollar - 1))) {
+                    substr(name, 0, dollar)
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+};
+
+def fn_label_of(uid: long, name: str) -> str {
+    let base = runtime_base(name);
+    if (len(base) > 0) {
+        base
+    } else {
+        arch.arch_fn_label(uid, name)
+    }
+};
+
 
 def is_ns(name: str, imports: [str]) -> bool {
     let i = 0;
@@ -1784,6 +2452,16 @@ def gen_push_args(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     st
 };
 
+// Call a one-argument runtime helper. The argument is in %rax and goes on
+// the stack — the Y convention every helper written in Y (std/rt.y) and
+// every asm helper shares; the caller cleans up. (Runtime helpers used to
+// take it in %rdi, which only hand-written asm could honour.)
+def gen_helper1(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, label: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    st = emit(st, "    push %rax");
+    st = emit(st, "    call " + label);
+    emit(st, "    add $8, %rsp")
+};
+
 def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let callee = node.callee;
     if (callee.k != "id") {
@@ -1877,16 +2555,14 @@ def gen_print(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     if (t.k == "trec") {
         // Records are formatted field by field from their static shape.
         st = gen_rec_str(st, pa0, t);
-        st = emit(st, "    mov %rax, %rdi");
-        st = emit(st, "    call y_print_hstr");
+        st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == "tfunc") {
         // A function value has no printable contents; show its signature
         // (the VM prints `<function SIG>` too, with `<inferred>` returns).
         st = gen(st, pa0);
         st = gen_str_const(st, "<function " + types.tdisp_fnval(t) + ">");
-        st = emit(st, "    mov %rax, %rdi");
-        st = emit(st, "    call y_print_hstr");
+        st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
     } else {
         gen_print_scalar(st, pa0, t)
@@ -1895,18 +2571,17 @@ def gen_print(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 
 def gen_print_scalar(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, arg, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = gen(st, arg);
-    st = emit(st, "    mov %rax, %rdi");
     if (t.k == "tbool") {
-        st = emit(st, "    call y_print_bool");
+        st = gen_helper1(st, "y_print_bool");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == "tstr") {
-        st = emit(st, "    call y_print_hstr");
+        st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == "tfloat") {
-        st = emit(st, "    call y_print_float");
+        st = gen_helper1(st, "y_print_float");
         emit(st, "    xor %eax, %eax")
     } else {
-        st = emit(st, "    call y_print_long");
+        st = gen_helper1(st, "y_print_long");
         emit(st, "    xor %eax, %eax")
     }
 };
@@ -3210,15 +3885,14 @@ def gen_puts(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     let pa = pargs[0];
     st = gen(st, pa);
     let t = infer(st, pa);
-    st = emit(st, "    mov %rax, %rdi");
     if (t.k == "tbool") {
-        st = emit(st, "    call y_put_bool");
+        st = gen_helper1(st, "y_put_bool");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == "tstr") {
-        st = emit(st, "    call y_put_hstr");
+        st = gen_helper1(st, "y_put_hstr");
         emit(st, "    xor %eax, %eax")
     } else {
-        st = emit(st, "    call y_put_long");
+        st = gen_helper1(st, "y_put_long");
         emit(st, "    xor %eax, %eax")
     }
 };
@@ -3231,15 +3905,14 @@ def gen_eputs(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     let pa = pargs[0];
     st = gen(st, pa);
     let t = infer(st, pa);
-    st = emit(st, "    mov %rax, %rdi");
     if (t.k == "tbool") {
-        st = emit(st, "    call y_eput_bool");
+        st = gen_helper1(st, "y_eput_bool");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == "tstr") {
-        st = emit(st, "    call y_eput_hstr");
+        st = gen_helper1(st, "y_eput_hstr");
         emit(st, "    xor %eax, %eax")
     } else {
-        st = emit(st, "    call y_eput_long");
+        st = gen_helper1(st, "y_eput_long");
         emit(st, "    xor %eax, %eax")
     }
 };
@@ -3263,8 +3936,7 @@ def gen_sleep(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     let sargs = node.args;
     let sa = sargs[0];
     st = gen(st, sa);
-    st = emit(st, "    mov %rax, %rdi");
-    emit(st, "    call y_sleep")
+    gen_helper1(st, "y_sleep")
 };
 
 
@@ -3564,7 +4236,7 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
             let d = defs[i];
             let rl = next_uid(st);
             st = rl.st;
-            let label = arch.arch_fn_label(rl.uid, d.name);
+            let label = fn_label_of(rl.uid, d.name);
             let fns = push(st.fns, { name: d.name, label: label, typ: func_type(d.func) });
             st = { out: st.out, rodata: st.rodata, uid: st.uid,
               fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
@@ -3644,22 +4316,36 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
         st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tnull" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, []);
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
-        // assemble the file
-        let asm = arch.arch_header();
-        asm = asm + arch.arch_text() + arch.arch_prelude();
+        // assemble the file. Body-level tree shaking comes first: its
+        // output is also the root set for shaking the arch prelude, and
+        // the kept prelude's references shake the rodata constants.
         let allbodies = st.bodies;
+        let shaken = prune_bodies(allbodies, arch.arch_prelude());
+        let bodies = shaken.bodies;
+        let body_refs = shaken.refs;
         // Piece-list + single join: `asm = asm + piece` per iteration is
         // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
         // the arena never frees), which OOMs on self-compilation.
         let pieces: [str] = [];
         let b = 0;
-        while (b < len(allbodies)) {
-            pieces = push(pieces, allbodies[b]);
+        while (b < len(bodies)) {
+            pieces = push(pieces, bodies[b]);
             pieces = push(pieces, "\n");
             b = b + 1;
         };
-        asm = asm + join(pieces, "");
-        asm = asm + arch.arch_rodata() + arch.arch_consts();
+        let body_text = join(pieces, "");
+        let asm = arch.arch_header();
+        let prelude_text = shake_refs(arch.arch_prelude(), body_refs);
+        asm = asm + arch.arch_text() + prelude_text;
+        asm = asm + body_text;
+        let const_refs = text_refs(prelude_text, true);
+        let ci = 0;
+        while (ci < len(body_refs)) {
+            const_refs = push(const_refs, body_refs[ci]);
+            ci = ci + 1;
+        };
+        let consts_text = shake_refs(arch.arch_consts(), const_refs);
+        asm = asm + arch.arch_rodata() + consts_text;
         let allrod = st.rodata;
         let s2 = 0;
         let rodpieces: [str] = [];

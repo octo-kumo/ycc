@@ -10,13 +10,29 @@
   size, and into `push`/`slice`/`==`/`join`/`foreach`, which now take it
   as a parameter. `bytes(s)` / `from_bytes(b)` convert to and from `str`.)
 - add type aliasing (type a = [int])
-- DONE (mechanism landed, migration ongoing): reduce raw assembly embeded inside ycc, try to do more with y code in std.
-  (`src/y/std/prelude.y` is runtime code written in Y, spliced ahead of the
-  program when referenced. `readline()` is the first resident: ~90 lines of
-  hand-written assembly became twenty lines of Y over the `syscall`
-  intrinsic plus `bytes`/`from_bytes`. The rule is that arch_x64.y provides
-  small general PRIMITIVES and the prelude provides behaviour; more of
-  arch_x64.y can move across the same way.)
+- DONE: reduce raw assembly embeded inside ycc, try to do more with y code in std.
+  (`src/y/std/rt.y` is the runtime library written in Y, spliced in front of
+  every program; tree shaking drops what a program does not reach. The rule
+  is that arch_x64.y provides small general PRIMITIVES — allocator, traps,
+  record lookup, byte-moving string/array cores, float formatting, argv —
+  and Y provides behaviour: number formatting, the print/put/eput family,
+  `trim`/`ord`/`chr`/`tonum`/`index_of`/`join`/`split`, `range`, time,
+  files. arch_x64.y went from 2357 lines to 976; `readline()` and `exec()`
+  made the same move earlier.)
+- DONE: tree shaking (only the code a program reaches ships).
+  (`prune_bodies` drops uncalled functions; `shake_refs` drops unreferenced
+  arch-prelude and rodata blocks. A hello world is an 8 KB binary whose
+  hand-written runtime is just the allocator, the str<->[byte] bridge and
+  the digit loop of `y_long_tostr`.)
+- DONE: optional std libraries imported by name (`import net;`, `net.xxx`).
+  (A module is a plain Y file in `src/y/std/` — add one by dropping a file
+  there; `std_resolve` in native.y finds it next to the importer (vendor or
+  shadow), then in `std/` and `src/y/std/` from the cwd and the ycc binary.
+  `src/y/std/net.y` — TCP over raw sockets plus a tiny HTTP server — is the
+  first one: `net.listen_http(8080, handler)` / `net.listen_tcp(22, handler)`.
+  Its functions flatten into one namespace with the other modules, so they
+  carry uncollidable names (`close_fd`, `send_str`); a `ui` module lands the
+  same way.)
 - DONE: add more type inference
   (native `def` return types are inferred from the body when unannotated;
   `let` locals were already inferred. Params still need annotations.)

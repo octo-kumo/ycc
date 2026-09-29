@@ -13,13 +13,13 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/lexer.y` | tokens; `&` is an `op` (pointer/address-of) |
 | `src/y/parser.y` | AST (nested maps) **plus type nodes** (`typ` fields, additive); every node carries line/col |
 | `src/y/types.y` | static checker: AST → `[errors]` with line/col; the law |
-| `src/y/arch_x64.y` | x86_64 behind the arch interface: `arch_id/word/sysno`, `arch_fn_label/loc_label/str_label`, `arch_header/rodata/text`, `arch_prelude` (print_long/bool/cstr, div_zero), `arch_consts`, `arch_frame` (16-align), `arch_exit` |
-| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports) → strip namespaces → rename → check → hoist → frame layout → arch emit |
+| `src/y/arch_x64.y` | x86_64 behind the arch interface: `arch_id/word/sysno`, `arch_fn_label/loc_label/str_label`, `arch_header/rodata/text`, `arch_prelude`, `arch_consts`, `arch_frame` (16-align), `arch_exit`. The prelude is only the **primitives** that need raw machine state (allocator, traps, record lookup, the byte-moving string/array cores, float formatting, argv) |
+| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports + optional std modules) → strip namespaces → rename → check → hoist → frame layout → tree shake → arch emit |
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect (+ octal payload writer) |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), static, entry `_start` |
-| `src/y/std/` | standard library **in Y**: `io.y` (file I/O over raw syscalls), later `str.y`, `mem.y` |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `prelude.y` (`readline`/`exec` chunks) |
 
 New Y files must stay in the **portable subset** (no pointer syntax in their
 own code): they are parsed by the C compiler's `parser.c` and compiled by the
@@ -151,8 +151,8 @@ methods/traits if Y grows them.
 including a third generation and a smoke compile with the self-built binary.
 
 Measured on the self-compile (`ycc --time -o ycc src/y/ycc.y`):
-427 KB of spliced source, 93 K tokens, 1.89 MB of assembly, a 492 KB static
-ELF, in ~2.5 s and ~365 MB of arena.
+562 KB of spliced source, 123 K tokens, 2.36 MB of assembly, a 602 KB static
+ELF, in ~2.4 s and ~683 MB of arena.
 
 What made it possible was not new features but removing copies: arrays and
 records became reference values in all three engines (copy-on-store made the
@@ -167,15 +167,23 @@ static shapes cover what `src/y/*.y` needs; closures, first-class functions,
 
 ## Runtime library: Y, not assembly
 
-`src/y/std/prelude.y` holds runtime code written **in Y**, spliced ahead of
-the program by `native_resolve` when the program mentions one of its names
-(a textual check, so an unused prelude costs nothing — there is no
-dead-code pass). These are ordinary defs: they go through rename,
-typecheck and emit like any user function, so a bug in them is a bug in Y
-code rather than in hand-rolled x86.
+`src/y/std/rt.y` holds runtime code written **in Y**, spliced in front of
+every program by `native_resolve` (always — generated code calls into it by
+fixed label, so there is no name to test for). These are ordinary defs:
+they go through rename, typecheck and emit like any user function, so a bug
+in them is a bug in Y code rather than in hand-rolled x86.
 
-The rule is that `arch_x64.y` provides small, general **primitives** and
-the prelude provides **behaviour**. Two worked examples:
+The rule is that `arch_x64.y` provides small, general **primitives** and the
+runtime provides **behaviour**. What stays in assembly is only what needs raw
+machine state: the `y_alloc` bump allocator, the trap stubs (div/0, OOB,
+unwrap-of-none, OOM), dynamic record lookup (`y_dot_lookup`), the
+byte-moving string cores (`y_str_eq/cmp/cat/substr`), `str`↔`[byte]`
+conversion, the generic array cores (`y_arr_push/slice/eq` — one
+implementation each, parameterized by element width, because Y has no
+generics), float formatting, and argv materialization. Everything else —
+number formatting, the whole print/put/eput family, `trim`/`ord`/`chr`/
+`tonum`/`index_of`/`join`/`split`, `range`, time, files — is Y. Two worked
+examples of the same move landed earlier:
 
 - `readline()` — the backend contributes only the `syscall` intrinsic and
   `bytes`/`from_bytes`; stopping at the newline, growing the buffer and
@@ -188,9 +196,80 @@ the prelude provides **behaviour**. Two worked examples:
 `ycc --no-exec` simply does not splice the exec chunk, so the call fails
 with "undefined function 'exec'" and the binary has no path to a shell.
 
-The prelude text lives as a line array inside `prelude.y` because the
+The runtime text lives as line arrays inside `rt.y`/`prelude.y` because the
 shipped `ycc` is a standalone static ELF — it cannot read a support file at
-run time.
+run time. A Y helper may call intrinsics (`substr`, `bytes`, `from_bytes`,
+`tostring`, `syscall`, …) and other helpers, but never an assembly-only
+label directly — the checker would call it undefined — so every bridge into
+the primitives goes through an intrinsic.
+
+**`y_` is a reserved prefix.** A `y_*` def is emitted under its bare name
+(`fn_label_of` in native.y) because generated code calls it by fixed label:
+`print(long)` compiles to `call y_print_long` and must find exactly that
+label, rename's `$N` suffix notwithstanding. A program may override a
+runtime helper by defining the same name later (the last def wins the bare
+label); anything else starting with `y_` is on its own.
+
+## Tree shaking
+
+Nothing reaches the binary that the program does not reach itself:
+
+- **bodies** — `prune_bodies` drops every function nothing calls, rooted at
+  `_start` plus whatever the arch prelude references from Y (so a helper
+  the prelude calls by label survives). An unused stdlib function costs
+  nothing but its parse.
+- **arch blocks** — `shake_refs` splits the arch prelude and the rodata
+  constants into labelled blocks and keeps exactly the ones referenced from
+  the surviving code or from another kept block (`call`, `lea`, a jump, or a
+  computed immediate like `$ystr_end-ystr`, which names both), plus any
+  block the previous kept block falls through into. Labels never merge
+  blocks, so an internal loop label travels with its own references and dead
+  code is dropped even mid-function.
+
+A hello world is 8 KB and ~490 asm lines, of which the hand-written runtime
+is `y_alloc`, `y_bytes_to_str` and the digit loop of `y_long_tostr`: the
+splitter, the file layer and the float formatter are not there because the
+program does not use them.
+
+The scanners walk a `bytes()` copy of the emitted text and materialize only
+the symbols they reference; per-character `substr` would cost an allocation
+(and two `brk` syscalls) per character.
+
+## Optional std modules
+
+`import net;` — no `from` — pulls in an optional std module by NAME, and
+every function is called through the namespace:
+
+```y
+import net;
+
+def hello(req: str) -> str {
+    net.http_response(200, "hi there")
+};
+
+net.listen_http(8080, hello);        // blocking, serving forever
+// net.listen_tcp(22, tcp_handler);  // raw connections instead
+```
+
+A module is a plain Y file; adding one is dropping a file in `src/y/std/`.
+`import name;` looks for `name.y` next to the importing file (a project can
+vendor or shadow a module), then in `std/` and `src/y/std/` relative to the
+working directory, then in the same places relative to the `ycc` binary — so
+the test suite works from any directory. `std_resolve` in native.y holds the
+list.
+
+The file found is spliced exactly like `import x from "path"` and its defs
+are flattened into one namespace with everything else (strip_ns rewrites
+`net.listen_tcp` to `listen_tcp`), so a module picks names that will not
+collide with the other std modules — `net.close_fd`, `net.send_str` — and
+uses the namespace when calling them anyway. Modules are compile-time input
+only: the program that runs has no use for the file.
+
+`src/y/std/net.y` is the first optional module: TCP over raw sockets
+(`socket_tcp`/`bind_tcp`/`listen_fd`/`accept_tcp`/`connect_tcp`/
+`send_str`/`recv_str`/`local_port`) and a tiny HTTP server
+(`http_response`, `http_serve_one`, `listen_http`), all Y over `syscall`.
+A `ui` module would land the same way.
 
 ## Testing
 
