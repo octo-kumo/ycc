@@ -226,6 +226,19 @@ Nothing reaches the binary that the program does not reach itself:
   blocks, so an internal loop label travels with its own references and dead
   code is dropped even mid-function.
 
+Measured against the pre-tree-shaking compiler (bench/compare.sh of this
+work against commit `ae6cff1`, same benchmark programs on both sides):
+output is 33–50% smaller and the asm is 55–79% smaller for small
+programs, at a cost — compiling is 17–25% slower (every program now
+compiles the ~350-line runtime chunk, and the primitives that moved to Y
+do more work per call) and string-heavy output (`tostring`/`index_of` in
+loops) can run up to 2x slower than when they were hand-written asm. The
+self-compile slowed less than its source grew (562 KB vs 427 KB spliced,
+8% slower per KB). That trade — binary size and readable runtime for
+compile time and string-heavy speed — is deliberate; the next lever is
+the remaining hot primitives (`y_long_tostr`, `y_str_index`), which are
+either cheaper Y forms or back to being byte primitives in asm.
+
 A hello world is 8 KB and ~490 asm lines, of which the hand-written runtime
 is `y_alloc`, `y_bytes_to_str` and the digit loop of `y_long_tostr`: the
 splitter, the file layer and the float formatter are not there because the

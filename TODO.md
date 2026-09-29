@@ -9,6 +9,14 @@
   static type into every access (`movzbq`/`movb`), into the allocation
   size, and into `push`/`slice`/`==`/`join`/`foreach`, which now take it
   as a parameter. `bytes(s)` / `from_bytes(b)` convert to and from `str`.)
+- bench the hot primitives and decide (the workflow in AGENTS.md):
+  `bench/compare.sh` against `ae6cff1` shows the runtime move cost ~17-25%
+  compile time and up to 2x on string-heavy output (tostring/index_of in
+  loops), in exchange for 33-50% smaller binaries. Decide per helper:
+  cheaper Y forms (y_long_tostr can fill a fixed [byte; 24] instead of
+  pushing per digit) or back to asm as a byte primitive (y_str_index,
+  y_str_trim are the ones the compiler itself hammers).
+
 - add type aliasing (type a = [int])
 - DONE: reduce raw assembly embeded inside ycc, try to do more with y code in std.
   (`src/y/std/rt.y` is the runtime library written in Y, spliced in front of
