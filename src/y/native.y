@@ -2072,13 +2072,15 @@ def gen_elem_addr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     if (e.typ.k == "tarrfix") {
         st = emit(st, "    cmp $" + tostring(e.typ.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
-        emit(st, "    lea 16(%rax,%rcx," + eascale + "), %rax")
+        0
     } else {
         st = emit(st, "    mov (%rax), %rdx");
         st = emit(st, "    cmp %rdx, %rcx");
         st = emit(st, "    jge y_oob");
-        emit(st, "    lea 16(%rax,%rcx," + eascale + "), %rax")
-    }
+        0
+    };
+    st = emit(st, "    mov 16(%rax), %rax");
+    emit(st, "    lea (%rax,%rcx," + eascale + "), %rax")
 };
 
 def gen_bin(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -3175,9 +3177,14 @@ def gen_arrrep_esz(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc
     st = emit(st, "    push %rax");
     st = emit(st, "    mov $" + tostring(arr_alloc_size(esz, n)) + ", %rdi");
     st = emit(st, "    call y_alloc");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov $" + tostring(arr_header_size()) + ", %rdi");
+    st = emit(st, "    call y_alloc");
+    st = emit(st, "    pop %rdx");
+    st = emit(st, "    mov $" + tostring(n) + ", (%rax)");
+    st = emit(st, "    mov $" + tostring(n) + ", 8(%rax)");
+    st = emit(st, "    mov %rdx, 16(%rax)");
     st = emit(st, "    mov %rax, %rdx");
-    st = emit(st, "    mov $" + tostring(n) + ", (%rdx)");
-    st = emit(st, "    mov $" + tostring(n) + ", 8(%rdx)");
     st = emit(st, "    pop %rax");
     st = gen_fill_heap(st, n, esz);
     emit(st, "    mov %rdx, %rax")
@@ -3568,22 +3575,29 @@ def arr_elem_bytes(t) -> long {
 };
 
 // Load element [idx] of the array based at `base` into `dst`.
+// Element load: `base` is the ARRAY HEADER register, `idx` the index
+// register, `dst` the result. Headers are {len, cap, data} with the
+// elements in a separate block, so the data pointer rides through %dst.
 def elem_load(esz: long, base: str, idx: str, dst: str) -> str {
     if (esz == 1) {
-        "    movzbq 16(" + base + "," + idx + ",1), " + dst
+        "    mov 16(" + base + "), " + dst + "\n"
+            + "    movzbq (" + dst + "," + idx + ",1), " + dst
     } else {
-        "    mov 16(" + base + "," + idx + ",8), " + dst
+        "    mov 16(" + base + "), " + dst + "\n"
+            + "    mov (" + dst + "," + idx + ",8), " + dst
     }
 };
 
 // Store %rdx into element [idx] of the array based at `base`. The value
 // always arrives in %rdx so the byte form can name %dl without a register
 // table; a packed store truncates to 8 bits, which is the narrowing.
+// %r11 is the scratch that carries the data pointer: no generated value
+// lives in it across a store (the syscall instruction clobbers it).
 def elem_store_rdx(esz: long, base: str, idx: str) -> str {
     if (esz == 1) {
-        "    movb %dl, 16(" + base + "," + idx + ",1)"
+        "    mov 16(" + base + "), %r11\n    movb %dl, (%r11," + idx + ",1)"
     } else {
-        "    mov %rdx, 16(" + base + "," + idx + ",8)"
+        "    mov 16(" + base + "), %r11\n    mov %rdx, (%r11," + idx + ",8)"
     }
 };
 
@@ -3591,15 +3605,23 @@ def elem_store_rdx(esz: long, base: str, idx: str) -> str {
 // offset into the displacement instead of using an index register.
 def elem_store_rdx_const(esz: long, base: str, k: long) -> str {
     if (esz == 1) {
-        "    movb %dl, " + tostring(16 + k) + "(" + base + ")"
+        "    mov 16(" + base + "), %r11\n    movb %dl, " + tostring(k) + "(%r11)"
     } else {
-        "    mov %rdx, " + tostring(16 + k * 8) + "(" + base + ")"
+        "    mov 16(" + base + "), %r11\n    mov %rdx, " + tostring(k * 8) + "(%r11)"
     }
 };
 
-// Bytes to allocate for a header plus n elements.
+// The array header is {len, cap, data} and NEVER moves: elements live in a
+// separate block, so growth keeps every alias valid (that is what makes
+// `arr += v` in-place). This is the block size for n elements.
 def arr_alloc_size(esz: long, n: long) -> long {
-    16 + n * esz
+    let b = n * esz;
+    if (b < 8) { 8 } else { b }
+};
+
+// Bytes to allocate for the header itself.
+def arr_header_size() -> long {
+    24
 };
 
 // Field read rec.field: the checker guarantees a trec with that field.
@@ -3677,9 +3699,14 @@ def gen_array_esz(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     let n = len(elems);
     st = emit(st, "    mov $" + tostring(arr_alloc_size(esz, n)) + ", %rdi");
     st = emit(st, "    call y_alloc");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov $" + tostring(arr_header_size()) + ", %rdi");
+    st = emit(st, "    call y_alloc");
     st = emit(st, "    mov %rax, %r10");
+    st = emit(st, "    pop %rdx");
     st = emit(st, "    mov $" + tostring(n) + ", (%r10)");
     st = emit(st, "    mov $" + tostring(n) + ", 8(%r10)");
+    st = emit(st, "    mov %rdx, 16(%r10)");
     let k = n - 1;
     while (k >= 0) {
         st = emit(st, "    pop %rdx");
@@ -3882,13 +3909,17 @@ def gen_join_conv(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     st = emit(st, "    mov %rax, " + tostring(soff) + "(%rbp)");
     st = emit(st, "    mov (%rax), %rdi");
     st = emit(st, "    shl $3, %rdi");
-    st = emit(st, "    add $16, %rdi");
     st = emit(st, "    call y_alloc");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov $24, %rdi");
+    st = emit(st, "    call y_alloc");
+    st = emit(st, "    pop %rdx");
     st = emit(st, "    mov %rax, " + tostring(doff) + "(%rbp)");
     st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rcx");
-    st = emit(st, "    mov (%rcx), %rdx");
-    st = emit(st, "    mov %rdx, (%rax)");
-    st = emit(st, "    mov %rdx, 8(%rax)");
+    st = emit(st, "    mov (%rcx), %rcx");
+    st = emit(st, "    mov %rcx, (%rax)");
+    st = emit(st, "    mov %rcx, 8(%rax)");
+    st = emit(st, "    mov %rdx, 16(%rax)");
     st = emit(st, "    xor %eax, %eax");
     st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
     let r1 = next_loc(st);
@@ -3907,7 +3938,8 @@ def gen_join_conv(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     st = emit(st, "    add $8, %rsp");
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
     st = emit(st, "    mov " + tostring(doff) + "(%rbp), %rdx");
-    st = emit(st, "    mov %rax, 16(%rdx,%rcx,8)");
+    st = emit(st, "    mov 16(%rdx), %rdx");
+    st = emit(st, "    mov %rax, (%rdx,%rcx,8)");
     st = emit(st, "    inc %rcx");
     st = emit(st, "    mov %rcx, " + tostring(ioff) + "(%rbp)");
     st = emit(st, "    jmp " + r1.lbl);
