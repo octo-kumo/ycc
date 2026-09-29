@@ -15,7 +15,26 @@ YBOOT=yboot
 #   ycc   = ycc compiled by cycc, natively (static ELF bytes, no toolchain).
 #   _ycc  = ycc compiled by ycc; must be byte-identical to ycc, then deleted.
 # Bootstrap chain: yboot -> cycc -> ycc -> _ycc (fixpoint check).
-YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/prelude.y src/y/std/rt.y
+YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/prelude.y src/y/std/rt.y src/y/std/prof_lines.y
+
+# The `ycc --prof` runtime lives as editable Y in src/y/std/prof.y, but ycc
+# is a standalone binary and splices an EMBEDDED copy of it — so make
+# generates the line-array wrapper from the source. Deterministic output,
+# so the byte-identical fixpoint still holds.
+PROF_LINES=src/y/std/prof_lines.y
+
+$(PROF_LINES): src/y/std/prof.y
+	{ echo '// GENERATED from src/y/std/prof.y by make -- do not edit.'; \
+	  echo '// (ycc is a standalone binary: the --prof runtime is spliced'; \
+	  echo '// in from this embedded copy.)'; \
+	  echo 'def prof_lines() -> [str] {'; \
+	  echo '    ['; \
+	  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/        "/' -e 's/$$/",/' src/y/std/prof.y; \
+	  echo '        ""'; \
+	  echo '    ]'; \
+	  echo '};'; \
+	  echo ''; \
+	  echo 'export { prof_lines };'; } > $@
 
 all: $(YBOOT)
 
@@ -28,6 +47,7 @@ src/c/%.o: src/c/%.c $(HDRS)
 clean:
 	rm -f $(OBJS) $(YBOOT) cycc ycc _ycc a.out
 	rm -f $(SRCS:src/c/%.c=src/c/%.asan.o) yboot-asan
+	rm -f $(PROF_LINES)
 
 valgrind: $(YBOOT)
 	valgrind --leak-check=full --quiet ./yboot

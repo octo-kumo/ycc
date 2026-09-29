@@ -19,6 +19,7 @@ import types from "./types.y";
 import rename from "./rename.y";
 import prelude from "./std/prelude.y";
 import yrt from "./std/rt.y";
+import yprof from "./std/prof_lines.y";
 
 // ── native import resolution ───────────────────────────────────────────
 // Unlike the C backend (which wraps modules in IIFEs returning maps —
@@ -29,19 +30,22 @@ import yrt from "./std/rt.y";
 // must be defs; duplicate def names across the splice are a loud error.
 
 def native_resolve(src: str, base_dir: str, depth: long) -> { src: str, imports: [str], pre: long } {
-    native_resolve_x(src, base_dir, depth, true)
+    native_resolve_x(src, base_dir, depth, true, false)
 };
 
 // allow_exec = false is `ycc --no-exec`: the exec chunk is not spliced, so
 // `exec(...)` fails with "undefined function" and the binary has no path
 // to a shell at all.
 //
+// prof = true is `ycc --prof`: the profiling runtime is spliced and the
+// emitter wraps every function with its enter/exit hooks (see std/prof.y).
+//
 // `pre` is how many lines the prelude added in FRONT of the user's text.
 // Prepending (rather than appending) is deliberate: defs hoist either way,
 // but a later def shadows an earlier one, so a user's own `readline` must
 // come after ours to win. The cost is that every position downstream is
 // shifted, which the driver undoes when it prints an error.
-def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> { src: str, imports: [str], pre: long } {
+def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, prof: bool) -> { src: str, imports: [str], pre: long } {
     // NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
     // enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
     // encoder splices twice and every enc64 def collides (find_dup is fatal).
@@ -56,6 +60,16 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     let rtl = yrt.rt_lines();
     rsrc = join(rtl, "\n") + "\n" + rsrc;
     pre = pre + len(rtl);
+    // `--prof` builds splice the profiling runtime the same way: generated
+    // code calls y_prof_enter/y_prof_exit around every function and the
+    // report prints at exit. Non-prof builds never mention it, so tree
+    // shaking has nothing to keep.
+    if (prof) {
+        let pl = yprof.prof_lines();
+        rsrc = join(pl, "\n") + "\n" + rsrc;
+        pre = pre + len(pl);
+        0
+    } else { 0; };
     // Prelude chunks go in front of the resolved text, but only when the
     // program actually mentions one of their names — otherwise every binary
     // would carry code it never calls (there is no dead-code pass).
@@ -1766,6 +1780,21 @@ def fn_names_of(fns: [{ name: str, label: str, typ: { k: str } }]) -> [str] {
         i = i + 1;
     };
     out
+};
+
+// Is some function emitted under exactly this label? Used to detect a
+// --prof build (the spliced std/prof.y defines y_prof_enter) without
+// threading the flag through every emitter signature.
+def fn_label_present(fns: [{ name: str, label: str, typ: { k: str } }], label: str) -> bool {
+    let i = 0;
+    let found = false;
+    while (i < len(fns)) {
+        let e = fns[i];
+        if (e.label == label) { found = true; 0; } else { 0; };
+        i = i + 1;
+        0
+    };
+    found
 };
 
 def fns_find(fns: [{ name: str, label: str, typ: { k: str } }], name: str) -> { name: str, label: str, typ: { k: str } } {
@@ -3946,6 +3975,17 @@ def gen_exit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     let eargs = node.args;
     let ea = eargs[0];
     st = gen(st, ea);
+    if (fn_label_present(st.fns, "y_prof_report")) {
+        // --prof: exit() never returns, so the epilogue's report would
+        // never run — print it here. The exit code stays in %rax.
+        st = emit(st, "    push %rax");
+        st = emit(st, "    mov %r13, %rax");
+        st = emit(st, "    push %rax");
+        st = emit(st, "    call y_prof_report");
+        st = emit(st, "    add $8, %rsp");
+        st = emit(st, "    pop %rax");
+        0
+    } else { 0; };
     st = emit(st, "    mov %rax, %rdi");
     st = emit(st, "    mov $60, %rax");
     st = emit(st, "    syscall");
@@ -4055,9 +4095,49 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     };
     f = gen_block(f, func.body);
     let frame = arch.arch_frame(f.slots);
+    // ── profiling (ycc --prof) ─────────────────────────────────────────
+    // Wrap the body with y_prof_enter/y_prof_exit. The stats table lives
+    // in %r13 (callee-saved; generated code never touches it) and _start
+    // allocates it. The function's own label is the row name. The
+    // profiler's own functions are exempt: their calls run the
+    // instrumentation itself (std/prof.y guards the rest).
+    let prof_on = fn_label_present(st.fns, "y_prof_enter");
+    if (prof_on) {
+        if (substr(label, 0, 7) == "y_prof_") {
+            prof_on = false;
+            0
+        } else { 0; };
+        0
+    } else { 0; };
+    let pname = "";
+    let prodata = f.rodata;
+    let puid = f.uid;
+    if (prof_on) {
+        let ru = next_uid(f);
+        f = ru.st;
+        let nlbl = arch.arch_str_label(ru.uid);
+        let ne = [];
+        ne = push(ne, nlbl);
+        ne = push(ne, tostring(len(label)));
+        ne = push(ne, esc_asm(label));
+        prodata = push(f.rodata, ne);
+        pname = nlbl;
+        puid = f.uid;
+        0
+    } else { 0; };
     let code = [];
     code = push(code, label + ":");
     if (is_main) {
+        if (prof_on) {
+            // the table first: every later call (argv init included) is
+            // measured against it
+            code = push(code, "    mov $" + tostring(puid + 8) + ", %rax");
+            code = push(code, "    push %rax");
+            code = push(code, "    call y_prof_init");
+            code = push(code, "    add $8, %rsp");
+            code = push(code, "    mov %rax, %r13");
+            0
+        } else { 0; };
         if (want_argv) {
             // _start prologue: at process entry %rsp -> [argc][argv0ptr]....
             // argv (char**) is the ADDRESS rsp+8 (lea, not a load!); argc is
@@ -4084,6 +4164,19 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
         code = push(code, "    sub $" + tostring(frame) + ", %rsp");
         0
     } else { 0; };
+    if (prof_on) {
+        // y_prof_enter(table, slot, name) — args left to right, like any
+        // Y call; slot is the function's uid (unique per body).
+        code = push(code, "    mov %r13, %rax");
+        code = push(code, "    push %rax");
+        code = push(code, "    mov $" + tostring(fuid) + ", %rax");
+        code = push(code, "    push %rax");
+        code = push(code, "    lea " + pname + "(%rip), %rax");
+        code = push(code, "    push %rax");
+        code = push(code, "    call y_prof_enter");
+        code = push(code, "    add $24, %rsp");
+        0
+    } else { 0; };
     let fout = f.out;
     let j = 0;
     while (j < len(fout)) {
@@ -4091,6 +4184,28 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
         j = j + 1;
     };
     code = push(code, f.end_label + ":");
+    if (prof_on) {
+        // every `return` funnels through end_label, so one exit hook sees
+        // them all. _start gets the report instead (which books anything
+        // still in flight); the epilogue below must still find the return
+        // value in %rax, hence the push/pop around the call.
+        if (is_main) {
+            code = push(code, "    mov %r13, %rax");
+            code = push(code, "    push %rax");
+            code = push(code, "    call y_prof_report");
+            code = push(code, "    add $8, %rsp");
+            0
+        } else {
+            code = push(code, "    push %rax");
+            code = push(code, "    mov %r13, %rax");
+            code = push(code, "    push %rax");
+            code = push(code, "    call y_prof_exit");
+            code = push(code, "    add $8, %rsp");
+            code = push(code, "    pop %rax");
+            0
+        };
+        0
+    } else { 0; };
     if (is_main) {
         code = push(code, "    mov $60, %rax");
         code = push(code, "    xor %edi, %edi");
@@ -4108,7 +4223,7 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     // f.bodies (see NATIVE.md "rebind: a = push(a, v)"), so the two engines
     // disagreed and ycc emitted calls to labels it never defined.
     let bodies = push(f.bodies, join(code, "\n"));
-    { out: st.out, rodata: f.rodata, uid: f.uid,
+    { out: st.out, rodata: prodata, uid: puid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: bodies }

@@ -14,12 +14,13 @@ import nativelib from "./native.y";
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, prof: bool } {
     let out = "";
     let files = [];
     let asm_only = false;
     let timing = false;
     let allow_exec = true;
+    let prof = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -43,6 +44,9 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         } else if (a == "--no-exec") {
             allow_exec = false;
             0
+        } else if (a == "--prof") {
+            prof = true;
+            0
         } else if (a == "--help" || a == "-h") {
             puts("Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [-h] FILE\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
@@ -50,6 +54,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
             puts("  -t, --time   print per-phase time and heap use to stderr\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
+            puts("  --prof       instrument the output: per-function call counts and\n");
+            puts("               cpu times printed on stderr when the program exits\n");
             puts("  -h, --help   show this text and exit\n");
             exit(0);
             0
@@ -63,7 +69,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, prof: prof }
 };
 
 // ── phase reporting (--time) ─────────────────────────────────────────────
@@ -174,7 +180,7 @@ def main(cmdline: [str]) -> long {
             let tstart = t0;
             let hstart = h0;
             let dt: [{ name: str, us: long, heap: long }] = [];
-            let nr = nativelib.native_resolve_x(src2, base_dir, 0, pargs.allow_exec);
+            let nr = nativelib.native_resolve_x(src2, base_dir, 0, pargs.allow_exec, pargs.prof);
             let ph = nativelib.phase_end(dt, "resolve", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let nrsrc = nr.src;

@@ -20,3 +20,4 @@ wasm/playground/emit-as.js
 wasm/playground/check.js
 tools/lsp/check.js
 embedded_runtime.inc
+src/y/std/prof_lines.y
