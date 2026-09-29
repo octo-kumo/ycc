@@ -4,28 +4,33 @@
 // when the process exits.
 //
 // What each row means (one per instrumented function, worst first):
-//   calls    how many times the function was entered
-//   total_ns cpu time inside it, callees included (CLOCK_PROCESS_CPUTIME_ID)
-//   avg_ns   total_ns / calls
-//   max_ns   the single longest call
-//   self_ns  total_ns minus what it spent in callees
+//   calls    how many times the function was entered (exact)
+//   total_ns cpu time inside it, callees included — for a recursive
+//            function this counts the nesting per level (CLOCK_PROCESS_CPUTIME_ID)
+//   self_ns  total_ns minus what it spent in callees: the function itself
+//   avg_ns   self_ns / calls: the average time in the function's own body
+//   max_ns   the single longest call, callees included
 //
-// Timing costs two clock_gettime calls per function call, so absolute
-// numbers carry that overhead — compare rows and branches, not absolutes.
+// Timing costs two clock_gettime calls per function call (~200 ns on a
+// quiet machine), so absolute numbers carry that overhead: a function
+// whose body is a few instructions looks slower than it is. Call counts
+// are exact, and the overhead is identical on both sides of a branch
+// comparison, so ratios stay meaningful — compare rows, not absolutes.
 //
 // STATE is a record of one flat zeroed [long] table, the per-slot name
 // strings and the heap break at startup; the emitter allocates it in
 // _start and keeps its address in %r13, passing it to every call:
 //   tab[0] nslots   tab[1] depth   tab[2] guard (nonzero while in here)
-//   per slot s:  3+5*s .. calls, total_ns, max_ns, child_ns, unused
-//   per frame j: 3+5*nslots+3*j .. slot, enter_ns, child_ns
+//   tab[3], tab[4] the clock scratch (a timespec — no per-call allocation)
+//   per slot s:  5+5*s .. calls, total_ns, max_ns, child_ns, unused
+//   per frame j: 5+5*nslots+3*j .. slot, enter_ns, child_ns
 // The guard makes re-entry harmless: anything the profiler itself calls is
 // measured with its enter/exit pair skipped symmetrically, so nothing
 // recurses and no frame is ever half-accounted.
 
 def y_prof_init(n: long) -> { tab: [long], names: [str], heap0: long } {
     let tab: [long] = [];
-    let total = 3 + 5 * n + 3 * 1024;
+    let total = 5 + 5 * n + 3 * 1024;
     let i = 0;
     while (i < total) {
         tab = push(tab, 0);
@@ -43,11 +48,12 @@ def y_prof_init(n: long) -> { tab: [long], names: [str], heap0: long } {
     { tab: tab, names: names, heap0: syscall(12, 0) }
 };
 
-// The cpu clock in nanoseconds (CLOCK_PROCESS_CPUTIME_ID).
-def y_prof_now() -> long {
-    let ts: [long; 2] = [0; 2];
-    syscall(228, 2, &ts[0]);
-    ts[0] * 1000000000 + ts[1]
+// The cpu clock in nanoseconds (CLOCK_PROCESS_CPUTIME_ID). The timespec
+// lives in the table: a per-call `[long; 2]` would allocate a heap block
+// (two brk syscalls) and dominate what is being measured.
+def y_prof_now(t: [long]) -> long {
+    syscall(228, 2, &t[3]);
+    t[3] * 1000000000 + t[4]
 };
 
 // Called from every instrumented prologue (arg pushed as the function's
@@ -63,16 +69,16 @@ def y_prof_enter(st: { tab: [long], names: [str], heap0: long }, slot: long, nam
             names[slot] = name;
             0
         } else { 0; };
-        let eb = 3 + 5 * slot;
+        let eb = 5 + 5 * slot;
         let d = t[1];
         let j = d;
         if (j >= 1024) {
             j = 1023;
             0
         } else { 0; };
-        let sb = 3 + 5 * t[0] + 3 * j;
+        let sb = 5 + 5 * t[0] + 3 * j;
         t[sb] = slot;
-        t[sb + 1] = y_prof_now();
+        t[sb + 1] = y_prof_now(t);
         t[sb + 2] = 0;
         t[1] = d + 1;
         t[2] = 0;
@@ -97,10 +103,10 @@ def y_prof_exit(st: { tab: [long], names: [str], heap0: long }) -> long {
                 j = 1023;
                 0
             } else { 0; };
-            let sb = 3 + 5 * t[0] + 3 * j;
+            let sb = 5 + 5 * t[0] + 3 * j;
             let slot = t[sb];
-            let dur = y_prof_now() - t[sb + 1];
-            let eb = 3 + 5 * slot;
+            let dur = y_prof_now(t) - t[sb + 1];
+            let eb = 5 + 5 * slot;
             t[eb] = t[eb] + 1;
             t[eb + 1] = t[eb + 1] + dur;
             if (dur > t[eb + 2]) {
@@ -114,7 +120,7 @@ def y_prof_exit(st: { tab: [long], names: [str], heap0: long }) -> long {
                     pj = 1023;
                     0
                 } else { 0; };
-                let pb = 3 + 5 * t[0] + 3 * pj;
+                let pb = 5 + 5 * t[0] + 3 * pj;
                 t[pb + 2] = t[pb + 2] + dur;
                 0
             } else { 0; };
@@ -202,7 +208,7 @@ def y_prof_report(st: { tab: [long], names: [str], heap0: long }) -> long {
     let idx: [long] = [];
     let i = 0;
     while (i < n) {
-        if (t[3 + 5 * i] > 0) {
+        if (t[5 + 5 * i] > 0) {
             idx = push(idx, i);
             0
         } else { 0; };
@@ -213,12 +219,12 @@ def y_prof_report(st: { tab: [long], names: [str], heap0: long }) -> long {
     let a = 1;
     while (a < m) {
         let v = idx[a];
-        let vt = t[3 + 5 * v + 1];
+        let vt = t[5 + 5 * v + 1];
         let b = a - 1;
         let go = true;
         while (go) {
             if (b >= 0) {
-                if (t[3 + 5 * idx[b] + 1] < vt) {
+                if (t[5 + 5 * idx[b] + 1] < vt) {
                     idx[b + 1] = idx[b];
                     b = b - 1;
                     0
@@ -241,27 +247,27 @@ def y_prof_report(st: { tab: [long], names: [str], heap0: long }) -> long {
     let total = 0;
     i = 0;
     while (i < m) {
-        let eb = 3 + 5 * idx[i];
+        let eb = 5 + 5 * idx[i];
         calls = calls + t[eb];
-        total = total + t[eb + 1];
+        total = total + (t[eb + 1] - t[eb + 3]);
         i = i + 1;
         0
     };
     eputs("prof: " + tostring(m) + " fns " + tostring(calls) + " calls "
         + tostring(total) + " ns cpu " + tostring(heap_used() - st.heap0) + " B alloc\n");
     eputs(y_prof_pad("calls", 10) + y_prof_pad("total_ns", 14)
-        + y_prof_pad("avg_ns", 12) + y_prof_pad("max_ns", 12)
-        + y_prof_pad("self_ns", 12) + "  name\n");
+        + y_prof_pad("self_ns", 14) + y_prof_pad("avg_ns", 12)
+        + y_prof_pad("max_ns", 12) + "  name\n");
     i = 0;
     while (i < m) {
-        let eb = 3 + 5 * idx[i];
+        let eb = 5 + 5 * idx[i];
         let c = t[eb];
         let tot = t[eb + 1];
         let selfns = tot - t[eb + 3];
         let nm = names[idx[i]];
         eputs(y_prof_pad(tostring(c), 10) + y_prof_pad(tostring(tot), 14)
-            + y_prof_pad(tostring(tot / c), 12) + y_prof_pad(tostring(t[eb + 2]), 12)
-            + y_prof_pad(tostring(selfns), 12) + "  " + y_prof_name(nm) + "\n");
+            + y_prof_pad(tostring(selfns), 14) + y_prof_pad(tostring(selfns / c), 12)
+            + y_prof_pad(tostring(t[eb + 2]), 12) + "  " + y_prof_name(nm) + "\n");
         i = i + 1;
         0
     };
