@@ -21,3 +21,9 @@ wasm/playground/check.js
 tools/lsp/check.js
 embedded_runtime.inc
 src/y/std/prof_lines.y
+
+# Reference binaries kept for port verification (see refs/SHA256SUMS)
+refs/
+# generated twin of src/y/std/prof_lines.y
+src/c/prof_lines.c
+cycc-asan
