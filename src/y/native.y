@@ -187,7 +187,7 @@ def std_resolve(name: str, base_dir: str) -> str {
     while (i < len(cands)) {
         if (len(found) == 0) {
             let c: str = cands[i];
-            if (read_file(c) == null) {
+            if (read_file(c) == none) {
                 0
             } else {
                 found = norm_path(c);
@@ -255,7 +255,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                     0
                 } else {
                     let mod_src = read_file(full);
-                    if (mod_src == null) {
+                    if (mod_src == none) {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
                         out_lines += line;
                         0
@@ -273,8 +273,8 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                             mod_dir = substr(full, 0, last_slash);
                             0
                         } else { 0 };
-                        // mod_src is str? (read_file returns null on missing
-                        // file); the null case exited above, so unwrap here.
+                        // mod_src is str? (read_file returns none on missing
+                        // file); the none case exited above, so unwrap here.
                         let mod_src2 = unwrap(mod_src);
                         let sub = native_resolve_seen(mod_src2, mod_dir, depth + 1, seen);
                         // NOTE: each bound once — `x.y` on a call result
@@ -1125,7 +1125,7 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
     else if (k == "str") { { k: "tstr" } }
     else if (k == "bstr") { { k: "tarr", of: { k: "tbyte" } } }
     else if (k == "bool") { { k: "tbool" } }
-    else if (k == "null") { { k: "tnull" } }
+    else if (k == "void") { { k: "tvoid" } }
     else if (k == "id") {
         if (node.v == "self") { { k: "tfunc" } } else {
             let e = env_find(st, node.v);
@@ -1220,7 +1220,7 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
         } else {
             // `...` spread entries merge the source's fields (static
             // union: first appearance keeps the position, later wins the
-            // value) -- the same rule as types.y's map arm.
+            // value) -- the same rule as types.y's rec arm.
             let mfields = [];
             let mi = 0;
             while (mi < len(melems)) {
@@ -1292,7 +1292,7 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
     } else if (k == "store") {
         infer(st, node.v)
     } else if (k == "while") {
-        { k: "tnull" }
+        { k: "tvoid" }
     } else if (k == "ret") {
         infer(st, node.e)
     } else {
@@ -1308,7 +1308,7 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     } else {
         let name = node.callee.v;
         if (name == "print") {
-            { k: "tnull" }
+            { k: "tvoid" }
         } else if (name == "syscall") {
             { k: "tlong" }
         } else if (name == "len") {
@@ -1331,8 +1331,8 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         } else if (name == "substr" || name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof") {
             { k: "tstr" }
         } else if (name == "read_file") {
-            // str? (option): a missing file yields null at runtime
-            // (callers null-check with `== null`, then unwrap).
+            // str? (option): a missing file yields none at runtime
+            // (callers none-check with `== none`, then unwrap).
             // Matches types.y (read_file -> str?).
             { k: "topt", of: { k: "tstr" } }
         } else if (name == "bytes") {
@@ -1346,7 +1346,7 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         } else if (name == "clock_us" || name == "heap_used") {
             { k: "tlong" }
         } else if (name == "sleep") {
-            { k: "tnull" }
+            { k: "tvoid" }
         } else if (name == "split" || name == "argv") {
             { k: "tarr", of: { k: "tstr" } }
         } else if (name == "range") {
@@ -1361,9 +1361,9 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             let gargs = node.args;
             infer(st, gargs[0])
         } else if (name == "puts" || name == "exit") {
-            { k: "tnull" }
+            { k: "tvoid" }
         } else if (name == "eputs") {
-            { k: "tnull" }
+            { k: "tvoid" }
         } else {
             let e = env_find(st, name);
             if (e.kind == "none") {
@@ -1380,7 +1380,7 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
 def infer_block(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { k: str } {
     let stmts = node.stmts;
     if (len(stmts) == 0) {
-        { k: "tnull" }
+        { k: "tvoid" }
     } else {
         infer(st, stmts[len(stmts) - 1])
     }
@@ -1388,7 +1388,7 @@ def infer_block(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 
 def infer_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { k: str } {
     if (node.kind == "def") {
-        { k: "tfunc", args: [], ret: { k: "tnull" } }
+        { k: "tfunc", args: [], ret: { k: "tvoid" } }
     } else {
         // NOTE: nested ifs — the C VM evaluates `&&` eagerly.
         if (node.typ.k == "tnone") {
@@ -1914,7 +1914,7 @@ def gen(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env
         gen_str_const(st, node.v)
     } else if (k == "bstr") {
         gen_bstr(st, node)
-    } else if (k == "null") {
+    } else if (k == "void") {
         emit(st, "    xor %eax, %eax")
     } else if (k == "id") {
         gen_id(st, node)
@@ -2030,7 +2030,7 @@ def gen_str_const(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
 def gen_id(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     if (node.v == "self") {
         // Bare `self` as a value: only legal in discarded positions
-        // (the checker rejects every typed use). Emit null-ish zero.
+        // (the checker rejects every typed use). Emit zero (none).
         emit(st, "    xor %eax, %eax  # bare self (discarded)")
     } else if (node.v == "none") {
         // The empty option (checker gives it typeof from context).
@@ -2155,7 +2155,7 @@ def gen_slice(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     let slesz = arr_elem_bytes(infer(st, node.arr));
     st = gen(st, node.arr);
     st = emit(st, "    push %rax");
-    if (lo.k == "null") {
+    if (lo.k == "void") {
         st = emit(st, "    xor %eax, %eax");
         0
     } else {
@@ -2163,7 +2163,7 @@ def gen_slice(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
         0
     };
     st = emit(st, "    push %rax");
-    if (hi.k == "null") {
+    if (hi.k == "void") {
         // default: the array's length (the header keeps it in slot 0);
         // the array pointer sits one slot below the pushed lo.
         st = emit(st, "    mov 8(%rsp), %rax");
@@ -2802,11 +2802,6 @@ def gen_print(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
         };
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
-    } else if (t.k == "tnull") {
-        st = gen(st, pa0);
-        st = gen_str_const(st, "null");
-        st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
     } else if (t.k == "topt") {
         st = gen(st, pa0);
         st = gen_opt_str_rax(st, t);
@@ -2851,7 +2846,7 @@ def gen_typeof(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
 // compile time. Stack layout while building: [record][accumulator], the
 // record pushed first (8(%rsp)), the accumulator on top (0(%rsp)).
 
-// Option value in %rax (0 = none, else the box address): leave "null" or
+// Option value in %rax (0 = none, else the box address): leave "none" or
 // the payload's string form in %rax. Options are 0-or-box (NATIVE.md).
 def gen_opt_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let rdone = next_loc(st);
@@ -2864,7 +2859,7 @@ def gen_opt_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, lo
     st = gen_val_tostr_rax(st, t.of);
     st = emit(st, "    jmp " + rdone.lbl);
     st = emit(st, rnul.lbl + ":");
-    st = gen_str_const(st, "null");
+    st = gen_str_const(st, "none");
     emit(st, rdone.lbl + ":")
 };
 
@@ -4358,8 +4353,6 @@ def gen_val_tostr_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, 
         } else {
             gen_arr_tostr_rax(st, t.of)
         }
-    } else if (tk == "tnull") {
-        gen_str_const(st, "null")
     } else if (tk == "topt") {
         gen_opt_str_rax(st, t)
     } else if (tk == "trec") {
@@ -4511,7 +4504,7 @@ def gen_dot(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
     let idx = rec_field_idx(t, dkey);
     if (idx < 0) {
         // unknown static shape ({k}-holes, bare params): dynamic field
-        // lookup. The record carries its shape table (see gen_map note);
+        // lookup. The record carries its shape table (see gen_reclit note);
         // the key goes through the regular string rodata channel.
         let r = next_uid(st);
         st = r.st;
@@ -4557,6 +4550,9 @@ def rec_field_idx(t, key: str) -> long {
             } else { 0; };
             i = i + 1;
         };
+    } else if (t.k == "tmap") {
+        // a map is lowered to the fixed {keys, vals} record (see "maps")
+        if (key == "keys") { idx = 0; 0 } else if (key == "vals") { idx = 1; 0 } else { 0 };
     };
     idx
 };
@@ -4741,9 +4737,6 @@ def gen_tostring(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     } else if (t.k == "tarrfix") {
         st = gen(st, a0);
         if (t.of.k == "tbyte") { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, t.of) }
-    } else if (t.k == "tnull") {
-        st = gen(st, a0);
-        gen_str_const(st, "null")
     } else if (t.k == "topt") {
         st = gen(st, a0);
         gen_opt_str_rax(st, t)
@@ -4863,7 +4856,7 @@ def gen_split(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 
 def gen_puts(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // puts(v): write the value WITHOUT trailing newline (C semantics:
-    // fputs + flush). Like print but no newline; returns null.
+    // fputs + flush). Like print but no newline; returns nothing (void).
     // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
     let pargs = node.args;
     let pa = pargs[0];
@@ -4954,7 +4947,7 @@ def gen_exit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
 // argv MAY only appear as `main(argv())`'s argument feed: ycc.y's entry is
 // `let result = main(argv())`. The _start prologue (below) builds the argv
 // array and stashes it in r15; gen_argv emits the call that materializes it.
-// read_file(path): openat+read loop into a heap string; null (0) on error,
+// read_file(path): openat+read loop into a heap string; none (0) on error,
 // else a some()-style heap box holding the string header (options are
 // 0-or-box per NATIVE.md, so unwrap() derefs uniformly).
 // write_file(path, content): openat(O_WRONLY|O_CREAT|O_TRUNC, 0644)+write;
@@ -5407,7 +5400,7 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
         st = rm.st;
         // Only pay for argv materialization when the program uses it.
         let want = uses_scan_block(ast3.stmts, { argv: false });
-        st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tnull" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, []);
+        st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, []);
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         // assemble the file. Body-level tree shaking comes first: its
@@ -5446,7 +5439,7 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
         while (s2 < len(allrod)) {
             let pair = allrod[s2];
             // String entries are exactly [label, len, escaped]; shape
-            // tables (see gen_map note) are longer and all-strings.
+            // tables (see gen_reclit note) are longer and all-strings.
             if (len(pair) == 3) {
                 rodpieces += pair[0] + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + pair[2] + "\"\n";
                 0
@@ -5472,10 +5465,10 @@ export { emit_program, native_resolve, native_resolve_x, strip_ns, strip_list, s
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and
-// every map operation lowers to synthetic A{ out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } over those arrays (the
+// every map operation lowers to synthetic AST over those arrays (the
 // emitter knows the static key and value types for comparison and
 // formatting), so maps need no runtime assembly of their own. Reads are
-// always optional: a hit boxes the value (some(v)), a miss leaves null.
+// always optional: a hit boxes the value (some(v)), a miss leaves none.
 
 def n_str(v: str, line: long, col: long) -> {k: str} {
     { k: "str", v: v, line: line, col: col }
@@ -5576,7 +5569,7 @@ def gen_maplit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
 };
 
 // m[k] read: scan the keys; a hit boxes the value (some(vals[i]) -- the
-// read's V? type), a miss leaves the starting 0 (null).
+// read's V? type), a miss leaves the starting 0 (none).
 def gen_map_get(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let ln = node.line;
     let cl = node.col;

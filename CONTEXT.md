@@ -1,4 +1,4 @@
-# CONTEXT.md — session state snapshot (2026-09-30)
+# CONTEXT.md — session state snapshot (2026-09-30, updated)
 
 Working context for continuing the Y language / toolchain work. Read this
 first, then `AGENTS.md` for build/test commands and `PORTING.md` for the
@@ -29,120 +29,61 @@ Target language state:
    homogeneous arrays; heap arrays with len/cap doubling.
 2. Symbol ops only: `push`/`prepend`/`map_get`/`map_set` gone from the
    language; ycc's own source migrated to `arr += elem`.
-3. **Records vs maps (in progress)**: records static (`r.f`, fixed
-   shape), maps dynamic `{K => V}` (hashable K, homogeneous V), keyed
-   `m['key']`, **read always yields `V?` (option) even when the map type
-   says `{K => V}`** (user's explicit rule), literal `{"a": 1}`.
-   Terminology: record AST kinds say `"rec"`, "map" = dynamic type.
-4. Byte strings `b"..."` / `b'...'` → `[byte]`, Python-style repr
-   `b'...'` when printed (done).
+3. Records vs maps (done): records static (`r.f`, fixed shape), maps
+   dynamic `{K => V}` (hashable K, homogeneous V), keyed `m["k"]`,
+   **read always yields `V?`**, literal `{"a": 1}`, `let m: {K => V} =
+   {}` for empty maps; unannotated `{}` is the empty record. Lowered to
+   a `{keys, vals}` record + synthetic AST (native.y "maps" section).
+4. Byte strings `b"..."` / `b'...'` → `[byte]` (done).
 5. Tail recursion: tail self-calls recycle the frame (done).
 6. std/struct.y pack/unpack helpers (done).
-7. **NEW — type-system redesign (just specified by user, NOT started):**
-   - `void`: when no value should be returned. **When `if` arms don't
-     agree on a type, the whole `if` becomes `void`** — it is then not
-     usable as a value (no more hard "if' branches disagree" error;
-     disagreement poisons to void instead).
-   - `none`: the empty case of the option type (`T?` = `some(T)` |
-     `none`). **Remove the concept of `null` entirely** unless a very
-     good reason appears — `null` literal, `tnull` type, `== null`
-     checks, `print(null)`, `typeof(null)`, bare `return` semantics all
-     fold into `none`/`void`.
-   - **Postfix unwrap shorthand: `var!`** ≡ `unwrap(var)` (unwraps an
-     option). `unwrap` builtin stays.
-   - Language surface to migrate: `test/y/**` uses `null` in t35
-     (readline EOF), t43, e14, and `test_comprehensive.sh` expectations
-     (`typeof: null`, `tostring: null`, `map: get missing` → `null`,
-     `return: bare return is null`).
-8. Tests for all of the above (in progress) — see below.
-9. Docs (`docs/src/`, Tectonic v2 LaTeX) record everything and build.
-10. Toolchain gates stay green (copy gate, fixpoint, all suites).
+7. Type redesign (done, both twins):
+   - `void`: `if` arms that disagree make the `if` void (no more
+     "'if' branches disagree"); void can't be bound / printed / passed
+     (`'f' arg N: cannot pass a void value`) / returned as a value.
+     `-> void` annotation discards the body tail; bare `return;` makes
+     an unannotated def void (ret arm returns the value's type when the
+     def's return type is being inferred).
+   - `null` removed: no keyword, no `tnull`; `none` (predeclared id,
+     type `topt<tunk>`, displayed "none") is the empty option; prints
+     `none`. Internal "absent expression" AST placeholders are
+     `{k: "void"}` (were `{k: "null"}`), typed `tvoid`.
+   - Postfix `x!` = `unwrap(x)` (parser desugars to a call).
+   - Map key types checked: `{foo => V}` is "not a native value type".
+   - C value model renamed: `Y_NONE`/`yv_none`/`yv_is_none`,
+     `Y_REC`/`yr`/`yr_get`/`yr_set`/`yr_has`.
+8. Tests (done): native t46_maps, t47_none_void, e24–e28; comprehensive
+   "Void" and "Options" sections; audit t23_none_eq, t51 now parity;
+   ysh.y migrated (maps of functions, `h!(tokens)`) and dropped from
+   native-examples UNSUPPORTED.
+9. Docs updated (none/void/`!`/maps `{K => V}`); `tectonic -X build`
+   in docs/ builds (tectonic 0.17 at ~/.local/bin in WSL).
+10. Gates green: `make ycc` byte-identical, all suites pass.
 
-## Done and committed (recent, all unsigned commits)
+## Environment note (Windows + WSL)
 
-- `735f61c` tests batch: t43_spread_cons, t44_struct_roundtrip,
-  t45_byte_repr, e23_spread_nonrecord; fixed-array growth `a += 1` on
-  `[T; N]` is a type error again (the types.y side had silently never
-  landed — lesson: an edit-tool/python failure can leave the twin
-  half-applied; always `grep` for the new message in BOTH files);
-  t37 expected regenerated for byte reprs.
-- Earlier: operators + `::` cons + record spread + TCO + byte strings +
-  std/struct + print/tostring forms + symbol-ops removal + ycc source
-  migration + docs (10 chapters, `tectonic -X build`).
-- Suites were green **before the map work**: native 61/61, audit 65/65,
-  loops 49/49, ycc-units 32/32; comprehensive 230/235 and examples
-  13/14 — the only failures anywhere were the map-type feature (5
-  comprehensive map tests + ysh.y).
+Work happens on Windows; build/test in WSL. The repo has local git
+config `core.autocrlf=false`, `core.eol=lf` (the checkout must be LF —
+CRLF breaks the shell scripts and the byte gates).
 
-## In flight: map type `{K => V}` (uncommitted)
+## refs/ (rebuilt on this machine)
 
-### Y side (`src/y`) — COMPLETE and building
-- `lexer.y`: `=>` two-char op.
-- `parser.y`: map type `{ K => V }` in `parse_type_record` (separator
-  `=>` vs `:` disambiguates from record shapes); map literal with
-  quoted keys → node kind `"map"` (`maplit_node`); `map_key_type`
-  (str/long/byte/bool/float, anything else stays `tname` for the
-  checker to reject).
-- `types.y`: `tmap` type (`{k: "tmap", key: K, of: V}`); map-literal
-  arm (str keys, homogeneous values, `...` spread rejected); index read
-  → `topt(of: V)` always; `idxassign` → writes `V`; `len` accepts maps;
-  `print`/`tostring` accept maps; empty `{}` is an empty record, and
-  under `let m: {K => V} = {}` the decl adoption makes it the map
-  (`typeof_decl` + `gen_decl` lower it to the `{keys, vals}` shape).
-- `native.y`: walkers (strip_ns/uses_scan/fv_ids/fv_binds) know
-  `"map"`; `infer` types map literals and `tmap` dot-shape; dispatch
-  routes `index`/`idxassign` to `gen_map_get`/`gen_map_set`; `print`/
-  `tostring`/`len` handle `tmap`. **Lowering = synthetic AST over a
-  `{keys: [K], vals: [V]}` record — zero new assembly** (see the
-  "maps" section at the end of native.y: `gen_maplit` dedupes keys
-  emit-time, `gen_map_get` scans and returns `some(v)`/`0`,
-  `gen_map_set` scans and overwrites-or-appends, `gen_map_repr` builds
-  `{"k": v, ...}` with quoted keys).
-- **Branch-type trick (important):** `typeof_expr`'s if-arms must agree
-  via `teq`; concrete record shapes only unify through the `single_k`
-  hole law. `map_type_of(v) -> {k: str}` returns the tmap node through
-  a `{k: str}` annotation so its flow type is the hole — without it the
-  map arm disagrees with the rec arm (`'if' branches disagree` at
-  ~6035 in the spliced build). Same idiom as `t_unk()`.
+`refs/` was absent here and was reconstructed: `refs/ycc-735f61c.ref` =
+cycc@735f61c compiling src/y@735f61c (self-compile fixpoint verified);
+`refs/ycc.ref` = the **Y-only bootstrap** of the current sources
+(`ycc-735f61c.ref -o s1 src/y/ycc.y; s1 -o s2; s2 -o s3; cmp s2 s3`),
+which the C copy must reproduce byte for byte. When the language
+changes again, regenerate refs/ycc.ref the same way (a Y bootstrap
+from the previous ref), never from cycc.
 
-### Verified smoke
-`let m = {"a": 1}; print(m["a"]);` → `1`; `print(m["b"])` → `null`
-(null = today's empty option; becomes `none` after the redesign).
+## Pending / ideas
 
-### C twin (`src/c`) — NOT STARTED (out of sync!)
-Needs the same map work **plus** the terminology rename the Y side
-already got (record nodes `"map"`→`"rec"`, `gen_map`→`gen_reclit`,
-`rn_map`→`rn_reclit`) and, per the user, `yv.h`/`yv.c` renames
-(`Y_MAP`→`Y_REC`, `ym*`→`yr*`). Doing the C side first is fine per the
-bootstrapping rule.
-
-## Pending next steps (in order)
-
-1. **Type redesign, C first** (`src/c/types.c`, `parser.c`, `native.c`):
-   - `if` arms disagree → result type `void` (tvoid), not an error;
-     void not usable as a value (binding/returning/arguing it errors).
-   - `none` replaces `null` everywhere (lexer kw, literal node, type
-     `tnull`→none-case, comparisons, print/tostring/typeof output,
-     bare `return`).
-   - Postfix `!` = unwrap (parser postfix chain + emitter call
-     `unwrap`-equivalent); `unwrap` builtin stays.
-   - Keep `tnone` (missing-annotation marker) semantics intact — do
-     not confuse it with the new `none` value.
-2. **Port the same to `src/y`** (`types.y`, `parser.y`, `native.y`,
-   `lexer.y`), keeping the twins 1:1 (same function names/structure).
-3. **C twin map work + `"rec"` rename + `yv` rename** so the copy gate
-   passes again.
-4. **Migrate tests**: `null`→`none` in test/y/native/{t35,t43,e14},
-   `test_comprehensive.sh` expectations; add fixtures for `!` postfix
-   and void-if-arms (disagreeing arms legal as statements, error when
-   used as values); map fixtures (t46+) for get/set/overwrite/new key/
-   homogeneous/empty/literal; `dot-assign: string key form` test.
-5. Fix comprehensive's 5 map-pending tests + examples `ysh.y`.
-6. Rebuild docs (map section exists in draft: `{K => V}`, read `V?`;
-   add `none`/`void`/`!`); `tectonic -X build`.
-7. Full suites: `YREF="$(pwd)/cycc" ./test/sh/run_all.sh`, then `make
-   ycc` gates (byte-identical vs refs + fixpoint), then commit
-   (`git commit --no-gpg-sign`).
+- Maps are linear scans (fine for small tables); a hashed layout would
+  need a bench run per AGENTS.md.
+- Map literal keys are always `str` (no literal syntax for long keys;
+  use an annotated `{}` + stores).
+- test/y/ycc/{vm,partial,test_vm}.y are legacy snapshots (skipped /
+  rejected by both compilers); they still mention `null`.
 
 ## Landmines / lessons (repeatedly hit)
 

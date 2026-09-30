@@ -37,7 +37,7 @@ expect_for() {
         t01_empty_block.y)
             echo "parity" ;;
         t51_empty_map.y)
-            echo "reject" ;;   # an unannotated {} cannot infer a record type
+            echo "parity" ;;   # an unannotated {} is the empty record (prints {})
         t06_div_by_zero.y)
             echo "reject" ;;   # 'array / number' is a static error now
         t10_deep_recursion.y)

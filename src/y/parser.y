@@ -1,8 +1,9 @@
 // parser.y — parse a token list into an AST of nested maps.
 // Each parse function returns { node: <ast>, pos: <int> }.
-// AST node kinds: num, str, id, bool, null, bin, un, call, index, slice,
+// AST node kinds: num, str, id, bool, void (an absent expression), bin,
+//   un, call, index, slice,
 //   dot, assign, idxassign, decl, func, if, while, for, foreach, forrange,
-//   block, array, map, ret.
+//   block, array, rec, map, ret. Postfix `x!` is sugar for unwrap(x).
 
 // ── token helpers ────────────────────────────────────────────────────────
 
@@ -95,11 +96,11 @@ def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: st
     if (is_punct(toks, pos, close)) { go = false; 0; } else { 0; };
     while (go) {
         // NOTE: bound once — `one(toks, pos)` inline misparses on the C VM.
-        // NOTE: the seed hole `{node:{k:null},pos}` is tnone-typed; the
+        // NOTE: the seed hole `{node:{k:void},pos}` is tnone-typed; the
         // expr arm fills the SAME hole with a full node — the two shapes
         // unify via the tcompat law (never strict teq), so no branch error.
-        // NOTE: `0;` tails — the while body must be null-typed (see note).
-        let r = { node: { k: "null" }, pos: pos };
+        // NOTE: `0;` tails — the while body must be void-typed (see note).
+        let r = { node: { k: "void" }, pos: pos };
         if (one == "expr") {
             r = parse_expr(toks, pos);
             0
@@ -170,8 +171,6 @@ def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
         res({ k: "bool", v: "true", line: ln, col: cl }, p + 1)
     } else if (is_kw(toks, p, "false")) {
         res({ k: "bool", v: "false", line: ln, col: cl }, p + 1)
-    } else if (is_kw(toks, p, "null")) {
-        res({ k: "null", line: ln, col: cl }, p + 1)
     } else if (is_punct(toks, p, "(")) {
         let inner = parse_expr(toks, p + 1);
         res(inner.node, inner.pos + 1)  // skip ')'
@@ -190,7 +189,7 @@ def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
     } else if (is_kw(toks, p, "foreach")) {
         parse_foreach(toks, p)
     } else {
-        res({ k: "null" }, p + 1)
+        res({ k: "void" }, p + 1)
     }
 };
 
@@ -213,12 +212,12 @@ def parse_postfix(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
             if (is_punct(toks, pos + 1, ":")) {
                 if (is_punct(toks, pos + 2, "]")) {
                     // arr[:] — full slice
-                    node = { k: "slice", arr: node, lo: { k: "null" }, hi: { k: "null" }, line: bln, col: bcl };
+                    node = { k: "slice", arr: node, lo: { k: "void" }, hi: { k: "void" }, line: bln, col: bcl };
                     pos = pos + 3;  // skip '[', ':', ']'
                 } else {
                     // arr[:hi] — no lo
                     let second = parse_expr(toks, pos + 2);
-                    node = { k: "slice", arr: node, lo: { k: "null" }, hi: second.node, line: bln, col: bcl };
+                    node = { k: "slice", arr: node, lo: { k: "void" }, hi: second.node, line: bln, col: bcl };
                     pos = second.pos + 1;  // skip ']'
                 };
             } else {
@@ -226,7 +225,7 @@ def parse_postfix(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
                 if (is_punct(toks, first.pos, ":")) {
                     if (is_punct(toks, first.pos + 1, "]")) {
                         // arr[lo:] — no hi
-                        node = { k: "slice", arr: node, lo: first.node, hi: { k: "null" }, line: bln, col: bcl };
+                        node = { k: "slice", arr: node, lo: first.node, hi: { k: "void" }, line: bln, col: bcl };
                         pos = first.pos + 2;  // skip ':' and ']'
                     } else {
                         // arr[lo:hi]
@@ -244,6 +243,12 @@ def parse_postfix(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
             let name = tv(toks, pos + 1);
             node = { k: "dot", obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos) };
             pos = pos + 2;
+        } else if (is_op(toks, pos, "!")) {
+            // x! -- postfix unwrap, exactly unwrap(x) (traps on none).
+            let ua: [{k: str}] = [];
+            ua += node;
+            node = { k: "call", callee: { k: "id", v: "unwrap", line: tline(toks, pos), col: tcol(toks, pos) }, args: ua, line: tline(toks, pos), col: tcol(toks, pos) };
+            pos = pos + 1;
         } else if (is_op(toks, pos, "++")) {
             // x++ — postfix: the OLD value is the expression's value, and
             // the target is evaluated once (a[f()]++ calls f once).
@@ -282,7 +287,7 @@ def parse_binary(toks: [{ t: str, v: str, line: long, col: long }], p: long, min
         // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
         // with bools and the checker rejects the joint gate (tcompat law:
         // only annotations unify, never branch conditions).
-        // NOTE: every arm ends in `0;` — the while body must be null-typed
+        // NOTE: every arm ends in `0;` — the while body must be void-typed
         // (an `if` without `else` takes its body's type; a long-typed body
         // would poison the loop).
         if (prec == 0) {
@@ -437,7 +442,7 @@ def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { n
         while (go) {
             // trailing comma: '}' right after ',' ends the map
             // NOTE: statement-form + `0;` tails — the while body must be
-            // null-typed (see parse_binary note).
+            // void-typed (see parse_binary note).
             if (is_punct(toks, pos, "}")) {
                 go = false;
                 0
@@ -482,9 +487,10 @@ def maplit_node(is_map: bool, keys: [str], vals: [{k: str}], ln: long, cl: long)
 
 // ── type parsing ─────────────────────────────────────────────────────────
 // Types are parsed into type-node maps (not just skipped): kinds tlong,
-// tbool, tstr, tnull, tname (unresolved name -> checker error), tptr {to},
+// tbool, tstr, tvoid, tname (unresolved name -> checker error), tptr {to},
 // tarr {of}, tparams {ts} (parenthesized list, resolved by arrow context),
-// tfunc {args, ret}, trec {fields: [{name, typ}]}, tnone (no annotation).
+// tfunc {args, ret}, trec {fields: [{name, typ}]}, tmap {key, of},
+// tnone (no annotation).
 // Extra fields are ignored by the C backend, so this is additive.
 
 def parse_type_node(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
@@ -540,7 +546,7 @@ def parse_type_array(toks: [{ t: str, v: str, line: long, col: long }], p: long)
 // (T, T) tail of parse_type_node + shared postfix tail (fresh names — see note).
 def parse_type_params(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
     // NOTE: statement-form loops + `0;` tails — while bodies must be
-    // null-typed (see parse_binary note).
+    // void-typed (see parse_binary note).
     let ts = [];
     let pos = p + 1;  // skip '('
     if (!is_punct(toks, pos, ")")) {
@@ -562,7 +568,6 @@ def parse_type_params(toks: [{ t: str, v: str, line: long, col: long }], p: long
     parse_type_tparams(toks, pos + 1, ts)  // skip ')'
 };
 
-// { field: T, ... } tail of parse_type_node (fresh names — see note).
 // The key type of a map type ({K => V}): K must be hashable (str, long,
 // byte, bool, float). Anything else stays a named type for the checker
 // to reject.
@@ -572,9 +577,10 @@ def map_key_type(name: str) -> {k: str} {
     else if (name == "byte") { { k: "tbyte" } }
     else if (name == "bool") { { k: "tbool" } }
     else if (name == "float") { { k: "tfloat" } }
-    else { { k: "tname", v: name, line: 0, col: 0 } }
+    else { { k: "tname", name: name } }
 };
 
+// { field: T, ... } tail of parse_type_node (fresh names — see note).
 def parse_type_record(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
     // `{ f: T, ... }` is a record shape; `{ K => V }` is a map type.
     let fields = [];
@@ -615,7 +621,7 @@ def parse_type_atom2(toks: [{ t: str, v: str, line: long, col: long }], p: long)
     else if (nm == "bool") { parse_type_tail(toks, p + 1, { k: "tbool" }) }
     else if (nm == "str") { parse_type_tail(toks, p + 1, { k: "tstr" }) }
     else if (nm == "float") { parse_type_tail(toks, p + 1, { k: "tfloat" }) }
-    else if (nm == "null") { parse_type_tail(toks, p + 1, { k: "tnull" }) }
+    else if (nm == "void") { parse_type_tail(toks, p + 1, { k: "tvoid" }) }
     else { parse_type_tail(toks, p + 1, { k: "tname", name: nm }) }
 };
 
@@ -800,7 +806,7 @@ def parse_block(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
     let go = true;
     while (go) {
         // NOTE: statement-form + `0;` tails — the while body must be
-        // null-typed (see parse_binary note).
+        // void-typed (see parse_binary note).
         if (is_punct(toks, pos, "}")) {
             go = false;
             0
@@ -970,7 +976,7 @@ def parse_if(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { no
     let cond = parse_expr(toks, p + 1);
     let then_b = parse_block(toks, cond.pos);
     let pos = then_b.pos;
-    let else_b = { k: "null" };
+    let else_b = { k: "void" };
     let has_else = false;
     // NOTE: `0;` tails (see `?` note above).
     if (is_kw(toks, pos, "else")) {
@@ -1021,7 +1027,7 @@ def parse_for_or_range(toks: [{ t: str, v: str, line: long, col: long }], p: lon
         // NOTE: statement-form + `0;` tails — bare `if` arms would take
         // the body's type and poison the sequence (see parse_binary note).
         let pos = p + 2;  // skip 'for' '('
-        let init = { k: "null" };
+        let init = { k: "void" };
         if (!is_punct(toks, pos, ";")) {
             let ir = parse_stmt(toks, pos);
             init = ir.node;
@@ -1031,7 +1037,7 @@ def parse_for_or_range(toks: [{ t: str, v: str, line: long, col: long }], p: lon
         pos = pos + 1;  // ';'
         let cond = parse_expr(toks, pos);
         pos = cond.pos + 1;  // ';'
-        let step = { k: "null" };
+        let step = { k: "void" };
         if (!is_punct(toks, pos, ")")) {
             let sr = parse_stmt(toks, pos);
             step = sr.node;
@@ -1056,7 +1062,7 @@ def parse_program(toks: [{ t: str, v: str, line: long, col: long }]) -> {k: str}
         pos = s.pos;
         if (is_punct(toks, pos, ";")) { pos = pos + 1; 0; } else { 0 };
         // safety: if a statement made no progress, bail to avoid infinite loop
-        // NOTE: `0;` tail — the while body must be null-typed (see note).
+        // NOTE: `0;` tail — the while body must be void-typed (see note).
         if (pos == before) {
             pos = pos + 1;
             0

@@ -388,7 +388,6 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             else if (word == "return") { ty = "kw"; 0; }
             else if (word == "true") { ty = "kw"; 0; }
             else if (word == "false") { ty = "kw"; 0; }
-            else if (word == "null") { ty = "kw"; 0; }
             else { 0 };
             if (word == "b") {
                 // b"..." / b'...' -- a byte-string literal: the same type

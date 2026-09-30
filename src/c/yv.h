@@ -3,9 +3,9 @@
  * The C compiler (src/c) is a 1:1 copy of the Y compiler (src/y); this
  * header provides the DATA semantics the Y code runs on:
  *
- *   null | bool | long | float | str | array | map
+ *   none | bool | long | float | str | array | record
  *
- * Arrays and maps are REFERENCE values (shared by every binding; push()
+ * Arrays and records are REFERENCE values (shared by every binding; push()
  * grows in place and returns the same array — the Y rules). Strings and
  * numbers are immutable values. Values are allocated once and kept for
  * the process lifetime (the compiler is a batch tool; freeing is not
@@ -20,7 +20,7 @@
 
 #include <stddef.h>
 
-typedef enum { Y_NULL, Y_BOOL, Y_LONG, Y_FLOAT, Y_STR, Y_ARR, Y_MAP } YTag;
+typedef enum { Y_NONE, Y_BOOL, Y_LONG, Y_FLOAT, Y_STR, Y_ARR, Y_REC } YTag;
 
 typedef struct Yv Yv;
 
@@ -42,12 +42,12 @@ struct Yv {
             char **keys; /* NUL-terminated */
             Yv **vals;
             size_t len, cap;
-        } m;
+        } r;
     } u;
 };
 
 /* ── constructors ────────────────────────────────────────────────────── */
-Yv *yv_null(void);
+Yv *yv_none(void);
 Yv *yv_bool(int v);
 Yv *yv_long(long v);
 Yv *yv_float(double v);
@@ -67,9 +67,9 @@ double yv_f(const Yv *v);
 /* ── values ──────────────────────────────────────────────────────────── */
 int yv_truth(const Yv *v);            /* the value in an `if`/`while` */
 int yv_eq(const Yv *a, const Yv *b);  /* value equality (str by content) */
-int yv_is_null(const Yv *v);          /* `x == null` */
-Yv *yv_unwrap(const Yv *v);           /* unwrap(v): trap on null */
-long yv_len(const Yv *v);             /* str chars / array count / map count */
+int yv_is_none(const Yv *v);          /* `x == none` */
+Yv *yv_unwrap(const Yv *v);           /* unwrap(v): trap on none */
+long yv_len(const Yv *v);             /* str chars / array count / record fields */
 
 /* ── strings ─────────────────────────────────────────────────────────── */
 Yv *ys_cat(const Yv *a, const Yv *b);
@@ -96,18 +96,18 @@ void ya_set(Yv *a, long i, Yv *v);    /* bounds-checked */
 Yv *ya_push(Yv *a, Yv *v);            /* in place, returns a (the Y rule) */
 Yv *ya_slice(const Yv *a, long lo, long hi); /* new [T]; clamped */
 
-/* ── maps / records (reference values, insertion-ordered) ────────────── */
-Yv *ym(size_t n, ...);                /* n (key, value) pairs (no sentinel) */
-Yv *ym_new(void);
-Yv *ym_get(const Yv *m, const char *key); /* missing -> yv_null() */
-Yv *ym_set(Yv *m, const char *key, Yv *v); /* insert or update in place */
-int ym_has(const Yv *m, const char *key);
+/* ── records (reference values, insertion-ordered) ───────────────────── */
+Yv *yr(size_t n, ...);                /* n (key, value) pairs (no sentinel) */
+Yv *yr_new(void);
+Yv *yr_get(const Yv *m, const char *key); /* missing -> yv_none() */
+Yv *yr_set(Yv *m, const char *key, Yv *v); /* insert or update in place */
+int yr_has(const Yv *m, const char *key);
 
 /* ── the builtins the compiler code calls ────────────────────────────── */
 void puts_(const Yv *s);              /* puts(s) */
 void eputs_(const Yv *s);             /* eputs(s) */
 void exit_(long code);                /* exit(code) */
-Yv *read_file(const Yv *path);        /* str contents, or null (str?) */
+Yv *read_file(const Yv *path);        /* str contents, or none (str?) */
 int write_file(const Yv *path, const Yv *data);
 int write_bytes(const Yv *path, const Yv *bytearr, long mode);
 void yv_set_argv(int argc, char **argv); /* the driver feeds argv() */

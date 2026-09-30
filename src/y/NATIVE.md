@@ -68,8 +68,10 @@ the two compilers are kept in lockstep.
   body serves both call forms — capture-free bodies simply never read that
   slot. A capturing function is emitted at its *creation site*, because only
   the enclosing environment knows each captured name's type.
-- Maps with dynamic string keys are still **rejected** by types.y with a
-  clear error.
+- Maps `{K => V}` are lowered to a `{keys: [K], vals: [V]}` record and
+  every map operation (literal, `m[k]`, `m[k] = v`, `len`, printing) to
+  synthetic AST over those arrays -- no map-specific assembly. Reads are
+  always `V?` (`none` on a miss).
 
 ## Pipeline (now → later)
 
@@ -136,9 +138,11 @@ at self-hosting this becomes a raw `write` syscall. No cc/as/ld involved.
 Now: `long`/`int`, `bool`, `float`, `str`, `*T`, `[T; N]`, `[T]`, `T?`,
 function types `(A, B) -> R`, monomorphic `def` (annotations **required** on
 params in native mode; return types and locals inferred), captures resolved
-into closures, `if` cond must be `bool`, branch types must match, `while` is
-`null`-typed, `str`→`*T`, `long`→`float` and `none`-unification are the only
-implicit conversions. Error messages strip rename's `$N` suffixes and carry
+into closures, `if` cond must be `bool`, `if` arms that disagree make the
+`if` `void` (a statement; using it as a value errors), `while` is
+`void`-typed, `str`→`*T`, `long`→`float` and `none`-unification are the only
+implicit conversions. There is no `null`: `none` is the empty option and
+postfix `x!` is `unwrap(x)`. Error messages strip rename's `$N` suffixes and carry
 line/col (LSP feeds on these).
 Later: generics, records, borrow rules, exhaustiveness,
 methods/traits if Y grows them.
@@ -162,9 +166,10 @@ past 7.5 GB), and the output writer stopped issuing one `write` syscall per
 byte.
 
 Still missing for a *comfortable* self-host (the compiler works around each
-today): heap maps with dynamic string keys, and record spread. Records with
-static shapes cover what `src/y/*.y` needs; closures, first-class functions,
-`for`/`foreach`, block expressions and floats have all landed since.
+today): nothing structural any more -- maps `{K => V}` and record spread
+have landed. Records with static shapes cover what `src/y/*.y` needs;
+closures, first-class functions, `for`/`foreach`, block expressions and
+floats have all landed since.
 
 ## Runtime library: Y, not assembly
 
@@ -361,8 +366,8 @@ compiling — so the list can only shrink.
   Negating `LONG_MIN` still wraps to `LONG_MIN`, as the language requires.
 - Division/modulo by zero, OOB indexing, unwrap-of-none, OOM each exit
   cleanly with a message + exit 1.
-- No heap maps with dynamic keys, and no record spread (clear type errors).
-  Records, heap strings and the string builtins
+- Maps are linear-scan (a `{keys, vals}` record): fine for small tables,
+  O(n) per lookup. Records, heap strings and the string builtins
   (`substr`/`join`/`split`/`tostring`/`ord`/…) are supported — the compiler
   itself relies on them.
 - `float` is IEEE754 double, held in `%rax` as raw bits and moved through

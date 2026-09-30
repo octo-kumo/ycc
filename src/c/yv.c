@@ -48,8 +48,8 @@ static Yv *ynew(YTag tag) {
 
 /* ── constructors ────────────────────────────────────────────────────── */
 
-Yv *yv_null(void) {
-    Yv *v = ynew(Y_NULL);
+Yv *yv_none(void) {
+    Yv *v = ynew(Y_NONE);
     v->u.l = 0;
     return v;
 }
@@ -112,16 +112,16 @@ int yv_truth(const Yv *v) {
     case Y_BOOL: return v->u.b;
     case Y_LONG: return v->u.l != 0;
     case Y_FLOAT: return v->u.f != 0.0;
-    case Y_NULL: return 0;
+    case Y_NONE: return 0;
     default: return 1;
     }
 }
 
-int yv_is_null(const Yv *v) { return !v || v->tag == Y_NULL; }
+int yv_is_none(const Yv *v) { return !v || v->tag == Y_NONE; }
 
 Yv *yv_unwrap(const Yv *v) {
-    if (!v || v->tag == Y_NULL) {
-        fprintf(stderr, "runtime error: unwrap of null\n");
+    if (!v || v->tag == Y_NONE) {
+        fprintf(stderr, "runtime error: unwrap of none\n");
         exit(1);
     }
     return (Yv *)v;
@@ -132,7 +132,7 @@ long yv_len(const Yv *v) {
     switch (v->tag) {
     case Y_STR: return (long)v->u.s.n;
     case Y_ARR: return (long)v->u.a.len;
-    case Y_MAP: return (long)v->u.m.len;
+    case Y_REC: return (long)v->u.r.len;
     default: return 0;
     }
 }
@@ -341,9 +341,9 @@ Yv *ys_tostring(const Yv *v) {
     char buf[8192];
     buf[0] = '\0';
     size_t cap = sizeof(buf);
-    if (!v) { return ys("null"); }
+    if (!v) { return ys("none"); }
     switch (v->tag) {
-    case Y_NULL: return ys("null");
+    case Y_NONE: return ys("none");
     case Y_BOOL: return ys_cstr(v->u.b ? "true" : "false");
     case Y_LONG: return ys_long(v->u.l);
     case Y_FLOAT: {
@@ -372,25 +372,25 @@ Yv *ys_tostring(const Yv *v) {
         b[pos] = '\0';
         return ys_n(b, pos);
     }
-    case Y_MAP: {
+    case Y_REC: {
         size_t total = 3;
-        for (size_t i = 0; i < v->u.m.len; i++) {
-            char *k = escape_str(v->u.m.keys[i]);
-            Yv *e = ys_tostring(v->u.m.vals[i]);
+        for (size_t i = 0; i < v->u.r.len; i++) {
+            char *k = escape_str(v->u.r.keys[i]);
+            Yv *e = ys_tostring(v->u.r.vals[i]);
             total += strlen(k) + strlen(e->u.s.p) + 4;
         }
         char *b = yalloc(total + 1);
         size_t pos = 0;
         b[pos++] = '{';
-        for (size_t i = 0; i < v->u.m.len; i++) {
+        for (size_t i = 0; i < v->u.r.len; i++) {
             if (i > 0) { b[pos++] = ','; b[pos++] = ' '; }
-            char *k = escape_str(v->u.m.keys[i]);
+            char *k = escape_str(v->u.r.keys[i]);
             size_t kl = strlen(k);
             memcpy(b + pos, k, kl);
             pos += kl;
             b[pos++] = ':';
             b[pos++] = ' ';
-            Yv *e = ys_tostring(v->u.m.vals[i]);
+            Yv *e = ys_tostring(v->u.r.vals[i]);
             size_t el = strlen(e->u.s.p);
             memcpy(b + pos, e->u.s.p, el);
             pos += el;
@@ -400,7 +400,7 @@ Yv *ys_tostring(const Yv *v) {
         return ys_n(b, pos);
     }
     }
-    return ys("null");
+    return ys("none");
 }
 
 /* ── arrays (reference values) ───────────────────────────────────────── */
@@ -495,70 +495,70 @@ Yv *ya_slice(const Yv *a, long lo, long hi) {
 /* ── maps / records ──────────────────────────────────────────────────── */
 
 static void ym_grow(Yv *m, size_t need) {
-    if (need <= m->u.m.cap) return;
-    size_t cap = m->u.m.cap < 8 ? 8 : m->u.m.cap * 2;
+    if (need <= m->u.r.cap) return;
+    size_t cap = m->u.r.cap < 8 ? 8 : m->u.r.cap * 2;
     while (cap < need) cap *= 2;
     char **keys = yalloc(sizeof(char *) * cap);
     Yv **vals = yalloc(sizeof(Yv *) * cap);
-    if (m->u.m.len) {
-        memcpy(keys, m->u.m.keys, sizeof(char *) * m->u.m.len);
-        memcpy(vals, m->u.m.vals, sizeof(Yv *) * m->u.m.len);
+    if (m->u.r.len) {
+        memcpy(keys, m->u.r.keys, sizeof(char *) * m->u.r.len);
+        memcpy(vals, m->u.r.vals, sizeof(Yv *) * m->u.r.len);
     }
-    m->u.m.keys = keys;
-    m->u.m.vals = vals;
-    m->u.m.cap = cap;
+    m->u.r.keys = keys;
+    m->u.r.vals = vals;
+    m->u.r.cap = cap;
 }
 
-Yv *ym_new(void) {
-    Yv *v = ynew(Y_MAP);
-    v->u.m.keys = NULL;
-    v->u.m.vals = NULL;
-    v->u.m.len = 0;
-    v->u.m.cap = 0;
+Yv *yr_new(void) {
+    Yv *v = ynew(Y_REC);
+    v->u.r.keys = NULL;
+    v->u.r.vals = NULL;
+    v->u.r.len = 0;
+    v->u.r.cap = 0;
     return v;
 }
 
-Yv *ym(size_t n, ...) {
-    Yv *v = ym_new();
+Yv *yr(size_t n, ...) {
+    Yv *v = yr_new();
     va_list ap;
     va_start(ap, n);
     for (size_t i = 0; i < n; i++) {
         const char *k = va_arg(ap, const char *);
         Yv *val = va_arg(ap, Yv *);
-        ym_set(v, k, val);
+        yr_set(v, k, val);
     }
     va_end(ap);
     return v;
 }
 
-Yv *ym_get(const Yv *m, const char *key) {
-    if (m && m->tag == Y_MAP) {
-        for (size_t i = 0; i < m->u.m.len; i++) {
-            if (strcmp(m->u.m.keys[i], key) == 0) return m->u.m.vals[i];
+Yv *yr_get(const Yv *m, const char *key) {
+    if (m && m->tag == Y_REC) {
+        for (size_t i = 0; i < m->u.r.len; i++) {
+            if (strcmp(m->u.r.keys[i], key) == 0) return m->u.r.vals[i];
         }
     }
-    return yv_null();
+    return yv_none();
 }
 
-Yv *ym_set(Yv *m, const char *key, Yv *v) {
-    if (!m || m->tag != Y_MAP) return m;
-    for (size_t i = 0; i < m->u.m.len; i++) {
-        if (strcmp(m->u.m.keys[i], key) == 0) {
-            m->u.m.vals[i] = v;
+Yv *yr_set(Yv *m, const char *key, Yv *v) {
+    if (!m || m->tag != Y_REC) return m;
+    for (size_t i = 0; i < m->u.r.len; i++) {
+        if (strcmp(m->u.r.keys[i], key) == 0) {
+            m->u.r.vals[i] = v;
             return m;
         }
     }
-    ym_grow(m, m->u.m.len + 1);
-    m->u.m.keys[m->u.m.len] = ystrdup(key);
-    m->u.m.vals[m->u.m.len] = v;
-    m->u.m.len++;
+    ym_grow(m, m->u.r.len + 1);
+    m->u.r.keys[m->u.r.len] = ystrdup(key);
+    m->u.r.vals[m->u.r.len] = v;
+    m->u.r.len++;
     return m;
 }
 
-int ym_has(const Yv *m, const char *key) {
-    if (!m || m->tag != Y_MAP) return 0;
-    for (size_t i = 0; i < m->u.m.len; i++) {
-        if (strcmp(m->u.m.keys[i], key) == 0) return 1;
+int yr_has(const Yv *m, const char *key) {
+    if (!m || m->tag != Y_REC) return 0;
+    for (size_t i = 0; i < m->u.r.len; i++) {
+        if (strcmp(m->u.r.keys[i], key) == 0) return 1;
     }
     return 0;
 }
@@ -568,7 +568,7 @@ int yv_eq(const Yv *a, const Yv *b) {
     if (!a || !b) return 0;
     if (a->tag != b->tag) return 0;
     switch (a->tag) {
-    case Y_NULL: return 1;
+    case Y_NONE: return 1;
     case Y_BOOL: return a->u.b == b->u.b;
     case Y_LONG: return a->u.l == b->u.l;
     case Y_FLOAT: return a->u.f == b->u.f;
@@ -579,11 +579,11 @@ int yv_eq(const Yv *a, const Yv *b) {
             if (!yv_eq(a->u.a.items[i], b->u.a.items[i])) return 0;
         return 1;
     }
-    case Y_MAP: {
-        if (a->u.m.len != b->u.m.len) return 0;
-        for (size_t i = 0; i < a->u.m.len; i++) {
-            if (strcmp(a->u.m.keys[i], b->u.m.keys[i]) != 0) return 0;
-            if (!yv_eq(a->u.m.vals[i], b->u.m.vals[i])) return 0;
+    case Y_REC: {
+        if (a->u.r.len != b->u.r.len) return 0;
+        for (size_t i = 0; i < a->u.r.len; i++) {
+            if (strcmp(a->u.r.keys[i], b->u.r.keys[i]) != 0) return 0;
+            if (!yv_eq(a->u.r.vals[i], b->u.r.vals[i])) return 0;
         }
         return 1;
     }
@@ -595,26 +595,26 @@ int yv_eq(const Yv *a, const Yv *b) {
 
 void puts_(const Yv *s) {
     if (s && s->tag == Y_STR) fputs(s->u.s.p, stdout);
-    else fputs("null", stdout);
+    else fputs("none", stdout);
     fflush(stdout);
 }
 
 void eputs_(const Yv *s) {
     if (s && s->tag == Y_STR) fputs(s->u.s.p, stderr);
-    else fputs("null", stderr);
+    else fputs("none", stderr);
     fflush(stderr);
 }
 
 void exit_(long code) { exit((int)code); }
 
 Yv *read_file(const Yv *path) {
-    if (!path || path->tag != Y_STR) return yv_null();
+    if (!path || path->tag != Y_STR) return yv_none();
     FILE *f = fopen(path->u.s.p, "rb");
-    if (!f) return yv_null();
+    if (!f) return yv_none();
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (sz < 0) { fclose(f); return yv_null(); }
+    if (sz < 0) { fclose(f); return yv_none(); }
     char *buf = yalloc((size_t)sz + 1);
     size_t rd = fread(buf, 1, (size_t)sz, f);
     buf[rd] = '\0';

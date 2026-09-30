@@ -3,5 +3,5 @@
 // prelude is spliced in front of it. Mentioning readline() pulls the
 // prelude in, which used to shift every position below it.
 let line = readline();
-let ok = line == null;
+let ok = line == none;
 print(nope);

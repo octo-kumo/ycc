@@ -31,11 +31,13 @@ a runtime error (Section~\ref{sec:errors}).
 
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[\ic{tostring(v)}] String form: numbers as decimal (floats with six
-  decimals), \ic{true}/\ic{false}, strings unchanged, \ic{null} as
-  \ic{"null"}, arrays as \ic{"[e0, e1, ...]"}, records as
-  \ic{"\{k: v, ...\}"} with escaped keys.
+  decimals), \ic{true}/\ic{false}, strings unchanged, options as their
+  payload or \ic{"none"}, arrays as \ic{"[e0, e1, ...]"}, records as
+  \ic{"\{k: v, ...\}"}, maps as \ic{"\{"k": v, ...\}"} (string keys
+  quoted).
 \item[\ic{tonum(s)}] Parse a decimal integer (\ic{0} on garbage).
-\item[\ic{typeof(v)}] The static type as a printable value.
+\item[\ic{typeof(v)}] The static type as a printable value
+  (\ic{typeof(none)} is \ic{"none"}).
 \end{description}
 
 \subsection{Binary data}
@@ -51,8 +53,9 @@ a runtime error (Section~\ref{sec:errors}).
 
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[\ic{some(v)}] A present option holding \ic{v}.
-\item[\ic{is\_some(v)}] \ic{true} unless \ic{v} is \ic{null}.
-\item[\ic{unwrap(v)}] The payload; \textbf{traps} on \ic{null}.
+\item[\ic{is\_some(v)}] \ic{true} unless \ic{v} is \ic{none}.
+\item[\ic{unwrap(v)}] The payload; \textbf{traps} on \ic{none}. The
+  postfix form \ic{v!} is the same operation.
 \end{description}
 
 \subsection{Input/output and the environment}
@@ -63,8 +66,9 @@ a runtime error (Section~\ref{sec:errors}).
 \item[\ic{eputs(s)}] Same, to stderr (keeps \ic{--time} output and
   program output apart).
 \item[\ic{readline()}] One line from stdin without its newline, or
-  \ic{null} at end of input.
-\item[\ic{read\_file(path)}] File contents as \ic{str}, or \ic{null}.
+  \ic{none} at end of input (\ic{str?}).
+\item[\ic{read\_file(path)}] File contents as \ic{str?}: \ic{none} when
+  the file cannot be read.
 \item[\ic{write\_file(path, s)}] Write a string; \ic{bool} success.
 \item[\ic{write\_bytes(path, b, mode)}] Write \ic{[byte]} binary-safe
   and chmod (\ic{mode < 0} skips chmod); \ic{bool} success.
@@ -72,7 +76,7 @@ a runtime error (Section~\ref{sec:errors}).
 \item[\ic{exit(code)}] Terminate with an exit code.
 \item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}.
 \item[\ic{heap\_used()}] Bytes allocated so far.
-\item[\ic{sleep(ms)}] Suspend the process.
+\item[\ic{sleep(ms)}] Suspend the process (\ic{void}).
 \item[\ic{syscall(...)}] Raw Linux syscall wrapper; the first argument
   is the syscall number.
 \item[\ic{exec(cmd)}] Run a shell command, return its exit code.

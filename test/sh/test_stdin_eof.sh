@@ -1,5 +1,5 @@
 #!/bin/bash
-# EOF must not be latched: after readline() returns null, a later call has to
+# EOF must not be latched: after readline() returns none, a later call has to
 # attempt a fresh read. Proven with a FIFO — the first writer closes (EOF),
 # a second one opens later and writes more. Phase b polls on a wall-clock
 # budget, so the check never depends on which side wins the race.
@@ -16,19 +16,19 @@ def drain(tag: str) -> long {
     let go = true;
     while (go) {
         let l = readline();
-        if (l == null) { go = false; } else { n = n + 1; puts(tag + ":" + unwrap(l) + "\n"); };
+        if (l == none) { go = false; } else { n = n + 1; puts(tag + ":" + unwrap(l) + "\n"); };
     };
     n
 };
 // Phase a stops at the first EOF. Phase b keeps polling for a few seconds:
-// if EOF were latched every retry would return null and this would print 0.
+// if EOF were latched every retry would return none and this would print 0.
 print(drain("a"));
 let t0 = clock_us();
 let got = 0;
 let go = true;
 while (go) {
     let l = readline();
-    if (l == null) {
+    if (l == none) {
         if (clock_us() - t0 > 8000000) { go = false; };
     } else {
         got = got + 1;

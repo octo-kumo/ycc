@@ -40,8 +40,8 @@ gets a generated twin (`src/c/prof_lines.c`) the same way.
 
 ## Translation rules
 
-1. **Values** (`yv.h`): `null | bool | long | float | str | array | map`.
-   Arrays and maps are **reference values** (shared; `push` grows in
+1. **Values** (`yv.h`): `none | bool | long | float | str | array | record`
+   (tags `Y_NONE` ... `Y_REC`). Arrays and records are **reference values** (shared; `push` grows in
    place and returns the same array — exactly the Y rules). Strings and
    numbers are immutable values. The value model lives in `yv.c`; nothing
    else allocates Y values directly.
@@ -51,10 +51,10 @@ gets a generated twin (`src/c/prof_lines.c`) the same way.
    Boxing at the boundaries: `yv_long(x)` / `yv_l(v)`, `yv_bool(x)` /
    `yv_b(v)`, `yv_float(x)` / `yv_f(v)`.
 
-3. **Records** are insertion-ordered maps:
-   `let r = { k: "num", v: x }` → `Yv *r = ym(2, "k", ys("num"), "v", x);`
+3. **Records** are insertion-ordered key/value records (`yr*`):
+   `let r = { k: "num", v: x }` → `Yv *r = yr(2, "k", ys("num"), "v", x);`
    (n key/value pairs, **no sentinel**). Field read `r.name` →
-   `ym_get(r, "name")`. The Y code rebuilds records instead of mutating
+   `yr_get(r, "name")`; `x == none` → `yv_is_none(x)`. The Y code rebuilds records instead of mutating
    fields; do the same.
 
 4. **Arrays**:

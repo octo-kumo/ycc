@@ -184,11 +184,11 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
         buf = ys_join(chunks, ys(""));
         ;
     } else { ; }
-    return ym(4, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col));
+    return yr(4, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *mktok(Yv *t, Yv *v, long line, long col) {
-    return ym(4, "t", t, "v", v, "line", yv_long(line), "col", yv_long(col));
+    return yr(4, "t", t, "v", v, "line", yv_long(line), "col", yv_long(col));
 }
 
 // Value of a single hex digit char (0-15), or -1 if not a hex digit.
@@ -221,6 +221,7 @@ Yv *twocharop(Yv *src, long i) {
     else if (ys_eq_lit(two, "::")) { return two; }
     else if (ys_eq_lit(two, "..")) { return two; }
     else if (ys_eq_lit(two, "->")) { return two; }
+    else if (ys_eq_lit(two, "=>")) { return two; }
     else if (ys_eq_lit(two, "++")) { return two; }
     else if (ys_eq_lit(two, "--")) { return two; }
     else if (ys_eq_lit(two, "+=")) { return two; }
@@ -391,7 +392,6 @@ Yv *tokenize(Yv *src) {
             else if (ys_eq_lit(word, "return")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "true")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "false")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "null")) { ty = ys("kw"); ; }
             else { ; }
             if (ys_eq_lit(word, "b")) {
                 // b"..." / b'...' -- a byte-string literal: the same type
@@ -400,17 +400,17 @@ Yv *tokenize(Yv *src) {
                 Yv *qch = ys_substr(src, i, 1);
                 if (ys_eq_lit(qch, "\"")) {
                     Yv *bq = lex_quoted(src, i, line, col);
-                    i = yv_l(ym_get(bq, "end"));
-                    line = yv_l(ym_get(bq, "line"));
-                    col = yv_l(ym_get(bq, "col"));
-                    toks = ya_push(toks, mktok(ys("bstr"), ym_get(bq, "text"), bline, startcol));
+                    i = yv_l(yr_get(bq, "end"));
+                    line = yv_l(yr_get(bq, "line"));
+                    col = yv_l(yr_get(bq, "col"));
+                    toks = ya_push(toks, mktok(ys("bstr"), yr_get(bq, "text"), bline, startcol));
                     ;
                 } else if (ys_eq_lit(qch, "'")) {
                     Yv *bq2 = lex_quoted(src, i, line, col);
-                    i = yv_l(ym_get(bq2, "end"));
-                    line = yv_l(ym_get(bq2, "line"));
-                    col = yv_l(ym_get(bq2, "col"));
-                    toks = ya_push(toks, mktok(ys("bstr"), ym_get(bq2, "text"), bline, startcol));
+                    i = yv_l(yr_get(bq2, "end"));
+                    line = yv_l(yr_get(bq2, "line"));
+                    col = yv_l(yr_get(bq2, "col"));
+                    toks = ya_push(toks, mktok(ys("bstr"), yr_get(bq2, "text"), bline, startcol));
                     ;
                 } else {
                     toks = ya_push(toks, mktok(ty, word, line, startcol));
@@ -429,10 +429,10 @@ Yv *tokenize(Yv *src) {
             long startline = line;
             long startcol = col;
             Yv *q = lex_quoted(src, i, line, col);
-            i = yv_l(ym_get(q, "end"));
-            line = yv_l(ym_get(q, "line"));
-            col = yv_l(ym_get(q, "col"));
-            toks = ya_push(toks, mktok(ys("str"), ym_get(q, "text"), startline, startcol));
+            i = yv_l(yr_get(q, "end"));
+            line = yv_l(yr_get(q, "line"));
+            col = yv_l(yr_get(q, "col"));
+            toks = ya_push(toks, mktok(ys("str"), yr_get(q, "text"), startline, startcol));
             ;
         } else if (ys_eq(c, slash())) {
             // Slash: comment opener, block comment, or division operator.

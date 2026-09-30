@@ -23,7 +23,8 @@ through every enclosing use. Typical families:
   long}, \ic{arrays support only '+=' and '*=' (in place), not '-='},
   \ic{'++' needs a number target};
 \item call errors: \ic{call takes 2 args, got 1};
-\item non-value use: \ic{cannot index long (only arrays)}.
+\item non-value use: \ic{cannot index long (only arrays and maps)};
+\item void use: \ic{cannot bind a void value to 'x'}.
 \end{itemize}
 
 \subsection{Run time}
@@ -38,7 +39,7 @@ condition & message \\
 \midrule
 array index outside \ic{[0, len)} & \ic{runtime error: index out of bounds} \\
 division or remainder by zero & \ic{runtime error: division by zero} \\
-\ic{unwrap(null)} & \ic{runtime error: unwrap of null} \\
+\ic{unwrap(none)}, \ic{none!} & \ic{runtime error: unwrap of none} \\
 missing dynamic field/key & \ic{runtime error: record has no field 'k'} \\
 memory exhausted & \ic{out of memory} \\
 unbounded recursion & a recursion-limit error, not a crash \\

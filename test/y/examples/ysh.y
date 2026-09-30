@@ -6,7 +6,7 @@ def banner() {
     puts("    ▌ \n▌▌▛▘▛▌\n▙▌▄▌▌▌\n▄▌     \n" + VERSION.major + "." + tostring(VERSION.minor) + " — type 'help' for commands\n");
 };
 
-def show_help() -> long {
+def show_help(args: [str]) -> long {
     puts("commands:\n");
     puts("  help              show this help\n");
     puts("  echo <args...>    print arguments\n");
@@ -45,10 +45,10 @@ def run_src(src: str) -> long {
 };
 
 def read_eval_body() -> long {
-    let lines = [];
+    let lines: [str] = [];
     let line = readline();
-    while (line != null) {
-        lines += line;
+    while (line != none) {
+        lines += line!;
         line = readline();
     };
     clear_eof();
@@ -205,16 +205,16 @@ def cmd_exit(t: [str]) -> long {
 };
 
 const HANDLERS = {
-    echo: cmd_echo,
-    calc: cmd_calc,
-    rev: cmd_rev,
-    count: cmd_count,
-    seq: cmd_seq,
-    fib: cmd_fib,
-    help: show_help,
-    exit: cmd_exit,
-    quit: cmd_exit,
-    eval: def (args: [str]) -> long {
+    "echo": cmd_echo,
+    "calc": cmd_calc,
+    "rev": cmd_rev,
+    "count": cmd_count,
+    "seq": cmd_seq,
+    "fib": cmd_fib,
+    "help": show_help,
+    "exit": cmd_exit,
+    "quit": cmd_exit,
+    "eval": def (args: [str]) -> long {
         cmd_eval(args);
         0
     }
@@ -226,12 +226,12 @@ def dispatch(line: str) -> long {
         0
     } else {
         let tokens = split(trimmed, " ");
-        let h = map_get(HANDLERS, tokens[0]);
-        if (h == null) {
+        let h = HANDLERS[tokens[0]];
+        if (h == none) {
             puts("ysh: unknown command: " + tokens[0] + "\n");
             0
         } else {
-            h(tokens)
+            h!(tokens)
         }
     }
 };
@@ -259,10 +259,10 @@ def cmd_run_line(line: str) -> long {
     if (tokens[0] == "eval") {
         return cmd_eval(tokens);
     };
-    if (map_get(HANDLERS, tokens[0]) != null) {
+    if (HANDLERS[tokens[0]] != none) {
         return dispatch(trimmed);
     };
-    spawn(trimmed)
+    exec(trimmed)
 };
 
 let args = argv();
@@ -281,11 +281,11 @@ let running = true;
 while (running) {
     puts("y> ");
     let line = readline();
-    if (line == null) {
+    if (line == none) {
         puts("\n");
         running = false;
     } else {
-        if (dispatch(line) == 1) {
+        if (dispatch(line!) == 1) {
             running = false;
         };
     };

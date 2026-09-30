@@ -79,7 +79,7 @@ Yv *parse_cli_args(Yv *argv) {
         }
         i = i + 1;
     }
-    return ym(6, "out", out, "files", files, "asm_only", yv_bool(asm_only),
+    return yr(6, "out", out, "files", files, "asm_only", yv_bool(asm_only),
               "timing", yv_bool(timing), "allow_exec", yv_bool(allow_exec),
               "prof", yv_bool(prof));
 }
@@ -124,10 +124,10 @@ long print_phase_rows(Yv *times) {
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
         eputs_(ys_cat(
-            ys_cat(ys_cat(ys_cat(ys("  "), padr(ym_get(e, "name"), 12)),
-                           padl(fmt_ms(yv_l(ym_get(e, "us"))), 12)),
+            ys_cat(ys_cat(ys_cat(ys("  "), padr(yr_get(e, "name"), 12)),
+                           padl(fmt_ms(yv_l(yr_get(e, "us"))), 12)),
                    ys(" ms")),
-            ys_cat(ys_cat(padl(fmt_kb(yv_l(ym_get(e, "heap"))), 12), ys(" KB")),
+            ys_cat(ys_cat(padl(fmt_kb(yv_l(yr_get(e, "heap"))), 12), ys(" KB")),
                    ys("\n"))));
         i = i + 1;
     }
@@ -152,7 +152,7 @@ long print_native_errors(Yv *errors, long pre) {
     long i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
-        long ln = yv_l(ym_get(e, "line"));
+        long ln = yv_l(yr_get(e, "line"));
         if (ln > pre) {
             ln = ln - pre;
             ;
@@ -161,9 +161,9 @@ long print_native_errors(Yv *errors, long pre) {
         }
         puts_(ys_cat(
             ys_cat(ys_cat(ys_cat(ys_long(ln), ys(":")),
-                          ys_long(yv_l(ym_get(e, "col")))),
+                          ys_long(yv_l(yr_get(e, "col")))),
                    ys(": error: ")),
-            ys_cat(ym_get(e, "msg"), ys("\n"))));
+            ys_cat(yr_get(e, "msg"), ys("\n"))));
         i = i + 1;
     }
     return 0;
@@ -173,8 +173,8 @@ long y_main(Yv *cmdline) {
     Yv *args = parse_cli_args(cmdline);
     /* NOTE: bound once — `args.out` inline misparses on the C backend. */
     Yv *pargs = args;
-    Yv *out = ym_get(pargs, "out");
-    Yv *files = ym_get(pargs, "files");
+    Yv *out = yr_get(pargs, "out");
+    Yv *files = yr_get(pargs, "files");
 
     if (yv_len(files) == 0) {
         puts_(ys("error: no input file (see ycc -h)\n"));
@@ -188,14 +188,14 @@ long y_main(Yv *cmdline) {
     } else {
         Yv *file = ya_get(files, 0);
         Yv *src = read_file(file);
-        if (yv_is_null(src)) {
+        if (yv_is_none(src)) {
             puts_(ys_cat(ys_cat(ys("error: cannot read file '"), file),
                          ys("'\n")));
             exit_(1);
             return 1;
         } else {
-            /* src is str? (read_file returns null on missing file); the
-             * null case exited above, so unwrap here (loud on null). */
+            /* src is str? (read_file returns none on missing file); the
+             * none case exited above, so unwrap here (loud on none). */
             Yv *src2 = yv_unwrap(src);
             /* get base dir from file path (use last slash, like C compiler's
              * strrchr) */
@@ -217,29 +217,29 @@ long y_main(Yv *cmdline) {
             long hstart = h0;
             Yv *dt = yav(0);
             Yv *nr = native_resolve_x(src2, base_dir, 0,
-                                      yv_b(ym_get(pargs, "allow_exec")),
-                                      yv_b(ym_get(pargs, "prof")));
+                                      yv_b(yr_get(pargs, "allow_exec")),
+                                      yv_b(yr_get(pargs, "prof")));
             Yv *ph = phase_end(dt, ys("resolve"), t0, h0);
-            dt = ym_get(ph, "times");
-            t0 = yv_l(ym_get(ph, "t"));
-            h0 = yv_l(ym_get(ph, "h"));
-            Yv *nrsrc = ym_get(nr, "src");
-            Yv *nrimports = ym_get(nr, "imports");
-            long nrpre = yv_l(ym_get(nr, "pre"));
+            dt = yr_get(ph, "times");
+            t0 = yv_l(yr_get(ph, "t"));
+            h0 = yv_l(yr_get(ph, "h"));
+            Yv *nrsrc = yr_get(nr, "src");
+            Yv *nrimports = yr_get(nr, "imports");
+            long nrpre = yv_l(yr_get(nr, "pre"));
             Yv *toks = tokenize(nrsrc);
             ph = phase_end(dt, ys("tokenize"), t0, h0);
-            dt = ym_get(ph, "times");
-            t0 = yv_l(ym_get(ph, "t"));
-            h0 = yv_l(ym_get(ph, "h"));
+            dt = yr_get(ph, "times");
+            t0 = yv_l(yr_get(ph, "t"));
+            h0 = yv_l(yr_get(ph, "h"));
             Yv *ast = parse_program(toks);
             ph = phase_end(dt, ys("parse"), t0, h0);
-            dt = ym_get(ph, "times");
-            t0 = yv_l(ym_get(ph, "t"));
-            h0 = yv_l(ym_get(ph, "h"));
+            dt = yr_get(ph, "times");
+            t0 = yv_l(yr_get(ph, "t"));
+            h0 = yv_l(yr_get(ph, "h"));
             Yv *r = emit_program(ast, nrimports);
             /* emit_program reports its own sub-phases (strip_ns, rename,
              * typecheck, emit_fns, emit_start, asm_text); splice them in. */
-            Yv *sub = ym_get(r, "times");
+            Yv *sub = yr_get(r, "times");
             long si = 0;
             while (si < yv_len(sub)) {
                 Yv *se = ya_get(sub, si);
@@ -250,13 +250,13 @@ long y_main(Yv *cmdline) {
             h0 = heap_used();
             /* NOTE: `!(r.ok)` with parens — the C parser reads `!r.ok`
              * as `(!r).ok`. */
-            long rok = yv_b(ym_get(r, "ok"));
+            long rok = yv_b(yr_get(r, "ok"));
             if (!(rok)) {
-                print_native_errors(ym_get(r, "errors"), nrpre);
+                print_native_errors(yr_get(r, "errors"), nrpre);
                 exit_(1);
                 return 1;
-            } else if (yv_b(ym_get(pargs, "asm_only"))) {
-                Yv *rasm = ym_get(r, "asm");
+            } else if (yv_b(yr_get(pargs, "asm_only"))) {
+                Yv *rasm = yr_get(r, "asm");
                 if (yv_len(out) == 0) {
                     puts_(rasm);
                     ;
@@ -265,8 +265,8 @@ long y_main(Yv *cmdline) {
                     ;
                 }
                 ph = phase_end(dt, ys("write"), t0, h0);
-                dt = ym_get(ph, "times");
-                if (yv_b(ym_get(pargs, "timing"))) {
+                dt = yr_get(ph, "times");
+                if (yv_b(yr_get(pargs, "timing"))) {
                     eputs_(ys_cat(ys("ycc --time: "), ys_cat(file, ys("\n"))));
                     print_phase_rows(dt);
                     eputs_(ys_cat(
@@ -289,24 +289,24 @@ long y_main(Yv *cmdline) {
                  * executable DIRECTLY with the write_bytes builtin
                  * (binary-safe open/write/chmod, tinycc-style — NULs pass
                  * through as array elements, no shell, no exec/printf). */
-                Yv *rasm2 = ym_get(r, "asm");
+                Yv *rasm2 = yr_get(r, "asm");
                 Yv *ab = ycc_assemble(rasm2);
                 ph = phase_end(dt, ys("assemble"), t0, h0);
-                dt = ym_get(ph, "times");
-                t0 = yv_l(ym_get(ph, "t"));
-                h0 = yv_l(ym_get(ph, "h"));
+                dt = yr_get(ph, "times");
+                t0 = yv_l(yr_get(ph, "t"));
+                h0 = yv_l(yr_get(ph, "h"));
                 /* ycc_assemble reports its own sub-phases (split/encode/link). */
-                Yv *asub = ym_get(ab, "times");
+                Yv *asub = yr_get(ab, "times");
                 long ai = 0;
                 while (ai < yv_len(asub)) {
                     Yv *ae = ya_get(asub, ai);
                     dt = ya_push(dt, ae);
                     ai = ai + 1;
                 }
-                long abok = yv_b(ym_get(ab, "ok"));
+                long abok = yv_b(yr_get(ab, "ok"));
                 if (!(abok)) {
                     puts_(ys_cat(ys("error: assemble: "),
-                                 ys_cat(ym_get(ab, "error"), ys("\n"))));
+                                 ys_cat(yr_get(ab, "error"), ys("\n"))));
                     exit_(1);
                     return 1;
                 } else {
@@ -319,12 +319,12 @@ long y_main(Yv *cmdline) {
                     }
                     /* NOTE: bound once — `x.y` on a call result
                      * misparses on the C backend. */
-                    Yv *abbytes = ym_get(ab, "bytes");
+                    Yv *abbytes = yr_get(ab, "bytes");
                     /* 493 = 0755 executable (chmod applied by write_bytes). */
                     int ok = write_bytes(out_path, abbytes, 493);
                     ph = phase_end(dt, ys("write"), t0, h0);
-                    dt = ym_get(ph, "times");
-                    if (yv_b(ym_get(pargs, "timing"))) {
+                    dt = yr_get(ph, "times");
+                    if (yv_b(yr_get(pargs, "timing"))) {
                         eputs_(ys_cat(ys("ycc --time: "), ys_cat(file, ys("\n"))));
                         print_phase_rows(dt);
                         eputs_(ys_cat(

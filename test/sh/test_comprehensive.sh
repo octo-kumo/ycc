@@ -103,7 +103,8 @@ run_test "typeof: long" 'print(typeof(42));' 'long'
 run_test "typeof: float" 'print(typeof(3.14));' 'float'
 run_test "typeof: str" 'print(typeof("hi"));' 'str'
 run_test "typeof: bool" 'print(typeof(true));' 'bool'
-run_test "typeof: null" 'print(typeof(null));' 'null'
+run_test "typeof: none" 'print(typeof(none));' 'none'
+run_test "typeof: option" 'let o: long? = some(1); print(typeof(o));' 'long?'
 run_test "typeof: array" 'print(typeof([1,2]));' '[long]'
 run_test "typeof: map" 'print(typeof({a:1}));' '{a: long}'
 
@@ -113,7 +114,7 @@ echo "── Builtins: tostring ──"
 run_test "tostring: long" 'print(tostring(42));' '42'
 run_test "tostring: float" 'print(tostring(3.14));' '3.140000'
 run_test "tostring: bool" 'print(tostring(true));' 'true'
-run_test "tostring: null" 'print(tostring(null));' 'null'
+run_test "tostring: none" 'print(tostring(none));' 'none'
 run_test "tostring: array" 'print(tostring([1,2]));' '[1, 2]'
 run_test "tostring: map" 'print(tostring({a:1}));' '{a: 1}'
 
@@ -185,7 +186,7 @@ echo "── Builtins: map_get/map_set ──"
 # symbolic: a.key for records, a['key'] for maps. (map_get/map_set/push
 # are gone -- symbol ops replace them.)
 run_test "map: get existing" 'let m = {"a": 1}; print(m["a"]);' '1'
-run_test "map: get missing" 'let m = {"a": 1}; print(m["b"]);' 'null'
+run_test "map: get missing" 'let m = {"a": 1}; print(m["b"]);' 'none'
 run_test "map: set overwrite" 'let m = {"a": 1}; m["a"] = 2; print(m["a"]);' '2'
 run_test "map: set new key" 'let m = {"a": 1}; m["b"] = 3; print(m["b"]);' '3'
 run_test "map: homogeneous values" 'let m = {"a": 1, "b": 2}; print(m["b"]);' '2'
@@ -210,7 +211,8 @@ run_test "dot-assign: leaves others" 'let s = {a: 1, b: 2}; s.a = 9; print(s.b);
 # A record's shape is fixed at compile time (struct layout): writing a
 # field the shape does not have is a compile error.
 run_test "dot-assign: new key is rejected" 'let s = {a: 1}; s.c = 7; print(s.c);' "record has no field 'c'"
-run_test "dot-assign: string key form" 'let m = {k: "v"}; m["k"] = "w"; print(m.k);' 'w'
+run_test "dot-assign: string key form is map-only" 'let r = {k: "v"}; r["k"] = "w"; print(r.k);' "cannot index { k: str } (only arrays and maps)"
+run_test "index-assign: map string key" 'let m = {"k": "v"}; m["k"] = "w"; print(m["k"]!);' 'w'
 run_test "dot-assign: visible through an alias" 'let n = {inner: {n: 1}}; let t = n.inner; t.n = 5; print(n.inner.n);' '5'
 run_test "index-assign still works" 'let a = [1,2,3]; a[1] = 20; print(a);' '[1, 20, 3]'
 
@@ -400,8 +402,40 @@ run_test "return: falls through" 'def f(n: long) -> long { if (n < 0) { return 0
 run_test "return: skips rest of body" 'def f() -> long { return 1; 999 }; print(f());' '1'
 run_test "return: out of a while loop" 'def f(xs: [long]) -> long { let i = 0; while (i < len(xs)) { if (xs[i] > 10) { return xs[i]; }; i = i + 1; }; 0 - 1 }; print(f([1, 2, 42, 7]));' '42'
 run_test "return: loop finishes without returning" 'def f(xs: [long]) -> long { let i = 0; while (i < len(xs)) { if (xs[i] > 10) { return xs[i]; }; i = i + 1; }; 0 - 1 }; print(f([1, 2]));' '-1'
-run_test "return: bare return is null" 'def f() { return; }; print(f());' 'null'
+run_test "return: bare return makes a void def" 'def f() { return; }; print(f());' 'got void'
+run_test "return: bare return in a typed def" 'def f() -> long { return; }; print(f());' "'return': expected long, got void"
+run_test "return: -> void discards the tail" 'def f(x: long) -> void { print(x); x }; f(4);' '4'
+run_test "return: value in a void def" 'def f() -> void { return 1; };' "'return': expected void, got long"
 run_test "return: nested in inner function" 'def outer() -> long { def inner(n: long) -> long { if (n > 0) { return 7; }; 0 }; inner(1) + 1 }; print(outer());' '8'
+
+# ── Void: disagreeing if arms ──
+# When the arms of an if/else disagree on a type, the whole if is void: a
+# statement, legal on its own, rejected wherever a value is needed.
+echo ""
+echo "── Void: disagreeing if arms ──"
+run_test "void-if: legal as a statement" 'if (true) { 1 } else { "a" }; print(2);' '2'
+run_test "void-if: agreeing arms keep their type" 'let x = if (false) { 1 } else { 2 }; print(x);' '2'
+run_test "void-if: cannot be bound" 'let x = if (true) { 1 } else { "a" };' "cannot bind a void value to 'x'"
+run_test "void-if: cannot be printed" 'print(if (true) { 1 } else { "a" });' 'got void'
+run_test "void-if: cannot be an argument" 'def f(v) { v }; f(if (true) { 1 } else { "a" });' "'f' arg 0: cannot pass a void value"
+run_test "void-if: cannot be returned as a value" 'def f() -> long { if (true) { 1 } else { "a" } };' "'f' body: expected long, got void"
+
+# ── Options: none and postfix ! ──
+echo ""
+echo "── Options: none and postfix ! ──"
+run_test "none: prints as none" 'let a: long? = none; print(a);' 'none'
+run_test "none: is-none check" 'let a: long? = none; print(a == none);' 'true'
+run_test "none: some is not none" 'let a: long? = some(0); print(a == none);' 'false'
+run_test "none: a plain value is not an option" 'let a: long? = 5;' "expected long?, got long"
+run_test "none: str is not optional" 'let s = "x"; print(s == none);' "'==' compares str with none"
+run_test "null: is gone" 'let x = null;' "undefined variable 'null'"
+run_test "unwrap-!: some value" 'let a: long? = some(41); print(a! + 1);' '42'
+run_test "unwrap-!: same as unwrap()" 'let a: str? = some("hi"); print(a! == unwrap(a));' 'true'
+run_test "unwrap-!: on a map read" 'let m = {"k": 7}; print(m["k"]! * 6);' '42'
+run_test "unwrap-!: binds tighter than unary !" 'let b: bool? = some(false); print(!b!);' 'true'
+run_test "unwrap-!: none traps" 'let a: long? = none; print(a!);' 'runtime error: unwrap of none'
+run_test "unwrap-!: != still lexes" 'let a = 1; print(a != 2);' 'true'
+run_test "unwrap-!: needs an option" 'let a = 1; print(a!);' 'unwrap needs an option'
 
 # ── Functions: closures ──
 echo ""
@@ -429,7 +463,7 @@ run_test "array: literal" 'print([1, 2, 3]);' '[1, 2, 3]'
 run_test "array: empty" 'print([]);' '[]'
 run_test "array: index" 'let a = [10, 20, 30]; print(a[1]);' '20'
 run_test "array: nested" 'let a = [[1,2], [3,4]]; print(a[1][0]);' '3'
-run_test "array: mixed types is rejected" 'print([1, "two", true, null]);' "array element: expected long, got str" 
+run_test "array: mixed types is rejected" 'print([1, "two", true, none]);' "array element: expected long, got str" 
 
 # ── Data types: maps ──
 echo ""

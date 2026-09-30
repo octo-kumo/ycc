@@ -145,7 +145,7 @@ static Yv *parse_num(Yv *s) {
         ;
     } else { ; };
     if (i >= yv_len(s)) {
-        return ym(2, "ok", yv_bool(0), "v", yv_long(0));
+        return yr(2, "ok", yv_bool(0), "v", yv_long(0));
     } else {
         return parse_num_go(s, i, neg);
     }
@@ -169,12 +169,12 @@ static Yv *parse_num_go(Yv *s, long i, int neg) {
         ;
     };
     if (neg) { v = 0 - v; ; } else { ; };
-    return ym(2, "ok", yv_bool(ok), "v", yv_long(v));
+    return yr(2, "ok", yv_bool(ok), "v", yv_long(v));
 }
 
 static int is_num_text(Yv *s) {
     Yv *r = parse_num(s);
-    return yv_b(ym_get(r, "ok"));
+    return yv_b(yr_get(r, "ok"));
 }
 
 /* Split operands on top-level commas (ignore commas inside parens). */
@@ -222,8 +222,8 @@ static Yv *parse_operand(Yv *t) {
 
 static Yv *parse_operand_empty(Yv *t) {
     (void)t; /* t is carried only for the shape dispatch (see parse_operand) */
-    return ym(3, "ok", yv_bool(0),
-              "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+    return yr(3, "ok", yv_bool(0),
+              "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                         "a", ys(""), "b", ys(""), "name", ys(""),
                         "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                         "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -246,15 +246,15 @@ static Yv *parse_operand_ind(Yv *t) {
     Yv *r = ys_substr(t, 1, yv_len(t) - 1);
     long n = reg_num(r);
     if (n < 0) {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("unknown register '"), r), ys("'")));
     } else {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("ind"), "n", yv_long(n), "size", yv_long(reg_size(r)), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("ind"), "n", yv_long(n), "size", yv_long(reg_size(r)), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -266,15 +266,15 @@ static Yv *parse_operand_reg(Yv *t) {
     /* (split: %-gate above narrows; this body sees registers only.) */
     long n = reg_num(t);
     if (n < 0) {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("unknown register '"), t), ys("'")));
     } else {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("reg"), "n", yv_long(n), "size", yv_long(reg_size(t)), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("reg"), "n", yv_long(n), "size", yv_long(reg_size(t)), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -299,8 +299,8 @@ static Yv *parse_operand_memlbl(Yv *t) {
     if (ys_index_of(t, ys("(")) >= 0) {
         return parse_mem(t);
     } else {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("lbl"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("lbl"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", t,
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -334,8 +334,8 @@ static Yv *parse_imm_diff(Yv *s, long dash) {
     if (dash >= 0) {
         Yv *a = ys_substr(s, 0, dash + 1);
         Yv *b = ys_substr(s, dash + 2, yv_len(s) - dash - 2);
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("diff"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("diff"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", a, "b", b, "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -349,16 +349,16 @@ static Yv *parse_imm_num(Yv *s) {
     /* (split from parse_imm: the label-diff gate above narrows; this body
        sees plain decimal immediates only.) */
     Yv *r = parse_num(s);
-    if (yv_b(ym_get(r, "ok"))) {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("imm"), "n", yv_long(0), "size", yv_long(0), "v", ym_get(r, "v"),
+    if (yv_b(yr_get(r, "ok"))) {
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("imm"), "n", yv_long(0), "size", yv_long(0), "v", yr_get(r, "v"),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -394,22 +394,22 @@ static Yv *parse_mem_rip(Yv *t, Yv *head, Yv *parts) {
     /* label(%rip) — mem-shape built ONLY here.
        NOTE: nested ifs, not `||` (see is_digit_ch note). */
     if (yv_len(parts) != 1) {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad rip-relative '"), t), ys("'")));
     } else if (!ys_eq_lit(ya_get(parts, 0), "%rip")) {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad rip-relative '"), t), ys("'")));
     } else {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(-1), "idx", yv_long(-1), "scale", yv_long(1),
                             "disp", yv_long(0), "rip", yv_bool(1), "lbl", head),
@@ -420,21 +420,21 @@ static Yv *parse_mem_rip(Yv *t, Yv *head, Yv *parts) {
 static Yv *parse_mem_disp(Yv *t, Yv *head, Yv *parts) {
     /* numeric displacement head: parse_num cannot fail (is_num_text held). */
     Yv *r = parse_num(head);
-    return parse_mem_regs(t, parts, yv_l(ym_get(r, "v")));
+    return parse_mem_regs(t, parts, yv_l(yr_get(r, "v")));
 }
 
 static Yv *parse_mem_regs(Yv *t, Yv *parts, long disp) {
     /* NOTE: nested ifs, not `||` (see is_digit_ch note). */
     if (yv_len(parts) < 1) {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad memory '"), t), ys("'")));
     } else if (yv_len(parts) > 3) {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -442,8 +442,8 @@ static Yv *parse_mem_regs(Yv *t, Yv *parts, long disp) {
     } else {
         long bn = reg_num(ya_get(parts, 0));
         if (bn < 0) {
-            return ym(3, "ok", yv_bool(0),
-                      "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+            return yr(3, "ok", yv_bool(0),
+                      "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                                 "a", ys(""), "b", ys(""), "name", ys(""),
                                 "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                                 "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -456,8 +456,8 @@ static Yv *parse_mem_regs(Yv *t, Yv *parts, long disp) {
 
 static Yv *mem_rest(Yv *t, Yv *parts, long disp, long bn) {
     if (yv_len(parts) == 1) {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(-1), "scale", yv_long(1),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
@@ -465,15 +465,15 @@ static Yv *mem_rest(Yv *t, Yv *parts, long disp, long bn) {
     } else {
         long xn = reg_num(ya_get(parts, 1));
         if (xn < 0) {
-            return ym(3, "ok", yv_bool(0),
-                      "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+            return yr(3, "ok", yv_bool(0),
+                      "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                                 "a", ys(""), "b", ys(""), "name", ys(""),
                                 "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                                 "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                       "error", ys_cat(ys_cat(ys("bad index register '"), t), ys("'")));
         } else if (xn == 4) {
-            return ym(3, "ok", yv_bool(0),
-                      "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+            return yr(3, "ok", yv_bool(0),
+                      "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                                 "a", ys(""), "b", ys(""), "name", ys(""),
                                 "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                                 "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -490,8 +490,8 @@ static Yv *mem_scale(Yv *t, Yv *parts, long disp, long bn, long xn) {
     if (yv_len(parts) == 3) {
         return mem_scaleThree(t, parts, disp, bn, xn);
     } else {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(scale),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
@@ -502,51 +502,51 @@ static Yv *mem_scale(Yv *t, Yv *parts, long disp, long bn, long xn) {
 static Yv *mem_scaleThree(Yv *t, Yv *parts, long disp, long bn, long xn) {
     /* (split: 3-part gate above narrows; scale-shape built ONLY here.) */
     Yv *r = parse_num(ya_get(parts, 2));
-    if (!(yv_b(ym_get(r, "ok")))) {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+    if (!(yv_b(yr_get(r, "ok")))) {
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad scale '"), t), ys("'")));
     } else {
-        return mem_scaleVal(t, yv_l(ym_get(r, "v")), disp, bn, xn);
+        return mem_scaleVal(t, yv_l(yr_get(r, "v")), disp, bn, xn);
     }
 }
 
 static Yv *mem_scaleVal(Yv *t, long v, long disp, long bn, long xn) {
     /* (split: numeric scale narrows; mem-shape built ONLY here.) */
     if (v == 1) {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(1),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else if (v == 2) {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(2),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else if (v == 4) {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(4),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else if (v == 8) {
-        return ym(3, "ok", yv_bool(1),
-                  "op", ym(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(8),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else {
-        return ym(3, "ok", yv_bool(0),
-                  "op", ym(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -587,21 +587,21 @@ static Yv *decode_str(Yv *s) {
                 /* NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`
                    tails (see parser.y parse_binary note). */
                 Yv *oct = decode_oct(s, i + 2, n);
-                if (!ys_eq_lit(ym_get(oct, "err"), "")) {
-                    err = ym_get(oct, "err");
+                if (!ys_eq_lit(yr_get(oct, "err"), "")) {
+                    err = yr_get(oct, "err");
                     ;
                 } else {
-                    out = ya_push(out, ym_get(oct, "v"));
+                    out = ya_push(out, yr_get(oct, "v"));
                     ;
                 };
-                i = yv_l(ym_get(oct, "k"));
+                i = yv_l(yr_get(oct, "k"));
             } else {
                 err = ys_cat(ys_cat(ys("bad escape '\\"), e), ys("'"));
                 i = n;
             };
         }
     }
-    return ym(3, "ok", yv_bool(ys_eq_lit(err, "")), "bytes", out, "error", err);
+    return yr(3, "ok", yv_bool(ys_eq_lit(err, "")), "bytes", out, "error", err);
 }
 
 static Yv *decode_oct(Yv *s, long k, long n) {
@@ -633,9 +633,9 @@ static Yv *decode_oct(Yv *s, long k, long n) {
         ;
     };
     if (v > 255) {
-        return ym(3, "v", yv_long(0), "k", yv_long(kk), "err", ys("octal escape out of range"));
+        return yr(3, "v", yv_long(0), "k", yv_long(kk), "err", ys("octal escape out of range"));
     } else {
-        return ym(3, "v", yv_long(v), "k", yv_long(kk), "err", ys(""));
+        return yr(3, "v", yv_long(v), "k", yv_long(kk), "err", ys(""));
     }
 }
 
@@ -662,7 +662,7 @@ static Yv *labmap_new(long cap) {
     Yv *m = yav(0);
     long i = 0;
     while (i < cap) {
-        m = ya_push(m, ym(3, "name", ys(""), "sec", yv_long(0), "off", yv_long(0)));
+        m = ya_push(m, yr(3, "name", ys(""), "sec", yv_long(0), "off", yv_long(0)));
         i = i + 1;
     }
     return m;
@@ -676,11 +676,11 @@ static Yv *labmap_put(Yv *m, Yv *name, long sec, long off) {
     long n = 0;
     while (done == 0) {
         Yv *e = ya_get(m, i);
-        if (ys_eq_lit(ym_get(e, "name"), "")) {
-            ya_set(m, i, ym(3, "name", name, "sec", yv_long(sec), "off", yv_long(off)));
+        if (ys_eq_lit(yr_get(e, "name"), "")) {
+            ya_set(m, i, yr(3, "name", name, "sec", yv_long(sec), "off", yv_long(off)));
             done = 1;
             ;
-        } else if (ys_eq(ym_get(e, "name"), name)) {
+        } else if (ys_eq(yr_get(e, "name"), name)) {
             dup = 1;
             done = 1;
             ;
@@ -692,7 +692,7 @@ static Yv *labmap_put(Yv *m, Yv *name, long sec, long off) {
         n = n + 1;
         if (n > cap) { done = 1; ; } else { ; };
     };
-    return ym(2, "map", m, "dup", yv_bool(dup));
+    return yr(2, "map", m, "dup", yv_bool(dup));
 }
 
 static Yv *labmap_get(Yv *m, Yv *name) {
@@ -704,12 +704,12 @@ static Yv *labmap_get(Yv *m, Yv *name) {
     long n = 0;
     while (done == 0) {
         Yv *e = ya_get(m, i);
-        if (ys_eq_lit(ym_get(e, "name"), "")) {
+        if (ys_eq_lit(yr_get(e, "name"), "")) {
             done = 1;
             ;
-        } else if (ys_eq(ym_get(e, "name"), name)) {
-            found_sec = yv_l(ym_get(e, "sec"));
-            found_off = yv_l(ym_get(e, "off"));
+        } else if (ys_eq(yr_get(e, "name"), name)) {
+            found_sec = yv_l(yr_get(e, "sec"));
+            found_off = yv_l(yr_get(e, "off"));
             done = 1;
             ;
         } else {
@@ -720,7 +720,7 @@ static Yv *labmap_get(Yv *m, Yv *name) {
         n = n + 1;
         if (n > cap) { done = 1; ; } else { ; };
     };
-    return ym(2, "sec", yv_long(found_sec), "off", yv_long(found_off));
+    return yr(2, "sec", yv_long(found_sec), "off", yv_long(found_off));
 }
 
 /* Build the index from pass-1 labels; reports the first duplicate name
@@ -733,22 +733,22 @@ static Yv *labmap_build(Yv *labels) {
     long i = 0;
     while (i < yv_len(labels)) {
         Yv *e = ya_get(labels, i);
-        Yv *r = labmap_put(m, ym_get(e, "name"), yv_l(ym_get(e, "sec")), yv_l(ym_get(e, "off")));
-        m = ym_get(r, "map");
-        if (yv_b(ym_get(r, "dup"))) { dup = ym_get(e, "name"); ; } else { ; };
+        Yv *r = labmap_put(m, yr_get(e, "name"), yv_l(yr_get(e, "sec")), yv_l(yr_get(e, "off")));
+        m = yr_get(r, "map");
+        if (yv_b(yr_get(r, "dup"))) { dup = yr_get(e, "name"); ; } else { ; };
         i = i + 1;
     }
-    return ym(2, "map", m, "dup", dup);
+    return yr(2, "map", m, "dup", dup);
 }
 
 static Yv *label_addr(Yv *lmap, long code_len, long pad, Yv *name) {
     Yv *e = labmap_get(lmap, name);
-    if (yv_l(ym_get(e, "sec")) < 0) {
-        return ym(2, "ok", yv_bool(0), "addr", yv_long(0));
-    } else if (yv_l(ym_get(e, "sec")) == 0) {
-        return ym(2, "ok", yv_bool(1), "addr", ym_get(e, "off"));
+    if (yv_l(yr_get(e, "sec")) < 0) {
+        return yr(2, "ok", yv_bool(0), "addr", yv_long(0));
+    } else if (yv_l(yr_get(e, "sec")) == 0) {
+        return yr(2, "ok", yv_bool(1), "addr", yr_get(e, "off"));
     } else {
-        return ym(2, "ok", yv_bool(1), "addr", yv_long(code_len + pad + yv_l(ym_get(e, "off"))));
+        return yr(2, "ok", yv_bool(1), "addr", yv_long(code_len + pad + yv_l(yr_get(e, "off"))));
     }
 }
 
@@ -777,11 +777,11 @@ Yv *asm_assemble(Yv *text) {
             ;
         } else {
             Yv *st = asm_assemble_line(lines, li, sec, offs, items, labels, err);
-            sec = yv_l(ym_get(st, "sec"));
-            offs = ym_get(st, "offs");
-            items = ym_get(st, "items");
-            labels = ym_get(st, "labels");
-            err = ym_get(st, "err");
+            sec = yv_l(yr_get(st, "sec"));
+            offs = yr_get(st, "offs");
+            items = yr_get(st, "items");
+            labels = yr_get(st, "labels");
+            err = yr_get(st, "err");
             ;
         };
         li = li + 1;
@@ -790,27 +790,27 @@ Yv *asm_assemble(Yv *text) {
     long t2 = clock_us();
     long h2 = heap_used();
     if (!ys_eq_lit(err, "")) {
-        return ym(4, "ok", yv_bool(0), "bytes", yav(0), "error", err,
+        return yr(4, "ok", yv_bool(0), "bytes", yav(0), "error", err,
                   "times", yav(2,
-                               ym(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
-                               ym(3, "name", ys("a:encode"), "us", yv_long(t2 - t1), "heap", yv_long(h2 - h1))));
+                               yr(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
+                               yr(3, "name", ys("a:encode"), "us", yv_long(t2 - t1), "heap", yv_long(h2 - h1))));
     } else {
         Yv *lk = asm_link(items, labels);
         long t3 = clock_us();
         long h3 = heap_used();
         Yv *tl = yav(3,
-                     ym(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
-                     ym(3, "name", ys("a:encode"), "us", yv_long(t2 - t1), "heap", yv_long(h2 - h1)),
-                     ym(3, "name", ys("a:link"), "us", yv_long(t3 - t2), "heap", yv_long(h3 - h2)));
-        Yv *lsub = ym_get(lk, "times");
+                     yr(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
+                     yr(3, "name", ys("a:encode"), "us", yv_long(t2 - t1), "heap", yv_long(h2 - h1)),
+                     yr(3, "name", ys("a:link"), "us", yv_long(t3 - t2), "heap", yv_long(h3 - h2)));
+        Yv *lsub = yr_get(lk, "times");
         long k = 0;
         while (k < yv_len(lsub)) {
             Yv *le = ya_get(lsub, k);
             tl = ya_push(tl, le);
             k = k + 1;
         }
-        return ym(4, "ok", ym_get(lk, "ok"), "bytes", ym_get(lk, "bytes"),
-                  "error", ym_get(lk, "error"), "times", tl);
+        return yr(4, "ok", yr_get(lk, "ok"), "bytes", yr_get(lk, "bytes"),
+                  "error", yr_get(lk, "error"), "times", tl);
     }
 }
 
@@ -835,11 +835,11 @@ static Yv *asm_assemble_line(Yv *lines, long li, long sec, Yv *offs, Yv *items, 
 }
 
 static Yv *asm_state(long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
-    return ym(5, "sec", yv_long(sec), "offs", offs, "items", items, "labels", labels, "err", err);
+    return yr(5, "sec", yv_long(sec), "offs", offs, "items", items, "labels", labels, "err", err);
 }
 
 static Yv *asm_state_err(long sec, Yv *offs, Yv *items, Yv *labels, long lno, Yv *msg) {
-    return ym(5, "sec", yv_long(sec), "offs", offs, "items", items, "labels", labels,
+    return yr(5, "sec", yv_long(sec), "offs", offs, "items", items, "labels", labels,
               "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), msg));
 }
 
@@ -861,16 +861,16 @@ static Yv *asm_labdef_go(Yv *nm, long lno, long sec, Yv *offs, Yv *items, Yv *la
        detected once at index build (labmap_build reports the name). */
     (void)lno; /* carried only for the asm_* line-handler shape */
     return asm_state(sec, offs, items,
-                     ya_push(labels, ym(3, "name", nm, "sec", yv_long(sec), "off", ya_get(offs, sec))), err);
+                     ya_push(labels, yr(3, "name", nm, "sec", yv_long(sec), "off", ya_get(offs, sec))), err);
 }
 
 static Yv *asm_dirline(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
     Yv *r = asm_directive(line, lno, sec, offs);
-    if (!ys_eq_lit(ym_get(r, "err"), "")) {
-        return asm_state(yv_l(ym_get(r, "sec")), ym_get(r, "offs"), items, labels, ym_get(r, "err"));
+    if (!ys_eq_lit(yr_get(r, "err"), "")) {
+        return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"), items, labels, yr_get(r, "err"));
     } else {
-        return asm_state(yv_l(ym_get(r, "sec")), ym_get(r, "offs"),
-                         ya_push(items, ym_get(r, "item")), labels, err);
+        return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"),
+                         ya_push(items, yr_get(r, "item")), labels, err);
     }
 }
 
@@ -888,11 +888,11 @@ static Yv *asm_maybe_labline(Yv *line, long lno, long sec, Yv *offs, Yv *items, 
 
 static Yv *asm_insnline(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
     Yv *r = asm_content(line, lno, sec, offs);
-    if (!ys_eq_lit(ym_get(r, "err"), "")) {
-        return asm_state(yv_l(ym_get(r, "sec")), ym_get(r, "offs"), items, labels, ym_get(r, "err"));
+    if (!ys_eq_lit(yr_get(r, "err"), "")) {
+        return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"), items, labels, yr_get(r, "err"));
     } else {
-        return asm_state(yv_l(ym_get(r, "sec")), ym_get(r, "offs"),
-                         ya_push(items, ym_get(r, "item")), labels, err);
+        return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"),
+                         ya_push(items, yr_get(r, "item")), labels, err);
     }
 }
 
@@ -925,12 +925,12 @@ static Yv *asm_labline_content(Yv *nm, Yv *rest, long lno, long sec, Yv *offs, Y
        FIRST so both toolchains agree. */
     long lab_off = yv_l(ya_get(offs, sec));
     Yv *r = asm_content(rest, lno, sec, offs);
-    if (!ys_eq_lit(ym_get(r, "err"), "")) {
-        return asm_state(yv_l(ym_get(r, "sec")), ym_get(r, "offs"), items, labels, ym_get(r, "err"));
+    if (!ys_eq_lit(yr_get(r, "err"), "")) {
+        return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"), items, labels, yr_get(r, "err"));
     } else {
-        return asm_state(yv_l(ym_get(r, "sec")), ym_get(r, "offs"),
-                         ya_push(items, ym_get(r, "item")),
-                         ya_push(labels, ym(3, "name", nm, "sec", yv_long(sec), "off", yv_long(lab_off))),
+        return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"),
+                         ya_push(items, yr_get(r, "item")),
+                         ya_push(labels, yr(3, "name", nm, "sec", yv_long(sec), "off", yv_long(lab_off))),
                          err);
     }
 }
@@ -966,24 +966,24 @@ static int asm_strdata_bad(Yv *rest) {
 static Yv *asm_strdata_err(Yv *line, long lno, long sec, Yv *offs) {
     /* (split: error shape `{err,sec,offs,item:{}}` built ONLY here.) */
     (void)line;
-    return ym(4,
+    return yr(4,
               "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad string literal")),
               "sec", yv_long(sec), "offs", offs,
-              "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+              "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                          "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
 }
 
 static Yv *asm_strdata_go(Yv *line, long lno, long sec, Yv *offs, Yv *payload, int nul) {
     (void)line;
     Yv *d = decode_str(payload);
-    if (!(yv_b(ym_get(d, "ok")))) {
-        return ym(4,
-                  "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), ym_get(d, "error")),
+    if (!(yv_b(yr_get(d, "ok")))) {
+        return yr(4,
+                  "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), yr_get(d, "error")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else {
-        return asm_strdata_emit(sec, offs, ym_get(d, "bytes"), nul);
+        return asm_strdata_emit(sec, offs, yr_get(d, "bytes"), nul);
     }
 }
 
@@ -998,10 +998,10 @@ static Yv *asm_strdata_emit(long sec, Yv *offs, Yv *bytes, int nul) {
 }
 
 static Yv *asm_strdata_item(long sec, Yv *offs, Yv *bb) {
-    Yv *item = ym(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bb)),
+    Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bb)),
                   "kind", ys("data"), "bytes", bb, "fix", yav(0));
     ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + yv_len(bb)));
-    return ym(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
+    return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
 }
 
 static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
@@ -1015,12 +1015,12 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
         ;
     } else { ; };
     if (ys_eq_lit(dir, ".text")) {
-        return ym(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+        return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else if (ys_eq_lit(dir, ".globl")) {
-        return ym(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+        return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else if (ys_eq_lit(dir, ".string")) {
         return asm_strdata(line, lno, sec, offs, rest, 1);
@@ -1031,10 +1031,10 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
     } else if (ys_eq_lit(dir, ".quad")) {
         return asm_quad(line, lno, sec, offs, rest);
     } else {
-        return ym(4,
+        return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported directive '")), dir), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     }
 }
@@ -1058,10 +1058,10 @@ static int asm_section_bad(Yv *rest) {
 static Yv *asm_section_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
     /* (split: error shape built ONLY here.) */
     (void)line;
-    return ym(4,
+    return yr(4,
               "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported section '")), rest), ys("'")),
               "sec", yv_long(sec), "offs", offs,
-              "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+              "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                          "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
 }
 
@@ -1070,12 +1070,12 @@ static Yv *asm_section_go(long sec, Yv *offs, Yv *rest) {
        NOTE: both arms share the key set — teq holds. */
     (void)sec;
     if (ys_eq_lit(rest, ".rodata")) {
-        return ym(4, "err", ys(""), "sec", yv_long(1), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+        return yr(4, "err", ys(""), "sec", yv_long(1), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else {
-        return ym(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+        return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     }
 }
@@ -1103,16 +1103,16 @@ static Yv *asm_quad_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
        NOTE: nested ifs (see is_digit_ch note); both arms share the key set. */
     (void)line;
     if (!is_num_text(rest)) {
-        return ym(4,
+        return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad .quad value '")), rest), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else {
-        return ym(4,
+        return yr(4,
                   "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": negative .quad value")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     }
 }
@@ -1120,10 +1120,10 @@ static Yv *asm_quad_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
 static Yv *asm_quad_go(long sec, Yv *offs, Yv *rest) {
     /* (split: data-item shape built ONLY here.) */
     Yv *bytes = le64(ys_tonum(rest));
-    Yv *item = ym(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bytes)),
+    Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bytes)),
                   "kind", ys("data"), "bytes", bytes, "fix", yav(0));
     ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + yv_len(bytes)));
-    return ym(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
+    return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
 }
 
 static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
@@ -1152,22 +1152,22 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
         while (i < yv_len(texts)) {
             Yv *r = parse_operand(ya_get(texts, i));
             /* NOTE: `0;` tails (see parser.y parse_binary note): `ok = false`
-               is bool-typed; the else-arm is null-typed. */
-            if (!(yv_b(ym_get(r, "ok")))) {
+               is bool-typed; the else-arm is void-typed. */
+            if (!(yv_b(yr_get(r, "ok")))) {
                 ok = 0;
                 ;
             } else {
-                ops = ya_push(ops, ym_get(r, "op"));
+                ops = ya_push(ops, yr_get(r, "op"));
                 ;
             };
             i = i + 1;
             ;
         };
         if (!ok) {
-            return ym(4,
+            return yr(4,
                       "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad operand")),
                       "sec", yv_long(sec), "offs", offs,
-                      "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                      "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                                  "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
         } else {
             return asm_encode(mn, ops, lno, sec, offs);
@@ -1179,18 +1179,18 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
 
 static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
     Yv *r = enc_insn(mn, ops);
-    if (!ys_eq_lit(ym_get(r, "err"), "")) {
-        return ym(4,
-                  "err", ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), ym_get(r, "err")), ys(" in '")), mn), ys("'")),
+    if (!ys_eq_lit(yr_get(r, "err"), "")) {
+        return yr(4,
+                  "err", ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), yr_get(r, "err")), ys(" in '")), mn), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", ym(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else {
-        long blen = yv_len(ym_get(r, "bytes"));
-        Yv *item = ym(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(blen),
-                      "kind", ys("insn"), "bytes", ym_get(r, "bytes"), "fix", ym_get(r, "fix"));
+        long blen = yv_len(yr_get(r, "bytes"));
+        Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(blen),
+                      "kind", ys("insn"), "bytes", yr_get(r, "bytes"), "fix", yr_get(r, "fix"));
         ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + blen));
-        return ym(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
+        return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
     }
 }
 
@@ -1208,23 +1208,23 @@ static Yv *asm_link(Yv *items, Yv *labels) {
     long i = 0;
     while (i < yv_len(items)) {
         Yv *it = ya_get(items, i);
-        if (yv_l(ym_get(it, "sec")) == 0) { code_len = code_len + yv_l(ym_get(it, "len")); ; } else { ; };
-        if (yv_l(ym_get(it, "sec")) == 1) { ro_len = ro_len + yv_l(ym_get(it, "len")); ; } else { ; };
+        if (yv_l(yr_get(it, "sec")) == 0) { code_len = code_len + yv_l(yr_get(it, "len")); ; } else { ; };
+        if (yv_l(yr_get(it, "sec")) == 1) { ro_len = ro_len + yv_l(yr_get(it, "len")); ; } else { ; };
         i = i + 1;
         ;
     };
     Yv *lm = labmap_build(labels);
     long lt1 = clock_us();
     long lh1 = heap_used();
-    Yv *lmap = ym_get(lm, "map");
+    Yv *lmap = yr_get(lm, "map");
     Yv *start = labmap_get(lmap, ys("_start"));
-    if (!ys_eq_lit(ym_get(lm, "dup"), "")) {
-        return ym(4, "ok", yv_bool(0), "bytes", yav(0),
-                  "error", ys_cat(ys_cat(ys("duplicate label '"), ym_get(lm, "dup")), ys("'")),
-                  "times", yav(1, ym(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
-    } else if (yv_l(ym_get(start, "sec")) != 0) {
-        return ym(4, "ok", yv_bool(0), "bytes", yav(0), "error", ys("no _start label (empty program?)"),
-                  "times", yav(1, ym(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
+    if (!ys_eq_lit(yr_get(lm, "dup"), "")) {
+        return yr(4, "ok", yv_bool(0), "bytes", yav(0),
+                  "error", ys_cat(ys_cat(ys("duplicate label '"), yr_get(lm, "dup")), ys("'")),
+                  "times", yav(1, yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
+    } else if (yv_l(yr_get(start, "sec")) != 0) {
+        return yr(4, "ok", yv_bool(0), "bytes", yav(0), "error", ys("no _start label (empty program?)"),
+                  "times", yav(1, yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
     } else {
         /* pad code to a page so rodata lands page-aligned (mirrors elf.y) */
         long pad = 0;
@@ -1241,19 +1241,19 @@ static Yv *asm_link(Yv *items, Yv *labels) {
                 ;
             } else {
             Yv *it = ya_get(items, i);
-            if (yv_l(ym_get(it, "sec")) == 0) {
+            if (yv_l(yr_get(it, "sec")) == 0) {
                 Yv *r = patch_item(code, it, lmap, code_len, pad);
                 /* NOTE: `0;` tails (see note above): str-arm vs [long]-arm. */
-                if (!ys_eq_lit(ym_get(r, "err"), "")) {
-                    err = ym_get(r, "err");
+                if (!ys_eq_lit(yr_get(r, "err"), "")) {
+                    err = yr_get(r, "err");
                     ;
                 } else {
-                    code = ym_get(r, "bytes");
+                    code = yr_get(r, "bytes");
                     ;
                 };
                 ;
-            } else if (yv_l(ym_get(it, "sec")) == 1) {
-                Yv *rbytes = ym_get(it, "bytes");
+            } else if (yv_l(yr_get(it, "sec")) == 1) {
+                Yv *rbytes = yr_get(it, "bytes");
                 long j = 0;
                 while (j < yv_len(rbytes)) {
                     ro = ya_push(ro, ya_get(rbytes, j));
@@ -1267,25 +1267,25 @@ static Yv *asm_link(Yv *items, Yv *labels) {
             };
         };
         if (!ys_eq_lit(err, "")) {
-            return ym(4, "ok", yv_bool(0), "bytes", yav(0), "error", err,
-                      "times", yav(1, ym(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
+            return yr(4, "ok", yv_bool(0), "bytes", yav(0), "error", err,
+                      "times", yav(1, yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
         } else {
             long lt2 = clock_us();
             long lh2 = heap_used();
-            Yv *eb = elf_build(code, ro, yv_l(ym_get(start, "off")));
+            Yv *eb = elf_build(code, ro, yv_l(yr_get(start, "off")));
             long lt3 = clock_us();
             long lh3 = heap_used();
-            return ym(4, "ok", yv_bool(1), "bytes", eb, "error", ys(""),
+            return yr(4, "ok", yv_bool(1), "bytes", eb, "error", ys(""),
                       "times", yav(3,
-                                   ym(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0)),
-                                   ym(3, "name", ys("l:patch"), "us", yv_long(lt2 - lt1), "heap", yv_long(lh2 - lh1)),
-                                   ym(3, "name", ys("l:elf"), "us", yv_long(lt3 - lt2), "heap", yv_long(lh3 - lh2))));
+                                   yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0)),
+                                   yr(3, "name", ys("l:patch"), "us", yv_long(lt2 - lt1), "heap", yv_long(lh2 - lh1)),
+                                   yr(3, "name", ys("l:elf"), "us", yv_long(lt3 - lt2), "heap", yv_long(lh3 - lh2))));
         }
     }
 }
 
 static Yv *patch_item(Yv *code, Yv *it, Yv *lmap, long code_len, long pad) {
-    Yv *bytes = ym_get(it, "bytes");
+    Yv *bytes = yr_get(it, "bytes");
     Yv *err = ys("");
     /* NOTE: single bool gate (see asm_strdata note): insn-vs-other shapes
        never mix in one chain. */
@@ -1297,7 +1297,7 @@ static Yv *patch_item(Yv *code, Yv *it, Yv *lmap, long code_len, long pad) {
 }
 
 static int patch_item_isdata(Yv *it) {
-    if (ys_eq_lit(ym_get(it, "kind"), "insn")) { return 0; } else { return 1; }
+    if (ys_eq_lit(yr_get(it, "kind"), "insn")) { return 0; } else { return 1; }
 }
 
 static Yv *patch_item_insn(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, Yv *bytes, Yv *err) {
@@ -1311,7 +1311,7 @@ static Yv *patch_item_insn(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, 
 
 static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, Yv *bytes, Yv *err) {
     long base = yv_len(code);
-    Yv *fxlist = ym_get(it, "fix");
+    Yv *fxlist = yr_get(it, "fix");
     long f = 0;
     /* NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails. */
     while (f < yv_len(fxlist)) {
@@ -1322,19 +1322,19 @@ static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, 
         Yv *fx = ya_get(fxlist, f);
         /* at is instruction-relative: bytes is the ITEM's list, and the
            rel target is relative to the instruction END (base + it.len). */
-        long at = yv_l(ym_get(fx, "off"));
+        long at = yv_l(yr_get(fx, "off"));
         /* NOTE: nested ifs, not `||` (see is_digit_ch note).
            NOTE: thread callee results (see note above): bare calls in
            statement position DISCARD {bytes,err} on the C VM. */
-        if (ys_eq_lit(ym_get(fx, "kind"), "rel32")) {
+        if (ys_eq_lit(yr_get(fx, "kind"), "rel32")) {
             Yv *rr = patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
-            bytes = ym_get(rr, "bytes");
-            if (!ys_eq_lit(ym_get(rr, "err"), "")) { err = ym_get(rr, "err"); ; } else { ; };
+            bytes = yr_get(rr, "bytes");
+            if (!ys_eq_lit(yr_get(rr, "err"), "")) { err = yr_get(rr, "err"); ; } else { ; };
             ;
         } else {
             Yv *rk = patch_item_kind2(lmap, code_len, pad, fx, bytes, base, it, at);
-            bytes = ym_get(rk, "bytes");
-            if (!ys_eq_lit(ym_get(rk, "err"), "")) { err = ym_get(rk, "err"); ; } else { ; };
+            bytes = yr_get(rk, "bytes");
+            if (!ys_eq_lit(yr_get(rk, "err"), "")) { err = yr_get(rk, "err"); ; } else { ; };
             ;
         };
         f = f + 1;
@@ -1346,7 +1346,7 @@ static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, 
 
 static Yv *patch_item_kind2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at) {
     /* (split: non-rel32 kinds; `{bytes,err}` built ONLY here + callees.) */
-    if (ys_eq_lit(ym_get(fx, "kind"), "rip32")) {
+    if (ys_eq_lit(yr_get(fx, "kind"), "rip32")) {
         return patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
     } else {
         return patch_item_diff(lmap, code_len, pad, fx, bytes, base, it);
@@ -1356,13 +1356,13 @@ static Yv *patch_item_kind2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes
 static Yv *patch_item_rel(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at) {
     /* rel32/rip32: target - address past the instruction.
        NOTE: fx/it stay BARE holes (see types.y note): single reads unify. */
-    Yv *t = label_addr(lmap, code_len, pad, ym_get(fx, "lbl"));
-    if (!(yv_b(ym_get(t, "ok")))) {
-        return ym(2, "bytes", bytes,
-                  "err", ys_cat(ys_cat(ys("undefined label '"), ym_get(fx, "lbl")), ys("'")));
+    Yv *t = label_addr(lmap, code_len, pad, yr_get(fx, "lbl"));
+    if (!(yv_b(yr_get(t, "ok")))) {
+        return yr(2, "bytes", bytes,
+                  "err", ys_cat(ys_cat(ys("undefined label '"), yr_get(fx, "lbl")), ys("'")));
     } else {
-        long v = yv_l(ym_get(t, "addr")) - (base + yv_l(ym_get(it, "len")));
-        return ym(2, "bytes", patch32(bytes, at, v), "err", ys(""));
+        long v = yv_l(yr_get(t, "addr")) - (base + yv_l(yr_get(it, "len")));
+        return yr(2, "bytes", patch32(bytes, at, v), "err", ys(""));
     }
 }
 
@@ -1371,28 +1371,28 @@ static Yv *patch_item_diff(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes,
        NOTE: fx/it stay BARE holes (see types.y note): single reads unify. */
     (void)base;
     (void)it;
-    Yv *ta = label_addr(lmap, code_len, pad, ym_get(fx, "lbl"));
-    if (!(yv_b(ym_get(ta, "ok")))) {
-        return ym(2, "bytes", bytes,
-                  "err", ys_cat(ys_cat(ys("undefined label '"), ym_get(fx, "lbl")), ys("'")));
+    Yv *ta = label_addr(lmap, code_len, pad, yr_get(fx, "lbl"));
+    if (!(yv_b(yr_get(ta, "ok")))) {
+        return yr(2, "bytes", bytes,
+                  "err", ys_cat(ys_cat(ys("undefined label '"), yr_get(fx, "lbl")), ys("'")));
     } else {
-        Yv *dd = patch_item_diff2(lmap, code_len, pad, fx, bytes, yv_l(ym_get(ta, "addr")));
-        return ym(2, "bytes", ym_get(dd, "bytes"), "err", ym_get(dd, "err"));
+        Yv *dd = patch_item_diff2(lmap, code_len, pad, fx, bytes, yv_l(yr_get(ta, "addr")));
+        return yr(2, "bytes", yr_get(dd, "bytes"), "err", yr_get(dd, "err"));
     }
 }
 
 static Yv *patch_item_diff2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long ta) {
-    Yv *tb = label_addr(lmap, code_len, pad, ym_get(fx, "lbl2"));
-    if (!(yv_b(ym_get(tb, "ok")))) {
-        return ym(2, "bytes", bytes,
-                  "err", ys_cat(ys_cat(ys("undefined label '"), ym_get(fx, "lbl2")), ys("'")));
+    Yv *tb = label_addr(lmap, code_len, pad, yr_get(fx, "lbl2"));
+    if (!(yv_b(yr_get(tb, "ok")))) {
+        return yr(2, "bytes", bytes,
+                  "err", ys_cat(ys_cat(ys("undefined label '"), yr_get(fx, "lbl2")), ys("'")));
     } else {
-        return ym(2, "bytes", patch32(bytes, yv_l(ym_get(fx, "off")), ta - yv_l(ym_get(tb, "addr"))), "err", ys(""));
+        return yr(2, "bytes", patch32(bytes, yv_l(yr_get(fx, "off")), ta - yv_l(yr_get(tb, "addr"))), "err", ys(""));
     }
 }
 
 static Yv *patch_item_finish(Yv *code, Yv *bytes, Yv *err) {
-    return ym(2, "bytes", concat_bytes(code, bytes), "err", err);
+    return yr(2, "bytes", concat_bytes(code, bytes), "err", err);
 }
 
 static Yv *patch32(Yv *bytes, long at, long v) {
@@ -1420,11 +1420,11 @@ static Yv *concat_bytes(Yv *a, Yv *b) {
    (one malloc+copy per byte) and nothing reads it — it dominated -o time. */
 Yv *ycc_assemble(Yv *asm_text) {
     Yv *r = asm_assemble(asm_text);
-    if (!(yv_b(ym_get(r, "ok")))) {
-        return ym(5, "ok", yv_bool(0), "bytes", yav(0), "octal", ys(""),
-                  "error", ym_get(r, "error"), "times", ym_get(r, "times"));
+    if (!(yv_b(yr_get(r, "ok")))) {
+        return yr(5, "ok", yv_bool(0), "bytes", yav(0), "octal", ys(""),
+                  "error", yr_get(r, "error"), "times", yr_get(r, "times"));
     } else {
-        return ym(5, "ok", yv_bool(1), "bytes", ym_get(r, "bytes"), "octal", ys(""),
-                  "error", ys(""), "times", ym_get(r, "times"));
+        return yr(5, "ok", yv_bool(1), "bytes", yr_get(r, "bytes"), "octal", ys(""),
+                  "error", ys(""), "times", yr_get(r, "times"));
     }
 }

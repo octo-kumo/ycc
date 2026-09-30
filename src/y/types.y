@@ -2,10 +2,10 @@
 // Usage: let errors = types.check_program(ast);  // [] means OK
 // Each error: { msg: str, line: long, col: long }.
 //
-// Supported types: long, bool, str, null, *T (pointers), monomorphic
-// (T, ...) -> R functions. Everything else (arrays, maps, floats,
-// first-class function values in argument position, closures over locals)
-// is rejected with a clear error, not silently miscompiled.
+// Supported types: long, byte, float, bool, str, void, options T? (the
+// empty case is `none`), *T (pointers), arrays [T] / [T; N], records
+// {f: T}, maps {K => V} and (T, ...) -> R functions. Anything else is
+// rejected with a clear error, not silently miscompiled.
 //
 // Rules (native mode):
 // - def params and return types REQUIRE annotations.
@@ -14,7 +14,7 @@
 //   referring to an outer local/param is a capture error (closures are
 //   planned, not present: no heap for envs yet).
 // - `if` conditions must be bool; branches must agree; if-without-else
-//   must have a null-typed body (expression-oriented, like the VM).
+//   must have a void-typed body (expression-oriented, like the VM).
 // - print takes exactly one long/bool/str. syscall takes 1-7 long/bool/str/*T.
 // - Assignment targets keep their declared type. No implicit conversions.
 
@@ -23,7 +23,7 @@ def err_at(msg: str, line: long, col: long) -> { msg: str, line: long, col: long
 };
 
 // ── types ────────────────────────────────────────────────────────────────
-// Type nodes come from the parser: tlong/tbool/tstr/tnull/tnone/tname,
+// Type nodes come from the parser: tlong/tbool/tstr/tvoid/tnone/tname,
 // tptr {to}, tarr {of}, tfunc {args, ret}, trec {fields: [{name, typ}]},
 // tparams. Internal only: tunk (error poison, unifies with everything),
 // trec (checked record type {fields: [{name, typ}]} — same shape as the
@@ -196,7 +196,6 @@ def tstr_go(t) -> str {
     else if (t.k == "tfloat") { "float" }
     else if (t.k == "tbool") { "bool" }
     else if (t.k == "tstr") { "str" }
-    else if (t.k == "tnull") { "null" }
     else if (t.k == "tvoid") { "void" }
     else if (t.k == "tunk") { "<error>" }
     else if (t.k == "tnone") { "<missing annotation>" }
@@ -204,7 +203,11 @@ def tstr_go(t) -> str {
     else if (t.k == "tptr") { "*" + tstr_go(t.to) }
     else if (t.k == "tarr") { "[" + tstr_go(t.of) + "]" }
     else if (t.k == "tarrfix") { "[" + tstr_go(t.of) + "; " + tostring(t.n) + "]" }
-    else if (t.k == "topt") { tstr_go(t.of) + "?" }
+    else if (t.k == "topt") {
+        // `none` alone is the option of nothing-known-yet
+        let tof = t.of;
+        if (tof.k == "tunk") { "none" } else { tstr_go(tof) + "?" }
+    }
     else if (t.k == "tmap") { "{" + tstr_go(t.key) + " => " + tstr_go(t.of) + "}" }
     else if (t.k == "trec") {
         let parts = [];
@@ -286,7 +289,8 @@ def tdisp(t) -> str {
     } else if (t.k == "tptr") {
         "*" + tdisp(t.to)
     } else if (t.k == "topt") {
-        tdisp(t.of) + "?"
+        let tof = t.of;
+        if (tof.k == "tunk") { "none" } else { tdisp(tof) + "?" }
     } else {
         tstr_go(t)
     }
@@ -338,7 +342,6 @@ def is_value_type(t) -> bool {
     else if (t.k == "tfloat") { true }
     else if (t.k == "tbool") { true }
     else if (t.k == "tstr") { true }
-    else if (t.k == "tnull") { true }
     else if (t.k == "tptr") { true }
     else if (t.k == "tunk") { true }
     else if (t.k == "tnone") { true }
@@ -348,8 +351,17 @@ def is_value_type(t) -> bool {
     else if (t.k == "tarr") { true }
     else if (t.k == "tarrfix") { true }
     else if (t.k == "topt") { true }
-    else if (t.k == "tmap") { true }
+    else if (t.k == "tmap") { is_hash_key(t.key) }
     else { t.k == "trec" }
+};
+
+// Map keys must be hashable scalars: str, long, byte, bool, float.
+def is_hash_key(t) -> bool {
+    if (t.k == "tstr") { true }
+    else if (t.k == "tlong") { true }
+    else if (t.k == "tbyte") { true }
+    else if (t.k == "tbool") { true }
+    else { t.k == "tfloat" }
 };
 
 // A function VALUE prints as `<function (params)->(ret)>` — note the extra
@@ -566,7 +578,7 @@ def num_eq_ok(lt, rt) -> bool {
 };
 
 def typeof_eq(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
-    // str compares by content (null-safe: str vs null is allowed).
+    // str compares by content. `x == none` is the option's is-none check.
     // Nested ifs throughout (see lexer.y isalnum note).
     if (teq(lt, rt)) { { typ: { k: "tbool" }, st: st } }
     else if (num_eq_ok(lt, rt)) {
@@ -577,32 +589,23 @@ def typeof_eq(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: 
     else if (lt.k == "tstr") {
         if (rt.k == "tstr") { { typ: { k: "tbool" }, st: st } }
         else if (rt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
-        else if (rt.k == "tnull") { { typ: { k: "tbool" }, st: st } }
         else {
             st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
             { typ: { k: "tbool" }, st: st }
         }
     } else if (lt.k == "tunk") {
         { typ: { k: "tbool" }, st: st }
-    } else if (lt.k == "tnull") {
-        if (rt.k == "tstr") { { typ: { k: "tbool" }, st: st } }
-        else {
-            st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
-            { typ: { k: "tbool" }, st: st }
-        }
     } else if (lt.k == "topt") {
-        // options null-check (`x == null`) plus same-option comparison.
-        // Anything else is a type error (t10 parity for non-options).
-        if (rt.k == "tnull") { { typ: { k: "tbool" }, st: st } }
-        else if (rt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
+        // options: the is-none check (`x == none`) plus same-option
+        // comparison. Anything else is a type error (t10 parity).
+        if (rt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
         else if (teq(lt, rt)) { { typ: { k: "tbool" }, st: st } }
         else {
             st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
             { typ: { k: "tbool" }, st: st }
         }
     } else if (rt.k == "topt") {
-        if (lt.k == "tnull") { { typ: { k: "tbool" }, st: st } }
-        else if (lt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
+        if (lt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
         else {
             st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
             { typ: { k: "tbool" }, st: st }
@@ -642,11 +645,11 @@ def tcompat(got, want) -> bool {
     else if (got.k == "tparams") { true }
     else if (want.k == "tparams") { true }
     else if (want.k == "topt") {
-        // The empty value widens to any T?; a plain T does NOT -- use
-        // some(v), which is the explicit box (options are 0-or-box, so
-        // some(0) differs from null). Option-to-option unifies payloads.
-        if (got.k == "tnull") { true }
-        else if (got.k == "topt") { teq(got.of, want.of) }
+        // `none` (the option of tunk) widens to any T? through teq; a
+        // plain T does NOT -- use some(v), which is the explicit box
+        // (options are 0-or-box, so some(0) differs from none).
+        // Option-to-option unifies payloads.
+        if (got.k == "topt") { teq(got.of, want.of) }
         else { false }
     }
     else if (got.k == "trec") {
@@ -749,12 +752,11 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         { typ: t_unk(), st: st }
     } else if (k == "bool") {
         { typ: { k: "tbool" }, st: st }
-    } else if (k == "null") {
-        // NO null type: null IS the option-empty value (value-or-null
-        // options on this toolchain — some() is identity, is_some is
-        // (v != null)). The literal is the unknown option; `x == null`
-        // is the is-none check and assignments require a T?.
-        { typ: { k: "topt", of: t_unk() }, st: st }
+    } else if (k == "void") {
+        // An absent expression (bare `return;`, a missing else, an empty
+        // for-clause): it computes nothing. The empty option is `none`
+        // (an id, see below), never this node.
+        { typ: { k: "tvoid" }, st: st }
     } else if (k == "id") {
         if (node.v == "self") {
             // resolved by the enclosing def pre-pass (stored as _self in st)
@@ -908,21 +910,15 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         if (node.has_else) {
             let e = typeof_expr(st, node.els);
             st = e.st;
-            if (!teq(t.typ, e.typ)) {
-                // Void mixing: when either arm computes no value (void /
-                // null statements), the whole if is a statement — no
-                // disagreement error, the value arm's value is discarded.
-                let tk: str = t.typ.k;
-                let ek: str = e.typ.k;
-                if (tk == "tvoid" || tk == "tnull" || ek == "tvoid" || ek == "tnull") {
-                    0
-                } else {
-                    st = fail(st, "'if' branches disagree: " + tstr(t.typ) + " vs " + tstr(e.typ), node.line, node.col);
-                    0
-                };
-                0
-            } else { 0; };
-            { typ: t.typ, st: st }
+            if (teq(t.typ, e.typ)) {
+                { typ: t.typ, st: st }
+            } else {
+                // VOID law: arms that disagree on a type (a value arm vs a
+                // statement arm, or two different values) make the whole
+                // `if` a statement -- void, not usable as a value. Using it
+                // as one errors at that use (binding, argument, print...).
+                { typ: { k: "tvoid" }, st: st }
+            }
         } else {
             // VOID law: an `if` without `else` is a STATEMENT — its value is
             // nothing, whatever the then-branch computes. No forced else
@@ -1025,12 +1021,15 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         } else {
             let r = typeof_expr(st, node.e);
             st = expect_type(r.st, r.typ, st.ret, "'return'", node.line, node.col);
-            { typ: st.ret, st: st }
+            // An inferred return type (tunk while the body is checked)
+            // takes the returned value's type: a bare `return;` returns
+            // nothing, so it makes the def void.
+            let rk: str = st.ret.k;
+            if (rk == "tunk") { { typ: r.typ, st: st } } else { { typ: st.ret, st: st } }
         }
     } else if (k == "rec") {
         // Record literal { k: v, ... }: every value checked, the type is a
-        // trec with field names in order. Empty maps need an annotation
-        // (nothing to infer — like []).
+        // trec with field names in order.
         let mkeys = node.keys;
         let mvals = node.vals;
         if (len(mkeys) == 0) {
@@ -1183,8 +1182,6 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             { typ: t_unk(), st: st }
         } else if (r.typ.k == "tparams") {
             { typ: t_unk(), st: st }
-        } else if (r.typ.k == "tnull") {
-            { typ: t_unk(), st: st }
         } else {
             st = fail(st, "cannot read field '" + node.key + "' of " + tstr(r.typ) + " (need a record)", node.line, node.col);
             { typ: t_unk(), st: st }
@@ -1228,7 +1225,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 { typ: got.typ.of, st: st }
             } else if (got.typ.k == "tmap") {
                 // m[k]: the key must match K; a read is ALWAYS optional --
-                // V? for any V (null when the key is missing).
+                // V? for any V (none when the key is missing).
                 st = check_visible(st, got, node.arr.v, node.line, node.col);
                 let r = typeof_expr(st, node.idx);
                 st = r.st;
@@ -1278,12 +1275,12 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         st = sr.st;
         let slo = node.lo;
         let shi = node.hi;
-        if (slo.k == "null") { 0; } else {
+        if (slo.k == "void") { 0; } else {
             let rl = typeof_expr(st, slo);
             st = expect_type(rl.st, rl.typ, { k: "tlong" }, "slice start", node.line, node.col);
             0
         };
-        if (shi.k == "null") { 0; } else {
+        if (shi.k == "void") { 0; } else {
             let rh = typeof_expr(st, shi);
             st = expect_type(rh.st, rh.typ, { k: "tlong" }, "slice end", node.line, node.col);
             0
@@ -1434,9 +1431,6 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 // (tunk inside) still unifies quietly through teq, so the
                 // report-once law holds.
                 { typ: { k: "tarr", of: r0.typ }, st: st }
-            } else if (r0.typ.k == "tnull") {
-                // [null, ..]: option inference is future work — unify quietly.
-                { typ: { k: "tarr", of: t_unk() }, st: st }
             } else if (!is_value_type(r0.typ)) {
                 st = fail(st, "array element type " + tstr(r0.typ) + " is unsupported in native mode", node.line, node.col);
                 { typ: t_unk(), st: st }
@@ -1582,7 +1576,7 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "tnull" || r.typ.k == "topt") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "topt") {
                     { typ: { k: "tvoid" }, st: st }
                 } else {
                     st = fail(st, "print supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
@@ -1646,9 +1640,6 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 if (r.typ.k == "topt") {
                     { typ: r.typ.of, st: st }
                 } else if (r.typ.k == "tunk") {
-                    { typ: t_unk(), st: st }
-                } else if (r.typ.k == "tnull") {
-                    // hole shapes (see dot-arm note): unify quietly.
                     { typ: t_unk(), st: st }
                 } else if (r.typ.k == "tnone") {
                     { typ: t_unk(), st: st }
@@ -1740,7 +1731,7 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tnull" || r.typ.k == "topt") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "topt") {
                     { typ: { k: "tstr" }, st: st }
                 } else {
                     st = fail(st, "tostring supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
@@ -1846,12 +1837,12 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             // sleep(ms): suspend the caller for ms milliseconds.
             if (len(cargs) != 1) {
                 st = fail(st, "sleep takes exactly 1 argument (milliseconds)", node.line, node.col);
-                { typ: { k: "tnull" }, st: st }
+                { typ: { k: "tvoid" }, st: st }
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tlong" }, "sleep duration", node.line, node.col);
-                { typ: { k: "tnull" }, st: st }
+                { typ: { k: "tvoid" }, st: st }
             }
         } else if (name == "puts") {
             if (len(cargs) != 1) {
@@ -1892,9 +1883,9 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tstr" }, "read_file path", node.line, node.col);
-                // NOTE: typed str? (option): a missing file yields null at
-                // RUNTIME on both toolchains (callers null-check with
-                // `== null`, then unwrap). Matches native.y infer.
+                // NOTE: typed str? (option): a missing file yields none at
+                // RUNTIME on both toolchains (callers none-check with
+                // `== none`, then unwrap). Matches native.y infer.
                 { typ: { k: "topt", of: { k: "tstr" } }, st: st }
             }
         } else if (name == "bytes") {
@@ -2040,7 +2031,16 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     while (i < len(cargs)) {
                         let r = typeof_expr(st, cargs[i]);
                         st = r.st;
-                        st = expect_type(st, r.typ, cargs_ft[i], "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
+                        let ak: str = r.typ.k;
+                        if (ak == "tvoid") {
+                            // void is not a value (an unannotated param
+                            // would otherwise accept it quietly)
+                            st = fail(st, "'" + disp(name) + "' arg " + tostring(i) + ": cannot pass a void value", node.line, node.col);
+                            0
+                        } else {
+                            st = expect_type(st, r.typ, cargs_ft[i], "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
+                            0
+                        };
                         i = i + 1;
                     };
                     { typ: ft.ret, st: st }
@@ -2237,7 +2237,12 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
             0
         } else { 0; };
         if (!(ret_inferred)) {
-            st = expect_type(st, b.typ, ret, "'" + disp(name) + "' body", line, col);
+            // `-> void` discards the body's tail value (no value returns)
+            let rtk: str = ret.k;
+            if (rtk == "tvoid") { 0; } else {
+                st = expect_type(st, b.typ, ret, "'" + disp(name) + "' body", line, col);
+                0
+            };
             0
         } else { 0; };
         st = st_fdepth(st, saved_depth);

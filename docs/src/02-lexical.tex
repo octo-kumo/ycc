@@ -34,7 +34,7 @@ code and must not be written by hand.
 The keywords are:
 \begin{center}
 \ic{let} \ic{const} \ic{def} \ic{if} \ic{else} \ic{while} \ic{for}
-\ic{foreach} \ic{in} \ic{return} \ic{true} \ic{false} \ic{null}
+\ic{foreach} \ic{in} \ic{return} \ic{true} \ic{false}
 \end{center}
 
 \subsection{Literals}
@@ -76,7 +76,10 @@ literal. The escapes are the string escapes above, so binary data writes
 naturally: \ic{b"\bs x7fELF"} is the four-byte ELF magic. Either quote
 spells the same type; single quotes exist only for byte strings.
 
-\paragraph{Booleans and null.} \ic{true}, \ic{false}, \ic{null}.
+\paragraph{Booleans and none.} \ic{true}, \ic{false}. The empty option
+is spelled \ic{none}, a predeclared name rather than a keyword
+(Section~\ref{sec:type-options}). There is no \ic{null}: the word is an
+ordinary (undefined) identifier.
 
 \subsection{Operators and punctuation}
 
@@ -87,7 +90,7 @@ kind & tokens \\
 \midrule
 two-character &
   \ic{==} \ic{!=} \ic{<=} \ic{>=} \ic{\&\&} \ic{||} \ic{::} \ic{..}
-  \ic{->} \ic{++} \ic{--} \ic{+=} \ic{-=} \ic{*=} \ic{/=} \ic{\%=} \\
+  \ic{->} \ic{=>} \ic{++} \ic{--} \ic{+=} \ic{-=} \ic{*=} \ic{/=} \ic{\%=} \\
 single-character &
   \ic{+} \ic{-} \ic{*} \ic{/} \ic{\%} \ic{<} \ic{>} \ic{=} \ic{!}
   \ic{\&} \\
@@ -105,8 +108,6 @@ that matches, exactly like C:
       write \ic{x - -y} when negation is meant;
 \item \ic{/=} is one token; \ic{//} starts a comment, and
       \ic{/ == y} must be written with a space to divide;
-\item there is \textbf{no} \ic{=+} operator: \ic{x =+ y} is
-      \ic{x = +y}. In-place prepend is \ic{*=} (Section~\ref{sec:arrays}).
 \end{itemize}
 
 \paragraph{Reserved but unimplemented.} The operator \ic{::} lexes and

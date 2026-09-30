@@ -251,7 +251,7 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
     // node shape through the flow-insensitive env (each arm's return type
     // must teq ALL others). Each arm here is a SINGLE callee call (or leaf
     // literal) with the uniform return type R, so arms always agree.
-    // Leaf shapes (num/str/bool/null) return the node untouched.
+    // Leaf shapes (num/str/bool/void) return the node untouched.
     let k = node.k;
     if (k == "num") {
         { st: st, node: node }
@@ -261,7 +261,7 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
         { st: st, node: node }
     } else if (k == "bool") {
         { st: st, node: node }
-    } else if (k == "null") {
+    } else if (k == "void") {
         { st: st, node: node }
     } else if (k == "id") {
         rn_id(st, node.v, node.line, node.col)
@@ -301,6 +301,8 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
         rn_arrrep(node, st)
     } else if (k == "rec") {
         rn_reclit(node, st)
+    } else if (k == "map") {
+        rn_maplit(node, st)
     } else if (k == "index") {
         rn_index(node, st)
     } else if (k == "slice") {
@@ -448,6 +450,11 @@ def rn_arrrep(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { 
 def rn_reclit(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
     let r = rn_list(node.vals, st);
     { st: r.st, node: { k: "rec", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
+};
+
+def rn_maplit(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+    let r = rn_list(node.vals, st);
+    { st: r.st, node: { k: "map", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
 };
 
 def rn_index(node: {k: str, arr: {k: str}, idx: {k: str}}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {

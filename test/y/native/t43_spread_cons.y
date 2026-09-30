@@ -30,7 +30,7 @@ print([8] :: [[9]]);
 // options round trip
 let o: long? = some(5);
 print(o);
-let n: long? = null;
+let n: long? = none;
 print(n);
 print(unwrap(o));
 print(is_some(n));

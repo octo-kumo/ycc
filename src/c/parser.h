@@ -41,11 +41,13 @@ Yv *parse_expr(Yv *toks, long p);
 Yv *parse_array(Yv *toks, long p);
 int brace_is_map(Yv *toks, long p);
 Yv *parse_map(Yv *toks, long p);
+Yv *maplit_node(int is_map, Yv *keys, Yv *vals, long ln, long cl);
 
 /* ── type parsing ───────────────────────────────────────────────────────── */
 Yv *parse_type_node(Yv *toks, long p);
 Yv *parse_type_array(Yv *toks, long p);
 Yv *parse_type_params(Yv *toks, long p);
+Yv *map_key_type(Yv *name);
 Yv *parse_type_record(Yv *toks, long p);
 Yv *parse_type_atom2(Yv *toks, long p);
 Yv *parse_type_tail(Yv *toks, long apos, Yv *anode);

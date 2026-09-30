@@ -130,7 +130,7 @@
       "patterns": [
         {
           "name": "constant.language.y",
-          "match": "\\b(true|false|null)\\b"
+          "match": "\\b(true|false|none)\\b"
         }
       ]
     },

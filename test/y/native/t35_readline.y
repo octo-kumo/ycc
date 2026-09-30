@@ -1,9 +1,9 @@
-// readline(): a line at a time, newline stripped, null at end of input
+// readline(): a line at a time, newline stripped, none at end of input
 let n = 0;
 let go = true;
 while (go) {
     let line = readline();
-    if (line == null) {
+    if (line == none) {
         go = false;
     } else {
         let s = unwrap(line);
@@ -13,6 +13,6 @@ while (go) {
 };
 print("lines=" + tostring(n));
 
-// EOF is not latched, so asking again is legal (and null here: stdin is done)
+// EOF is not latched, so asking again is legal (and none here: stdin is done)
 let again = readline();
-if (again == null) { print("eof again"); } else { print("unexpected"); };
+if (again == none) { print("eof again"); } else { print("unexpected"); };

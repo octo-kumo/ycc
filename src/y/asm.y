@@ -898,7 +898,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: l
         while (i < len(texts)) {
             let r = parse_operand(texts[i]);
             // NOTE: `0;` tails (see parser.y parse_binary note): `ok = false`
-            // is bool-typed; the else-arm is null-typed.
+            // is bool-typed; the else-arm is void-typed.
             if (!(r.ok)) {
                 ok = false;
                 0

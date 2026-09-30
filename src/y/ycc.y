@@ -156,13 +156,13 @@ def main(cmdline: [str]) -> long {
     } else {
         let file = files[0];
         let src = read_file(file);
-        if (src == null) {
+        if (src == none) {
             puts("error: cannot read file '" + file + "'\n");
             exit(1);
             1
         } else {
-            // src is str? (read_file returns null on missing file); the
-            // null case exited above, so unwrap here (loud on null).
+            // src is str? (read_file returns none on missing file); the
+            // none case exited above, so unwrap here (loud on none).
             let src2 = unwrap(src);
             // get base dir from file path (use last slash, like C compiler's strrchr)
             let last_slash = last_index_of(file, "/");

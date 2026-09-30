@@ -2,8 +2,8 @@
 \label{sec:types}
 
 Checking is static and \emph{fatal}: a type error is a compile error.
-The type system is small --- scalars, arrays, records, options, pointers
-and functions --- and mostly structural.
+The type system is small --- scalars, arrays, records, maps, options,
+pointers, functions and \ic{void} --- and mostly structural.
 
 \subsection{Scalar types}
 
@@ -48,13 +48,43 @@ fields and is used where the precise shape is not known statically (it
 poisons quietly rather than erroring --- see
 Section~\ref{sec:poison}).
 
-\subsection{Options and pointers}
+\subsection{Maps}
 
-\ic{T?} is ``a \ty{T} or \ic{null}''; \ic{null} is its empty value and
-\ic{some}/\ic{unwrap}/\ic{is\_some} (Section~\ref{sec:builtin-option})
-manipulate it. \ic{*T} is a raw machine pointer; \ic{\&e} yields one
-(Section~\ref{sec:pointers}). Options are \emph{not} sum types: any
-value may be compared against \ic{null}.
+\ic{\{K => V\}} is a dynamic map from hashable keys \ty{K} (\ic{str},
+\ic{long}, \ic{byte}, \ic{bool}, \ic{float}) to one value type \ty{V}.
+Reading \ic{m[k]} always yields \ic{V?}; see Section~\ref{sec:maps}.
+
+\subsection{Options and pointers}
+\label{sec:type-options}
+
+\ic{T?} is ``a \ty{T} or nothing''. Its empty case is \ic{none};
+\ic{some}/\ic{unwrap}/\ic{is\_some} and the postfix unwrap \ic{x!}
+(Section~\ref{sec:builtin-option}) manipulate it. There is no
+\ic{null}: \ic{none} is the only empty value, and it exists only at
+option types --- a plain \ic{str} or \ic{long} can never be empty, so
+\ic{s == none} on a \ic{str} is a type error. On its own \ic{none} has
+the type ``option of anything'' (printed \ic{none}) and adopts the
+option type its context expects. A plain \ty{T} does not widen to
+\ic{T?}; write \ic{some(v)}. \ic{*T} is a raw machine pointer; \ic{\&e}
+yields one (Section~\ref{sec:pointers}).
+
+\subsection{Void}
+
+\ic{void} is the type of an expression that computes no value: a loop,
+an \ic{if} without \ic{else}, a call to a void function
+(Section~\ref{sec:void}), a bare \ic{return}. Void is not a value: it
+cannot be bound, passed, printed or returned as one.
+
+\paragraph{Disagreeing \ic{if} arms.} When the two arms of an
+\ic{if}/\ic{else} have different types, the whole \ic{if} is
+\ic{void} --- a statement. That is legal wherever a statement is, and
+an error wherever a value is needed:
+
+\begin{lstlisting}
+if (ok) { 1 } else { "one" };            // fine: a statement
+let v = if (ok) { 1 } else { 2 };        // long
+let w = if (ok) { 1 } else { "one" };    // error: cannot bind a void value to 'w'
+\end{lstlisting}
 
 \subsection{Functions}
 
@@ -76,8 +106,10 @@ see Section~\ref{sec:functions}.
   Adoption is restricted to literals --- assigning an existing
   \ic{[long]} to a \ic{[byte]} binding is a type error (the layouts
   differ).
-\item An empty array literal \ic{[]} or empty record \ic{\{\}} needs an
-  annotation (there is nothing to infer from).
+\item An empty array literal \ic{[]} needs an annotation (there is
+  nothing to infer from). An unannotated \ic{\{\}} is the empty record;
+  under a map annotation it is the empty map:
+  \ic{let m: \{str => long\} = \{\};}.
 \end{itemize}
 
 \subsection{Conversions}
@@ -128,5 +160,5 @@ produces an \emph{unknown} type that unifies with everything. The law
 this enables: \textbf{the root cause is reported exactly once} --- an
 unknown-typed piece never generates follow-on errors at every enclosing
 use. Concretely, unknown unifies silently in element checks, call
-arguments and branches; the missing annotation itself is the single
-diagnostic.
+arguments and branches (so an unknown arm never makes an \ic{if}
+void); the missing annotation itself is the single diagnostic.

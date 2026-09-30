@@ -38,7 +38,7 @@ Function literals may also appear bound or anonymous:
 
 \begin{align*}
 \ty{type} ::={}& \ic{long} \mid \ic{byte} \mid \ic{bool} \mid \ic{float}
-              \mid \ic{str} \\
+              \mid \ic{str} \mid \ic{void} \\
   |~& \ic{[}~\ty{type}~\ic{]}                    && \text{(heap array)}\\
   |~& \ic{[}~\ty{type}~\ic{;}~\ty{nat}~\ic{]}   && \text{(fixed array)}\\
   |~& \ty{type}~\ic{?}                           && \text{(option)}\\
@@ -47,7 +47,8 @@ Function literals may also appear bound or anonymous:
                                                  && \text{(function)}\\
   |~& \ic{\{}~[\ty{name}~\ic{:}~\ty{type}
         ~\{,~\ty{name}~\ic{:}~\ty{type}\}]~\ic{\}}
-                                                 && \text{(record shape)}
+                                                 && \text{(record shape)}\\
+  |~& \ic{\{}~\ty{type}~\ic{=>}~\ty{type}~\ic{\}}  && \text{(map)}
 \end{align*}
 
 \noindent A record shape is structural; the shape \ic{\{ k: str \}} is
@@ -84,7 +85,7 @@ inclusive and the high bound exclusive.
 
 \begin{align*}
 \ty{primary} ::={}& \ty{long} \mid \ty{float} \mid \ty{string}
-     \mid \ic{true} \mid \ic{false} \mid \ic{null} \mid \ty{name} \\
+     \mid \ic{true} \mid \ic{false} \mid \ty{name} \\
   |~& \ic{(}~\ty{expr}~\ic{)} \mid \ty{block} \\
   |~& \ic{[}~[\ty{expr}~\{,\ty{expr}\}]~\ic{]}
        \mid \ic{[}~\ty{expr}~\ic{;}~\ty{expr}~\ic{]} \\
@@ -97,10 +98,15 @@ inclusive and the high bound exclusive.
 \ty{postfix} ::={}& \ty{primary}
    ~\{~\ic{(}~[\ty{args}]~\ic{)} \mid \ic{[}~\ty{expr}~\ic{]}
    \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name}
-   \mid \ic{++} \mid \ic{--}~\} \\
+   \mid \ic{!} \mid \ic{++} \mid \ic{--}~\} \\
 \ty{unary} ::={}& [\ic{!} \mid \ic{-} \mid \ic{*} \mid \ic{\&}
    \mid \ic{++} \mid \ic{--}]~\ty{postfix}
 \end{align*}
+
+\noindent Postfix \ic{e!} unwraps an option: it is exactly
+\ic{unwrap(e)} (Section~\ref{sec:builtin-option}) and, like every
+postfix form, binds tighter than the prefix operators --- \ic{!x!} is
+\ic{!(x!)}. The two-character token \ic{!=} is always inequality.
 
 \subsection*{Operator precedence}
 

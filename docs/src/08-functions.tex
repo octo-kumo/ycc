@@ -63,7 +63,7 @@ cells (``\ic{let} semantics''):
 \begin{lstlisting}
 while (i < 3) {
     let x = i;
-    fns = push(fns, def() -> long { x });
+    fns += def() -> long { x };
     i = i + 1;
 };
 \end{lstlisting}
@@ -71,11 +71,33 @@ while (i < 3) {
 \subsection{Options}
 \label{sec:builtin-option}
 
-\ic{T?} is the type of ``a \ty{T} or \ic{null}''. \ic{some(v)} boxes a
-value as present, \ic{is\_some(v)} tests, \ic{unwrap(v)} returns the
-payload and is a \emph{runtime error} on \ic{null} (it is a programmer
-error, loudly). Comparisons with \ic{null} work directly; an option of
-an array is a nullable reference, not a copied one.
+\ic{T?} is the type of ``a \ty{T} or nothing''; its empty case is
+\ic{none}. \ic{some(v)} boxes a value as present, \ic{is\_some(v)}
+tests, and \ic{unwrap(v)} --- or its postfix spelling \ic{v!} ---
+returns the payload and is a \emph{runtime error} on \ic{none} (it is a
+programmer error, loudly). \ic{x == none} is the is-empty check; an
+option of an array is an optional reference, not a copied one.
+
+\begin{lstlisting}
+let line = readline();          // str?
+if (line == none) { print("eof"); } else { print(line! + "!"); };
+\end{lstlisting}
+
+\subsection{Void}
+\label{sec:void}
+
+A \ic{def} whose result is not a value is \ic{void}. Write \ic{-> void}
+to say so: the body's trailing value is then discarded, and \ic{return}
+takes no value. An unannotated \ic{def} whose only exits are bare
+\ic{return;} statements (or whose body ends in a statement) infers
+\ic{void}. A void call is a statement; using it as a value --- binding
+it, printing it, passing it as an argument --- is a compile error:
+
+\begin{lstlisting}
+def log(msg: str) -> void { print("log: " + msg); };
+log("hi");                 // fine: a statement
+let x = log("hi");         // error: cannot bind a void value to 'x'
+\end{lstlisting}
 
 \subsection{Pointers}
 \label{sec:pointers}

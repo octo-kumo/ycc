@@ -19,7 +19,6 @@ YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim (see ytool.sh)
 
 # example -> reason it cannot compile natively (yet)
 declare -A UNSUPPORTED=(
-    [ysh.y]="needs heap maps with dynamic string keys (map_get), the :: operator, spawn(), and higher-order dispatch through a map"
 )
 
 # Line-by-line comparison that tolerates the VM's missing return-type
