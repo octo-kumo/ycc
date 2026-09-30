@@ -37,9 +37,9 @@ expect_for() {
         t01_empty_block.y)
             echo "parity" ;;
         t06_div_by_zero.y)
-            echo "div:1:0:KNOWN BUG — 'array / number' errors in the VM ('Operands must be numbers') but compiled code coerces and prints 0.000000" ;;
+            echo "reject" ;;   # 'array / number' is a static error now
         t10_deep_recursion.y)
-            echo "div:1:0:KNOWN LIMIT — f(100000) exhausts the VM's C stack; the VM now reports 'Maximum recursion depth exceeded' and exits 1 (it used to SIGSEGV), while the compiled binary survives (long overflow wraps, prints 0)" ;;
+            echo "parity" ;;   # one engine: recursion behaves the same everywhere
         *) echo "parity" ;;
     esac
 }

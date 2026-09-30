@@ -1,0 +1,108 @@
+\section{Lexical structure}
+\label{sec:lexical}
+
+\subsection{Source text}
+
+A program is a sequence of bytes, conventionally UTF-8. The lexer works
+on bytes; only ASCII is significant to the grammar. Both \ic{"\bs n"} (LF) and \ic{"\bs r\bs n"} (CRLF) end a line. Positions reported
+in diagnostics are 1-based line and column, the column counted in bytes.
+
+\subsection{Comments}
+
+\begin{lstlisting}
+// a line comment runs to the end of the line
+/* a block comment
+   does not nest: the first */ closes it */
+\end{lstlisting}
+
+\noindent Comments are whitespace: they separate tokens and nothing more.
+
+\subsection{Identifiers and keywords}
+
+\ic{isalpha}(c) is true for \ic{A}--\ic{Z}, \ic{a}--\ic{z} and
+\ic{\_}; \ic{isdigit}(c) for \ic{0}--\ic{9}. An identifier is
+
+\begin{align*}
+\ty{identifier} &::= \ty{isalpha}~\{~\ty{isalnum}~\}
+\end{align*}
+
+\noindent so \ic{\_} is a word character: \ic{is\_digit} is a single
+identifier, not three tokens. The prefix \ic{y\_} is \emph{reserved}:
+identifiers beginning with \ic{y\_} are used by the compiler's generated
+code and must not be written by hand.
+
+The keywords are:
+\begin{center}
+\ic{let} \ic{const} \ic{def} \ic{if} \ic{else} \ic{while} \ic{for}
+\ic{foreach} \ic{in} \ic{return} \ic{true} \ic{false} \ic{null}
+\end{center}
+
+\subsection{Literals}
+\label{sec:literals}
+
+\paragraph{Integers.} Decimal, binary (\ic{0b1010}) and hexadecimal
+(\ic{0x1F}) radix literals are supported; \ic{\_} may separate digits in
+any position after the prefix (\ic{1\_000\_000}). All integer literals
+are \ty{long} (64-bit).
+
+\paragraph{Floats.} A digit sequence with a decimal point and/or an
+exponent: \ic{1.5}, \ic{1.5e+3}, \ic{2.0e-1}. A dot followed by a
+non-digit is \emph{not} a fractional part --- \ic{a..b} lexes as
+\ic{a}, \ic{..}, \ic{b}. Float literals are IEEE-754 binary64
+(\ty{float}).
+
+\paragraph{Strings.} Double-quoted byte strings:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+escape & meaning \\
+\midrule
+\ic{\bs n} \ic{\bs t} \ic{\bs r} & LF, HT, CR \\
+\ic{"\bs "} \ic{"\bs ""} \ic{"\bs '"} & backslash, quote \\
+\ic{\bs xHH} & byte with hex value \ic{HH} \\
+\ic{\bs c} (any other \ty{c}) & \ty{c}; the backslash is dropped \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent A literal may not contain an unescaped newline or a NUL byte:
+string values are NUL-terminated byte strings and cannot carry NUL (use
+\ic{[byte]} arrays, Section~\ref{sec:builtin-bytes}, for binary data).
+
+\paragraph{Booleans and null.} \ic{true}, \ic{false}, \ic{null}.
+
+\subsection{Operators and punctuation}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+kind & tokens \\
+\midrule
+two-character &
+  \ic{==} \ic{!=} \ic{<=} \ic{>=} \ic{\&\&} \ic{||} \ic{::} \ic{..}
+  \ic{->} \ic{++} \ic{--} \ic{+=} \ic{-=} \ic{*=} \ic{/=} \ic{\%=} \\
+single-character &
+  \ic{+} \ic{-} \ic{*} \ic{/} \ic{\%} \ic{<} \ic{>} \ic{=} \ic{!}
+  \ic{\&} \\
+punctuation &
+  \ic{(} \ic{)} \ic{\{} \ic{\}} \ic{[} \ic{]} \ic{,} \ic{;} \ic{:} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Maximal munch.} The lexer always takes the longest operator
+that matches, exactly like C:
+\begin{itemize}[nosep]
+\item \ic{x+++y} is \ic{x ++ + y}, not \ic{x + ++y};
+\item \ic{x--y} is \ic{x-- y} (a parse error), not \ic{x - -y};
+      write \ic{x - -y} when negation is meant;
+\item \ic{/=} is one token; \ic{//} starts a comment, and
+      \ic{/ == y} must be written with a space to divide;
+\item there is \textbf{no} \ic{=+} operator: \ic{x =+ y} is
+      \ic{x = +y}. In-place prepend is \ic{*=} (Section~\ref{sec:arrays}).
+\end{itemize}
+
+\paragraph{Reserved but unimplemented.} The operator \ic{::} lexes and
+parses but is rejected by the checker with ``\ic{operator '::' is
+unsupported}''; it is reserved for a future list-splicing form.

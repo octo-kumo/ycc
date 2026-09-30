@@ -1,0 +1,77 @@
+\section{Functions, closures, options, pointers}
+\label{sec:functions}
+
+\subsection{Functions}
+
+A \ic{def} declares a function; parameters are typed, the return type is
+inferred or checked. Recursion uses \ic{self} (a function's own name is
+\emph{not} in scope inside its body --- write \ic{self(...)}):
+
+\begin{lstlisting}
+def fact(n: long) -> long {
+    if (n <= 1) { 1 } else { n * self(n - 1) }
+};
+\end{lstlisting}
+
+\noindent Functions are first-class values: they may be bound
+(\ic{let f = g;}), stored in arrays and records, passed to other
+functions, and called through any of those (\ic{f(1)}, \ic{fs[0](1)},
+\ic{r.handler(1)}). Calling a non-function is a compile error.
+
+\subsection{Closures}
+\label{sec:closures}
+
+A function literal closes over its \emph{entire lexical scope}, not over
+the individual variables it mentions. Captured bindings are
+\textbf{shared}: a write inside the closure is visible outside, and a
+write outside is visible inside.
+
+\begin{lstlisting}
+def counter() {
+    let n = 0;
+    def tick() -> long { n = n + 1; n };
+    tick
+};
+let t = counter();
+t(); t();
+print(t());        // 3 -- the one shared n
+\end{lstlisting}
+
+\noindent Each \emph{invocation} of the enclosing function creates fresh
+bindings, so closures created in different iterations see different
+cells (``\ic{let} semantics''):
+
+\begin{lstlisting}
+while (i < 3) {
+    let x = i;
+    fns = push(fns, def() -> long { x });
+    i = i + 1;
+};
+\end{lstlisting}
+
+\subsection{Options}
+\label{sec:builtin-option}
+
+\ic{T?} is the type of ``a \ty{T} or \ic{null}''. \ic{some(v)} boxes a
+value as present, \ic{is\_some(v)} tests, \ic{unwrap(v)} returns the
+payload and is a \emph{runtime error} on \ic{null} (it is a programmer
+error, loudly). Comparisons with \ic{null} work directly; an option of
+an array is a nullable reference, not a copied one.
+
+\subsection{Pointers}
+\label{sec:pointers}
+
+\ic{*T} is a raw address of one \ty{T}; \ic{*p = v} stores,
+\ic{*p} reads. The address-of operator \ic{\&e} is deliberately narrow:
+
+\begin{itemize}[nosep]
+\item \ic{\&x} --- address of a local or parameter;
+\item \ic{\&a[i]} --- address of an array element (any array expression:
+  \ic{\&grid[0][i]} is legal);
+\item \ic{\&arr} on a whole heap array, or \ic{\&} of any temporary, is
+  a compile error (temporaries have no address).
+\end{itemize}
+
+\noindent Pointers are for interfacing with the system-call level
+(buffers for \ic{read}/\ic{write}-style calls); ordinary code uses
+arrays and records.

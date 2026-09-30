@@ -175,9 +175,17 @@ run_test "push: to empty" 'let a = []; print(push(a, 42));' '[42]'
 # ── Builtins: map_get/map_set ──
 echo ""
 echo "── Builtins: map_get/map_set ──"
-run_test "map_get: existing" 'let m = {a: 1}; print(map_get(m, "a"));' '1'
-run_test "map_get: missing" 'let m = {a: 1}; print(map_get(m, "b"));' 'null'
-# NOTE: map_set mutation is a known VM limitation (VM passes clones to builtins)
+# Maps (dynamic) are a separate type from records (static structs):
+# {K: V} with a hashable key type K and one homogeneous value type V.
+# Quoted keys make a map literal; record keys are identifiers. Keying is
+# symbolic: a.key for records, a['key'] for maps. (map_get/map_set/push
+# are gone -- symbol ops replace them.)
+run_test "map: get existing" 'let m = {"a": 1}; print(m["a"]);' '1'
+run_test "map: get missing" 'let m = {"a": 1}; print(m["b"]);' 'null'
+run_test "map: set overwrite" 'let m = {"a": 1}; m["a"] = 2; print(m["a"]);' '2'
+run_test "map: set new key" 'let m = {"a": 1}; m["b"] = 3; print(m["b"]);' '3'
+run_test "map: homogeneous values" 'let m = {"a": 1, "b": 2}; print(m["b"]);' '2'
+run_test "map_get is gone" 'let m = {"a": 1}; print(map_get(m, "a"));' "undefined function 'map_get'"
 # and has a double-free in the compiled runtime. Skipping mutation tests.
 
 # ── Records: spread ──
@@ -195,7 +203,9 @@ echo ""
 echo "── Records: field assignment ──"
 run_test "dot-assign: overwrite" 'let s = {a: 1, b: 2}; s.a = 9; print(s.a);' '9'
 run_test "dot-assign: leaves others" 'let s = {a: 1, b: 2}; s.a = 9; print(s.b);' '2'
-run_test "dot-assign: new key" 'let s = {a: 1}; s.c = 7; print(s.c);' '7'
+# A record's shape is fixed at compile time (struct layout): writing a
+# field the shape does not have is a compile error.
+run_test "dot-assign: new key is rejected" 'let s = {a: 1}; s.c = 7; print(s.c);' "record has no field 'c'"
 run_test "dot-assign: string key form" 'let m = {k: "v"}; m["k"] = "w"; print(m.k);' 'w'
 run_test "dot-assign: visible through an alias" 'let n = {inner: {n: 1}}; let t = n.inner; t.n = 5; print(n.inner.n);' '5'
 run_test "index-assign still works" 'let a = [1,2,3]; a[1] = 20; print(a);' '[1, 20, 3]'

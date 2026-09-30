@@ -1,0 +1,30 @@
+\title{The \textsf{Y} Language\\[2pt]\large A Formal Definition}
+\author{the y compiler project}
+\date{September 2026}
+
+\maketitle
+
+\begin{abstract}
+This document is the language definition of \textsf{Y}, a small
+statically-checked systems language that compiles directly to Linux
+x86-64 executables. It records the complete surface language, its type
+system, and its evaluation semantics --- with particular precision for the
+mutating array operators (\ic{+=}, \ic{*=}), the
+increment/decrement and compound-assignment families, and their
+evaluated-exactly-once rules, so that these features are specified rather
+than discovered. Where the language is quirky, the quirk is written
+down; where a construct is reserved but unimplemented, it says so.
+\end{abstract}
+
+\tableofcontents
+
+\input{01-overview}
+\input{02-lexical}
+\input{03-grammar}
+\input{04-types}
+\input{05-expressions}
+\input{06-arrays}
+\input{07-references}
+\input{08-functions}
+\input{09-builtins}
+\input{10-errors}

@@ -286,6 +286,41 @@ def tdisp(t) -> str {
 // NOTE: nested ifs, not `||` chains (see lexer.y isalnum note): the C VM
 // evaluates both sides eagerly AND the checker rejects `||` mixing
 // map-field shapes through the same gate.
+// Merge one field into a record literal's field list. A later entry wins
+// the value (and its type); the first appearance keeps the position. That
+// is the static union rule for `{a: 1, ...obj}`: obj may overwrite a, and
+// a later explicit key may overwrite what obj spread.
+def field_merge(fields, name: str, typ) -> [{ name: str, typ: { k: str } }] {
+    let out: [{ name: str, typ: { k: str } }] = [];
+    let i = 0;
+    let seen = false;
+    while (i < len(fields)) {
+        let f = fields[i];
+        let fnm: str = f.name;
+        if (fnm == name) {
+            if (seen) {
+                0
+            } else {
+                out = push(out, { name: name, typ: typ });
+                seen = true;
+                0
+            };
+            0
+        } else {
+            out = push(out, f);
+            0
+        };
+        i = i + 1;
+    };
+    if (seen) {
+        0
+    } else {
+        out = push(out, { name: name, typ: typ });
+        0
+    };
+    out
+};
+
 def is_value_type(t) -> bool {
     if (t.k == "tlong") { true }
     else if (t.k == "tbyte") { true }
@@ -579,6 +614,14 @@ def tcompat(got, want) -> bool {
     else if (want.k == "tname") { true }
     else if (got.k == "tparams") { true }
     else if (want.k == "tparams") { true }
+    else if (want.k == "topt") {
+        // The empty value widens to any T?; a plain T does NOT -- use
+        // some(v), which is the explicit box (options are 0-or-box, so
+        // some(0) differs from null). Option-to-option unifies payloads.
+        if (got.k == "tnull") { true }
+        else if (got.k == "topt") { teq(got.of, want.of) }
+        else { false }
+    }
     else if (got.k == "trec") {
         if (want.k == "trec") { trec_compat(got, want) } else { false }
     } else if (want.k == "trec") {
@@ -972,7 +1015,30 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 let mkey = mkeys[i];
                 let r = typeof_expr(st, mvv);
                 st = r.st;
-                if (r.typ.k == "tnone") {
+                if (mkey == "...") {
+                    // Static spread `...obj`: the union of the two shapes
+                    // (field_merge: later wins the value, first appearance
+                    // keeps the position). No dynamic shape is involved.
+                    if (r.typ.k == "trec") {
+                        let sfs = r.typ.fields;
+                        let si = 0;
+                        while (si < len(sfs)) {
+                            let sf = sfs[si];
+                            fields = field_merge(fields, sf.name, sf.typ);
+                            si = si + 1;
+                        };
+                        0
+                    } else if (r.typ.k == "tunk" || r.typ.k == "tnone" || r.typ.k == "tname") {
+                        // poison quietly (tcompat law)
+                        ok = false;
+                        0
+                    } else {
+                        st = fail(st, "'...' spread needs a record, got " + tstr(r.typ), node.line, node.col);
+                        ok = false;
+                        0
+                    };
+                    0
+                } else if (r.typ.k == "tnone") {
                     // unannotated value shape (tcompat law): the missing
                     // annotation errors once at its own site; don't cascade
                     // here, but poison the record so uses don't mistype.
@@ -986,7 +1052,12 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     ok = false;
                     0
                 } else { 0; };
-                fields = push(fields, { name: mkey, typ: r.typ });
+                if (mkey == "...") {
+                    0
+                } else {
+                    fields = field_merge(fields, mkey, r.typ);
+                    0
+                };
                 i = i + 1;
             };
             if (ok) {
@@ -1408,10 +1479,10 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tfunc") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "tnull" || r.typ.k == "topt") {
                     { typ: { k: "tvoid" }, st: st }
                 } else {
-                    st = fail(st, "print supports long/bool/float/str/record/function, got " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "print supports long/bool/float/str/array/record/option, got " + tstr(r.typ), node.line, node.col);
                     { typ: { k: "tvoid" }, st: st }
                 }
             }
@@ -1620,10 +1691,10 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tnull" || r.typ.k == "topt") {
                     { typ: { k: "tstr" }, st: st }
                 } else {
-                    st = fail(st, "tostring supports long/bool/float/str/array, got " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "tostring supports long/bool/float/str/array/record/option, got " + tstr(r.typ), node.line, node.col);
                     { typ: t_unk(), st: st }
                 }
             }
@@ -2192,4 +2263,4 @@ def def_sig(name: str, func) -> { name: str, typ: { k: str } } {
     { name: name, typ: { k: "tfunc", args: args, ret: ret } }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_merge };

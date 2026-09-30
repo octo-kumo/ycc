@@ -1,0 +1,6545 @@
+/* native.c — typed AST -> x86_64 assembly (AT&T/GAS) for the native backend.
+ * 1:1 copy of src/y/native.y (see PORTING.md): every def is one function,
+ * same names, same parameter order, same control flow.
+ *
+ * Usage (the driver, ycc.y):
+ *   let r = emit_program(ast, imports);  // { ok, asm, errors }
+ *   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
+ *
+ * Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
+ * capture-free nested defs = baby lambda lifting) -> frame layout -> emit.
+ * Every value is 8 bytes (long/bool/ptr/str-address); expression values in
+ * %rax; locals at negative rbp offsets; Y-function args pushed on the stack.
+ */
+#include "native.h"
+
+#include "yv.h"
+
+/* `pow10` is a native.y def (integer powers of ten) and glibc claims the
+ * name as a builtin; the 1:1 name wins, so silence the clash. */
+#pragma GCC diagnostic ignored "-Wbuiltin-declaration-mismatch"
+
+/* ── imported (flattened module calls; PORTING.md rule 6) ─────────────── */
+
+/* src/y/arch_x64.y */
+Yv *arch_fn_label(long uid, Yv *name);
+Yv *arch_loc_label(long fuid, long n);
+Yv *arch_str_label(long i);
+Yv *arch_header(void);
+Yv *arch_rodata(void);
+Yv *arch_text(void);
+long arch_frame(long slots);
+Yv *arch_prelude(void);
+Yv *arch_consts(void);
+/* src/y/types.y */
+Yv *tdisp(Yv *t);
+Yv *tdisp_fnval(Yv *t);
+Yv *check_program(Yv *ast);
+Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
+/* src/y/rename.y */
+Yv *rename_program(Yv *ast);
+/* src/y/std/prelude.y */
+Yv *prelude_lines(void);
+Yv *exec_lines(void);
+Yv *prelude_names(void);
+Yv *exec_names(void);
+/* src/y/std/rt.y */
+Yv *rt_lines(void);
+/* src/y/std/prof_lines.y */
+Yv *prof_lines(void);
+
+/* ── forward declarations (native.y def order) ────────────────────────── */
+
+Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
+Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                     int prof);
+int names_mentioned(Yv *src, Yv *names);
+Yv *norm_path(Yv *p);
+int seen_has(Yv *seen, Yv *full);
+Yv *dir_of(Yv *p);
+Yv *std_resolve(Yv *name, Yv *base_dir);
+Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen);
+int is_id_b(long c);
+long skip_sp(Yv *b, long i, long hi);
+long tok_end_b(Yv *b, long i, long hi);
+Yv *tok_at_b(Yv *text, Yv *b, long i, long hi);
+Yv *tok_push(Yv *out, Yv *t);
+Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
+Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
+Yv *text_refs(Yv *text, int want_jumps);
+Yv *label_at(Yv *text, Yv *b, long lo, long hi);
+Yv *body_label(Yv *body);
+int is_data_line_b(Yv *text, Yv *b, long lo, long hi);
+int block_falls_b(Yv *text, Yv *b, long lo, long hi);
+long name_index(Yv *names, Yv *tok);
+Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
+Yv *shake_refs(Yv *text, Yv *root_refs);
+Yv *prune_bodies(Yv *bodies, Yv *asm_roots);
+int is_all_digits(Yv *s);
+Yv *runtime_base(Yv *name);
+Yv *fn_label_of(long uid, Yv *name);
+int is_ns(Yv *name, Yv *imports);
+Yv *normnode(Yv *anode);
+Yv *strip_list(Yv *nodes, Yv *imports);
+Yv *strip_ns(Yv *node, Yv *imports);
+Yv *strip_decl(Yv *node, Yv *imports);
+Yv *st_new(void);
+Yv *emit(Yv *st, Yv *line);
+Yv *next_uid(Yv *st);
+Yv *next_loc(Yv *st);
+Yv *esc_asm(Yv *s);
+Yv *env_find(Yv *st, Yv *name);
+Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ);
+Yv *infer(Yv *st, Yv *node);
+Yv *infer_call(Yv *st, Yv *node);
+Yv *infer_block(Yv *st, Yv *node);
+Yv *infer_decl(Yv *st, Yv *node);
+Yv *uses_scan_block(Yv *stmts, Yv *out);
+Yv *uses_scan_node(Yv *node, Yv *out);
+Yv *collect_from_block(Yv *stmts, Yv *out);
+Yv *collect_from_node(Yv *node, Yv *out);
+int name_in(Yv *xs, Yv *n);
+int is_intrinsic_name(Yv *n);
+Yv *fv_ids(Yv *node, Yv *out);
+Yv *fv_ids_list(Yv *nodes, Yv *out);
+Yv *fv_binds(Yv *node, Yv *out);
+Yv *fv_binds_list(Yv *nodes, Yv *out);
+Yv *fn_captures(Yv *func, Yv *fnnames);
+Yv *fv_bind_params(Yv *ps, Yv *out);
+Yv *fn_names_of(Yv *fns);
+int fn_label_present(Yv *fns, Yv *label);
+Yv *fns_find(Yv *fns, Yv *name);
+Yv *gen(Yv *st, Yv *node);
+Yv *gen_str_const(Yv *st, Yv *s);
+Yv *gen_id(Yv *st, Yv *node);
+Yv *gen_cap_ptr(Yv *st, Yv *name);
+Yv *box_capture(Yv *st, Yv *name);
+Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps);
+Yv *gen_range(Yv *st, Yv *node);
+Yv *gen_slice(Yv *st, Yv *node);
+Yv *gen_indirect(Yv *st, Yv *node, Yv *callee);
+Yv *gen_un(Yv *st, Yv *node);
+Yv *gen_addr(Yv *st, Yv *node);
+Yv *gen_elem_addr(Yv *st, Yv *node);
+Yv *gen_bin(Yv *st, Yv *node);
+Yv *gen_logic(Yv *st, Yv *node, int is_or);
+Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt);
+Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt);
+Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op);
+Yv *gen_bin_rest(Yv *st, Yv *node);
+Yv *syscall_reg(long i);
+Yv *gen_push_args(Yv *st, Yv *args);
+Yv *gen_helper1(Yv *st, Yv *label);
+Yv *gen_call(Yv *st, Yv *node);
+Yv *gen_print(Yv *st, Yv *node);
+Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t);
+Yv *gen_typeof(Yv *st, Yv *node);
+Yv *gen_opt_str_rax(Yv *st, Yv *t);
+Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t);
+Yv *gen_rec_str_rax(Yv *st, Yv *t);
+Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt);
+Yv *gen_acc_cat_const(Yv *st, Yv *s);
+Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft);
+Yv *gen_syscall(Yv *st, Yv *node);
+long capture_off(Yv *st);
+Yv *gen_direct(Yv *st, Yv *node, Yv *name);
+Yv *gen_if(Yv *st, Yv *node);
+Yv *gen_while(Yv *st, Yv *node);
+Yv *gen_for(Yv *st, Yv *node);
+Yv *gen_forrange(Yv *st, Yv *node);
+Yv *gen_foreach(Yv *st, Yv *node);
+Yv *gen_block(Yv *st, Yv *node);
+long mfield_idx(Yv *names, Yv *name);
+Yv *gen_map(Yv *st, Yv *node);
+Yv *gen_func_literal(Yv *st, Yv *node);
+Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps);
+Yv *gen_decl(Yv *st, Yv *node);
+Yv *gen_assign(Yv *st, Yv *node);
+Yv *gen_fill(Yv *st, long base, long n);
+Yv *gen_fill_heap(Yv *st, long n, long esz);
+Yv *gen_arrrep(Yv *st, Yv *node);
+Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz);
+long hexval_ch(Yv *c);
+int lit_is_float(Yv *s);
+Yv *norm_num(Yv *s);
+long flit_mant(Yv *s);
+long flit_ebase(Yv *s);
+long flit_exp(Yv *s);
+long flit_num(Yv *s);
+long flit_den(Yv *s);
+long pow10(long k);
+Yv *gen_lit(Yv *st, Yv *node);
+Yv *gen_scale10(Yv *st, long n);
+Yv *gen_index(Yv *st, Yv *node);
+Yv *gen_dotassign(Yv *st, Yv *node);
+Yv *n_num(Yv *v, long line, long col);
+Yv *n_id(Yv *v, long line, long col);
+Yv *args1(Yv *a);
+Yv *args2(Yv *a, Yv *b);
+Yv *n_call1(Yv *name, Yv *a0, long line, long col);
+Yv *n_call2(Yv *name, Yv *a0, Yv *a1, long line, long col);
+Yv *block2(Yv *a, Yv *b, long ln, long cl);
+Yv *block3(Yv *a, Yv *b, Yv *c, long ln, long cl);
+Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl);
+Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl);
+Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl);
+Yv *gen_incdec(Yv *st, Yv *node);
+Yv *gen_opassign(Yv *st, Yv *node);
+Yv *gen_opassign_arith(Yv *st, Yv *node);
+Yv *place_read_id(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_read_idx(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_read_dot(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_asg_id(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
+Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
+Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
+Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
+Yv *place_bind_id(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_bind_idx_id(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *gen_opassign_arr(Yv *st, Yv *node);
+Yv *gen_idxassign(Yv *st, Yv *node);
+Yv *gen_val_tostr_rax(Yv *st, Yv *t);
+Yv *gen_arr_tostr_rax(Yv *st, Yv *elty);
+Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s);
+long elem_bytes(Yv *t);
+long arr_elem_bytes(Yv *t);
+Yv *elem_load(long esz, Yv *base, Yv *idx, Yv *dst);
+Yv *elem_store_rdx(long esz, Yv *base, Yv *idx);
+Yv *elem_store_rdx_const(long esz, Yv *base, long k);
+long arr_alloc_size(long esz, long n);
+long arr_header_size(void);
+Yv *gen_dot(Yv *st, Yv *node);
+long rec_field_idx(Yv *t, Yv *key);
+Yv *gen_array(Yv *st, Yv *node);
+Yv *gen_array_esz(Yv *st, Yv *node, long esz);
+Yv *gen_len(Yv *st, Yv *node);
+Yv *gen_push(Yv *st, Yv *node);
+Yv *gen_some(Yv *st, Yv *node);
+Yv *gen_is_some(Yv *st, Yv *node);
+Yv *gen_unwrap(Yv *st, Yv *node);
+Yv *gen_substr(Yv *st, Yv *node);
+Yv *gen_trim(Yv *st, Yv *node);
+Yv *gen_prepend(Yv *st, Yv *node);
+Yv *gen_byte_at(Yv *st, Yv *node);
+Yv *gen_ord(Yv *st, Yv *node);
+Yv *gen_chr(Yv *st, Yv *node);
+Yv *gen_tonum(Yv *st, Yv *node);
+Yv *gen_tostring(Yv *st, Yv *node);
+Yv *gen_index_of(Yv *st, Yv *node, int last);
+Yv *gen_join(Yv *st, Yv *node);
+Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz);
+Yv *gen_split(Yv *st, Yv *node);
+Yv *gen_puts(Yv *st, Yv *node);
+Yv *gen_eputs(Yv *st, Yv *node);
+Yv *gen_clock_us(Yv *st, Yv *node);
+Yv *gen_heap_used(Yv *st, Yv *node);
+Yv *gen_sleep(Yv *st, Yv *node);
+Yv *gen_exit(Yv *st, Yv *node);
+Yv *gen_argv(Yv *st, Yv *node);
+Yv *gen_read_file(Yv *st, Yv *node);
+Yv *gen_write_file(Yv *st, Yv *node);
+Yv *gen_write_bytes(Yv *st, Yv *node);
+Yv *gen_store(Yv *st, Yv *node);
+Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
+                int want_argv, Yv *captypes);
+Yv *infer_fn_ret(Yv *st, Yv *func);
+Yv *func_type(Yv *func);
+Yv *func_type_in(Yv *st, Yv *func);
+Yv *ndisp(Yv *name);
+Yv *find_dup(Yv *defs);
+Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
+Yv *emit_program(Yv *ast, Yv *imports);
+
+/* ── native import resolution ─────────────────────────────────────────── */
+/* Unlike the C backend (which wraps modules in IIFEs returning maps —
+ * impossible without a heap), the native splicer INLINES module sources:
+ * `import io from "path"` splices the module's text in place and drops its
+ * `export` line. References `io.x` are rewritten to plain `x` by
+ * strip_namespaces (AST-level, so strings are untouched). Module top-levels
+ * must be defs; duplicate def names across the splice are a loud error. */
+
+Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
+    return native_resolve_x(src, base_dir, depth, 1, 0);
+}
+
+/* allow_exec = false is `ycc --no-exec`: the exec chunk is not spliced, so
+ * `exec(...)` fails with "undefined function" and the binary has no path
+ * to a shell at all.
+ *
+ * prof = true is `ycc --prof`: the profiling runtime is spliced and the
+ * emitter wraps every function with its enter/exit hooks (see std/prof.y).
+ *
+ * `pre` is how many lines the prelude added in FRONT of the user's text.
+ * Prepending (rather than appending) is deliberate: defs hoist either way,
+ * but a later def shadows an earlier one, so a user's own `readline` must
+ * come after ours to win. The cost is that every position downstream is
+ * shifted, which the driver undoes when it prints an error. */
+Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                     int prof) {
+    /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
+     * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
+     * encoder splices twice and every enc64 def collides (find_dup is
+     * fatal). */
+    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0));
+    Yv *rsrc = ym_get(r, "src");
+    Yv *rimports = ym_get(r, "imports");
+    long pre = 0;
+    /* The runtime library (std/rt.y) is spliced in front of EVERY program:
+     * generated code calls into it by fixed label (`call y_print_long`), so
+     * there is no name to test for. Unused helpers cost nothing in the
+     * output — prune_bodies drops them at emit time. */
+    Yv *rtl = rt_lines();
+    rsrc = ys_cat(ys_cat(ys_join(rtl, ys("\n")), ys("\n")), rsrc);
+    pre = pre + yv_len(rtl);
+    /* `--prof` builds splice the profiling runtime the same way: generated
+     * code calls y_prof_enter/y_prof_exit around every function and the
+     * report prints at exit. Non-prof builds never mention it, so tree
+     * shaking has nothing to keep. */
+    if (prof) {
+        Yv *pl = prof_lines();
+        rsrc = ys_cat(ys_cat(ys_join(pl, ys("\n")), ys("\n")), rsrc);
+        pre = pre + yv_len(pl);
+        ;
+    } else {
+        ;
+    }
+    /* Prelude chunks go in front of the resolved text, but only when the
+     * program actually mentions one of their names — otherwise every binary
+     * would carry code it never calls (there is no dead-code pass). */
+    if (allow_exec) {
+        if (names_mentioned(rsrc, exec_names())) {
+            Yv *xl = exec_lines();
+            rsrc = ys_cat(ys_cat(ys_join(xl, ys("\n")), ys("\n")), rsrc);
+            pre = pre + yv_len(xl);
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (names_mentioned(rsrc, prelude_names())) {
+        Yv *pl = prelude_lines();
+        rsrc = ys_cat(ys_cat(ys_join(pl, ys("\n")), ys("\n")), rsrc);
+        pre = pre + yv_len(pl);
+        ;
+    } else {
+        ;
+    }
+    return ym(3, "src", rsrc, "imports", rimports, "pre", yv_long(pre));
+}
+
+/* Textual check, deliberately: it runs before tokenizing, and a false
+ * positive only costs an unused function in the output. */
+int names_mentioned(Yv *src, Yv *names) {
+    long i = 0;
+    int want = 0;
+    while (i < yv_len(names)) {
+        Yv *nm = ya_get(names, i);
+        if (ys_index_of(src, nm) >= 0) {
+            want = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return want;
+}
+
+/* Collapse "/./" segments so the same file resolves to one key no matter
+ * how deep the import nesting is (base dirs accumulate "/." per level:
+ * "ycc/././enc64.y" vs "ycc/./././enc64.y"). Deterministic, so same-file
+ * inputs always yield the same key (sufficient for seen-dedup). */
+Yv *norm_path(Yv *p) {
+    Yv *parts = ys_split(p, ys("/"));
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(parts)) {
+        /* NOTE: bound once — `parts[i]` inline misparses on the C backend. */
+        Yv *seg = ya_get(parts, i);
+        if (ys_eq_lit(seg, ".")) {
+            ;
+        } else {
+            out = ya_push(out, seg);
+            ;
+        }
+        i = i + 1;
+    }
+    return ys_join(out, ys("/"));
+}
+
+int seen_has(Yv *seen, Yv *full) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(seen)) {
+        /* NOTE: bound once — `seen[i]` inline misparses on the C backend. */
+        Yv *e = ya_get(seen, i);
+        if (ys_eq(e, full)) {
+            found = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* ── optional std modules ─────────────────────────────────────────────── */
+/* `import net;` (no `from`) pulls in a module by NAME instead of by path:
+ * an optional std library (net, ui, ...) or a project-local one. A file
+ * next to the importer wins (so a project can vendor or shadow a module),
+ * then the compiler's own std library:
+ *     <importer dir>/<name>.y        <importer dir>/std/<name>.y
+ *     ./std/<name>.y                 ./src/y/std/<name>.y
+ *     <ycc dir>/std/<name>.y         <ycc dir>/src/y/std/<name>.y
+ *     <ycc dir>/../src/y/std/<name>.y
+ * The file found is spliced exactly like `import x from "path"` and its
+ * defs are called through the namespace: `net.listen_tcp(...)` and
+ * friends. */
+
+Yv *dir_of(Yv *p) {
+    long s = ys_last_index_of(p, ys("/"));
+    if (s < 0) {
+        return ys("");
+    } else {
+        return ys_substr(p, 0, s);
+    }
+}
+
+Yv *std_resolve(Yv *name, Yv *base_dir) {
+    Yv *cands = yav(0);
+    cands = ya_push(cands,
+                    ys_cat(ys_cat(ys_cat(base_dir, ys("/")), name), ys(".y")));
+    cands = ya_push(
+        cands, ys_cat(ys_cat(ys_cat(base_dir, ys("/std/")), name), ys(".y")));
+    cands = ya_push(cands, ys_cat(ys_cat(ys("std/"), name), ys(".y")));
+    cands = ya_push(cands, ys_cat(ys_cat(ys("src/y/std/"), name), ys(".y")));
+    Yv *av = argv_();
+    if (yv_len(av) > 0) {
+        Yv *exe = ya_get(av, 0);
+        Yv *d = dir_of(exe);
+        if (yv_len(d) > 0) {
+            cands = ya_push(
+                cands, ys_cat(ys_cat(ys_cat(d, ys("/std/")), name), ys(".y")));
+            cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/src/y/std/")),
+                                                 name),
+                                        ys(".y")));
+            cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/../src/y/std/")),
+                                                 name),
+                                        ys(".y")));
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    Yv *found = ys("");
+    long i = 0;
+    while (i < yv_len(cands)) {
+        if (yv_len(found) == 0) {
+            Yv *c = ya_get(cands, i);
+            if (yv_is_null(read_file(c))) {
+                ;
+            } else {
+                found = norm_path(c);
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
+    if (depth > 32) {
+        puts_(ys("error: native import depth exceeded (cycle?)\n"));
+        return ym(3, "src", ys(""), "imports", yav(0), "seen", seen);
+    } else {
+        Yv *lines = ys_split(src, ys("\n"));
+        Yv *out_lines = yav(0);
+        Yv *imports = yav(0);
+        long i = 0;
+        long n = yv_len(lines);
+        while (i < n) {
+            Yv *line = ya_get(lines, i);
+            Yv *trimmed = ys_trim(line);
+            if (ys_eq_lit(ys_substr(trimmed, 0, 7), "import ")) {
+                Yv *rest = ys_substr(trimmed, 7, yv_len(trimmed) - 7);
+                long from_idx = ys_index_of(rest, ys(" from "));
+                Yv *name = ys("");
+                Yv *full = ys("");
+                Yv *path = ys("");
+                if (from_idx >= 0) {
+                    name = ys_trim(ys_substr(rest, 0, from_idx));
+                    Yv *path_part = ys_trim(
+                        ys_substr(rest, from_idx + 6,
+                                  yv_len(rest) - from_idx - 6));
+                    if (ys_eq_lit(ys_substr(path_part, yv_len(path_part) - 1, 1),
+                                  ";")) {
+                        path_part =
+                            ys_substr(path_part, 0, yv_len(path_part) - 1);
+                        ;
+                    } else {
+                        ;
+                    }
+                    path = ys_substr(path_part, 1, yv_len(path_part) - 2);
+                    /* NOTE: normalized (see norm_path): nested base dirs
+                     * accumulate "/." segments, so raw joins of the same file
+                     * differ per depth and seen-dedup would never hit. */
+                    full = norm_path(ys_cat(ys_cat(base_dir, ys("/")), path));
+                    if (ys_eq_lit(ys_substr(path, 0, 1), "/")) {
+                        full = norm_path(path);
+                        ;
+                    } else {
+                        ;
+                    }
+                    ;
+                } else {
+                    /* bare `import name;`: an optional std module (net, ui,
+                     * ...) or a project-local one — see std_resolve above. */
+                    name = ys_trim(rest);
+                    if (ys_eq_lit(ys_substr(name, yv_len(name) - 1, 1), ";")) {
+                        name = ys_trim(ys_substr(name, 0, yv_len(name) - 1));
+                        ;
+                    } else {
+                        ;
+                    }
+                    path = name;
+                    full = std_resolve(name, base_dir);
+                    ;
+                }
+                if (yv_len(name) == 0) {
+                    out_lines = ya_push(out_lines, line);
+                    ;
+                } else if (yv_len(full) == 0) {
+                    puts_(ys_cat(
+                        ys_cat(ys("error: cannot find module '"), name),
+                        ys("' (import name; looks next to the importer and in std/)\n")));
+                    out_lines = ya_push(out_lines, line);
+                    ;
+                } else {
+                    Yv *mod_src = read_file(full);
+                    if (yv_is_null(mod_src)) {
+                        puts_(ys_cat(
+                            ys_cat(ys_cat(ys_cat(ys("error: cannot open import '"),
+                                                path),
+                                          ys("' (resolved to '")),
+                                   full),
+                            ys("')\n")));
+                        out_lines = ya_push(out_lines, line);
+                        ;
+                    } else if (seen_has(seen, full)) {
+                        /* NOTE: already spliced (see native_resolve note):
+                         * record the namespace name (strip_ns needs it) but
+                         * do NOT splice the text a second time. */
+                        imports = ya_push(imports, name);
+                        ;
+                    } else {
+                        seen = ya_push(seen, full);
+                        long last_slash = ys_last_index_of(full, ys("/"));
+                        Yv *mod_dir = base_dir;
+                        if (last_slash >= 0) {
+                            mod_dir = ys_substr(full, 0, last_slash);
+                            ;
+                        } else {
+                            ;
+                        }
+                        /* mod_src is str? (read_file returns null on missing
+                         * file); the null case exited above, so unwrap
+                         * here. */
+                        Yv *mod_src2 = yv_unwrap(mod_src);
+                        Yv *sub =
+                            native_resolve_seen(mod_src2, mod_dir, depth + 1,
+                                                seen);
+                        /* NOTE: each bound once — `x.y` on a call result
+                         * misparses on the C backend (it reads `f().y`
+                         * as `f(.y)`). */
+                        Yv *subsrc = ym_get(sub, "src");
+                        Yv *subns = ym_get(sub, "imports");
+                        Yv *subseen = ym_get(sub, "seen");
+                        seen = subseen;
+                        /* splice the module text inline (its own imports
+                         * first) */
+                        Yv *sub_lines = ys_split(subsrc, ys("\n"));
+                        long k = 0;
+                        while (k < yv_len(sub_lines)) {
+                            out_lines = ya_push(out_lines,
+                                                ya_get(sub_lines, k));
+                            k = k + 1;
+                        }
+                        long m = 0;
+                        while (m < yv_len(subns)) {
+                            imports = ya_push(imports, ya_get(subns, m));
+                            m = m + 1;
+                        }
+                        imports = ya_push(imports, name);
+                        ;
+                    }
+                    ;
+                }
+                ;
+            } else {
+                /* NOTE: no empty if-arms here — the C backend corrupts the
+                 * heap on empty blocks. Export lines are dropped (defs are
+                 * spliced; uses are rewritten by strip_namespaces). */
+                if (!ys_eq_lit(ys_substr(trimmed, 0, 7), "export ")) {
+                    out_lines = ya_push(out_lines, line);
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            }
+            i = i + 1;
+        }
+        return ym(3, "src", ys_join(out_lines, ys("\n")), "imports", imports,
+                  "seen", seen);
+    }
+}
+
+int is_id_b(long c) {
+    int ok = 0;
+    if (c >= 48) {
+        if (c <= 57) {
+            ok = 1;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (c >= 97) {
+        if (c <= 122) {
+            ok = 1;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (c >= 65) {
+        if (c <= 90) {
+            ok = 1;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (c == 95) {
+        ok = 1;
+        ;
+    } else {
+        ;
+    }
+    if (c == 36) {
+        ok = 1;
+        ;
+    } else {
+        ;
+    }
+    return ok;
+}
+
+/* First non-blank offset in [i, hi); blank means space (the asm dialect
+ * indents with spaces) or end of range. */
+long skip_sp(Yv *b, long i, long hi) {
+    long p = i;
+    int go = 1;
+    while (go) {
+        if (p >= hi) {
+            go = 0;
+            ;
+        } else {
+            if (yv_l(ya_get(b, p)) == 32) {
+                p = p + 1;
+                ;
+            } else {
+                go = 0;
+                ;
+            }
+            ;
+        }
+    }
+    return p;
+}
+
+/* End of the identifier at offset `i` (a leading `$` — an assembly
+ * immediate like `$ystr_end-ystr` — is not part of the name). */
+long tok_end_b(Yv *b, long i, long hi) {
+    long p = i;
+    if (p < hi) {
+        if (yv_l(ya_get(b, p)) == 36) {
+            p = p + 1;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    int go = 1;
+    while (go) {
+        if (p >= hi) {
+            go = 0;
+            ;
+        } else {
+            if (is_id_b(yv_l(ya_get(b, p)))) {
+                p = p + 1;
+                ;
+            } else {
+                go = 0;
+                ;
+            }
+            ;
+        }
+    }
+    return p;
+}
+
+/* The identifier at offset `i`, or "". */
+Yv *tok_at_b(Yv *text, Yv *b, long i, long hi) {
+    long s = i;
+    if (s < hi) {
+        if (yv_l(ya_get(b, s)) == 36) {
+            s = s + 1;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    long e = tok_end_b(b, i, hi);
+    if (e > s) {
+        return ys_substr(text, s, e - s);
+    } else {
+        return ys("");
+    }
+}
+
+Yv *tok_push(Yv *out, Yv *t) {
+    if (yv_len(t) == 0) {
+        return out;
+    } else {
+        return ya_push(out, t);
+    }
+}
+
+/* Every symbol one line [lo, hi) references: call/lea/jump operands and
+ * both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
+ * mnemonic — this walks every line of the emitted text, so no searching. */
+Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
+    long p = skip_sp(b, lo, hi);
+    if (p >= hi) {
+        return out;
+    } else {
+        Yv *w = tok_at_b(text, b, p, hi);
+        long we = tok_end_b(b, p, hi);
+        long op = skip_sp(b, we, hi);
+        if (ys_eq_lit(w, "call")) {
+            out = tok_push(out, tok_at_b(text, b, op, hi));
+            ;
+        } else if (ys_eq_lit(w, "lea")) {
+            out = tok_push(out, tok_at_b(text, b, op, hi));
+            ;
+        } else if (ys_eq_lit(w, "mov")) {
+            long q = p;
+            int go = 1;
+            while (go) {
+                if (q >= hi) {
+                    go = 0;
+                    ;
+                } else {
+                    if (yv_l(ya_get(b, q)) == 36) {
+                        go = 0;
+                        ;
+                    } else {
+                        q = q + 1;
+                        ;
+                    }
+                    ;
+                }
+            }
+            if (q < hi) {
+                Yv *t = tok_at_b(text, b, q, hi);
+                out = tok_push(out, t);
+                long after = tok_end_b(b, q, hi);
+                if (after < hi) {
+                    if (yv_l(ya_get(b, after)) == 45) {
+                        out = tok_push(out, tok_at_b(text, b, after + 1, hi));
+                        ;
+                    } else {
+                        ;
+                    }
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            if (want_jumps) {
+                if (ys_eq_lit(ys_substr(w, 0, 1), "j")) {
+                    out = tok_push(out, tok_at_b(text, b, op, hi));
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            } else {
+                ;
+            }
+            ;
+        }
+        return out;
+    }
+}
+
+/* Every symbol a byte range references, line by line. */
+Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
+    long ls = lo;
+    long i = lo;
+    Yv *res = out;
+    while (i < hi) {
+        if (yv_l(ya_get(b, i)) == 10) {
+            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            ls = i + 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    if (ls < hi) {
+        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        ;
+    } else {
+        ;
+    }
+    return res;
+}
+
+/* Every symbol a whole asm text references. */
+Yv *text_refs(Yv *text, int want_jumps) {
+    Yv *b = bytes_of(text);
+    return refs_range(text, b, 0, yv_len(b), yav(0), want_jumps);
+}
+
+/* The label a line [lo, hi) defines, or "". */
+Yv *label_at(Yv *text, Yv *b, long lo, long hi) {
+    long p = skip_sp(b, lo, hi);
+    long e = tok_end_b(b, p, hi);
+    Yv *lab = ys("");
+    if (e > p) {
+        if (e < hi) {
+            if (yv_l(ya_get(b, e)) == 58) {
+                long s = p;
+                if (yv_l(ya_get(b, s)) == 36) {
+                    s = s + 1;
+                    ;
+                } else {
+                    ;
+                }
+                lab = ys_substr(text, s, e - s);
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    return lab;
+}
+
+/* The label a body starts with (`label: ...`). */
+Yv *body_label(Yv *body) {
+    Yv *b = bytes_of(body);
+    return label_at(body, b, 0, yv_len(b));
+}
+
+/* A line that is data, not code: blank lines, directives, or a bare label
+ * (possibly followed by data on the same line). */
+int is_data_line_b(Yv *text, Yv *b, long lo, long hi) {
+    Yv *lab = label_at(text, b, lo, hi);
+    long p = skip_sp(b, lo, hi);
+    if (yv_len(lab) > 0) {
+        p = skip_sp(b, p + 1 + yv_len(lab), hi);
+        ;
+    } else {
+        ;
+    }
+    if (p >= hi) {
+        return 1;
+    } else {
+        return yv_l(ya_get(b, p)) == 46;
+    }
+}
+
+/* Does a block [lo, hi) run into the next one? Only when its last
+ * instruction is not a transfer; `ret`/`jmp`/`syscall` end the block (the
+ * trap stubs end in an exit syscall and must not drag the file along). */
+int block_falls_b(Yv *text, Yv *b, long lo, long hi) {
+    long end = hi;
+    int falls = 1;
+    int go = 1;
+    while (go) {
+        /* start of the last line in [lo, end) */
+        long p = lo;
+        long i = lo;
+        while (i < end) {
+            if (yv_l(ya_get(b, i)) == 10) {
+                p = i + 1;
+                ;
+            } else {
+                ;
+            }
+            i = i + 1;
+        }
+        long s = skip_sp(b, p, end);
+        if (s >= end) {
+            /* blank line: drop it and look at the line before */
+            if (p > lo) {
+                end = p - 1;
+                ;
+            } else {
+                go = 0;
+                ;
+            }
+            ;
+        } else {
+            go = 0;
+            Yv *w = tok_at_b(text, b, s, end);
+            if (ys_eq_lit(w, "ret")) {
+                falls = 0;
+                ;
+            } else if (ys_eq_lit(w, "jmp")) {
+                falls = 0;
+                ;
+            } else if (ys_eq_lit(w, "syscall")) {
+                falls = 0;
+                ;
+            } else {
+                ;
+            }
+            ;
+        }
+    }
+    return falls;
+}
+
+/* Index of `tok` in `names`, or -1 (length first: most misses are free). */
+long name_index(Yv *names, Yv *tok) {
+    long tl = yv_len(tok);
+    long i = 0;
+    long found = -1;
+    while (i < yv_len(names)) {
+        if (found < 0) {
+            Yv *nm = ya_get(names, i);
+            if (yv_len(nm) == tl) {
+                if (ys_eq(nm, tok)) {
+                    found = i;
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* Mark every names[i] some entry of `roots` points at, then close over kept
+ * blocks: their own references and (for code that runs into the next block)
+ * their successor. `falls[i]` says block i falls through to block i+1. */
+Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
+    long n = yv_len(names);
+    long r = 0;
+    while (r < yv_len(roots)) {
+        long idx = name_index(names, ya_get(roots, r));
+        if (idx >= 0) {
+            ya_set(keep, idx, yv_bool(1));
+            ;
+        } else {
+            ;
+        }
+        r = r + 1;
+    }
+    Yv *scanned = yav(0);
+    long i = 0;
+    while (i < n) {
+        scanned = ya_push(scanned, yv_bool(0));
+        i = i + 1;
+    }
+    int more = 1;
+    while (more) {
+        more = 0;
+        long b = 0;
+        while (b < n) {
+            if (yv_b(ya_get(keep, b))) {
+                if (!(yv_b(ya_get(scanned, b)))) {
+                    ya_set(scanned, b, yv_bool(1));
+                    more = 1;
+                    if (yv_b(ya_get(falls, b))) {
+                        if (b + 1 < n) {
+                            if (!(yv_b(ya_get(keep, b + 1)))) {
+                                ya_set(keep, b + 1, yv_bool(1));
+                                ;
+                            } else {
+                                ;
+                            }
+                            ;
+                        } else {
+                            ;
+                        }
+                        ;
+                    } else {
+                        ;
+                    }
+                    Yv *rs = ya_get(refs, b);
+                    long j = 0;
+                    while (j < yv_len(rs)) {
+                        long idx = name_index(names, ya_get(rs, j));
+                        if (idx >= 0) {
+                            if (!(yv_b(ya_get(keep, idx)))) {
+                                ya_set(keep, idx, yv_bool(1));
+                                ;
+                            } else {
+                                ;
+                            }
+                            ;
+                        } else {
+                            ;
+                        }
+                        j = j + 1;
+                    }
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            } else {
+                ;
+            }
+            b = b + 1;
+        }
+    }
+    return keep;
+}
+
+/* Keep only the blocks of `text` that `root_refs` (the program's own
+ * references) or another kept block reaches. Output order matches input. */
+Yv *shake_refs(Yv *text, Yv *root_refs) {
+    Yv *b = bytes_of(text);
+    long n = yv_len(b);
+    /* every label starts a block; lines before the first label (directives)
+     * form a head block that is always kept */
+    Yv *names = yav(0);
+    Yv *starts = yav(0);
+    long i = 0;
+    long ls = 0;
+    while (i < n) {
+        if (yv_l(ya_get(b, i)) == 10) {
+            Yv *lab = label_at(text, b, ls, i);
+            if (yv_len(lab) > 0) {
+                names = ya_push(names, lab);
+                starts = ya_push(starts, yv_long(ls));
+                ;
+            } else {
+                if (yv_len(starts) == 0) {
+                    names = ya_push(names, ys(""));
+                    starts = ya_push(starts, yv_long(0));
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            }
+            ls = i + 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    if (ls < n) {
+        Yv *lab = label_at(text, b, ls, n);
+        if (yv_len(lab) > 0) {
+            names = ya_push(names, lab);
+            starts = ya_push(starts, yv_long(ls));
+            ;
+        } else {
+            if (yv_len(starts) == 0) {
+                names = ya_push(names, ys(""));
+                starts = ya_push(starts, yv_long(0));
+                ;
+            } else {
+                ;
+            }
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    long nb = yv_len(starts);
+    if (nb == 0) {
+        return text;
+    } else {
+        /* per-block references + fall-through flags */
+        Yv *refs = yav(0);
+        Yv *falls = yav(0);
+        long k = 0;
+        while (k < nb) {
+            long lo = yv_l(ya_get(starts, k));
+            long hi = n;
+            if (k + 1 < nb) {
+                hi = yv_l(ya_get(starts, k + 1));
+                ;
+            } else {
+                ;
+            }
+            refs = ya_push(refs, refs_range(text, b, lo, hi, yav(0), 1));
+            if (block_falls_b(text, b, lo, hi)) {
+                if (is_data_line_b(text, b, lo, hi)) {
+                    falls = ya_push(falls, yv_bool(0));
+                    ;
+                } else {
+                    falls = ya_push(falls, yv_bool(1));
+                    ;
+                }
+                ;
+            } else {
+                falls = ya_push(falls, yv_bool(0));
+                ;
+            }
+            k = k + 1;
+        }
+        Yv *keep = yav(0);
+        k = 0;
+        while (k < nb) {
+            if (yv_len(ya_get(names, k)) == 0) {
+                keep = ya_push(keep, yv_bool(1));
+                ;
+            } else {
+                keep = ya_push(keep, yv_bool(0));
+                ;
+            }
+            k = k + 1;
+        }
+        keep = shake_keep(names, refs, falls, keep, root_refs);
+        /* reassemble kept blocks (their byte ranges), in order */
+        Yv *pieces = yav(0);
+        k = 0;
+        while (k < nb) {
+            if (yv_b(ya_get(keep, k))) {
+                long lo = yv_l(ya_get(starts, k));
+                long hi = n;
+                if (k + 1 < nb) {
+                    hi = yv_l(ya_get(starts, k + 1));
+                    ;
+                } else {
+                    ;
+                }
+                pieces = ya_push(pieces, ys_substr(text, lo, hi - lo));
+                ;
+            } else {
+                ;
+            }
+            k = k + 1;
+        }
+        return ys_join(pieces, ys(""));
+    }
+}
+
+/* Drop function bodies nothing reaches: dead stdlib code the program never
+ * calls. Bodies are referenced by label from other bodies AND from the arch
+ * prelude (y_float_tostr's block calls the Y-side y_long_tostr), so
+ * `asm_roots` is the prelude text. Returns the kept bodies plus everything
+ * they reference — the roots for shaking the arch prelude itself. */
+Yv *prune_bodies(Yv *bodies, Yv *asm_roots) {
+    long nb = yv_len(bodies);
+    Yv *labels = yav(0);
+    Yv *refs = yav(0);
+    long i = 0;
+    while (i < nb) {
+        Yv *b = ya_get(bodies, i);
+        labels = ya_push(labels, body_label(b));
+        refs = ya_push(refs, text_refs(b, 1));
+        i = i + 1;
+    }
+    Yv *keep = yav(0);
+    Yv *falls = yav(0);
+    i = 0;
+    while (i < nb) {
+        keep = ya_push(keep, yv_bool(0));
+        falls = ya_push(falls, yv_bool(0));
+        i = i + 1;
+    }
+    Yv *roots = text_refs(asm_roots, 1);
+    long root = name_index(labels, ys("_start"));
+    if (root >= 0) {
+        roots = ya_push(roots, ys("_start"));
+        ;
+    } else {
+        ;
+    }
+    keep = shake_keep(labels, refs, falls, keep, roots);
+    Yv *out = yav(0);
+    Yv *outrefs = yav(0);
+    i = 0;
+    while (i < nb) {
+        if (yv_b(ya_get(keep, i))) {
+            Yv *b = ya_get(bodies, i);
+            out = ya_push(out, b);
+            Yv *rs = ya_get(refs, i);
+            long j = 0;
+            while (j < yv_len(rs)) {
+                outrefs = ya_push(outrefs, ya_get(rs, j));
+                j = j + 1;
+            }
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return ym(2, "bodies", out, "refs", outrefs);
+}
+
+int is_all_digits(Yv *s) {
+    if (yv_len(s) == 0) {
+        return 0;
+    } else {
+        long i = 0;
+        int ok = 1;
+        while (i < yv_len(s)) {
+            if (ys_index_of(ys("0123456789"), ys_substr(s, i, 1)) < 0) {
+                ok = 0;
+                ;
+            } else {
+                ;
+            }
+            i = i + 1;
+        }
+        return ok;
+    }
+}
+
+/* The bare runtime name behind `name`, or "" when it is not one. */
+Yv *runtime_base(Yv *name) {
+    if (yv_len(name) < 3) {
+        return ys("");
+    } else {
+        if (!ys_eq_lit(ys_substr(name, 0, 2), "y_")) {
+            return ys("");
+        } else {
+            long dollar = ys_index_of(name, ys("$"));
+            if (dollar < 0) {
+                return name;
+            } else {
+                if (is_all_digits(
+                        ys_substr(name, dollar + 1, yv_len(name) - dollar - 1))) {
+                    return ys_substr(name, 0, dollar);
+                } else {
+                    return ys("");
+                }
+            }
+        }
+    }
+}
+
+Yv *fn_label_of(long uid, Yv *name) {
+    Yv *base = runtime_base(name);
+    if (yv_len(base) > 0) {
+        return base;
+    } else {
+        return arch_fn_label(uid, name);
+    }
+}
+
+int is_ns(Yv *name, Yv *imports) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(imports)) {
+        if (ys_eq(ya_get(imports, i), name)) {
+            found = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* Identity with a declared {k: str} return: normalizes multi-shape
+ * expression arms (strip_*, infer rebuilds a different node kind per arm,
+ * which strict branch-teq rejects) into unknown-shaped flows. Callers read
+ * .k/.line/.col directly; deeper reads unify quietly (tcompat law). The
+ * RUNTIME value passes through untouched (same node object). */
+Yv *normnode(Yv *anode) { return anode; }
+
+/* strip_namespaces: dot(NAME, key) with NAME an import namespace -> id(key).
+ * Full AST rebuild (only dot nodes change, but uniform rebuild is
+ * simplest). */
+
+Yv *strip_list(Yv *nodes, Yv *imports) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(nodes)) {
+        out = ya_push(out, strip_ns(ya_get(nodes, i), imports));
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *strip_ns(Yv *node, Yv *imports) {
+    /* NOTE: kind bound once — `node.k` inline in a call misparses on the
+     * C backend (it reads `f(x.k)` as `f((x).k)`... actually as `f(.k)`). */
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "dot")) {
+        Yv *dobj = ym_get(node, "obj");
+        Yv *obj = strip_ns(dobj, imports);
+        Yv *okey = ym_get(node, "key");
+        Yv *oline = ym_get(node, "line");
+        Yv *ocol = ym_get(node, "col");
+        if (ys_eq_lit(ym_get(obj, "k"), "id")) {
+            Yv *ov = ym_get(obj, "v");
+            if (is_ns(ov, imports)) {
+                return normnode(ym(4, "k", ys("id"), "v", okey, "line", oline,
+                                   "col", ocol));
+            } else {
+                return normnode(ym(5, "k", ys("dot"), "obj", obj, "key", okey,
+                                   "line", oline, "col", ocol));
+            }
+        } else {
+            return normnode(ym(5, "k", ys("dot"), "obj", obj, "key", okey,
+                               "line", oline, "col", ocol));
+        }
+    } else if (ys_eq_lit(k, "un")) {
+        return normnode(ym(5, "k", ys("un"), "op", ym_get(node, "op"), "e",
+                           strip_ns(ym_get(node, "e"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "addr") || ys_eq_lit(k, "deref")) {
+        return normnode(ym(4, "k", k, "e", strip_ns(ym_get(node, "e"), imports),
+                           "line", ym_get(node, "line"), "col",
+                           ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "bin")) {
+        return normnode(
+            ym(6, "k", ys("bin"), "op", ym_get(node, "op"), "l",
+               strip_ns(ym_get(node, "l"), imports), "r",
+               strip_ns(ym_get(node, "r"), imports), "line",
+               ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "call")) {
+        return normnode(ym(5, "k", ys("call"), "callee",
+                           strip_ns(ym_get(node, "callee"), imports), "args",
+                           strip_list(ym_get(node, "args"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "if")) {
+        return normnode(ym(7, "k", ys("if"), "cond",
+                           strip_ns(ym_get(node, "cond"), imports), "then",
+                           strip_ns(ym_get(node, "then"), imports), "els",
+                           strip_ns(ym_get(node, "els"), imports), "has_else",
+                           ym_get(node, "has_else"), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "while")) {
+        return normnode(ym(5, "k", ys("while"), "cond",
+                           strip_ns(ym_get(node, "cond"), imports), "body",
+                           strip_ns(ym_get(node, "body"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "block")) {
+        return normnode(ym(4, "k", ys("block"), "stmts",
+                           strip_list(ym_get(node, "stmts"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "decl")) {
+        return strip_decl(node, imports);
+    } else if (ys_eq_lit(k, "func")) {
+        return normnode(ym(7, "k", ys("func"), "params", ym_get(node, "params"),
+                           "ptypes", ym_get(node, "ptypes"), "ret",
+                           ym_get(node, "ret"), "body",
+                           strip_ns(ym_get(node, "body"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "assign")) {
+        return normnode(ym(5, "k", ys("assign"), "name", ym_get(node, "name"),
+                           "v", strip_ns(ym_get(node, "v"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "incdec")) {
+        return normnode(ym(6, "k", ys("incdec"), "op", ym_get(node, "op"), "pre",
+                           ym_get(node, "pre"), "tgt",
+                           strip_ns(ym_get(node, "tgt"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "opassign")) {
+        return normnode(ym(6, "k", ys("opassign"), "op", ym_get(node, "op"),
+                           "tgt", strip_ns(ym_get(node, "tgt"), imports), "v",
+                           strip_ns(ym_get(node, "v"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "store")) {
+        return normnode(ym(5, "k", ys("store"), "p",
+                           strip_ns(ym_get(node, "p"), imports), "v",
+                           strip_ns(ym_get(node, "v"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "ret")) {
+        return normnode(ym(4, "k", ys("ret"), "e",
+                           strip_ns(ym_get(node, "e"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "array")) {
+        return normnode(ym(4, "k", ys("array"), "elems",
+                           strip_list(ym_get(node, "elems"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "arrrep")) {
+        return normnode(ym(5, "k", ys("arrrep"), "v",
+                           strip_ns(ym_get(node, "v"), imports), "n",
+                           ym_get(node, "n"), "line", ym_get(node, "line"),
+                           "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "map")) {
+        return normnode(ym(5, "k", ys("map"), "keys", ym_get(node, "keys"),
+                           "vals", strip_list(ym_get(node, "vals"), imports),
+                           "line", ym_get(node, "line"), "col",
+                           ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "index")) {
+        return normnode(
+            ym(5, "k", ys("index"), "arr", strip_ns(ym_get(node, "arr"), imports),
+               "idx", strip_ns(ym_get(node, "idx"), imports), "line",
+               ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "slice")) {
+        return normnode(ym(6, "k", ys("slice"), "arr",
+                           strip_ns(ym_get(node, "arr"), imports), "lo",
+                           strip_ns(ym_get(node, "lo"), imports), "hi",
+                           strip_ns(ym_get(node, "hi"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "idxassign")) {
+        return normnode(ym(6, "k", ys("idxassign"), "arr",
+                           strip_ns(ym_get(node, "arr"), imports), "idx",
+                           strip_ns(ym_get(node, "idx"), imports), "v",
+                           strip_ns(ym_get(node, "v"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "dotassign")) {
+        return normnode(ym(6, "k", ys("dotassign"), "obj",
+                           strip_ns(ym_get(node, "obj"), imports), "key",
+                           ym_get(node, "key"), "v",
+                           strip_ns(ym_get(node, "v"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "foreach")) {
+        return normnode(ym(6, "k", ys("foreach"), "name", ym_get(node, "name"),
+                           "iter", strip_ns(ym_get(node, "iter"), imports),
+                           "body", strip_ns(ym_get(node, "body"), imports),
+                           "line", ym_get(node, "line"), "col",
+                           ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "forrange")) {
+        return normnode(ym(7, "k", ys("forrange"), "name", ym_get(node, "name"),
+                           "lo", strip_ns(ym_get(node, "lo"), imports), "hi",
+                           strip_ns(ym_get(node, "hi"), imports), "body",
+                           strip_ns(ym_get(node, "body"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else if (ys_eq_lit(k, "for")) {
+        return normnode(ym(7, "k", ys("for"), "init",
+                           strip_ns(ym_get(node, "init"), imports), "cond",
+                           strip_ns(ym_get(node, "cond"), imports), "step",
+                           strip_ns(ym_get(node, "step"), imports), "body",
+                           strip_ns(ym_get(node, "body"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else {
+        return normnode(node);
+    }
+}
+
+Yv *strip_decl(Yv *node, Yv *imports) {
+    if (ys_eq_lit(ym_get(node, "kind"), "def")) {
+        return normnode(ym(6, "k", ys("decl"), "kind", ys("def"), "name",
+                           ym_get(node, "name"), "v",
+                           strip_ns(ym_get(node, "v"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    } else {
+        return normnode(ym(7, "k", ys("decl"), "kind", ym_get(node, "kind"),
+                           "name", ym_get(node, "name"), "typ",
+                           ym_get(node, "typ"), "v",
+                           strip_ns(ym_get(node, "v"), imports), "line",
+                           ym_get(node, "line"), "col", ym_get(node, "col")));
+    }
+}
+
+/* ── emit state ─────────────────────────────────────────────────────────
+ * st = { out, rodata, uid, fuid, loc, env, slots,
+ *        self_label, end_label, fns, bodies }
+ * env: FLAT list of {name, kind, off, label, typ} — names are unique
+ * post-rename, so no scopes or shadowing. kind: "local"|"param"|"func". */
+
+Yv *st_new(void) {
+    return ym(11, "out", yav(0), "rodata", yav(0), "uid", yv_long(1), "fuid",
+              yv_long(0), "loc", yv_long(1), "env", yav(0), "slots",
+              yv_long(0), "self_label", ys(""), "end_label", ys(""), "fns",
+              yav(0), "bodies", yav(0));
+}
+
+Yv *emit(Yv *st, Yv *line) {
+    return ym(11, "out", ya_push(ym_get(st, "out"), line), "rodata",
+              ym_get(st, "rodata"), "uid", ym_get(st, "uid"), "fuid",
+              ym_get(st, "fuid"), "loc", ym_get(st, "loc"), "env",
+              ym_get(st, "env"), "slots", ym_get(st, "slots"), "self_label",
+              ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+              "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+}
+
+Yv *next_uid(Yv *st) {
+    long u = yv_l(ym_get(st, "uid"));
+    st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"), "uid",
+            yv_long(yv_l(ym_get(st, "uid")) + 1), "fuid", ym_get(st, "fuid"),
+            "loc", ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+            ym_get(st, "slots"), "self_label", ym_get(st, "self_label"),
+            "end_label", ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+            "bodies", ym_get(st, "bodies"));
+    return ym(2, "st", st, "uid", yv_long(u));
+}
+
+Yv *next_loc(Yv *st) {
+    long n = yv_l(ym_get(st, "loc"));
+    Yv *lbl = arch_loc_label(yv_l(ym_get(st, "fuid")), n);
+    st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"), "uid",
+            ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+            yv_long(yv_l(ym_get(st, "loc")) + 1), "env", ym_get(st, "env"),
+            "slots", ym_get(st, "slots"), "self_label",
+            ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+            "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+    return ym(2, "st", st, "lbl", lbl);
+}
+
+/* ── string escaping for GAS .string ──────────────────────────────────── */
+
+Yv *esc_asm(Yv *s) {
+    Yv *buf = ys("");
+    long i = 0;
+    long n = yv_len(s);
+    while (i < n) {
+        Yv *c = ys_substr(s, i, 1);
+        long o = ys_ord(c);
+        if (ys_eq_lit(c, "\\")) {
+            buf = ys_cat(buf, ys("\\\\"));
+        } else if (ys_eq_lit(c, "\"")) {
+            buf = ys_cat(buf, ys("\\\""));
+        } else if (ys_eq_lit(c, "\n")) {
+            buf = ys_cat(buf, ys("\\n"));
+        } else if (ys_eq_lit(c, "\t")) {
+            buf = ys_cat(buf, ys("\\t"));
+        } else if (o < 32 || o > 126) {
+            long d2 = o / 64;
+            long d1 = (o / 8) % 8;
+            long d0 = o % 8;
+            buf = ys_cat(ys_cat(ys_cat(ys_cat(buf, ys("\\")), ys_long(d2)),
+                                ys_long(d1)),
+                         ys_long(d0));
+        } else {
+            buf = ys_cat(buf, c);
+        }
+        i = i + 1;
+    }
+    return buf;
+}
+
+/* ── flat environment ─────────────────────────────────────────────────── */
+
+Yv *env_find(Yv *st, Yv *name) {
+    /* Miss marker: kind "none". Real entries have name/kind/off/label/typ
+     * but NO k field — never test e.k. */
+    Yv *env = ym_get(st, "env");
+    long i = 0;
+    Yv *found = ym(5, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
+                   "label", ys(""), "typ", ym(1, "k", ys("tnone")));
+    while (i < yv_len(env)) {
+        Yv *e = ya_get(env, i);
+        if (ys_eq(ym_get(e, "name"), name)) {
+            found = e;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ) {
+    Yv *env = ya_push(
+        ym_get(st, "env"),
+        ym(5, "name", name, "kind", kind, "off", yv_long(off), "label", label,
+           "typ", typ));
+    return ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"),
+              "uid", ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+              ym_get(st, "loc"), "env", env, "slots", ym_get(st, "slots"),
+              "self_label", ym_get(st, "self_label"), "end_label",
+              ym_get(st, "end_label"), "fns", ym_get(st, "fns"), "bodies",
+              ym_get(st, "bodies"));
+}
+
+/* ── mini type inference (for print dispatch) ───────────────────────────
+ * The checker already validated everything; this mirrors it just enough to
+ * pick y_print_long / y_print_bool / y_print_cstr. */
+
+Yv *infer(Yv *st, Yv *node) {
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "num")) {
+        if (lit_is_float(ym_get(node, "v"))) {
+            return ym(1, "k", ys("tfloat"));
+        } else {
+            return ym(1, "k", ys("tlong"));
+        }
+    } else if (ys_eq_lit(k, "str")) {
+        return ym(1, "k", ys("tstr"));
+    } else if (ys_eq_lit(k, "bool")) {
+        return ym(1, "k", ys("tbool"));
+    } else if (ys_eq_lit(k, "null")) {
+        return ym(1, "k", ys("tnull"));
+    } else if (ys_eq_lit(k, "id")) {
+        if (ys_eq_lit(ym_get(node, "v"), "self")) {
+            return ym(1, "k", ys("tfunc"));
+        } else {
+            Yv *e = env_find(st, ym_get(node, "v"));
+            if (ys_eq_lit(ym_get(e, "kind"), "none")) {
+                if (ys_eq_lit(ym_get(node, "v"), "none")) {
+                    return normnode(
+                        ym(2, "k", ys("topt"), "of", ym(1, "k", ys("tunk"))));
+                } else {
+                    return ym(1, "k", ys("tunk"));
+                }
+            } else {
+                return ym_get(e, "typ");
+            }
+        }
+    } else if (ys_eq_lit(k, "un")) {
+        if (ys_eq_lit(ym_get(node, "op"), "-")) {
+            return infer(st, ym_get(node, "e"));
+        } else {
+            return ym(1, "k", ys("tbool"));
+        }
+    } else if (ys_eq_lit(k, "bin")) {
+        Yv *op = ym_get(node, "op");
+        if (ys_eq_lit(op, "+") || ys_eq_lit(op, "-") || ys_eq_lit(op, "*") ||
+            ys_eq_lit(op, "/") || ys_eq_lit(op, "%")) {
+            Yv *bl = infer(st, ym_get(node, "l"));
+            Yv *br = infer(st, ym_get(node, "r"));
+            if (ys_eq_lit(op, "+") &&
+                (ys_eq_lit(ym_get(bl, "k"), "tarr") ||
+                 ys_eq_lit(ym_get(bl, "k"), "tarrfix"))) {
+                /* array `+` concatenates into a NEW heap array (types.y
+                 * typeof_arith_arr) -- the element type survives. */
+                return ym(2, "k", ys("tarr"), "of", ym_get(bl, "of"));
+            } else if (ys_eq_lit(op, "+") &&
+                (ys_eq_lit(ym_get(br, "k"), "tarr") ||
+                 ys_eq_lit(ym_get(br, "k"), "tarrfix"))) {
+                return ym(2, "k", ys("tarr"), "of", ym_get(br, "of"));
+            } else if (ys_eq_lit(op, "+") &&
+                (ys_eq_lit(ym_get(bl, "k"), "tstr") ||
+                 ys_eq_lit(ym_get(br, "k"), "tstr"))) {
+                return ym(1, "k", ys("tstr"));
+            } else if (ys_eq_lit(ym_get(bl, "k"), "tfloat")) {
+                return ym(1, "k", ys("tfloat"));
+            } else if (ys_eq_lit(ym_get(br, "k"), "tfloat")) {
+                return ym(1, "k", ys("tfloat"));
+            } else {
+                return ym(1, "k", ys("tlong"));
+            }
+        } else {
+            return ym(1, "k", ys("tbool"));
+        }
+    } else if (ys_eq_lit(k, "func")) {
+        return normnode(func_type_in(st, node));
+    } else if (ys_eq_lit(k, "addr")) {
+        return normnode(
+            ym(2, "k", ys("tptr"), "to", infer(st, ym_get(node, "e"))));
+    } else if (ys_eq_lit(k, "arrrep")) {
+        return normnode(ym(3, "k", ys("tarrfix"), "of",
+                           infer(st, ym_get(node, "v")), "n",
+                           ym_get(node, "n")));
+    } else if (ys_eq_lit(k, "array")) {
+        Yv *elems = ym_get(node, "elems");
+        if (yv_len(elems) == 0) {
+            return normnode(
+                ym(2, "k", ys("tarr"), "of", ym(1, "k", ys("tunk"))));
+        } else {
+            return normnode(ym(2, "k", ys("tarr"), "of",
+                               infer(st, ya_get(elems, 0))));
+        }
+    } else if (ys_eq_lit(k, "index")) {
+        /* checker guarantees an array base (any expression); the element
+         * type is the base type's `of`. */
+        Yv *iarr = ym_get(node, "arr");
+        Yv *bt = infer(st, iarr);
+        if (ys_eq_lit(ym_get(bt, "k"), "tarrfix") ||
+            ys_eq_lit(ym_get(bt, "k"), "tarr")) {
+            return ym_get(bt, "of");
+        } else {
+            return ym(1, "k", ys("tunk"));
+        }
+    } else if (ys_eq_lit(k, "slice")) {
+        /* arr[lo:hi] keeps the element type but is always a heap [T]. */
+        Yv *ts = infer(st, ym_get(node, "arr"));
+        if (ys_eq_lit(ym_get(ts, "k"), "tarr")) {
+            return ym(2, "k", ys("tarr"), "of", ym_get(ts, "of"));
+        } else if (ys_eq_lit(ym_get(ts, "k"), "tarrfix")) {
+            return ym(2, "k", ys("tarr"), "of", ym_get(ts, "of"));
+        } else {
+            return ym(1, "k", ys("tunk"));
+        }
+    } else if (ys_eq_lit(k, "deref")) {
+        Yv *t = infer(st, ym_get(node, "e"));
+        if (ys_eq_lit(ym_get(t, "k"), "tptr")) {
+            return ym_get(t, "to");
+        } else {
+            return ym(1, "k", ys("tunk"));
+        }
+    } else if (ys_eq_lit(k, "call")) {
+        return infer_call(st, node);
+    } else if (ys_eq_lit(k, "if")) {
+        return infer(st, ym_get(node, "then"));
+    } else if (ys_eq_lit(k, "block")) {
+        return infer_block(st, node);
+    } else if (ys_eq_lit(k, "decl")) {
+        return infer_decl(st, node);
+    } else if (ys_eq_lit(k, "assign")) {
+        return infer(st, ym_get(node, "v"));
+    } else if (ys_eq_lit(k, "incdec")) {
+        return infer(st, ym_get(node, "tgt"));
+    } else if (ys_eq_lit(k, "opassign")) {
+        return infer(st, ym_get(node, "tgt"));
+    } else if (ys_eq_lit(k, "map")) {
+        /* record literal: field types from the values (checker validated).
+         * NOTE: each bound once — `x.y[i]` chains misparse on the C VM. */
+        Yv *melems = ym_get(node, "vals");
+        Yv *mkeys = ym_get(node, "keys");
+        if (yv_len(melems) == 0) {
+            return normnode(ym(2, "k", ys("trec"), "fields", yav(0)));
+        } else {
+            /* `...` spread entries merge the source's fields (static
+             * union: first appearance keeps the position, later wins the
+             * value) -- the same rule as types.y's map arm. */
+            Yv *mfields = yav(0);
+            long mi = 0;
+            while (mi < yv_len(melems)) {
+                Yv *mf = infer(st, ya_get(melems, mi));
+                /* NOTE: bound once — `x.y[i]` chains misparse on the C VM. */
+                Yv *mk = ya_get(mkeys, mi);
+                if (ys_eq_lit(mk, "...")) {
+                    if (ys_eq_lit(ym_get(mf, "k"), "trec")) {
+                        Yv *msfs = ym_get(mf, "fields");
+                        long msi = 0;
+                        while (msi < yv_len(msfs)) {
+                            Yv *msf = ya_get(msfs, msi);
+                            mfields = field_merge(mfields, ym_get(msf, "name"),
+                                                  ym_get(msf, "typ"));
+                            msi = msi + 1;
+                        }
+                        ;
+                    } else {
+                        ;
+                    }
+                    ;
+                } else {
+                    mfields = field_merge(mfields, mk, mf);
+                    ;
+                }
+                mi = mi + 1;
+            }
+            return normnode(ym(2, "k", ys("trec"), "fields", mfields));
+        }
+    } else if (ys_eq_lit(k, "dot")) {
+        /* field read: static index into the trec (checker validated). */
+        Yv *dobj = ym_get(node, "obj");
+        Yv *dt = infer(st, dobj);
+        if (ys_eq_lit(ym_get(dt, "k"), "trec")) {
+            int found = 0;
+            Yv *ftyp = ym(1, "k", ys("tunk"));
+            Yv *dfs = ym_get(dt, "fields");
+            long di = 0;
+            while (di < yv_len(dfs)) {
+                Yv *df = ya_get(dfs, di);
+                /* NOTE: :str binding (see teq note in types.y): df flows
+                 * from bare values (tunk), so a direct `==` would compare
+                 * string POINTERS; annotated let forces content compare. */
+                Yv *dfn = ym_get(df, "name");
+                if (ys_eq(dfn, ym_get(node, "key"))) {
+                    found = 1;
+                    ftyp = ym_get(df, "typ");
+                    ;
+                } else {
+                    ;
+                }
+                di = di + 1;
+            }
+            if (found) {
+                return ftyp;
+            } else {
+                return ym(1, "k", ys("tunk"));
+            }
+        } else {
+            return ym(1, "k", ys("tunk"));
+        }
+    } else if (ys_eq_lit(k, "store")) {
+        return infer(st, ym_get(node, "v"));
+    } else if (ys_eq_lit(k, "while")) {
+        return ym(1, "k", ys("tnull"));
+    } else if (ys_eq_lit(k, "ret")) {
+        return infer(st, ym_get(node, "e"));
+    } else {
+        return ym(1, "k", ys("tunk"));
+    }
+}
+
+Yv *infer_call(Yv *st, Yv *node) {
+    if (!ys_eq_lit(ym_get(ym_get(node, "callee"), "k"), "id")) {
+        /* Calling an expression (immediately-invoked literal, fs[0](x), ...)
+         */
+        Yv *cft = infer(st, ym_get(node, "callee"));
+        if (ys_eq_lit(ym_get(cft, "k"), "tfunc")) {
+            return ym_get(cft, "ret");
+        } else {
+            return ym(1, "k", ys("tunk"));
+        }
+    } else {
+        Yv *name = ym_get(ym_get(node, "callee"), "v");
+        if (ys_eq_lit(name, "print")) {
+            return ym(1, "k", ys("tnull"));
+        } else if (ys_eq_lit(name, "syscall")) {
+            return ym(1, "k", ys("tlong"));
+        } else if (ys_eq_lit(name, "len")) {
+            return ym(1, "k", ys("tlong"));
+        } else if (ys_eq_lit(name, "is_some")) {
+            return ym(1, "k", ys("tbool"));
+        } else if (ys_eq_lit(name, "unwrap")) {
+            /* unwrap(x): payload type when x is statically an option. */
+            Yv *uargs = ym_get(node, "args");
+            if (yv_len(uargs) != 1) {
+                return ym(1, "k", ys("tunk"));
+            } else {
+                Yv *ut = infer(st, ya_get(uargs, 0));
+                if (ys_eq_lit(ym_get(ut, "k"), "topt")) {
+                    return ym_get(ut, "of");
+                } else {
+                    return ym(1, "k", ys("tunk"));
+                }
+            }
+        } else if (ys_eq_lit(name, "some")) {
+            /* some(x): option of x's type. */
+            Yv *sargs = ym_get(node, "args");
+            if (yv_len(sargs) != 1) {
+                return ym(2, "k", ys("topt"), "of", ym(1, "k", ys("tunk")));
+            } else {
+                return ym(2, "k", ys("topt"), "of",
+                          infer(st, ya_get(sargs, 0)));
+            }
+        } else if (ys_eq_lit(name, "substr") || ys_eq_lit(name, "trim") ||
+                   ys_eq_lit(name, "chr") || ys_eq_lit(name, "join") ||
+                   ys_eq_lit(name, "tostring") || ys_eq_lit(name, "typeof")) {
+            return ym(1, "k", ys("tstr"));
+        } else if (ys_eq_lit(name, "read_file")) {
+            /* str? (option): a missing file yields null at runtime
+             * (callers null-check with `== null`, then unwrap).
+             * Matches types.y (read_file -> str?). */
+            return ym(2, "k", ys("topt"), "of", ym(1, "k", ys("tstr")));
+        } else if (ys_eq_lit(name, "bytes")) {
+            return ym(2, "k", ys("tarr"), "of", ym(1, "k", ys("tbyte")));
+        } else if (ys_eq_lit(name, "from_bytes")) {
+            return ym(1, "k", ys("tstr"));
+        } else if (ys_eq_lit(name, "ptr_addr")) {
+            return ym(1, "k", ys("tlong"));
+        } else if (ys_eq_lit(name, "tonum") || ys_eq_lit(name, "ord") ||
+                   ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "index_of") ||
+                   ys_eq_lit(name, "last_index_of")) {
+            return ym(1, "k", ys("tlong"));
+        } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "heap_used")) {
+            return ym(1, "k", ys("tlong"));
+        } else if (ys_eq_lit(name, "sleep")) {
+            return ym(1, "k", ys("tnull"));
+        } else if (ys_eq_lit(name, "split") || ys_eq_lit(name, "argv")) {
+            return ym(2, "k", ys("tarr"), "of", ym(1, "k", ys("tstr")));
+        } else if (ys_eq_lit(name, "range")) {
+            return ym(2, "k", ys("tarr"), "of", ym(1, "k", ys("tlong")));
+        } else if (ys_eq_lit(name, "write_file")) {
+            return ym(1, "k", ys("tbool"));
+        } else if (ys_eq_lit(name, "write_bytes")) {
+            return ym(1, "k", ys("tbool"));
+        } else if (ys_eq_lit(name, "push") || ys_eq_lit(name, "prepend")) {
+            /* both yield the array they take (the header never moves, and
+             * the type is the array's either way) */
+            Yv *gargs = ym_get(node, "args");
+            return infer(st, ya_get(gargs, 0));
+        } else if (ys_eq_lit(name, "puts") || ys_eq_lit(name, "exit")) {
+            return ym(1, "k", ys("tnull"));
+        } else if (ys_eq_lit(name, "eputs")) {
+            return ym(1, "k", ys("tnull"));
+        } else {
+            Yv *e = env_find(st, name);
+            if (ys_eq_lit(ym_get(e, "kind"), "none")) {
+                return ym(1, "k", ys("tunk"));
+            } else if (ys_eq_lit(ym_get(ym_get(e, "typ"), "k"), "tfunc")) {
+                return ym_get(ym_get(e, "typ"), "ret");
+            } else {
+                return ym(1, "k", ys("tunk"));
+            }
+        }
+    }
+}
+
+Yv *infer_block(Yv *st, Yv *node) {
+    Yv *stmts = ym_get(node, "stmts");
+    if (yv_len(stmts) == 0) {
+        return ym(1, "k", ys("tnull"));
+    } else {
+        return infer(st, ya_get(stmts, yv_len(stmts) - 1));
+    }
+}
+
+Yv *infer_decl(Yv *st, Yv *node) {
+    if (ys_eq_lit(ym_get(node, "kind"), "def")) {
+        return ym(3, "k", ys("tfunc"), "args", yav(0), "ret",
+                  ym(1, "k", ys("tnull")));
+    } else {
+        /* NOTE: nested ifs — the C VM evaluates `&&` eagerly. */
+        if (ys_eq_lit(ym_get(ym_get(node, "typ"), "k"), "tnone")) {
+            return infer(st, ym_get(node, "v"));
+        } else {
+            return ym_get(node, "typ");
+        }
+    }
+}
+
+/* ── feature-use scan (for conditional prologue) ───────────────────────
+ * Walk the renamed AST for calls the _start prologue must serve: argv()
+ * needs y_argv_init to materialize the [str] array from the raw stack.
+ * Everything else (y_alloc, y_print_*, ...) is position-independent.
+ * Returns { argv: bool }. */
+
+Yv *uses_scan_block(Yv *stmts, Yv *out) {
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        out = uses_scan_node(ya_get(stmts, i), out);
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *uses_scan_node(Yv *node, Yv *out) {
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "call")) {
+        /* scan callee + args (argv() could nest inside an argument).
+         * NOTE: each bound once — `node.callee.k` inline misparses on the
+         * C backend (reads `f(x.k)` as `f(.k)`). */
+        Yv *ncallee = ym_get(node, "callee");
+        Yv *nargs = ym_get(node, "args");
+        Yv *found = out;
+        if (ys_eq_lit(ym_get(ncallee, "k"), "id")) {
+            if (ys_eq_lit(ym_get(ncallee, "v"), "argv")) {
+                found = ym(1, "argv", yv_bool(1));
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        Yv *o2 = uses_scan_node(ncallee, found);
+        return uses_scan_block(nargs, o2);
+    } else if (ys_eq_lit(k, "un")) {
+        return uses_scan_node(ym_get(node, "e"), out);
+    } else if (ys_eq_lit(k, "bin")) {
+        return uses_scan_node(ym_get(node, "r"),
+                              uses_scan_node(ym_get(node, "l"), out));
+    } else if (ys_eq_lit(k, "addr") || ys_eq_lit(k, "deref")) {
+        return uses_scan_node(ym_get(node, "e"), out);
+    } else if (ys_eq_lit(k, "if")) {
+        return uses_scan_node(ym_get(node, "els"),
+                              uses_scan_node(ym_get(node, "then"),
+                                             uses_scan_node(
+                                                 ym_get(node, "cond"), out)));
+    } else if (ys_eq_lit(k, "while")) {
+        return uses_scan_node(ym_get(node, "body"),
+                              uses_scan_node(ym_get(node, "cond"), out));
+    } else if (ys_eq_lit(k, "block")) {
+        return uses_scan_block(ym_get(node, "stmts"), out);
+    } else if (ys_eq_lit(k, "decl")) {
+        return uses_scan_node(ym_get(node, "v"), out);
+    } else if (ys_eq_lit(k, "func")) {
+        return uses_scan_node(ym_get(node, "body"), out);
+    } else if (ys_eq_lit(k, "assign")) {
+        return uses_scan_node(ym_get(node, "v"), out);
+    } else if (ys_eq_lit(k, "incdec")) {
+        return uses_scan_node(ym_get(node, "tgt"), out);
+    } else if (ys_eq_lit(k, "opassign")) {
+        return uses_scan_node(ym_get(node, "v"),
+                              uses_scan_node(ym_get(node, "tgt"), out));
+    } else if (ys_eq_lit(k, "store")) {
+        return uses_scan_node(ym_get(node, "v"),
+                              uses_scan_node(ym_get(node, "p"), out));
+    } else if (ys_eq_lit(k, "ret")) {
+        return uses_scan_node(ym_get(node, "e"), out);
+    } else if (ys_eq_lit(k, "array")) {
+        return uses_scan_block(ym_get(node, "elems"), out);
+    } else if (ys_eq_lit(k, "arrrep")) {
+        return uses_scan_node(ym_get(node, "v"), out);
+    } else if (ys_eq_lit(k, "map")) {
+        return uses_scan_block(ym_get(node, "vals"), out);
+    } else if (ys_eq_lit(k, "index")) {
+        return uses_scan_node(ym_get(node, "idx"),
+                              uses_scan_node(ym_get(node, "arr"), out));
+    } else if (ys_eq_lit(k, "slice")) {
+        return uses_scan_node(ym_get(node, "hi"),
+                              uses_scan_node(ym_get(node, "lo"),
+                                             uses_scan_node(
+                                                 ym_get(node, "arr"), out)));
+    } else if (ys_eq_lit(k, "idxassign")) {
+        return uses_scan_node(ym_get(node, "v"),
+                              uses_scan_node(ym_get(node, "idx"),
+                                             uses_scan_node(
+                                                 ym_get(node, "arr"), out)));
+    } else if (ys_eq_lit(k, "dotassign")) {
+        return uses_scan_node(ym_get(node, "v"),
+                              uses_scan_node(ym_get(node, "obj"), out));
+    } else if (ys_eq_lit(k, "foreach")) {
+        return uses_scan_node(ym_get(node, "body"),
+                              uses_scan_node(ym_get(node, "iter"), out));
+    } else if (ys_eq_lit(k, "forrange")) {
+        return uses_scan_node(ym_get(node, "body"),
+                              uses_scan_node(ym_get(node, "hi"),
+                                             uses_scan_node(
+                                                 ym_get(node, "lo"), out)));
+    } else if (ys_eq_lit(k, "for")) {
+        return uses_scan_node(ym_get(node, "body"),
+                              uses_scan_node(ym_get(node, "step"),
+                                             uses_scan_node(
+                                                 ym_get(node, "cond"),
+                                                 uses_scan_node(
+                                                     ym_get(node, "init"),
+                                                     out))));
+    } else {
+        return out;
+    }
+}
+
+/* ── def collection (incl. hoisting) ────────────────────────────────────
+ * Walk blocks/ifs/whiles/func-bodies; every named def and every let-bound
+ * anonymous def becomes a top-level function (they capture nothing — the
+ * checker proved it). Returns [{name, func}]. */
+
+Yv *collect_from_block(Yv *stmts, Yv *out) {
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        out = collect_from_node(ya_get(stmts, i), out);
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *collect_from_node(Yv *node, Yv *out) {
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "decl")) {
+        if (ys_eq_lit(ym_get(node, "kind"), "def")) {
+            out = ya_push(out, ym(2, "name", ym_get(node, "name"), "func",
+                                  ym_get(node, "v")));
+            out = collect_from_node(ym_get(node, "v"), out);
+            ;
+        } else {
+            if (ys_eq_lit(ym_get(ym_get(node, "v"), "k"), "func")) {
+                out = ya_push(out, ym(2, "name", ym_get(node, "name"), "func",
+                                      ym_get(node, "v")));
+                ;
+            } else {
+                ;
+            }
+            out = collect_from_node(ym_get(node, "v"), out);
+            ;
+        }
+    } else if (ys_eq_lit(k, "func")) {
+        out = collect_from_block(ym_get(ym_get(node, "body"), "stmts"), out);
+        ;
+    } else if (ys_eq_lit(k, "if")) {
+        out = collect_from_node(ym_get(node, "then"), out);
+        if (yv_b(ym_get(node, "has_else"))) {
+            out = collect_from_node(ym_get(node, "els"), out);
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else if (ys_eq_lit(k, "while")) {
+        out = collect_from_node(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "for")) {
+        out = collect_from_node(ym_get(node, "init"), out);
+        out = collect_from_node(ym_get(node, "body"), out);
+        out = collect_from_node(ym_get(node, "step"), out);
+        ;
+    } else if (ys_eq_lit(k, "foreach")) {
+        out = collect_from_node(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "forrange")) {
+        out = collect_from_node(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "block")) {
+        out = collect_from_block(ym_get(node, "stmts"), out);
+        ;
+    } else {
+        ;
+    }
+    return out;
+}
+
+/* ── free variables (closure conversion) ────────────────────────────────
+ * A function that reads a name bound by an ENCLOSING function captures it.
+ * The capture list is computed purely syntactically (rename.y has already
+ * made every binding unique), so the creation site and the body emitter
+ * derive the same ordered list independently. */
+
+int name_in(Yv *xs, Yv *n) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(xs)) {
+        Yv *x = ya_get(xs, i);
+        if (ys_eq(x, n)) {
+            found = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* Builtins are resolved by name at the call site, never captured. */
+int is_intrinsic_name(Yv *n) {
+    return name_in(
+        yav(36, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+            ys("is_some"), ys("unwrap"), ys("substr"), ys("trim"), ys("ord"),
+            ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
+            ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
+            ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("sleep"),
+            ys("heap_used"), ys("exit"), ys("argv"), ys("read_file"),
+            ys("write_file"), ys("write_bytes"), ys("range"), ys("typeof"),
+            ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
+            ys("none")),
+        n);
+}
+
+/* Every identifier READ in a subtree (callee names included: calling a
+ * captured closure needs the name captured too). */
+Yv *fv_ids(Yv *node, Yv *out) {
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "id")) {
+        out = ya_push(out, ym_get(node, "v"));
+        ;
+    } else if (ys_eq_lit(k, "un")) {
+        out = fv_ids(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "addr")) {
+        out = fv_ids(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "deref")) {
+        out = fv_ids(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "ret")) {
+        out = fv_ids(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "bin")) {
+        out = fv_ids(ym_get(node, "l"), out);
+        out = fv_ids(ym_get(node, "r"), out);
+        ;
+    } else if (ys_eq_lit(k, "array")) {
+        out = fv_ids_list(ym_get(node, "elems"), out);
+        ;
+    } else if (ys_eq_lit(k, "map")) {
+        out = fv_ids_list(ym_get(node, "vals"), out);
+        ;
+    } else if (ys_eq_lit(k, "arrrep")) {
+        out = fv_ids(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "call")) {
+        out = fv_ids(ym_get(node, "callee"), out);
+        out = fv_ids_list(ym_get(node, "args"), out);
+        ;
+    } else if (ys_eq_lit(k, "index")) {
+        out = fv_ids(ym_get(node, "arr"), out);
+        out = fv_ids(ym_get(node, "idx"), out);
+        ;
+    } else if (ys_eq_lit(k, "slice")) {
+        out = fv_ids(ym_get(node, "arr"), out);
+        out = fv_ids(ym_get(node, "lo"), out);
+        out = fv_ids(ym_get(node, "hi"), out);
+        ;
+    } else if (ys_eq_lit(k, "idxassign")) {
+        out = fv_ids(ym_get(node, "arr"), out);
+        out = fv_ids(ym_get(node, "idx"), out);
+        out = fv_ids(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "dot")) {
+        out = fv_ids(ym_get(node, "obj"), out);
+        ;
+    } else if (ys_eq_lit(k, "dotassign")) {
+        out = fv_ids(ym_get(node, "obj"), out);
+        out = fv_ids(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "store")) {
+        out = fv_ids(ym_get(node, "p"), out);
+        out = fv_ids(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "assign")) {
+        out = ya_push(out, ym_get(node, "name"));
+        out = fv_ids(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "incdec")) {
+        out = fv_ids(ym_get(node, "tgt"), out);
+        ;
+    } else if (ys_eq_lit(k, "opassign")) {
+        out = fv_ids(ym_get(node, "tgt"), out);
+        out = fv_ids(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "decl")) {
+        out = fv_ids(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "if")) {
+        out = fv_ids(ym_get(node, "cond"), out);
+        out = fv_ids(ym_get(node, "then"), out);
+        if (yv_b(ym_get(node, "has_else"))) {
+            out = fv_ids(ym_get(node, "els"), out);
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else if (ys_eq_lit(k, "while")) {
+        out = fv_ids(ym_get(node, "cond"), out);
+        out = fv_ids(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "for")) {
+        out = fv_ids(ym_get(node, "init"), out);
+        out = fv_ids(ym_get(node, "cond"), out);
+        out = fv_ids(ym_get(node, "step"), out);
+        out = fv_ids(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "foreach")) {
+        out = fv_ids(ym_get(node, "iter"), out);
+        out = fv_ids(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "forrange")) {
+        out = fv_ids(ym_get(node, "lo"), out);
+        out = fv_ids(ym_get(node, "hi"), out);
+        out = fv_ids(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "block")) {
+        out = fv_ids_list(ym_get(node, "stmts"), out);
+        ;
+    } else if (ys_eq_lit(k, "func")) {
+        out = fv_ids(ym_get(node, "body"), out);
+        ;
+    } else {
+        ;
+    }
+    return out;
+}
+
+Yv *fv_ids_list(Yv *nodes, Yv *out) {
+    long i = 0;
+    while (i < yv_len(nodes)) {
+        out = fv_ids(ya_get(nodes, i), out);
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *fv_binds(Yv *node, Yv *out) {
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "decl")) {
+        out = ya_push(out, ym_get(node, "name"));
+        out = fv_binds(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "func")) {
+        out = fv_bind_params(ym_get(node, "params"), out);
+        out = fv_binds(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "block")) {
+        out = fv_binds_list(ym_get(node, "stmts"), out);
+        ;
+    } else if (ys_eq_lit(k, "if")) {
+        out = fv_binds(ym_get(node, "cond"), out);
+        out = fv_binds(ym_get(node, "then"), out);
+        if (yv_b(ym_get(node, "has_else"))) {
+            out = fv_binds(ym_get(node, "els"), out);
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else if (ys_eq_lit(k, "while")) {
+        out = fv_binds(ym_get(node, "cond"), out);
+        out = fv_binds(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "for")) {
+        out = fv_binds(ym_get(node, "init"), out);
+        out = fv_binds(ym_get(node, "cond"), out);
+        out = fv_binds(ym_get(node, "step"), out);
+        out = fv_binds(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "foreach")) {
+        out = ya_push(out, ym_get(node, "name"));
+        out = fv_binds(ym_get(node, "iter"), out);
+        out = fv_binds(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "forrange")) {
+        out = ya_push(out, ym_get(node, "name"));
+        out = fv_binds(ym_get(node, "lo"), out);
+        out = fv_binds(ym_get(node, "hi"), out);
+        out = fv_binds(ym_get(node, "body"), out);
+        ;
+    } else if (ys_eq_lit(k, "ret")) {
+        out = fv_binds(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "un")) {
+        out = fv_binds(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "addr")) {
+        out = fv_binds(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "deref")) {
+        out = fv_binds(ym_get(node, "e"), out);
+        ;
+    } else if (ys_eq_lit(k, "bin")) {
+        out = fv_binds(ym_get(node, "l"), out);
+        out = fv_binds(ym_get(node, "r"), out);
+        ;
+    } else if (ys_eq_lit(k, "array")) {
+        out = fv_binds_list(ym_get(node, "elems"), out);
+        ;
+    } else if (ys_eq_lit(k, "map")) {
+        out = fv_binds_list(ym_get(node, "vals"), out);
+        ;
+    } else if (ys_eq_lit(k, "arrrep")) {
+        out = fv_binds(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "call")) {
+        out = fv_binds(ym_get(node, "callee"), out);
+        out = fv_binds_list(ym_get(node, "args"), out);
+        ;
+    } else if (ys_eq_lit(k, "index")) {
+        out = fv_binds(ym_get(node, "arr"), out);
+        out = fv_binds(ym_get(node, "idx"), out);
+        ;
+    } else if (ys_eq_lit(k, "slice")) {
+        out = fv_binds(ym_get(node, "arr"), out);
+        out = fv_binds(ym_get(node, "lo"), out);
+        out = fv_binds(ym_get(node, "hi"), out);
+        ;
+    } else if (ys_eq_lit(k, "idxassign")) {
+        out = fv_binds(ym_get(node, "arr"), out);
+        out = fv_binds(ym_get(node, "idx"), out);
+        out = fv_binds(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "dot")) {
+        out = fv_binds(ym_get(node, "obj"), out);
+        ;
+    } else if (ys_eq_lit(k, "dotassign")) {
+        out = fv_binds(ym_get(node, "obj"), out);
+        out = fv_binds(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "store")) {
+        out = fv_binds(ym_get(node, "p"), out);
+        out = fv_binds(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "assign")) {
+        out = fv_binds(ym_get(node, "v"), out);
+        ;
+    } else if (ys_eq_lit(k, "incdec")) {
+        out = fv_binds(ym_get(node, "tgt"), out);
+        ;
+    } else if (ys_eq_lit(k, "opassign")) {
+        out = fv_binds(ym_get(node, "tgt"), out);
+        out = fv_binds(ym_get(node, "v"), out);
+        ;
+    } else {
+        ;
+    }
+    return out;
+}
+
+Yv *fv_binds_list(Yv *nodes, Yv *out) {
+    long i = 0;
+    while (i < yv_len(nodes)) {
+        out = fv_binds(ya_get(nodes, i), out);
+        i = i + 1;
+    }
+    return out;
+}
+
+/* Ordered capture list of a function literal: names it reads that it does
+ * not bind, minus the hoisted top-level function names and the intrinsics.
+ * NOTE: reads only `params` and `body`, never `func.k` — `_start` is a
+ * synthesized record without a `k` field. */
+Yv *fn_captures(Yv *func, Yv *fnnames) {
+    Yv *bound =
+        fv_bind_params(ym_get(func, "params"), fv_binds(ym_get(func, "body"),
+                                                       yav(0)));
+    Yv *reads = fv_ids(ym_get(func, "body"), yav(0));
+    Yv *caps = yav(0);
+    long i = 0;
+    while (i < yv_len(reads)) {
+        Yv *n = ya_get(reads, i);
+        if (name_in(bound, n)) {
+            ;
+        } else if (name_in(fnnames, n)) {
+            ;
+        } else if (is_intrinsic_name(n)) {
+            ;
+        } else if (name_in(caps, n)) {
+            ;
+        } else {
+            caps = ya_push(caps, n);
+            ;
+        }
+        i = i + 1;
+    }
+    return caps;
+}
+
+Yv *fv_bind_params(Yv *ps, Yv *out) {
+    long i = 0;
+    while (i < yv_len(ps)) {
+        Yv *p = ya_get(ps, i);
+        out = ya_push(out, p);
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *fn_names_of(Yv *fns) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(fns)) {
+        Yv *e = ya_get(fns, i);
+        out = ya_push(out, ym_get(e, "name"));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* Is some function emitted under exactly this label? Used to detect a
+ * --prof build (the spliced std/prof.y defines y_prof_enter) without
+ * threading the flag through every emitter signature. */
+int fn_label_present(Yv *fns, Yv *label) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(fns)) {
+        Yv *e = ya_get(fns, i);
+        if (ys_eq(ym_get(e, "label"), label)) {
+            found = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+Yv *fns_find(Yv *fns, Yv *name) {
+    long i = 0;
+    Yv *found = ym(3, "name", ys(""), "label", ys_cat(ys("y_missing_"), name),
+                   "typ", ym(1, "k", ys("tnone")));
+    while (i < yv_len(fns)) {
+        Yv *e = ya_get(fns, i);
+        if (ys_eq(ym_get(e, "name"), name)) {
+            found = e;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* ── expression emission (value in %rax) ──────────────────────────────── */
+
+Yv *gen(Yv *st, Yv *node) {
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "num")) {
+        return gen_lit(st, node);
+    } else if (ys_eq_lit(k, "bool")) {
+        if (ys_eq_lit(ym_get(node, "v"), "true")) {
+            return emit(st, ys("    mov $1, %rax"));
+        } else {
+            return emit(st, ys("    xor %eax, %eax"));
+        }
+    } else if (ys_eq_lit(k, "str")) {
+        return gen_str_const(st, ym_get(node, "v"));
+    } else if (ys_eq_lit(k, "null")) {
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(k, "id")) {
+        return gen_id(st, node);
+    } else if (ys_eq_lit(k, "un")) {
+        return gen_un(st, node);
+    } else if (ys_eq_lit(k, "addr")) {
+        return gen_addr(st, node);
+    } else if (ys_eq_lit(k, "array")) {
+        return gen_array(st, node);
+    } else if (ys_eq_lit(k, "deref")) {
+        st = gen(st, ym_get(node, "e"));
+        return emit(st, ys("    mov (%rax), %rax"));
+    } else if (ys_eq_lit(k, "bin")) {
+        return gen_bin(st, node);
+    } else if (ys_eq_lit(k, "call")) {
+        return gen_call(st, node);
+    } else if (ys_eq_lit(k, "if")) {
+        return gen_if(st, node);
+    } else if (ys_eq_lit(k, "while")) {
+        return gen_while(st, node);
+    } else if (ys_eq_lit(k, "for")) {
+        return gen_for(st, node);
+    } else if (ys_eq_lit(k, "forrange")) {
+        return gen_forrange(st, node);
+    } else if (ys_eq_lit(k, "foreach")) {
+        return gen_foreach(st, node);
+    } else if (ys_eq_lit(k, "block")) {
+        return gen_block(st, node);
+    } else if (ys_eq_lit(k, "decl")) {
+        return gen_decl(st, node);
+    } else if (ys_eq_lit(k, "assign")) {
+        return gen_assign(st, node);
+    } else if (ys_eq_lit(k, "incdec")) {
+        return gen_incdec(st, node);
+    } else if (ys_eq_lit(k, "opassign")) {
+        return gen_opassign(st, node);
+    } else if (ys_eq_lit(k, "index")) {
+        return gen_index(st, node);
+    } else if (ys_eq_lit(k, "slice")) {
+        return gen_slice(st, node);
+    } else if (ys_eq_lit(k, "idxassign")) {
+        return gen_idxassign(st, node);
+    } else if (ys_eq_lit(k, "dotassign")) {
+        return gen_dotassign(st, node);
+    } else if (ys_eq_lit(k, "dot")) {
+        return gen_dot(st, node);
+    } else if (ys_eq_lit(k, "map")) {
+        /* map literal anywhere (let/call-arg): heap address in %rax. */
+        return gen_map(st, node);
+    } else if (ys_eq_lit(k, "arrrep")) {
+        /* [v; n] anywhere (let/assign/call-arg): heap address in %rax. */
+        return gen_arrrep(st, node);
+    } else if (ys_eq_lit(k, "func")) {
+        /* Anonymous function literal in expression position. */
+        return gen_func_literal(st, node);
+    } else if (ys_eq_lit(k, "store")) {
+        return gen_store(st, node);
+    } else if (ys_eq_lit(k, "ret")) {
+        st = gen(st, ym_get(node, "e"));
+        return emit(st, ys_cat(ys("    jmp "), ym_get(st, "end_label")));
+    } else {
+        /* Unreachable: the checker rejects everything else. */
+        return emit(st, ys_cat(ys_cat(ys("    # INTERNAL: unhandled "), k),
+                              ys(" (checker drift)")));
+    }
+}
+
+/* A string literal in .rodata: header object [len, data..., NUL]; the value
+ * is the header's address. Used by `str` nodes and by every synthesised
+ * constant (typeof, function/record formatting). */
+Yv *gen_str_const(Yv *st, Yv *s) {
+    Yv *r = next_uid(st);
+    st = ym_get(r, "st");
+    Yv *lbl = arch_str_label(yv_l(ym_get(r, "uid")));
+    /* NOTE: push-chain over a let-bound [] (not a literal): the checker
+     * rejects heterogeneous array literals ([str, long, str]) AND pushes
+     * onto a direct [] literal; pushes onto a let-bound [] unify quietly
+     * and the runtime value is identical. */
+    Yv *rod0 = yav(0);
+    rod0 = ya_push(rod0, lbl);
+    rod0 = ya_push(rod0, ys_long(yv_len(s)));
+    rod0 = ya_push(rod0, esc_asm(s));
+    Yv *rod = ya_push(ym_get(st, "rodata"), rod0);
+    st = ym(11, "out", ym_get(st, "out"), "rodata", rod, "uid",
+            ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+            ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+            ym_get(st, "slots"), "self_label", ym_get(st, "self_label"),
+            "end_label", ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+            "bodies", ym_get(st, "bodies"));
+    return emit(st, ys_cat(ys_cat(ys("    lea "), lbl), ys("(%rip), %rax")));
+}
+
+Yv *gen_id(Yv *st, Yv *node) {
+    if (ys_eq_lit(ym_get(node, "v"), "self")) {
+        /* Bare `self` as a value: only legal in discarded positions
+         * (the checker rejects every typed use). Emit null-ish zero. */
+        return emit(st, ys("    xor %eax, %eax  # bare self (discarded)"));
+    } else if (ys_eq_lit(ym_get(node, "v"), "none")) {
+        /* The empty option (checker gives it typeof from context). */
+        return emit(st, ys("    xor %eax, %eax"));
+    } else {
+        Yv *e = env_find(st, ym_get(node, "v"));
+        if (ys_eq_lit(ym_get(e, "kind"), "none")) {
+            return emit(st, ys_cat(ys("    # INTERNAL: undefined "),
+                                  ym_get(node, "v")));
+        } else if (ys_eq_lit(ym_get(e, "kind"), "func")) {
+            /* A hoisted def used as a VALUE: wrap it in a closure record
+             * with no captures (top-level defs capture nothing). */
+            return gen_make_closure(st, ym_get(e, "label"), yav(0));
+        } else if (ys_eq_lit(ym_get(e, "kind"), "capture")) {
+            /* Captured by the enclosing closure: load the closure record
+             * (at the frame offset recorded in `off`), read slot idx+1 —
+             * the shared cell pointer — and deref it (see box_capture).
+             * NOTE: the index rides in `label` — env entries have no spare
+             * numeric field and adding one would touch every signature. */
+            long idx = ys_tonum(ym_get(e, "label"));
+            st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                       ys_long(yv_l(ym_get(e, "off")))),
+                                ys("(%rbp), %rcx")));
+            st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                       ys_long(8 * (idx + 1))),
+                                ys("(%rcx), %rax")));
+            return emit(st, ys("    mov (%rax), %rax"));
+        } else if (ys_eq_lit(ym_get(e, "kind"), "box")) {
+            /* A captured variable's shared cell; the slot holds its
+             * pointer. */
+            st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                       ys_long(yv_l(ym_get(e, "off")))),
+                                ys("(%rbp), %rax")));
+            return emit(st, ys("    mov (%rax), %rax"));
+        } else {
+            return emit(st, ys_cat(ys_cat(ys("    mov "),
+                                         ys_long(yv_l(ym_get(e, "off")))),
+                                  ys("(%rbp), %rax")));
+        }
+    }
+}
+
+/* ── closures ───────────────────────────────────────────────────────────
+ * A closure is a heap record [code_addr, cap0, cap1, ...] and its VALUE is
+ * that address (8 bytes, like every other value).
+ *
+ * Calling convention: the caller pushes the closure FIRST (deepest), then
+ * the args left to right. Param offsets are therefore identical to a direct
+ * call, and the closure pointer sits at rbp+16+8*nargs. That is why a
+ * capture-free body works unchanged under both call forms: it simply never
+ * reads that slot, and the caller cleans up either way. */
+
+/* The cell pointer for a capture, in %rax. Every capture slot holds a
+ * heap BOX pointer (see box_capture) — through a closure record or through
+ * a "box" binding alike. */
+Yv *gen_cap_ptr(Yv *st, Yv *name) {
+    Yv *e = env_find(st, name);
+    if (ys_eq_lit(ym_get(e, "kind"), "capture")) {
+        /* NOTE: the index rides in `label` (see gen_id's capture arm). */
+        long pidx = ys_tonum(ym_get(e, "label"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                   ys_long(yv_l(ym_get(e, "off")))),
+                            ys("(%rbp), %rcx")));
+        return emit(st, ys_cat(ys_cat(ys("    mov "),
+                                      ys_long(8 * (pidx + 1))),
+                               ys("(%rcx), %rax")));
+    } else {
+        return emit(st, ys_cat(ys_cat(ys("    mov "),
+                                      ys_long(yv_l(ym_get(e, "off")))),
+                               ys("(%rbp), %rax")));
+    }
+}
+
+/* A captured variable lives in ONE heap cell shared by its binding and
+ * every closure over it: writes through either are visible through both —
+ * the scope is shared, exactly as in the VM and the compiled C runtime
+ * (the old native model copied the value at creation and could not even
+ * write to a capture). box_capture runs at the closure's creation site,
+ * once per captured name: the FIRST capture allocates the cell and
+ * re-binds the name to it (kind "box"); later captures find it already
+ * boxed. In a loop the creation code runs per iteration, so each
+ * iteration's closures share one fresh cell. */
+Yv *box_capture(Yv *st, Yv *name) {
+    Yv *e = env_find(st, name);
+    if (ys_eq_lit(ym_get(e, "kind"), "box") ||
+        ys_eq_lit(ym_get(e, "kind"), "capture")) {
+        return st;
+    } else {
+        st = gen_id(st, ym(4, "k", ys("id"), "v", name, "line", yv_long(0),
+                           "col", yv_long(0)));
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    mov $8, %rdi"));
+        st = emit(st, ys("    call y_alloc"));
+        st = emit(st, ys("    pop %rdx"));
+        st = emit(st, ys("    mov %rdx, (%rax)"));
+        long boff = (yv_l(ym_get(st, "slots")) + 1) * -8;
+        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(boff)),
+                             ys("(%rbp)")));
+        Yv *st2 =
+            ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"),
+               "uid", ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+               ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+               yv_long(yv_l(ym_get(st, "slots")) + 1), "self_label",
+               ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+               "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+        return env_define(st2, name, ys("box"), boff, ys(""), ym_get(e, "typ"));
+    }
+}
+
+Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
+    long n = yv_len(caps);
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(8 + 8 * n)),
+                         ys(", %rdi")));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    lea "), label), ys("(%rip), %rcx")));
+    st = emit(st, ys("    mov %rcx, (%rax)"));
+    long i = 0;
+    while (i < n) {
+        Yv *cn = ya_get(caps, i);
+        /* Captured as a shared cell pointer (see box_capture). */
+        st = gen_cap_ptr(st, cn);
+        st = emit(st, ys("    pop %rcx"));
+        st = emit(st, ys("    push %rcx"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
+                                    ys_long(8 * (i + 1))),
+                             ys("(%rcx)")));
+        i = i + 1;
+    }
+    return emit(st, ys("    pop %rax"));
+}
+
+/* Indirect call through a closure value produced by `callee`.
+ * range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin
+ * the C engines already have). */
+Yv *gen_range(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_range"));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
+/* arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands
+ * are untouched, like `+` on arrays). A missing bound means 0 / len. */
+Yv *gen_slice(Yv *st, Yv *node) {
+    Yv *lo = ym_get(node, "lo");
+    Yv *hi = ym_get(node, "hi");
+    long slesz = arr_elem_bytes(infer(st, ym_get(node, "arr")));
+    st = gen(st, ym_get(node, "arr"));
+    st = emit(st, ys("    push %rax"));
+    if (ys_eq_lit(ym_get(lo, "k"), "null")) {
+        st = emit(st, ys("    xor %eax, %eax"));
+        ;
+    } else {
+        st = gen(st, lo);
+        ;
+    }
+    st = emit(st, ys("    push %rax"));
+    if (ys_eq_lit(ym_get(hi, "k"), "null")) {
+        /* default: the array's length (the header keeps it in slot 0);
+         * the array pointer sits one slot below the pushed lo. */
+        st = emit(st, ys("    mov 8(%rsp), %rax"));
+        st = emit(st, ys("    mov (%rax), %rax"));
+        ;
+    } else {
+        st = gen(st, hi);
+        ;
+    }
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(slesz)), ys(", %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_arr_slice"));
+    return emit(st, ys("    add $32, %rsp"));
+}
+
+Yv *gen_indirect(Yv *st, Yv *node, Yv *callee) {
+    Yv *args = ym_get(node, "args");
+    long n = yv_len(args);
+    st = gen(st, callee);
+    st = emit(st, ys("    push %rax"));
+    st = gen_push_args(st, args);
+    /* Reload the closure (it sits just below the n pushed args) and call
+     * through its code pointer. */
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * n)),
+                         ys("(%rsp), %rax")));
+    st = emit(st, ys("    mov (%rax), %rax"));
+    st = emit(st, ys("    call *%rax"));
+    return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(8 * (n + 1))),
+                          ys(", %rsp")));
+}
+
+Yv *gen_un(Yv *st, Yv *node) {
+    Yv *ut = infer(st, ym_get(node, "e"));
+    st = gen(st, ym_get(node, "e"));
+    if (ys_eq_lit(ym_get(node, "op"), "-")) {
+        if (ys_eq_lit(ym_get(ut, "k"), "tfloat")) {
+            /* 0.0 - x (no SSE negate form emitted by this backend) */
+            st = emit(st, ys("    movq %rax, %xmm1"));
+            st = emit(st, ys("    xor %ecx, %ecx"));
+            st = emit(st, ys("    movq %rcx, %xmm0"));
+            st = emit(st, ys("    subsd %xmm1, %xmm0"));
+            return emit(st, ys("    movq %xmm0, %rax"));
+        } else {
+            return emit(st, ys("    neg %rax"));
+        }
+    } else {
+        return emit(st, ys("    xor $1, %rax"));
+    }
+}
+
+Yv *gen_addr(Yv *st, Yv *node) {
+    /* Checker guarantees plain ids, or id-rooted index into an array. */
+    if (ys_eq_lit(ym_get(ym_get(node, "e"), "k"), "index")) {
+        return gen_elem_addr(st, ym_get(node, "e"));
+    } else {
+        Yv *e = env_find(st, ym_get(ym_get(node, "e"), "v"));
+        if (ys_eq_lit(ym_get(e, "kind"), "box")) {
+            /* the shared cell IS the variable's address */
+            return emit(st, ys_cat(ys_cat(ys("    mov "),
+                                         ys_long(yv_l(ym_get(e, "off")))),
+                                  ys("(%rbp), %rax")));
+        } else if (ys_eq_lit(ym_get(e, "kind"), "capture")) {
+            long aidx = ys_tonum(ym_get(e, "label"));
+            st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                       ys_long(yv_l(ym_get(e, "off")))),
+                                ys("(%rbp), %rcx")));
+            return emit(st, ys_cat(ys_cat(ys("    mov "),
+                                         ys_long(8 * (aidx + 1))),
+                                  ys("(%rcx), %rax")));
+        } else {
+            return emit(st, ys_cat(ys_cat(ys("    lea "),
+                                         ys_long(yv_l(ym_get(e, "off")))),
+                                  ys("(%rbp), %rax")));
+        }
+    }
+}
+
+/* Address of element arr[idx] in %rax (bounds-trapped). Works for both
+ * array kinds: fixed (frame SIB) and heap (header load + SIB). */
+Yv *gen_elem_addr(Yv *st, Yv *node) {
+    /* &a[i] — an element's address. The base is any array expression
+     * (`&grid[0][i]` too) and runs once, before the index (the same order
+     * gen_index and the VM use). */
+    Yv *earr = ym_get(node, "arr");
+    Yv *bt = infer(st, earr);
+    long eaesz = arr_elem_bytes(bt);
+    Yv *eascale = ys("8");
+    if (eaesz == 1) {
+        eascale = ys("1");
+        ;
+    } else {
+        ;
+    }
+    st = gen(st, earr);
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "idx"));
+    st = emit(st, ys("    mov %rax, %rcx"));
+    st = emit(st, ys("    pop %rax"));
+    st = emit(st, ys("    test %rcx, %rcx"));
+    st = emit(st, ys("    js y_oob"));
+    if (ys_eq_lit(ym_get(bt, "k"), "tarrfix")) {
+        st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
+                                    ys_long(yv_l(ym_get(bt, "n")))),
+                             ys(", %rcx")));
+        st = emit(st, ys("    jge y_oob"));
+        ;
+    } else {
+        st = emit(st, ys("    mov (%rax), %rdx"));
+        st = emit(st, ys("    cmp %rdx, %rcx"));
+        st = emit(st, ys("    jge y_oob"));
+        ;
+    }
+    st = emit(st, ys("    mov 16(%rax), %rax"));
+    return emit(st, ys_cat(ys_cat(ys("    lea (%rax,%rcx,"), eascale),
+                           ys("), %rax")));
+}
+
+Yv *gen_bin(Yv *st, Yv *node) {
+    Yv *op = ym_get(node, "op");
+    /* Lazy &&/||: short-circuit jumps, not eager and/or (the right operand
+     * must not run when the left already decides). */
+    if (ys_eq_lit(op, "&&")) {
+        return gen_logic(st, node, 0);
+    } else if (ys_eq_lit(op, "||")) {
+        return gen_logic(st, node, 1);
+    } else {
+        return gen_bin_rest(st, node);
+    }
+}
+
+/* Short-circuit logic: value is 0/1; the right operand only evaluates when
+ * the left operand does not already decide the result.
+ *   a && b : test a -> jz F; test b -> jz F; 1; jmp E; F: 0; E:
+ *   a || b : test a -> jnz T; test b -> jnz T; 0; jmp E; T: 1; E: */
+Yv *gen_logic(Yv *st, Yv *node, int is_or) {
+    Yv *rT = next_loc(st);
+    st = ym_get(rT, "st");
+    Yv *rF = next_loc(st);
+    st = ym_get(rF, "st");
+    Yv *rE = next_loc(st);
+    st = ym_get(rE, "st");
+    st = gen(st, ym_get(node, "l"));
+    st = emit(st, ys("    test %rax, %rax"));
+    if (is_or) {
+        st = emit(st, ys_cat(ys("    jnz "), ym_get(rT, "lbl")));
+        ;
+    } else {
+        ;
+    }
+    if (is_or) {
+        ;
+    } else {
+        st = emit(st, ys_cat(ys("    jz "), ym_get(rF, "lbl")));
+        ;
+    }
+    st = gen(st, ym_get(node, "r"));
+    st = emit(st, ys("    test %rax, %rax"));
+    if (is_or) {
+        st = emit(st, ys_cat(ys("    jnz "), ym_get(rT, "lbl")));
+        ;
+    } else {
+        ;
+    }
+    if (is_or) {
+        ;
+    } else {
+        st = emit(st, ys_cat(ys("    jz "), ym_get(rF, "lbl")));
+        ;
+    }
+    if (is_or) {
+        ;
+    } else {
+        st = emit(st, ys("    mov $1, %rax"));
+        st = emit(st, ys_cat(ys("    jmp "), ym_get(rE, "lbl")));
+        ;
+    }
+    if (is_or) {
+        st = emit(st, ys("    xor %eax, %eax"));
+        st = emit(st, ys_cat(ys("    jmp "), ym_get(rE, "lbl")));
+        st = emit(st, ys_cat(ym_get(rT, "lbl"), ys(":")));
+        st = emit(st, ys("    mov $1, %rax"));
+        ;
+    } else {
+        ;
+    }
+    if (is_or) {
+        ;
+    } else {
+        st = emit(st, ys_cat(ym_get(rF, "lbl"), ys(":")));
+        st = emit(st, ys("    xor %eax, %eax"));
+        ;
+    }
+    return emit(st, ys_cat(ym_get(rE, "lbl"), ys(":")));
+}
+
+/* AUTO-STRINGIFY `+`: when a string meets a non-string, stringify the other
+ * side (y_long_tostr / y_bool_tostr) and concatenate — the same semantics
+ * the C runtime's y_add gives. tstr+tstr is a plain concat; tstr+tunk falls
+ * back to the raw pointer concat (the old behavior) since the runtime type
+ * is unknown statically. */
+Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
+    /* NOTE: y_long_tostr / y_bool_tostr take ONE STACK ARG (push; call;
+     * add $8) — gen_tostring's pattern. y_str_cat takes two stack args. */
+    if (ys_eq_lit(ym_get(lt, "k"), "tarr") ||
+        ys_eq_lit(ym_get(lt, "k"), "tarrfix") ||
+        ys_eq_lit(ym_get(rt, "k"), "tarr") ||
+        ys_eq_lit(ym_get(rt, "k"), "tarrfix")) {
+        return gen_cat_arr(st, node, lt, rt);
+    }
+    if (ys_eq_lit(ym_get(lt, "k"), "tstr")) {
+        if (ys_eq_lit(ym_get(rt, "k"), "tstr")) {
+            st = gen_push_args(st, yav(2, ym_get(node, "l"),
+                                      ym_get(node, "r")));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        } else if (ys_eq_lit(ym_get(rt, "k"), "tlong")) {
+            st = gen(st, ym_get(node, "l"));
+            st = emit(st, ys("    push %rax"));
+            st = gen(st, ym_get(node, "r"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_long_tostr"));
+            st = emit(st, ys("    add $8, %rsp"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        } else if (ys_eq_lit(ym_get(rt, "k"), "tbool")) {
+            st = gen(st, ym_get(node, "l"));
+            st = emit(st, ys("    push %rax"));
+            st = gen(st, ym_get(node, "r"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_bool_tostr"));
+            st = emit(st, ys("    add $8, %rsp"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        } else if (ys_eq_lit(ym_get(rt, "k"), "tfloat")) {
+            st = gen(st, ym_get(node, "l"));
+            st = emit(st, ys("    push %rax"));
+            st = gen(st, ym_get(node, "r"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_float_tostr"));
+            st = emit(st, ys("    add $8, %rsp"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        } else {
+            /* Unknown right operand: treat it as a string. Most unknowns
+             * here ARE strings (a field read through an untyped hole infers
+             * as tunk — the compiler's own tstr() does exactly that), and
+             * the return-type inference in emit_program now pins down the
+             * long-returning calls that used to land in this arm. */
+            st = gen_push_args(st, yav(2, ym_get(node, "l"),
+                                      ym_get(node, "r")));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        }
+        ;
+    } else {
+        ;
+    }
+    if (!ys_eq_lit(ym_get(lt, "k"), "tstr")) {
+        if (ys_eq_lit(ym_get(lt, "k"), "tlong")) {
+            st = gen(st, ym_get(node, "l"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_long_tostr"));
+            st = emit(st, ys("    add $8, %rsp"));
+            st = emit(st, ys("    push %rax"));
+            st = gen(st, ym_get(node, "r"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        } else if (ys_eq_lit(ym_get(lt, "k"), "tbool")) {
+            st = gen(st, ym_get(node, "l"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_bool_tostr"));
+            st = emit(st, ys("    add $8, %rsp"));
+            st = emit(st, ys("    push %rax"));
+            st = gen(st, ym_get(node, "r"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        } else if (ys_eq_lit(ym_get(lt, "k"), "tfloat")) {
+            st = gen(st, ym_get(node, "l"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_float_tostr"));
+            st = emit(st, ys("    add $8, %rsp"));
+            st = emit(st, ys("    push %rax"));
+            st = gen(st, ym_get(node, "r"));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        } else {
+            /* Unknown left operand: treat it as a string (see the note on
+             * the right-operand arm). */
+            st = gen_push_args(st, yav(2, ym_get(node, "l"),
+                                      ym_get(node, "r")));
+            st = emit(st, ys("    call y_str_cat"));
+            st = emit(st, ys("    add $16, %rsp"));
+        }
+        ;
+    } else {
+        ;
+    }
+    return st;
+}
+
+/* Float arithmetic and comparison. Operands arrive in %rax as raw bits;
+ * a long operand is widened with cvtsi2sd first (the only coercion). */
+Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
+    Yv *op = ym_get(node, "op");
+    st = gen(st, ym_get(node, "l"));
+    if (ys_eq_lit(ym_get(lt, "k"), "tfloat")) {
+        ;
+    } else {
+        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
+        st = emit(st, ys("    movq %xmm0, %rax"));
+        ;
+    }
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "r"));
+    if (ys_eq_lit(ym_get(rt, "k"), "tfloat")) {
+        ;
+    } else {
+        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
+        st = emit(st, ys("    movq %xmm0, %rax"));
+        ;
+    }
+    st = emit(st, ys("    movq %rax, %xmm1"));
+    st = emit(st, ys("    pop %rax"));
+    st = emit(st, ys("    movq %rax, %xmm0"));
+    if (ys_eq_lit(op, "+")) {
+        st = emit(st, ys("    addsd %xmm1, %xmm0"));
+        return emit(st, ys("    movq %xmm0, %rax"));
+    } else if (ys_eq_lit(op, "-")) {
+        st = emit(st, ys("    subsd %xmm1, %xmm0"));
+        return emit(st, ys("    movq %xmm0, %rax"));
+    } else if (ys_eq_lit(op, "*")) {
+        st = emit(st, ys("    mulsd %xmm1, %xmm0"));
+        return emit(st, ys("    movq %xmm0, %rax"));
+    } else if (ys_eq_lit(op, "/")) {
+        st = emit(st, ys("    divsd %xmm1, %xmm0"));
+        return emit(st, ys("    movq %xmm0, %rax"));
+    } else {
+        /* Comparisons: ucomisd sets CF/ZF, so the UNSIGNED conditions are
+         * the right ones (a/ae/b/be), not the signed g/ge/l/le. */
+        st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
+        if (ys_eq_lit(op, "<")) {
+            st = emit(st, ys("    setb %al"));
+            ;
+        } else if (ys_eq_lit(op, "<=")) {
+            st = emit(st, ys("    setbe %al"));
+            ;
+        } else if (ys_eq_lit(op, ">")) {
+            st = emit(st, ys("    seta %al"));
+            ;
+        } else if (ys_eq_lit(op, ">=")) {
+            st = emit(st, ys("    setae %al"));
+            ;
+        } else if (ys_eq_lit(op, "==")) {
+            st = emit(st, ys("    sete %al"));
+            ;
+        } else {
+            st = emit(st, ys("    setne %al"));
+            ;
+        }
+        return emit(st, ys("    movzbq %al, %rax"));
+    }
+}
+
+Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op) {
+    st = gen_push_args(st, yav(2, ym_get(node, "l"), ym_get(node, "r")));
+    st = emit(st, ys("    call y_str_cmp"));
+    st = emit(st, ys("    add $16, %rsp"));
+    st = emit(st, ys("    cmp $0, %rax"));
+    if (ys_eq_lit(op, "<")) {
+        st = emit(st, ys("    setl %al"));
+        ;
+    } else if (ys_eq_lit(op, ">")) {
+        st = emit(st, ys("    setg %al"));
+        ;
+    } else if (ys_eq_lit(op, "<=")) {
+        st = emit(st, ys("    setle %al"));
+        ;
+    } else {
+        st = emit(st, ys("    setge %al"));
+        ;
+    }
+    return emit(st, ys("    movzbq %al, %rax"));
+}
+
+Yv *gen_bin_rest(Yv *st, Yv *node) {
+    Yv *op = ym_get(node, "op");
+    Yv *lt = infer(st, ym_get(node, "l"));
+    Yv *rt = infer(st, ym_get(node, "r"));
+    if (ys_eq_lit(op, "+") &&
+        (ys_eq_lit(ym_get(lt, "k"), "tstr") ||
+         ys_eq_lit(ym_get(rt, "k"), "tstr"))) {
+        return gen_cat(st, node, lt, rt);
+    } else if (ys_eq_lit(op, "+") &&
+               (ys_eq_lit(ym_get(lt, "k"), "tarr") ||
+                ys_eq_lit(ym_get(rt, "k"), "tarr"))) {
+        /* array `+` is the copy-concat form (gen_cat splits off the array
+         * case first), not numeric add on the header pointers. */
+        return gen_cat(st, node, lt, rt);
+    } else if (ys_eq_lit(op, "+") &&
+               (ys_eq_lit(ym_get(lt, "k"), "tarrfix") ||
+                ys_eq_lit(ym_get(rt, "k"), "tarrfix"))) {
+        return gen_cat(st, node, lt, rt);
+    } else if (ys_eq_lit(ym_get(lt, "k"), "tfloat") ||
+               ys_eq_lit(ym_get(rt, "k"), "tfloat")) {
+        return gen_float_bin(st, node, lt, rt);
+    } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) &&
+               (ys_eq_lit(ym_get(lt, "k"), "tstr") ||
+                ys_eq_lit(ym_get(rt, "k"), "tstr"))) {
+        st = gen_push_args(st, yav(2, ym_get(node, "l"), ym_get(node, "r")));
+        st = emit(st, ys("    call y_str_eq"));
+        st = emit(st, ys("    add $16, %rsp"));
+        if (ys_eq_lit(op, "!=")) {
+            return emit(st, ys("    xor $1, %rax"));
+        } else {
+            return st;
+        }
+    } else if ((ys_eq_lit(op, "<") || ys_eq_lit(op, ">") ||
+                ys_eq_lit(op, "<=") || ys_eq_lit(op, ">=")) &&
+               ys_eq_lit(ym_get(lt, "k"), "tstr")) {
+        /* Lexicographic ordering: y_str_cmp returns the SIGN, so the normal
+         * signed setcc forms work on its result against 0. */
+        return gen_str_cmp(st, node, op);
+    } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) &&
+               (ys_eq_lit(ym_get(lt, "k"), "tarr") ||
+                ys_eq_lit(ym_get(rt, "k"), "tarr"))) {
+        /* Arrays compare STRUCTURALLY (length then elements), like the VM
+         * and the compiled C runtime — `arr == []` is an emptiness test,
+         * not a pointer comparison. String elements compare by value. */
+        Yv *elt = ym(1, "k", ys("tunk"));
+        if (ys_eq_lit(ym_get(lt, "k"), "tarr")) {
+            elt = ym_get(lt, "of");
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(ym_get(elt, "k"), "tunk")) {
+            if (ys_eq_lit(ym_get(rt, "k"), "tarr")) {
+                elt = ym_get(rt, "of");
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        st = gen_push_args(st, yav(2, ym_get(node, "l"), ym_get(node, "r")));
+        if (ys_eq_lit(ym_get(elt, "k"), "tstr")) {
+            st = emit(st, ys("    call y_arr_eq_str"));
+            st = emit(st, ys("    add $16, %rsp"));
+            ;
+        } else {
+            st = emit(st, ys_cat(ys_cat(ys("    mov $"),
+                                        ys_long(elem_bytes(elt))),
+                                 ys(", %rax")));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_arr_eq"));
+            st = emit(st, ys("    add $24, %rsp"));
+            ;
+        }
+        if (ys_eq_lit(op, "!=")) {
+            return emit(st, ys("    xor $1, %rax"));
+        } else {
+            return st;
+        }
+    } else {
+        st = gen(st, ym_get(node, "l"));
+        st = emit(st, ys("    push %rax"));
+        st = gen(st, ym_get(node, "r"));
+        st = emit(st, ys("    mov %rax, %rcx"));
+        st = emit(st, ys("    pop %rax"));
+        if (ys_eq_lit(op, "+")) {
+            return emit(st, ys("    add %rcx, %rax"));
+        } else if (ys_eq_lit(op, "-")) {
+            return emit(st, ys("    sub %rcx, %rax"));
+        } else if (ys_eq_lit(op, "*")) {
+            return emit(st, ys("    imul %rcx, %rax"));
+        } else if (ys_eq_lit(op, "/")) {
+            /* idiv raises #DE on LONG_MIN / -1 (the quotient does not fit),
+             * so divisor -1 is handled as a negation instead: neg of
+             * LONG_MIN wraps back to LONG_MIN, which is what the VM and the
+             * C runtime produce, and every other value negates exactly. */
+            st = emit(st, ys("    test %rcx, %rcx"));
+            st = emit(st, ys("    jz y_div_zero"));
+            Yv *d1 = next_loc(st);
+            st = ym_get(d1, "st");
+            Yv *d2 = next_loc(st);
+            st = ym_get(d2, "st");
+            st = emit(st, ys("    cmp $-1, %rcx"));
+            st = emit(st, ys_cat(ys("    jne "), ym_get(d1, "lbl")));
+            st = emit(st, ys("    neg %rax"));
+            st = emit(st, ys_cat(ys("    jmp "), ym_get(d2, "lbl")));
+            st = emit(st, ys_cat(ym_get(d1, "lbl"), ys(":")));
+            st = emit(st, ys("    cqo"));
+            st = emit(st, ys("    idiv %rcx"));
+            return emit(st, ys_cat(ym_get(d2, "lbl"), ys(":")));
+        } else if (ys_eq_lit(op, "%")) {
+            /* Same #DE: x % -1 is 0 for every x (see the `/` note). */
+            st = emit(st, ys("    test %rcx, %rcx"));
+            st = emit(st, ys("    jz y_div_zero"));
+            Yv *m1 = next_loc(st);
+            st = ym_get(m1, "st");
+            Yv *m2 = next_loc(st);
+            st = ym_get(m2, "st");
+            st = emit(st, ys("    cmp $-1, %rcx"));
+            st = emit(st, ys_cat(ys("    jne "), ym_get(m1, "lbl")));
+            st = emit(st, ys("    xor %eax, %eax"));
+            st = emit(st, ys_cat(ys("    jmp "), ym_get(m2, "lbl")));
+            st = emit(st, ys_cat(ym_get(m1, "lbl"), ys(":")));
+            st = emit(st, ys("    cqo"));
+            st = emit(st, ys("    idiv %rcx"));
+            st = emit(st, ys("    mov %rdx, %rax"));
+            return emit(st, ys_cat(ym_get(m2, "lbl"), ys(":")));
+        } else if (ys_eq_lit(op, "<")) {
+            st = emit(st, ys("    cmp %rcx, %rax"));
+            st = emit(st, ys("    setl %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, ">")) {
+            st = emit(st, ys("    cmp %rcx, %rax"));
+            st = emit(st, ys("    setg %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, "<=")) {
+            st = emit(st, ys("    cmp %rcx, %rax"));
+            st = emit(st, ys("    setle %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, ">=")) {
+            st = emit(st, ys("    cmp %rcx, %rax"));
+            st = emit(st, ys("    setge %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, "==")) {
+            st = emit(st, ys("    cmp %rcx, %rax"));
+            st = emit(st, ys("    sete %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, "!=")) {
+            st = emit(st, ys("    cmp %rcx, %rax"));
+            st = emit(st, ys("    setne %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, "&&")) {
+            return emit(st, ys("    and %rcx, %rax"));
+        } else {
+            return emit(st, ys("    or %rcx, %rax"));
+        }
+    }
+}
+
+/* ── calls ──────────────────────────────────────────────────────────────
+ * Linux syscall arg regs (in order): rdi, rsi, rdx, r10, r8, r9. */
+
+Yv *syscall_reg(long i) {
+    if (i == 0) {
+        return ys("%rdi");
+    } else if (i == 1) {
+        return ys("%rsi");
+    } else if (i == 2) {
+        return ys("%rdx");
+    } else if (i == 3) {
+        return ys("%r10");
+    } else if (i == 4) {
+        return ys("%r8");
+    } else {
+        return ys("%r9");
+    }
+}
+
+Yv *gen_push_args(Yv *st, Yv *args) {
+    long i = 0;
+    while (i < yv_len(args)) {
+        st = gen(st, ya_get(args, i));
+        st = emit(st, ys("    push %rax"));
+        i = i + 1;
+    }
+    return st;
+}
+
+/* Call a one-argument runtime helper. The argument is in %rax and goes on
+ * the stack — the Y convention every helper written in Y (std/rt.y) and
+ * every asm helper shares; the caller cleans up. (Runtime helpers used to
+ * take it in %rdi, which only hand-written asm could honour.) */
+Yv *gen_helper1(Yv *st, Yv *label) {
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys("    call "), label));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
+Yv *gen_call(Yv *st, Yv *node) {
+    Yv *callee = ym_get(node, "callee");
+    if (!ys_eq_lit(ym_get(callee, "k"), "id")) {
+        /* Calling the result of an expression (e.g. `fs[0](x)`): it is a
+         * closure value, so go through its code pointer. */
+        return gen_indirect(st, node, callee);
+    } else {
+        Yv *name = ym_get(callee, "v");
+        if (ys_eq_lit(name, "print")) {
+            return gen_print(st, node);
+        } else if (ys_eq_lit(name, "syscall")) {
+            return gen_syscall(st, node);
+        } else if (ys_eq_lit(name, "len")) {
+            return gen_len(st, node);
+        } else if (ys_eq_lit(name, "range")) {
+            return gen_range(st, node);
+        } else if (ys_eq_lit(name, "push")) {
+            return gen_push(st, node);
+        } else if (ys_eq_lit(name, "some")) {
+            return gen_some(st, node);
+        } else if (ys_eq_lit(name, "is_some")) {
+            return gen_is_some(st, node);
+        } else if (ys_eq_lit(name, "unwrap")) {
+            return gen_unwrap(st, node);
+        } else if (ys_eq_lit(name, "substr")) {
+            return gen_substr(st, node);
+        } else if (ys_eq_lit(name, "trim")) {
+            return gen_trim(st, node);
+        } else if (ys_eq_lit(name, "prepend")) {
+            return gen_prepend(st, node);
+        } else if (ys_eq_lit(name, "byte_at")) {
+            return gen_byte_at(st, node);
+        } else if (ys_eq_lit(name, "ord")) {
+            return gen_ord(st, node);
+        } else if (ys_eq_lit(name, "chr")) {
+            return gen_chr(st, node);
+        } else if (ys_eq_lit(name, "tonum")) {
+            return gen_tonum(st, node);
+        } else if (ys_eq_lit(name, "tostring")) {
+            return gen_tostring(st, node);
+        } else if (ys_eq_lit(name, "typeof")) {
+            return gen_typeof(st, node);
+        } else if (ys_eq_lit(name, "index_of")) {
+            return gen_index_of(st, node, 0);
+        } else if (ys_eq_lit(name, "last_index_of")) {
+            return gen_index_of(st, node, 1);
+        } else if (ys_eq_lit(name, "join")) {
+            return gen_join(st, node);
+        } else if (ys_eq_lit(name, "split")) {
+            return gen_split(st, node);
+        } else if (ys_eq_lit(name, "puts")) {
+            return gen_puts(st, node);
+        } else if (ys_eq_lit(name, "eputs")) {
+            return gen_eputs(st, node);
+        } else if (ys_eq_lit(name, "clock_us")) {
+            return gen_clock_us(st, node);
+        } else if (ys_eq_lit(name, "sleep")) {
+            return gen_sleep(st, node);
+        } else if (ys_eq_lit(name, "heap_used")) {
+            return gen_heap_used(st, node);
+        } else if (ys_eq_lit(name, "exit")) {
+            return gen_exit(st, node);
+        } else if (ys_eq_lit(name, "argv")) {
+            return gen_argv(st, node);
+        } else if (ys_eq_lit(name, "read_file")) {
+            return gen_read_file(st, node);
+        } else if (ys_eq_lit(name, "bytes")) {
+            st = gen_push_args(st, ym_get(node, "args"));
+            st = emit(st, ys("    call y_str_to_bytes"));
+            return emit(st, ys("    add $8, %rsp"));
+        } else if (ys_eq_lit(name, "from_bytes")) {
+            st = gen_push_args(st, ym_get(node, "args"));
+            st = emit(st, ys("    call y_bytes_to_str"));
+            return emit(st, ys("    add $8, %rsp"));
+        } else if (ys_eq_lit(name, "ptr_addr")) {
+            /* A pointer IS its numeric value at run time: nothing to emit
+             * beyond evaluating the operand. This exists only so the type
+             * system lets the value cross into long territory. */
+            Yv *paargs = ym_get(node, "args");
+            return gen(st, ya_get(paargs, 0));
+        } else if (ys_eq_lit(name, "write_file")) {
+            return gen_write_file(st, node);
+        } else if (ys_eq_lit(name, "write_bytes")) {
+            return gen_write_bytes(st, node);
+        } else {
+            return gen_direct(st, node, name);
+        }
+    }
+}
+
+Yv *gen_print(Yv *st, Yv *node) {
+    Yv *args = ym_get(node, "args");
+    Yv *pa0 = ya_get(args, 0);
+    Yv *t = infer(st, pa0);
+    if (ys_eq_lit(ym_get(t, "k"), "trec")) {
+        /* Records are formatted field by field from their static shape. */
+        st = gen_rec_str(st, pa0, t);
+        st = gen_helper1(st, ys("y_print_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tfunc")) {
+        /* A function value has no printable contents; show its signature
+         * (the VM prints `<function SIG>` too, with `<inferred>` returns). */
+        st = gen(st, pa0);
+        st = gen_str_const(
+            st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(t)), ys(">")));
+        st = gen_helper1(st, ys("y_print_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tarr") ||
+               ys_eq_lit(ym_get(t, "k"), "tarrfix")) {
+        /* Arrays print like tostring: "[e0, e1, ...]". */
+        st = gen(st, pa0);
+        st = gen_arr_tostr_rax(st, ym_get(t, "of"));
+        st = gen_helper1(st, ys("y_print_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tnull")) {
+        st = gen(st, pa0);
+        st = gen_str_const(st, ys("null"));
+        st = gen_helper1(st, ys("y_print_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "topt")) {
+        st = gen(st, pa0);
+        st = gen_opt_str_rax(st, t);
+        st = gen_helper1(st, ys("y_print_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else {
+        return gen_print_scalar(st, pa0, t);
+    }
+}
+
+Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t) {
+    st = gen(st, arg);
+    if (ys_eq_lit(ym_get(t, "k"), "tbool")) {
+        st = gen_helper1(st, ys("y_print_bool"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tstr")) {
+        st = gen_helper1(st, ys("y_print_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tfloat")) {
+        st = gen_helper1(st, ys("y_print_float"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else {
+        st = gen_helper1(st, ys("y_print_long"));
+        return emit(st, ys("    xor %eax, %eax"));
+    }
+}
+
+/* `typeof(e)` is resolved statically: the checker has already pinned e's
+ * type, so this is a plain string constant. */
+Yv *gen_typeof(Yv *st, Yv *node) {
+    Yv *targs = ym_get(node, "args");
+    return gen_str_const(st, tdisp(infer(st, ya_get(targs, 0))));
+}
+
+/* ── record formatting ──────────────────────────────────────────────────
+ * `{a: 1, b: "x"}` — the shape is static, so the walk is unrolled at
+ * compile time. Stack layout while building: [record][accumulator], the
+ * record pushed first (8(%rsp)), the accumulator on top (0(%rsp)). */
+
+/* Option value in %rax (0 = none, else the box address): leave "null" or
+ * the payload's string form in %rax. Options are 0-or-box (NATIVE.md). */
+Yv *gen_opt_str_rax(Yv *st, Yv *t) {
+    Yv *rdone = next_loc(st);
+    st = ym_get(rdone, "st");
+    Yv *rnul = next_loc(st);
+    st = ym_get(rnul, "st");
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), ym_get(rnul, "lbl")));
+    st = emit(st, ys("    mov (%rax), %rax"));
+    st = gen_val_tostr_rax(st, ym_get(t, "of"));
+    st = emit(st, ys_cat(ys("    jmp "), ym_get(rdone, "lbl")));
+    st = emit(st, ys_cat(ym_get(rnul, "lbl"), ys(":")));
+    st = gen_str_const(st, ys("null"));
+    return emit(st, ys_cat(ym_get(rdone, "lbl"), ys(":")));
+}
+
+Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t) {
+    st = gen(st, arg);
+    return gen_rec_str_rax(st, t);
+}
+
+/* The record's address sits in %rax; leave "{a: 1, b: ...}" in %rax.
+ * Values are formatted from the static shape (the walk is unrolled at
+ * compile time). Stack layout while building: [record][accumulator], the
+ * record pushed first (8(%rsp)), the accumulator on top (0(%rsp)). */
+Yv *gen_rec_str_rax(Yv *st, Yv *t) {
+    st = emit(st, ys("    push %rax"));
+    st = gen_str_const(st, ys("{"));
+    st = emit(st, ys("    push %rax"));
+    Yv *fs = ym_get(t, "fields");
+    long i = 0;
+    while (i < yv_len(fs)) {
+        Yv *f = ya_get(fs, i);
+        Yv *sep = ys("");
+        if (i > 0) {
+            sep = ys(", ");
+            ;
+        } else {
+            ;
+        }
+        st = gen_acc_cat_const(
+            st, ys_cat(ys_cat(sep, ym_get(f, "name")), ys(": ")));
+        st = gen_rec_field_str(st, i, ym_get(f, "typ"));
+        i = i + 1;
+    }
+    st = gen_acc_cat_const(st, ys("}"));
+    st = emit(st, ys("    mov (%rsp), %rax"));
+    return emit(st, ys("    add $16, %rsp"));
+}
+
+/* acc = acc + <constant>, with the layout above still in place.
+ * Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
+ * y_arr_cat copies both sides; the one-element side is built with the
+ * ordinary array literal emitter, so `arr + v` evaluates v exactly once. */
+Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
+    Yv *ln = ym_get(node, "line");
+    Yv *cl = ym_get(node, "col");
+    Yv *lk = ym_get(lt, "k");
+    Yv *rk = ym_get(rt, "k");
+    long esz = 8;
+    int larr = 1;
+    if (ys_eq_lit(lk, "tarr")) {
+        esz = arr_elem_bytes(lt);
+        ;
+    } else if (ys_eq_lit(lk, "tarrfix")) {
+        esz = arr_elem_bytes(lt);
+        ;
+    } else {
+        larr = 0;
+        esz = arr_elem_bytes(rt);
+        ;
+    }
+    Yv *one = ym(4, "k", ys("array"), "elems", args1(ym_get(node, "r")), "line",
+                 ln, "col", cl);
+    if (larr) {
+        ;
+    } else {
+        one = ym(4, "k", ys("array"), "elems", args1(ym_get(node, "l")), "line",
+                 ln, "col", cl);
+        ;
+    }
+    if (larr) {
+        st = gen(st, ym_get(node, "l"));
+        st = emit(st, ys("    push %rax"));
+        if (ys_eq_lit(rk, "tarr")) {
+            st = gen(st, ym_get(node, "r"));
+            ;
+        } else {
+            if (ys_eq_lit(rk, "tarrfix")) {
+                st = gen(st, ym_get(node, "r"));
+                ;
+            } else {
+                st = gen_array_esz(st, one, esz);
+                ;
+            }
+            ;
+        }
+        ;
+    } else {
+        st = gen_array_esz(st, one, esz);
+        st = emit(st, ys("    push %rax"));
+        st = gen(st, ym_get(node, "r"));
+        ;
+    }
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(esz)), ys(", %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_arr_cat"));
+    return emit(st, ys("    add $24, %rsp"));
+}
+
+Yv *gen_acc_cat_const(Yv *st, Yv *s) {
+    st = emit(st, ys("    mov (%rsp), %rax"));
+    st = emit(st, ys("    push %rax"));
+    st = gen_str_const(st, s);
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_str_cat"));
+    st = emit(st, ys("    add $16, %rsp"));
+    return emit(st, ys("    mov %rax, (%rsp)"));
+}
+
+/* acc = acc + <field idx, rendered by its static type>. */
+Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft) {
+    Yv *fk = ym_get(ft, "k");
+    if (ys_eq_lit(fk, "tstr")) {
+        st = emit(st, ys("    mov 8(%rsp), %rcx"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
+                             ys("(%rcx), %rdx")));
+    } else if (ys_eq_lit(fk, "tlong")) {
+        st = emit(st, ys("    mov 8(%rsp), %rcx"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
+                             ys("(%rcx), %rax")));
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_long_tostr"));
+        st = emit(st, ys("    add $8, %rsp"));
+        st = emit(st, ys("    mov %rax, %rdx"));
+    } else if (ys_eq_lit(fk, "tbool")) {
+        st = emit(st, ys("    mov 8(%rsp), %rcx"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
+                             ys("(%rcx), %rax")));
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_bool_tostr"));
+        st = emit(st, ys("    add $8, %rsp"));
+        st = emit(st, ys("    mov %rax, %rdx"));
+    } else if (ys_eq_lit(fk, "tfloat")) {
+        st = emit(st, ys("    mov 8(%rsp), %rcx"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
+                             ys("(%rcx), %rax")));
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_float_tostr"));
+        st = emit(st, ys("    add $8, %rsp"));
+        st = emit(st, ys("    mov %rax, %rdx"));
+    } else if (ys_eq_lit(fk, "tfunc")) {
+        st = gen_str_const(
+            st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(ft)), ys(">")));
+        st = emit(st, ys("    mov %rax, %rdx"));
+    } else {
+        /* Arrays, records-in-records, options: no recursive formatter
+         * yet. */
+        st = gen_str_const(st, ys_cat(ys_cat(ys("<"), tdisp(ft)), ys(">")));
+        st = emit(st, ys("    mov %rax, %rdx"));
+    }
+    st = emit(st, ys("    mov (%rsp), %rax"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    push %rdx"));
+    st = emit(st, ys("    call y_str_cat"));
+    st = emit(st, ys("    add $16, %rsp"));
+    return emit(st, ys("    mov %rax, (%rsp)"));
+}
+
+Yv *gen_syscall(Yv *st, Yv *node) {
+    Yv *args = ym_get(node, "args");
+    /* args[0] is the number; rest are a1..a6. Push all, pop into regs. */
+    st = gen_push_args(st, args);
+    long n = yv_len(args) - 1;
+    long i = n;
+    while (i >= 1) {
+        st = emit(st, ys_cat(ys("    pop "), syscall_reg(i - 1)));
+        /* a str flows in as its header; the kernel wants the data bytes. */
+        Yv *at = infer(st, ya_get(args, i));
+        if (ys_eq_lit(ym_get(at, "k"), "tstr")) {
+            st = emit(st, ys_cat(ys("    add $8, "), syscall_reg(i - 1)));
+            ;
+        } else {
+            ;
+        }
+        i = i - 1;
+    }
+    st = emit(st, ys("    pop %rax"));
+    return emit(st, ys("    syscall"));
+}
+
+/* The frame offset of the closure record of the body being emitted, or -1
+ * when it captures nothing. Every "capture" env entry carries it (their
+ * `off` is the record's slot offset) — used to pass the record along on
+ * recursive `self` calls, which would otherwise reach the body without
+ * one. */
+long capture_off(Yv *st) {
+    Yv *env = ym_get(st, "env");
+    long i = 0;
+    long res = -1;
+    while (i < yv_len(env)) {
+        Yv *e = ya_get(env, i);
+        if (ys_eq_lit(ym_get(e, "kind"), "capture")) {
+            res = yv_l(ym_get(e, "off"));
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return res;
+}
+
+Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
+    Yv *label = ys("");
+    int indirect = 0;
+    /* NOTE: `0;` tails — every arm must have the same type (assignments to
+     * `label` are str, to `indirect` bool), so make them all long. */
+    if (ys_eq_lit(name, "self")) {
+        label = ym_get(st, "self_label");
+        ;
+    } else {
+        Yv *e = env_find(st, name);
+        if (ys_eq_lit(ym_get(e, "kind"), "none")) {
+            label = ys_cat(ys("y_missing_"), name);
+            ;
+        } else if (ys_eq_lit(ym_get(e, "kind"), "func")) {
+            label = ym_get(e, "label");
+            ;
+        } else {
+            /* A local/param/capture holding a closure value: call through
+             * it. */
+            indirect = 1;
+            ;
+        }
+        ;
+    }
+    if (indirect) {
+        return gen_indirect(st, node, ym_get(node, "callee"));
+    } else {
+        /* A recursive `self` call reaches the same body, which reads its
+         * captures through the closure record — pass this frame's record
+         * along, exactly as an indirect call would. */
+        long soff = -1;
+        if (ys_eq_lit(name, "self")) {
+            soff = capture_off(st);
+            ;
+        } else {
+            ;
+        }
+        if (soff >= 0) {
+            st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
+                                 ys("(%rbp), %rax")));
+            st = emit(st, ys("    push %rax"));
+            ;
+        } else {
+            ;
+        }
+        st = gen_push_args(st, ym_get(node, "args"));
+        st = emit(st, ys_cat(ys("    call "), label));
+        long nbytes = yv_len(ym_get(node, "args")) * 8;
+        if (soff >= 0) {
+            nbytes = nbytes + 8;
+            ;
+        } else {
+            ;
+        }
+        if (nbytes == 0) {
+            return st;
+        } else {
+            return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(nbytes)),
+                                   ys(", %rsp")));
+        }
+    }
+}
+
+/* ── control flow ─────────────────────────────────────────────────────── */
+
+Yv *gen_if(Yv *st, Yv *node) {
+    Yv *r1 = next_loc(st);
+    st = ym_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = ym_get(r2, "st");
+    st = gen(st, ym_get(node, "cond"));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), ym_get(r1, "lbl")));
+    st = gen(st, ym_get(node, "then"));
+    if (yv_b(ym_get(node, "has_else"))) {
+        st = emit(st, ys_cat(ys("    jmp "), ym_get(r2, "lbl")));
+        st = emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+        st = gen(st, ym_get(node, "els"));
+        return emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
+    } else {
+        return emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+    }
+}
+
+Yv *gen_while(Yv *st, Yv *node) {
+    Yv *r1 = next_loc(st);
+    st = ym_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = ym_get(r2, "st");
+    st = emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+    st = gen(st, ym_get(node, "cond"));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), ym_get(r2, "lbl")));
+    st = gen(st, ym_get(node, "body"));
+    st = emit(st, ys_cat(ys("    jmp "), ym_get(r1, "lbl")));
+    st = emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
+    return emit(st, ys("    xor %eax, %eax"));
+}
+
+/* ── counted loops ──────────────────────────────────────────────────────
+ * All three lower to the same shape as `while`: a head label, a test, the
+ * body, a step, and a jump back. The loop variable is a normal local slot,
+ * so nothing new is needed at runtime. */
+
+Yv *gen_for(Yv *st, Yv *node) {
+    /* for (init; cond; step) body */
+    st = gen(st, ym_get(node, "init"));
+    Yv *r1 = next_loc(st);
+    st = ym_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = ym_get(r2, "st");
+    st = emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+    st = gen(st, ym_get(node, "cond"));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), ym_get(r2, "lbl")));
+    st = gen(st, ym_get(node, "body"));
+    st = gen(st, ym_get(node, "step"));
+    st = emit(st, ys_cat(ys("    jmp "), ym_get(r1, "lbl")));
+    st = emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
+    return emit(st, ys("    xor %eax, %eax"));
+}
+
+Yv *gen_forrange(Yv *st, Yv *node) {
+    /* for (x in lo..hi) body — half-open, like the C VM.
+     * Slot layout: [var][limit]; the limit is evaluated once. */
+    long voff = (yv_l(ym_get(st, "slots")) + 1) * -8;
+    long loff = (yv_l(ym_get(st, "slots")) + 2) * -8;
+    st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"), "uid",
+            ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+            ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+            yv_long(yv_l(ym_get(st, "slots")) + 2), "self_label",
+            ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+            "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+    st = gen(st, ym_get(node, "hi"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(loff)),
+                         ys("(%rbp)")));
+    st = gen(st, ym_get(node, "lo"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(voff)),
+                         ys("(%rbp)")));
+    st = env_define(st, ym_get(node, "name"), ys("local"), voff, ys(""),
+                    ym(1, "k", ys("tlong")));
+    Yv *r1 = next_loc(st);
+    st = ym_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = ym_get(r2, "st");
+    st = emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(voff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(loff)),
+                         ys("(%rbp), %rcx")));
+    st = emit(st, ys("    cmp %rcx, %rax"));
+    st = emit(st, ys_cat(ys("    jge "), ym_get(r2, "lbl")));
+    st = gen(st, ym_get(node, "body"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(voff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    inc %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(voff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys("    jmp "), ym_get(r1, "lbl")));
+    st = emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
+    return emit(st, ys("    xor %eax, %eax"));
+}
+
+Yv *gen_foreach(Yv *st, Yv *node) {
+    /* foreach (x in arr) body. Slots: [x][arr][i]. The array is evaluated
+     * once; `x` is refreshed from arr[i] at the top of every iteration. */
+    long voff = (yv_l(ym_get(st, "slots")) + 1) * -8;
+    long aoff = (yv_l(ym_get(st, "slots")) + 2) * -8;
+    long ioff = (yv_l(ym_get(st, "slots")) + 3) * -8;
+    st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"), "uid",
+            ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+            ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+            yv_long(yv_l(ym_get(st, "slots")) + 3), "self_label",
+            ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+            "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+    Yv *elt = infer(st, ym_get(node, "iter"));
+    Yv *eltyp = ym(1, "k", ys("tunk"));
+    if (ys_eq_lit(ym_get(elt, "k"), "tarr")) {
+        eltyp = ym_get(elt, "of");
+        ;
+    } else {
+        ;
+    }
+    if (ys_eq_lit(ym_get(elt, "k"), "tarrfix")) {
+        eltyp = ym_get(elt, "of");
+        ;
+    } else {
+        ;
+    }
+    st = gen(st, ym_get(node, "iter"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys("    xor %eax, %eax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    st = env_define(st, ym_get(node, "name"), ys("local"), voff, ys(""),
+                    eltyp);
+    Yv *r1 = next_loc(st);
+    st = ym_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = ym_get(r2, "st");
+    st = emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+    /* i < len(arr) — the heap header keeps the length in slot 0. */
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys("    mov (%rdx), %rcx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    cmp %rcx, %rax"));
+    st = emit(st, ys_cat(ys("    jge "), ym_get(r2, "lbl")));
+    /* x = arr[i] */
+    st = emit(st, elem_load(arr_elem_bytes(elt), ys("%rdx"), ys("%rax"),
+                            ys("%rcx")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rcx, "), ys_long(voff)),
+                         ys("(%rbp)")));
+    st = gen(st, ym_get(node, "body"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    inc %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys("    jmp "), ym_get(r1, "lbl")));
+    st = emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
+    return emit(st, ys("    xor %eax, %eax"));
+}
+
+Yv *gen_block(Yv *st, Yv *node) {
+    /* No scope push: names are unique post-rename, blocks share the
+     * frame. */
+    Yv *stmts = ym_get(node, "stmts");
+    if (yv_len(stmts) == 0) {
+        return emit(st, ys("    xor %eax, %eax"));
+    } else {
+        long i = 0;
+        while (i < yv_len(stmts)) {
+            st = gen(st, ya_get(stmts, i));
+            i = i + 1;
+        }
+        return st;
+    }
+}
+
+/* Record literal { k: v, ... }: heap-allocate 8*n bytes (arena, static
+ * size — like a dynamic array without the header) and store each value.
+ * The VALUE is the heap address (8 bytes, first-class: locals, params,
+ * returns all just copy the address). Field k lives at addr+8k.
+ * (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
+ * empty maps are rejected by the checker anyway.) */
+/* Position of `name` in a record literal's merged field list, or -1. */
+long mfield_idx(Yv *names, Yv *name) {
+    long i = 0;
+    long out = -1;
+    while (i < yv_len(names)) {
+        Yv *nm = ya_get(names, i);
+        if (ys_eq(nm, name)) {
+            out = i;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *gen_map(Yv *st, Yv *node) {
+    /* NOTE: bound once — `node.vals[i]` inline misparses on the C VM. */
+    Yv *mvals = ym_get(node, "vals");
+    Yv *mkeys = ym_get(node, "keys");
+    long nent = yv_len(mvals);
+    /* Static merge for `...` spread entries (the types.y field_merge
+     * rule): first appearance keeps the position, a later entry wins the
+     * value. The value loop below stores into merged slots in entry
+     * order, so a later store simply overwrites -- no dynamic shape. */
+    Yv *names = yav(0);
+    long ni = 0;
+    while (ni < nent) {
+        Yv *nk = ya_get(mkeys, ni);
+        if (ys_eq_lit(nk, "...")) {
+            Yv *srec = infer(st, ya_get(mvals, ni));
+            if (ys_eq_lit(ym_get(srec, "k"), "trec")) {
+                Yv *sfs = ym_get(srec, "fields");
+                long si = 0;
+                while (si < yv_len(sfs)) {
+                    Yv *sf = ya_get(sfs, si);
+                    if (mfield_idx(names, ym_get(sf, "name")) < 0) {
+                        names = ya_push(names, ym_get(sf, "name"));
+                        ;
+                    } else {
+                        ;
+                    }
+                    si = si + 1;
+                }
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            if (mfield_idx(names, nk) < 0) {
+                names = ya_push(names, nk);
+                ;
+            } else {
+                ;
+            }
+            ;
+        }
+        ni = ni + 1;
+    }
+    long n = yv_len(names);
+    /* Shape tag for dynamic field reads (see y_dot_lookup note in
+     * arch_x64.y): every record carries its field table; field i lives
+     * at tag_base+8+i*8 and the value (base+8) keeps today's offsets,
+     * so statically-precise reads are bit-identical. Table label per
+     * site (uid); table rows are decimal quads (both assemblers take
+     * `.quad N`; no pointers, so no fixup-kind gaps). */
+    Yv *ru = next_uid(st);
+    st = ym_get(ru, "st");
+    Yv *tlbl = ys_cat(ys("ytd_"), ys_long(yv_l(ym_get(ru, "uid"))));
+    Yv *te = yav(0);
+    te = ya_push(te, tlbl);
+    te = ya_push(te, ys("TABLE"));
+    te = ya_push(te, ys("1498307412"));
+    te = ya_push(te, ys_long(n));
+    long j = 0;
+    while (j < n) {
+        Yv *nm = ya_get(names, j);
+        te = ya_push(te, ys_long(8 * j));
+        long nl = yv_len(nm);
+        te = ya_push(te, ys_long(nl));
+        long c = 0;
+        while (c < nl) {
+            Yv *ch = ys_substr(nm, c, 1);
+            long co = ys_ord(ch);
+            te = ya_push(te, ys_long(co));
+            c = c + 1;
+        }
+        j = j + 1;
+    }
+    Yv *trod = ya_push(ym_get(st, "rodata"), te);
+    st = ym(11, "out", ym_get(st, "out"), "rodata", trod, "uid",
+            ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+            ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+            ym_get(st, "slots"), "self_label", ym_get(st, "self_label"),
+            "end_label", ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+            "bodies", ym_get(st, "bodies"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(8 * n + 16)),
+                         ys(", %rdi")));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    lea "), tlbl), ys("(%rip), %rax")));
+    st = emit(st, ys("    pop %rcx"));
+    st = emit(st, ys("    mov %rax, 0(%rcx)"));
+    st = emit(st, ys("    push %rcx"));
+    long i = 0;
+    while (i < nent) {
+        /* NOTE: bound once — `x.y[i]` chains misparse on the C VM. */
+        Yv *mv = ya_get(mvals, i);
+        Yv *mk = ya_get(mkeys, i);
+        st = gen(st, mv);
+        st = emit(st, ys("    pop %rcx"));
+        if (ys_eq_lit(mk, "...")) {
+            /* Spread: the source ran ONCE (just above); copy its fields
+             * into their merged slots. A later entry's store overwrites. */
+            st = emit(st, ys("    mov %rax, %rdx"));
+            Yv *srec2 = infer(st, mv);
+            if (ys_eq_lit(ym_get(srec2, "k"), "trec")) {
+                Yv *sfs2 = ym_get(srec2, "fields");
+                long sj = 0;
+                while (sj < yv_len(sfs2)) {
+                    Yv *sf2 = ya_get(sfs2, sj);
+                    long mi2 = mfield_idx(names, ym_get(sf2, "name"));
+                    /* %rdx is the source's record VALUE (field 0 at +0);
+                     * %rcx is the fresh record's ALLOC base (fields at +8). */
+                    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(sj * 8)),
+                                         ys("(%rdx), %rsi")));
+                    st = emit(st, ys_cat(ys_cat(ys("    mov %rsi, "),
+                                                ys_long(8 + mi2 * 8)),
+                                         ys("(%rcx)")));
+                    sj = sj + 1;
+                }
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            long mi = mfield_idx(names, mk);
+            st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
+                                        ys_long(8 + mi * 8)),
+                                 ys("(%rcx)")));
+            ;
+        }
+        st = emit(st, ys("    push %rcx"));
+        i = i + 1;
+    }
+    st = emit(st, ys("    pop %rax"));
+    return emit(st, ys("    add $8, %rax"));
+}
+
+/* Bind `name` to a closure over `func`: emit the body HERE (the enclosing
+ * env still knows each captured name's type — emit_program deliberately
+ * skips capturing functions), build the record, store it in a fresh slot.
+ * An anonymous `def(...) {...}` used as a value: it has no entry in the
+ * hoisted table, so give it a fresh label, emit the body here (where the
+ * capture types are known) and hand back the closure record. */
+Yv *gen_func_literal(Yv *st, Yv *node) {
+    Yv *caps = fn_captures(node, fn_names_of(ym_get(st, "fns")));
+    Yv *captypes = yav(0);
+    long ci = 0;
+    while (ci < yv_len(caps)) {
+        Yv *cn = ya_get(caps, ci);
+        Yv *ce = env_find(st, cn);
+        captypes = ya_push(captypes, ym_get(ce, "typ"));
+        ci = ci + 1;
+    }
+    Yv *rl = next_uid(st);
+    st = ym_get(rl, "st");
+    Yv *lbl = arch_fn_label(yv_l(ym_get(rl, "uid")), ys("anon"));
+    Yv *ru = next_uid(st);
+    st = ym_get(ru, "st");
+    st = emit_one_fn(st, lbl, yv_l(ym_get(ru, "uid")), node, 0, 0, captypes);
+    long bci = 0;
+    while (bci < yv_len(caps)) {
+        Yv *bcn = ya_get(caps, bci);
+        st = box_capture(st, bcn);
+        bci = bci + 1;
+    }
+    return gen_make_closure(st, lbl, caps);
+}
+
+Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
+    Yv *fe = fns_find(ym_get(st, "fns"), name);
+    Yv *captypes = yav(0);
+    long ci = 0;
+    while (ci < yv_len(caps)) {
+        Yv *cn2 = ya_get(caps, ci);
+        Yv *ce = env_find(st, cn2);
+        captypes = ya_push(captypes, ym_get(ce, "typ"));
+        ci = ci + 1;
+    }
+    Yv *ru = next_uid(st);
+    st = ym_get(ru, "st");
+    st = emit_one_fn(st, ym_get(fe, "label"), yv_l(ym_get(ru, "uid")), func, 0,
+                     0, captypes);
+    long bci = 0;
+    while (bci < yv_len(caps)) {
+        Yv *bcn = ya_get(caps, bci);
+        st = box_capture(st, bcn);
+        bci = bci + 1;
+    }
+    st = gen_make_closure(st, ym_get(fe, "label"), caps);
+    long coff = (yv_l(ym_get(st, "slots")) + 1) * -8;
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(coff)),
+                         ys("(%rbp)")));
+    Yv *st3 =
+        ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"), "uid",
+           ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+           ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+           yv_long(yv_l(ym_get(st, "slots")) + 1), "self_label",
+           ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+           "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+    return env_define(st3, name, ys("closure"), coff, ys(""),
+                      func_type_in(st3, func));
+}
+
+Yv *gen_decl(Yv *st, Yv *node) {
+    if (ys_eq_lit(ym_get(node, "kind"), "def")) {
+        /* A nested `def` that captures is a closure just like a let-bound
+         * literal; a capture-free one stays hoisted (emitted by
+         * emit_program, env pre-bound, calls go direct). */
+        Yv *dcaps =
+            fn_captures(ym_get(node, "v"), fn_names_of(ym_get(st, "fns")));
+        if (yv_len(dcaps) == 0) {
+            return st;
+        } else {
+            return gen_closure_binding(st, ym_get(node, "name"),
+                                       ym_get(node, "v"), dcaps);
+        }
+    } else {
+        if (ys_eq_lit(ym_get(ym_get(node, "v"), "k"), "func")) {
+            /* let-bound function. Capture-free ones stay pure labels (the
+             * env already binds them, calls go direct). One that captures
+             * becomes a closure record built HERE, where the captured
+             * values are live, and the binding holds that record. */
+            Yv *caps = fn_captures(ym_get(node, "v"),
+                                   fn_names_of(ym_get(st, "fns")));
+            if (yv_len(caps) == 0) {
+                return st;
+            } else {
+                return gen_closure_binding(st, ym_get(node, "name"),
+                                           ym_get(node, "v"), caps);
+            }
+        } else if (ys_eq_lit(ym_get(ym_get(node, "v"), "k"), "arrrep")) {
+            /* heap array: [v; n] allocates a header {len, cap, data}.
+             * Reference value like every other array: the binding holds
+             * the header address. */
+            Yv *t = ym_get(node, "typ");
+            if (ys_eq_lit(ym_get(t, "k"), "tnone")) {
+                t = infer(st, ym_get(node, "v"));
+            }
+            st = gen_arrrep_esz(st, ym_get(node, "v"), arr_elem_bytes(t));
+            long off = (yv_l(ym_get(st, "slots")) + 1) * -8;
+            st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
+                                 ys("(%rbp)")));
+            Yv *st2 =
+                ym(11, "out", ym_get(st, "out"), "rodata",
+                   ym_get(st, "rodata"), "uid", ym_get(st, "uid"), "fuid",
+                   ym_get(st, "fuid"), "loc", ym_get(st, "loc"), "env",
+                   ym_get(st, "env"), "slots",
+                   yv_long(yv_l(ym_get(st, "slots")) + 1), "self_label",
+                   ym_get(st, "self_label"), "end_label",
+                   ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+                   "bodies", ym_get(st, "bodies"));
+            return env_define(st2, ym_get(node, "name"), ys("local"), off,
+                              ys(""), t);
+        } else if (ys_eq_lit(ym_get(ym_get(node, "v"), "k"), "array")) {
+            /* Heap array literal. The DECLARED element type decides the
+             * element width: `let b: [byte] = [104, 105]` packs, and the
+             * literal's own elements only ever infer as long. */
+            Yv *t = ym_get(node, "typ");
+            if (ys_eq_lit(ym_get(t, "k"), "tnone")) {
+                t = infer(st, ym_get(node, "v"));
+            }
+            st = gen_array_esz(st, ym_get(node, "v"), arr_elem_bytes(t));
+            long off = (yv_l(ym_get(st, "slots")) + 1) * -8;
+            st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
+                                 ys("(%rbp)")));
+            Yv *st2 =
+                ym(11, "out", ym_get(st, "out"), "rodata",
+                   ym_get(st, "rodata"), "uid", ym_get(st, "uid"), "fuid",
+                   ym_get(st, "fuid"), "loc", ym_get(st, "loc"), "env",
+                   ym_get(st, "env"), "slots",
+                   yv_long(yv_l(ym_get(st, "slots")) + 1), "self_label",
+                   ym_get(st, "self_label"), "end_label",
+                   ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+                   "bodies", ym_get(st, "bodies"));
+            return env_define(st2, ym_get(node, "name"), ys("local"), off,
+                              ys(""), t);
+        } else if (ys_eq_lit(ym_get(ym_get(node, "v"), "k"), "map")) {
+            /* record literal: heap address (first-class value, plain
+             * slot). */
+            st = gen(st, ym_get(node, "v"));
+            long off = (yv_l(ym_get(st, "slots")) + 1) * -8;
+            st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
+                                 ys("(%rbp)")));
+            Yv *t = ym_get(node, "typ");
+            if (ys_eq_lit(ym_get(t, "k"), "tnone")) {
+                t = infer(st, ym_get(node, "v"));
+            }
+            Yv *st2 =
+                ym(11, "out", ym_get(st, "out"), "rodata",
+                   ym_get(st, "rodata"), "uid", ym_get(st, "uid"), "fuid",
+                   ym_get(st, "fuid"), "loc", ym_get(st, "loc"), "env",
+                   ym_get(st, "env"), "slots",
+                   yv_long(yv_l(ym_get(st, "slots")) + 1), "self_label",
+                   ym_get(st, "self_label"), "end_label",
+                   ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+                   "bodies", ym_get(st, "bodies"));
+            return env_define(st2, ym_get(node, "name"), ys("local"), off,
+                              ys(""), t);
+        } else {
+            st = gen(st, ym_get(node, "v"));
+            /* Reference semantics: arrays and records are heap values and
+             * bindings share them (no copy-on-store). Cloning here made
+             * every `let x = <call returning [T]>` O(n), so threading an
+             * accumulator through helpers was O(n^2) — the assembler's
+             * patch loop spent 650MB on a 20KB output. The VM and the C
+             * runtime alias too, so all three engines agree. */
+            long off = (yv_l(ym_get(st, "slots")) + 1) * -8;
+            st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
+                                 ys("(%rbp)")));
+            /* bind with annotation or inferred type */
+            Yv *t = ym_get(node, "typ");
+            if (ys_eq_lit(ym_get(t, "k"), "tnone")) {
+                t = infer(st, ym_get(node, "v"));
+            }
+            Yv *st2 =
+                ym(11, "out", ym_get(st, "out"), "rodata",
+                   ym_get(st, "rodata"), "uid", ym_get(st, "uid"), "fuid",
+                   ym_get(st, "fuid"), "loc", ym_get(st, "loc"), "env",
+                   ym_get(st, "env"), "slots",
+                   yv_long(yv_l(ym_get(st, "slots")) + 1), "self_label",
+                   ym_get(st, "self_label"), "end_label",
+                   ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+                   "bodies", ym_get(st, "bodies"));
+            return env_define(st2, ym_get(node, "name"), ys("local"), off,
+                              ys(""), t);
+        }
+    }
+}
+
+Yv *gen_assign(Yv *st, Yv *node) {
+    Yv *e = env_find(st, ym_get(node, "name"));
+    /* Reference semantics: arrays and records are heap values shared by
+     * every binding that names them (no copy-on-store) — the same model
+     * the VM and the compiled C runtime use. A captured variable lives in
+     * one shared heap cell (box_capture), so its store goes through the
+     * cell and is visible in the capturing scope too. */
+    st = gen(st, ym_get(node, "v"));
+    if (ys_eq_lit(ym_get(e, "kind"), "capture")) {
+        long idx = ys_tonum(ym_get(e, "label"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                   ys_long(yv_l(ym_get(e, "off")))),
+                            ys("(%rbp), %rcx")));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                   ys_long(8 * (idx + 1))),
+                            ys("(%rcx), %rdx")));
+        st = emit(st, ys("    mov %rax, (%rdx)"));
+        return st;
+    } else if (ys_eq_lit(ym_get(e, "kind"), "box")) {
+        st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                   ys_long(yv_l(ym_get(e, "off")))),
+                            ys("(%rbp), %rdx")));
+        st = emit(st, ys("    mov %rax, (%rdx)"));
+        return st;
+    } else {
+        return emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
+                                      ys_long(yv_l(ym_get(e, "off")))),
+                               ys("(%rbp)")));
+    }
+}
+
+/* Fill n frame slots (base = lowest address) with the value in %rax. */
+Yv *gen_fill(Yv *st, long base, long n) {
+    if (n == 0) {
+        return st;
+    } else {
+        Yv *r = next_loc(st);
+        st = ym_get(r, "st");
+        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", %rcx")));
+        st = emit(st, ys_cat(ym_get(r, "lbl"), ys(":")));
+        st = emit(st, ys("    dec %rcx"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(base)),
+                             ys("(%rbp,%rcx,8)")));
+        return emit(st, ys_cat(ys("    jnz "), ym_get(r, "lbl")));
+    }
+}
+
+/* Heap-array fill: the header is in %rdx, the fill value in %rax. Writes
+ * data[i] for i = n-1 .. 0 (data starts at header+16). */
+Yv *gen_fill_heap(Yv *st, long n, long esz) {
+    if (n == 0) {
+        return st;
+    } else {
+        Yv *r = next_loc(st);
+        st = ym_get(r, "st");
+        st = emit(st, ys("    mov %rdx, %r10"));
+        st = emit(st, ys("    mov %rax, %rdx"));
+        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", %rcx")));
+        st = emit(st, ys_cat(ym_get(r, "lbl"), ys(":")));
+        st = emit(st, ys("    dec %rcx"));
+        st = emit(st, elem_store_rdx(esz, ys("%r10"), ys("%rcx")));
+        st = emit(st, ys_cat(ys("    jnz "), ym_get(r, "lbl")));
+        st = emit(st, ys("    mov %r10, %rdx"));
+        return st;
+    }
+}
+
+/* [v; n] as a first-class expression: allocate a heap header
+ * {len, cap, data...}, fill every slot with v, leave the address in %rax.
+ * Usable anywhere (let, assign, call argument, return), not just `let`. */
+Yv *gen_arrrep(Yv *st, Yv *node) {
+    return gen_arrrep_esz(st, node, elem_bytes(infer(st, ym_get(node, "v"))));
+}
+
+/* Same, with the element width supplied by the declaration (`let b:
+ * [byte; 4] = [0; 4]` — the literal's own elements infer as long). */
+Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz) {
+    long n = yv_l(ym_get(node, "n"));
+    st = gen(st, ym_get(node, "v"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(arr_alloc_size(esz, n))),
+                         ys(", %rdi")));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(arr_header_size())),
+                         ys(", %rdi")));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    pop %rdx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", (%rax)")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", 8(%rax)")));
+    st = emit(st, ys("    mov %rdx, 16(%rax)"));
+    st = emit(st, ys("    mov %rax, %rdx"));
+    st = emit(st, ys("    pop %rax"));
+    st = gen_fill_heap(st, n, esz);
+    return emit(st, ys("    mov %rdx, %rax"));
+}
+
+/* Radix literals (0x../0b..) reach the emitter as their source text; the
+ * assembler only understands plain decimal immediates, so normalize here.
+ * NOTE: nested ifs, not `||` (see is_digit_ch note in asm.y). */
+long hexval_ch(Yv *c) {
+    long o = ys_ord(c);
+    long v = 0;
+    if (o >= 48) {
+        if (o <= 57) {
+            v = o - 48;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (o >= 97) {
+        if (o <= 102) {
+            v = o - 87;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (o >= 65) {
+        if (o <= 70) {
+            v = o - 55;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    return v;
+}
+
+/* A numeric literal denotes a float when it has a fraction or an exponent.
+ * Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'. */
+int lit_is_float(Yv *s) {
+    int radix = 0;
+    if (yv_len(s) > 2) {
+        Yv *p = ys_substr(s, 0, 2);
+        if (ys_eq_lit(p, "0x")) {
+            radix = 1;
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(p, "0X")) {
+            radix = 1;
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(p, "0b")) {
+            radix = 1;
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(p, "0B")) {
+            radix = 1;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (radix) {
+        return 0;
+    } else {
+        int f = 0;
+        if (ys_index_of(s, ys(".")) >= 0) {
+            f = 1;
+            ;
+        } else {
+            ;
+        }
+        if (ys_index_of(s, ys("e")) >= 0) {
+            f = 1;
+            ;
+        } else {
+            ;
+        }
+        if (ys_index_of(s, ys("E")) >= 0) {
+            f = 1;
+            ;
+        } else {
+            ;
+        }
+        return f;
+    }
+}
+
+Yv *norm_num(Yv *s) {
+    long radix = 0;
+    if (yv_len(s) > 2) {
+        Yv *p = ys_substr(s, 0, 2);
+        if (ys_eq_lit(p, "0x")) {
+            radix = 16;
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(p, "0X")) {
+            radix = 16;
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(p, "0b")) {
+            radix = 2;
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(p, "0B")) {
+            radix = 2;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (radix == 0) {
+        return s;
+    } else {
+        long v = 0;
+        long i = 2;
+        while (i < yv_len(s)) {
+            Yv *c = ys_substr(s, i, 1);
+            if (ys_eq_lit(c, "_")) {
+                ;
+            } else {
+                v = v * radix + hexval_ch(c);
+                ;
+            }
+            i = i + 1;
+        }
+        return ys_long(v);
+    }
+}
+
+/* Digits of a float literal with the dot and exponent removed
+ * (e.g. "3.25" -> 325, "1.5e-2" -> 15) and the matching net power of ten
+ * (-> -2 and -3). Building the double at runtime as mantissa * 10^n lets
+ * IEEE arithmetic do the rounding, which is exactly the value the literal
+ * denotes — no float parser needed in the compiler. */
+long flit_mant(Yv *s) {
+    long v = 0;
+    long i = 0;
+    long n = flit_ebase(s);
+    while (i < n) {
+        Yv *c = ys_substr(s, i, 1);
+        if (ys_eq_lit(c, ".")) {
+            ;
+        } else {
+            v = v * 10 + hexval_ch(c);
+            ;
+        }
+        i = i + 1;
+    }
+    return v;
+}
+
+/* Index of the 'e'/'E' that starts the exponent, or len(s) when absent. */
+long flit_ebase(Yv *s) {
+    long e = ys_index_of(s, ys("e"));
+    if (e < 0) {
+        e = ys_index_of(s, ys("E"));
+        ;
+    } else {
+        ;
+    }
+    if (e < 0) {
+        return yv_len(s);
+    } else {
+        return e;
+    }
+}
+
+/* Net power of ten: the explicit exponent minus the fraction digit
+ * count. */
+long flit_exp(Yv *s) {
+    long eb = flit_ebase(s);
+    long dot = ys_index_of(s, ys("."));
+    long frac = 0;
+    if (dot >= 0) {
+        frac = eb - dot - 1;
+        ;
+    } else {
+        ;
+    }
+    long ex = 0;
+    if (eb < yv_len(s)) {
+        long i = eb + 1;
+        int neg = 0;
+        Yv *sc = ys_substr(s, i, 1);
+        if (ys_eq_lit(sc, "-")) {
+            neg = 1;
+            i = i + 1;
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(sc, "+")) {
+            i = i + 1;
+            ;
+        } else {
+            ;
+        }
+        while (i < yv_len(s)) {
+            ex = ex * 10 + hexval_ch(ys_substr(s, i, 1));
+            i = i + 1;
+        }
+        if (neg) {
+            ex = 0 - ex;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    return ex - frac;
+}
+
+long flit_num(Yv *s) {
+    long v = 0;
+    long i = 0;
+    long n = yv_len(s);
+    while (i < n) {
+        Yv *c = ys_substr(s, i, 1);
+        if (ys_eq_lit(c, ".")) {
+            ;
+        } else {
+            v = v * 10 + hexval_ch(c);
+            ;
+        }
+        i = i + 1;
+    }
+    return v;
+}
+
+long flit_den(Yv *s) {
+    long dot = ys_index_of(s, ys("."));
+    long frac = 0;
+    if (dot >= 0) {
+        frac = yv_len(s) - dot - 1;
+        ;
+    } else {
+        ;
+    }
+    long d = 1;
+    long i = 0;
+    while (i < frac) {
+        d = d * 10;
+        i = i + 1;
+    }
+    return d;
+}
+
+/* 10^k for 0 <= k <= 18 (the largest power of ten a long holds exactly). */
+long pow10(long k) {
+    long d = 1;
+    long i = 0;
+    while (i < k) {
+        d = d * 10;
+        i = i + 1;
+    }
+    return d;
+}
+
+Yv *gen_lit(Yv *st, Yv *node) {
+    if (lit_is_float(ym_get(node, "v"))) {
+        /* Float literal: mantissa scaled by 10^n, where n folds together
+         * the fraction length and any explicit exponent. Floats live in
+         * %rax as raw IEEE754 bits; only arithmetic and comparison use
+         * %xmm. */
+        st = emit(st, ys_cat(ys_cat(ys("    mov $"),
+                                    ys_long(flit_mant(ym_get(node, "v")))),
+                             ys(", %rax")));
+        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
+        return gen_scale10(st, flit_exp(ym_get(node, "v")));
+    } else {
+        return emit(st, ys_cat(ys_cat(ys("    mov $"),
+                                      norm_num(ym_get(node, "v"))),
+                               ys(", %rax")));
+    }
+}
+
+/* %xmm0 *= 10^n (n may be negative). Applied in chunks of 18 so every
+ * factor fits a long exactly; |n| <= 18 is therefore one correctly-rounded
+ * operation, which is every literal anyone writes. */
+Yv *gen_scale10(Yv *st, long n) {
+    int up = n > 0;
+    long left = n;
+    if (!(up)) {
+        left = 0 - n;
+        ;
+    } else {
+        ;
+    }
+    while (left > 0) {
+        long chunk = left;
+        if (chunk > 18) {
+            chunk = 18;
+            ;
+        } else {
+            ;
+        }
+        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pow10(chunk))),
+                             ys(", %rax")));
+        st = emit(st, ys("    cvtsi2sd %rax, %xmm1"));
+        if (up) {
+            st = emit(st, ys("    mulsd %xmm1, %xmm0"));
+            ;
+        } else {
+            st = emit(st, ys("    divsd %xmm1, %xmm0"));
+            ;
+        }
+        left = left - chunk;
+    }
+    return emit(st, ys("    movq %xmm0, %rax"));
+}
+
+Yv *gen_index(Yv *st, Yv *node) {
+    /* Checker: an array expression — a plain variable or a nested place
+     * (`grid[0][1]`, `rec.v[i]`); the base is evaluated once, here.
+     * Bounds-trapped at runtime. Fixed arrays are heap headers now (same
+     * layout as heap arrays); only the bound differs: static n for [T; N],
+     * runtime len for [T]. */
+    Yv *garr = ym_get(node, "arr");
+    Yv *bt = infer(st, garr);
+    long ixesz = arr_elem_bytes(bt);
+    st = gen(st, garr);
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "idx"));
+    st = emit(st, ys("    mov %rax, %rcx"));
+    st = emit(st, ys("    pop %rax"));
+    st = emit(st, ys("    test %rcx, %rcx"));
+    st = emit(st, ys("    js y_oob"));
+    if (ys_eq_lit(ym_get(bt, "k"), "tarrfix")) {
+        st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
+                                    ys_long(yv_l(ym_get(bt, "n")))),
+                             ys(", %rcx")));
+        st = emit(st, ys("    jge y_oob"));
+        return emit(st, elem_load(ixesz, ys("%rax"), ys("%rcx"), ys("%rax")));
+    } else {
+        st = emit(st, ys("    mov (%rax), %rdx"));
+        st = emit(st, ys("    cmp %rdx, %rcx"));
+        st = emit(st, ys("    jge y_oob"));
+        return emit(st, elem_load(ixesz, ys("%rax"), ys("%rcx"), ys("%rax")));
+    }
+}
+
+/* s.f = v — in-place record field write, for any object expression: a
+ * plain variable, a nested place (`a[0].f`), a chain (`x.y.f`). Records
+ * are heap addresses; field i lives at addr+8i (same layout the static
+ * gen_dot read uses), so the write is: value -> (rec + 8*idx). The object
+ * runs first, then the value — the VM's order. Reference semantics: a
+ * field write is observable through every binding (same as the VM and the
+ * compiled C runtime). */
+Yv *gen_dotassign(Yv *st, Yv *node) {
+    Yv *dobj = ym_get(node, "obj");
+    Yv *dkey = ym_get(node, "key");
+    Yv *dt = infer(st, dobj);
+    long idx = rec_field_idx(dt, dkey);
+    st = gen(st, dobj);
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "v"));
+    st = emit(st, ys("    pop %rdx"));
+    return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * idx)),
+                           ys("(%rdx)")));
+}
+
+/* ── ++/-- and op= ──────────────────────────────────────────────────────
+ * These desugar into ordinary statements before emitting: the arithmetic
+ * then goes through gen_bin (whose division/modulo handle LONG_MIN and -1),
+ * and a target like a[f()] is evaluated EXACTLY ONCE — the desugar binds
+ * its index/base expression in a synthetic `let` first. Synthetic names
+ * are `y_t<N>`: user names carry rename's `$`, and `y_` is reserved, so
+ * they cannot collide with anything the program can write.
+ *
+ * Array forms are the in-place ones: `arr += v` becomes push (the header
+ * never moves, so every alias sees the append), `arr += arr2` a push loop
+ * over arr2, and `arr *= v` the prepend primitive. */
+
+/* Synthetic AST pieces for the ++/-- and op= desugars. Node lists are
+ * built with push chains over a let-bound [] — the checker rejects
+ * heterogeneous array literals (see gen_str_const's note). */
+Yv *n_num(Yv *v, long line, long col) {
+    return ym(4, "k", ys("num"), "v", v, "line", yv_long(line), "col",
+              yv_long(col));
+}
+
+Yv *n_id(Yv *v, long line, long col) {
+    return ym(4, "k", ys("id"), "v", v, "line", yv_long(line), "col",
+              yv_long(col));
+}
+
+Yv *args1(Yv *a) {
+    Yv *out = yav(0);
+    out = ya_push(out, a);
+    return out;
+}
+
+Yv *args2(Yv *a, Yv *b) {
+    Yv *out = yav(0);
+    out = ya_push(out, a);
+    out = ya_push(out, b);
+    return out;
+}
+
+Yv *n_call1(Yv *name, Yv *a0, long line, long col) {
+    return ym(5, "k", ys("call"), "callee", n_id(name, line, col), "args",
+              args1(a0), "line", yv_long(line), "col", yv_long(col));
+}
+
+Yv *n_call2(Yv *name, Yv *a0, Yv *a1, long line, long col) {
+    return ym(5, "k", ys("call"), "callee", n_id(name, line, col), "args",
+              args2(a0, a1), "line", yv_long(line), "col", yv_long(col));
+}
+
+Yv *block2(Yv *a, Yv *b, long ln, long cl) {
+    Yv *st = yav(0);
+    st = ya_push(st, a);
+    st = ya_push(st, b);
+    return ym(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *block3(Yv *a, Yv *b, Yv *c, long ln, long cl) {
+    Yv *st = yav(0);
+    st = ya_push(st, a);
+    st = ya_push(st, b);
+    st = ya_push(st, c);
+    return ym(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl) {
+    Yv *st = yav(0);
+    st = ya_push(st, a);
+    st = ya_push(st, b);
+    st = ya_push(st, c);
+    st = ya_push(st, d);
+    return ym(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl) {
+    Yv *st = yav(0);
+    st = ya_push(st, a);
+    st = ya_push(st, b);
+    st = ya_push(st, c);
+    st = ya_push(st, d);
+    st = ya_push(st, e);
+    return ym(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl) {
+    Yv *st = yav(0);
+    st = ya_push(st, a);
+    st = ya_push(st, b);
+    st = ya_push(st, c);
+    st = ya_push(st, d);
+    st = ya_push(st, e);
+    st = ya_push(st, f);
+    return ym(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *gen_incdec(Yv *st, Yv *node) {
+    Yv *op = ym_get(node, "op");
+    Yv *binop = ys("+");
+    if (ys_eq_lit(op, "--")) {
+        binop = ys("-");
+        ;
+    } else {
+        ;
+    }
+    Yv *tgt = ym_get(node, "tgt");
+    long ln = yv_l(ym_get(node, "line"));
+    long cl = yv_l(ym_get(node, "col"));
+    Yv *one = n_num(ys("1"), ln, cl);
+    Yv *r = next_uid(st);
+    st = ym_get(r, "st");
+    Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(ym_get(r, "uid"))));
+    /* One shape for every place: capture the base/index exactly once (a
+     * no-op let for a plain variable), read the place, step it, write it
+     * back. The arithmetic goes through gen_bin (LONG_MIN / -1 safe). */
+    Yv *bind = gen_place_bind(tgt, t1, ln, cl);
+    Yv *place = gen_place_read(tgt, t1, ln, cl);
+    if (yv_b(ym_get(node, "pre"))) {
+        /* ++x -> { bind; let v = x + 1; x = v; v } */
+        Yv *nv = ym(6, "k", ys("bin"), "op", binop, "l", place, "r", one,
+                    "line", yv_long(ln), "col", yv_long(cl));
+        Yv *d2 = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                    ym(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v",
+                    nv, "line", yv_long(ln), "col", yv_long(cl));
+        Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1,
+                                   ln, cl);
+        return gen(st, block4(bind, d2, asg,
+                              n_id(ys_cat(t1, ys("v")), ln, cl), ln, cl));
+    } else {
+        /* x++ -> { bind; let v = x; x = v + 1; v } */
+        Yv *d2 = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                    ym(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v",
+                    place, "line", yv_long(ln), "col", yv_long(cl));
+        Yv *nv = ym(6, "k", ys("bin"), "op", binop, "l",
+                    n_id(ys_cat(t1, ys("v")), ln, cl), "r", one, "line",
+                    yv_long(ln), "col", yv_long(cl));
+        Yv *asg = gen_place_assign(tgt, nv, t1, ln, cl);
+        return gen(st, block4(bind, d2, asg,
+                              n_id(ys_cat(t1, ys("v")), ln, cl), ln, cl));
+    }
+}
+
+Yv *gen_opassign(Yv *st, Yv *node) {
+    Yv *t = infer(st, ym_get(node, "tgt"));
+    if (ys_eq_lit(ym_get(t, "k"), "tarr") ||
+        ys_eq_lit(ym_get(t, "k"), "tarrfix")) {
+        return gen_opassign_arr(st, node);
+    } else {
+        return gen_opassign_arith(st, node);
+    }
+}
+
+Yv *gen_opassign_arith(Yv *st, Yv *node) {
+    /* `x op= v` for numbers and strings -> `x = x op v`, with the target's
+     * index/base evaluated once through a synthetic let. */
+    Yv *tgt = ym_get(node, "tgt");
+    Yv *op = ym_get(node, "op");
+    long ln = yv_l(ym_get(node, "line"));
+    long cl = yv_l(ym_get(node, "col"));
+    Yv *r = next_uid(st);
+    st = ym_get(r, "st");
+    Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(ym_get(r, "uid"))));
+    Yv *bind = gen_place_bind(tgt, t1, ln, cl);
+    Yv *rd = gen_place_read(tgt, t1, ln, cl);
+    Yv *bin = ym(6, "k", ys("bin"), "op", op, "l", rd, "r", ym_get(node, "v"),
+                 "line", yv_long(ln), "col", yv_long(cl));
+    Yv *d2 = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                ym(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v", bin,
+                "line", yv_long(ln), "col", yv_long(cl));
+    Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1, ln,
+                               cl);
+    return gen(st, block4(bind, d2, asg, n_id(ys_cat(t1, ys("v")), ln, cl), ln,
+                          cl));
+}
+
+/* The place an opassign target names. `t1` is the synthetic name that
+ * captured the target's index (a[i]) or base (o.f) — an id target needs
+ * no capture (re-reading a variable has no side effects). Each target
+ * shape gets its own arm (single-call dispatch, see normnode note). */
+Yv *place_read_id(Yv *tgt, Yv *t1, long ln, long cl) {
+    (void)t1; /* unused in native.y's def too */
+    return n_id(ym_get(tgt, "v"), ln, cl);
+}
+
+/* The base array node for an index place: a plain variable is used
+ * directly (re-reading it has no side effects); any other base expression
+ * was captured in `t1 + "a"` (see place_bind_idx), so the desugared forms
+ * read and write it through a plain variable and evaluate it exactly
+ * once. */
+Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl) {
+    Yv *ba = ym_get(tgt, "arr");
+    if (ys_eq_lit(ym_get(ba, "k"), "id")) {
+        return n_id(ym_get(ba, "v"), ln, cl);
+    } else {
+        return n_id(ys_cat(t1, ys("a")), ln, cl);
+    }
+}
+
+Yv *place_read_idx(Yv *tgt, Yv *t1, long ln, long cl) {
+    return ym(5, "k", ys("index"), "arr", place_arr(tgt, t1, ln, cl), "idx",
+              n_id(t1, ln, cl), "line", yv_long(ln), "col", yv_long(cl));
+}
+
+Yv *place_read_dot(Yv *tgt, Yv *t1, long ln, long cl) {
+    return ym(5, "k", ys("dot"), "obj", n_id(t1, ln, cl), "key",
+              ym_get(tgt, "key"), "line", yv_long(ln), "col", yv_long(cl));
+}
+
+Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl) {
+    if (ys_eq_lit(ym_get(tgt, "k"), "id")) {
+        return place_read_id(tgt, t1, ln, cl);
+    } else if (ys_eq_lit(ym_get(tgt, "k"), "index")) {
+        return place_read_idx(tgt, t1, ln, cl);
+    } else {
+        return place_read_dot(tgt, t1, ln, cl);
+    }
+}
+
+Yv *place_asg_id(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+    (void)t1; /* unused in native.y's def too */
+    return ym(5, "k", ys("assign"), "name", ym_get(tgt, "v"), "v", valnode,
+              "line", yv_long(ln), "col", yv_long(cl));
+}
+
+Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+    return ym(6, "k", ys("idxassign"), "arr", place_arr(tgt, t1, ln, cl), "idx",
+              n_id(t1, ln, cl), "v", valnode, "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+    return ym(6, "k", ys("dotassign"), "obj", n_id(t1, ln, cl), "key",
+              ym_get(tgt, "key"), "v", valnode, "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+    if (ys_eq_lit(ym_get(tgt, "k"), "id")) {
+        return place_asg_id(tgt, valnode, t1, ln, cl);
+    } else if (ys_eq_lit(ym_get(tgt, "k"), "index")) {
+        return place_asg_idx(tgt, valnode, t1, ln, cl);
+    } else {
+        return place_asg_dot(tgt, valnode, t1, ln, cl);
+    }
+}
+
+Yv *place_bind_id(Yv *tgt, Yv *t1, long ln, long cl) {
+    (void)tgt; /* unused in native.y's def too */
+    (void)t1;
+    return ym(4, "k", ys("block"), "stmts", yav(0), "line", yv_long(ln), "col",
+              yv_long(cl));
+}
+
+Yv *place_bind_idx_id(Yv *tgt, Yv *t1, long ln, long cl) {
+    return ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+              ym(1, "k", ys("tnone")), "name", t1, "v", ym_get(tgt, "idx"),
+              "line", yv_long(ln), "col", yv_long(cl));
+}
+
+Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl) {
+    /* nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
+     * `t1 + "a"` as well, so the place evaluates it exactly once. */
+    Yv *tba = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                 ym(1, "k", ys("tnone")), "name", ys_cat(t1, ys("a")), "v",
+                 ym_get(tgt, "arr"), "line", yv_long(ln), "col", yv_long(cl));
+    Yv *tib = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                 ym(1, "k", ys("tnone")), "name", t1, "v",
+                 ym_get(tgt, "idx"), "line", yv_long(ln), "col",
+                 yv_long(cl));
+    return block2(tba, tib, ln, cl);
+}
+
+Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl) {
+    Yv *ba = ym_get(tgt, "arr");
+    if (ys_eq_lit(ym_get(ba, "k"), "id")) {
+        return place_bind_idx_id(tgt, t1, ln, cl);
+    } else {
+        return place_bind_idx_nest(tgt, t1, ln, cl);
+    }
+}
+
+Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl) {
+    return ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+              ym(1, "k", ys("tnone")), "name", t1, "v", ym_get(tgt, "obj"),
+              "line", yv_long(ln), "col", yv_long(cl));
+}
+
+/* The synthetic `let` that runs the target's index/base exactly once (a
+ * no-op statement for id targets). */
+Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl) {
+    if (ys_eq_lit(ym_get(tgt, "k"), "id")) {
+        return place_bind_id(tgt, t1, ln, cl);
+    } else if (ys_eq_lit(ym_get(tgt, "k"), "index")) {
+        return place_bind_idx(tgt, t1, ln, cl);
+    } else {
+        return place_bind_dot(tgt, t1, ln, cl);
+    }
+}
+
+Yv *gen_opassign_arr(Yv *st, Yv *node) {
+    /* In-place array forms. `*=` prepends one element. `+=` pushes one
+     * element — or, when the VALUE is an array, appends its elements one
+     * by one (its length is captured first, so `a += a` is safe). The
+     * checker enforces matching element types; the same value-shaped rule
+     * runs in the VM and the compiled C runtime. */
+    Yv *tgt = ym_get(node, "tgt");
+    Yv *op = ym_get(node, "op");
+    Yv *v = ym_get(node, "v");
+    long ln = yv_l(ym_get(node, "line"));
+    long cl = yv_l(ym_get(node, "col"));
+    Yv *r = next_uid(st);
+    st = ym_get(r, "st");
+    Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(ym_get(r, "uid"))));
+    Yv *tt = infer(st, tgt);
+    Yv *et = ym_get(tt, "of");
+    (void)et; /* bound in native.y too; unused there */
+    Yv *mode = ys("push");
+    if (ys_eq_lit(op, "*")) {
+        mode = ys("prepend");
+        ;
+    } else {
+        Yv *vt = infer(st, v);
+        if (ys_eq_lit(ym_get(vt, "k"), "tarr") ||
+            ys_eq_lit(ym_get(vt, "k"), "tarrfix")) {
+            mode = ys("append");
+            ;
+        } else {
+            ;
+        }
+        ;
+    }
+    if (ys_eq_lit(mode, "append")) {
+        /* { let tv = v; let ti = 0; let tn = len(tv);
+         *   while (ti < tn) { place = push(place, tv[ti]); ti = ti + 1 }
+         *   place } */
+        Yv *tv = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                    ym(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v",
+                    v, "line", yv_long(ln), "col", yv_long(cl));
+        Yv *ti = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                    ym(1, "k", ys("tnone")), "name", ys_cat(t1, ys("i")), "v",
+                    n_num(ys("0"), ln, cl), "line", yv_long(ln), "col",
+                    yv_long(cl));
+        Yv *tn = ym(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                    ym(1, "k", ys("tnone")), "name", ys_cat(t1, ys("n")), "v",
+                    n_call1(ys("len"), n_id(ys_cat(t1, ys("v")), ln, cl), ln,
+                            cl),
+                    "line", yv_long(ln), "col", yv_long(cl));
+        Yv *elem = ym(5, "k", ys("index"), "arr",
+                      n_id(ys_cat(t1, ys("v")), ln, cl), "idx",
+                      n_id(ys_cat(t1, ys("i")), ln, cl), "line", yv_long(ln),
+                      "col", yv_long(cl));
+        Yv *put = gen_place_assign(
+            tgt,
+            n_call2(ys("push"), gen_place_read(tgt, t1, ln, cl), elem, ln, cl),
+            t1, ln, cl);
+        Yv *step = ym(
+            5, "k", ys("assign"), "name", ys_cat(t1, ys("i")), "v",
+            ym(6, "k", ys("bin"), "op", ys("+"), "l",
+               n_id(ys_cat(t1, ys("i")), ln, cl), "r", n_num(ys("1"), ln, cl),
+               "line", yv_long(ln), "col", yv_long(cl)),
+            "line", yv_long(ln), "col", yv_long(cl));
+        Yv *loop = ym(
+            5, "k", ys("while"), "cond",
+            ym(6, "k", ys("bin"), "op", ys("<"), "l",
+               n_id(ys_cat(t1, ys("i")), ln, cl), "r",
+               n_id(ys_cat(t1, ys("n")), ln, cl), "line", yv_long(ln), "col",
+               yv_long(cl)),
+            "body", block2(put, step, ln, cl), "line", yv_long(ln), "col",
+            yv_long(cl));
+        return gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop,
+                              gen_place_read(tgt, t1, ln, cl), ln, cl));
+    } else {
+        Yv *fname = ys("push");
+        if (ys_eq_lit(mode, "prepend")) {
+            fname = ys("prepend");
+            ;
+        } else {
+            ;
+        }
+        Yv *call = n_call2(fname, gen_place_read(tgt, t1, ln, cl), v, ln, cl);
+        return gen(st,
+                   block3(gen_place_bind(tgt, t1, ln, cl),
+                          gen_place_assign(tgt, call, t1, ln, cl),
+                          gen_place_read(tgt, t1, ln, cl), ln, cl));
+    }
+}
+
+Yv *gen_idxassign(Yv *st, Yv *node) {
+    /* Fixed arrays are heap headers now: one layout for both kinds.
+     * Fixed uses the static bound n; heap uses the runtime len.
+     * Reference semantics: `x[i] = v` writes through to the array every
+     * binding shares — params included (the VM and the compiled C runtime
+     * alias the same way). The base is any array expression and runs once
+     * (the VM's order: base, index, value). No write-back to the base:
+     * the header pointer never moves, so the store through it is already
+     * visible through every binding. */
+    Yv *garr = ym_get(node, "arr");
+    Yv *bt = infer(st, garr);
+    long iaesz = arr_elem_bytes(bt);
+    st = gen(st, garr);
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "idx"));
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "v"));
+    st = emit(st, ys("    pop %rcx"));
+    st = emit(st, ys("    pop %rdx"));
+    st = emit(st, ys("    test %rcx, %rcx"));
+    st = emit(st, ys("    js y_oob"));
+    if (ys_eq_lit(ym_get(bt, "k"), "tarrfix")) {
+        st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
+                                    ys_long(yv_l(ym_get(bt, "n")))),
+                             ys(", %rcx")));
+        st = emit(st, ys("    jge y_oob"));
+        st = emit(st, ys("    mov %rdx, %r10"));
+        st = emit(st, ys("    mov %rax, %rdx"));
+        st = emit(st, elem_store_rdx(iaesz, ys("%r10"), ys("%rcx")));
+        st = emit(st, ys("    mov %r10, %rdx"));
+        ;
+    } else {
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    mov (%rdx), %rax"));
+        st = emit(st, ys("    cmp %rax, %rcx"));
+        st = emit(st, ys("    jge y_oob"));
+        st = emit(st, ys("    pop %rax"));
+        st = emit(st, ys("    mov %rdx, %r10"));
+        st = emit(st, ys("    mov %rax, %rdx"));
+        st = emit(st, elem_store_rdx(iaesz, ys("%r10"), ys("%rcx")));
+        st = emit(st, ys("    mov %r10, %rdx"));
+        ;
+    }
+    return st;
+}
+
+/* ── value formatting ───────────────────────────────────────────────────
+ * A value of static type `t` sits in %rax; leave its string form in %rax.
+ * The walk is unrolled at compile time (the type is static), so nested
+ * arrays emit nested loops rather than needing a runtime type tag. */
+
+Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
+    Yv *tk = ym_get(t, "k");
+    if (ys_eq_lit(tk, "tstr")) {
+        return st;
+    } else if (ys_eq_lit(tk, "tbool")) {
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_bool_tostr"));
+        return emit(st, ys("    add $8, %rsp"));
+    } else if (ys_eq_lit(tk, "tfloat")) {
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_float_tostr"));
+        return emit(st, ys("    add $8, %rsp"));
+    } else if (ys_eq_lit(tk, "tarr")) {
+        return gen_arr_tostr_rax(st, ym_get(t, "of"));
+    } else if (ys_eq_lit(tk, "tarrfix")) {
+        return gen_arr_tostr_rax(st, ym_get(t, "of"));
+    } else if (ys_eq_lit(tk, "tnull")) {
+        return gen_str_const(st, ys("null"));
+    } else if (ys_eq_lit(tk, "topt")) {
+        return gen_opt_str_rax(st, t);
+    } else if (ys_eq_lit(tk, "trec")) {
+        return gen_rec_str_rax(st, t);
+    } else {
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_long_tostr"));
+        return emit(st, ys("    add $8, %rsp"));
+    }
+}
+
+/* Array header in %rax -> "[e0, e1, ...]" in %rax, matching the VM's
+ * tostring(). Slots: [src][acc][i]. */
+Yv *gen_arr_tostr_rax(Yv *st, Yv *elty) {
+    long soff = (yv_l(ym_get(st, "slots")) + 1) * -8;
+    long aoff = (yv_l(ym_get(st, "slots")) + 2) * -8;
+    long ioff = (yv_l(ym_get(st, "slots")) + 3) * -8;
+    st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"), "uid",
+            ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+            ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+            yv_long(yv_l(ym_get(st, "slots")) + 3), "self_label",
+            ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+            "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(soff)),
+                         ys("(%rbp)")));
+    st = gen_str_const(st, ys("["));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys("    xor %eax, %eax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    Yv *r1 = next_loc(st);
+    st = ym_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = ym_get(r2, "st");
+    Yv *r3 = next_loc(st);
+    st = ym_get(r3, "st");
+    st = emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys("    mov (%rdx), %rcx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    cmp %rcx, %rax"));
+    st = emit(st, ys_cat(ys("    jge "), ym_get(r2, "lbl")));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), ym_get(r3, "lbl")));
+    st = gen_acc_cat_slot(st, aoff, ys(", "));
+    st = emit(st, ys_cat(ym_get(r3, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rcx")));
+    st = emit(st, elem_load(elem_bytes(elty), ys("%rdx"), ys("%rcx"),
+                            ys("%rax")));
+    st = gen_val_tostr_rax(st, elty);
+    st = emit(st, ys("    mov %rax, %rdx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    push %rdx"));
+    st = emit(st, ys("    call y_str_cat"));
+    st = emit(st, ys("    add $16, %rsp"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    inc %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys("    jmp "), ym_get(r1, "lbl")));
+    st = emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
+    st = gen_acc_cat_slot(st, aoff, ys("]"));
+    return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
+                           ys("(%rbp), %rax")));
+}
+
+/* slot(%rbp) = slot(%rbp) + <constant>. */
+Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s) {
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(off)), ys("(%rbp), %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = gen_str_const(st, s);
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_str_cat"));
+    st = emit(st, ys("    add $16, %rsp"));
+    return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
+                           ys("(%rbp)")));
+}
+
+/* ── element size ───────────────────────────────────────────────────────
+ * Byte arrays are PACKED: one byte per element, not eight. Every element
+ * lives at base + 16 + i*esz, so the scale factor, the allocation size and
+ * the load/store width all follow from the element type. Everything else
+ * stays 8 bytes (one machine word per value). */
+
+long elem_bytes(Yv *t) {
+    if (ys_eq_lit(ym_get(t, "k"), "tbyte")) {
+        return 1;
+    } else {
+        return 8;
+    }
+}
+
+long arr_elem_bytes(Yv *t) {
+    if (ys_eq_lit(ym_get(t, "k"), "tarr")) {
+        return elem_bytes(ym_get(t, "of"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tarrfix")) {
+        return elem_bytes(ym_get(t, "of"));
+    } else {
+        return 8;
+    }
+}
+
+/* Load element [idx] of the array based at `base` into `dst`.
+ * Element load: `base` is the ARRAY HEADER register, `idx` the index
+ * register, `dst` the result. Headers are {len, cap, data} with the
+ * elements in a separate block, so the data pointer rides through %dst. */
+Yv *elem_load(long esz, Yv *base, Yv *idx, Yv *dst) {
+    if (esz == 1) {
+        return ys_cat(
+            ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base), ys("), ")),
+                          dst),
+                   ys("\n")),
+            ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("    movzbq ("), dst),
+                                          ys(",")),
+                                   idx),
+                            ys(",1), ")),
+                   dst));
+    } else {
+        return ys_cat(
+            ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base), ys("), ")),
+                          dst),
+                   ys("\n")),
+            ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov ("), dst),
+                                          ys(",")),
+                                   idx),
+                            ys(",8), ")),
+                   dst));
+    }
+}
+
+/* Store %rdx into element [idx] of the array based at `base`. The value
+ * always arrives in %rdx so the byte form can name %dl without a register
+ * table; a packed store truncates to 8 bits, which is the narrowing.
+ * %r11 is the scratch that carries the data pointer: no generated value
+ * lives in it across a store (the syscall instruction clobbers it). */
+Yv *elem_store_rdx(long esz, Yv *base, Yv *idx) {
+    if (esz == 1) {
+        return ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
+                                    ys("), %r11\n    movb %dl, (%r11,")),
+                             idx),
+                      ys(",1)"));
+    } else {
+        return ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
+                                    ys("), %r11\n    mov %rdx, (%r11,")),
+                             idx),
+                      ys(",8)"));
+    }
+}
+
+/* Same, for a compile-time-constant index (array literals): fold the
+ * offset into the displacement instead of using an index register. */
+Yv *elem_store_rdx_const(long esz, Yv *base, long k) {
+    if (esz == 1) {
+        return ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
+                                    ys("), %r11\n    movb %dl, ")),
+                      ys_cat(ys_long(k), ys("(%r11)")));
+    } else {
+        return ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
+                                    ys("), %r11\n    mov %rdx, ")),
+                      ys_cat(ys_long(k * 8), ys("(%r11)")));
+    }
+}
+
+/* The array header is {len, cap, data} and NEVER moves: elements live in a
+ * separate block, so growth keeps every alias valid (that is what makes
+ * `arr += v` in-place). This is the block size for n elements. */
+long arr_alloc_size(long esz, long n) {
+    long b = n * esz;
+    if (b < 8) {
+        return 8;
+    } else {
+        return b;
+    }
+}
+
+/* Bytes to allocate for the header itself. */
+long arr_header_size(void) { return 24; }
+
+Yv *gen_dot(Yv *st, Yv *node) {
+    /* NOTE: bound once — `node.obj` inline misparses on the C VM. */
+    Yv *dobj = ym_get(node, "obj");
+    Yv *dkey = ym_get(node, "key");
+    Yv *t = infer(st, dobj);
+    long idx = rec_field_idx(t, dkey);
+    if (idx < 0) {
+        /* unknown static shape ({k}-holes, bare params): dynamic field
+         * lookup. The record carries its shape table (see gen_map note);
+         * the key goes through the regular string rodata channel. */
+        Yv *r = next_uid(st);
+        st = ym_get(r, "st");
+        Yv *klbl = arch_str_label(yv_l(ym_get(r, "uid")));
+        Yv *krod = yav(0);
+        krod = ya_push(krod, klbl);
+        krod = ya_push(krod, ys_long(yv_len(dkey)));
+        krod = ya_push(krod, esc_asm(dkey));
+        Yv *rod = ya_push(ym_get(st, "rodata"), krod);
+        st = ym(11, "out", ym_get(st, "out"), "rodata", rod, "uid",
+                ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+                ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+                ym_get(st, "slots"), "self_label", ym_get(st, "self_label"),
+                "end_label", ym_get(st, "end_label"), "fns",
+                ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+        st = gen(st, dobj);
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys_cat(ys_cat(ys("    lea "), klbl), ys("(%rip), %rax")));
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_dot_lookup"));
+        st = emit(st, ys("    add $16, %rsp"));
+        ;
+    } else {
+        st = gen(st, dobj);
+        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(idx * 8)),
+                             ys("(%rax), %rax")));
+        ;
+    }
+    return st;
+}
+
+/* Static field index of `key` in trec type t (-1 = checker drift;
+ * the checker rejects unknown fields, so this is unreachable). */
+long rec_field_idx(Yv *t, Yv *key) {
+    long idx = -1;
+    if (ys_eq_lit(ym_get(t, "k"), "trec")) {
+        Yv *fs = ym_get(t, "fields");
+        long i = 0;
+        while (i < yv_len(fs)) {
+            /* NOTE: bound once — `x.y[i]` chains misparse on the C VM. */
+            Yv *f = ya_get(fs, i);
+            if (ys_eq(ym_get(f, "name"), key)) {
+                idx = i;
+                ;
+            } else {
+                ;
+            }
+            i = i + 1;
+        }
+    }
+    return idx;
+}
+
+/* Heap array literal [v, ...]: alloc 16+8n, store len/cap/elems. The header
+ * pointer (an 8-byte value like any other) is the expression value. */
+Yv *gen_array(Yv *st, Yv *node) {
+    return gen_array_esz(st, node, arr_elem_bytes(infer(st, node)));
+}
+
+/* Same, with the element width supplied by the declaration (`let b:
+ * [byte] = [104, 105]` — the literal's own elements infer as long). */
+Yv *gen_array_esz(Yv *st, Yv *node, long esz) {
+    Yv *elems = ym_get(node, "elems");
+    st = gen_push_args(st, elems);
+    long n = yv_len(elems);
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"),
+                                ys_long(arr_alloc_size(esz, n))),
+                         ys(", %rdi")));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(arr_header_size())),
+                         ys(", %rdi")));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    mov %rax, %r10"));
+    st = emit(st, ys("    pop %rdx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", (%r10)")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", 8(%r10)")));
+    st = emit(st, ys("    mov %rdx, 16(%r10)"));
+    long k = n - 1;
+    while (k >= 0) {
+        st = emit(st, ys("    pop %rdx"));
+        st = emit(st, elem_store_rdx_const(esz, ys("%r10"), k));
+        k = k - 1;
+    }
+    return emit(st, ys("    mov %r10, %rax"));
+}
+
+Yv *gen_len(Yv *st, Yv *node) {
+    /* Checker: single array or string argument. Fixed size is immediate
+     * (from the inferred type itself); heap length (array header or string
+     * header) loads from address+0. NOTE: the argument is any array-typed
+     * expression (id, dot like `a.args`, call result) — never assume a
+     * plain id (no `.v` reads here); infer gives the static type. */
+    Yv *args = ym_get(node, "args");
+    Yv *at = infer(st, ya_get(args, 0));
+    if (ys_eq_lit(ym_get(at, "k"), "tstr")) {
+        st = gen(st, ya_get(args, 0));
+        return emit(st, ys("    mov (%rax), %rax"));
+    } else {
+        st = gen(st, ya_get(args, 0));
+        return emit(st, ys("    mov (%rax), %rax"));
+    }
+}
+
+/* push(arr, v): Y calling convention straight into the prelude helper.
+ * Returns the (possibly reallocated) header — rebind it: `a = push(a, v)`. */
+Yv *gen_push(Yv *st, Yv *node) {
+    Yv *pargs = ym_get(node, "args");
+    long pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_arr_push"));
+    long nbytes = yv_len(ym_get(node, "args")) * 8 + 8;
+    return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(nbytes)),
+                           ys(", %rsp")));
+}
+
+Yv *gen_some(Yv *st, Yv *node) {
+    Yv *args = ym_get(node, "args");
+    st = gen(st, ya_get(args, 0));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    mov $8, %rdi"));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    pop %rcx"));
+    st = emit(st, ys("    mov %rcx, (%rax)"));
+    return st;
+}
+
+Yv *gen_is_some(Yv *st, Yv *node) {
+    Yv *args = ym_get(node, "args");
+    st = gen(st, ya_get(args, 0));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys("    setne %al"));
+    return emit(st, ys("    movzbq %al, %rax"));
+}
+
+Yv *gen_unwrap(Yv *st, Yv *node) {
+    Yv *args = ym_get(node, "args");
+    st = gen(st, ya_get(args, 0));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys("    jz y_opt_unwrap"));
+    return emit(st, ys("    mov (%rax), %rax"));
+}
+
+/* ── string builtins (all on {len, data} header objects) ────────────────
+ * Every helper takes header addresses via the Y calling convention
+ * (args pushed left-to-right, first arg deepest) and returns a header
+ * address (or long) in %rax. Caller cleans the stack. */
+
+Yv *gen_substr(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_str_substr"));
+    return emit(st, ys("    add $24, %rsp"));
+}
+
+Yv *gen_trim(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_str_trim"));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
+/* prepend(arr, v) -> arr: in-place insert at the front (the header never
+ * moves, so every alias sees it). The `*=` operator desugars to this. */
+Yv *gen_prepend(Yv *st, Yv *node) {
+    Yv *pargs = ym_get(node, "args");
+    long pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_arr_prepend"));
+    long nbytes = yv_len(ym_get(node, "args")) * 8 + 8;
+    return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(nbytes)),
+                           ys(", %rsp")));
+}
+
+/* byte_at(s, i): byte i of string s, trapped when out of bounds. This is
+ * the primitive every string helper is built on — reading one byte must
+ * not copy the string the way bytes() does. Inline, four instructions,
+ * because scanning loops call it per character. */
+Yv *gen_byte_at(Yv *st, Yv *node) {
+    Yv *args = ym_get(node, "args");
+    st = gen(st, ya_get(args, 0));
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ya_get(args, 1));
+    st = emit(st, ys("    pop %rcx"));
+    st = emit(st, ys("    mov (%rcx), %rdx"));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys("    js y_oob"));
+    st = emit(st, ys("    cmp %rdx, %rax"));
+    st = emit(st, ys("    jge y_oob"));
+    return emit(st, ys("    movzbq 8(%rcx,%rax,1), %rax"));
+}
+
+Yv *gen_ord(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_str_ord"));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
+Yv *gen_chr(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_str_chr"));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
+Yv *gen_tonum(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_str_tonum"));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
+Yv *gen_tostring(Yv *st, Yv *node) {
+    /* dispatch on the static type: long/bool need conversion, str is
+     * identity NOTE: bind args once — `node.args[0]` inline misparses on
+     * the C VM. */
+    Yv *targs = ym_get(node, "args");
+    Yv *a0 = ya_get(targs, 0);
+    Yv *t = infer(st, a0);
+    if (ys_eq_lit(ym_get(t, "k"), "tstr")) {
+        return gen(st, a0);
+    } else if (ys_eq_lit(ym_get(t, "k"), "tbool")) {
+        st = gen_push_args(st, ym_get(node, "args"));
+        st = emit(st, ys("    call y_bool_tostr"));
+        return emit(st, ys("    add $8, %rsp"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tfloat")) {
+        st = gen_push_args(st, ym_get(node, "args"));
+        st = emit(st, ys("    call y_float_tostr"));
+        return emit(st, ys("    add $8, %rsp"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tarr")) {
+        st = gen(st, a0);
+        return gen_arr_tostr_rax(st, ym_get(t, "of"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tarrfix")) {
+        st = gen(st, a0);
+        return gen_arr_tostr_rax(st, ym_get(t, "of"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tnull")) {
+        st = gen(st, a0);
+        return gen_str_const(st, ys("null"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "topt")) {
+        st = gen(st, a0);
+        return gen_opt_str_rax(st, t);
+    } else if (ys_eq_lit(ym_get(t, "k"), "trec")) {
+        st = gen(st, a0);
+        return gen_rec_str_rax(st, t);
+    } else {
+        st = gen_push_args(st, ym_get(node, "args"));
+        st = emit(st, ys("    call y_long_tostr"));
+        return emit(st, ys("    add $8, %rsp"));
+    }
+}
+
+Yv *gen_index_of(Yv *st, Yv *node, int last) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    if (last) {
+        st = emit(st, ys("    call y_str_lastidx"));
+        return emit(st, ys("    add $16, %rsp"));
+    } else {
+        st = emit(st, ys("    call y_str_index"));
+        return emit(st, ys("    add $16, %rsp"));
+    }
+}
+
+/* join(arr, sep). y_str_join walks string HEADERS, so an array of longs,
+ * bools or floats is stringified into a fresh [str] first — reading a raw
+ * long as a header would fault. Unknown element types keep the old direct
+ * path: most of them really are strings (the compiler's own arrays infer
+ * as tunk through {k}-holes), and guessing wrong there would corrupt
+ * output rather than crash. */
+Yv *gen_join(Yv *st, Yv *node) {
+    Yv *jargs = ym_get(node, "args");
+    Yv *at = infer(st, ya_get(jargs, 0));
+    Yv *eltyp = ym(1, "k", ys("tunk"));
+    if (ys_eq_lit(ym_get(at, "k"), "tarr")) {
+        eltyp = ym_get(at, "of");
+        ;
+    } else {
+        ;
+    }
+    if (ys_eq_lit(ym_get(at, "k"), "tarrfix")) {
+        eltyp = ym_get(at, "of");
+        ;
+    } else {
+        ;
+    }
+    Yv *ek = ym_get(eltyp, "k");
+    if (ys_eq_lit(ek, "tlong")) {
+        return gen_join_conv(st, node, ys("y_long_tostr"), 8);
+    } else if (ys_eq_lit(ek, "tbyte")) {
+        return gen_join_conv(st, node, ys("y_long_tostr"), 1);
+    } else if (ys_eq_lit(ek, "tbool")) {
+        return gen_join_conv(st, node, ys("y_bool_tostr"), 8);
+    } else if (ys_eq_lit(ek, "tfloat")) {
+        return gen_join_conv(st, node, ys("y_float_tostr"), 8);
+    } else {
+        st = gen_push_args(st, ym_get(node, "args"));
+        st = emit(st, ys("    call y_str_join"));
+        return emit(st, ys("    add $16, %rsp"));
+    }
+}
+
+/* Slots: [src][dst][i]. Builds dst = [tostr(src[0]), ...] then joins it. */
+Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz) {
+    long soff = (yv_l(ym_get(st, "slots")) + 1) * -8;
+    long doff = (yv_l(ym_get(st, "slots")) + 2) * -8;
+    long ioff = (yv_l(ym_get(st, "slots")) + 3) * -8;
+    st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"), "uid",
+            ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+            ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+            yv_long(yv_l(ym_get(st, "slots")) + 3), "self_label",
+            ym_get(st, "self_label"), "end_label", ym_get(st, "end_label"),
+            "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+    Yv *jargs = ym_get(node, "args");
+    st = gen(st, ya_get(jargs, 0));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(soff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys("    mov (%rax), %rdi"));
+    st = emit(st, ys("    shl $3, %rdi"));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    mov $24, %rdi"));
+    st = emit(st, ys("    call y_alloc"));
+    st = emit(st, ys("    pop %rdx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(doff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
+                         ys("(%rbp), %rcx")));
+    st = emit(st, ys("    mov (%rcx), %rcx"));
+    st = emit(st, ys("    mov %rcx, (%rax)"));
+    st = emit(st, ys("    mov %rcx, 8(%rax)"));
+    st = emit(st, ys("    mov %rdx, 16(%rax)"));
+    st = emit(st, ys("    xor %eax, %eax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    Yv *r1 = next_loc(st);
+    st = ym_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = ym_get(r2, "st");
+    st = emit(st, ys_cat(ym_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys("    mov (%rdx), %rcx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    cmp %rcx, %rax"));
+    st = emit(st, ys_cat(ys("    jge "), ym_get(r2, "lbl")));
+    st = emit(st, elem_load(esz, ys("%rdx"), ys("%rax"), ys("%rcx")));
+    st = emit(st, ys("    push %rcx"));
+    st = emit(st, ys_cat(ys("    call "), tostr_fn));
+    st = emit(st, ys("    add $8, %rsp"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rcx")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(doff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys("    mov 16(%rdx), %rdx"));
+    st = emit(st, ys("    mov %rax, (%rdx,%rcx,8)"));
+    st = emit(st, ys("    inc %rcx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rcx, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys("    jmp "), ym_get(r1, "lbl")));
+    st = emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(doff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ya_get(jargs, 1));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_str_join"));
+    return emit(st, ys("    add $16, %rsp"));
+}
+
+Yv *gen_split(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_str_split"));
+    return emit(st, ys("    add $16, %rsp"));
+}
+
+Yv *gen_puts(Yv *st, Yv *node) {
+    /* puts(v): write the value WITHOUT trailing newline (C semantics:
+     * fputs + flush). Like print but no newline; returns null.
+     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+    Yv *pargs = ym_get(node, "args");
+    Yv *pa = ya_get(pargs, 0);
+    st = gen(st, pa);
+    Yv *t = infer(st, pa);
+    if (ys_eq_lit(ym_get(t, "k"), "tbool")) {
+        st = gen_helper1(st, ys("y_put_bool"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tstr")) {
+        st = gen_helper1(st, ys("y_put_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else {
+        st = gen_helper1(st, ys("y_put_long"));
+        return emit(st, ys("    xor %eax, %eax"));
+    }
+}
+
+Yv *gen_eputs(Yv *st, Yv *node) {
+    /* eputs(v): like puts, but on fd 2. Profiling/diagnostic output must
+     * never land in stdout (where `-S` assembly and program output live).
+     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+    Yv *pargs = ym_get(node, "args");
+    Yv *pa = ya_get(pargs, 0);
+    st = gen(st, pa);
+    Yv *t = infer(st, pa);
+    if (ys_eq_lit(ym_get(t, "k"), "tbool")) {
+        st = gen_helper1(st, ys("y_eput_bool"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else if (ys_eq_lit(ym_get(t, "k"), "tstr")) {
+        st = gen_helper1(st, ys("y_eput_hstr"));
+        return emit(st, ys("    xor %eax, %eax"));
+    } else {
+        st = gen_helper1(st, ys("y_eput_long"));
+        return emit(st, ys("    xor %eax, %eax"));
+    }
+}
+
+Yv *gen_clock_us(Yv *st, Yv *node) {
+    /* clock_us() -> long (monotonic microseconds, via clock_gettime). */
+    Yv *unused = node;
+    (void)unused;
+    return emit(st, ys("    call y_clock_us"));
+}
+
+Yv *gen_heap_used(Yv *st, Yv *node) {
+    /* heap_used() -> long (current arena break; deltas are the signal). */
+    Yv *unused = node;
+    (void)unused;
+    return emit(st, ys("    call y_heap_used"));
+}
+
+Yv *gen_sleep(Yv *st, Yv *node) {
+    /* sleep(ms): suspend the caller for ms milliseconds (nanosleep, EINTR
+     * cannot happen in single-threaded code, so one syscall is enough).
+     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+    Yv *sargs = ym_get(node, "args");
+    Yv *sa = ya_get(sargs, 0);
+    st = gen(st, sa);
+    return gen_helper1(st, ys("y_sleep"));
+}
+
+Yv *gen_exit(Yv *st, Yv *node) {
+    /* exit(code): terminate the process with the exit-code syscall.
+     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+    Yv *eargs = ym_get(node, "args");
+    Yv *ea = ya_get(eargs, 0);
+    st = gen(st, ea);
+    if (fn_label_present(ym_get(st, "fns"), ys("y_prof_report"))) {
+        /* --prof: exit() never returns, so the epilogue's report would
+         * never run — print it here. The exit code stays in %rax. */
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    mov %r13, %rax"));
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_prof_report"));
+        st = emit(st, ys("    add $8, %rsp"));
+        st = emit(st, ys("    pop %rax"));
+        ;
+    } else {
+        ;
+    }
+    st = emit(st, ys("    mov %rax, %rdi"));
+    st = emit(st, ys("    mov $60, %rax"));
+    st = emit(st, ys("    syscall"));
+    /* exit() terminates the process; the epilogue (ret / exit(0)) is
+     * unreachable. Emit a jump to the function end so the backend never
+     * falls through into dead code (and exit codes are never masked). */
+    return emit(st, ys_cat(ys("    jmp "), ym_get(st, "end_label")));
+}
+
+/* ── process I/O + files (argv, read_file, write_file) ───────────────
+ * argv MAY only appear as `main(argv())`'s argument feed: ycc.y's entry is
+ * `let result = main(argv())`. The _start prologue (below) builds the argv
+ * array and stashes it in r15; gen_argv emits the call that materializes
+ * it. read_file(path): openat+read loop into a heap string; null (0) on
+ * error, else a some()-style heap box holding the string header (options
+ * are 0-or-box per NATIVE.md, so unwrap() derefs uniformly).
+ * write_file(path, content): openat(O_WRONLY|O_CREAT|O_TRUNC, 0644)+write;
+ * returns bool. Both are straight-line syscalls, no libc. */
+
+Yv *gen_argv(Yv *st, Yv *node) {
+    Yv *unused = node;
+    (void)unused;
+    return emit(st, ys("    call y_argv"));
+}
+
+Yv *gen_read_file(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_read_file"));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
+Yv *gen_write_file(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_write_file"));
+    return emit(st, ys("    add $16, %rsp"));
+}
+
+Yv *gen_write_bytes(Yv *st, Yv *node) {
+    st = gen_push_args(st, ym_get(node, "args"));
+    st = emit(st, ys("    call y_write_bytes"));
+    return emit(st, ys("    add $24, %rsp"));
+}
+
+Yv *gen_store(Yv *st, Yv *node) {
+    st = gen(st, ym_get(node, "p"));
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "v"));
+    st = emit(st, ys("    pop %rcx"));
+    return emit(st, ys("    mov %rax, (%rcx)"));
+}
+
+/* ── functions ──────────────────────────────────────────────────────────
+ * Frame: locals at rbp-8, rbp-16, ...; params at rbp+16, rbp+24, ....
+ * Every emitted function gets: prologue, body, end_label, epilogue. */
+
+Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
+                int want_argv, Yv *captypes) {
+    /* fresh per-function state; uid/rodata/fns flow through and back.
+     * The scope is pre-loaded with every known def (like the checker's
+     * fresh_func_scope): bodies see all top-level + hoisted functions. */
+    Yv *f = ym(11, "out", yav(0), "rodata", ym_get(st, "rodata"), "uid",
+               ym_get(st, "uid"), "fuid", yv_long(fuid), "loc", yv_long(1),
+               "env", yav(0), "slots", yv_long(0), "self_label", label,
+               "end_label", arch_loc_label(fuid, 0), "fns", ym_get(st, "fns"),
+               "bodies", ym_get(st, "bodies"));
+    Yv *fnsall = ym_get(st, "fns");
+    long g = 0;
+    while (g < yv_len(fnsall)) {
+        Yv *fe = ya_get(fnsall, g);
+        f = env_define(f, ym_get(fe, "name"), ys("func"), 0,
+                       ym_get(fe, "label"), ym_get(fe, "typ"));
+        g = g + 1;
+    }
+    /* bind params. Caller pushes args left-to-right, so the LAST arg sits
+     * at rbp+16 and param k lives at rbp+16+8*(n-1-k) (arity-dependent). */
+    Yv *params = ym_get(func, "params");
+    Yv *ptypes = ym_get(func, "ptypes");
+    long nargs = yv_len(params);
+    long i = 0;
+    while (i < nargs) {
+        f = env_define(f, ya_get(params, i), ys("param"),
+                       16 + (nargs - 1 - i) * 8, ys(""), ya_get(ptypes, i));
+        i = i + 1;
+    }
+    /* Captures: the caller pushed the closure record BEFORE the args, so
+     * it lives just past them at rbp+16+8*nargs. Each capture reads slot
+     * idx+1 of that record (slot 0 is the code pointer). A capture-free
+     * function binds nothing here and never touches the slot, which is
+     * what lets one body serve both direct and closure calls. `_start` has
+     * no enclosing frame, so it never captures. */
+    if (is_main) {
+        ;
+    } else {
+        Yv *mycaps = fn_captures(func, fn_names_of(ym_get(st, "fns")));
+        long cloff = 16 + nargs * 8;
+        long c = 0;
+        while (c < yv_len(mycaps)) {
+            Yv *cn = ya_get(mycaps, c);
+            /* Capture types come from the creation site (the enclosing env
+             * knows them); without one the emitter would pick long for a
+             * captured string in print/puts and in `+`. */
+            Yv *ct = ym(1, "k", ys("tnone"));
+            if (c < yv_len(captypes)) {
+                ct = ya_get(captypes, c);
+                ;
+            } else {
+                ;
+            }
+            f = env_define(f, cn, ys("capture"), cloff, ys_long(c), ct);
+            c = c + 1;
+        }
+        ;
+    }
+    f = gen_block(f, ym_get(func, "body"));
+    long frame = arch_frame(yv_l(ym_get(f, "slots")));
+    /* ── profiling (ycc --prof) ─────────────────────────────────────────
+     * Wrap the body with y_prof_enter/y_prof_exit. The stats table lives
+     * in %r13 (callee-saved; generated code never touches it) and _start
+     * allocates it. The function's own label is the row name. The
+     * profiler's own functions are exempt: their calls run the
+     * instrumentation itself (std/prof.y guards the rest). */
+    int prof_on = fn_label_present(ym_get(st, "fns"), ys("y_prof_enter"));
+    if (prof_on) {
+        if (ys_eq_lit(ys_substr(label, 0, 7), "y_prof_")) {
+            prof_on = 0;
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    Yv *pname = ys("");
+    Yv *prodata = ym_get(f, "rodata");
+    long puid = yv_l(ym_get(f, "uid"));
+    if (prof_on) {
+        Yv *ru = next_uid(f);
+        f = ym_get(ru, "st");
+        Yv *nlbl = arch_str_label(yv_l(ym_get(ru, "uid")));
+        Yv *ne = yav(0);
+        ne = ya_push(ne, nlbl);
+        ne = ya_push(ne, ys_long(yv_len(label)));
+        ne = ya_push(ne, esc_asm(label));
+        prodata = ya_push(ym_get(f, "rodata"), ne);
+        pname = nlbl;
+        puid = yv_l(ym_get(f, "uid"));
+        ;
+    } else {
+        ;
+    }
+    Yv *code = yav(0);
+    code = ya_push(code, ys_cat(label, ys(":")));
+    if (is_main) {
+        if (prof_on) {
+            /* the table first: every later call (argv init included) is
+             * measured against it */
+            code = ya_push(code, ys_cat(ys_cat(ys("    mov $"),
+                                               ys_long(puid + 8)),
+                                        ys(", %rax")));
+            code = ya_push(code, ys("    push %rax"));
+            code = ya_push(code, ys("    call y_prof_init"));
+            code = ya_push(code, ys("    add $8, %rsp"));
+            code = ya_push(code, ys("    mov %rax, %r13"));
+            ;
+        } else {
+            ;
+        }
+        if (want_argv) {
+            /* _start prologue: at process entry %rsp -> [argc][argv0ptr]....
+             * argv (char**) is the ADDRESS rsp+8 (lea, not a load!); argc
+             * is [rsp]. y_argv_init copies every arg into a header string
+             * and stashes the [str] array in r15 for y_argv. Skipped
+             * entirely when the program never calls argv() (saves ~14s of
+             * startup: y_cstr_to_str walks every byte of every arg).
+             * NOTE: no bare (%rsp)/(%r12) — the encoder rejects rsp/r12
+             * bases. */
+            code = ya_push(code, ys("    mov %rsp, %rax"));
+            code = ya_push(code, ys("    mov (%rax), %r15"));
+            code = ya_push(code, ys("    mov %rax, %r14"));
+            code = ya_push(code, ys("    add $8, %r14"));
+            code = ya_push(code, ys("    push %r14"));
+            code = ya_push(code, ys("    push %r15"));
+            code = ya_push(code, ys("    call y_argv_init"));
+            code = ya_push(code, ys("    add $16, %rsp"));
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    code = ya_push(code, ys("    push %rbp"));
+    code = ya_push(code, ys("    mov %rsp, %rbp"));
+    if (frame > 0) {
+        code = ya_push(code, ys_cat(ys_cat(ys("    sub $"), ys_long(frame)),
+                                    ys(", %rsp")));
+        ;
+    } else {
+        ;
+    }
+    if (prof_on) {
+        /* y_prof_enter(table, slot, name) — args left to right, like any
+         * Y call; slot is the function's uid (unique per body). */
+        code = ya_push(code, ys("    mov %r13, %rax"));
+        code = ya_push(code, ys("    push %rax"));
+        code = ya_push(code, ys_cat(ys_cat(ys("    mov $"), ys_long(fuid)),
+                                    ys(", %rax")));
+        code = ya_push(code, ys("    push %rax"));
+        code = ya_push(code, ys_cat(ys_cat(ys("    lea "), pname),
+                                    ys("(%rip), %rax")));
+        code = ya_push(code, ys("    push %rax"));
+        code = ya_push(code, ys("    call y_prof_enter"));
+        code = ya_push(code, ys("    add $24, %rsp"));
+        ;
+    } else {
+        ;
+    }
+    Yv *fout = ym_get(f, "out");
+    long j = 0;
+    while (j < yv_len(fout)) {
+        code = ya_push(code, ya_get(fout, j));
+        j = j + 1;
+    }
+    code = ya_push(code, ys_cat(ym_get(f, "end_label"), ys(":")));
+    if (prof_on) {
+        /* every `return` funnels through end_label, so one exit hook sees
+         * them all. _start gets the report instead (which books anything
+         * still in flight); the epilogue below must still find the return
+         * value in %rax, hence the push/pop around the call. */
+        if (is_main) {
+            code = ya_push(code, ys("    mov %r13, %rax"));
+            code = ya_push(code, ys("    push %rax"));
+            code = ya_push(code, ys("    call y_prof_report"));
+            code = ya_push(code, ys("    add $8, %rsp"));
+            ;
+        } else {
+            code = ya_push(code, ys("    push %rax"));
+            code = ya_push(code, ys("    mov %r13, %rax"));
+            code = ya_push(code, ys("    push %rax"));
+            code = ya_push(code, ys("    call y_prof_exit"));
+            code = ya_push(code, ys("    add $8, %rsp"));
+            code = ya_push(code, ys("    pop %rax"));
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    if (is_main) {
+        code = ya_push(code, ys("    mov $60, %rax"));
+        code = ya_push(code, ys("    xor %edi, %edi"));
+        code = ya_push(code, ys("    syscall"));
+    } else {
+        code = ya_push(code, ys("    mov %rbp, %rsp"));
+        code = ya_push(code, ys("    pop %rbp"));
+        code = ya_push(code, ys("    ret"));
+    }
+    /* NOTE: append to f.bodies, NOT st.bodies. Emitting this body can add
+     * bodies of its own (a nested capturing def is emitted at its creation
+     * site), and those land in f.bodies. Using st.bodies dropped them
+     * whenever push had to GROW the array: the C runtime shares the grown
+     * buffer between the two record copies, the native backend rebinds only
+     * f.bodies (see NATIVE.md "rebind: a = push(a, v)"), so the two
+     * engines disagreed and ycc emitted calls to labels it never defined. */
+    Yv *bodies =
+        ya_push(ym_get(f, "bodies"), ys_join(code, ys("\n")));
+    return ym(11, "out", ym_get(st, "out"), "rodata", prodata, "uid",
+              yv_long(puid), "fuid", ym_get(st, "fuid"), "loc",
+              ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+              ym_get(st, "slots"), "self_label", ym_get(st, "self_label"),
+              "end_label", ym_get(st, "end_label"), "fns", ym_get(st, "fns"),
+              "bodies", bodies);
+}
+
+/* Build a tfunc type from a func node (params have annotations — checked).
+ * Return type of a function whose `-> T` was omitted: the type of its
+ * body's tail, inferred in a scope holding every known def plus the
+ * params. types.y does the same for checking; the emitter needs it too,
+ * because a call's result type decides e.g. whether `+` must stringify. */
+Yv *infer_fn_ret(Yv *st, Yv *func) {
+    Yv *f = ym(11, "out", yav(0), "rodata", ym_get(st, "rodata"), "uid",
+               ym_get(st, "uid"), "fuid", yv_long(0), "loc", yv_long(1),
+               "env", yav(0), "slots", yv_long(0), "self_label", ys(""),
+               "end_label", ys(""), "fns", ym_get(st, "fns"), "bodies",
+               ym_get(st, "bodies"));
+    Yv *fnsall = ym_get(st, "fns");
+    long g = 0;
+    while (g < yv_len(fnsall)) {
+        Yv *fe = ya_get(fnsall, g);
+        f = env_define(f, ym_get(fe, "name"), ys("func"), 0,
+                       ym_get(fe, "label"), ym_get(fe, "typ"));
+        g = g + 1;
+    }
+    Yv *params = ym_get(func, "params");
+    Yv *ptypes = ym_get(func, "ptypes");
+    long n = yv_len(params);
+    long i = 0;
+    while (i < n) {
+        f = env_define(f, ya_get(params, i), ys("param"),
+                       16 + (n - 1 - i) * 8, ys(""), ya_get(ptypes, i));
+        i = i + 1;
+    }
+    return infer(f, ym_get(func, "body"));
+}
+
+Yv *func_type(Yv *func) {
+    return ym(3, "k", ys("tfunc"), "args", ym_get(func, "ptypes"), "ret",
+              ym_get(func, "ret"));
+}
+
+/* Same, but with an unannotated return type resolved from the body — the
+ * checker infers it too, so a literal's call sites must agree (whether `+`
+ * stringifies, which print arm runs, ...). */
+Yv *func_type_in(Yv *st, Yv *func) {
+    Yv *r = ym_get(func, "ret");
+    if (ys_eq_lit(ym_get(r, "k"), "tnone")) {
+        r = infer_fn_ret(st, func);
+        ;
+    } else {
+        ;
+    }
+    return ym(3, "k", ys("tfunc"), "args", ym_get(func, "ptypes"), "ret", r);
+}
+
+/* Display name: strip rename's `$N` suffix (see types.y disp). */
+Yv *ndisp(Yv *name) {
+    long i = ys_index_of(name, ys("$"));
+    if (i < 0) {
+        return name;
+    } else {
+        return ys_substr(name, 0, i);
+    }
+}
+
+/* Two spliced modules may define the same name: shadowing would silently
+ * pick one, so duplicates are a loud error (at the second def's
+ * position). */
+Yv *find_dup(Yv *defs) {
+    Yv *seen = yav(0);
+    long i = 0;
+    Yv *out = ym(2, "found", yv_bool(0), "err",
+                 ym(3, "msg", ys(""), "line", yv_long(1), "col", yv_long(1)));
+    while (i < yv_len(defs)) {
+        Yv *d = ya_get(defs, i);
+        long j = 0;
+        while (j < yv_len(seen)) {
+            /* NOTE: :str binding (see teq note in types.y): seen elements
+             * infer tunk (pushed into bare []), so compare via annotated
+             * let to force content (not pointer) comparison. */
+            Yv *sn = ya_get(seen, j);
+            if (ys_eq(sn, ym_get(d, "name"))) {
+                out = ym(2, "found", yv_bool(1), "err",
+                         ym(3, "msg",
+                            ys_cat(ys_cat(ys("duplicate definition '"),
+                                          ndisp(ym_get(d, "name"))),
+                                   ys("' (native imports splice; rename one)")),
+                            "line",
+                            yv_long(yv_l(ym_get(ym_get(d, "func"), "line"))),
+                            "col",
+                            yv_long(yv_l(ym_get(ym_get(d, "func"), "col")))));
+                ;
+            } else {
+                ;
+            }
+            j = j + 1;
+        }
+        seen = ya_push(seen, ym_get(d, "name"));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* ── phase timing ───────────────────────────────────────────────────────
+ * Every phase records elapsed microseconds and heap bytes consumed, so
+ * `ycc --time` can show where wall time AND memory go (the arena never
+ * frees, so allocation volume is as interesting as elapsed time). */
+
+Yv *phase_end(Yv *times, Yv *name, long t0, long h0) {
+    long t1 = clock_us();
+    long h1 = heap_used();
+    return ym(3, "times",
+              ya_push(times, ym(3, "name", name, "us", yv_long(t1 - t0),
+                                "heap", yv_long(h1 - h0))),
+              "t", yv_long(t1), "h", yv_long(h1));
+}
+
+/* ── entry point ──────────────────────────────────────────────────────── */
+
+Yv *emit_program(Yv *ast, Yv *imports) {
+    Yv *times = yav(0);
+    long pt = clock_us();
+    long ph = heap_used();
+    Yv *ast2 = strip_ns(ast, imports);
+    Yv *pr = phase_end(times, ys("strip_ns"), pt, ph);
+    times = ym_get(pr, "times");
+    pt = yv_l(ym_get(pr, "t"));
+    ph = yv_l(ym_get(pr, "h"));
+    /* Static name resolution: every binding gets a unique name, so neither
+     * the checker nor the emitter deals with scopes or shadowing. */
+    Yv *ast3 = rename_program(ast2);
+    pr = phase_end(times, ys("rename"), pt, ph);
+    times = ym_get(pr, "times");
+    pt = yv_l(ym_get(pr, "t"));
+    ph = yv_l(ym_get(pr, "h"));
+    Yv *errors = check_program(ast3);
+    pr = phase_end(times, ys("typecheck"), pt, ph);
+    times = ym_get(pr, "times");
+    pt = yv_l(ym_get(pr, "t"));
+    ph = yv_l(ym_get(pr, "h"));
+    /* collect every def (top-level + capture-free nested + let-bound) */
+    Yv *defs = collect_from_block(ym_get(ast3, "stmts"), yav(0));
+    Yv *dup = find_dup(defs);
+    if (yv_b(ym_get(dup, "found"))) {
+        errors = ya_push(errors, ym_get(dup, "err"));
+        ;
+    } else {
+        ;
+    }
+    if (yv_len(errors) > 0) {
+        return ym(4, "ok", yv_bool(0), "asm", ys(""), "errors", errors, "times",
+                  times);
+    } else {
+        /* assign labels + env entries (also pre-binds for calls) */
+        Yv *st = st_new();
+        Yv *r = next_uid(st);
+        st = ym_get(r, "st");
+        long i = 0;
+        while (i < yv_len(defs)) {
+            Yv *d = ya_get(defs, i);
+            Yv *rl = next_uid(st);
+            st = ym_get(rl, "st");
+            Yv *label = fn_label_of(yv_l(ym_get(rl, "uid")), ym_get(d, "name"));
+            Yv *fns = ya_push(ym_get(st, "fns"),
+                              ym(3, "name", ym_get(d, "name"), "label", label,
+                                 "typ", func_type(ym_get(d, "func"))));
+            st = ym(11, "out", ym_get(st, "out"), "rodata",
+                    ym_get(st, "rodata"), "uid", ym_get(st, "uid"), "fuid",
+                    ym_get(st, "fuid"), "loc", ym_get(st, "loc"), "env",
+                    ym_get(st, "env"), "slots", ym_get(st, "slots"),
+                    "self_label", ym_get(st, "self_label"), "end_label",
+                    ym_get(st, "end_label"), "fns", fns, "bodies",
+                    ym_get(st, "bodies"));
+            st = env_define(st, ym_get(d, "name"), ys("func"), 0, label,
+                            func_type(ym_get(d, "func")));
+            i = i + 1;
+        }
+        /* emit each function body. Capturing ones are emitted at their
+         * creation site instead (gen_decl), where capture types are known.
+         * First: fill in the return type of every unannotated def, so call
+         * sites know what a call yields. */
+        Yv *fixedfns = yav(0);
+        long fx = 0;
+        while (fx < yv_len(defs)) {
+            Yv *dfx = ya_get(defs, fx);
+            Yv *ftab = ym_get(st, "fns");
+            Yv *fe0 = ya_get(ftab, fx);
+            Yv *ty0 = ym_get(fe0, "typ");
+            if (ys_eq_lit(ym_get(ym_get(ty0, "ret"), "k"), "tnone")) {
+                Yv *rt2 = infer_fn_ret(st, ym_get(dfx, "func"));
+                fixedfns = ya_push(
+                    fixedfns,
+                    ym(3, "name", ym_get(fe0, "name"), "label",
+                       ym_get(fe0, "label"), "typ",
+                       ym(3, "k", ys("tfunc"), "args", ym_get(ty0, "args"),
+                          "ret", rt2)));
+                ;
+            } else {
+                fixedfns = ya_push(fixedfns, fe0);
+                ;
+            }
+            fx = fx + 1;
+        }
+        st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"),
+                "uid", ym_get(st, "uid"), "fuid", ym_get(st, "fuid"), "loc",
+                ym_get(st, "loc"), "env", ym_get(st, "env"), "slots",
+                ym_get(st, "slots"), "self_label", ym_get(st, "self_label"),
+                "end_label", ym_get(st, "end_label"), "fns", fixedfns,
+                "bodies", ym_get(st, "bodies"));
+        i = 0;
+        Yv *allfnnames = fn_names_of(ym_get(st, "fns"));
+        while (i < yv_len(defs)) {
+            Yv *d = ya_get(defs, i);
+            Yv *fns = ym_get(st, "fns");
+            Yv *f = ya_get(fns, i);
+            if (yv_len(fn_captures(ym_get(d, "func"), allfnnames)) == 0) {
+                Yv *rf = next_uid(st);
+                st = ym_get(rf, "st");
+                st = emit_one_fn(st, ym_get(f, "label"),
+                                 yv_l(ym_get(rf, "uid")), ym_get(d, "func"), 0,
+                                 0, yav(0));
+                ;
+            } else {
+                ;
+            }
+            i = i + 1;
+        }
+        pr = phase_end(times, ys("emit_fns"), pt, ph);
+        times = ym_get(pr, "times");
+        pt = yv_l(ym_get(pr, "t"));
+        ph = yv_l(ym_get(pr, "h"));
+        /* main = program with hoisted defs skipped. A capture-free def is
+         * emitted once by the loop above (calls go direct to its label); a
+         * CAPTURING one is emitted at its creation site instead — so its
+         * decl must run here, where gen_decl emits the body at the same
+         * label and binds the closure record (exactly what a nested `def`
+         * does). */
+        Yv *main_stmts = yav(0);
+        Yv *pstmts = ym_get(ast3, "stmts");
+        i = 0; /* the Y source re-lets `i` here; same value, same scope */
+        while (i < yv_len(pstmts)) {
+            Yv *s = ya_get(pstmts, i);
+            if (ys_eq_lit(ym_get(s, "k"), "decl")) {
+                if (ys_eq_lit(ym_get(s, "kind"), "def")) {
+                    if (yv_len(fn_captures(ym_get(s, "v"), allfnnames)) == 0) {
+                        ;
+                    } else {
+                        main_stmts = ya_push(main_stmts, s);
+                        ;
+                    }
+                    ;
+                } else if (ys_eq_lit(ym_get(ym_get(s, "v"), "k"), "func")) {
+                    if (yv_len(fn_captures(ym_get(s, "v"), allfnnames)) == 0) {
+                        ;
+                    } else {
+                        main_stmts = ya_push(main_stmts, s);
+                        ;
+                    }
+                    ;
+                } else {
+                    main_stmts = ya_push(main_stmts, s);
+                    ;
+                }
+                ;
+            } else {
+                main_stmts = ya_push(main_stmts, s);
+                ;
+            }
+            i = i + 1;
+        }
+        Yv *rm = next_uid(st);
+        st = ym_get(rm, "st");
+        /* Only pay for argv materialization when the program uses it. */
+        Yv *want = uses_scan_block(ym_get(ast3, "stmts"),
+                                   ym(1, "argv", yv_bool(0)));
+        st = emit_one_fn(
+            st, ys("_start"), yv_l(ym_get(rm, "uid")),
+            ym(4, "params", yav(0), "ptypes", yav(0), "ret",
+               ym(1, "k", ys("tnull")), "body",
+               ym(2, "k", ys("block"), "stmts", main_stmts)),
+            1, yv_b(ym_get(want, "argv")), yav(0));
+        pr = phase_end(times, ys("emit_start"), pt, ph);
+        times = ym_get(pr, "times");
+        pt = yv_l(ym_get(pr, "t"));
+        ph = yv_l(ym_get(pr, "h"));
+        /* assemble the file. Body-level tree shaking comes first: its
+         * output is also the root set for shaking the arch prelude, and
+         * the kept prelude's references shake the rodata constants. */
+        Yv *allbodies = ym_get(st, "bodies");
+        Yv *shaken = prune_bodies(allbodies, arch_prelude());
+        Yv *bodies = ym_get(shaken, "bodies");
+        Yv *body_refs = ym_get(shaken, "refs");
+        /* Piece-list + single join: `asm = asm + piece` per iteration is
+         * quadratic (each concat re-copies the whole 1.4MB+ accumulator —
+         * the arena never frees), which OOMs on self-compilation. */
+        Yv *pieces = yav(0);
+        long b = 0;
+        while (b < yv_len(bodies)) {
+            pieces = ya_push(pieces, ya_get(bodies, b));
+            pieces = ya_push(pieces, ys("\n"));
+            b = b + 1;
+        }
+        Yv *body_text = ys_join(pieces, ys(""));
+        /* `asm` is a C keyword (GNU basic asm) — the Y local is renamed
+         * `asm_` here; it is a local name, not part of the API. */
+        Yv *asm_ = arch_header();
+        Yv *prelude_text = shake_refs(arch_prelude(), body_refs);
+        asm_ = ys_cat(ys_cat(asm_, arch_text()), prelude_text);
+        asm_ = ys_cat(asm_, body_text);
+        Yv *const_refs = text_refs(prelude_text, 1);
+        long ci = 0;
+        while (ci < yv_len(body_refs)) {
+            const_refs = ya_push(const_refs, ya_get(body_refs, ci));
+            ci = ci + 1;
+        }
+        Yv *consts_text = shake_refs(arch_consts(), const_refs);
+        asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
+        Yv *allrod = ym_get(st, "rodata");
+        long s2 = 0;
+        Yv *rodpieces = yav(0);
+        while (s2 < yv_len(allrod)) {
+            Yv *pair = ya_get(allrod, s2);
+            /* String entries are exactly [label, len, escaped]; shape
+             * tables (see gen_map note) are longer and all-strings. */
+            if (yv_len(pair) == 3) {
+                rodpieces = ya_push(
+                    rodpieces,
+                    ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ya_get(pair, 0),
+                                                       ys(":\n.quad ")),
+                                               ys_tostring(ya_get(pair, 1))),
+                                        ys("\n.string \"")),
+                                 ya_get(pair, 2)),
+                           ys("\"\n")));
+                ;
+            } else {
+                rodpieces = ya_push(rodpieces,
+                                    ys_cat(ya_get(pair, 0), ys(":\n")));
+                long q = 2;
+                while (q < yv_len(pair)) {
+                    rodpieces = ya_push(rodpieces,
+                                        ys_cat(ys_cat(ys(".quad "),
+                                                      ya_get(pair, q)),
+                                               ys("\n")));
+                    q = q + 1;
+                }
+                ;
+            }
+            s2 = s2 + 1;
+        }
+        asm_ = ys_cat(asm_, ys_join(rodpieces, ys("")));
+        pr = phase_end(times, ys("asm_text"), pt, ph);
+        times = ym_get(pr, "times");
+        pt = yv_l(ym_get(pr, "t"));
+        ph = yv_l(ym_get(pr, "h"));
+        return ym(4, "ok", yv_bool(1), "asm", asm_, "errors", errors, "times",
+                  times);
+    }
+}

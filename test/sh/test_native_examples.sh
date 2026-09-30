@@ -15,6 +15,7 @@
 source "$(dirname "$0")/lib.sh"
 
 YCC="$ROOT/ycc"
+YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim (see ytool.sh)
 
 # example -> reason it cannot compile natively (yet)
 declare -A UNSUPPORTED=(

@@ -403,6 +403,9 @@ def brace_is_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> 
             is_punct(toks, p + 2, ":")
         } else if (k == "num") {
             is_punct(toks, p + 2, ":")
+        } else if (is_op(toks, p + 1, "..")) {
+            // `...obj` (lexed as `..` + `.`) opens a record literal
+            true
         } else {
             false
         }
@@ -428,8 +431,18 @@ def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { n
                 go = false;
                 0
             } else {
+                // Spread `...obj` lexes as `..` + `.`; the entry is
+                // recorded under the "..." key with the source record as
+                // its value (the checker and emitter merge it statically).
                 let key = tv(toks, pos);
-                pos = pos + 2;  // skip key and ':'
+                if (key == "..") {
+                    key = "...";
+                    pos = pos + 2;  // the two dot tokens; there is no ':'
+                    0
+                } else {
+                    pos = pos + 2;  // skip key and ':'
+                    0
+                };
                 let e = parse_expr(toks, pos);
                 keys = push(keys, key);
                 vals = push(vals, e.node);

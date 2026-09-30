@@ -1,0 +1,106 @@
+\section{Expressions and evaluation}
+\label{sec:evaluation}
+
+Evaluation is strict and left-to-right; every operand is evaluated
+exactly once per execution of the enclosing expression. Side effects
+include calls, reads of places with side-effecting subexpressions, and
+the mutating array operators.
+
+\subsection{Numeric semantics}
+
+\ic{long} arithmetic is two's complement modulo $2^{64}$: overflow
+\emph{wraps}, it does not trap. Division and remainder truncate toward
+zero (C semantics) and are subject to:
+
+\begin{itemize}[nosep]
+\item division or remainder by zero is a runtime error
+  (Section~\ref{sec:errors});
+\item \ic{LONG\_MIN / -1} evaluates to \ic{LONG\_MIN} (the quotient does
+  not fit and would fault on x86) and \ic{LONG\_MIN \% -1} evaluates to
+  \ic{0}. Implementations must special-case these two.
+\end{itemize}
+
+\ic{float} arithmetic is IEEE-754 binary64. Mixed long/float operands
+widen the long side.
+
+\subsection{Logic}
+
+\ic{\&\&} and \ic{||} short-circuit: the right operand is evaluated
+only when the left does not decide the result. Both operands must be
+\ic{bool}.
+
+\subsection{Strings}
+
+Strings are immutable values: concatenation \ic{a + b} produces a new
+string. If exactly one side of \ic{+} is a string, the other side is
+stringified (Section~\ref{sec:builtin-tostring}) and concatenated.
+Comparisons \ic{<} \ic{<=} \ic{>} \ic{>=} on two strings compare bytes
+lexicographically; \ic{==} compares contents.
+
+\subsection{Assignment}
+\label{sec:assignment}
+
+\ic{p = e} evaluates \ic{e} and stores it into the place \ic{p}.
+Assignment is an expression yielding the assigned value. Section~\ref{sec:references}
+defines what storing into arrays, records and variables means for
+aliasing.
+
+\subsection{Increment, decrement and compound assignment}
+\label{sec:exactly-once}
+
+The four increment/decrement forms and the five compound-assignment
+operators share one rule:
+
+\begin{quote}
+\textbf{Exactly-once rule.} The target place's subexpressions are
+evaluated \emph{exactly once}. Writing \ic{a[f()] += e} evaluates
+\ic{f()} one time, no matter how the place is read and written.
+\end{quote}
+
+\noindent Formally, let a \ty{place} be $p ::= x \mid a[i] \mid o.f$,
+possibly nested. Define $\mathrm{cap}(p)$, the capture of a place into
+fresh variables (every non-name subexpression runs once):
+
+\begin{align*}
+\mathrm{cap}(x) &= \epsilon \\
+\mathrm{cap}(a[i]) &= \mathrm{cap}(a);
+   \;\; \text{if } a \text{ is not a name: } \texttt{let } \beta = a \texttt{;}
+   \;\; \texttt{let } \iota = i \texttt{;} \\
+\mathrm{cap}(o.f) &= \mathrm{cap}(o);
+   \;\; \text{if } o \text{ is not a name: } \texttt{let } \beta = o \texttt{;}
+\end{align*}
+
+\noindent with $\mathrm{read}(p)$ and $\mathrm{write}(p, v)$ the
+corresponding read and store through the captured names. Then the
+\emph{numeric} forms desugar as:
+
+\begin{align*}
+\texttt{p++} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{;}
+   ~~\texttt{write}(p, \texttt{t + 1})\texttt{;}~~\texttt{t}~\texttt{\}} \\
+\texttt{++p} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{ + 1;}
+   ~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}} \\
+\texttt{p--} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{;}
+   ~~\texttt{write}(p, \texttt{t - 1})\texttt{;}~~\texttt{t}~\texttt{\}} \\
+\texttt{--p} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{ - 1;}
+   ~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}} \\[4pt]
+\texttt{p op= e} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)
+   \texttt{ } op \texttt{ } e\texttt{;}~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}}
+\end{align*}
+
+\noindent for $op \in \{+,-,\times,\div,\%\}$ on numbers. Each form is
+an expression: postfix yields the \emph{old} value, prefix the
+\emph{new} one, and \ic{p op= e} the new value of the place.
+
+\paragraph{Examples.}
+\begin{lstlisting}
+a[f()]++;         // { let y_t = f(); let v = a[y_t];
+                  //   a[y_t] = v + 1; v }   -- f() runs once
+rec.v[g()] += 1;  // g() once; the read and the write use the same element
+x.y.z += e;       // x and x.y evaluated once
+\end{lstlisting}
+
+\paragraph{Arrays.} On array targets \ic{+=} and \ic{*=} are
+\emph{primitive in-place} operations --- they do not desugar through
+\ic{+} (which copies) --- and are defined in Section~\ref{sec:arrays}.
+On string targets only \ic{+=} is legal and concatenates. Every other
+combination is a type error (Section~\ref{sec:opassign-typing}).

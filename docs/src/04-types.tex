@@ -1,0 +1,132 @@
+\section{Types and static semantics}
+\label{sec:types}
+
+Checking is static and \emph{fatal}: a type error is a compile error.
+The type system is small --- scalars, arrays, records, options, pointers
+and functions --- and mostly structural.
+
+\subsection{Scalar types}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+type & domain & notes \\
+\midrule
+\ic{long}  & 64-bit signed integers & wraparound on overflow \\
+\ic{byte}  & $0\ldots255$ & stored in one byte inside \ic{[byte]} \\
+\ic{bool}  & \ic{true}, \ic{false} & \\
+\ic{float} & IEEE-754 binary64 & \\
+\ic{str}   & immutable byte strings & no embedded NUL \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Arrays}
+\label{sec:type-arrays}
+
+\ic{[T]} is a heap array of \ty{T}, \ic{[T; N]} a fixed-length array of
+\ty{T} with \ty{N} a literal. The element type is part of the type and
+arrays are \textbf{homogeneous}: every element of an array has exactly
+the element type. Heterogeneous array literals are rejected:
+
+\begin{lstlisting}
+let bad = [1, "two"];        // error: array element: expected long, got str
+\end{lstlisting}
+
+\noindent This applies recursively --- \ic{[[1], [2]]} has type
+\ic{[[long]]}, and every operator that mixes arrays and elements
+(Section~\ref{sec:arrays}) enforces the same rule.
+
+\subsection{Records}
+\label{sec:type-records}
+
+A record literal \ic{\{ a: 1, b: "x" \}} has the structural shape
+\ic{\{ a: long, b: str \}}; field order is preserved and is part of the
+type. A field read is legal when the static shape has the field. The
+shape-hole form \ic{\{ k: str \}} matches any record with at least those
+fields and is used where the precise shape is not known statically (it
+poisons quietly rather than erroring --- see
+Section~\ref{sec:poison}).
+
+\subsection{Options and pointers}
+
+\ic{T?} is ``a \ty{T} or \ic{null}''; \ic{null} is its empty value and
+\ic{some}/\ic{unwrap}/\ic{is\_some} (Section~\ref{sec:builtin-option})
+manipulate it. \ic{*T} is a raw machine pointer; \ic{\&e} yields one
+(Section~\ref{sec:pointers}). Options are \emph{not} sum types: any
+value may be compared against \ic{null}.
+
+\subsection{Functions}
+
+\ic{(T, T, ...) -> R}. Parameter types are mandatory; return
+types are inferred when omitted and checked when written. Function
+values are first-class (they may be bound, passed, stored and called);
+see Section~\ref{sec:functions}.
+
+\subsection{Annotations and inference}
+
+\begin{itemize}[nosep]
+\item \ic{def} parameter annotations are \textbf{required}; the checker
+  reports a missing one exactly once (Section~\ref{sec:poison}).
+\item Return types are inferred from the body when omitted; when written,
+  every \ic{return} and the body's trailing value must conform.
+\item \ic{let} annotations are optional and checked; an annotated
+  \emph{array literal} \emph{adopts} the annotated element type:
+  \ic{let b: [byte] = [104, 105];} packs those elements one byte each.
+  Adoption is restricted to literals --- assigning an existing
+  \ic{[long]} to a \ic{[byte]} binding is a type error (the layouts
+  differ).
+\item An empty array literal \ic{[]} or empty record \ic{\{\}} needs an
+  annotation (there is nothing to infer from).
+\end{itemize}
+
+\subsection{Conversions}
+
+Exactly three implicit conversions exist:
+\ic{long $\bs to$ float} (the only numeric widening),
+\ic{byte $\bs to$ long}, and \ic{byte $\bs to$ float}. An annotated
+\ic{byte} position accepts a \ic{long} literal and masks it to eight
+bits where it is stored. There is no cast syntax.
+
+\subsection{Operator typing}
+
+Arithmetic requires numbers; if either side is \ic{float} the result is
+\ic{float} and the other side widens. \ic{+} additionally allows
+strings (concatenation, with auto-stringification of the non-string
+side) and arrays (Section~\ref{sec:arrays}); arrays win over strings
+when both appear. Comparisons yield \ic{bool}; \ic{<}\,\ldots\ic{>=}
+on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} require
+booleans. Equality works on any two values of the same type (structural
+for arrays and records).
+
+\subsection{Compound assignment typing}
+\label{sec:opassign-typing}
+
+For a target of type \ty{T} and value of type \ty{U}:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\ty{T} & operators & rule \\
+\midrule
+numbers & \ic{+= -= *= /= \%=} & \ty{U} $=$ \ty{T} (or widening) \\
+\ic{str} & \ic{+=} only & \ty{U} $=$ \ty{str} \\
+array & \ic{+=}, \ic{*=} only & Section~\ref{sec:arrays} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Anything else is a compile error, e.g. ``\ic{arrays support
+only '+=' and '*=' (in place), not '-='}''. \ic{++}/\ic{--} require a
+numeric target.
+
+\subsection{The poison law}
+\label{sec:poison}
+
+Missing information (a missing annotation, an unanalyzable expression)
+produces an \emph{unknown} type that unifies with everything. The law
+this enables: \textbf{the root cause is reported exactly once} --- an
+unknown-typed piece never generates follow-on errors at every enclosing
+use. Concretely, unknown unifies silently in element checks, call
+arguments and branches; the missing annotation itself is the single
+diagnostic.

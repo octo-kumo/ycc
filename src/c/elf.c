@@ -1,0 +1,130 @@
+/* elf.c — minimal ELF64 writer for ycc output.
+ * 1:1 C copy of src/y/elf.y (see PORTING.md).
+ * One PT_LOAD segment (read+execute), static, no interpreter, no libc:
+ * the entry point is our own `_start`, and user code only uses raw syscalls.
+ * Layout: [EHDR 64][PHDR 56][code][rodata]; base vaddr 0x400000.
+ *
+ * Bytes are plain longs (0-255) in Y lists; the driver renders them as
+ * octal escapes for printf (Y strings cannot carry NUL through write_file). */
+
+#include "elf.h"
+
+/* imported — src/y/enc64.y (`import elfenc from "./enc64.y";`; module calls
+ * are flattened, `elfenc.byte_of(v, i)` -> `byte_of(v, i)`). enc64.h now
+ * exists, so the prototype comes from there; it matches enc64.y:
+ * `def byte_of(v: long, i: long) -> long`. */
+#include "enc64.h"
+
+Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
+    long code_off = 120;
+    long base = 4194304;
+    // Pad the code to a page so rodata starts page-aligned; pad rodata tail
+    // to a page so the mapping covers every string byte (the kernel maps
+    // whole pages, and string helpers may over-read a few bytes past a
+    // trailing NUL). Layout: [EHDR 64][PHDR 56][code][pad][rodata][pad].
+    // Without full-page coverage, argv/envp-adjacent stack reads and even
+    // plain rodata loads fault with EFAULT/silent garbage.
+    // NOTE: out is built with ONE push per byte (not enc.concat per field):
+    // concat copies the whole prefix each time (O(n^2) clones), which hangs
+    // the C VM on real (~8K+) inputs. Helpers below append in place.
+    Yv *out = yav(0);
+    long codesz = yv_len(code);
+    long codetrail = codesz % 4096;
+    long codepad = 0;
+    // NOTE: `0;` tails (see parser.y parse_binary note).
+    if (codetrail != 0) { codepad = 4096 - codetrail; ; } else { ; }
+    long rosz = yv_len(rodata) + 8;
+    long rotrail = rosz % 4096;
+    long ropad = 0;
+    if (rotrail != 0) { ropad = 4096 - rotrail; ; } else { ; }
+    long total = code_off + codesz + codepad + rosz + ropad;
+    long entry = base + code_off + entry_off;
+    // EHDR
+    out = push_bytes(out, yav(16, yv_long(127), yv_long(69), yv_long(76),
+                              yv_long(70), yv_long(2), yv_long(1), yv_long(1),
+                              yv_long(0), yv_long(0), yv_long(0), yv_long(0),
+                              yv_long(0), yv_long(0), yv_long(0), yv_long(0),
+                              yv_long(0)));
+    out = push_le16(out, 2);
+    out = push_le16(out, 62);
+    out = push_le32(out, 1);
+    out = push_le64(out, entry);
+    out = push_le64(out, 64);
+    out = push_le64(out, 0);
+    out = push_le32(out, 0);
+    out = push_le16(out, 64);
+    out = push_le16(out, 56);
+    out = push_le16(out, 1);
+    out = push_le16(out, 0);
+    out = push_le16(out, 0);
+    out = push_le16(out, 0);
+    // PHDR: PT_LOAD, R+E
+    out = push_le32(out, 1);
+    out = push_le32(out, 5);
+    out = push_le64(out, 0);
+    out = push_le64(out, base);
+    out = push_le64(out, base);
+    out = push_le64(out, total);
+    out = push_le64(out, total);
+    out = push_le64(out, 4096);
+    out = push_bytes(out, code);
+    long p = 0;
+    while (p < codepad) {
+        out = ya_push(out, yv_long(0));
+        p = p + 1;
+        ;
+    }
+    out = push_bytes(out, rodata);
+    out = push_bytes(out, yav(8, yv_long(0), yv_long(0), yv_long(0), yv_long(0),
+                              yv_long(0), yv_long(0), yv_long(0), yv_long(0)));
+    long q = 0;
+    while (q < ropad) {
+        out = ya_push(out, yv_long(0));
+        q = q + 1;
+        ;
+    }
+    return out;
+}
+
+// Append helpers: one push per byte (O(1) amortized each). The C VM's push
+// clones the array per call, but that is still O(n) per byte appended —
+// linear overall, unlike enc.concat(out, field) which re-clones the whole
+// prefix for every header field (quadratic, hangs on real inputs).
+Yv *push_bytes(Yv *out, Yv *bytes) {
+    // NOTE: annotated [long] (not holes): push() needs known heap arrays.
+    long i = 0;
+    while (i < yv_len(bytes)) {
+        out = ya_push(out, ya_get(bytes, i));
+        i = i + 1;
+        ;
+    }
+    return out;
+}
+
+Yv *push_le16(Yv *out, long v) {
+    out = ya_push(out, yv_long(byte_of(v, 0)));
+    out = ya_push(out, yv_long(byte_of(v, 1)));
+    return out;
+}
+
+Yv *push_le32(Yv *out, long v) {
+    out = ya_push(out, yv_long(byte_of(v, 0)));
+    out = ya_push(out, yv_long(byte_of(v, 1)));
+    out = ya_push(out, yv_long(byte_of(v, 2)));
+    out = ya_push(out, yv_long(byte_of(v, 3)));
+    return out;
+}
+
+Yv *push_le64(Yv *out, long v) {
+    out = ya_push(out, yv_long(byte_of(v, 0)));
+    out = ya_push(out, yv_long(byte_of(v, 1)));
+    out = ya_push(out, yv_long(byte_of(v, 2)));
+    out = ya_push(out, yv_long(byte_of(v, 3)));
+    out = ya_push(out, yv_long(byte_of(v, 4)));
+    out = ya_push(out, yv_long(byte_of(v, 5)));
+    out = ya_push(out, yv_long(byte_of(v, 6)));
+    out = ya_push(out, yv_long(byte_of(v, 7)));
+    return out;
+}
+
+/* export { elf_build }; */

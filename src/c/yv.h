@@ -51,7 +51,11 @@ Yv *yv_null(void);
 Yv *yv_bool(int v);
 Yv *yv_long(long v);
 Yv *yv_float(double v);
-Yv *ys(const char *lit);              /* string from a C literal/bytes */
+/* Strings are byte strings with a length (a Y `str` may contain NUL).
+ * For LITERALS `ys("...")` is a macro that keeps every byte, embedded NUL
+ * included; ys_cstr() is for NUL-terminated dynamic text. */
+#define ys(lit) ys_n((lit), sizeof(lit) - 1)
+Yv *ys_cstr(const char *s);           /* string from NUL-terminated text */
 Yv *ys_n(const char *p, size_t n);    /* string from raw bytes */
 Yv *ys_fmt(const char *fmt, ...);     /* formatted string (printf-style) */
 

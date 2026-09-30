@@ -1,0 +1,45 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=2.6cm]{geometry}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black}
+
+% Inline Y code and identifiers.
+\newcommand{\y}[1]{\texttt{#1}}
+\newcommand{\ty}[1]{\textsf{\textit{#1}}}
+
+% Code blocks.
+\usepackage{listings}
+\lstdefinelanguage{Y}{
+  morekeywords={let,const,def,if,else,while,for,foreach,in,return,true,false,null},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+}
+\lstset{
+  language=Y,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape\color{gray},
+  stringstyle=\color{blue!60!black},
+  columns=flexible,
+  keepspaces=true,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{black!30},
+  xleftmargin=1.2em,
+  xrightmargin=1.2em,
+}
+\newcommand{\ic}[1]{\text{\ttfamily #1}}
+\newcommand{\bs}{\text{\textbackslash{}}}
+
+\begin{document}

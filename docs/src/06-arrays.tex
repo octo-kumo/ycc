@@ -1,0 +1,146 @@
+\section{Arrays}
+\label{sec:arrays}
+
+Arrays are the language's one growable sequence. They are
+\textbf{reference values}: a binding names an array \emph{object}, and
+mutating operators write into that object so every binding sees the
+change. Arrays are \textbf{homogeneous}: one element type, enforced
+everywhere.
+
+\subsection{Structure: length and capacity}
+\label{sec:lencap}
+
+An array object carries two independent quantities:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & meaning & invariant \\
+\midrule
+\ic{len} & number of live elements & $\texttt{len} \ge 0$ \\
+\ic{cap} & elements the storage can hold & $\texttt{len} \le \texttt{cap}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Indexing is trapped: reading or writing \ic{a[i]} with
+\ic{i < 0} or \ic{i >= len} is a runtime error (``index out of
+bounds''). \ic{cap} is never observable through operators --- only
+\ic{len} is (\ic{len(a)}).
+
+\paragraph{Growth policy (amortized doubling).}
+\begin{align*}
+\texttt{cap}_0 &= 0 \\
+\texttt{cap}_{k+1} &= \max(8,\; 2\cdot\texttt{cap}_k)
+   \qquad \text{when } \texttt{len} \text{ reaches } \texttt{cap}
+\end{align*}
+
+\noindent That is: the array grows \emph{only} when the capacity is
+reached; the first growth yields capacity 8 and every later growth
+doubles it ($8, 16, 32, \ldots$). Appending $n$ elements one at a time
+therefore costs $O(n)$ copies total, $O(1)$ amortized per element. The
+capacity never shrinks.
+
+\subsection{Operators}
+\label{sec:array-ops}
+
+Let \ty{a}, \ty{b} be arrays of \ty{T}, and \ty{x} a value of type
+\ty{T}. The complete operator semantics:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+expression & result & effect on operands & value types \\
+\midrule
+\ic{a + b} & new array $= a \mathbin{+\!\!+} b$ & none &
+   \ty{T} $=$ \ty{T} \\
+\ic{a + x} & new array $= a \mathbin{+\!\!+} [\,x\,]$ & none &
+   type of \ty{x} is \ty{T} \\
+\ic{x + a} & new array $= [\,x\,] \mathbin{+\!\!+} a$ & none &
+   type of \ty{x} is \ty{T} \\
+\ic{x :: a} & new array $= [\,x\,] \mathbin{+\!\!+} a$ & none &
+   \ty{x} is ONE element \\
+\ic{a += b} & \ty{a} & appends every element of \ty{b}, in place &
+   \ty{T} $=$ \ty{T} \\
+\ic{a += x} & \ty{a} & pushes \ty{x}, in place &
+   type of \ty{x} is \ty{T} \\
+\ic{a *= x} & \ty{a} & prepends \ty{x}, in place &
+   type of \ty{x} is \ty{T} \\
+\ic{a = b}  & \ty{b} & aliases: both names name one array & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent In prose, matching the design intent exactly:
+
+\begin{itemize}[nosep]
+\item \ic{arr1 + arr2} --- make a new array which is \ic{arr1}
+  concatenated with \ic{arr2}; the operands are untouched.
+\item \ic{arr1 += arr2} --- append \ic{arr2} to the end of \ic{arr1},
+  \emph{in place}.
+\item \ic{arr1 = arr2} --- both point to the same array in memory.
+\item \ic{arr1 + elem} --- a new array which is \ic{arr1} concatenated
+  with \ic{[elem]}; only allowed if the element types match.
+\item \ic{elem + arr1} --- a new array which is \ic{[elem]} concatenated
+  with \ic{arr1}.
+\item \ic{+=} means in-place push (of an element) or append (of an
+  array); \ic{+} always means a \emph{new} array; \ic{*=} means prepend
+  the item in place.
+\end{itemize}
+
+\paragraph{The one-thing rule.} Whether \ic{+=} pushes or appends is
+decided by the \emph{shape of the value}: an array value appends its
+elements; any other value pushes as one element. Consequently, to push
+an array \emph{as one element} of an array-of-arrays, wrap it in a
+one-element array literal:
+\begin{lstlisting}
+let rows = [[1], [2]];
+rows += [[3]];        // appends the single row [3]
+rows += [[4]];        // and the row [4] -- one element each
+\end{lstlisting}
+
+\paragraph{Homogeneity.} Every mixing form requires matching element
+types; the checker rejects mismatches --- including the append case, where
+a non-matching array would splice wrong-typed elements:
+\begin{lstlisting}
+let rows = [[1], [2]];
+rows += [3];   // error: '+=' appended elements: expected [long], got long
+\end{lstlisting}
+
+\paragraph{\ic{a += a}.} The right side is captured (its length snapshotted)
+before appending, so \ic{a += a} doubles \ic{a} with a copy of its
+original elements.
+
+\subsection{Aliasing and visibility}
+\label{sec:array-aliasing}
+
+Assigning arrays aliases; mutating operators are visible through every
+alias:
+
+\begin{lstlisting}
+let m1 = [1, 2];
+let m2 = m1;      // ONE array, two names
+m1 += 3;          // m2 sees it: len(m2) == 3
+\end{lstlisting}
+
+\noindent By contrast \ic{+} never mutates: \ic{let ys = xs + [9];}
+leaves \ic{xs} at its old length.
+
+\subsection{Fixed arrays}
+
+\ic{[T; N]} arrays are allocated with exactly \ic{N} slots; their length
+is part of the type, so they reject \ic{push}/\ic{+=}/\ic{*=} growth.
+Indexing is bounds-trapped like heap arrays. A fixed array may be sliced;
+the result is a heap \ic{[T]}.
+
+\subsection{Slices}
+
+\ic{a[lo:hi]} evaluates to a \textbf{new} heap \ic{[T]} holding the
+elements in $[\texttt{lo}, \texttt{hi})$. Missing bounds default to
+\ic{0} and \ic{len}; bounds are clamped (no trap). All four spellings
+are legal: \ic{a[:]}, \ic{a[lo:]}, \ic{a[:hi]}, \ic{a[lo:hi]}.
+
+\subsection{Operators are the interface}
+
+There are no array mutator functions: \ic{+=} and \ic{*=} \emph{are}
+push and prepend. \ic{len(a)} is the only array builtin.

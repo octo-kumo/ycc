@@ -10,6 +10,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Both compile .y straight to static ELFs; every test requires the two to
 # agree — byte-identical binaries and identical program behavior.
 CYCC="${CYCC:-$ROOT/cycc}"
+# Historical name for the engine helper (suites call `$YBOOT -q` /
+# `$YBOOT --compile`); it maps those to the two compilers (see ytool.sh).
+YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"
 YREF="${YREF:-$ROOT/refs/ycc.ref}"
 
 # A sanitized toolchain runs roughly 15x slower, so the default timeouts

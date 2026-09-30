@@ -1,0 +1,66 @@
+\section{Errors and diagnostics}
+\label{sec:errors}
+
+\subsection{Compile time}
+
+Static checking is fatal: a rejected program compiles to nothing.
+Diagnostics are one line each,
+
+\begin{center}
+\ic{line:col: error: message}
+\end{center}
+
+\noindent positioned in the user's source even when the compilation
+splices prelude/runtime code in front of it. The checker reports a root
+cause \emph{once} (Section~\ref{sec:poison}): a missing annotation or
+unanalyzable expression poisons quietly instead of cascading errors
+through every enclosing use. Typical families:
+
+\begin{itemize}[nosep]
+\item name errors: \ic{undefined variable 'x'};
+\item shape errors: \ic{record has no field 'f'};
+\item operator typing: \ic{'+=' appended elements: expected [long], got
+  long}, \ic{arrays support only '+=' and '*=' (in place), not '-='},
+  \ic{'++' needs a number target};
+\item call errors: \ic{call takes 2 args, got 1};
+\item non-value use: \ic{cannot index long (only arrays)}.
+\end{itemize}
+
+\subsection{Run time}
+
+The compiled program traps --- writes a one-line message to stderr and
+exits with status 1 --- on:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+condition & message \\
+\midrule
+array index outside \ic{[0, len)} & \ic{runtime error: index out of bounds} \\
+division or remainder by zero & \ic{runtime error: division by zero} \\
+\ic{unwrap(null)} & \ic{runtime error: unwrap of null} \\
+missing dynamic field/key & \ic{runtime error: record has no field 'k'} \\
+memory exhausted & \ic{out of memory} \\
+unbounded recursion & a recursion-limit error, not a crash \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Fixed arrays trap exactly like heap arrays; slices never trap
+(they clamp). Integer overflow is \emph{not} an error
+(Section~\ref{sec:evaluation}).
+
+\subsection{Exit status}
+
+A successfully run program exits with the code it chose
+(\ic{exit(code)} or falling off the end, which is \ic{0}); a trapped
+program exits with \ic{1}. The compiler itself exits \ic{0} on success,
+\ic{1} on a rejected input.
+
+\subsection{Reproducibility}
+
+The compiler is deterministic: the same input produces byte-identical
+output on every run and in either implementation. This is checked
+continuously by comparing the two compilers' output binaries byte for
+byte, and by self-compilation (a compiler built by the compiler is
+identical to the one that built it).

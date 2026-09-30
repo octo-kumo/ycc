@@ -1,0 +1,106 @@
+\section{Records and maps}
+\label{sec:references}
+
+Y has \emph{two} key/value types, deliberately distinct:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & \textbf{record} (static) & \textbf{map} (dynamic) \\
+\midrule
+type & \ic{\{ a: long, b: str \}} & \ic{\{str: long\}} \\
+keys & identifiers, fixed at compile time & any hashable value at run time \\
+values & may differ per field & one homogeneous type \ty{V} \\
+layout & C struct: fields at fixed offsets & growable key/value store \\
+keying & \ic{r.a} & \ic{m['a']} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{The value model}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+category & types & assignment \\
+\midrule
+values & \ic{long} \ic{byte} \ic{bool} \ic{float} \ic{str} \ic{null}
+   & copies the bits \\
+references & arrays (\ic{[T]}, \ic{[T; N]}), records, maps
+   & \textbf{aliases} the object \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent ``Reference'' means: every binding of the same object names
+one storage, and every in-place mutation (\ic{+=}, \ic{*=}, field
+assignment, map stores) is observable through all of them.
+
+\subsection{Records}
+
+A record literal \ic{\{ name: "y", n: 1 \}} allocates one record object
+whose shape is the literal's fields \emph{as written}; field order is
+preserved. At run time a record is exactly a C struct: field \ty{i} is
+the word at \ic{+8i} from the record address, so \ic{r.a} compiles to a
+single load at a compile-time offset.
+
+\begin{lstlisting}
+let r = { v: [7], n: 1 };
+let s = r;            // aliases the record
+r.v += 8;             // s.v sees it
+s.n = 2;              // r.n sees it
+\end{lstlisting}
+
+\noindent The shape is fixed: writing a field the shape does not have is
+a \emph{compile error} (there is no runtime field growth), and a field
+read requires the field to exist statically.
+
+\paragraph{Record spread.} \ic{\{a: 0, ...obj\}} builds a record whose
+shape is the \emph{union} of the two shapes — entirely statically; no
+dynamic shape is involved. Entries merge with last-wins values and
+first-appearance positions, so \ic{obj} may overwrite \ic{a} and a later
+explicit key may overwrite what \ic{obj} spread:
+
+\begin{lstlisting}
+let b = {x: 1, y: 2};
+let c = {y: 9, z: 3};
+print({a: 0, ...b});     // {a: 0, x: 1, y: 2}
+print({...b, ...c});     // {x: 1, y: 9, z: 3}
+print({...b, y: 100});   // {x: 1, y: 100}
+\end{lstlisting}
+
+\subsection{Maps}
+\label{sec:maps}
+
+A map type is \ic{\{\ty{K}: \ty{V}\}} where \ty{K} is a hashable key
+type (\ic{str}, \ic{long}, \ic{byte}, \ic{bool}, \ic{float}) and \ty{V}
+is one homogeneous value type. Map literals use quoted keys (identifier
+keys are record syntax):
+
+\begin{lstlisting}
+let m = {"a": 1, "b": 2};      // {str: long}
+let empty: {str: long} = {};   // empty literals need the annotation
+m["c"] = 3;                    // insert or overwrite
+print(m["a"]);                 // 1
+print(m["zz"]);                // null -- reads yield V?
+\end{lstlisting}
+
+\noindent Keying is symbolic and exclusive: \ic{m['k']} is the map form
+and is reserved for maps; \ic{r.a} is the record form. Reading
+\ic{m[k]} yields \ic{\ty{V}?} — \ic{null} when the key is absent — and
+\ic{m[k] = v} stores in place (the store is visible through every
+binding of the map). \ic{len(m)} is the number of entries. The map grows
+as needed (amortized doubling, like arrays).
+
+\subsection{Equality}
+
+\ic{==} on two arrays or two records is \textbf{structural}: same
+length/fields, pairwise-equal contents. It is never a pointer
+comparison; \ic{arr == []} is an emptiness test.
+
+\subsection{Copying}
+
+There is no implicit deep copy. To duplicate an array use \ic{+} with an
+empty right side (\ic{a + []}) or slicing (\ic{a[:]}); records can be
+rebuilt field by field. The language deliberately makes sharing the
+default and copying explicit.

@@ -1135,7 +1135,13 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
         if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") {
             let bl = infer(st, node.l);
             let br = infer(st, node.r);
-            if (op == "+" && (bl.k == "tstr" || br.k == "tstr")) {
+            if (op == "+" && (bl.k == "tarr" || bl.k == "tarrfix")) {
+                // array `+` concatenates into a NEW heap array (types.y
+                // typeof_arith_arr) -- the element type survives.
+                { k: "tarr", of: bl.of }
+            } else if (op == "+" && (br.k == "tarr" || br.k == "tarrfix")) {
+                { k: "tarr", of: br.of }
+            } else if (op == "+" && (bl.k == "tstr" || br.k == "tstr")) {
                 { k: "tstr" }
             } else if (bl.k == "tfloat") {
                 { k: "tfloat" }
@@ -1201,13 +1207,33 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
         if (len(melems) == 0) {
             normnode({ k: "trec", fields: [] })
         } else {
+            // `...` spread entries merge the source's fields (static
+            // union: first appearance keeps the position, later wins the
+            // value) -- the same rule as types.y's map arm.
             let mfields = [];
             let mi = 0;
             while (mi < len(melems)) {
                 let mf = infer(st, melems[mi]);
                 // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
                 let mk = mkeys[mi];
-                mfields = push(mfields, { name: mk, typ: mf });
+                if (mk == "...") {
+                    if (mf.k == "trec") {
+                        let msfs = mf.fields;
+                        let msi = 0;
+                        while (msi < len(msfs)) {
+                            let msf = msfs[msi];
+                            mfields = types.field_merge(mfields, msf.name, msf.typ);
+                            msi = msi + 1;
+                        };
+                        0
+                    } else {
+                        0
+                    };
+                    0
+                } else {
+                    mfields = types.field_merge(mfields, mk, mf);
+                    0
+                };
                 mi = mi + 1;
             };
             normnode({ k: "trec", fields: mfields })
@@ -2705,6 +2731,22 @@ def gen_print(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
         st = gen_str_const(st, "<function " + types.tdisp_fnval(t) + ">");
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
+    } else if (t.k == "tarr" || t.k == "tarrfix") {
+        // Arrays print like tostring: "[e0, e1, ...]".
+        st = gen(st, pa0);
+        st = gen_arr_tostr_rax(st, t.of);
+        st = gen_helper1(st, "y_print_hstr");
+        emit(st, "    xor %eax, %eax")
+    } else if (t.k == "tnull") {
+        st = gen(st, pa0);
+        st = gen_str_const(st, "null");
+        st = gen_helper1(st, "y_print_hstr");
+        emit(st, "    xor %eax, %eax")
+    } else if (t.k == "topt") {
+        st = gen(st, pa0);
+        st = gen_opt_str_rax(st, t);
+        st = gen_helper1(st, "y_print_hstr");
+        emit(st, "    xor %eax, %eax")
     } else {
         gen_print_scalar(st, pa0, t)
     }
@@ -2739,8 +2781,33 @@ def gen_typeof(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
 // compile time. Stack layout while building: [record][accumulator], the
 // record pushed first (8(%rsp)), the accumulator on top (0(%rsp)).
 
+// Option value in %rax (0 = none, else the box address): leave "null" or
+// the payload's string form in %rax. Options are 0-or-box (NATIVE.md).
+def gen_opt_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let rdone = next_loc(st);
+    st = rdone.st;
+    let rnul = next_loc(st);
+    st = rnul.st;
+    st = emit(st, "    test %rax, %rax");
+    st = emit(st, "    jz " + rnul.lbl);
+    st = emit(st, "    mov (%rax), %rax");
+    st = gen_val_tostr_rax(st, t.of);
+    st = emit(st, "    jmp " + rdone.lbl);
+    st = emit(st, rnul.lbl + ":");
+    st = gen_str_const(st, "null");
+    emit(st, rdone.lbl + ":")
+};
+
 def gen_rec_str(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, arg, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = gen(st, arg);
+    gen_rec_str_rax(st, t)
+};
+
+// The record's address sits in %rax; leave "{a: 1, b: ...}" in %rax.
+// Values are formatted from the static shape (the walk is unrolled at
+// compile time). Stack layout while building: [record][accumulator], the
+// record pushed first (8(%rsp)), the accumulator on top (0(%rsp)).
+def gen_rec_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = emit(st, "    push %rax");
     st = gen_str_const(st, "{");
     st = emit(st, "    push %rax");
@@ -3111,11 +3178,60 @@ def gen_block(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 // returns all just copy the address). Field k lives at addr+8k.
 // (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
 // empty maps are rejected by the checker anyway.)
+// Position of `name` in a record literal's merged field list, or -1.
+def mfield_idx(names: [str], name: str) -> long {
+    let i = 0;
+    let out = -1;
+    while (i < len(names)) {
+        let nm: str = names[i];
+        if (nm == name) {
+            out = i;
+            0
+        } else { 0; };
+        i = i + 1;
+    };
+    out
+};
+
 def gen_map(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // NOTE: bound once — `node.vals[i]` inline misparses on the C VM.
     let mvals = node.vals;
     let mkeys = node.keys;
-    let n = len(mvals);
+    let nent = len(mvals);
+    // Static merge for `...` spread entries (the types.y field_merge
+    // rule): first appearance keeps the position, a later entry wins the
+    // value. The value loop below stores into merged slots in entry
+    // order, so a later store simply overwrites -- no dynamic shape.
+    let names: [str] = [];
+    let ni = 0;
+    while (ni < nent) {
+        let nk = mkeys[ni];
+        if (nk == "...") {
+            let srec = infer(st, mvals[ni]);
+            if (srec.k == "trec") {
+                let sfs = srec.fields;
+                let si = 0;
+                while (si < len(sfs)) {
+                    let sf = sfs[si];
+                    if (mfield_idx(names, sf.name) < 0) {
+                        names = push(names, sf.name);
+                        0
+                    } else { 0; };
+                    si = si + 1;
+                };
+                0
+            } else { 0; };
+            0
+        } else {
+            if (mfield_idx(names, nk) < 0) {
+                names = push(names, nk);
+                0
+            } else { 0; };
+            0
+        };
+        ni = ni + 1;
+    };
+    let n = len(names);
     // Shape tag for dynamic field reads (see y_dot_lookup note in
     // arch_x64.y): every record carries its field table; field i lives
     // at tag_base+8+i*8 and the value (base+8) keeps today's offsets,
@@ -3132,7 +3248,7 @@ def gen_map(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
     te = push(te, tostring(n));
     let j = 0;
     while (j < n) {
-        let nm: str = mkeys[j];
+        let nm: str = names[j];
         te = push(te, tostring(8 * j));
         let nl = len(nm);
         te = push(te, tostring(nl));
@@ -3158,12 +3274,37 @@ def gen_map(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
     st = emit(st, "    mov %rax, 0(%rcx)");
     st = emit(st, "    push %rcx");
     let i = 0;
-    while (i < n) {
+    while (i < nent) {
         // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
         let mv = mvals[i];
+        let mk = mkeys[i];
         st = gen(st, mv);
         st = emit(st, "    pop %rcx");
-        st = emit(st, "    mov %rax, " + tostring(8 + i * 8) + "(%rcx)");
+        if (mk == "...") {
+            // Spread: the source ran ONCE (just above); copy its fields
+            // into their merged slots. A later entry's store overwrites.
+            st = emit(st, "    mov %rax, %rdx");
+            let srec2 = infer(st, mv);
+            if (srec2.k == "trec") {
+                let sfs2 = srec2.fields;
+                let sj = 0;
+                while (sj < len(sfs2)) {
+                    let sf2 = sfs2[sj];
+                    let mi2 = mfield_idx(names, sf2.name);
+                    // %rdx is the source's record VALUE (field 0 at +0);
+                    // %rcx is the fresh record's ALLOC base (fields at +8).
+                    st = emit(st, "    mov " + tostring(sj * 8) + "(%rdx), %rsi");
+                    st = emit(st, "    mov %rsi, " + tostring(8 + mi2 * 8) + "(%rcx)");
+                    sj = sj + 1;
+                };
+                0
+            } else { 0; };
+            0
+        } else {
+            let mi = mfield_idx(names, mk);
+            st = emit(st, "    mov %rax, " + tostring(8 + mi * 8) + "(%rcx)");
+            0
+        };
         st = emit(st, "    push %rcx");
         i = i + 1;
     };
@@ -4002,6 +4143,12 @@ def gen_val_tostr_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, 
         gen_arr_tostr_rax(st, t.of)
     } else if (tk == "tarrfix") {
         gen_arr_tostr_rax(st, t.of)
+    } else if (tk == "tnull") {
+        gen_str_const(st, "null")
+    } else if (tk == "topt") {
+        gen_opt_str_rax(st, t)
+    } else if (tk == "trec") {
+        gen_rec_str_rax(st, t)
     } else {
         st = emit(st, "    push %rax");
         st = emit(st, "    call y_long_tostr");
@@ -4375,6 +4522,15 @@ def gen_tostring(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     } else if (t.k == "tarrfix") {
         st = gen(st, a0);
         gen_arr_tostr_rax(st, t.of)
+    } else if (t.k == "tnull") {
+        st = gen(st, a0);
+        gen_str_const(st, "null")
+    } else if (t.k == "topt") {
+        st = gen(st, a0);
+        gen_opt_str_rax(st, t)
+    } else if (t.k == "trec") {
+        st = gen(st, a0);
+        gen_rec_str_rax(st, t)
     } else {
         st = gen_push_args(st, node.args);
         st = emit(st, "    call y_long_tostr");

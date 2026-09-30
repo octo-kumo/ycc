@@ -1,0 +1,53 @@
+\section{Overview}
+\label{sec:overview}
+
+\textsf{Y} is a small imperative language with a static checker, designed
+so that a complete implementation of the language fits in one head: the
+compiler is roughly thirteen thousand lines of \textsf{Y} itself and
+compiles a program to a \emph{static} x86-64 ELF executable using only
+its own assembler and ELF writer --- no system assembler, linker, or C
+toolchain is involved at run time or at build time of user programs.
+
+\subsection*{Implementations}
+
+Two implementations exist and are kept in exact step:
+
+\begin{itemize}[nosep]
+\item \textbf{the reference compiler}, written in \textsf{Y}
+  (\ic{src/y/}), self-hosting and byte-reproducible;
+\item \textbf{the C copy}, a line-for-line port of the same compiler in C
+  (\ic{src/c/}), sharing one value model. The two must produce
+  byte-identical executables for every input.
+\end{itemize}
+
+This document defines the language both implement. Implementation
+detail is deliberately excluded except where it \emph{is} observable
+behavior (value sharing, integer wraparound, trap conditions).
+
+\subsection*{Notation}
+
+Grammar productions are given in EBNF, with
+\texttt{typewriter} for terminals, \ty{italic} for nonterminals,
+\texttt{[~]} for option, \texttt{\{~\}} for repetition,
+\texttt{|} for alternation, and \texttt{(~)} for grouping.
+Semantic rules are written as equational desugars or prose; the desugars
+are normative: an implementation may use any mechanism that produces the
+same observable behavior.
+
+\subsection*{A taste}
+
+\begin{lstlisting}
+// values, references, and the mutating operators
+let xs = [1, 2, 3];      // heap array: len 3
+xs += 4;                 // in-place push:        [1, 2, 3, 4]
+xs *= 0;                 // in-place prepend:     [0, 1, 2, 3, 4]
+let ys = xs + [9];       // NEW array, xs untouched
+
+// the target of a compound assignment runs exactly once
+def idx() -> long { print("called"); 2 };
+a[idx()] += 10;          // idx() runs ONE time
+
+// records are reference values too
+let r = { name: "y", nums: [1, 2] };
+r.nums += 3;             // visible through every binding of r
+\end{lstlisting}

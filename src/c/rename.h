@@ -1,0 +1,126 @@
+/* rename.h — static name resolution (uniquify) for the native pipeline.
+ *
+ * 1:1 C twin of src/y/rename.y (see PORTING.md). rename_program(ast) -> ast'
+ * where every binding has a globally unique name (`orig$N`; `$` is
+ * lexer-illegal, so generated names can never collide with user code).
+ * Exports exactly rename.y's top-level defs.
+ *
+ * Type map (PORTING.md): state { scopes: [[{ orig, uniq }]], n: long } and
+ * every record/array/shape-hole/str is Yv *; line/col/i counters are long.
+ * The uniform node-renamer result R = { st: state, node: {k: str} } is a
+ * Yv * record too.
+ */
+#ifndef RENAME_H
+#define RENAME_H
+
+#include "yv.h"
+
+/* scope state ({ scopes: [[{ orig: str, uniq: str }]], n: long }) */
+Yv *rn_fresh(Yv *st, Yv *orig);
+Yv *rn_push(Yv *st);
+Yv *rn_pop(Yv *st);
+Yv *rn_define(Yv *st, Yv *orig, Yv *uniq);
+Yv *rn_lookup(Yv *st, Yv *name);
+Yv *rn_bind(Yv *st, Yv *orig);
+
+/* node lists and ids */
+Yv *rn_list(Yv *nodes, Yv *st);
+Yv *rn_id(Yv *st, Yv *name, long line, long col);
+
+/* def pre-pass and redefinition shadowing */
+Yv *rn_prepass(Yv *stmts, Yv *st);
+Yv *rn_prepass_one(Yv *s, Yv *st);
+Yv *rn_prepass_decl(Yv *s, Yv *st);
+Yv *rn_shadow_dups(Yv *stmts);
+Yv *rn_shadow_one(Yv *s, Yv *stmts, long i);
+Yv *rn_shadow_decl(Yv *s, Yv *stmts, long i);
+Yv *rn_shadow_go(Yv *s, Yv *stmts, long i);
+int rn_redefined_later(Yv *stmts, long i, Yv *name);
+Yv *rn_decl_name(Yv *s);
+Yv *rn_decl_name_go(Yv *s);
+Yv *rn_rebuild_decl(Yv *s, Yv *newname);
+Yv *rn_rebuild_def(Yv *s, Yv *newname);
+Yv *rn_rebuild_let(Yv *s, Yv *newname);
+Yv *rn_block(Yv *stmts, Yv *st);
+
+/* one def per AST shape (see rn_node note in rename.c) */
+Yv *rn_node(Yv *node, Yv *st);
+Yv *rn_un(Yv *node, Yv *st);
+Yv *rn_addrderef(Yv *node, Yv *st);
+Yv *rn_bin(Yv *node, Yv *st);
+Yv *rn_call(Yv *node, Yv *st);
+Yv *rn_if(Yv *node, Yv *st);
+Yv *rn_if_then(Yv *node, Yv *cond, Yv *st);
+Yv *rn_if_finish(Yv *node, Yv *cond, Yv *tstmts, Yv *st);
+Yv *rn_while(Yv *node, Yv *st);
+Yv *rn_while_body(Yv *node, Yv *cond, Yv *st);
+Yv *rn_blocknode(Yv *node, Yv *st);
+Yv *rn_assign(Yv *node, Yv *st);
+Yv *rn_assign_lookup(Yv *node, Yv *v, Yv *st);
+Yv *rn_assign_finish(Yv *node, Yv *v, Yv *u, Yv *st);
+Yv *rn_incdec(Yv *node, Yv *st);
+Yv *rn_opassign(Yv *node, Yv *st);
+Yv *rn_store(Yv *node, Yv *st);
+Yv *rn_store_val(Yv *node, Yv *p, Yv *st);
+Yv *rn_ret(Yv *node, Yv *st);
+Yv *rn_array(Yv *node, Yv *st);
+Yv *rn_arrrep(Yv *node, Yv *st);
+Yv *rn_map(Yv *node, Yv *st);
+Yv *rn_index(Yv *node, Yv *st);
+Yv *rn_index_idx(Yv *node, Yv *a, Yv *st);
+Yv *rn_slice(Yv *node, Yv *st);
+Yv *rn_slice_lo(Yv *node, Yv *a, Yv *st);
+Yv *rn_slice_hi(Yv *node, Yv *a, Yv *lo, Yv *st);
+Yv *rn_dot(Yv *node, Yv *st);
+Yv *rn_idxassign(Yv *node, Yv *st);
+Yv *rn_idxassign_idx(Yv *node, Yv *a, Yv *st);
+Yv *rn_idxassign_val(Yv *node, Yv *a, Yv *idx, Yv *st);
+Yv *rn_dotassign(Yv *node, Yv *st);
+Yv *rn_dotassign_val(Yv *node, Yv *o, Yv *st);
+Yv *rn_foreach(Yv *node, Yv *st);
+Yv *rn_foreach_body(Yv *node, Yv *iter, Yv *st);
+Yv *rn_foreach_block(Yv *node, Yv *iter, Yv *uniq, Yv *st);
+Yv *rn_forrange(Yv *node, Yv *st);
+Yv *rn_forrange_hi(Yv *node, Yv *lo, Yv *st);
+Yv *rn_forrange_body(Yv *node, Yv *lo, Yv *hi, Yv *st);
+Yv *rn_forrange_block(Yv *node, Yv *lo, Yv *hi, Yv *uniq, Yv *st);
+Yv *rn_for(Yv *node, Yv *st);
+Yv *rn_for_cond(Yv *node, Yv *init, Yv *st);
+Yv *rn_for_step(Yv *node, Yv *init, Yv *cond, Yv *st);
+Yv *rn_for_body(Yv *node, Yv *init, Yv *cond, Yv *step, Yv *st);
+Yv *rn_decl(Yv *node, Yv *st);
+Yv *rn_decl_def(Yv *node, Yv *st);
+Yv *rn_decl_def_lookup(Yv *node, Yv *u, Yv *st);
+Yv *rn_decl_def_go(Yv *node, Yv *u, Yv *st);
+Yv *rn_decl_rest(Yv *node, Yv *st);
+Yv *rn_decl_func(Yv *node, Yv *st);
+Yv *rn_decl_func_lookup(Yv *node, Yv *u, Yv *st);
+Yv *rn_decl_func_go(Yv *node, Yv *u, Yv *st);
+Yv *rn_decl_func_finish(Yv *node, Yv *u, Yv *fv, Yv *st);
+Yv *rn_decl_val(Yv *node, Yv *st);
+Yv *rn_decl_val_bind(Yv *node, Yv *v, Yv *st);
+Yv *rn_decl_val_finish(Yv *node, Yv *v, Yv *uniq, Yv *st);
+
+/* func values: params/ptypes/ret/body threaded as fields (see rn_func note) */
+Yv *rn_func(Yv *func, Yv *st);
+Yv *rn_func_p1(Yv *func, Yv *fparams, Yv *st);
+Yv *rn_func_p2(Yv *func, Yv *fparams, Yv *fptypes, Yv *st);
+Yv *rn_func_p3(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *st);
+Yv *rn_func_p4(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody,
+               Yv *st);
+Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
+               long fcol, Yv *st);
+Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
+                   long fcol, Yv *st);
+Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
+               long fcol, Yv *params, long i, Yv *st);
+Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
+                 Yv *params, Yv *st);
+Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
+                   Yv *params, Yv *stmts, Yv *st);
+
+/* the module entry point (rename.y: export { rename_program }) */
+Yv *rename_program(Yv *ast);
+Yv *rename_program_go(Yv *stmts, long line, long col);
+
+#endif /* RENAME_H */

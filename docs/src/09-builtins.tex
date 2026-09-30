@@ -1,0 +1,93 @@
+\section{Builtins}
+\label{sec:builtins}
+
+The following functions are available without declaration. ``Trap'' marks
+a runtime error (Section~\ref{sec:errors}).
+
+\subsection{Sequences and text}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{len(x)}] Length of a string (bytes), array (elements), record
+  (fields) or map (entries) as \ic{long}.
+\item[\ic{range(n)}] \ic{[0, 1, ..., n-1]}.
+\item[\ic{substr(s, i, n)}] Substring, C-clamped: \ic{i < 0} becomes
+  \ic{0}, \ic{i >= len} yields \ic{""}, \ic{n < 0} or overflow runs to
+  the end.
+\item[\ic{trim(s)}] Strip leading/trailing space, tab, CR, LF.
+\item[\ic{join(xs, sep)}] Concatenate \ic{[str]} with a separator.
+\item[\ic{split(s, sep)}] Split on every occurrence of a non-empty
+  separator; returns \ic{[str]} (empty for empty separator).
+\item[\ic{index\_of(s, sub)}] First index of \ic{sub} in \ic{s}, or
+  \ic{-1}.
+\item[\ic{last\_index\_of(s, sub)}] Last index, or \ic{-1}.
+\item[\ic{ord(s)}] First byte as \ic{long}, or \ic{-1} for empty.
+\item[\ic{chr(n)}] One-byte string of \ic{n} (masked to 8 bits).
+\item[\ic{byte\_at(s, i)}] Byte at \ic{i} as \ic{long}; traps out of
+  bounds. Cheap per-byte access (no copy).
+\end{description}
+
+\subsection{Conversions}
+\label{sec:builtin-tostring}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{tostring(v)}] String form: numbers as decimal (floats with six
+  decimals), \ic{true}/\ic{false}, strings unchanged, \ic{null} as
+  \ic{"null"}, arrays as \ic{"[e0, e1, ...]"}, records as
+  \ic{"\{k: v, ...\}"} with escaped keys.
+\item[\ic{tonum(s)}] Parse a decimal integer (\ic{0} on garbage).
+\item[\ic{typeof(v)}] The static type as a printable value.
+\end{description}
+
+\subsection{Binary data}
+\label{sec:builtin-bytes}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{bytes(s)}] \ic{[byte]} of the string's raw bytes.
+\item[\ic{from\_bytes(b)}] String from a \ic{[byte]} array.
+\end{description}
+
+\subsection{Options}
+\label{sec:builtin-option-b}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{some(v)}] A present option holding \ic{v}.
+\item[\ic{is\_some(v)}] \ic{true} unless \ic{v} is \ic{null}.
+\item[\ic{unwrap(v)}] The payload; \textbf{traps} on \ic{null}.
+\end{description}
+
+\subsection{Input/output and the environment}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{print(x)}] Print a value followed by a newline to stdout.
+\item[\ic{puts(s)}] Write a string to stdout, no newline added.
+\item[\ic{eputs(s)}] Same, to stderr (keeps \ic{--time} output and
+  program output apart).
+\item[\ic{readline()}] One line from stdin without its newline, or
+  \ic{null} at end of input.
+\item[\ic{read\_file(path)}] File contents as \ic{str}, or \ic{null}.
+\item[\ic{write\_file(path, s)}] Write a string; \ic{bool} success.
+\item[\ic{write\_bytes(path, b, mode)}] Write \ic{[byte]} binary-safe
+  and chmod (\ic{mode < 0} skips chmod); \ic{bool} success.
+\item[\ic{argv()}] \ic{[str]} of the program's arguments.
+\item[\ic{exit(code)}] Terminate with an exit code.
+\item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}.
+\item[\ic{heap\_used()}] Bytes allocated so far.
+\item[\ic{sleep(ms)}] Suspend the process.
+\item[\ic{syscall(...)}] Raw Linux syscall wrapper; the first argument
+  is the syscall number.
+\item[\ic{exec(cmd)}] Run a shell command, return its exit code.
+  Removed from the binary entirely by \ic{--no-exec} (then calling it
+  is a compile error).
+\end{description}
+
+\subsection{Pointers}
+\label{sec:builtin-map}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{ptr\_addr(p)}] The address of a pointer as \ic{long}.
+\end{description}
+
+\noindent Mutating and keying are symbolic, not functional: arrays use
+\ic{+=} / \ic{*=}, records use \ic{r.f}, maps use \ic{m['k']} and
+\ic{m['k'] = v}. The legacy functions \ic{push}, \ic{prepend},
+\ic{map\_get} and \ic{map\_set} do not exist.

@@ -72,9 +72,9 @@ Yv *yv_float(double f) {
     return v;
 }
 
-Yv *ys(const char *lit) {
+Yv *ys_cstr(const char *s) {
     Yv *v = ynew(Y_STR);
-    v->u.s.p = ystrdup(lit ? lit : "");
+    v->u.s.p = ystrdup(s ? s : "");
     v->u.s.n = strlen(v->u.s.p);
     return v;
 }
@@ -92,7 +92,7 @@ Yv *ys_fmt(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    return ys(buf);
+    return ys_cstr(buf);
 }
 
 long yv_l(const Yv *v) { return v && v->tag == Y_LONG ? v->u.l : 0; }
@@ -130,7 +130,7 @@ Yv *yv_unwrap(const Yv *v) {
 long yv_len(const Yv *v) {
     if (!v) return 0;
     switch (v->tag) {
-    case Y_STR: return (long)strlen(v->u.s.p);
+    case Y_STR: return (long)v->u.s.n;
     case Y_ARR: return (long)v->u.a.len;
     case Y_MAP: return (long)v->u.m.len;
     default: return 0;
@@ -140,20 +140,21 @@ long yv_len(const Yv *v) {
 /* ── strings ─────────────────────────────────────────────────────────── */
 
 Yv *ys_cat(const Yv *a, const Yv *b) {
-    const char *as = (a && a->tag == Y_STR) ? a->u.s.p : "";
-    const char *bs = (b && b->tag == Y_STR) ? b->u.s.p : "";
-    size_t an = strlen(as), bn = strlen(bs);
+    /* length-based: a Y str may contain NUL bytes */
+    size_t an = (a && a->tag == Y_STR) ? a->u.s.n : 0;
+    size_t bn = (b && b->tag == Y_STR) ? b->u.s.n : 0;
     Yv *v = ynew(Y_STR);
     v->u.s.p = yalloc(an + bn + 1);
-    memcpy(v->u.s.p, as, an);
-    memcpy(v->u.s.p + an, bs, bn + 1);
+    if (an) memcpy(v->u.s.p, a->u.s.p, an);
+    if (bn) memcpy(v->u.s.p + an, b->u.s.p, bn);
+    v->u.s.p[an + bn] = '\0';
     v->u.s.n = an + bn;
     return v;
 }
 
 Yv *ys_substr(const Yv *s, long start, long count) {
     if (!s || s->tag != Y_STR) { return ys(""); }
-    long slen = (long)strlen(s->u.s.p);
+    long slen = (long)s->u.s.n;
     long st = start;
     long cnt = count;
     if (st < 0) st = 0;
@@ -163,27 +164,36 @@ Yv *ys_substr(const Yv *s, long start, long count) {
 }
 
 int ys_eq(const Yv *a, const Yv *b) {
-    const char *as = (a && a->tag == Y_STR) ? a->u.s.p : "";
-    const char *bs = (b && b->tag == Y_STR) ? b->u.s.p : "";
-    return strcmp(as, bs) == 0;
+    size_t an = (a && a->tag == Y_STR) ? a->u.s.n : 0;
+    size_t bn = (b && b->tag == Y_STR) ? b->u.s.n : 0;
+    if (an != bn) return 0;
+    return an == 0 || memcmp(a->u.s.p, b->u.s.p, an) == 0;
 }
 
 int ys_eq_lit(const Yv *a, const char *lit) {
     if (!a || a->tag != Y_STR) return 0;
-    return strcmp(a->u.s.p, lit) == 0;
+    size_t n = strlen(lit);
+    return a->u.s.n == n && memcmp(a->u.s.p, lit, n) == 0;
 }
 
 int ys_cmp(const Yv *a, const Yv *b) {
-    const char *as = (a && a->tag == Y_STR) ? a->u.s.p : "";
-    const char *bs = (b && b->tag == Y_STR) ? b->u.s.p : "";
-    return strcmp(as, bs);
+    /* length-aware strcmp: common prefix first, then the lengths */
+    size_t an = (a && a->tag == Y_STR) ? a->u.s.n : 0;
+    size_t bn = (b && b->tag == Y_STR) ? b->u.s.n : 0;
+    size_t n = an < bn ? an : bn;
+    int c = n ? memcmp(a->u.s.p, b->u.s.p, n) : 0;
+    if (c) return c;
+    return an < bn ? -1 : (an > bn ? 1 : 0);
 }
 
 Yv *ys_trim(const Yv *x) {
     if (!x || x->tag != Y_STR) { return ys(""); }
     const char *s = x->u.s.p;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    size_t slen = strlen(s);
+    size_t slen = x->u.s.n;
+    while (slen > 0 && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')) {
+        s++;
+        slen--;
+    }
     while (slen > 0 && (s[slen - 1] == ' ' || s[slen - 1] == '\t' ||
                         s[slen - 1] == '\n' || s[slen - 1] == '\r'))
         slen--;
@@ -195,16 +205,32 @@ Yv *ys_join(const Yv *arr, const Yv *sep) {
     size_t total = 1;
     for (size_t i = 0; i < arr->u.a.len; i++) {
         Yv *e = ys_tostring(arr->u.a.items[i]);
-        total += strlen(e->u.s.p) + strlen(sep->u.s.p);
+        total += e->u.s.n + sep->u.s.n;
     }
     char *buf = yalloc(total + 1);
-    buf[0] = '\0';
+    size_t pos = 0;
     for (size_t i = 0; i < arr->u.a.len; i++) {
-        if (i > 0) strcat(buf, sep->u.s.p);
+        if (i > 0) {
+            memcpy(buf + pos, sep->u.s.p, sep->u.s.n);
+            pos += sep->u.s.n;
+        }
         Yv *e = ys_tostring(arr->u.a.items[i]);
-        strcat(buf, e->u.s.p);
+        memcpy(buf + pos, e->u.s.p, e->u.s.n);
+        pos += e->u.s.n;
     }
-    return ys_n(buf, strlen(buf));
+    buf[pos] = '\0';
+    return ys_n(buf, pos);
+}
+
+/* first index of sub at or after `from` in s[0..n), or (size_t)-1 */
+static size_t ymem_find(const char *s, size_t n, const char *sub, size_t m,
+                        size_t from) {
+    if (m == 0) return from <= n ? from : (size_t)-1;
+    if (m > n) return (size_t)-1;
+    for (size_t i = from; i + m <= n; i++) {
+        if (memcmp(s + i, sub, m) == 0) return i;
+    }
+    return (size_t)-1;
 }
 
 Yv *ys_split(const Yv *s, const Yv *delim) {
@@ -214,25 +240,26 @@ Yv *ys_split(const Yv *s, const Yv *delim) {
     out->u.a.cap = 0;
     if (!s || s->tag != Y_STR || !delim || delim->tag != Y_STR) { return out; }
     const char *str = s->u.s.p;
+    size_t n = s->u.s.n;
     const char *d = delim->u.s.p;
-    size_t dlen = strlen(d);
+    size_t dlen = delim->u.s.n;
     if (dlen == 0) { return out; }
     size_t count = 0;
-    const char *p = str;
-    while (*p) {
+    size_t p = 0;
+    while (p < n) {
         count++;
-        const char *nx = strstr(p, d);
-        p = nx ? nx + dlen : p + strlen(p);
+        size_t nx = ymem_find(str, n, d, dlen, p);
+        p = nx != (size_t)-1 ? nx + dlen : n;
     }
     out->u.a.items = yalloc(sizeof(Yv *) * (count > 0 ? count : 1));
     out->u.a.cap = count;
     size_t i = 0;
-    p = str;
-    while (*p) {
-        const char *nx = strstr(p, d);
-        size_t len = nx ? (size_t)(nx - p) : strlen(p);
-        out->u.a.items[i++] = ys_n(p, len);
-        p = nx ? nx + dlen : p + strlen(p);
+    p = 0;
+    while (p < n) {
+        size_t nx = ymem_find(str, n, d, dlen, p);
+        size_t len = nx != (size_t)-1 ? nx - p : n - p;
+        out->u.a.items[i++] = ys_n(str + p, len);
+        p = nx != (size_t)-1 ? nx + dlen : n;
     }
     out->u.a.len = i;
     return out;
@@ -240,22 +267,22 @@ Yv *ys_split(const Yv *s, const Yv *delim) {
 
 long ys_index_of(const Yv *s, const Yv *sub) {
     if (!s || s->tag != Y_STR || !sub || sub->tag != Y_STR) { return -1; }
-    const char *hit = strstr(s->u.s.p, sub->u.s.p);
-    return hit ? (long)(hit - s->u.s.p) : -1;
+    size_t i = ymem_find(s->u.s.p, s->u.s.n, sub->u.s.p, sub->u.s.n, 0);
+    return i == (size_t)-1 ? -1 : (long)i;
 }
 
 long ys_last_index_of(const Yv *s, const Yv *sub) {
     if (!s || s->tag != Y_STR || !sub || sub->tag != Y_STR) { return -1; }
-    size_t slen = strlen(s->u.s.p), nlen = strlen(sub->u.s.p);
-    if (nlen == 0) { return (long)slen; }
-    for (long i = (long)(slen - nlen); i >= 0; i--) {
-        if (memcmp(s->u.s.p + i, sub->u.s.p, nlen) == 0) { return i; }
+    size_t n = s->u.s.n, m = sub->u.s.n;
+    if (m == 0) { return (long)n; }
+    for (long i = (long)(n - m); i >= 0; i--) {
+        if (memcmp(s->u.s.p + i, sub->u.s.p, m) == 0) { return i; }
     }
     return -1;
 }
 
 long ys_ord(const Yv *x) {
-    if (!x || x->tag != Y_STR || x->u.s.p[0] == '\0') { return -1; }
+    if (!x || x->tag != Y_STR || x->u.s.n == 0) { return -1; }
     return (long)(unsigned char)x->u.s.p[0];
 }
 
@@ -269,7 +296,7 @@ Yv *ys_chr(long v) {
 Yv *ys_long(long v) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%ld", v);
-    return ys(buf);
+    return ys_cstr(buf);
 }
 
 long ys_tonum(const Yv *x) {
@@ -317,11 +344,11 @@ Yv *ys_tostring(const Yv *v) {
     if (!v) { return ys("null"); }
     switch (v->tag) {
     case Y_NULL: return ys("null");
-    case Y_BOOL: return ys(v->u.b ? "true" : "false");
+    case Y_BOOL: return ys_cstr(v->u.b ? "true" : "false");
     case Y_LONG: return ys_long(v->u.l);
     case Y_FLOAT: {
         snprintf(buf, cap, "%f", v->u.f);
-        return ys(buf);
+        return ys_cstr(buf);
     }
     case Y_STR: return ys_n(v->u.s.p, v->u.s.n);
     case Y_ARR: {
@@ -631,7 +658,7 @@ void yv_set_argv(int argc, char **argv) {
     a->u.a.items = NULL;
     a->u.a.len = 0;
     a->u.a.cap = 0;
-    for (int i = 0; i < argc; i++) ya_push(a, ys(argv[i]));
+    for (int i = 0; i < argc; i++) ya_push(a, ys_cstr(argv[i]));
     g_argv = a;
 }
 
@@ -650,7 +677,7 @@ Yv *bytes_of(const Yv *s) {
     v->u.a.items = NULL;
     v->u.a.len = 0;
     v->u.a.cap = 0;
-    size_t n = (s && s->tag == Y_STR) ? strlen(s->u.s.p) : 0;
+    size_t n = (s && s->tag == Y_STR) ? s->u.s.n : 0;
     if (n) {
         ya_grow(v, n);
         for (size_t i = 0; i < n; i++)
@@ -673,5 +700,5 @@ Yv *from_bytes(const Yv *a) {
 }
 
 long byte_len(const Yv *s) {
-    return (s && s->tag == Y_STR) ? (long)strlen(s->u.s.p) : 0;
+    return (s && s->tag == Y_STR) ? (long)s->u.s.n : 0;
 }

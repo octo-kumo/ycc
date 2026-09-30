@@ -1,0 +1,142 @@
+\section{Syntax}
+\label{sec:grammar}
+
+\subsection{Structure and modules}
+
+A \ty{program} is a sequence of \ty{statement}s executed in order.
+Source files may be combined with imports; an import splices the
+imported file's text in front of the importing file's own code, under a
+namespace alias:
+
+\begin{lstlisting}
+import io from "./std/io.y";   // io.f(...) addresses defs of io.y
+\end{lstlisting}
+
+\noindent An \ic{export \{ a, b \}} clause, when present, must be the
+\emph{last} statement of a file. Paths resolve relative to the importing
+file's directory.
+
+\subsection{Declarations}
+
+\begin{align*}
+\ty{declaration} ::={}& \ic{let}~\ty{name}~[\ic{:}~\ty{type}]~\ic{=}~\ty{expr}~\ic{;} \\
+  |~& \ic{const}~\ty{name}~[\ic{:}~\ty{type}]~\ic{=}~\ty{expr}~\ic{;} \\
+  |~& \ic{def}~\ty{name}~\ic{(}~\ty{params}~\ic{)}~[\ic{->}~\ty{type}]~\ty{block}
+\end{align*}
+
+\ty{params} is a comma-separated list of \ty{name}~\ic{:}~\ty{type};
+parameter annotations are \textbf{mandatory}, return types are optional
+(inferred from the body, Section~\ref{sec:types}). A \ic{const}
+declaration currently behaves exactly like \ic{let}; the keyword records
+intent and is reserved for future immutability checking.
+
+Function literals may also appear bound or anonymous:
+\ic{let f = def (x: long) -> long \{ x \};}.
+
+\subsection{Types}
+\label{sec:type-grammar}
+
+\begin{align*}
+\ty{type} ::={}& \ic{long} \mid \ic{byte} \mid \ic{bool} \mid \ic{float}
+              \mid \ic{str} \\
+  |~& \ic{[}~\ty{type}~\ic{]}                    && \text{(heap array)}\\
+  |~& \ic{[}~\ty{type}~\ic{;}~\ty{nat}~\ic{]}   && \text{(fixed array)}\\
+  |~& \ty{type}~\ic{?}                           && \text{(option)}\\
+  |~& \ic{*}~\ty{type}                           && \text{(pointer)}\\
+  |~& \ic{(}~[\ty{type}~\{,\ty{type}\}]~\ic{)}~\ic{->}~\ty{type}
+                                                 && \text{(function)}\\
+  |~& \ic{\{}~[\ty{name}~\ic{:}~\ty{type}
+        ~\{,~\ty{name}~\ic{:}~\ty{type}\}]~\ic{\}}
+                                                 && \text{(record shape)}
+\end{align*}
+
+\noindent A record shape is structural; the shape \ic{\{ k: str \}} is
+written to mean ``a record with at least a field \ic{k} of type
+\ty{str}'' and is the conventional shape-hole annotation for AST-like
+data. \ic{nat} is a non-negative integer literal. The type name
+\ic{int} is accepted as a synonym of \ic{long} in annotations.
+
+\subsection{Statements}
+
+\begin{align*}
+\ty{statement} ::={}& \ty{declaration} \\
+  |~& \ty{expr}~\ic{;} \\
+  |~& \ty{assignment}~\ic{;} \\
+  |~& \ic{return}~[\ty{expr}]~\ic{;} \\
+  |~& \ty{block} \\
+  |~& \ic{if}~\ic{(}~\ty{expr}~\ic{)}~\ty{block}~[\ic{else}~(\ty{block} \mid \ty{statement})] \\
+  |~& \ic{while}~\ic{(}~\ty{expr}~\ic{)}~\ty{block} \\
+  |~& \ic{for}~\ic{(}~\ty{stmt}~\ic{;}~\ty{expr}~\ic{;}~\ty{stmt}~\ic{)}~\ty{block} \\
+  |~& \ic{for}~\ty{name}~\ic{in}~\ty{expr}~\ic{..}~\ty{expr}~\ty{block} \\
+  |~& \ic{foreach}~\ic{(}~\ty{name}~\ic{in}~\ty{expr}~\ic{)}~\ty{block} \\
+  |~& \ty{block}
+\end{align*}
+
+\noindent \ty{block} is \ic{\{}~\ty{statement}\(^*\)~[\ty{expr}]~\ic{\}}:
+a block is an \emph{expression} whose value is its trailing expression
+(if any). A block must never be empty; write \ic{\{ 0; \}} where a
+placeholder is needed. \ic{foreach} iterates the elements of an array;
+the \ic{for} range form iterates \ic{lo..hi} with the low bound
+inclusive and the high bound exclusive.
+
+\subsection{Expressions}
+\label{sec:expr-grammar}
+
+\begin{align*}
+\ty{primary} ::={}& \ty{long} \mid \ty{float} \mid \ty{string}
+     \mid \ic{true} \mid \ic{false} \mid \ic{null} \mid \ty{name} \\
+  |~& \ic{(}~\ty{expr}~\ic{)} \mid \ty{block} \\
+  |~& \ic{[}~[\ty{expr}~\{,\ty{expr}\}]~\ic{]}
+       \mid \ic{[}~\ty{expr}~\ic{;}~\ty{expr}~\ic{]} \\
+  |~& \ic{\{}~[\ty{name}~\ic{:}~\ty{expr}~\{,\ldots\}]~\ic{\}}
+       \quad \ic{\{}~[\ty{string}~\ic{:}~\ty{expr}~\{,\ldots\}]~\ic{\}} \\
+  |~& \ic{def}~\ic{(}~\ty{params}~\ic{)}~[\ic{->}~\ty{type}]~\ty{block}
+\end{align*}
+
+\begin{align*}
+\ty{postfix} ::={}& \ty{primary}
+   ~\{~\ic{(}~[\ty{args}]~\ic{)} \mid \ic{[}~\ty{expr}~\ic{]}
+   \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name}
+   \mid \ic{++} \mid \ic{--}~\} \\
+\ty{unary} ::={}& [\ic{!} \mid \ic{-} \mid \ic{*} \mid \ic{\&}
+   \mid \ic{++} \mid \ic{--}]~\ty{postfix}
+\end{align*}
+
+\subsection*{Operator precedence}
+
+All binary operators are left-associative; lower rows bind tighter:
+
+\begin{center}
+\begin{tabular}{cll}
+\toprule
+level & operators & notes \\
+\midrule
+1 & \ic{||} & short-circuit \\
+2 & \ic{\&\&} & short-circuit \\
+3 & \ic{==} \ic{!=} & structural equality \\
+4 & \ic{<} \ic{>} \ic{<=} \ic{>=} & numeric, or lexicographic \ty{str} \\
+5 & \ic{::} & one-element cons (Section~\ref{sec:arrays}) \\
+6 & \ic{+} \ic{-} & numeric, string/array \ic{+} \\
+7 & \ic{*} \ic{/} \ic{\%} & numeric \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Assignment forms}
+
+\begin{align*}
+\ty{assignment} ::={}& \ty{place}~\ic{=}~\ty{expr} \\
+  |~& \ty{place}~\ty{compound-op}~\ty{expr}
+     && \ic{+=}~\ic{-=}~\ic{*=}~\ic{/=}~\ic{\%=} \\
+  |~& \ty{place}~\ic{++} \mid \ic{++}~\ty{place}
+   \mid \ty{place}~\ic{--} \mid \ic{--}~\ty{place}
+\end{align*}
+
+\noindent A \ty{place} is a name, an index expression \ic{a[e]} (arrays
+and maps), or a field expression \ic{o.f} (records), possibly nested:
+\ic{grid[0][1]}, \ic{rec.v[2]}, \ic{m['k'][i]}. Field access is
+symbolic and exclusive: \ic{r.f} for records, \ic{m['k']} for maps.
+Pointers add \ic{*p = e}.
+Section~\ref{sec:exactly-once} defines the exact evaluation of every
+form; all of them evaluate the place's subexpressions \textbf{exactly
+once}.
