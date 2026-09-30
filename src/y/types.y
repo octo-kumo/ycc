@@ -1258,9 +1258,13 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else if (r0.typ.k == "tname") {
                 { typ: { k: "tarr", of: t_unk() }, st: st }
             } else if (r0.typ.k == "tarr") {
-                // nested array literal [[..], ..]: inner element type unknown
-                // yet (missing annotation inside) — unify quietly, report once.
-                { typ: { k: "tarr", of: t_unk() }, st: st }
+                // nested array literal [[..], ..]: the inner literal's type
+                // IS known, so keep it as the element type ([[1], [2]] :
+                // [[long]]) — that is what lets the checker enforce
+                // homogeneity through `+=` / `*=` / `+`. A poisoned inner
+                // (tunk inside) still unifies quietly through teq, so the
+                // report-once law holds.
+                { typ: { k: "tarr", of: r0.typ }, st: st }
             } else if (r0.typ.k == "tnull") {
                 // [null, ..]: option inference is future work — unify quietly.
                 { typ: { k: "tarr", of: t_unk() }, st: st }

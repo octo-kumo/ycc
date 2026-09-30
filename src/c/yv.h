@@ -85,7 +85,7 @@ Yv *ys_long(long v);                  /* tostring of a long */
 long ys_tonum(const Yv *s);           /* string -> long (0 on garbage) */
 
 /* ── arrays (reference values) ───────────────────────────────────────── */
-Yv *yav(size_t n, ...);               /* [v0, v1, ...] from n values */
+Yv *yav(size_t n, ...);               /* [v0, v1, ...] from n values (no sentinel) */
 Yv *ya_rep(Yv *v, long n);            /* [v; n] */
 Yv *ya_get(const Yv *a, long i);      /* bounds-checked (exit on OOB) */
 void ya_set(Yv *a, long i, Yv *v);    /* bounds-checked */
@@ -93,7 +93,7 @@ Yv *ya_push(Yv *a, Yv *v);            /* in place, returns a (the Y rule) */
 Yv *ya_slice(const Yv *a, long lo, long hi); /* new [T]; clamped */
 
 /* ── maps / records (reference values, insertion-ordered) ────────────── */
-Yv *ym(size_t n, ...);                /* n (key, value) pairs + NULL */
+Yv *ym(size_t n, ...);                /* n (key, value) pairs (no sentinel) */
 Yv *ym_new(void);
 Yv *ym_get(const Yv *m, const char *key); /* missing -> yv_null() */
 Yv *ym_set(Yv *m, const char *key, Yv *v); /* insert or update in place */

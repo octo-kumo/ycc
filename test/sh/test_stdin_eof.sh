@@ -5,7 +5,7 @@
 # budget, so the check never depends on which side wins the race.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="${YBOOT:-$ROOT/yboot}"
+YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim: -q = reference ycc, --compile = the C copy (see ytool.sh)
 FIFO=$(mktemp -u /tmp/yeof_XXXXXX)
 PROG=$(mktemp /tmp/yeof_XXXXXX.y)
 mkfifo "$FIFO"

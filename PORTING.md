@@ -53,7 +53,7 @@ gets a generated twin (`src/c/prof_lines.c`) the same way.
 
 3. **Records** are insertion-ordered maps:
    `let r = { k: "num", v: x }` → `Yv *r = ym(2, "k", ys("num"), "v", x);`
-   (`ym(n, key1, val1, ..., NULL)` — n pairs). Field read `r.name` →
+   (n key/value pairs, **no sentinel**). Field read `r.name` →
    `ym_get(r, "name")`. The Y code rebuilds records instead of mutating
    fields; do the same.
 
@@ -78,7 +78,14 @@ gets a generated twin (`src/c/prof_lines.c`) the same way.
    loops, same early `return`s, same statement order. The `0;` statement
    tails of Y if-arms become `;`. Do not refactor while porting.
 
-8. **Errors and exits** behave like the Y code: `exit(n)` terminates;
+8. **Smaller mappings**: `sym(x)` is an implementation detail — a unique
+   symbol name for emitter labels; port it as a static C counter string
+   (e.g. `ys_fmt("y_%ld", ++sym_counter)`), keeping the produced names
+   identical. `write_bytes(path, bytes, mode)` takes three arguments.
+   `foreach x in xs` (a unique name for the index) →
+   `for (size_t _i = 0; _i < (xs)->u.a.len; _i++) { Yv *x = (xs)->u.a.items[_i]; ... }`.
+
+9. **Errors and exits** behave like the Y code: `exit(n)` terminates;
    diagnostics go through `puts`/`eputs` unchanged.
 
 ## What the port must NOT do

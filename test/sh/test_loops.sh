@@ -6,7 +6,7 @@
 PASS=0
 FAIL=0
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="${YBOOT:-$ROOT/yboot}"
+YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim: -q = reference ycc, --compile = the C copy (see ytool.sh)
 
 # Colors
 RED='\033[0;31m'

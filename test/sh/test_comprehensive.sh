@@ -6,11 +6,11 @@
 PASS=0
 FAIL=0
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="${YBOOT:-$ROOT/yboot}"  # overridable: make test-asan points this at yboot-asan
+YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim: -q = reference ycc, --compile = the C copy (see ytool.sh)
 
 # A sanitized toolchain runs roughly 15x slower (see lib.sh).
 YTIMEOUT_SCALE=1
-case "$YBOOT" in
+case "$YBOOT${CYCC:-}" in
     *asan* | *msan* | *ubsan*) YTIMEOUT_SCALE=15 ;;
 esac
 VM_TO=$(( 10 * YTIMEOUT_SCALE ))
