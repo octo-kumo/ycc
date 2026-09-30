@@ -16,11 +16,16 @@
 // API is just syscalls 41 (socket) 42 (connect) 43 (accept) 49 (bind)
 // 50 (listen) 51 (getsockname) plus read/write/close. A sockaddr_in is a
 // 16-byte buffer built element by element — note that the port is BIG
-// endian while everything else on x86-64 is not.
+// endian (network byte order), while every other field is written a byte
+// at a time, so no host-order surprise.
 //
 // Names live in one flat namespace with the other std modules once
-// spliced, so they carry a `net`-ish prefix where they would collide
-// (`close_fd`, `send_str`); call them as net.close_fd(...) anyway.
+// spliced (native.y strip_ns rewrites `net.foo` to `foo`), so a module
+// picks names that will not collide with the rest of std: `close_fd`
+// because io.y has `close`, and the socket verbs carry a suffix that says
+// what they do (`socket_tcp`, `listen_fd`, `accept_tcp`). `send_str` is
+// io.y's `write_str` with the length supplied. Call them as
+// net.close_fd(...) anyway -- the namespace is dropped at compile time.
 
 // socket(AF_INET=2, SOCK_STREAM=1, 0) -> fd, or a negative errno.
 def socket_tcp() -> long {
@@ -28,6 +33,8 @@ def socket_tcp() -> long {
 };
 
 // Fill a sockaddr_in for a dotted-quad host ("127.0.0.1") and port.
+// Returns 0 either way: there is nothing to report here, and a host that
+// does not split into exactly four parts leaves the address at 0.0.0.0.
 def addr_set(a: [byte; 16], host: str, port: long) -> long {
     a[0] = 2;
     a[1] = 0;
@@ -86,12 +93,16 @@ def local_port(fd: long) -> long {
     a[2] * 256 + a[3]
 };
 
-// send_str(fd, data) -> bytes written (a str is already its bytes).
+// send_str(fd, data) -> bytes written (a str is already its bytes, and
+// len() is its length). One write(2): a short write is the caller's to
+// finish, nothing here retries.
 def send_str(fd: long, data: str) -> long {
     syscall(1, fd, data, len(data))
 };
 
 // recv_str(fd, max) -> up to max bytes as a str, none at EOF/error.
+// One read(2), so `max` is clamped to the 4096-byte buffer below and a
+// larger ask silently caps at that: call it again to read more.
 def recv_str(fd: long, max: long) -> str? {
     let buf: [byte; 4096] = [0; 4096];
     let n = max;
@@ -143,8 +154,10 @@ def http_response(status: long, body: str) -> str {
         + "\r\nConnection: close\r\n\r\n" + body
 };
 
-// http_read_head(fd) -> the request head, up to the blank line that ends
-// it (never waits for a body).
+// http_read_head(fd) -> the request head: every chunk read until the blank
+// line that ends it shows up (or the peer goes quiet, or 64 KiB has piled
+// up -- the last two are the safety valves). Bytes of the BODY may already
+// be in the string when a client pipelines them with the head.
 def http_read_head(fd: long) -> str {
     let out = "";
     let done = false;
@@ -181,8 +194,10 @@ def http_serve_one(fd: long, handler: (str) -> str) -> long {
     0
 };
 
-// listen_tcp(port, handler): bind + listen + accept forever. `handler`
-// receives each connection fd and owns it; it is closed when it returns.
+// listen_tcp(port, handler): bind + listen + accept until an accept fails.
+// `handler` receives each connection fd and the LOOP closes it once the
+// handler returns -- it must not close it itself, or that close hits a
+// recycled fd. As in listen_http, socket/bind/listen results go unchecked.
 def listen_tcp(port: long, handler: (long) -> long) -> long {
     let fd = socket_tcp();
     bind_tcp(fd, port);
@@ -205,6 +220,9 @@ def listen_tcp(port: long, handler: (long) -> long) -> long {
 
 // listen_http(port, handler): a tiny blocking HTTP server. `handler` maps
 // a request head to a response, usually `net.http_response(code, body)`.
+// Same loop as listen_tcp: accept until an accept fails, and the socket,
+// bind and listen results are not checked -- a busy port shows up as an
+// immediate return of 0 rather than an error.
 def listen_http(port: long, handler: (str) -> str) -> long {
     let fd = socket_tcp();
     bind_tcp(fd, port);

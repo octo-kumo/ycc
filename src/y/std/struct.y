@@ -2,17 +2,18 @@
 //
 // The building blocks of file headers and binary layouts. A "binary
 // string" is a plain [byte] array (b"..." literals are the same type):
-// concatenate with `+`, cut with slices, and print with the Python-style
-// b'...' repr.
+// concatenate with `+` (which makes a NEW array), cut with slices, and
+// print with the Python-style b'...' repr.
 //
-//     import struct from "./std/struct.y";
+//     import struct;
 //
 //     let hdr = struct.u32be(0x7f454c46) + struct.u16le(2) + struct.pad(10);
 //     if (struct.get_u32be(hdr, 0) == 0x7f454c46) { print("ELF magic") };
 //
-// All writers take a long and produce exactly their width; all readers
-// take (bytes, offset) and read without bounds magic — slicing first is
-// the idiom for untrusted input.
+// Every fixed-width writer takes a long and produces exactly its width;
+// the readers take (bytes, offset) and do NO bounds checking of their own
+// -- an offset past the end trips the runtime's index trap (y_oob) and
+// exits 1, so slice first for untrusted input.
 
 // ── byte plumbing ─────────────────────────────────────────────────────
 // The low 8 bits of v's two's-complement pattern, and the value shifted
@@ -189,7 +190,10 @@ def get_u64be(b: [byte], off: long) -> long {
     x
 };
 
-// The i64 readers are the same words: a long IS the signed pattern.
+// The i64 readers are the same words: a long IS the signed pattern — and
+// so are the u64 readers (a `long` is 64 bits with no unsigned reading of
+// it, so a u64 value with the top bit set comes back as its negative
+// two's complement; the i64 spelling just says so out loud).
 def get_i64le(b: [byte], off: long) -> long { get_u64le(b, off) };
 def get_i64be(b: [byte], off: long) -> long { get_u64be(b, off) };
 
@@ -197,6 +201,10 @@ def get_i64be(b: [byte], off: long) -> long { get_u64be(b, off) };
 // A format is a comma-separated list of the writer/reader names:
 //     pack("u32be,i16le,pad", [1, -2, 4])   -- pad takes its width
 //     unpack("u32be,i16le", hdr)            -- reads two values
+// pack reads vals[i] for name i, so the two lists must line up: a format
+// longer than the value list runs off the end (index trap), and names are
+// trimmed, so "u32be, u16le" and "u32be,u16le" are the same format. An
+// unknown name prints to stdout and exits 1.
 
 def pack_one(name: str, v: long) -> [byte] {
     if (name == "u8") { u8(v) }
@@ -218,6 +226,9 @@ def pack_one(name: str, v: long) -> [byte] {
     else {
         puts("struct.pack: unknown format '" + name + "'\n");
         exit(1);
+        // Unreachable (exit never returns), but the arm still has to
+        // produce a [byte]: arms that disagree make the whole `if` void,
+        // and pack's `out += pack_one(...)` cannot take a void value.
         let none: [byte] = [];
         none
     }
