@@ -84,7 +84,7 @@ long ys_index_of(const Yv *s, const Yv *sub);
 long ys_last_index_of(const Yv *s, const Yv *sub);
 long ys_ord(const Yv *s);             /* first byte */
 Yv *ys_chr(long v);
-Yv *ys_tostring(const Yv *v);         /* the VM's tostring formatting */
+Yv *ys_tostring(const Yv *v);         /* the format the native tostring prints */
 Yv *ys_long(long v);                  /* tostring of a long */
 long ys_tonum(const Yv *s);           /* string -> long (0 on garbage) */
 
@@ -103,7 +103,11 @@ Yv *yr_get(const Yv *m, const char *key); /* missing -> yv_none() */
 Yv *yr_set(Yv *m, const char *key, Yv *v); /* insert or update in place */
 int yr_has(const Yv *m, const char *key);
 
-/* ── the builtins the compiler code calls ────────────────────────────── */
+/* ── builtins ──────────────────────────────────────────────────────────
+ * What the C modules call, plus the rest of the value model's interface:
+ * a few of these (ya_slice, ya_rep, yr_has, yv_eq, from_bytes, byte_len,
+ * the float boxing) are the PORTING.md spellings of Y builtins the C copy
+ * does not currently reach. */
 void puts_(const Yv *s);              /* puts(s) */
 void eputs_(const Yv *s);             /* eputs(s) */
 void exit_(long code);                /* exit(code) */

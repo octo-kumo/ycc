@@ -1,10 +1,11 @@
 // ycc — the Y compiler. Compiles Y source straight to a native
 // executable (Linux x86_64) with no toolchain: no cc, no as, no ld,
-// no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [-h] FILE
+// no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
 //   (no flags)   compile FILE to a native executable (default output: a.out)
 //   -o OUTPUT    output path (executable, or .s file with -S)
 //   -S           emit assembly only (stdout, or the -o file)
 //   -t, --time   print per-phase time and heap use to stderr
+//   --prof       instrument the output (see -h)
 //   -h, --help   show this text and exit
 
 import lexer from "./lexer.y";
@@ -79,7 +80,8 @@ def padl(s: str, w: long) -> str {
     r
 };
 
-// Microseconds as fixed-point milliseconds (native mode has no floats).
+// Microseconds as fixed-point milliseconds, integer arithmetic only: the C
+// twin formats the same way, so both copies print the same string.
 def fmt_ms(us: long) -> str {
     let ms = us / 1000;
     let fr = us % 1000;
@@ -93,7 +95,9 @@ def fmt_kb(b: long) -> str {
 };
 
 def print_phase_rows(times: [{ name: str, us: long, heap: long }]) -> long {
-    // NOTE: bound once — `times[i]` inline misparses on the CVM backend.
+    // NOTE: vestigial alias — `times[i]` parses and typechecks in both
+    // copies today; the binding stays only because the compiled compiler
+    // is byte-gated against refs/ycc.ref.
     let all = times;
     let i = 0;
     while (i < len(all)) {
@@ -112,7 +116,7 @@ def print_counter(name: str, v: long) -> long {
 // ── main ─────────────────────────────────────────────────────────────────
 
 def print_native_errors(errors: [{ msg: str, line: long, col: long }], pre: long) -> long {
-    // NOTE: bound once — `errors[i]` inline misparses on the CVM backend.
+    // NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
     // `pre` is the number of prelude lines spliced in front of the user's
     // source: subtract it so positions refer to the file the user wrote.
     // A position INSIDE the prelude (line <= pre) would be a compiler bug,
@@ -131,7 +135,7 @@ def print_native_errors(errors: [{ msg: str, line: long, col: long }], pre: long
 
 def main(cmdline: [str]) -> long {
     let args = parse_cli_args(cmdline);
-    // NOTE: bound once — `args.out` inline misparses on the C backend.
+    // NOTE: vestigial alias (see print_phase_rows) — `args.out` works.
     let pargs = args;
     let out = pargs.out;
     let files = pargs.files;
@@ -164,8 +168,6 @@ def main(cmdline: [str]) -> long {
             } else { 0; };
 
             // splice imports, tokenize, parse, compile to assembly
-            // NOTE: each bound once — `x.y` on a call result misparses on
-            // the C backend (it reads `f().y` as `f(.y)`).
             let t0 = clock_us();
             let h0 = heap_used();
             let tstart = t0;
@@ -195,10 +197,8 @@ def main(cmdline: [str]) -> long {
             };
             t0 = clock_us();
             h0 = heap_used();
-            // NOTE: `!(r.ok)` with parens — the C parser reads `!r.ok`
-            // as `(!r).ok`.
             let rok = r.ok;
-            if (!(rok)) {
+            if (!rok) {
                 print_native_errors(r.errors, nrpre);
                 exit(1);
                 1
@@ -228,13 +228,12 @@ def main(cmdline: [str]) -> long {
                 // executable DIRECTLY with the write_bytes builtin
                 // (binary-safe open/write/chmod, tinycc-style — NULs pass
                 // through as array elements, no shell, no exec/printf).
-                // No `&x`, no `*T`, no `syscall` here: the C bootstrap
-                // parser cannot parse any of them (see lexer OPERATORS).
                 let rasm2 = r.asm;
                 let ab = nasm.ycc_assemble(rasm2);
                 ph = nativelib.phase_end(dt, "assemble", t0, h0);
                 dt = ph.times; t0 = ph.t; h0 = ph.h;
-                // ycc_assemble reports its own sub-phases (split/encode/link).
+                // ycc_assemble reports its own sub-phases: a:split,
+                // a:encode, a:link, then l:labmap, l:patch, l:elf.
                 let asub = ab.times;
                 let ai = 0;
                 while (ai < len(asub)) {
@@ -243,15 +242,13 @@ def main(cmdline: [str]) -> long {
                     ai = ai + 1;
                 };
                 let abok = ab.ok;
-                if (!(abok)) {
+                if (!abok) {
                     puts("error: assemble: " + ab.error + "\n");
                     exit(1);
                     1
                 } else {
                     let out_path = out;
                     if (len(out_path) == 0) { out_path = "a.out"; 0; } else { 0; };
-                    // NOTE: bound once — `x.y` on a call result
-                    // misparses on the C backend.
                     let abbytes = ab.bytes;
                     // 493 = 0755 executable (chmod applied by write_bytes).
                     let ok = write_bytes(out_path, abbytes, 493);
@@ -267,7 +264,7 @@ def main(cmdline: [str]) -> long {
                         print_counter("out_bytes", len(abbytes));
                         0
                     } else { 0; };
-                    if (!(ok)) {
+                    if (!ok) {
                         puts("error: writing '" + out_path + "' failed\n");
                         exit(1);
                         1

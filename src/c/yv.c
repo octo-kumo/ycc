@@ -1,9 +1,11 @@
 /* yv.c — the Y value model (see yv.h / PORTING.md).
  *
- * The behavior here mirrors the old C runtime exactly (it is the behavior
- * the reference ycc binary was built under): substr clamps like C,
- * tostring formats like the VM's val_to_str, push grows in place with
- * 0->8->doubling capacity, arrays and maps are shared references.
+ * This is the C copy's own runtime: it gives the C modules exactly the
+ * value semantics the Y modules run on when they are compiled to native
+ * code — substr clamps like C, tostring prints the same format, push
+ * grows in place with 0->8->doubling capacity, arrays and maps are
+ * shared references. The two compilers must agree, so anything changed
+ * here moves the reference semantics `make ycc` compares against.
  */
 #include "yv.h"
 
@@ -43,6 +45,16 @@ static char *ystrndup(const char *s, size_t n) {
 static Yv *ynew(YTag tag) {
     Yv *v = yalloc(sizeof(Yv));
     v->tag = tag;
+    return v;
+}
+
+/* A fresh empty array value: items/len/cap all zeroed, so the first
+ * append goes through ya_grow. Every array constructor starts here. */
+static Yv *yarr_new(void) {
+    Yv *v = ynew(Y_ARR);
+    v->u.a.items = NULL;
+    v->u.a.len = 0;
+    v->u.a.cap = 0;
     return v;
 }
 
@@ -234,10 +246,7 @@ static size_t ymem_find(const char *s, size_t n, const char *sub, size_t m,
 }
 
 Yv *ys_split(const Yv *s, const Yv *delim) {
-    Yv *out = ynew(Y_ARR);
-    out->u.a.items = NULL;
-    out->u.a.len = 0;
-    out->u.a.cap = 0;
+    Yv *out = yarr_new();
     if (!s || s->tag != Y_STR || !delim || delim->tag != Y_STR) { return out; }
     const char *str = s->u.s.p;
     size_t n = s->u.s.n;
@@ -352,7 +361,7 @@ Yv *ys_tostring(const Yv *v) {
     }
     case Y_STR: return ys_n(v->u.s.p, v->u.s.n);
     case Y_ARR: {
-        /* "[e0, e1, ...]" — the VM's val_to_str format */
+        /* "[e0, e1, ...]" — the format the native tostring prints */
         size_t total = 2;
         for (size_t i = 0; i < v->u.a.len; i++) {
             Yv *e = ys_tostring(v->u.a.items[i]);
@@ -416,10 +425,7 @@ static void ya_grow(Yv *a, size_t need) {
 }
 
 Yv *yav(size_t n, ...) {
-    Yv *v = ynew(Y_ARR);
-    v->u.a.items = NULL;
-    v->u.a.len = 0;
-    v->u.a.cap = 0;
+    Yv *v = yarr_new();
     if (n) {
         ya_grow(v, n);
         va_list ap;
@@ -432,10 +438,7 @@ Yv *yav(size_t n, ...) {
 }
 
 Yv *ya_rep(Yv *x, long n) {
-    Yv *v = ynew(Y_ARR);
-    v->u.a.items = NULL;
-    v->u.a.len = 0;
-    v->u.a.cap = 0;
+    Yv *v = yarr_new();
     if (n > 0) {
         ya_grow(v, (size_t)n);
         for (long i = 0; i < n; i++) v->u.a.items[i] = x;
@@ -461,22 +464,14 @@ void ya_set(Yv *a, long i, Yv *v) {
 }
 
 Yv *ya_push(Yv *a, Yv *v) {
-    if (!a || a->tag != Y_ARR) {
-        a = ynew(Y_ARR);
-        a->u.a.items = NULL;
-        a->u.a.len = 0;
-        a->u.a.cap = 0;
-    }
+    if (!a || a->tag != Y_ARR) a = yarr_new();
     ya_grow(a, a->u.a.len + 1);
     a->u.a.items[a->u.a.len++] = v;
     return a;
 }
 
 Yv *ya_slice(const Yv *a, long lo, long hi) {
-    Yv *v = ynew(Y_ARR);
-    v->u.a.items = NULL;
-    v->u.a.len = 0;
-    v->u.a.cap = 0;
+    Yv *v = yarr_new();
     if (!a || a->tag != Y_ARR) return v;
     long n = (long)a->u.a.len;
     if (lo < 0) lo = 0;
@@ -654,10 +649,7 @@ int write_bytes(const Yv *path, const Yv *bytearr, long mode) {
 static Yv *g_argv = NULL;
 
 void yv_set_argv(int argc, char **argv) {
-    Yv *a = ynew(Y_ARR);
-    a->u.a.items = NULL;
-    a->u.a.len = 0;
-    a->u.a.cap = 0;
+    Yv *a = yarr_new();
     for (int i = 0; i < argc; i++) ya_push(a, ys_cstr(argv[i]));
     g_argv = a;
 }
@@ -673,10 +665,7 @@ long clock_us(void) {
 long heap_used(void) { return g_heap_used; }
 
 Yv *bytes_of(const Yv *s) {
-    Yv *v = ynew(Y_ARR);
-    v->u.a.items = NULL;
-    v->u.a.len = 0;
-    v->u.a.cap = 0;
+    Yv *v = yarr_new();
     size_t n = (s && s->tag == Y_STR) ? s->u.s.n : 0;
     if (n) {
         ya_grow(v, n);

@@ -22,11 +22,13 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
     // to a page so the mapping covers every string byte (the kernel maps
     // whole pages, and string helpers may over-read a few bytes past a
     // trailing NUL). Layout: [EHDR 64][PHDR 56][code][pad][rodata][pad].
-    // Without full-page coverage, argv/envp-adjacent stack reads and even
-    // plain rodata loads fault with EFAULT/silent garbage.
-    // NOTE: out is built with ONE push per byte (not enc.concat per field):
-    // concat copies the whole prefix each time (O(n^2) clones), which hangs
-    // the C VM on real (~8K+) inputs. Helpers below append in place.
+    // Without full-page coverage the last partial page is the end of the
+    // mapping, so those over-reads (and any read of the tail) fault with
+    // EFAULT or return garbage.
+    // NOTE: out is appended to IN PLACE, one byte at a time, rather than
+    // re-concatenated per header field: `+=` grows the array geometrically,
+    // while `out = concat(out, f)` would allocate a fresh array and copy
+    // every byte written so far, for every field. Helpers below append.
     Yv *out = yav(0);
     long codesz = yv_len(code);
     long codetrail = codesz % 4096;
@@ -88,12 +90,13 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
     return out;
 }
 
-// Append helpers: one push per byte (O(1) amortized each). The C VM's push
-// clones the array per call, but that is still O(n) per byte appended —
-// linear overall, unlike enc.concat(out, field) which re-clones the whole
-// prefix for every header field (quadratic, hangs on real inputs).
+// Append helpers: one in-place append per byte, O(1) amortized. The C twin
+// grows the same way (ya_push / ya_grow in src/c/yv.c: 0 -> 8 -> doubling),
+// so both copies build the same buffer; each helper returns the array so the
+// caller can rebind it.
 Yv *push_bytes(Yv *out, Yv *bytes) {
-    // NOTE: annotated [byte] (not holes): push() needs known heap arrays.
+    // NOTE: annotated `[byte]`, not a bare hole: a hole takes its element
+    // type from the call site, and these buffers are always packed bytes.
     long i = 0;
     while (i < yv_len(bytes)) {
         out = ya_push(out, ya_get(bytes, i));

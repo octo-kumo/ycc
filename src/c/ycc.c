@@ -1,12 +1,13 @@
 /* ycc.c — the driver (1:1 copy of src/y/ycc.y).
  *
  * ycc — the Y compiler. Compiles Y source straight to a native
- * executable (Linux x86_64) with no toolchain: no cc, no as, no ld,
- * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [-h] FILE
+ * executable (Linux x86-64) with no toolchain: no cc, no as, no ld,
+ * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
  *   (no flags)   compile FILE to a native executable (default output: a.out)
  *   -o OUTPUT    output path (executable, or .s file with -S)
  *   -S           emit assembly only (stdout, or the -o file)
  *   -t, --time   print per-phase time and heap use to stderr
+ *   --prof       instrument the output (see -h)
  *   -h, --help   show this text and exit
  */
 #include "ycc.h"
@@ -104,7 +105,8 @@ Yv *padl(Yv *s, long w) {
     return r;
 }
 
-/* Microseconds as fixed-point milliseconds (native mode has no floats). */
+/* Microseconds as fixed-point milliseconds, integer arithmetic only: the C
+ * twin formats the same way, so both copies print the same string. */
 Yv *fmt_ms(long us) {
     long ms = us / 1000;
     long fr = us % 1000;
@@ -118,7 +120,9 @@ Yv *fmt_ms(long us) {
 Yv *fmt_kb(long b) { return ys_long(b / 1024); }
 
 long print_phase_rows(Yv *times) {
-    /* NOTE: bound once — `times[i]` inline misparses on the CVM backend. */
+    /* NOTE: vestigial alias — `times[i]` parses and typechecks in both
+     * copies today; the binding stays only because the compiled compiler
+     * is byte-gated against refs/ycc.ref. */
     Yv *all = times;
     long i = 0;
     while (i < yv_len(all)) {
@@ -143,7 +147,7 @@ long print_counter(Yv *name, long v) {
 /* ── main ──────────────────────────────────────────────────────────────── */
 
 long print_native_errors(Yv *errors, long pre) {
-    /* NOTE: bound once — `errors[i]` inline misparses on the CVM backend.
+    /* NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
      * `pre` is the number of prelude lines spliced in front of the user's
      * source: subtract it so positions refer to the file the user wrote.
      * A position INSIDE the prelude (line <= pre) would be a compiler bug,
@@ -171,7 +175,7 @@ long print_native_errors(Yv *errors, long pre) {
 
 long y_main(Yv *cmdline) {
     Yv *args = parse_cli_args(cmdline);
-    /* NOTE: bound once — `args.out` inline misparses on the C backend. */
+    /* NOTE: vestigial alias (see print_phase_rows) — `args.out` works. */
     Yv *pargs = args;
     Yv *out = yr_get(pargs, "out");
     Yv *files = yr_get(pargs, "files");
@@ -208,9 +212,7 @@ long y_main(Yv *cmdline) {
                 ;
             }
 
-            /* splice imports, tokenize, parse, compile to assembly
-             * NOTE: each bound once — `x.y` on a call result misparses on
-             * the C backend (it reads `f().y` as `f(.y)`). */
+            /* splice imports, tokenize, parse, compile to assembly */
             long t0 = clock_us();
             long h0 = heap_used();
             long tstart = t0;
@@ -248,10 +250,8 @@ long y_main(Yv *cmdline) {
             }
             t0 = clock_us();
             h0 = heap_used();
-            /* NOTE: `!(r.ok)` with parens — the C parser reads `!r.ok`
-             * as `(!r).ok`. */
             long rok = yv_b(yr_get(r, "ok"));
-            if (!(rok)) {
+            if (!rok) {
                 print_native_errors(yr_get(r, "errors"), nrpre);
                 exit_(1);
                 return 1;
@@ -285,7 +285,7 @@ long y_main(Yv *cmdline) {
                 }
                 return 0;
             } else {
-                /* Assemble to a [byte] buffer in process (no as/ld/cc) and write the
+                /* Assemble to a [byte] buffer in-process (no as/ld/cc) and write the
                  * executable DIRECTLY with the write_bytes builtin
                  * (binary-safe open/write/chmod, tinycc-style — NULs pass
                  * through as array elements, no shell, no exec/printf). */
@@ -295,7 +295,8 @@ long y_main(Yv *cmdline) {
                 dt = yr_get(ph, "times");
                 t0 = yv_l(yr_get(ph, "t"));
                 h0 = yv_l(yr_get(ph, "h"));
-                /* ycc_assemble reports its own sub-phases (split/encode/link). */
+                /* ycc_assemble reports its own sub-phases: a:split,
+                 * a:encode, a:link, then l:labmap, l:patch, l:elf. */
                 Yv *asub = yr_get(ab, "times");
                 long ai = 0;
                 while (ai < yv_len(asub)) {
@@ -304,7 +305,7 @@ long y_main(Yv *cmdline) {
                     ai = ai + 1;
                 }
                 long abok = yv_b(yr_get(ab, "ok"));
-                if (!(abok)) {
+                if (!abok) {
                     puts_(ys_cat(ys("error: assemble: "),
                                  ys_cat(yr_get(ab, "error"), ys("\n"))));
                     exit_(1);
@@ -317,8 +318,6 @@ long y_main(Yv *cmdline) {
                     } else {
                         ;
                     }
-                    /* NOTE: bound once — `x.y` on a call result
-                     * misparses on the C backend. */
                     Yv *abbytes = yr_get(ab, "bytes");
                     /* 493 = 0755 executable (chmod applied by write_bytes). */
                     int ok = write_bytes(out_path, abbytes, 493);
@@ -342,7 +341,7 @@ long y_main(Yv *cmdline) {
                     } else {
                         ;
                     }
-                    if (!(ok)) {
+                    if (!ok) {
                         puts_(ys_cat(ys_cat(ys("error: writing '"), out_path),
                                      ys("' failed\n")));
                         exit_(1);
