@@ -45,16 +45,16 @@ def reg_num(name: str) -> long {
 
 def reg_size(name: str) -> long {
     let c = name[1];
-    if (c == 'x') {
+    if (c == c'x') {
         // %xmmN: SSE register (size 128 marks the class apart from GPRs)
         128
-    } else if (c == 'r') {
+    } else if (c == c'r') {
         // %r..: 64-bit, unless ends in d/b
         let last = name[len(name) - 1];
-        if (last == 'd') { 32 } else if (last == 'b') { 8 } else { 64 }
+        if (last == c'd') { 32 } else if (last == c'b') { 8 } else { 64 }
     } else {
         // %e..: 32-bit; %..l / %..h legacy: 8-bit; %r.. handled above
-        if (c == 'e') { 32 } else { 8 }
+        if (c == c'e') { 32 } else { 8 }
     }
 };
 
@@ -62,7 +62,7 @@ def reg_size(name: str) -> long {
 // Y evaluates both sides of &&/|| eagerly, so `o.k == "reg" && o.size`
 // would still read .size on a mem/lbl/imm operand).
 def op_size(o) -> long {
-    if (o.k == "reg") { o.size }
+    if (o.k == "reg") { o.size } else { 0 }
 };
 def rex(w: bool, r: long, x: long, b: long) -> long {
     let v = 64;

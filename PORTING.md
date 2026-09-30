@@ -1,11 +1,7 @@
 # Porting the Y code to C (1:1)
 
 The C compiler (`src/c/`) is a **1:1 copy of the Y compiler (`src/y/`)**.
-There is no independent C implementation any more — no VM, no C emitter,
-no separate parser/typechecker with their own semantics. Every C module
-mirrors one Y module; every function mirrors one `def`; the record shapes,
-control flow and names match. When a Y module changes, the same change is
-applied to its C twin.
+Every C module mirrors one Y module; every function mirrors one `def`; the record shapes, control flow and names match. When a Y module changes, the same change is applied to its C twin.
 
 The C version is accepted only when it reproduces the reference binary
 byte for byte:

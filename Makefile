@@ -1,6 +1,5 @@
 GCC=gcc
-# The C compiler is a 1:1 copy of the Y compiler (see PORTING.md): no VM,
-# no C emission — it compiles .y straight to a native ELF exactly like ycc.
+# The C compiler is a 1:1 copy of the Y compiler (see PORTING.md): it compiles .y straight to a native ELF exactly like ycc.
 CFLAGS=-Wall -Wextra -std=gnu99 -g
 CYC_SRCS=$(wildcard src/c/*.c)
 CY_HDRS=$(wildcard src/c/*.h)

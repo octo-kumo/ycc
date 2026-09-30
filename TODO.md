@@ -1,3 +1,12 @@
+# Not Done
+- all features used in TODO.y and exhaustive tests
+
+
+
+
+# Done
+(remember to verify items without "DONE" if not done move up to not done, then remove that label and this message)
+
 - DONE: add 0xffab 0b101 1e10 1.2e-10 etc support
   (hex/binary integer literals with `_` separators in both frontends;
   scientific notation and float literals work in every engine now that

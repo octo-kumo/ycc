@@ -28,7 +28,7 @@ def is_alpha_ch(c: str) -> bool {
 def parse_num(s: str) -> {ok: bool, v: long} {
     let neg = false;
     let i = 0;
-    if (s[0] == '-') {
+    if (substr(s, 0, 1) == "-") {
         neg = true;
         i = 1;
     }
@@ -43,7 +43,7 @@ def parse_num_go(s: str, i: long, neg: bool) -> {ok: bool, v: long} {
     let v = 0;
     let ok = true;
     while (i < len(s)) {
-        let c = s[i];
+        let c = substr(s, i, 1);
         if (is_digit_ch(c)) {
             v = v * 10 + ord(c) - 48;
         } else {
@@ -65,7 +65,7 @@ def split_ops(s: str) -> [str] {
     let cur = "";
     let i = 0;
     while (i < len(s)) {
-        let c = s[i];
+        let c = substr(s, i, 1);
         if (c == "(") { depth++ };
         if (c == ")") { depth-- } ;
         if (c == ",") {
@@ -101,9 +101,9 @@ def parse_operand_empty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, 
 
 def parse_operand_nonempty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // `*%reg` — register-indirect call/jump target (closure code pointers).
-    if (t[0] == '*') {
+    if (substr(t, 0, 1) == "*") {
         parse_operand_ind(t)
-    } else if (t[0] == '%') {
+    } else if (substr(t, 0, 1) == "%") {
         parse_operand_reg(t)
     } else {
         parse_operand_noreg(t)
@@ -132,7 +132,7 @@ def parse_operand_reg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v:
 };
 
 def parse_operand_noreg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
-    if (t[0] == '$') {
+    if (substr(t, 0, 1) == "$") {
         parse_operand_imm(t)
     } else {
         parse_operand_memlbl(t)
@@ -166,7 +166,7 @@ def parse_imm(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a
 
 def parse_imm_alpha(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // (split: len>0 narrows; this body checks the alpha gate only.)
-    if (is_alpha_ch(s[0])) {
+    if (is_alpha_ch(substr(s, 0, 1))) {
         parse_imm_diff(s, dash)
     } else {
         parse_imm_num(s)
@@ -899,7 +899,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
     let lh0 = heap_used();
     let code_len = 0;
     let ro_len = 0;
-    for (let it in items) {
+    foreach (it in items) {
         if (it.sec == 0) { code_len = code_len + it.len; };
         if (it.sec == 1) { ro_len = ro_len + it.len; };
     };

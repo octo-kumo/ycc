@@ -29,24 +29,18 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             if (i + 1 < n) {
                 i = i + 1;
                 out = argv[i];
-                0
             } else {
                 puts("ycc: -o needs an argument\n");
                 exit(1);
-                0
             };
         } else if (a == "-S") {
             asm_only = true;
-            0
         } else if (a == "--time" || a == "-t") {
             timing = true;
-            0
         } else if (a == "--no-exec") {
             allow_exec = false;
-            0
         } else if (a == "--prof") {
             prof = true;
-            0
         } else if (a == "--help" || a == "-h") {
             puts("Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [-h] FILE\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
@@ -58,14 +52,11 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               cpu times printed on stderr when the program exits\n");
             puts("  -h, --help   show this text and exit\n");
             exit(0);
-            0
         } else if (substr(a, 0, 1) == "-") {
             puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
             exit(1);
-            0
         } else {
             files += a;
-            0
         };
         i = i + 1;
     };

@@ -148,7 +148,7 @@ def op_prec(op: str) -> long {
     else if (op == "*") { 7 }
     else if (op == "/") { 7 }
     else if (op == "%") { 7 }
-   
+    else { 0 }
 };
 
 // ── primary expressions ──────────────────────────────────────────────────

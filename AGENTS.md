@@ -4,8 +4,7 @@ C (gnu99/gcc) + the Y compiler for the `.y` language. The Y compiler in
 `src/y/` compiles `.y` straight to static x86-64 ELFs (its own assembler
 and ELF writer — no cc/as/ld). The C compiler in `src/c/` is a **1:1
 copy of the Y code** (see `PORTING.md`): same modules, same functions,
-same semantics. There is no VM and no C backend any more — both tools
-are the same compiler, one written in Y, one in C.
+same semantics.
 
 ## Build
 
