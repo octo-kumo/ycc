@@ -5,9 +5,8 @@
 // assembly in arch_x64.y. That does not scale and it is where the bugs
 // live. The rule here is the opposite: the backend provides small, general
 // PRIMITIVES (the `syscall` intrinsic, `bytes`/`from_bytes`), and the
-// actual behaviour -- stopping at a newline, growing a buffer, splitting a
-// command line -- is ordinary Y code that the compiler compiles like any
-// other function.
+// actual behaviour -- stopping at a newline, running a child process --
+// is ordinary Y code that the compiler compiles like any other function.
 //
 // These are plain defs, not intrinsics: they go through the normal
 // rename/typecheck/emit path, so a bug here is a bug in Y code, not in
@@ -26,7 +25,7 @@ def prelude_lines() -> [str] {
         "// read would swallow input past the newline, which a REPL then",
         "// could not hand to a child process. EOF is not latched -- a later",
         "// call issues a fresh read(2), so a REPL survives Ctrl-D and a FIFO",
-        "// that is reopened. The C engines call clearerr(stdin) to match.",
+        "// that is reopened.",
         "def readline() -> str? {",
         "    let one: [byte; 1] = [0; 1];",
         "    let out: [byte] = [];",
@@ -56,15 +55,11 @@ def prelude_lines() -> [str] {
         "// clear_eof() -- clear the end-of-input condition so a later",
         "// readline() reads again. Nothing to do here: readline() issues a",
         "// raw read(2) on fd 0 every call and there is no sticky flag to",
-        "// reset. It exists so the same source runs on all three engines",
-        "// (the C engines call clearerr(stdin), which is not a no-op there).",
+        "// reset. It stays a def because a C backend of the language latches",
+        "// EOF in its stdio buffer and needs clearerr(stdin) there.",
         "def clear_eof() -> long { 0 };",
         ""
     ]
-};
-
-def prelude_src() -> str {
-    join(prelude_lines(), "\n")
 };
 
 // exec() lives in its own chunk so --no-exec can leave it out entirely:
@@ -73,13 +68,12 @@ def prelude_src() -> str {
 def exec_lines() -> [str] {
     [
         "// exec(cmd) -> long  (exit status, or -1 if the child died on a",
-        "// signal / could not be started). Same contract as the C engines'",
-        "// system(3): the command is interpreted by /bin/sh -c.",
+        "// signal / could not be started). The command string goes to",
+        "// /bin/sh -c verbatim, the same contract system(3) has.",
         "//",
-        "// SECURITY: there is no sanitizing here, exactly as in the C",
-        "// toolchain. Never pass untrusted input. ycc --no-exec omits this",
-        "// function entirely, so a binary built with it cannot reach a",
-        "// shell at all.",
+        "// SECURITY: there is no sanitizing here. Never pass untrusted",
+        "// input. ycc --no-exec omits this function entirely, so a binary",
+        "// built with it cannot reach a shell at all.",
         "//",
         "// Written in Y over the raw syscalls: fork(57), execve(59),",
         "// wait4(61), exit(60). envp is NULL -- sh supplies a default PATH",
@@ -122,6 +116,9 @@ def exec_lines() -> [str] {
 
 // Names the prelude defines. A program that mentions none of them gets no
 // prelude at all, so a hello-world binary stays the size it was.
+// These are the TRIGGER names native.y searches the spliced text for; a
+// chunk may define more -- exec_lines also defines exit_status, which only
+// exec() calls.
 def prelude_names() -> [str] {
     ["readline", "clear_eof"]
 };
@@ -130,4 +127,4 @@ def exec_names() -> [str] {
     ["exec"]
 };
 
-export { prelude_src, prelude_lines, prelude_names, exec_lines, exec_names };
+export { prelude_lines, prelude_names, exec_lines, exec_names };

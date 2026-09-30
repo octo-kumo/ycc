@@ -69,7 +69,6 @@ def y_prof_enter(st: { tab: [long], names: [str], heap0: long }, slot: long, nam
             names[slot] = name;
             0
         } else { 0; };
-        let eb = 5 + 5 * slot;
         let d = t[1];
         let j = d;
         if (j >= 1024) {
@@ -185,9 +184,10 @@ def y_prof_pad(s: str, w: long) -> str {
     r
 };
 
-// Print the report to stderr: one row per function that ran, worst
-// (total_ns) first, then a summary line. Frames still in flight (the
-// program left through exit()) are booked first, so nothing is lost.
+// Print the report to stderr: the summary line, then the column header, then
+// one row per function that ran, worst (total_ns) first. Frames still in
+// flight (the program left through exit()) are booked first, so nothing is
+// lost.
 def y_prof_report(st: { tab: [long], names: [str], heap0: long }) -> long {
     let t = st.tab;
     let names = st.names;

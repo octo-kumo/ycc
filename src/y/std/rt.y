@@ -5,12 +5,16 @@
 // searching/parsing, time, files. `native.y` splices these defs in front of
 // every program; tree shaking (prune_bodies) drops the ones the program
 // never calls, and arch_x64.y keeps only the primitives that need raw
-// memory: the allocator, the traps, byte-moving string/array cores, float
-// formatting and argv materialization.
+// memory: the allocator, the traps, dynamic record lookup (y_rec_has /
+// y_dot_lookup), the byte-moving string/array cores, the str<->[byte] bridge,
+// float formatting and argv materialization.
 //
 // Rules for code here:
-//   - it runs on the NATIVE pipeline only, so `&x`/`*p`/`syscall` are fine;
-//     the wrapper below (the line array) must stay in the portable subset.
+//   - the text INSIDE the line array is compiled into every program, so it
+//     may use the whole native language: `&x`, `*p`, `syscall`.
+//   - the wrapper below (the line-array building code) is part of the
+//     compiler's own source: it is compiled by BOTH ycc and the C twin
+//     (src/c, see PORTING.md), so it stays plain Y — no `&x`, no `syscall`.
 //   - function names starting with `y_` are emitted under their bare name
 //     (see fn_label_of in native.y): generated code calls them by fixed
 //     label, so the emitter's `call y_print_long` finds this def. The `y_`
@@ -20,9 +24,10 @@
 //     uses, so these are callable from both Y code and generated code.
 //   - a helper may call intrinsics freely: `substr` here is the asm
 //     y_str_substr primitive, `bytes`/`from_bytes` the str<->[byte] bridge,
-//     `tostring` the float formatter. Direct calls to asm-only labels are
-//     not allowed (the checker would call them undefined), so every bridge
-//     into the primitives goes through an intrinsic.
+//     `tostring` the value formatter (a float reaches the asm
+//     y_float_tostr). Direct calls to asm-only labels are not allowed (the
+//     checker would call them undefined), so every bridge into the
+//     primitives goes through an intrinsic.
 
 def rt_lines() -> [str] {
     [
@@ -274,7 +279,7 @@ def rt_lines() -> [str] {
         "};",
         "",
         "// join(arr, sep): one byte at a time into a [byte] accumulator",
-        "// (push grows geometrically, so the whole join is linear).",
+        "// (`+=` grows geometrically, so the whole join is linear).",
         "def y_str_join(arr: [str], sep: str) -> str {",
         "    let out: [byte] = [];",
         "    let sb = bytes(sep);",
@@ -504,8 +509,4 @@ def rt_lines() -> [str] {
     ]
 };
 
-def rt_src() -> str {
-    join(rt_lines(), "\n")
-};
-
-export { rt_lines, rt_src };
+export { rt_lines };
