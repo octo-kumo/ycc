@@ -30,7 +30,14 @@ def err_at(msg: str, line: long, col: long) -> { msg: str, line: long, col: long
 // parser's trec; teq/tstr compare field-by-field).
 
 def t_unk() -> {k: str} { { k: "tunk" } };
-def t_null() -> {k: str} { { k: "tnull" } };
+
+// A map type node ({K => V}). Returns through a {k: str} annotation so
+// the value's flow type is the unknown-shape marker: typeof_expr's if
+// arms only agree through such holes (see teq note), and a concrete
+// {k, key, of} shape here would disagree with the rec arm's {k, fields}.
+def map_type_of(v) -> {k: str} {
+    { k: "tmap", key: { k: "tstr" }, of: v }
+};
 
 def teq(a, b) -> bool {
     // NOTE: no `||` (see lexer.y isalnum note): the C VM evaluates both sides
@@ -57,6 +64,9 @@ def teq(a, b) -> bool {
     else if (ak == "tarr") { teq(a.of, b.of) }
     else if (ak == "tarrfix") {
         if (a.n == b.n) { teq(a.of, b.of) } else { false }
+    } else if (ak == "tmap") {
+        // map types: same key type, equal value types.
+        if (teq(a.key, b.key)) { teq(a.of, b.of) } else { false }
     } else if (a.k == "topt") { teq(a.of, b.of) }
     else if (a.k == "trec") {
         // record types: same field names in order, pairwise-equal types.
@@ -195,6 +205,7 @@ def tstr_go(t) -> str {
     else if (t.k == "tarr") { "[" + tstr_go(t.of) + "]" }
     else if (t.k == "tarrfix") { "[" + tstr_go(t.of) + "; " + tostring(t.n) + "]" }
     else if (t.k == "topt") { tstr_go(t.of) + "?" }
+    else if (t.k == "tmap") { "{" + tstr_go(t.key) + " => " + tstr_go(t.of) + "}" }
     else if (t.k == "trec") {
         let parts = [];
         let fs = t.fields;
@@ -337,6 +348,7 @@ def is_value_type(t) -> bool {
     else if (t.k == "tarr") { true }
     else if (t.k == "tarrfix") { true }
     else if (t.k == "topt") { true }
+    else if (t.k == "tmap") { true }
     else { t.k == "trec" }
 };
 
@@ -1015,15 +1027,17 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             st = expect_type(r.st, r.typ, st.ret, "'return'", node.line, node.col);
             { typ: st.ret, st: st }
         }
-    } else if (k == "map") {
+    } else if (k == "rec") {
         // Record literal { k: v, ... }: every value checked, the type is a
         // trec with field names in order. Empty maps need an annotation
         // (nothing to infer — like []).
         let mkeys = node.keys;
         let mvals = node.vals;
         if (len(mkeys) == 0) {
-            st = fail(st, "cannot infer record type: annotate the map", node.line, node.col);
-            { typ: t_unk(), st: st }
+            // The empty literal `{}` is an empty record ({} prints as {}).
+            // Under a map annotation it IS the map instead -- that adoption
+            // happens in typeof_decl (and the emitter lowers it there).
+            { typ: { k: "trec", fields: [] }, st: st }
         } else {
             let fields = [];
             let i = 0;
@@ -1084,6 +1098,39 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 { typ: t_unk(), st: st }
             }
+        }
+    } else if (k == "map") {
+        // Map literal { "k": v, ... }: quoted keys (so the key type is
+        // str), homogeneous values -- the first entry's type wins and
+        // later entries must match. Duplicate keys collapse at emit time
+        // (last entry wins the value, first appearance the position).
+        // Spread is record-only.
+        let gkeys = node.keys;
+        let gvals = node.vals;
+        let gok = true;
+        let gi = 0;
+        let gt = t_unk();
+        while (gi < len(gvals)) {
+            let gk: str = gkeys[gi];
+            let gr = typeof_expr(st, gvals[gi]);
+            st = gr.st;
+            if (gk == "...") {
+                st = fail(st, "'...' spread is record-only (a map literal takes key: value entries)", node.line, node.col);
+                gok = false;
+                0
+            } else if (gi == 0) {
+                gt = gr.typ;
+                0
+            } else {
+                st = expect_type(st, gr.typ, gt, "map value", node.line, node.col);
+                0
+            };
+            gi = gi + 1;
+        };
+        if (gok) {
+            { typ: map_type_of(gt), st: st }
+        } else {
+            { typ: t_unk(), st: st }
         }
     } else if (k == "dot") {
         // Record field read: obj must be a trec with that field.
@@ -1179,12 +1226,20 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tlong" }, "array index", node.line, node.col);
                 { typ: got.typ.of, st: st }
+            } else if (got.typ.k == "tmap") {
+                // m[k]: the key must match K; a read is ALWAYS optional --
+                // V? for any V (null when the key is missing).
+                st = check_visible(st, got, node.arr.v, node.line, node.col);
+                let r = typeof_expr(st, node.idx);
+                st = r.st;
+                st = expect_type(st, r.typ, got.typ.key, "map key", node.line, node.col);
+                { typ: { k: "topt", of: got.typ.of }, st: st }
             } else if (got.typ.k == "tunk" || got.typ.k == "tnone" || got.typ.k == "tname") {
                 let r = typeof_expr(st, node.idx);
                 st = r.st;
                 { typ: t_unk(), st: st }
             } else {
-                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays)", node.line, node.col);
+                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays and maps)", node.line, node.col);
                 { typ: t_unk(), st: st }
             }
         } else {
@@ -1199,6 +1254,11 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = ri.st;
                 st = expect_type(st, ri.typ, { k: "tlong" }, "array index", node.line, node.col);
                 { typ: br.typ.of, st: st }
+            } else if (br.typ.k == "tmap") {
+                let ri = typeof_expr(st, node.idx);
+                st = ri.st;
+                st = expect_type(st, ri.typ, br.typ.key, "map key", node.line, node.col);
+                { typ: { k: "topt", of: br.typ.of }, st: st }
             } else if (br.typ.k == "tunk" || br.typ.k == "tnone" || br.typ.k == "tname") {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
@@ -1206,7 +1266,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = ri.st;
                 { typ: t_unk(), st: st }
             } else {
-                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", node.line, node.col);
+                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", node.line, node.col);
                 { typ: t_unk(), st: st }
             }
         }
@@ -1241,7 +1301,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
     } else if (k == "dotassign") {
         // s.f = v — in-place record field write. The object must be a plain
         // variable holding a record; the field must exist in its static
-        // shape (checked at the map literal / annotation site).
+        // shape (checked at the record literal / annotation site).
         if (node.obj.k == "id") {
             let got = lookup(st.bindings, node.obj.v);
             if (got.kind == "") {
@@ -1299,8 +1359,19 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = v.st;
                 st = expect_type(st, v.typ, got.typ.of, "array element", node.line, node.col);
                 { typ: got.typ.of, st: st }
+            } else if (got.typ.k == "tmap") {
+                // m[k] = v: the key matches K and the value V (the store is
+                // in place -- every alias of the map sees it).
+                st = check_visible(st, got, node.arr.v, node.line, node.col);
+                let ix = typeof_expr(st, node.idx);
+                st = ix.st;
+                st = expect_type(st, ix.typ, got.typ.key, "map key", node.line, node.col);
+                let v = typeof_expr(st, node.v);
+                st = v.st;
+                st = expect_type(st, v.typ, got.typ.of, "map value", node.line, node.col);
+                { typ: got.typ.of, st: st }
             } else {
-                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays)", node.line, node.col);
+                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays and maps)", node.line, node.col);
                 { typ: t_unk(), st: st }
             }
         } else {
@@ -1317,6 +1388,14 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = v.st;
                 st = expect_type(st, v.typ, br.typ.of, "array element", node.line, node.col);
                 { typ: br.typ.of, st: st }
+            } else if (br.typ.k == "tmap") {
+                let ix = typeof_expr(st, node.idx);
+                st = ix.st;
+                st = expect_type(st, ix.typ, br.typ.key, "map key", node.line, node.col);
+                let v = typeof_expr(st, node.v);
+                st = v.st;
+                st = expect_type(st, v.typ, br.typ.of, "map value", node.line, node.col);
+                { typ: br.typ.of, st: st }
             } else if (br.typ.k == "tunk" || br.typ.k == "tnone" || br.typ.k == "tname") {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
@@ -1326,7 +1405,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = v.st;
                 { typ: t_unk(), st: st }
             } else {
-                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", node.line, node.col);
+                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", node.line, node.col);
                 { typ: t_unk(), st: st }
             }
         }
@@ -1503,10 +1582,10 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "tnull" || r.typ.k == "topt") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "tnull" || r.typ.k == "topt") {
                     { typ: { k: "tvoid" }, st: st }
                 } else {
-                    st = fail(st, "print supports long/bool/float/str/array/record/option, got " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "print supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
                     { typ: { k: "tvoid" }, st: st }
                 }
             }
@@ -1517,14 +1596,14 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tarrfix" || r.typ.k == "tarr" || r.typ.k == "tstr") {
+                if (r.typ.k == "tarrfix" || r.typ.k == "tarr" || r.typ.k == "tstr" || r.typ.k == "tmap") {
                     { typ: { k: "tlong" }, st: st }
                 } else if (r.typ.k == "tunk" || r.typ.k == "tnone" || r.typ.k == "tname") {
                     // poison/unannotated shape (tcompat law): root cause
                     // errors once at its own site; len() unifies quietly.
                     { typ: { k: "tlong" }, st: st }
                 } else {
-                    st = fail(st, "len supports arrays and strings, got " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "len supports arrays, strings and maps, got " + tstr(r.typ), node.line, node.col);
                     { typ: { k: "tlong" }, st: st }
                 }
             }
@@ -1661,10 +1740,10 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tnull" || r.typ.k == "topt") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tnull" || r.typ.k == "topt") {
                     { typ: { k: "tstr" }, st: st }
                 } else {
-                    st = fail(st, "tostring supports long/bool/float/str/array/record/option, got " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "tostring supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
                     { typ: t_unk(), st: st }
                 }
             }
@@ -2043,6 +2122,11 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                         st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                         0;
                     };
+                    t = node.typ;
+                    0
+                } else if (vk == "rec" && len(node.v.keys) == 0 && node.typ.k == "tmap") {
+                    // The empty literal `{}` under a map annotation IS the
+                    // map (the emitter lowers it to the {keys, vals} shape).
                     t = node.typ;
                     0
                 } else {

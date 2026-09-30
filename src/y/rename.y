@@ -299,8 +299,8 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
         rn_array(node, st)
     } else if (k == "arrrep") {
         rn_arrrep(node, st)
-    } else if (k == "map") {
-        rn_map(node, st)
+    } else if (k == "rec") {
+        rn_reclit(node, st)
     } else if (k == "index") {
         rn_index(node, st)
     } else if (k == "slice") {
@@ -445,9 +445,9 @@ def rn_arrrep(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { 
     { st: r.st, node: { k: "arrrep", v: r.node, n: node.n, line: node.line, col: node.col } }
 };
 
-def rn_map(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_reclit(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
     let r = rn_list(node.vals, st);
-    { st: r.st, node: { k: "map", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
+    { st: r.st, node: { k: "rec", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
 };
 
 def rn_index(node: {k: str, arr: {k: str}, idx: {k: str}}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {

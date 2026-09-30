@@ -428,9 +428,10 @@ def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { n
     let cl = tcol(toks, p);
     let keys = [];
     let vals = [];
+    let is_map = false;
     let pos = p + 1;
     if (is_punct(toks, pos, "}")) {
-        res({ k: "map", keys: keys, vals: vals, line: ln, col: cl }, pos + 1)
+        res(maplit_node(is_map, keys, vals, ln, cl), pos + 1)
     } else {
         let go = true;
         while (go) {
@@ -441,6 +442,14 @@ def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { n
                 go = false;
                 0
             } else {
+                // A quoted key makes a MAP literal ({k: "map"}); identifier
+                // keys stay record fields ({k: "rec"}).
+                if (is_map) {
+                    0
+                } else {
+                    is_map = tt(toks, pos) == "str";
+                    0
+                };
                 // Spread `...obj` lexes as `..` + `.`; the entry is
                 // recorded under the "..." key with the source record as
                 // its value (the checker and emitter merge it statically).
@@ -461,8 +470,14 @@ def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { n
                 0
             };
         };
-        res({ k: "map", keys: keys, vals: vals, line: ln, col: cl }, pos + 1)  // skip '}'
+        res(maplit_node(is_map, keys, vals, ln, cl), pos + 1)  // skip '}'
     }
+};
+
+// `{a: 1}` is a record ({k: "rec"}), `{"a": 1}` a map ({k: "map"}).
+def maplit_node(is_map: bool, keys: [str], vals: [{k: str}], ln: long, cl: long) -> {k: str} {
+    if (is_map) { { k: "map", keys: keys, vals: vals, line: ln, col: cl } }
+    else { { k: "rec", keys: keys, vals: vals, line: ln, col: cl } }
 };
 
 // ── type parsing ─────────────────────────────────────────────────────────
@@ -548,7 +563,20 @@ def parse_type_params(toks: [{ t: str, v: str, line: long, col: long }], p: long
 };
 
 // { field: T, ... } tail of parse_type_node (fresh names — see note).
+// The key type of a map type ({K => V}): K must be hashable (str, long,
+// byte, bool, float). Anything else stays a named type for the checker
+// to reject.
+def map_key_type(name: str) -> {k: str} {
+    if (name == "str") { { k: "tstr" } }
+    else if (name == "long") { { k: "tlong" } }
+    else if (name == "byte") { { k: "tbyte" } }
+    else if (name == "bool") { { k: "tbool" } }
+    else if (name == "float") { { k: "tfloat" } }
+    else { { k: "tname", v: name, line: 0, col: 0 } }
+};
+
 def parse_type_record(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
+    // `{ f: T, ... }` is a record shape; `{ K => V }` is a map type.
     let fields = [];
     let pos = p + 1;  // skip '{'
     if (!is_punct(toks, pos, "}")) {
@@ -559,6 +587,12 @@ def parse_type_record(toks: [{ t: str, v: str, line: long, col: long }], p: long
                 0
             } else {
                 let fname = tv(toks, pos);
+                if (is_op(toks, pos + 1, "=>")) {
+                    // map type: the key is a type name, then =>, then V
+                    let kt = map_key_type(fname);
+                    let vt = parse_type_node(toks, pos + 2);
+                    return parse_type_tail(toks, vt.pos + 1, { k: "tmap", key: kt, of: vt.node });
+                };
                 let ft = parse_type_node(toks, pos + 2);  // skip name and ':'
                 fields += { name: fname, typ: ft.node };
                 pos = ft.pos;
@@ -609,7 +643,7 @@ def parse_type_arrow(toks: [{ t: str, v: str, line: long, col: long }], apos: lo
     // becomes the single parameter. anode is bound ONCE (never rebound),
     // so anode.ts always reads the pre-arrow shape.
     // NOTE: NO eager `anode.ts` snapshot (ats): the C backend evaluates
-    // map literals EAGERLY — `{k:topt,...}.ts` on a non-tparams shape is a
+    // record literals EAGERLY — `{k:topt,...}.ts` on a non-tparams shape is a
     // hard runtime error ("key 'ts' not found"), and the C VM has no
     // option/lazy field access. Read .ts ONLY inside the tparams arms.
     // NOTE: NO `let ak = anode.k` snapshot: the checker env is

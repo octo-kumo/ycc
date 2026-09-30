@@ -217,6 +217,7 @@ def twocharop(src: str, i: long) -> str {
     else if (two == "::") { two }
     else if (two == "..") { two }
     else if (two == "->") { two }
+    else if (two == "=>") { two }
     else if (two == "++") { two }
     else if (two == "--") { two }
     else if (two == "+=") { two }
