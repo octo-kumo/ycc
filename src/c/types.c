@@ -5,19 +5,25 @@
  *
  * Supported types: long, byte, float, bool, str, void, options T? (the
  * empty case is `none`), *T (pointers), arrays [T] / [T; N], records
- * {f: T}, maps {K => V} and (T, ...) -> R functions. Anything else is
- * rejected with a clear error, not silently miscompiled.
+ * {f: T}, maps {K => V}, unions A | B (every member a record) and
+ * (T, ...) -> R functions. Anything else is rejected with a clear error,
+ * not silently miscompiled.
  *
  * Rules (native mode):
- * - def params and return types REQUIRE annotations.
+ * - def param and return annotations are OPTIONAL: a missing one is the
+ *   poison tunk (typeof_def), and a missing return is inferred from the
+ *   body's tail value.
  * - let/const without annotation is inferred from the initializer.
- * - Nested defs see only their own params + top-level defs + intrinsics:
- *   referring to an outer local/param is a capture error (closures are
- *   planned, not present: no heap for envs yet).
+ * - A nested def may read an enclosing local/param: that is a CAPTURE, and
+ *   the emitter closure-converts it into a heap cell shared by the binding
+ *   and every closure over it (native.y box_capture), so a write inside is
+ *   visible outside.
  * - `if` conditions must be bool. Matching arms keep their value type;
  *   mismatched arms make the `if` void. An `if` without `else` is void.
- * - print takes exactly one long/bool/str. syscall takes 1-7 long/bool/str/\*T.
- * - Assignment targets keep their declared type. No implicit conversions.
+ * - print takes exactly one long/bool/float/str/array/record/map/option/
+ *   union/function. syscall takes 1-7 long/bool/str/\*T.
+ * - Assignment targets keep their declared type. The only implicit
+ *   conversions are the numeric widenings (see tcompat).
  *
  * Translation conventions (see PORTING.md): records are yr() maps read
  * with yr_get; type nodes are { k: "tarr", of: ... } maps; checker state
@@ -95,7 +101,6 @@ static Yv *typeof_block(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
 static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col);
 static Yv *st_fdepth(Yv *st, long d);
-static Yv *check_func_value(Yv *st, Yv *name, Yv *func, long line, long col) __attribute__((unused)); /* def kept 1:1; unused */
 static Yv *def_sig(Yv *name, Yv *func);
 static Yv *tstr_union(Yv *ts, Yv *sep);
 static Yv *tdisp_union(Yv *ts);
@@ -184,7 +189,9 @@ int teq(Yv *a, Yv *b) {
         // any record (the missing annotation errors once at its own site,
         // not again at every enclosing branch — same tcompat law as the
         // dot arm). Concrete mismatches still disagree (e11/e12 parity).
-        // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
+        // NOTE: each bound once — the checker env is flow-INSENSITIVE (one
+        // shape per name, last wins), so a name read inline here would merge
+        // the `fields` shape of a, b and every other arm in teq.
         Yv *af = yr_get(a, "fields");
         Yv *bf = yr_get(b, "fields");
         if (yv_len(af) != yv_len(bf)) {
@@ -198,12 +205,12 @@ int teq(Yv *a, Yv *b) {
         } else {
             int ok = 1;
             long i = 0;
-            // NOTE: no `&&` (see lexer.y note): the C VM evaluates both sides
-            // eagerly, so af[i] runs past the end (clamped — safe here, but
-            // the checker rejects the shape); flag-form loop instead.
+            // The loop below is VESTIGIAL: teq_fields(af, bf, 0) is this
+            // arm's value, so the loop's `ok` is never read. It stays only
+            // because the emitted compiler is byte-compared against
+            // refs/ycc.ref — deleting it changes the golden binary.
             while (ok) {
                 if (i < yv_len(af)) {
-                    // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
                     // NOTE: names bound with :str (see teq note): bare-param
                     // flows infer tunk, which would make `!=` below compare
                     // string POINTERS; annotated lets force content compare.
@@ -224,8 +231,6 @@ int teq(Yv *a, Yv *b) {
                 }
                 ;
             }
-            // hmm — the loop above exits via ok=false BOTH on mismatch and on
-            // exhaustion; recompute properly below (flag pair, no `&&`).
             return teq_fields(af, bf, 0);
         }
     } else if (ys_eq_lit(ak, "tfunc")) {
@@ -263,8 +268,8 @@ int teq(Yv *a, Yv *b) {
     }
 }
 
-// Pairwise teq over record-field lists / type lists (index recursion keeps
-// the loop-guard shapes checker-clean: no `&&`, no eager-OOB indexing).
+// Pairwise teq over record-field lists / type lists. Index recursion (not a
+// loop) so the shape stays checker-clean and out-of-range reads impossible.
 static int teq_fields(Yv *af, Yv *bf, long i) {
     if (i >= yv_len(af)) {
         return 1;
@@ -380,7 +385,8 @@ static Yv *tstr_go(Yv *t) {
         Yv *fs = yr_get(t, "fields");
         long i = 0;
         while (i < yv_len(fs)) {
-            // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
+            // NOTE: bound once — `fields` is a bare param here, so an inline
+            // `fs[i]` would merge shapes across arms (see teq note).
             Yv *f = ya_get(fs, i);
             parts = ya_push(parts, ys_cat(ys_cat(yr_get(f, "name"), ys(": ")),
                                           tstr_go(yr_get(f, "typ"))));
@@ -611,11 +617,10 @@ static int num_is_float(Yv *s) {
     }
 }
 
-// User-visible rendering (typeof / print of a function or record value).
-// Matches the C VM's type_t_to_buf byte for byte for the types both
-// engines have, so `typeof(x)` reads the same under either backend.
-// tstr() stays as it is: compiler diagnostics (and the tests that match
-// on them) use the roomier spacing.
+// User-visible rendering (`typeof` / print of a function or record value):
+// tight spacing, no padding. tstr() stays as it is — compiler diagnostics
+// (and the tests that match on them) use the roomier spacing. The two copies
+// must agree on every type they both render.
 Yv *tdisp(Yv *t) {
     if (ys_eq_lit(yr_get(t, "k"), "trec")) {
         Yv *parts = yav(0);
@@ -658,11 +663,6 @@ Yv *tdisp(Yv *t) {
     }
 }
 
-// A type is "first-class storable but not yet callable through": function
-// values may live in let-bindings and be called directly, never passed around.
-// NOTE: nested ifs, not `||` chains (see lexer.y isalnum note): the C VM
-// evaluates both sides eagerly AND the checker rejects `||` mixing
-// map-field shapes through the same gate.
 // Merge one field into a record literal's field list. A later entry wins
 // the value (and its type); the first appearance keeps the position. That
 // is the static union rule for `{a: 1, ...obj}`: obj may overwrite a, and
@@ -746,7 +746,7 @@ static int is_hash_key(Yv *t) {
 }
 
 // A function VALUE prints as `<function (params)->(ret)>` — note the extra
-// parens around the return type, which is how the C VM renders it.
+// parens around the return type, which is how both compilers render it.
 Yv *tdisp_fnval(Yv *t) {
     Yv *parts = yav(0);
     Yv *ta = yr_get(t, "args");
@@ -765,8 +765,9 @@ Yv *tdisp_fnval(Yv *t) {
 // No scopes: rename.y gave every binding a unique name, so one flat list
 // suffices. bindings = [{name, typ, kind, fdepth}] (fdepth = function-nesting
 // depth where bound; top level = 0). kind: "local" | "param" | "func"
-// (any def) | "intrinsic". A local/param is visible only at its own fdepth —
-// anything else is a capture (closures need heap envs — planned).
+// (any def) | "intrinsic". fdepth is bookkeeping only — it is threaded but
+// never tested: a nested def reading an enclosing local is a capture, and
+// captures are legal (native.y box_capture).
 
 static Yv *lookup(Yv *bindings, Yv *name) {
     long i = 0;
@@ -807,16 +808,20 @@ static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind) {
 // Threaded state st = { bindings, errors, ret, self, fdepth }.
 // typeof_* returns { typ, st }.
 
-// The C compiler's parser has no dot-assign (`st.errors = ...`), so state
-// updates are explicit map rebuilds (same style as the rest of ycc).
+// State is threaded by rebuilding the record, so a helper never mutates its
+// caller's st (same style as the rest of ycc). `fail` is the one place that
+// writes through: `st.errors += ...` appends to the LIVE array in place,
+// because arrays are reference values, and hands the record back here.
 static Yv *st_errors(Yv *st, Yv *errs) {
     return yr(5, "bindings", yr_get(st, "bindings"), "errors", errs,
               "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
               "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))));
 }
 
-// NOTE: the parameter is NOT named `self`: the C VM binds `self` to the
-// enclosing function in every scope, which would shadow it.
+// NOTE: the parameter is deliberately NOT named `self` — `self` is the
+// language's own name for the enclosing function (see the `id` and `call`
+// arms of typeof_expr/typeof_call), so the state field and the language's
+// reserved word must not read alike.
 static Yv *st_self(Yv *st, Yv *selfv) {
     return yr(5, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
               "ret", yr_get(st, "ret"), "self", selfv,
@@ -844,10 +849,12 @@ static Yv *disp(Yv *name) {
     }
 }
 
-// A local/param binding from an enclosing function is a CAPTURE. Captures
-// are legal now: the emitter closure-converts the function, copying each
-// captured value into a heap closure record. (Captured values are copied
-// at closure-creation time, so a closure sees the value as it was then.)
+// A local/param binding from an enclosing function is a CAPTURE, and captures
+// are legal: the emitter closure-converts the function and BOXES each captured
+// variable in one heap cell shared by the binding and every closure over it
+// (native.y box_capture), so a write inside the closure is visible outside.
+// Nothing is left to check here, so this is a pass-through kept at every call
+// site as the hook for a future capture rule.
 static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col) {
     __attribute__((unused)) Yv *unused = name;
     __attribute__((unused)) long unused2 = line;
@@ -868,17 +875,20 @@ static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col)
     }
 }
 
-// Binary-operator result typing, split out so the `bin` arm needs no `||`
-// chains at all (see lexer.y isalnum note).
+// Binary-operator result typing. Split out of the `bin` arm so the operator
+// table there stays a flat `op == "..."` dispatch and each operator's rule
+// lives in one named place.
 static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
     // "+" on strings concatenates (either side may be poison tunk, but at
-    // least one side must be a real str — nested ifs, no `&&`/`||`).
-    // AUTO-STRINGIFY: str + long/bool (and the mirror) stringify the
-    // number and concat — same semantics as the C runtime's y_add.
+    // least one side must be a real str — hence the per-kind arms below).
+    // AUTO-STRINGIFY: str + long/bool/float (and the mirror) stringify the
+    // number and concat — the same lowering native.y gen_cat emits
+    // (y_long_tostr / y_float_tostr, then y_str_cat).
     if (ys_eq_lit(op, "+")) {
-        // Arrays win over strings (the VM's O_ADD order): arr + arr
-        // concatenates into a NEW array, arr + elem appends one (same type
-        // only), elem + arr prepends one. In-place forms are `+=` / `*=`.
+        // Arrays win over strings (the arm order below IS that order):
+        // arr + arr concatenates into a NEW array, arr + elem appends one
+        // (same type only), elem + arr prepends one. In-place forms are
+        // `+=` / `*=`.
         if (ys_eq_lit(yr_get(lt, "k"), "tarr") ||
             ys_eq_lit(yr_get(lt, "k"), "tarrfix")) {
             return typeof_arith_arr(st, op, lt, rt, line, col);
@@ -997,7 +1007,7 @@ static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, long line,
 static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
     if (ys_eq_lit(yr_get(lt, "k"), "tstr")) {
         // str < str is lexicographic ordering (byte by byte), matching the
-        // VM and the compiled C runtime.
+        // y_str_cmp helper native.y emits.
         st = expect_type(st, rt, yr(1, "k", ys("tstr")),
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
@@ -1023,7 +1033,8 @@ static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
 }
 
 // Both sides numeric (long/byte/float): `==` and `!=` compare by value
-// across widths, matching how the C engines treat these.
+// across widths, which is what the compiled code does (native.y gen_bin_rest
+// emits a plain word compare).
 static int is_num_kind(Yv *t) {
     if (ys_eq_lit(yr_get(t, "k"), "tlong")) {
         return 1;
@@ -1046,7 +1057,7 @@ static int num_eq_ok(Yv *lt, Yv *rt) {
 
 static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
     // str compares by content. `x == none` is the option's is-none check.
-    // Nested ifs throughout (see lexer.y isalnum note).
+    // Nested ifs throughout (house style — one kind per arm).
     if (teq(lt, rt)) {
         return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
     } else if (num_eq_ok(lt, rt)) {
@@ -1128,9 +1139,10 @@ static Yv *typeof_logic(Yv *st, Yv *op __attribute__((unused)),
 // with anything HERE so one root cause yields one error at its site
 // (the missing-annotation error), not a cascade at every use.
 // NOTE: trec shapes unify STRUCTURALLY here (superset accepts subset —
-// extra fields are ignored by the C backend AND by native codegen, which
-// reads static indexes): parser.y's {k}-annotated node params accept call,
-// index, dot, map, func literals without a cascade at every res() site.
+// extra fields are ignored: native codegen reads static indexes, and the
+// C copy's yr() ignores them too): parser.y's {k}-annotated node params
+// accept call, index, dot, map, func literals without a cascade at every
+// res() site.
 // Branch agreement and ==/!= keep strict teq (e11/e12 parity).
 static int tcompat(Yv *got, Yv *want) {
     if (teq(got, want)) {
@@ -1184,11 +1196,11 @@ static int tcompat(Yv *got, Yv *want) {
             return 0;
         }
     } else if (ys_eq_lit(yr_get(got, "k"), "tlong")) {
-        // long widens to float (the only numeric coercion, matching the
-        // C engines: `2.0 * i` and `x + 1` with a float x).
+        // long widens to float (the only numeric coercion: `2.0 * i` and
+        // `x + 1` with a float x both work).
         // long also narrows to byte: there is no cast syntax, so an
         // annotated position is the only place the intent can be stated
-        // (`let b: byte = 65`, `push(bs, n)`, a byte-typed parameter).
+        // (`let b: byte = 65`, `bs += n`, a byte-typed parameter).
         // The value is masked to 8 bits where it is stored.
         if (ys_eq_lit(yr_get(want, "k"), "tfloat")) {
             return 1;
@@ -1365,8 +1377,8 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         }
     } else if (ys_eq_lit(k, "addr")) {
         // &x (plain local/param) or &a[i] (element address, either array).
-        // NOTE: no `&&` guard here — the VM evaluates both sides eagerly,
-        // so a missing field on the right would crash. Nested ifs instead.
+        // NOTE: nested ifs, not a `&&` guard (house style — one failure
+        // message per shape, and `&&` would be short-circuit anyway).
         if (ys_eq_lit(yr_get(yr_get(node, "e"), "k"), "id")) {
             if (!ys_eq_lit(yr_get(yr_get(node, "e"), "v"), "self")) {
                 Yv *got = lookup(yr_get(st, "bindings"),
@@ -1510,9 +1522,9 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         Yv *r = typeof_expr(yr_get(l, "st"), yr_get(node, "r"));
         st = yr_get(r, "st");
         Yv *op = yr_get(node, "op");
-        // NOTE: nested ifs, not `||` chains (see lexer.y isalnum note): the
-        // C VM evaluates both sides eagerly AND the checker rejects `||`
-        // mixing comparison-bool with map-field shapes through one gate.
+        // NOTE: one flat `op == "..."` table, deliberately not a `||`
+        // chain: each row dispatches to a named helper, and only the two
+        // comparison ops share one.
         if (ys_eq_lit(op, "+")) {
             return typeof_arith(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
                                 yv_l(yr_get(node, "line")),
@@ -1649,7 +1661,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         Yv *fbb = typeof_block(st, yr_get(node, "body"));
         return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", yr_get(fbb, "st"));
     } else if (ys_eq_lit(k, "forrange")) {
-        // forrange (x in lo..hi) body — x is a long.
+        // for x in lo..hi { body } — x is a long.
         Yv *rl = typeof_expr(st, yr_get(node, "lo"));
         st = expect_type(yr_get(rl, "st"), yr_get(rl, "typ"),
                          yr(1, "k", ys("tlong")), ys("'for' range start"),
@@ -1774,7 +1786,9 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             long i = 0;
             int ok = 1;
             while (i < yv_len(mkeys)) {
-                // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
+                // NOTE: each bound once — flow-snapshot: `vals` is a bare
+                // node field, so reading `mvals[i]` inline would re-read the
+                // node through whatever shape the env holds for it.
                 Yv *mvv = ya_get(mvals, i);
                 Yv *mkey = ya_get(mkeys, i);
                 Yv *r = typeof_expr(st, mvv);
@@ -1880,7 +1894,6 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         }
     } else if (ys_eq_lit(k, "dot")) {
         // Record field read: obj must be a trec with that field.
-        // NOTE: each bound once — `node.obj` inline misparses on the C VM.
         // NOTE: flow-snapshot (dobj/dkey bound once, never rebound): the
         // checker env is flow-INSENSITIVE (last shape wins per name), so a
         // field read must go through a name bound to exactly one shape.
@@ -1896,7 +1909,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             Yv *fs = yr_get(yr_get(r, "typ"), "fields");
             long j = 0;
             while (j < yv_len(fs)) {
-                // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
+                // NOTE: bound once (flow-snapshot, see the note above).
                 // NOTE: :str bindings (see teq note).
                 Yv *f = ya_get(fs, j);
                 Yv *fn = yr_get(f, "name");
@@ -1975,12 +1988,13 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                       "st", st);
         }
     } else if (ys_eq_lit(k, "index")) {
-        // Indexing binds a name once (no x.y[i] chains — the C parser
-        // misreads them; see teq note). Plain locals, params, AND function
-        // params of array type alike: frames or heap headers address them
-        // directly; bounds are checked at runtime. Fixed [T; N] and heap
-        // [T] alike. Params of tunk (missing annotation) error elsewhere —
-        // here they poison quietly to avoid cascades.
+        // A plain-variable base (the `id` arm) and an arbitrary expression
+        // base (the else arm: `grid[0][1]`, `rec.v[i]`, `f()[i]`) both work.
+        // Plain locals, params, AND function params of array type alike: the
+        // frame slot or the heap header addresses them directly; bounds are
+        // checked at runtime. Fixed [T; N] and heap [T] alike. Params of
+        // tunk (missing annotation) error elsewhere — here they poison
+        // quietly to avoid cascades.
         if (ys_eq_lit(yr_get(yr_get(node, "arr"), "k"), "id")) {
             Yv *got = lookup(yr_get(st, "bindings"),
                              yr_get(yr_get(node, "arr"), "v"));
@@ -2139,9 +2153,10 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             return yr(2, "typ", t_unk(), "st", st);
         }
     } else if (ys_eq_lit(k, "dotassign")) {
-        // s.f = v — in-place record field write. The object must be a plain
-        // variable holding a record; the field must exist in its static
-        // shape (checked at the record literal / annotation site).
+        // s.f = v — in-place record field write. The object may be a plain
+        // variable (`id` arm) or any record-valued expression (`a[0].f`,
+        // `x.y.f` — else arm); the field must exist in its static shape
+        // (checked at the record literal / annotation site).
         if (ys_eq_lit(yr_get(yr_get(node, "obj"), "k"), "id")) {
             Yv *got = lookup(yr_get(st, "bindings"),
                              yr_get(yr_get(node, "obj"), "v"));
@@ -2374,8 +2389,10 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                     st = yr_get(r, "st");
                     // NOTE: tnone/tname/poison shapes unify quietly (tcompat
                     // law) — the root cause errors once at its own site.
-                    // A poisoned FIRST element (tunk) adopts the first known
-                    // later element so [f(x), 1] reports only f's own error.
+                    // A poisoned FIRST element (tunk) adopts the first later
+                    // long/bool/str element so [f(x), 1] reports only f's own
+                    // error (a float/byte/record there leaves the element type
+                    // poison, which still unifies quietly downstream).
                     if (ys_eq_lit(yr_get(elt, "k"), "tunk")) {
                         if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tlong")) {
                             elt = yr_get(r, "typ");
@@ -2692,8 +2709,10 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
 }
 
 static Yv *typeof_call(Yv *st, Yv *node) {
-    // callee must be a plain id (direct calls only — no func pointers yet)
-    // NOTE: cargs bound once — `node.args[i]` inline misparses on the C VM.
+    // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
+    // an intrinsic, `self`, or a local holding a closure) and an arbitrary
+    // expression (the `if` arm — an immediately-invoked literal, an element
+    // of an array of functions, ...).
     Yv *cargs = yr_get(node, "args");
     if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "k"), "id")) {
         // Calling an expression: legal when it yields a function value
@@ -3350,7 +3369,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             // ptr_addr(p) -> long: a pointer's numeric value. Pointers ARE
             // longs at run time; this is the one place the type system lets
             // that through, so Y code can build a char** (an array of
-            // addresses) without the backend growing a bespoke helper.
+            // addresses) without the emitter growing a bespoke helper.
             if (yv_len(cargs) != 1) {
                 st = fail(st,
                           ys("ptr_addr takes exactly 1 argument (pointer)"),
@@ -3654,15 +3673,18 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
     }
 }
 
-// Check a func value bound to `name` (def decl or let-bound anonymous def).
-// Returns updated st; binds name as kind "func" with its tfunc type.
+// Check a func value bound to `name` (def decl, let-bound anonymous def, or
+// an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
+// an inferred return filled in), and `name` ends up bound as kind "func".
 static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
     if (yv_len(yr_get(func, "params")) != yv_len(yr_get(func, "ptypes"))) {
         st = fail(st, ys("internal: params/ptypes length mismatch"), line, col);
         return yr(2, "typ", t_unk(), "st", st);
     } else {
         Yv *args = yav(0);
-        // NOTE: bound once — `func.params[i]` inline misparses on the C VM.
+        // NOTE: bound once (flow-snapshot: `params`/`ptypes` are bare node
+        // fields; an inline `func.params[i]` would re-read the node through
+        // whatever shape the env holds for `func`).
         Yv *fparams = yr_get(func, "params");
         Yv *fptypes = yr_get(func, "ptypes");
         long i = 0;
@@ -3671,13 +3693,14 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             Yv *pt = ya_get(fptypes, i);
             if (ys_eq_lit(yr_get(pt, "k"), "tnone")) {
                 // OPTIONAL ANNOTATIONS v1: a missing param annotation is a
-                // poison-tolerant unknown (t_unk). This covers BOTH the ycc
-                // pipeline's bare-hole plumbing params (the C parser cannot
-                // annotate record shapes on them) AND user-written defs
-                // without annotations — holes and user params now type
-                // identically. Caveat: the emitter has no runtime tag, so a
-                // richer value (str/record) flowing into an unannotated
-                // param behaves as a plain long there; annotate those sites.
+                // poison-tolerant unknown (t_unk). That covers BOTH the ycc
+                // pipeline's bare-hole plumbing params AND user-written defs
+                // without annotations — holes and user params type
+                // identically. (Record shapes CAN be annotated on a param —
+                // `def f(r: {a: long})` — they are simply not required.)
+                // Caveat: the emitter has no runtime tag, so a richer value
+                // (str/record) flowing into an unannotated param behaves as
+                // a plain long there; annotate those sites.
                 pt = t_unk();
                 ;
             } else if (!is_value_type(pt) &&
@@ -3714,8 +3737,8 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         // bind early so recursion via `self`/name works
         st = st_bind(st, name, ft, ys("func"));
         // check the body one level deeper. Outer locals/params stay in the
-        // flat map but with a smaller fdepth: touching one is a capture
-        // (there is no heap for environments yet).
+        // flat map (one shape per name), so a nested def reading one is a
+        // capture — legal, and closure-converted by the emitter.
         Yv *saved_self = yr_get(st, "self");
         Yv *saved_ret = yr_get(st, "ret");
         long saved_depth = yv_l(yr_get(st, "fdepth"));
@@ -3777,12 +3800,6 @@ static Yv *st_fdepth(Yv *st, long d) {
               "fdepth", yv_long(d));
 }
 
-static Yv *check_func_value(Yv *st, Yv *name, Yv *func, long line, long col) {
-    // let-bound anonymous def: same rules as a named def
-    Yv *r = typeof_def(st, name, func, line, col);
-    return yr_get(r, "st");
-}
-
 // ── entry point ──────────────────────────────────────────────────────────
 
 Yv *check_program(Yv *ast) {
@@ -3792,8 +3809,9 @@ Yv *check_program(Yv *ast) {
     long i = 0;
     while (i < yv_len(pstmts)) {
         Yv *s = ya_get(pstmts, i);
-        // NOTE: nested ifs, not `&&`: the VM evaluates both sides eagerly,
-        // so `s.kind`/`s.v.k` on a non-decl node would crash.
+        // NOTE: nested ifs, not `&&` (house style — the `s.v.k` read is
+        // only reached once `s` is known to be a decl; `&&` would
+        // short-circuit to the same place).
         if (ys_eq_lit(yr_get(s, "k"), "decl")) {
             if (ys_eq_lit(yr_get(s, "kind"), "def")) {
                 defs = ya_push(defs, def_sig(yr_get(s, "name"), yr_get(s, "v")));
@@ -3815,13 +3833,16 @@ Yv *check_program(Yv *ast) {
     Yv *st = yr(5, "bindings", yav(0), "errors", yav(0), "ret",
                 yr(1, "k", ys("tnone")), "self", yr(1, "k", ys("tnone")),
                 "fdepth", yv_long(0));
-    // intrinsics + top-level defs are visible at top level
+    // top-level defs are visible at top level
     st = st_bind(st, ys("print"),
                  yr(3, "k", ys("tfunc"), "args", yav(1, yr(1, "k", ys("tlong"))),
                     "ret", yr(1, "k", ys("tvoid"))),
                  ys("intrinsic"));
     st = st_bind(st, ys("syscall"), yr(1, "k", ys("tlong")), ys("intrinsic"));
-    // (len/syscall specials are matched by name in typeof_call)
+    // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
+    // ... syscall), so these two bindings are never consulted by a call; they
+    // exist only so `print`/`syscall` read as defined when they appear as
+    // values (e.g. `let p = print;`).
     long d = 0;
     while (d < yv_len(defs)) {
         st = st_bind(st, yr_get(ya_get(defs, d), "name"),

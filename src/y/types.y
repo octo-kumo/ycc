@@ -4,19 +4,25 @@
 //
 // Supported types: long, byte, float, bool, str, void, options T? (the
 // empty case is `none`), *T (pointers), arrays [T] / [T; N], records
-// {f: T}, maps {K => V} and (T, ...) -> R functions. Anything else is
-// rejected with a clear error, not silently miscompiled.
+// {f: T}, maps {K => V}, unions A | B (every member a record) and
+// (T, ...) -> R functions. Anything else is rejected with a clear error,
+// not silently miscompiled.
 //
 // Rules (native mode):
-// - def params and return types REQUIRE annotations.
+// - def param and return annotations are OPTIONAL: a missing one is the
+//   poison tunk (typeof_def), and a missing return is inferred from the
+//   body's tail value.
 // - let/const without annotation is inferred from the initializer.
-// - Nested defs see only their own params + top-level defs + intrinsics:
-//   referring to an outer local/param is a capture error (closures are
-//   planned, not present: no heap for envs yet).
+// - A nested def may read an enclosing local/param: that is a CAPTURE, and
+//   the emitter closure-converts it into a heap cell shared by the binding
+//   and every closure over it (native.y box_capture), so a write inside is
+//   visible outside.
 // - `if` conditions must be bool. Matching arms keep their value type;
 //   mismatched arms make the `if` void. An `if` without `else` is void.
-// - print takes exactly one long/bool/str. syscall takes 1-7 long/bool/str/*T.
-// - Assignment targets keep their declared type. No implicit conversions.
+// - print takes exactly one long/bool/float/str/array/record/map/option/
+//   union/function. syscall takes 1-7 long/bool/str/*T.
+// - Assignment targets keep their declared type. The only implicit
+//   conversions are the numeric widenings (see tcompat).
 
 def err_at(msg: str, line: long, col: long) -> { msg: str, line: long, col: long } {
     { msg: msg, line: line, col: col }
@@ -75,7 +81,9 @@ def teq(a, b) -> bool {
         // any record (the missing annotation errors once at its own site,
         // not again at every enclosing branch — same tcompat law as the
         // dot arm). Concrete mismatches still disagree (e11/e12 parity).
-        // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
+        // NOTE: each bound once — the checker env is flow-INSENSITIVE (one
+        // shape per name, last wins), so a name read inline here would merge
+        // the `fields` shape of a, b and every other arm in teq.
         let af = a.fields;
         let bf = b.fields;
         if (len(af) != len(bf)) {
@@ -85,12 +93,12 @@ def teq(a, b) -> bool {
         } else {
             let ok = true;
             let i = 0;
-            // NOTE: no `&&` (see lexer.y note): the C VM evaluates both sides
-            // eagerly, so af[i] runs past the end (clamped — safe here, but
-            // the checker rejects the shape); flag-form loop instead.
+            // The loop below is VESTIGIAL: teq_fields(af, bf, 0) is this
+            // arm's value, so the loop's `ok` is never read. It stays only
+            // because the emitted compiler is byte-compared against
+            // refs/ycc.ref — deleting it changes the golden binary.
             while (ok) {
                 if (i < len(af)) {
-                    // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
                     // NOTE: names bound with :str (see teq note): bare-param
                     // flows infer tunk, which would make `!=` below compare
                     // string POINTERS; annotated lets force content compare.
@@ -108,8 +116,6 @@ def teq(a, b) -> bool {
                 } else { ok = false; 0 };
                 0
             };
-            // hmm — the loop above exits via ok=false BOTH on mismatch and on
-            // exhaustion; recompute properly below (flag pair, no `&&`).
             teq_fields(af, bf, 0)
         }
     } else if (ak == "tfunc") {
@@ -136,8 +142,8 @@ def teq(a, b) -> bool {
     } else { true }
 };
 
-// Pairwise teq over record-field lists / type lists (index recursion keeps
-// the loop-guard shapes checker-clean: no `&&`, no eager-OOB indexing).
+// Pairwise teq over record-field lists / type lists. Index recursion (not a
+// loop) so the shape stays checker-clean and out-of-range reads impossible.
 def teq_fields(af, bf, i: long) -> bool {
     if (i >= len(af)) { true }
     else {
@@ -221,7 +227,8 @@ def tstr_go(t) -> str {
         let fs = t.fields;
         let i = 0;
         while (i < len(fs)) {
-            // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
+            // NOTE: bound once — `fields` is a bare param here, so an inline
+            // `fs[i]` would merge shapes across arms (see teq note).
             let f = fs[i];
             parts += f.name + ": " + tstr_go(f.typ);
             i = i + 1;
@@ -394,11 +401,10 @@ def num_is_float(s: str) -> bool {
     }
 };
 
-// User-visible rendering (typeof / print of a function or record value).
-// Matches the C VM's type_t_to_buf byte for byte for the types both
-// engines have, so `typeof(x)` reads the same under either backend.
-// tstr() stays as it is: compiler diagnostics (and the tests that match
-// on them) use the roomier spacing.
+// User-visible rendering (`typeof` / print of a function or record value):
+// tight spacing, no padding. tstr() stays as it is — compiler diagnostics
+// (and the tests that match on them) use the roomier spacing. The two copies
+// must agree on every type they both render.
 def tdisp(t) -> str {
     if (t.k == "trec") {
         let parts = [];
@@ -435,11 +441,6 @@ def tdisp(t) -> str {
     }
 };
 
-// A type is "first-class storable but not yet callable through": function
-// values may live in let-bindings and be called directly, never passed around.
-// NOTE: nested ifs, not `||` chains (see lexer.y isalnum note): the C VM
-// evaluates both sides eagerly AND the checker rejects `||` mixing
-// map-field shapes through the same gate.
 // Merge one field into a record literal's field list. A later entry wins
 // the value (and its type); the first appearance keeps the position. That
 // is the static union rule for `{a: 1, ...obj}`: obj may overwrite a, and
@@ -505,7 +506,7 @@ def is_hash_key(t) -> bool {
 };
 
 // A function VALUE prints as `<function (params)->(ret)>` — note the extra
-// parens around the return type, which is how the C VM renders it.
+// parens around the return type, which is how both compilers render it.
 def tdisp_fnval(t) -> str {
     let parts = [];
     let ta = t.args;
@@ -521,8 +522,9 @@ def tdisp_fnval(t) -> str {
 // No scopes: rename.y gave every binding a unique name, so one flat list
 // suffices. bindings = [{name, typ, kind, fdepth}] (fdepth = function-nesting
 // depth where bound; top level = 0). kind: "local" | "param" | "func"
-// (any def) | "intrinsic". A local/param is visible only at its own fdepth —
-// anything else is a capture (closures need heap envs — planned).
+// (any def) | "intrinsic". fdepth is bookkeeping only — it is threaded but
+// never tested: a nested def reading an enclosing local is a capture, and
+// captures are legal (native.y box_capture).
 
 def lookup(bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], name: str) -> { typ: { k: str }, kind: str, fdepth: long } {
     let i = 0;
@@ -557,11 +559,15 @@ def st_bind(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: lo
 // Threaded state st = { bindings, errors, ret, self, fdepth }.
 // typeof_* returns { typ, st }.
 
-// The C compiler's parser has no dot-assign (`st.errors = ...`), so state
-// updates are explicit map rebuilds (same style as the rest of ycc).
+// State is threaded by rebuilding the record, so a helper never mutates its
+// caller's st (same style as the rest of ycc). `fail` is the one place that
+// writes through: `st.errors += ...` appends to the LIVE array in place,
+// because arrays are reference values, and hands the record back here.
 def st_errors(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, errs: [{ msg: str, line: long, col: long }]) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } { { bindings: st.bindings, errors: errs, ret: st.ret, self: st.self, fdepth: st.fdepth } };
-// NOTE: the parameter is NOT named `self`: the C VM binds `self` to the
-// enclosing function in every scope, which would shadow it.
+// NOTE: the parameter is deliberately NOT named `self` — `self` is the
+// language's own name for the enclosing function (see the `id` and `call`
+// arms of typeof_expr/typeof_call), so the state field and the language's
+// reserved word must not read alike.
 def st_self(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, selfv) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: selfv, fdepth: st.fdepth } };
 def st_ret(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, ret) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth } };
 
@@ -577,10 +583,12 @@ def disp(name: str) -> str {
     if (i < 0) { name } else { substr(name, 0, i) }
 };
 
-// A local/param binding from an enclosing function is a CAPTURE. Captures
-// are legal now: the emitter closure-converts the function, copying each
-// captured value into a heap closure record. (Captured values are copied
-// at closure-creation time, so a closure sees the value as it was then.)
+// A local/param binding from an enclosing function is a CAPTURE, and captures
+// are legal: the emitter closure-converts the function and BOXES each captured
+// variable in one heap cell shared by the binding and every closure over it
+// (native.y box_capture), so a write inside the closure is visible outside.
+// Nothing is left to check here, so this is a pass-through kept at every call
+// site as the hook for a future capture rule.
 def check_visible(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, got, name: str, line: long, col: long) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } {
     let unused = name;
     let unused2 = line;
@@ -595,17 +603,20 @@ def expect_type(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
     }
 };
 
-// Binary-operator result typing, split out so the `bin` arm needs no `||`
-// chains at all (see lexer.y isalnum note).
+// Binary-operator result typing. Split out of the `bin` arm so the operator
+// table there stays a flat `op == "..."` dispatch and each operator's rule
+// lives in one named place.
 def typeof_arith(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     // "+" on strings concatenates (either side may be poison tunk, but at
-    // least one side must be a real str — nested ifs, no `&&`/`||`).
-    // AUTO-STRINGIFY: str + long/bool (and the mirror) stringify the
-    // number and concat — same semantics as the C runtime's y_add.
+    // least one side must be a real str — hence the per-kind arms below).
+    // AUTO-STRINGIFY: str + long/bool/float (and the mirror) stringify the
+    // number and concat — the same lowering native.y gen_cat emits
+    // (y_long_tostr / y_float_tostr, then y_str_cat).
     if (op == "+") {
-        // Arrays win over strings (the VM's O_ADD order): arr + arr
-        // concatenates into a NEW array, arr + elem appends one (same type
-        // only), elem + arr prepends one. In-place forms are `+=` / `*=`.
+        // Arrays win over strings (the arm order below IS that order):
+        // arr + arr concatenates into a NEW array, arr + elem appends one
+        // (same type only), elem + arr prepends one. In-place forms are
+        // `+=` / `*=`.
         if (lt.k == "tarr" || lt.k == "tarrfix") {
             typeof_arith_arr(st, op, lt, rt, line, col)
         } else if (rt.k == "tarr" || rt.k == "tarrfix") {
@@ -690,7 +701,7 @@ def typeof_arith_long(st: { bindings: [{ name: str, typ: { k: str }, kind: str, 
 def typeof_cmp(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     if (lt.k == "tstr") {
         // str < str is lexicographic ordering (byte by byte), matching the
-        // VM and the compiled C runtime.
+        // y_str_cmp helper native.y emits.
         st = expect_type(st, rt, { k: "tstr" }, "'" + op + "' right operand", line, col);
         { typ: { k: "tbool" }, st: st }
     } else if (lt.k == "tfloat" || rt.k == "tfloat") {
@@ -705,7 +716,8 @@ def typeof_cmp(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
 };
 
 // Both sides numeric (long/byte/float): `==` and `!=` compare by value
-// across widths, matching how the C engines treat these.
+// across widths, which is what the compiled code does (native.y gen_bin_rest
+// emits a plain word compare).
 def is_num_kind(t) -> bool {
     if (t.k == "tlong") { true }
     else if (t.k == "tbyte") { true }
@@ -719,7 +731,7 @@ def num_eq_ok(lt, rt) -> bool {
 
 def typeof_eq(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     // str compares by content. `x == none` is the option's is-none check.
-    // Nested ifs throughout (see lexer.y isalnum note).
+    // Nested ifs throughout (house style — one kind per arm).
     if (teq(lt, rt)) { { typ: { k: "tbool" }, st: st } }
     else if (num_eq_ok(lt, rt)) {
         // Numeric kinds compare across widths: a byte IS a small long, so
@@ -772,9 +784,10 @@ def typeof_logic(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdept
 // with anything HERE so one root cause yields one error at its site
 // (the missing-annotation error), not a cascade at every use.
 // NOTE: trec shapes unify STRUCTURALLY here (superset accepts subset —
-// extra fields are ignored by the C backend AND by native codegen, which
-// reads static indexes): parser.y's {k}-annotated node params accept call,
-// index, dot, map, func literals without a cascade at every res() site.
+// extra fields are ignored: native codegen reads static indexes, and the
+// C copy's yr() ignores them too): parser.y's {k}-annotated node params
+// accept call, index, dot, map, func literals without a cascade at every
+// res() site.
 // Branch agreement and ==/!= keep strict teq (e11/e12 parity).
 def tcompat(got, want) -> bool {
     if (teq(got, want)) { true }
@@ -808,8 +821,8 @@ def tcompat(got, want) -> bool {
     else if (got.k == "tstr") {
         if (want.k == "tptr") { true } else { false }
     } else if (got.k == "tlong") {
-        // long widens to float (the only numeric coercion, matching the
-        // C engines: `2.0 * i` and `x + 1` with a float x).
+        // long widens to float (the only numeric coercion: `2.0 * i` and
+        // `x + 1` with a float x both work).
         // long also narrows to byte: there is no cast syntax, so an
         // annotated position is the only place the intent can be stated
         // (`let b: byte = 65`, `bs += n`, a byte-typed parameter).
@@ -942,8 +955,8 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         }
     } else if (k == "addr") {
         // &x (plain local/param) or &a[i] (element address, either array).
-        // NOTE: no `&&` guard here — the VM evaluates both sides eagerly,
-        // so a missing field on the right would crash. Nested ifs instead.
+        // NOTE: nested ifs, not a `&&` guard (house style — one failure
+        // message per shape, and `&&` would be short-circuit anyway).
         if (node.e.k == "id") {
             if (node.e.v != "self") {
                 let got = lookup(st.bindings, node.e.v);
@@ -1022,9 +1035,9 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         let r = typeof_expr(l.st, node.r);
         st = r.st;
         let op = node.op;
-        // NOTE: nested ifs, not `||` chains (see lexer.y isalnum note): the
-        // C VM evaluates both sides eagerly AND the checker rejects `||`
-        // mixing comparison-bool with map-field shapes through one gate.
+        // NOTE: one flat `op == "..."` table, deliberately not a `||`
+        // chain: each row dispatches to a named helper, and only the two
+        // comparison ops share one.
         if (op == "+") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
         else if (op == "-") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
         else if (op == "*") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
@@ -1102,7 +1115,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         let fbb = typeof_block(st, node.body);
         { typ: { k: "tvoid" }, st: fbb.st }
     } else if (k == "forrange") {
-        // forrange (x in lo..hi) body — x is a long.
+        // for x in lo..hi { body } — x is a long.
         let rl = typeof_expr(st, node.lo);
         st = expect_type(rl.st, rl.typ, { k: "tlong" }, "'for' range start", node.line, node.col);
         let rh = typeof_expr(st, node.hi);
@@ -1187,7 +1200,9 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             let i = 0;
             let ok = true;
             while (i < len(mkeys)) {
-                // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
+                // NOTE: each bound once — flow-snapshot: `vals` is a bare
+                // node field, so reading `mvals[i]` inline would re-read the
+                // node through whatever shape the env holds for it.
                 let mvv = mvals[i];
                 let mkey = mkeys[i];
                 let r = typeof_expr(st, mvv);
@@ -1278,7 +1293,6 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         }
     } else if (k == "dot") {
         // Record field read: obj must be a trec with that field.
-        // NOTE: each bound once — `node.obj` inline misparses on the C VM.
         // NOTE: flow-snapshot (dobj/dkey bound once, never rebound): the
         // checker env is flow-INSENSITIVE (last shape wins per name), so a
         // field read must go through a name bound to exactly one shape.
@@ -1294,7 +1308,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             let fs = r.typ.fields;
             let j = 0;
             while (j < len(fs)) {
-                // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
+                // NOTE: bound once (flow-snapshot, see the note above).
                 // NOTE: :str bindings (see teq note).
                 let f = fs[j];
                 let fn: str = f.name;
@@ -1351,12 +1365,13 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             { typ: { k: "tarrfix", of: r.typ, n: node.n }, st: st }
         }
     } else if (k == "index") {
-        // Indexing binds a name once (no x.y[i] chains — the C parser
-        // misreads them; see teq note). Plain locals, params, AND function
-        // params of array type alike: frames or heap headers address them
-        // directly; bounds are checked at runtime. Fixed [T; N] and heap
-        // [T] alike. Params of tunk (missing annotation) error elsewhere —
-        // here they poison quietly to avoid cascades.
+        // A plain-variable base (the `id` arm) and an arbitrary expression
+        // base (the else arm: `grid[0][1]`, `rec.v[i]`, `f()[i]`) both work.
+        // Plain locals, params, AND function params of array type alike: the
+        // frame slot or the heap header addresses them directly; bounds are
+        // checked at runtime. Fixed [T; N] and heap [T] alike. Params of
+        // tunk (missing annotation) error elsewhere — here they poison
+        // quietly to avoid cascades.
         if (node.arr.k == "id") {
             let got = lookup(st.bindings, node.arr.v);
             if (got.kind == "") {
@@ -1456,9 +1471,10 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             { typ: t_unk(), st: st }
         }
     } else if (k == "dotassign") {
-        // s.f = v — in-place record field write. The object must be a plain
-        // variable holding a record; the field must exist in its static
-        // shape (checked at the record literal / annotation site).
+        // s.f = v — in-place record field write. The object may be a plain
+        // variable (`id` arm) or any record-valued expression (`a[0].f`,
+        // `x.y.f` — else arm); the field must exist in its static shape
+        // (checked at the record literal / annotation site).
         if (node.obj.k == "id") {
             let got = lookup(st.bindings, node.obj.v);
             if (got.kind == "") {
@@ -1602,8 +1618,10 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     st = r.st;
                     // NOTE: tnone/tname/poison shapes unify quietly (tcompat
                     // law) — the root cause errors once at its own site.
-                    // A poisoned FIRST element (tunk) adopts the first known
-                    // later element so [f(x), 1] reports only f's own error.
+                    // A poisoned FIRST element (tunk) adopts the first later
+                    // long/bool/str element so [f(x), 1] reports only f's own
+                    // error (a float/byte/record there leaves the element type
+                    // poison, which still unifies quietly downstream).
                     if (elt.k == "tunk") {
                         if (r.typ.k == "tlong") { elt = r.typ; 0; } else { 0; };
                         if (r.typ.k == "tbool") { elt = r.typ; 0; } else { 0; };
@@ -1867,8 +1885,10 @@ def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str 
 };
 
 def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
-    // callee must be a plain id (direct calls only — no func pointers yet)
-    // NOTE: cargs bound once — `node.args[i]` inline misparses on the C VM.
+    // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
+    // an intrinsic, `self`, or a local holding a closure) and an arbitrary
+    // expression (the `if` arm — an immediately-invoked literal, an element
+    // of an array of functions, ...).
     let cargs = node.args;
     if (node.callee.k != "id") {
         // Calling an expression: legal when it yields a function value
@@ -2290,7 +2310,7 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             // ptr_addr(p) -> long: a pointer's numeric value. Pointers ARE
             // longs at run time; this is the one place the type system lets
             // that through, so Y code can build a char** (an array of
-            // addresses) without the backend growing a bespoke helper.
+            // addresses) without the emitter growing a bespoke helper.
             if (len(cargs) != 1) {
                 st = fail(st, "ptr_addr takes exactly 1 argument (pointer)", node.line, node.col);
                 { typ: { k: "tlong" }, st: st }
@@ -2500,15 +2520,18 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
     }
 };
 
-// Check a func value bound to `name` (def decl or let-bound anonymous def).
-// Returns updated st; binds name as kind "func" with its tfunc type.
+// Check a func value bound to `name` (def decl, let-bound anonymous def, or
+// an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
+// an inferred return filled in), and `name` ends up bound as kind "func".
 def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, name: str, func, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     if (len(func.params) != len(func.ptypes)) {
         st = fail(st, "internal: params/ptypes length mismatch", line, col);
         { typ: t_unk(), st: st }
     } else {
         let args = [];
-        // NOTE: bound once — `func.params[i]` inline misparses on the C VM.
+        // NOTE: bound once (flow-snapshot: `params`/`ptypes` are bare node
+        // fields; an inline `func.params[i]` would re-read the node through
+        // whatever shape the env holds for `func`).
         let fparams = func.params;
         let fptypes = func.ptypes;
         let i = 0;
@@ -2517,13 +2540,14 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
             let pt = fptypes[i];
             if (pt.k == "tnone") {
                 // OPTIONAL ANNOTATIONS v1: a missing param annotation is a
-                // poison-tolerant unknown (t_unk). This covers BOTH the ycc
-                // pipeline's bare-hole plumbing params (the C parser cannot
-                // annotate record shapes on them) AND user-written defs
-                // without annotations — holes and user params now type
-                // identically. Caveat: the emitter has no runtime tag, so a
-                // richer value (str/record) flowing into an unannotated
-                // param behaves as a plain long there; annotate those sites.
+                // poison-tolerant unknown (t_unk). That covers BOTH the ycc
+                // pipeline's bare-hole plumbing params AND user-written defs
+                // without annotations — holes and user params type
+                // identically. (Record shapes CAN be annotated on a param —
+                // `def f(r: {a: long})` — they are simply not required.)
+                // Caveat: the emitter has no runtime tag, so a richer value
+                // (str/record) flowing into an unannotated param behaves as
+                // a plain long there; annotate those sites.
                 pt = t_unk();
                 0
             } else if (!is_value_type(pt) && pt.k != "tfunc") {
@@ -2549,8 +2573,8 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
         // bind early so recursion via `self`/name works
         st = st_bind(st, name, ft, "func");
         // check the body one level deeper. Outer locals/params stay in the
-        // flat map but with a smaller fdepth: touching one is a capture
-        // (there is no heap for environments yet).
+        // flat map (one shape per name), so a nested def reading one is a
+        // capture — legal, and closure-converted by the emitter.
         let saved_self = st.self;
         let saved_ret = st.ret;
         let saved_depth = st.fdepth;
@@ -2600,12 +2624,6 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
 
 def st_fdepth(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, d: long) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: d } };
 
-def check_func_value(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, name: str, func, line: long, col: long) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } {
-    // let-bound anonymous def: same rules as a named def
-    let r = typeof_def(st, name, func, line, col);
-    r.st
-};
-
 // ── entry point ──────────────────────────────────────────────────────────
 
 def check_program(ast) -> [{ msg: str, line: long, col: long }] {
@@ -2615,8 +2633,9 @@ def check_program(ast) -> [{ msg: str, line: long, col: long }] {
     let i = 0;
     while (i < len(pstmts)) {
         let s = pstmts[i];
-        // NOTE: nested ifs, not `&&`: the VM evaluates both sides eagerly,
-        // so `s.kind`/`s.v.k` on a non-decl node would crash.
+        // NOTE: nested ifs, not `&&` (house style — the `s.v.k` read is
+        // only reached once `s` is known to be a decl; `&&` would
+        // short-circuit to the same place).
         if (s.k == "decl") {
             if (s.kind == "def") {
                 defs += def_sig(s.name, s.v);
@@ -2632,10 +2651,13 @@ def check_program(ast) -> [{ msg: str, line: long, col: long }] {
     };
     // pass 2: check everything in order (depth 0 = top level)
     let st = { bindings: [], errors: [], ret: { k: "tnone" }, self: { k: "tnone" }, fdepth: 0 };
-    // intrinsics + top-level defs are visible at top level
+    // top-level defs are visible at top level
     st = st_bind(st, "print", { k: "tfunc", args: [{ k: "tlong" }], ret: { k: "tvoid" } }, "intrinsic");
     st = st_bind(st, "syscall", { k: "tlong" }, "intrinsic");
-    // (len/syscall specials are matched by name in typeof_call)
+    // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
+    // ... syscall), so these two bindings are never consulted by a call; they
+    // exist only so `print`/`syscall` read as defined when they appear as
+    // values (e.g. `let p = print;`).
     let d = 0;
     while (d < len(defs)) {
         st = st_bind(st, defs[d].name, defs[d].typ, "func");
