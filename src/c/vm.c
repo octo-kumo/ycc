@@ -383,7 +383,10 @@ void vm_scope_set_local(VMVariableScope *scope, const char *name,
 
 VMVariableScope *vm_scope_new(VMVariableScope *parent) {
     VMVariableScope *s = malloc(sizeof(VMVariableScope));
-    s->parent = parent;
+    /* The child holds a reference to its parent: a returned closure keeps
+     * its defining scope alive through the chain (a captured block scope
+     * must not dangle under a released call frame — params live there). */
+    s->parent = vm_scope_retain(parent);
     s->refcount = 1;
     map_init(&s->variables);
     return s;
@@ -395,13 +398,17 @@ VMVariableScope *vm_scope_retain(VMVariableScope *scope) {
 }
 
 void vm_scope_release(VMVariableScope *scope) {
-    if (!scope) return;
-    if (--scope->refcount > 0) return;
-    for (size_t i = 0; i < scope->variables.len; i++) {
-        val_free(scope->variables.items[i].value);
+    /* Iterative: the chain is as deep as the scope nesting, so recursing
+     * here could exhaust the stack (same reason vm_scope_get is iterative). */
+    while (scope && --scope->refcount == 0) {
+        VMVariableScope *parent = scope->parent;
+        for (size_t i = 0; i < scope->variables.len; i++) {
+            val_free(scope->variables.items[i].value);
+        }
+        map_free(&scope->variables);
+        free(scope);
+        scope = parent;
     }
-    map_free(&scope->variables);
-    free(scope);
 }
 
 void vm_init(VM *vm) {
