@@ -7,7 +7,8 @@ def arch_word() -> long {
     8
 };
 
-// syscall number table. NOTE: nested ifs, not `||` (C toolchain).
+// syscall number table. NOTE: one arm per syscall (ladder style, see the
+// master note in asm.y's is_digit_ch — not a language restriction).
 def arch_sysno(name: str) -> long {
     if (name == "read") { 0 }
     else if (name == "write") { 1 }
@@ -54,11 +55,13 @@ def arch_exit() -> str {
 def arch_prelude() -> str {
     // Runtime PRIMITIVES — everything with a specific behaviour lives in
     // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there). What stays here is what only raw machine
-    // state can do: the brk bump allocator (y_alloc), the trap stubs,
-    // dynamic record lookup (y_dot_lookup), the byte-moving string/array
-    // cores (eq/cmp/cat/substr, arr push/slice/eq), float formatting,
-    // str<->[byte] conversion and argv materialization.
+    // not use, here and there: native.y's shake pass prunes this text
+    // block by block, prune_bodies does the same for rt.y's functions).
+    // What stays here is what only raw machine state can do: the brk bump
+    // allocator (y_alloc), the trap stubs, the record field-table probes
+    // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
+    // (eq/cmp/cat/substr, arr push/prepend/slice/cat/eq), float
+    // formatting, str<->[byte] conversion and argv materialization.
     join([
         "y_str_eq:",
         "    push %rbp",
@@ -112,9 +115,11 @@ def arch_prelude() -> str {
         "    pop %rbx",
         "    pop %rbp",
         "    ret",
-        // y_str_cmp(a, b) -> -1 / 0 / 1, lexicographic byte order. The VM
-        // and the C runtime use strcmp, whose SIGN is all that is defined,
-        // so returning the sign keeps all three engines identical.
+        // y_str_cmp(a, b) -> -1 / 0 / 1, lexicographic unsigned-byte
+        // order. Only the SIGN is meaningful to callers (types.y
+        // typeof_cmp, native.y gen_str_cmp), and yv.c's ys_cmp agrees
+        // (memcmp on the common prefix, then length), so the three
+        // spellings of string order all rank identically.
         "y_str_cmp:",
         "    push %rbp",
         "    mov %rsp, %rbp",
@@ -938,13 +943,13 @@ def arch_prelude() -> str {
         "    pop %rbx",
         "    pop %rbp",
         "    ret",
-        // y_arr_push(arr, val, esz) -> arr (possibly moved). esz is the
-        // element width; one implementation covers packed [byte] and
-        // word-per-element arrays alike.
-        // y_arr_push(arr, val, esz) -> arr. The header is {len, cap, data}
-        // and NEVER moves (elements live in a separate block), so growth
-        // is invisible to aliases and `arr += v` can be truly in place.
-        // Capacity doubles when reached (8 first), matching the C engines.
+        // y_arr_push(arr, val, esz) -> arr. esz is the element width; one
+        // implementation covers packed [byte] and word-per-element arrays
+        // alike. The header is {len, cap, data} and NEVER moves (elements
+        // live in a separate block), so growth is invisible to aliases,
+        // `arr += v` is truly in place, and the returned header is the one
+        // the caller passed in. Capacity doubles when reached (8 first),
+        // matching yv.c's ya_push.
         "y_arr_push:",
         "    push %rbp",
         "    mov %rsp, %rbp",

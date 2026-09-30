@@ -16,7 +16,8 @@ long arch_word(void) {
     return 8;
 }
 
-// syscall number table. NOTE: nested ifs, not `||` (C toolchain).
+// syscall number table. NOTE: one arm per syscall (ladder style, see the
+// master note in asm.y's is_digit_ch — not a language restriction).
 long arch_sysno(Yv *name) {
     if (ys_eq_lit(name, "read")) { return 0; }
     else if (ys_eq_lit(name, "write")) { return 1; }
@@ -63,11 +64,13 @@ Yv *arch_exit(void) {
 Yv *arch_prelude(void) {
     // Runtime PRIMITIVES — everything with a specific behaviour lives in
     // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there). What stays here is what only raw machine
-    // state can do: the brk bump allocator (y_alloc), the trap stubs,
-    // dynamic record lookup (y_dot_lookup), the byte-moving string/array
-    // cores (eq/cmp/cat/substr, arr push/slice/eq), float formatting,
-    // str<->[byte] conversion and argv materialization.
+    // not use, here and there: native.y's shake pass prunes this text
+    // block by block, prune_bodies does the same for rt.y's functions).
+    // What stays here is what only raw machine state can do: the brk bump
+    // allocator (y_alloc), the trap stubs, the record field-table probes
+    // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
+    // (eq/cmp/cat/substr, arr push/prepend/slice/cat/eq), float
+    // formatting, str<->[byte] conversion and argv materialization.
     Yv *lines = yav(0);
     lines = ya_push(lines, ys("y_str_eq:"));
     lines = ya_push(lines, ys("    push %rbp"));
@@ -121,9 +124,11 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
-    // y_str_cmp(a, b) -> -1 / 0 / 1, lexicographic byte order. The VM
-    // and the C runtime use strcmp, whose SIGN is all that is defined,
-    // so returning the sign keeps all three engines identical.
+    // y_str_cmp(a, b) -> -1 / 0 / 1, lexicographic unsigned-byte
+    // order. Only the SIGN is meaningful to callers (types.y typeof_cmp,
+    // native.y gen_str_cmp), and yv.c's ys_cmp agrees (memcmp on the
+    // common prefix, then length), so the three spellings of string order
+    // all rank identically.
     lines = ya_push(lines, ys("y_str_cmp:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
@@ -949,13 +954,13 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
-    // y_arr_push(arr, val, esz) -> arr (possibly moved). esz is the
-    // element width; one implementation covers packed [byte] and
-    // word-per-element arrays alike.
-    // y_arr_push(arr, val, esz) -> arr. The header is {len, cap, data}
-    // and NEVER moves (elements live in a separate block), so growth
-    // is invisible to aliases and `arr += v` can be truly in place.
-    // Capacity doubles when reached (8 first), matching the C engines.
+    // y_arr_push(arr, val, esz) -> arr. esz is the element width; one
+    // implementation covers packed [byte] and word-per-element arrays
+    // alike. The header is {len, cap, data} and NEVER moves (elements
+    // live in a separate block), so growth is invisible to aliases,
+    // `arr += v` is truly in place, and the returned header is the one
+    // the caller passed in. Capacity doubles when reached (8 first),
+    // matching yv.c's ya_push.
     lines = ya_push(lines, ys("y_arr_push:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));

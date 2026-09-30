@@ -1,7 +1,9 @@
 /* asm.c — 1:1 port of src/y/asm.y (translation contract: PORTING.md).
  *
  * Assembler for the native backend's x86-64 dialect.
- * asm_assemble(text) -> {ok, bytes: [byte], error, times}
+ * asm_assemble(text) -> {ok, bytes: [byte], error, times} (times: per-phase
+ * us/heap rows for `ycc --time`).
+ * ycc_assemble(text) -> the driver's wrapper (see its note at the bottom).
  * Only what native.y/arch_x64.y emit is accepted; anything else is a loud
  * error with a line number — never a silent miscompile.
  * Two passes: (1) parse + encode with zeroed label fields, recording fixups;
@@ -86,8 +88,6 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs);
 static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs);
 static Yv *asm_link(Yv *items, Yv *labels);
 static Yv *patch_item(Yv *code, Yv *it, Yv *lmap, long code_len, long pad);
-static int patch_item_isdata(Yv *it);
-static Yv *patch_item_insn(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, Yv *bytes, Yv *err);
 static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, Yv *bytes, Yv *err);
 static Yv *patch_item_kind2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at);
 static Yv *patch_item_rel(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at);
@@ -98,40 +98,26 @@ static Yv *patch32(Yv *bytes, long at, long v);
 static Yv *concat_bytes(Yv *a, Yv *b);
 
 static int is_digit_ch(Yv *c) {
-    /* NOTE: nested ifs, not `||` (see lexer.y isalnum note): the C VM
-       evaluates both sides eagerly AND the checker rejects joint gates. */
-    if (ys_eq_lit(c, "0")) { return 1; }
-    else if (ys_eq_lit(c, "1")) { return 1; }
-    else if (ys_eq_lit(c, "2")) { return 1; }
-    else if (ys_eq_lit(c, "3")) { return 1; }
-    else if (ys_eq_lit(c, "4")) { return 1; }
-    else if (ys_eq_lit(c, "5")) { return 1; }
-    else if (ys_eq_lit(c, "6")) { return 1; }
-    else if (ys_eq_lit(c, "7")) { return 1; }
-    else if (ys_eq_lit(c, "8")) { return 1; }
-    else { return ys_eq_lit(c, "9"); }
+    /* 1:1 of asm.y's `c >= "0" && c <= "9"`. Str ordering is lexicographic
+       by unsigned byte on both sides — asm.y reaches it through native.y's
+       gen_str_cmp and the y_str_cmp stub, the C twin through yv.c's ys_cmp
+       (memcmp on the common prefix, then length) — so a range test is
+       ys_cmp(...) >= 0 / <= 0, the same translation lexer.c uses for
+       isdigit/isupper/islower. */
+    return ys_cmp(c, ys("0")) >= 0 && ys_cmp(c, ys("9")) <= 0;
 }
 
 static int is_oct_ch(Yv *c) {
-    /* NOTE: nested ifs, not `&&` (see is_digit_ch note above). */
-    long o = ys_ord(c);
-    if (o >= 48) {
-        if (o <= 55) { return 1; } else { return 0; }
-    } else { return 0; }
+    /* 1:1 of asm.y's `c >= "0" && c <= "7"` (same ys_cmp range test). */
+    return ys_cmp(c, ys("0")) >= 0 && ys_cmp(c, ys("7")) <= 0;
 }
 
 static int is_alpha_ch(Yv *c) {
-    /* NOTE: no string </<= in Y (numbers only) — compare code points.
-       NOTE: nested ifs, not `||`/`&&` (see is_digit_ch note above).
-       NOTE: flat range ladder (not nested): `o >= 65` swallows 97-122, so
-       the lower branch must come AFTER excluding 91-96. */
-    long o = ys_ord(c);
-    if (o == 95) { return 1; }
-    else if (o < 65) { return 0; }
-    else if (o <= 90) { return 1; }
-    else if (o < 97) { return 0; }
-    else if (o <= 122) { return 1; }
-    else { return 0; }
+    /* 1:1 of asm.y's `c == "_" || (c >= "A" && c <= "Z") ||
+       (c >= "a" && c <= "z")`. */
+    return ys_eq_lit(c, "_") ||
+           (ys_cmp(c, ys("A")) >= 0 && ys_cmp(c, ys("Z")) <= 0) ||
+           (ys_cmp(c, ys("a")) >= 0 && ys_cmp(c, ys("z")) <= 0);
 }
 
 /* parse a decimal integer (optional leading -). Returns {ok, v}. */
@@ -309,9 +295,7 @@ static Yv *parse_operand_memlbl(Yv *t) {
 }
 
 static Yv *parse_imm(Yv *s) {
-    /* $a-b label difference, else decimal number
-       NOTE: nested ifs, not `&&` (see is_digit_ch note above): the joint
-       gate mixes comparison-bool with call shapes (is_alpha_ch). */
+    /* $a-b label difference, else decimal number */
     long dash = ys_index_of(ys_substr(s, 1, yv_len(s) - 1), ys("-"));
     if (yv_len(s) > 0) {
         return parse_imm_alpha(s, dash);
@@ -367,9 +351,8 @@ static Yv *parse_imm_num(Yv *s) {
 }
 
 static Yv *parse_mem(Yv *t) {
-    /* NOTE: dispatch by SHAPE (see parse_operand note) + nested ifs, not
-       `&&` (see is_digit_ch note): the joint gate mixes str-cmp with call
-       shapes (is_num_text). */
+    /* dispatch by SHAPE (see parse_operand note): `8(%rbp)` has a head,
+       `(%rbx,%rcx,1)` does not. */
     long open = ys_index_of(t, ys("("));
     Yv *head = ys_trim(ys_substr(t, 0, open));
     Yv *inside = ys_substr(t, open + 1, yv_len(t) - open - 2);
@@ -645,8 +628,8 @@ static Yv *decode_oct(Yv *s, long k, long n) {
    every fixup (plus the old duplicate scan) against that list is O(F·L) —
    minutes on big programs (7k labels × 11k refs). This index makes queries
    O(1): flat [{name,sec,off}] with name "" marking empty slots, put-if-
-   absent (first wins, matching linear-scan order). Pure Y (arrays, longs,
-   strings, ord) — no new builtins, so all toolchains already support it. */
+   absent (first wins, matching linear-scan order). Plain Y only (arrays,
+   longs, strings, ord) — nothing yv.c lacks already. */
 
 static long hash_str(Yv *s) {
     long h = 0;
@@ -877,7 +860,7 @@ static Yv *asm_dirline(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *la
 static Yv *asm_maybe_labline(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
     /* maybe `label: rest` (rodata emits `ystr_N: .string ...`); otherwise a
        plain instruction. NOTE: misnomer fixed: the else-arm assembles an
-       INSTRUCTION (asm_content), not a directive. */
+       INSTRUCTION (asm_insnline), not a directive. */
     long ci = ys_index_of(line, ys(":"));
     if (ci > 0) {
         return asm_labline(line, lno, sec, offs, items, labels, err, ci);
@@ -917,12 +900,12 @@ static Yv *asm_labline_go(Yv *nm, Yv *rest, long lno, long sec, Yv *offs, Yv *it
 }
 
 static Yv *asm_labline_content(Yv *nm, Yv *rest, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
-    /* The item builder does `offs[sec] = offs[sec] + len` IN PLACE. Under
-       the C VM's copy-on-write the caller's offs keeps the pre-item value,
-       so reading offs[sec] afterwards was correct there; the native arrays
-       are shared and mutated in place, which shifted the label by its own
-       item length (ystr_nl -> 't' of "true"). Bind the pre-item offset
-       FIRST so both toolchains agree. */
+    /* The item builder does `offs[sec] = offs[sec] + len` IN PLACE, and
+       arrays are REFERENCE values in both toolchains (yv.c's ya_push/
+       ya_set mutate the shared array), so offs[sec] read AFTER
+       asm_content is the POST-item offset: the label would land on its own
+       item's bytes (ystr_nl -> 't' of "true"). Bind the pre-item offset
+       FIRST. */
     long lab_off = yv_l(ya_get(offs, sec));
     Yv *r = asm_content(rest, lno, sec, offs);
     if (!ys_eq_lit(yr_get(r, "err"), "")) {
@@ -1091,8 +1074,10 @@ static Yv *asm_quad(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
 }
 
 static int asm_quad_bad(Yv *rest) {
-    /* NOTE: nested ifs, not `!` on call shapes... `!is_num_text` is `un` on a
-       plain bool — fine. Range check nested (see is_digit_ch note). */
+    /* `!is_num_text(rest)` is fine — `!` (an `un` node) needs a bool operand
+       (types.y typeof_expr's "un" arm) and is_num_text returns one. The
+       range test below stays a separate arm because the two causes need
+       different messages (see asm_quad_err). */
     if (!is_num_text(rest)) { return 1; }
     else if (ys_tonum(rest) < 0) { return 1; }
     else { return 0; }
@@ -1287,25 +1272,12 @@ static Yv *asm_link(Yv *items, Yv *labels) {
 static Yv *patch_item(Yv *code, Yv *it, Yv *lmap, long code_len, long pad) {
     Yv *bytes = yr_get(it, "bytes");
     Yv *err = ys("");
-    /* NOTE: single bool gate (see asm_strdata note): insn-vs-other shapes
-       never mix in one chain. */
-    if (patch_item_isdata(it)) {
+    /* NOTE: single gate (see asm_strdata note): insn-vs-other shapes never
+       mix in one chain. */
+    if (!ys_eq_lit(yr_get(it, "kind"), "insn")) {
         return patch_item_finish(code, bytes, err);
     } else {
-        return patch_item_insn(code, it, lmap, code_len, pad, bytes, err);
-    }
-}
-
-static int patch_item_isdata(Yv *it) {
-    if (ys_eq_lit(yr_get(it, "kind"), "insn")) { return 0; } else { return 1; }
-}
-
-static Yv *patch_item_insn(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, Yv *bytes, Yv *err) {
-    /* (split: insn-gate above narrows; `{bytes,err}` threading ONLY here.) */
-    if (1) {
         return patch_item_loop(code, it, lmap, code_len, pad, bytes, err);
-    } else {
-        return patch_item_finish(code, bytes, err);
     }
 }
 
@@ -1324,8 +1296,9 @@ static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, 
            rel target is relative to the instruction END (base + it.len). */
         long at = yv_l(yr_get(fx, "off"));
         /* NOTE: nested ifs, not `||` (see is_digit_ch note).
-           NOTE: thread callee results (see note above): bare calls in
-           statement position DISCARD {bytes,err} on the C VM. */
+           NOTE: thread callee results (see note above): the callee's
+           {bytes,err} is the only path the patched bytes take to the
+           caller, so both arms must rebind `bytes` (and `err`). */
         if (ys_eq_lit(yr_get(fx, "kind"), "rel32")) {
             Yv *rr = patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
             bytes = yr_get(rr, "bytes");
@@ -1355,7 +1328,8 @@ static Yv *patch_item_kind2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes
 
 static Yv *patch_item_rel(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at) {
     /* rel32/rip32: target - address past the instruction.
-       NOTE: fx/it stay BARE holes (see types.y note): single reads unify. */
+       NOTE: fx/it stay BARE holes (see types.y typeof_def note): single
+       reads unify. */
     Yv *t = label_addr(lmap, code_len, pad, yr_get(fx, "lbl"));
     if (!(yv_b(yr_get(t, "ok")))) {
         return yr(2, "bytes", bytes,
@@ -1368,7 +1342,8 @@ static Yv *patch_item_rel(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, 
 
 static Yv *patch_item_diff(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it) {
     /* (split: diff-shape fixups only; `{bytes,err}` built ONLY here.)
-       NOTE: fx/it stay BARE holes (see types.y note): single reads unify. */
+       NOTE: fx/it stay BARE holes (see types.y typeof_def note): single
+       reads unify. */
     (void)base;
     (void)it;
     Yv *ta = label_addr(lmap, code_len, pad, yr_get(fx, "lbl"));
@@ -1397,14 +1372,17 @@ static Yv *patch_item_finish(Yv *code, Yv *bytes, Yv *err) {
 
 static Yv *patch32(Yv *bytes, long at, long v) {
     Yv *b = le32(v);
-    Yv *b0 = b;
-    ya_set(bytes, at, ya_get(b0, 0));
-    ya_set(bytes, at + 1, ya_get(b0, 1));
-    ya_set(bytes, at + 2, ya_get(b0, 2));
-    ya_set(bytes, at + 3, ya_get(b0, 3));
+    ya_set(bytes, at, ya_get(b, 0));
+    ya_set(bytes, at + 1, ya_get(b, 1));
+    ya_set(bytes, at + 2, ya_get(b, 2));
+    ya_set(bytes, at + 3, ya_get(b, 3));
     return bytes;
 }
 
+/* asm.y writes `code + bytes` (array concat -> a NEW array). The push form
+   grows `a` in place instead; that is unobservable here because the only
+   caller (asm_link) rebinds its `code` to the result and drops the old
+   array on the floor. */
 static Yv *concat_bytes(Yv *a, Yv *b) {
     long i = 0;
     while (i < yv_len(b)) {
@@ -1416,8 +1394,9 @@ static Yv *concat_bytes(Yv *a, Yv *b) {
 
 /* Convenience for the driver: text in, bytes out. The driver writes the
    bytes straight through the write syscall (NUL-safe). The old `octal`
-   debugging field was REMOVED: rendering it cost O(n^2) string building
-   (one malloc+copy per byte) and nothing reads it — it dominated -o time. */
+   RENDERING was removed: it cost O(n^2) string building (one malloc+copy
+   per byte) and nothing read it — it dominated -o time. The field itself
+   stays in the record shape (always "") so the shape does not change. */
 Yv *ycc_assemble(Yv *asm_text) {
     Yv *r = asm_assemble(asm_text);
     if (!(yv_b(yr_get(r, "ok")))) {

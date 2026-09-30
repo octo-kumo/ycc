@@ -1,17 +1,30 @@
 // asm.y — assembler for the native backend's x86-64 dialect.
-// asm_assemble(text) -> {ok, bytes: [byte], error}
-// asm_octal(bytes) -> printf-safe octal payload string.
+// asm_assemble(text) -> {ok, bytes: [byte], error, times} (times: per-phase
+// us/heap rows for `ycc --time`).
+// ycc_assemble(text) -> the driver's wrapper (see its note at the bottom).
 // Only what native.y/arch_x64.y emit is accepted; anything else is a loud
 // error with a line number — never a silent miscompile.
 // Two passes: (1) parse + encode with zeroed label fields, recording fixups;
 // (2) resolve labels and patch. All jumps/calls use rel32 (fixed size), so
 // instruction lengths are known in pass 1.
 //
-// Portable-subset Y only (runs inside ycc on the C toolchain).
+// The only constraint on this file is the twin: every def here has a
+// statement-for-statement twin in src/c/asm.c (see PORTING.md), and both
+// compilers must emit byte-identical programs (the `make ycc` gate).
+// Nothing in the LANGUAGE is restricted here.
 
 import enc from "./enc64.y";
 import elf from "./elf.y";
 
+// NOTE: the master note for every "nested ifs, not `&&`/`||`" comment in
+// this file (and its C twin). `&&` and `||` are short-circuiting and fully
+// legal: the def below uses one, and types.y's typeof_logic accepts ANY
+// operand types and returns bool. The ladder style stays only because the
+// C twin mirrors these arms statement for statement (PORTING.md) — it is
+// house style, not a rule.
+// NOTE: str `<`/`<=`/`>`/`>=` order lexicographically by UNSIGNED byte
+// (types.y typeof_cmp -> native.y gen_str_cmp -> the y_str_cmp stub), so
+// the one-character range tests below are exact.
 def is_digit_ch(c: str) -> bool {
     c >= "0" && c <= "9"
 };
@@ -154,8 +167,6 @@ def parse_operand_memlbl(t: str) -> {ok: bool, op: {k: str, n: long, size: long,
 
 def parse_imm(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // $a-b label difference, else decimal number
-    // NOTE: nested ifs, not `&&` (see is_digit_ch note above): the joint
-    // gate mixes comparison-bool with call shapes (is_alpha_ch).
     let dash = index_of(s[1:], "-");
     if (len(s) > 0) {
         parse_imm_alpha(s, dash)
@@ -196,9 +207,8 @@ def parse_imm_num(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: lon
 };
 
 def parse_mem(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
-    // NOTE: dispatch by SHAPE (see parse_operand note) + nested ifs, not
-    // `&&` (see is_digit_ch note): the joint gate mixes str-cmp with call
-    // shapes (is_num_text).
+    // dispatch by SHAPE (see parse_operand note): `8(%rbp)` has a head,
+    // `(%rbx,%rcx,1)` does not.
     let open = index_of(t, "(");
     let head = trim(t[0:open]);
     let inside = t[open + 1:len(t) - 1];
@@ -385,7 +395,7 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
         { v: 0, k: kk, err: "octal escape out of range" }
     } else {
         { v: v, k: kk, err: "" }
-     }
+    }
 };
 
 
@@ -395,8 +405,8 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
 // every fixup (plus the old duplicate scan) against that list is O(F·L) —
 // minutes on big programs (7k labels × 11k refs). This index makes queries
 // O(1): flat [{name,sec,off}] with name "" marking empty slots, put-if-
-// absent (first wins, matching linear-scan order). Pure Y (arrays, longs,
-// strings, ord) — no new builtins, so all toolchains already support it.
+// absent (first wins, matching linear-scan order). Plain Y only (arrays,
+// longs, strings, ord) — nothing the C twin's yv.c lacks already.
 
 def hash_str(s: str) -> long {
     let h = 0;
@@ -623,7 +633,7 @@ def asm_dirline(line: str, lno: long, sec: long, offs: [long], items: [{sec: lon
 def asm_maybe_labline(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
     // maybe `label: rest` (rodata emits `ystr_N: .string ...`); otherwise a
     // plain instruction. NOTE: misnomer fixed: the else-arm assembles an
-    // INSTRUCTION (asm_content), not a directive.
+    // INSTRUCTION (asm_insnline), not a directive.
     let ci = index_of(line, ":");
     if (ci > 0) {
         asm_labline(line, lno, sec, offs, items, labels, err, ci)
@@ -663,20 +673,20 @@ def asm_labline_go(nm: str, rest: str, lno: long, sec: long, offs: [long], items
 };
 
 def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
-    // The item builder does `offs[sec] = offs[sec] + len` IN PLACE. Under
-    // the C VM's copy-on-write the caller's offs keeps the pre-item value,
-    // so reading offs[sec] afterwards was correct there; the native arrays
-    // are shared and mutated in place, which shifted the label by its own
-    // item length (ystr_nl -> 't' of "true"). Bind the pre-item offset
-    // FIRST so both toolchains agree.
+    // The item builder does `offs[sec] = offs[sec] + len` IN PLACE, and
+    // arrays are REFERENCE values in both toolchains (yv.c's ya_push/ya_set
+    // mutate the shared array; see AGENTS.md), so offs[sec] read AFTER
+    // asm_content is the POST-item offset: the label would land on its own
+    // item's bytes (ystr_nl -> 't' of "true"). Bind the pre-item offset
+    // FIRST.
     let lab_off = offs[sec];
     let r = asm_content(rest, lno, sec, offs);
     if (r.err != "") {
         asm_state(r.sec, r.offs, items, labels, r.err)
     } else {
         items += r.item;
-    labels += { name: nm, sec: sec, off: lab_off };
-    asm_state(r.sec, r.offs, items, labels, err)
+        labels += { name: nm, sec: sec, off: lab_off };
+        asm_state(r.sec, r.offs, items, labels, err)
     }
 };
 
@@ -807,8 +817,10 @@ def asm_quad(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: 
 };
 
 def asm_quad_bad(rest: str) -> bool {
-    // NOTE: nested ifs, not `!` on call shapes... `!is_num_text` is `un` on a
-    // plain bool — fine. Range check nested (see is_digit_ch note).
+    // NOTE: `!is_num_text(rest)` is fine — `!` (an `un` node) needs a bool
+    // operand (types.y typeof_expr's "un" arm) and is_num_text returns one.
+    // The range test below stays a separate arm because the two causes need
+    // different messages (see asm_quad_err).
     if (!is_num_text(rest)) { true }
     else if (tonum(rest) < 0) { true }
     else { false }
@@ -840,7 +852,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: l
     if (tab >= 0) {
         if (sp < 0) { cut = tab; 0; }
         else if (tab < sp) { cut = tab; 0; }
-       ;
+        ;
         0
     };
     let mn = line;
@@ -899,6 +911,8 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
     let lh0 = heap_used();
     let code_len = 0;
     let ro_len = 0;
+    // NOTE: `0;` tails (see parser.y parse_binary note). `it.len` reads go
+    // through the bare hole (tnone unifies — see types.y typeof_def note).
     foreach (it in items) {
         if (it.sec == 0) { code_len = code_len + it.len; };
         if (it.sec == 1) { ro_len = ro_len + it.len; };
@@ -968,7 +982,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
 def patch_item(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long) -> {bytes: [byte], err: str} {
     let bytes = it.bytes;
     let err = "";
-    // NOTE: single bool gate (see asm_strdata note): insn-vs-other shapes
+    // NOTE: single gate (see asm_strdata note): insn-vs-other shapes
     // never mix in one chain.
     if (it.kind != "insn") {
         patch_item_finish(code, bytes, err)
@@ -991,8 +1005,9 @@ def patch_item_loop(code: [byte], it: {sec: long, off: long, len: long, kind: st
             // rel target is relative to the instruction END (base + it.len).
             let at = fx.off;
             // NOTE: nested ifs, not `||` (see is_digit_ch note).
-            // NOTE: thread callee results (see note above): bare calls in
-            // statement position DISCARD {bytes,err} on the C VM.
+            // NOTE: thread callee results (see note above): the callee's
+            // {bytes,err} is the only path the patched bytes take to the
+            // caller, so both arms must rebind `bytes` (and `err`).
             if (fx.kind == "rel32") {
                 let rr = patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
                 bytes = rr.bytes;
@@ -1019,7 +1034,8 @@ def patch_item_kind2(lmap: [{name: str, sec: long, off: long}], code_len: long, 
 
 def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, at: long) -> {bytes: [byte], err: str} {
     // rel32/rip32: target - address past the instruction.
-    // NOTE: fx/it stay BARE holes (see types.y note): single reads unify.
+    // NOTE: fx/it stay BARE holes (see types.y typeof_def note): single
+    // reads unify.
     let t = label_addr(lmap, code_len, pad, fx.lbl);
     if (!t.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl + "'" }
@@ -1031,7 +1047,8 @@ def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pa
 
 def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}) -> {bytes: [byte], err: str} {
     // (split: diff-shape fixups only; `{bytes,err}` built ONLY here.)
-    // NOTE: fx/it stay BARE holes (see types.y note): single reads unify.
+    // NOTE: fx/it stay BARE holes (see types.y typeof_def note): single
+    // reads unify.
     let ta = label_addr(lmap, code_len, pad, fx.lbl);
     if (!ta.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl + "'" }
@@ -1065,8 +1082,9 @@ def patch32(bytes: [byte], at: long, v: long) -> [byte] {
 
 // Convenience for the driver: text in, bytes out. The driver writes the
 // bytes straight through the write syscall (NUL-safe). The old `octal`
-// debugging field was REMOVED: rendering it cost O(n^2) string building
-// (one malloc+copy per byte) and nothing reads it — it dominated -o time.
+// RENDERING was removed: it cost O(n^2) string building (one malloc+copy
+// per byte) and nothing read it — it dominated -o time. The field itself
+// stays in the record shape (always "") so the shape does not change.
 def ycc_assemble(asm_text: str) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
     let r = asm_assemble(asm_text);
     if (!r.ok) {
