@@ -1,16 +1,19 @@
 // enc64.y — x86-64 instruction encoding for the native backend's subset.
-// Operands use the assembler's parsed forms:
-//   {k:"reg", n, size}      n = 0-15, size = 64/32/8
+// Operands use the assembler's parsed forms (asm.y parse_operand):
+//   {k:"reg", n, size}      n = 0-15, size = 64/32/8 (128 = an xmm)
 //   {k:"imm", v}            signed long
 //   {k:"mem", base, idx, scale, disp, rip, lbl}  rip: bool (lbl valid),
 //     base/idx: reg numbers (-1 = none), scale 1/2/4/8, disp long
 //   {k:"lbl", name}         code label (jumps/calls)
+//   {k:"ind", n, size}      call *%reg — an indirect target (closure code)
 //   {k:"diff", a, b}        a-b as imm32 (rodata lengths)
-// Every encode_* returns a packed [byte] buffer (values 0-255).
+// Every enc_* returns {bytes: [byte] (values 0-255), fix: [...], err: str};
+// le16/le32/le64/byte_of return the [byte] buffer itself.
 // Only the forms our backend emits exist here — anything else is a loud
 // error from the assembler, never a silent miscompile.
 //
-// New files must stay in the portable Y subset (parsed by the C compiler).
+// The C copy in src/c compiles this file, so every construct used here
+// needs a twin there (PORTING.md).
 
 def r64(n: long) -> {k: str, n: long, size: long} { { k: "reg", n: n, size: 64 } };
 def r32(n: long) -> {k: str, n: long, size: long} { { k: "reg", n: n, size: 32 } };
@@ -58,9 +61,12 @@ def reg_size(name: str) -> long {
     }
 };
 
-// Safe size read: non-registers yield 0 (never crash on missing keys —
-// Y evaluates both sides of &&/|| eagerly, so `o.k == "reg" && o.size`
-// would still read .size on a mem/lbl/imm operand).
+// Safe size read: a non-register yields 0 without touching `.size`. A
+// field read of a key the record does not carry TRAPS at run time (the
+// y_dot_lookup primitive in arch_x64.y), so this shape gate is what keeps
+// a mem/lbl/imm operand from faulting. (`&&` short-circuits — gen_bin /
+// gen_logic in native.y — so `o.k == "reg" && o.size` would be safe too;
+// the gate stays as the explicit form.)
 def op_size(o) -> long {
     if (o.k == "reg") { o.size } else { 0 }
 };
@@ -78,7 +84,6 @@ def modrm(mod: long, reg: long, rm: long) -> long {
 };
 
 def sib(scale: long, index: long, base: long) -> long {
-    // NOTE: `0;` tails (see rex note above).
     let s = 0;
     if (scale == 2) { s = 1; } 
     else if (scale == 4) { s = 2; } 
@@ -102,8 +107,7 @@ def le64(v: long) -> [byte] {
     out
 };
 
-// Exact byte i (0 = least significant) of a signed long. Y division
-// truncates, so floor it manually — correct for negatives (unlike %).
+// 256^i (the weight of byte i).
 def pow256(i: long) -> long {
     let r = 1;
     let j = 0;
@@ -115,15 +119,10 @@ def pow256(i: long) -> long {
 };
 
 def div_floor(v: long, d: long) -> long {
-    // NOTE: Y division truncates toward zero (C semantics), so floor needs
-    // a correction when the remainder is nonzero and the signs differ.
-    // No `&&` (see lexer.y isalnum note): nested ifs. No bare `/` either:
-    // the Y lexer treats a lone "/" outside strings as a comment opener
-    // (or a loud error), so division is spelled `divtrunc` below... no —
-    // division IS available as an operator; the lexer note above is about
-    // the "/" CHARACTER reaching the dispatch arm, not the operator itself.
-    // (This comment previously contained a bare "/" example that broke
-    // self-lexing; keep "/" out of comments or quote it.)
+    // NOTE: Y division truncates toward zero (C semantics — native.y emits
+    // `cqo; idiv` for `/`), so floor needs a correction when the remainder
+    // is nonzero and the signs differ. Both engines truncate the same way,
+    // so one correction serves them both.
     let q = v / d;
     let r = v - q * d;
     if (r != 0) {
@@ -134,6 +133,8 @@ def div_floor(v: long, d: long) -> long {
     q
 };
 
+// Exact byte i (0 = least significant) of a signed long. Y division
+// truncates, so floor it manually — correct for negatives (unlike %).
 def byte_of(v: long, i: long) -> long {
     let q = div_floor(v, pow256(i));
     q - div_floor(q, 256) * 256
@@ -156,10 +157,10 @@ def mem_tail(m, reg: long) -> {modrm: long, extra: [byte], rip_lbl: str, disp32:
         { modrm: modrm(0, reg, 5), extra: [], rip_lbl: m.lbl, disp32: true }
     } else if (m.idx < 0) {
         // no index: [base+disp]. Low 101 (rbp/r13) needs at least disp8
-        // (mod=00 would mean disp32-only); low 100 (rsp/r12) needs SIB
-        // with base=rsp encoding (SIB base field 100 + base in SIB byte).
+        // (mod=00 would mean disp32-only); low 100 (rsp/r12) needs a SIB
+        // byte whose base field is 100 — which is rsp, or r12 once REX.B
+        // widens it (rex_rm sets that from m.base).
         if (m.base % 8 == 5) {
-            // rbp/r13 need at least disp8 (mod=00 would mean disp32-only)
             if (fits8(m.disp)) {
                 let extra: [byte] = [u8(m.disp)];
                 { modrm: modrm(1, reg, 5), extra: extra, rip_lbl: "", disp32: false }
@@ -246,8 +247,8 @@ def fixup(at: long, kind: str, lbl: str, lbl2: str) -> {off: long, kind: str, lb
 };
 
 // ── instruction encoders ───────────────────────────────────────────────
-// Each returns {bytes, fix: [{off, kind, lbl, lbl2}]} with off relative to
-// the instruction start. Only forms our backend emits exist.
+// Each returns {bytes, fix: [{off, kind, lbl, lbl2}], err} with off relative
+// to the instruction start. Only forms our backend emits exist.
 
 def with_rex(r: long, bytes: [byte]) -> [byte] {
     if (r < 0) {
@@ -258,10 +259,7 @@ def with_rex(r: long, bytes: [byte]) -> [byte] {
     }
 };
 
-// NOTE: no x.y[i] chains or dot-assign (C-toolchain portability); bind first.
-
 def enc_push(o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
-    // NOTE: nested ifs, not `||` (see reg_num note above).
     if (o.k != "reg") {
         { bytes: [], fix: [], err: "push needs r64" }
     } else if (op_size(o) != 64) {
@@ -274,7 +272,6 @@ def enc_push(o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: 
 };
 
 def enc_pop(o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
-    // NOTE: nested ifs, not `||` (see reg_num note above).
     if (o.k != "reg") {
         { bytes: [], fix: [], err: "pop needs r64" }
     } else if (op_size(o) != 64) {
@@ -367,9 +364,6 @@ def enc_mem_result(r: long, b: [byte], t: {modrm: long, extra: [byte], rip_lbl: 
     } else {
         let fx = [];
         let bb = b;
-        // NOTE: nested ifs, not `&&` (see lexer.y isalnum note): the C VM
-        // evaluates both sides eagerly AND the checker rejects the joint gate.
-        // NOTE: `0;` tails (see rex note above).
         if (t.disp32) {
             if (t.rip_lbl != "") {
             // fixup offset counts the REX prefix with_rex is about to add;
@@ -387,7 +381,6 @@ def enc_mem_result(r: long, b: [byte], t: {modrm: long, extra: [byte], rip_lbl: 
 
 def enc_movb(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // movb $imm8, mem
-    // NOTE: nested ifs, not `||`/`&&` (see reg_num note above).
     if (dst.k != "mem") {
         { bytes: [], fix: [], err: "movb form" }
     } else if (src.k != "imm") {
@@ -399,7 +392,6 @@ def enc_movb(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str,
 
 def enc_movb_imm(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // (split: shape gate above narrows; this body sees mem/imm only.)
-    // NOTE: nested ifs, not `||` (see reg_num note above).
     if (src.v < -128) {
         { bytes: [], fix: [], err: "movb imm range" }
     } else if (src.v > 127) {
@@ -473,7 +465,6 @@ def enc_xor32(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str
 
 def enc_alu_imm(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32
-    // NOTE: nested ifs, not `||`/`&&` (see reg_num note above).
     if (dst.k != "reg") {
         { bytes: [], fix: [], err: "alu-imm dst" }
     } else if (op_size(dst) != 64) {
@@ -494,7 +485,7 @@ def enc_alu_imm_go(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, k
 };
 
 def enc_alu_imm_body(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
-    // NOTE: split from enc_alu_imm (see note above): no size gate here.
+    // (the size gate lives in enc_alu_imm; no gate here)
     let ext = 0;
     if (op == "sub") { ext = 5; }
     else if (op == "cmp") { ext = 7; }
@@ -517,7 +508,6 @@ def enc_alu_imm_body(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long,
 
 def enc_shl(dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // shl $imm8, %r64
-    // NOTE: nested ifs, not `||` (see reg_num note above).
     if (dst.k != "reg") {
         { bytes: [], fix: [], err: "shl dst" }
     } else if (op_size(dst) != 64) {
@@ -537,7 +527,6 @@ def enc_shl(dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: s
 
 def enc_shr(dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // shr $imm8, %r64 (logical, for unsigned divide-by-pow2)
-    // NOTE: nested ifs, not `||` (see reg_num note above).
     if (dst.k != "reg") {
         { bytes: [], fix: [], err: "shr dst" }
     } else if (op_size(dst) != 64) {
@@ -663,7 +652,6 @@ def enc_imul(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str,
 };
 
 def enc_unary(op: str, o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
-    // NOTE: nested ifs, not `||` (see reg_num note above).
     if (o.k != "reg") {
         { bytes: [], fix: [], err: "unary form" }
     } else if (op_size(o) != 64) {

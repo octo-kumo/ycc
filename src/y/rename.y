@@ -2,8 +2,8 @@
 // rename_program(ast) -> ast' where every binding has a globally unique
 // name (`orig$N`; `$` is lexer-illegal, so generated names can never collide
 // with user code). After this pass there is no shadowing and no scopes for
-// later passes to resolve: types.y keeps one flat map + a function-depth
-// counter (for the capture law), native.y keeps one flat env.
+// later passes to resolve: types.y keeps one flat binding list, native.y
+// one flat env.
 //
 // Rules:
 // - let/const/def names, func params, foreach/forrange loop vars: bound.
@@ -15,7 +15,8 @@
 //   hoist — use-before-def stays an error, like TDZ.
 // - Map keys, dot keys, strings: untouched (not variables).
 //
-// Portable-subset Y only (runs inside ycc on the C toolchain).
+// The C copy in src/c compiles this file, so every construct used here
+// needs a twin there (PORTING.md).
 
 def rn_fresh(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, orig: str) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, name: str } {
     let u = orig + "$" + tostring(st.n);
@@ -208,9 +209,11 @@ def rn_fill_defaults(vals: [{k: str}], args: [{k: str}]) -> [{k: str}] {
 
 // ── type aliases ─────────────────────────────────────────────────────────
 // `type A = T` makes the name A stand for T in every annotation (and match
-// pattern) of its block and below. Resolution rewrites the type nodes, so
-// the checker and emitter never see an alias. A union's members are
-// flattened (an alias of a union inside a union adds its members).
+// pattern) seen AFTER it. Resolution rewrites the type nodes, so the checker
+// and emitter never see an alias. A union's members are flattened (an alias
+// of a union inside a union adds its members). NOTE: `tys` is never popped,
+// so an alias declared inside a block stays visible for the rest of the
+// traversal, siblings included — the alias table is not scoped like names.
 
 def rn_type(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, t) -> {k: str} {
     if (len(st.tys) == 0) { t } else { rn_type_go(st, t, 0) }
@@ -230,6 +233,9 @@ def rn_types(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: 
     }
 };
 
+// Identity with a declared {k: str} return: launders a rebuilt type node's
+// real shape into the unknown-shape flow type, so the arms of a type dispatch
+// agree (the normnode trick in native.y strip_ns).
 def rn_tn(t) -> {k: str} { t };
 
 def rn_type_go(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, t, depth: long) -> {k: str} {
@@ -256,7 +262,9 @@ def rn_type_name(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ na
         if (e.name == name) { found = i; i = -1; 0 };
         i = i - 1;
     };
-    // (depth bounds a cyclic alias: `type L = {next: L?}` stays unresolved)
+    // (depth bounds a cyclic alias: `type L = {next: L?}` stops growing at
+    // depth 32 and leaves the innermost name a tname, which tcompat unifies
+    // with anything — so the alias resolves, it just does not recurse.)
     if (found < 0 || depth > 32) {
         t
     } else {
@@ -317,12 +325,11 @@ def rn_drop_typedefs(stmts: [{k: str}]) -> [{k: str}] {
     out
 };
 
-// Redefinition shadows, exactly as it does in the VM: `def f ... def f ...`
-// keeps the LAST definition, and every reference (before or after, since
-// defs hoist) binds to it. rename.y resolves def names through the prepass
-// binding, so two same-named defs would otherwise collapse onto one unique
-// name; give the earlier ones a dead name instead. They are still checked
-// and emitted — only unreachable.
+// Redefinition shadows: `def f ... def f ...` keeps the LAST definition, and
+// every reference (before or after, since defs hoist) binds to it. rename.y
+// resolves def names through the prepass binding, so two same-named defs would
+// otherwise collapse onto one unique name; give the earlier ones a dead name
+// instead. They are still checked and emitted — only unreachable.
 def rn_shadow_dups(stmts: [{k: str}]) -> [{k: str}] {
     let out: [{k: str}] = [];
     let i = 0;
@@ -425,10 +432,10 @@ def rn_block(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: l
 
 def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: dispatch WITHOUT a shared-shape if-chain (see parser.y
-    // parse_type_arrow note): a 25-arm chain on one name merges every arm's
-    // node shape through the flow-insensitive env (each arm's return type
-    // must teq ALL others). Each arm here is a SINGLE callee call (or leaf
-    // literal) with the uniform return type R, so arms always agree.
+    // parse_type_arrow note): a long arm chain on one name merges every
+    // arm's node shape through the flow-insensitive env (each arm's return
+    // type must teq ALL others). Each arm here is a SINGLE callee call (or
+    // leaf literal) with the uniform return type R, so arms always agree.
     // Leaf shapes (num/str/bool/void) return the node untouched.
     let k = node.k;
     if (k == "num") {
@@ -576,7 +583,6 @@ def rn_if_then(node, cond: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]],
 def rn_if_finish(node, cond: {k: str}, tstmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: both arms build the SAME key set (cond/then/els/has_else);
     // els differs (renamed vs passthrough) but both unify — teq holds.
-    // NOTE: `0;` tails on bare-ifs (see parser.y parse_binary note).
     if (node.has_else) {
         let e = rn_node(node.els, st);
         { st: e.st, node: { k: "if", cond: cond, then: { k: "block", stmts: tstmts, line: node.then.line, col: node.then.col }, els: e.node, has_else: true, line: node.line, col: node.col } }
@@ -794,7 +800,8 @@ def rn_decl(node: {k: str, kind: str}, st: { scopes: [[{ orig: str, uniq: str }]
 };
 
 def rn_decl_def(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
-    // name pre-bound by rn_prepass; look it up (must exist)
+    // name pre-bound by rn_prepass; look it up (the empty arm below is a
+    // fallback for a decl that never went through the prepass)
     rn_decl_def_lookup(node, rn_lookup(st, node.name), st)
 };
 
@@ -858,14 +865,12 @@ def rn_decl_val_finish(node, v: {k: str}, uniq: str, st: { scopes: [[{ orig: str
     { st: st, node: { k: "decl", kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v, line: node.line, col: node.col } }
 };
 
-// Rename a func value. The func VALUE (params/ptypes/ret/body) is passed
-// as FIELDS (like parse_stmt_*_go): the checker merges same-named param
-// reads across defs, so reading func.params/func.body off a shared `func`
-// name resolves against every func-shaped call site at once. Fields are
-// plain values (params/pts/ret/body passed separately — no record reads).
+// Rename a func value. `func` is annotated with the full func shape, so its
+// fields type-check against that shape; the rn_func_p* chain exists to pass
+// each one on as a plain VALUE (params/ptypes/ret/body/line/col) so no callee
+// carries a body full of `func.x` reads — rn_func_p4 is the one place with
+// two, the two longs.
 def rn_func(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
-    // NOTE: ONE field read per callee (see note above): rn_func_p* chain
-    // threads the fields as VALUES; no body reads 2+ fields off `func`.
     rn_func_p1(func, func.params, rn_push(st))
 };
 
@@ -914,7 +919,8 @@ def rn_func_body(fptypes, fret, fbody: {k: str, stmts: [{k: str}]}, fline: long,
 };
 
 def rn_func_finish(fptypes, fret, fbody, fline: long, fcol: long, params: [str], stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
-    // NOTE: NO record reads here — all values are params already.
+    // NOTE: NO record reads here — all values are params already. `fbody`
+    // rides along for signature parity with the C twin and is never read.
     { st: st, node: { k: "func", params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: "block", stmts: stmts, line: fline, col: fcol }, line: fline, col: fcol } }
 };
 

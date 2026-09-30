@@ -1,15 +1,17 @@
 /* enc64.c — 1:1 port of src/y/enc64.y (translation contract: PORTING.md).
  *
  * x86-64 instruction encoding for the native backend's subset.
- * Operands use the assembler's parsed forms:
- *   {k:"reg", n, size}      n = 0-15, size = 64/32/8
+ * Operands use the assembler's parsed forms (asm.y parse_operand):
+ *   {k:"reg", n, size}      n = 0-15, size = 64/32/8 (128 = an xmm)
  *   {k:"imm", v}            signed long
  *   {k:"mem", base, idx, scale, disp, rip, lbl}  rip: bool (lbl valid),
  *     base/idx: reg numbers (-1 = none), scale 1/2/4/8, disp long
  *   {k:"lbl", name}         code label (jumps/calls)
+ *   {k:"ind", n, size}      call *%reg — an indirect target (closure code)
  *   {k:"diff", a, b}        a-b as imm32 (rodata lengths)
- * Every encode_* returns a [byte] buffer (values 0-255); the C value model
- * keeps its elements as boxed long values.
+ * Every enc_* returns {bytes, fix, err}; bytes is a list of byte values
+ * (0-255), which the C value model keeps boxed as long values.
+ * le16/le32/le64/byte_of return the byte list itself.
  * Only the forms our backend emits exist here — anything else is a loud
  * error from the assembler, never a silent miscompile.
  */
@@ -74,50 +76,22 @@ Yv *r8(long n) {
 
 /* Register number by AT&T name. Supports the registers our backend uses. */
 long reg_num(Yv *name) {
-    /* NOTE: nested ifs, not `||` (see lexer.y isalnum note): the C VM
-       evaluates both sides eagerly AND the checker rejects joint gates. */
-    if (ys_eq_lit(name, "%rax")) { return 0; }
-    else if (ys_eq_lit(name, "%eax")) { return 0; }
-    else if (ys_eq_lit(name, "%al")) { return 0; }
-    else if (ys_eq_lit(name, "%rcx")) { return 1; }
-    else if (ys_eq_lit(name, "%ecx")) { return 1; }
-    else if (ys_eq_lit(name, "%cl")) { return 1; }
-    else if (ys_eq_lit(name, "%rdx")) { return 2; }
-    else if (ys_eq_lit(name, "%edx")) { return 2; }
-    else if (ys_eq_lit(name, "%dl")) { return 2; }
-    else if (ys_eq_lit(name, "%rbx")) { return 3; }
-    else if (ys_eq_lit(name, "%ebx")) { return 3; }
-    else if (ys_eq_lit(name, "%bl")) { return 3; }
-    else if (ys_eq_lit(name, "%rsp")) { return 4; }
-    else if (ys_eq_lit(name, "%esp")) { return 4; }
-    else if (ys_eq_lit(name, "%rbp")) { return 5; }
-    else if (ys_eq_lit(name, "%ebp")) { return 5; }
-    else if (ys_eq_lit(name, "%rsi")) { return 6; }
-    else if (ys_eq_lit(name, "%esi")) { return 6; }
-    else if (ys_eq_lit(name, "%sil")) { return 6; }
-    else if (ys_eq_lit(name, "%rdi")) { return 7; }
-    else if (ys_eq_lit(name, "%edi")) { return 7; }
-    else if (ys_eq_lit(name, "%dil")) { return 7; }
-    else if (ys_eq_lit(name, "%r8")) { return 8; }
-    else if (ys_eq_lit(name, "%r8d")) { return 8; }
-    else if (ys_eq_lit(name, "%r8b")) { return 8; }
-    else if (ys_eq_lit(name, "%r9")) { return 9; }
-    else if (ys_eq_lit(name, "%r9d")) { return 9; }
-    else if (ys_eq_lit(name, "%r9b")) { return 9; }
-    else if (ys_eq_lit(name, "%r10")) { return 10; }
-    else if (ys_eq_lit(name, "%r10d")) { return 10; }
-    else if (ys_eq_lit(name, "%r10b")) { return 10; }
-    else if (ys_eq_lit(name, "%r11")) { return 11; }
-    else if (ys_eq_lit(name, "%r11d")) { return 11; }
-    else if (ys_eq_lit(name, "%r11b")) { return 11; }
-    else if (ys_eq_lit(name, "%r12")) { return 12; }
-    else if (ys_eq_lit(name, "%r12d")) { return 12; }
-    else if (ys_eq_lit(name, "%r13")) { return 13; }
-    else if (ys_eq_lit(name, "%r13d")) { return 13; }
-    else if (ys_eq_lit(name, "%r14")) { return 14; }
-    else if (ys_eq_lit(name, "%r14d")) { return 14; }
-    else if (ys_eq_lit(name, "%r15")) { return 15; }
-    else if (ys_eq_lit(name, "%r15d")) { return 15; }
+    if (ys_eq_lit(name, "%rax") || ys_eq_lit(name, "%eax") || ys_eq_lit(name, "%al")) { return 0; }
+    else if (ys_eq_lit(name, "%rcx") || ys_eq_lit(name, "%ecx") || ys_eq_lit(name, "%cl")) { return 1; }
+    else if (ys_eq_lit(name, "%rdx") || ys_eq_lit(name, "%edx") || ys_eq_lit(name, "%dl")) { return 2; }
+    else if (ys_eq_lit(name, "%rbx") || ys_eq_lit(name, "%ebx") || ys_eq_lit(name, "%bl")) { return 3; }
+    else if (ys_eq_lit(name, "%rsp") || ys_eq_lit(name, "%esp")) { return 4; }
+    else if (ys_eq_lit(name, "%rbp") || ys_eq_lit(name, "%ebp")) { return 5; }
+    else if (ys_eq_lit(name, "%rsi") || ys_eq_lit(name, "%esi") || ys_eq_lit(name, "%sil")) { return 6; }
+    else if (ys_eq_lit(name, "%rdi") || ys_eq_lit(name, "%edi") || ys_eq_lit(name, "%dil")) { return 7; }
+    else if (ys_eq_lit(name, "%r8") || ys_eq_lit(name, "%r8d") || ys_eq_lit(name, "%r8b")) { return 8; }
+    else if (ys_eq_lit(name, "%r9") || ys_eq_lit(name, "%r9d") || ys_eq_lit(name, "%r9b")) { return 9; }
+    else if (ys_eq_lit(name, "%r10") || ys_eq_lit(name, "%r10d") || ys_eq_lit(name, "%r10b")) { return 10; }
+    else if (ys_eq_lit(name, "%r11") || ys_eq_lit(name, "%r11d") || ys_eq_lit(name, "%r11b")) { return 11; }
+    else if (ys_eq_lit(name, "%r12") || ys_eq_lit(name, "%r12d")) { return 12; }
+    else if (ys_eq_lit(name, "%r13") || ys_eq_lit(name, "%r13d")) { return 13; }
+    else if (ys_eq_lit(name, "%r14") || ys_eq_lit(name, "%r14d")) { return 14; }
+    else if (ys_eq_lit(name, "%r15") || ys_eq_lit(name, "%r15d")) { return 15; }
     else if (ys_eq_lit(name, "%xmm0")) { return 0; }
     else if (ys_eq_lit(name, "%xmm1")) { return 1; }
     else if (ys_eq_lit(name, "%xmm2")) { return 2; }
@@ -142,21 +116,22 @@ long reg_size(Yv *name) {
     }
 }
 
-/* Safe size read: non-registers yield 0 (never crash on missing keys —
-   Y evaluates both sides of &&/|| eagerly, so `o.k == "reg" && o.size`
-   would still read .size on a mem/lbl/imm operand). */
+/* Safe size read: a non-register yields 0 without touching `.size`. A
+   field read of a key the record does not carry is a run-time trap in the
+   native backend (the y_dot_lookup primitive in arch_x64.y), so this shape
+   gate is what keeps a mem/lbl/imm operand from faulting. (`&&`
+   short-circuits — gen_bin / gen_logic in native.y — so `o.k == "reg" &&
+   o.size` would be safe too; the gate stays as the explicit form.) */
 static long op_size(Yv *o) {
     if (ys_eq_lit(yr_get(o, "k"), "reg")) { return yv_l(yr_get(o, "size")); } else { return 0; }
 }
 
 static long rex(int w, long r, long x, long b) {
-    /* NOTE: `0;` tails (see parser.y parse_binary note): bare-`if` arms take
-       the body's type (long) and poison the sequence gate. */
     long v = 64;
-    if (w) { v = v + 8; ; } else { ; };
-    if (r >= 8) { v = v + 4; ; } else { ; };
-    if (x >= 8) { v = v + 2; ; } else { ; };
-    if (b >= 8) { v = v + 1; ; } else { ; };
+    if (w) { v = v + 8; ; }
+    if (r >= 8) { v = v + 4; ; }
+    if (x >= 8) { v = v + 2; ; }
+    if (b >= 8) { v = v + 1; ; }
     if (v == 64) { return -1; } else { return v; }
 }
 
@@ -165,9 +140,8 @@ static long modrm(long mod, long reg, long rm) {
 }
 
 static long sib(long scale, long index, long base) {
-    /* NOTE: `0;` tails (see rex note above). */
     long s = 0;
-    if (scale == 2) { s = 1; ; } else if (scale == 4) { s = 2; ; } else if (scale == 8) { s = 3; ; } else { ; };
+    if (scale == 2) { s = 1; ; } else if (scale == 4) { s = 2; ; } else if (scale == 8) { s = 3; ; }
     return s * 64 + (index % 8) * 8 + base % 8;
 }
 
@@ -190,8 +164,7 @@ Yv *le64(long v) {
     return out;
 }
 
-/* Exact byte i (0 = least significant) of a signed long. Y division
-   truncates, so floor it manually — correct for negatives (unlike %). */
+/* 256^i (the weight of byte i). */
 static long pow256(long i) {
     long r = 1;
     long j = 0;
@@ -203,24 +176,19 @@ static long pow256(long i) {
 }
 
 static long div_floor(long v, long d) {
-    /* NOTE: Y division truncates toward zero (C semantics), so floor needs
-       a correction when the remainder is nonzero and the signs differ.
-       No `&&` (see lexer.y isalnum note): nested ifs. No bare `/` either:
-       the Y lexer treats a lone "/" outside strings as a comment opener
-       (or a loud error), so division is spelled `divtrunc` below... no —
-       division IS available as an operator; the lexer note above is about
-       the "/" CHARACTER reaching the dispatch arm, not the operator itself.
-       (This comment previously contained a bare "/" example that broke
-       self-lexing; keep "/" out of comments or quote it.) */
+    /* NOTE: Y division truncates toward zero (C semantics — native.y emits
+       `cqo; idiv` for `/`), so floor needs a correction when the remainder
+       is nonzero and the signs differ. Both engines truncate the same way,
+       so one correction serves them both. */
     long q = v / d;
     long r = v - q * d;
     if (r != 0) {
         if (v < 0) {
-            if (d > 0) { q = q - 1; ; } else { ; };
+            if (d > 0) { q = q - 1; ; }
             ;
-        } else if (d < 0) { q = q - 1; ; } else { ; };
+        } else if (d < 0) { q = q - 1; ; }
         ;
-    } else { ; };
+    }
     return q;
 }
 
@@ -235,12 +203,7 @@ static long u8(long v) {
 
 /* fits in a signed 8-bit immediate? */
 static int fits8(long v) {
-    /* NOTE: nested ifs, not `&&` (see lexer.y isalnum note): the C VM
-       evaluates both sides eagerly AND the checker rejects `&&` mixing
-       comparison-bool with map-field shapes through the same gate. */
-    if (v >= -128) {
-        if (v <= 127) { return 1; } else { return 0; }
-    } else { return 0; }
+    return v >= -128 && v <= 127;
 }
 
 /* Encode a memory operand tail (ModRM + optional SIB + displacement).
@@ -252,10 +215,10 @@ static Yv *mem_tail(Yv *m, long reg) {
                   "rip_lbl", yr_get(m, "lbl"), "disp32", yv_bool(1));
     } else if (yv_l(yr_get(m, "idx")) < 0) {
         /* no index: [base+disp]. Low 101 (rbp/r13) needs at least disp8
-           (mod=00 would mean disp32-only); low 100 (rsp/r12) needs SIB
-           with base=rsp encoding (SIB base field 100 + base in SIB byte). */
+           (mod=00 would mean disp32-only); low 100 (rsp/r12) needs a SIB
+           byte whose base field is 100 — which is rsp, or r12 once REX.B
+           widens it (rex_rm sets that from m.base). */
         if (yv_l(yr_get(m, "base")) % 8 == 5) {
-            /* rbp/r13 need at least disp8 (mod=00 would mean disp32-only) */
             if (fits8(yv_l(yr_get(m, "disp")))) {
                 Yv *extra = yav(1, yv_long(u8(yv_l(yr_get(m, "disp")))));
                 return yr(4, "modrm", yv_long(modrm(1, reg, 5)),
@@ -367,8 +330,8 @@ Yv *fixup(long at, Yv *kind, Yv *lbl, Yv *lbl2) {
 }
 
 /* ── instruction encoders ───────────────────────────────────────────────
-   Each returns {bytes, fix: [{off, kind, lbl, lbl2}]} with off relative to
-   the instruction start. Only forms our backend emits exist. */
+   Each returns {bytes, fix: [{off, kind, lbl, lbl2}], err} with off
+   relative to the instruction start. Only forms our backend emits exist. */
 
 static Yv *with_rex(long r, Yv *bytes) {
     if (r < 0) {
@@ -379,10 +342,7 @@ static Yv *with_rex(long r, Yv *bytes) {
     }
 }
 
-/* NOTE: no x.y[i] chains or dot-assign (C-toolchain portability); bind first. */
-
 static Yv *enc_push(Yv *o) {
-    /* NOTE: nested ifs, not `||` (see reg_num note above). */
     if (!ys_eq_lit(yr_get(o, "k"), "reg")) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("push needs r64"));
     } else if (op_size(o) != 64) {
@@ -395,7 +355,6 @@ static Yv *enc_push(Yv *o) {
 }
 
 static Yv *enc_pop(Yv *o) {
-    /* NOTE: nested ifs, not `||` (see reg_num note above). */
     if (!ys_eq_lit(yr_get(o, "k"), "reg")) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("pop needs r64"));
     } else if (op_size(o) != 64) {
@@ -443,7 +402,7 @@ static Yv *enc_mov(Yv *dst, Yv *src) {
         Yv *zeros = yav(4, yv_long(0), yv_long(0), yv_long(0), yv_long(0));
         Yv *b = concat(prefix, zeros);
         long off = 3;
-        if (r < 0) { off = 2; ; } else { ; };
+        if (r < 0) { off = 2; ; }
         return yr(3, "bytes", with_rex(r, b),
                   "fix", yav(1, fixup(off, ys("imm32diff"), yr_get(src, "a"), yr_get(src, "b"))), "err", ys(""));
     } else if (ys_eq_lit(yr_get(dst, "k"), "reg") && ys_eq_lit(yr_get(src, "k"), "mem")) {
@@ -490,29 +449,25 @@ static Yv *enc_mem_result(long r, Yv *b, Yv *t) {
     } else {
         Yv *fx = yav(0);
         Yv *bb = b;
-        /* NOTE: nested ifs, not `&&` (see lexer.y isalnum note): the C VM
-           evaluates both sides eagerly AND the checker rejects the joint gate.
-           NOTE: `0;` tails (see rex note above). */
         if (yv_b(yr_get(t, "disp32"))) {
             if (!ys_eq_lit(yr_get(t, "rip_lbl"), "")) {
             /* fixup offset counts the REX prefix with_rex is about to add;
                the disp32 placeholder bytes must exist for the patch to land. */
                 long off = yv_len(b);
-                if (r >= 0) { off = off + 1; ; } else { ; };
+                if (r >= 0) { off = off + 1; ; }
                 fx = ya_push(fx, fixup(off, ys("rip32"), yr_get(t, "rip_lbl"), ys("")));
                 Yv *zeros = yav(4, yv_long(0), yv_long(0), yv_long(0), yv_long(0));
                 bb = concat(b, zeros);
                 ;
-            } else { ; };
+            }
             ;
-        } else { ; };
+        }
         return yr(3, "bytes", with_rex(r, bb), "fix", fx, "err", ys(""));
     }
 }
 
 static Yv *enc_movb(Yv *dst, Yv *src) {
-    /* movb $imm8, mem
-       NOTE: nested ifs, not `||`/`&&` (see reg_num note above). */
+    /* movb $imm8, mem */
     if (!ys_eq_lit(yr_get(dst, "k"), "mem")) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("movb form"));
     } else if (!ys_eq_lit(yr_get(src, "k"), "imm")) {
@@ -523,8 +478,7 @@ static Yv *enc_movb(Yv *dst, Yv *src) {
 }
 
 static Yv *enc_movb_imm(Yv *dst, Yv *src) {
-    /* (split: shape gate above narrows; this body sees mem/imm only.)
-       NOTE: nested ifs, not `||` (see reg_num note above). */
+    /* (split: shape gate above narrows; this body sees mem/imm only.) */
     if (yv_l(yr_get(src, "v")) < -128) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("movb imm range"));
     } else if (yv_l(yr_get(src, "v")) > 127) {
@@ -578,7 +532,6 @@ static Yv *enc_arith(Yv *op, Yv *dst, Yv *src) {
         else if (ys_eq_lit(op, "or")) { base = 9; ; }
         else if (ys_eq_lit(op, "cmp")) { base = 57; ; }
         else if (ys_eq_lit(op, "test")) { base = 133; ; }
-        else { ; };
         long r = rex(1, yv_l(yr_get(src, "n")), -1, yv_l(yr_get(dst, "n")));
         Yv *b = yav(2, yv_long(base), yv_long(modrm(3, yv_l(yr_get(src, "n")), yv_l(yr_get(dst, "n")))));
         return yr(3, "bytes", with_rex(r, b), "fix", yav(0), "err", ys(""));
@@ -598,8 +551,7 @@ static Yv *enc_xor32(Yv *dst, Yv *src) {
 }
 
 static Yv *enc_alu_imm(Yv *op, Yv *dst, long v) {
-    /* add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32
-       NOTE: nested ifs, not `||`/`&&` (see reg_num note above). */
+    /* add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32 */
     if (!ys_eq_lit(yr_get(dst, "k"), "reg")) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("alu-imm dst"));
     } else if (op_size(dst) != 64) {
@@ -620,14 +572,13 @@ static Yv *enc_alu_imm_go(Yv *op, Yv *dst, long v) {
 }
 
 static Yv *enc_alu_imm_body(Yv *op, Yv *dst, long v) {
-    /* NOTE: split from enc_alu_imm (see note above): no size gate here. */
+    /* (the size gate lives in enc_alu_imm; no gate here) */
     long ext = 0;
     if (ys_eq_lit(op, "sub")) { ext = 5; ; }
     else if (ys_eq_lit(op, "cmp")) { ext = 7; ; }
     else if (ys_eq_lit(op, "xor")) { ext = 6; ; }
     else if (ys_eq_lit(op, "and")) { ext = 4; ; }
     else if (ys_eq_lit(op, "or")) { ext = 1; ; }
-    else { ; };
     int wide = op_size(dst) == 64;
     long r = rex(wide, -1, -1, yv_l(yr_get(dst, "n")));
     if (fits8(v)) {
@@ -643,8 +594,7 @@ static Yv *enc_alu_imm_body(Yv *op, Yv *dst, long v) {
 }
 
 static Yv *enc_shl(Yv *dst, long v) {
-    /* shl $imm8, %r64
-       NOTE: nested ifs, not `||` (see reg_num note above). */
+    /* shl $imm8, %r64 */
     if (!ys_eq_lit(yr_get(dst, "k"), "reg")) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("shl dst"));
     } else if (op_size(dst) != 64) {
@@ -663,8 +613,7 @@ static Yv *enc_shl(Yv *dst, long v) {
 }
 
 static Yv *enc_shr(Yv *dst, long v) {
-    /* shr $imm8, %r64 (logical, for unsigned divide-by-pow2)
-       NOTE: nested ifs, not `||` (see reg_num note above). */
+    /* shr $imm8, %r64 (logical, for unsigned divide-by-pow2) */
     if (!ys_eq_lit(yr_get(dst, "k"), "reg")) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("shr dst"));
     } else if (op_size(dst) != 64) {
@@ -798,7 +747,6 @@ static Yv *enc_imul(Yv *dst, Yv *src) {
 }
 
 static Yv *enc_unary(Yv *op, Yv *o) {
-    /* NOTE: nested ifs, not `||` (see reg_num note above). */
     if (!ys_eq_lit(yr_get(o, "k"), "reg")) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("unary form"));
     } else if (op_size(o) != 64) {
@@ -810,7 +758,6 @@ static Yv *enc_unary(Yv *op, Yv *o) {
         else if (ys_eq_lit(op, "div")) { ext = 6; ; }
         else if (ys_eq_lit(op, "dec")) { ext = 1; opc = 255; ; }
         else if (ys_eq_lit(op, "inc")) { ext = 0; opc = 255; ; }
-        else { ; };
         long r = rex(1, -1, -1, yv_l(yr_get(o, "n")));
         Yv *b = yav(2, yv_long(opc), yv_long(modrm(3, ext, yv_l(yr_get(o, "n")))));
         return yr(3, "bytes", with_rex(r, b), "fix", yav(0), "err", ys(""));

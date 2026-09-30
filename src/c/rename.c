@@ -4,8 +4,8 @@
  * rename_program(ast) -> ast' where every binding has a globally unique
  * name (`orig$N`; `$` is lexer-illegal, so generated names can never collide
  * with user code). After this pass there is no shadowing and no scopes for
- * later passes to resolve: types.y keeps one flat map + a function-depth
- * counter (for the capture law), native.y keeps one flat env.
+ * later passes to resolve: types.y keeps one flat binding list, native.y one
+ * flat env.
  *
  * Rules:
  * - let/const/def names, func params, foreach/forrange loop vars: bound.
@@ -23,7 +23,8 @@
  */
 
 /* imported */ /* none: rename.y is self-contained — it calls only its own
- * defs and the push/len/tostring builtins (ya_push/yv_len/ys_long). */
+ * defs and the string/array builtins (`+`, len, tostring, push ->
+ * ys_cat/yv_len/ys_long/ya_push). */
 
 #include "rename.h"
 
@@ -75,8 +76,6 @@ Yv *rn_lookup(Yv *st, Yv *name) {
                 found = yr_get(e, "uniq");
                 j = -1;
                 i = -1;
-                ;
-            } else {
                 ;
             }
             j = j - 1;
@@ -211,6 +210,8 @@ Yv *rn_fill_defaults(Yv *vals, Yv *args) {
         }
         if (ok) {
             Yv *out = yav(0);
+            /* Y: `out += args` — one push per element (yv.h has no `+=`
+               helper, so the array form is spelled out here). */
             for (long a = 0; a < n; a++) out = ya_push(out, ya_get(args, a));
             long j = n;
             while (j < yv_len(vals)) {
@@ -226,7 +227,11 @@ Yv *rn_fill_defaults(Yv *vals, Yv *args) {
 
 /* ── type aliases ─────────────────────────────────────────────────────────
  * `type A = T` makes the name A stand for T in every annotation (and match
- * pattern) of its block and below; unions are flattened. */
+ * pattern) seen AFTER it; resolution rewrites the type nodes, so the checker
+ * and emitter never see an alias. A union's members are flattened (an alias
+ * of a union inside a union adds its members). NOTE: `tys` is never popped,
+ * so an alias declared inside a block stays visible for the rest of the
+ * traversal, siblings included — the alias table is not scoped like names. */
 
 Yv *rn_type(Yv *st, Yv *t) {
     if (yv_len(yr_get(st, "tys")) == 0) {
@@ -288,7 +293,9 @@ Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth) {
         }
         i = i - 1;
     }
-    /* (depth bounds a cyclic alias: `type L = {next: L?}` stays unresolved) */
+    /* (depth bounds a cyclic alias: `type L = {next: L?}` stops growing at
+       depth 32 and leaves the innermost name a tname, which tcompat unifies
+       with anything — so the alias resolves, it just does not recurse.) */
     if (found < 0 || depth > 32) {
         return t;
     } else {
@@ -324,6 +331,7 @@ Yv *rn_union_flat(Yv *ts) {
         Yv *t = ya_get(ts, i);
         if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
             Yv *inner = yr_get(t, "ts");
+            /* Y: `out += inner` — one push per element (see rn_fill_defaults). */
             for (long j = 0; j < yv_len(inner); j++) out = ya_push(out, ya_get(inner, j));
         } else {
             out = ya_push(out, t);
@@ -346,12 +354,11 @@ Yv *rn_drop_typedefs(Yv *stmts) {
     return out;
 }
 
-/* Redefinition shadows, exactly as it does in the VM: `def f ... def f ...`
- * keeps the LAST definition, and every reference (before or after, since
- * defs hoist) binds to it. rename.y resolves def names through the prepass
- * binding, so two same-named defs would otherwise collapse onto one unique
- * name; give the earlier ones a dead name instead. They are still checked
- * and emitted — only unreachable. */
+/* Redefinition shadows: `def f ... def f ...` keeps the LAST definition, and
+ * every reference (before or after, since defs hoist) binds to it. rename.y
+ * resolves def names through the prepass binding, so two same-named defs would
+ * otherwise collapse onto one unique name; give the earlier ones a dead name
+ * instead. They are still checked and emitted — only unreachable. */
 Yv *rn_shadow_dups(Yv *stmts) {
     Yv *out = yav(0);
     long i = 0;
@@ -461,10 +468,10 @@ Yv *rn_block(Yv *stmts, Yv *st) {
 
 Yv *rn_node(Yv *node, Yv *st) {
     /* NOTE: dispatch WITHOUT a shared-shape if-chain (see parser.y
-     * parse_type_arrow note): a 25-arm chain on one name merges every arm's
-     * node shape through the flow-insensitive env (each arm's return type
-     * must teq ALL others). Each arm here is a SINGLE callee call (or leaf
-     * literal) with the uniform return type R, so arms always agree.
+     * parse_type_arrow note): a long arm chain on one name merges every
+     * arm's node shape through the flow-insensitive env (each arm's return
+     * type must teq ALL others). Each arm here is a SINGLE callee call (or
+     * leaf literal) with the uniform return type R, so arms always agree.
      * Leaf shapes (num/str/bool/void) return the node untouched. */
     Yv *k = yr_get(node, "k");
     if (ys_eq_lit(k, "num")) {
@@ -632,8 +639,7 @@ Yv *rn_if_then(Yv *node, Yv *cond, Yv *st) {
 
 Yv *rn_if_finish(Yv *node, Yv *cond, Yv *tstmts, Yv *st) {
     /* NOTE: both arms build the SAME key set (cond/then/els/has_else);
-     * els differs (renamed vs passthrough) but both unify — teq holds.
-     * NOTE: `0;` tails on bare-ifs (see parser.y parse_binary note). */
+     * els differs (renamed vs passthrough) but both unify — teq holds. */
     if (yv_b(yr_get(node, "has_else"))) {
         Yv *e = rn_node(yr_get(node, "els"), st);
         return yr(
@@ -1005,14 +1011,12 @@ Yv *rn_decl_val_finish(Yv *node, Yv *v, Yv *uniq, Yv *st) {
                  yr_get(node, "line"), "col", yr_get(node, "col")));
 }
 
-/* Rename a func value. The func VALUE (params/ptypes/ret/body) is passed
- * as FIELDS (like parse_stmt_*_go): the checker merges same-named param
- * reads across defs, so reading func.params/func.body off a shared `func`
- * name resolves against every func-shaped call site at once. Fields are
- * plain values (params/pts/ret/body passed separately — no record reads). */
+/* Rename a func value. `func` is annotated with the full func shape, so its
+ * fields type-check against that shape; the rn_func_p* chain exists to pass
+ * each one on as a plain VALUE (params/ptypes/ret/body/line/col) so no callee
+ * carries a body full of `func.x` reads — rn_func_p4 is the one place with
+ * two, the two longs. */
 Yv *rn_func(Yv *func, Yv *st) {
-    /* NOTE: ONE field read per callee (see note above): rn_func_p* chain
-     * threads the fields as VALUES; no body reads 2+ fields off `func`. */
     return rn_func_p1(func, yr_get(func, "params"), rn_push(st));
 }
 
