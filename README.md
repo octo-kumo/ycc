@@ -19,30 +19,37 @@ hello, world
 
 ## The language
 
-Y is deliberately small: `let`/`def`, structural records, homogeneous
-heap arrays, options, pointers, closures. Some highlights:
+Y is deliberately small: `let`/`def`, structural records, dynamic maps,
+homogeneous heap arrays, options, pointers, closures, unions with `match`.
+Some highlights:
 
 ```y
 // arrays: + copies, += and *= mutate in place, = aliases
 let xs = [1, 2, 3];
-xs += 4;              // push:              [1, 2, 3, 4]
-xs *= 0;              // prepend:           [0, 1, 2, 3, 4]
-xs += [9, 10];        // append elements:   [0, 1, 2, 3, 4, 9, 10]
+xs += 4;              // push:               [1, 2, 3, 4]
+xs *= 0;              // prepend:            [0, 1, 2, 3, 4]
+xs += [9, 10];        // append elements:    [0, 1, 2, 3, 4, 9, 10]
 let ys = xs + [11];   // a NEW array; xs untouched
 
 // the target of an assignment family is evaluated exactly once
-a[f()] += 1;          // f() runs ONE time
+let grid = [[1, 2], [3, 4]];
+let f() -> long { print("called"); 0 };
+grid[f()] += 1;       // f() runs ONE time
 
 // records and arrays are reference values
 let r = { nums: [1, 2] };
 let s = r;
 s.nums += 3;          // r.nums sees it
+
+// `null` is gone: `none` is the empty option, `x!` unwraps
+let a: long? = none;
+print(a == none);
 ```
 
 The full formal definition — grammar, type system, and the exact
 operator/aliasing semantics — lives in **`docs/`** (LaTeX, built with
-[Tectonic v2](https://tectonic-typesetting.github.io/): `cd docs &&
-tectonic -X build`).
+Tectonic — `cd docs && tectonic -X build`; it was last built with
+Tectonic 0.17).
 
 ## Usage
 
@@ -64,9 +71,9 @@ ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
 | path | contents |
 |---|---|
 | `src/y/` | the compiler, in Y (`ycc.y` driver, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `std/`) |
-| `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the shared value model) |
+| `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the value model) |
 | `docs/` | the formal language definition (LaTeX/Tectonic) |
-| `refs/` | reference binaries for the byte-identical port gate |
+| `refs/` | reference binaries for the byte-identical port gate (currently `cycc`'s own output — see `PORTING.md`) |
 | `test/` | `test/sh/` suites + `test/y/` programs (`native/`, `audit/`, `examples/`, `ycc/`) |
 | `bench/` | compile-time/runtime benchmarks + `compare.sh` |
 
@@ -75,8 +82,11 @@ ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
 ```console
 $ make              # gcc -> cycc (the C copy)
 $ make ycc          # cycc -> ycc, then: cmp ycc refs/ycc.ref + fixpoint
-$ make test         # the port gate + every suite in test/sh/
-$ ./test/sh/run_all.sh port native   # a subset
+$ make test         # the port gate + all twelve suites in test/sh/
+$ ./test/sh/run_all.sh port native   # a subset (suite names: port native
+                                     # native-examples examples audit ycc-units
+                                     # ycc fixpoint loops comprehensive prof
+                                     # stdin-eof)
 ```
 
 `make asan` builds an ASan+UBSan `cycc-asan` for crash hunting.

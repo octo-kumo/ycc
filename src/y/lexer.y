@@ -16,10 +16,11 @@ def islower(c: str) -> bool {
 };
 
 def isalpha(c: str) -> bool {
-    // word chars: letters AND underscore (chr(95)) AND digits (Y words like
-    // "t0"/"r64" contain digits; the C backend's take_alpha accepts them too
-    // via is_alpha... precisely: parser.c is_alpha includes is_digit, so
-    // "t0" lexes as one id there as well — parity).
+    // word chars: letters AND underscore (chr(95)) AND digits — Y words
+    // like "t0"/"r64" contain digits, which is why the scan after the first
+    // character is isalnum (letters + digits + "_"). The C twin's isalpha
+    // /isalnum are the same two tests (src/c/lexer.c), so both lexers split
+    // identifiers identically.
     islower(c) || isupper(c) || c == "_" || isdigit(c)
 };
 
@@ -38,14 +39,13 @@ def isspace(c: str) -> bool {
     c == " " || c == "\t" || c == "\n" || c == "\r"
 };
 
-// NOTE: isdigit/isalpha/isalnum-style names MUST avoid underscores AND the
-// is_* prefix: Y's own lexer (this file) treats "_" as a word character for
-// isalpha(), but the C toolchain's parser.c parse_identifier splits "isdigit"
-// into `is`, `_`, `digit`... precisely: the Y lexer emits "isdigit" as ONE
-// id token (isalnum includes "_"), while parser.c's take_alpha stops at "_"
-// (its isalpha lacks "_"), so the C backend sees three tokens and the rename
-// pass shreds every def whose name contains an underscore. All predicate
-// names in ycc/*.y therefore use the flat isalpha/isdigit/isalnum style.
+// NOTE: these predicates keep the flat C spellings isdigit/isupper/islower/
+// isalpha/isalnum/isspace/ispunct because <ctype.h> reserves all seven as
+// builtin names: the C twin has to rename them (src/c/lexer.h maps each to a
+// y_lex_* symbol), and both copies must agree on the Y spelling at the call
+// sites. The old companion rule — "avoid underscores, the other lexer stops
+// at them" — no longer holds: isalpha above takes "_", and so does the C
+// twin's, so a name like is_radix_ch lexes as one identifier in both.
 
 // is c one of the single-char punctuation symbols?
 def ispunct(c: str) -> bool {
@@ -164,12 +164,10 @@ def issingleop(c: str) -> bool {
     c == "&" || c == "?" || c == "|"
 };
 
-// The slash character, built without a literal: Y string literals cannot
-// spell it... precisely: they CAN (c == slash-char works in comparisons),
-// but a bare slash char inside a comment or adjacent to code confuses the
-// dispatch reasoning above, so every slash reference goes through this one
-// helper (chr(47)). Single source of truth, zero literal slashes outside
-// strings in this file.
+// The slash character, in one place: this file's own source contains no bare
+// "/" outside this literal and the "/=" test in twocharop, so the comment
+// dispatch in tokenize (line comment / block comment / division) is the only
+// place a slash in the source being lexed is ever interpreted.
 def slash() -> str { "/" };
 
 def isdigitch(c: str) -> bool {
@@ -355,10 +353,8 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             // (The string arm above consumed every slash inside quotes, so a
             // slash reaching here is real code.) Look ahead one char:
             // slash-slash = line comment, slash-star = block comment,
-            // anything else = division operator. No lone-slash error: the C
-            // backend lexes division identically (parser.c skip_spaces skips
-            // comments, parse_operator matches division), so parity demands
-            // we emit the operator too.
+            // anything else = division operator. No lone-slash error:
+            // division is ordinary code, so the operator is emitted.
             if (substr(src, i + 1, 1) == slash()) {
                 // line comment
                 i = i + 2;
@@ -418,10 +414,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 0
             };
         } else {
-            // operator / punct / unknown-char dispatch. NOTE: bound once —
-            // twocharop(src, i) inline inside a call misparses on the C
-            // backend (it reads `f(g(x), ...)` args with dot/index shapes
-            // as field access; see native.y strip_ns note).
+            // operator / punct / unknown-char dispatch.
             let two = twocharop(src, i);
             if (two != "") {
                 toks += mktok("op", two, line, col);

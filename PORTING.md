@@ -9,10 +9,22 @@ byte for byte:
 ```
 make cycc                        # gcc builds the C copy
 ./cycc -o /tmp/ycc-c src/y/ycc.y # the C copy compiles the compiler
-cmp /tmp/ycc-c refs/ycc.ref      # byte-identical to the shipped ycc
+cmp /tmp/ycc-c refs/ycc.ref      # byte-identical to the golden reference
 ```
 
-`refs/ycc.ref` is the backup of the real `ycc` binary (see refs/SHA256SUMS).
+`refs/ycc.ref` is the golden output for the current sources (see
+`refs/SHA256SUMS`). **Provenance (2026-09-30):** it is `cycc`'s output —
+`cycc -o refs/ycc.ref src/y/ycc.y` — not a Y bootstrap. The previous
+reference was unusable (it trapped with "index out of bounds" on every
+input, so the old `ref → s1 → s2 → s3` Y-bootstrap chain could not be
+run at all); the replacement was accepted only after the self-compile
+fixpoint was verified across three generations (`cycc → y1 == y2 == y3`,
+`test/sh/test_fixpoint.sh`). Consequence for the gate: `cmp ycc
+refs/ycc.ref` now proves the C copy reproduces *its own* last
+self-consistent output, not that it reproduces a separately bootstrapped
+compiler — the twin agreement itself is what the port gate rests on
+(`test_port.sh` compiles every test program with both compilers and
+requires byte-identical binaries).
 
 ## Module map
 
@@ -28,8 +40,8 @@ cmp /tmp/ycc-c refs/ycc.ref      # byte-identical to the shipped ycc
 | `src/y/asm.y`           | `src/c/asm.c`         | the assembler                     |
 | `src/y/elf.y`           | `src/c/elf.c`         | ELF writer                        |
 | `src/y/ycc.y`           | `src/c/ycc.c`         | driver + `main`                   |
-| —                       | `src/c/yv.c`/`yv.h`   | the Y value model (the one shared runtime) |
-| `src/y/std/*.y`         | (stay Y)              | program modules, read from disk   |
+| —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
+| `src/y/std/*.y`         | (stay Y)              | spliced into every program from line arrays (`src/c/std_lines.c`) |
 
 `src/y/std/prof_lines.y` is generated from `prof.y` by `make`; the C copy
 gets a generated twin (`src/c/prof_lines.c`) the same way.
@@ -37,8 +49,9 @@ gets a generated twin (`src/c/prof_lines.c`) the same way.
 ## Translation rules
 
 1. **Values** (`yv.h`): `none | bool | long | float | str | array | record`
-   (tags `Y_NONE` ... `Y_REC`). Arrays and records are **reference values** (shared; `push` grows in
-   place and returns the same array — exactly the Y rules). Strings and
+   (tags `Y_NONE` ... `Y_REC`). Arrays and records are **reference values**
+   (shared; `ya_push` grows an array in place and returns the same object —
+   the rule `arr += v` follows). Strings and
    numbers are immutable values. The value model lives in `yv.c`; nothing
    else allocates Y values directly.
 
@@ -56,13 +69,15 @@ gets a generated twin (`src/c/prof_lines.c`) the same way.
 4. **Arrays**:
    `[a, b]` → `yav(2, a, b)`, `[]` → `yav(0)`, `[v; n]` → `ya_rep(v, n)`,
    `a[i]` → `ya_get(a, i)`, `a[i] = v` → `ya_set(a, i, v)`,
-   `a[i:j]` → `ya_slice(a, i, j)`, `push(a, v)` → `ya_push(a, v)` (same
-   in-place semantics), `len(x)` → `yv_len(x)`.
+   `a[i:j]` → `ya_slice(a, i, j)`, `a += v` → `ya_push(a, v)` (in
+   place), `len(x)` → `yv_len(x)`. (`push` is not a language function any
+   more; `+=` is what pushes.)
 
 5. **Strings**: `"x"` (as a value) → `ys("x")`; `a + b` → `ys_cat(a, b)`;
    `s == "lit"` → `ys_eq_lit(s, "lit")`; `s == t` → `ys_eq(s, t)`;
    `substr(s, i, n)` → `ys_substr(s, i, n)` (C-clamped semantics);
-   `tostring(v)` → `ys_tostring(v)` (same formatting as the VM);
+   `tostring(v)` → `ys_tostring(v)` (the same formatting the native
+   runtime's `tostring` produces);
    `ord/chr/trim/join/split/index_of/last_index_of` keep their names.
 
 6. **Functions**: `def f(a: long, s: str) -> long` → `long f(long a, Yv *s)`.
@@ -71,8 +86,10 @@ gets a generated twin (`src/c/prof_lines.c`) the same way.
    `self(...)` recursion → the function's own name.
 
 7. **Control flow is 1:1**: same `if`/`else if` chains, same `while`/`for`
-   loops, same early `return`s, same statement order. The `0;` statement
-   tails of Y if-arms become `;`. Do not refactor while porting.
+   loops, same early `return`s, same statement order. A block whose last
+   statement ends in `;` is void (the parser plants a `void` statement);
+   an `else` arm written `{ 0 }` or `{ 0; }` ports as the bare `;`/`0`
+   form it has — do not refactor while porting.
 
 8. **Smaller mappings**: `sym(x)` is an implementation detail — a unique
    symbol name for emitter labels; port it as a static C counter string

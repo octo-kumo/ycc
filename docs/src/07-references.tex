@@ -100,10 +100,18 @@ arrays). Values are homogeneous: storing a \ic{str} into a
 \ic{\{str => long\}} is a compile error, as is a key of the wrong type.
 
 \subsection{Equality}
+\label{sec:equality}
 
-\ic{==} on two arrays or two records is \textbf{structural}: same
-length/fields, pairwise-equal contents. It is never a pointer
-comparison; \ic{arr == []} is an emptiness test.
+\ic{==} and \ic{!=} on two \textbf{arrays} are \textbf{structural}: same
+length, pairwise-equal elements (with string elements compared by
+content). It is never a pointer comparison; \ic{arr == []} is an
+emptiness test.
+
+On two \textbf{records} or two \textbf{maps}, \ic{==} compares
+\emph{identity}: it is true exactly when both names refer to the same
+object. Two equal-looking literals are two objects, so \ic{\{x: 1\} ==
+\{x: 1\}} is \ic{false}; compare fields yourself, or copy the record and
+compare the copy's fields.
 
 \subsection{Copying}
 

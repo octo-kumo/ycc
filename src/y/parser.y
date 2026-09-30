@@ -1,17 +1,25 @@
 // parser.y — parse a token list into an AST of nested maps.
 // Each parse function returns { node: <ast>, pos: <int> }.
-// AST node kinds: num, str, id, bool, void (an absent expression), bin,
-//   un, call, index, slice,
-//   dot, assign, idxassign, decl, func, if, while, for, foreach, forrange,
-//   block, array, rec, map, ret. Postfix `x!` is sugar for unwrap(x).
+// AST node kinds: num, str, bstr, char, id, bool, void (an absent
+//   expression), err (a syntax error planted here for the checker to
+//   report — this module has no error channel of its own),
+//   bin, un, addr, deref, call, index, slice, dot, incdec,
+//   assign, idxassign, dotassign, sliceassign, store, opassign,
+//   decl, typedef, func, if, while, for, foreach, forrange,
+//   block, array, arrrep, rec, map, ret,
+//   plus the match lowering: narrow, rectest, matchend.
+// Postfix `x!` is sugar for unwrap(x).
+// Annotations parse into type nodes: tlong/tbool/tstr/tbyte/tfloat/tvoid/
+//   tname/tnone/tptr/tarr/tarrfix/tparams/tfunc/trec/tmap/tunion/topt, and
+//   tpat for a record pattern.
 
 // ── token helpers ────────────────────────────────────────────────────────
 
 def tclamp(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long {
-    // The C VM wraps out-of-bounds indices modulo count (vm.c), so peeking
-    // past EOF silently read toks[0] there. The native backend traps
-    // instead — clamp every peek to the trailing "eof" token (lexer always
-    // appends one) so both toolchains agree.
+    // Peeking past the end must not read out of bounds: the compiled
+    // compiler traps there and the C copy's ya_get aborts with "index out
+    // of bounds" (src/c/yv.c). Clamp every peek to the trailing "eof"
+    // token (tokenize always appends one) so both copies agree.
     let n = len(toks);
     let q = p;
     if (q >= n) { q = n - 1; 0; } else { 0; };
@@ -19,13 +27,15 @@ def tclamp(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long {
 };
 
 def tt(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> str {
-    // NOTE: NEVER inline `toks[p].t` (dot-then-index): parser.c misparses
-    // `x.y[i]` as `x.(y[i])` (AGENTS.md) — always bind first, then read.
+    // NOTE: bind the token, then read its field. The inline form
+    // `toks[p].t` parses fine today (index-then-dot is an ordinary postfix
+    // chain — see parse_postfix), but it is a one-read-per-peek either way,
+    // so every helper below keeps this shape.
     let tok = toks[tclamp(toks, p)];
     tok.t
 };
 def tv(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> str {
-    // NOTE: bound once (see tt note): `toks[p].v` inline would misparse.
+    // NOTE: bound once (see tt note).
     let tok = toks[tclamp(toks, p)];
     tok.v
 };
@@ -41,10 +51,10 @@ def tcol(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long {
 };
 
 def is_kw(toks: [{ t: str, v: str, line: long, col: long }], p: long, w: str) -> bool {
-    // NOTE: no `&&` — the C VM evaluates both sides eagerly AND the native
-    // checker rejects `&&` mixing map-field shapes with bools (see lexer.y
-    // isalnum note). Nested ifs keep both toolchains quiet.
-    // NOTE: bound once — `toks[p].t` inline misparses (see tt note).
+    // Nested ifs, not `&&`: both spellings typecheck (types.y types `&&`
+    // through typeof_logic, which takes any operand) and both short-circuit,
+    // so this is style, not a rule.
+    // NOTE: bound once (see tt note).
     let tok = toks[tclamp(toks, p)];
     if (tok.t == "kw") {
         if (tok.v == w) { true } else { false }
@@ -81,21 +91,17 @@ def res(node, p: long) -> { node: {k: str}, pos: long } {
 // (each returning { node, pos }) until the `close` punct. Handles trailing
 // commas. Returns { node: [nodes], pos } with pos AT the close punct (caller
 // skips it). Replaces 6 copy-pasted comma-list loops.
-// `one` is a production NAME ("expr" only, for now) — Y has no first-class
-// functions in native mode, so callers name the production and sep_by
-// dispatches (a defunctionalized stub: extend the if-chain for more).
+// `one` is a production NAME ("expr" only, for now) and sep_by dispatches on
+// it — a defunctionalized stub: extend the if-chain to add a production.
 // NOTE: toks is the token list [{ t, v, line, col }]; param typed tarr of
-// trec so the checker accepts plain token-list arguments (e03 parity: real
-// missing element types still error at the empty-array use sites).
+// trec so the checker accepts plain token-list arguments (a real missing
+// element type still errors at the empty-array use sites).
 def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: str, one: str) -> { node: [{k: str}], pos: long } {
     let xs: [{k: str}] = [];
     let pos = p;
-    // NOTE: statement-form (not `let go = !(...)`): the `un` arm types
-    // through the operand, and a call-shaped operand confuses inference.
     let go = true;
     if (is_punct(toks, pos, close)) { go = false; 0; } else { 0; };
     while (go) {
-        // NOTE: bound once — `one(toks, pos)` inline misparses on the C VM.
         // NOTE: the seed hole `{node:{k:void},pos}` is tnone-typed; the
         // expr arm fills the SAME hole with a full node — the two shapes
         // unify via the tcompat law (never strict teq), so no branch error.
@@ -105,8 +111,9 @@ def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: st
             r = parse_expr(toks, pos);
             0
         };
-        // NOTE: each bound once — `x.y` on a call result misparses on the
-        // C backend (it reads `f().y` as `f(.y)`).
+        // NOTE: the result's two fields are read off its own name (see tt
+        // note) — `one(toks, pos).node` inline is fine to parse, but the
+        // call result is already bound here.
         let rnode = r.node;
         let rpos = r.pos;
         xs += rnode;
@@ -328,9 +335,9 @@ def parse_binary(toks: [{ t: str, v: str, line: long, col: long }], p: long, min
         let op = tv(toks, pos);
         let prec = 0;
         if (tt(toks, pos) == "op") { prec = op_prec(op); 0; };
-        // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
-        // with bools and the checker rejects the joint gate (tcompat law:
-        // only annotations unify, never branch conditions).
+        // Nested ifs, not one `prec != 0 || prec < min_prec` gate: a mixed
+        // long/bool gate reads worse, and `||` would type fine anyway
+        // (typeof_logic takes any operand) — this is shape, not a rule.
         // The explicit else arms end in long-valued `0`s, keeping their
         // types aligned; the terminating `;` discards the value.
         if (prec == 0) {
@@ -357,8 +364,6 @@ def parse_binary(toks: [{ t: str, v: str, line: long, col: long }], p: long, min
 };
 
 def parse_unary(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
-    // NOTE: nested ifs, not `||` (see parse_binary note): bool-gated call
-    // shapes poison the joint `||` gate.
     if (is_op(toks, p, "-")) {
         let inner = parse_unary(toks, p + 1);
         res({ k: "un", op: tv(toks, p), e: inner.node, line: tline(toks, p), col: tcol(toks, p) }, inner.pos)
@@ -443,8 +448,6 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
             res({ k: "arrrep", v: first.node, n: n, line: ln, col: cl }, pos + 1)  // skip ']'
         } else {
             // literal, with trailing-comma tolerance
-            // NOTE: statement-form init (not `let go = is_punct(...)`): the
-            // `un`-typed call shape confuses inference (see sep_by note).
             let elems = [first.node];
             let go = true;
             if (is_punct(toks, pos, ",")) { 0; } else { go = false; 0; };
@@ -562,7 +565,8 @@ def maplit_node(is_map: bool, keys: [str], vals: [{k: str}], ln: long, cl: long)
 // tarr {of}, tparams {ts} (parenthesized list, resolved by arrow context),
 // tfunc {args, ret}, trec {fields: [{name, typ}]}, tmap {key, of},
 // tnone (no annotation).
-// Extra fields are ignored by the C backend, so this is additive.
+// Extra fields are ignored by the checker and the emitter, so this is
+// additive.
 
 def parse_type_node(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
     // NOTE: NO `node`/`pos` locals shared across arms. Earlier this function
@@ -572,8 +576,8 @@ def parse_type_node(toks: [{ t: str, v: str, line: long, col: long }], p: long) 
     // `target.arr` reads in parse_stmt resolved against rebound shapes.
     // The atom dispatches first, then ONE tail applies `?` + `->` with
     // fresh names only (parse_type_tail below).
-    // (The C VM has no early return, but every arm's tail IS its res(),
-    // so falling through is impossible — each arm is the last expression.)
+    // (Every arm's tail IS its res(), so no arm can fall through into the
+    // next — each one is the last expression in its body.)
     // NOTE: atom arms need parse_type_array/params/record/atom2 (defined
     // BELOW — forward refs are fine: defs hoist per block level in rename).
     if (is_op(toks, p, "*")) {
@@ -717,44 +721,23 @@ def parse_type_tail(toks: [{ t: str, v: str, line: long, col: long }], apos: lon
 
 // Arrow tail: `->` B (right-assoc) or bare grouping (fresh names — see note).
 def parse_type_arrow(toks: [{ t: str, v: str, line: long, col: long }], apos: long, anode) -> { node: {k: str}, pos: long } {
-    // A parenthesized list becomes the parameter list; any other atom
-    // becomes the single parameter. anode is bound ONCE (never rebound),
-    // so anode.ts always reads the pre-arrow shape.
-    // NOTE: NO eager `anode.ts` snapshot (ats): the C backend evaluates
-    // record literals EAGERLY — `{k:topt,...}.ts` on a non-tparams shape is a
-    // hard runtime error ("key 'ts' not found"), and the C VM has no
-    // option/lazy field access. Read .ts ONLY inside the tparams arms.
-    // NOTE: NO `let ak = anode.k` snapshot: the checker env is
-    // flow-insensitive (LAST shape wins per name)... but ak is a STR (not a
-    // record), and narrowing a let-bound str via if-chains is exact — EXCEPT
-    // the env ALSO merges ak with every other `ak` in the function. There is
-    // exactly one `ak` here, so the snapshot is sound; the rule is only that
-    // no OTHER arm may rebind `ak`. (`node`/`tgt` snapshots broke this rule:
-    // they were rebound across MANY arms, merging all shapes.)
-    // `anode` itself is a PARAM (never rebound), so `anode.k`/`anode.ts`
-    // reads are always the true call-site shape. Keep reads inline.
-    // NOTE: split callee by SHAPE, not by re-reading anode.k per arm:
-    // parse_type_tparams vs parse_type_plain are SEPARATE defs, so each
-    // function body contains exactly ONE `anode.k` read site resolving
-    // against exactly one call-site shape family. (Two `anode.k` reads in
-    // one body merge through the flow-insensitive env.)
-    // `?` shapes already returned via parse_type_tail (which handles `?`
-    // BEFORE calling here), so anode is never topt at this point: tparams
-    // (param list) or a plain atom. Dispatch by shape WITHOUT reading
-    // anode.k twice in one body: tparams goes to parse_type_tparams, every
-    // other shape stays inline. The dispatch reads anode.k ONCE (nested
-    // ifs, not `||` — bool/call-shape gates poison joint conditions).
-    // NOTE: dispatch WITHOUT reading anode.k here at all: the CALLER
-    // (parse_type_tail) already knows the shape — tparams arms call
-    // parse_type_tparams directly, all other arms call parse_type_plain.
-    // Reading anode.k in this body reintroduces the merged-shape read
-    // (this `anode` param name is shared across all call sites).
+    // Every atom shape reaches here — plain atoms and the `{k:"topt"}`
+    // wrapper parse_type_tail builds for `T?` — and this body reads NO
+    // field of `anode` at all, it hands the node to parse_type_plain. That
+    // is deliberate: `anode` is one PARAM name shared by every call site,
+    // so any `anode.k`/`anode.ts` read here would resolve against the
+    // MERGED shape family of all of them (a name's type is fixed at its
+    // binding — rename.y uniquifies every let — and the checker keeps one
+    // type per name). The tparams branch never comes through here:
+    // parse_type_params calls parse_type_tparams directly with the TS
+    // LIST.
     parse_type_plain(toks, apos, anode)
 };
 
 def parse_type_plain(toks: [{ t: str, v: str, line: long, col: long }], apos: long, anode) -> { node: {k: str}, pos: long } {
-    // Non-tparams atoms: `->` builds tfunc, else anode. This body contains
-    // NO `anode.k`/`anode.ts` reads at all, so nothing merges here.
+    // Every non-tparams atom (including the topt wrapper): `->` builds
+    // tfunc, else the node itself. This body contains NO `anode.k`/
+    // `anode.ts` reads at all, so nothing merges here.
     if (is_op(toks, apos, "->")) {
         let rhs = parse_type_node(toks, apos + 1);
         res({ k: "tfunc", args: [anode], ret: rhs.node }, rhs.pos)
@@ -764,9 +747,10 @@ def parse_type_plain(toks: [{ t: str, v: str, line: long, col: long }], apos: lo
 };
 
 def parse_type_tparams(toks: [{ t: str, v: str, line: long, col: long }], apos: long, tlist: [{k: str}]) -> { node: {k: str}, pos: long } {
-    // tparams shape ONLY (dispatched by shape): the caller passes the TS
-    // LIST itself (not a tparams record), so this body contains NO record
-    // field reads at all — nothing to merge, nothing to mis-resolve.
+    // Reached only from parse_type_params (a parenthesized list), which
+    // passes the TS LIST itself (not a tparams record), so this body
+    // contains NO record field reads at all — nothing to merge, nothing to
+    // mis-resolve.
     // `->` after a param list: (A, B) -> R. Else bare grouping: (T) = T.
     let ts0 = tlist;
     if (is_op(toks, apos, "->")) {
@@ -782,8 +766,9 @@ def parse_type_tparams(toks: [{ t: str, v: str, line: long, col: long }], apos: 
 def parse_type_atom(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> long {
     // Parse a single non-arrow type and return the position after it.
     // Atoms: long, str, bool, [T], (T, T), { field: T, ... }
-    // NOTE: bound once — `parse_type_node(...).pos` inline misparses on the
-    // C backend (it reads `f().y` as `f(.y)`).
+    // NOTE: no callers left — parse_type below is the only one, and nothing
+    // calls that (annotations go through parse_type_full). Dead code: the
+    // defs are not tree-shaken, so removing them changes the golden binary.
     let r = parse_type_node(toks, p);
     r.pos
 };
@@ -794,6 +779,7 @@ def parse_type(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> lo
     // A -> B (right-associative, so A -> B -> C = A -> (B -> C)).
     // The recursive arm only updates `pos`; this conditional's value is
     // discarded, so its VOID-law arm mismatch does not affect the result.
+    // NOTE: dead code — see parse_type_atom.
     let pos = parse_type_atom(toks, p);
     if (is_op(toks, pos, "->")) {
         pos = parse_type(toks, pos + 1);
@@ -948,9 +934,6 @@ def parse_block(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
     let cl = tcol(toks, p);
     let pos = p + 1;  // skip '{'
     let stmts: [{k: str}] = [];
-    // NOTE: no `&&` (see lexer.y line-comment note): the C VM evaluates both
-    // sides eagerly, so tt()/toks[pos] runs past "}" (clamped — safe here,
-    // but the native checker rejects the shape); nested-if form instead.
     let go = true;
     // A block whose last statement ends in `;` is void: `{ f(); }` computes
     // nothing, `{ f() }` is f's value. A trailing `return x;` (or a branch
@@ -1001,8 +984,6 @@ def if_diverges(s) -> bool {
 // ── statements ───────────────────────────────────────────────────────────
 
 def parse_stmt(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
-    // NOTE: no `||` (see lexer.y isalnum note): the C VM evaluates both sides
-    // eagerly AND the native checker rejects `||` mixing map-field shapes.
     if (is_kw(toks, p, "let")) { parse_decl(toks, p) }
     else if (is_kw(toks, p, "const")) { parse_decl(toks, p) }
     else if (is_typedef_start(toks, p)) { parse_typedef(toks, p) }
@@ -1011,11 +992,13 @@ def parse_stmt(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
         res({ k: "ret", e: e.node, line: tline(toks, p), col: tcol(toks, p) }, e.pos)
     } else {
         // expression, possibly an assignment: id = expr, arr[i] = expr, or obj.key = expr
-        // NOTE: dispatch by SHAPE into separate defs (like parse_type_tail):
-        // parse_stmt_assign splits index/dot/deref/plain-id into callees
-        // that each read ONLY their own shape's fields. Reading tgt.arr +
-        // tgt.obj + tgt.e + tgt.v in ONE body merges all shapes through the
-        // flow-insensitive env ("record has no field 'arr'").
+        // One def per target shape (see parse_stmt_assign): the callees
+        // below each read ONLY their own shape's fields, because a name
+        // carries ONE type — a param annotated `{k: str}` may read `.k`
+        // and nothing else (types.y's dot arm: "record has no field 'arr'"),
+        // and rename.y gives every binding a unique name, so a local's type
+        // is the one from its own `let`, not the shapes assigned to it
+        // later.
         let e = parse_expr(toks, p);
         if (is_op(toks, e.pos, "=")) {
             parse_stmt_assign(toks, p, e.node, e.pos)
@@ -1050,6 +1033,8 @@ def is_compound_assign(toks: [{ t: str, v: str, line: long, col: long }], p: lon
 };
 
 def parse_stmt_opassign(toks: [{ t: str, v: str, line: long, col: long }], p: long, tgt: {k: str}, epos: long) -> { node: {k: str}, pos: long } {
+    // NOTE: `p` is unused — the operator token is at `epos`, and line/col
+    // come from there too (the C twin marks it `(void)p;`).
     let op = tv(toks, epos);
     let rhs = parse_expr(toks, epos + 1);
     // Every compound op is `X=`, so the binary op is its first character.
@@ -1060,9 +1045,9 @@ def parse_stmt_opassign(toks: [{ t: str, v: str, line: long, col: long }], p: lo
 // Assignment dispatch: one def per target shape (see parse_stmt note).
 // Each body reads ONLY its own shape's fields — no merged-shape reads.
 def parse_stmt_assign(toks: [{ t: str, v: str, line: long, col: long }], p: long, tgt: {k: str}, epos: long) -> { node: {k: str}, pos: long } {
-    // NOTE: dispatch WITHOUT reading tgt.k twice in one body (see
-    // parse_type_arrow note): index/dot go to dedicated callees; deref and
-    // plain-id stay inline (disjoint fields e vs v — but read each once).
+    // ONE `tgt.k` read per body: `tgt` is annotated `{k: str}` here, so this
+    // is the only field it may read. index gets a dedicated callee;
+    // everything else (dot, deref, slice, plain id) goes to parse_stmt_rest.
     if (tgt.k == "index") {
         parse_stmt_idxassign(toks, p, tgt, epos)
     } else {
@@ -1071,19 +1056,19 @@ def parse_stmt_assign(toks: [{ t: str, v: str, line: long, col: long }], p: long
 };
 
 def parse_stmt_idxassign(toks: [{ t: str, v: str, line: long, col: long }], p: long, tgt: {k: str}, epos: long) -> { node: {k: str}, pos: long } {
-    // NOTE: pass the WHOLE target + a KIND tag; the callee re-reads fields
-    // off its OWN param (one shape per callee — no cross-callee merge).
-    // Reading tgt.arr HERE would merge with tgt.obj/tgt.e/tgt.v reads in
-    // sibling callees (same param name `tgt` across defs shares one env
-    // entry). The _go callee's param is a DIFFERENT name (itgt), read once.
+    // NOTE: hand the WHOLE target to a callee whose param is a DIFFERENT
+    // name (`itgt`): `tgt` is annotated `{k: str}` and cannot read
+    // `tgt.arr` here at all (see parse_stmt note), so the fields must be
+    // read in a body that takes the node unannotated.
     parse_stmt_idxassign_go(toks, p, tgt, epos)
 };
 
 def parse_stmt_idxassign_go(toks: [{ t: str, v: str, line: long, col: long }], p: long, itgt, epos: long) -> { node: {k: str}, pos: long } {
-    // NOTE: param DECLARED with the full shape: the env entry for `itgt`
-    // carries arr/idx (not the merged {k}-only hole), so the reads below
-    // resolve. tcompat's structural trec rule accepts the richer call-site
-    // literal at the call (superset accepts subset).
+    // NOTE: `itgt` is UNANNOTATED on purpose, so `itgt.arr`/`itgt.idx`
+    // resolve against the call-site shape (the caller's `tgt`, typed by its
+    // own `{k: str}` annotation, flows in through tcompat's structural trec
+    // rule — superset accepts subset). An annotation here would pin these
+    // reads to whatever fields it names.
     let rhs = parse_expr(toks, epos + 1);
     res({ k: "idxassign", arr: itgt.arr, idx: itgt.idx, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
 };
@@ -1099,12 +1084,12 @@ def parse_stmt_rest(toks: [{ t: str, v: str, line: long, col: long }], p: long, 
 };
 
 def parse_stmt_dotassign(toks: [{ t: str, v: str, line: long, col: long }], p: long, tgt: {k: str}, epos: long) -> { node: {k: str}, pos: long } {
-    // NOTE: same whole-record handoff as idxassign (see note above).
+    // NOTE: same whole-target handoff as idxassign (see note above).
     parse_stmt_dotassign_go(toks, p, tgt, epos)
 };
 
 def parse_stmt_dotassign_go(toks: [{ t: str, v: str, line: long, col: long }], p: long, dtgt, epos: long) -> { node: {k: str}, pos: long } {
-    // NOTE: full-shape param (see idxassign_go note).
+    // NOTE: unannotated param (see idxassign_go note).
     let rhs = parse_expr(toks, epos + 1);
     res({ k: "dotassign", obj: dtgt.obj, key: dtgt.key, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
 };
@@ -1112,8 +1097,9 @@ def parse_stmt_dotassign_go(toks: [{ t: str, v: str, line: long, col: long }], p
 
 
 def parse_stmt_simple(toks: [{ t: str, v: str, line: long, col: long }], p: long, tgt: {k: str}, epos: long) -> { node: {k: str}, pos: long } {
-    // deref (*p = v) vs plain id (x = v): separate callees per shape, fields
-    // passed as VALUES (see parse_stmt_idxassign note).
+    // deref (*p = v) vs plain id (x = v): separate callees per shape, the
+    // whole target handed over unannotated (see parse_stmt_idxassign_go
+    // note).
     if (tgt.k == "deref") {
         parse_stmt_store(toks, p, tgt, epos)
     } else {
@@ -1132,18 +1118,19 @@ def parse_stmt_simple2(toks: [{ t: str, v: str, line: long, col: long }], p: lon
 // `a[lo:hi] = src`: overwrite that range of a with src's elements (the
 // lengths must agree; checked at run time).
 def parse_stmt_sliceassign(toks: [{ t: str, v: str, line: long, col: long }], p: long, ltgt, epos: long) -> { node: {k: str}, pos: long } {
+    // NOTE: unannotated param (see idxassign_go note).
     let rhs = parse_expr(toks, epos + 1);
     res({ k: "sliceassign", arr: ltgt.arr, lo: ltgt.lo, hi: ltgt.hi, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
 };
 
 def parse_stmt_store(toks: [{ t: str, v: str, line: long, col: long }], p: long, stgt, epos: long) -> { node: {k: str}, pos: long } {
-    // NOTE: full-shape param (see idxassign_go note).
+    // NOTE: unannotated param (see idxassign_go note).
     let rhs = parse_expr(toks, epos + 1);
     res({ k: "store", p: stgt.e, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
 };
 
 def parse_stmt_plainassign(toks: [{ t: str, v: str, line: long, col: long }], p: long, atgt, epos: long) -> { node: {k: str}, pos: long } {
-    // NOTE: full-shape param (see idxassign_go note).
+    // NOTE: unannotated param (see idxassign_go note).
     let rhs = parse_expr(toks, epos + 1);
     res({ k: "assign", name: atgt.v, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
 };
@@ -1502,7 +1489,8 @@ def parse_program(toks: [{ t: str, v: str, line: long, col: long }]) -> {k: str}
         pos = s.pos;
         if (is_punct(toks, pos, ";")) { pos = pos + 1; 0; };
         // safety: if a statement made no progress, bail to avoid infinite loop
-        // NOTE: `0;` tail — the while body must be void-typed (see note).
+        // NOTE: `0;` tail — the while body must be void-typed (see the
+        // parse_block note).
         if (pos == before) {
             pos = pos + 1;
             0

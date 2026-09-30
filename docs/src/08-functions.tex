@@ -40,10 +40,12 @@ profiled entry pairs with its exit.
 \subsection{Closures}
 \label{sec:closures}
 
-A function literal closes over its \emph{entire lexical scope}, not over
-the individual variables it mentions. Captured bindings are
-\textbf{shared}: a write inside the closure is visible outside, and a
-write outside is visible inside.
+A function literal captures the enclosing bindings it reads --- and only
+those that are already in scope where the literal is written (a name
+bound by a \ic{let} \emph{after} the \ic{def} is not in scope and is an
+undefined-variable error, exactly like reading a local before its
+declaration). Captured bindings are \textbf{shared}: a write inside the
+closure is visible outside, and a write outside is visible inside.
 
 \begin{lstlisting}
 def counter() {

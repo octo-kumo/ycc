@@ -16,7 +16,7 @@ type & domain & notes \\
 \ic{byte}  & $0\ldots255$ & stored in one byte inside \ic{[byte]} \\
 \ic{bool}  & \ic{true}, \ic{false} & \\
 \ic{float} & IEEE-754 binary64 & \\
-\ic{str}   & immutable byte strings & no embedded NUL \\
+\ic{str}   & immutable byte strings & length-prefixed; may hold NUL \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -88,16 +88,20 @@ let w = if (ok) { 1 } else { "one" };    // error: cannot bind a void value to '
 
 \subsection{Functions}
 
-\ic{(T, T, ...) -> R}. Parameter types are mandatory; return
-types are inferred when omitted and checked when written. Function
-values are first-class (they may be bound, passed, stored and called);
-see Section~\ref{sec:functions}.
+\ic{(T, T, ...) -> R}. Return types are inferred when omitted and
+checked when written. A parameter annotation is optional: without one
+the parameter takes the unknown type, which poisons quietly
+(Section~\ref{sec:poison}) and is treated as a machine word by the
+backend --- so annotate every parameter that carries a string, array,
+record or option. Function values are first-class (they may be bound,
+passed, stored and called); see Section~\ref{sec:functions}.
 
 \subsection{Annotations and inference}
 
 \begin{itemize}[nosep]
-\item \ic{def} parameter annotations are \textbf{required}; the checker
-  reports a missing one exactly once (Section~\ref{sec:poison}).
+\item \ic{def} parameter annotations are \textbf{recommended}; a missing
+  one takes the unknown type and never cascades a second diagnostic
+  (Section~\ref{sec:poison}).
 \item Return types are inferred from the body when omitted; when written,
   every \ic{return} and the body's trailing value must conform.
 \item \ic{let} annotations are optional and checked; an annotated
@@ -114,11 +118,13 @@ see Section~\ref{sec:functions}.
 
 \subsection{Conversions}
 
-Exactly three implicit conversions exist:
+The implicit conversions are:
 \ic{long $\bs to$ float} (the only numeric widening),
-\ic{byte $\bs to$ long}, and \ic{byte $\bs to$ float}. An annotated
-\ic{byte} position accepts a \ic{long} literal and masks it to eight
-bits where it is stored. There is no cast syntax.
+\ic{byte $\bs to$ long}, \ic{byte $\bs to$ float}, and the narrowing
+\ic{long $\bs to$ byte} at an \emph{annotated} \ic{byte} position (where
+the value is masked to eight bits when it is stored). A \ic{str} also
+flows into a \ic{*T} position, since a string value is a byte address.
+Apart from these, nothing converts: there is no cast syntax.
 
 \subsection{Operator typing}
 
@@ -127,9 +133,11 @@ Arithmetic requires numbers; if either side is \ic{float} the result is
 strings (concatenation, with auto-stringification of the non-string
 side) and arrays (Section~\ref{sec:arrays}); arrays win over strings
 when both appear. Comparisons yield \ic{bool}; \ic{<}\,\ldots\ic{>=}
-on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} require
-booleans. Equality works on any two values of the same type (structural
-for arrays and records).
+on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} accept any
+values: a non-zero value is true and the result is \ic{bool}
+(Section~\ref{sec:evaluation}). Equality works on any two values of the
+same type; it is by content for scalars and strings, structural for
+arrays, and by identity for records and maps (Section~\ref{sec:equality}).
 
 \subsection{Compound assignment typing}
 \label{sec:opassign-typing}

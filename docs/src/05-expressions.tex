@@ -26,8 +26,9 @@ widen the long side.
 \subsection{Logic}
 
 \ic{\&\&} and \ic{||} short-circuit: the right operand is evaluated
-only when the left does not decide the result. Both operands must be
-\ic{bool}.
+only when the left does not decide the result. Operands are not
+required to be \ic{bool} --- any non-zero value is true, and the result
+of either operator is a \ic{bool}.
 
 \subsection{Strings}
 
@@ -104,3 +105,7 @@ x.y.z += e;       // x and x.y evaluated once
 \ic{+} (which copies) --- and are defined in Section~\ref{sec:arrays}.
 On string targets only \ic{+=} is legal and concatenates. Every other
 combination is a type error (Section~\ref{sec:opassign-typing}).
+
+\paragraph{Maps and slices.} A map store \ic{m[k] = v} evaluates \ic{m},
+\ic{k} and \ic{v} once each; a slice assignment \ic{a[lo:hi] = b} the same
+way (Section~\ref{sec:arrays}).

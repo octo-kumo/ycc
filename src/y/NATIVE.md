@@ -19,33 +19,39 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect (+ octal payload writer) |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), static, entry `_start` |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `prelude.y` (`readline`/`exec` chunks) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof` and the separate `exec` chunk), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `prof.y` (the `--prof` runtime), `struct.y` (pack/unpack helpers) |
 
-New Y files must stay in the **portable subset** (no pointer syntax in their
-own code) and must get a **1:1 C twin** in `src/c/` (see `PORTING.md`) --
-the two compilers are kept in lockstep.
+New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
+`PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
+the exception: those files are spliced into *compiled programs*, never
+ported, so they may use the whole native surface -- `&x`, `*p`,
+`syscall`.)
 
 ## Data representation
 
 - `long`/`int` (same), `byte` (8-bit unsigned), `bool` (0/1), `float`
-  (IEEE754 double bits), pointer `*T`, `str` (NUL-terminated bytes in
-  `.rodata`, value = address), option `T?` (0 = none, else heap box),
+  (IEEE754 double bits), pointer `*T`, `str` (a `.rodata` header, value =
+  its address), option `T?` (0 = none, else heap box),
   function values (address of a closure record): **every value is exactly 8
   bytes** on the stack/in regs/on the heap.
 - **`[byte]` arrays are packed**: one byte per element, not eight. Every
-  element lives at `base + 16 + i*esz`, and `esz` comes from the static
+  element lives at `data + i*esz`, and `esz` comes from the static
   element type — so the scale factor, the allocation size and the load/store
   width follow from the type alone (`movzbq`/`movb` instead of `mov`).
-  `y_arr_push`/`y_arr_slice`/`y_arr_eq` take `esz` as an argument, so one
-  implementation serves both layouts. 100k elements cost 256 KB packed
-  versus 2 MB unpacked. `bytes(s)` and `from_bytes(b)` convert to and from
-  `str`; a `byte` widens to `long` in arithmetic, and a `long` narrows to
-  `byte` at annotated sites (there is no cast syntax).
+  `y_arr_push`/`y_arr_prepend`/`y_arr_slice`/`y_arr_eq` take `esz` as an
+  argument, so one implementation serves both layouts. 100k elements cost
+  256 KB packed versus 2 MB unpacked. `bytes(s)` and `from_bytes(b)` convert
+  to and from `str`; a `byte` widens to `long` in arithmetic, and a `long`
+  narrows to `byte` at annotated sites (there is no cast syntax).
 - Locals live at fixed `rbp` offsets (one flat frame per function, 8 bytes/slot).
   Arrays — fixed `[v; n]` and dynamic `[v, ...]` alike — are **heap headers**
-  `{len, cap, data...}`; a local holds the header address, so `[T; N]` is as
-  first-class as `[T]` (it can be bound, passed, returned; only `push` is
-  rejected, since `N` is part of the type).
+  `{len, cap, data}` where `data` points at a separately allocated element
+  block; a local holds the header address, so `[T; N]` is as
+  first-class as `[T]` (it can be bound, passed, returned; only `+=`/`*=`
+  growth is rejected, since `N` is part of the type).
+- **`str`** is a length-prefixed `.rodata` header `[len, data..., NUL]`, and
+  the value is that header's address — so a `str` may carry embedded NULs
+  and `len` is a load, not a `strlen`.
 - **Arrays and records are reference values**: a binding stores the address,
   never a copy. `let b = a`, passing, returning and storing all share, and
   `a[i] = v` / `s.f = v` are observable through every alias. Both
@@ -53,7 +59,8 @@ the two compilers are kept in lockstep.
   semantics here; it made every helper that returned an accumulator O(n), so
   the assembler was O(n²) and self-compilation OOMed past 7.5 GB.)
 - Heap (bump allocator over `brk`, stateless — no retained end pointer):
-  dynamic arrays `[v, ...]` as `{len, cap, data...}` headers, option boxes.
+  dynamic arrays `[v, ...]` as `{len, cap, data}` headers (element block
+  allocated separately), option boxes.
   Nothing is ever freed (arena); no GC to write until something needs it.
 - Expression values in `%rax`; operands that must survive nested evaluation are
   **pushed** (nothing live in caller-saved regs across a call).
@@ -67,7 +74,11 @@ the two compilers are kept in lockstep.
   identical to a direct call and the closure sits at `rbp+16+8*nargs`. One
   body serves both call forms — capture-free bodies simply never read that
   slot. A capturing function is emitted at its *creation site*, because only
-  the enclosing environment knows each captured name's type.
+  the enclosing environment knows each captured name's type. Every capture
+  slot holds a pointer to one heap **cell** (`box_capture`), so a captured
+  variable is *shared* between the enclosing frame and every closure over it
+  — writes are visible in both directions, and each iteration of a loop gets
+  fresh cells.
 - Maps `{K => V}` are lowered to a `{keys: [K], vals: [V]}` record and
   every map operation (literal, `m[k]`, `m[k] = v`, `len`, printing) to
   synthetic AST over those arrays -- no map-specific assembly. Reads are
@@ -78,16 +89,16 @@ the two compilers are kept in lockstep.
 ```
 source → lexer → parser (+types) → splice imports → strip namespaces
   → rename (uniquify) → types.y (static check, ERRORS ARE FATAL)
-  → [later: ANF/CPS] → [later: closure conversion, defunctionalization]
+  → [later: ANF/CPS, defunctionalization]
   → frame layout → arch emit → asm.y (assemble) → elf.y → executable
 ```
 
-- **Now**: direct AST→asm (stack machine + heap values), top-level `def` only, nested
-  capture-free `def` is hoisted (baby lambda lifting), captures are a type error.
-  No scopes/shadowing downstream of rename (flat envs + function-depth counter).
-- **Next**: ANF lowering (explicit eval order), closure conversion
-  (closures = code pointer + env), defunctionalization, register allocation,
-  TCO, heap maps/strings, GC (only when something must free).
+- **Now**: direct AST→asm (stack machine + heap values). A capture-free
+  `def` (top-level or nested) is hoisted to a top-level function and called
+  directly; one that captures is closure-converted and emitted at its
+  creation site. No scopes/shadowing downstream of rename (flat envs).
+- **Next**: ANF lowering (explicit eval order), defunctionalization,
+  register allocation, GC (only when something must free).
 - Semantics disputes between the Y and C implementations are resolved toward
   "what would a reasonable scoped functional language do" (TypeScript/Rust
   intuition): lexical scope, `self` for recursion, no implicit coercions
@@ -99,22 +110,24 @@ source → lexer → parser (+types) → splice imports → strip namespaces
 emitted instruction (fixed-size near jumps/calls, so lengths are known in
 pass 1), `asm.y` assembles (two passes + fixups + rodata), `elf.y` wraps one
 PT_LOAD (R+E) with entry `_start`. Verified byte-for-byte behaviorally against
-binutils-built binaries for the whole corpus. Bytes leave Y as octal escapes
-through `exec printf` (Y strings cannot carry NUL via `write_file`) + chmod;
-at self-hosting this becomes a raw `write` syscall. No cc/as/ld involved.
+binutils-built binaries for the whole corpus. The assembled bytes go straight
+out through the `write_bytes` builtin (raw `open`/`write`/`chmod` over
+syscalls, mode 493 = 0755), so NULs pass through untouched. No cc/as/ld
+involved.
 
 ## Pointers, stack arrays, heap arrays, options
 
 - Syntax: `&x` address-of a local/param/fixed-array, `&a[i]` element address,
   `*p` load, `*p = v` store, `a[i]` / `a[i] = v`, `len(a)`,
-  `let buf = [v; n]` (n stack slots), `[v, ...]` (heap), `[T; N]` / `[T]` types,
+  `let buf = [v; n]`, `[v, ...]` (heap), `[T; N]` / `[T]` types,
   `T?` option types (`int` is `long`), `some(v)` / `none` / `is_some` / `unwrap`.
 - Types: `*T`, `[T; N]`, `[T]`, `T?`. `&x : *T`, `&a : *T` (fixed) / `&a[i] : *T`.
   `str` flows into `*T`; `none` unifies with any `T?`.
 - Fixed and heap arrays are both first-class reference values: assign, pass,
   return, alias. The difference is only the type: `[T; N]` carries its length
-  statically and rejects `push` (growing it would break the type), while `[T]`
-  grows via `push` (rebind: `a = push(a, v)`, since growing may move it).
+  statically and rejects `+=`/`*=` (growing it would break the type), while
+  `[T]` grows in place via `+=`/`*=` (no rebind: the header never moves, so
+  every alias sees the growth).
   Indexing either kind is bounds-trapped (`y_oob`). Unwrap of `none` traps
   (`y_opt_unwrap`).
 - Memory safety today = static types + trapped OOB + arena heap (nothing
@@ -135,15 +148,17 @@ at self-hosting this becomes a raw `write` syscall. No cc/as/ld involved.
 
 ## Type system (types.y) — the law, expanded over time
 
-Now: `long`/`int`, `bool`, `float`, `str`, `*T`, `[T; N]`, `[T]`, `T?`,
-function types `(A, B) -> R`, monomorphic `def` (annotations **required** on
-params in native mode; return types and locals inferred), captures resolved
-into closures, `if` cond must be `bool`, `if` arms that disagree make the
-`if` `void` (a statement; using it as a value errors), `while` is
-`void`-typed, `str`→`*T`, `long`→`float` and `none`-unification are the only
-implicit conversions. There is no `null`: `none` is the empty option and
-postfix `x!` is `unwrap(x)`. Error messages strip rename's `$N` suffixes and carry
-line/col (LSP feeds on these).
+Now: `long`/`int`, `bool`, `float`, `str`, `byte`, `*T`, `[T; N]`, `[T]`,
+`T?`, `{f: T}` records, `{K => V}` maps, record unions `A | B`,
+function types `(A, B) -> R`, monomorphic `def` (a param without an
+annotation infers the poison type `<error>` — annotate; return types and
+locals are inferred), captures resolved into closures, `if` cond must be
+`bool`, `if` arms that disagree make the `if` `void` (a statement; using it
+as a value errors), `while` is `void`-typed, and the only implicit
+conversions are `long`→`float`, `byte`→`long`/`float`, `long`→`byte` at an
+annotated site, `str`→`*T` and `none`-unification. There is no `null`:
+`none` is the empty option and postfix `x!` is `unwrap(x)`. Error messages
+strip rename's `$N` suffixes and carry line/col (LSP feeds on these).
 Later: generics, borrow rules, methods/traits if Y grows them.
 
 ## Newer language features
@@ -188,14 +203,16 @@ All of these are lowered early, so the checker and emitter see little new:
 ## Self-hosting: done
 
 `ycc` compiles its own source to a byte-identical binary. The chain is
-`cycc → ycc → _ycc`, gated by `cmp ycc refs/ycc.ref` (the C copy is
-byte-identical to the reference) and `cmp ycc _ycc` (`make ycc`), and
-`test/sh/test_fixpoint.sh` re-checks it from an already-built `./ycc`,
-including a third generation and a smoke compile with the self-built binary.
+`cycc → ycc → _ycc`, gated by `cmp ycc refs/ycc.ref` and `cmp ycc _ycc`
+(`make ycc`), and `test/sh/test_fixpoint.sh` re-checks it from an
+already-built `./ycc`, including a third generation and a smoke compile
+with the self-built binary.
 
-Measured on the self-compile (`ycc --time -o ycc src/y/ycc.y`):
-562 KB of spliced source, 123 K tokens, 2.36 MB of assembly, a 602 KB static
-ELF, in ~2.4 s and ~683 MB of arena.
+Measured on the self-compile (`ycc --time -o ycc src/y/ycc.y`, a slow
+shared VM — the numbers are for shape, not for speed): 714 KB of spliced
+source, 158 K tokens, 3.1 MB of assembly, a 788 KB static ELF, in ~23 s and
+~31 GB of arena, with the assembler's link phase (`a:link`/`l:patch`)
+dominating. On the development machine the same compile takes ~2 s.
 
 What made it possible was not new features but removing copies: arrays and
 records became reference values everywhere (copy-on-store made the
@@ -222,9 +239,10 @@ runtime provides **behaviour**. What stays in assembly is only what needs raw
 machine state: the `y_alloc` bump allocator, the trap stubs (div/0, OOB,
 unwrap-of-none, OOM), dynamic record lookup (`y_dot_lookup`), the
 byte-moving string cores (`y_str_eq/cmp/cat/substr`), `str`↔`[byte]`
-conversion, the generic array cores (`y_arr_push/slice/eq` — one
-implementation each, parameterized by element width, because Y has no
-generics), float formatting, and argv materialization. Everything else —
+conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
+`y_arr_eq` — one implementation each, parameterized by element width,
+because Y has no generics), float formatting, and argv materialization.
+Everything else —
 number formatting, the whole print/put/eput family, `trim`/`ord`/`chr`/
 `tonum`/`index_of`/`join`/`split`, `range`, time, files — is Y. Two worked
 examples of the same move landed earlier:
@@ -296,7 +314,8 @@ compile time and string-heavy speed — is deliberate; the next lever is
 the remaining hot primitives (`y_long_tostr`, `y_str_index`), which are
 either cheaper Y forms or back to being byte primitives in asm.
 
-A hello world is 8 KB and ~490 asm lines, of which the hand-written runtime
+A hello world is 8 KB (8312 bytes, the page-aligned ELF) and ~760 asm
+lines, of which the hand-written runtime
 is `y_alloc`, `y_bytes_to_str` and the digit loop of `y_long_tostr`: the
 splitter, the file layer and the float formatter are not there because the
 program does not use them.
@@ -338,8 +357,8 @@ only: the program that runs has no use for the file.
 `src/y/std/net.y` is the first optional module: TCP over raw sockets
 (`socket_tcp`/`bind_tcp`/`listen_fd`/`accept_tcp`/`connect_tcp`/
 `send_str`/`recv_str`/`local_port`) and a tiny HTTP server
-(`http_response`, `http_serve_one`, `listen_http`), all Y over `syscall`.
-A `ui` module would land the same way.
+(`http_response`, `http_read_head`, `http_serve_one`, `listen_http`), all Y
+over `syscall`. A `ui` module would land the same way.
 
 ## Profiling compiled output (`ycc --prof`)
 
@@ -391,10 +410,10 @@ programs must also keep passing if the C path ever learns the feature — one
 behavior, two backends.
 
 `test/sh/test_native_examples.sh` is the ratchet on the example corpus:
-every `test/y/examples/*.y` the native compiler accepts must print what the
-reference compiler's output prints. Examples it cannot take yet live in the script's `UNSUPPORTED`
-map with a reason each, and the suite fails as soon as one of them starts
-compiling — so the list can only shrink.
+every `test/y/examples/*.y` the built `./ycc` accepts must print what the
+reference compiler's output prints. Its `UNSUPPORTED` map is currently
+**empty** — every example compiles — and the suite fails as soon as one of
+them starts compiling again, so the list can only shrink.
 
 ## Known native limitations
 
@@ -422,14 +441,9 @@ compiling — so the list can only shrink.
 - **Embedded NUL bytes.** A `str` is length-prefixed (`{len, data..., NUL}`),
   so `from_bytes([65, 0, 66])` is a 3-byte string and `bytes()` returns all
   three. Use `[byte]` arrays for binary data.
-- `str` flows into `*T` positions but has no byte access yet.
-- **`push` may move the array.** The header and its elements live in one
-  block (`{len, cap, data...}`), so growing past `cap` allocates a new
-  block: other bindings keep pointing at the old one. The C runtime keeps a
-  stable header with separately allocated data, so there growth is
-  invisible to aliases. Always rebind — `a = push(a, v)` — and never rely
-  on an alias taken before a `push`. (A `{len, cap, dataptr}` header would
-  close the gap at the cost of one extra load per element access.)
+- Unbounded (non-tail) recursion exhausts the stack: there is no
+  recursion limit, so deep non-tail recursion dies on a guard page. Tail
+  recursion is constant-space (see above).
 - Arena heap: nothing is freed (no leaks that matter for short-lived
   binaries; long-running programs want the planned GC).
 - `y_alloc` issues two `brk` syscalls per allocation (no writable segment to

@@ -7,8 +7,9 @@ a runtime error (Section~\ref{sec:errors}).
 \subsection{Sequences and text}
 
 \begin{description}[style=nextline,leftmargin=5.2em]
-\item[\ic{len(x)}] Length of a string (bytes), array (elements), record
-  (fields) or map (entries) as \ic{long}.
+\item[\ic{len(x)}] Length of a string (bytes), array (elements) or map
+  (entries) as \ic{long}. Records are rejected (a record's field count
+  is part of its type).
 \item[\ic{range(n)}] \ic{[0, 1, ..., n-1]}.
 \item[\ic{substr(s, i, n)}] Substring, C-clamped: \ic{i < 0} becomes
   \ic{0}, \ic{i >= len} yields \ic{""}, \ic{n < 0} or overflow runs to
@@ -67,6 +68,9 @@ a runtime error (Section~\ref{sec:errors}).
   program output apart).
 \item[\ic{readline()}] One line from stdin without its newline, or
   \ic{none} at end of input (\ic{str?}).
+\item[\ic{clear\_eof()}] No-op: \ic{readline()} issues a fresh read on
+  every call, so end of input is never latched. Present so the same
+  source runs on every compiler.
 \item[\ic{read\_file(path)}] File contents as \ic{str?}: \ic{none} when
   the file cannot be read.
 \item[\ic{write\_file(path, s)}] Write a string; \ic{bool} success.

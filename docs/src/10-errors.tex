@@ -29,7 +29,7 @@ through every enclosing use. Typical families:
 
 \subsection{Run time}
 
-The compiled program traps --- writes a one-line message to stderr and
+The compiled program traps --- writes a one-line message to stdout and
 exits with status 1 --- on:
 
 \begin{center}
@@ -41,11 +41,18 @@ array index outside \ic{[0, len)} & \ic{runtime error: index out of bounds} \\
 division or remainder by zero & \ic{runtime error: division by zero} \\
 \ic{unwrap(none)}, \ic{none!} & \ic{runtime error: unwrap of none} \\
 missing dynamic field/key & \ic{runtime error: record has no field 'k'} \\
-memory exhausted & \ic{out of memory} \\
-unbounded recursion & a recursion-limit error, not a crash \\
+slice assignment out of range & \ic{runtime error: slice assignment out of bounds} \\
+match with no arm covering a value & \ic{runtime error: no match arm matched} \\
+memory exhausted & \ic{runtime error: out of memory} \\
+unbounded (non-tail) recursion & stack exhaustion: no limit, so the
+  process dies on the guard page \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\noindent These messages go to \textbf{stdout} (the trap stubs use
+\ic{write(1, ...)} directly), so a program's real output stays
+recognizable; \ic{eputs} is the way to send diagnostics to stderr.
 
 \noindent Fixed arrays trap exactly like heap arrays; slices never trap
 (they clamp). Integer overflow is \emph{not} an error

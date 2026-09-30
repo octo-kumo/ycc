@@ -16,9 +16,11 @@ same semantics.
   `refs/` holds the backed-up reference binaries (gitignored; see
   `refs/SHA256SUMS`).
 - Do not commit build artifacts: `*.o`, `cycc`, `cycc-asan`, `ycc`,
-  `_ycc`, `a.out`, `src/c/prof_lines.c`, `src/y/std/prof_lines.y` (all
-  gitignored; `make clean` removes them). `refs/` is gitignored too but
-  is **not** disposable — it is the port's ground truth.
+  `_ycc`, `a.out`, `src/c/prof_lines.c`, `src/c/std_lines.c`,
+  `src/y/std/prof_lines.y` (all gitignored; `make clean` removes the
+  binaries and both generated C twins — `src/c/std_lines.c` is tracked,
+  so `git checkout` it after a clean). `refs/` is gitignored too but is
+  **not** disposable — it is the port's ground truth.
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
   Do NOT put a `ulimit -v` on sanitized runs — ASan reserves terabytes
@@ -42,23 +44,34 @@ same semantics.
 
 ## Test suites (`test/sh/`)
 
-Every suite compiles each program with **both** compilers and requires
-the outputs to agree (byte-identical binaries where compared, identical
-program behavior); the reference side is `refs/ycc.ref`.
+Twelve suites, run by `test/sh/run_all.sh` (named below in brackets). Most
+compile each program with **both** compilers — the reference side is
+`refs/ycc.ref` — and require the outputs to agree (byte-identical
+binaries, identical program behavior). `test_native.sh`,
+`test_native_examples.sh` and `test_prof.sh` drive the built `./ycc`
+itself, so they skip when it is missing.
 
-- `test_port.sh` — the port gate: every `test/y/**.y` (and the compiler
-  sources themselves) compile to byte-identical binaries with `cycc` and
-  the reference `ycc`.
-- `test_native.sh` — `test/y/native/*.y`: `t*` assert stdout/exit
-  (`.expected`/`.exit`, stdin from `.stdin`), `e*` assert rejection
-  (first-line `// expect-error:` marker).
+- `test_port.sh` [port] — the port gate: every `test/y/**.y` (and the
+  compiler sources themselves) compile to byte-identical binaries with
+  `cycc` and the reference `ycc`.
+- `test_native.sh` [native] — `test/y/native/*.y`: `t*` assert
+  stdout/exit (`.expected`/`.exit`, stdin from `.stdin`), `e*` assert
+  rejection (first-line `// expect-error:` marker).
+- `test_native_examples.sh` [native-examples] — the ratchet: every
+  `test/y/examples/*.y` the built `./ycc` accepts must print what the
+  reference prints; its `UNSUPPORTED` list (currently empty) may only
+  shrink.
 - `test_comprehensive.sh`, `test_loops.sh` — inline regression cases:
-  builtins, operators, functions, errors, loops, precedence.
+  builtins, operators, functions, void/options, errors, loops,
+  precedence.
 - `test_examples.sh` — every `test/y/examples/*.y` runs and both
   compilers agree.
 - `test_audit.sh` — all `test/y/audit/t*.y` edge cases; both compilers
   must agree exactly.
-- `test_ycc_units.sh` — every `test/y/ycc/test_*.y` must compile and run.
+- `test_ycc_units.sh` [ycc-units] — every `test/y/ycc/test_*.y` must
+  compile and run (two legacy snapshots are skiplisted with reasons).
+- `test_ycc.sh` [ycc] — a few one-liners compiled by `./ycc` and
+  compared with the reference's output.
 - `test_fixpoint.sh` — three generations of self-compilation are
   byte-identical and the self-built binary still compiles working
   programs.
@@ -102,21 +115,27 @@ code calls it by fixed label.
 `src/y/*.y` is compiled by the Y toolchain **and** ported 1:1 to
 `src/c/`, so its habits matter:
 
-- **Never leave a block empty** (`0;` fillers are legal and harmless).
+- An **empty block is legal** and void — `{ }` needs no `0;` filler (the
+  void redesign made the fillers optional; leftover ones are harmless).
 - A block's value is its last statement **without** a trailing `;`:
   `{ f() }` is f's value, `{ f(); }` is void (a trailing `return x;` keeps
-  its value).
+  its value). `if` arms do **not** have to agree in type any more:
+  disagreeing arms simply make the `if` void (`types.y`, the "VOID law").
 - Postfix binds tighter than unary: `!x.y` is `!(x.y)`, `x.y[i]` is
   `(x.y)[i]`. Dot chains and index chains parse correctly.
-- `&&` / `||` short-circuit, in both forms.
+- `&&` / `||` short-circuit, in both forms. Operands need not be `bool` —
+  any non-zero value is true (`typeof_logic` in `types.y`).
 - Recursion uses `self`, not the function's own name.
-- Closures capture entire scopes, not single variables; captured
-  variables are shared (writes inside are visible outside) — the C copy
-  has no closures at all, so avoid new ones in `src/y` (the compiler
-  sources use none today).
-- **Arrays, maps and records are references**, in both copies. `push`
-  grows in place (`a = push(a, v)` to rebind). String and number values
-  are immutable.
+- A nested `def` captures the enclosing bindings **that are already in
+  scope where it is written** (a name declared later is an
+  undefined-variable error — `let`s do not hoist, `rename.y`). Captures
+  are **shared**: a write inside the closure is visible outside and the
+  other way round. Avoid *new* closures in `src/y`: the C twin's value
+  model (`yv.h`: `none|bool|long|float|str|array|record`) has no function
+  value to store one in.
+- **Arrays, maps and records are references**, in both copies; an array
+  header never moves, so `arr += v` is visible through every alias. String
+  and number values are immutable.
 - Arrays are **homogeneous** — element types must match; heterogeneous
   literals are rejected.
 - `--no-exec` strips the `exec()` builtin (no shell access).
@@ -130,6 +149,8 @@ code calls it by fixed label.
   (element types must match); anything else pushes one element.
 - `arr *= v` → **in place**: prepends one item (element type must match).
 - `arr = arr2` → both names alias one array.
+- A **fixed** `[T; N]` cannot grow: `+=` / `*=` on it is a type error
+  ("its length is part of its type; use `[T]` instead").
 - `x++`, `++x`, `x--`, `--x` and `x op= e` (`+= -= *= /= %=`) evaluate
   the target's subexpressions **exactly once**; numbers take the
   arithmetic, strings only `+=`, arrays the two in-place forms above.
@@ -139,23 +160,27 @@ code calls it by fixed label.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `native.y` (emitter), `arch_x64.y`
   (asm + prelude), `enc64.y`, `asm.y`, `elf.y`; `std/` (`rt.y` runtime
-  in Y, `prelude.y`, `io.y`, `net.y`, `prof.y`).
-- `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the shared Y
-  value model). `PORTING.md` is the contract.
-- `refs/` — backed-up reference binaries for the port gate.
-- `test/` — `test/sh/` (suite drivers + `lib.sh`), `test/y/` (`native/`
-  fixtures with expected/exit/stdin, `audit/` edge cases, `examples/`
-  regression corpus, `ycc/` unit fixtures).
+  in Y, `prelude.y` (`readline`/`exec`), `io.y`, `net.y`, `prof.y`,
+  `struct.y`).
+- `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
+  model; no Y twin). `PORTING.md` is the contract.
+- `refs/` — backed-up reference binaries for the port gate (see
+  `PORTING.md` for where the current `ycc.ref` came from).
+- `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh`), `test/y/`
+  (`native/` fixtures with expected/exit/stdin, `audit/` edge cases,
+  `examples/` regression corpus, `ycc/` unit fixtures).
 - `bench/` — benchmarks + `compare.sh` (see the workflow above).
 
 ## Native backend (see `src/y/NATIVE.md`)
 
 Unboxed values (long/int/byte/bool/float/ptr/str/option/function = 8
 bytes); `[byte]` arrays are packed; stable heap headers `{len, cap,
-data}` with capacity doubling (0→8→×2); closures as `[code, caps...]`
-records; `&x`, `*p`, `a[i]`, `a[lo:hi]`, `T?`, `float`, `byte` types;
-`for`/`for..in`/`foreach`/`while`; block expressions; annotations
-required on `def` params (return types inferred). `ycc` is native-only:
-`ycc [-o OUT] [-S] [-t] [--no-exec] [--prof] FILE`, cc-style; the
-shipped binary needs nothing at runtime — it is a static ELF invoking
-raw syscalls.
+data}` (elements in a separate block) with capacity doubling (0→8→×2);
+closures as `[code, caps...]` records; `&x`, `*p`, `a[i]`, `a[lo:hi]`,
+`T?`, `x!`, `void`, `float`, `byte` types; `for`/`for..in`/`foreach`/
+`while`; block expressions; `type` aliases, record unions and `match`;
+`def` params may be annotated (recommended: an unannotated param is a
+poison-tolerant unknown), return types are inferred. `ycc` is
+native-only: `ycc [-o OUT] [-S] [-t] [--no-exec] [--prof] FILE`,
+cc-style; the shipped binary needs nothing at runtime — it is a static
+ELF invoking raw syscalls.

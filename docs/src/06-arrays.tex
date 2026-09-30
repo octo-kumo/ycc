@@ -129,9 +129,10 @@ leaves \ic{xs} at its old length.
 \subsection{Fixed arrays}
 
 \ic{[T; N]} arrays are allocated with exactly \ic{N} slots; their length
-is part of the type, so they reject \ic{push}/\ic{+=}/\ic{*=} growth.
-Indexing is bounds-trapped like heap arrays. A fixed array may be sliced;
-the result is a heap \ic{[T]}.
+is part of the type, so they reject growth: \ic{+=} and \ic{*=} on a
+fixed array is a compile error (``cannot grow fixed array \ic{[long; 3]}
+with \ic{'+='}''). Indexing is bounds-trapped like heap arrays. A fixed
+array may be sliced; the result is a heap \ic{[T]}.
 
 \subsection{Slices}
 
@@ -162,4 +163,5 @@ helpers for file headers and binary layouts (\ic{u32be}, \ic{get\_i16le},
 \subsection{Operators are the interface}
 
 There are no array mutator functions: \ic{+=} and \ic{*=} \emph{are}
-push and prepend. \ic{len(a)} is the only array builtin.
+push and prepend. \ic{len(a)} is the only builtin whose argument is an
+array as such (and \ic{join} takes a \ic{[str]}).

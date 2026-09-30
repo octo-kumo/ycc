@@ -66,9 +66,13 @@ escape & meaning \\
 \end{tabular}
 \end{center}
 
-\noindent A literal may not contain an unescaped newline or a NUL byte:
-string values are NUL-terminated byte strings and cannot carry NUL (use
-\ic{[byte]} arrays, Section~\ref{sec:builtin-bytes}, for binary data).
+\noindent An escape is read as a single byte, and an unrecognised
+\ic{\bs c} simply drops the backslash (\ic{"q\q"} is \ic{"qq"}), so a NUL
+is spelled \ic{"\bs x00"} --- which is not \ic{"\bs0"} (that is the
+character \ic{0}). A \ic{str} is a length-prefixed byte string, so an
+escaped NUL inside one is ordinary data and \ic{len} counts it (use
+\ic{[byte]} arrays, Section~\ref{sec:builtin-bytes}, for bulk binary
+data).
 
 \paragraph{Byte strings.} \ic{b"..."} and \ic{b'...'} are \emph{byte
 string literals}: a \ic{[byte]} value spelled like a Python \ic{bytes}
@@ -93,7 +97,7 @@ two-character &
   \ic{->} \ic{=>} \ic{++} \ic{--} \ic{+=} \ic{-=} \ic{*=} \ic{/=} \ic{\%=} \\
 single-character &
   \ic{+} \ic{-} \ic{*} \ic{/} \ic{\%} \ic{<} \ic{>} \ic{=} \ic{!}
-  \ic{\&} \\
+  \ic{\&} \ic{.} \ic{?} \ic{|} \\
 punctuation &
   \ic{(} \ic{)} \ic{\{} \ic{\}} \ic{[} \ic{]} \ic{,} \ic{;} \ic{:} \\
 \bottomrule
@@ -110,6 +114,9 @@ that matches, exactly like C:
       \ic{/ == y} must be written with a space to divide;
 \end{itemize}
 
-\paragraph{Reserved but unimplemented.} The operator \ic{::} lexes and
-parses but is rejected by the checker with ``\ic{operator '::' is
-unsupported}''; it is reserved for a future list-splicing form.
+\paragraph{Contextual keywords.} \ic{none}, \ic{match}, \ic{type} and
+\ic{void} are ordinary identifiers to the lexer: \ic{none} is a
+predeclared name (Section~\ref{sec:type-options}), \ic{match} is the
+match-expression keyword only when an expression and \ic{\{} follow it,
+and \ic{type} starts a type alias only when followed by \ic{name =}. Each
+stays usable as an ordinary name elsewhere.
