@@ -72,7 +72,7 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 i = i + 1;
                 while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; };
             };
-            toks = push(toks, mk_tok("num", substr(src, start, i - start)));
+            toks += mk_tok("num", substr(src, start, i - start));
         } else if (is_alpha(c)) {
             let start = i;
             while (i < n && is_alnum(substr(src, i, 1))) { i = i + 1; };
@@ -85,7 +85,7 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 word == "null") {
                 ty = "kw";
             };
-            toks = push(toks, mk_tok(ty, word));
+            toks += mk_tok(ty, word);
         } else if (c == "\"") {
             print("  string literal start");
             i = i + 1;
@@ -112,24 +112,24 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                     i = i + 1;
                 };
             };
-            toks = push(toks, mk_tok("str", buf));
+            toks += mk_tok("str", buf);
         } else {
             let two = two_char_op(src, i);
             if (two != "") {
-                toks = push(toks, mk_tok("op", two));
+                toks += mk_tok("op", two);
                 i = i + 2;
             } else if (is_single_op(c)) {
-                toks = push(toks, mk_tok("op", c));
+                toks += mk_tok("op", c);
                 i = i + 1;
             } else if (is_punct(c)) {
-                toks = push(toks, mk_tok("punct", c));
+                toks += mk_tok("punct", c);
                 i = i + 1;
             } else {
                 i = i + 1;
             };
         };
     };
-    toks = push(toks, mk_tok("eof", ""));
+    toks += mk_tok("eof", "");
     toks
 };
 

@@ -108,6 +108,81 @@ int ispunct(Yv *c) {
     else { return ys_eq_lit(c, ":"); }
 }
 
+// Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
+// decoded text and the position just past the closing quote. Escapes:
+// \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
+Yv *lex_quoted(Yv *src, long i, long line, long col) {
+    Yv *q = ys_substr(src, i, 1);
+    long n = yv_len(src);
+    i = i + 1;
+    col = col + 1;
+    long start = i;
+    int open = 1;
+    int hasesc = 0;
+    while (open) {
+        if (i < n) {
+            Yv *ch = ys_substr(src, i, 1);
+            if (ys_eq_lit(ch, "\\")) { hasesc = 1; i = i + 2; col = col + 2; ; }
+            else if (ys_eq(ch, q)) { open = 0; ; }
+            else {
+                if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
+                else { col = col + 1; ; };
+                i = i + 1;
+                ;
+            };
+            ;
+        } else { open = 0; ; }
+    };
+    if (open) {
+        puts_(ys("error: unterminated string literal\n"));
+      
+        exit_(1);  ;
+    } else { ; }
+    Yv *raw = ys_substr(src, start, i - start);
+    i = i + 1;  // skip closing quote
+    col = col + 1;
+    Yv *buf = raw;
+    if (hasesc) {
+        // process escapes into a chunk list + join (O(n))
+        Yv *chunks = yav(0);
+        long k = 0;
+        long rn = yv_len(raw);
+        while (k < rn) {
+            Yv *rc = ys_substr(raw, k, 1);
+            if (ys_eq_lit(rc, "\\")) {
+                Yv *esc = ys_substr(raw, k + 1, 1);
+                if (ys_eq_lit(esc, "n")) { chunks = ya_push(chunks, ys("\n")); k = k + 2; ; }
+                else if (ys_eq_lit(esc, "t")) { chunks = ya_push(chunks, ys("\t")); k = k + 2; ; }
+                else if (ys_eq_lit(esc, "r")) { chunks = ya_push(chunks, ys("\r")); k = k + 2; ; }
+                else if (ys_eq_lit(esc, "x")) {
+                    // \xHH -- two hex digits
+                    long h1 = hexvalx(ys_substr(raw, k + 2, 1));
+                    long h2 = hexvalx(ys_substr(raw, k + 3, 1));
+                    if (h1 >= 0 && h2 >= 0) {
+                        chunks = ya_push(chunks, ys_chr(h1 * 16 + h2));
+                        k = k + 4;
+                        ;
+                    } else {
+                        chunks = ya_push(chunks, esc);
+                        k = k + 2;
+                        ;
+                    };
+                    ;
+                }
+                else { chunks = ya_push(chunks, esc); k = k + 2; ; };
+                ;
+            } else {
+                chunks = ya_push(chunks, rc);
+                k = k + 1;
+                ;
+            };
+        };
+        buf = ys_join(chunks, ys(""));
+        ;
+    } else { ; }
+    return ym(4, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col));
+}
+
 Yv *mktok(Yv *t, Yv *v, long line, long col) {
     return ym(4, "t", t, "v", v, "line", yv_long(line), "col", yv_long(col));
 }
@@ -314,83 +389,46 @@ Yv *tokenize(Yv *src) {
             else if (ys_eq_lit(word, "false")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "null")) { ty = ys("kw"); ; }
             else { ; }
-            toks = ya_push(toks, mktok(ty, word, line, startcol));
+            if (ys_eq_lit(word, "b")) {
+                // b"..." / b'...' -- a byte-string literal: the same type
+                // as [byte], spelled like a Python bytes literal.
+                long bline = line;
+                Yv *qch = ys_substr(src, i, 1);
+                if (ys_eq_lit(qch, "\"")) {
+                    Yv *bq = lex_quoted(src, i, line, col);
+                    i = yv_l(ym_get(bq, "end"));
+                    line = yv_l(ym_get(bq, "line"));
+                    col = yv_l(ym_get(bq, "col"));
+                    toks = ya_push(toks, mktok(ys("bstr"), ym_get(bq, "text"), bline, startcol));
+                    ;
+                } else if (ys_eq_lit(qch, "'")) {
+                    Yv *bq2 = lex_quoted(src, i, line, col);
+                    i = yv_l(ym_get(bq2, "end"));
+                    line = yv_l(ym_get(bq2, "line"));
+                    col = yv_l(ym_get(bq2, "col"));
+                    toks = ya_push(toks, mktok(ys("bstr"), ym_get(bq2, "text"), bline, startcol));
+                    ;
+                } else {
+                    toks = ya_push(toks, mktok(ty, word, line, startcol));
+                    ;
+                };
+                ;
+            } else {
+                toks = ya_push(toks, mktok(ty, word, line, startcol));
+                ;
+            }
             ;
         } else if (ys_eq_lit(c, "\"")) {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.
-            // Fast path: scan to the closing quote (respecting escapes), extract
-            // the raw content with ONE substr, then process escapes only if any
-            // backslash is present. Avoids O(n^2) char-by-char concatenation.
             long startline = line;
             long startcol = col;
-            i = i + 1;
-            col = col + 1;
-            long start = i;
-            int open = 1;
-            int hasesc = 0;
-            while (open) {
-                if (i < n) {
-                    Yv *ch = ys_substr(src, i, 1);
-                    if (ys_eq_lit(ch, "\\")) { hasesc = 1; i = i + 2; col = col + 2; ; }
-                    else if (ys_eq_lit(ch, "\"")) { open = 0; ; }
-                    else {
-                        if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
-                        else { col = col + 1; ; }
-                        i = i + 1;
-                        ;
-                    };
-                    ;
-                } else { open = 0; ; }
-            };
-            if (open) {
-                puts_(ys("error: unterminated string literal\n"));
-                ;
-            } else { ; }
-            Yv *raw = ys_substr(src, start, i - start);
-            i = i + 1;  // skip closing quote
-            col = col + 1;
-            Yv *buf = raw;
-            if (hasesc) {
-                // process escapes into a chunk list + join (O(n))
-                Yv *chunks = yav(0);
-                long k = 0;
-                long rn = yv_len(raw);
-                while (k < rn) {
-                    Yv *rc = ys_substr(raw, k, 1);
-                    if (ys_eq_lit(rc, "\\")) {
-                        Yv *esc = ys_substr(raw, k + 1, 1);
-                        if (ys_eq_lit(esc, "n")) { chunks = ya_push(chunks, ys("\n")); k = k + 2; ; }
-                        else if (ys_eq_lit(esc, "t")) { chunks = ya_push(chunks, ys("\t")); k = k + 2; ; }
-                        else if (ys_eq_lit(esc, "r")) { chunks = ya_push(chunks, ys("\r")); k = k + 2; ; }
-                        else if (ys_eq_lit(esc, "x")) {
-                            // \xHH — two hex digits
-                            long h1 = hexvalx(ys_substr(raw, k + 2, 1));
-                            long h2 = hexvalx(ys_substr(raw, k + 3, 1));
-                            if (h1 >= 0 && h2 >= 0) {
-                                chunks = ya_push(chunks, ys_chr(h1 * 16 + h2));
-                                k = k + 4;
-                                ;
-                            } else {
-                                chunks = ya_push(chunks, esc);
-                                k = k + 2;
-                                ;
-                            };
-                            ;
-                        }
-                        else { chunks = ya_push(chunks, esc); k = k + 2; ; };
-                        ;
-                    } else {
-                        chunks = ya_push(chunks, rc);
-                        k = k + 1;
-                        ;
-                    };
-                };
-                buf = ys_join(chunks, ys(""));
-                ;
-            } else { ; }
-            toks = ya_push(toks, mktok(ys("str"), buf, startline, startcol));
+            Yv *q = lex_quoted(src, i, line, col);
+            i = yv_l(ym_get(q, "end"));
+            line = yv_l(ym_get(q, "line"));
+            col = yv_l(ym_get(q, "col"));
+            toks = ya_push(toks, mktok(ys("str"), ym_get(q, "text"), startline, startcol));
             ;
         } else if (ys_eq(c, slash())) {
             // Slash: comment opener, block comment, or division operator.

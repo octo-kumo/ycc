@@ -55,6 +55,25 @@ static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col);
 static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col);
 static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
+/* `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
+ * (unlike `elem + a`, an array-typed element is never spliced). The right
+ * operand must be an array; the left must be its element type. */
+static Yv *typeof_cons(Yv *st, Yv *lt, Yv *rt, long line, long col) {
+    if (ys_eq_lit(ym_get(rt, "k"), "tarr") ||
+        ys_eq_lit(ym_get(rt, "k"), "tarrfix")) {
+        st = expect_type(st, lt, ym_get(rt, "of"), ys("'::' element"), line, col);
+        return ym(2, "typ", ym(2, "k", ys("tarr"), "of", ym_get(rt, "of")),
+                  "st", st);
+    } else {
+        st = fail(st,
+                  ys_cat(ys_cat(ys("'::' needs an array on the right, got "),
+                                tstr(rt)),
+                         ys("")),
+                  line, col);
+        return ym(2, "typ", t_unk(), "st", st);
+    }
+}
+
 static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static int is_num_kind(Yv *t);
@@ -1100,6 +1119,9 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         }
     } else if (ys_eq_lit(k, "str")) {
         return ym(2, "typ", ym(1, "k", ys("tstr")), "st", st);
+    } else if (ys_eq_lit(k, "bstr")) {
+        // b"..." is a [byte] literal (packed bytes, like a Python bytes)
+        return ym(2, "typ", ym(2, "k", ys("tarr"), "of", ym(1, "k", ys("tbyte"))), "st", st);
     } else if (ys_eq_lit(k, "err")) {
         // Planted by the parser where the token stream stopped making
         // sense (parser.y has no error channel of its own).
@@ -1367,6 +1389,10 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             return typeof_logic(st, op, ym_get(l, "typ"), ym_get(r, "typ"),
                                 yv_l(ym_get(node, "line")),
                                 yv_l(ym_get(node, "col")));
+        } else if (ys_eq_lit(op, "::")) {
+            return typeof_cons(st, ym_get(l, "typ"), ym_get(r, "typ"),
+                               yv_l(ym_get(node, "line")),
+                               yv_l(ym_get(node, "col")));
         } else {
             st = fail(st,
                       ys_cat(ys_cat(ys("operator '"), op),
@@ -2157,8 +2183,18 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
 // The result is always the target's type (the new value).
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
     Yv *op = ym_get(node, "op");
-    if (ys_eq_lit(ym_get(tt, "k"), "tarr") ||
-        ys_eq_lit(ym_get(tt, "k"), "tarrfix")) {
+    if (ys_eq_lit(ym_get(tt, "k"), "tarrfix")) {
+        /* A fixed array's length is part of its type: growth is a type
+         * error (the old push-on-fixed rejection, now on the operators). */
+        st = fail(st,
+                  ys_cat(ys_cat(ys_cat(ys_cat(ys("cannot grow fixed array "),
+                                             tstr(tt)),
+                                       ys(" with '")),
+                                op),
+                         ys("' (its length is part of its type; use [T] instead)")),
+                  yv_l(ym_get(node, "line")), yv_l(ym_get(node, "col")));
+        return ym(2, "typ", tt, "st", st);
+    } else if (ys_eq_lit(ym_get(tt, "k"), "tarr")) {
         if (ys_eq_lit(op, "*")) {
             // `*= ` prepends ONE item — its type must be the element type.
             st = expect_type(st, vt, ym_get(tt, "of"), ys("'*=' element"),
@@ -2407,87 +2443,6 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     st = fail(st,
                               ys_cat(ys("unwrap needs an option, got "),
                                      tstr(ym_get(r, "typ"))),
-                              yv_l(ym_get(node, "line")),
-                              yv_l(ym_get(node, "col")));
-                    return ym(2, "typ", t_unk(), "st", st);
-                }
-            }
-        } else if (ys_eq_lit(name, "push")) { // push(arr, v) -> arr (possibly reallocated; rebind the result:
-            // `a = push(a, v)`). Only heap arrays grow; fixed arrays reject.
-            if (yv_len(cargs) != 2) {
-                st = fail(st, ys("push takes exactly 2 arguments (array, value)"),
-                          yv_l(ym_get(node, "line")),
-                          yv_l(ym_get(node, "col")));
-                return ym(2, "typ", t_unk(), "st", st);
-            } else {
-                Yv *r0 = typeof_expr(st, ya_get(cargs, 0));
-                st = ym_get(r0, "st");
-                if (ys_eq_lit(ym_get(ym_get(r0, "typ"), "k"), "tarrfix")) {
-                    // A fixed array's length is part of its type ([T; N]),
-                    // so growing it would break every later bound check.
-                    st = fail(st,
-                              ys_cat(ys_cat(ys("cannot push to fixed array "),
-                                            tstr(ym_get(r0, "typ"))),
-                                     ys(" (its length is part of its type; use [T] instead)")),
-                              yv_l(ym_get(node, "line")),
-                              yv_l(ym_get(node, "col")));
-                    Yv *r1f = typeof_expr(st, ya_get(cargs, 1));
-                    st = ym_get(r1f, "st");
-                    return ym(2, "typ", t_unk(), "st", st);
-                } else if (!ys_eq_lit(ym_get(ym_get(r0, "typ"), "k"), "tarr")) {
-                    st = fail(st,
-                              ys_cat(ys("push needs a heap array, got "),
-                                     tstr(ym_get(r0, "typ"))),
-                              yv_l(ym_get(node, "line")),
-                              yv_l(ym_get(node, "col")));
-                    return ym(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(ym_get(ym_get(ym_get(r0, "typ"), "of"), "k"),
-                                     "tunk")) {
-                    // push(x, v) where x's element type is poison/unknown:
-                    // still check v for its own errors, but don't cascade
-                    // a second "cannot infer" (the root cause errors once).
-                    // NOTE: r1 bound once above? No — r1 not yet bound here;
-                    // bind fresh (r1b) to avoid double-type of cargs[1].
-                    Yv *r1b = typeof_expr(st, ya_get(cargs, 1));
-                    st = ym_get(r1b, "st");
-                    return ym(2, "typ", t_unk(), "st", st);
-                } else {
-                    Yv *r1c = typeof_expr(st, ya_get(cargs, 1));
-                    st = ym_get(r1c, "st");
-                    st = expect_type(st, ym_get(r1c, "typ"),
-                                     ym_get(ym_get(r0, "typ"), "of"),
-                                     ys("push value"), yv_l(ym_get(node, "line")),
-                                     yv_l(ym_get(node, "col")));
-                    return ym(2, "typ", ym_get(r0, "typ"), "st", st);
-                }
-            }
-        } else if (ys_eq_lit(name, "prepend")) {
-            // prepend(arr, v) -> arr, in place: v is inserted at the front
-            if (yv_len(cargs) != 2) {
-                st = fail(st, ys("prepend takes exactly 2 arguments"),
-                          yv_l(ym_get(node, "line")),
-                          yv_l(ym_get(node, "col")));
-                return ym(2, "typ", t_unk(), "st", st);
-            } else {
-                Yv *ra = typeof_expr(st, ya_get(cargs, 0));
-                st = ym_get(ra, "st");
-                Yv *rv = typeof_expr(st, ya_get(cargs, 1));
-                st = ym_get(rv, "st");
-                if (ys_eq_lit(ym_get(ym_get(ra, "typ"), "k"), "tarr") ||
-                    ys_eq_lit(ym_get(ym_get(ra, "typ"), "k"), "tarrfix")) {
-                    st = expect_type(st, ym_get(rv, "typ"),
-                                     ym_get(ym_get(ra, "typ"), "of"),
-                                     ys("prepend element"),
-                                     yv_l(ym_get(node, "line")),
-                                     yv_l(ym_get(node, "col")));
-                    return ym(2, "typ", ym_get(ra, "typ"), "st", st);
-                } else if (ys_eq_lit(ym_get(ym_get(ra, "typ"), "k"), "tunk") ||
-                           ys_eq_lit(ym_get(ym_get(ra, "typ"), "k"), "tnone")) {
-                    return ym(2, "typ", t_unk(), "st", st);
-                } else {
-                    st = fail(st,
-                              ys_cat(ys("prepend needs an array, got "),
-                                     tstr(ym_get(ra, "typ"))),
                               yv_l(ym_get(node, "line")),
                               yv_l(ym_get(node, "col")));
                     return ym(2, "typ", t_unk(), "st", st);

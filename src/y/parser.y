@@ -108,7 +108,7 @@ def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: st
         // C backend (it reads `f().y` as `f(.y)`).
         let rnode = r.node;
         let rpos = r.pos;
-        xs = push(xs, rnode);
+        xs += rnode;
         pos = rpos;
         if (is_punct(toks, pos, ",")) {
             pos = pos + 1;
@@ -120,7 +120,7 @@ def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: st
             // checker rejects — dropping the leftovers silently compiled
             // `print(1 zzz)` into `print(1)`.
             if (is_punct(toks, pos, close)) { 0; } else {
-                xs = push(xs, { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or '" + close + "')", line: tline(toks, pos), col: tcol(toks, pos) });
+                xs += { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or '" + close + "')", line: tline(toks, pos), col: tcol(toks, pos) };
                 0;
             };
             go = false;
@@ -161,6 +161,9 @@ def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
         res({ k: "num", v: v, line: ln, col: cl }, p + 1)
     } else if (t == "str") {
         res({ k: "str", v: v, line: ln, col: cl }, p + 1)
+    } else if (t == "bstr") {
+        // b"..." / b'...' -- a [byte] literal
+        res({ k: "bstr", v: v, line: ln, col: cl }, p + 1)
     } else if (t == "id") {
         res({ k: "id", v: v, line: ln, col: cl }, p + 1)
     } else if (is_kw(toks, p, "true")) {
@@ -289,7 +292,14 @@ def parse_binary(toks: [{ t: str, v: str, line: long, col: long }], p: long, min
             go = false;
             0
         } else {
-            let right_r = parse_binary(toks, pos + 1, prec + 1);
+            // `::` is right-associative: 1 :: 2 :: [3] is 1 :: (2 :: [3])
+            // = [1, 2, 3]. Everything else is left-associative.
+            let next_min = prec + 1;
+            if (op == "::") {
+                next_min = prec;
+                0
+            } else { 0; };
+            let right_r = parse_binary(toks, pos + 1, next_min);
             left = { k: "bin", op: op, l: left, r: right_r.node, line: tline(toks, pos), col: tcol(toks, pos) };
             pos = right_r.pos;
             0
@@ -369,7 +379,7 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
                     0
                 } else {
                     let e = parse_expr(toks, pos);
-                    elems = push(elems, e.node);
+                    elems += e.node;
                     pos = e.pos;
                     go = is_punct(toks, pos, ",");
                     0
@@ -379,7 +389,7 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
             // means the stream is malformed, and dropping it silently would
             // compile `[1, 2 zzz]` as `[1, 2]`.
             if (is_punct(toks, pos, "]")) { 0; } else {
-                elems = push(elems, { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or ']')", line: tline(toks, pos), col: tcol(toks, pos) });
+                elems += { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or ']')", line: tline(toks, pos), col: tcol(toks, pos) };
                 0;
             };
             res({ k: "array", elems: elems, line: ln, col: cl }, pos + 1)  // skip ']'
@@ -444,8 +454,8 @@ def parse_map(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { n
                     0
                 };
                 let e = parse_expr(toks, pos);
-                keys = push(keys, key);
-                vals = push(vals, e.node);
+                keys += key;
+                vals += e.node;
                 pos = e.pos;
                 if (is_punct(toks, pos, ",")) { pos = pos + 1; 0; } else { go = false; 0; };
                 0
@@ -526,7 +536,7 @@ def parse_type_params(toks: [{ t: str, v: str, line: long, col: long }], p: long
                 0
             } else {
                 let t = parse_type_node(toks, pos);
-                ts = push(ts, t.node);
+                ts += t.node;
                 pos = t.pos;
                 if (is_punct(toks, pos, ",")) { pos = pos + 1; 0; } else { go = false; 0; };
                 0
@@ -550,7 +560,7 @@ def parse_type_record(toks: [{ t: str, v: str, line: long, col: long }], p: long
             } else {
                 let fname = tv(toks, pos);
                 let ft = parse_type_node(toks, pos + 2);  // skip name and ':'
-                fields = push(fields, { name: fname, typ: ft.node });
+                fields += { name: fname, typ: ft.node };
                 pos = ft.pos;
                 if (is_punct(toks, pos, ",")) { pos = pos + 1; 0; } else { go = false; 0; };
                 0
@@ -703,7 +713,7 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
         let go = true;
         while (go) {
             let nm = tv(toks, pos);
-            names = push(names, nm);
+            names += nm;
             pos = pos + 1;  // name
             let pt = { k: "tnone" };
             if (is_punct(toks, pos, ":")) {
@@ -712,7 +722,7 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
                 pos = tr.pos;
                 0
             } else { 0 };
-            ptypes = push(ptypes, pt);
+            ptypes += pt;
             if (is_punct(toks, pos, ",")) {
                 pos = pos + 1;
                 0
@@ -765,7 +775,7 @@ def parse_block(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
             0
         } else {
             let s = parse_stmt(toks, pos);
-            stmts = push(stmts, s.node);
+            stmts += s.node;
             pos = s.pos;
             if (is_punct(toks, pos, ";")) { pos = pos + 1; 0; } else { 0 };
             0
@@ -1008,7 +1018,7 @@ def parse_program(toks: [{ t: str, v: str, line: long, col: long }]) -> {k: str}
     while (tt(toks, pos) != "eof") {
         let before = pos;
         let s = parse_stmt(toks, pos);
-        stmts = push(stmts, s.node);
+        stmts += s.node;
         pos = s.pos;
         if (is_punct(toks, pos, ";")) { pos = pos + 1; 0; } else { 0 };
         // safety: if a statement made no progress, bail to avoid infinite loop

@@ -39,7 +39,7 @@ print(lit == diff);
 let acc: [byte] = [];
 let i = 0;
 while (i < 40) {
-    acc = push(acc, 97 + i % 26);
+    acc += 97 + i % 26;
     i = i + 1;
 };
 print(len(acc));
@@ -59,7 +59,7 @@ def upper(src: [byte]) -> [byte] {
     while (j < len(src)) {
         let c = src[j];
         if (c >= 97) { if (c <= 122) { c = c - 32; }; };
-        out = push(out, c);
+        out += c;
         j = j + 1;
     };
     out
@@ -74,7 +74,7 @@ print(high[1]);
 // grow across many reallocations and verify every element survives
 let big: [byte] = [];
 let k = 0;
-while (k < 5000) { big = push(big, (k % 255) + 1); k = k + 1; };
+while (k < 5000) { big += (k % 255) + 1; k = k + 1; };
 print(len(big));
 let ok = true;
 k = 0;

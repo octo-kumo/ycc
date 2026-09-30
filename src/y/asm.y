@@ -105,7 +105,7 @@ def split_ops(s: str) -> [str] {
         if (c == ")") { depth = depth - 1; 0; } else { 0 };
         if (c == ",") {
             if (depth == 0) {
-                out = push(out, trim(cur));
+                out += trim(cur);
                 cur = "";
                 0
             } else {
@@ -120,7 +120,7 @@ def split_ops(s: str) -> [str] {
         i = i + 1;
         0
     };
-    out = push(out, trim(cur));
+    out += trim(cur);
     out
 };
 
@@ -353,24 +353,24 @@ def decode_str(s: str) -> {ok: bool, bytes: [long], error: str} {
     while (i < n) {
         let c = substr(s, i, 1);
         if (c != "\\") {
-            out = push(out, ord(c));
+            out += ord(c);
             i = i + 1;
         } else {
             let e = substr(s, i + 1, 1);
             if (e == "n") {
-                out = push(out, 10);
+                out += 10;
                 i = i + 2;
             } else if (e == "t") {
-                out = push(out, 9);
+                out += 9;
                 i = i + 2;
             } else if (e == "r") {
-                out = push(out, 13);
+                out += 13;
                 i = i + 2;
             } else if (e == "\\") {
-                out = push(out, 92);
+                out += 92;
                 i = i + 2;
             } else if (e == "\"") {
-                out = push(out, 34);
+                out += 34;
                 i = i + 2;
             } else if (is_oct_ch(e)) {
                 // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`
@@ -380,7 +380,7 @@ def decode_str(s: str) -> {ok: bool, bytes: [long], error: str} {
                     err = oct.err;
                     0
                 } else {
-                    out = push(out, oct.v);
+                    out += oct.v;
                     0
                 };
                 i = oct.k;
@@ -452,7 +452,7 @@ def labmap_new(cap: long) -> [{ name: str, sec: long, off: long }] {
     let m = [];
     let i = 0;
     while (i < cap) {
-        m = push(m, { name: "", sec: 0, off: 0 });
+        m += { name: "", sec: 0, off: 0 };
         i = i + 1;
     };
     m
@@ -595,7 +595,7 @@ def asm_assemble(text: str) -> {ok: bool, bytes: [long], error: str, times: [{ n
         let k = 0;
         while (k < len(lsub)) {
             let le = lsub[k];
-            tl = push(tl, le);
+            tl += le;
             k = k + 1;
         };
         { ok: lk.ok, bytes: lk.bytes, error: lk.error, times: tl }
@@ -646,7 +646,8 @@ def asm_labdef(line: str, lno: long, sec: long, offs: [long], items: [{sec: long
 def asm_labdef_go(nm: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
     // NOTE: no definition-site duplicate scan (was O(L^2)): duplicates are
     // detected once at index build (labmap_build reports the name).
-    asm_state(sec, offs, items, push(labels, { name: nm, sec: sec, off: offs[sec] }), err)
+    labels += { name: nm, sec: sec, off: offs[sec] };
+    asm_state(sec, offs, items, labels, err)
 };
 
 def asm_dirline(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
@@ -654,7 +655,8 @@ def asm_dirline(line: str, lno: long, sec: long, offs: [long], items: [{sec: lon
     if (r.err != "") {
         asm_state(r.sec, r.offs, items, labels, r.err)
     } else {
-        asm_state(r.sec, r.offs, push(items, r.item), labels, err)
+        items += r.item;
+        asm_state(r.sec, r.offs, items, labels, err)
     }
 };
 
@@ -675,7 +677,8 @@ def asm_insnline(line: str, lno: long, sec: long, offs: [long], items: [{sec: lo
     if (r.err != "") {
         asm_state(r.sec, r.offs, items, labels, r.err)
     } else {
-        asm_state(r.sec, r.offs, push(items, r.item), labels, err)
+        items += r.item;
+        asm_state(r.sec, r.offs, items, labels, err)
     }
 };
 
@@ -711,7 +714,9 @@ def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], 
     if (r.err != "") {
         asm_state(r.sec, r.offs, items, labels, r.err)
     } else {
-        asm_state(r.sec, r.offs, push(items, r.item), push(labels, { name: nm, sec: sec, off: lab_off }), err)
+        items += r.item;
+    labels += { name: nm, sec: sec, off: lab_off };
+    asm_state(r.sec, r.offs, items, labels, err)
     }
 };
 
@@ -761,7 +766,7 @@ def asm_strdata_emit(sec: long, offs: [long], bytes: [long], nul: bool) -> {err:
     // NOTE: `0;` tails (see parser.y parse_binary note).
     let bb = bytes;
     if (nul) {
-        bb = push(bb, 0);
+        bb += 0;
         0
     } else { 0 };
     asm_strdata_item(sec, offs, bb)
@@ -898,7 +903,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: l
                 ok = false;
                 0
             } else {
-                ops = push(ops, r.op);
+                ops += r.op;
                 0
             };
             i = i + 1;
@@ -986,7 +991,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long],
                 let rbytes = it.bytes;
                 let j = 0;
                 while (j < len(rbytes)) {
-                    ro = push(ro, rbytes[j]);
+                    ro += rbytes[j];
                     j = j + 1;
                     0
                 };
@@ -1132,7 +1137,7 @@ def patch32(bytes: [long], at: long, v: long) -> [long] {
 def concat_bytes(a: [long], b: [long]) -> [long] {
     let i = 0;
     while (i < len(b)) {
-        a = push(a, b[i]);
+        a += b[i];
         i = i + 1;
     };
     a

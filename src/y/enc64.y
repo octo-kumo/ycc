@@ -249,12 +249,12 @@ def concat(a: [long], b: [long]) -> [long] {
     let out = [];
     let i = 0;
     while (i < len(a)) {
-        out = push(out, a[i]);
+        out += a[i];
         i = i + 1;
     };
     let j = 0;
     while (j < len(b)) {
-        out = push(out, b[j]);
+        out += b[j];
         j = j + 1;
     };
     out
@@ -384,7 +384,7 @@ def enc_mem_result(r: long, b: [long], t: {modrm: long, extra: [long], rip_lbl: 
             // the disp32 placeholder bytes must exist for the patch to land.
                 let off = len(b);
                 if (r >= 0) { off = off + 1; 0; } else { 0 };
-                fx = push(fx, fixup(off, "rip32", t.rip_lbl, ""));
+                fx += fixup(off, "rip32", t.rip_lbl, "");
                 bb = concat(b, [0, 0, 0, 0]);
                 0
             } else { 0 };

@@ -70,6 +70,12 @@ escape & meaning \\
 string values are NUL-terminated byte strings and cannot carry NUL (use
 \ic{[byte]} arrays, Section~\ref{sec:builtin-bytes}, for binary data).
 
+\paragraph{Byte strings.} \ic{b"..."} and \ic{b'...'} are \emph{byte
+string literals}: a \ic{[byte]} value spelled like a Python \ic{bytes}
+literal. The escapes are the string escapes above, so binary data writes
+naturally: \ic{b"\bs x7fELF"} is the four-byte ELF magic. Either quote
+spells the same type; single quotes exist only for byte strings.
+
 \paragraph{Booleans and null.} \ic{true}, \ic{false}, \ic{null}.
 
 \subsection{Operators and punctuation}

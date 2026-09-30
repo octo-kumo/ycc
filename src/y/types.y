@@ -202,7 +202,7 @@ def tstr_go(t) -> str {
         while (i < len(fs)) {
             // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
             let f = fs[i];
-            parts = push(parts, f.name + ": " + tstr_go(f.typ));
+            parts += f.name + ": " + tstr_go(f.typ);
             i = i + 1;
         };
         "{ " + join(parts, ", ") + " }"
@@ -212,7 +212,7 @@ def tstr_go(t) -> str {
         let ta = t.args;
         let i = 0;
         while (i < len(ta)) {
-            parts = push(parts, tstr_go(ta[i]));
+            parts += tstr_go(ta[i]);
             i = i + 1;
         };
         "(" + join(parts, ", ") + ") -> " + tstr_go(t.ret)
@@ -255,7 +255,7 @@ def tdisp(t) -> str {
         let i = 0;
         while (i < len(fs)) {
             let f = fs[i];
-            parts = push(parts, f.name + ": " + tdisp(f.typ));
+            parts += f.name + ": " + tdisp(f.typ);
             i = i + 1;
         };
         "{" + join(parts, ", ") + "}"
@@ -264,7 +264,7 @@ def tdisp(t) -> str {
         let ta = t.args;
         let i = 0;
         while (i < len(ta)) {
-            parts = push(parts, tdisp(ta[i]));
+            parts += tdisp(ta[i]);
             i = i + 1;
         };
         "(" + join(parts, ", ") + ")->" + tdisp(t.ret)
@@ -301,13 +301,13 @@ def field_merge(fields, name: str, typ) -> [{ name: str, typ: { k: str } }] {
             if (seen) {
                 0
             } else {
-                out = push(out, { name: name, typ: typ });
+                out += { name: name, typ: typ };
                 seen = true;
                 0
             };
             0
         } else {
-            out = push(out, f);
+            out += f;
             0
         };
         i = i + 1;
@@ -315,7 +315,7 @@ def field_merge(fields, name: str, typ) -> [{ name: str, typ: { k: str } }] {
     if (seen) {
         0
     } else {
-        out = push(out, { name: name, typ: typ });
+        out += { name: name, typ: typ };
         0
     };
     out
@@ -347,7 +347,7 @@ def tdisp_fnval(t) -> str {
     let ta = t.args;
     let i = 0;
     while (i < len(ta)) {
-        parts = push(parts, tdisp(ta[i]));
+        parts += tdisp(ta[i]);
         i = i + 1;
     };
     "(" + join(parts, ", ") + ")->(" + tdisp(t.ret) + ")"
@@ -384,7 +384,8 @@ def lookup(bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], 
 };
 
 def st_bind(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, name: str, typ, kind: str) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } {
-    let bindings = push(st.bindings, { name: name, typ: typ, kind: kind, fdepth: st.fdepth });
+    st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth };
+    let bindings = st.bindings
     { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth }
 };
 
@@ -401,7 +402,8 @@ def st_self(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: lo
 def st_ret(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, ret) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth } };
 
 def fail(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, msg: str, line: long, col: long) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } {
-    st_errors(st, push(st.errors, err_at(msg, line, col)))
+    st.errors += err_at(msg, line, col);
+    st_errors(st, st.errors)
 };
 
 // Display name: strip the rename pass's `$N` suffix so errors read like
@@ -491,6 +493,19 @@ def typeof_arith_arr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, f
     } else {
         st = expect_type(st, lt, rt.of, "'+' element", line, col);
         { typ: { k: "tarr", of: rt.of }, st: st }
+    }
+};
+
+// `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
+// (unlike `elem + a`, an array-typed element is never spliced). The right
+// operand must be an array; the left must be its element type.
+def typeof_cons(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    if (rt.k == "tarr" || rt.k == "tarrfix") {
+        st = expect_type(st, lt, rt.of, "'::' element", line, col);
+        { typ: { k: "tarr", of: rt.of }, st: st }
+    } else {
+        st = fail(st, "'::' needs an array on the right, got " + tstr(rt), line, col);
+        { typ: t_unk(), st: st }
     }
 };
 
@@ -637,7 +652,7 @@ def tcompat(got, want) -> bool {
         // C engines: `2.0 * i` and `x + 1` with a float x).
         // long also narrows to byte: there is no cast syntax, so an
         // annotated position is the only place the intent can be stated
-        // (`let b: byte = 65`, `push(bs, n)`, a byte-typed parameter).
+        // (`let b: byte = 65`, `bs += n`, a byte-typed parameter).
         // The value is masked to 8 bits where it is stored.
         if (want.k == "tfloat") { true }
         else if (want.k == "tbyte") { true }
@@ -712,6 +727,9 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         }
     } else if (k == "str") {
         { typ: { k: "tstr" }, st: st }
+    } else if (k == "bstr") {
+        // b"..." is a [byte] literal (packed bytes, like a Python bytes)
+        { typ: { k: "tarr", of: { k: "tbyte" } }, st: st }
     } else if (k == "err") {
         // Planted by the parser where the token stream stopped making
         // sense (parser.y has no error channel of its own).
@@ -861,6 +879,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         else if (op == "!=") { typeof_eq(st, op, l.typ, r.typ, node.line, node.col) }
         else if (op == "&&") { typeof_logic(st, op, l.typ, r.typ, node.line, node.col) }
         else if (op == "||") { typeof_logic(st, op, l.typ, r.typ, node.line, node.col) }
+        else if (op == "::") { typeof_cons(st, l.typ, r.typ, node.line, node.col) }
         else {
             st = fail(st, "operator '" + op + "' is unsupported in native mode", node.line, node.col);
             { typ: t_unk(), st: st }
@@ -1558,60 +1577,6 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     { typ: t_unk(), st: st }
                 }
             }
-        } else if (name == "push") {            // push(arr, v) -> arr (possibly reallocated; rebind the result:
-            // `a = push(a, v)`). Only heap arrays grow; fixed arrays reject.
-            if (len(cargs) != 2) {
-                st = fail(st, "push takes exactly 2 arguments (array, value)", node.line, node.col);
-                { typ: t_unk(), st: st }
-            } else {
-                let r0 = typeof_expr(st, cargs[0]);
-                st = r0.st;
-                if (r0.typ.k == "tarrfix") {
-                    // A fixed array's length is part of its type ([T; N]),
-                    // so growing it would break every later bound check.
-                    st = fail(st, "cannot push to fixed array " + tstr(r0.typ) + " (its length is part of its type; use [T] instead)", node.line, node.col);
-                    let r1f = typeof_expr(st, cargs[1]);
-                    st = r1f.st;
-                    { typ: t_unk(), st: st }
-                } else if (r0.typ.k != "tarr") {
-                    st = fail(st, "push needs a heap array, got " + tstr(r0.typ), node.line, node.col);
-                    { typ: t_unk(), st: st }
-                } else if (r0.typ.of.k == "tunk") {
-                    // push(x, v) where x's element type is poison/unknown:
-                    // still check v for its own errors, but don't cascade
-                    // a second "cannot infer" (the root cause errors once).
-                    // NOTE: r1 bound once above? No — r1 not yet bound here;
-                    // bind fresh (r1b) to avoid double-type of cargs[1].
-                    let r1b = typeof_expr(st, cargs[1]);
-                    st = r1b.st;
-                    { typ: t_unk(), st: st }
-                } else {
-                    let r1c = typeof_expr(st, cargs[1]);
-                    st = r1c.st;
-                    st = expect_type(st, r1c.typ, r0.typ.of, "push value", node.line, node.col);
-                    { typ: r0.typ, st: st }
-                }
-            }
-        } else if (name == "prepend") {
-            // prepend(arr, v) -> arr, in place: v is inserted at the front
-            if (len(cargs) != 2) {
-                st = fail(st, "prepend takes exactly 2 arguments", node.line, node.col);
-                { typ: t_unk(), st: st }
-            } else {
-                let ra = typeof_expr(st, cargs[0]);
-                st = ra.st;
-                let rv = typeof_expr(st, cargs[1]);
-                st = rv.st;
-                if (ra.typ.k == "tarr" || ra.typ.k == "tarrfix") {
-                    st = expect_type(st, rv.typ, ra.typ.of, "prepend element", node.line, node.col);
-                    { typ: ra.typ, st: st }
-                } else if (ra.typ.k == "tunk" || ra.typ.k == "tnone") {
-                    { typ: t_unk(), st: st }
-                } else {
-                    st = fail(st, "prepend needs an array, got " + tstr(ra.typ), node.line, node.col);
-                    { typ: t_unk(), st: st }
-                }
-            }
         } else if (name == "substr") {
             // substr(s, start, count) -> str (C-clamped semantics)
             if (len(cargs) != 3) {
@@ -2137,7 +2102,7 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
                 ok = false;
                 0
             } else { 0; };
-            args = push(args, pt);
+            args += pt;
             i = i + 1;
         };
         let ret = func.ret;
@@ -2220,11 +2185,11 @@ def check_program(ast) -> [{ msg: str, line: long, col: long }] {
         // so `s.kind`/`s.v.k` on a non-decl node would crash.
         if (s.k == "decl") {
             if (s.kind == "def") {
-                defs = push(defs, def_sig(s.name, s.v));
+                defs += def_sig(s.name, s.v);
                 0
             } else if (s.v.k == "func") {
                 // top-level let f = def... : also hoisted for mutual recursion
-                defs = push(defs, def_sig(s.name, s.v));
+                defs += def_sig(s.name, s.v);
                 0
             } else { 0; };
             0
@@ -2255,7 +2220,7 @@ def def_sig(name: str, func) -> { name: str, typ: { k: str } } {
     while (i < len(func.params)) {
         let pt = fpt[i];
         if (pt.k == "tnone") { pt = t_unk(); };
-        args = push(args, pt);
+        args += pt;
         i = i + 1;
     };
     let ret = func.ret;

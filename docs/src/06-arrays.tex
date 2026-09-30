@@ -140,6 +140,25 @@ elements in $[\texttt{lo}, \texttt{hi})$. Missing bounds default to
 \ic{0} and \ic{len}; bounds are clamped (no trap). All four spellings
 are legal: \ic{a[:]}, \ic{a[lo:]}, \ic{a[:hi]}, \ic{a[lo:hi]}.
 
+\subsection{Byte strings}
+
+A \ic{[byte]} array \emph{is} a binary string: \ic{b"..."} literals
+produce them, \ic{+} concatenates, slices cut, and printing one shows
+the Python-style repr --- printable ASCII verbatim, quote and backslash
+escaped, \ic{\bs n} \ic{\bs r} \ic{\bs t} as escapes, and every other
+byte as \ic{\bs xHH}:
+
+\begin{lstlisting}
+print(b"\bs x7fELF");     // b'\bs x7fELF'
+let hdr = b"AB" + b"\bs x00";
+print(hdr);              // b'AB\bs x00'
+print(hdr[0:2]);         // b'AB'
+\end{lstlisting}
+
+\noindent \ic{\bs{std/struct.y}} builds on this with pack/unpack
+helpers for file headers and binary layouts (\ic{u32be}, \ic{get\_i16le},
+\ic{pack}, \ic{unpack}, \ldots).
+
 \subsection{Operators are the interface}
 
 There are no array mutator functions: \ic{+=} and \ic{*=} \emph{are}

@@ -48,7 +48,7 @@ def read_eval_body() -> long {
     let lines = [];
     let line = readline();
     while (line != null) {
-        lines = push(lines, line);
+        lines += line;
         line = readline();
     };
     clear_eof();
@@ -90,7 +90,7 @@ def to_rpn(toks: [str]) -> [str] {
     foreach (tok in toks) {
         if (op_prec(tok) > 0) {
             while (sp > 0 && ops[sp - 1] != "(" && op_prec(ops[sp - 1]) >= op_prec(tok)) {
-                out = push(out, ops[sp - 1]);
+                out += ops[sp - 1];
                 sp = sp - 1;
             };
             ops[sp] = tok;
@@ -100,18 +100,18 @@ def to_rpn(toks: [str]) -> [str] {
             sp = sp + 1;
         } else if (tok == ")") {
             while (sp > 0 && ops[sp - 1] != "(") {
-                out = push(out, ops[sp - 1]);
+                out += ops[sp - 1];
                 sp = sp - 1;
             };
             if (sp > 0) {
                 sp = sp - 1;
             };
         } else {
-            out = push(out, tok);
+            out += tok;
         };
     };
     while (sp > 0) {
-        out = push(out, ops[sp - 1]);
+        out += ops[sp - 1];
         sp = sp - 1;
     };
     out

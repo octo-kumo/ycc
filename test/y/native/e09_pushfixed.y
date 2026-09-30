@@ -1,3 +1,3 @@
-// expect-error: cannot push to fixed
+// expect-error: cannot grow fixed array
 let a = [0; 2];
-a = push(a, 1);
+a += 1;

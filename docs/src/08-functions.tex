@@ -18,6 +18,25 @@ def fact(n: long) -> long {
 functions, and called through any of those (\ic{f(1)}, \ic{fs[0](1)},
 \ic{r.handler(1)}). Calling a non-function is a compile error.
 
+\subsection{Tail calls}
+
+A self-call in \emph{tail position} --- the body's trailing expression,
+a \ic{return}'s value, or an if-arm's trailing expression --- recycles
+the stack frame instead of growing it: the arguments are evaluated, the
+frame is torn down, and control re-enters the function. Tail recursion
+therefore runs in constant stack space:
+
+\begin{lstlisting}
+def sum_to(n: long, acc: long) -> long {
+    if (n == 0) { acc } else { self(n - 1, acc + n) }
+};
+\end{lstlisting}
+
+\noindent Calls outside tail position (\ic{self(x) + self(y)},
+\ic{let t = self(x)}, inside loops) are ordinary calls and stack as
+usual. Instrumented builds (\ic{--prof}) keep plain calls so every
+profiled entry pairs with its exit.
+
 \subsection{Closures}
 \label{sec:closures}
 

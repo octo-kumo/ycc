@@ -31,6 +31,8 @@ int isalnum(Yv *c);                  /* (c: str) -> bool */
 int is_radix_ch(Yv *c, long radix);  /* (c: str, radix: long) -> bool */
 int isspace(Yv *c);                  /* (c: str) -> bool */
 int ispunct(Yv *c);                  /* (c: str) -> bool */
+Yv *lex_quoted(Yv *src, long i, long line, long col);
+                                     /* -> { text: str, end: long, line: long, col: long } */
 Yv *mktok(Yv *t, Yv *v, long line, long col);
                                      /* -> { t: str, v: str, line: long, col: long } */
 long hexvalx(Yv *c);                 /* (c: str) -> long */

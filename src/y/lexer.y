@@ -104,6 +104,81 @@ def ispunct(c: str) -> bool {
     else { c == ":" }
 };
 
+// Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
+// decoded text and the position just past the closing quote. Escapes:
+// \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
+def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: long, line: long, col: long } {
+    let q = substr(src, i, 1);
+    let n = len(src);
+    i = i + 1;
+    col = col + 1;
+    let start = i;
+    let open = true;
+    let hasesc = false;
+    while (open) {
+        if (i < n) {
+            let ch = substr(src, i, 1);
+            if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; 0; }
+            else if (ch == q) { open = false; 0; }
+            else {
+                if (ch == "\n") { line = line + 1; col = 1; 0; }
+                else { col = col + 1; 0; };
+                i = i + 1;
+                0
+            };
+            0
+        } else { open = false; 0 };
+    };
+    if (open) {
+        puts("error: unterminated string literal\n");
+        exit(1);
+        0
+    } else { 0 };
+    let raw = substr(src, start, i - start);
+    i = i + 1;  // skip closing quote
+    col = col + 1;
+    let buf = raw;
+    if (hasesc) {
+        // process escapes into a chunk list + join (O(n))
+        let chunks: [str] = [];
+        let k = 0;
+        let rn = len(raw);
+        while (k < rn) {
+            let rc = substr(raw, k, 1);
+            if (rc == "\\") {
+                let esc = substr(raw, k + 1, 1);
+                if (esc == "n") { chunks += "\n"; k = k + 2; 0; }
+                else if (esc == "t") { chunks += "\t"; k = k + 2; 0; }
+                else if (esc == "r") { chunks += "\r"; k = k + 2; 0; }
+                else if (esc == "x") {
+                    // \xHH -- two hex digits
+                    let h1 = hexvalx(substr(raw, k + 2, 1));
+                    let h2 = hexvalx(substr(raw, k + 3, 1));
+                    if (h1 >= 0 && h2 >= 0) {
+                        chunks += chr(h1 * 16 + h2);
+                        k = k + 4;
+                        0
+                    } else {
+                        chunks += esc;
+                        k = k + 2;
+                        0
+                    };
+                    0
+                }
+                else { chunks += esc; k = k + 2; 0; };
+                0
+            } else {
+                chunks += rc;
+                k = k + 1;
+                0
+            };
+        };
+        buf = join(chunks, "");
+        0
+    } else { 0 };
+    { text: buf, end: i, line: line, col: col }
+};
+
 def mktok(t: str, v: str, line: long, col: long) -> { t: str, v: str, line: long, col: long } {
     { t: t, v: v, line: line, col: col }
 };
@@ -281,7 +356,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             } else { 0 };
             0
             };
-            toks = push(toks, mktok("num", substr(src, start, i - start), line, startcol));
+            toks += mktok("num", substr(src, start, i - start), line, startcol);
             0
         } else if (isalpha(c)) {
             let start = i;
@@ -310,83 +385,46 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             else if (word == "false") { ty = "kw"; 0; }
             else if (word == "null") { ty = "kw"; 0; }
             else { 0 };
-            toks = push(toks, mktok(ty, word, line, startcol));
+            if (word == "b") {
+                // b"..." / b'...' -- a byte-string literal: the same type
+                // as [byte], spelled like a Python bytes literal.
+                let bline = line;
+                let qch = substr(src, i, 1);
+                if (qch == "\"") {
+                    let bq = lex_quoted(src, i, line, col);
+                    i = bq.end;
+                    line = bq.line;
+                    col = bq.col;
+                    toks += mktok("bstr", bq.text, bline, startcol);
+                    0
+                } else if (qch == "'") {
+                    let bq2 = lex_quoted(src, i, line, col);
+                    i = bq2.end;
+                    line = bq2.line;
+                    col = bq2.col;
+                    toks += mktok("bstr", bq2.text, bline, startcol);
+                    0
+                } else {
+                    toks += mktok(ty, word, line, startcol);
+                    0
+                };
+                0
+            } else {
+                toks += mktok(ty, word, line, startcol);
+                0
+            };
             0
         } else if (c == "\"") {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.
-            // Fast path: scan to the closing quote (respecting escapes), extract
-            // the raw content with ONE substr, then process escapes only if any
-            // backslash is present. Avoids O(n^2) char-by-char concatenation.
             let startline = line;
             let startcol = col;
-            i = i + 1;
-            col = col + 1;
-            let start = i;
-            let open = true;
-            let hasesc = false;
-            while (open) {
-                if (i < n) {
-                    let ch = substr(src, i, 1);
-                    if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; 0; }
-                    else if (ch == "\"") { open = false; 0; }
-                    else {
-                        if (ch == "\n") { line = line + 1; col = 1; 0; }
-                        else { col = col + 1; 0; };
-                        i = i + 1;
-                        0
-                    };
-                    0
-                } else { open = false; 0 };
-            };
-            if (open) {
-                puts("error: unterminated string literal\n");
-                0
-            } else { 0 };
-            let raw = substr(src, start, i - start);
-            i = i + 1;  // skip closing quote
-            col = col + 1;
-            let buf = raw;
-            if (hasesc) {
-                // process escapes into a chunk list + join (O(n))
-                let chunks: [str] = [];
-                let k = 0;
-                let rn = len(raw);
-                while (k < rn) {
-                    let rc = substr(raw, k, 1);
-                    if (rc == "\\") {
-                        let esc = substr(raw, k + 1, 1);
-                        if (esc == "n") { chunks = push(chunks, "\n"); k = k + 2; 0; }
-                        else if (esc == "t") { chunks = push(chunks, "\t"); k = k + 2; 0; }
-                        else if (esc == "r") { chunks = push(chunks, "\r"); k = k + 2; 0; }
-                        else if (esc == "x") {
-                            // \xHH — two hex digits
-                            let h1 = hexvalx(substr(raw, k + 2, 1));
-                            let h2 = hexvalx(substr(raw, k + 3, 1));
-                            if (h1 >= 0 && h2 >= 0) {
-                                chunks = push(chunks, chr(h1 * 16 + h2));
-                                k = k + 4;
-                                0
-                            } else {
-                                chunks = push(chunks, esc);
-                                k = k + 2;
-                                0
-                            };
-                            0
-                        }
-                        else { chunks = push(chunks, esc); k = k + 2; 0; };
-                        0
-                    } else {
-                        chunks = push(chunks, rc);
-                        k = k + 1;
-                        0
-                    };
-                };
-                buf = join(chunks, "");
-                0
-            } else { 0 };
-            toks = push(toks, mktok("str", buf, startline, startcol));
+            let q = lex_quoted(src, i, line, col);
+            i = q.end;
+            line = q.line;
+            col = q.col;
+            toks += mktok("str", q.text, startline, startcol);
             0
         } else if (c == slash()) {
             // Slash: comment opener, block comment, or division operator.
@@ -444,12 +482,12 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 // below never sees it.
                 let two = twocharop(src, i);
                 if (two == "/=") {
-                    toks = push(toks, mktok("op", two, line, col));
+                    toks += mktok("op", two, line, col);
                     i = i + 2;
                     col = col + 2;
                     0
                 } else {
-                    toks = push(toks, mktok("op", slash(), line, col));
+                    toks += mktok("op", slash(), line, col);
                     i = i + 1;
                     col = col + 1;
                     0
@@ -463,17 +501,17 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             // as field access; see native.y strip_ns note).
             let two = twocharop(src, i);
             if (two != "") {
-                toks = push(toks, mktok("op", two, line, col));
+                toks += mktok("op", two, line, col);
                 i = i + 2;
                 col = col + 2;
                 0
             } else if (issingleop(c)) {
-                toks = push(toks, mktok("op", c, line, col));
+                toks += mktok("op", c, line, col);
                 i = i + 1;
                 col = col + 1;
                 0
             } else if (ispunct(c)) {
-                toks = push(toks, mktok("punct", c, line, col));
+                toks += mktok("punct", c, line, col);
                 i = i + 1;
                 col = col + 1;
                 0
@@ -485,7 +523,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             };
         };
     };
-    toks = push(toks, mktok("eof", "", line, col));
+    toks += mktok("eof", "", line, col);
     toks
 };
 

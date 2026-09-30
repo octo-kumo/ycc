@@ -79,7 +79,7 @@ cat > /tmp/yfp_probe.y <<'PROBE'
 def fib(n: long) -> long { if (n < 2) { n } else { self(n - 1) + self(n - 2) } };
 let xs = [];
 let i = 0;
-while (i < 8) { xs = push(xs, fib(i)); i = i + 1; };
+while (i < 8) { xs += fib(i)); i = i + 1; };
 print(len(xs));
 print(xs[7]);
 puts("ok\n");

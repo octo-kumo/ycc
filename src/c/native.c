@@ -137,6 +137,7 @@ Yv *gen_typeof(Yv *st, Yv *node);
 Yv *gen_opt_str_rax(Yv *st, Yv *t);
 Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t);
 Yv *gen_rec_str_rax(Yv *st, Yv *t);
+Yv *gen_cons(Yv *st, Yv *node);
 Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_acc_cat_const(Yv *st, Yv *s);
 Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft);
@@ -148,6 +149,10 @@ Yv *gen_while(Yv *st, Yv *node);
 Yv *gen_for(Yv *st, Yv *node);
 Yv *gen_forrange(Yv *st, Yv *node);
 Yv *gen_foreach(Yv *st, Yv *node);
+Yv *gen_bstr(Yv *st, Yv *node);
+Yv *gen_tail(Yv *st, Yv *node);
+Yv *gen_tail_call(Yv *st, Yv *node);
+int is_self_call(Yv *node);
 Yv *gen_block(Yv *st, Yv *node);
 long mfield_idx(Yv *names, Yv *name);
 Yv *gen_map(Yv *st, Yv *node);
@@ -1621,6 +1626,8 @@ Yv *infer(Yv *st, Yv *node) {
         }
     } else if (ys_eq_lit(k, "str")) {
         return ym(1, "k", ys("tstr"));
+    } else if (ys_eq_lit(k, "bstr")) {
+        return ym(2, "k", ys("tarr"), "of", ym(1, "k", ys("tbyte")));
     } else if (ys_eq_lit(k, "bool")) {
         return ym(1, "k", ys("tbool"));
     } else if (ys_eq_lit(k, "null")) {
@@ -1650,7 +1657,7 @@ Yv *infer(Yv *st, Yv *node) {
     } else if (ys_eq_lit(k, "bin")) {
         Yv *op = ym_get(node, "op");
         if (ys_eq_lit(op, "+") || ys_eq_lit(op, "-") || ys_eq_lit(op, "*") ||
-            ys_eq_lit(op, "/") || ys_eq_lit(op, "%")) {
+            ys_eq_lit(op, "/") || ys_eq_lit(op, "%") || ys_eq_lit(op, "::")) {
             Yv *bl = infer(st, ym_get(node, "l"));
             Yv *br = infer(st, ym_get(node, "r"));
             if (ys_eq_lit(op, "+") &&
@@ -1662,6 +1669,9 @@ Yv *infer(Yv *st, Yv *node) {
             } else if (ys_eq_lit(op, "+") &&
                 (ys_eq_lit(ym_get(br, "k"), "tarr") ||
                  ys_eq_lit(ym_get(br, "k"), "tarrfix"))) {
+                return ym(2, "k", ys("tarr"), "of", ym_get(br, "of"));
+            } else if (ys_eq_lit(op, "::")) {
+                /* cons: one element prepended to the right's array */
                 return ym(2, "k", ys("tarr"), "of", ym_get(br, "of"));
             } else if (ys_eq_lit(op, "+") &&
                 (ys_eq_lit(ym_get(bl, "k"), "tstr") ||
@@ -2505,6 +2515,8 @@ Yv *gen(Yv *st, Yv *node) {
         }
     } else if (ys_eq_lit(k, "str")) {
         return gen_str_const(st, ym_get(node, "v"));
+    } else if (ys_eq_lit(k, "bstr")) {
+        return gen_bstr(st, node);
     } else if (ys_eq_lit(k, "null")) {
         return emit(st, ys("    xor %eax, %eax"));
     } else if (ys_eq_lit(k, "id")) {
@@ -2576,6 +2588,25 @@ Yv *gen(Yv *st, Yv *node) {
 /* A string literal in .rodata: header object [len, data..., NUL]; the value
  * is the header's address. Used by `str` nodes and by every synthesised
  * constant (typeof, function/record formatting). */
+/* b"..." / b'...' -- a packed [byte] literal: desugar to a
+ * one-byte-per-element array literal and let gen_array_esz do the packing. */
+Yv *gen_bstr(Yv *st, Yv *node) {
+    Yv *bv = ym_get(node, "v");
+    Yv *elems = yav(0);
+    long bi = 0;
+    long bn = yv_len(bv);
+    while (bi < bn) {
+        Yv *bnum = ym(4, "k", ys("num"), "v",
+                       ys_long(ys_ord(ys_substr(bv, bi, 1))),
+                       "line", ym_get(node, "line"), "col", ym_get(node, "col"));
+        elems = ya_push(elems, bnum);
+        bi = bi + 1;
+    }
+    Yv *barr = ym(4, "k", ys("array"), "elems", elems, "line", ym_get(node, "line"),
+                  "col", ym_get(node, "col"));
+    return gen_array_esz(st, barr, 1L);
+}
+
 Yv *gen_str_const(Yv *st, Yv *s) {
     Yv *r = next_uid(st);
     st = ym_get(r, "st");
@@ -3161,14 +3192,14 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         return gen_cat(st, node, lt, rt);
     } else if (ys_eq_lit(op, "+") &&
                (ys_eq_lit(ym_get(lt, "k"), "tarr") ||
-                ys_eq_lit(ym_get(rt, "k"), "tarr"))) {
+                ys_eq_lit(ym_get(rt, "k"), "tarr") ||
+                ys_eq_lit(ym_get(lt, "k"), "tarrfix") ||
+                ys_eq_lit(ym_get(rt, "k"), "tarrfix"))) {
         /* array `+` is the copy-concat form (gen_cat splits off the array
          * case first), not numeric add on the header pointers. */
         return gen_cat(st, node, lt, rt);
-    } else if (ys_eq_lit(op, "+") &&
-               (ys_eq_lit(ym_get(lt, "k"), "tarrfix") ||
-                ys_eq_lit(ym_get(rt, "k"), "tarrfix"))) {
-        return gen_cat(st, node, lt, rt);
+    } else if (ys_eq_lit(op, "::")) {
+        return gen_cons(st, node);
     } else if (ys_eq_lit(ym_get(lt, "k"), "tfloat") ||
                ys_eq_lit(ym_get(rt, "k"), "tfloat")) {
         return gen_float_bin(st, node, lt, rt);
@@ -3462,7 +3493,14 @@ Yv *gen_print(Yv *st, Yv *node) {
                ys_eq_lit(ym_get(t, "k"), "tarrfix")) {
         /* Arrays print like tostring: "[e0, e1, ...]". */
         st = gen(st, pa0);
-        st = gen_arr_tostr_rax(st, ym_get(t, "of"));
+        if (ys_eq_lit(ym_get(ym_get(t, "of"), "k"), "tbyte")) {
+            /* [byte] prints Python-style: b'...' with escapes */
+            st = gen_helper1(st, ys("y_bytes_repr"));
+            ;
+        } else {
+            st = gen_arr_tostr_rax(st, ym_get(t, "of"));
+            ;
+        }
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
     } else if (ys_eq_lit(ym_get(t, "k"), "tnull")) {
@@ -3564,6 +3602,24 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t) {
  * Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
  * y_arr_cat copies both sides; the one-element side is built with the
  * ordinary array literal emitter, so `arr + v` evaluates v exactly once. */
+/* `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
+ * (types.y typeof_cons keeps even array-typed elements whole). */
+Yv *gen_cons(Yv *st, Yv *node) {
+    Yv *ln = ym_get(node, "line");
+    Yv *cl = ym_get(node, "col");
+    long cesz = arr_elem_bytes(infer(st, ym_get(node, "r")));
+    Yv *one = ym(4, "k", ys("array"), "elems", args1(ym_get(node, "l")), "line",
+                 ln, "col", cl);
+    st = gen_array_esz(st, one, cesz);
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ym_get(node, "r"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys("    mov $"), ys_cat(ys_long(cesz), ys(", %rax"))));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_arr_cat"));
+    return emit(st, ys("    add $24, %rsp"));
+}
+
 Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     Yv *ln = ym_get(node, "line");
     Yv *cl = ym_get(node, "col");
@@ -3948,6 +4004,109 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     st = emit(st, ys_cat(ys("    jmp "), ym_get(r1, "lbl")));
     st = emit(st, ys_cat(ym_get(r2, "lbl"), ys(":")));
     return emit(st, ys("    xor %eax, %eax"));
+}
+
+/* ── tail calls ─────────────────────────────────────────────────────────
+ * A self-call in tail position (the body's trailing value, a `return`'s
+ * value, an if-arm's trailing value) recycles the frame instead of
+ * growing the stack: every argument is evaluated into a fresh local
+ * first (arguments may read parameters the copy below overwrites), the
+ * locals are copied over the parameter slots, and the frame tears down
+ * into a `jmp` back to the prologue. Tail recursion is then constant
+ * space. Instrumented builds (--prof) keep plain calls so every entry
+ * stays paired with its exit. */
+
+int is_self_call(Yv *node) {
+    if (!ys_eq_lit(ym_get(node, "k"), "call")) { return 0; }
+    Yv *cal = ym_get(node, "callee");
+    return ys_eq_lit(ym_get(cal, "k"), "id") &&
+           ys_eq_lit(ym_get(cal, "v"), "self");
+}
+
+Yv *gen_tail_call(Yv *st, Yv *node) {
+    Yv *targs = ym_get(node, "args");
+    long n = yv_len(targs);
+    /* evaluate each argument into a fresh local */
+    Yv *offs = yav(0);
+    long i = 0;
+    while (i < n) {
+        st = gen(st, ya_get(targs, i));
+        long off = (yv_l(ym_get(st, "slots")) + 1) * -8;
+        st = emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(off), ys("(%rbp)"))));
+        offs = ya_push(offs, yv_long(off));
+        st = ym(11, "out", ym_get(st, "out"), "rodata", ym_get(st, "rodata"),
+                "uid", ym_get(st, "uid"), "fuid", ym_get(st, "fuid"),
+                "loc", ym_get(st, "loc"), "env", ym_get(st, "env"),
+                "slots", yv_long(yv_l(ym_get(st, "slots")) + 1),
+                "self_label", ym_get(st, "self_label"),
+                "end_label", ym_get(st, "end_label"),
+                "fns", ym_get(st, "fns"), "bodies", ym_get(st, "bodies"));
+        i = i + 1;
+    }
+    /* copy the locals over the parameter slots (param k: 16 + 8*(n-1-k)) */
+    long j = 0;
+    while (j < n) {
+        long po = 16 + 8 * (n - 1 - j);
+        st = emit(st, ys_cat(ys("    mov "), ys_cat(ys_long(yv_l(ya_get(offs, j))), ys("(%rbp), %rax"))));
+        st = emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(po), ys("(%rbp)"))));
+        j = j + 1;
+    }
+    /* tear down this frame and re-enter the prologue; the return address
+     * of the original call stays where it is, so the caller sees a normal
+     * return. */
+    st = emit(st, ys("    mov %rbp, %rsp"));
+    st = emit(st, ys("    pop %rbp"));
+    return emit(st, ys_cat(ys("    jmp "), ym_get(st, "self_label")));
+}
+
+Yv *gen_tail(Yv *st, Yv *node) {
+    Yv *k = ym_get(node, "k");
+    if (ys_eq_lit(k, "ret")) {
+        Yv *e = ym_get(node, "e");
+        if (is_self_call(e)) {
+            return gen_tail_call(st, e);
+        }
+        st = gen(st, e);
+        return emit(st, ys_cat(ys("    jmp "), ym_get(st, "end_label")));
+    } else if (ys_eq_lit(k, "call")) {
+        if (is_self_call(node)) { return gen_tail_call(st, node); }
+        return gen(st, node);
+    } else if (ys_eq_lit(k, "block")) {
+        Yv *tl = ym_get(node, "stmts");
+        long m = yv_len(tl);
+        long ti = 0;
+        while (ti < m - 1) {
+            st = gen(st, ya_get(tl, ti));
+            ti = ti + 1;
+        }
+        if (m > 0) {
+            Yv *lastn = ya_get(tl, m - 1);
+            st = gen_tail(st, lastn);
+            ;
+        } else {
+            ;
+        }
+        return st;
+    } else if (ys_eq_lit(k, "if")) {
+        st = gen(st, ym_get(node, "cond"));
+        st = emit(st, ys("    test %rax, %rax"));
+        Yv *rl1 = next_loc(st);
+        st = ym_get(rl1, "st");
+        Yv *lelse = ym_get(rl1, "lbl");
+        Yv *rl2 = next_loc(st);
+        st = ym_get(rl2, "st");
+        Yv *lend = ym_get(rl2, "lbl");
+        st = emit(st, ys_cat(ys("    jz "), lelse));
+        st = gen_tail(st, ym_get(node, "then"));
+        if (yv_b(ym_get(node, "has_else"))) {
+            st = emit(st, ys_cat(ys("    jmp "), lend));
+            st = emit(st, ys_cat(lelse, ys(":")));
+            st = gen_tail(st, ym_get(node, "els"));
+            return emit(st, ys_cat(lend, ys(":")));
+        }
+        return emit(st, ys_cat(lelse, ys(":")));
+    }
+    return gen(st, node);
 }
 
 Yv *gen_block(Yv *st, Yv *node) {
@@ -5253,8 +5412,16 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
         st = emit(st, ys("    call y_float_tostr"));
         return emit(st, ys("    add $8, %rsp"));
     } else if (ys_eq_lit(tk, "tarr")) {
+        if (ys_eq_lit(ym_get(ym_get(t, "of"), "k"), "tbyte")) {
+            /* [byte] stringifies Python-style: b'...' with escapes */
+            return gen_helper1(st, ys("y_bytes_repr"));
+        }
         return gen_arr_tostr_rax(st, ym_get(t, "of"));
     } else if (ys_eq_lit(tk, "tarrfix")) {
+        if (ys_eq_lit(ym_get(ym_get(t, "of"), "k"), "tbyte")) {
+            /* [byte] stringifies Python-style: b'...' with escapes */
+            return gen_helper1(st, ys("y_bytes_repr"));
+        }
         return gen_arr_tostr_rax(st, ym_get(t, "of"));
     } else if (ys_eq_lit(tk, "tnull")) {
         return gen_str_const(st, ys("null"));
@@ -5687,9 +5854,17 @@ Yv *gen_tostring(Yv *st, Yv *node) {
         return emit(st, ys("    add $8, %rsp"));
     } else if (ys_eq_lit(ym_get(t, "k"), "tarr")) {
         st = gen(st, a0);
+        if (ys_eq_lit(ym_get(ym_get(t, "of"), "k"), "tbyte")) {
+            /* [byte] stringifies Python-style: b'...' with escapes */
+            return gen_helper1(st, ys("y_bytes_repr"));
+        }
         return gen_arr_tostr_rax(st, ym_get(t, "of"));
     } else if (ys_eq_lit(ym_get(t, "k"), "tarrfix")) {
         st = gen(st, a0);
+        if (ys_eq_lit(ym_get(ym_get(t, "of"), "k"), "tbyte")) {
+            /* [byte] stringifies Python-style: b'...' with escapes */
+            return gen_helper1(st, ys("y_bytes_repr"));
+        }
         return gen_arr_tostr_rax(st, ym_get(t, "of"));
     } else if (ys_eq_lit(ym_get(t, "k"), "tnull")) {
         st = gen(st, a0);
@@ -6027,14 +6202,14 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         }
         ;
     }
-    f = gen_block(f, ym_get(func, "body"));
-    long frame = arch_frame(yv_l(ym_get(f, "slots")));
-    /* ── profiling (ycc --prof) ─────────────────────────────────────────
+    /* ── profiling (ycc --prof) ───────────────────────────────────────
      * Wrap the body with y_prof_enter/y_prof_exit. The stats table lives
      * in %r13 (callee-saved; generated code never touches it) and _start
      * allocates it. The function's own label is the row name. The
      * profiler's own functions are exempt: their calls run the
-     * instrumentation itself (std/prof.y guards the rest). */
+     * instrumentation itself (std/prof.y guards the rest).
+     * (Computed before the body: tail-call recycling stays off under
+     * --prof so every enter keeps its matching exit.) */
     int prof_on = fn_label_present(ym_get(st, "fns"), ys("y_prof_enter"));
     if (prof_on) {
         if (ys_eq_lit(ys_substr(label, 0, 7), "y_prof_")) {
@@ -6047,6 +6222,12 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     } else {
         ;
     }
+    if (prof_on) {
+        f = gen_block(f, ym_get(func, "body"));
+    } else {
+        f = gen_tail(f, ym_get(func, "body"));
+    }
+    long frame = arch_frame(yv_l(ym_get(f, "slots")));
     Yv *pname = ys("");
     Yv *prodata = ym_get(f, "rodata");
     long puid = yv_l(ym_get(f, "uid"));

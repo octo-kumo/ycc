@@ -33,7 +33,7 @@ def y_prof_init(n: long) -> { tab: [long], names: [str], heap0: long } {
     let total = 5 + 5 * n + 3 * 1024;
     let i = 0;
     while (i < total) {
-        tab = push(tab, 0);
+        tab += 0;
         i = i + 1;
         0
     };
@@ -41,7 +41,7 @@ def y_prof_init(n: long) -> { tab: [long], names: [str], heap0: long } {
     let names: [str] = [];
     i = 0;
     while (i < n) {
-        names = push(names, "");
+        names += "";
         i = i + 1;
         0
     };
@@ -209,7 +209,7 @@ def y_prof_report(st: { tab: [long], names: [str], heap0: long }) -> long {
     let i = 0;
     while (i < n) {
         if (t[5 + 5 * i] > 0) {
-            idx = push(idx, i);
+            idx += i;
             0
         } else { 0; };
         i = i + 1;

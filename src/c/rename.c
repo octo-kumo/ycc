@@ -281,6 +281,8 @@ Yv *rn_node(Yv *node, Yv *st) {
         return ym(2, "st", st, "node", node);
     } else if (ys_eq_lit(k, "str")) {
         return ym(2, "st", st, "node", node);
+    } else if (ys_eq_lit(k, "bstr")) {
+        return ym(2, "st", st, "node", node);
     } else if (ys_eq_lit(k, "bool")) {
         return ym(2, "st", st, "node", node);
     } else if (ys_eq_lit(k, "null")) {

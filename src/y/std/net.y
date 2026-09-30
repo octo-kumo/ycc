@@ -110,7 +110,7 @@ def recv_str(fd: long, max: long) -> str? {
         let out: [byte] = [];
         let i = 0;
         while (i < k) {
-            out = push(out, buf[i]);
+            out += buf[i];
             i = i + 1;
             0
         };

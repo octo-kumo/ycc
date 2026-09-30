@@ -54,7 +54,7 @@ def eval(node, scope) {
         let i = 0;
         let elems = node.elems;
         while (i < len(elems)) {
-            out = push(out, eval(elems[i], scope));
+            out += eval(elems[i], scope);
             i = i + 1;
         };
         out
@@ -135,7 +135,7 @@ def eval_slice(node, scope) {
     let out = [];
     let i = lo;
     while (i < hi) {
-        out = push(out, arr[i]);
+        out += arr[i];
         i = i + 1;
     };
     out
@@ -157,7 +157,7 @@ def eval_call(node, scope) {
     let cargs = node.args;
     let i = 0;
     while (i < len(cargs)) {
-        argv = push(argv, eval(cargs[i], scope));
+        argv += eval(cargs[i], scope);
         i = i + 1;
     };
     let ct = typeof(callee);

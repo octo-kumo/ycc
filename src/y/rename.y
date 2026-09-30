@@ -24,7 +24,8 @@ def rn_fresh(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, orig: str) -
 };
 
 def rn_push(st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
-    let scopes = push(st.scopes, []);
+    st.scopes += [[]];
+    let scopes = st.scopes
     { scopes: scopes, n: st.n }
 };
 
@@ -33,7 +34,7 @@ def rn_pop(st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [
     let old = st.scopes;
     let i = 0;
     while (i < len(old) - 1) {
-        scopes = push(scopes, old[i]);
+        scopes += [old[i]];
         i = i + 1;
     };
     { scopes: scopes, n: st.n }
@@ -42,7 +43,7 @@ def rn_pop(st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [
 def rn_define(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, orig: str, uniq: str) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
     let scopes = st.scopes;
     let top = scopes[len(scopes) - 1];
-    top = push(top, { orig: orig, uniq: uniq });
+    top += { orig: orig, uniq: uniq };
     scopes[len(scopes) - 1] = top;
     { scopes: scopes, n: st.n }
 };
@@ -86,7 +87,7 @@ def rn_list(nodes: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: lo
     while (i < len(nodes)) {
         let r = rn_node(nodes[i], st);
         st = r.st;
-        out = push(out, r.node);
+        out += r.node;
         i = i + 1;
     };
     { st: st, nodes: out }
@@ -148,7 +149,7 @@ def rn_shadow_dups(stmts: [{k: str}]) -> [{k: str}] {
     let out: [{k: str}] = [];
     let i = 0;
     while (i < len(stmts)) {
-        out = push(out, rn_shadow_one(stmts[i], stmts, i));
+        out += rn_shadow_one(stmts[i], stmts, i);
         i = i + 1;
         0
     };
@@ -255,6 +256,8 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
     if (k == "num") {
         { st: st, node: node }
     } else if (k == "str") {
+        { st: st, node: node }
+    } else if (k == "bstr") {
         { st: st, node: node }
     } else if (k == "bool") {
         { st: st, node: node }
@@ -681,7 +684,8 @@ def rn_func_go(fparams, fptypes, fret, fbody, fline: long, fcol: long, params: [
         rn_func_body(fptypes, fret, fbody, fline, fcol, params, st)
     } else {
         let b = rn_bind(st, fparams[i]);
-        rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, push(params, b.uniq), i + 1, b.st)
+        params += b.uniq;
+        rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, params, i + 1, b.st)
     }
 };
 

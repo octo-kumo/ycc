@@ -27,15 +27,17 @@ expect_for() {
         t08_mod_zero.y)
             echo "both1:VM says 'Division by zero in modulus operator', runtime says 'runtime error: modulo by zero'" ;;
         t22_map_missing_key.y)
-            echo "both1:VM says \"Key 'x' not found in map\", runtime says \"runtime error: key 'x' not found\"" ;;
+            echo "reject" ;;   # missing dynamic key is a compile-time rejection now
         t48_str_index.y)
-            echo "both1:VM says 'Attempting to index a non-array value', runtime says 'runtime error: indexing a non-array'" ;;
+            echo "reject" ;;   # indexing a non-array is a static error now
         t50_cons_nonarr.y)
-            echo "both1:VM says 'Right operand of :: must be an array', runtime says 'runtime error: :: requires array on right'" ;;
+            echo "reject" ;;   # '::' needs an array on the right (static)
         t62_chained_idx.y)
-            echo "both1:same wording split as t48 (chained index into non-array)" ;;
+            echo "reject" ;;   # same rule as t48 (chained index into non-array)
         t01_empty_block.y)
             echo "parity" ;;
+        t51_empty_map.y)
+            echo "reject" ;;   # an unannotated {} cannot infer a record type
         t06_div_by_zero.y)
             echo "reject" ;;   # 'array / number' is a static error now
         t10_deep_recursion.y)

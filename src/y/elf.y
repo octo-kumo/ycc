@@ -59,7 +59,7 @@ def elf_build(code: [long], rodata: [long], entry_off: long) -> [long] {
     out = push_bytes(out, code);
     let p = 0;
     while (p < codepad) {
-        out = push(out, 0);
+        out += 0;
         p = p + 1;
         0
     };
@@ -67,7 +67,7 @@ def elf_build(code: [long], rodata: [long], entry_off: long) -> [long] {
     out = push_bytes(out, [0, 0, 0, 0, 0, 0, 0, 0]);
     let q = 0;
     while (q < ropad) {
-        out = push(out, 0);
+        out += 0;
         q = q + 1;
         0
     };
@@ -82,7 +82,7 @@ def push_bytes(out: [long], bytes: [long]) -> [long] {
     // NOTE: annotated [long] (not holes): push() needs known heap arrays.
     let i = 0;
     while (i < len(bytes)) {
-        out = push(out, bytes[i]);
+        out += bytes[i];
         i = i + 1;
         0
     };
@@ -90,28 +90,28 @@ def push_bytes(out: [long], bytes: [long]) -> [long] {
 };
 
 def push_le16(out: [long], v: long) -> [long] {
-    out = push(out, elfenc.byte_of(v, 0));
-    out = push(out, elfenc.byte_of(v, 1));
+    out += elfenc.byte_of(v, 0);
+    out += elfenc.byte_of(v, 1);
     out
 };
 
 def push_le32(out: [long], v: long) -> [long] {
-    out = push(out, elfenc.byte_of(v, 0));
-    out = push(out, elfenc.byte_of(v, 1));
-    out = push(out, elfenc.byte_of(v, 2));
-    out = push(out, elfenc.byte_of(v, 3));
+    out += elfenc.byte_of(v, 0);
+    out += elfenc.byte_of(v, 1);
+    out += elfenc.byte_of(v, 2);
+    out += elfenc.byte_of(v, 3);
     out
 };
 
 def push_le64(out: [long], v: long) -> [long] {
-    out = push(out, elfenc.byte_of(v, 0));
-    out = push(out, elfenc.byte_of(v, 1));
-    out = push(out, elfenc.byte_of(v, 2));
-    out = push(out, elfenc.byte_of(v, 3));
-    out = push(out, elfenc.byte_of(v, 4));
-    out = push(out, elfenc.byte_of(v, 5));
-    out = push(out, elfenc.byte_of(v, 6));
-    out = push(out, elfenc.byte_of(v, 7));
+    out += elfenc.byte_of(v, 0);
+    out += elfenc.byte_of(v, 1);
+    out += elfenc.byte_of(v, 2);
+    out += elfenc.byte_of(v, 3);
+    out += elfenc.byte_of(v, 4);
+    out += elfenc.byte_of(v, 5);
+    out += elfenc.byte_of(v, 6);
+    out += elfenc.byte_of(v, 7);
     out
 };
 

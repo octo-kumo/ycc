@@ -35,10 +35,15 @@ run_test() {
     vm_out=$(timeout $VM_TO $YBOOT -q "$tmpfile" 2>&1)
     vm_exit=$?
 
-    # Compiled
-    $YBOOT --compile "$tmpfile" -o "$binfile" >/dev/null 2>&1
-    bin_out=$(timeout 10 "$binfile" 2>&1)
-    bin_exit=$?
+    # Compiled: a compile failure IS the output (error-message tests)
+    compile_out=$($YBOOT --compile "$tmpfile" -o "$binfile" 2>&1)
+    if [ $? -ne 0 ]; then
+        bin_out="$compile_out"
+        bin_exit=1
+    else
+        bin_out=$(timeout 10 "$binfile" 2>&1)
+        bin_exit=$?
+    fi
 
     rm -f "$tmpfile" "$binfile"
 
@@ -169,8 +174,7 @@ run_test "last_index_of: not found" 'print(last_index_of("hello", "xyz"));' '-1'
 # ── Builtins: push ──
 echo ""
 echo "── Builtins: push ──"
-run_test "push: to array" 'let a = [1,2]; print(push(a, 3));' '[1, 2, 3]'
-run_test "push: to empty" 'let a = []; print(push(a, 42));' '[42]'
+run_test "push is gone" 'let a = [1,2]; print(push(a, 3));' "undefined function 'push'"
 
 # ── Builtins: map_get/map_set ──
 echo ""
@@ -306,7 +310,7 @@ run_test "from_bytes: literal" 'let b: [byte] = [104, 105]; print(from_bytes(b))
 run_test "byte: annotated array literal" 'let b: [byte] = [1, 2, 3]; print(tostring(b));' '[1, 2, 3]'
 run_test "byte: widens to long" 'let b: [byte] = [41]; let n = b[0] + 1; print(n);' '42'
 run_test "byte: unsigned above 127" 'let b: [byte] = [200]; print(b[0]);' '200'
-run_test "byte: push and index" 'let b: [byte] = []; b = push(b, 65); b = push(b, 66); print(from_bytes(b));' 'AB'
+run_test "byte: push and index" 'let b: [byte] = []; b += 65; b += 66; print(from_bytes(b));' 'AB'
 run_test "byte: slice" 'let b: [byte] = [97, 98, 99, 100]; print(from_bytes(b[1:3]));' 'bc'
 run_test "tostring: array of long" 'print(tostring([1, 2, 3]));' '[1, 2, 3]'
 run_test "tostring: array of str" 'print(tostring(["a", "b"]));' '[a, b]'
@@ -332,7 +336,8 @@ echo ""
 echo "── Operators: unary ──"
 run_test "unary minus" 'print(-5);' '-5'
 run_test "unary minus expr" 'print(-(2 + 3));' '-5'
-run_test "double negative" 'print(--5);' '5'
+run_test "double negative" 'print(-(-5));' '5'
+run_test "prefix -- is decrement" 'let x = 5; --x; print(x);' '4'
 
 # ── Operators: cons ──
 echo ""
@@ -395,7 +400,7 @@ run_test "return: falls through" 'def f(n: long) -> long { if (n < 0) { return 0
 run_test "return: skips rest of body" 'def f() -> long { return 1; 999 }; print(f());' '1'
 run_test "return: out of a while loop" 'def f(xs: [long]) -> long { let i = 0; while (i < len(xs)) { if (xs[i] > 10) { return xs[i]; }; i = i + 1; }; 0 - 1 }; print(f([1, 2, 42, 7]));' '42'
 run_test "return: loop finishes without returning" 'def f(xs: [long]) -> long { let i = 0; while (i < len(xs)) { if (xs[i] > 10) { return xs[i]; }; i = i + 1; }; 0 - 1 }; print(f([1, 2]));' '-1'
-run_test "return: bare return is null" 'def f() -> long { return; 999 }; print(f());' 'null'
+run_test "return: bare return is null" 'def f() { return; }; print(f());' 'null'
 run_test "return: nested in inner function" 'def outer() -> long { def inner(n: long) -> long { if (n > 0) { return 7; }; 0 }; inner(1) + 1 }; print(outer());' '8'
 
 # ── Functions: closures ──
@@ -407,8 +412,8 @@ run_test "closure: counter" 'def make_counter() { let n = 0; def inc() { n = n +
 # ── Functions: higher-order ──
 echo ""
 echo "── Functions: higher-order ──"
-run_test "HOF: map" 'def map(f, xs) { let r = []; foreach (x in xs) { r = push(r, f(x)) }; r }; def double(x) { x * 2 }; print(map(double, [1,2,3]));' '[2, 4, 6]'
-run_test "HOF: filter" 'def filter(p, xs) { let r = []; foreach (x in xs) { if (p(x)) { r = push(r, x) } }; r }; def is_even(x) { x % 2 == 0 }; print(filter(is_even, [1,2,3,4,5]));' '[2, 4]'
+run_test "HOF: map" 'def map(f, xs) { let r = []; foreach (x in xs) { r += f(x)) }; r }; def double(x) { x * 2 }; print(map(double, [1,2,3]));' '[2, 4, 6]'
+run_test "HOF: filter" 'def filter(p, xs) { let r = []; foreach (x in xs) { if (p(x)) { r += x) } }; r }; def is_even(x) { x % 2 == 0 }; print(filter(is_even, [1,2,3,4,5]));' '[2, 4]'
 run_test "HOF: reduce" 'def reduce(f, acc, xs) { foreach (x in xs) { acc = f(acc, x) }; acc }; def add(a, b) { a + b }; print(reduce(add, 0, [1,2,3,4,5]));' '15'
 
 # ── Functions: anonymous ──

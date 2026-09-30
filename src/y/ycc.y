@@ -64,7 +64,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             exit(1);
             0
         } else {
-            files = push(files, a);
+            files += a;
             0
         };
         i = i + 1;
@@ -199,7 +199,7 @@ def main(cmdline: [str]) -> long {
             let si = 0;
             while (si < len(sub)) {
                 let se = sub[si];
-                dt = push(dt, se);
+                dt += se;
                 si = si + 1;
             };
             t0 = clock_us();
@@ -248,7 +248,7 @@ def main(cmdline: [str]) -> long {
                 let ai = 0;
                 while (ai < len(asub)) {
                     let ae = asub[ai];
-                    dt = push(dt, ae);
+                    dt += ae;
                     ai = ai + 1;
                 };
                 let abok = ab.ok;

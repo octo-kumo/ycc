@@ -226,6 +226,9 @@ Yv *parse_primary(Yv *toks, long p) {
         return res(ym(4, "k", ys("num"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "str")) {
         return res(ym(4, "k", ys("str"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+    } else if (ys_eq_lit(t, "bstr")) {
+        // b"..." / b'...' -- a [byte] literal
+        return res(ym(4, "k", ys("bstr"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "id")) {
         return res(ym(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (is_kw(toks, p, ys("true"))) {
@@ -363,7 +366,14 @@ Yv *parse_binary(Yv *toks, long p, long min_prec) {
             go = 0;
             ;
         } else {
-            Yv *right_r = parse_binary(toks, pos + 1, prec + 1);
+            /* `::` is right-associative: 1 :: 2 :: [3] is 1 :: (2 :: [3])
+             * = [1, 2, 3]. Everything else is left-associative. */
+            long next_min = prec + 1;
+            if (ys_eq_lit(op, "::")) {
+                next_min = prec;
+                ;
+            } else { ; }
+            Yv *right_r = parse_binary(toks, pos + 1, next_min);
             left = ym(6, "k", ys("bin"), "op", op, "l", left, "r", ym_get(right_r, "node"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
             pos = yv_l(ym_get(right_r, "pos"));
             ;
