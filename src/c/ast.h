@@ -30,6 +30,13 @@ typedef enum {
     O_MOD,  // %
     O_NOT,  // !   // logical NOT (unary)
     O_NEG,  // -   // arithmetic negation (unary)
+    /* In-place compound-assign operators, produced only by the parser's
+     * `x op= e` desugar (never spelled in source position, so they stay
+     * out of OPERATORS[]): O_IADD is `+=` — numeric add, string concat,
+     * or IN-PLACE array push/append. O_ISTAR is `*=` — numeric multiply
+     * or IN-PLACE array prepend. */
+    O_IADD,
+    O_ISTAR,
 } Operator;
 
 Operator operator_from_str(const char *op);

@@ -437,27 +437,25 @@ def typeof_arith(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdept
 };
 
 def typeof_arith_arr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
-    // The array operand decides the result type; the other side is either
-    // an array of the same type or one matching element.
+    // The array operand decides the result type. Two arrays CONCATENATE
+    // (each side's elements are spliced in, so the ELEMENT types must
+    // match — arrays are homogeneous by design); a non-array operand is
+    // ONE element of the array's element type.
     let lk: str = lt.k;
     if (op != "+") {
         st = fail(st, "'" + op + "' is not defined on arrays (only '+' copies, '+='/'*=' mutate)", line, col);
         { typ: t_unk(), st: st }
     } else if (lk == "tarr" || lk == "tarrfix") {
         if (rt.k == "tarr" || rt.k == "tarrfix") {
-            if (teq(lt, rt)) {
-                { typ: lt, st: st }
-            } else {
-                st = fail(st, "'+' concatenates arrays of the same type, got " + tstr(lt) + " and " + tstr(rt), line, col);
-                { typ: t_unk(), st: st }
-            }
+            st = expect_type(st, rt.of, lt.of, "'+' concatenated elements", line, col);
+            { typ: { k: "tarr", of: lt.of }, st: st }
         } else {
             st = expect_type(st, rt, lt.of, "'+' element", line, col);
-            { typ: lt, st: st }
+            { typ: { k: "tarr", of: lt.of }, st: st }
         }
     } else {
         st = expect_type(st, lt, rt.of, "'+' element", line, col);
-        { typ: rt, st: st }
+        { typ: { k: "tarr", of: rt.of }, st: st }
     }
 };
 
@@ -1323,17 +1321,19 @@ def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str 
     let op = node.op;
     if (tt.k == "tarr" || tt.k == "tarrfix") {
         if (op == "*") {
+            // `*= ` prepends ONE item — its type must be the element type.
             st = expect_type(st, vt, tt.of, "'*=' element", node.line, node.col);
             { typ: tt, st: st }
         } else if (op == "+") {
-            if (teq(vt, tt.of)) {
-                { typ: tt, st: st }
-            } else if (teq(vt, tt)) {
+            if (vt.k == "tarr" || vt.k == "tarrfix") {
+                // `arr += arr2` appends arr2's ELEMENTS in place, so the
+                // element types must match (homogeneity).
+                st = expect_type(st, vt.of, tt.of, "'+=' appended elements", node.line, node.col);
                 { typ: tt, st: st }
             } else if (vt.k == "tunk" || vt.k == "tnone") {
                 { typ: tt, st: st }
             } else {
-                st = fail(st, "'+=' on an array takes an element or an array of the same type, got " + tstr(vt), node.line, node.col);
+                st = expect_type(st, vt, tt.of, "'+=' element", node.line, node.col);
                 { typ: tt, st: st }
             }
         } else {

@@ -130,6 +130,29 @@ typecheck_result_t tc_binary_op(Expr *expr, TCVarTypeScope *scope) {
     // these ops only work on numbers, and should only produce numbers, may be
     // int or float, we allow mix use, which would result in float
 
+    /* `x += v` / `x *= v` (the parser's op= desugar): numbers take the
+     * arithmetic, strings only `+=`, arrays the in-place forms (`+=` push
+     * or append, `*=` prepend one). */
+    if (expr->as.op_node.op == O_IADD || expr->as.op_node.op == O_ISTAR) {
+        typecheck_result_t il = tc_expr(expr->as.op_node.left, scope);
+        if (!il.is_ok) { return il; }
+        typecheck_result_t ir = tc_expr(expr->as.op_node.right, scope);
+        if (!ir.is_ok) { return ir; }
+        if (il.type->base == VAL_ARR) {
+            return TC_OK(il.type);
+        }
+        if (expr->as.op_node.op == O_IADD &&
+            (il.type->base == VAL_STR || ir.type->base == VAL_STR)) {
+            return TC_OK(TYPE_STR);
+        }
+        if ((il.type->base == VAL_LONG || il.type->base == VAL_FLOAT) &&
+            (ir.type->base == VAL_LONG || ir.type->base == VAL_FLOAT)) {
+            return TC_OK(il.type);
+        }
+        return TC_ERR("'+=' / '*=' needs numbers, strings or an array target",
+                      expr);
+    }
+
     bool input_numeric =
         expr->as.op_node.op == O_ADD || expr->as.op_node.op == O_SUB ||
         expr->as.op_node.op == O_MUL || expr->as.op_node.op == O_DIV ||

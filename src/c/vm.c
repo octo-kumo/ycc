@@ -668,6 +668,80 @@ static VMValue *vm_execute_inner(VMVariableScope *scope, Expr *expr) {
             __ISCALCULATION(+);
             break;
         }
+        case O_IADD: {
+            /* `x += v`: numeric add / string concat / IN-PLACE array
+             * push-or-append. The left side is the mutation target and
+             * decides the rule (an array wins over strings). The
+             * value-shaped rule matches the native backend and the
+             * compiled C runtime: an array value appends its ELEMENTS,
+             * anything else pushes as one element. */
+            if (left->type == VAL_ARR) {
+                VMArray *a = left->data.arr;
+                size_t add = right->type == VAL_ARR ? right->data.arr->count : 1;
+                if (a->count + add > a->capacity) {
+                    size_t newcap = a->capacity < 8 ? 8 : a->capacity * 2;
+                    while (newcap < a->count + add) newcap *= 2;
+                    a->elements = realloc(a->elements, sizeof(VMValue *) * newcap);
+                    a->capacity = newcap;
+                }
+                if (right->type == VAL_ARR) {
+                    /* `add` is the captured length — `a += a` appends a
+                     * snapshot, not an endless tail-chase. */
+                    for (size_t i = 0; i < add; i++)
+                        a->elements[a->count++] =
+                            val_clone(right->data.arr->elements[i]);
+                } else {
+                    a->elements[a->count++] = val_clone(right);
+                }
+                val->type = VAL_ARR;
+                val->data.arr = a;
+                a->refcount++;
+                break;
+            }
+            if (left->type == VAL_STR || right->type == VAL_STR) {
+                char *left_str;
+                if (left->type == VAL_STR) { left_str = strdup(left->data.s); }
+                else { left_str = val_to_str(left); }
+                char *right_str;
+                if (right->type == VAL_STR) { right_str = strdup(right->data.s); }
+                else { right_str = val_to_str(right); }
+                size_t concat_len = strlen(left_str) + strlen(right_str) + 1;
+                char *concat_str = malloc(concat_len);
+                strcpy(concat_str, left_str);
+                strncat(concat_str, right_str,
+                        concat_len - strlen(concat_str) - 1);
+                val->type = VAL_STR;
+                val->data.s = concat_str;
+                free(left_str);
+                free(right_str);
+                break;
+            }
+            __ISCALCULATION(+);
+            break;
+        }
+        case O_ISTAR: {
+            /* `x *= v`: numeric multiply, or IN-PLACE array prepend of ONE
+             * item (`v` becomes the new front element). */
+            if (left->type == VAL_ARR) {
+                VMArray *a = left->data.arr;
+                if (a->count + 1 > a->capacity) {
+                    size_t newcap = a->capacity < 8 ? 8 : a->capacity * 2;
+                    if (newcap < a->count + 1) newcap = a->count + 1;
+                    a->elements = realloc(a->elements, sizeof(VMValue *) * newcap);
+                    a->capacity = newcap;
+                }
+                memmove(a->elements + 1, a->elements,
+                        a->count * sizeof(VMValue *));
+                a->elements[0] = val_clone(right);
+                a->count++;
+                val->type = VAL_ARR;
+                val->data.arr = a;
+                a->refcount++;
+                break;
+            }
+            __ISCALCULATION(*);
+            break;
+        }
         case O_SUB: {
             __ISCALCULATION(-);
             break;

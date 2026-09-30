@@ -3889,9 +3889,10 @@ def gen_place_bind(tgt, t1: str, ln: long, cl: long) -> {k: str} {
 
 def gen_opassign_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // In-place array forms. `*=` prepends one element. `+=` pushes one
-    // element, or — when the value is an array of the SAME type as the
-    // target — appends it element by element (its length is captured
-    // first, so `a += a` is safe).
+    // element — or, when the VALUE is an array, appends its elements one
+    // by one (its length is captured first, so `a += a` is safe). The
+    // checker enforces matching element types; the same value-shaped rule
+    // runs in the VM and the compiled C runtime.
     let tgt = node.tgt;
     let op = node.op;
     let v = node.v;
@@ -3908,10 +3909,10 @@ def gen_opassign_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
         0
     } else {
         let vt = infer(st, v);
-        if (types.teq(vt, et)) {
+        if (vt.k == "tarr" || vt.k == "tarrfix") {
+            mode = "append";
             0
         } else {
-            mode = "append";
             0
         };
         0

@@ -579,6 +579,64 @@ YValue *y_add(YValue *a, YValue *b) {
     return y_mk_float(av + bv);
 }
 
+/* `x += v` (O_IADD): numeric add / string concat / IN-PLACE array
+ * push-or-append. The left side is the mutation target and decides the
+ * rule; an array value appends its elements, anything else becomes one
+ * new back element. `a += a` appends a snapshot of the original length.
+ * Ownership: both operands are consumed; the result is fresh (for arrays
+ * it is the mutated left operand). */
+YValue *y_iadd(YValue *a, YValue *b) {
+    if (a->type == Y_ARR) {
+        YArray *arr = a->data.arr;
+        size_t add = b->type == Y_ARR ? b->data.arr->count : 1;
+        if (arr->count + add > arr->capacity) {
+            size_t newcap = arr->capacity < 8 ? 8 : arr->capacity * 2;
+            while (newcap < arr->count + add) newcap *= 2;
+            arr->elements = realloc(arr->elements, sizeof(YValue *) * newcap);
+            arr->capacity = newcap;
+        }
+        if (b->type == Y_ARR) {
+            for (size_t i = 0; i < add; i++)
+                arr->elements[arr->count++] = y_clone(b->data.arr->elements[i]);
+        } else {
+            arr->elements[arr->count++] = b;
+            b = NULL; /* ownership moved into the array */
+        }
+        y_free(b);
+        return a;
+    }
+    return y_add(a, b);
+}
+
+/* `x *= v` (O_ISTAR): numeric multiply, or IN-PLACE array prepend of ONE
+ * item (v becomes the new front element). */
+YValue *y_istar(YValue *a, YValue *b) {
+    if (a->type == Y_ARR) {
+        YArray *arr = a->data.arr;
+        if (arr->count + 1 > arr->capacity) {
+            size_t newcap = arr->capacity < 8 ? 8 : arr->capacity * 2;
+            if (newcap < arr->count + 1) newcap = arr->count + 1;
+            arr->elements = realloc(arr->elements, sizeof(YValue *) * newcap);
+            arr->capacity = newcap;
+        }
+        memmove(arr->elements + 1, arr->elements,
+                arr->count * sizeof(YValue *));
+        arr->elements[0] = b; /* take ownership of the already-cloned value */
+        arr->count++;
+        return a;
+    }
+    if (a->type == Y_LONG && b->type == Y_LONG) {
+        /* Wrap through unsigned: signed overflow is UB (see y_add). */
+        long r = (long)((unsigned long)a->data.l * (unsigned long)b->data.l);
+        y_free(a); y_free(b);
+        return y_mk_long(r);
+    }
+    double av = a->type == Y_LONG ? (double)a->data.l : a->data.f;
+    double bv = b->type == Y_LONG ? (double)b->data.l : b->data.f;
+    y_free(a); y_free(b);
+    return y_mk_float(av * bv);
+}
+
 YValue *y_div(YValue *a, YValue *b) {
     if (a->type == Y_LONG && b->type == Y_LONG) {
         if (b->data.l == 0) {

@@ -17,6 +17,9 @@ Operator operator_from_str(const char *op) {
 
 const char *operator_to_str(Operator op) {
     if (op == O_NOT) { return "!"; }
+    if (op == O_NEG) { return "-"; }
+    if (op == O_IADD) { return "+="; }
+    if (op == O_ISTAR) { return "*="; }
     if (op < 0 || (size_t)op >= sizeof(OPERATORS) / sizeof(OPERATORS[0]) - 1) {
         return "<invalid operator>";
     }

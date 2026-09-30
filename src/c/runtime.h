@@ -111,6 +111,8 @@ bool y_equals(YValue *a, YValue *b);
 /* ── Arithmetic / logic ─────────────────────────────────────────────────── */
 
 YValue *y_add(YValue *a, YValue *b);
+YValue *y_iadd(YValue *a, YValue *b);
+YValue *y_istar(YValue *a, YValue *b);
 YValue *y_sub(YValue *a, YValue *b);
 YValue *y_mul(YValue *a, YValue *b);
 YValue *y_div(YValue *a, YValue *b);

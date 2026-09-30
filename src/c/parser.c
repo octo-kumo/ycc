@@ -757,11 +757,28 @@ ast_parser_result_t ast_parse_paren_expr(const char *input) {
 
 /* Unary logical NOT: !expr. Binds tighter than binary ops; the operand is a
  * full inline expression so `!a && b` parses as `(!a) && b`. */
+static Expr *yy_desugar_incdec(Expr *target, int is_plus, int is_prefix);
 ast_parser_result_t ast_parse_unary(const char *input) {
     const char *original_input = input;
     SKIP_SPACES;
+    /* Prefix `++x` / `--x` (maximal munch: `--x` is predecrement, not
+     * negation of a negation). */
+    if ((input[0] == '+' && input[1] == '+') ||
+        (input[0] == '-' && input[1] == '-')) {
+        int is_plus = input[0] == '+';
+        input += 2;
+        ast_parser_result_t operand = ast__parse_inside_binary_op(input);
+        if (!operand.is_some) { return anone(original_input); }
+        Expr *d = yy_desugar_incdec(operand.value, is_plus, 1);
+        if (!d) {
+            ast_free(operand.value);
+            return anone(original_input);
+        }
+        return asome(d, operand.remaining);
+    }
     if (input[0] != '!' && input[0] != '-') { return anone(original_input); }
     if (input[0] == '!' && input[1] == '=') { return anone(original_input); }
+    if (input[0] == '-' && input[1] == '-') { return anone(original_input); }
     char op_char = input[0];
     input++; /* consume '!' or '-' */
     ast_parser_result_t operand = ast__parse_inside_binary_op(input);
@@ -894,46 +911,294 @@ static ast_parser_result_t ast_parse_prec_rhs(const char *input, int min_prec) {
     return left;
 }
 
+
+/* ── compound-assignment / incdec desugars ─────────────────────────────
+ *
+ * `x op= e`, `x++`, `++x`, `x--` and `--x` desugar into ordinary
+ * assignments and blocks here, with the target's subexpressions bound to
+ * temps first so the target is evaluated EXACTLY ONCE:
+ *   a[f()] += 1  ->  { let y_t0 = f(); let y_t1 = y_t1v...; a[y_t0] = ... }
+ * For arrays `+=` (O_IADD) and `*=` (O_ISTAR) keep their operator, whose
+ * evaluation mutates in place (push-or-append / prepend); the assignment
+ * then rebinds the same header. The rest use plain arithmetic. */
+
+static Expr *mk_num(long v) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_ELONG;
+    n->as.elong = v;
+    return n;
+}
+
+static Expr *mk_var_owned(const char *name) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_EVAR;
+    n->as.evar = strdup(name);
+    return n;
+}
+
+static Expr *mk_str(const char *s) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_ESTR;
+    n->as.estr.data = strdup(s);
+    n->as.estr.length = (int)strlen(s);
+    return n;
+}
+
+static Expr *mk_op_node(Operator op, Expr *l, Expr *r) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_EOP;
+    n->as.op_node.op = op;
+    n->as.op_node.left = l;
+    n->as.op_node.right = r;
+    return n;
+}
+
+static Expr *mk_decl_owned(const char *name, Expr *value) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_EDECLARATION;
+    n->as.declaration_node.kind = DECL_LET;
+    n->as.declaration_node.name = strdup(name);
+    n->as.declaration_node.value = value;
+    return n;
+}
+
+static Expr *mk_assign_var_owned(const char *name, Expr *value) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_EASSIGNMENT;
+    n->as.assignment_node.var_name = strdup(name);
+    n->as.assignment_node.value = value;
+    return n;
+}
+
+static Expr *mk_assign_idx(Expr *arr, Expr *idx, Expr *value) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_EARRAY_ASSIGN;
+    n->as.array_assign_node.array = arr;
+    n->as.array_assign_node.idx = idx;
+    n->as.array_assign_node.value = value;
+    return n;
+}
+
+static Expr *mk_block(Expr **stmts, size_t count) {
+    Expr *n = (Expr *)malloc(sizeof(Expr));
+    n->kind = EXPR_EBLOCK;
+    n->as.block_node.exprs = stmts;
+    n->as.block_node.count = count;
+    return n;
+}
+
+/* Synthetic names carry the `y_t` prefix: ycc reserves `y_`, so they
+ * cannot collide with anything the program can write. */
+static long yy_tmp_counter = 0;
+static char *yy_fresh_tmp(void) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "y_t%ld", yy_tmp_counter++);
+    return strdup(buf);
+}
+
+/* An assignable place reduced to names: the target's index/object
+ * expressions are bound first (in `pre`), so a place is a variable, a
+ * base-name + index-name pair, or a base-name + field-name pair. */
+typedef struct {
+    int kind;       /* 0 = var, 1 = index, 2 = field */
+    char *name;     /* the variable, or the base name */
+    char *idx_name; /* kind 1: the temp holding the index */
+    char *key;      /* kind 2: the field name */
+    Expr **pre;
+    size_t pre_n;
+} yy_place;
+
+static Expr *yy_place_read(yy_place *p) {
+    if (p->kind == 0) { return mk_var_owned(p->name); }
+    if (p->kind == 1) {
+        Expr *idx = (Expr *)malloc(sizeof(Expr));
+        idx->kind = EXPR_EARRAY_IDX;
+        idx->as.array_idx_node.array = mk_var_owned(p->name);
+        idx->as.array_idx_node.idx = mk_var_owned(p->idx_name);
+        return idx;
+    }
+    return mk_op_node(O_DOT, mk_var_owned(p->name), mk_var_owned(p->key));
+}
+
+static Expr *yy_place_write(yy_place *p, Expr *value) {
+    if (p->kind == 0) { return mk_assign_var_owned(p->name, value); }
+    if (p->kind == 1) {
+        return mk_assign_idx(mk_var_owned(p->name), mk_var_owned(p->idx_name),
+                             value);
+    }
+    return mk_assign_idx(mk_var_owned(p->name), mk_str(p->key), value);
+}
+
+static void yy_pre_push(yy_place *p, Expr *decl) {
+    p->pre = (Expr **)realloc(p->pre, sizeof(Expr *) * (p->pre_n + 1));
+    p->pre[p->pre_n++] = decl;
+}
+
+/* Reduce an expression to an assignable place, binding its index/object
+ * subexpressions to temps exactly once. Returns 0 when the expression is
+ * not a place (nothing consumed); on success the TARGET is consumed — its
+ * subnodes move into the temp decls and the shell is freed. */
+static int yy_build_place(Expr *target, yy_place *p) {
+    p->kind = 0;
+    p->name = NULL;
+    p->idx_name = NULL;
+    p->key = NULL;
+    p->pre = NULL;
+    p->pre_n = 0;
+    if (target->kind == EXPR_EVAR) {
+        p->name = strdup(target->as.evar);
+        ast_free(target);
+        return 1;
+    }
+    if (target->kind == EXPR_EARRAY_IDX) {
+        Expr *arr = target->as.array_idx_node.array;
+        Expr *idx = target->as.array_idx_node.idx;
+        /* the index always runs once; the base too unless it is a plain
+         * variable (re-reading one has no side effects) */
+        char *t = yy_fresh_tmp();
+        yy_pre_push(p, mk_decl_owned(t, idx));
+        p->idx_name = t;
+        if (arr->kind == EXPR_EVAR) {
+            p->name = strdup(arr->as.evar);
+            ast_free(arr);
+        } else {
+            char *b = yy_fresh_tmp();
+            yy_pre_push(p, mk_decl_owned(b, arr));
+            p->name = b;
+        }
+        free(target); /* shell only: children moved into the temps */
+        p->kind = 1;
+        return 1;
+    }
+    if (target->kind == EXPR_EOP && target->as.op_node.op == O_DOT &&
+        target->as.op_node.right &&
+        target->as.op_node.right->kind == EXPR_EVAR) {
+        Expr *obj = target->as.op_node.left;
+        p->key = strdup(target->as.op_node.right->as.evar);
+        ast_free(target->as.op_node.right);
+        if (obj->kind == EXPR_EVAR) {
+            p->name = strdup(obj->as.evar);
+            ast_free(obj);
+        } else {
+            char *b = yy_fresh_tmp();
+            yy_pre_push(p, mk_decl_owned(b, obj));
+            p->name = b;
+        }
+        free(target); /* shell only */
+        p->kind = 2;
+        return 1;
+    }
+    return 0;
+}
+
+/* Assemble `{ pre...; stmts... }`, collapsing to the single statement
+ * when nothing needs a wrapper. Consumes the stmts array. */
+static Expr *yy_finish_block(yy_place *p, Expr **stmts, size_t count) {
+    if (p->pre_n == 0 && count == 1) {
+        Expr *only = stmts[0];
+        free(stmts);
+        free(p->pre);
+        return only;
+    }
+    size_t total = p->pre_n + count;
+    Expr **all = (Expr **)malloc(sizeof(Expr *) * total);
+    for (size_t i = 0; i < p->pre_n; i++) all[i] = p->pre[i];
+    for (size_t i = 0; i < count; i++) all[p->pre_n + i] = stmts[i];
+    free(stmts);
+    free(p->pre);
+    return mk_block(all, total);
+}
+
+/* `x op= e` -> `{ pre...; let y_tN = read op e; write(y_tN); y_tN }`.
+ * The result value is the new target value, matching the native backend. */
+static Expr *yy_desugar_opassign(Expr *target, Expr *rhs, Operator op) {
+    yy_place p;
+    if (!yy_build_place(target, &p)) { return NULL; }
+    char *t = yy_fresh_tmp();
+    Expr *step = mk_op_node(op, yy_place_read(&p), rhs);
+    Expr **stmts = (Expr **)malloc(sizeof(Expr *) * 3);
+    stmts[0] = mk_decl_owned(t, step);
+    stmts[1] = yy_place_write(&p, mk_var_owned(t));
+    stmts[2] = mk_var_owned(t);
+    free(p.name);
+    free(p.idx_name);
+    free(p.key);
+    return yy_finish_block(&p, stmts, 3);
+}
+
+/* `x++` -> `{ pre...; let y_tN = read; write(y_tN + 1); y_tN }` (the old
+ * value); `++x` -> `{ pre...; let y_tN = read + 1; write(y_tN); y_tN }`. */
+static Expr *yy_desugar_incdec(Expr *target, int is_plus, int is_prefix) {
+    yy_place p;
+    if (!yy_build_place(target, &p)) { return NULL; }
+    Operator aop = is_plus ? O_ADD : O_SUB;
+    char *t = yy_fresh_tmp();
+    Expr **stmts = (Expr **)malloc(sizeof(Expr *) * 3);
+    if (is_prefix) {
+        /* the step is computed into t; the write stores it as-is */
+        stmts[0] = mk_decl_owned(t, mk_op_node(aop, yy_place_read(&p), mk_num(1)));
+        stmts[1] = yy_place_write(&p, mk_var_owned(t));
+    } else {
+        stmts[0] = mk_decl_owned(t, yy_place_read(&p));
+        stmts[1] = yy_place_write(&p, mk_op_node(aop, mk_var_owned(t), mk_num(1)));
+    }
+    stmts[2] = mk_var_owned(t);
+    free(p.name);
+    free(p.idx_name);
+    free(p.key);
+    return yy_finish_block(&p, stmts, 3);
+}
+
 ast_parser_result_t ast_parse_binary_op(const char *input) {
     const char *original_input = input;
 
     ast_parser_result_t left = ast__parse_inside_binary_op(input);
     if (!left.is_some) { return anone(original_input); }
 
-    /* Compound assignment: `x += e` desugars to `x = x + e` (same for
-     * -=, *=, /=). Handled before the generic operator scan, which would
-     * otherwise see a bare `+` followed by `=`. Variable targets only. */
+    /* Postfix `x++` / `x--`: maximal munch sees the operator pair first,
+     * so `x+++y` is `(x++) + y`. Handled before any binary scan. */
+    {
+        const char *q = skip_spaces(left.remaining);
+        if ((q[0] == '+' && q[1] == '+') || (q[0] == '-' && q[1] == '-')) {
+            Expr *d = yy_desugar_incdec(left.value, q[0] == '+', 0);
+            if (!d) {
+                ast_free(left.value);
+                return anone(original_input);
+            }
+            return asome(d, q + 2);
+        }
+    }
+
+    /* Compound assignment: `x op= e`, any assignable target (a variable,
+     * a[i], a[f()], s.f, ...). Handled before the generic operator scan,
+     * which would otherwise see a bare `+` followed by `=`. `+=` and `*=`
+     * keep O_IADD/O_ISTAR (the in-place array forms); the rest are plain
+     * arithmetic. The target's subexpressions run exactly once. */
     {
         const char *q = skip_spaces(left.remaining);
         char cop = 0;
-        if ((q[0] == '+' || q[0] == '-' || q[0] == '*' || q[0] == '/') &&
+        if ((q[0] == '+' || q[0] == '-' || q[0] == '*' || q[0] == '/' ||
+             q[0] == '%') &&
             q[1] == '=' && q[2] != '=')
             cop = q[0];
-        if (cop && left.value->kind == EXPR_EVAR) {
+        if (cop) {
             ast_parser_result_t rhs = ast__parse_inline_expr(q + 2);
             if (!rhs.is_some) {
                 ast_free(left.value);
                 return anone(original_input);
             }
-            Expr *var_ref = (Expr *)malloc(sizeof(Expr));
-            var_ref->kind = EXPR_EVAR;
-            var_ref->as.evar = strdup(left.value->as.evar);
-
-            Expr *binop = (Expr *)malloc(sizeof(Expr));
-            binop->kind = EXPR_EOP;
-            binop->as.op_node.op = cop == '+'   ? O_ADD
-                                   : cop == '-' ? O_SUB
-                                   : cop == '*' ? O_MUL
-                                                : O_DIV;
-            binop->as.op_node.left = var_ref;
-            binop->as.op_node.right = rhs.value;
-
-            Expr *assign_node = (Expr *)malloc(sizeof(Expr));
-            assign_node->kind = EXPR_EASSIGNMENT;
-            assign_node->as.assignment_node.var_name = left.value->as.evar;
-            assign_node->as.assignment_node.value = binop;
-            free(left.value); /* name ownership moved into assign_node */
-            return asome(assign_node, rhs.remaining);
+            Operator bop = cop == '+'   ? O_IADD
+                           : cop == '*' ? O_ISTAR
+                           : cop == '-' ? O_SUB
+                           : cop == '/' ? O_DIV
+                                        : O_MOD;
+            Expr *d = yy_desugar_opassign(left.value, rhs.value, bop);
+            if (!d) {
+                ast_free(left.value);
+                ast_free(rhs.value);
+                return anone(original_input);
+            }
+            return asome(d, rhs.remaining);
         }
     }
 

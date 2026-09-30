@@ -200,6 +200,8 @@ static char *emit_func_def(CodegenCtx *ctx, EFunc *func, const char *hint) {
 static const char *op_fn(Operator op) {
     switch (op) {
     case O_ADD:  return "y_add";
+    case O_IADD: return "y_iadd";
+    case O_ISTAR: return "y_istar";
     case O_SUB:  return "y_sub";
     case O_MUL:  return "y_mul";
     case O_DIV:  return "y_div";
