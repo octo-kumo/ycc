@@ -18,15 +18,15 @@ def arch_sysno(name: str) -> long {
 };
 
 def arch_fn_label(uid: long, name: str) -> str {
-    "yfn_" + tostring(uid) + "_" + name
+    "yfn_" + uid + "_" + name
 };
 
 def arch_loc_label(fuid: long, n: long) -> str {
-    "yL_" + tostring(fuid) + "_" + tostring(n)
+    "yL_" + fuid + "_" + n
 };
 
 def arch_str_label(i: long) -> str {
-    "ystr_" + tostring(i)
+    "ystr_" + i
 };
 
 def arch_header() -> str {
@@ -213,6 +213,62 @@ def arch_prelude() -> str {
         "    inc %r8",
         "    jmp yscc_loop",
         "yscc_done:",
+        "    ret",
+        "y_rec_has:",
+        "    push %rbp",
+        "    mov %rsp, %rbp",
+        "    push %rbx",
+        "    push %r13",
+        "    push %r14",
+        "    push %r15",
+        "    mov 24(%rbp), %rbx",
+        "    mov 16(%rbp), %r13",
+        "    test %rbx, %rbx",
+        "    jz yrh_no",
+        "    mov -8(%rbx), %r14",
+        "    mov (%r14), %r10",
+        "    mov $1498307412, %rax",
+        "    cmp %rax, %r10",
+        "    jnz yrh_no",
+        "    mov 8(%r14), %r15",
+        "    lea 16(%r14), %r14",
+        "    mov (%r13), %r10",
+        "    mov %r13, %r11",
+        "    add $8, %r11",
+        "yrh_next:",
+        "    test %r15, %r15",
+        "    jz yrh_no",
+        "    dec %r15",
+        "    mov 8(%r14), %rcx",
+        "    cmp %r10, %rcx",
+        "    jnz yrh_skip",
+        "    xor %edx, %edx",
+        "yrh_cmp:",
+        "    cmp %r10, %rdx",
+        "    jge yrh_yes",
+        "    movzbq 16(%r14,%rdx,8), %rax",
+        "    movzbq (%r11,%rdx,1), %rcx",
+        "    cmp %rcx, %rax",
+        "    jnz yrh_skip",
+        "    inc %rdx",
+        "    jmp yrh_cmp",
+        "yrh_skip:",
+        "    mov 8(%r14), %rax",
+        "    shl $3, %rax",
+        "    add $16, %rax",
+        "    add %rax, %r14",
+        "    jmp yrh_next",
+        "yrh_yes:",
+        "    mov $1, %rax",
+        "    jmp yrh_ret",
+        "yrh_no:",
+        "    xor %eax, %eax",
+        "yrh_ret:",
+        "    pop %r15",
+        "    pop %r14",
+        "    pop %r13",
+        "    pop %rbx",
+        "    pop %rbp",
         "    ret",
         "y_div_zero:",
         "    mov $1, %rax",

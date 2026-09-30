@@ -33,7 +33,7 @@ def op_prec(op: str) -> long {
     else if (op == "::") { 5 }
     else if (op == "+" || op == "-") { 6 }
     else if (op == "*" || op == "/" || op == "%") { 7 }
-    else { 0 }
+   
 };
 
 // ── primary expressions ──────────────────────────────────────────────────

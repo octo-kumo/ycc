@@ -39,3 +39,10 @@ required on `def` params/returns), `if`/`else`, `while`, `long`/`int`
 `push`, options `some(v)`/`none`/`is_some`/`unwrap`, `print`, `syscall`,
 top-level `def` plus capture-free hoisting. Imports are spliced
 inline (no runtime maps); see `NATIVE.md` for the rejection list and why.
+
+Also: `c ? a : b`; `print(a, b, ...)`; a block whose last statement ends
+in `;` is void; default parameter values (`def f(n, acc = 1)`) and tail
+calls through a function's own name; `type A = {...}` aliases and record
+unions `A | B` taken apart with `match`; `s[i]` (a `byte`) and `s[lo:hi]`
+on strings; `c'a'` byte literals; slice assignment `a[lo:hi] = b` (see
+`NATIVE.md`).

@@ -87,4 +87,30 @@ Yv *parse_for_or_range(Yv *toks, long p);
 /* ── top level: a program is a block of statements (no surrounding braces) ─ */
 Yv *parse_program(Yv *toks);
 
+/* ── new syntax: calls, ternary, unions, defaults, match ────────────────── */
+Yv *mk_call(Yv *callee, Yv *args, long ln, long cl);
+Yv *tostring_call(Yv *arg, long ln, long cl);
+int is_id_named(Yv *node, Yv *name);
+Yv *parse_ternary(Yv *toks, Yv *cond, long q);
+Yv *block1(Yv *e, long ln, long cl);
+Yv *parse_type_full(Yv *toks, long p);
+Yv *lit_type(Yv *node);
+Yv *lit_type_neg(Yv *node);
+Yv *num_lit_type(Yv *s);
+int stmt_diverges(Yv *s);
+int block_diverges(Yv *stmts);
+int if_diverges(Yv *s);
+int is_typedef_start(Yv *toks, long p);
+Yv *parse_typedef(Yv *toks, long p);
+Yv *parse_stmt_simple2(Yv *toks, long p, Yv *tgt, long epos);
+Yv *parse_stmt_sliceassign(Yv *toks, long p, Yv *ltgt, long epos);
+Yv *parse_match_try(Yv *toks, long p);
+Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl);
+Yv *parse_arm_body(Yv *toks, long p);
+Yv *pat_res(Yv *test, Yv *binds, Yv *cover, int wild, long pos);
+Yv *let_node(Yv *name, Yv *v, long ln, long cl);
+Yv *parse_pattern(Yv *toks, long p, Yv *tmp);
+Yv *parse_type_pattern(Yv *toks, long p, Yv *tmp);
+Yv *parse_value_pattern(Yv *toks, Yv *node, long pos, Yv *tmp, long ln, long cl);
+
 #endif /* PARSER_H */

@@ -104,6 +104,9 @@ code calls it by fixed label.
 `src/c/`, so its habits matter:
 
 - **Never leave a block empty** (`0;` fillers are legal and harmless).
+- A block's value is its last statement **without** a trailing `;`:
+  `{ f() }` is f's value, `{ f(); }` is void (a trailing `return x;` keeps
+  its value).
 - Postfix binds tighter than unary: `!x.y` is `!(x.y)`, `x.y[i]` is
   `(x.y)[i]`. Dot chains and index chains parse correctly.
 - `&&` / `||` short-circuit, in both forms.

@@ -29,11 +29,11 @@ expect_for() {
         t22_map_missing_key.y)
             echo "reject" ;;   # missing dynamic key is a compile-time rejection now
         t48_str_index.y)
-            echo "reject" ;;   # indexing a non-array is a static error now
+            echo "parity" ;;   # s[i] is the byte at i (prints 104)
         t50_cons_nonarr.y)
             echo "reject" ;;   # '::' needs an array on the right (static)
         t62_chained_idx.y)
-            echo "reject" ;;   # same rule as t48 (chained index into non-array)
+            echo "reject" ;;   # chained index into a non-array stays a static error
         t01_empty_block.y)
             echo "parity" ;;
         t51_empty_map.y)

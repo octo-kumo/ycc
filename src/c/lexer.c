@@ -182,7 +182,7 @@ int issingleop(Yv *c) {
            ys_eq_lit(c, "%") || ys_eq_lit(c, "<") ||
            ys_eq_lit(c, ">") || ys_eq_lit(c, "=") ||
            ys_eq_lit(c, ".") || ys_eq_lit(c, "!") ||
-           ys_eq_lit(c, "&") || ys_eq_lit(c, "?");
+           ys_eq_lit(c, "&") || ys_eq_lit(c, "?") || ys_eq_lit(c, "|");
 }
 
 // The slash character, built without a literal: Y string literals cannot
@@ -345,6 +345,15 @@ Yv *tokenize(Yv *src) {
                     toks = ya_push(toks, mktok(ty, word, line, startcol));
                     ;
                 };
+                ;
+            } else if (ys_eq_lit(word, "c") && ys_eq_lit(ys_substr(src, i, 1), "'")) {
+                // c'a' -- a character literal: one byte, typed `byte`.
+                long cline = line;
+                Yv *cq = lex_quoted(src, i, line, col);
+                i = yv_l(yr_get(cq, "end"));
+                line = yv_l(yr_get(cq, "line"));
+                col = yv_l(yr_get(cq, "col"));
+                toks = ya_push(toks, mktok(ys("char"), yr_get(cq, "text"), cline, startcol));
                 ;
             } else {
                 toks = ya_push(toks, mktok(ty, word, line, startcol));

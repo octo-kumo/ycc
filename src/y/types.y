@@ -128,6 +128,11 @@ def teq(a, b) -> bool {
             };
             teq_list(aa, bb, 0)
         }
+    } else if (ak == "tunion") {
+        // unions: the same members in the same order
+        let ua = a.ts;
+        let ub = b.ts;
+        if (len(ua) != len(ub)) { false } else { teq_list(ua, ub, 0) }
     } else { true }
 };
 
@@ -200,6 +205,8 @@ def tstr_go(t) -> str {
     else if (t.k == "tunk") { "<error>" }
     else if (t.k == "tnone") { "<missing annotation>" }
     else if (t.k == "tname") { t.name }
+    else if (t.k == "tunion") { tstr_union(t.ts, " | ") }
+    else if (t.k == "tpat") { let tn: [str] = t.names; "{ " + join(tn, ", ") + " }" }
     else if (t.k == "tptr") { "*" + tstr_go(t.to) }
     else if (t.k == "tarr") { "[" + tstr_go(t.of) + "]" }
     else if (t.k == "tarrfix") { "[" + tstr_go(t.of) + "; " + tostring(t.n) + "]" }
@@ -234,6 +241,136 @@ def tstr_go(t) -> str {
 };
 
 def tstr(t) -> str { tstr_go(t) };
+
+def tstr_union(ts: [{k: str}], sep: str) -> str {
+    let parts: [str] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        parts += tstr_go(ts[i]);
+        i = i + 1;
+    };
+    join(parts, sep)
+};
+
+def tdisp_union(ts: [{k: str}]) -> str {
+    let parts: [str] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        parts += tdisp(ts[i]);
+        i = i + 1;
+    };
+    join(parts, " | ")
+};
+
+// ── unions and match ─────────────────────────────────────────────────────
+// A union `A | B` holds any of its record members. Records carry their
+// field names at run time, so a member is recognized by having all of its
+// fields (the first matching arm wins).
+
+// The field names a match pattern tests: a record type's, or a record
+// pattern's (tpat).
+def type_names(t) -> [str] {
+    let out: [str] = [];
+    let tk: str = t.k;
+    if (tk == "trec") {
+        let fs = t.fields;
+        let i = 0;
+        while (i < len(fs)) {
+            let f = fs[i];
+            out += f.name;
+            i = i + 1;
+        };
+        0
+    } else if (tk == "tpat") {
+        let ns: [str] = t.names;
+        out += ns;
+        0
+    } else { 0 };
+    out
+};
+
+def rec_has_names(r, names: [str]) -> bool {
+    let rk: str = r.k;
+    if (rk != "trec") { false } else {
+        let have = type_names(r);
+        let ok = true;
+        let i = 0;
+        while (i < len(names)) {
+            let nm: str = names[i];
+            let found = false;
+            let j = 0;
+            while (j < len(have)) {
+                let hn: str = have[j];
+                if (hn == nm) { found = true; 0 } else { 0 };
+                j = j + 1;
+            };
+            if (!found) { ok = false; 0 } else { 0 };
+            i = i + 1;
+        };
+        ok
+    }
+};
+
+// The static type of `narrow(e, t)`: t itself for a record type; for a
+// record pattern (tpat), the first member of the subject's union that has
+// those fields (the subject itself when it is a record). tunk when none.
+def narrow_type(s, t) -> {k: str} {
+    let tk: str = t.k;
+    let sk: str = s.k;
+    if (tk != "tpat") { t }
+    else if (sk == "trec") {
+        if (rec_has_names(s, t.names)) { s } else { t_unk() }
+    } else if (sk == "tunion") {
+        let ms: [{k: str}] = s.ts;
+        let found = t_unk();
+        let i = len(ms) - 1;
+        while (i >= 0) {
+            if (rec_has_names(ms[i], t.names)) { found = ms[i]; 0 } else { 0 };
+            i = i - 1;
+        };
+        found
+    } else { t_unk() }
+};
+
+// Every member of a union must be a record type (they are told apart by
+// their field names).
+def union_ok(t) -> bool {
+    let ms: [{k: str}] = t.ts;
+    let ok = true;
+    let i = 0;
+    while (i < len(ms)) {
+        let m = ms[i];
+        let mk: str = m.k;
+        if (mk != "trec") { ok = false; 0 } else { 0 };
+        i = i + 1;
+    };
+    ok
+};
+
+// got flows into the union want: a member does (a record compatible with
+// some member), and so does a union whose every member does.
+def union_accepts(got, want) -> bool {
+    let gk: str = got.k;
+    if (gk == "tunion") {
+        let gs: [{k: str}] = got.ts;
+        let ok = true;
+        let i = 0;
+        while (i < len(gs)) {
+            if (!union_accepts(gs[i], want)) { ok = false; 0 } else { 0 };
+            i = i + 1;
+        };
+        ok
+    } else {
+        let ws: [{k: str}] = want.ts;
+        let any = false;
+        let j = 0;
+        while (j < len(ws)) {
+            if (tcompat(got, ws[j])) { any = true; 0 } else { 0 };
+            j = j + 1;
+        };
+        any
+    }
+};
 
 // A numeric literal denotes a float when it has a fraction or an exponent.
 // Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'.
@@ -288,6 +425,8 @@ def tdisp(t) -> str {
         "[" + tdisp(t.of) + "; " + tostring(t.n) + "]"
     } else if (t.k == "tptr") {
         "*" + tdisp(t.to)
+    } else if (t.k == "tunion") {
+        tdisp_union(t.ts)
     } else if (t.k == "topt") {
         let tof = t.of;
         if (tof.k == "tunk") { "none" } else { tdisp(tof) + "?" }
@@ -352,6 +491,7 @@ def is_value_type(t) -> bool {
     else if (t.k == "tarrfix") { true }
     else if (t.k == "topt") { true }
     else if (t.k == "tmap") { is_hash_key(t.key) }
+    else if (t.k == "tunion") { union_ok(t) }
     else { t.k == "trec" }
 };
 
@@ -400,7 +540,7 @@ def lookup(bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], 
             found_kind = e.kind;
             found_fd = e.fdepth;
             0
-        } else { 0 };
+        };
         i = i + 1;
         0
     };
@@ -644,6 +784,11 @@ def tcompat(got, want) -> bool {
     else if (want.k == "tname") { true }
     else if (got.k == "tparams") { true }
     else if (want.k == "tparams") { true }
+    else if (want.k == "tunion") { union_accepts(got, want) }
+    else if (got.k == "tunion") {
+        // a union is none of its members until a match says which
+        false
+    }
     else if (want.k == "topt") {
         // `none` (the option of tunk) widens to any T? through teq; a
         // plain T does NOT -- use some(v), which is the explicit box
@@ -726,7 +871,7 @@ def trec_has(gfs, name: str, typ) -> bool {
         if (gf.name == name) {
             if (tcompat(gf.typ, typ)) { found = true; 0; } else { 0; };
             0
-        } else { 0 };
+        };
         i = i + 1;
     };
     found
@@ -1157,7 +1302,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     found = true;
                     ftyp = f.typ;
                     0
-                } else { 0 };
+                };
                 j = j + 1;
                 0
             };
@@ -1231,6 +1376,13 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = r.st;
                 st = expect_type(st, r.typ, got.typ.key, "map key", node.line, node.col);
                 { typ: { k: "topt", of: got.typ.of }, st: st }
+            } else if (got.typ.k == "tstr") {
+                // s[i]: the byte at i (trapped when out of bounds)
+                st = check_visible(st, got, node.arr.v, node.line, node.col);
+                let r = typeof_expr(st, node.idx);
+                st = r.st;
+                st = expect_type(st, r.typ, { k: "tlong" }, "string index", node.line, node.col);
+                { typ: { k: "tbyte" }, st: st }
             } else if (got.typ.k == "tunk" || got.typ.k == "tnone" || got.typ.k == "tname") {
                 let r = typeof_expr(st, node.idx);
                 st = r.st;
@@ -1256,6 +1408,11 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = ri.st;
                 st = expect_type(st, ri.typ, br.typ.key, "map key", node.line, node.col);
                 { typ: { k: "topt", of: br.typ.of }, st: st }
+            } else if (br.typ.k == "tstr") {
+                let ri = typeof_expr(st, node.idx);
+                st = ri.st;
+                st = expect_type(st, ri.typ, { k: "tlong" }, "string index", node.line, node.col);
+                { typ: { k: "tbyte" }, st: st }
             } else if (br.typ.k == "tunk" || br.typ.k == "tnone" || br.typ.k == "tname") {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
@@ -1289,6 +1446,9 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             { typ: { k: "tarr", of: sr.typ.of }, st: st }
         } else if (sr.typ.k == "tarrfix") {
             { typ: { k: "tarr", of: sr.typ.of }, st: st }
+        } else if (sr.typ.k == "tstr") {
+            // s[lo:hi] -> the substring (bounds clamped, like substr)
+            { typ: { k: "tstr" }, st: st }
         } else if (sr.typ.k == "tunk") {
             { typ: t_unk(), st: st }
         } else {
@@ -1458,10 +1618,185 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 { typ: { k: "tarr", of: elt }, st: st }
             }
         }
+    } else if (k == "char") {
+        { typ: { k: "tbyte" }, st: st }
+    } else if (k == "rectest") {
+        typeof_rectest(st, node)
+    } else if (k == "narrow") {
+        typeof_narrow(st, node)
+    } else if (k == "matchend") {
+        typeof_matchend(st, node)
+    } else if (k == "sliceassign") {
+        typeof_sliceassign(st, node)
     } else {
         st = fail(st, "'" + k + "' is unsupported in native mode (heap planned: maps, loops, strings ops)", node.line, node.col);
         { typ: t_unk(), st: st }
     }
+};
+
+// `T` / `{f: v}` pattern test: the subject must be a record or a union,
+// and the pattern must be able to match one of its members.
+def typeof_rectest(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let r = typeof_expr(st, node.e);
+    st = r.st;
+    let s = r.typ;
+    let t = node.typ;
+    let sk: str = s.k;
+    let tk: str = t.k;
+    if (tk == "tname") {
+        st = fail(st, "unknown type '" + t.name + "' in match pattern", node.line, node.col);
+        0
+    } else if (tk != "trec" && tk != "tpat") {
+        st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
+        0
+    } else if (sk == "tunk") {
+        0
+    } else if (sk == "trec" || sk == "tunion") {
+        if (tk == "tpat") {
+            let nt = narrow_type(s, t);
+            if (nt.k == "tunk") {
+                st = fail(st, "no record in " + tstr(s) + " has the fields of pattern " + tstr(t), node.line, node.col);
+                0
+            } else { 0 };
+            0
+        } else if (!pattern_fits(s, t)) {
+            st = fail(st, "pattern type " + tstr(t) + " can never match " + tstr(s), node.line, node.col);
+            0
+        } else { 0 };
+        0
+    } else {
+        st = fail(st, "cannot match a record pattern against " + tstr(s), node.line, node.col);
+        0
+    };
+    { typ: { k: "tbool" }, st: st }
+};
+
+// Some member of s (a record or a union) has every field of the record
+// type t.
+def pattern_fits(s, t) -> bool {
+    let sk: str = s.k;
+    let names = type_names(t);
+    if (sk == "tunion") {
+        let ms: [{k: str}] = s.ts;
+        let any = false;
+        let i = 0;
+        while (i < len(ms)) {
+            if (rec_has_names(ms[i], names)) { any = true; 0 } else { 0 };
+            i = i + 1;
+        };
+        any
+    } else {
+        rec_has_names(s, names)
+    }
+};
+
+def typeof_narrow(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    // errors about the pattern itself are reported once, by its rectest
+    let r = typeof_expr(st, node.e);
+    let t = node.typ;
+    let tk: str = t.k;
+    if (tk == "trec" || tk == "tpat") {
+        { typ: narrow_type(r.typ, t), st: r.st }
+    } else {
+        { typ: t_unk(), st: r.st }
+    }
+};
+
+// The fall-through of a match without `_`: every member of the subject's
+// union (or the subject's record type) must be covered by a type arm.
+// Its type is the poison tunk, so it never disagrees with the arms.
+def typeof_matchend(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let r = typeof_expr(st, node.e);
+    st = r.st;
+    let s = r.typ;
+    let sk: str = s.k;
+    let cover: [{k: str}] = node.cover;
+    if (sk == "tunk") {
+        0
+    } else if (sk == "tunion") {
+        let ms: [{k: str}] = s.ts;
+        let missing: [str] = [];
+        let i = 0;
+        while (i < len(ms)) {
+            if (!covered(ms[i], cover)) { missing += tstr(ms[i]); 0 } else { 0 };
+            i = i + 1;
+        };
+        if (len(missing) > 0) {
+            st = fail(st, "non-exhaustive match: nothing matches " + join(missing, ", ") + " (add an arm or '_')", node.line, node.col);
+            0
+        } else { 0 };
+        0
+    } else if (sk == "trec" && covered(s, cover)) {
+        0
+    } else {
+        st = fail(st, "non-exhaustive match on " + tstr(s) + " (add a '_' arm)", node.line, node.col);
+        0
+    };
+    { typ: t_unk(), st: st }
+};
+
+// A member is covered by a type arm whose fields it all has.
+def covered(m, cover: [{k: str}]) -> bool {
+    let any = false;
+    let i = 0;
+    while (i < len(cover)) {
+        let c = cover[i];
+        let ck: str = c.k;
+        if (ck == "trec") {
+            if (rec_has_names(m, type_names(c))) { any = true; 0 } else { 0 };
+            0
+        } else { 0 };
+        i = i + 1;
+    };
+    any
+};
+
+// a[lo:hi] = src: a is an array, src an array of the same element type.
+def typeof_sliceassign(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let ar = typeof_expr(st, node.arr);
+    st = ar.st;
+    let slo = node.lo;
+    let shi = node.hi;
+    if (slo.k == "void") { 0; } else {
+        let rl = typeof_expr(st, slo);
+        st = expect_type(rl.st, rl.typ, { k: "tlong" }, "slice start", node.line, node.col);
+        0
+    };
+    if (shi.k == "void") { 0; } else {
+        let rh = typeof_expr(st, shi);
+        st = expect_type(rh.st, rh.typ, { k: "tlong" }, "slice end", node.line, node.col);
+        0
+    };
+    let vr = typeof_expr(st, node.v);
+    st = vr.st;
+    let at = ar.typ;
+    let vt = vr.typ;
+    let akk: str = at.k;
+    let vkk: str = vt.k;
+    if (akk == "tarr" || akk == "tarrfix") {
+        if (vkk == "tarr" || vkk == "tarrfix") {
+            if (teq(vt.of, at.of)) { 0 } else {
+                st = fail(st, "slice assignment: cannot store " + tstr(vt) + " into " + tstr(at), node.line, node.col);
+                0
+            };
+            0
+        } else if (vkk == "tunk") {
+            0
+        } else {
+            st = fail(st, "slice assignment needs an array on the right, got " + tstr(vt), node.line, node.col);
+            0
+        };
+        0
+    } else if (akk == "tstr") {
+        st = fail(st, "cannot assign to a slice of str (strings are immutable)", node.line, node.col);
+        0
+    } else if (akk == "tunk") {
+        0
+    } else {
+        st = fail(st, "cannot slice-assign " + tstr(at) + " (only arrays)", node.line, node.col);
+        0
+    };
+    { typ: { k: "tvoid" }, st: st }
 };
 
 // ++/-- target rule: numbers (long/byte/float) only.
@@ -1576,7 +1911,7 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "topt") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "topt" || r.typ.k == "tunion") {
                     { typ: { k: "tvoid" }, st: st }
                 } else {
                     st = fail(st, "print supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
@@ -1731,7 +2066,7 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "topt") {
+                if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "topt" || r.typ.k == "tunion") {
                     { typ: { k: "tstr" }, st: st }
                 } else {
                     st = fail(st, "tostring supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
@@ -2327,4 +2662,4 @@ def def_sig(name: str, func) -> { name: str, typ: { k: str } } {
     { name: name, typ: { k: "tfunc", args: args, ret: ret } }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_merge };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_merge, narrow_type, type_names };

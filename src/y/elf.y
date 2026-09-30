@@ -25,11 +25,11 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long) -> [byte] {
     let codetrail = codesz % 4096;
     let codepad = 0;
     // NOTE: `0;` tails (see parser.y parse_binary note).
-    if (codetrail != 0) { codepad = 4096 - codetrail; 0; } else { 0 };
+    if (codetrail != 0) { codepad = 4096 - codetrail; };
     let rosz = len(rodata) + 8;
     let rotrail = rosz % 4096;
     let ropad = 0;
-    if (rotrail != 0) { ropad = 4096 - rotrail; 0; } else { 0 };
+    if (rotrail != 0) { ropad = 4096 - rotrail; };
     let total = code_off + codesz + codepad + rosz + ropad;
     let entry = base + code_off + entry_off;
     // EHDR
@@ -62,7 +62,6 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long) -> [byte] {
     while (p < codepad) {
         out += 0;
         p = p + 1;
-        0
     };
     out = push_bytes(out, rodata);
     let trailer: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -71,7 +70,6 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long) -> [byte] {
     while (q < ropad) {
         out += 0;
         q = q + 1;
-        0
     };
     out
 };
@@ -86,7 +84,6 @@ def push_bytes(out: [byte], bytes: [byte]) -> [byte] {
     while (i < len(bytes)) {
         out += bytes[i];
         i = i + 1;
-        0
     };
     out
 };

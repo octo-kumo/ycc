@@ -17,19 +17,19 @@
 //
 // Portable-subset Y only (runs inside ycc on the C toolchain).
 
-def rn_fresh(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, orig: str) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, name: str } {
+def rn_fresh(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, orig: str) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, name: str } {
     let u = orig + "$" + tostring(st.n);
-    let nst = { scopes: st.scopes, n: st.n + 1 };
+    let nst = { scopes: st.scopes, n: st.n + 1, tys: st.tys, dfl: st.dfl };
     { st: nst, name: u }
 };
 
-def rn_push(st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
+def rn_push(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
     st.scopes += [[]];
     let scopes = st.scopes
-    { scopes: scopes, n: st.n }
+    { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 
-def rn_pop(st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
+def rn_pop(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
     let scopes = [];
     let old = st.scopes;
     let i = 0;
@@ -37,18 +37,18 @@ def rn_pop(st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [
         scopes += [old[i]];
         i = i + 1;
     };
-    { scopes: scopes, n: st.n }
+    { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 
-def rn_define(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, orig: str, uniq: str) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
+def rn_define(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, orig: str, uniq: str) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
     let scopes = st.scopes;
     let top = scopes[len(scopes) - 1];
     top += { orig: orig, uniq: uniq };
     scopes[len(scopes) - 1] = top;
-    { scopes: scopes, n: st.n }
+    { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 
-def rn_lookup(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, name: str) -> str {
+def rn_lookup(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, name: str) -> str {
     // Innermost scope first; within a frame, the NEWEST binding wins
     // (a later let shadows an earlier one).
     let all = st.scopes;
@@ -64,7 +64,7 @@ def rn_lookup(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, name: str) 
                 j = -1;
                 i = -1;
                 0
-            } else { 0 };
+            };
             j = j - 1;
             0
         };
@@ -75,13 +75,13 @@ def rn_lookup(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, name: str) 
 };
 
 // Bind one name in the current scope, return {st, uniq}.
-def rn_bind(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, orig: str) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, uniq: str } {
+def rn_bind(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, orig: str) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, uniq: str } {
     let r = rn_fresh(st, orig);
     st = rn_define(r.st, orig, r.name);
     { st: st, uniq: r.name }
 };
 
-def rn_list(nodes: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, nodes: [{k: str}] } {
+def rn_list(nodes: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, nodes: [{k: str}] } {
     let out = [];
     let i = 0;
     while (i < len(nodes)) {
@@ -93,7 +93,7 @@ def rn_list(nodes: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: lo
     { st: st, nodes: out }
 };
 
-def rn_id(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, name: str, line: long, col: long) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_id(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, name: str, line: long, col: long) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let u = rn_lookup(st, name);
     if (u == "") {
         { st: st, node: { k: "id", v: name, line: line, col: col } }
@@ -104,7 +104,7 @@ def rn_id(st: { scopes: [[{ orig: str, uniq: str }]], n: long }, name: str, line
 
 // Pre-bind all def names (named defs + let-bound anonymous defs) in a
 // statement list so mutual recursion resolves.
-def rn_prepass(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
+def rn_prepass(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
     // NOTE: stmts elements are bare {k}-holes at the boundary (like res);
     // pass each element as a BARE value (rn_prepass_one takes unannotated
     // s) so field reads resolve via the tcompat law, not merged shapes.
@@ -117,26 +117,204 @@ def rn_prepass(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n:
     st
 };
 
-def rn_prepass_one(s, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
+def rn_prepass_one(s, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
     if (s.k == "decl") {
         rn_prepass_decl(s, st)
+    } else if (s.k == "typedef") {
+        // aliases hoist like defs: every annotation in the block sees them
+        st.tys += { name: s.name, typ: s.typ };
+        st
     } else {
         st
     }
 };
 
-def rn_prepass_decl(s, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { scopes: [[{ orig: str, uniq: str }]], n: long } {
+def rn_prepass_decl(s, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
     // decl shapes only (named def vs let-bound func): one `s.v.k` read in
     // this body (see parse_type_arrow note — two reads in one body merge).
     if (s.kind == "def") {
         let r = rn_bind(st, s.name);
-        r.st
+        rn_note_defaults(r.st, r.uniq, s.v)
     } else if (s.v.k == "func") {
         let r = rn_bind(st, s.name);
-        r.st
+        rn_note_defaults(r.st, r.uniq, s.v)
     } else {
         st
     }
+};
+
+// Remember a def's default parameter values under its unique name, so a
+// direct call that leaves trailing arguments out gets them filled in.
+def rn_note_defaults(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, uniq: str, func) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
+    let dv: [{k: str}] = func.defs;
+    let i = 0;
+    let any = false;
+    while (i < len(dv)) {
+        let d = dv[i];
+        let dk: str = d.k;
+        if (dk != "void") { any = true; 0 };
+        i = i + 1;
+    };
+    if (any) {
+        st.dfl += { name: uniq, vals: dv };
+        0
+    };
+    st
+};
+
+// The defaults of the def a call names ([] for anything else).
+def rn_find_defaults(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, name: str) -> [{k: str}] {
+    let out: [{k: str}] = [];
+    let ds = st.dfl;
+    let i = 0;
+    while (i < len(ds)) {
+        let d = ds[i];
+        if (d.name == name) { out = d.vals; 0 };
+        i = i + 1;
+    };
+    out
+};
+
+// args + the defaults of the missing trailing parameters -- only when
+// every one of them has a default (otherwise the checker reports the
+// arity mismatch as usual).
+def rn_fill_defaults(vals: [{k: str}], args: [{k: str}]) -> [{k: str}] {
+    let n = len(args);
+    if (n >= len(vals)) {
+        args
+    } else {
+        let ok = true;
+        let i = n;
+        while (i < len(vals)) {
+            let d = vals[i];
+            let dk: str = d.k;
+            if (dk == "void") { ok = false; 0 };
+            i = i + 1;
+        };
+        if (ok) {
+            let out: [{k: str}] = [];
+            out += args;
+            let j = n;
+            while (j < len(vals)) {
+                out += vals[j];
+                j = j + 1;
+            };
+            out
+        } else {
+            args
+        }
+    }
+};
+
+// ── type aliases ─────────────────────────────────────────────────────────
+// `type A = T` makes the name A stand for T in every annotation (and match
+// pattern) of its block and below. Resolution rewrites the type nodes, so
+// the checker and emitter never see an alias. A union's members are
+// flattened (an alias of a union inside a union adds its members).
+
+def rn_type(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, t) -> {k: str} {
+    if (len(st.tys) == 0) { t } else { rn_type_go(st, t, 0) }
+};
+
+def rn_types(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, ts: [{k: str}]) -> [{k: str}] {
+    if (len(st.tys) == 0) {
+        ts
+    } else {
+        let out: [{k: str}] = [];
+        let i = 0;
+        while (i < len(ts)) {
+            out += rn_type(st, ts[i]);
+            i = i + 1;
+        };
+        out
+    }
+};
+
+def rn_tn(t) -> {k: str} { t };
+
+def rn_type_go(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, t, depth: long) -> {k: str} {
+    let k: str = t.k;
+    if (k == "tname") { rn_type_name(st, t.name, t, depth) }
+    else if (k == "tptr") { rn_tn({ k: "tptr", to: rn_type_go(st, t.to, depth) }) }
+    else if (k == "tarr") { rn_tn({ k: "tarr", of: rn_type_go(st, t.of, depth) }) }
+    else if (k == "tarrfix") { rn_tn({ k: "tarrfix", of: rn_type_go(st, t.of, depth), n: t.n }) }
+    else if (k == "topt") { rn_tn({ k: "topt", of: rn_type_go(st, t.of, depth) }) }
+    else if (k == "tmap") { rn_tn({ k: "tmap", key: rn_type_go(st, t.key, depth), of: rn_type_go(st, t.of, depth) }) }
+    else if (k == "trec") { rn_tn({ k: "trec", fields: rn_type_fields(st, t.fields, depth) }) }
+    else if (k == "tfunc") { rn_tn({ k: "tfunc", args: rn_type_list(st, t.args, depth), ret: rn_type_go(st, t.ret, depth) }) }
+    else if (k == "tparams") { rn_tn({ k: "tparams", ts: rn_type_list(st, t.ts, depth) }) }
+    else if (k == "tunion") { rn_tn({ k: "tunion", ts: rn_union_flat(rn_type_list(st, t.ts, depth)) }) }
+    else { t }
+};
+
+def rn_type_name(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, name: str, t, depth: long) -> {k: str} {
+    let tys = st.tys;
+    let i = len(tys) - 1;
+    let found = -1;
+    while (i >= 0) {
+        let e = tys[i];
+        if (e.name == name) { found = i; i = -1; 0 };
+        i = i - 1;
+    };
+    // (depth bounds a cyclic alias: `type L = {next: L?}` stays unresolved)
+    if (found < 0 || depth > 32) {
+        t
+    } else {
+        let e = tys[found];
+        rn_type_go(st, e.typ, depth + 1)
+    }
+};
+
+def rn_type_list(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, ts: [{k: str}], depth: long) -> [{k: str}] {
+    let out: [{k: str}] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        out += rn_type_go(st, ts[i], depth);
+        i = i + 1;
+    };
+    out
+};
+
+def rn_type_fields(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, fs: [{ name: str, typ: {k: str} }], depth: long) -> [{ name: str, typ: {k: str} }] {
+    let out: [{ name: str, typ: {k: str} }] = [];
+    let i = 0;
+    while (i < len(fs)) {
+        let f = fs[i];
+        out += { name: f.name, typ: rn_type_go(st, f.typ, depth) };
+        i = i + 1;
+    };
+    out
+};
+
+def rn_union_flat(ts: [{k: str}]) -> [{k: str}] {
+    let out: [{k: str}] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        let t = ts[i];
+        let tk: str = t.k;
+        if (tk == "tunion") {
+            let inner: [{k: str}] = t.ts;
+            out += inner;
+            0
+        } else {
+            out += t;
+            0
+        };
+        i = i + 1;
+    };
+    out
+};
+
+def rn_drop_typedefs(stmts: [{k: str}]) -> [{k: str}] {
+    let out: [{k: str}] = [];
+    let i = 0;
+    while (i < len(stmts)) {
+        let s = stmts[i];
+        let sk: str = s.k;
+        if (sk == "typedef") { 0 } else { out += s; 0 };
+        i = i + 1;
+    };
+    out
 };
 
 // Redefinition shadows, exactly as it does in the VM: `def f ... def f ...`
@@ -236,16 +414,16 @@ def rn_rebuild_let(s, newname: str) -> {k: str} {
     { k: "decl", kind: s.kind, name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col }
 };
 
-def rn_block(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, stmts: [{k: str}] } {
+def rn_block(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, stmts: [{k: str}] } {
     stmts = rn_shadow_dups(stmts);
     st = rn_push(st);
     st = rn_prepass(stmts, st);
-    let r = rn_list(stmts, st);
+    let r = rn_list(rn_drop_typedefs(stmts), st);
     st = rn_pop(r.st);
     { st: st, stmts: r.nodes }
 };
 
-def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: dispatch WITHOUT a shared-shape if-chain (see parser.y
     // parse_type_arrow note): a 25-arm chain on one name merges every arm's
     // node shape through the flow-insensitive env (each arm's return type
@@ -319,9 +497,36 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
         rn_forrange(node, st)
     } else if (k == "for") {
         rn_for(node, st)
+    } else if (k == "sliceassign") {
+        rn_sliceassign(node, st)
+    } else if (k == "rectest") {
+        rn_typed_e(node, st)
+    } else if (k == "narrow") {
+        rn_typed_e(node, st)
+    } else if (k == "matchend") {
+        rn_matchend(node, st)
     } else {
         { st: st, node: node }
     }
+};
+
+// rectest / narrow: an operand plus the (alias-resolved) type it tests.
+def rn_typed_e(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
+    let e = rn_node(node.e, st);
+    { st: e.st, node: { k: node.k, e: e.node, typ: rn_type(e.st, node.typ), line: node.line, col: node.col } }
+};
+
+def rn_matchend(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
+    let e = rn_node(node.e, st);
+    { st: e.st, node: { k: "matchend", e: e.node, cover: rn_types(e.st, node.cover), line: node.line, col: node.col } }
+};
+
+def rn_sliceassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
+    let a = rn_node(node.arr, st);
+    let l = rn_node(node.lo, a.st);
+    let h = rn_node(node.hi, l.st);
+    let v = rn_node(node.v, h.st);
+    { st: v.st, node: { k: "sliceassign", arr: a.node, lo: l.node, hi: h.node, v: v.node, line: node.line, col: node.col } }
 };
 
 // One def per AST shape (see rn_node note). Each takes the bare node hole
@@ -329,40 +534,46 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
 // annotated scope state, and returns the uniform R. Field reads off the
 // bare hole unify quietly via the tcompat law (tnone); each body reads
 // ONLY its own shape's fields.
-def rn_un(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_un(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_node(node.e, st);
     { st: r.st, node: { k: "un", op: node.op, e: r.node, line: node.line, col: node.col } }
 };
 
-def rn_addrderef(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_addrderef(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let k = node.k;
     let r = rn_node(node.e, st);
     { st: r.st, node: { k: k, e: r.node, line: node.line, col: node.col } }
 };
 
-def rn_bin(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_bin(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let l = rn_node(node.l, st);
     let r = rn_node(node.r, l.st);
     { st: r.st, node: { k: "bin", op: node.op, l: l.node, r: r.node, line: node.line, col: node.col } }
 };
 
-def rn_call(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_call(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let c = rn_node(node.callee, st);
     let a = rn_list(node.args, c.st);
-    { st: a.st, node: { k: "call", callee: c.node, args: a.nodes, line: node.line, col: node.col } }
+    let cn = c.node;
+    let args = a.nodes;
+    if (cn.k == "id") {
+        args = rn_fill_defaults(rn_find_defaults(a.st, cn.v), args);
+        0
+    };
+    { st: a.st, node: { k: "call", callee: cn, args: args, line: node.line, col: node.col } }
 };
 
-def rn_if(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_if(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let c = rn_node(node.cond, st);
     rn_if_then(node, c.node, c.st)
 };
 
-def rn_if_then(node, cond: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_if_then(node, cond: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let tb = rn_block(node.then.stmts, st);
     rn_if_finish(node, cond, tb.stmts, tb.st)
 };
 
-def rn_if_finish(node, cond: {k: str}, tstmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_if_finish(node, cond: {k: str}, tstmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: both arms build the SAME key set (cond/then/els/has_else);
     // els differs (renamed vs passthrough) but both unify — teq holds.
     // NOTE: `0;` tails on bare-ifs (see parser.y parse_binary note).
@@ -374,32 +585,32 @@ def rn_if_finish(node, cond: {k: str}, tstmts: [{k: str}], st: { scopes: [[{ ori
     }
 };
 
-def rn_while(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_while(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let c = rn_node(node.cond, st);
     rn_while_body(node, c.node, c.st)
 };
 
-def rn_while_body(node, cond: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_while_body(node, cond: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let b = rn_block(node.body.stmts, st);
     { st: b.st, node: { k: "while", cond: cond, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
 };
 
-def rn_blocknode(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_blocknode(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let b = rn_block(node.stmts, st);
     { st: b.st, node: { k: "block", stmts: b.stmts, line: node.line, col: node.col } }
 };
 
-def rn_assign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_assign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_node(node.v, st);
     rn_assign_lookup(node, r.node, r.st)
 };
 
-def rn_assign_lookup(node, v: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_assign_lookup(node, v: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let u = rn_lookup(st, node.name);
     rn_assign_finish(node, v, u, st)
 };
 
-def rn_assign_finish(node, v: {k: str}, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_assign_finish(node, v: {k: str}, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: both arms share the key set; name differs (passthrough vs
     // renamed) but str vs hole unifies — teq holds.
     if (u == "") {
@@ -411,167 +622,167 @@ def rn_assign_finish(node, v: {k: str}, u: str, st: { scopes: [[{ orig: str, uni
 
 // ++x / x++: the target is an expression (id, index, dot) and is renamed
 // like any other — it is evaluated exactly once at run time.
-def rn_incdec(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_incdec(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_node(node.tgt, st);
     { st: r.st, node: { k: "incdec", op: node.op, pre: node.pre, tgt: r.node, line: node.line, col: node.col } }
 };
 
-def rn_opassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_opassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let t = rn_node(node.tgt, st);
     let v = rn_node(node.v, t.st);
     { st: v.st, node: { k: "opassign", op: node.op, tgt: t.node, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_store(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_store(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let p = rn_node(node.p, st);
     rn_store_val(node, p.node, p.st)
 };
 
-def rn_store_val(node, p: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_store_val(node, p: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let v = rn_node(node.v, st);
     { st: v.st, node: { k: "store", p: p, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_ret(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_ret(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_node(node.e, st);
     { st: r.st, node: { k: "ret", e: r.node, line: node.line, col: node.col } }
 };
 
-def rn_array(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_array(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_list(node.elems, st);
     { st: r.st, node: { k: "array", elems: r.nodes, line: node.line, col: node.col } }
 };
 
-def rn_arrrep(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_arrrep(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_node(node.v, st);
     { st: r.st, node: { k: "arrrep", v: r.node, n: node.n, line: node.line, col: node.col } }
 };
 
-def rn_reclit(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_reclit(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_list(node.vals, st);
     { st: r.st, node: { k: "rec", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
 };
 
-def rn_maplit(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_maplit(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_list(node.vals, st);
     { st: r.st, node: { k: "map", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
 };
 
-def rn_index(node: {k: str, arr: {k: str}, idx: {k: str}}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_index(node: {k: str, arr: {k: str}, idx: {k: str}}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let a = rn_node(node.arr, st);
     rn_index_idx(node, a.node, a.st)
 };
 
-def rn_index_idx(node, a: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_index_idx(node, a: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let x = rn_node(node.idx, st);
     { st: x.st, node: { k: "index", arr: a, idx: x.node, line: node.line, col: node.col } }
 };
 
-def rn_slice(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_slice(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let a = rn_node(node.arr, st);
     rn_slice_lo(node, a.node, a.st)
 };
 
-def rn_slice_lo(node, a: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_slice_lo(node, a: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let l = rn_node(node.lo, st);
     rn_slice_hi(node, a, l.node, l.st)
 };
 
-def rn_slice_hi(node, a: {k: str}, lo: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_slice_hi(node, a: {k: str}, lo: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let h = rn_node(node.hi, st);
     { st: h.st, node: { k: "slice", arr: a, lo: lo, hi: h.node, line: node.line, col: node.col } }
 };
 
-def rn_dot(node: {k: str, obj: {k: str}, key: str, line: long, col: long}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_dot(node: {k: str, obj: {k: str}, key: str, line: long, col: long}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let o = rn_node(node.obj, st);
     { st: o.st, node: { k: "dot", obj: o.node, key: node.key, line: node.line, col: node.col } }
 };
 
-def rn_idxassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_idxassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let a = rn_node(node.arr, st);
     rn_idxassign_idx(node, a.node, a.st)
 };
 
-def rn_idxassign_idx(node, a: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_idxassign_idx(node, a: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let x = rn_node(node.idx, st);
     rn_idxassign_val(node, a, x.node, x.st)
 };
 
-def rn_idxassign_val(node, a: {k: str}, idx: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_idxassign_val(node, a: {k: str}, idx: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let v = rn_node(node.v, st);
     { st: v.st, node: { k: "idxassign", arr: a, idx: idx, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_dotassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_dotassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let o = rn_node(node.obj, st);
     rn_dotassign_val(node, o.node, o.st)
 };
 
-def rn_dotassign_val(node, o: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_dotassign_val(node, o: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let v = rn_node(node.v, st);
     { st: v.st, node: { k: "dotassign", obj: o, key: node.key, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_foreach(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_foreach(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let it = rn_node(node.iter, st);
     rn_foreach_body(node, it.node, it.st)
 };
 
-def rn_foreach_body(node, iter: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_foreach_body(node, iter: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let st1 = rn_push(st);
     let nb = rn_bind(st1, node.name);
     rn_foreach_block(node, iter, nb.uniq, nb.st)
 };
 
-def rn_foreach_block(node, iter: {k: str}, uniq: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_foreach_block(node, iter: {k: str}, uniq: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let b = rn_block(node.body.stmts, st);
     let st2 = rn_pop(b.st);
     { st: st2, node: { k: "foreach", name: uniq, iter: iter, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
 };
 
-def rn_forrange(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_forrange(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let l = rn_node(node.lo, st);
     rn_forrange_hi(node, l.node, l.st)
 };
 
-def rn_forrange_hi(node, lo: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_forrange_hi(node, lo: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let h = rn_node(node.hi, st);
     rn_forrange_body(node, lo, h.node, h.st)
 };
 
-def rn_forrange_body(node, lo: {k: str}, hi: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_forrange_body(node, lo: {k: str}, hi: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let st1 = rn_push(st);
     let nb = rn_bind(st1, node.name);
     rn_forrange_block(node, lo, hi, nb.uniq, nb.st)
 };
 
-def rn_forrange_block(node, lo: {k: str}, hi: {k: str}, uniq: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_forrange_block(node, lo: {k: str}, hi: {k: str}, uniq: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let b = rn_block(node.body.stmts, st);
     let st2 = rn_pop(b.st);
     { st: st2, node: { k: "forrange", name: uniq, lo: lo, hi: hi, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
 };
 
-def rn_for(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_for(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let ri = rn_node(node.init, st);
     rn_for_cond(node, ri.node, ri.st)
 };
 
-def rn_for_cond(node, init: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_for_cond(node, init: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let rc = rn_node(node.cond, st);
     rn_for_step(node, init, rc.node, rc.st)
 };
 
-def rn_for_step(node, init: {k: str}, cond: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_for_step(node, init: {k: str}, cond: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let rs = rn_node(node.step, st);
     rn_for_body(node, init, cond, rs.node, rs.st)
 };
 
-def rn_for_body(node, init: {k: str}, cond: {k: str}, step: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_for_body(node, init: {k: str}, cond: {k: str}, step: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let b = rn_block(node.body.stmts, st);
     { st: b.st, node: { k: "for", init: init, cond: cond, step: step, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
 };
 
-def rn_decl(node: {k: str, kind: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl(node: {k: str, kind: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: dispatch by shape into dedicated callees (see rn_node note):
     // named-def vs let-bound-func vs plain value — each body reads ONLY
     // its own shape's fields.
@@ -582,12 +793,12 @@ def rn_decl(node: {k: str, kind: str}, st: { scopes: [[{ orig: str, uniq: str }]
     }
 };
 
-def rn_decl_def(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_def(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // name pre-bound by rn_prepass; look it up (must exist)
     rn_decl_def_lookup(node, rn_lookup(st, node.name), st)
 };
 
-def rn_decl_def_lookup(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_def_lookup(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: both arms share the key set (kind/def/name/v) — teq holds.
     if (u == "") {
         let b = rn_bind(st, node.name);
@@ -597,12 +808,12 @@ def rn_decl_def_lookup(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]],
     }
 };
 
-def rn_decl_def_go(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_def_go(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let f = rn_func(node.v, st);
     { st: f.st, node: { k: "decl", kind: "def", name: u, v: f.node, line: node.line, col: node.col } }
 };
 
-def rn_decl_rest(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_rest(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     if (node.v.k == "func") {
         rn_decl_func(node, st)
     } else {
@@ -610,11 +821,11 @@ def rn_decl_rest(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) ->
     }
 };
 
-def rn_decl_func(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_func(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     rn_decl_func_lookup(node, rn_lookup(st, node.name), st)
 };
 
-def rn_decl_func_lookup(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_func_lookup(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: both arms share the key set — teq holds.
     if (u == "") {
         let b = rn_bind(st, node.name);
@@ -624,27 +835,27 @@ def rn_decl_func_lookup(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]]
     }
 };
 
-def rn_decl_func_go(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_func_go(node, u: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let f = rn_func(node.v, st);
     rn_decl_func_finish(node, u, f.node, f.st)
 };
 
-def rn_decl_func_finish(node, u: str, fv: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
-    { st: st, node: { k: "decl", kind: node.kind, name: u, typ: node.typ, v: fv, line: node.line, col: node.col } }
+def rn_decl_func_finish(node, u: str, fv: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
+    { st: st, node: { k: "decl", kind: node.kind, name: u, typ: rn_type(st, node.typ), v: fv, line: node.line, col: node.col } }
 };
 
-def rn_decl_val(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_val(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let r = rn_node(node.v, st);
     rn_decl_val_bind(node, r.node, r.st)
 };
 
-def rn_decl_val_bind(node, v: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_decl_val_bind(node, v: {k: str}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let b = rn_bind(st, node.name);
     rn_decl_val_finish(node, v, b.uniq, b.st)
 };
 
-def rn_decl_val_finish(node, v: {k: str}, uniq: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
-    { st: st, node: { k: "decl", kind: node.kind, name: uniq, typ: node.typ, v: v, line: node.line, col: node.col } }
+def rn_decl_val_finish(node, v: {k: str}, uniq: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
+    { st: st, node: { k: "decl", kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v, line: node.line, col: node.col } }
 };
 
 // Rename a func value. The func VALUE (params/ptypes/ret/body) is passed
@@ -652,37 +863,37 @@ def rn_decl_val_finish(node, v: {k: str}, uniq: str, st: { scopes: [[{ orig: str
 // reads across defs, so reading func.params/func.body off a shared `func`
 // name resolves against every func-shaped call site at once. Fields are
 // plain values (params/pts/ret/body passed separately — no record reads).
-def rn_func(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: ONE field read per callee (see note above): rn_func_p* chain
     // threads the fields as VALUES; no body reads 2+ fields off `func`.
     rn_func_p1(func, func.params, rn_push(st))
 };
 
-def rn_func_p1(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_p1(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     rn_func_p2(func, fparams, func.ptypes, st)
 };
 
-def rn_func_p2(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, fptypes, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_p2(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, fptypes, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     rn_func_p3(func, fparams, fptypes, func.ret, st)
 };
 
-def rn_func_p3(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, fptypes, fret, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_p3(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, fptypes, fret, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     rn_func_p4(func, fparams, fptypes, fret, func.body, st)
 };
 
-def rn_func_p4(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, fptypes, fret, fbody, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_p4(func: {k: str, params: [{k: str}], ptypes: [{k: str}], ret: {k: str}, body: {k: str}, line: long, col: long}, fparams, fptypes, fret, fbody, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     rn_func_p5(fparams, fptypes, fret, fbody, func.line, func.col, st)
 };
 
-def rn_func_p5(fparams, fptypes, fret, fbody, fline: long, fcol: long, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_p5(fparams, fptypes, fret, fbody, fline: long, fcol: long, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, st)
 };
 
-def rn_func_params(fparams, fptypes, fret, fbody, fline: long, fcol: long, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_params(fparams, fptypes, fret, fbody, fline: long, fcol: long, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, [], 0, st)
 };
 
-def rn_func_go(fparams, fptypes, fret, fbody, fline: long, fcol: long, params: [str], i: long, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_go(fparams, fptypes, fret, fbody, fline: long, fcol: long, params: [str], i: long, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: recursion over the param list (replaces the while loop): the
     // loop's `st = b.st` rebind poisoned the merged-shape read of st.
     // fparams stays BARE (like res(node)): the single `fparams[i]` read
@@ -696,15 +907,15 @@ def rn_func_go(fparams, fptypes, fret, fbody, fline: long, fcol: long, params: [
     }
 };
 
-def rn_func_body(fptypes, fret, fbody: {k: str, stmts: [{k: str}]}, fline: long, fcol: long, params: [str], st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_body(fptypes, fret, fbody: {k: str, stmts: [{k: str}]}, fline: long, fcol: long, params: [str], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: fbody read ONCE here (one read site — no merge).
     let b = rn_block(fbody.stmts, st);
     rn_func_finish(fptypes, fret, fbody, fline, fcol, params, b.stmts, rn_pop(b.st))
 };
 
-def rn_func_finish(fptypes, fret, fbody, fline: long, fcol: long, params: [str], stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+def rn_func_finish(fptypes, fret, fbody, fline: long, fcol: long, params: [str], stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: NO record reads here — all values are params already.
-    { st: st, node: { k: "func", params: params, ptypes: fptypes, ret: fret, body: { k: "block", stmts: stmts, line: fline, col: fcol }, line: fline, col: fcol } }
+    { st: st, node: { k: "func", params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: "block", stmts: stmts, line: fline, col: fcol }, line: fline, col: fcol } }
 };
 
 
@@ -715,7 +926,7 @@ def rename_program(ast) -> {k: str} {
 
 def rename_program_go(stmts: [{k: str}], line: long, col: long) -> {k: str} {
     // NOTE: fields passed as values (see rn_func note).
-    let st = { scopes: [[]], n: 1 };
+    let st = { scopes: [[]], n: 1, tys: [], dfl: [] };
     let b = rn_block(stmts, st);
     { k: "block", stmts: b.stmts, line: line, col: col }
 };

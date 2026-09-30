@@ -13,52 +13,25 @@ import enc from "./enc64.y";
 import elf from "./elf.y";
 
 def is_digit_ch(c: str) -> bool {
-    // NOTE: nested ifs, not `||` (see lexer.y isalnum note): the C VM
-    // evaluates both sides eagerly AND the checker rejects joint gates.
-    if (c == "0") { true }
-    else if (c == "1") { true }
-    else if (c == "2") { true }
-    else if (c == "3") { true }
-    else if (c == "4") { true }
-    else if (c == "5") { true }
-    else if (c == "6") { true }
-    else if (c == "7") { true }
-    else if (c == "8") { true }
-    else { c == "9" }
+    c >= "0" && c <= "9"
 };
 
 def is_oct_ch(c: str) -> bool {
-    // NOTE: nested ifs, not `&&` (see is_digit_ch note above).
-    let o = ord(c);
-    if (o >= 48) {
-        if (o <= 55) { true } else { false }
-    } else { false }
+    c >= "0" && c <= "7"
 };
 
 def is_alpha_ch(c: str) -> bool {
-    // NOTE: no string </<= in Y (numbers only) — compare code points.
-    // NOTE: nested ifs, not `||`/`&&` (see is_digit_ch note above).
-    // NOTE: flat range ladder (not nested): `o >= 65` swallows 97-122, so
-    // the lower branch must come AFTER excluding 91-96.
-    let o = ord(c);
-    if (o == 95) { true }
-    else if (o < 65) { false }
-    else if (o <= 90) { true }
-    else if (o < 97) { false }
-    else if (o <= 122) { true }
-    else { false }
+    c == "_" || (c >= "A" && c <= "Z") || (c >= "a" && c <= "z")
 };
 
 // parse a decimal integer (optional leading -). Returns {ok, v}.
 def parse_num(s: str) -> {ok: bool, v: long} {
     let neg = false;
     let i = 0;
-    // NOTE: `0;` tails (see parser.y parse_binary note).
-    if (substr(s, 0, 1) == "-") {
+    if (s[0] == '-') {
         neg = true;
         i = 1;
-        0
-    } else { 0 };
+    }
     if (i >= len(s)) {
         { ok: false, v: 0 }
     } else {
@@ -67,29 +40,22 @@ def parse_num(s: str) -> {ok: bool, v: long} {
 };
 
 def parse_num_go(s: str, i: long, neg: bool) -> {ok: bool, v: long} {
-    // (split: non-empty remainder narrows; `{ok,v}` built ONLY here.)
-    // NOTE: `0;` tails (see parser.y parse_binary note).
     let v = 0;
     let ok = true;
     while (i < len(s)) {
-        let c = substr(s, i, 1);
+        let c = s[i];
         if (is_digit_ch(c)) {
             v = v * 10 + ord(c) - 48;
-            0
         } else {
             ok = false;
-            0
         };
         i = i + 1;
-        0
     };
-    if (neg) { v = 0 - v; 0; } else { 0 };
-    { ok: ok, v: v }
+    { ok: ok, v: if (neg) { 0 - v } else { v } }
 };
 
 def is_num_text(s: str) -> bool {
-    let r = parse_num(s);
-    r.ok
+    parse_num(s).ok
 };
 
 // Split operands on top-level commas (ignore commas inside parens).
@@ -98,27 +64,21 @@ def split_ops(s: str) -> [str] {
     let depth = 0;
     let cur = "";
     let i = 0;
-    // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails.
     while (i < len(s)) {
-        let c = substr(s, i, 1);
-        if (c == "(") { depth = depth + 1; 0; } else { 0 };
-        if (c == ")") { depth = depth - 1; 0; } else { 0 };
+        let c = s[i];
+        if (c == "(") { depth++ };
+        if (c == ")") { depth-- } ;
         if (c == ",") {
             if (depth == 0) {
                 out += trim(cur);
                 cur = "";
-                0
             } else {
-                cur = cur + c;
-                0
+                cur += c;
             };
-            0
         } else {
-            cur = cur + c;
-            0
+            cur += c;
         };
-        i = i + 1;
-        0
+        i ++;
     };
     out += trim(cur);
     out
@@ -141,9 +101,9 @@ def parse_operand_empty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, 
 
 def parse_operand_nonempty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // `*%reg` — register-indirect call/jump target (closure code pointers).
-    if (substr(t, 0, 1) == "*") {
+    if (t[0] == '*') {
         parse_operand_ind(t)
-    } else if (substr(t, 0, 1) == "%") {
+    } else if (t[0] == '%') {
         parse_operand_reg(t)
     } else {
         parse_operand_noreg(t)
@@ -152,7 +112,7 @@ def parse_operand_nonempty(t: str) -> {ok: bool, op: {k: str, n: long, size: lon
 
 def parse_operand_ind(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // (split: *-gate above narrows; the rest must be a 64-bit register.)
-    let r = substr(t, 1, len(t) - 1);
+    let r = t[1:];
     let n = enc.reg_num(r);
     if (n < 0) {
         { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + r + "'" }
@@ -172,7 +132,7 @@ def parse_operand_reg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v:
 };
 
 def parse_operand_noreg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
-    if (substr(t, 0, 1) == "$") {
+    if (t[0] == '$') {
         parse_operand_imm(t)
     } else {
         parse_operand_memlbl(t)
@@ -181,7 +141,7 @@ def parse_operand_noreg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, 
 
 def parse_operand_imm(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // (split: $-gate above narrows; strips the $ and parses the immediate.)
-    parse_imm(substr(t, 1, len(t) - 1))
+    parse_imm(t[1:])
 };
 
 def parse_operand_memlbl(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
@@ -196,7 +156,7 @@ def parse_imm(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a
     // $a-b label difference, else decimal number
     // NOTE: nested ifs, not `&&` (see is_digit_ch note above): the joint
     // gate mixes comparison-bool with call shapes (is_alpha_ch).
-    let dash = index_of(substr(s, 1, len(s) - 1), "-");
+    let dash = index_of(s[1:], "-");
     if (len(s) > 0) {
         parse_imm_alpha(s, dash)
     } else {
@@ -206,7 +166,7 @@ def parse_imm(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a
 
 def parse_imm_alpha(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // (split: len>0 narrows; this body checks the alpha gate only.)
-    if (is_alpha_ch(substr(s, 0, 1))) {
+    if (is_alpha_ch(s[0])) {
         parse_imm_diff(s, dash)
     } else {
         parse_imm_num(s)
@@ -216,8 +176,8 @@ def parse_imm_alpha(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size
 def parse_imm_diff(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // (split: alpha-gate above narrows; diff-shape built ONLY here.)
     if (dash >= 0) {
-        let a = substr(s, 0, dash + 1);
-        let b = substr(s, dash + 2, len(s) - dash - 2);
+        let a = s[0:dash + 1];
+        let b = s[dash + 2:];
         { ok: true, op: { k: "diff", n: 0, size: 0, v: 0, a: a, b: b, name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     } else {
         parse_imm_num(s)
@@ -240,8 +200,8 @@ def parse_mem(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a
     // `&&` (see is_digit_ch note): the joint gate mixes str-cmp with call
     // shapes (is_num_text).
     let open = index_of(t, "(");
-    let head = trim(substr(t, 0, open));
-    let inside = substr(t, open + 1, len(t) - open - 2);
+    let head = trim(t[0:open]);
+    let inside = t[open + 1:len(t) - 1];
     let parts = split_ops(inside);
     if (head != "") {
         parse_mem_head(t, head, parts)
@@ -768,7 +728,7 @@ def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> {err:
     if (nul) {
         bb += 0;
         0
-    } else { 0 };
+    };
     asm_strdata_item(sec, offs, bb)
 };
 
@@ -787,7 +747,7 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, s
         dir = substr(line, 0, sp);
         rest = trim(substr(line, sp + 1, len(line) - sp - 1));
         0
-    } else { 0 };
+    };
     if (dir == ".text") {
         { err: "", sec: 0, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else if (dir == ".globl") {
@@ -880,16 +840,16 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: l
     if (tab >= 0) {
         if (sp < 0) { cut = tab; 0; }
         else if (tab < sp) { cut = tab; 0; }
-        else { 0 };
+       ;
         0
-    } else { 0 };
+    };
     let mn = line;
     let rest = "";
     if (cut >= 0) {
         mn = substr(line, 0, cut);
         rest = trim(substr(line, cut + 1, len(line) - cut - 1));
         0
-    } else { 0 };
+    };
     let ops = [];
     if (rest != "") {
         let texts = split_ops(rest);
@@ -939,15 +899,9 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
     let lh0 = heap_used();
     let code_len = 0;
     let ro_len = 0;
-    // NOTE: `0;` tails (see parser.y parse_binary note). `it.len` reads go
-    // through the bare hole (tnone unifies — see types.y typeof_def note).
-    let i = 0;
-    while (i < len(items)) {
-        let it = items[i];
-        if (it.sec == 0) { code_len = code_len + it.len; 0; } else { 0 };
-        if (it.sec == 1) { ro_len = ro_len + it.len; 0; } else { 0 };
-        i = i + 1;
-        0
+    for (let it in items) {
+        if (it.sec == 0) { code_len = code_len + it.len; };
+        if (it.sec == 1) { ro_len = ro_len + it.len; };
     };
     let lm = labmap_build(labels);
     let lt1 = clock_us();
@@ -964,7 +918,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
         // pad code to a page so rodata lands page-aligned (mirrors elf.y)
         let pad = 0;
         let trail = code_len % 4096;
-        if (trail != 0) { pad = 4096 - trail; 0; } else { 0 };
+        if (trail != 0) { pad = 4096 - trail; };
         let code: [byte] = [];
         let ro: [byte] = [];
         let err = "";
@@ -973,32 +927,25 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
         while (i < len(items)) {
             if (err != "") {
                 i = len(items);
-                0
             } else {
-            let it = items[i];
-            if (it.sec == 0) {
-                let r = patch_item(code, it, lmap, code_len, pad);
-                // NOTE: `0;` tails (see note above): str-arm vs [byte]-arm.
-                if (r.err != "") {
-                    err = r.err;
-                    0
-                } else {
-                    code = r.bytes;
-                    0
+                let it = items[i];
+                if (it.sec == 0) {
+                    let r = patch_item(code, it, lmap, code_len, pad);
+                    // NOTE: `0;` tails (see note above): str-arm vs [byte]-arm.
+                    if (r.err != "") {
+                        err = r.err;
+                    } else {
+                        code = r.bytes;
+                    };
+                } else if (it.sec == 1) {
+                    let rbytes = it.bytes;
+                    let j = 0;
+                    while (j < len(rbytes)) {
+                        ro += rbytes[j];
+                        j = j + 1;
+                    };
                 };
-                0
-            } else if (it.sec == 1) {
-                let rbytes = it.bytes;
-                let j = 0;
-                while (j < len(rbytes)) {
-                    ro += rbytes[j];
-                    j = j + 1;
-                    0
-                };
-                0
-            } else { 0 };
-            i = i + 1;
-            0
+                i = i + 1;
             };
         };
         if (err != "") {
@@ -1023,36 +970,22 @@ def patch_item(code: [byte], it: {sec: long, off: long, len: long, kind: str, by
     let err = "";
     // NOTE: single bool gate (see asm_strdata note): insn-vs-other shapes
     // never mix in one chain.
-    if (patch_item_isdata(it)) {
+    if (it.kind != "insn") {
         patch_item_finish(code, bytes, err)
     } else {
-        patch_item_insn(code, it, lmap, code_len, pad, bytes, err)
-    }
-};
-
-def patch_item_isdata(it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}) -> bool {
-    if (it.kind == "insn") { false } else { true }
-};
-
-def patch_item_insn(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, bytes: [byte], err: str) -> {bytes: [byte], err: str} {
-    // (split: insn-gate above narrows; `{bytes,err}` threading ONLY here.)
-    if (true) {
         patch_item_loop(code, it, lmap, code_len, pad, bytes, err)
-    } else {
-        patch_item_finish(code, bytes, err)
     }
 };
 
 def patch_item_loop(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, bytes: [byte], err: str) -> {bytes: [byte], err: str} {
-        let base = len(code);
-        let fxlist = it.fix;
-        let f = 0;
-        // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails.
-        while (f < len(fxlist)) {
-            if (err != "") {
-                f = len(fxlist);
-                0
-            } else {
+    let base = len(code);
+    let fxlist = it.fix;
+    let f = 0;
+    // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails.
+    while (f < len(fxlist)) {
+        if (err != "") {
+            f = len(fxlist);
+        } else {
             let fx = fxlist[f];
             // at is instruction-relative: bytes is the ITEM's list, and the
             // rel target is relative to the instruction END (base + it.len).
@@ -1063,18 +996,15 @@ def patch_item_loop(code: [byte], it: {sec: long, off: long, len: long, kind: st
             if (fx.kind == "rel32") {
                 let rr = patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
                 bytes = rr.bytes;
-                if (rr.err != "") { err = rr.err; 0; } else { 0 };
-                0
+                if (rr.err != "") { err = rr.err; }
             } else {
                 let rk = patch_item_kind2(lmap, code_len, pad, fx, bytes, base, it, at);
                 bytes = rk.bytes;
-                if (rk.err != "") { err = rk.err; 0; } else { 0 };
-                0
+                if (rk.err != "") { err = rk.err; }
             };
             f = f + 1;
-            0
-            };
         };
+    };
     patch_item_finish(code, bytes, err)
 };
 
@@ -1091,7 +1021,7 @@ def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pa
     // rel32/rip32: target - address past the instruction.
     // NOTE: fx/it stay BARE holes (see types.y note): single reads unify.
     let t = label_addr(lmap, code_len, pad, fx.lbl);
-    if (!(t.ok)) {
+    if (!t.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl + "'" }
     } else {
         let v = t.addr - (base + it.len);
@@ -1103,7 +1033,7 @@ def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, p
     // (split: diff-shape fixups only; `{bytes,err}` built ONLY here.)
     // NOTE: fx/it stay BARE holes (see types.y note): single reads unify.
     let ta = label_addr(lmap, code_len, pad, fx.lbl);
-    if (!(ta.ok)) {
+    if (!ta.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl + "'" }
     } else {
         let dd = patch_item_diff2(lmap, code_len, pad, fx, bytes, ta.addr);
@@ -1113,7 +1043,7 @@ def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, p
 
 def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], ta: long) -> {bytes: [byte], err: str} {
     let tb = label_addr(lmap, code_len, pad, fx.lbl2);
-    if (!(tb.ok)) {
+    if (!tb.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl2 + "'" }
     } else {
         { bytes: patch32(bytes, fx.off, ta - tb.addr), err: "" }
@@ -1121,26 +1051,16 @@ def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, 
 };
 
 def patch_item_finish(code: [byte], bytes: [byte], err: str) -> {bytes: [byte], err: str} {
-    { bytes: concat_bytes(code, bytes), err: err }
+    { bytes: code + bytes, err: err }
 };
 
 def patch32(bytes: [byte], at: long, v: long) -> [byte] {
     let b = enc.le32(v);
-    let b0 = b;
-    bytes[at] = b0[0];
-    bytes[at + 1] = b0[1];
-    bytes[at + 2] = b0[2];
-    bytes[at + 3] = b0[3];
+    bytes[at] = b[0];
+    bytes[at + 1] = b[1];
+    bytes[at + 2] = b[2];
+    bytes[at + 3] = b[3];
     bytes
-};
-
-def concat_bytes(a: [byte], b: [byte]) -> [byte] {
-    let i = 0;
-    while (i < len(b)) {
-        a += b[i];
-        i = i + 1;
-    };
-    a
 };
 
 // Convenience for the driver: text in, bytes out. The driver writes the
@@ -1149,7 +1069,7 @@ def concat_bytes(a: [byte], b: [byte]) -> [byte] {
 // (one malloc+copy per byte) and nothing reads it — it dominated -o time.
 def ycc_assemble(asm_text: str) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
     let r = asm_assemble(asm_text);
-    if (!(r.ok)) {
+    if (!r.ok) {
         { ok: false, bytes: [], octal: "", error: r.error, times: r.times }
     } else {
         { ok: true, bytes: r.bytes, octal: "", error: "", times: r.times }

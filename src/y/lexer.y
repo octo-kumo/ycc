@@ -4,10 +4,6 @@
 
 // NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
 def isdigit(c: str) -> bool {
-    // Range compares on the 1-char string, not ord(c): ord goes through
-    // bytes(), which allocates a copy of the string per character, and the
-    // lexer classifies every character of the source. Comparisons land in
-    // y_str_eq/y_str_cmp — byte primitives, no allocation.
     c >= "0" && c <= "9"
 };
 
@@ -132,7 +128,7 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
         };
         buf = join(chunks, "");
         0
-    } else { 0 };
+    };
     { text: buf, end: i, line: line, col: col }
 };
 
@@ -165,7 +161,7 @@ def twocharop(src: str, i: long) -> str {
 def issingleop(c: str) -> bool {
     c == "+" || c == "-" || c == "*" || c == slash() || c == "%" ||
     c == "<" || c == ">" || c == "=" || c == "." || c == "!" ||
-    c == "&" || c == "?"
+    c == "&" || c == "?" || c == "|"
 };
 
 // The slash character, built without a literal: Y string literals cannot
@@ -303,7 +299,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             else if (word == "return") { ty = "kw"; 0; }
             else if (word == "true") { ty = "kw"; 0; }
             else if (word == "false") { ty = "kw"; 0; }
-            else { 0 };
+           ;
             if (word == "b") {
                 // b"..." / b'...' -- a byte-string literal: the same type
                 // as [byte], spelled like a Python bytes literal.
@@ -327,6 +323,15 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                     toks += mktok(ty, word, line, startcol);
                     0
                 };
+                0
+            } else if (word == "c" && substr(src, i, 1) == "'") {
+                // c'a' -- a character literal: one byte, typed `byte`.
+                let cline = line;
+                let cq = lex_quoted(src, i, line, col);
+                i = cq.end;
+                line = cq.line;
+                col = cq.col;
+                toks += mktok("char", cq.text, cline, startcol);
                 0
             } else {
                 toks += mktok(ty, word, line, startcol);
@@ -391,7 +396,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 if (open) {
                     puts("error: unterminated block comment\n");
                     0
-                } else { 0 };
+                };
                 0
             } else {
                 // division operator or `/=` (not a comment opener). The

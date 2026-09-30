@@ -18,50 +18,22 @@ def r8(n: long) -> {k: str, n: long, size: long} { { k: "reg", n: n, size: 8 } }
 
 // Register number by AT&T name. Supports the registers our backend uses.
 def reg_num(name: str) -> long {
-    // NOTE: nested ifs, not `||` (see lexer.y isalnum note): the C VM
-    // evaluates both sides eagerly AND the checker rejects joint gates.
-    if (name == "%rax") { 0 }
-    else if (name == "%eax") { 0 }
-    else if (name == "%al") { 0 }
-    else if (name == "%rcx") { 1 }
-    else if (name == "%ecx") { 1 }
-    else if (name == "%cl") { 1 }
-    else if (name == "%rdx") { 2 }
-    else if (name == "%edx") { 2 }
-    else if (name == "%dl") { 2 }
-    else if (name == "%rbx") { 3 }
-    else if (name == "%ebx") { 3 }
-    else if (name == "%bl") { 3 }
-    else if (name == "%rsp") { 4 }
-    else if (name == "%esp") { 4 }
-    else if (name == "%rbp") { 5 }
-    else if (name == "%ebp") { 5 }
-    else if (name == "%rsi") { 6 }
-    else if (name == "%esi") { 6 }
-    else if (name == "%sil") { 6 }
-    else if (name == "%rdi") { 7 }
-    else if (name == "%edi") { 7 }
-    else if (name == "%dil") { 7 }
-    else if (name == "%r8") { 8 }
-    else if (name == "%r8d") { 8 }
-    else if (name == "%r8b") { 8 }
-    else if (name == "%r9") { 9 }
-    else if (name == "%r9d") { 9 }
-    else if (name == "%r9b") { 9 }
-    else if (name == "%r10") { 10 }
-    else if (name == "%r10d") { 10 }
-    else if (name == "%r10b") { 10 }
-    else if (name == "%r11") { 11 }
-    else if (name == "%r11d") { 11 }
-    else if (name == "%r11b") { 11 }
-    else if (name == "%r12") { 12 }
-    else if (name == "%r12d") { 12 }
-    else if (name == "%r13") { 13 }
-    else if (name == "%r13d") { 13 }
-    else if (name == "%r14") { 14 }
-    else if (name == "%r14d") { 14 }
-    else if (name == "%r15") { 15 }
-    else if (name == "%r15d") { 15 }
+    if (name == "%rax" || name == "%eax" || name == "%al") { 0 }
+    else if (name == "%rcx" || name == "%ecx" || name == "%cl") { 1 }
+    else if (name == "%rdx" || name == "%edx" || name == "%dl") { 2 }
+    else if (name == "%rbx" || name == "%ebx" || name == "%bl") { 3 }
+    else if (name == "%rsp" || name == "%esp") { 4 }
+    else if (name == "%rbp" || name == "%ebp") { 5 }
+    else if (name == "%rsi" || name == "%esi" || name == "%sil") { 6 }
+    else if (name == "%rdi" || name == "%edi" || name == "%dil") { 7 }
+    else if (name == "%r8" || name == "%r8d" || name == "%r8b") { 8 }
+    else if (name == "%r9" || name == "%r9d" || name == "%r9b") { 9 }
+    else if (name == "%r10" || name == "%r10d" || name == "%r10b") { 10 }
+    else if (name == "%r11" || name == "%r11d" || name == "%r11b") { 11 }
+    else if (name == "%r12" || name == "%r12d") { 12 }
+    else if (name == "%r13" || name == "%r13d") { 13 }
+    else if (name == "%r14" || name == "%r14d") { 14 }
+    else if (name == "%r15" || name == "%r15d") { 15 }
     else if (name == "%xmm0") { 0 }
     else if (name == "%xmm1") { 1 }
     else if (name == "%xmm2") { 2 }
@@ -72,17 +44,17 @@ def reg_num(name: str) -> long {
 };
 
 def reg_size(name: str) -> long {
-    let c = substr(name, 1, 1);
-    if (c == "x") {
+    let c = name[1];
+    if (c == 'x') {
         // %xmmN: SSE register (size 128 marks the class apart from GPRs)
         128
-    } else if (c == "r") {
+    } else if (c == 'r') {
         // %r..: 64-bit, unless ends in d/b
-        let last = substr(name, len(name) - 1, 1);
-        if (last == "d") { 32 } else if (last == "b") { 8 } else { 64 }
+        let last = name[len(name) - 1];
+        if (last == 'd') { 32 } else if (last == 'b') { 8 } else { 64 }
     } else {
         // %e..: 32-bit; %..l / %..h legacy: 8-bit; %r.. handled above
-        if (c == "e") { 32 } else { 8 }
+        if (c == 'e') { 32 } else { 8 }
     }
 };
 
@@ -90,16 +62,14 @@ def reg_size(name: str) -> long {
 // Y evaluates both sides of &&/|| eagerly, so `o.k == "reg" && o.size`
 // would still read .size on a mem/lbl/imm operand).
 def op_size(o) -> long {
-    if (o.k == "reg") { o.size } else { 0 }
+    if (o.k == "reg") { o.size }
 };
 def rex(w: bool, r: long, x: long, b: long) -> long {
-    // NOTE: `0;` tails (see parser.y parse_binary note): bare-`if` arms take
-    // the body's type (long) and poison the sequence gate.
     let v = 64;
-    if (w) { v = v + 8; 0; } else { 0 };
-    if (r >= 8) { v = v + 4; 0; } else { 0 };
-    if (x >= 8) { v = v + 2; 0; } else { 0 };
-    if (b >= 8) { v = v + 1; 0; } else { 0 };
+    if (w) { v = v + 8; };
+    if (r >= 8) { v = v + 4; };
+    if (x >= 8) { v = v + 2; };
+    if (b >= 8) { v = v + 1; };
     if (v == 64) { -1 } else { v }
 };
 
@@ -110,7 +80,9 @@ def modrm(mod: long, reg: long, rm: long) -> long {
 def sib(scale: long, index: long, base: long) -> long {
     // NOTE: `0;` tails (see rex note above).
     let s = 0;
-    if (scale == 2) { s = 1; 0; } else if (scale == 4) { s = 2; 0; } else if (scale == 8) { s = 3; 0; } else { 0 };
+    if (scale == 2) { s = 1; } 
+    else if (scale == 4) { s = 2; } 
+    else if (scale == 8) { s = 3; };
     s * 64 + (index % 8) * 8 + base % 8
 };
 
@@ -156,11 +128,9 @@ def div_floor(v: long, d: long) -> long {
     let r = v - q * d;
     if (r != 0) {
         if (v < 0) {
-            if (d > 0) { q = q - 1; 0; } else { 0 };
-            0
-        } else if (d < 0) { q = q - 1; 0; } else { 0 };
-        0
-    } else { 0 };
+            if (d > 0) { q = q - 1; };
+        } else if (d < 0) { q = q - 1; };
+    };
     q
 };
 
@@ -175,12 +145,7 @@ def u8(v: long) -> long {
 
 // fits in a signed 8-bit immediate?
 def fits8(v: long) -> bool {
-    // NOTE: nested ifs, not `&&` (see lexer.y isalnum note): the C VM
-    // evaluates both sides eagerly AND the checker rejects `&&` mixing
-    // comparison-bool with map-field shapes through the same gate.
-    if (v >= -128) {
-        if (v <= 127) { true } else { false }
-    } else { false }
+    v >= -128 && v <= 127
 };
 
 // Encode a memory operand tail (ModRM + optional SIB + displacement).
@@ -357,7 +322,7 @@ def enc_mov(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, 
         let zeros: [byte] = [0, 0, 0, 0];
         let b = concat(prefix, zeros);
         let off = 3;
-        if (r < 0) { off = 2; 0; } else { 0 };
+        if (r < 0) { off = 2; 0; };
         { bytes: with_rex(r, b), fix: [fixup(off, "imm32diff", src.a, src.b)], err: "" }
     } else if (dst.k == "reg" && src.k == "mem") {
         if (op_size(dst) == 64) {
@@ -410,14 +375,12 @@ def enc_mem_result(r: long, b: [byte], t: {modrm: long, extra: [byte], rip_lbl: 
             // fixup offset counts the REX prefix with_rex is about to add;
             // the disp32 placeholder bytes must exist for the patch to land.
                 let off = len(b);
-                if (r >= 0) { off = off + 1; 0; } else { 0 };
+                if (r >= 0) { off = off + 1; 0; };
                 fx += fixup(off, "rip32", t.rip_lbl, "");
                 let zeros: [byte] = [0, 0, 0, 0];
                 bb = concat(b, zeros);
-                0
-            } else { 0 };
-            0
-        } else { 0 };
+            };
+        };
         { bytes: with_rex(r, bb), fix: fx, err: "" }
     }
 };
@@ -484,13 +447,12 @@ def enc_arith(op: str, dst, src) -> {bytes: [byte], fix: [{off: long, kind: str,
     // op: add/sub/xor/and/or/cmp/test; r64,r64 only here
     if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 64) {
         let base = 1;
-        if (op == "sub") { base = 41; 0; }
-        else if (op == "xor") { base = 49; 0; }
-        else if (op == "and") { base = 33; 0; }
-        else if (op == "or") { base = 9; 0; }
-        else if (op == "cmp") { base = 57; 0; }
-        else if (op == "test") { base = 133; 0; }
-        else { 0 };
+        if (op == "sub") { base = 41; }
+        else if (op == "xor") { base = 49; }
+        else if (op == "and") { base = 33; }
+        else if (op == "or") { base = 9; }
+        else if (op == "cmp") { base = 57; }
+        else if (op == "test") { base = 133; }
         let r = rex(true, src.n, -1, dst.n);
         let b: [byte] = [base, modrm(3, src.n, dst.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
@@ -534,12 +496,11 @@ def enc_alu_imm_go(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, k
 def enc_alu_imm_body(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // NOTE: split from enc_alu_imm (see note above): no size gate here.
     let ext = 0;
-    if (op == "sub") { ext = 5; 0; }
-    else if (op == "cmp") { ext = 7; 0; }
-    else if (op == "xor") { ext = 6; 0; }
-    else if (op == "and") { ext = 4; 0; }
-    else if (op == "or") { ext = 1; 0; }
-    else { 0 };
+    if (op == "sub") { ext = 5; }
+    else if (op == "cmp") { ext = 7; }
+    else if (op == "xor") { ext = 6; }
+    else if (op == "and") { ext = 4; }
+    else if (op == "or") { ext = 1; }
     let wide = op_size(dst) == 64;
     let r = rex(wide, -1, -1, dst.n);
     if (fits8(v)) {
@@ -714,7 +675,6 @@ def enc_unary(op: str, o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: s
         else if (op == "div") { ext = 6; 0; }
         else if (op == "dec") { ext = 1; opc = 255; 0; }
         else if (op == "inc") { ext = 0; opc = 255; 0; }
-        else { 0 };
         let r = rex(true, -1, -1, o.n);
         let b: [byte] = [opc, modrm(3, ext, o.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }

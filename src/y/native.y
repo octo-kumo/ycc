@@ -140,7 +140,7 @@ def seen_has(seen: [str], full: str) -> bool {
         if (e == full) {
             found = true;
             0
-        } else { 0 };
+        };
         i = i + 1;
         0
     };
@@ -226,13 +226,13 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                     if (substr(path_part, len(path_part) - 1, 1) == ";") {
                         path_part = substr(path_part, 0, len(path_part) - 1);
                         0
-                    } else { 0 };
+                    };
                     path = substr(path_part, 1, len(path_part) - 2);
                     // NOTE: normalized (see norm_path): nested base dirs
                     // accumulate "/." segments, so raw joins of the same file
                     // differ per depth and seen-dedup would never hit.
                     full = norm_path(base_dir + "/" + path);
-                    if (substr(path, 0, 1) == "/") { full = norm_path(path); 0; } else { 0 };
+                    if (substr(path, 0, 1) == "/") { full = norm_path(path); 0; };
                     0
                 } else {
                     // bare `import name;`: an optional std module (net, ui,
@@ -241,7 +241,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                     if (substr(name, len(name) - 1, 1) == ";") {
                         name = trim(substr(name, 0, len(name) - 1));
                         0
-                    } else { 0 };
+                    };
                     path = name;
                     full = std_resolve(name, base_dir);
                     0
@@ -272,7 +272,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                         if (last_slash >= 0) {
                             mod_dir = substr(full, 0, last_slash);
                             0
-                        } else { 0 };
+                        };
                         // mod_src is str? (read_file returns none on missing
                         // file); the none case exited above, so unwrap here.
                         let mod_src2 = unwrap(mod_src);
@@ -311,7 +311,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                 if (substr(trimmed, 0, 7) != "export ") {
                     out_lines += line;
                     0
-                } else { 0 };
+                };
                 0
             };
             i = i + 1;
@@ -974,7 +974,7 @@ def strip_ns(node, imports: [str]) -> { k: str } {
     } else if (k == "decl") {
         strip_decl(node, imports)
     } else if (k == "func") {
-        normnode({ k: "func", params: node.params, ptypes: node.ptypes, ret: node.ret, body: strip_ns(node.body, imports), line: node.line, col: node.col })
+        normnode({ k: "func", params: node.params, ptypes: node.ptypes, ret: node.ret, body: strip_ns(node.body, imports), line: node.line, col: node.col, defs: node.defs })
     } else if (k == "assign") {
         normnode({ k: "assign", name: node.name, v: strip_ns(node.v, imports), line: node.line, col: node.col })
     } else if (k == "incdec") {
@@ -1007,6 +1007,8 @@ def strip_ns(node, imports: [str]) -> { k: str } {
         normnode({ k: "forrange", name: node.name, lo: strip_ns(node.lo, imports), hi: strip_ns(node.hi, imports), body: strip_ns(node.body, imports), line: node.line, col: node.col })
     } else if (k == "for") {
         normnode({ k: "for", init: strip_ns(node.init, imports), cond: strip_ns(node.cond, imports), step: strip_ns(node.step, imports), body: strip_ns(node.body, imports), line: node.line, col: node.col })
+    } else if (k == "sliceassign") {
+        normnode({ k: "sliceassign", arr: strip_ns(node.arr, imports), lo: strip_ns(node.lo, imports), hi: strip_ns(node.hi, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
     } else {
         normnode(node)
     }
@@ -1184,6 +1186,8 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
         } else if (bt.k == "tmap") {
             // m[k] is always optional: V? for any V
             normnode({ k: "topt", of: bt.of })
+        } else if (bt.k == "tstr") {
+            { k: "tbyte" }
         } else {
             { k: "tunk" }
         }
@@ -1192,7 +1196,16 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
         let ts = infer(st, node.arr);
         if (ts.k == "tarr") { { k: "tarr", of: ts.of } }
         else if (ts.k == "tarrfix") { { k: "tarr", of: ts.of } }
+        else if (ts.k == "tstr") { { k: "tstr" } }
         else { { k: "tunk" } }
+    } else if (k == "char") {
+        { k: "tbyte" }
+    } else if (k == "rectest") {
+        { k: "tbool" }
+    } else if (k == "narrow") {
+        types.narrow_type(infer(st, node.e), node.typ)
+    } else if (k == "sliceassign") {
+        { k: "tvoid" }
     } else if (k == "deref") {
         let t = infer(st, node.e);
         if (t.k == "tptr") { t.to } else { { k: "tunk" } }
@@ -1480,6 +1493,10 @@ def uses_scan_node(node, out: { argv: bool }) -> { argv: bool } {
         uses_scan_node(node.body, uses_scan_node(node.hi, uses_scan_node(node.lo, out)))
     } else if (k == "for") {
         uses_scan_node(node.body, uses_scan_node(node.step, uses_scan_node(node.cond, uses_scan_node(node.init, out))))
+    } else if (k == "sliceassign") {
+        uses_scan_node(node.v, uses_scan_node(node.hi, uses_scan_node(node.lo, uses_scan_node(node.arr, out))))
+    } else if (k == "rectest" || k == "narrow" || k == "matchend") {
+        uses_scan_node(node.e, out)
     } else {
         out
     }
@@ -1684,6 +1701,15 @@ def fv_ids(node, out: [str]) -> [str] {
     } else if (k == "func") {
         out = fv_ids(node.body, out);
         0
+    } else if (k == "sliceassign") {
+        out = fv_ids(node.arr, out);
+        out = fv_ids(node.lo, out);
+        out = fv_ids(node.hi, out);
+        out = fv_ids(node.v, out);
+        0
+    } else if (k == "rectest" || k == "narrow" || k == "matchend") {
+        out = fv_ids(node.e, out);
+        0
     } else { 0; };
     out
 };
@@ -1809,6 +1835,12 @@ def fv_binds(node, out: [str]) -> [str] {
         0
     } else if (k == "opassign") {
         out = fv_binds(node.tgt, out);
+        out = fv_binds(node.v, out);
+        0
+    } else if (k == "sliceassign") {
+        out = fv_binds(node.arr, out);
+        out = fv_binds(node.lo, out);
+        out = fv_binds(node.hi, out);
         out = fv_binds(node.v, out);
         0
     } else { 0; };
@@ -1952,11 +1984,28 @@ def gen(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env
     } else if (k == "opassign") {
         gen_opassign(st, node)
     } else if (k == "index") {
-        // maps scan their keys; arrays index directly
+        // maps scan their keys; strings read a byte; arrays index directly
         let kbt = infer(st, node.arr);
-        if (kbt.k == "tmap") { gen_map_get(st, node) } else { gen_index(st, node) }
+        if (kbt.k == "tmap") { gen_map_get(st, node) }
+        else if (kbt.k == "tstr") { gen_byte_at(st, n_call2("byte_at", node.arr, node.idx, node.line, node.col)) }
+        else { gen_index(st, node) }
     } else if (k == "slice") {
-        gen_slice(st, node)
+        let sbt = infer(st, node.arr);
+        if (sbt.k == "tstr") { gen_str_slice(st, node) } else { gen_slice(st, node) }
+    } else if (k == "char") {
+        gen_lit(st, { k: "num", v: node.v, line: node.line, col: node.col })
+    } else if (k == "rectest") {
+        st = gen(st, node.e);
+        gen_rectest_rax(st, types.type_names(node.typ))
+    } else if (k == "narrow") {
+        // the value itself; only its static type changes
+        gen(st, node.e)
+    } else if (k == "matchend") {
+        // unreachable when the checker accepted the match
+        st = emit(st, "    call y_match_fail");
+        emit(st, "    xor %eax, %eax")
+    } else if (k == "sliceassign") {
+        gen_sliceassign(st, node)
     } else if (k == "idxassign") {
         let kbt = infer(st, node.arr);
         if (kbt.k == "tmap") { gen_map_set(st, node) } else { gen_idxassign(st, node) }
@@ -2178,6 +2227,143 @@ def gen_slice(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     st = emit(st, "    push %rax");
     st = emit(st, "    call y_arr_slice");
     emit(st, "    add $32, %rsp")
+};
+
+// s[lo:hi] -- the substring, half-open and clamped like an array slice;
+// a missing bound means 0 / len (y_str_slice in rt.y).
+def gen_str_slice(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let lo = node.lo;
+    let hi = node.hi;
+    st = gen(st, node.arr);
+    st = emit(st, "    push %rax");
+    if (lo.k == "void") {
+        st = emit(st, "    xor %eax, %eax");
+        0
+    } else {
+        st = gen(st, lo);
+        0
+    };
+    st = emit(st, "    push %rax");
+    if (hi.k == "void") {
+        st = emit(st, "    mov 8(%rsp), %rax");
+        st = emit(st, "    mov (%rax), %rax");
+        0
+    } else {
+        st = gen(st, hi);
+        0
+    };
+    st = emit(st, "    push %rax");
+    st = emit(st, "    call y_str_slice");
+    emit(st, "    add $24, %rsp")
+};
+
+// a[lo:hi] = src: y_arr_setslice{1,8} (rt.y) check the range and the
+// length, then copy src's elements in. Evaluation order: a, lo, hi, src.
+def gen_sliceassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let lo = node.lo;
+    let hi = node.hi;
+    let esz = arr_elem_bytes(infer(st, node.arr));
+    st = gen(st, node.arr);
+    st = emit(st, "    push %rax");
+    if (lo.k == "void") {
+        st = emit(st, "    xor %eax, %eax");
+        0
+    } else {
+        st = gen(st, lo);
+        0
+    };
+    st = emit(st, "    push %rax");
+    if (hi.k == "void") {
+        st = emit(st, "    mov 8(%rsp), %rax");
+        st = emit(st, "    mov (%rax), %rax");
+        0
+    } else {
+        st = gen(st, hi);
+        0
+    };
+    st = emit(st, "    push %rax");
+    st = gen(st, node.v);
+    st = emit(st, "    push %rax");
+    st = emit(st, "    call y_arr_setslice" + tostring(esz));
+    st = emit(st, "    add $32, %rsp");
+    emit(st, "    xor %eax, %eax")
+};
+
+// Record in %rax -> 1 when it has every field in names, else 0 (the
+// record's own field table answers, through y_rec_has).
+def gen_rectest_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, names: [str]) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (len(names) == 0) {
+        emit(st, "    mov $1, %rax")
+    } else {
+        let rfail = next_loc(st);
+        st = rfail.st;
+        let rdone = next_loc(st);
+        st = rdone.st;
+        st = emit(st, "    push %rax");
+        let i = 0;
+        while (i < len(names)) {
+            st = emit(st, "    mov (%rsp), %rax");
+            st = emit(st, "    push %rax");
+            st = gen_str_const(st, names[i]);
+            st = emit(st, "    push %rax");
+            st = emit(st, "    call y_rec_has");
+            st = emit(st, "    add $16, %rsp");
+            st = emit(st, "    test %rax, %rax");
+            st = emit(st, "    jz " + rfail.lbl);
+            i = i + 1;
+        };
+        st = emit(st, "    add $8, %rsp");
+        st = emit(st, "    mov $1, %rax");
+        st = emit(st, "    jmp " + rdone.lbl);
+        st = emit(st, rfail.lbl + ":");
+        st = emit(st, "    add $8, %rsp");
+        st = emit(st, "    xor %eax, %eax");
+        emit(st, rdone.lbl + ":")
+    }
+};
+
+// Union value in %rax -> its string form: the member it matches, tried
+// from the one with the most fields down (the most specific shape wins).
+def gen_union_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let ms: [{k: str}] = t.ts;
+    let order: [{k: str}] = [];
+    let most = 0;
+    let i = 0;
+    while (i < len(ms)) {
+        let n = len(types.type_names(ms[i]));
+        if (n > most) { most = n; 0 } else { 0 };
+        i = i + 1;
+    };
+    let want = most;
+    while (want >= 0) {
+        let j = 0;
+        while (j < len(ms)) {
+            if (len(types.type_names(ms[j])) == want) { order += ms[j]; 0 } else { 0 };
+            j = j + 1;
+        };
+        want = want - 1;
+    };
+    let rdone = next_loc(st);
+    st = rdone.st;
+    st = emit(st, "    push %rax");
+    let m = 0;
+    while (m < len(order)) {
+        let rnext = next_loc(st);
+        st = rnext.st;
+        let mt = order[m];
+        st = emit(st, "    mov (%rsp), %rax");
+        st = gen_rectest_rax(st, types.type_names(mt));
+        st = emit(st, "    test %rax, %rax");
+        st = emit(st, "    jz " + rnext.lbl);
+        st = emit(st, "    pop %rax");
+        st = gen_rec_str_rax(st, mt);
+        st = emit(st, "    jmp " + rdone.lbl);
+        st = emit(st, rnext.lbl + ":");
+        m = m + 1;
+    };
+    st = emit(st, "    pop %rax");
+    st = gen_str_const(st, "<union>");
+    emit(st, rdone.lbl + ":")
 };
 
 def gen_indirect(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, callee) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -2812,6 +2998,11 @@ def gen_print(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
         st = gen_map_repr(st, pa0, t);
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
+    } else if (t.k == "tunion") {
+        st = gen(st, pa0);
+        st = gen_union_str_rax(st, t);
+        st = gen_helper1(st, "y_print_hstr");
+        emit(st, "    xor %eax, %eax")
     } else {
         gen_print_scalar(st, pa0, t)
     }
@@ -3244,11 +3435,20 @@ def gen_foreach(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 // space. Instrumented builds (--prof) keep plain calls so every entry
 // stays paired with its exit.
 
-def is_self_call(node) -> bool {
+def is_self_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> bool {
+    // `self(...)`, or a call naming the function being emitted (after
+    // rename every def has a unique name, so the label decides).
     if (node.k == "call") {
         let cal = node.callee;
         if (cal.k == "id") {
-            cal.v == "self"
+            let cv: str = cal.v;
+            if (cv == "self") {
+                true
+            } else {
+                let fe = fns_find(st.fns, cv);
+                let ee = env_find(st, cv);
+                fe.label == st.self_label && ee.kind == "func"
+            }
         } else {
             false
         }
@@ -3294,14 +3494,14 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     let k = node.k;
     if (k == "ret") {
         let e = node.e;
-        if (is_self_call(e)) {
+        if (is_self_call(st, e)) {
             gen_tail_call(st, e)
         } else {
             st = gen(st, e);
             emit(st, "    jmp " + st.end_label)
         }
     } else if (k == "call") {
-        if (is_self_call(node)) {
+        if (is_self_call(st, node)) {
             gen_tail_call(st, node)
         } else {
             gen(st, node)
@@ -3309,6 +3509,9 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     } else if (k == "block") {
         let tl = node.stmts;
         let m = len(tl);
+        // a trailing `;` (void) leaves the statement before it in tail
+        // position: the block's value is void either way
+        if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; 0 } else { 0 };
         let ti = 0;
         while (ti < m - 1) {
             st = gen(st, tl[ti]);
@@ -3351,13 +3554,21 @@ def gen_block(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     if (len(stmts) == 0) {
         emit(st, "    xor %eax, %eax")
     } else {
+        // A trailing `;` (void) computes nothing: nothing to emit.
+        let m = len(stmts);
+        if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; 0 } else { 0 };
         let i = 0;
-        while (i < len(stmts)) {
+        while (i < m) {
             st = gen(st, stmts[i]);
             i = i + 1;
         };
         st
     }
+};
+
+def is_void_node(n) -> bool {
+    let k: str = n.k;
+    k == "void"
 };
 
 // Record literal { k: v, ... }: heap-allocate 8*n bytes (arena, static
@@ -4351,6 +4562,8 @@ def gen_val_tostr_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, 
         gen_opt_str_rax(st, t)
     } else if (tk == "trec") {
         gen_rec_str_rax(st, t)
+    } else if (tk == "tunion") {
+        gen_union_str_rax(st, t)
     } else {
         st = emit(st, "    push %rax");
         st = emit(st, "    call y_long_tostr");
@@ -4546,7 +4759,7 @@ def rec_field_idx(t, key: str) -> long {
         };
     } else if (t.k == "tmap") {
         // a map is lowered to the fixed {keys, vals} record (see "maps")
-        if (key == "keys") { idx = 0; 0 } else if (key == "vals") { idx = 1; 0 } else { 0 };
+        if (key == "keys") { idx = 0; 0 } else if (key == "vals") { idx = 1; 0 };
     };
     idx
 };
@@ -4737,6 +4950,9 @@ def gen_tostring(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     } else if (t.k == "trec") {
         st = gen(st, a0);
         gen_rec_str_rax(st, t)
+    } else if (t.k == "tunion") {
+        st = gen(st, a0);
+        gen_union_str_rax(st, t)
     } else if (t.k == "tmap") {
         gen_map_repr(st, a0, t)
     } else {

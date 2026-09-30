@@ -144,8 +144,46 @@ into closures, `if` cond must be `bool`, `if` arms that disagree make the
 implicit conversions. There is no `null`: `none` is the empty option and
 postfix `x!` is `unwrap(x)`. Error messages strip rename's `$N` suffixes and carry
 line/col (LSP feeds on these).
-Later: generics, records, borrow rules, exhaustiveness,
-methods/traits if Y grows them.
+Later: generics, borrow rules, methods/traits if Y grows them.
+
+## Newer language features
+
+All of these are lowered early, so the checker and emitter see little new:
+
+- **`c ? a : b`** parses to `if (c) { a } else { b }` (lowest precedence,
+  right-associative); arms that disagree make it void, so
+  `a ? f() : none;` is a fine statement.
+- **Trailing `;` is void**: `{ f(); }` computes nothing, `{ f() }` is f's
+  value. The parser appends a `void` statement; a trailing `return x;` (or
+  an if/else that returns on every path) keeps its value. The emitter
+  emits nothing for that `void`, and a tail call before it stays a tail
+  call.
+- **`print(a, b, ...)`** is `print(tostring(a) + tostring(b) + ...)`.
+- **Default parameters** `def f(n, acc = 1)`: the default must be a
+  literal and types an unannotated parameter; rename.y fills omitted
+  trailing arguments of direct calls.
+- **Tail calls** recycle the frame for `self(...)` and for a call naming
+  the function being emitted.
+- **`type A = T`** aliases are resolved by rename.y (scoped to their block,
+  hoisted like defs); unions are flattened.
+- **Unions** `A | B` hold record types only. Records carry their field
+  table, so the member a value holds is recognized at run time by its
+  field names (`y_rec_has` in the prelude). A record flows into a union
+  that has a compatible member; a union flows nowhere but another union
+  until a `match` narrows it. Unions print as the member they hold.
+- **`match e { pat => arm, ... }`** is lowered by the parser to
+  `{ let $m = e; if (test) { binds; arm } else if ... }` over three node
+  kinds: `rectest` (has T's fields), `narrow` (the value typed as T) and
+  `matchend` (the fall-through). Patterns: `_`, `T x`, `T {f, g: y}`, `T`,
+  record patterns `{f: v} x` / `({f: v}) x` (fields equal to values) and
+  literals (`1`, `"s"`, `c'a'`, `true`, `none`, `-2`, `(expr)`). Arms follow
+  the `if` law. Without `_`, every union member must be covered by a type
+  arm or the match is rejected as non-exhaustive.
+- **Strings**: `s[i]` is the `byte` at i (trapped out of bounds), `s[lo:hi]`
+  the substring (half-open, clamped). **`c'a'`** is a `byte` literal.
+- **Slice assignment** `a[lo:hi] = b` copies b's elements into that range;
+  the range must lie inside a and hold exactly `len(b)` elements
+  (`y_arr_setslice1`/`8` in rt.y trap otherwise).
 
 ## Self-hosting: done
 

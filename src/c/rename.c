@@ -27,17 +27,18 @@
 
 #include "rename.h"
 
-/* state = { scopes: [[{ orig: str, uniq: str }]], n: long } */
+/* state = { scopes: [[{ orig: str, uniq: str }]], n: long,
+ *           tys: [{ name, typ }], dfl: [{ name, vals }] } */
 Yv *rn_fresh(Yv *st, Yv *orig) {
     Yv *u = ys_cat(ys_cat(orig, ys("$")), ys_long(yv_l(yr_get(st, "n"))));
-    Yv *nst = yr(2, "scopes", yr_get(st, "scopes"), "n",
-                 yv_long(yv_l(yr_get(st, "n")) + 1));
+    Yv *nst = yr(4, "scopes", yr_get(st, "scopes"), "n",
+                 yv_long(yv_l(yr_get(st, "n")) + 1), "tys", yr_get(st, "tys"), "dfl", yr_get(st, "dfl"));
     return yr(2, "st", nst, "name", u);
 }
 
 Yv *rn_push(Yv *st) {
     Yv *scopes = ya_push(yr_get(st, "scopes"), yav(0));
-    return yr(2, "scopes", scopes, "n", yr_get(st, "n"));
+    return yr(4, "scopes", scopes, "n", yr_get(st, "n"), "tys", yr_get(st, "tys"), "dfl", yr_get(st, "dfl"));
 }
 
 Yv *rn_pop(Yv *st) {
@@ -48,7 +49,7 @@ Yv *rn_pop(Yv *st) {
         scopes = ya_push(scopes, ya_get(old, i));
         i = i + 1;
     }
-    return yr(2, "scopes", scopes, "n", yr_get(st, "n"));
+    return yr(4, "scopes", scopes, "n", yr_get(st, "n"), "tys", yr_get(st, "tys"), "dfl", yr_get(st, "dfl"));
 }
 
 Yv *rn_define(Yv *st, Yv *orig, Yv *uniq) {
@@ -56,7 +57,7 @@ Yv *rn_define(Yv *st, Yv *orig, Yv *uniq) {
     Yv *top = ya_get(scopes, yv_len(scopes) - 1);
     top = ya_push(top, yr(2, "orig", orig, "uniq", uniq));
     ya_set(scopes, yv_len(scopes) - 1, top);
-    return yr(2, "scopes", scopes, "n", yr_get(st, "n"));
+    return yr(4, "scopes", scopes, "n", yr_get(st, "n"), "tys", yr_get(st, "tys"), "dfl", yr_get(st, "dfl"));
 }
 
 Yv *rn_lookup(Yv *st, Yv *name) {
@@ -137,6 +138,10 @@ Yv *rn_prepass(Yv *stmts, Yv *st) {
 Yv *rn_prepass_one(Yv *s, Yv *st) {
     if (ys_eq_lit(yr_get(s, "k"), "decl")) {
         return rn_prepass_decl(s, st);
+    } else if (ys_eq_lit(yr_get(s, "k"), "typedef")) {
+        /* aliases hoist like defs: every annotation in the block sees them */
+        ya_push(yr_get(st, "tys"), yr(2, "name", yr_get(s, "name"), "typ", yr_get(s, "typ")));
+        return st;
     } else {
         return st;
     }
@@ -147,13 +152,198 @@ Yv *rn_prepass_decl(Yv *s, Yv *st) {
      * this body (see parse_type_arrow note — two reads in one body merge). */
     if (ys_eq_lit(yr_get(s, "kind"), "def")) {
         Yv *r = rn_bind(st, yr_get(s, "name"));
-        return yr_get(r, "st");
+        return rn_note_defaults(yr_get(r, "st"), yr_get(r, "uniq"), yr_get(s, "v"));
     } else if (ys_eq_lit(yr_get(yr_get(s, "v"), "k"), "func")) {
         Yv *r = rn_bind(st, yr_get(s, "name"));
-        return yr_get(r, "st");
+        return rn_note_defaults(yr_get(r, "st"), yr_get(r, "uniq"), yr_get(s, "v"));
     } else {
         return st;
     }
+}
+
+/* Remember a def's default parameter values under its unique name, so a
+ * direct call that leaves trailing arguments out gets them filled in. */
+Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func) {
+    Yv *dv = yr_get(func, "defs");
+    long i = 0;
+    int any = 0;
+    while (i < yv_len(dv)) {
+        if (!ys_eq_lit(yr_get(ya_get(dv, i), "k"), "void")) {
+            any = 1;
+        }
+        i = i + 1;
+    }
+    if (any) {
+        ya_push(yr_get(st, "dfl"), yr(2, "name", uniq, "vals", dv));
+    }
+    return st;
+}
+
+/* The defaults of the def a call names ([] for anything else). */
+Yv *rn_find_defaults(Yv *st, Yv *name) {
+    Yv *out = yav(0);
+    Yv *ds = yr_get(st, "dfl");
+    long i = 0;
+    while (i < yv_len(ds)) {
+        Yv *d = ya_get(ds, i);
+        if (ys_eq(yr_get(d, "name"), name)) {
+            out = yr_get(d, "vals");
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+/* args + the defaults of the missing trailing parameters -- only when
+ * every one of them has a default. */
+Yv *rn_fill_defaults(Yv *vals, Yv *args) {
+    long n = yv_len(args);
+    if (n >= yv_len(vals)) {
+        return args;
+    } else {
+        int ok = 1;
+        long i = n;
+        while (i < yv_len(vals)) {
+            if (ys_eq_lit(yr_get(ya_get(vals, i), "k"), "void")) {
+                ok = 0;
+            }
+            i = i + 1;
+        }
+        if (ok) {
+            Yv *out = yav(0);
+            for (long a = 0; a < n; a++) out = ya_push(out, ya_get(args, a));
+            long j = n;
+            while (j < yv_len(vals)) {
+                out = ya_push(out, ya_get(vals, j));
+                j = j + 1;
+            }
+            return out;
+        } else {
+            return args;
+        }
+    }
+}
+
+/* ── type aliases ─────────────────────────────────────────────────────────
+ * `type A = T` makes the name A stand for T in every annotation (and match
+ * pattern) of its block and below; unions are flattened. */
+
+Yv *rn_type(Yv *st, Yv *t) {
+    if (yv_len(yr_get(st, "tys")) == 0) {
+        return t;
+    } else {
+        return rn_type_go(st, t, 0);
+    }
+}
+
+Yv *rn_types(Yv *st, Yv *ts) {
+    if (yv_len(yr_get(st, "tys")) == 0) {
+        return ts;
+    } else {
+        Yv *out = yav(0);
+        long i = 0;
+        while (i < yv_len(ts)) {
+            out = ya_push(out, rn_type(st, ya_get(ts, i)));
+            i = i + 1;
+        }
+        return out;
+    }
+}
+
+Yv *rn_type_go(Yv *st, Yv *t, long depth) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tname")) {
+        return rn_type_name(st, yr_get(t, "name"), t, depth);
+    } else if (ys_eq_lit(k, "tptr")) {
+        return yr(2, "k", ys("tptr"), "to", rn_type_go(st, yr_get(t, "to"), depth));
+    } else if (ys_eq_lit(k, "tarr")) {
+        return yr(2, "k", ys("tarr"), "of", rn_type_go(st, yr_get(t, "of"), depth));
+    } else if (ys_eq_lit(k, "tarrfix")) {
+        return yr(3, "k", ys("tarrfix"), "of", rn_type_go(st, yr_get(t, "of"), depth), "n", yr_get(t, "n"));
+    } else if (ys_eq_lit(k, "topt")) {
+        return yr(2, "k", ys("topt"), "of", rn_type_go(st, yr_get(t, "of"), depth));
+    } else if (ys_eq_lit(k, "tmap")) {
+        return yr(3, "k", ys("tmap"), "key", rn_type_go(st, yr_get(t, "key"), depth), "of", rn_type_go(st, yr_get(t, "of"), depth));
+    } else if (ys_eq_lit(k, "trec")) {
+        return yr(2, "k", ys("trec"), "fields", rn_type_fields(st, yr_get(t, "fields"), depth));
+    } else if (ys_eq_lit(k, "tfunc")) {
+        return yr(3, "k", ys("tfunc"), "args", rn_type_list(st, yr_get(t, "args"), depth), "ret", rn_type_go(st, yr_get(t, "ret"), depth));
+    } else if (ys_eq_lit(k, "tparams")) {
+        return yr(2, "k", ys("tparams"), "ts", rn_type_list(st, yr_get(t, "ts"), depth));
+    } else if (ys_eq_lit(k, "tunion")) {
+        return yr(2, "k", ys("tunion"), "ts", rn_union_flat(rn_type_list(st, yr_get(t, "ts"), depth)));
+    } else {
+        return t;
+    }
+}
+
+Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth) {
+    Yv *tys = yr_get(st, "tys");
+    long i = yv_len(tys) - 1;
+    long found = -1;
+    while (i >= 0) {
+        if (ys_eq(yr_get(ya_get(tys, i), "name"), name)) {
+            found = i;
+            i = -1;
+        }
+        i = i - 1;
+    }
+    /* (depth bounds a cyclic alias: `type L = {next: L?}` stays unresolved) */
+    if (found < 0 || depth > 32) {
+        return t;
+    } else {
+        return rn_type_go(st, yr_get(ya_get(tys, found), "typ"), depth + 1);
+    }
+}
+
+Yv *rn_type_list(Yv *st, Yv *ts, long depth) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(ts)) {
+        out = ya_push(out, rn_type_go(st, ya_get(ts, i), depth));
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *rn_type_fields(Yv *st, Yv *fs, long depth) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(fs)) {
+        Yv *f = ya_get(fs, i);
+        out = ya_push(out, yr(2, "name", yr_get(f, "name"), "typ", rn_type_go(st, yr_get(f, "typ"), depth)));
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *rn_union_flat(Yv *ts) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(ts)) {
+        Yv *t = ya_get(ts, i);
+        if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+            Yv *inner = yr_get(t, "ts");
+            for (long j = 0; j < yv_len(inner); j++) out = ya_push(out, ya_get(inner, j));
+        } else {
+            out = ya_push(out, t);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *rn_drop_typedefs(Yv *stmts) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        Yv *s = ya_get(stmts, i);
+        if (!ys_eq_lit(yr_get(s, "k"), "typedef")) {
+            out = ya_push(out, s);
+        }
+        i = i + 1;
+    }
+    return out;
 }
 
 /* Redefinition shadows, exactly as it does in the VM: `def f ... def f ...`
@@ -264,7 +454,7 @@ Yv *rn_block(Yv *stmts, Yv *st) {
     stmts = rn_shadow_dups(stmts);
     st = rn_push(st);
     st = rn_prepass(stmts, st);
-    Yv *r = rn_list(stmts, st);
+    Yv *r = rn_list(rn_drop_typedefs(stmts), st);
     st = rn_pop(yr_get(r, "st"));
     return yr(2, "st", st, "stmts", yr_get(r, "nodes"));
 }
@@ -344,9 +534,46 @@ Yv *rn_node(Yv *node, Yv *st) {
         return rn_forrange(node, st);
     } else if (ys_eq_lit(k, "for")) {
         return rn_for(node, st);
+    } else if (ys_eq_lit(k, "sliceassign")) {
+        return rn_sliceassign(node, st);
+    } else if (ys_eq_lit(k, "rectest")) {
+        return rn_typed_e(node, st);
+    } else if (ys_eq_lit(k, "narrow")) {
+        return rn_typed_e(node, st);
+    } else if (ys_eq_lit(k, "matchend")) {
+        return rn_matchend(node, st);
     } else {
         return yr(2, "st", st, "node", node);
     }
+}
+
+/* rectest / narrow: an operand plus the (alias-resolved) type it tests. */
+Yv *rn_typed_e(Yv *node, Yv *st) {
+    Yv *e = rn_node(yr_get(node, "e"), st);
+    return yr(2, "st", yr_get(e, "st"), "node",
+              yr(5, "k", yr_get(node, "k"), "e", yr_get(e, "node"), "typ",
+                 rn_type(yr_get(e, "st"), yr_get(node, "typ")), "line",
+                 yr_get(node, "line"), "col", yr_get(node, "col")));
+}
+
+Yv *rn_matchend(Yv *node, Yv *st) {
+    Yv *e = rn_node(yr_get(node, "e"), st);
+    return yr(2, "st", yr_get(e, "st"), "node",
+              yr(5, "k", ys("matchend"), "e", yr_get(e, "node"), "cover",
+                 rn_types(yr_get(e, "st"), yr_get(node, "cover")), "line",
+                 yr_get(node, "line"), "col", yr_get(node, "col")));
+}
+
+Yv *rn_sliceassign(Yv *node, Yv *st) {
+    Yv *a = rn_node(yr_get(node, "arr"), st);
+    Yv *l = rn_node(yr_get(node, "lo"), yr_get(a, "st"));
+    Yv *h = rn_node(yr_get(node, "hi"), yr_get(l, "st"));
+    Yv *v = rn_node(yr_get(node, "v"), yr_get(h, "st"));
+    return yr(2, "st", yr_get(v, "st"), "node",
+              yr(7, "k", ys("sliceassign"), "arr", yr_get(a, "node"), "lo",
+                 yr_get(l, "node"), "hi", yr_get(h, "node"), "v",
+                 yr_get(v, "node"), "line", yr_get(node, "line"), "col",
+                 yr_get(node, "col")));
 }
 
 /* One def per AST shape (see rn_node note). Each takes the bare node hole
@@ -382,9 +609,14 @@ Yv *rn_bin(Yv *node, Yv *st) {
 Yv *rn_call(Yv *node, Yv *st) {
     Yv *c = rn_node(yr_get(node, "callee"), st);
     Yv *a = rn_list(yr_get(node, "args"), yr_get(c, "st"));
+    Yv *cn = yr_get(c, "node");
+    Yv *args = yr_get(a, "nodes");
+    if (ys_eq_lit(yr_get(cn, "k"), "id")) {
+        args = rn_fill_defaults(rn_find_defaults(yr_get(a, "st"), yr_get(cn, "v")), args);
+    }
     return yr(2, "st", yr_get(a, "st"), "node",
-              yr(5, "k", ys("call"), "callee", yr_get(c, "node"), "args",
-                 yr_get(a, "nodes"), "line", yr_get(node, "line"), "col",
+              yr(5, "k", ys("call"), "callee", cn, "args",
+                 args, "line", yr_get(node, "line"), "col",
                  yr_get(node, "col")));
 }
 
@@ -752,7 +984,7 @@ Yv *rn_decl_func_go(Yv *node, Yv *u, Yv *st) {
 Yv *rn_decl_func_finish(Yv *node, Yv *u, Yv *fv, Yv *st) {
     return yr(2, "st", st, "node",
               yr(7, "k", ys("decl"), "kind", yr_get(node, "kind"), "name", u,
-                 "typ", yr_get(node, "typ"), "v", fv, "line",
+                 "typ", rn_type(st, yr_get(node, "typ")), "v", fv, "line",
                  yr_get(node, "line"), "col", yr_get(node, "col")));
 }
 
@@ -769,7 +1001,7 @@ Yv *rn_decl_val_bind(Yv *node, Yv *v, Yv *st) {
 Yv *rn_decl_val_finish(Yv *node, Yv *v, Yv *uniq, Yv *st) {
     return yr(2, "st", st, "node",
               yr(7, "k", ys("decl"), "kind", yr_get(node, "kind"), "name",
-                 uniq, "typ", yr_get(node, "typ"), "v", v, "line",
+                 uniq, "typ", rn_type(st, yr_get(node, "typ")), "v", v, "line",
                  yr_get(node, "line"), "col", yr_get(node, "col")));
 }
 
@@ -844,8 +1076,8 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
      * (fbody is kept for 1:1 signature parity but never read, as in Y.) */
     (void)fbody;
     return yr(2, "st", st, "node",
-              yr(7, "k", ys("func"), "params", params, "ptypes", fptypes,
-                 "ret", fret, "body",
+              yr(7, "k", ys("func"), "params", params, "ptypes", rn_types(st, fptypes),
+                 "ret", rn_type(st, fret), "body",
                  yr(4, "k", ys("block"), "stmts", stmts, "line",
                     yv_long(fline), "col", yv_long(fcol)),
                  "line", yv_long(fline), "col", yv_long(fcol)));
@@ -858,7 +1090,7 @@ Yv *rename_program(Yv *ast) {
 
 Yv *rename_program_go(Yv *stmts, long line, long col) {
     /* NOTE: fields passed as values (see rn_func note). */
-    Yv *st = yr(2, "scopes", yav(1, yav(0)), "n", yv_long(1));
+    Yv *st = yr(4, "scopes", yav(1, yav(0)), "n", yv_long(1), "tys", yav(0), "dfl", yav(0));
     Yv *b = rn_block(stmts, st);
     return yr(4, "k", ys("block"), "stmts", yr_get(b, "stmts"), "line",
               yv_long(line), "col", yv_long(col));

@@ -16,5 +16,7 @@ Yv *tdisp(Yv *t);             /* user-visible rendering (typeof) */
 Yv *tdisp_fnval(Yv *t);       /* "<function (params)->(ret)>" shape */
 int teq(Yv *a, Yv *b);        /* strict type equality (branch agreement) */
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);  /* record-literal upsert */
+Yv *narrow_type(Yv *s, Yv *t); /* static type of a match `narrow` node */
+Yv *type_names(Yv *t);        /* field names a record type / pattern tests */
 
 #endif /* TYPES_H */

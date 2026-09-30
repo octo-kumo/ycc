@@ -124,4 +124,20 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
 Yv *rename_program(Yv *ast);
 Yv *rename_program_go(Yv *stmts, long line, long col);
 
+/* defaults, type aliases, match / slice-assign nodes */
+Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func);
+Yv *rn_find_defaults(Yv *st, Yv *name);
+Yv *rn_fill_defaults(Yv *vals, Yv *args);
+Yv *rn_type(Yv *st, Yv *t);
+Yv *rn_types(Yv *st, Yv *ts);
+Yv *rn_type_go(Yv *st, Yv *t, long depth);
+Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth);
+Yv *rn_type_list(Yv *st, Yv *ts, long depth);
+Yv *rn_type_fields(Yv *st, Yv *fs, long depth);
+Yv *rn_union_flat(Yv *ts);
+Yv *rn_drop_typedefs(Yv *stmts);
+Yv *rn_typed_e(Yv *node, Yv *st);
+Yv *rn_matchend(Yv *node, Yv *st);
+Yv *rn_sliceassign(Yv *node, Yv *st);
+
 #endif /* RENAME_H */
