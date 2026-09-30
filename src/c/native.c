@@ -19,6 +19,17 @@
  * name as a builtin; the 1:1 name wins, so silence the clash. */
 #pragma GCC diagnostic ignored "-Wbuiltin-declaration-mismatch"
 
+/* Portability: no special subset is required of the Y twin any more. It is
+ * hand-maintained alongside this file, not a machine translation, so both
+ * compilers see the same constructs — dot chains, dot-assign and
+ * short-circuit `&&` all work. What still binds is PORTING.md's 1:1
+ * contract: same defs, same order, same arms.
+ *
+ * House style in src/y/native.y: a subexpression read more than once is
+ * bound to a local (`let k = node.k;`) instead of re-read inline. The binds
+ * are not free to remove either: every `let` costs a frame slot, so dropping
+ * one changes the emitted `sub $N, %rsp`. */
+
 /* ── imported (flattened module calls; PORTING.md rule 6) ─────────────── */
 
 /* src/y/arch_x64.y */
@@ -284,11 +295,10 @@ Yv *find_dup(Yv *defs);
 Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
 Yv *emit_program(Yv *ast, Yv *imports);
 
-/* ── native import resolution ─────────────────────────────────────────── */
-/* Unlike the C backend (which wraps modules in IIFEs returning maps —
- * impossible without a heap), the native splicer INLINES module sources:
- * `import io from "path"` splices the module's text in place and drops its
- * `export` line. References `io.x` are rewritten to plain `x` by
+/* ── native import resolution ───────────────────────────────────────────
+ * An import is a COMPILE-TIME text splice, and both compilers splice the
+ * same way: `import io from "path"` inlines the module's source in place and
+ * drops its `export` line. References `io.x` are rewritten to plain `x` by
  * strip_namespaces (AST-level, so strings are untouched). Module top-levels
  * must be defs; duplicate def names across the splice are a loud error. */
 
@@ -391,7 +401,6 @@ Yv *norm_path(Yv *p) {
     Yv *out = yav(0);
     long i = 0;
     while (i < yv_len(parts)) {
-        /* NOTE: bound once — `parts[i]` inline misparses on the C backend. */
         Yv *seg = ya_get(parts, i);
         if (ys_eq_lit(seg, ".")) {
             ;
@@ -408,7 +417,6 @@ int seen_has(Yv *seen, Yv *full) {
     long i = 0;
     int found = 0;
     while (i < yv_len(seen)) {
-        /* NOTE: bound once — `seen[i]` inline misparses on the C backend. */
         Yv *e = ya_get(seen, i);
         if (ys_eq(e, full)) {
             found = 1;
@@ -593,9 +601,6 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                         Yv *sub =
                             native_resolve_seen(mod_src2, mod_dir, depth + 1,
                                                 seen);
-                        /* NOTE: each bound once — `x.y` on a call result
-                         * misparses on the C backend (it reads `f().y`
-                         * as `f(.y)`). */
                         Yv *subsrc = yr_get(sub, "src");
                         Yv *subns = yr_get(sub, "imports");
                         Yv *subseen = yr_get(sub, "seen");
@@ -621,9 +626,9 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                 }
                 ;
             } else {
-                /* NOTE: no empty if-arms here — the C backend corrupts the
-                 * heap on empty blocks. Export lines are dropped (defs are
-                 * spliced; uses are rewritten by strip_namespaces). */
+                /* NOTE: no empty if-arms here — keep the `;` filler.
+                 * Export lines are dropped (defs are spliced; uses are
+                 * rewritten by strip_namespaces). */
                 if (!ys_eq_lit(ys_substr(trimmed, 0, 7), "export ")) {
                     out_lines = ya_push(out_lines, line);
                     ;
@@ -1360,8 +1365,6 @@ Yv *strip_list(Yv *nodes, Yv *imports) {
 }
 
 Yv *strip_ns(Yv *node, Yv *imports) {
-    /* NOTE: kind bound once — `node.k` inline in a call misparses on the
-     * C backend (it reads `f(x.k)` as `f((x).k)`... actually as `f(.k)`). */
     Yv *k = yr_get(node, "k");
     if (ys_eq_lit(k, "dot")) {
         Yv *dobj = yr_get(node, "obj");
@@ -1800,8 +1803,7 @@ Yv *infer(Yv *st, Yv *node) {
     } else if (ys_eq_lit(k, "opassign")) {
         return infer(st, yr_get(node, "tgt"));
     } else if (ys_eq_lit(k, "rec")) {
-        /* record literal: field types from the values (checker validated).
-         * NOTE: each bound once — `x.y[i]` chains misparse on the C VM. */
+        /* record literal: field types from the values (checker validated). */
         Yv *melems = yr_get(node, "vals");
         Yv *mkeys = yr_get(node, "keys");
         if (yv_len(melems) == 0) {
@@ -1814,7 +1816,7 @@ Yv *infer(Yv *st, Yv *node) {
             long mi = 0;
             while (mi < yv_len(melems)) {
                 Yv *mf = infer(st, ya_get(melems, mi));
-                /* NOTE: bound once — `x.y[i]` chains misparse on the C VM. */
+                /* mk is read twice: the `...` test, then the merge. */
                 Yv *mk = ya_get(mkeys, mi);
                 if (ys_eq_lit(mk, "...")) {
                     if (ys_eq_lit(yr_get(mf, "k"), "trec")) {
@@ -2005,7 +2007,8 @@ Yv *infer_decl(Yv *st, Yv *node) {
         return yr(3, "k", ys("tfunc"), "args", yav(0), "ret",
                   yr(1, "k", ys("tvoid")));
     } else {
-        /* NOTE: nested ifs — the C VM evaluates `&&` eagerly. */
+        /* an annotated `let` takes the declared type; otherwise infer the
+         * initializer's */
         if (ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tnone")) {
             return infer(st, yr_get(node, "v"));
         } else {
@@ -2033,8 +2036,7 @@ Yv *uses_scan_node(Yv *node, Yv *out) {
     Yv *k = yr_get(node, "k");
     if (ys_eq_lit(k, "call")) {
         /* scan callee + args (argv() could nest inside an argument).
-         * NOTE: each bound once — `node.callee.k` inline misparses on the
-         * C backend (reads `f(x.k)` as `f(.k)`). */
+         * ncallee is read three times: the argv test, the id test, the walk. */
         Yv *ncallee = yr_get(node, "callee");
         Yv *nargs = yr_get(node, "args");
         Yv *found = out;
@@ -2731,10 +2733,10 @@ Yv *gen_str_const(Yv *st, Yv *s) {
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *lbl = arch_str_label(yv_l(yr_get(r, "uid")));
-    /* NOTE: push-chain over a let-bound [] (not a literal): the checker
-     * rejects heterogeneous array literals ([str, long, str]) AND pushes
-     * onto a direct [] literal; pushes onto a let-bound [] unify quietly
-     * and the runtime value is identical. */
+    /* NOTE: push-chain over a let-bound [] (not a literal). The checker
+     * rejects heterogeneous array literals ([str, long, str]); these three
+     * parts are all str, so a literal would check too — the push-chain is
+     * just the shape the other node-list builders use. */
     Yv *rod0 = yav(0);
     rod0 = ya_push(rod0, lbl);
     rod0 = ya_push(rod0, ys_long(yv_len(s)));
@@ -2828,7 +2830,7 @@ Yv *gen_cap_ptr(Yv *st, Yv *name) {
 
 /* A captured variable lives in ONE heap cell shared by its binding and
  * every closure over it: writes through either are visible through both —
- * the scope is shared, exactly as in the VM and the compiled C runtime
+ * the scope is shared, exactly as in the C copy's value model (yv.c)
  * (the old native model copied the value at creation and could not even
  * write to a capture). box_capture runs at the closure's creation site,
  * once per captured name: the FIRST capture allocates the cell and
@@ -2885,9 +2887,8 @@ Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
     return emit(st, ys("    pop %rax"));
 }
 
-/* Indirect call through a closure value produced by `callee`.
- * range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin
- * the C engines already have). */
+/* range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin;
+ * y_range in std/rt.y). */
 Yv *gen_range(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
     st = emit(st, ys("    call y_range"));
@@ -3060,6 +3061,7 @@ Yv *gen_union_str_rax(Yv *st, Yv *t) {
     return emit(st, ys_cat(yr_get(rdone, "lbl"), ys(":")));
 }
 
+/* Indirect call through a closure value produced by `callee`. */
 Yv *gen_indirect(Yv *st, Yv *node, Yv *callee) {
     Yv *args = yr_get(node, "args");
     long n = yv_len(args);
@@ -3242,7 +3244,7 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
 
 /* AUTO-STRINGIFY `+`: when a string meets a non-string, stringify the other
  * side (y_long_tostr / y_bool_tostr) and concatenate — the same semantics
- * the C runtime's y_add gives. tstr+tstr is a plain concat; tstr+tunk falls
+ * types.y's typeof_arith gives. tstr+tstr is a plain concat; tstr+tunk falls
  * back to the raw pointer concat (the old behavior) since the runtime type
  * is unknown statically. */
 Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
@@ -3476,9 +3478,9 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
     } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) &&
                (ys_eq_lit(yr_get(lt, "k"), "tarr") ||
                 ys_eq_lit(yr_get(rt, "k"), "tarr"))) {
-        /* Arrays compare STRUCTURALLY (length then elements), like the VM
-         * and the compiled C runtime — `arr == []` is an emptiness test,
-         * not a pointer comparison. String elements compare by value. */
+        /* Arrays compare STRUCTURALLY (length then elements), matching
+         * yv.c's yv_eq for Y_ARR — `arr == []` is an emptiness test, not a
+         * pointer comparison. String elements compare by value. */
         Yv *elt = yr(1, "k", ys("tunk"));
         if (ys_eq_lit(yr_get(lt, "k"), "tarr")) {
             elt = yr_get(lt, "of");
@@ -3531,8 +3533,9 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         } else if (ys_eq_lit(op, "/")) {
             /* idiv raises #DE on LONG_MIN / -1 (the quotient does not fit),
              * so divisor -1 is handled as a negation instead: neg of
-             * LONG_MIN wraps back to LONG_MIN, which is what the VM and the
-             * C runtime produce, and every other value negates exactly. */
+             * LONG_MIN wraps back to LONG_MIN (the language's rule for the
+             * whole long range, NATIVE.md), and every other value negates
+             * exactly. */
             st = emit(st, ys("    test %rcx, %rcx"));
             st = emit(st, ys("    jz y_div_zero"));
             Yv *d1 = next_loc(st);
@@ -3736,7 +3739,7 @@ Yv *gen_print(Yv *st, Yv *node) {
         return emit(st, ys("    xor %eax, %eax"));
     } else if (ys_eq_lit(yr_get(t, "k"), "tfunc")) {
         /* A function value has no printable contents; show its signature
-         * (the VM prints `<function SIG>` too, with `<inferred>` returns). */
+         * (`<function (params)->(ret)>`, types.y tdisp_fnval). */
         st = gen(st, pa0);
         st = gen_str_const(
             st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(t)), ys(">")));
@@ -3856,10 +3859,6 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t) {
     return emit(st, ys("    add $16, %rsp"));
 }
 
-/* acc = acc + <constant>, with the layout above still in place.
- * Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
- * y_arr_cat copies both sides; the one-element side is built with the
- * ordinary array literal emitter, so `arr + v` evaluates v exactly once. */
 /* `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
  * (types.y typeof_cons keeps even array-typed elements whole). */
 Yv *gen_cons(Yv *st, Yv *node) {
@@ -3878,6 +3877,9 @@ Yv *gen_cons(Yv *st, Yv *node) {
     return emit(st, ys("    add $24, %rsp"));
 }
 
+/* Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
+ * y_arr_cat copies both sides; the one-element side is built with the
+ * ordinary array literal emitter, so `arr + v` evaluates v exactly once. */
 Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     Yv *ln = yr_get(node, "line");
     Yv *cl = yr_get(node, "col");
@@ -3935,6 +3937,7 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     return emit(st, ys("    add $24, %rsp"));
 }
 
+/* acc = acc + <constant>, with the layout above still in place. */
 Yv *gen_acc_cat_const(Yv *st, Yv *s) {
     st = emit(st, ys("    mov (%rsp), %rax"));
     st = emit(st, ys("    push %rax"));
@@ -3981,8 +3984,9 @@ Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft) {
             st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(ft)), ys(">")));
         st = emit(st, ys("    mov %rax, %rdx"));
     } else {
-        /* Arrays, records-in-records, options: no recursive formatter
-         * yet. */
+        /* Arrays, options, maps and records nested in a RECORD: printed as
+         * their type name — only gen_val_tostr_rax (the value formatter)
+         * walks them recursively. */
         st = gen_str_const(st, ys_cat(ys_cat(ys("<"), tdisp(ft)), ys(">")));
         st = emit(st, ys("    mov %rax, %rdx"));
     }
@@ -4041,7 +4045,6 @@ long capture_off(Yv *st) {
 Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
     Yv *label = ys("");
     int indirect = 0;
-    /* VOID law: mixed-type if arms make this a statement; no filler tails needed. */
     if (ys_eq_lit(name, "self")) {
         label = yr_get(st, "self_label");
     } else {
@@ -4155,7 +4158,7 @@ Yv *gen_for(Yv *st, Yv *node) {
 }
 
 Yv *gen_forrange(Yv *st, Yv *node) {
-    /* for (x in lo..hi) body — half-open, like the C VM.
+    /* for (x in lo..hi) body — half-open: lo inclusive, hi exclusive.
      * Slot layout: [var][limit]; the limit is evaluated once. */
     long voff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long loff = (yv_l(yr_get(st, "slots")) + 2) * -8;
@@ -4398,12 +4401,6 @@ int is_void_node(Yv *n) {
     return ys_eq_lit(yr_get(n, "k"), "void");
 }
 
-/* Record literal { k: v, ... }: heap-allocate 8*n bytes (arena, static
- * size — like a dynamic array without the header) and store each value.
- * The VALUE is the heap address (8 bytes, first-class: locals, params,
- * returns all just copy the address). Field k lives at addr+8k.
- * (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
- * empty maps are rejected by the checker anyway.) */
 /* Position of `name` in a record literal's merged field list, or -1. */
 long mfield_idx(Yv *names, Yv *name) {
     long i = 0;
@@ -4421,8 +4418,14 @@ long mfield_idx(Yv *names, Yv *name) {
     return out;
 }
 
+/* Record literal { k: v, ... }: heap-allocate a block for the values + the
+ * shape table, then store each value. The VALUE is the record address
+ * (8 bytes, first-class: locals, params, returns all just copy it). Field k
+ * lives at record+8k; the table pointer sits at record-8, which is what
+ * y_dot_lookup reads (`mov -8(%rbx), %r14`).
+ * (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
+ * empty maps are rejected by the checker anyway.) */
 Yv *gen_reclit(Yv *st, Yv *node) {
-    /* NOTE: bound once — `node.vals[i]` inline misparses on the C VM. */
     Yv *mvals = yr_get(node, "vals");
     Yv *mkeys = yr_get(node, "keys");
     long nent = yv_len(mvals);
@@ -4466,8 +4469,8 @@ Yv *gen_reclit(Yv *st, Yv *node) {
         ni = ni + 1;
     }
     long n = yv_len(names);
-    /* Shape tag for dynamic field reads (see y_dot_lookup note in
-     * arch_x64.y): every record carries its field table; field i lives
+    /* Shape tag for dynamic field reads (y_dot_lookup in arch_x64.y reads
+     * it): every record carries its field table; field i lives
      * at tag_base+8+i*8 and the value (base+8) keeps today's offsets,
      * so statically-precise reads are bit-identical. Table label per
      * site (uid); table rows are decimal quads (both assemblers take
@@ -4512,7 +4515,7 @@ Yv *gen_reclit(Yv *st, Yv *node) {
     st = emit(st, ys("    push %rcx"));
     long i = 0;
     while (i < nent) {
-        /* NOTE: bound once — `x.y[i]` chains misparse on the C VM. */
+        /* mv is walked twice (gen, then infer), so bind it once. */
         Yv *mv = ya_get(mvals, i);
         Yv *mk = ya_get(mkeys, i);
         st = gen(st, mv);
@@ -4728,8 +4731,8 @@ Yv *gen_decl(Yv *st, Yv *node) {
              * bindings share them (no copy-on-store). Cloning here made
              * every `let x = <call returning [T]>` O(n), so threading an
              * accumulator through helpers was O(n^2) — the assembler's
-             * patch loop spent 650MB on a 20KB output. The VM and the C
-             * runtime alias too, so all three engines agree. */
+             * patch loop spent 650MB on a 20KB output. The C copy's value
+             * model aliases too (yv.c). */
             long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
             st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
                                  ys("(%rbp)")));
@@ -4757,7 +4760,7 @@ Yv *gen_assign(Yv *st, Yv *node) {
     Yv *e = env_find(st, yr_get(node, "name"));
     /* Reference semantics: arrays and records are heap values shared by
      * every binding that names them (no copy-on-store) — the same model
-     * the VM and the compiled C runtime use. A captured variable lives in
+     * the C copy's value model uses (yv.c). A captured variable lives in
      * one shared heap cell (box_capture), so its store goes through the
      * cell and is visible in the capturing scope too. */
     st = gen(st, yr_get(node, "v"));
@@ -4851,8 +4854,7 @@ Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz) {
 }
 
 /* Radix literals (0x../0b..) reach the emitter as their source text; the
- * assembler only understands plain decimal immediates, so normalize here.
- * NOTE: nested ifs, not `||` (see is_digit_ch note in asm.y). */
+ * assembler only understands plain decimal immediates, so normalize here. */
 long hexval_ch(Yv *c) {
     long o = ys_ord(c);
     long v = 0;
@@ -5221,9 +5223,9 @@ Yv *gen_index(Yv *st, Yv *node) {
  * plain variable, a nested place (`a[0].f`), a chain (`x.y.f`). Records
  * are heap addresses; field i lives at addr+8i (same layout the static
  * gen_dot read uses), so the write is: value -> (rec + 8*idx). The object
- * runs first, then the value — the VM's order. Reference semantics: a
- * field write is observable through every binding (same as the VM and the
- * compiled C runtime). */
+ * runs first, then the value. Reference semantics: a field write is
+ * observable through every binding (the C copy's value model shares records
+ * the same way). */
 Yv *gen_dotassign(Yv *st, Yv *node) {
     Yv *dobj = yr_get(node, "obj");
     Yv *dkey = yr_get(node, "key");
@@ -5542,8 +5544,7 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
     /* In-place array forms. `*=` prepends one element. `+=` pushes one
      * element — or, when the VALUE is an array, appends its elements one
      * by one (its length is captured first, so `a += a` is safe). The
-     * checker enforces matching element types; the same value-shaped rule
-     * runs in the VM and the compiled C runtime. */
+     * checker enforces matching element types (types.y opassign_check). */
     Yv *tgt = yr_get(node, "tgt");
     Yv *op = yr_get(node, "op");
     Yv *v = yr_get(node, "v");
@@ -5630,9 +5631,9 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
     /* Fixed arrays are heap headers now: one layout for both kinds.
      * Fixed uses the static bound n; heap uses the runtime len.
      * Reference semantics: `x[i] = v` writes through to the array every
-     * binding shares — params included (the VM and the compiled C runtime
-     * alias the same way). The base is any array expression and runs once
-     * (the VM's order: base, index, value). No write-back to the base:
+     * binding shares — params included (the C copy's value model aliases
+     * the same way). The base is any array expression and runs once, in
+     * base/index/value order. No write-back to the base:
      * the header pointer never moves, so the store through it is already
      * visible through every binding. */
     Yv *garr = yr_get(node, "arr");
@@ -5714,8 +5715,8 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
     }
 }
 
-/* Array header in %rax -> "[e0, e1, ...]" in %rax, matching the VM's
- * tostring(). Slots: [src][acc][i]. */
+/* Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
+ * gives. Slots: [src][acc][i]. */
 Yv *gen_arr_tostr_rax(Yv *st, Yv *elty) {
     long soff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
@@ -5816,10 +5817,9 @@ long arr_elem_bytes(Yv *t) {
     }
 }
 
-/* Load element [idx] of the array based at `base` into `dst`.
- * Element load: `base` is the ARRAY HEADER register, `idx` the index
- * register, `dst` the result. Headers are {len, cap, data} with the
- * elements in a separate block, so the data pointer rides through %dst. */
+/* Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
+ * the index register, `dst` the result. Headers are {len, cap, data} with
+ * the elements in a separate block, so the data pointer rides through %dst. */
 Yv *elem_load(long esz, Yv *base, Yv *idx, Yv *dst) {
     if (esz == 1) {
         return ys_cat(
@@ -5893,7 +5893,7 @@ long arr_alloc_size(long esz, long n) {
 long arr_header_size(void) { return 24; }
 
 Yv *gen_dot(Yv *st, Yv *node) {
-    /* NOTE: bound once — `node.obj` inline misparses on the C VM. */
+    /* dobj is read twice (infer, then gen). */
     Yv *dobj = yr_get(node, "obj");
     Yv *dkey = yr_get(node, "key");
     Yv *t = infer(st, dobj);
@@ -5940,7 +5940,7 @@ long rec_field_idx(Yv *t, Yv *key) {
         Yv *fs = yr_get(t, "fields");
         long i = 0;
         while (i < yv_len(fs)) {
-            /* NOTE: bound once — `x.y[i]` chains misparse on the C VM. */
+            /* f is read twice: the name compare, then the field's type. */
             Yv *f = ya_get(fs, i);
             if (ys_eq(yr_get(f, "name"), key)) {
                 idx = i;
@@ -5957,8 +5957,10 @@ long rec_field_idx(Yv *t, Yv *key) {
     return idx;
 }
 
-/* Heap array literal [v, ...]: alloc 16+8n, store len/cap/elems. The header
- * pointer (an 8-byte value like any other) is the expression value. */
+/* Heap array literal [v, ...]: a data block of arr_alloc_size(esz, n) and a
+ * separate arr_header_size() header {len, cap, data}; the values are stored
+ * into the data block through the header's pointer. The header address (an
+ * 8-byte value like any other) is the expression value. */
 Yv *gen_array(Yv *st, Yv *node) {
     return gen_array_esz(st, node, arr_elem_bytes(infer(st, node)));
 }
@@ -6121,8 +6123,7 @@ Yv *gen_tonum(Yv *st, Yv *node) {
 
 Yv *gen_tostring(Yv *st, Yv *node) {
     /* dispatch on the static type: long/bool need conversion, str is
-     * identity NOTE: bind args once — `node.args[0]` inline misparses on
-     * the C VM. */
+     * identity */
     Yv *targs = yr_get(node, "args");
     Yv *a0 = ya_get(targs, 0);
     Yv *t = infer(st, a0);
@@ -6294,8 +6295,7 @@ Yv *gen_split(Yv *st, Yv *node) {
 
 Yv *gen_puts(Yv *st, Yv *node) {
     /* puts(v): write the value WITHOUT trailing newline (C semantics:
-     * fputs + flush). Like print but no newline; returns nothing (void).
-     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+     * fputs + flush). Like print but no newline; returns nothing (void). */
     Yv *pargs = yr_get(node, "args");
     Yv *pa = ya_get(pargs, 0);
     st = gen(st, pa);
@@ -6314,8 +6314,7 @@ Yv *gen_puts(Yv *st, Yv *node) {
 
 Yv *gen_eputs(Yv *st, Yv *node) {
     /* eputs(v): like puts, but on fd 2. Profiling/diagnostic output must
-     * never land in stdout (where `-S` assembly and program output live).
-     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+     * never land in stdout (where `-S` assembly and program output live). */
     Yv *pargs = yr_get(node, "args");
     Yv *pa = ya_get(pargs, 0);
     st = gen(st, pa);
@@ -6348,8 +6347,7 @@ Yv *gen_heap_used(Yv *st, Yv *node) {
 
 Yv *gen_sleep(Yv *st, Yv *node) {
     /* sleep(ms): suspend the caller for ms milliseconds (nanosleep, EINTR
-     * cannot happen in single-threaded code, so one syscall is enough).
-     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+     * cannot happen in single-threaded code, so one syscall is enough). */
     Yv *sargs = yr_get(node, "args");
     Yv *sa = ya_get(sargs, 0);
     st = gen(st, sa);
@@ -6357,8 +6355,7 @@ Yv *gen_sleep(Yv *st, Yv *node) {
 }
 
 Yv *gen_exit(Yv *st, Yv *node) {
-    /* exit(code): terminate the process with the exit-code syscall.
-     * NOTE: bind args once — `node.args[0]` inline misparses on the C VM. */
+    /* exit(code): terminate the process with the exit-code syscall. */
     Yv *eargs = yr_get(node, "args");
     Yv *ea = ya_get(eargs, 0);
     st = gen(st, ea);
@@ -6395,8 +6392,7 @@ Yv *gen_exit(Yv *st, Yv *node) {
  * returns bool. Both are straight-line syscalls, no libc. */
 
 Yv *gen_argv(Yv *st, Yv *node) {
-    Yv *unused = node;
-    (void)unused;
+    (void)node; /* native.y has no statement here; the node is unread */
     return emit(st, ys("    call y_argv"));
 }
 
@@ -6643,10 +6639,11 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     /* NOTE: append to f.bodies, NOT st.bodies. Emitting this body can add
      * bodies of its own (a nested capturing def is emitted at its creation
      * site), and those land in f.bodies. Using st.bodies dropped them
-     * whenever push had to GROW the array: the C runtime shares the grown
-     * buffer between the two record copies, the native backend rebinds only
-     * f.bodies (see NATIVE.md "rebind: a = push(a, v)"), so the two
-     * engines disagreed and ycc emitted calls to labels it never defined. */
+     * whenever push had to GROW the array: the C copy's value model shares
+     * the grown buffer between the two record copies, the native backend
+     * rebinds only f.bodies (see NATIVE.md "rebind: a = push(a, v)"), so the
+     * two compilers disagreed and ycc emitted calls to labels it never
+     * defined. */
     Yv *bodies =
         ya_push(yr_get(f, "bodies"), ys_join(code, ys("\n")));
     return yr(11, "out", yr_get(st, "out"), "rodata", prodata, "uid",

@@ -10,9 +10,16 @@
 // Every value is 8 bytes (long/bool/ptr/str-address); expression values in
 // %rax; locals at negative rbp offsets; Y-function args pushed on the stack.
 //
-// Portability: this file stays in the portable Y subset (parsed by the C
-// compiler): no `x.y[i]` chains, no dot-assign, no `&&`-guarded field access,
-// no variable named `self`.
+// Portability: no special subset is required of this file any more. The C
+// copy (src/c/native.c) is hand-maintained C, not a machine translation, so
+// both compilers see the same constructs — dot chains, dot-assign and
+// short-circuit `&&` all work. What still binds is PORTING.md's 1:1 contract:
+// same defs, same order, same arms.
+//
+// House style here: a subexpression read more than once is bound to a local
+// (`let k = node.k;`) instead of re-read inline. The binds are not free to
+// remove either: every `let` costs a frame slot, so dropping one changes the
+// emitted `sub $N, %rsp`.
 
 import arch from "./arch_x64.y";
 import types from "./types.y";
@@ -22,10 +29,9 @@ import yrt from "./std/rt.y";
 import yprof from "./std/prof_lines.y";
 
 // ── native import resolution ───────────────────────────────────────────
-// Unlike the C backend (which wraps modules in IIFEs returning maps —
-// impossible without a heap), the native splicer INLINES module sources:
-// `import io from "path"` splices the module's text in place and drops its
-// `export` line. References `io.x` are rewritten to plain `x` by
+// An import is a COMPILE-TIME text splice, and the C copy splices the same
+// way: `import io from "path"` inlines the module's source in place and drops
+// its `export` line. References `io.x` are rewritten to plain `x` by
 // strip_namespaces (AST-level, so strings are untouched). Module top-levels
 // must be defs; duplicate def names across the splice are a loud error.
 
@@ -117,7 +123,6 @@ def norm_path(p: str) -> str {
     let out = [];
     let i = 0;
     while (i < len(parts)) {
-        // NOTE: bound once — `parts[i]` inline misparses on the C backend.
         let seg = parts[i];
         if (seg == ".") {
             0
@@ -135,7 +140,6 @@ def seen_has(seen: [str], full: str) -> bool {
     let i = 0;
     let found = false;
     while (i < len(seen)) {
-        // NOTE: bound once — `seen[i]` inline misparses on the C backend.
         let e = seen[i];
         if (e == full) {
             found = true;
@@ -277,9 +281,6 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                         // file); the none case exited above, so unwrap here.
                         let mod_src2 = unwrap(mod_src);
                         let sub = native_resolve_seen(mod_src2, mod_dir, depth + 1, seen);
-                        // NOTE: each bound once — `x.y` on a call result
-                        // misparses on the C backend (it reads `f().y`
-                        // as `f(.y)`).
                         let subsrc = sub.src;
                         let subns = sub.imports;
                         let subseen = sub.seen;
@@ -305,9 +306,9 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                 };
                 0
             } else {
-                // NOTE: no empty if-arms here — the C backend corrupts the
-                // heap on empty blocks. Export lines are dropped (defs are
-                // spliced; uses are rewritten by strip_namespaces).
+                // NOTE: no empty if-arms here — keep the `0;` filler.
+                // Export lines are dropped (defs are spliced; uses are
+                // rewritten by strip_namespaces).
                 if (substr(trimmed, 0, 7) != "export ") {
                     out_lines += line;
                     0
@@ -938,8 +939,6 @@ def strip_list(nodes: [{ k: str }], imports: [str]) -> [{ k: str }] {
 };
 
 def strip_ns(node, imports: [str]) -> { k: str } {
-    // NOTE: kind bound once — `node.k` inline in a call misparses on the
-    // C backend (it reads `f(x.k)` as `f((x).k)`... actually as `f(.k)`).
     let k = node.k;
     if (k == "dot") {
         let dobj = node.obj;
@@ -1225,7 +1224,6 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
         infer(st, node.tgt)
     } else if (k == "rec") {
         // record literal: field types from the values (checker validated).
-        // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
         let melems = node.vals;
         let mkeys = node.keys;
         if (len(melems) == 0) {
@@ -1238,7 +1236,7 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             let mi = 0;
             while (mi < len(melems)) {
                 let mf = infer(st, melems[mi]);
-                // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
+                // mk is read twice: the `...` test, then the merge.
                 let mk = mkeys[mi];
                 if (mk == "...") {
                     if (mf.k == "trec") {
@@ -1403,7 +1401,8 @@ def infer_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     if (node.kind == "def") {
         { k: "tfunc", args: [], ret: { k: "tvoid" } }
     } else {
-        // NOTE: nested ifs — the C VM evaluates `&&` eagerly.
+        // an annotated `let` takes the declared type; otherwise infer the
+        // initializer's
         if (node.typ.k == "tnone") {
             infer(st, node.v)
         } else {
@@ -1431,8 +1430,7 @@ def uses_scan_node(node, out: { argv: bool }) -> { argv: bool } {
     let k = node.k;
     if (k == "call") {
         // scan callee + args (argv() could nest inside an argument).
-        // NOTE: each bound once — `node.callee.k` inline misparses on the
-        // C backend (reads `f(x.k)` as `f(.k)`).
+        // ncallee is read three times: the argv test, the id test, the walk.
         let ncallee = node.callee;
         let nargs = node.args;
         let found = out;
@@ -2059,10 +2057,10 @@ def gen_str_const(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     let r = next_uid(st);
     st = r.st;
     let lbl = arch.arch_str_label(r.uid);
-    // NOTE: push-chain over a let-bound [] (not a literal): the checker
-    // rejects heterogeneous array literals ([str, long, str]) AND pushes
-    // onto a direct [] literal; pushes onto a let-bound [] unify quietly
-    // and the runtime value is identical.
+    // NOTE: push-chain over a let-bound [] (not a literal). The checker
+    // rejects heterogeneous array literals ([str, long, str]); these three
+    // parts are all str, so a literal would check too — the push-chain is
+    // just the shape the other node-list builders use.
     let rod0 = [];
     rod0 += lbl;
     rod0 += tostring(len(s));
@@ -2139,7 +2137,7 @@ def gen_cap_ptr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 
 // A captured variable lives in ONE heap cell shared by its binding and
 // every closure over it: writes through either are visible through both —
-// the scope is shared, exactly as in the VM and the compiled C runtime
+// the scope is shared, exactly as in the C copy's value model (yv.c)
 // (the old native model copied the value at creation and could not even
 // write to a capture). box_capture runs at the closure's creation site,
 // once per captured name: the FIRST capture allocates the cell and
@@ -2187,9 +2185,8 @@ def gen_make_closure(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
     emit(st, "    pop %rax")
 };
 
-// Indirect call through a closure value produced by `callee`.
-// range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin
-// the C engines already have).
+// range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin;
+// y_range in std/rt.y).
 def gen_range(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_range");
@@ -2366,6 +2363,7 @@ def gen_union_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, 
     emit(st, rdone.lbl + ":")
 };
 
+// Indirect call through a closure value produced by `callee`.
 def gen_indirect(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, callee) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let args = node.args;
     let n = len(args);
@@ -2524,7 +2522,7 @@ def gen_logic(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 
 // AUTO-STRINGIFY `+`: when a string meets a non-string, stringify the other
 // side (y_long_tostr / y_bool_tostr) and concatenate — the same semantics
-// the C runtime's y_add gives. tstr+tstr is a plain concat; tstr+tunk falls
+// types.y's typeof_arith gives. tstr+tstr is a plain concat; tstr+tunk falls
 // back to the raw pointer concat (the old behavior) since the runtime type
 // is unknown statically.
 def gen_cat(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, lt: { k: str }, rt: { k: str }) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -2731,9 +2729,9 @@ def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
         // signed setcc forms work on its result against 0.
         gen_str_cmp(st, node, op)
     } else if ((op == "==" || op == "!=") && (lt.k == "tarr" || rt.k == "tarr")) {
-        // Arrays compare STRUCTURALLY (length then elements), like the VM
-        // and the compiled C runtime — `arr == []` is an emptiness test,
-        // not a pointer comparison. String elements compare by value.
+        // Arrays compare STRUCTURALLY (length then elements), matching
+        // yv.c's yv_eq for Y_ARR — `arr == []` is an emptiness test, not a
+        // pointer comparison. String elements compare by value.
         let elt = { k: "tunk" };
         if (lt.k == "tarr") { elt = lt.of; 0; } else { 0; };
         if (elt.k == "tunk") {
@@ -2772,8 +2770,8 @@ def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     } else if (op == "/") {
         // idiv raises #DE on LONG_MIN / -1 (the quotient does not fit), so
         // divisor -1 is handled as a negation instead: neg of LONG_MIN
-        // wraps back to LONG_MIN, which is what the VM and the C runtime
-        // produce, and every other value negates exactly.
+        // wraps back to LONG_MIN (the language's rule for the whole long
+        // range, NATIVE.md), and every other value negates exactly.
         st = emit(st, "    test %rcx, %rcx");
         st = emit(st, "    jz y_div_zero");
         let d1 = next_loc(st);
@@ -2970,7 +2968,7 @@ def gen_print(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
         emit(st, "    xor %eax, %eax")
     } else if (t.k == "tfunc") {
         // A function value has no printable contents; show its signature
-        // (the VM prints `<function SIG>` too, with `<inferred>` returns).
+        // (`<function (params)->(ret)>`, types.y tdisp_fnval).
         st = gen(st, pa0);
         st = gen_str_const(st, "<function " + types.tdisp_fnval(t) + ">");
         st = gen_helper1(st, "y_print_hstr");
@@ -3083,10 +3081,6 @@ def gen_rec_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, lo
     emit(st, "    add $16, %rsp")
 };
 
-// acc = acc + <constant>, with the layout above still in place.
-// Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
-// y_arr_cat copies both sides; the one-element side is built with the
-// ordinary array literal emitter, so `arr + v` evaluates v exactly once.
 // `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
 // (types.y typeof_cons keeps even array-typed elements whole).
 def gen_cons(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -3104,6 +3098,9 @@ def gen_cons(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     emit(st, "    add $24, %rsp")
 };
 
+// Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
+// y_arr_cat copies both sides; the one-element side is built with the
+// ordinary array literal emitter, so `arr + v` evaluates v exactly once.
 def gen_cat_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, lt: { k: str }, rt: { k: str }) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let ln = node.line;
     let cl = node.col;
@@ -3151,6 +3148,7 @@ def gen_cat_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     emit(st, "    add $24, %rsp")
 };
 
+// acc = acc + <constant>, with the layout above still in place.
 def gen_acc_cat_const(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, s: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = emit(st, "    mov (%rsp), %rax");
     st = emit(st, "    push %rax");
@@ -3192,7 +3190,9 @@ def gen_rec_field_str(st: { out: [str], rodata: [[str]], uid: long, fuid: long, 
         st = gen_str_const(st, "<function " + types.tdisp_fnval(ft) + ">");
         st = emit(st, "    mov %rax, %rdx")
     } else {
-        // Arrays, records-in-records, options: no recursive formatter yet.
+        // Arrays, options, maps and records nested in a RECORD: printed as their
+        // type name — only gen_val_tostr_rax (the value formatter) walks
+        // them recursively.
         st = gen_str_const(st, "<" + types.tdisp(ft) + ">");
         st = emit(st, "    mov %rax, %rdx")
     };
@@ -3247,7 +3247,6 @@ def capture_off(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 def gen_direct(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let label = "";
     let indirect = false;
-    // VOID law: mixed-type if arms make this a statement; no filler tails needed.
     if (name == "self") {
         label = st.self_label;
     } else {
@@ -3352,7 +3351,7 @@ def gen_for(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
 };
 
 def gen_forrange(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    // for (x in lo..hi) body — half-open, like the C VM.
+    // for (x in lo..hi) body — half-open: lo inclusive, hi exclusive.
     // Slot layout: [var][limit]; the limit is evaluated once.
     let voff = (st.slots + 1) * -8;
     let loff = (st.slots + 2) * -8;
@@ -3571,12 +3570,6 @@ def is_void_node(n) -> bool {
     k == "void"
 };
 
-// Record literal { k: v, ... }: heap-allocate 8*n bytes (arena, static
-// size — like a dynamic array without the header) and store each value.
-// The VALUE is the heap address (8 bytes, first-class: locals, params,
-// returns all just copy the address). Field k lives at addr+8k.
-// (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
-// empty maps are rejected by the checker anyway.)
 // Position of `name` in a record literal's merged field list, or -1.
 def mfield_idx(names: [str], name: str) -> long {
     let i = 0;
@@ -3592,8 +3585,14 @@ def mfield_idx(names: [str], name: str) -> long {
     out
 };
 
+// Record literal { k: v, ... }: heap-allocate a block for the values + the
+// shape table, then store each value. The VALUE is the record address
+// (8 bytes, first-class: locals, params, returns all just copy it). Field k
+// lives at record+8k; the table pointer sits at record-8, which is what
+// y_dot_lookup reads (`mov -8(%rbx), %r14`).
+// (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
+// empty maps are rejected by the checker anyway.)
 def gen_reclit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    // NOTE: bound once — `node.vals[i]` inline misparses on the C VM.
     let mvals = node.vals;
     let mkeys = node.keys;
     let nent = len(mvals);
@@ -3631,8 +3630,8 @@ def gen_reclit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         ni = ni + 1;
     };
     let n = len(names);
-    // Shape tag for dynamic field reads (see y_dot_lookup note in
-    // arch_x64.y): every record carries its field table; field i lives
+    // Shape tag for dynamic field reads (y_dot_lookup in arch_x64.y reads it):
+    // every record carries its field table; field i lives
     // at tag_base+8+i*8 and the value (base+8) keeps today's offsets,
     // so statically-precise reads are bit-identical. Table label per
     // site (uid); table rows are decimal quads (both assemblers take
@@ -3675,7 +3674,7 @@ def gen_reclit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     st = emit(st, "    push %rcx");
     let i = 0;
     while (i < nent) {
-        // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
+        // mv is walked twice (gen, then infer), so bind it once.
         let mv = mvals[i];
         let mk = mkeys[i];
         st = gen(st, mv);
@@ -3875,7 +3874,7 @@ def gen_assign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     let e = env_find(st, node.name);
     // Reference semantics: arrays and records are heap values shared by
     // every binding that names them (no copy-on-store) — the same model
-    // the VM and the compiled C runtime use. A captured variable lives in
+    // the C copy's value model uses (yv.c). A captured variable lives in
     // one shared heap cell (box_capture), so its store goes through the
     // cell and is visible in the capturing scope too.
     st = gen(st, node.v);
@@ -3959,7 +3958,6 @@ def gen_arrrep_esz(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc
 
 // Radix literals (0x../0b..) reach the emitter as their source text; the
 // assembler only understands plain decimal immediates, so normalize here.
-// NOTE: nested ifs, not `||` (see is_digit_ch note in asm.y).
 def hexval_ch(c: str) -> long {
     let o = ord(c);
     let v = 0;
@@ -4184,9 +4182,9 @@ def gen_index(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 // plain variable, a nested place (`a[0].f`), a chain (`x.y.f`). Records
 // are heap addresses; field i lives at addr+8i (same layout the static
 // gen_dot read uses), so the write is: value -> (rec + 8*idx). The object
-// runs first, then the value — the VM's order. Reference semantics: a
-// field write is observable through every binding (same as the VM and the
-// compiled C runtime).
+// runs first, then the value. Reference semantics: a field write is
+// observable through every binding (the C copy's value model shares records
+// the same way).
 def gen_dotassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let dobj = node.obj;
     let dkey = node.key;
@@ -4438,8 +4436,7 @@ def gen_opassign_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
     // In-place array forms. `*=` prepends one element. `+=` pushes one
     // element — or, when the VALUE is an array, appends its elements one
     // by one (its length is captured first, so `a += a` is safe). The
-    // checker enforces matching element types; the same value-shaped rule
-    // runs in the VM and the compiled C runtime.
+    // checker enforces matching element types (types.y opassign_check).
     let tgt = node.tgt;
     let op = node.op;
     let v = node.v;
@@ -4488,9 +4485,9 @@ def gen_idxassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     // Fixed arrays are heap headers now: one layout for both kinds.
     // Fixed uses the static bound n; heap uses the runtime len.
     // Reference semantics: `x[i] = v` writes through to the array every
-    // binding shares — params included (the VM and the compiled C runtime
-    // alias the same way). The base is any array expression and runs once
-    // (the VM's order: base, index, value). No write-back to the base:
+    // binding shares — params included (the C copy's value model aliases
+    // the same way). The base is any array expression and runs once, in
+    // base/index/value order. No write-back to the base:
     // the header pointer never moves, so the store through it is already
     // visible through every binding.
     let garr = node.arr;
@@ -4571,8 +4568,8 @@ def gen_val_tostr_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, 
     }
 };
 
-// Array header in %rax -> "[e0, e1, ...]" in %rax, matching the VM's
-// tostring(). Slots: [src][acc][i].
+// Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
+// gives. Slots: [src][acc][i].
 def gen_arr_tostr_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, elty) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let soff = (st.slots + 1) * -8;
     let aoff = (st.slots + 2) * -8;
@@ -4649,10 +4646,9 @@ def arr_elem_bytes(t) -> long {
     else { 8 }
 };
 
-// Load element [idx] of the array based at `base` into `dst`.
-// Element load: `base` is the ARRAY HEADER register, `idx` the index
-// register, `dst` the result. Headers are {len, cap, data} with the
-// elements in a separate block, so the data pointer rides through %dst.
+// Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
+// the index register, `dst` the result. Headers are {len, cap, data} with
+// the elements in a separate block, so the data pointer rides through %dst.
 def elem_load(esz: long, base: str, idx: str, dst: str) -> str {
     if (esz == 1) {
         "    mov 16(" + base + "), " + dst + "\n"
@@ -4704,7 +4700,7 @@ def arr_header_size() -> long {
 // infer (checker validated). Works for locals, params, and call results
 // alike — every record value is just an address in %rax.
 def gen_dot(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    // NOTE: bound once — `node.obj` inline misparses on the C VM.
+    // dobj is read twice (infer, then gen).
     let dobj = node.obj;
     let dkey = node.key;
     let t = infer(st, dobj);
@@ -4749,7 +4745,7 @@ def rec_field_idx(t, key: str) -> long {
         let fs = t.fields;
         let i = 0;
         while (i < len(fs)) {
-            // NOTE: bound once — `x.y[i]` chains misparse on the C VM.
+            // f is read twice: the name compare, then the field's type.
             let f = fs[i];
             if (f.name == key) {
                 idx = i;
@@ -4764,8 +4760,10 @@ def rec_field_idx(t, key: str) -> long {
     idx
 };
 
-// Heap array literal [v, ...]: alloc 16+8n, store len/cap/elems. The header
-// pointer (an 8-byte value like any other) is the expression value.
+// Heap array literal [v, ...]: a data block of arr_alloc_size(esz, n) and a
+// separate arr_header_size() header {len, cap, data}; the values are stored
+// into the data block through the header's pointer. The header address (an
+// 8-byte value like any other) is the expression value.
 def gen_array(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     gen_array_esz(st, node, arr_elem_bytes(infer(st, node)))
 };
@@ -4924,7 +4922,6 @@ def gen_tonum(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 
 def gen_tostring(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // dispatch on the static type: long/bool need conversion, str is identity
-    // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
     let targs = node.args;
     let a0 = targs[0];
     let t = infer(st, a0);
@@ -5067,7 +5064,6 @@ def gen_split(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 def gen_puts(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // puts(v): write the value WITHOUT trailing newline (C semantics:
     // fputs + flush). Like print but no newline; returns nothing (void).
-    // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
     let pargs = node.args;
     let pa = pargs[0];
     st = gen(st, pa);
@@ -5087,7 +5083,6 @@ def gen_puts(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
 def gen_eputs(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // eputs(v): like puts, but on fd 2. Profiling/diagnostic output must
     // never land in stdout (where `-S` assembly and program output live).
-    // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
     let pargs = node.args;
     let pa = pargs[0];
     st = gen(st, pa);
@@ -5119,7 +5114,6 @@ def gen_heap_used(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
 def gen_sleep(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // sleep(ms): suspend the caller for ms milliseconds (nanosleep, EINTR
     // cannot happen in single-threaded code, so one syscall is enough).
-    // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
     let sargs = node.args;
     let sa = sargs[0];
     st = gen(st, sa);
@@ -5129,7 +5123,6 @@ def gen_sleep(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 
 def gen_exit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // exit(code): terminate the process with the exit-code syscall.
-    // NOTE: bind args once — `node.args[0]` inline misparses on the C VM.
     let eargs = node.args;
     let ea = eargs[0];
     st = gen(st, ea);
@@ -5383,10 +5376,11 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     // NOTE: append to f.bodies, NOT st.bodies. Emitting this body can add
     // bodies of its own (a nested capturing def is emitted at its creation
     // site), and those land in f.bodies. Using st.bodies dropped them
-    // whenever push had to GROW the array: the C runtime shares the grown
-    // buffer between the two record copies, the native backend rebinds only
-    // f.bodies (see NATIVE.md "rebind: a += v"), so the two engines
-    // disagreed and ycc emitted calls to labels it never defined.
+    // whenever push had to GROW the array: the C copy's value model shares
+    // the grown buffer between the two record copies, the native backend
+    // rebinds only f.bodies (see NATIVE.md "rebind: a = push(a, v)"), so the
+    // two compilers disagreed and ycc emitted calls to labels it never
+    // defined.
     f.bodies += join(code, "\n");
     let bodies = f.bodies
     { out: st.out, rodata: prodata, uid: puid,
