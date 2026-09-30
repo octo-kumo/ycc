@@ -124,6 +124,8 @@ def hexvalx(c: str) -> long {
 };
 
 // Try to read a two-char operator at position i. Returns the operator or "".
+// Maximal munch, like C: `x+++y` is `x ++ + y`. There is no `=+` operator;
+// `x =+ y` is `x = +y`.
 // NOTE: nested ifs, not `||` chains (see ispunct note).
 def twocharop(src: str, i: long) -> str {
     let two = substr(src, i, 2);
@@ -136,6 +138,13 @@ def twocharop(src: str, i: long) -> str {
     else if (two == "::") { two }
     else if (two == "..") { two }
     else if (two == "->") { two }
+    else if (two == "++") { two }
+    else if (two == "--") { two }
+    else if (two == "+=") { two }
+    else if (two == "-=") { two }
+    else if (two == "*=") { two }
+    else if (two == "/=") { two }
+    else if (two == "%=") { two }
     else { "" }
 };
 
@@ -429,10 +438,22 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 } else { 0 };
                 0
             } else {
-                // division operator (not a comment opener)
-                toks = push(toks, mktok("op", slash(), line, col));
-                i = i + 1;
-                col = col + 1;
+                // division operator or `/=` (not a comment opener). The
+                // comment dispatch above owns the `/` branch, so `/=` has
+                // to be recognized HERE — the generic twocharop dispatch
+                // below never sees it.
+                let two = twocharop(src, i);
+                if (two == "/=") {
+                    toks = push(toks, mktok("op", two, line, col));
+                    i = i + 2;
+                    col = col + 2;
+                    0
+                } else {
+                    toks = push(toks, mktok("op", slash(), line, col));
+                    i = i + 1;
+                    col = col + 1;
+                    0
+                };
                 0
             };
         } else {

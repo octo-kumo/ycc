@@ -241,6 +241,18 @@ def parse_postfix(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
             let name = tv(toks, pos + 1);
             node = { k: "dot", obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos) };
             pos = pos + 2;
+        } else if (is_op(toks, pos, "++")) {
+            // x++ — postfix: the OLD value is the expression's value, and
+            // the target is evaluated once (a[f()]++ calls f once).
+            node = { k: "incdec", op: "++", pre: false, tgt: node, line: tline(toks, pos), col: tcol(toks, pos) };
+            pos = pos + 1;
+            go = false;
+            0
+        } else if (is_op(toks, pos, "--")) {
+            node = { k: "incdec", op: "--", pre: false, tgt: node, line: tline(toks, pos), col: tcol(toks, pos) };
+            pos = pos + 1;
+            go = false;
+            0
         } else {
             go = false;
             0
@@ -303,6 +315,13 @@ def parse_unary(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
         // dereference: *p
         let inner = parse_unary(toks, p + 1);
         res({ k: "deref", e: inner.node, line: tline(toks, p), col: tcol(toks, p) }, inner.pos)
+    } else if (is_op(toks, p, "++")) {
+        // ++x — prefix: the NEW value is the expression's value
+        let inner = parse_unary(toks, p + 1);
+        res({ k: "incdec", op: "++", pre: true, tgt: inner.node, line: tline(toks, p), col: tcol(toks, p) }, inner.pos)
+    } else if (is_op(toks, p, "--")) {
+        let inner = parse_unary(toks, p + 1);
+        res({ k: "incdec", op: "--", pre: true, tgt: inner.node, line: tline(toks, p), col: tcol(toks, p) }, inner.pos)
     } else {
         parse_postfix(toks, p)
     }
@@ -762,10 +781,31 @@ def parse_stmt(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
         let e = parse_expr(toks, p);
         if (is_op(toks, e.pos, "=")) {
             parse_stmt_assign(toks, p, e.node, e.pos)
+        } else if (is_compound_assign(toks, e.pos)) {
+            parse_stmt_opassign(toks, p, e.node, e.pos)
         } else {
             e
         }
     }
+};
+
+// `x op= e`. The target keeps its expression form — a[f()] += 1 evaluates
+// f() once. Array targets reinterpret `+=` (push/append) and `*=` (prepend
+// an element) in the emitter; everywhere else `*=` is multiply-assign.
+def is_compound_assign(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> bool {
+    if (is_op(toks, p, "+=")) { true }
+    else if (is_op(toks, p, "-=")) { true }
+    else if (is_op(toks, p, "*=")) { true }
+    else if (is_op(toks, p, "/=")) { true }
+    else { is_op(toks, p, "%=") }
+};
+
+def parse_stmt_opassign(toks: [{ t: str, v: str, line: long, col: long }], p: long, tgt: {k: str}, epos: long) -> { node: {k: str}, pos: long } {
+    let op = tv(toks, epos);
+    let rhs = parse_expr(toks, epos + 1);
+    // Every compound op is `X=`, so the binary op is its first character.
+    let binop = substr(op, 0, 1);
+    res({ k: "opassign", op: binop, tgt: tgt, v: rhs.node, line: tline(toks, epos), col: tcol(toks, epos) }, rhs.pos)
 };
 
 // Assignment dispatch: one def per target shape (see parse_stmt note).

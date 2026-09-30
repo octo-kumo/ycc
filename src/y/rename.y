@@ -284,6 +284,10 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st
         rn_func(node, st)
     } else if (k == "assign") {
         rn_assign(node, st)
+    } else if (k == "incdec") {
+        rn_incdec(node, st)
+    } else if (k == "opassign") {
+        rn_opassign(node, st)
     } else if (k == "store") {
         rn_store(node, st)
     } else if (k == "ret") {
@@ -398,6 +402,19 @@ def rn_assign_finish(node, v: {k: str}, u: str, st: { scopes: [[{ orig: str, uni
     } else {
         { st: st, node: { k: "assign", name: u, v: v, line: node.line, col: node.col } }
     }
+};
+
+// ++x / x++: the target is an expression (id, index, dot) and is renamed
+// like any other — it is evaluated exactly once at run time.
+def rn_incdec(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+    let r = rn_node(node.tgt, st);
+    { st: r.st, node: { k: "incdec", op: node.op, pre: node.pre, tgt: r.node, line: node.line, col: node.col } }
+};
+
+def rn_opassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {
+    let t = rn_node(node.tgt, st);
+    let v = rn_node(node.v, t.st);
+    { st: v.st, node: { k: "opassign", op: node.op, tgt: t.node, v: v.node, line: node.line, col: node.col } }
 };
 
 def rn_store(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long }, node: {k: str} } {

@@ -402,7 +402,14 @@ def typeof_arith(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdept
     // AUTO-STRINGIFY: str + long/bool (and the mirror) stringify the
     // number and concat — same semantics as the C runtime's y_add.
     if (op == "+") {
-        if (lt.k == "tstr") {
+        // Arrays win over strings (the VM's O_ADD order): arr + arr
+        // concatenates into a NEW array, arr + elem appends one (same type
+        // only), elem + arr prepends one. In-place forms are `+=` / `*=`.
+        if (lt.k == "tarr" || lt.k == "tarrfix") {
+            typeof_arith_arr(st, op, lt, rt, line, col)
+        } else if (rt.k == "tarr" || rt.k == "tarrfix") {
+            typeof_arith_arr(st, op, lt, rt, line, col)
+        } else if (lt.k == "tstr") {
             if (rt.k == "tstr") { { typ: { k: "tstr" }, st: st } }
             else if (rt.k == "tunk") { { typ: { k: "tstr" }, st: st } }
             else if (rt.k == "tlong") { { typ: { k: "tstr" }, st: st } }
@@ -427,6 +434,31 @@ def typeof_arith(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdept
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else { typeof_arith_long(st, op, lt, rt, line, col) }
     } else { typeof_arith_long(st, op, lt, rt, line, col) }
+};
+
+def typeof_arith_arr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    // The array operand decides the result type; the other side is either
+    // an array of the same type or one matching element.
+    let lk: str = lt.k;
+    if (op != "+") {
+        st = fail(st, "'" + op + "' is not defined on arrays (only '+' copies, '+='/'*=' mutate)", line, col);
+        { typ: t_unk(), st: st }
+    } else if (lk == "tarr" || lk == "tarrfix") {
+        if (rt.k == "tarr" || rt.k == "tarrfix") {
+            if (teq(lt, rt)) {
+                { typ: lt, st: st }
+            } else {
+                st = fail(st, "'+' concatenates arrays of the same type, got " + tstr(lt) + " and " + tstr(rt), line, col);
+                { typ: t_unk(), st: st }
+            }
+        } else {
+            st = expect_type(st, rt, lt.of, "'+' element", line, col);
+            { typ: lt, st: st }
+        }
+    } else {
+        st = expect_type(st, lt, rt.of, "'+' element", line, col);
+        { typ: rt, st: st }
+    }
 };
 
 def typeof_arith_long(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
@@ -737,8 +769,20 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     { typ: t_unk(), st: st }
                 }
             } else {
-                st = fail(st, "'&' needs a plain variable element (&a[i])", node.line, node.col);
-                { typ: t_unk(), st: st }
+                // general base (`&grid[0][i]`, `&rec.v[i]`): an element
+                // address of any array expression.
+                let barr = arr;
+                let br = typeof_expr(st, barr);
+                st = br.st;
+                if (br.typ.k == "tarrfix" || br.typ.k == "tarr") {
+                    let r = typeof_expr(st, ix);
+                    st = r.st;
+                    st = expect_type(st, r.typ, { k: "tlong" }, "array index", node.line, node.col);
+                    { typ: { k: "tptr", to: br.typ.of }, st: st }
+                } else {
+                    st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", node.line, node.col);
+                    { typ: t_unk(), st: st }
+                }
             }
         } else {
             st = fail(st, "'&' needs a plain variable (only locals/params have addresses)", node.line, node.col);
@@ -876,6 +920,19 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             st = expect_type(st, r.typ, got.typ, "assignment to '" + disp(node.name) + "'", node.line, node.col);
             { typ: got.typ, st: st }
         }
+    } else if (k == "incdec") {
+        // ++x / x++: numbers only — `s++` on a string would silently
+        // concatenate, so it is a type error instead.
+        let t = typeof_expr(st, node.tgt);
+        st = t.st;
+        incdec_check(st, node, t.typ)
+    } else if (k == "opassign") {
+        // `x op= e`: the rules live in opassign_check.
+        let t = typeof_expr(st, node.tgt);
+        st = t.st;
+        let v = typeof_expr(st, node.v);
+        st = v.st;
+        opassign_check(st, node, t.typ, v.typ)
     } else if (k == "store") {
         let p = typeof_expr(st, node.p);
         let v = typeof_expr(p.st, node.v);
@@ -1043,8 +1100,27 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 { typ: t_unk(), st: st }
             }
         } else {
-            st = fail(st, "only plain variables can be indexed in native mode", node.line, node.col);
-            { typ: t_unk(), st: st }
+            // Any expression of array type: `grid[0][1]`, `rec.v[i]`,
+            // `f()[i]`. The base runs once at runtime; its static type
+            // carries the element type.
+            let barr = node.arr;
+            let br = typeof_expr(st, barr);
+            st = br.st;
+            if (br.typ.k == "tarrfix" || br.typ.k == "tarr") {
+                let ri = typeof_expr(st, node.idx);
+                st = ri.st;
+                st = expect_type(st, ri.typ, { k: "tlong" }, "array index", node.line, node.col);
+                { typ: br.typ.of, st: st }
+            } else if (br.typ.k == "tunk" || br.typ.k == "tnone" || br.typ.k == "tname") {
+                // poison quietly (tcompat law) — the missing annotation
+                // reports at its own site.
+                let ri = typeof_expr(st, node.idx);
+                st = ri.st;
+                { typ: t_unk(), st: st }
+            } else {
+                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", node.line, node.col);
+                { typ: t_unk(), st: st }
+            }
         }
     } else if (k == "slice") {
         // arr[lo:hi] -> a new array of the same element type. Missing
@@ -1099,8 +1175,26 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 { typ: t_unk(), st: st }
             }
         } else {
-            st = fail(st, "only plain variables can be dot-assigned in native mode", node.line, node.col);
-            { typ: t_unk(), st: st }
+            // General object (`a[0].f = v`, `x.y.f = v`): the object
+            // expression's static type must be a record with the field.
+            let dobj2 = node.obj;
+            let obr = typeof_expr(st, dobj2);
+            st = obr.st;
+            if (obr.typ.k == "trec") {
+                let ft = trec_field_type(obr.typ, node.key);
+                if (ft.k == "tnone") {
+                    st = fail(st, "record has no field '" + node.key + "'", node.line, node.col);
+                    { typ: t_unk(), st: st }
+                } else {
+                    let v = typeof_expr(st, node.v);
+                    st = v.st;
+                    st = expect_type(st, v.typ, ft, "record field '" + node.key + "'", node.line, node.col);
+                    { typ: ft, st: st }
+                }
+            } else {
+                st = fail(st, "cannot field-assign " + tstr(obr.typ) + " (only records)", node.line, node.col);
+                { typ: t_unk(), st: st }
+            }
         }
     } else if (k == "idxassign") {
         if (node.arr.k == "id") {
@@ -1122,8 +1216,31 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 { typ: t_unk(), st: st }
             }
         } else {
-            st = fail(st, "only plain variables can be indexed in native mode", node.line, node.col);
-            { typ: t_unk(), st: st }
+            // General base (`grid[0][1] = v`, `rec.v[i] = v`): the base
+            // expression's static type must be an array of the value type.
+            let barr = node.arr;
+            let br = typeof_expr(st, barr);
+            st = br.st;
+            if (br.typ.k == "tarrfix" || br.typ.k == "tarr") {
+                let ix = typeof_expr(st, node.idx);
+                st = ix.st;
+                st = expect_type(st, ix.typ, { k: "tlong" }, "array index", node.line, node.col);
+                let v = typeof_expr(st, node.v);
+                st = v.st;
+                st = expect_type(st, v.typ, br.typ.of, "array element", node.line, node.col);
+                { typ: br.typ.of, st: st }
+            } else if (br.typ.k == "tunk" || br.typ.k == "tnone" || br.typ.k == "tname") {
+                // poison quietly (tcompat law) — the missing annotation
+                // reports at its own site.
+                let ix = typeof_expr(st, node.idx);
+                st = ix.st;
+                let v = typeof_expr(st, node.v);
+                st = v.st;
+                { typ: t_unk(), st: st }
+            } else {
+                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", node.line, node.col);
+                { typ: t_unk(), st: st }
+            }
         }
     } else if (k == "array") {
         // Heap dynamic array literal [v, ...]. Element type = first element;
@@ -1178,6 +1295,66 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         }
     } else {
         st = fail(st, "'" + k + "' is unsupported in native mode (heap planned: maps, loops, strings ops)", node.line, node.col);
+        { typ: t_unk(), st: st }
+    }
+};
+
+// ++/-- target rule: numbers (long/byte/float) only.
+def incdec_check(st, node, tt: { k: str }) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let op = node.op;
+    if (tt.k == "tlong" || tt.k == "tbyte" || tt.k == "tfloat") {
+        { typ: tt, st: st }
+    } else if (tt.k == "tunk" || tt.k == "tnone") {
+        { typ: t_unk(), st: st }
+    } else {
+        st = fail(st, "'" + op + "' needs a number target, got " + tstr(tt), node.line, node.col);
+        { typ: t_unk(), st: st }
+    }
+};
+
+// `x op= e` rules by target type:
+//   numbers  -> the arithmetic family (+ - * / %), result the target type
+//   str      -> `+=` concatenates; the rest are errors
+//   arrays   -> in place only: `+=` pushes one element (or appends another
+//               array of the same type), `*=` prepends one element. `+`
+//               itself is the copy form; `-=`, `/=`, `%=` are errors.
+// The result is always the target's type (the new value).
+def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let op = node.op;
+    if (tt.k == "tarr" || tt.k == "tarrfix") {
+        if (op == "*") {
+            st = expect_type(st, vt, tt.of, "'*=' element", node.line, node.col);
+            { typ: tt, st: st }
+        } else if (op == "+") {
+            if (teq(vt, tt.of)) {
+                { typ: tt, st: st }
+            } else if (teq(vt, tt)) {
+                { typ: tt, st: st }
+            } else if (vt.k == "tunk" || vt.k == "tnone") {
+                { typ: tt, st: st }
+            } else {
+                st = fail(st, "'+=' on an array takes an element or an array of the same type, got " + tstr(vt), node.line, node.col);
+                { typ: tt, st: st }
+            }
+        } else {
+            st = fail(st, "arrays support only '+=' and '*=' (in place), not '" + op + "='", node.line, node.col);
+            { typ: tt, st: st }
+        }
+    } else if (tt.k == "tstr") {
+        if (op == "+") {
+            st = expect_type(st, vt, { k: "tstr" }, "'+=' string", node.line, node.col);
+            { typ: tt, st: st }
+        } else {
+            st = fail(st, "strings support only '+=' (concatenate), not '" + op + "='", node.line, node.col);
+            { typ: tt, st: st }
+        }
+    } else if (tt.k == "tlong" || tt.k == "tbyte" || tt.k == "tfloat") {
+        st = expect_type(st, vt, tt, "'" + op + "=' value", node.line, node.col);
+        { typ: tt, st: st }
+    } else if (tt.k == "tunk" || tt.k == "tnone") {
+        { typ: t_unk(), st: st }
+    } else {
+        st = fail(st, "'" + op + "=' needs a number, string or array target, got " + tstr(tt), node.line, node.col);
         { typ: t_unk(), st: st }
     }
 };
@@ -1338,6 +1515,26 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     st = r1c.st;
                     st = expect_type(st, r1c.typ, r0.typ.of, "push value", node.line, node.col);
                     { typ: r0.typ, st: st }
+                }
+            }
+        } else if (name == "prepend") {
+            // prepend(arr, v) -> arr, in place: v is inserted at the front
+            if (len(cargs) != 2) {
+                st = fail(st, "prepend takes exactly 2 arguments", node.line, node.col);
+                { typ: t_unk(), st: st }
+            } else {
+                let ra = typeof_expr(st, cargs[0]);
+                st = ra.st;
+                let rv = typeof_expr(st, cargs[1]);
+                st = rv.st;
+                if (ra.typ.k == "tarr" || ra.typ.k == "tarrfix") {
+                    st = expect_type(st, rv.typ, ra.typ.of, "prepend element", node.line, node.col);
+                    { typ: ra.typ, st: st }
+                } else if (ra.typ.k == "tunk" || ra.typ.k == "tnone") {
+                    { typ: t_unk(), st: st }
+                } else {
+                    st = fail(st, "prepend needs an array, got " + tstr(ra.typ), node.line, node.col);
+                    { typ: t_unk(), st: st }
                 }
             }
         } else if (name == "substr") {
@@ -1991,4 +2188,4 @@ def def_sig(name: str, func) -> { name: str, typ: { k: str } } {
     { name: name, typ: { k: "tfunc", args: args, ret: ret } }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval };
+export { check_program, tstr, tdisp, tdisp_fnval, teq };

@@ -977,6 +977,10 @@ def strip_ns(node, imports: [str]) -> { k: str } {
         normnode({ k: "func", params: node.params, ptypes: node.ptypes, ret: node.ret, body: strip_ns(node.body, imports), line: node.line, col: node.col })
     } else if (k == "assign") {
         normnode({ k: "assign", name: node.name, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+    } else if (k == "incdec") {
+        normnode({ k: "incdec", op: node.op, pre: node.pre, tgt: strip_ns(node.tgt, imports), line: node.line, col: node.col })
+    } else if (k == "opassign") {
+        normnode({ k: "opassign", op: node.op, tgt: strip_ns(node.tgt, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
     } else if (k == "store") {
         normnode({ k: "store", p: strip_ns(node.p, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
     } else if (k == "ret") {
@@ -1157,16 +1161,12 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             normnode({ k: "tarr", of: infer(st, elems[0]) })
         }
     } else if (k == "index") {
-        // checker guarantees a plain array id; elem type from env
-        if (node.arr.k == "id") {
-            let e = env_find(st, node.arr.v);
-            if (e.kind == "none") {
-                { k: "tunk" }
-            } else if (e.typ.k == "tarrfix" || e.typ.k == "tarr") {
-                e.typ.of
-            } else {
-                { k: "tunk" }
-            }
+        // checker guarantees an array base (any expression); the element
+        // type is the base type's `of`.
+        let iarr = node.arr;
+        let bt = infer(st, iarr);
+        if (bt.k == "tarrfix" || bt.k == "tarr") {
+            bt.of
         } else {
             { k: "tunk" }
         }
@@ -1189,6 +1189,10 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
         infer_decl(st, node)
     } else if (k == "assign") {
         infer(st, node.v)
+    } else if (k == "incdec") {
+        infer(st, node.tgt)
+    } else if (k == "opassign") {
+        infer(st, node.tgt)
     } else if (k == "map") {
         // record literal: field types from the values (checker validated).
         // NOTE: each bound once — `x.y[i]` chains misparse on the C VM.
@@ -1300,6 +1304,11 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             { k: "tbool" }
         } else if (name == "write_bytes") {
             { k: "tbool" }
+        } else if (name == "push" || name == "prepend") {
+            // both yield the array they take (the header never moves, and
+            // the type is the array's either way)
+            let gargs = node.args;
+            infer(st, gargs[0])
         } else if (name == "puts" || name == "exit") {
             { k: "tnull" }
         } else if (name == "eputs") {
@@ -1390,6 +1399,10 @@ def uses_scan_node(node, out: { argv: bool }) -> { argv: bool } {
         uses_scan_node(node.body, out)
     } else if (k == "assign") {
         uses_scan_node(node.v, out)
+    } else if (k == "incdec") {
+        uses_scan_node(node.tgt, out)
+    } else if (k == "opassign") {
+        uses_scan_node(node.v, uses_scan_node(node.tgt, out))
     } else if (k == "store") {
         uses_scan_node(node.v, uses_scan_node(node.p, out))
     } else if (k == "ret") {
@@ -1500,6 +1513,7 @@ def name_in(xs: [str], n: str) -> bool {
 def is_intrinsic_name(n: str) -> bool {
     name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "substr", "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
+             "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "sleep", "heap_used", "exit", "argv", "read_file", "write_file",
              "write_bytes", "range", "typeof", "bytes",
@@ -1569,6 +1583,13 @@ def fv_ids(node, out: [str]) -> [str] {
         0
     } else if (k == "assign") {
         out = push(out, node.name);
+        out = fv_ids(node.v, out);
+        0
+    } else if (k == "incdec") {
+        out = fv_ids(node.tgt, out);
+        0
+    } else if (k == "opassign") {
+        out = fv_ids(node.tgt, out);
         out = fv_ids(node.v, out);
         0
     } else if (k == "decl") {
@@ -1724,6 +1745,13 @@ def fv_binds(node, out: [str]) -> [str] {
     } else if (k == "assign") {
         out = fv_binds(node.v, out);
         0
+    } else if (k == "incdec") {
+        out = fv_binds(node.tgt, out);
+        0
+    } else if (k == "opassign") {
+        out = fv_binds(node.tgt, out);
+        out = fv_binds(node.v, out);
+        0
     } else { 0; };
     out
 };
@@ -1858,6 +1886,10 @@ def gen(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env
         gen_decl(st, node)
     } else if (k == "assign") {
         gen_assign(st, node)
+    } else if (k == "incdec") {
+        gen_incdec(st, node)
+    } else if (k == "opassign") {
+        gen_opassign(st, node)
     } else if (k == "index") {
         gen_index(st, node)
     } else if (k == "slice") {
@@ -1929,12 +1961,18 @@ def gen_id(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
             gen_make_closure(st, e.label, [])
         } else if (e.kind == "capture") {
             // Captured by the enclosing closure: load the closure record
-            // (at the frame offset recorded in `off`) and read slot idx+1.
+            // (at the frame offset recorded in `off`), read slot idx+1 —
+            // the shared cell pointer — and deref it (see box_capture).
             // NOTE: the index rides in `label` — env entries have no spare
             // numeric field and adding one would touch every signature.
             let idx = tonum(e.label);
             st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
-            emit(st, "    mov " + tostring(8 * (idx + 1)) + "(%rcx), %rax")
+            st = emit(st, "    mov " + tostring(8 * (idx + 1)) + "(%rcx), %rax");
+            emit(st, "    mov (%rax), %rax")
+        } else if (e.kind == "box") {
+            // A captured variable's shared cell; the slot holds its pointer.
+            st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax");
+            emit(st, "    mov (%rax), %rax")
         } else {
             emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
         }
@@ -1951,6 +1989,51 @@ def gen_id(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
 // capture-free body works unchanged under both call forms: it simply never
 // reads that slot, and the caller cleans up either way.
 
+// The cell pointer for a capture, in %rax. Every capture slot holds a
+// heap BOX pointer (see box_capture) — through a closure record or through
+// a "box" binding alike.
+def gen_cap_ptr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let e = env_find(st, name);
+    if (e.kind == "capture") {
+        // NOTE: the index rides in `label` (see gen_id's capture arm).
+        let pidx = tonum(e.label);
+        st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
+        emit(st, "    mov " + tostring(8 * (pidx + 1)) + "(%rcx), %rax")
+    } else {
+        emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
+    }
+};
+
+// A captured variable lives in ONE heap cell shared by its binding and
+// every closure over it: writes through either are visible through both —
+// the scope is shared, exactly as in the VM and the compiled C runtime
+// (the old native model copied the value at creation and could not even
+// write to a capture). box_capture runs at the closure's creation site,
+// once per captured name: the FIRST capture allocates the cell and
+// re-binds the name to it (kind "box"); later captures find it already
+// boxed. In a loop the creation code runs per iteration, so each
+// iteration's closures share one fresh cell.
+def box_capture(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let e = env_find(st, name);
+    if (e.kind == "box" || e.kind == "capture") {
+        st
+    } else {
+        st = gen_id(st, { k: "id", v: name, line: 0, col: 0 });
+        st = emit(st, "    push %rax");
+        st = emit(st, "    mov $8, %rdi");
+        st = emit(st, "    call y_alloc");
+        st = emit(st, "    pop %rdx");
+        st = emit(st, "    mov %rdx, (%rax)");
+        let boff = (st.slots + 1) * -8;
+        st = emit(st, "    mov %rax, " + tostring(boff) + "(%rbp)");
+        let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
+          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+          bodies: st.bodies };
+        env_define(st2, name, "box", boff, "", e.typ)
+    }
+};
+
 def gen_make_closure(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, label: str, caps: [str]) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let n = len(caps);
     st = emit(st, "    mov $" + tostring(8 + 8 * n) + ", %rdi");
@@ -1961,8 +2044,8 @@ def gen_make_closure(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
     let i = 0;
     while (i < n) {
         let cn: str = caps[i];
-        // Captured BY VALUE at creation time.
-        st = gen_id(st, { k: "id", v: cn, line: 0, col: 0 });
+        // Captured as a shared cell pointer (see box_capture).
+        st = gen_cap_ptr(st, cn);
         st = emit(st, "    pop %rcx");
         st = emit(st, "    push %rcx");
         st = emit(st, "    mov %rax, " + tostring(8 * (i + 1)) + "(%rcx)");
@@ -2052,25 +2135,39 @@ def gen_addr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         gen_elem_addr(st, node.e)
     } else {
         let e = env_find(st, node.e.v);
-        emit(st, "    lea " + tostring(e.off) + "(%rbp), %rax")
+        if (e.kind == "box") {
+            // the shared cell IS the variable's address
+            emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
+        } else if (e.kind == "capture") {
+            let aidx = tonum(e.label);
+            st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
+            emit(st, "    mov " + tostring(8 * (aidx + 1)) + "(%rcx), %rax")
+        } else {
+            emit(st, "    lea " + tostring(e.off) + "(%rbp), %rax")
+        }
     }
 };
 
 // Address of element arr[idx] in %rax (bounds-trapped). Works for both
 // array kinds: fixed (frame SIB) and heap (header load + SIB).
 def gen_elem_addr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    let e = env_find(st, node.arr.v);
-    let eaesz = arr_elem_bytes(e.typ);
+    // &a[i] — an element's address. The base is any array expression
+    // (`&grid[0][i]` too) and runs once, before the index (the same order
+    // gen_index and the VM use).
+    let earr = node.arr;
+    let bt = infer(st, earr);
+    let eaesz = arr_elem_bytes(bt);
     let eascale = "8";
     if (eaesz == 1) { eascale = "1"; 0; } else { 0; };
-    st = gen(st, node.idx);
+    st = gen(st, earr);
     st = emit(st, "    push %rax");
-    st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax");
-    st = emit(st, "    pop %rcx");
+    st = gen(st, node.idx);
+    st = emit(st, "    mov %rax, %rcx");
+    st = emit(st, "    pop %rax");
     st = emit(st, "    test %rcx, %rcx");
     st = emit(st, "    js y_oob");
-    if (e.typ.k == "tarrfix") {
-        st = emit(st, "    cmp $" + tostring(e.typ.n) + ", %rcx");
+    if (bt.k == "tarrfix") {
+        st = emit(st, "    cmp $" + tostring(bt.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
         0
     } else {
@@ -2163,6 +2260,9 @@ def gen_logic(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 def gen_cat(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, lt: { k: str }, rt: { k: str }) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // NOTE: y_long_tostr / y_bool_tostr take ONE STACK ARG (push; call;
     // add $8) — gen_tostring's pattern. y_str_cat takes two stack args.
+    if (lt.k == "tarr" || lt.k == "tarrfix" || rt.k == "tarr" || rt.k == "tarrfix") {
+        return gen_cat_arr(st, node, lt, rt);
+    };
     if (lt.k == "tstr") {
         if (rt.k == "tstr") {
             st = gen_push_args(st, [node.l, node.r]);
@@ -2338,6 +2438,12 @@ def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     let lt = infer(st, node.l);
     let rt = infer(st, node.r);
     if (op == "+" && (lt.k == "tstr" || rt.k == "tstr")) {
+        gen_cat(st, node, lt, rt)
+    } else if (op == "+" && (lt.k == "tarr" || rt.k == "tarr")) {
+        // array `+` is the copy-concat form (gen_cat splits off the array
+        // case first), not numeric add on the header pointers.
+        gen_cat(st, node, lt, rt)
+    } else if (op == "+" && (lt.k == "tarrfix" || rt.k == "tarrfix")) {
         gen_cat(st, node, lt, rt)
     } else if (lt.k == "tfloat" || rt.k == "tfloat") {
         gen_float_bin(st, node, lt, rt)
@@ -2521,6 +2627,8 @@ def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             gen_substr(st, node)
         } else if (name == "trim") {
             gen_trim(st, node)
+        } else if (name == "prepend") {
+            gen_prepend(st, node)
         } else if (name == "byte_at") {
             gen_byte_at(st, node)
         } else if (name == "ord") {
@@ -2653,6 +2761,56 @@ def gen_rec_str(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 };
 
 // acc = acc + <constant>, with the layout above still in place.
+// Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
+// y_arr_cat copies both sides; the one-element side is built with the
+// ordinary array literal emitter, so `arr + v` evaluates v exactly once.
+def gen_cat_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, lt: { k: str }, rt: { k: str }) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let ln = node.line;
+    let cl = node.col;
+    let lk: str = lt.k;
+    let rk: str = rt.k;
+    let esz = 8;
+    let larr = true;
+    if (lk == "tarr") { esz = arr_elem_bytes(lt); 0; }
+    else if (lk == "tarrfix") { esz = arr_elem_bytes(lt); 0; }
+    else { larr = false; esz = arr_elem_bytes(rt); 0; };
+    let one = { k: "array", elems: args1(node.r), line: ln, col: cl };
+    if (larr) {
+        0
+    } else {
+        one = { k: "array", elems: args1(node.l), line: ln, col: cl };
+        0
+    };
+    if (larr) {
+        st = gen(st, node.l);
+        st = emit(st, "    push %rax");
+        if (rk == "tarr") {
+            st = gen(st, node.r);
+            0
+        } else {
+            if (rk == "tarrfix") {
+                st = gen(st, node.r);
+                0
+            } else {
+                st = gen_array_esz(st, one, esz);
+                0
+            };
+            0
+        };
+        0
+    } else {
+        st = gen_array_esz(st, one, esz);
+        st = emit(st, "    push %rax");
+        st = gen(st, node.r);
+        0
+    };
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov $" + tostring(esz) + ", %rax");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    call y_arr_cat");
+    emit(st, "    add $24, %rsp")
+};
+
 def gen_acc_cat_const(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, s: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = emit(st, "    mov (%rsp), %rax");
     st = emit(st, "    push %rax");
@@ -2726,6 +2884,26 @@ def gen_syscall(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     emit(st, "    syscall")
 };
 
+// The frame offset of the closure record of the body being emitted, or -1
+// when it captures nothing. Every "capture" env entry carries it (their
+// `off` is the record's slot offset) — used to pass the record along on
+// recursive `self` calls, which would otherwise reach the body without
+// one.
+def capture_off(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }) -> long {
+    let env = st.env;
+    let i = 0;
+    let res = -1;
+    while (i < len(env)) {
+        let e = env[i];
+        if (e.kind == "capture") {
+            res = e.off;
+            0
+        } else { 0; };
+        i = i + 1;
+    };
+    res
+};
+
 def gen_direct(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let label = "";
     let indirect = false;
@@ -2752,9 +2930,26 @@ def gen_direct(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     if (indirect) {
         gen_indirect(st, node, node.callee)
     } else {
+        // A recursive `self` call reaches the same body, which reads its
+        // captures through the closure record — pass this frame's record
+        // along, exactly as an indirect call would.
+        let soff = -1;
+        if (name == "self") {
+            soff = capture_off(st);
+            0
+        } else { 0; };
+        if (soff >= 0) {
+            st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rax");
+            st = emit(st, "    push %rax");
+            0
+        } else { 0; };
         st = gen_push_args(st, node.args);
         st = emit(st, "    call " + label);
         let nbytes = len(node.args) * 8;
+        if (soff >= 0) {
+            nbytes = nbytes + 8;
+            0
+        } else { 0; };
         if (nbytes == 0) {
             st
         } else {
@@ -2998,6 +3193,12 @@ def gen_func_literal(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, lbl, ru.uid, node, false, false, captypes);
+    let bci = 0;
+    while (bci < len(caps)) {
+        let bcn: str = caps[bci];
+        st = box_capture(st, bcn);
+        bci = bci + 1;
+    };
     gen_make_closure(st, lbl, caps)
 };
 
@@ -3014,6 +3215,12 @@ def gen_closure_binding(st: { out: [str], rodata: [[str]], uid: long, fuid: long
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, fe.label, ru.uid, func, false, false, captypes);
+    let bci = 0;
+    while (bci < len(caps)) {
+        let bcn: str = caps[bci];
+        st = box_capture(st, bcn);
+        bci = bci + 1;
+    };
     st = gen_make_closure(st, fe.label, caps);
     let coff = (st.slots + 1) * -8;
     st = emit(st, "    mov %rax, " + tostring(coff) + "(%rbp)");
@@ -3121,10 +3328,23 @@ def gen_assign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     let e = env_find(st, node.name);
     // Reference semantics: arrays and records are heap values shared by
     // every binding that names them (no copy-on-store) — the same model
-    // the VM and the compiled C runtime use.
+    // the VM and the compiled C runtime use. A captured variable lives in
+    // one shared heap cell (box_capture), so its store goes through the
+    // cell and is visible in the capturing scope too.
     st = gen(st, node.v);
-    st = emit(st, "    mov %rax, " + tostring(e.off) + "(%rbp)");
-    st
+    if (e.kind == "capture") {
+        let idx = tonum(e.label);
+        st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
+        st = emit(st, "    mov " + tostring(8 * (idx + 1)) + "(%rcx), %rdx");
+        st = emit(st, "    mov %rax, (%rdx)");
+        st
+    } else if (e.kind == "box") {
+        st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rdx");
+        st = emit(st, "    mov %rax, (%rdx)");
+        st
+    } else {
+        emit(st, "    mov %rax, " + tostring(e.off) + "(%rbp)")
+    }
 };
 
 // Fill n frame slots (base = lowest address) with the value in %rax.
@@ -3386,20 +3606,23 @@ def gen_scale10(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 };
 
 def gen_index(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    // Checker: plain id of fixed or heap array. Bounds-trapped at runtime.
-    // Fixed arrays are heap headers now (same layout as heap arrays);
-    // only the bound differs: static n for [T; N], runtime len for [T].
-    let e = env_find(st, node.arr.v);
-    let ixesz = arr_elem_bytes(e.typ);
-    st = gen(st, node.arr);
+    // Checker: an array expression — a plain variable or a nested place
+    // (`grid[0][1]`, `rec.v[i]`); the base is evaluated once, here.
+    // Bounds-trapped at runtime. Fixed arrays are heap headers now (same
+    // layout as heap arrays); only the bound differs: static n for [T; N],
+    // runtime len for [T].
+    let garr = node.arr;
+    let bt = infer(st, garr);
+    let ixesz = arr_elem_bytes(bt);
+    st = gen(st, garr);
     st = emit(st, "    push %rax");
     st = gen(st, node.idx);
     st = emit(st, "    mov %rax, %rcx");
     st = emit(st, "    pop %rax");
     st = emit(st, "    test %rcx, %rcx");
     st = emit(st, "    js y_oob");
-    if (e.typ.k == "tarrfix") {
-        st = emit(st, "    cmp $" + tostring(e.typ.n) + ", %rcx");
+    if (bt.k == "tarrfix") {
+        st = emit(st, "    cmp $" + tostring(bt.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
         emit(st, elem_load(ixesz, "%rax", "%rcx", "%rax"))
     } else {
@@ -3410,21 +3633,307 @@ def gen_index(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     }
 };
 
-// s.f = v — in-place record field write. The checker guarantees the object
-// is a plain variable holding a record whose static shape has the field.
-// Records are heap addresses; field i lives at addr+8i (same layout the
-// static gen_dot read uses), so the write is: value -> (rec + 8*idx).
+// s.f = v — in-place record field write, for any object expression: a
+// plain variable, a nested place (`a[0].f`), a chain (`x.y.f`). Records
+// are heap addresses; field i lives at addr+8i (same layout the static
+// gen_dot read uses), so the write is: value -> (rec + 8*idx). The object
+// runs first, then the value — the VM's order. Reference semantics: a
+// field write is observable through every binding (same as the VM and the
+// compiled C runtime).
 def gen_dotassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    let e = env_find(st, node.obj.v);
-    // Reference semantics: params share the caller's record, and a field
-    // write is observable through every binding (same as the VM and the
-    // compiled C runtime).
-    let idx = rec_field_idx(e.typ, node.key);
-    st = gen(st, node.v);
+    let dobj = node.obj;
+    let dkey = node.key;
+    let dt = infer(st, dobj);
+    let idx = rec_field_idx(dt, dkey);
+    st = gen(st, dobj);
     st = emit(st, "    push %rax");
-    st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rdx");
-    st = emit(st, "    pop %rax");
+    st = gen(st, node.v);
+    st = emit(st, "    pop %rdx");
     st = emit(st, "    mov %rax, " + tostring(8 * idx) + "(%rdx)")
+};
+
+// ── ++/-- and op= ──────────────────────────────────────────────────────
+// These desugar into ordinary statements before emitting: the arithmetic
+// then goes through gen_bin (whose division/modulo handle LONG_MIN and -1),
+// and a target like a[f()] is evaluated EXACTLY ONCE — the desugar binds
+// its index/base expression in a synthetic `let` first. Synthetic names
+// are `y_t<N>`: user names carry rename's `$`, and `y_` is reserved, so
+// they cannot collide with anything the program can write.
+//
+// Array forms are the in-place ones: `arr += v` becomes push (the header
+// never moves, so every alias sees the append), `arr += arr2` a push loop
+// over arr2, and `arr *= v` the prepend primitive.
+
+// Synthetic AST pieces for the ++/-- and op= desugars. Node lists are
+// built with push chains over a let-bound [] — the checker rejects
+// heterogeneous array literals (see gen_str_const's note).
+def n_num(v: str, line: long, col: long) -> {k: str} {
+    { k: "num", v: v, line: line, col: col }
+};
+
+def n_id(v: str, line: long, col: long) -> {k: str} {
+    { k: "id", v: v, line: line, col: col }
+};
+
+def args1(a) -> [{k: str}] {
+    let out: [{k: str}] = [];
+    out = push(out, a);
+    out
+};
+
+def args2(a, b) -> [{k: str}] {
+    let out: [{k: str}] = [];
+    out = push(out, a);
+    out = push(out, b);
+    out
+};
+
+def n_call1(name: str, a0, line: long, col: long) -> {k: str} {
+    { k: "call", callee: n_id(name, line, col), args: args1(a0), line: line, col: col }
+};
+
+def n_call2(name: str, a0, a1, line: long, col: long) -> {k: str} {
+    { k: "call", callee: n_id(name, line, col), args: args2(a0, a1), line: line, col: col }
+};
+
+def block2(a, b, ln: long, cl: long) -> {k: str} {
+    let st: [{k: str}] = [];
+    st = push(st, a);
+    st = push(st, b);
+    { k: "block", stmts: st, line: ln, col: cl }
+};
+
+def block3(a, b, c, ln: long, cl: long) -> {k: str} {
+    let st: [{k: str}] = [];
+    st = push(st, a);
+    st = push(st, b);
+    st = push(st, c);
+    { k: "block", stmts: st, line: ln, col: cl }
+};
+
+def block4(a, b, c, d, ln: long, cl: long) -> {k: str} {
+    let st: [{k: str}] = [];
+    st = push(st, a);
+    st = push(st, b);
+    st = push(st, c);
+    st = push(st, d);
+    { k: "block", stmts: st, line: ln, col: cl }
+};
+
+def block5(a, b, c, d, e, ln: long, cl: long) -> {k: str} {
+    let st: [{k: str}] = [];
+    st = push(st, a);
+    st = push(st, b);
+    st = push(st, c);
+    st = push(st, d);
+    st = push(st, e);
+    { k: "block", stmts: st, line: ln, col: cl }
+};
+
+def block6(a, b, c, d, e, f, ln: long, cl: long) -> {k: str} {
+    let st: [{k: str}] = [];
+    st = push(st, a);
+    st = push(st, b);
+    st = push(st, c);
+    st = push(st, d);
+    st = push(st, e);
+    st = push(st, f);
+    { k: "block", stmts: st, line: ln, col: cl }
+};
+
+def gen_incdec(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let op = node.op;
+    let binop = "+";
+    if (op == "--") { binop = "-"; 0; } else { 0; };
+    let tgt = node.tgt;
+    let ln = node.line;
+    let cl = node.col;
+    let one = n_num("1", ln, cl);
+    let r = next_uid(st);
+    st = r.st;
+    let t1 = "y_t" + tostring(r.uid);
+    // One shape for every place: capture the base/index exactly once (a
+    // no-op let for a plain variable), read the place, step it, write it
+    // back. The arithmetic goes through gen_bin (LONG_MIN / -1 safe).
+    let bind = gen_place_bind(tgt, t1, ln, cl);
+    let place = gen_place_read(tgt, t1, ln, cl);
+    if (node.pre) {
+        // ++x -> { bind; let v = x + 1; x = v; v }
+        let nv = { k: "bin", op: binop, l: place, r: one, line: ln, col: cl };
+        let d2 = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: nv, line: ln, col: cl };
+        let asg = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
+        gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+    } else {
+        // x++ -> { bind; let v = x; x = v + 1; v }
+        let d2 = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: place, line: ln, col: cl };
+        let nv = { k: "bin", op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
+        let asg = gen_place_assign(tgt, nv, t1, ln, cl);
+        gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+    }
+};
+
+// `x op= v`: arrays take the in-place forms (`+=` push/append, `*=`
+// prepend), everything else
+// the arithmetic desugar. Arrays are homogeneous by design, so `+=` on an
+// array is either a same-typed element (push) or a same-typed array
+// (append) — never a mix.
+def gen_opassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let t = infer(st, node.tgt);
+    if (t.k == "tarr" || t.k == "tarrfix") {
+        gen_opassign_arr(st, node)
+    } else {
+        gen_opassign_arith(st, node)
+    }
+};
+
+def gen_opassign_arith(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    // `x op= v` for numbers and strings -> `x = x op v`, with the target's
+    // index/base evaluated once through a synthetic let.
+    let tgt = node.tgt;
+    let op = node.op;
+    let ln = node.line;
+    let cl = node.col;
+    let r = next_uid(st);
+    st = r.st;
+    let t1 = "y_t" + tostring(r.uid);
+    let bind = gen_place_bind(tgt, t1, ln, cl);
+    let rd = gen_place_read(tgt, t1, ln, cl);
+    let bin = { k: "bin", op: op, l: rd, r: node.v, line: ln, col: cl };
+    let d2 = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: bin, line: ln, col: cl };
+    let asg = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
+    gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+};
+
+// The place an opassign target names. `t1` is the synthetic name that
+// captured the target's index (a[i]) or base (o.f) — an id target needs
+// no capture (re-reading a variable has no side effects). Each target
+// shape gets its own arm (single-call dispatch, see normnode note).
+def place_read_id(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    n_id(tgt.v, ln, cl)
+};
+
+// The base array node for an index place: a plain variable is used
+// directly (re-reading it has no side effects); any other base expression
+// was captured in `t1 + "a"` (see place_bind_idx), so the desugared forms
+// read and write it through a plain variable and evaluate it exactly once.
+def place_arr(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    let ba = tgt.arr;
+    if (ba.k == "id") { n_id(ba.v, ln, cl) } else { n_id(t1 + "a", ln, cl) }
+};
+
+def place_read_idx(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "index", arr: place_arr(tgt, t1, ln, cl), idx: n_id(t1, ln, cl), line: ln, col: cl }
+};
+
+def place_read_dot(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "dot", obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl }
+};
+
+def gen_place_read(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    if (tgt.k == "id") { place_read_id(tgt, t1, ln, cl) }
+    else if (tgt.k == "index") { place_read_idx(tgt, t1, ln, cl) }
+    else { place_read_dot(tgt, t1, ln, cl) }
+};
+
+def place_asg_id(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "assign", name: tgt.v, v: valnode, line: ln, col: cl }
+};
+
+def place_asg_idx(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "idxassign", arr: place_arr(tgt, t1, ln, cl), idx: n_id(t1, ln, cl), v: valnode, line: ln, col: cl }
+};
+
+def place_asg_dot(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "dotassign", obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl }
+};
+
+def gen_place_assign(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
+    if (tgt.k == "id") { place_asg_id(tgt, valnode, t1, ln, cl) }
+    else if (tgt.k == "index") { place_asg_idx(tgt, valnode, t1, ln, cl) }
+    else { place_asg_dot(tgt, valnode, t1, ln, cl) }
+};
+
+def place_bind_id(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "block", stmts: [], line: ln, col: cl }
+};
+
+def place_bind_idx_id(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1, v: tgt.idx, line: ln, col: cl }
+};
+
+def place_bind_idx_nest(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    // nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
+    // `t1 + "a"` as well, so the place evaluates it exactly once.
+    let tba = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "a", v: tgt.arr, line: ln, col: cl };
+    let tib = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1, v: tgt.idx, line: ln, col: cl };
+    block2(tba, tib, ln, cl)
+};
+
+def place_bind_idx(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    let ba = tgt.arr;
+    if (ba.k == "id") { place_bind_idx_id(tgt, t1, ln, cl) }
+    else { place_bind_idx_nest(tgt, t1, ln, cl) }
+};
+
+def place_bind_dot(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1, v: tgt.obj, line: ln, col: cl }
+};
+
+// The synthetic `let` that runs the target's index/base exactly once (a
+// no-op statement for id targets).
+def gen_place_bind(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+    if (tgt.k == "id") { place_bind_id(tgt, t1, ln, cl) }
+    else if (tgt.k == "index") { place_bind_idx(tgt, t1, ln, cl) }
+    else { place_bind_dot(tgt, t1, ln, cl) }
+};
+
+def gen_opassign_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    // In-place array forms. `*=` prepends one element. `+=` pushes one
+    // element, or — when the value is an array of the SAME type as the
+    // target — appends it element by element (its length is captured
+    // first, so `a += a` is safe).
+    let tgt = node.tgt;
+    let op = node.op;
+    let v = node.v;
+    let ln = node.line;
+    let cl = node.col;
+    let r = next_uid(st);
+    st = r.st;
+    let t1 = "y_t" + tostring(r.uid);
+    let tt = infer(st, tgt);
+    let et = tt.of;
+    let mode = "push";
+    if (op == "*") {
+        mode = "prepend";
+        0
+    } else {
+        let vt = infer(st, v);
+        if (types.teq(vt, et)) {
+            0
+        } else {
+            mode = "append";
+            0
+        };
+        0
+    };
+    if (mode == "append") {
+        // { let tv = v; let ti = 0; let tn = len(tv);
+        //   while (ti < tn) { place = push(place, tv[ti]); ti = ti + 1 }
+        //   place }
+        let tv = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: v, line: ln, col: cl };
+        let ti = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl };
+        let tn = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl };
+        let elem = { k: "index", arr: n_id(t1 + "v", ln, cl), idx: n_id(t1 + "i", ln, cl), line: ln, col: cl };
+        let put = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
+        let step = { k: "assign", name: t1 + "i", v: { k: "bin", op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
+        let loop = { k: "while", cond: { k: "bin", op: "<", l: n_id(t1 + "i", ln, cl), r: n_id(t1 + "n", ln, cl), line: ln, col: cl }, body: block2(put, step, ln, cl), line: ln, col: cl };
+        gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+    } else {
+        let fname = "push";
+        if (mode == "prepend") { fname = "prepend"; 0; } else { 0; };
+        let call = n_call2(fname, gen_place_read(tgt, t1, ln, cl), v, ln, cl);
+        gen(st, block3(gen_place_bind(tgt, t1, ln, cl), gen_place_assign(tgt, call, t1, ln, cl), gen_place_read(tgt, t1, ln, cl), ln, cl))
+    }
 };
 
 def gen_idxassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -3432,10 +3941,14 @@ def gen_idxassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     // Fixed uses the static bound n; heap uses the runtime len.
     // Reference semantics: `x[i] = v` writes through to the array every
     // binding shares — params included (the VM and the compiled C runtime
-    // alias the same way).
-    let e = env_find(st, node.arr.v);
-    let iaesz = arr_elem_bytes(e.typ);
-    st = gen(st, node.arr);
+    // alias the same way). The base is any array expression and runs once
+    // (the VM's order: base, index, value). No write-back to the base:
+    // the header pointer never moves, so the store through it is already
+    // visible through every binding.
+    let garr = node.arr;
+    let bt = infer(st, garr);
+    let iaesz = arr_elem_bytes(bt);
+    st = gen(st, garr);
     st = emit(st, "    push %rax");
     st = gen(st, node.idx);
     st = emit(st, "    push %rax");
@@ -3444,8 +3957,8 @@ def gen_idxassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     st = emit(st, "    pop %rdx");
     st = emit(st, "    test %rcx, %rcx");
     st = emit(st, "    js y_oob");
-    if (e.typ.k == "tarrfix") {
-        st = emit(st, "    cmp $" + tostring(e.typ.n) + ", %rcx");
+    if (bt.k == "tarrfix") {
+        st = emit(st, "    cmp $" + tostring(bt.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
         st = emit(st, "    mov %rdx, %r10");
         st = emit(st, "    mov %rax, %rdx");
@@ -3464,7 +3977,6 @@ def gen_idxassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
         st = emit(st, "    mov %r10, %rdx");
         0
     };
-    st = emit(st, "    mov %rdx, " + tostring(e.off) + "(%rbp)");
     st
 };
 
@@ -3789,6 +4301,19 @@ def gen_trim(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_trim");
     emit(st, "    add $8, %rsp")
+};
+
+// prepend(arr, v) -> arr: in-place insert at the front (the header never
+// moves, so every alias sees it). The `*=` operator desugars to this.
+def gen_prepend(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let pargs = node.args;
+    let pesz = arr_elem_bytes(infer(st, pargs[0]));
+    st = gen_push_args(st, node.args);
+    st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    call y_arr_prepend");
+    let nbytes = len(node.args) * 8 + 8;
+    emit(st, "    add $" + tostring(nbytes) + ", %rsp")
 };
 
 // byte_at(s, i): byte i of string s, trapped when out of bounds. This is
@@ -4454,7 +4979,12 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
         };
         pr = phase_end(times, "emit_fns", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
-        // main = program with defs skipped (they're hoisted)
+        // main = program with hoisted defs skipped. A capture-free def is
+        // emitted once by the loop above (calls go direct to its label); a
+        // CAPTURING one is emitted at its creation site instead — so its
+        // decl must run here, where gen_decl emits the body at the same
+        // label and binds the closure record (exactly what a nested `def`
+        // does).
         let main_stmts = [];
         let pstmts = ast3.stmts;
         let i = 0;
@@ -4462,9 +4992,17 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
             let s = pstmts[i];
             if (s.k == "decl") {
                 if (s.kind == "def") {
-                    0;
+                    if (len(fn_captures(s.v, allfnnames)) == 0) { 0; } else {
+                        main_stmts = push(main_stmts, s);
+                        0;
+                    };
+                    0
                 } else if (s.v.k == "func") {
-                    0;
+                    if (len(fn_captures(s.v, allfnnames)) == 0) { 0; } else {
+                        main_stmts = push(main_stmts, s);
+                        0;
+                    };
+                    0
                 } else {
                     main_stmts = push(main_stmts, s);
                     0;
