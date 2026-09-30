@@ -114,12 +114,13 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
     col = col + 1;
     let start = i;
     let open = true;
+    let closed = false;
     let hasesc = false;
     while (open) {
         if (i < n) {
             let ch = substr(src, i, 1);
             if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; 0; }
-            else if (ch == q) { open = false; 0; }
+            else if (ch == q) { open = false; closed = true; 0; }
             else {
                 if (ch == "\n") { line = line + 1; col = 1; 0; }
                 else { col = col + 1; 0; };
@@ -129,11 +130,14 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
             0
         } else { open = false; 0 };
     };
-    if (open) {
+    if (closed) {
+        0
+    } else {
+        // ran off the end with the quote still open
         puts("error: unterminated string literal\n");
         exit(1);
         0
-    } else { 0 };
+    };
     let raw = substr(src, start, i - start);
     i = i + 1;  // skip closing quote
     col = col + 1;

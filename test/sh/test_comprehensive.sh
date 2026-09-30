@@ -307,7 +307,7 @@ run_test "bytes: first element" 'let b = bytes("Hello"); print(b[0]);' '72'
 run_test "bytes: round trip" 'print(from_bytes(bytes("round trip")));' 'round trip'
 run_test "bytes: empty string" 'print(len(bytes("")));' '0'
 run_test "from_bytes: literal" 'let b: [byte] = [104, 105]; print(from_bytes(b));' 'hi'
-run_test "byte: annotated array literal" 'let b: [byte] = [1, 2, 3]; print(tostring(b));' '[1, 2, 3]'
+run_test "byte: annotated array literal" 'let b: [byte] = [1, 2, 3]; print(tostring(b));' "b'\\x01\\x02\\x03'"
 run_test "byte: widens to long" 'let b: [byte] = [41]; let n = b[0] + 1; print(n);' '42'
 run_test "byte: unsigned above 127" 'let b: [byte] = [200]; print(b[0]);' '200'
 run_test "byte: push and index" 'let b: [byte] = []; b += 65; b += 66; print(from_bytes(b));' 'AB'
@@ -412,15 +412,15 @@ run_test "closure: counter" 'def make_counter() { let n = 0; def inc() { n = n +
 # ── Functions: higher-order ──
 echo ""
 echo "── Functions: higher-order ──"
-run_test "HOF: map" 'def map(f, xs) { let r = []; foreach (x in xs) { r += f(x)) }; r }; def double(x) { x * 2 }; print(map(double, [1,2,3]));' '[2, 4, 6]'
-run_test "HOF: filter" 'def filter(p, xs) { let r = []; foreach (x in xs) { if (p(x)) { r += x) } }; r }; def is_even(x) { x % 2 == 0 }; print(filter(is_even, [1,2,3,4,5]));' '[2, 4]'
-run_test "HOF: reduce" 'def reduce(f, acc, xs) { foreach (x in xs) { acc = f(acc, x) }; acc }; def add(a, b) { a + b }; print(reduce(add, 0, [1,2,3,4,5]));' '15'
+run_test "HOF: map" 'def map(f: (long) -> long, xs: [long]) -> [long] { let r: [long] = []; foreach (x in xs) { r += f(x) }; r }; def double(x: long) { x * 2 }; print(map(double, [1,2,3]));' '[2, 4, 6]'
+run_test "HOF: filter" 'def filter(p: (long) -> bool, xs: [long]) -> [long] { let r: [long] = []; foreach (x in xs) { if (p(x)) { r += x; 0; } else { 0; }; 0 }; r }; def is_even(x: long) { x % 2 == 0 }; print(filter(is_even, [1,2,3,4,5]));' '[2, 4]'
+run_test "HOF: reduce" 'def reduce(f: (long, long) -> long, acc: long, xs: [long]) -> long { foreach (x in xs) { acc = f(acc, x) }; acc }; def add(a: long, b: long) { a + b }; print(reduce(add, 0, [1,2,3,4,5]));' '15'
 
 # ── Functions: anonymous ──
 echo ""
 echo "── Functions: anonymous ──"
 run_test "anonymous: immediate" 'print((def(x) { x * 2 })(5));' '10'
-run_test "anonymous: as arg" 'def apply(f, x) { f(x) }; print(apply(def(n) { n + 1 }, 10));' '11'
+run_test "anonymous: as arg" 'def apply(f: (long) -> long, x: long) { f(x) }; print(apply(def(n: long) { n + 1 }, 10));' '11'
 
 # ── Data types: arrays ──
 echo ""
@@ -429,7 +429,7 @@ run_test "array: literal" 'print([1, 2, 3]);' '[1, 2, 3]'
 run_test "array: empty" 'print([]);' '[]'
 run_test "array: index" 'let a = [10, 20, 30]; print(a[1]);' '20'
 run_test "array: nested" 'let a = [[1,2], [3,4]]; print(a[1][0]);' '3'
-run_test "array: mixed types" 'print([1, "two", true, null]);' '[1, two, true, null]'
+run_test "array: mixed types is rejected" 'print([1, "two", true, null]);' "array element: expected long, got str" 
 
 # ── Data types: maps ──
 echo ""
@@ -511,13 +511,14 @@ run_test "deep nesting" 'let a = [[[[42]]]]; print(a[0][0][0][0]);' '42'
 echo ""
 echo "── Error cases ──"
 run_test "undefined variable" 'print(undefined_var);' 'undefined_var'
-run_test "type error: call non-function" 'let x = 42; x();' 'non-function'
+run_test "type error: call non-function" 'let x = 42; x();' "is not a function" 
 # Arity is enforced at run time in BOTH engines: the typechecker is advisory,
 # so without the generated check a short call read args[] past the end and the
 # compiled binary segfaulted (test/y/native/e05_badcall.y).
-run_test "arity: too few args" 'def add(a: long, b: long) -> long { a + b }; print(add(1));' 'Argument count mismatch'
-run_test "arity: too many args" 'def one(a: long) -> long { a }; print(one(1, 2));' 'Argument count mismatch'
-run_test "arity: args to a no-arg function" 'def z() -> long { 7 }; print(z(1));' 'Argument count mismatch'
+# Arity is a static error now (the VM used to report it at run time).
+run_test "arity: too few args" 'def add(a: long, b: long) -> long { a + b }; print(add(1));' "takes 2 args, got 1"
+run_test "arity: too many args" 'def one(a: long) -> long { a }; print(one(1, 2));' "takes 1 args, got 2"
+run_test "arity: args to a no-arg function" 'def z() -> long { 7 }; print(z(1));' "takes 0 args, got 1" 
 
 # ── Self-hosted compiler ──
 # Lives in test/sh/test_ycc.sh now (needs ./ycc); run via

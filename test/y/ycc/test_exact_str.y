@@ -19,6 +19,7 @@ while (open && i < n) {
         print("  closing quote");
         i = i + 1;
         open = false;
+        0;
     } else {
         buf = buf + ch;
         i = i + 1;

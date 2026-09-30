@@ -118,12 +118,13 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
     col = col + 1;
     long start = i;
     int open = 1;
+    int closed = 0;
     int hasesc = 0;
     while (open) {
         if (i < n) {
             Yv *ch = ys_substr(src, i, 1);
             if (ys_eq_lit(ch, "\\")) { hasesc = 1; i = i + 2; col = col + 2; ; }
-            else if (ys_eq(ch, q)) { open = 0; ; }
+            else if (ys_eq(ch, q)) { open = 0; closed = 1; ; }
             else {
                 if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
                 else { col = col + 1; ; };
@@ -133,11 +134,14 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
             ;
         } else { open = 0; ; }
     };
-    if (open) {
+    if (closed) {
+        ;
+    } else {
+        /* ran off the end with the quote still open */
         puts_(ys("error: unterminated string literal\n"));
-      
-        exit_(1);  ;
-    } else { ; }
+        exit_(1);
+        ;
+    }
     Yv *raw = ys_substr(src, start, i - start);
     i = i + 1;  // skip closing quote
     col = col + 1;

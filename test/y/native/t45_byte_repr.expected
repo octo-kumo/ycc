@@ -1,0 +1,11 @@
+b'hello world'
+b'~'
+b''
+b'\x01\x02\x1f\x7f\x80\xff'
+b'\'"\\'
+b'\n\r\t'
+b'a\nb'
+b'\x00ABC\xff'
+5
+b'ABC'
+b'ABC!'

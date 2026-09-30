@@ -2,11 +2,11 @@
 72
 111
 Hello
-[72, 101, 108, 108, 111]
+b'Hello'
 73
 72
 hi!
-[104, 105, 33]
+b'hi!'
 3
 Hi!
 Hi
@@ -17,20 +17,20 @@ true
 false
 40
 abcdefghijklmnopqrstuvwxyzabcdefghijklmn
-[0, 0, 0, 0]
-[0, 0, 255, 0]
+b'\x00\x00\x00\x00'
+b'\x00\x00\xff\x00'
 MIXED CASE 123
-[200, 255, 128]
+b'\xc8\xff\x80'
 255
 5000
 true
-[236, 237, 238, 239, 240, 241]
+b'\xec\xed\xee\xef\xf0\xf1'
 5000
 true
 0
-[]
+b''
 
-[]
-[7]
-[]
+b''
+b'\x07'
+b''
 9

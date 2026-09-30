@@ -42,7 +42,7 @@ def is_single_op(c: str) -> bool {
 };
 
 def tokenize(src: str) -> [{ t: str, v: str }] {
-    let toks = [];
+    let toks: [{ t: str, v: str }] = [];
     let i = 0;
     let n = len(src);
     while (i < n) {
@@ -59,6 +59,7 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 if (substr(src, i, 2) == "*/") {
                     i = i + 2;
                     open = false;
+                    0;
                 } else {
                     i = i + 1;
                 };
@@ -71,6 +72,7 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; };
             };
             toks += mk_tok("num", substr(src, start, i - start));
+            0;
         } else if (is_alpha(c)) {
             let start = i;
             while (i < n && is_alnum(substr(src, i, 1))) { i = i + 1; };
@@ -82,8 +84,10 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 word == "return" || word == "true" || word == "false" ||
                 word == "null") {
                 ty = "kw";
+                0;
             };
             toks += mk_tok(ty, word);
+            0;
         } else if (c == "\"") {
             i = i + 1;
             let buf = "";
@@ -101,12 +105,14 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
                 } else if (ch == "\"") {
                     i = i + 1;
                     open = false;
+                    0;
                 } else {
                     buf = buf + ch;
                     i = i + 1;
                 };
             };
             toks += mk_tok("str", buf);
+            0;
         } else {
             let two = two_char_op(src, i);
             if (two != "") {

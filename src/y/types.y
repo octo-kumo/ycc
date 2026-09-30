@@ -1413,7 +1413,12 @@ def incdec_check(st, node, tt: { k: str }) -> { typ: { k: str }, st: { bindings:
 // The result is always the target's type (the new value).
 def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     let op = node.op;
-    if (tt.k == "tarr" || tt.k == "tarrfix") {
+    if (tt.k == "tarrfix") {
+        // A fixed array's length is part of its type: growth is a type
+        // error (the old push-on-fixed rejection, now on the operators).
+        st = fail(st, "cannot grow fixed array " + tstr(tt) + " with '" + op + "=' (its length is part of its type; use [T] instead)", node.line, node.col);
+        { typ: tt, st: st }
+    } else if (tt.k == "tarr") {
         if (op == "*") {
             // `*= ` prepends ONE item — its type must be the element type.
             st = expect_type(st, vt, tt.of, "'*=' element", node.line, node.col);
