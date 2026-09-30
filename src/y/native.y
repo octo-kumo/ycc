@@ -3056,25 +3056,19 @@ def capture_off(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 def gen_direct(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let label = "";
     let indirect = false;
-    // NOTE: `0;` tails — every arm must have the same type (assignments to
-    // `label` are str, to `indirect` bool), so make them all long.
+    // VOID law: mixed-type if arms make this a statement; no filler tails needed.
     if (name == "self") {
         label = st.self_label;
-        0
     } else {
         let e = env_find(st, name);
         if (e.kind == "none") {
             label = "y_missing_" + name;
-            0
         } else if (e.kind == "func") {
             label = e.label;
-            0
         } else {
             // A local/param/capture holding a closure value: call through it.
             indirect = true;
-            0
         };
-        0
     };
     if (indirect) {
         gen_indirect(st, node, node.callee)
@@ -4971,7 +4965,7 @@ def gen_write_file(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc
 
 // write_bytes(path, bytes, mode): binary-safe emit (tinycc's
 // tcc_write_elf_file output step, minus buffering): openat + write loop
-// over the heap array's data + close + chmod. Args arrive left-to-right
+// over the packed byte array's data + close + chmod. Args arrive left-to-right
 // (path deepest); the helper takes the same Y convention.
 def gen_write_bytes(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = gen_push_args(st, node.args);

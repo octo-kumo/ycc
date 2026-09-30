@@ -1,5 +1,5 @@
 // asm.y — assembler for the native backend's x86-64 dialect.
-// asm_assemble(text) -> {ok, bytes, error}
+// asm_assemble(text) -> {ok, bytes: [byte], error}
 // asm_octal(bytes) -> printf-safe octal payload string.
 // Only what native.y/arch_x64.y emit is accepted; anything else is a loud
 // error with a line number — never a silent miscompile.
@@ -345,8 +345,8 @@ def mem_scaleVal(t: str, v: long, disp: long, bn: long, xn: long) -> {ok: bool, 
 
 // Decode a quoted GAS string (no surrounding quotes in s).
 // Handles \\ \" \n \t \r and \ooo octal. Returns {ok, bytes, error}.
-def decode_str(s: str) -> {ok: bool, bytes: [long], error: str} {
-    let out = [];
+def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
+    let out: [byte] = [];
     let i = 0;
     let n = len(s);
     let err = "";
@@ -544,7 +544,7 @@ def label_addr(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: l
 
 // ── pass 1: parse lines into items ─────────────────────────────────────
 
-def asm_assemble(text: str) -> {ok: bool, bytes: [long], error: str, times: [{ name: str, us: long, heap: long }]} {
+def asm_assemble(text: str) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
     let t0 = clock_us();
     let h0 = heap_used();
     let lines = split(text, "\n");
@@ -720,7 +720,7 @@ def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], 
     }
 };
 
-def asm_content(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_content(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     if (substr(line, 0, 1) == ".") {
         asm_directive(line, lno, sec, offs)
     } else {
@@ -728,7 +728,7 @@ def asm_content(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec
     }
 };
 
-def asm_strdata(line: str, lno: long, sec: long, offs: [long], rest: str, nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata(line: str, lno: long, sec: long, offs: [long], rest: str, nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // .string/.ascii quoted payload (split from asm_directive: dir-gate above
     // narrows; data-item shape built ONLY here).
     // NOTE: single gate on a BOOL (str narrowing is exact — see
@@ -748,12 +748,12 @@ def asm_strdata_bad(rest: str) -> bool {
     else { false }
 };
 
-def asm_strdata_err(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_err(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // (split: error shape `{err,sec,offs,item:{}}` built ONLY here.)
     { err: "L" + tostring(lno) + ": bad string literal", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
 };
 
-def asm_strdata_go(line: str, lno: long, sec: long, offs: [long], payload: str, nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_go(line: str, lno: long, sec: long, offs: [long], payload: str, nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     let d = decode_str(payload);
     if (!(d.ok)) {
         { err: "L" + tostring(lno) + ": " + d.error, sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
@@ -762,7 +762,7 @@ def asm_strdata_go(line: str, lno: long, sec: long, offs: [long], payload: str, 
     }
 };
 
-def asm_strdata_emit(sec: long, offs: [long], bytes: [long], nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // NOTE: `0;` tails (see parser.y parse_binary note).
     let bb = bytes;
     if (nul) {
@@ -772,13 +772,13 @@ def asm_strdata_emit(sec: long, offs: [long], bytes: [long], nul: bool) -> {err:
     asm_strdata_item(sec, offs, bb)
 };
 
-def asm_strdata_item(sec: long, offs: [long], bb: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_item(sec: long, offs: [long], bb: [byte]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     let item = { sec: sec, off: offs[sec], len: len(bb), kind: "data", bytes: bb, fix: [] };
     offs[sec] = offs[sec] + len(bb);
     { err: "", sec: sec, offs: offs, item: item }
 };
 
-def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     let sp = index_of(line, " ");
     let dir = line;
     let rest = "";
@@ -807,7 +807,7 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, s
 
 // .section payload (split from asm_directive: dir-gate above narrows).
 // NOTE: single bool gate (see asm_strdata note): marker-vs-error never mix.
-def asm_section(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_section(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     if (asm_section_bad(rest)) {
         asm_section_err(line, lno, sec, offs, rest)
     } else {
@@ -821,12 +821,12 @@ def asm_section_bad(rest: str) -> bool {
     else { true }
 };
 
-def asm_section_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_section_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // (split: error shape built ONLY here.)
     { err: "L" + tostring(lno) + ": unsupported section '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
 };
 
-def asm_section_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_section_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // (split: marker shape `{err,sec,offs,item:{sec}}` built ONLY here.)
     // NOTE: both arms share the key set — teq holds.
     if (rest == ".rodata") {
@@ -837,7 +837,7 @@ def asm_section_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, 
 };
 
 // .quad payload: single non-negative long, 8 bytes little-endian (string headers).
-def asm_quad(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_quad(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // NOTE: single bool gate (see asm_strdata note).
     if (asm_quad_bad(rest)) {
         asm_quad_err(line, lno, sec, offs, rest)
@@ -854,7 +854,7 @@ def asm_quad_bad(rest: str) -> bool {
     else { false }
 };
 
-def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // (split: error shape built ONLY here — one message per cause.)
     // NOTE: nested ifs (see is_digit_ch note); both arms share the key set.
     if (!is_num_text(rest)) {
@@ -864,7 +864,7 @@ def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {e
     }
 };
 
-def asm_quad_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_quad_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     // (split: data-item shape built ONLY here.)
     let bytes = enc.le64(tonum(rest));
     let item = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [] };
@@ -872,7 +872,7 @@ def asm_quad_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, off
     { err: "", sec: sec, offs: offs, item: item }
 };
 
-def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     let sp = index_of(line, " ");
     let tab = index_of(line, "\t");
     let cut = sp;
@@ -919,7 +919,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: l
     }
 };
 
-def asm_encode(mn: str, ops, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_encode(mn: str, ops, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
     let r = enc.enc_insn(mn, ops);
     if (r.err != "") {
         { err: "L" + tostring(lno) + ": " + r.err + " in '" + mn + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
@@ -933,7 +933,7 @@ def asm_encode(mn: str, ops, lno: long, sec: long, offs: [long]) -> {err: str, s
 
 // ── pass 2: layout, fixups, ELF ────────────────────────────────────────
 
-def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], labels: [{name: str, sec: long, off: long}]) -> {ok: bool, bytes: [long], error: str, times: [{ name: str, us: long, heap: long }]} {
+def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], labels: [{name: str, sec: long, off: long}]) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
     // section sizes
     let lt0 = clock_us();
     let lh0 = heap_used();
@@ -965,8 +965,8 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long],
         let pad = 0;
         let trail = code_len % 4096;
         if (trail != 0) { pad = 4096 - trail; 0; } else { 0 };
-        let code = [];
-        let ro = [];
+        let code: [byte] = [];
+        let ro: [byte] = [];
         let err = "";
         let i = 0;
         // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails.
@@ -978,7 +978,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long],
             let it = items[i];
             if (it.sec == 0) {
                 let r = patch_item(code, it, lmap, code_len, pad);
-                // NOTE: `0;` tails (see note above): str-arm vs [long]-arm.
+                // NOTE: `0;` tails (see note above): str-arm vs [byte]-arm.
                 if (r.err != "") {
                     err = r.err;
                     0
@@ -1018,7 +1018,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [long],
     }
 };
 
-def patch_item(code: [long], it: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long) -> {bytes: [long], err: str} {
+def patch_item(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long) -> {bytes: [byte], err: str} {
     let bytes = it.bytes;
     let err = "";
     // NOTE: single bool gate (see asm_strdata note): insn-vs-other shapes
@@ -1030,11 +1030,11 @@ def patch_item(code: [long], it: {sec: long, off: long, len: long, kind: str, by
     }
 };
 
-def patch_item_isdata(it: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}) -> bool {
+def patch_item_isdata(it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}) -> bool {
     if (it.kind == "insn") { false } else { true }
 };
 
-def patch_item_insn(code: [long], it: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, bytes: [long], err: str) -> {bytes: [long], err: str} {
+def patch_item_insn(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, bytes: [byte], err: str) -> {bytes: [byte], err: str} {
     // (split: insn-gate above narrows; `{bytes,err}` threading ONLY here.)
     if (true) {
         patch_item_loop(code, it, lmap, code_len, pad, bytes, err)
@@ -1043,7 +1043,7 @@ def patch_item_insn(code: [long], it: {sec: long, off: long, len: long, kind: st
     }
 };
 
-def patch_item_loop(code: [long], it: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, bytes: [long], err: str) -> {bytes: [long], err: str} {
+def patch_item_loop(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, bytes: [byte], err: str) -> {bytes: [byte], err: str} {
         let base = len(code);
         let fxlist = it.fix;
         let f = 0;
@@ -1078,7 +1078,7 @@ def patch_item_loop(code: [long], it: {sec: long, off: long, len: long, kind: st
     patch_item_finish(code, bytes, err)
 };
 
-def patch_item_kind2(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [long], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, at: long) -> {bytes: [long], err: str} {
+def patch_item_kind2(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, at: long) -> {bytes: [byte], err: str} {
     // (split: non-rel32 kinds; `{bytes,err}` built ONLY here + callees.)
     if (fx.kind == "rip32") {
         patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at)
@@ -1087,7 +1087,7 @@ def patch_item_kind2(lmap: [{name: str, sec: long, off: long}], code_len: long, 
     }
 };
 
-def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [long], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, at: long) -> {bytes: [long], err: str} {
+def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, at: long) -> {bytes: [byte], err: str} {
     // rel32/rip32: target - address past the instruction.
     // NOTE: fx/it stay BARE holes (see types.y note): single reads unify.
     let t = label_addr(lmap, code_len, pad, fx.lbl);
@@ -1099,7 +1099,7 @@ def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pa
     }
 };
 
-def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [long], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}) -> {bytes: [long], err: str} {
+def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}) -> {bytes: [byte], err: str} {
     // (split: diff-shape fixups only; `{bytes,err}` built ONLY here.)
     // NOTE: fx/it stay BARE holes (see types.y note): single reads unify.
     let ta = label_addr(lmap, code_len, pad, fx.lbl);
@@ -1111,7 +1111,7 @@ def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, p
     }
 };
 
-def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [long], ta: long) -> {bytes: [long], err: str} {
+def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], ta: long) -> {bytes: [byte], err: str} {
     let tb = label_addr(lmap, code_len, pad, fx.lbl2);
     if (!(tb.ok)) {
         { bytes: bytes, err: "undefined label '" + fx.lbl2 + "'" }
@@ -1120,11 +1120,11 @@ def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, 
     }
 };
 
-def patch_item_finish(code: [long], bytes: [long], err: str) -> {bytes: [long], err: str} {
+def patch_item_finish(code: [byte], bytes: [byte], err: str) -> {bytes: [byte], err: str} {
     { bytes: concat_bytes(code, bytes), err: err }
 };
 
-def patch32(bytes: [long], at: long, v: long) -> [long] {
+def patch32(bytes: [byte], at: long, v: long) -> [byte] {
     let b = enc.le32(v);
     let b0 = b;
     bytes[at] = b0[0];
@@ -1134,7 +1134,7 @@ def patch32(bytes: [long], at: long, v: long) -> [long] {
     bytes
 };
 
-def concat_bytes(a: [long], b: [long]) -> [long] {
+def concat_bytes(a: [byte], b: [byte]) -> [byte] {
     let i = 0;
     while (i < len(b)) {
         a += b[i];
@@ -1147,7 +1147,7 @@ def concat_bytes(a: [long], b: [long]) -> [long] {
 // bytes straight through the write syscall (NUL-safe). The old `octal`
 // debugging field was REMOVED: rendering it cost O(n^2) string building
 // (one malloc+copy per byte) and nothing reads it — it dominated -o time.
-def ycc_assemble(asm_text: str) -> {ok: bool, bytes: [long], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
+def ycc_assemble(asm_text: str) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
     let r = asm_assemble(asm_text);
     if (!(r.ok)) {
         { ok: false, bytes: [], octal: "", error: r.error, times: r.times }

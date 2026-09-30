@@ -14,8 +14,8 @@
  * - Nested defs see only their own params + top-level defs + intrinsics:
  *   referring to an outer local/param is a capture error (closures are
  *   planned, not present: no heap for envs yet).
- * - `if` conditions must be bool; branches must agree; if-without-else
- *   must have a void-typed body (expression-oriented, like the VM).
+ * - `if` conditions must be bool. Matching arms keep their value type;
+ *   mismatched arms make the `if` void. An `if` without `else` is void.
  * - print takes exactly one long/bool/str. syscall takes 1-7 long/bool/str/\*T.
  * - Assignment targets keep their declared type. No implicit conversions.
  *
@@ -2936,7 +2936,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
         } else if (ys_eq_lit(name, "write_bytes")) {
             // write_bytes(path, bytes, mode) -> bool: tinycc-style binary
             // emit (open/write/chmod over raw syscalls in native code).
-            // bytes is a heap [long] array (elf.y output); mode is a long
+            // bytes is a packed heap [byte] array (elf.y output); mode is a long
             // (493 = 0755 executable, -1 = skip chmod).
             if (yv_len(cargs) != 3) {
                 st = fail(st,
@@ -2954,8 +2954,19 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(w0, "typ"), yr(1, "k", ys("tstr")),
                                  ys("write_bytes path"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                if (!ys_eq_lit(yr_get(yr_get(w1, "typ"), "k"), "tarr") &&
-                    !ys_eq_lit(yr_get(yr_get(w1, "typ"), "k"), "tunk")) {
+                Yv *w1typ = yr_get(w1, "typ");
+                Yv *w1kind = yr_get(w1typ, "k");
+                if (ys_eq_lit(w1kind, "tarr")) {
+                    /* Require packed layout; scalar compatibility does not
+                       convert an existing [long] array. */
+                    st = expect_type(st, w1typ,
+                                     yr(2, "k", ys("tarr"), "of",
+                                        yr(1, "k", ys("tbyte"))),
+                                     ys("write_bytes data"),
+                                     yv_l(yr_get(node, "line")),
+                                     yv_l(yr_get(node, "col")));
+                    ;
+                } else if (!ys_eq_lit(w1kind, "tunk")) {
                     st = fail(st,
                               ys_cat(ys("write_bytes needs a byte array, got "),
                                      tstr(yr_get(w1, "typ"))),

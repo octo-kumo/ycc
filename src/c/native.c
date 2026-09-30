@@ -3836,26 +3836,20 @@ long capture_off(Yv *st) {
 Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
     Yv *label = ys("");
     int indirect = 0;
-    /* NOTE: `0;` tails — every arm must have the same type (assignments to
-     * `label` are str, to `indirect` bool), so make them all long. */
+    /* VOID law: mixed-type if arms make this a statement; no filler tails needed. */
     if (ys_eq_lit(name, "self")) {
         label = yr_get(st, "self_label");
-        ;
     } else {
         Yv *e = env_find(st, name);
         if (ys_eq_lit(yr_get(e, "kind"), "none")) {
             label = ys_cat(ys("y_missing_"), name);
-            ;
         } else if (ys_eq_lit(yr_get(e, "kind"), "func")) {
             label = yr_get(e, "label");
-            ;
         } else {
             /* A local/param/capture holding a closure value: call through
              * it. */
             indirect = 1;
-            ;
         }
-        ;
     }
     if (indirect) {
         return gen_indirect(st, node, yr_get(node, "callee"));

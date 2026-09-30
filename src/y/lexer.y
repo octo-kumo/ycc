@@ -8,26 +8,15 @@ def isdigit(c: str) -> bool {
     // bytes(), which allocates a copy of the string per character, and the
     // lexer classifies every character of the source. Comparisons land in
     // y_str_eq/y_str_cmp — byte primitives, no allocation.
-    // NOTE: nested ifs, not `&&` (see isalnum note below): the C VM
-    // evaluates both sides eagerly AND the native checker rejects `&&`
-    // whose operand shapes disagree (comparison-bool vs map-field access
-    // both poison through `&&`; plain comparison pairs are fine, but the
-    // uniform nested-if style keeps both toolchains quiet everywhere).
-    if (c >= "0") {
-        if (c <= "9") { true } else { false }
-    } else { false }
+    c >= "0" && c <= "9"
 };
 
 def isupper(c: str) -> bool {
-    if (c >= "A") {
-        if (c <= "Z") { true } else { false }
-    } else { false }
+    c >= "A" && c <= "Z"
 };
 
 def islower(c: str) -> bool {
-    if (c >= "a") {
-        if (c <= "z") { true } else { false }
-    } else { false }
+    c >= "a" && c <= "z"
 };
 
 def isalpha(c: str) -> bool {
@@ -35,48 +24,22 @@ def isalpha(c: str) -> bool {
     // "t0"/"r64" contain digits; the C backend's take_alpha accepts them too
     // via is_alpha... precisely: parser.c is_alpha includes is_digit, so
     // "t0" lexes as one id there as well — parity).
-    if (islower(c)) { true }
-    else if (isupper(c)) { true }
-    else if (c == "_") { true }
-    else { isdigit(c) }
+    islower(c) || isupper(c) || c == "_" || isdigit(c)
 };
 
 def isalnum(c: str) -> bool {
-    // NOTE: no `||` of bools here — the C VM evaluates both sides eagerly
-    // AND the native checker types `||` operands strictly; nested ifs keep
-    // both toolchains quiet.
-    if (isdigit(c)) { true } else { isalpha(c) }
+    isdigit(c) || isalpha(c)
 };
 
 // Digit of a radix literal (0x.. / 0b..), including `_` separators.
-// NOTE: nested ifs, not `||` (see isalnum note).
 def is_radix_ch(c: str, radix: long) -> bool {
-    let ok = false;
-    if (c == "_") { ok = true; 0; } else { 0; };
-    if (radix == 2) {
-        if (c == "0") { ok = true; 0; } else { 0; };
-        if (c == "1") { ok = true; 0; } else { 0; };
-        0
-    } else {
-        if (isdigit(c)) { ok = true; 0; } else { 0; };
-        if (c >= "a") {
-            if (c <= "f") { ok = true; 0; } else { 0; };
-            0
-        } else { 0; };
-        if (c >= "A") {
-            if (c <= "F") { ok = true; 0; } else { 0; };
-            0
-        } else { 0; };
-        0
-    };
-    ok
+    if (c == "_") { true }
+    else if (radix == 2) { c == "0" || c == "1" }
+    else { isdigit(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F") }
 };
 
 def isspace(c: str) -> bool {
-    if (c == " ") { true }
-    else if (c == "\t") { true }
-    else if (c == "\n") { true }
-    else { c == "\r" }
+    c == " " || c == "\t" || c == "\n" || c == "\r"
 };
 
 // NOTE: isdigit/isalpha/isalnum-style names MUST avoid underscores AND the
@@ -89,19 +52,9 @@ def isspace(c: str) -> bool {
 // names in ycc/*.y therefore use the flat isalpha/isdigit/isalnum style.
 
 // is c one of the single-char punctuation symbols?
-// NOTE: nested ifs, not `||` chains — the native checker rejects `||`
-// whose operands disagree, and `==` on strings yields bool while a bare
-// `c` or chained comparison can poison a branch (see isalnum note).
 def ispunct(c: str) -> bool {
-    if (c == "(") { true }
-    else if (c == ")") { true }
-    else if (c == "{") { true }
-    else if (c == "}") { true }
-    else if (c == "[") { true }
-    else if (c == "]") { true }
-    else if (c == ",") { true }
-    else if (c == ";") { true }
-    else { c == ":" }
+    c == "(" || c == ")" || c == "{" || c == "}" || c == "[" ||
+    c == "]" || c == "," || c == ";" || c == ":"
 };
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
@@ -188,59 +141,31 @@ def mktok(t: str, v: str, line: long, col: long) -> { t: str, v: str, line: long
 };
 
 // Value of a single hex digit char (0-15), or -1 if not a hex digit.
-// NOTE: nested ifs, not `&&` chains (see isdigit note).
 def hexvalx(c: str) -> long {
     let o = ord(c);
-    if (o >= 48) {
-        if (o <= 57) { o - 48 }
-        else if (o >= 65) {
-            if (o <= 70) { o - 65 + 10 }
-            else if (o >= 97) {
-                if (o <= 102) { o - 97 + 10 } else { -1 }
-            } else { -1 }
-        } else { -1 }
-    } else { -1 }
+    if (o >= 48 && o <= 57) { o - 48 }
+    else if (o >= 65 && o <= 70) { o - 65 + 10 }
+    else if (o >= 97 && o <= 102) { o - 97 + 10 }
+    else { -1 }
 };
 
 // Try to read a two-char operator at position i. Returns the operator or "".
 // Maximal munch, like C: `x+++y` is `x ++ + y`. There is no `=+` operator;
 // `x =+ y` is `x = +y`.
-// NOTE: nested ifs, not `||` chains (see ispunct note).
 def twocharop(src: str, i: long) -> str {
     let two = substr(src, i, 2);
-    if (two == "==") { two }
-    else if (two == "!=") { two }
-    else if (two == "<=") { two }
-    else if (two == ">=") { two }
-    else if (two == "&&") { two }
-    else if (two == "||") { two }
-    else if (two == "::") { two }
-    else if (two == "..") { two }
-    else if (two == "->") { two }
-    else if (two == "=>") { two }
-    else if (two == "++") { two }
-    else if (two == "--") { two }
-    else if (two == "+=") { two }
-    else if (two == "-=") { two }
-    else if (two == "*=") { two }
-    else if (two == "/=") { two }
-    else if (two == "%=") { two }
+    if (two == "==" || two == "!=" || two == "<=" || two == ">=" ||
+        two == "&&" || two == "||" || two == "::" || two == ".." ||
+        two == "->" || two == "=>" || two == "++" || two == "--" ||
+        two == "+=" || two == "-=" || two == "*=" || two == "/=" ||
+        two == "%=") { two }
     else { "" }
 };
 
 def issingleop(c: str) -> bool {
-    if (c == "+") { true }
-    else if (c == "-") { true }
-    else if (c == "*") { true }
-    else if (c == slash()) { true }
-    else if (c == "%") { true }
-    else if (c == "<") { true }
-    else if (c == ">") { true }
-    else if (c == "=") { true }
-    else if (c == ".") { true }
-    else if (c == "!") { true }
-    else if (c == "&") { true }
-    else { c == "?" }
+    c == "+" || c == "-" || c == "*" || c == slash() || c == "%" ||
+    c == "<" || c == ">" || c == "=" || c == "." || c == "!" ||
+    c == "&" || c == "?"
 };
 
 // The slash character, built without a literal: Y string literals cannot
@@ -282,16 +207,12 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             let start = i;
             let startcol = col;
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
-            // NOTE: nested ifs, not `||` (see isalnum note).
             let radix = 0;
             if (c == "0") {
                 let nxt = substr(src, i + 1, 1);
-                if (nxt == "x") { radix = 16; 0; } else { 0; };
-                if (nxt == "X") { radix = 16; 0; } else { 0; };
-                if (nxt == "b") { radix = 2; 0; } else { 0; };
-                if (nxt == "B") { radix = 2; 0; } else { 0; };
-                0
-            } else { 0; };
+                if (nxt == "x" || nxt == "X") { radix = 16; }
+                else if (nxt == "b" || nxt == "B") { radix = 2; };
+            };
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
@@ -305,6 +226,9 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 };
                 0
             } else {
+            // The first digit is already known from the branch condition.
+            i = i + 1;
+            col = col + 1;
             let ind = false;
             while (ind == false) {
                 if (i < n) {
@@ -314,36 +238,27 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 } else { ind = true; 0 };
             };
             // optional fractional part (but not '..' range).
-            // NOTE: no `&&` (see line-comment note): check the dot, then the
-            // lookahead, in nested form.
-            if (substr(src, i, 1) == ".") {
-                if (substr(src, i + 1, 1) != ".") {
-                    i = i + 1;
-                    col = col + 1;
-                    let frd = false;
-                    while (frd == false) {
-                        if (i < n) {
-                            if (isdigit(substr(src, i, 1))) { i = i + 1; col = col + 1; 0; }
-                            else { frd = true; 0; };
-                            0
-                        } else { frd = true; 0 };
-                    };
-                    0
-                } else { 0 };
+            if (substr(src, i, 1) == "." && substr(src, i + 1, 1) != ".") {
+                i = i + 1;
+                col = col + 1;
+                let frd = false;
+                while (frd == false) {
+                    if (i < n) {
+                        if (isdigit(substr(src, i, 1))) { i = i + 1; col = col + 1; 0; }
+                        else { frd = true; 0; };
+                        0
+                    } else { frd = true; 0 };
+                };
                 0
-            } else { 0 };
+            };
             // optional exponent: e / E, an optional sign, then digits. Only
             // consumed when at least one digit follows, so `1e` stays a
             // number followed by an identifier rather than a bad literal.
             let ec = substr(src, i, 1);
-            let is_e = false;
-            if (ec == "e") { is_e = true; 0; } else { 0; };
-            if (ec == "E") { is_e = true; 0; } else { 0; };
-            if (is_e) {
+            if (ec == "e" || ec == "E") {
                 let esign = 0;
                 let sc = substr(src, i + 1, 1);
-                if (sc == "+") { esign = 1; 0; } else { 0; };
-                if (sc == "-") { esign = 1; 0; } else { 0; };
+                if (sc == "+" || sc == "-") { esign = 1; };
                 if (isdigit(substr(src, i + 1 + esign, 1))) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
@@ -355,17 +270,17 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                             0
                         } else { exd = true; 0 };
                     };
-                    0
-                } else { 0 };
-                0
-            } else { 0 };
-            0
+                };
+            };
             };
             toks += mktok("num", substr(src, start, i - start), line, startcol);
             0
         } else if (isalpha(c)) {
             let start = i;
             let startcol = col;
+            // The first character is already known to be a word character.
+            i = i + 1;
+            col = col + 1;
             let inw = false;
             while (inw == false) {
                 if (i < n) {
@@ -439,7 +354,6 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             // backend lexes division identically (parser.c skip_spaces skips
             // comments, parse_operator matches division), so parity demands
             // we emit the operator too.
-            // NOTE: no `&&` guard (see below) — nested-if form.
             if (substr(src, i + 1, 1) == slash()) {
                 // line comment
                 i = i + 2;

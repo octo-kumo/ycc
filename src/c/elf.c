@@ -4,8 +4,8 @@
  * the entry point is our own `_start`, and user code only uses raw syscalls.
  * Layout: [EHDR 64][PHDR 56][code][rodata]; base vaddr 0x400000.
  *
- * Bytes are plain longs (0-255) in Y lists; the driver renders them as
- * octal escapes for printf (Y strings cannot carry NUL through write_file). */
+ * Y-side binary data flows through packed [byte] arrays. The C value model
+ * keeps each element as a boxed long; the driver writes it directly. */
 
 #include "elf.h"
 
@@ -40,11 +40,12 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
     long total = code_off + codesz + codepad + rosz + ropad;
     long entry = base + code_off + entry_off;
     // EHDR
-    out = push_bytes(out, yav(16, yv_long(127), yv_long(69), yv_long(76),
-                              yv_long(70), yv_long(2), yv_long(1), yv_long(1),
-                              yv_long(0), yv_long(0), yv_long(0), yv_long(0),
-                              yv_long(0), yv_long(0), yv_long(0), yv_long(0),
-                              yv_long(0)));
+    Yv *header = yav(16, yv_long(127), yv_long(69), yv_long(76),
+                     yv_long(70), yv_long(2), yv_long(1), yv_long(1),
+                     yv_long(0), yv_long(0), yv_long(0), yv_long(0),
+                     yv_long(0), yv_long(0), yv_long(0), yv_long(0),
+                     yv_long(0));
+    out = push_bytes(out, header);
     out = push_le16(out, 2);
     out = push_le16(out, 62);
     out = push_le32(out, 1);
@@ -75,8 +76,9 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
         ;
     }
     out = push_bytes(out, rodata);
-    out = push_bytes(out, yav(8, yv_long(0), yv_long(0), yv_long(0), yv_long(0),
-                              yv_long(0), yv_long(0), yv_long(0), yv_long(0)));
+    Yv *trailer = yav(8, yv_long(0), yv_long(0), yv_long(0), yv_long(0),
+                      yv_long(0), yv_long(0), yv_long(0), yv_long(0));
+    out = push_bytes(out, trailer);
     long q = 0;
     while (q < ropad) {
         out = ya_push(out, yv_long(0));
@@ -91,7 +93,7 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
 // linear overall, unlike enc.concat(out, field) which re-clones the whole
 // prefix for every header field (quadratic, hangs on real inputs).
 Yv *push_bytes(Yv *out, Yv *bytes) {
-    // NOTE: annotated [long] (not holes): push() needs known heap arrays.
+    // NOTE: annotated [byte] (not holes): push() needs known heap arrays.
     long i = 0;
     while (i < yv_len(bytes)) {
         out = ya_push(out, ya_get(bytes, i));

@@ -10,7 +10,7 @@ while (i < lines) {
     0
 };
 
-let toks = [];
+let toks: [str] = [];
 let n = len(src);
 let p = 0;
 while (p < n) {
@@ -19,7 +19,7 @@ while (p < n) {
         p = p + 1;
         0
     } else if (c == ";" || c == "=" || c == "+") {
-        toks = push(toks, c);
+        toks += c;
         p = p + 1;
         0
     } else if (c >= "0" && c <= "9") {
@@ -42,7 +42,7 @@ while (p < n) {
             };
             0
         };
-        toks = push(toks, substr(src, s, p - s));
+        toks += substr(src, s, p - s);
         0
     } else {
         let s = p;
@@ -67,7 +67,7 @@ while (p < n) {
             };
             0
         };
-        toks = push(toks, substr(src, s, p - s));
+        toks += substr(src, s, p - s);
         0
     };
     0

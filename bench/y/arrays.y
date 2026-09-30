@@ -1,10 +1,10 @@
-// bench/y/arrays.y — push growth, indexing, and an insertion sort: array
+// bench/y/arrays.y — array growth, indexing, and an insertion sort: array
 // header traffic plus element loops.
 def sort_demo(n: long) -> long {
-let a = [];
+let a: [long] = [];
 let i = 0;
 while (i < n) {
-    a = push(a, (i * 7919) % 10007);
+    a += (i * 7919) % 10007;
     i = i + 1;
     0
 };

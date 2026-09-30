@@ -6,7 +6,7 @@
 //     base/idx: reg numbers (-1 = none), scale 1/2/4/8, disp long
 //   {k:"lbl", name}         code label (jumps/calls)
 //   {k:"diff", a, b}        a-b as imm32 (rodata lengths)
-// Every encode_* returns a list of byte values (0-255).
+// Every encode_* returns a packed [byte] buffer (values 0-255).
 // Only the forms our backend emits exist here — anything else is a loud
 // error from the assembler, never a silent miscompile.
 //
@@ -114,17 +114,20 @@ def sib(scale: long, index: long, base: long) -> long {
     s * 64 + (index % 8) * 8 + base % 8
 };
 
-def le16(v: long) -> [long] {
-    [byte_of(v, 0), byte_of(v, 1)]
+def le16(v: long) -> [byte] {
+    let out: [byte] = [byte_of(v, 0), byte_of(v, 1)];
+    out
 };
 
-def le32(v: long) -> [long] {
-    [byte_of(v, 0), byte_of(v, 1), byte_of(v, 2), byte_of(v, 3)]
+def le32(v: long) -> [byte] {
+    let out: [byte] = [byte_of(v, 0), byte_of(v, 1), byte_of(v, 2), byte_of(v, 3)];
+    out
 };
 
-def le64(v: long) -> [long] {
-    [byte_of(v, 0), byte_of(v, 1), byte_of(v, 2), byte_of(v, 3),
-     byte_of(v, 4), byte_of(v, 5), byte_of(v, 6), byte_of(v, 7)]
+def le64(v: long) -> [byte] {
+    let out: [byte] = [byte_of(v, 0), byte_of(v, 1), byte_of(v, 2), byte_of(v, 3),
+                       byte_of(v, 4), byte_of(v, 5), byte_of(v, 6), byte_of(v, 7)];
+    out
 };
 
 // Exact byte i (0 = least significant) of a signed long. Y division
@@ -181,9 +184,9 @@ def fits8(v: long) -> bool {
 };
 
 // Encode a memory operand tail (ModRM + optional SIB + displacement).
-// Returns {modrm, extra: [bytes], rip_lbl/"", disp32: bool} — the caller
+// Returns {modrm, extra: [byte], rip_lbl/"", disp32: bool} — the caller
 // supplies the reg field and any label fixup.
-def mem_tail(m, reg: long) -> {modrm: long, extra: [long], rip_lbl: str, disp32: bool} {
+def mem_tail(m, reg: long) -> {modrm: long, extra: [byte], rip_lbl: str, disp32: bool} {
     if (m.rip) {
         { modrm: modrm(0, reg, 5), extra: [], rip_lbl: m.lbl, disp32: true }
     } else if (m.idx < 0) {
@@ -193,7 +196,8 @@ def mem_tail(m, reg: long) -> {modrm: long, extra: [long], rip_lbl: str, disp32:
         if (m.base % 8 == 5) {
             // rbp/r13 need at least disp8 (mod=00 would mean disp32-only)
             if (fits8(m.disp)) {
-                { modrm: modrm(1, reg, 5), extra: [u8(m.disp)], rip_lbl: "", disp32: false }
+                let extra: [byte] = [u8(m.disp)];
+                { modrm: modrm(1, reg, 5), extra: extra, rip_lbl: "", disp32: false }
             } else {
                 { modrm: modrm(2, reg, 5), extra: le32(m.disp), rip_lbl: "", disp32: false }
             }
@@ -202,16 +206,20 @@ def mem_tail(m, reg: long) -> {modrm: long, extra: [long], rip_lbl: str, disp32:
             // sib(1, 4, 4) = scale 00, index 100 (none), base 100 (rsp).
             let s = sib(1, 4, 4);
             if (m.disp == 0) {
-                { modrm: modrm(0, reg, 4), extra: [s], rip_lbl: "", disp32: false }
+                let extra: [byte] = [s];
+                { modrm: modrm(0, reg, 4), extra: extra, rip_lbl: "", disp32: false }
             } else if (fits8(m.disp)) {
-                { modrm: modrm(1, reg, 4), extra: [s, u8(m.disp)], rip_lbl: "", disp32: false }
+                let extra: [byte] = [s, u8(m.disp)];
+                { modrm: modrm(1, reg, 4), extra: extra, rip_lbl: "", disp32: false }
             } else {
-                { modrm: modrm(2, reg, 4), extra: concat([s], le32(m.disp)), rip_lbl: "", disp32: false }
+                let prefix: [byte] = [s];
+                { modrm: modrm(2, reg, 4), extra: concat(prefix, le32(m.disp)), rip_lbl: "", disp32: false }
             }
         } else if (m.disp == 0) {
             { modrm: modrm(0, reg, m.base), extra: [], rip_lbl: "", disp32: false }
         } else if (fits8(m.disp)) {
-            { modrm: modrm(1, reg, m.base), extra: [u8(m.disp)], rip_lbl: "", disp32: false }
+            let extra: [byte] = [u8(m.disp)];
+            { modrm: modrm(1, reg, m.base), extra: extra, rip_lbl: "", disp32: false }
         } else {
             { modrm: modrm(2, reg, m.base), extra: le32(m.disp), rip_lbl: "", disp32: false }
         }
@@ -220,16 +228,21 @@ def mem_tail(m, reg: long) -> {modrm: long, extra: [long], rip_lbl: str, disp32:
         let s = sib(m.scale, m.idx, m.base);
         if (m.base % 8 == 5) {
             if (fits8(m.disp)) {
-                { modrm: modrm(1, reg, 4), extra: [s, u8(m.disp)], rip_lbl: "", disp32: false }
+                let extra: [byte] = [s, u8(m.disp)];
+                { modrm: modrm(1, reg, 4), extra: extra, rip_lbl: "", disp32: false }
             } else {
-                { modrm: modrm(2, reg, 4), extra: concat([s], le32(m.disp)), rip_lbl: "", disp32: false }
+                let prefix: [byte] = [s];
+                { modrm: modrm(2, reg, 4), extra: concat(prefix, le32(m.disp)), rip_lbl: "", disp32: false }
             }
         } else if (m.disp == 0) {
-            { modrm: modrm(0, reg, 4), extra: [s], rip_lbl: "", disp32: false }
+            let extra: [byte] = [s];
+            { modrm: modrm(0, reg, 4), extra: extra, rip_lbl: "", disp32: false }
         } else if (fits8(m.disp)) {
-            { modrm: modrm(1, reg, 4), extra: [s, u8(m.disp)], rip_lbl: "", disp32: false }
+            let extra: [byte] = [s, u8(m.disp)];
+            { modrm: modrm(1, reg, 4), extra: extra, rip_lbl: "", disp32: false }
         } else {
-            { modrm: modrm(2, reg, 4), extra: concat([s], le32(m.disp)), rip_lbl: "", disp32: false }
+            let prefix: [byte] = [s];
+            { modrm: modrm(2, reg, 4), extra: concat(prefix, le32(m.disp)), rip_lbl: "", disp32: false }
         }
     }
 };
@@ -245,8 +258,8 @@ def rex_rm(w: bool, reg: long, m) -> long {
     }
 };
 
-def concat(a: [long], b: [long]) -> [long] {
-    let out = [];
+def concat(a: [byte], b: [byte]) -> [byte] {
+    let out: [byte] = [];
     let i = 0;
     while (i < len(a)) {
         out += a[i];
@@ -271,13 +284,18 @@ def fixup(at: long, kind: str, lbl: str, lbl2: str) -> {off: long, kind: str, lb
 // Each returns {bytes, fix: [{off, kind, lbl, lbl2}]} with off relative to
 // the instruction start. Only forms our backend emits exist.
 
-def with_rex(r: long, bytes: [long]) -> [long] {
-    if (r < 0) { bytes } else { concat([r], bytes) }
+def with_rex(r: long, bytes: [byte]) -> [byte] {
+    if (r < 0) {
+        bytes
+    } else {
+        let prefix: [byte] = [r];
+        concat(prefix, bytes)
+    }
 };
 
 // NOTE: no x.y[i] chains or dot-assign (C-toolchain portability); bind first.
 
-def enc_push(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_push(o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // NOTE: nested ifs, not `||` (see reg_num note above).
     if (o.k != "reg") {
         { bytes: [], fix: [], err: "push needs r64" }
@@ -285,12 +303,12 @@ def enc_push(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: 
         { bytes: [], fix: [], err: "push needs r64" }
     } else {
         let r = rex(false, -1, -1, o.n);
-        let b = [80 + (o.n % 8)];
+        let b: [byte] = [80 + (o.n % 8)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     }
 };
 
-def enc_pop(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_pop(o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // NOTE: nested ifs, not `||` (see reg_num note above).
     if (o.k != "reg") {
         { bytes: [], fix: [], err: "pop needs r64" }
@@ -298,16 +316,16 @@ def enc_pop(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: s
         { bytes: [], fix: [], err: "pop needs r64" }
     } else {
         let r = rex(false, -1, -1, o.n);
-        let b = [88 + (o.n % 8)];
+        let b: [byte] = [88 + (o.n % 8)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     }
 };
 
-def enc_mov(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_mov(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (dst.k == "reg" && src.k == "reg") {
         if (op_size(dst) == 64 && op_size(src) == 64) {
             let r = rex(true, src.n, -1, dst.n);
-            let b = [137, modrm(3, src.n, dst.n)];
+            let b: [byte] = [137, modrm(3, src.n, dst.n)];
             { bytes: with_rex(r, b), fix: [], err: "" }
         } else {
             { bytes: [], fix: [], err: "mov reg,reg size mix" }
@@ -316,23 +334,28 @@ def enc_mov(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, 
         if (op_size(dst) == 64) {
             if (src.v >= -2147483648 && src.v <= 2147483647) {
                 let r = rex(true, -1, -1, dst.n);
-                let b = concat([199, modrm(3, 0, dst.n)], le32(src.v));
+                let prefix: [byte] = [199, modrm(3, 0, dst.n)];
+                let b = concat(prefix, le32(src.v));
                 { bytes: with_rex(r, b), fix: [], err: "" }
             } else {
                 let r = rex(true, -1, -1, dst.n);
-                let b = concat([184 + (dst.n % 8)], le64(src.v));
+                let prefix: [byte] = [184 + (dst.n % 8)];
+                let b = concat(prefix, le64(src.v));
                 { bytes: with_rex(r, b), fix: [], err: "" }
             }
         } else if (op_size(dst) == 32) {
             let r = rex(false, -1, -1, dst.n);
-            let b = concat([199, modrm(3, 0, dst.n)], le32(src.v));
+            let prefix: [byte] = [199, modrm(3, 0, dst.n)];
+            let b = concat(prefix, le32(src.v));
             { bytes: with_rex(r, b), fix: [], err: "" }
         } else {
             { bytes: [], fix: [], err: "mov imm size" }
         }
     } else if (dst.k == "reg" && op_size(dst) == 64 && src.k == "diff") {
         let r = rex(true, -1, -1, dst.n);
-        let b = concat([199, modrm(3, 0, dst.n)], [0, 0, 0, 0]);
+        let prefix: [byte] = [199, modrm(3, 0, dst.n)];
+        let zeros: [byte] = [0, 0, 0, 0];
+        let b = concat(prefix, zeros);
         let off = 3;
         if (r < 0) { off = 2; 0; } else { 0 };
         { bytes: with_rex(r, b), fix: [fixup(off, "imm32diff", src.a, src.b)], err: "" }
@@ -340,7 +363,8 @@ def enc_mov(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, 
         if (op_size(dst) == 64) {
             let t = mem_tail(src, dst.n);
             let r = rex_rm(true, dst.n, src);
-            let b = concat([139, t.modrm], t.extra);
+            let prefix: [byte] = [139, t.modrm];
+            let b = concat(prefix, t.extra);
             enc_mem_result(r, b, t)
         } else {
             { bytes: [], fix: [], err: "mov r,mem size" }
@@ -349,18 +373,21 @@ def enc_mov(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, 
         // mov $imm32, mem (length/cap stores)
         let t = mem_tail(dst, 0);
         let r = rex_rm(true, 0, dst);
-        let b = concat(concat([199, t.modrm], t.extra), le32(src.v));
+        let prefix: [byte] = [199, t.modrm];
+        let b = concat(concat(prefix, t.extra), le32(src.v));
         enc_mem_result(r, b, t)
     } else if (dst.k == "mem" && src.k == "reg") {
         if (op_size(src) == 64) {
             let t = mem_tail(dst, src.n);
             let r = rex_rm(true, src.n, dst);
-            let b = concat([137, t.modrm], t.extra);
+            let prefix: [byte] = [137, t.modrm];
+            let b = concat(prefix, t.extra);
             enc_mem_result(r, b, t)
         } else if (op_size(src) == 8) {
             let t = mem_tail(dst, src.n);
             let r = rex_rm(false, src.n, dst);
-            let b = concat([136, t.modrm], t.extra);
+            let prefix: [byte] = [136, t.modrm];
+            let b = concat(prefix, t.extra);
             enc_mem_result(r, b, t)
         } else {
             { bytes: [], fix: [], err: "mov mem,reg size" }
@@ -369,7 +396,7 @@ def enc_mov(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, 
         { bytes: [], fix: [], err: "mov form" }
     }
 };
-def enc_mem_result(r: long, b: [long], t: {modrm: long, extra: [long], rip_lbl: str, disp32: bool}) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_mem_result(r: long, b: [byte], t: {modrm: long, extra: [byte], rip_lbl: str, disp32: bool}) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (t.modrm < 0) {
         { bytes: [], fix: [], err: "bad memory form" }
     } else {
@@ -385,7 +412,8 @@ def enc_mem_result(r: long, b: [long], t: {modrm: long, extra: [long], rip_lbl: 
                 let off = len(b);
                 if (r >= 0) { off = off + 1; 0; } else { 0 };
                 fx += fixup(off, "rip32", t.rip_lbl, "");
-                bb = concat(b, [0, 0, 0, 0]);
+                let zeros: [byte] = [0, 0, 0, 0];
+                bb = concat(b, zeros);
                 0
             } else { 0 };
             0
@@ -394,7 +422,7 @@ def enc_mem_result(r: long, b: [long], t: {modrm: long, extra: [long], rip_lbl: 
     }
 };
 
-def enc_movb(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_movb(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // movb $imm8, mem
     // NOTE: nested ifs, not `||`/`&&` (see reg_num note above).
     if (dst.k != "mem") {
@@ -406,7 +434,7 @@ def enc_movb(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str,
     }
 };
 
-def enc_movb_imm(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_movb_imm(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // (split: shape gate above narrows; this body sees mem/imm only.)
     // NOTE: nested ifs, not `||` (see reg_num note above).
     if (src.v < -128) {
@@ -416,39 +444,43 @@ def enc_movb_imm(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: 
     } else {
         let t = mem_tail(dst, 0);
         let r = rex_rm(false, 0, dst);
-        let b = concat(concat([198, t.modrm], t.extra), [u8(src.v)]);
+        let prefix: [byte] = [198, t.modrm];
+        let imm: [byte] = [u8(src.v)];
+        let b = concat(concat(prefix, t.extra), imm);
         enc_mem_result(r, b, t)
     }
 };
 
-def enc_movzbq(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_movzbq(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 8) {
         let r = rex(true, dst.n, -1, src.n);
-        let b = [15, 182, modrm(3, dst.n, src.n)];
+        let b: [byte] = [15, 182, modrm(3, dst.n, src.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     } else if (dst.k == "reg" && op_size(dst) == 64 && src.k == "mem") {
         // movzbq mem8 -> r64 (single-byte loads for string data)
         let t = mem_tail(src, dst.n);
         let r = rex_rm(true, dst.n, src);
-        let b = concat([15, 182, t.modrm], t.extra);
+        let prefix: [byte] = [15, 182, t.modrm];
+        let b = concat(prefix, t.extra);
         enc_mem_result(r, b, t)
     } else {
         { bytes: [], fix: [], err: "movzbq form" }
     }
 };
 
-def enc_lea(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_lea(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (dst.k == "reg" && op_size(dst) == 64 && src.k == "mem") {
         let t = mem_tail(src, dst.n);
         let r = rex_rm(true, dst.n, src);
-        let b = concat([141, t.modrm], t.extra);
+        let prefix: [byte] = [141, t.modrm];
+        let b = concat(prefix, t.extra);
         enc_mem_result(r, b, t)
     } else {
         { bytes: [], fix: [], err: "lea form" }
     }
 };
 
-def enc_arith(op: str, dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_arith(op: str, dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // op: add/sub/xor/and/or/cmp/test; r64,r64 only here
     if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 64) {
         let base = 1;
@@ -460,24 +492,24 @@ def enc_arith(op: str, dst, src) -> {bytes: [long], fix: [{off: long, kind: str,
         else if (op == "test") { base = 133; 0; }
         else { 0 };
         let r = rex(true, src.n, -1, dst.n);
-        let b = [base, modrm(3, src.n, dst.n)];
+        let b: [byte] = [base, modrm(3, src.n, dst.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     } else {
         { bytes: [], fix: [], err: "arith reg form" }
     }
 };
 
-def enc_xor32(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_xor32(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (dst.k == "reg" && op_size(dst) == 32 && src.k == "reg" && op_size(src) == 32) {
         let r = rex(false, src.n, -1, dst.n);
-        let b = [49, modrm(3, src.n, dst.n)];
+        let b: [byte] = [49, modrm(3, src.n, dst.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     } else {
         { bytes: [], fix: [], err: "xor32 form" }
     }
 };
 
-def enc_alu_imm(op: str, dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_alu_imm(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32
     // NOTE: nested ifs, not `||`/`&&` (see reg_num note above).
     if (dst.k != "reg") {
@@ -493,13 +525,13 @@ def enc_alu_imm(op: str, dst, v: long) -> {bytes: [long], fix: [{off: long, kind
     }
 };
 
-def enc_alu_imm_go(op: str, dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_alu_imm_go(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // (split from enc_alu_imm: the size gate above narrows; this body sees
     // only r64/r32 regs — no merged-shape reads.)
     enc_alu_imm_body(op, dst, v)
 };
 
-def enc_alu_imm_body(op: str, dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_alu_imm_body(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // NOTE: split from enc_alu_imm (see note above): no size gate here.
     let ext = 0;
     if (op == "sub") { ext = 5; 0; }
@@ -511,15 +543,18 @@ def enc_alu_imm_body(op: str, dst, v: long) -> {bytes: [long], fix: [{off: long,
     let wide = op_size(dst) == 64;
     let r = rex(wide, -1, -1, dst.n);
     if (fits8(v)) {
-        let b = concat([131, modrm(3, ext, dst.n)], [u8(v)]);
+        let prefix: [byte] = [131, modrm(3, ext, dst.n)];
+        let imm: [byte] = [u8(v)];
+        let b = concat(prefix, imm);
         { bytes: with_rex(r, b), fix: [], err: "" }
     } else {
-        let b = concat([129, modrm(3, ext, dst.n)], le32(v));
+        let prefix: [byte] = [129, modrm(3, ext, dst.n)];
+        let b = concat(prefix, le32(v));
         { bytes: with_rex(r, b), fix: [], err: "" }
     }
 };
 
-def enc_shl(dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_shl(dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // shl $imm8, %r64
     // NOTE: nested ifs, not `||` (see reg_num note above).
     if (dst.k != "reg") {
@@ -532,12 +567,14 @@ def enc_shl(dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: s
         { bytes: [], fix: [], err: "shl count range" }
     } else {
         let r = rex(true, -1, -1, dst.n);
-        let b = concat([193, modrm(3, 4, dst.n)], [u8(v)]);
+        let prefix: [byte] = [193, modrm(3, 4, dst.n)];
+        let imm: [byte] = [u8(v)];
+        let b = concat(prefix, imm);
         { bytes: with_rex(r, b), fix: [], err: "" }
     }
 };
 
-def enc_shr(dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_shr(dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // shr $imm8, %r64 (logical, for unsigned divide-by-pow2)
     // NOTE: nested ifs, not `||` (see reg_num note above).
     if (dst.k != "reg") {
@@ -550,7 +587,9 @@ def enc_shr(dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: s
         { bytes: [], fix: [], err: "shr count range" }
     } else {
         let r = rex(true, -1, -1, dst.n);
-        let b = concat([193, modrm(3, 5, dst.n)], [u8(v)]);
+        let prefix: [byte] = [193, modrm(3, 5, dst.n)];
+        let imm: [byte] = [u8(v)];
+        let b = concat(prefix, imm);
         { bytes: with_rex(r, b), fix: [], err: "" }
     }
 };
@@ -560,7 +599,7 @@ def enc_shr(dst, v: long) -> {bytes: [long], fix: [{off: long, kind: str, lbl: s
 // comparison move them into %xmmN, so the rest of the backend (slots,
 // pushes, calls) is unchanged.
 
-def enc_sse_arith(mn: str, dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_sse_arith(mn: str, dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // F2 0F <op> /r  — addsd 58, subsd 5C, mulsd 59, divsd 5E
     if (dst.k != "reg") {
         { bytes: [], fix: [], err: "sse dst" }
@@ -572,16 +611,18 @@ def enc_sse_arith(mn: str, dst, src) -> {bytes: [long], fix: [{off: long, kind: 
         if (mn == "mulsd") { op = 89; 0; } else { 0; };
         if (mn == "divsd") { op = 94; 0; } else { 0; };
         let r = rex(false, dst.n, -1, src.n);
-        let tail = [15, op, modrm(3, dst.n, src.n)];
+        let tail: [byte] = [15, op, modrm(3, dst.n, src.n)];
         if (r < 0) {
-            { bytes: concat([242], tail), fix: [], err: "" }
+            let prefix: [byte] = [242];
+            { bytes: concat(prefix, tail), fix: [], err: "" }
         } else {
-            { bytes: concat([242, r], tail), fix: [], err: "" }
+            let prefix: [byte] = [242, r];
+            { bytes: concat(prefix, tail), fix: [], err: "" }
         }
     }
 };
 
-def enc_ucomisd(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_ucomisd(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // 66 0F 2E /r
     if (dst.k != "reg") {
         { bytes: [], fix: [], err: "ucomisd dst" }
@@ -589,16 +630,18 @@ def enc_ucomisd(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: s
         { bytes: [], fix: [], err: "ucomisd src" }
     } else {
         let r = rex(false, dst.n, -1, src.n);
-        let tail = [15, 46, modrm(3, dst.n, src.n)];
+        let tail: [byte] = [15, 46, modrm(3, dst.n, src.n)];
         if (r < 0) {
-            { bytes: concat([102], tail), fix: [], err: "" }
+            let prefix: [byte] = [102];
+            { bytes: concat(prefix, tail), fix: [], err: "" }
         } else {
-            { bytes: concat([102, r], tail), fix: [], err: "" }
+            let prefix: [byte] = [102, r];
+            { bytes: concat(prefix, tail), fix: [], err: "" }
         }
     }
 };
 
-def enc_cvtsi2sd(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_cvtsi2sd(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
     if (dst.k != "reg") {
         { bytes: [], fix: [], err: "cvtsi2sd dst" }
@@ -606,11 +649,13 @@ def enc_cvtsi2sd(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: 
         { bytes: [], fix: [], err: "cvtsi2sd src" }
     } else {
         let r = rex(true, dst.n, -1, src.n);
-        { bytes: concat([242, r], [15, 42, modrm(3, dst.n, src.n)]), fix: [], err: "" }
+        let prefix: [byte] = [242, r];
+        let tail: [byte] = [15, 42, modrm(3, dst.n, src.n)];
+        { bytes: concat(prefix, tail), fix: [], err: "" }
     }
 };
 
-def enc_cvttsd2si(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_cvttsd2si(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating)
     if (dst.k != "reg") {
         { bytes: [], fix: [], err: "cvttsd2si dst" }
@@ -618,11 +663,13 @@ def enc_cvttsd2si(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl:
         { bytes: [], fix: [], err: "cvttsd2si src" }
     } else {
         let r = rex(true, dst.n, -1, src.n);
-        { bytes: concat([242, r], [15, 44, modrm(3, dst.n, src.n)]), fix: [], err: "" }
+        let prefix: [byte] = [242, r];
+        let tail: [byte] = [15, 44, modrm(3, dst.n, src.n)];
+        { bytes: concat(prefix, tail), fix: [], err: "" }
     }
 };
 
-def enc_movq(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_movq(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // 66 REX.W 0F 6E /r  — movq %gpr, %xmm   (gpr -> xmm)
     // 66 REX.W 0F 7E /r  — movq %xmm, %gpr   (xmm -> gpr)
     if (dst.k != "reg") {
@@ -632,25 +679,29 @@ def enc_movq(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str,
     } else if (op_size(dst) == 128) {
         // into an xmm: the xmm is the reg field, the gpr the rm field
         let r = rex(true, dst.n, -1, src.n);
-        { bytes: concat([102, r], [15, 110, modrm(3, dst.n, src.n)]), fix: [], err: "" }
+        let prefix: [byte] = [102, r];
+        let tail: [byte] = [15, 110, modrm(3, dst.n, src.n)];
+        { bytes: concat(prefix, tail), fix: [], err: "" }
     } else {
         // out of an xmm: the xmm is still the reg field
         let r = rex(true, src.n, -1, dst.n);
-        { bytes: concat([102, r], [15, 126, modrm(3, src.n, dst.n)]), fix: [], err: "" }
+        let prefix: [byte] = [102, r];
+        let tail: [byte] = [15, 126, modrm(3, src.n, dst.n)];
+        { bytes: concat(prefix, tail), fix: [], err: "" }
     }
 };
 
-def enc_imul(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_imul(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 64) {
         let r = rex(true, dst.n, -1, src.n);
-        let b = [15, 175, modrm(3, dst.n, src.n)];
+        let b: [byte] = [15, 175, modrm(3, dst.n, src.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     } else {
         { bytes: [], fix: [], err: "imul form" }
     }
 };
 
-def enc_unary(op: str, o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_unary(op: str, o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // NOTE: nested ifs, not `||` (see reg_num note above).
     if (o.k != "reg") {
         { bytes: [], fix: [], err: "unary form" }
@@ -665,67 +716,73 @@ def enc_unary(op: str, o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: s
         else if (op == "inc") { ext = 0; opc = 255; 0; }
         else { 0 };
         let r = rex(true, -1, -1, o.n);
-        let b = [opc, modrm(3, ext, o.n)];
+        let b: [byte] = [opc, modrm(3, ext, o.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     }
 };
 
-def enc_jmp(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_jmp(o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (o.k != "lbl") {
         { bytes: [], fix: [], err: "jmp target" }
     } else {
-        { bytes: [233, 0, 0, 0, 0], fix: [fixup(1, "rel32", o.name, "")], err: "" }
+        let bytes: [byte] = [233, 0, 0, 0, 0];
+        { bytes: bytes, fix: [fixup(1, "rel32", o.name, "")], err: "" }
     }
 };
 
-def enc_call(o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_call(o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (o.k == "ind") {
         // call *%reg — FF /2, used for closure code pointers.
         let r = rex(false, 0, -1, o.n);
-        let b = [255, modrm(3, 2, o.n)];
+        let b: [byte] = [255, modrm(3, 2, o.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     } else if (o.k != "lbl") {
         { bytes: [], fix: [], err: "call target" }
     } else {
-        { bytes: [232, 0, 0, 0, 0], fix: [fixup(1, "rel32", o.name, "")], err: "" }
+        let bytes: [byte] = [232, 0, 0, 0, 0];
+        { bytes: bytes, fix: [fixup(1, "rel32", o.name, "")], err: "" }
     }
 };
 
-def enc_jcc(code: long, o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_jcc(code: long, o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (o.k != "lbl") {
         { bytes: [], fix: [], err: "jcc target" }
     } else {
-        { bytes: [15, code, 0, 0, 0, 0], fix: [fixup(2, "rel32", o.name, "")], err: "" }
+        let bytes: [byte] = [15, code, 0, 0, 0, 0];
+        { bytes: bytes, fix: [fixup(2, "rel32", o.name, "")], err: "" }
     }
 };
 
-def enc_setcc(code: long, o) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_setcc(code: long, o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (o.k != "reg" || op_size(o) != 8) {
         { bytes: [], fix: [], err: "setcc form" }
     } else {
         let r = rex(false, -1, -1, o.n);
-        let b = [15, code, modrm(3, 0, o.n)];
+        let b: [byte] = [15, code, modrm(3, 0, o.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
     }
 };
 
-def enc_cmpb(v: long, m) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_cmpb(v: long, m) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (m.k != "mem") {
         { bytes: [], fix: [], err: "cmpb form" }
     } else {
         let t = mem_tail(m, 7);
         let r = rex_rm(false, 7, m);
-        let b = concat(concat([128, t.modrm], t.extra), [u8(v)]);
+        let prefix: [byte] = [128, t.modrm];
+        let imm: [byte] = [u8(v)];
+        let b = concat(concat(prefix, t.extra), imm);
         enc_mem_result(r, b, t)
     }
 };
 
-def enc_movb_reg(dst, src) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_movb_reg(dst, src) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     // movb %r8 -> mem8 (single-byte stores for string data)
     if (dst.k == "mem" && src.k == "reg" && op_size(src) == 8) {
         let t = mem_tail(dst, src.n);
         let r = rex_rm(false, src.n, dst);
-        let b = concat([136, t.modrm], t.extra);
+        let prefix: [byte] = [136, t.modrm];
+        let b = concat(prefix, t.extra);
         enc_mem_result(r, b, t)
     } else {
         { bytes: [], fix: [], err: "movb reg form" }
@@ -742,7 +799,7 @@ def need2(mn: str, ops) -> str {
     if (len(ops) != 2) { mn + " takes 2 operands" } else { "" }
 };
 
-def enc_insn(mn: str, ops) -> {bytes: [long], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+def enc_insn(mn: str, ops) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
     if (mn == "push") {
         let e = need1(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_push(ops[0]) }
@@ -899,11 +956,14 @@ def enc_insn(mn: str, ops) -> {bytes: [long], fix: [{off: long, kind: str, lbl: 
             enc_cmpb(ops[0].v, ops[1])
         }
     } else if (mn == "cqo") {
-        { bytes: [72, 153], fix: [], err: "" }
+        let bytes: [byte] = [72, 153];
+        { bytes: bytes, fix: [], err: "" }
     } else if (mn == "syscall") {
-        { bytes: [15, 5], fix: [], err: "" }
+        let bytes: [byte] = [15, 5];
+        { bytes: bytes, fix: [], err: "" }
     } else if (mn == "ret") {
-        { bytes: [195], fix: [], err: "" }
+        let bytes: [byte] = [195];
+        { bytes: bytes, fix: [], err: "" }
     } else {
         { bytes: [], fix: [], err: "unknown mnemonic '" + mn + "'" }
     }

@@ -13,8 +13,8 @@
 // - Nested defs see only their own params + top-level defs + intrinsics:
 //   referring to an outer local/param is a capture error (closures are
 //   planned, not present: no heap for envs yet).
-// - `if` conditions must be bool; branches must agree; if-without-else
-//   must have a void-typed body (expression-oriented, like the VM).
+// - `if` conditions must be bool. Matching arms keep their value type;
+//   mismatched arms make the `if` void. An `if` without `else` is void.
 // - print takes exactly one long/bool/str. syscall takes 1-7 long/bool/str/*T.
 // - Assignment targets keep their declared type. No implicit conversions.
 
@@ -1926,7 +1926,7 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         } else if (name == "write_bytes") {
             // write_bytes(path, bytes, mode) -> bool: tinycc-style binary
             // emit (open/write/chmod over raw syscalls in native code).
-            // bytes is a heap [long] array (elf.y output); mode is a long
+            // bytes is a packed heap [byte] array (elf.y output); mode is a long
             // (493 = 0755 executable, -1 = skip chmod).
             if (len(cargs) != 3) {
                 st = fail(st, "write_bytes takes exactly 3 arguments (path, bytes, mode)", node.line, node.col);
@@ -1939,7 +1939,12 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 let w2 = typeof_expr(st, cargs[2]);
                 st = w2.st;
                 st = expect_type(st, w0.typ, { k: "tstr" }, "write_bytes path", node.line, node.col);
-                if (w1.typ.k != "tarr" && w1.typ.k != "tunk") {
+                if (w1.typ.k == "tarr") {
+                    // Require packed layout: long-to-byte scalar compatibility
+                    // does not convert an existing [long] array.
+                    st = expect_type(st, w1.typ, { k: "tarr", of: { k: "tbyte" } }, "write_bytes data", node.line, node.col);
+                    0
+                } else if (w1.typ.k != "tunk") {
                     st = fail(st, "write_bytes needs a byte array, got " + tstr(w1.typ), node.line, node.col);
                     0
                 } else { 0; };

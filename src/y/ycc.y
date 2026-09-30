@@ -233,7 +233,7 @@ def main(cmdline: [str]) -> long {
                 } else { 0; };
                 0
             } else {
-                // Assemble to bytes in-process (no as/ld/cc) and write the
+                // Assemble to a [byte] buffer in-process (no as/ld/cc) and write the
                 // executable DIRECTLY with the write_bytes builtin
                 // (binary-safe open/write/chmod, tinycc-style — NULs pass
                 // through as array elements, no shell, no exec/printf).

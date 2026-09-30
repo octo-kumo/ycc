@@ -1,7 +1,7 @@
 /* asm.c — 1:1 port of src/y/asm.y (translation contract: PORTING.md).
  *
  * Assembler for the native backend's x86-64 dialect.
- * asm_assemble(text) -> {ok, bytes, error, times}
+ * asm_assemble(text) -> {ok, bytes: [byte], error, times}
  * Only what native.y/arch_x64.y emit is accepted; anything else is a loud
  * error with a line number — never a silent miscompile.
  * Two passes: (1) parse + encode with zeroed label fields, recording fixups;
@@ -1243,7 +1243,7 @@ static Yv *asm_link(Yv *items, Yv *labels) {
             Yv *it = ya_get(items, i);
             if (yv_l(yr_get(it, "sec")) == 0) {
                 Yv *r = patch_item(code, it, lmap, code_len, pad);
-                /* NOTE: `0;` tails (see note above): str-arm vs [long]-arm. */
+                /* NOTE: `0;` tails (see note above): str-arm vs [byte]-arm. */
                 if (!ys_eq_lit(yr_get(r, "err"), "")) {
                     err = yr_get(r, "err");
                     ;

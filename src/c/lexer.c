@@ -7,31 +7,20 @@
 
 #include "lexer.h"
 
-// NOTE: nested ifs, not `&&` (see isalnum note below): the C VM
-// evaluates both sides eagerly AND the native checker rejects `&&`
-// whose operand shapes disagree (comparison-bool vs map-field access
-// both poison through `&&`; plain comparison pairs are fine, but the
-// uniform nested-if style keeps both toolchains quiet everywhere).
 int isdigit(Yv *c) {
     // Range compares on the 1-char string, not ord(c): ord goes through
     // bytes(), which allocates a copy of the string per character, and the
     // lexer classifies every character of the source. Comparisons land in
     // y_str_eq/y_str_cmp — byte primitives, no allocation.
-    if (ys_cmp(c, ys("0")) >= 0) {
-        if (ys_cmp(c, ys("9")) <= 0) { return 1; } else { return 0; }
-    } else { return 0; }
+    return ys_cmp(c, ys("0")) >= 0 && ys_cmp(c, ys("9")) <= 0;
 }
 
 int isupper(Yv *c) {
-    if (ys_cmp(c, ys("A")) >= 0) {
-        if (ys_cmp(c, ys("Z")) <= 0) { return 1; } else { return 0; }
-    } else { return 0; }
+    return ys_cmp(c, ys("A")) >= 0 && ys_cmp(c, ys("Z")) <= 0;
 }
 
 int islower(Yv *c) {
-    if (ys_cmp(c, ys("a")) >= 0) {
-        if (ys_cmp(c, ys("z")) <= 0) { return 1; } else { return 0; }
-    } else { return 0; }
+    return ys_cmp(c, ys("a")) >= 0 && ys_cmp(c, ys("z")) <= 0;
 }
 
 int isalpha(Yv *c) {
@@ -39,48 +28,25 @@ int isalpha(Yv *c) {
     // "t0"/"r64" contain digits; the C backend's take_alpha accepts them too
     // via is_alpha... precisely: parser.c is_alpha includes is_digit, so
     // "t0" lexes as one id there as well — parity).
-    if (islower(c)) { return 1; }
-    else if (isupper(c)) { return 1; }
-    else if (ys_eq_lit(c, "_")) { return 1; }
-    else { return isdigit(c); }
+    return islower(c) || isupper(c) || ys_eq_lit(c, "_") || isdigit(c);
 }
 
 int isalnum(Yv *c) {
-    // NOTE: no `||` of bools here — the C VM evaluates both sides eagerly
-    // AND the native checker types `||` operands strictly; nested ifs keep
-    // both toolchains quiet.
-    if (isdigit(c)) { return 1; } else { return isalpha(c); }
+    return isdigit(c) || isalpha(c);
 }
 
 // Digit of a radix literal (0x.. / 0b..), including `_` separators.
-// NOTE: nested ifs, not `||` (see isalnum note).
 int is_radix_ch(Yv *c, long radix) {
-    int ok = 0;
-    if (ys_eq_lit(c, "_")) { ok = 1; ; } else { ; }
-    if (radix == 2) {
-        if (ys_eq_lit(c, "0")) { ok = 1; ; } else { ; };
-        if (ys_eq_lit(c, "1")) { ok = 1; ; } else { ; };
-        ;
-    } else {
-        if (isdigit(c)) { ok = 1; ; } else { ; };
-        if (ys_cmp(c, ys("a")) >= 0) {
-            if (ys_cmp(c, ys("f")) <= 0) { ok = 1; ; } else { ; };
-            ;
-        } else { ; };
-        if (ys_cmp(c, ys("A")) >= 0) {
-            if (ys_cmp(c, ys("F")) <= 0) { ok = 1; ; } else { ; };
-            ;
-        } else { ; };
-        ;
-    }
-    return ok;
+    if (ys_eq_lit(c, "_")) { return 1; }
+    else if (radix == 2) { return ys_eq_lit(c, "0") || ys_eq_lit(c, "1"); }
+    else { return isdigit(c) ||
+        (ys_cmp(c, ys("a")) >= 0 && ys_cmp(c, ys("f")) <= 0) ||
+        (ys_cmp(c, ys("A")) >= 0 && ys_cmp(c, ys("F")) <= 0); }
 }
 
 int isspace(Yv *c) {
-    if (ys_eq_lit(c, " ")) { return 1; }
-    else if (ys_eq_lit(c, "\t")) { return 1; }
-    else if (ys_eq_lit(c, "\n")) { return 1; }
-    else { return ys_eq_lit(c, "\r"); }
+    return ys_eq_lit(c, " ") || ys_eq_lit(c, "\t") ||
+           ys_eq_lit(c, "\n") || ys_eq_lit(c, "\r");
 }
 
 // NOTE: isdigit/isalpha/isalnum-style names MUST avoid underscores AND the
@@ -93,19 +59,12 @@ int isspace(Yv *c) {
 // names in ycc/*.y therefore use the flat isalpha/isdigit/isalnum style.
 
 // is c one of the single-char punctuation symbols?
-// NOTE: nested ifs, not `||` chains — the native checker rejects `||`
-// whose operands disagree, and `==` on strings yields bool while a bare
-// `c` or chained comparison can poison a branch (see isalnum note).
 int ispunct(Yv *c) {
-    if (ys_eq_lit(c, "(")) { return 1; }
-    else if (ys_eq_lit(c, ")")) { return 1; }
-    else if (ys_eq_lit(c, "{")) { return 1; }
-    else if (ys_eq_lit(c, "}")) { return 1; }
-    else if (ys_eq_lit(c, "[")) { return 1; }
-    else if (ys_eq_lit(c, "]")) { return 1; }
-    else if (ys_eq_lit(c, ",")) { return 1; }
-    else if (ys_eq_lit(c, ";")) { return 1; }
-    else { return ys_eq_lit(c, ":"); }
+    return ys_eq_lit(c, "(") || ys_eq_lit(c, ")") ||
+           ys_eq_lit(c, "{") || ys_eq_lit(c, "}") ||
+           ys_eq_lit(c, "[") || ys_eq_lit(c, "]") ||
+           ys_eq_lit(c, ",") || ys_eq_lit(c, ";") ||
+           ys_eq_lit(c, ":");
 }
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
@@ -192,59 +151,38 @@ Yv *mktok(Yv *t, Yv *v, long line, long col) {
 }
 
 // Value of a single hex digit char (0-15), or -1 if not a hex digit.
-// NOTE: nested ifs, not `&&` chains (see isdigit note).
 long hexvalx(Yv *c) {
     long o = ys_ord(c);
-    if (o >= 48) {
-        if (o <= 57) { return o - 48; }
-        else if (o >= 65) {
-            if (o <= 70) { return o - 65 + 10; }
-            else if (o >= 97) {
-                if (o <= 102) { return o - 97 + 10; } else { return -1; }
-            } else { return -1; }
-        } else { return -1; }
-    } else { return -1; }
+    if (o >= 48 && o <= 57) { return o - 48; }
+    else if (o >= 65 && o <= 70) { return o - 65 + 10; }
+    else if (o >= 97 && o <= 102) { return o - 97 + 10; }
+    else { return -1; }
 }
 
 // Try to read a two-char operator at position i. Returns the operator or "".
 // Maximal munch, like C: `x+++y` is `x ++ + y`. There is no `=+` operator;
 // `x =+ y` is `x = +y`.
-// NOTE: nested ifs, not `||` chains (see ispunct note).
 Yv *twocharop(Yv *src, long i) {
     Yv *two = ys_substr(src, i, 2);
-    if (ys_eq_lit(two, "==")) { return two; }
-    else if (ys_eq_lit(two, "!=")) { return two; }
-    else if (ys_eq_lit(two, "<=")) { return two; }
-    else if (ys_eq_lit(two, ">=")) { return two; }
-    else if (ys_eq_lit(two, "&&")) { return two; }
-    else if (ys_eq_lit(two, "||")) { return two; }
-    else if (ys_eq_lit(two, "::")) { return two; }
-    else if (ys_eq_lit(two, "..")) { return two; }
-    else if (ys_eq_lit(two, "->")) { return two; }
-    else if (ys_eq_lit(two, "=>")) { return two; }
-    else if (ys_eq_lit(two, "++")) { return two; }
-    else if (ys_eq_lit(two, "--")) { return two; }
-    else if (ys_eq_lit(two, "+=")) { return two; }
-    else if (ys_eq_lit(two, "-=")) { return two; }
-    else if (ys_eq_lit(two, "*=")) { return two; }
-    else if (ys_eq_lit(two, "/=")) { return two; }
-    else if (ys_eq_lit(two, "%=")) { return two; }
+    if (ys_eq_lit(two, "==") || ys_eq_lit(two, "!=") ||
+        ys_eq_lit(two, "<=") || ys_eq_lit(two, ">=") ||
+        ys_eq_lit(two, "&&") || ys_eq_lit(two, "||") ||
+        ys_eq_lit(two, "::") || ys_eq_lit(two, "..") ||
+        ys_eq_lit(two, "->") || ys_eq_lit(two, "=>") ||
+        ys_eq_lit(two, "++") || ys_eq_lit(two, "--") ||
+        ys_eq_lit(two, "+=") || ys_eq_lit(two, "-=") ||
+        ys_eq_lit(two, "*=") || ys_eq_lit(two, "/=") ||
+        ys_eq_lit(two, "%=")) { return two; }
     else { return ys(""); }
 }
 
 int issingleop(Yv *c) {
-    if (ys_eq_lit(c, "+")) { return 1; }
-    else if (ys_eq_lit(c, "-")) { return 1; }
-    else if (ys_eq_lit(c, "*")) { return 1; }
-    else if (ys_eq(c, slash())) { return 1; }
-    else if (ys_eq_lit(c, "%")) { return 1; }
-    else if (ys_eq_lit(c, "<")) { return 1; }
-    else if (ys_eq_lit(c, ">")) { return 1; }
-    else if (ys_eq_lit(c, "=")) { return 1; }
-    else if (ys_eq_lit(c, ".")) { return 1; }
-    else if (ys_eq_lit(c, "!")) { return 1; }
-    else if (ys_eq_lit(c, "&")) { return 1; }
-    else { return ys_eq_lit(c, "?"); }
+    return ys_eq_lit(c, "+") || ys_eq_lit(c, "-") ||
+           ys_eq_lit(c, "*") || ys_eq(c, slash()) ||
+           ys_eq_lit(c, "%") || ys_eq_lit(c, "<") ||
+           ys_eq_lit(c, ">") || ys_eq_lit(c, "=") ||
+           ys_eq_lit(c, ".") || ys_eq_lit(c, "!") ||
+           ys_eq_lit(c, "&") || ys_eq_lit(c, "?");
 }
 
 // The slash character, built without a literal: Y string literals cannot
@@ -286,16 +224,12 @@ Yv *tokenize(Yv *src) {
             long start = i;
             long startcol = col;
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
-            // NOTE: nested ifs, not `||` (see isalnum note).
             long radix = 0;
             if (ys_eq_lit(c, "0")) {
                 Yv *nxt = ys_substr(src, i + 1, 1);
-                if (ys_eq_lit(nxt, "x")) { radix = 16; ; } else { ; };
-                if (ys_eq_lit(nxt, "X")) { radix = 16; ; } else { ; };
-                if (ys_eq_lit(nxt, "b")) { radix = 2; ; } else { ; };
-                if (ys_eq_lit(nxt, "B")) { radix = 2; ; } else { ; };
-                ;
-            } else { ; }
+                if (ys_eq_lit(nxt, "x") || ys_eq_lit(nxt, "X")) { radix = 16; }
+                else if (ys_eq_lit(nxt, "b") || ys_eq_lit(nxt, "B")) { radix = 2; }
+            }
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
@@ -309,6 +243,9 @@ Yv *tokenize(Yv *src) {
                 };
                 ;
             } else {
+            // The first digit is already known from the branch condition.
+            i = i + 1;
+            col = col + 1;
             int ind = 0;
             while (ind == 0) {
                 if (i < n) {
@@ -318,36 +255,27 @@ Yv *tokenize(Yv *src) {
                 } else { ind = 1; ; }
             };
             // optional fractional part (but not '..' range).
-            // NOTE: no `&&` (see line-comment note): check the dot, then the
-            // lookahead, in nested form.
-            if (ys_eq_lit(ys_substr(src, i, 1), ".")) {
-                if (!ys_eq_lit(ys_substr(src, i + 1, 1), ".")) {
-                    i = i + 1;
-                    col = col + 1;
-                    int frd = 0;
-                    while (frd == 0) {
-                        if (i < n) {
-                            if (isdigit(ys_substr(src, i, 1))) { i = i + 1; col = col + 1; ; }
-                            else { frd = 1; ; };
-                            ;
-                        } else { frd = 1; ; }
-                    };
-                    ;
-                } else { ; }
-                ;
-            } else { ; }
+            if (ys_eq_lit(ys_substr(src, i, 1), ".") &&
+                !ys_eq_lit(ys_substr(src, i + 1, 1), ".")) {
+                i = i + 1;
+                col = col + 1;
+                int frd = 0;
+                while (frd == 0) {
+                    if (i < n) {
+                        if (isdigit(ys_substr(src, i, 1))) { i = i + 1; col = col + 1; ; }
+                        else { frd = 1; ; };
+                        ;
+                    } else { frd = 1; ; }
+                };
+            }
             // optional exponent: e / E, an optional sign, then digits. Only
             // consumed when at least one digit follows, so `1e` stays a
             // number followed by an identifier rather than a bad literal.
             Yv *ec = ys_substr(src, i, 1);
-            int is_e = 0;
-            if (ys_eq_lit(ec, "e")) { is_e = 1; ; } else { ; };
-            if (ys_eq_lit(ec, "E")) { is_e = 1; ; } else { ; }
-            if (is_e) {
+            if (ys_eq_lit(ec, "e") || ys_eq_lit(ec, "E")) {
                 long esign = 0;
                 Yv *sc = ys_substr(src, i + 1, 1);
-                if (ys_eq_lit(sc, "+")) { esign = 1; ; } else { ; };
-                if (ys_eq_lit(sc, "-")) { esign = 1; ; } else { ; }
+                if (ys_eq_lit(sc, "+") || ys_eq_lit(sc, "-")) { esign = 1; }
                 if (isdigit(ys_substr(src, i + 1 + esign, 1))) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
@@ -360,16 +288,17 @@ Yv *tokenize(Yv *src) {
                         } else { exd = 1; ; }
                     };
                     ;
-                } else { ; }
-                ;
-            } else { ; }
-            ;
+                }
+            }
             }
             toks = ya_push(toks, mktok(ys("num"), ys_substr(src, start, i - start), line, startcol));
             ;
         } else if (isalpha(c)) {
             long start = i;
             long startcol = col;
+            // The first character is already known to be a word character.
+            i = i + 1;
+            col = col + 1;
             int inw = 0;
             while (inw == 0) {
                 if (i < n) {
@@ -443,7 +372,6 @@ Yv *tokenize(Yv *src) {
             // backend lexes division identically (parser.c skip_spaces skips
             // comments, parse_operator matches division), so parity demands
             // we emit the operator too.
-            // NOTE: no `&&` guard (see below) — nested-if form.
             if (ys_eq(ys_substr(src, i + 1, 1), slash())) {
                 // line comment
                 i = i + 2;

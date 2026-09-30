@@ -287,9 +287,8 @@ def parse_binary(toks: [{ t: str, v: str, line: long, col: long }], p: long, min
         // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
         // with bools and the checker rejects the joint gate (tcompat law:
         // only annotations unify, never branch conditions).
-        // NOTE: every arm ends in `0;` — the while body must be void-typed
-        // (an `if` without `else` takes its body's type; a long-typed body
-        // would poison the loop).
+        // The explicit else arms end in long-valued `0`s, keeping their
+        // types aligned; the terminating `;` discards the value.
         if (prec == 0) {
             go = false;
             0
@@ -361,7 +360,8 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
         if (is_punct(toks, pos, ";")) {
             // repeat: size must be a num literal (else n = -1 sentinel,
             // rejected with a clear error by the checker).
-            // NOTE: `0;` tails (see `?` note above).
+            // Both paths leave the optional count check with a long-valued
+            // tail.
             let n = -1;
             pos = pos + 1;
             if (tt(toks, pos) == "num") {
@@ -632,8 +632,8 @@ def parse_type_atom2(toks: [{ t: str, v: str, line: long, col: long }], p: long)
 // option/arrow suffixes).
 def parse_type_tail(toks: [{ t: str, v: str, line: long, col: long }], apos: long, anode) -> { node: {k: str}, pos: long } {
     // postfix `?`: option type (binds tighter than `->`)
-    // NOTE: `0;` tails — bare-`if` arms would take the body's type and
-    // poison the sequence (see parse_binary note).
+    // Both paths return the same parser-result shape; `?` wraps the atom
+    // before the shared arrow parser handles the suffix.
     if (is_op(toks, apos, "?")) {
         // NOTE: `?` then re-check `->`: T? -> U must keep parsing the arrow
         // (right-assoc). The `?` shape feeds parse_type_arrow as its anode.
@@ -720,11 +720,11 @@ def parse_type(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> lo
     // Parse a type annotation and return the position after it.
     // Types: long, str, bool, [T], (T, T), { field: T }, and function types
     // A -> B (right-associative, so A -> B -> C = A -> (B -> C)).
-    // NOTE: `0;` tails (see `?` note above).
+    // The recursive arm only updates `pos`; this conditional's value is
+    // discarded, so its VOID-law arm mismatch does not affect the result.
     let pos = parse_type_atom(toks, p);
     if (is_op(toks, pos, "->")) {
         pos = parse_type(toks, pos + 1);
-        0
     } else { 0 };
     pos
 };
@@ -739,8 +739,8 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
     let pos = p + 1;  // skip 'def'
     let fname = "";
     // optional function name (present unless next token is '(')
-    // NOTE: `0;` tails (see parse_type_tail note): a bare-`if` arm takes the
-    // body's type (long via pos+1) and poisons the sequence gate.
+    // Only the optional-name branch changes `fname` and `pos`; both are
+    // consumed by the common parsing path below.
     if (!is_punct(toks, pos, "(")) {
         fname = tv(toks, pos);
         pos = pos + 1;
@@ -776,7 +776,7 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
     } else { 0 };
     pos = pos + 1;  // skip ')'
     // optional return type '-> type'
-    // NOTE: `0;` tails (see `?` note above).
+    // The optional return annotation updates the local type and position.
     let ret = { k: "tnone" };
     if (is_op(toks, pos, "->")) {
         let rr = parse_type_node(toks, pos + 1);
@@ -954,7 +954,7 @@ def parse_decl(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
     let cl = tcol(toks, p);
     let pos = p + 2;
     // optional ': type' (kept as a type node for the static checker)
-    // NOTE: `0;` tails (see `?` note above).
+    // The optional annotation updates the local type and position.
     let typ = { k: "tnone" };
     if (is_punct(toks, pos, ":")) {
         let tr = parse_type_node(toks, pos + 1);
@@ -978,7 +978,7 @@ def parse_if(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { no
     let pos = then_b.pos;
     let else_b = { k: "void" };
     let has_else = false;
-    // NOTE: `0;` tails (see `?` note above).
+    // The optional else branch updates the AST bookkeeping.
     if (is_kw(toks, pos, "else")) {
         if (is_kw(toks, pos + 1, "if")) {
             let ei = parse_if(toks, pos + 1);
@@ -1024,8 +1024,8 @@ def parse_for_or_range(toks: [{ t: str, v: str, line: long, col: long }], p: lon
         res({ k: "forrange", name: name, lo: lo.node, hi: hi.node, body: body.node, line: ln, col: cl }, body.pos)
     } else {
         // C-style for
-        // NOTE: statement-form + `0;` tails — bare `if` arms would take
-        // the body's type and poison the sequence (see parse_binary note).
+        // The init and step clauses are optional; only present clauses
+        // update their local parser state.
         let pos = p + 2;  // skip 'for' '('
         let init = { k: "void" };
         if (!is_punct(toks, pos, ";")) {

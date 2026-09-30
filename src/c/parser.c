@@ -361,9 +361,8 @@ Yv *parse_binary(Yv *toks, long p, long min_prec) {
         // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
         // with bools and the checker rejects the joint gate (tcompat law:
         // only annotations unify, never branch conditions).
-        // NOTE: every arm ends in `0;` — the while body must be void-typed
-        // (an `if` without `else` takes its body's type; a long-typed body
-        // would poison the loop).
+        // The explicit else arms end in long-valued `0`s, keeping their
+        // types aligned; the terminating `;` discards the value.
         if (prec == 0) {
             go = 0;
             ;
@@ -435,7 +434,8 @@ Yv *parse_array(Yv *toks, long p) {
         if (is_punct(toks, pos, ys(";"))) {
             // repeat: size must be a num literal (else n = -1 sentinel,
             // rejected with a clear error by the checker).
-            // NOTE: `0;` tails (see `?` note above).
+            // Both paths leave the optional count check with a long-valued
+            // tail.
             long n = -1;
             pos = pos + 1;
             if (ys_eq_lit(tt(toks, pos), "num")) {
@@ -751,8 +751,8 @@ Yv *parse_type_atom2(Yv *toks, long p) {
 // option/arrow suffixes).
 Yv *parse_type_tail(Yv *toks, long apos, Yv *anode) {
     // postfix `?`: option type (binds tighter than `->`)
-    // NOTE: `0;` tails — bare-`if` arms would take the body's type and
-    // poison the sequence (see parse_binary note).
+    // Both paths return the same parser-result shape; `?` wraps the atom
+    // before the shared arrow parser handles the suffix.
     if (is_op(toks, apos, ys("?"))) {
         // NOTE: `?` then re-check `->`: T? -> U must keep parsing the arrow
         // (right-assoc). The `?` shape feeds parse_type_arrow as its anode.
@@ -839,11 +839,11 @@ long parse_type(Yv *toks, long p) {
     // Parse a type annotation and return the position after it.
     // Types: long, str, bool, [T], (T, T), { field: T }, and function types
     // A -> B (right-associative, so A -> B -> C = A -> (B -> C)).
-    // NOTE: `0;` tails (see `?` note above).
+    // The recursive arm only updates `pos`; this conditional's value is
+    // discarded, so its VOID-law arm mismatch does not affect the result.
     long pos = parse_type_atom(toks, p);
     if (is_op(toks, pos, ys("->"))) {
         pos = parse_type(toks, pos + 1);
-        ;
     } else {
         ;
     }
@@ -860,8 +860,8 @@ Yv *parse_func(Yv *toks, long p) {
     long pos = p + 1;  // skip 'def'
     Yv *fname = ys("");
     // optional function name (present unless next token is '(')
-    // NOTE: `0;` tails (see parse_type_tail note): a bare-`if` arm takes the
-    // body's type (long via pos+1) and poisons the sequence gate.
+    // Only the optional-name branch changes `fname` and `pos`; both are
+    // consumed by the common parsing path below.
     if (!is_punct(toks, pos, ys("("))) {
         fname = tv(toks, pos);
         pos = pos + 1;
@@ -903,7 +903,7 @@ Yv *parse_func(Yv *toks, long p) {
     }
     pos = pos + 1;  // skip ')'
     // optional return type '-> type'
-    // NOTE: `0;` tails (see `?` note above).
+    // The optional return annotation updates the local type and position.
     Yv *ret = yr(1, "k", ys("tnone"));
     if (is_op(toks, pos, ys("->"))) {
         Yv *rr = parse_type_node(toks, pos + 1);
@@ -1097,7 +1097,7 @@ Yv *parse_decl(Yv *toks, long p) {
     long cl = tcol(toks, p);
     long pos = p + 2;
     // optional ': type' (kept as a type node for the static checker)
-    // NOTE: `0;` tails (see `?` note above).
+    // The optional annotation updates the local type and position.
     Yv *typ = yr(1, "k", ys("tnone"));
     if (is_punct(toks, pos, ys(":"))) {
         Yv *tr = parse_type_node(toks, pos + 1);
@@ -1123,7 +1123,7 @@ Yv *parse_if(Yv *toks, long p) {
     long pos = yv_l(yr_get(then_b, "pos"));
     Yv *else_b = yr(1, "k", ys("void"));
     int has_else = 0;
-    // NOTE: `0;` tails (see `?` note above).
+    // The optional else branch updates the AST bookkeeping.
     if (is_kw(toks, pos, ys("else"))) {
         if (is_kw(toks, pos + 1, ys("if"))) {
             Yv *ei = parse_if(toks, pos + 1);
@@ -1171,8 +1171,8 @@ Yv *parse_for_or_range(Yv *toks, long p) {
         return res(yr(7, "k", ys("forrange"), "name", name, "lo", yr_get(lo, "node"), "hi", yr_get(hi, "node"), "body", yr_get(body, "node"), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
     } else {
         // C-style for
-        // NOTE: statement-form + `0;` tails — bare `if` arms would take
-        // the body's type and poison the sequence (see parse_binary note).
+        // The init and step clauses are optional; only present clauses
+        // update their local parser state.
         long pos = p + 2;  // skip 'for' '('
         Yv *init = yr(1, "k", ys("void"));
         if (!is_punct(toks, pos, ys(";"))) {

@@ -3,12 +3,12 @@
 // the entry point is our own `_start`, and user code only uses raw syscalls.
 // Layout: [EHDR 64][PHDR 56][code][rodata]; base vaddr 0x400000.
 //
-// Bytes are plain longs (0-255) in Y lists; the driver renders them as
-// octal escapes for printf (Y strings cannot carry NUL through write_file).
+// Binary data flows through packed [byte] arrays; the driver writes it
+// directly so embedded NUL bytes are preserved.
 
 import elfenc from "./enc64.y";
 
-def elf_build(code: [long], rodata: [long], entry_off: long) -> [long] {
+def elf_build(code: [byte], rodata: [byte], entry_off: long) -> [byte] {
     let code_off = 120;
     let base = 4194304;
     // Pad the code to a page so rodata starts page-aligned; pad rodata tail
@@ -20,7 +20,7 @@ def elf_build(code: [long], rodata: [long], entry_off: long) -> [long] {
     // NOTE: out is built with ONE push per byte (not enc.concat per field):
     // concat copies the whole prefix each time (O(n^2) clones), which hangs
     // the C VM on real (~8K+) inputs. Helpers below append in place.
-    let out = [];
+    let out: [byte] = [];
     let codesz = len(code);
     let codetrail = codesz % 4096;
     let codepad = 0;
@@ -33,7 +33,8 @@ def elf_build(code: [long], rodata: [long], entry_off: long) -> [long] {
     let total = code_off + codesz + codepad + rosz + ropad;
     let entry = base + code_off + entry_off;
     // EHDR
-    out = push_bytes(out, [127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let header: [byte] = [127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    out = push_bytes(out, header);
     out = push_le16(out, 2);
     out = push_le16(out, 62);
     out = push_le32(out, 1);
@@ -64,7 +65,8 @@ def elf_build(code: [long], rodata: [long], entry_off: long) -> [long] {
         0
     };
     out = push_bytes(out, rodata);
-    out = push_bytes(out, [0, 0, 0, 0, 0, 0, 0, 0]);
+    let trailer: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
+    out = push_bytes(out, trailer);
     let q = 0;
     while (q < ropad) {
         out += 0;
@@ -78,8 +80,8 @@ def elf_build(code: [long], rodata: [long], entry_off: long) -> [long] {
 // clones the array per call, but that is still O(n) per byte appended —
 // linear overall, unlike enc.concat(out, field) which re-clones the whole
 // prefix for every header field (quadratic, hangs on real inputs).
-def push_bytes(out: [long], bytes: [long]) -> [long] {
-    // NOTE: annotated [long] (not holes): push() needs known heap arrays.
+def push_bytes(out: [byte], bytes: [byte]) -> [byte] {
+    // NOTE: annotated [byte] (not holes): push() needs known heap arrays.
     let i = 0;
     while (i < len(bytes)) {
         out += bytes[i];
@@ -89,13 +91,13 @@ def push_bytes(out: [long], bytes: [long]) -> [long] {
     out
 };
 
-def push_le16(out: [long], v: long) -> [long] {
+def push_le16(out: [byte], v: long) -> [byte] {
     out += elfenc.byte_of(v, 0);
     out += elfenc.byte_of(v, 1);
     out
 };
 
-def push_le32(out: [long], v: long) -> [long] {
+def push_le32(out: [byte], v: long) -> [byte] {
     out += elfenc.byte_of(v, 0);
     out += elfenc.byte_of(v, 1);
     out += elfenc.byte_of(v, 2);
@@ -103,7 +105,7 @@ def push_le32(out: [long], v: long) -> [long] {
     out
 };
 
-def push_le64(out: [long], v: long) -> [long] {
+def push_le64(out: [byte], v: long) -> [byte] {
     out += elfenc.byte_of(v, 0);
     out += elfenc.byte_of(v, 1);
     out += elfenc.byte_of(v, 2);
