@@ -5,7 +5,8 @@
   literal-value arm does not count as coverage)
 - exhaustive tests for every feature (the audit corpus is at 65 cases; the
   native corpus at ~139)
--
+- add tests that test for memory leaks (and also for tail recursive stuff the memory shouldnt grow, test with tail recursive fibonacci)
+- adversarial audit of ycc and if it can be hacked / broken / crashed by bad input and fix issues
 
 
 

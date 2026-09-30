@@ -234,10 +234,12 @@ Yv *ys_join(const Yv *arr, const Yv *sep) {
     return ys_n(buf, pos);
 }
 
-/* first index of sub at or after `from` in s[0..n), or (size_t)-1 */
+/* first index of sub at or after `from` in s[0..n), or (size_t)-1.
+   An empty needle never matches (mirrors rt.y's y_str_index, which
+   requires m > 0 and otherwise leaves `found` at -1). */
 static size_t ymem_find(const char *s, size_t n, const char *sub, size_t m,
                         size_t from) {
-    if (m == 0) return from <= n ? from : (size_t)-1;
+    if (m == 0) return (size_t)-1;
     if (m > n) return (size_t)-1;
     for (size_t i = from; i + m <= n; i++) {
         if (memcmp(s + i, sub, m) == 0) return i;
@@ -283,7 +285,7 @@ long ys_index_of(const Yv *s, const Yv *sub) {
 long ys_last_index_of(const Yv *s, const Yv *sub) {
     if (!s || s->tag != Y_STR || !sub || sub->tag != Y_STR) { return -1; }
     size_t n = s->u.s.n, m = sub->u.s.n;
-    if (m == 0) { return (long)n; }
+    if (m == 0) { return -1; } /* an empty needle never matches (rt.y) */
     for (long i = (long)(n - m); i >= 0; i--) {
         if (memcmp(s->u.s.p + i, sub->u.s.p, m) == 0) { return i; }
     }
@@ -365,7 +367,7 @@ Yv *ys_tostring(const Yv *v) {
         size_t total = 2;
         for (size_t i = 0; i < v->u.a.len; i++) {
             Yv *e = ys_tostring(v->u.a.items[i]);
-            total += strlen(e->u.s.p) + 2;
+            total += e->u.s.n + 2;
         }
         char *b = yalloc(total + 1);
         size_t pos = 0;
@@ -373,7 +375,7 @@ Yv *ys_tostring(const Yv *v) {
         for (size_t i = 0; i < v->u.a.len; i++) {
             if (i > 0) { b[pos++] = ','; b[pos++] = ' '; }
             Yv *e = ys_tostring(v->u.a.items[i]);
-            size_t el = strlen(e->u.s.p);
+            size_t el = e->u.s.n;
             memcpy(b + pos, e->u.s.p, el);
             pos += el;
         }
@@ -386,7 +388,7 @@ Yv *ys_tostring(const Yv *v) {
         for (size_t i = 0; i < v->u.r.len; i++) {
             char *k = escape_str(v->u.r.keys[i]);
             Yv *e = ys_tostring(v->u.r.vals[i]);
-            total += strlen(k) + strlen(e->u.s.p) + 4;
+            total += strlen(k) + e->u.s.n + 4;
         }
         char *b = yalloc(total + 1);
         size_t pos = 0;
@@ -400,7 +402,7 @@ Yv *ys_tostring(const Yv *v) {
             b[pos++] = ':';
             b[pos++] = ' ';
             Yv *e = ys_tostring(v->u.r.vals[i]);
-            size_t el = strlen(e->u.s.p);
+            size_t el = e->u.s.n;
             memcpy(b + pos, e->u.s.p, el);
             pos += el;
         }
@@ -588,14 +590,17 @@ int yv_eq(const Yv *a, const Yv *b) {
 
 /* ── builtins ────────────────────────────────────────────────────────── */
 
+/* Y `str` values may contain NUL bytes (ys_n / from_bytes), and the native
+   runtime writes len(s) bytes — so every output path here is length-based,
+   never strlen/fputs. */
 void puts_(const Yv *s) {
-    if (s && s->tag == Y_STR) fputs(s->u.s.p, stdout);
+    if (s && s->tag == Y_STR) fwrite(s->u.s.p, 1, s->u.s.n, stdout);
     else fputs("none", stdout);
     fflush(stdout);
 }
 
 void eputs_(const Yv *s) {
-    if (s && s->tag == Y_STR) fputs(s->u.s.p, stderr);
+    if (s && s->tag == Y_STR) fwrite(s->u.s.p, 1, s->u.s.n, stderr);
     else fputs("none", stderr);
     fflush(stderr);
 }
@@ -621,7 +626,7 @@ int write_file(const Yv *path, const Yv *content) {
     if (!path || path->tag != Y_STR || !content || content->tag != Y_STR) return 0;
     FILE *f = fopen(path->u.s.p, "wb");
     if (!f) return 0;
-    size_t n = strlen(content->u.s.p);
+    size_t n = content->u.s.n; /* length-based: a str may contain NULs */
     size_t wr = fwrite(content->u.s.p, 1, n, f);
     fclose(f);
     return wr == n;
