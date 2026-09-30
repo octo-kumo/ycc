@@ -22,8 +22,8 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `prelude.y` (`readline`/`exec` chunks) |
 
 New Y files must stay in the **portable subset** (no pointer syntax in their
-own code): they are parsed by the C compiler's `parser.c` and compiled by the
-C backend during the bootstrap.
+own code) and must get a **1:1 C twin** in `src/c/` (see `PORTING.md`) --
+the two compilers are kept in lockstep.
 
 ## Data representation
 
@@ -48,8 +48,8 @@ C backend during the bootstrap.
   rejected, since `N` is part of the type).
 - **Arrays and records are reference values**: a binding stores the address,
   never a copy. `let b = a`, passing, returning and storing all share, and
-  `a[i] = v` / `s.f = v` are observable through every alias. The VM and the
-  compiled C runtime use the same model. (Copy-on-store used to emulate value
+  `a[i] = v` / `s.f = v` are observable through every alias. Both
+  implementations use the same model. (Copy-on-store used to emulate value
   semantics here; it made every helper that returned an accumulator O(n), so
   the assembler was O(n²) and self-compilation OOMed past 7.5 GB.)
 - Heap (bump allocator over `brk`, stateless — no retained end pointer):
@@ -146,7 +146,8 @@ methods/traits if Y grows them.
 ## Self-hosting: done
 
 `ycc` compiles its own source to a byte-identical binary. The chain is
-`yboot → cycc → ycc → _ycc` with `cmp ycc _ycc` as the gate (`make ycc`), and
+`cycc → ycc → _ycc`, gated by `cmp ycc refs/ycc.ref` (the C copy is
+byte-identical to the reference) and `cmp ycc _ycc` (`make ycc`), and
 `test/sh/test_fixpoint.sh` re-checks it from an already-built `./ycc`,
 including a third generation and a smoke compile with the self-built binary.
 
@@ -155,7 +156,7 @@ Measured on the self-compile (`ycc --time -o ycc src/y/ycc.y`):
 ELF, in ~2.4 s and ~683 MB of arena.
 
 What made it possible was not new features but removing copies: arrays and
-records became reference values in all three engines (copy-on-store made the
+records became reference values everywhere (copy-on-store made the
 assembler O(n²) — 651 MB to build a 20 KB binary — and self-compilation OOMed
 past 7.5 GB), and the output writer stopped issuing one `write` syscall per
 byte.
@@ -348,7 +349,7 @@ behavior, two backends.
 
 `test/sh/test_native_examples.sh` is the ratchet on the example corpus:
 every `test/y/examples/*.y` the native compiler accepts must print what the
-VM prints. Examples it cannot take yet live in the script's `UNSUPPORTED`
+reference compiler's output prints. Examples it cannot take yet live in the script's `UNSUPPORTED`
 map with a reason each, and the suite fails as soon as one of them starts
 compiling — so the list can only shrink.
 
@@ -357,7 +358,7 @@ compiling — so the list can only shrink.
 - Division and modulo are exact across the whole long range, including
   `LONG_MIN / -1` and `LONG_MIN % -1` (`idiv` raises `#DE` on that pair, so
   divisor `-1` is compiled as a negation / a constant zero instead).
-  Negating `LONG_MIN` still wraps to `LONG_MIN`, as it does in the VM.
+  Negating `LONG_MIN` still wraps to `LONG_MIN`, as the language requires.
 - Division/modulo by zero, OOB indexing, unwrap-of-none, OOM each exit
   cleanly with a message + exit 1.
 - No heap maps with dynamic keys, and no record spread (clear type errors).
@@ -369,18 +370,15 @@ compiling — so the list can only shrink.
   convention are unchanged. Literals (including scientific notation) are
   built at run time as `mantissa × 10^n` with `cvtsi2sd` — IEEE arithmetic
   is correctly rounded, so the compiler needs no float parser. Printing is
-  fixed 6-decimal, matching the VM's `%f`, but only for magnitudes below
+  fixed 6-decimal, matching the reference's `%f` formatting, but only for magnitudes below
   2^63: `cvttsd2si` cannot take anything larger, and reproducing printf's
   exact expansion needs bignum arithmetic, so those print
   `<float magnitude >2^63>` rather than noise.
 - `str` supports `<`, `>`, `<=`, `>=` (lexicographic, via `y_str_cmp`
-  returning the sign), matching `strcmp` in the VM and the C runtime.
-- **Embedded NUL bytes are a known engine divergence.** A native `str` is
-  length-prefixed (`{len, data..., NUL}`), so `from_bytes([65, 0, 66])` is a
-  3-byte string and `bytes()` returns all three. The VM's `str` is a C
-  `char *`, so the same value truncates to 1 byte there. NUL-free data — all
-  text — round-trips identically in both. Binary data only survives
-  natively; do not build a test that asserts parity on it.
+  returning the sign), matching `strcmp` semantics.
+- **Embedded NUL bytes.** A `str` is length-prefixed (`{len, data..., NUL}`),
+  so `from_bytes([65, 0, 66])` is a 3-byte string and `bytes()` returns all
+  three. Use `[byte]` arrays for binary data.
 - `str` flows into `*T` positions but has no byte access yet.
 - **`push` may move the array.** The header and its elements live in one
   block (`{len, cap, data...}`), so growing past `cap` allocates a new

@@ -1,254 +1,92 @@
-# y compiler
+# y — the Y compiler
 
-A compiler and VM for a simple C-like programming language with first-class functions, arrays, maps, and type inference.
+A compiler for **Y**, a small statically-checked systems language, and
+its **1:1 copy in C**. Both compilers build on Linux x86-64 and emit
+*static* ELF executables using only their own assembler and ELF writer —
+no cc, no as, no ld, and no VM: a Y program is compiled straight to
+machine code.
 
-## Features
-
-- **Parser**: Recursive descent parser producing an AST
-- **Type checker**: Hindley-Milner style type inference
-- **VM**: Tree-walking interpreter for quick testing
-- **Native compilation**: Compiles to C, then to native binaries via gcc
-
-## Quick start
-
-```bash
-make
-./yboot test/y/examples/pi.y              # Run in VM
-./yboot --compile test/y/examples/pi.y -o pi_bin  # Compile to native binary
-./pi_bin                              # Run the compiled binary
+```console
+$ make            # builds ./cycc, the C copy of the compiler
+$ make ycc        # builds ./ycc and verifies it against the reference
+$ ./ycc test/y/examples/helloworld.y -o hello && ./hello
+hello, world
 ```
+
+`make ycc` is the acceptance gate: the C copy must produce a
+**byte-identical** compiler to the reference binary in `refs/` (see
+`refs/SHA256SUMS`), and `ycc` must self-compile byte-identically.
+
+## The language
+
+Y is deliberately small: `let`/`def`, structural records, homogeneous
+heap arrays, options, pointers, closures. Some highlights:
+
+```y
+// arrays: + copies, += and *= mutate in place, = aliases
+let xs = [1, 2, 3];
+xs += 4;              // push:              [1, 2, 3, 4]
+xs *= 0;              // prepend:           [0, 1, 2, 3, 4]
+xs += [9, 10];        // append elements:   [0, 1, 2, 3, 4, 9, 10]
+let ys = xs + [11];   // a NEW array; xs untouched
+
+// the target of an assignment family is evaluated exactly once
+a[f()] += 1;          // f() runs ONE time
+
+// records and arrays are reference values
+let r = { nums: [1, 2] };
+let s = r;
+s.nums += 3;          // r.nums sees it
+```
+
+The full formal definition — grammar, type system, and the exact
+operator/aliasing semantics — lives in **`docs/`** (LaTeX, built with
+[Tectonic v2](https://tectonic-typesetting.github.io/): `cd docs &&
+tectonic -X build`).
 
 ## Usage
 
-```
-Usage: ./yboot [OPTIONS] [FILE]
-
-Options:
-  -c, --compile [OUTPUT]  Compile to native binary (default: a.out)
-  -S, --emit-c [OUTPUT]   Emit C source only (default: stdout)
-  -o OUTPUT               Output file path
-      --no-exec           Disable the exec() builtin (no shell access)
-  -q, --quiet             Suppress progress output
-  -t, --time              Print per-phase timings to stderr
-      --strict            Treat type errors as fatal (exit 1)
-  -h, --help              Show this help
-
-Without options, runs the program in the built-in VM.
+```text
+ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
+  (no flags)   compile FILE to a native executable (default: a.out)
+  -o OUTPUT    output path (executable, or .s file with -S)
+  -S           emit assembly only (stdout, or the -o file)
+  -t, --time   per-phase timing table on stderr
+  --no-exec    omit exec() -- the binary cannot reach a shell
+  --prof       instrument the output: per-function call counts and
+               cpu times on stderr when the program exits
 ```
 
-Type checking is **advisory by default**: the checker is still incomplete, so
-a failed check prints a diagnostic but the program still runs or compiles.
-`--strict` makes a type error fatal (non-zero exit, nothing emitted) — what
-you want in a build script.
+`./cycc` takes exactly the same flags — it is the same compiler.
 
-### Examples
+## Layout
 
-```bash
-# Run in VM (shows AST, type check, and result)
-./yboot test/y/examples/helloworld.y
+| path | contents |
+|---|---|
+| `src/y/` | the compiler, in Y (`ycc.y` driver, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `std/`) |
+| `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the shared value model) |
+| `docs/` | the formal language definition (LaTeX/Tectonic) |
+| `refs/` | reference binaries for the byte-identical port gate |
+| `test/` | `test/sh/` suites + `test/y/` programs (`native/`, `audit/`, `examples/`, `ycc/`) |
+| `bench/` | compile-time/runtime benchmarks + `compare.sh` |
 
-# Compile to native binary
-./yboot --compile test/y/examples/helloworld.y -o hello
-./hello
+## Building and testing
 
-# Emit C source for inspection
-./yboot -S test/y/examples/math.y > math.c
-
-# Compile all examples
-for f in test/y/examples/*.y; do
-  ./yboot --compile "$f" -o "$(basename $f .y)_bin"
-done
+```console
+$ make              # gcc -> cycc (the C copy)
+$ make ycc          # cycc -> ycc, then: cmp ycc refs/ycc.ref + fixpoint
+$ make test         # the port gate + every suite in test/sh/
+$ ./test/sh/run_all.sh port native   # a subset
 ```
 
-## Language
+`make asan` builds an ASan+UBSan `cycc-asan` for crash hunting.
 
-The language is C-like with braces, plus some JS/TS-inspired features:
+When you change `src/y/*.y`, make the **same change** in `src/c/` (they
+are kept in lockstep — that is what "1:1 copy" means, see
+`PORTING.md`), then `make ycc` and `make test` must stay green.
 
-```js
-// Variables
-let x = 42;
-const y = 3.14;
+## Contributing
 
-// Functions (first-class)
-def add(a: long, b: long) -> long {
-    a + b
-};
-
-// Anonymous functions
-let square = def(n: long) { n * n };
-
-// Arrays and slicing
-let arr = [1, 2, 3, 4, 5];
-let first = arr[0];
-let slice = arr[1:3];  // [2, 3]
-
-// Maps
-let map = {name: "alice", age: 30};
-let name = map.name;
-
-// Recursion via `self`
-def factorial(n: long) -> long {
-    if (n == 0) { 1 } else { n * self(n - 1) }
-};
-
-// Higher-order functions
-def apply(f: (long) -> long, x: long) -> long {
-    f(x)
-};
-
-// Built-ins
-print("hello");
-let s = tostring(42);
-let r = range(10);  // [0, 1, 2, ..., 9]
-```
-
-See `lang.md` for the full language specification.
-
-## Architecture
-
-### Compilation pipeline
-
-```
-.y source → Parser → AST → Type checker → Code generator → C source → gcc → binary
-```
-
-### Components
-
-- **parser.c**: Recursive descent parser (1081 lines)
-- **ast.c/h**: AST node definitions and utilities
-- **typecheck.c**: Type inference and checking
-- **vm.c**: Tree-walking interpreter
-- **codegen.c**: C code generation backend (NEW)
-- **src/c/runtime.c/h**: Runtime library for compiled programs (NEW)
-
-### Code generation
-
-The compiler translates the AST into C source code that links against `src/c/runtime.c`. The generated code uses:
-
-- **GCC statement expressions** `({ ... })` for expression-oriented semantics
-- **Heap-allocated values** with a tagged union (`YValue`)
-- **Lexical scoping** via linked-list scopes with reference counting for closures
-- **First-class functions** as C function pointers + closure environments
-
-The runtime provides:
-- Value constructors and destructors
-- Arithmetic and comparison operators
-- Array/map operations (indexing, slicing, field access)
-- Function call machinery
-- Built-in functions (print, tostring, typeof, range)
-
-## Limitations
-
-- No garbage collection (the native backend uses an arena that never frees;
-  the C runtime and VM reference-count)
-- Limited error messages
-- Modules via source-to-source imports (`import m from "./x.y"`, paths relative
-  to the importing file; `export {...}` must be the last statement)
-- Type inference is incomplete for some edge cases
-- Closures capture entire scopes, not individual variables
-
-## Value semantics
-
-Numbers, booleans and strings are values. **Arrays, maps and records are
-references**: binding one to a second name shares it, and `push`, `map_set`,
-`a[i] = v` and `s.f = v` are observable through every binding. All three
-engines — the VM, compiled C, and the native backend — agree on this, which
-is what lets `ycc` compile itself to a byte-identical binary. Rebind the
-result of `push` (`a = push(a, v)`), since growing may move the array.
-
-## Profiling
-
-Both compilers can report where a compile spends time and memory:
-
-```bash
-./ycc --time -o prog prog.y     # per-phase table on stderr
-./yboot --time -q prog.y
-```
-
-`ycc --time` prints one row per phase (resolve, tokenize, parse, strip_ns,
-rename, typecheck, emit_fns, emit_start, asm_text, assemble — split into
-a:split/a:encode/a:link and l:labmap/l:patch/l:elf — and write) with elapsed
-milliseconds, heap bytes consumed by that phase, plus counters. The Y-level
-builtins behind it (`clock_us()`, `heap_used()`, `eputs(v)`) are available to
-any program, in every engine.
-
-## Testing
-
-```bash
-make test         # everything: full yboot→cycc→ycc chain + all suites
-make test-fast    # all suites except the ycc chain (ycc suites self-skip)
-make test-ycc     # full ycc chain + self-hosted check only
-make test-compile # tiny smoke: compile + run helloworld
-make asan         # build yboot-asan (ASan + UBSan)
-make test-asan    # run every suite against the sanitized toolchain
-```
-
-`make test-asan` is expected to be clean: no sanitizer report, no failure.
-The suites scale their timeouts automatically when `$YBOOT` names a
-sanitized binary (it runs roughly 15× slower).
-
-Suites live in `test/sh/` (run `./test/sh/run_all.sh [suite ...]` to pick a
-subset — e.g. `./test/sh/run_all.sh audit examples`):
-
-| suite          | script                    | what it checks                              |
-|----------------|---------------------------|---------------------------------------------|
-| loops          | `test_loops.sh`           | loops + precedence/audit regressions        |
-| comprehensive  | `test_comprehensive.sh`   | builtins, operators, functions, error cases |
-| examples       | `test_examples.sh`        | every `test/y/examples/*.y`, VM vs compiled |
-| audit          | `test_audit.sh`           | all 65 `test/y/audit/t*.y`, VM vs compiled  |
-| ycc-units      | `test_ycc_units.sh`       | every `test/y/ycc/test_*.y` runs in the VM  |
-| ycc            | `test_ycc.sh`             | self-hosted `ycc` matches `yboot` output    |
-| fixpoint       | `test_fixpoint.sh`        | `ycc` rebuilds itself byte-identically (3 generations) and the self-built binary works |
-| native         | `test_native.sh`          | `test/y/native/*.y` → static ELF → run (no toolchain) |
-| native-examples| `test_native_examples.sh` | every `test/y/examples/*.y` under real `ycc`, vs the VM |
-
-Every suite compares VM (`-q`) vs compiled-binary behavior — a change must
-pass in **both**. `test_audit.sh` documents its known divergences inline
-(`expect_for`); don't extend that allowlist to hide a new divergence.
-The `native` suite instead compiles to real x86_64 assembly
-(`ycc -S`, no C, no `YValue`) and checks program output — see
-`src/y/NATIVE.md` for the backend roadmap and `test/y/native/` for the corpus.
-`native-examples` is a ratchet: every example the native compiler accepts
-must match the VM, and its `UNSUPPORTED` list (with a reason per entry)
-fails the suite as soon as an entry starts compiling.
-
-## Implementation notes
-
-### Why C as an intermediate language?
-
-Generating C instead of assembly or LLVM IR lets us:
-- Leverage gcc's optimizer and platform support
-- Keep the codebase simple (no complex IR)
-- Produce readable intermediate output for debugging
-- Support any platform gcc supports
-
-### Expression-oriented compilation
-
-The language is expression-oriented (every construct returns a value). We use GCC's statement expressions to compile this naturally:
-
-```c
-// y: let x = if (cond) { 1 } else { 2 };
-// C:
-YValue *x = ({ YValue *_c = cond; YValue *_r;
-               if (_c->data.b) { _r = y_mk_long(1); }
-               else { _r = y_mk_long(2); }
-               _r; });
-```
-
-### Function compilation
-
-Named functions become static C functions. Anonymous functions and closures work via:
-1. Emit a static C function with a unique name
-2. Wrap it in a `YValue` with a closure scope pointer
-3. At call time, create a new scope with the closure as parent
-
-Recursion uses a special `self` binding in the function's scope.
-
-## License
-
-MIT (or whatever yun prefers)
-
-## Credits
-
-Original parser, VM, and type checker by yun.
-C code generation backend by hermes.
+`AGENTS.md` is the project guide (workflow, style rules, benchmarking
+policy). Performance-relevant changes are proposed, benchmarked on a
+branch with `bench/compare.sh`, and decided by the numbers.
