@@ -9,7 +9,8 @@
 # Every metric is lower-is-better. The SCORE is 100 x the geometric mean
 # of base/new over every (benchmark, metric) pair of compile time, run time
 # and binary size: 100 = no change, 105 = 5% better overall. The table
-# above it is the detail behind the number.
+# above it is the detail behind the number — it also carries asm_bytes and
+# asm_lines, which are shown for detail but are NOT part of the score.
 #
 # The last section compares the two builds' --prof reports function by
 # function (self cpu ns and call counts) — that is where a regression gets
@@ -28,6 +29,8 @@ RUNS="${3:-5}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d /tmp/ybench-cmp.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
+: >"$TMP/ratios.txt"   # the scored ratios; created up front so the awk below
+                         # never has to read a file that does not exist yet
 
 echo "base:  $BASE"
 echo "new:   $NEW"

@@ -4,8 +4,9 @@
 # a second one opens later and writes more. Phase b polls on a wall-clock
 # budget, so the check never depends on which side wins the race.
 set -u
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim: -q = reference ycc, --compile = the C copy (see ytool.sh)
+
+source "$(dirname "$0")/lib.sh"   # ROOT, YBOOT, YTIMEOUT_SCALE
+
 FIFO=$(mktemp -u /tmp/yeof_XXXXXX)
 PROG=$(mktemp /tmp/yeof_XXXXXX.y)
 mkfifo "$FIFO"
@@ -50,7 +51,7 @@ check() {
     local name="$1"; shift
     ( timeout 30 bash -c 'printf "one\ntwo\n" > "$1"; sleep 0.2; printf "three\n" > "$1"' _ "$FIFO" ) &
     local wpid=$! got
-    got=$(timeout 30 "$@" < "$FIFO" 2>&1)
+    got=$(timeout 30 "$@" < "$FIFO" 2>&1)   # stdin IS the fifo here
     wait "$wpid" 2>/dev/null
     if [ "$got" = "$expected" ]; then
         echo "PASS $name"
@@ -62,25 +63,28 @@ check() {
     fi
 }
 
-check "VM" "$YBOOT" -q "$PROG"
+# Three builds of the same program: the reference compiler, the C copy, and
+# the built ./ycc. Stdin is the fifo for all three — that is the whole test.
+CTO=$(( 120 * YTIMEOUT_SCALE ))
+check "reference" "$YBOOT" -q "$PROG"
 
 BINC=$(mktemp /tmp/yeof_bin_XXXXXX)
-if "$YBOOT" --compile "$PROG" -o "$BINC" >/dev/null 2>&1; then
-    check "C backend" "$BINC"
+if timeout "$CTO" "$YBOOT" --compile "$PROG" -o "$BINC" </dev/null >/dev/null 2>&1; then
+    check "C copy" "$BINC"
 else
-    echo "FAIL C backend (compile failed)"; rc=1
+    echo "FAIL C copy (compile failed)"; rc=1
 fi
 
 if [ -x "$ROOT/ycc" ]; then
     BINN=$(mktemp /tmp/yeof_bin_XXXXXX)
-    if "$ROOT/ycc" -o "$BINN" "$PROG" >/dev/null 2>&1; then
-        check "native" "$BINN"
+    if timeout "$CTO" "$ROOT/ycc" -o "$BINN" "$PROG" </dev/null >/dev/null 2>&1; then
+        check "built ycc" "$BINN"
     else
-        echo "FAIL native (compile failed)"; rc=1
+        echo "FAIL built ycc (compile failed)"; rc=1
     fi
     rm -f "$BINN"
 else
-    echo "SKIP native (run 'make ycc' first)"
+    echo "SKIP built ycc (run 'make ycc' first)"
 fi
 
 rm -f "$FIFO" "$PROG" "$BINC"

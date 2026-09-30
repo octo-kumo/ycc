@@ -1,44 +1,49 @@
 #!/bin/bash
-# Rigorous test suite for the y compiler
-# Tests all loop types in both VM and compiled modes
-# Usage: ./test.sh
+# test/sh/test_loops.sh — loop coverage, plus the operator-precedence
+# regressions the audit turned up.
+# Usage: ./test/sh/test_loops.sh
+#
+# Every test runs the program twice: compiled by the reference compiler
+# (-q through the shim) and compiled by the C copy. The two must print the
+# same bytes and exit the same way. There is no "both produced output, call
+# it a pass" allowance: the two sides are the same compiler, so a difference
+# is a regression.
 
-PASS=0
-FAIL=0
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim: -q = reference ycc, --compile = the C copy (see ytool.sh)
+source "$(dirname "$0")/lib.sh"   # ROOT, YBOOT, YTIMEOUT_SCALE, PASS/FAIL, colors
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
+VM_TO=$(( 10 * YTIMEOUT_SCALE ))    # compile + run, reference side
+CC_TO=$(( 60 * YTIMEOUT_SCALE ))    # compile, C-copy side
+RUN_TO=10                           # run the produced binary (never sanitized)
 
 run_test() {
     local name="$1"
     local file="$2"
+    local bin
+    bin=$(mktemp /tmp/ylops_bin_XXXXXX)
 
-    # Run VM (quiet: only program output)
-    vm_out=$(timeout 10 $YBOOT -q "$file" 2>&1)
+    # Reference side: compile with the reference compiler, then run it.
+    local vm_out vm_exit
+    vm_out=$(timeout "$VM_TO" "$YBOOT" -q "$file" </dev/null 2>&1)
     vm_exit=$?
 
-    # Compile
-    compile_out=$($YBOOT --compile "$file" -o /tmp/test_bin 2>&1)
+    # C-copy side: compile with the C copy, then run what it produced.
+    local compile_out compile_exit bin_out bin_exit
+    compile_out=$(timeout "$CC_TO" "$YBOOT" --compile "$file" -o "$bin" </dev/null 2>&1)
     compile_exit=$?
-
     if [ $compile_exit -ne 0 ]; then
         echo -e "${RED}FAIL${NC} $name (compilation failed)"
-        echo "  $compile_out" | tail -3
+        echo "$compile_out" | tail -3
         FAIL=$((FAIL + 1))
+        rm -f "$bin"
         return
     fi
 
-    # Run compiled binary
-    bin_out=$(timeout 10 /tmp/test_bin 2>&1)
+    bin_out=$(timeout "$RUN_TO" "$bin" </dev/null 2>&1)
     bin_exit=$?
+    rm -f "$bin"
 
     if [ $vm_exit -ne 0 ] && [ $vm_exit -ne 1 ]; then
-        echo -e "${RED}FAIL${NC} $name (VM crashed/hung, exit=$vm_exit)"
+        echo -e "${RED}FAIL${NC} $name (reference side crashed/hung, exit=$vm_exit)"
         FAIL=$((FAIL + 1))
         return
     fi
@@ -49,43 +54,45 @@ run_test() {
         return
     fi
 
-    # Compare outputs
-    if [ "$vm_out" = "$bin_out" ]; then
+    if [ "$vm_out" = "$bin_out" ] && [ "$vm_exit" = "$bin_exit" ]; then
         echo -e "${GREEN}PASS${NC} $name"
         PASS=$((PASS + 1))
     else
-        echo -e "${YELLOW}DIFF${NC} $name (VM vs compiled differ)"
-        echo "  VM:  $(echo "$vm_out" | head -3)"
-        echo "  BIN: $(echo "$bin_out" | head -3)"
-        # Still count as pass if both produced output (cosmetic diffs)
-        if [ -n "$vm_out" ] && [ -n "$bin_out" ]; then
-            PASS=$((PASS + 1))
-        else
-            FAIL=$((FAIL + 1))
-        fi
+        # Identical compilers: a differing byte here is the regression, not
+        # a cosmetic wobble. Fail it.
+        echo -e "${RED}FAIL${NC} $name (reference vs C copy differ)"
+        echo "  REF(ec=$vm_exit): $(echo "$vm_out" | head -3 | tr '\n' '|')"
+        echo "  CPY(ec=$bin_exit): $(echo "$bin_out" | head -3 | tr '\n' '|')"
+        FAIL=$((FAIL + 1))
     fi
 }
 
-# Inline test: write a .y file, run it, check expected output
+# Inline test: write the snippet to a .y file, run it through both compilers
+# and require the expected text on each side — checked separately, so a test
+# still fails when one engine regresses alone.
 inline_test() {
     local name="$1"
     local code="$2"
     local expected="$3"
 
-    tmpfile=$(mktemp /tmp/ytest_XXXXXX.y)
+    local tmpfile bin vm_out bin_out
+    tmpfile=$(mktemp /tmp/ylops_src_XXXXXX.y)
+    bin=$(mktemp /tmp/ylops_bin_XXXXXX)
     echo "$code" > "$tmpfile"
 
-    # VM (quiet: only program output)
-    vm_out=$(timeout 10 $YBOOT -q "$tmpfile" 2>&1)
+    # Reference side (quiet: only program output), then the C copy's build.
+    vm_out=$(timeout "$VM_TO" "$YBOOT" -q "$tmpfile" </dev/null 2>&1)
+    if timeout "$CC_TO" "$YBOOT" --compile "$tmpfile" -o "$bin" </dev/null >/dev/null 2>&1; then
+        bin_out=$(timeout "$RUN_TO" "$bin" </dev/null 2>&1)
+    else
+        # Never fall through to a stale binary: a failed compile is the output.
+        bin_out="(compilation failed)"
+    fi
 
-    # Compiled
-    $YBOOT --compile "$tmpfile" -o /tmp/test_bin >/dev/null 2>&1
-    bin_out=$(timeout 10 /tmp/test_bin 2>&1)
+    rm -f "$tmpfile" "$bin"
 
-    rm -f "$tmpfile"
-
-    vm_ok=0
-    bin_ok=0
+    local vm_ok=0
+    local bin_ok=0
 
     if echo "$vm_out" | grep -qF -- "$expected"; then vm_ok=1; fi
     if echo "$bin_out" | grep -qF -- "$expected"; then bin_ok=1; fi
@@ -95,8 +102,8 @@ inline_test() {
         PASS=$((PASS + 1))
     else
         echo -e "${RED}FAIL${NC} $name"
-        [ $vm_ok -eq 0 ] && echo "  VM missing: $expected (got: $vm_out)"
-        [ $bin_ok -eq 0 ] && echo "  BIN missing: $expected (got: $bin_out)"
+        [ $vm_ok -eq 0 ] && echo "  REF missing: $expected (got: $vm_out)"
+        [ $bin_ok -eq 0 ] && echo "  CPY missing: $expected (got: $bin_out)"
         FAIL=$((FAIL + 1))
     fi
 }
@@ -108,15 +115,15 @@ echo ""
 
 # ── File-based tests ──
 echo "── File-based tests ──"
-for f in test/y/examples/test_while.y test/y/examples/test_for.y test/y/examples/test_foreach.y test/y/examples/test_forrange.y; do
-    run_test "$(basename $f)" "$f"
+for f in test_while.y test_for.y test_foreach.y test_forrange.y; do
+    run_test "$f" "$ROOT/test/y/examples/$f"
 done
 
 # Regression: existing examples
 echo ""
 echo "── Regression tests ──"
-for f in test/y/examples/helloworld.y test/y/examples/pi.y test/y/examples/array.y test/y/examples/leftfold.y; do
-    run_test "$(basename $f)" "$f"
+for f in helloworld.y pi.y array.y leftfold.y; do
+    run_test "$f" "$ROOT/test/y/examples/$f"
 done
 
 # ── Inline tests: while ──

@@ -8,7 +8,8 @@
 
 source "$(dirname "$0")/lib.sh"
 
-YCC="$ROOT/ycc"
+# The built ycc (override with $YCC, e.g. the ASan build for make test-asan).
+YCC="${YCC:-$ROOT/ycc}"
 if [ ! -x "$YCC" ]; then
     echo "error: $YCC not built — run 'make ycc' first" >&2
     exit 2
@@ -31,9 +32,10 @@ print(mid(6));
 EOF
 
 # 1. the instrumented program prints exactly what the plain one does
-"$YCC" -o "$TMPD/plain" "$TMPD/p.y" </dev/null >/dev/null 2>&1 || {
+CTO=$(( 120 * YTIMEOUT_SCALE ))
+timeout "$CTO" "$YCC" -o "$TMPD/plain" "$TMPD/p.y" </dev/null >/dev/null 2>&1 || {
     fail "prof compile" "ycc failed"; print_summary "prof"; exit 1; }
-"$YCC" --prof -o "$TMPD/prof" "$TMPD/p.y" </dev/null >/dev/null 2>&1 || {
+timeout "$CTO" "$YCC" --prof -o "$TMPD/prof" "$TMPD/p.y" </dev/null >/dev/null 2>&1 || {
     fail "prof compile" "ycc --prof failed"; print_summary "prof"; exit 1; }
 
 "$TMPD/plain" </dev/null >"$TMPD/plain.out" 2>"$TMPD/plain.err"

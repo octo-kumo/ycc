@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gen_std_lines.py — generate the C twins of the std modules' embedded
+r"""gen_std_lines.py — generate the C twins of the std modules' embedded
 line arrays.
 
 src/y/std/rt.y and src/y/std/prelude.y carry their own source text as
@@ -7,7 +7,14 @@ src/y/std/rt.y and src/y/std/prelude.y carry their own source text as
 ELF and cannot read support files at run time). The 1:1 C copy needs the
 same arrays compiled in; this script extracts each literal and emits
 src/c/std_lines.c with one function per literal, byte-identical in
-content (escapes are decoded with the Y rules and re-encoded as C).
+content.
+
+Escapes are decoded with the Y rules (src/y/lexer.y lex_quoted: \n, \t, \r,
+\xHH, and \<c> drops the backslash) and re-encoded as C. The result is
+checked by the acceptance gate: `make ycc` builds cycc from this file and
+requires its output to be byte-identical to refs/ycc.ref.
+
+Called from the Makefile rule for $(STD_LINES_C); run by hand as:
 
 Usage: gen_std_lines.py OUT.c SRC.y:FUNC [SRC.y:FUNC ...]
 """

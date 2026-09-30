@@ -1,50 +1,33 @@
 #!/bin/bash
-# Every example that the NATIVE compiler accepts must behave like the VM.
+# Every example must compile with the BUILT ycc and behave like the same
+# example compiled with the reference compiler.
 # Usage: ./test/sh/test_native_examples.sh
 #
 # This is a ratchet, not a parity suite: examples listed in UNSUPPORTED are
-# expected to be rejected (each line says why), everything else must compile
-# with ./ycc and print what the VM prints. An example that starts compiling
-# must be removed from UNSUPPORTED, and one that stops compiling fails here.
+# expected to be REJECTED (each line says why), everything else must compile
+# with ./ycc and print what the reference compiler's build prints. An
+# example that starts compiling must be removed from UNSUPPORTED, and one
+# that stops compiling fails here. The list is empty: every example in
+# test/y/examples/ compiles today.
 #
 # Stdin is /dev/null (shell.y is interactive; EOF ends it cleanly).
-# Known cosmetic divergence: the VM has no return-type inference and prints
-# `<inferred>` where the native backend prints the real type. A test passes
-# if the outputs differ ONLY on such signature lines.
+# Outputs must match exactly. The old "a differing line is fine if the
+# reference side printed a `<inferred>`/`<function>` placeholder" allowance
+# is gone: both sides are the same compiler now (and print the same real
+# signature), so any difference is a regression, not decoration. The
+# byte-identity half of the gate lives in test_port.sh / lib.sh run_parity.
 
 source "$(dirname "$0")/lib.sh"
 
-YCC="$ROOT/ycc"
-YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim (see ytool.sh)
+# The built ycc (override with $YCC, e.g. the ASan build for make test-asan).
+YCC="${YCC:-$ROOT/ycc}"
 
-# example -> reason it cannot compile natively (yet)
+# example -> reason ycc cannot compile it (yet)
 declare -A UNSUPPORTED=(
 )
 
-# Line-by-line comparison that tolerates the VM's missing return-type
-# inference: a differing line is acceptable only when the VM's version of
-# that line is a signature placeholder (`<inferred>` / `<function ...>`).
-cosmetic_match() {
-    local vm="$1" nat="$2" n i a b
-    n=$(printf '%s\n' "$vm" | wc -l)
-    [ "$n" = "$(printf '%s\n' "$nat" | wc -l)" ] || return 1
-    i=1
-    while [ "$i" -le "$n" ]; do
-        a=$(printf '%s\n' "$vm" | sed -n "${i}p")
-        b=$(printf '%s\n' "$nat" | sed -n "${i}p")
-        if [ "$a" != "$b" ]; then
-            case "$a" in
-                *'<inferred>'* | *'<function'*) ;;
-                *) return 1 ;;
-            esac
-        fi
-        i=$((i + 1))
-    done
-    return 0
-}
-
 echo "═══════════════════════════════════════════"
-echo "  y examples under the native compiler"
+echo "  y examples: built ycc vs the reference compiler"
 echo "═══════════════════════════════════════════"
 echo ""
 
@@ -56,7 +39,7 @@ fi
 for f in "$ROOT"/test/y/examples/*.y; do
     name=$(basename "$f")
     binf=$(mktemp /tmp/ynatex_XXXXXX)
-    cc_out=$(timeout 120 "$YCC" -o "$binf" "$f" 2>&1)
+    cc_out=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$binf" "$f" </dev/null 2>&1)
     cc_ec=$?
     reason="${UNSUPPORTED[$name]}"
 
@@ -76,20 +59,19 @@ for f in "$ROOT"/test/y/examples/*.y; do
         continue
     fi
 
-    nat_out=$(timeout 10 "$binf" </dev/null 2>&1)
-    nat_ec=$?
+    built_out=$(timeout 10 "$binf" </dev/null 2>&1)
+    built_ec=$?
     rm -f "$binf"
-    vm_out=$(timeout 10 "$YBOOT" -q "$f" </dev/null 2>&1)
-    vm_ec=$?
+    # the same example through the reference compiler (compile, then run)
+    ref_out=$(timeout 10 "$YBOOT" -q "$f" </dev/null 2>&1)
+    ref_ec=$?
 
-    if [ "$nat_ec" -gt 1 ]; then
-        fail "$name" "native binary exited $nat_ec (crash?): $(echo "$nat_out" | tail -c 200)"
-    elif [ "$nat_out" = "$vm_out" ]; then
+    if [ "$built_ec" -gt 1 ]; then
+        fail "$name" "ycc-built binary exited $built_ec (crash?): $(echo "$built_out" | tail -c 200)"
+    elif [ "$built_out" = "$ref_out" ]; then
         pass "$name"
-    elif cosmetic_match "$vm_out" "$nat_out"; then
-        pass "$name (cosmetic signature-printing diff only)"
     else
-        fail "$name" "VM(ec=$vm_ec): $(echo "$vm_out" | head -c 200 | tr '\n' '|') / NATIVE(ec=$nat_ec): $(echo "$nat_out" | head -c 200 | tr '\n' '|')"
+        fail "$name" "REF(ec=$ref_ec): $(echo "$ref_out" | head -c 200 | tr '\n' '|') / BUILT(ec=$built_ec): $(echo "$built_out" | head -c 200 | tr '\n' '|')"
     fi
 done
 

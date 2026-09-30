@@ -10,7 +10,8 @@
 
 source "$(dirname "$0")/lib.sh"
 
-YCC="$ROOT/ycc"
+# The built ycc (override with $YCC, e.g. the ASan build for make test-asan).
+YCC="${YCC:-$ROOT/ycc}"
 if [ ! -x "$YCC" ]; then
     echo "error: $YCC not built — run 'make ycc' (or 'make test') first" >&2
     exit 2
@@ -29,7 +30,7 @@ run_native() {
         local want
         want=$(grep -m1 -o '// expect-error: .*' "$prog" | sed 's#// expect-error: ##')
         local err
-        err=$(timeout 120 "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
+        err=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
         local ec=$?
         rm -f "$bin"
         if [ $ec -eq 0 ]; then
@@ -44,7 +45,7 @@ run_native() {
 
     rm -f /tmp/ynative_test.txt
     local err
-    err=$(timeout 120 "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
+    err=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
     if [ $? -ne 0 ]; then
         fail "$base" "compile failed: $(echo "$err" | head -c 200 | tr '\n' '|')"
         rm -f "$bin"

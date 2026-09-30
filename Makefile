@@ -74,8 +74,16 @@ cycc-asan: $(CYC_SRCS) $(CY_HDRS)
 
 asan: cycc-asan
 
+# The suites read the compiler they test from the environment: $CYCC (lib.sh,
+# ytool.sh — the C copy) and $YCC (the suites that drive a built ./ycc). Both
+# must name cycc-asan, or the sanitized build is never exercised at all.
+# $YREF stays refs/ycc.ref: the golden reference is deliberately unsanitized,
+# and it is what the sanitized build's bytes are compared against.
+# Suites that need ./ycc (ycc, fixpoint, native, native-examples, prof) skip
+# themselves unless it is built; SUITES_ASAN is normally a subset, since a
+# sanitized self-compile wants orders of magnitude more memory than a plain one.
 test-asan: cycc-asan
-	YCC=$(CURDIR)/cycc-asan ASAN_OPTIONS=detect_leaks=0 \
+	CYCC=$(CURDIR)/cycc-asan YCC=$(CURDIR)/cycc-asan ASAN_OPTIONS=detect_leaks=0 \
 	    ./test/sh/run_all.sh $(SUITES_ASAN)
 
 # Full suite (see test/sh/). Suites compare the C copy's output against
@@ -83,6 +91,10 @@ test-asan: cycc-asan
 test: ycc
 	./test/sh/run_all.sh $(SUITES)
 
+# Same suites without the acceptance gate: only ./cycc is built, so the five
+# suites that drive a built ./ycc (ycc, fixpoint, native, native-examples,
+# prof) announce themselves as skipped. Use for a quick signal; `make test` is
+# the real one.
 test-fast: cycc
 	./test/sh/run_all.sh $(SUITES)
 
@@ -91,9 +103,12 @@ test-compile: cycc ycc
 	./cycc -o /tmp/hello_c test/y/examples/helloworld.y && /tmp/hello_c
 	./ycc -o /tmp/hello_y test/y/examples/helloworld.y && /tmp/hello_y
 
+# All three generated files go; make regenerates them (src/y/std/prof_lines.y
+# and src/c/prof_lines.c are gitignored, src/c/std_lines.c is committed —
+# regenerating it is byte-identical, so a clean rebuild leaves no diff).
 clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc a.out
-	rm -f $(PROF_LINES_C) $(STD_LINES_C)
+	rm -f $(PROF_LINES_Y) $(PROF_LINES_C) $(STD_LINES_C)
 
 valgrind: cycc
 	valgrind --leak-check=full --quiet ./cycc

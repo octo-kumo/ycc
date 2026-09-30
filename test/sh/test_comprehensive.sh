@@ -1,54 +1,46 @@
 #!/bin/bash
-# Comprehensive test suite for the Y compiler
-# Tests all language features, builtins, operators, and both VM/compiled modes
-# Usage: ./test_comprehensive.sh
+# Comprehensive test suite for the Y language: every feature group below runs
+# its snippet through BOTH compilers — the reference compiler (-q through the
+# shim) and the C copy — and the expected text must appear on both sides.
+# Usage: ./test/sh/test_comprehensive.sh
 
-PASS=0
-FAIL=0
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"  # engine shim: -q = reference ycc, --compile = the C copy (see ytool.sh)
+source "$(dirname "$0")/lib.sh"   # ROOT, YBOOT, YTIMEOUT_SCALE, PASS/FAIL, colors
 
-# A sanitized toolchain runs roughly 15x slower (see lib.sh).
-YTIMEOUT_SCALE=1
-case "$YBOOT${CYCC:-}" in
-    *asan* | *msan* | *ubsan*) YTIMEOUT_SCALE=15 ;;
-esac
-VM_TO=$(( 10 * YTIMEOUT_SCALE ))
+VM_TO=$(( 10 * YTIMEOUT_SCALE ))    # compile + run, reference side
+CC_TO=$(( 60 * YTIMEOUT_SCALE ))    # compile, C-copy side
+RUN_TO=10                           # run the produced binary (never sanitized)
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
-
-# Test helper: run code in both VM and compiled modes, compare outputs
+# Test helper: run code through both compilers and require the expected text
+# on both sides. A compile failure IS the C copy's output, so the same helper
+# covers the error-message tests.
 run_test() {
     local name="$1"
     local code="$2"
     local expected="$3"
 
-    tmpfile=$(mktemp /tmp/ytest_XXXXXX.y)
-    binfile=$(mktemp /tmp/ytest_bin_XXXXXX)
+    local tmpfile binfile vm_out vm_exit compile_out bin_out bin_exit
+    tmpfile=$(mktemp /tmp/ycomp_src_XXXXXX.y)
+    binfile=$(mktemp /tmp/ycomp_bin_XXXXXX)
     echo "$code" > "$tmpfile"
 
-    # VM (quiet: only program output)
-    vm_out=$(timeout $VM_TO $YBOOT -q "$tmpfile" 2>&1)
+    # Reference side (quiet: only program output)
+    vm_out=$(timeout "$VM_TO" "$YBOOT" -q "$tmpfile" </dev/null 2>&1)
     vm_exit=$?
 
-    # Compiled: a compile failure IS the output (error-message tests)
-    compile_out=$($YBOOT --compile "$tmpfile" -o "$binfile" 2>&1)
+    # C copy: compile, then run what it produced
+    compile_out=$(timeout "$CC_TO" "$YBOOT" --compile "$tmpfile" -o "$binfile" </dev/null 2>&1)
     if [ $? -ne 0 ]; then
         bin_out="$compile_out"
         bin_exit=1
     else
-        bin_out=$(timeout 10 "$binfile" 2>&1)
+        bin_out=$(timeout "$RUN_TO" "$binfile" </dev/null 2>&1)
         bin_exit=$?
     fi
 
     rm -f "$tmpfile" "$binfile"
 
-    vm_ok=0
-    bin_ok=0
+    local vm_ok=0
+    local bin_ok=0
 
     if echo "$vm_out" | grep -qF -- "$expected"; then vm_ok=1; fi
     if echo "$bin_out" | grep -qF -- "$expected"; then bin_ok=1; fi
@@ -58,36 +50,43 @@ run_test() {
         PASS=$((PASS + 1))
     else
         echo -e "${RED}FAIL${NC} $name"
-        [ $vm_ok -eq 0 ] && echo "  VM missing: $expected (got: $vm_out)"
-        [ $bin_ok -eq 0 ] && echo "  BIN missing: $expected (got: $bin_out)"
+        [ $vm_ok -eq 0 ] && echo "  REF missing: $expected (got: $vm_out)"
+        [ $bin_ok -eq 0 ] && echo "  CPY missing: $expected (got: $bin_out)"
         FAIL=$((FAIL + 1))
     fi
 }
 
-# Test helper: expect compilation to fail
-run_error_test() {
+# The empty program must print NOTHING and exit 0 on both sides. run_test
+# greps for a substring and the empty string matches any output at all, so
+# this one case needs an exact comparison.
+silent_test() {
     local name="$1"
     local code="$2"
 
-    tmpfile=$(mktemp /tmp/ytest_XXXXXX.y)
-    binfile=$(mktemp /tmp/ytest_bin_XXXXXX)
+    local tmpfile binfile vm_out vm_exit bin_out bin_exit
+    tmpfile=$(mktemp /tmp/ycomp_src_XXXXXX.y)
+    binfile=$(mktemp /tmp/ycomp_bin_XXXXXX)
     echo "$code" > "$tmpfile"
 
-    # VM should fail
-    vm_out=$(timeout $VM_TO $YBOOT -q "$tmpfile" 2>&1)
+    vm_out=$(timeout "$VM_TO" "$YBOOT" -q "$tmpfile" </dev/null 2>&1)
     vm_exit=$?
-
-    # Compiled should fail
-    $YBOOT --compile "$tmpfile" -o "$binfile" >/dev/null 2>&1
-    bin_exit=$?
+    if timeout "$CC_TO" "$YBOOT" --compile "$tmpfile" -o "$binfile" </dev/null >/dev/null 2>&1; then
+        bin_out=$(timeout "$RUN_TO" "$binfile" </dev/null 2>&1)
+        bin_exit=$?
+    else
+        bin_out="(compilation failed)"
+        bin_exit=1
+    fi
 
     rm -f "$tmpfile" "$binfile"
 
-    if [ $vm_exit -ne 0 ] && [ $bin_exit -ne 0 ]; then
-        echo -e "${GREEN}PASS${NC} $name (expected error)"
+    if [ $vm_exit -eq 0 ] && [ $bin_exit -eq 0 ] && [ -z "$vm_out" ] && [ -z "$bin_out" ]; then
+        echo -e "${GREEN}PASS${NC} $name"
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}FAIL${NC} $name (should have errored)"
+        echo -e "${RED}FAIL${NC} $name"
+        echo "  REF(ec=$vm_exit): '$vm_out'"
+        echo "  CPY(ec=$bin_exit): '$bin_out'"
         FAIL=$((FAIL + 1))
     fi
 }
@@ -172,10 +171,11 @@ run_test "index_of: not found" 'print(index_of("hello", "xyz"));' '-1'
 run_test "last_index_of: found" 'print(last_index_of("hello", "l"));' '3'
 run_test "last_index_of: not found" 'print(last_index_of("hello", "xyz"));' '-1'
 
-# ── Builtins: push ──
+# ── Removed builtins: must STAY gone (they were language functions once) ──
 echo ""
-echo "── Builtins: push ──"
+echo "── Removed builtins ──"
 run_test "push is gone" 'let a = [1,2]; print(push(a, 3));' "undefined function 'push'"
+run_test "prepend is gone" 'let a = [1,2]; print(prepend(0, a));' "undefined function 'prepend'"
 
 # ── Builtins: map_get/map_set ──
 echo ""
@@ -191,7 +191,7 @@ run_test "map: set overwrite" 'let m = {"a": 1}; m["a"] = 2; print(m["a"]);' '2'
 run_test "map: set new key" 'let m = {"a": 1}; m["b"] = 3; print(m["b"]);' '3'
 run_test "map: homogeneous values" 'let m = {"a": 1, "b": 2}; print(m["b"]);' '2'
 run_test "map_get is gone" 'let m = {"a": 1}; print(map_get(m, "a"));' "undefined function 'map_get'"
-# and has a double-free in the compiled runtime. Skipping mutation tests.
+run_test "map_set is gone" 'let m = {"a": 1}; map_set(m, "a", 2);' "undefined function 'map_set'"
 
 # ── Records: spread ──
 echo ""
@@ -271,15 +271,16 @@ run_test "precedence: mul before add" 'print(2 + 3 * 4);' '14'
 run_test "precedence: parens" 'print((2 + 3) * 4);' '20'
 run_test "precedence: left-assoc div" 'print(100 / 10 / 2);' '5'
 run_test "precedence: left-assoc sub" 'print(10 - 2 - 3);' '5'
-# Signed division: the VM used to wrap operands through unsigned (to dodge
-# signed-overflow UB in + - *), which silently turned / and % into UNSIGNED
-# division -- 7 / -2 gave 0 and -7 / 2 gave 9223372036854775804.
+# Signed division: operands are NOT wrapped through unsigned (an older
+# engine did that to dodge signed-overflow UB in + - *, which silently turned
+# / and % into UNSIGNED division -- 7 / -2 gave 0 and -7 / 2 gave
+# 9223372036854775804). These cases pin the current, signed result.
 run_test "divide: negative divisor" 'print(7 / -2);' '-3'
 run_test "divide: negative dividend" 'print(-7 / 2);' '-3'
 run_test "divide: both negative" 'print(-7 / -2);' '3'
 run_test "modulo: negative divisor" 'print(7 % -2);' '1'
 run_test "modulo: negative dividend" 'print(-7 % 2);' '-1'
-# LONG_MIN / -1 overflows: idiv raises #DE, so all three engines wrap to
+# LONG_MIN / -1 overflows: idiv raises #DE, so both compilers wrap to
 # LONG_MIN (and LONG_MIN % -1 is 0) instead of trapping.
 run_test "divide: LONG_MIN by -1" 'let mn = -9223372036854775807 - 1; print(mn / -1);' '-9223372036854775808'
 run_test "modulo: LONG_MIN by -1" 'let mn = -9223372036854775807 - 1; print(mn % -1);' '0'
@@ -293,7 +294,7 @@ run_test "greater than: true" 'print(3 > 2);' 'true'
 run_test "greater than: false" 'print(2 > 3);' 'false'
 run_test "less or equal: true" 'print(2 <= 2);' 'true'
 run_test "greater or equal: true" 'print(3 >= 3);' 'true'
-# Lexicographic string ordering (all three engines; strcmp semantics).
+# Lexicographic string ordering (both compilers; strcmp semantics).
 run_test "str less than: true" 'print("a" < "b");' 'true'
 run_test "str less than: false" 'print("b" < "a");' 'false'
 run_test "str prefix is smaller" 'print("ab" < "abc");' 'true'
@@ -351,9 +352,12 @@ run_test "cons: chained" 'print(1 :: 2 :: [3]);' '[1, 2, 3]'
 # ── Operators: slice ──
 echo ""
 echo "── Operators: slice ──"
-# NOTE: C parser can't handle postfix on array literals ([1,2,3][0:2] fails)
-# Using variables as workaround
+# A postfix chain straight off an array literal parses fine: the parser runs
+# parse_primary (which builds the literal) and then its own postfix loop, so
+# [1,2,3][0:2] slices the literal itself — no binding needed.
 run_test "slice: full" 'let a = [1,2,3,4]; print(a[0:4]);' '[1, 2, 3, 4]'
+run_test "slice: literal operand" 'print([1,2,3][0:2]);' '[1, 2]'
+run_test "index: literal operand" 'print([1,2,3][1]);' '2'
 run_test "slice: partial" 'let a = [1,2,3,4]; print(a[1:3]);' '[2, 3]'
 run_test "slice: from start" 'let a = [1,2,3,4]; print(a[:2]);' '[1, 2]'
 run_test "slice: to end" 'let a = [1,2,3,4]; print(a[2:]);' '[3, 4]'
@@ -531,35 +535,38 @@ run_test "def: function" 'def f() { 99 }; print(f());' '99'
 # ── Edge cases ──
 echo ""
 echo "── Edge cases ──"
-run_test "empty program" '' ''
+silent_test "empty program" ''
 run_test "trailing comma: array" 'print([1, 2, 3,]);' '[1, 2, 3]'
 run_test "trailing comma: map" 'print({a: 1, b: 2,});' '{a: 1, b: 2}'
 run_test "nested structures" 'let data = {arr: [1, 2], val: 3}; let a = data.arr; print(a[1] + data.val);' '5'
 run_test "deep nesting" 'let a = [[[[42]]]]; print(a[0][0][0][0]);' '42'
 
 # ── Error cases ──
-# Note: compiler detects errors but exits 0 (known limitation); VM and compiled
-# use slightly different error message wording, so match on a common substring.
-# KNOWN BUG: unclosed paren/bracket are silently accepted (parser drops the
-# malformed expr instead of erroring) — tracked, not asserted here.
+# A type/name error is a STATIC error: the checker rejects the file, the
+# compiler prints "L:C: error: ..." and exits 1 without writing a binary.
+# Both compilers must say it, so these cases match the diagnostic itself.
 echo ""
 echo "── Error cases ──"
 run_test "undefined variable" 'print(undefined_var);' 'undefined_var'
-run_test "type error: call non-function" 'let x = 42; x();' "is not a function" 
-# Arity is enforced at run time in BOTH engines: the typechecker is advisory,
-# so without the generated check a short call read args[] past the end and the
-# compiled binary segfaulted (test/y/native/e05_badcall.y).
-# Arity is a static error now (the VM used to report it at run time).
+run_test "type error: call non-function" 'let x = 42; x();' "is not a function"
+# An unterminated literal list is a syntax error, not a silently dropped
+# expression: the parser plants an "err" node and the checker reports it.
+run_test "unclosed paren is rejected" 'print((1 + 2);' "unexpected ';' (expected ',' or ')')"
+run_test "unclosed bracket is rejected" 'let a = [1, 2; print(a);' "unexpected ';' (expected ',' or ']')"
+# Arity is a STATIC error, reported by the type checker with the call's
+# line:col ("'add' takes 2 args, got 1"); nothing is emitted, nothing runs.
+# (It was a run-time check in the old engines, where a short call read the
+# argument array past its end -- see test/y/native/e05_badcall.y.)
 run_test "arity: too few args" 'def add(a: long, b: long) -> long { a + b }; print(add(1));' "takes 2 args, got 1"
 run_test "arity: too many args" 'def one(a: long) -> long { a }; print(one(1, 2));' "takes 1 args, got 2"
 run_test "arity: args to a no-arg function" 'def z() -> long { 7 }; print(z(1));' "takes 0 args, got 1" 
 
 # ── Self-hosted compiler ──
-# Lives in test/sh/test_ycc.sh now (needs ./ycc); run via
-# `make test` or `./test/sh/test_ycc.sh`. Skipped here to avoid running it twice. to avoid running it twice.
+# Lives in test/sh/test_ycc.sh (needs ./ycc); run via `make test` or
+# ./test/sh/test_ycc.sh. Skipped here to avoid running it twice.
 echo ""
 echo "── Self-hosted compiler ──"
-echo "  (see tests/test_ycc.sh)"
+echo "  (see test/sh/test_ycc.sh)"
 
 # ── Summary ──
 echo ""

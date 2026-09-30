@@ -1,8 +1,8 @@
 #!/bin/bash
 # test/sh/lib.sh — shared helpers for the y test suites.
 # Usage: source "$(dirname "$0")/lib.sh"
-# Provides: ROOT, CYCC, YREF, colors, PASS/FAIL/SKIP counters,
-# pass/fail/skip reporters, run_parity(), print_summary().
+# Provides: ROOT, CYCC, YREF, YBOOT, YTIMEOUT_SCALE, colors, PASS/FAIL/SKIP
+# counters, pass/fail/skip reporters, run_parity(), print_summary().
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The toolchain is one language implementation twice over: $CYCC is the C
@@ -10,14 +10,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Both compile .y straight to static ELFs; every test requires the two to
 # agree — byte-identical binaries and identical program behavior.
 CYCC="${CYCC:-$ROOT/cycc}"
-# Historical name for the engine helper (suites call `$YBOOT -q` /
-# `$YBOOT --compile`); it maps those to the two compilers (see ytool.sh).
+# The two-engine helper the older suites call as `$YBOOT -q` /
+# `$YBOOT --compile`; it maps those flags onto $YREF and $CYCC (ytool.sh).
+# Defined here so every suite that sources lib.sh gets it.
 YBOOT="${YBOOT:-$ROOT/test/sh/ytool.sh}"
 YREF="${YREF:-$ROOT/refs/ycc.ref}"
 
-# A sanitized toolchain runs roughly 15x slower, so the default timeouts
+# A sanitized COMPILER runs roughly 15x slower, so the default timeouts
 # below would flag heavy tests (audit/t45_fib) as hangs. Scale them instead
-# of weakening the limits for everyone.
+# of weakening the limits for everyone. Only the compiler steps scale: the
+# binaries the compilers emit are plain static ELFs, so their run timeout
+# (run_parity's $3) is deliberately NOT scaled.
 YTIMEOUT_SCALE=1
 case "$CYCC$YREF" in
     *asan* | *msan* | *ubsan*) YTIMEOUT_SCALE=15 ;;
@@ -44,27 +47,31 @@ skip() { echo -e "${YELLOW}SKIP${NC} $1${2:+ ($2)}"; SKIP=$((SKIP + 1)); }
 # compile_copy <file> <bin> [timeout] — compile with the C copy.
 # Exit = the compiler's exit; diagnostics land in RUN_RERR / RUN_CERR.
 compile_ref() {
-    RUN_RERR=$(timeout "$3" "$YREF" -o "$2" "$1" </dev/null 2>&1)
+    RUN_RERR=$(timeout "${3:-60}" "$YREF" -o "$2" "$1" </dev/null 2>&1)
     return $?
 }
 compile_copy() {
-    RUN_CERR=$(timeout "$3" "$CYCC" -o "$2" "$1" </dev/null 2>&1)
+    RUN_CERR=$(timeout "${3:-60}" "$CYCC" -o "$2" "$1" </dev/null 2>&1)
     return $?
 }
 
-# run_parity <name> <file> [ref_timeout] [compile_timeout] [bin_timeout]
+# run_parity <name> <file> [compile_timeout] [bin_timeout]
 # Compiles <file> with BOTH compilers and requires:
 #   - byte-identical binaries (the port gate),
 #   - identical program output and exit code when run (fed /dev/null).
 # Returns 0 on agreement, 1 otherwise.
-# RUN_VM_OUT/RUN_VMEC carry the reference side, RUN_BIN_OUT/RUN_BINEC the
-# C-copy side (historic names; the suites use them). On compile failure
-# the outputs hold the compiler diagnostics and the exit codes are "cfN".
+# RUN_REF_OUT/RUN_REF_EC carry the reference side, RUN_CPY_OUT/RUN_CPY_EC
+# the C-copy side (the suites read those). On compile failure the outputs
+# hold the compiler diagnostics and the exit codes are "cfN".
+# A program may only exit 0 or 1: anything else is a crash, a hang or an
+# abort and never an agreed-upon result.
 run_parity() {
     local name="$1" file="$2"
-    local ref_to=$(( ${3:-10} * YTIMEOUT_SCALE ))
-    local cc_to=$(( ${4:-60} * YTIMEOUT_SCALE ))
-    local bin_to="${5:-10}"
+    # One compile budget for both compilers: they are the same program and
+    # cost the same, so a per-side timeout (the third argument this helper
+    # used to take) had nothing left to say.
+    local cc_to=$(( ${3:-60} * YTIMEOUT_SCALE ))
+    local bin_to="${4:-10}"
 
     local binr binc
     binr=$(mktemp /tmp/ytest_ref_XXXXXX)
@@ -75,35 +82,42 @@ run_parity() {
     compile_copy "$file" "$binc" "$cc_to"
     local cec=$?
 
-    RUN_VM_OUT=""
-    RUN_BIN_OUT=""
-    RUN_VMEC=0
-    RUN_BINEC=0
+    RUN_REF_OUT=""
+    RUN_CPY_OUT=""
+    RUN_REF_EC=0
+    RUN_CPY_EC=0
     local ok=1
+    local differ=0
 
     if [ $rec -eq 0 ] && [ $cec -eq 0 ]; then
         # the port gate: the two compilers must agree byte for byte
         if ! cmp -s "$binr" "$binc"; then
             ok=0
-            RUN_VM_OUT="(binaries differ between compilers)"
-            RUN_BIN_OUT="(binaries differ between compilers)"
+            differ=1
         fi
-        RUN_VM_OUT=$(timeout "$bin_to" "$binr" </dev/null 2>&1)
-        RUN_VMEC=$?
-        RUN_BIN_OUT=$(timeout "$bin_to" "$binc" </dev/null 2>&1)
-        RUN_BINEC=$?
+        RUN_REF_OUT=$(timeout "$bin_to" "$binr" </dev/null 2>&1)
+        RUN_REF_EC=$?
+        RUN_CPY_OUT=$(timeout "$bin_to" "$binc" </dev/null 2>&1)
+        RUN_CPY_EC=$?
+        if [ $differ -eq 1 ]; then
+            # Both programs behaved identically yet the binaries differ.
+            # Keep that in the reported output, or the failure reads as
+            # "identical output" and hides the one thing that broke.
+            RUN_REF_OUT="(binaries differ between compilers)"$'\n'"$RUN_REF_OUT"
+            RUN_CPY_OUT="(binaries differ between compilers)"$'\n'"$RUN_CPY_OUT"
+        fi
     else
         ok=0
-        RUN_VM_OUT="$RUN_RERR"
-        RUN_BIN_OUT="$RUN_CERR"
-        RUN_VMEC="cf$rec"
-        RUN_BINEC="cf$cec"
+        RUN_REF_OUT="$RUN_RERR"
+        RUN_CPY_OUT="$RUN_CERR"
+        RUN_REF_EC="cf$rec"
+        RUN_CPY_EC="cf$cec"
     fi
     rm -f "$binr" "$binc"
 
-    if [ $ok -eq 1 ] && [ "$RUN_VM_OUT" = "$RUN_BIN_OUT" ] \
-        && [ "$RUN_VMEC" = "$RUN_BINEC" ] \
-        && { [ "$RUN_VMEC" = "0" ] || [ "$RUN_VMEC" = "1" ]; }; then
+    if [ $ok -eq 1 ] && [ "$RUN_REF_OUT" = "$RUN_CPY_OUT" ] \
+        && [ "$RUN_REF_EC" = "$RUN_CPY_EC" ] \
+        && { [ "$RUN_REF_EC" = "0" ] || [ "$RUN_REF_EC" = "1" ]; }; then
         return 0
     fi
     return 1

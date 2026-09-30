@@ -8,6 +8,12 @@
 # property from an already-built ./ycc, so `./test/sh/run_all.sh fixpoint`
 # catches a regression without a full rebuild.
 #
+# NOTE: self-compilation is memory-hungry — ycc needs tens of GB of RSS on
+# ycc.y (measured ~30 GB, ~25 s). On a busy or shared machine the kernel may
+# OOM-kill it, which shows up here as a bare "Killed" from `timeout` and four
+# failures that have nothing to do with the compiler. Re-run this suite alone
+# before believing a fixpoint failure.
+#
 # Usage: ./test/sh/test_fixpoint.sh
 # Skips (exit 0) if ./ycc is not built; build it with `make ycc`.
 
