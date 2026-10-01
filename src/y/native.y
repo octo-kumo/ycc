@@ -2853,12 +2853,10 @@ def gen_un(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
     st = gen(st, node.e);
     if (node.op == "-") {
         if (ut.k == "tfloat") {
-            // 0.0 - x (no SSE negate form emitted by this backend)
-            st = emit(st, "    movq %rax, %xmm1");
-            st = emit(st, "    xor %ecx, %ecx");
-            st = emit(st, "    movq %rcx, %xmm0");
-            st = emit(st, "    subsd %xmm1, %xmm0");
-            emit(st, "    movq %xmm0, %rax")
+            // flip the sign bit: -0.0 is a negative zero, -nan a nan
+            st = emit(st, "    mov $1, %rcx");
+            st = emit(st, "    shl $63, %rcx");
+            emit(st, "    xor %rcx, %rax")
         } else {
             emit(st, "    neg %rax")
         }

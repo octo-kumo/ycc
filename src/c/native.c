@@ -3788,12 +3788,10 @@ Yv *gen_un(Yv *st, Yv *node) {
     st = gen(st, yr_get(node, "e"));
     if (ys_eq_lit(yr_get(node, "op"), "-")) {
         if (ys_eq_lit(yr_get(ut, "k"), "tfloat")) {
-            /* 0.0 - x (no SSE negate form emitted by this backend) */
-            st = emit(st, ys("    movq %rax, %xmm1"));
-            st = emit(st, ys("    xor %ecx, %ecx"));
-            st = emit(st, ys("    movq %rcx, %xmm0"));
-            st = emit(st, ys("    subsd %xmm1, %xmm0"));
-            return emit(st, ys("    movq %xmm0, %rax"));
+            /* flip the sign bit: -0.0 is a negative zero, -nan a nan */
+            st = emit(st, ys("    mov $1, %rcx"));
+            st = emit(st, ys("    shl $63, %rcx"));
+            return emit(st, ys("    xor %rcx, %rax"));
         } else {
             return emit(st, ys("    neg %rax"));
         }

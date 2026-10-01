@@ -14,9 +14,6 @@
   `native_resolve_x`); what is missing is line markers from the emitter
   through the assembler.
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
-- **Float negation is `0.0 - x`.** Unary minus on a `float` subtracts
-  from zero instead of flipping the sign bit, so `-0.0` is `+0.0` (and
-  `1.0 / -0.0` is `+inf`); `0.0 * -1.0` does give a negative zero.
 
 
 ## Done
@@ -25,6 +22,11 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **Float negation was `0.0 - x`.** Unary minus on a `float` subtracted
+  from zero, so `-0.0` was `+0.0` and `1.0 / -0.0` was `+inf`. It now
+  flips the sign bit (`mov $1, %rcx; shl $63, %rcx; xor %rcx, %rax`,
+  three instructions instead of five), exact for every value (`t137`).
 
 - **`==` on two options compared boxes**, so `some(1) == some(1)` was
   false, and so were `[[1, 2]] == [[1, 2]]` and `[some(1)] == [some(1)]`

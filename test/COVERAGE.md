@@ -74,7 +74,7 @@ reason.
 | 04-types | Compound assignment typing | Valid numeric/string/array forms and rejected array operators | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y`, `native/e21_hetero_append.y`, `native/e22_array_opassign_ops.y`, `native/e74_array_operators.y` |
 | 04-types | The poison law | Unknown types do not cascade from unannotated parameters | `native/t22_noannot.y` |
 | 05-expressions | Expressions and evaluation | Strict left-to-right operand evaluation and exactly-once place evaluation | `native/t39_incdec_opassign.y`, `native/t75_eval_order.y` |
-| 05-expressions | Numeric semantics | Signed division/remainder edges, modulo-2^64 wraparound and float arithmetic | `native/t28_floats.y`, `native/t32_signed_div.y`, `native/t83_integer_wrap.y` |
+| 05-expressions | Numeric semantics | Signed division/remainder edges, modulo-2^64 wraparound, float arithmetic and exact float negation | `native/t28_floats.y`, `native/t32_signed_div.y`, `native/t83_integer_wrap.y`, `native/t137_float_negation.y` |
 | 05-expressions | Logic | Short-circuiting and truthiness of non-bool operands | `native/t75_eval_order.y`, `comprehensive: and: right side not evaluated`, `comprehensive: or: right side not evaluated` |
 | 05-expressions | Strings | Immutable concatenation, stringification and lexicographic comparison | `native/t28_floats.y`, `native/t33_str_compare.y`, `native/t69_fstrings.y`, `native/t77_reference_identity.y` |
 | 05-expressions | Assignment | Assignment statements store through names and mutable places | `native/t39_incdec_opassign.y`, `native/t51_strings_slices.y`, `native/t59_const.y` |

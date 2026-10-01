@@ -21,7 +21,9 @@ zero (C semantics) and are subject to:
 \end{itemize}
 
 \ic{float} arithmetic is IEEE-754 binary64. Mixed long/float operands
-widen the long side.
+widen the long side. Unary minus on a \ic{float} flips the sign, so
+\ic{-0.0} is a negative zero (\ic{1.0 / -0.0} is $-\infty$) and
+\ic{-(-x)} is \ic{x} for every \ic{x}.
 
 \subsection{Logic}
 
