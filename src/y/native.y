@@ -2,7 +2,8 @@
 // Usage:
 //   import types from "./types.y";
 //   import native from "./native.y";
-//   let r = native.emit_program(ast);  // { ok, asm, errors }
+//   let r = native.emit_program(ast, imports, origin);  // { ok, asm, errors }
+//   // (imports and origin come from native_resolve_x)
 //   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
 //
 // Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -40,29 +41,39 @@ embed STR_SRC from "./std/str.y";
 // way: `import io from "path"` inlines the module's source in place and drops
 // its `export` line. References `io.x` are rewritten to plain `x` by
 // strip_namespaces (AST-level, so strings are untouched). Module top-levels
-// must be defs; duplicate def names across the splice are a loud error.
+// must be defs; a def that replaces one from another file is a loud error
+// (find_dup).
+//
+// The ORIGIN MAP says where each line of the spliced program came from:
+// line i + 1 is line `line[i]` of file `files[file[i]]`. files[0] is the
+// program itself (`root`, the path the driver was given), then the
+// imported modules in splice order, then -- from `nuser` on -- the std
+// chunks the compiler splices in front. Error positions are printed
+// through it (ycc.y print_native_errors), and find_dup tells files apart
+// by it.
 
-def native_resolve(src: str, base_dir: str, depth: long) -> { src: str, imports: [str], pre: long } {
-    native_resolve_x(src, base_dir, depth, true)
+def native_resolve(src: str, base_dir: str, depth: long) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] } } {
+    native_resolve_x(src, base_dir, depth, true, "")
 };
 
 // allow_exec = false is `ycc --no-exec`: the exec chunk is not spliced, so
 // `exec(...)` fails with "undefined function" and the binary has no path
 // to a shell at all.
 //
-// `pre` is how many lines the prelude added in FRONT of the user's text.
-// Prepending (rather than appending) is deliberate: defs hoist either way,
-// but a later def shadows an earlier one, so a user's own `readline` must
-// come after ours to win. The cost is that every position downstream is
-// shifted, which the driver undoes when it prints an error.
-def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> { src: str, imports: [str], pre: long } {
+// The std chunks go in FRONT of the user's text. Prepending (rather than
+// appending) is deliberate: defs hoist either way, but a later def shadows
+// an earlier one, so a user's own `readline` must come after ours to win.
+// Every position downstream is shifted, which the origin map undoes.
+def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] } } {
     // NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
     // enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
-    // encoder splices twice and every enc64 def collides (find_dup is fatal).
-    let r = native_resolve_seen(src, base_dir, depth, []);
-    let rsrc = r.src;
+    // encoder splices twice and every enc64 def collides (find_dup).
+    let r = native_resolve_seen(src, base_dir, depth, [], 0);
+    let rsrc = join(r.lines, "\n");
     let rimports = r.imports;
-    let pre = 0;
+    let files: [str] = [root];
+    files += r.seen;
+    let origin = { files: files, nuser: len(files), file: r.ofile, line: r.oline };
     // The runtime library (std/rt.y) is spliced in front of EVERY program:
     // generated code calls into it by fixed label (`call y_print_long`), so
     // there is no name to test for. Unused helpers cost nothing in the
@@ -78,7 +89,7 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     let seen = words_seen(rsrc, pn + xn + str_names());
     let px = len(pn) + len(xn);
     rsrc = rt + rsrc;
-    pre = pre + count_nl(rt);
+    origin_front(origin, "std/rt.y", count_nl(rt));
     // std/str.y, std/exec.y and std/prelude.y go in front of the resolved
     // text, but only when the program actually mentions one of their
     // names — otherwise every binary would carry code it never calls.
@@ -90,7 +101,7 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     if (seen_any(seen, px, len(seen), 2)) {
         let tt = std_text(STR_SRC);
         rsrc = tt + rsrc;
-        pre = pre + count_nl(tt);
+        origin_front(origin, "std/str.y", count_nl(tt));
         0
     } else { 0; };
     let want_prelude = seen_any(seen, 0, len(pn), 1);
@@ -98,7 +109,7 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
         if (seen_any(seen, len(pn), px, 1)) {
             let xt = std_text(EXEC_SRC);
             rsrc = xt + rsrc;
-            pre = pre + count_nl(xt);
+            origin_front(origin, "std/exec.y", count_nl(xt));
             want_prelude = true;
             0
         } else { 0; };
@@ -107,10 +118,54 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     if (want_prelude) {
         let pt = std_text(PRELUDE_SRC);
         rsrc = pt + rsrc;
-        pre = pre + count_nl(pt);
+        origin_front(origin, "std/prelude.y", count_nl(pt));
         0
     } else { 0; };
-    { src: rsrc, imports: rimports, pre: pre }
+    { src: rsrc, imports: rimports, origin: origin }
+};
+
+// A std chunk of `n` lines went in front of the program: its lines come
+// first in the origin map, as lines 1..n of a new file `name`.
+def origin_front(o: { files: [str], nuser: long, file: [long], line: [long] }, name: str, n: long) -> long {
+    let id = len(o.files);
+    o.files += name;
+    let f: [long] = [];
+    let l: [long] = [];
+    let i = 0;
+    while (i < n) {
+        f += id;
+        l += i + 1;
+        i = i + 1;
+    };
+    o.file = f + o.file;
+    o.line = l + o.line;
+    0
+};
+
+// Which file line `ln` of the spliced program came from (0, the program
+// itself, when the map does not cover it).
+def origin_file(o: { files: [str], nuser: long, file: [long], line: [long] }, ln: long) -> long {
+    let f = o.file;
+    if (ln >= 1 && ln <= len(f)) { f[ln - 1] } else { 0 }
+};
+
+// Line `ln` of the spliced program as its file shows it: "path:line", or
+// just "line" in the program's own file when `bare` (error positions keep
+// the plain `line:col` form there). A line past the end of the map (the
+// end of the input) counts on from the last line it holds.
+def origin_at(o: { files: [str], nuser: long, file: [long], line: [long] }, ln: long, bare: bool) -> str {
+    let f = o.file;
+    let l = o.line;
+    let n = len(f);
+    if (ln < 1 || n == 0) {
+        tostring(ln)
+    } else {
+        let k = ln;
+        if (k > n) { k = n; 0; } else { 0; };
+        let fid = f[k - 1];
+        let at = tostring(l[k - 1] + ln - k);
+        if (fid == 0 && bare) { at } else { o.files[fid] + ":" + at }
+    }
 };
 
 // Names std/prelude.y defines. A program that mentions none of them gets
@@ -142,7 +197,8 @@ def std_text(s: str) -> str {
     if (s[len(s) - 1:] == "\n") { s } else { s + "\n" }
 };
 
-// How many lines a newline-terminated text holds (what `pre` counts).
+// How many lines a newline-terminated text holds (what a std chunk adds to
+// the origin map).
 def count_nl(s: str) -> long {
     let b = bytes(s);
     let n = len(b);
@@ -420,16 +476,22 @@ def std_resolve(name: str, base_dir: str) -> str {
     found
 };
 
-def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { src: str, imports: [str], seen: [str] } {
+// The program text `src` of file `fid` (its index in the origin map's
+// files: 0 for the program itself, k for seen[k - 1]) with its imports
+// spliced in, as lines; ofile/oline map each one back (see the origin map
+// above native_resolve).
+def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], fid: long) -> { lines: [str], imports: [str], seen: [str], ofile: [long], oline: [long] } {
     if (depth > 32) {
         // Fatal, like a missing module: carrying on compiled the program
         // without the rest of the chain and exited 0.
         puts("error: native import depth exceeded (cycle?)\n");
         exit(1);
-        { src: "", imports: [], seen: seen }
+        { lines: [], imports: [], seen: seen, ofile: [], oline: [] }
     } else {
         let lines = split(src, "\n");
-        let out_lines = [];
+        let out_lines: [str] = [];
+        let ofile: [long] = [];
+        let oline: [long] = [];
         let imports = [];
         let i = 0;
         let n = len(lines);
@@ -470,6 +532,8 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                 };
                 if (len(name) == 0) {
                     out_lines += line;
+                    ofile += fid;
+                    oline += i + 1;
                     0
                 } else if (len(full) == 0) {
                     // Fatal: carrying on only reported the module's names as
@@ -500,19 +564,15 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                         // mod_src is str? (read_file returns none on missing
                         // file); the none case exited above, so unwrap here.
                         let mod_src2 = unwrap(mod_src);
-                        let sub = native_resolve_seen(mod_src2, mod_dir, depth + 1, seen);
-                        let subsrc = sub.src;
+                        let sub = native_resolve_seen(mod_src2, mod_dir, depth + 1, seen, len(seen));
                         let subns = sub.imports;
                         let subseen = sub.seen;
                         seen = subseen;
-                        // splice the module text inline (its own imports first)
-                        let sub_lines = split(subsrc, "\n");
-                        let k = 0;
-                        while (k < len(sub_lines)) {
-                            out_lines += sub_lines[k];
-                            k = k + 1;
-                            0
-                        };
+                        // splice the module text inline (its own imports
+                        // first), and its lines' origins with it
+                        out_lines += sub.lines;
+                        ofile += sub.ofile;
+                        oline += sub.oline;
                         let m = 0;
                         while (m < len(subns)) {
                             imports += subns[m];
@@ -527,6 +587,8 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                 0
             } else if (is_embed_decl(trimmed)) {
                 out_lines += embed_decl(trimmed, base_dir);
+                ofile += fid;
+                oline += i + 1;
                 0
             } else {
                 // NOTE: no empty if-arms here — keep the `0;` filler.
@@ -534,6 +596,8 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                 // rewritten by strip_namespaces).
                 if (trimmed[:7] != "export ") {
                     out_lines += line;
+                    ofile += fid;
+                    oline += i + 1;
                     0
                 } else {
                     // `export { a, b,` may run on over several lines: drop
@@ -552,7 +616,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
             i = i + 1;
             0
         };
-        { src: join(out_lines, "\n"), imports: imports, seen: seen }
+        { lines: out_lines, imports: imports, seen: seen, ofile: ofile, oline: oline }
     }
 };
 
@@ -6099,36 +6163,77 @@ def func_type_in(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     { k: "tfunc", args: func.ptypes, ret: r }
 };
 
-// Display name: strip rename's `$N` suffix (see types.y disp).
-def ndisp(name: str) -> str {
-    let i = index_of(name, "$");
-    if (i < 0) { name } else { name[:i] }
-};
-
-// Two spliced modules may define the same name: shadowing would silently
-// pick one, so duplicates are a loud error (at the second def's position).
-def find_dup(defs: [{ name: str, func: { k: str } }]) -> { found: bool, err: { msg: str, line: long, col: long } } {
-    let seen = [];
+// Files share one namespace. A later top-level def replaces an earlier one
+// of the same name (rename.y rn_shadow_dups): deliberate within a file, but
+// across files it silently hands every caller -- the first file's own
+// included -- the other file's function. So a def that replaces one from
+// another file is an error, at the later def. The std chunks the compiler
+// splices in front (files from origin.nuser on) are exempt: a program may
+// replace those (its own `readline` wins).
+def find_dup(stmts: [{ k: str }], origin: { files: [str], nuser: long, file: [long], line: [long] }) -> [{ msg: str, line: long, col: long }] {
+    let names: [str] = [];
+    let fids: [long] = [];
+    let lines: [long] = [];
+    let cols: [long] = [];
     let i = 0;
-    let out = { found: false, err: { msg: "", line: 1, col: 1 } };
-    while (i < len(defs)) {
-        let d = defs[i];
-        let j = 0;
-        while (j < len(seen)) {
-            // NOTE: :str binding (see teq note in types.y): seen elements
-            // infer tunk (pushed into bare []), so compare via annotated
-            // let to force content (not pointer) comparison.
-            let sn: str = seen[j];
-            if (sn == d.name) {
-                out = { found: true, err: { msg: "duplicate definition '" + ndisp(d.name) + "' (native imports splice; rename one)", line: d.func.line, col: d.func.col } };
+    while (i < len(stmts)) {
+        let s = stmts[i];
+        let nm = top_def_name(s);
+        if (len(nm) > 0) {
+            let ln: long = s.line;
+            let f = origin_file(origin, ln);
+            if (f < origin.nuser) {
+                names += nm;
+                fids += f;
+                lines += ln;
+                cols += s.col;
                 0
             } else { 0; };
-            j = j + 1;
-        };
-        seen += d.name;
+            0
+        } else { 0; };
         i = i + 1;
     };
-    out
+    let errs: [{ msg: str, line: long, col: long }] = [];
+    let j = 1;
+    while (j < len(names)) {
+        let nj = names[j];
+        let other = -1;
+        let m = 0;
+        while (m < j) {
+            if (fids[m] != fids[j]) {
+                if (names[m] == nj) { other = m; 0; } else { 0; };
+                0
+            } else { 0; };
+            m = m + 1;
+        };
+        if (other >= 0) {
+            errs += { msg: "duplicate definition '" + nj + "': " + origin_at(origin, lines[other], false) + " defines it too (imported files share one namespace; rename one)", line: lines[j], col: cols[j] };
+            0
+        } else { 0; };
+        j = j + 1;
+    };
+    errs
+};
+
+// The name a top-level statement defines as a function -- a def, or a let
+// bound to a function literal; both hoist -- or "" (rename.y rn_decl_name).
+def top_def_name(s) -> str {
+    if (s.k == "decl") {
+        top_def_name_go(s)
+    } else {
+        ""
+    }
+};
+
+def top_def_name_go(s) -> str {
+    // NOTE: one `s.v.k` read per body (see rename.y rn_prepass_decl note).
+    if (s.kind == "def") {
+        s.name
+    } else if (s.v.k == "func") {
+        s.name
+    } else {
+        ""
+    }
 };
 
 // ── globals and hoisting ───────────────────────────────────────────────
@@ -6325,7 +6430,7 @@ def phase_end(times: [{ name: str, us: long, heap: long }], name: str, t0: long,
 
 // ── entry point ────────────────────────────────────────────────────────
 
-def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
+def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
     let times: [{ name: str, us: long, heap: long }] = [];
     let pt = clock_us();
     let ph = heap_used();
@@ -6342,9 +6447,12 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
     times = pr.times; pt = pr.t; ph = pr.h;
     // collect every named def (top-level, nested, let-bound)
     let defs = collect_from_block(ast3.stmts, []);
-    let dup = find_dup(defs);
-    if (dup.found) {
-        errors += dup.err;
+    // A def that replaces another file's goes first: the checker's errors
+    // may be only its consequences.
+    let dups = find_dup(ast.stmts, origin);
+    if (len(dups) > 0) {
+        dups += errors;
+        errors = dups;
         0
     } else { 0; };
     if (len(errors) > 0) {
@@ -6540,7 +6648,7 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
     }
 };
 
-export { emit_program, native_resolve, native_resolve_x, strip_ns, strip_list, strip_decl, phase_end };
+export { emit_program, native_resolve, native_resolve_x, origin_at, strip_ns, strip_list, strip_decl, phase_end };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and

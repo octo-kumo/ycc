@@ -179,7 +179,7 @@ f == "types.y" && /(fterr|err) = "/ { site(tmpl($0, index($0, "= \"") + 2)); nex
 f == "types.y" && infmt && /\{ "/ { site(tmpl($0, index($0, "{ \"") + 2)); next }
 f == "types.y" && infmt && /^ *"/ { site(tmpl($0, index($0, "\""))); next }
 f == "native.y" && /puts\("error: / { site(tmpl($0, index($0, "puts(") + 5)); next }
-f == "native.y" && /err: \{ msg: "[^"]/ { site(tmpl($0, index($0, "msg: ") + 5)); next }
+f == "native.y" && /\{ msg: "[^"]/ { site(tmpl($0, index($0, "msg: ") + 5)); next }
 f == "ycc.y" && /puts\("(error|ycc): / { site(tmpl($0, index($0, "puts(") + 5)); next }
 
 END {

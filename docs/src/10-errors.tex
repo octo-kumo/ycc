@@ -11,7 +11,10 @@ Diagnostics are one line each,
 \end{center}
 
 \noindent positioned in the user's source even when the compilation
-splices prelude/runtime code in front of it. The checker reports a root
+splices imported files or prelude/runtime code into it. An error in an
+imported file names that file, \ic{path:line:col: error: message}, with
+the line counted in that file and the path as the import resolved it.
+The checker reports a root
 cause \emph{once} (Section~\ref{sec:poison}): a missing annotation or
 unanalyzable expression poisons quietly instead of cascading errors
 through every enclosing use. Typical families:

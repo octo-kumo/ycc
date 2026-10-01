@@ -3,7 +3,8 @@
  * same names, same parameter order, same control flow.
  *
  * Usage (the driver, ycc.y):
- *   let r = emit_program(ast, imports);  // { ok, asm, errors }
+ *   let r = emit_program(ast, imports, origin);  // { ok, asm, errors }
+ *   // (imports and origin come from native_resolve_x)
  *   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
  *
  * Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -72,7 +73,11 @@ Y_EMBED(STR_SRC, "src/y/std/str.y")
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec);
+Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                     Yv *root);
+long origin_front(Yv *o, Yv *name, long n);
+long origin_file(Yv *o, long ln);
+Yv *origin_at(Yv *o, long ln, int bare);
 Yv *prelude_names(void);
 Yv *exec_names(void);
 Yv *str_names(void);
@@ -88,7 +93,8 @@ Yv *norm_path(Yv *p);
 int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
 Yv *std_resolve(Yv *name, Yv *base_dir);
-Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen);
+Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
+                        long fid);
 int is_embed_decl(Yv *trimmed);
 Yv *embed_decl(Yv *trimmed, Yv *base_dir);
 Yv *quote_text(Yv *s);
@@ -328,8 +334,9 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
 Yv *infer_fn_ret(Yv *st, Yv *func);
 Yv *func_type(Yv *func);
 Yv *func_type_in(Yv *st, Yv *func);
-Yv *ndisp(Yv *name);
-Yv *find_dup(Yv *defs);
+Yv *find_dup(Yv *stmts, Yv *origin);
+Yv *top_def_name(Yv *s);
+Yv *top_def_name_go(Yv *s);
 Yv *global_decls(Yv *stmts);
 Yv *decl_name(Yv *d);
 Yv *decl_type(Yv *d);
@@ -341,37 +348,53 @@ int ret_omitted(Yv *func);
 Yv *fn_ptypes(Yv *func);
 int reads_any(Yv *func, Yv *names);
 Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
-Yv *emit_program(Yv *ast, Yv *imports);
+Yv *emit_program(Yv *ast, Yv *imports, Yv *origin);
 
 /* ── native import resolution ───────────────────────────────────────────
  * An import is a COMPILE-TIME text splice, and both compilers splice the
  * same way: `import io from "path"` inlines the module's source in place and
  * drops its `export` line. References `io.x` are rewritten to plain `x` by
  * strip_namespaces (AST-level, so strings are untouched). Module top-levels
- * must be defs; duplicate def names across the splice are a loud error. */
+ * must be defs; a def that replaces one from another file is a loud error
+ * (find_dup).
+ *
+ * The ORIGIN MAP says where each line of the spliced program came from:
+ * line i + 1 is line `line[i]` of file `files[file[i]]`. files[0] is the
+ * program itself (`root`, the path the driver was given), then the
+ * imported modules in splice order, then -- from `nuser` on -- the std
+ * chunks the compiler splices in front. Error positions are printed
+ * through it (ycc.c print_native_errors), and find_dup tells files apart
+ * by it. */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
-    return native_resolve_x(src, base_dir, depth, 1);
+    return native_resolve_x(src, base_dir, depth, 1, ys(""));
 }
 
 /* allow_exec = false is `ycc --no-exec`: the exec chunk is not spliced, so
  * `exec(...)` fails with "undefined function" and the binary has no path
  * to a shell at all.
  *
- * `pre` is how many lines the prelude added in FRONT of the user's text.
- * Prepending (rather than appending) is deliberate: defs hoist either way,
- * but a later def shadows an earlier one, so a user's own `readline` must
- * come after ours to win. The cost is that every position downstream is
- * shifted, which the driver undoes when it prints an error. */
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
+ * The std chunks go in FRONT of the user's text. Prepending (rather than
+ * appending) is deliberate: defs hoist either way, but a later def shadows
+ * an earlier one, so a user's own `readline` must come after ours to win.
+ * Every position downstream is shifted, which the origin map undoes. */
+Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                     Yv *root) {
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
      * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
-     * encoder splices twice and every enc64 def collides (find_dup is
-     * fatal). */
-    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0));
-    Yv *rsrc = yr_get(r, "src");
+     * encoder splices twice and every enc64 def collides (find_dup). */
+    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0), 0);
+    Yv *rsrc = ys_join(yr_get(r, "lines"), ys("\n"));
     Yv *rimports = yr_get(r, "imports");
-    long pre = 0;
+    Yv *files = yav(1, root);
+    Yv *rseen = yr_get(r, "seen");
+    long fi = 0;
+    while (fi < yv_len(rseen)) {
+        files = ya_push(files, ya_get(rseen, fi));
+        fi = fi + 1;
+    }
+    Yv *origin = yr(4, "files", files, "nuser", yv_long(yv_len(files)),
+                    "file", yr_get(r, "ofile"), "line", yr_get(r, "oline"));
     /* The runtime library (std/rt.y) is spliced in front of EVERY program:
      * generated code calls into it by fixed label (`call y_print_long`), so
      * there is no name to test for. Unused helpers cost nothing in the
@@ -404,7 +427,7 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
     Yv *seen = words_seen(rsrc, names);
     long px = yv_len(pn) + yv_len(xn);
     rsrc = ys_cat(rt, rsrc);
-    pre = pre + count_nl(rt);
+    origin_front(origin, ys("std/rt.y"), count_nl(rt));
     /* std/str.y, std/exec.y and std/prelude.y go in front of the resolved
      * text, but only when the program actually mentions one of their
      * names — otherwise every binary would carry code it never calls.
@@ -416,7 +439,7 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
     if (seen_any(seen, px, yv_len(seen), 2)) {
         Yv *tt = std_text(STR_SRC());
         rsrc = ys_cat(tt, rsrc);
-        pre = pre + count_nl(tt);
+        origin_front(origin, ys("std/str.y"), count_nl(tt));
         ;
     } else {
         ;
@@ -426,7 +449,7 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
         if (seen_any(seen, yv_len(pn), px, 1)) {
             Yv *xt = std_text(EXEC_SRC());
             rsrc = ys_cat(xt, rsrc);
-            pre = pre + count_nl(xt);
+            origin_front(origin, ys("std/exec.y"), count_nl(xt));
             want_prelude = 1;
             ;
         } else {
@@ -439,12 +462,82 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
     if (want_prelude) {
         Yv *pt = std_text(PRELUDE_SRC());
         rsrc = ys_cat(pt, rsrc);
-        pre = pre + count_nl(pt);
+        origin_front(origin, ys("std/prelude.y"), count_nl(pt));
         ;
     } else {
         ;
     }
-    return yr(3, "src", rsrc, "imports", rimports, "pre", yv_long(pre));
+    return yr(3, "src", rsrc, "imports", rimports, "origin", origin);
+}
+
+/* A std chunk of `n` lines went in front of the program: its lines come
+ * first in the origin map, as lines 1..n of a new file `name`. */
+long origin_front(Yv *o, Yv *name, long n) {
+    long id = yv_len(yr_get(o, "files"));
+    ya_push(yr_get(o, "files"), name);
+    Yv *f = yav(0);
+    Yv *l = yav(0);
+    long i = 0;
+    while (i < n) {
+        f = ya_push(f, yv_long(id));
+        l = ya_push(l, yv_long(i + 1));
+        i = i + 1;
+    }
+    Yv *of = yr_get(o, "file");
+    Yv *ol = yr_get(o, "line");
+    long k = 0;
+    while (k < yv_len(of)) {
+        f = ya_push(f, ya_get(of, k));
+        k = k + 1;
+    }
+    k = 0;
+    while (k < yv_len(ol)) {
+        l = ya_push(l, ya_get(ol, k));
+        k = k + 1;
+    }
+    yr_set(o, "file", f);
+    yr_set(o, "line", l);
+    return 0;
+}
+
+/* Which file line `ln` of the spliced program came from (0, the program
+ * itself, when the map does not cover it). */
+long origin_file(Yv *o, long ln) {
+    Yv *f = yr_get(o, "file");
+    if (ln >= 1 && ln <= yv_len(f)) {
+        return yv_l(ya_get(f, ln - 1));
+    } else {
+        return 0;
+    }
+}
+
+/* Line `ln` of the spliced program as its file shows it: "path:line", or
+ * just "line" in the program's own file when `bare` (error positions keep
+ * the plain `line:col` form there). A line past the end of the map (the
+ * end of the input) counts on from the last line it holds. */
+Yv *origin_at(Yv *o, long ln, int bare) {
+    Yv *f = yr_get(o, "file");
+    Yv *l = yr_get(o, "line");
+    long n = yv_len(f);
+    if (ln < 1 || n == 0) {
+        return ys_long(ln);
+    } else {
+        long k = ln;
+        if (k > n) {
+            k = n;
+            ;
+        } else {
+            ;
+        }
+        long fid = yv_l(ya_get(f, k - 1));
+        Yv *at = ys_long(yv_l(ya_get(l, k - 1)) + ln - k);
+        if (fid == 0 && bare) {
+            return at;
+        } else {
+            return ys_cat(ys_cat(ya_get(yr_get(o, "files"), fid), ys(":")),
+                          at);
+        }
+    }
 }
 
 /* Names std/prelude.y defines. A program that mentions none of them gets
@@ -499,7 +592,8 @@ Yv *std_text(Yv *s) {
     }
 }
 
-/* How many lines a newline-terminated text holds (what `pre` counts). */
+/* How many lines a newline-terminated text holds (what a std chunk adds to
+ * the origin map). */
 long count_nl(Yv *s) {
     Yv *b = bytes_of(s);
     long n = yv_len(b);
@@ -846,16 +940,24 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
     return found;
 }
 
-Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
+/* The program text `src` of file `fid` (its index in the origin map's
+ * files: 0 for the program itself, k for seen[k - 1]) with its imports
+ * spliced in, as lines; ofile/oline map each one back (see the origin map
+ * above native_resolve). */
+Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
+                        long fid) {
     if (depth > 32) {
         // Fatal, like a missing module: carrying on compiled the program
         // without the rest of the chain and exited 0.
         puts_(ys("error: native import depth exceeded (cycle?)\n"));
         exit_(1);
-        return yr(3, "src", ys(""), "imports", yav(0), "seen", seen);
+        return yr(5, "lines", yav(0), "imports", yav(0), "seen", seen,
+                  "ofile", yav(0), "oline", yav(0));
     } else {
         Yv *lines = ys_split(src, ys("\n"));
         Yv *out_lines = yav(0);
+        Yv *ofile = yav(0);
+        Yv *oline = yav(0);
         Yv *imports = yav(0);
         long i = 0;
         long n = yv_len(lines);
@@ -906,6 +1008,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                 }
                 if (yv_len(name) == 0) {
                     out_lines = ya_push(out_lines, line);
+                    ofile = ya_push(ofile, yv_long(fid));
+                    oline = ya_push(oline, yv_long(i + 1));
                     ;
                 } else if (yv_len(full) == 0) {
                     puts_(ys_cat(
@@ -946,18 +1050,29 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                         Yv *mod_src2 = yv_unwrap(mod_src);
                         Yv *sub =
                             native_resolve_seen(mod_src2, mod_dir, depth + 1,
-                                                seen);
-                        Yv *subsrc = yr_get(sub, "src");
+                                                seen, yv_len(seen));
                         Yv *subns = yr_get(sub, "imports");
                         Yv *subseen = yr_get(sub, "seen");
                         seen = subseen;
                         /* splice the module text inline (its own imports
-                         * first) */
-                        Yv *sub_lines = ys_split(subsrc, ys("\n"));
+                         * first), and its lines' origins with it */
+                        Yv *sub_lines = yr_get(sub, "lines");
+                        Yv *sub_ofile = yr_get(sub, "ofile");
+                        Yv *sub_oline = yr_get(sub, "oline");
                         long k = 0;
                         while (k < yv_len(sub_lines)) {
                             out_lines = ya_push(out_lines,
                                                 ya_get(sub_lines, k));
+                            k = k + 1;
+                        }
+                        k = 0;
+                        while (k < yv_len(sub_ofile)) {
+                            ofile = ya_push(ofile, ya_get(sub_ofile, k));
+                            k = k + 1;
+                        }
+                        k = 0;
+                        while (k < yv_len(sub_oline)) {
+                            oline = ya_push(oline, ya_get(sub_oline, k));
                             k = k + 1;
                         }
                         long m = 0;
@@ -973,6 +1088,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                 ;
             } else if (is_embed_decl(trimmed)) {
                 out_lines = ya_push(out_lines, embed_decl(trimmed, base_dir));
+                ofile = ya_push(ofile, yv_long(fid));
+                oline = ya_push(oline, yv_long(i + 1));
                 ;
             } else {
                 /* NOTE: no empty if-arms here — keep the `;` filler.
@@ -980,6 +1097,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                  * rewritten by strip_namespaces). */
                 if (!ys_eq_lit(ys_slice(trimmed, 0, 7), "export ")) {
                     out_lines = ya_push(out_lines, line);
+                    ofile = ya_push(ofile, yv_long(fid));
+                    oline = ya_push(oline, yv_long(i + 1));
                     ;
                 } else {
                     if (ys_index_of(line, ys("{")) >= 0) {
@@ -997,8 +1116,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
             }
             i = i + 1;
         }
-        return yr(3, "src", ys_join(out_lines, ys("\n")), "imports", imports,
-                  "seen", seen);
+        return yr(5, "lines", out_lines, "imports", imports, "seen", seen,
+                  "ofile", ofile, "oline", oline);
     }
 }
 
@@ -7613,52 +7732,98 @@ Yv *func_type_in(Yv *st, Yv *func) {
     return yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"), "ret", r);
 }
 
-/* Display name: strip rename's `$N` suffix (see types.y disp). */
-Yv *ndisp(Yv *name) {
-    long i = ys_index_of(name, ys("$"));
-    if (i < 0) {
-        return name;
-    } else {
-        return ys_slice(name, 0, i);
-    }
-}
-
-/* Two spliced modules may define the same name: shadowing would silently
- * pick one, so duplicates are a loud error (at the second def's
- * position). */
-Yv *find_dup(Yv *defs) {
-    Yv *seen = yav(0);
+/* Files share one namespace. A later top-level def replaces an earlier one
+ * of the same name (rename.c rn_shadow_dups): deliberate within a file, but
+ * across files it silently hands every caller -- the first file's own
+ * included -- the other file's function. So a def that replaces one from
+ * another file is an error, at the later def. The std chunks the compiler
+ * splices in front (files from origin.nuser on) are exempt: a program may
+ * replace those (its own `readline` wins). */
+Yv *find_dup(Yv *stmts, Yv *origin) {
+    Yv *names = yav(0);
+    Yv *fids = yav(0);
+    Yv *lines = yav(0);
+    Yv *cols = yav(0);
     long i = 0;
-    Yv *out = yr(2, "found", yv_bool(0), "err",
-                 yr(3, "msg", ys(""), "line", yv_long(1), "col", yv_long(1)));
-    while (i < yv_len(defs)) {
-        Yv *d = ya_get(defs, i);
-        long j = 0;
-        while (j < yv_len(seen)) {
-            /* NOTE: :str binding (see teq note in types.y): seen elements
-             * infer tunk (pushed into bare []), so compare via annotated
-             * let to force content (not pointer) comparison. */
-            Yv *sn = ya_get(seen, j);
-            if (ys_eq(sn, yr_get(d, "name"))) {
-                out = yr(2, "found", yv_bool(1), "err",
-                         yr(3, "msg",
-                            ys_cat(ys_cat(ys("duplicate definition '"),
-                                          ndisp(yr_get(d, "name"))),
-                                   ys("' (native imports splice; rename one)")),
-                            "line",
-                            yv_long(yv_l(yr_get(yr_get(d, "func"), "line"))),
-                            "col",
-                            yv_long(yv_l(yr_get(yr_get(d, "func"), "col")))));
+    while (i < yv_len(stmts)) {
+        Yv *s = ya_get(stmts, i);
+        Yv *nm = top_def_name(s);
+        if (yv_len(nm) > 0) {
+            long ln = yv_l(yr_get(s, "line"));
+            long f = origin_file(origin, ln);
+            if (f < yv_l(yr_get(origin, "nuser"))) {
+                names = ya_push(names, nm);
+                fids = ya_push(fids, yv_long(f));
+                lines = ya_push(lines, yv_long(ln));
+                cols = ya_push(cols, yr_get(s, "col"));
                 ;
             } else {
                 ;
             }
-            j = j + 1;
+            ;
+        } else {
+            ;
         }
-        seen = ya_push(seen, yr_get(d, "name"));
         i = i + 1;
     }
-    return out;
+    Yv *errs = yav(0);
+    long j = 1;
+    while (j < yv_len(names)) {
+        Yv *nj = ya_get(names, j);
+        long other = -1;
+        long m = 0;
+        while (m < j) {
+            if (yv_l(ya_get(fids, m)) != yv_l(ya_get(fids, j))) {
+                if (ys_eq(ya_get(names, m), nj)) {
+                    other = m;
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            } else {
+                ;
+            }
+            m = m + 1;
+        }
+        if (other >= 0) {
+            Yv *msg = ys_cat(ys_cat(ys("duplicate definition '"), nj),
+                             ys("': "));
+            msg = ys_cat(msg, origin_at(origin, yv_l(ya_get(lines, other)), 0));
+            msg = ys_cat(msg, ys(" defines it too (imported files share one "
+                                 "namespace; rename one)"));
+            errs = ya_push(errs, yr(3, "msg", msg, "line", ya_get(lines, j),
+                                    "col", ya_get(cols, j)));
+            ;
+        } else {
+            ;
+        }
+        j = j + 1;
+    }
+    return errs;
+}
+
+/* The name a top-level statement defines as a function -- a def, or a let
+ * bound to a function literal; both hoist -- or "" (rename.c
+ * rn_decl_name). */
+Yv *top_def_name(Yv *s) {
+    if (ys_eq_lit(yr_get(s, "k"), "decl")) {
+        return top_def_name_go(s);
+    } else {
+        return ys("");
+    }
+}
+
+Yv *top_def_name_go(Yv *s) {
+    /* NOTE: one `s.v.k` read per body (see rename.c rn_prepass_decl
+     * note). */
+    if (ys_eq_lit(yr_get(s, "kind"), "def")) {
+        return yr_get(s, "name");
+    } else if (ys_eq_lit(yr_get(yr_get(s, "v"), "k"), "func")) {
+        return yr_get(s, "name");
+    } else {
+        return ys("");
+    }
 }
 
 /* ── globals and hoisting ───────────────────────────────────────────────
@@ -7904,7 +8069,7 @@ Yv *phase_end(Yv *times, Yv *name, long t0, long h0) {
 
 /* ── entry point ──────────────────────────────────────────────────────── */
 
-Yv *emit_program(Yv *ast, Yv *imports) {
+Yv *emit_program(Yv *ast, Yv *imports, Yv *origin) {
     Yv *times = yav(0);
     long pt = clock_us();
     long ph = heap_used();
@@ -7927,9 +8092,16 @@ Yv *emit_program(Yv *ast, Yv *imports) {
     ph = yv_l(yr_get(pr, "h"));
     /* collect every named def (top-level, nested, let-bound) */
     Yv *defs = collect_from_block(yr_get(ast3, "stmts"), yav(0));
-    Yv *dup = find_dup(defs);
-    if (yv_b(yr_get(dup, "found"))) {
-        errors = ya_push(errors, yr_get(dup, "err"));
+    /* A def that replaces another file's goes first: the checker's errors
+     * may be only its consequences. */
+    Yv *dups = find_dup(yr_get(ast, "stmts"), origin);
+    if (yv_len(dups) > 0) {
+        long di = 0;
+        while (di < yv_len(errors)) {
+            dups = ya_push(dups, ya_get(errors, di));
+            di = di + 1;
+        }
+        errors = dups;
         ;
     } else {
         ;

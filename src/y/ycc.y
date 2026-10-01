@@ -116,12 +116,12 @@ def print_counter(name: str, v: long) -> long {
 
 // ── main ─────────────────────────────────────────────────────────────────
 
-def print_native_errors(errors: [{ msg: str, line: long, col: long }], pre: long) -> long {
+def print_native_errors(errors: [{ msg: str, line: long, col: long }], origin: { files: [str], nuser: long, file: [long], line: [long] }) -> long {
     // NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
-    // `pre` is the number of prelude lines spliced in front of the user's
-    // source: subtract it so positions refer to the file the user wrote.
-    // A position INSIDE the prelude (line <= pre) would be a compiler bug,
-    // so it is reported as-is rather than silently going negative.
+    // Positions are lines of the spliced program (std chunks and imported
+    // modules included); the origin map turns each back into the file it
+    // came from: `line:col` in the program's own file, `path:line:col` in
+    // any other.
     let all = errors;
     // One error per position: a malformed token can trip two checks (the
     // construct it broke, then the statement it ended), and the second
@@ -130,9 +130,7 @@ def print_native_errors(errors: [{ msg: str, line: long, col: long }], pre: long
     let i = 0;
     while (i < len(all)) {
         let e = all[i];
-        let ln = e.line;
-        if (ln > pre) { ln = ln - pre; 0; } else { 0; };
-        let at = tostring(ln) + ":" + tostring(e.col);
+        let at = nativelib.origin_at(origin, e.line, true) + ":" + tostring(e.col);
         let dup = false;
         foreach (s in seen) {
             if (s == at) { dup = true; 0; } else { 0; };
@@ -187,19 +185,19 @@ def main(cmdline: [str]) -> long {
             let tstart = t0;
             let hstart = h0;
             let dt: [{ name: str, us: long, heap: long }] = [];
-            let nr = nativelib.native_resolve_x(src2, base_dir, 0, pargs.allow_exec);
+            let nr = nativelib.native_resolve_x(src2, base_dir, 0, pargs.allow_exec, file);
             let ph = nativelib.phase_end(dt, "resolve", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let nrsrc = nr.src;
             let nrimports = nr.imports;
-            let nrpre = nr.pre;
+            let nrorigin = nr.origin;
             let toks = lexer.tokenize(nrsrc);
             ph = nativelib.phase_end(dt, "tokenize", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let ast = parser.parse_program(toks);
             ph = nativelib.phase_end(dt, "parse", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
-            let r = nativelib.emit_program(ast, nrimports);
+            let r = nativelib.emit_program(ast, nrimports, nrorigin);
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;
@@ -213,7 +211,7 @@ def main(cmdline: [str]) -> long {
             h0 = heap_used();
             let rok = r.ok;
             if (!rok) {
-                print_native_errors(r.errors, nrpre);
+                print_native_errors(r.errors, nrorigin);
                 exit(1);
                 1
             } else if (pargs.asm_only) {

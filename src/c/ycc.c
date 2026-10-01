@@ -146,25 +146,22 @@ long print_counter(Yv *name, long v) {
 
 /* ── main ──────────────────────────────────────────────────────────────── */
 
-long print_native_errors(Yv *errors, long pre) {
+long print_native_errors(Yv *errors, Yv *origin) {
     /* NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
-     * `pre` is the number of prelude lines spliced in front of the user's
-     * source: subtract it so positions refer to the file the user wrote.
-     * A position INSIDE the prelude (line <= pre) would be a compiler bug,
-     * so it is reported as-is rather than silently going negative. */
+     * Positions are lines of the spliced program (std chunks and imported
+     * modules included); the origin map turns each back into the file it
+     * came from: `line:col` in the program's own file, `path:line:col` in
+     * any other. */
     Yv *all = errors;
+    /* One error per position: a malformed token can trip two checks (the
+     * construct it broke, then the statement it ended), and the second
+     * message only repeats the first. */
     Yv *seen = yav(0);
     long i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
-        long ln = yv_l(yr_get(e, "line"));
-        if (ln > pre) {
-            ln = ln - pre;
-            ;
-        } else {
-            ;
-        }
-        Yv *at = ys_cat(ys_cat(ys_long(ln), ys(":")),
+        Yv *at = ys_cat(ys_cat(origin_at(origin, yv_l(yr_get(e, "line")), 1),
+                               ys(":")),
                         ys_long(yv_l(yr_get(e, "col"))));
         int dup = 0;
         long j = 0;
@@ -238,14 +235,14 @@ long y_main(Yv *cmdline) {
             long hstart = h0;
             Yv *dt = yav(0);
             Yv *nr = native_resolve_x(src2, base_dir, 0,
-                                      yv_b(yr_get(pargs, "allow_exec")));
+                                      yv_b(yr_get(pargs, "allow_exec")), file);
             Yv *ph = phase_end(dt, ys("resolve"), t0, h0);
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));
             h0 = yv_l(yr_get(ph, "h"));
             Yv *nrsrc = yr_get(nr, "src");
             Yv *nrimports = yr_get(nr, "imports");
-            long nrpre = yv_l(yr_get(nr, "pre"));
+            Yv *nrorigin = yr_get(nr, "origin");
             Yv *toks = tokenize(nrsrc);
             ph = phase_end(dt, ys("tokenize"), t0, h0);
             dt = yr_get(ph, "times");
@@ -256,7 +253,7 @@ long y_main(Yv *cmdline) {
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));
             h0 = yv_l(yr_get(ph, "h"));
-            Yv *r = emit_program(ast, nrimports);
+            Yv *r = emit_program(ast, nrimports, nrorigin);
             /* emit_program reports its own sub-phases (strip_ns, rename,
              * typecheck, emit_fns, emit_start, asm_text); splice them in. */
             Yv *sub = yr_get(r, "times");
@@ -270,7 +267,7 @@ long y_main(Yv *cmdline) {
             h0 = heap_used();
             long rok = yv_b(yr_get(r, "ok"));
             if (!rok) {
-                print_native_errors(yr_get(r, "errors"), nrpre);
+                print_native_errors(yr_get(r, "errors"), nrorigin);
                 exit_(1);
                 return 1;
             } else if (yv_b(yr_get(pargs, "asm_only"))) {

@@ -36,7 +36,7 @@ reason.
 | 01-overview | Notation | EBNF conventions used by the manual | none: notation explains how the manual is written, not source-language behavior |
 | 01-overview | A taste | In-place array operations, exactly-once place evaluation, and record alias visibility | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y`, `comprehensive: dot-assign: visible through an alias` |
 | 02-lexical | Lexical structure | Byte-oriented scanning and ASCII token grammar | `native/t68_splice_scan.y`, `native/t74_lexical_operators.y`, `native/t25_radix.y` |
-| 02-lexical | Source text | User-source positions survive import/embed splicing | `native/e14_prelude_lineno.y`, `native/e57_embed_lines.y`, `native/t66_embed.y` |
+| 02-lexical | Source text | User-source positions survive import/embed splicing | `native/e14_prelude_lineno.y`, `native/e57_embed_lines.y`, `native/t66_embed.y`, `native/e133_import_error_positions.y` |
 | 02-lexical | Source text | CRLF source-line endings | none: LF-only fixtures cannot directly exercise CRLF source bytes |
 | 02-lexical | Comments | Line and block comments separate tokens; comment-like string text stays literal | `native/t68_splice_scan.y`, `native/t74_lexical_operators.y` |
 | 02-lexical | Identifiers and keywords | Underscored identifiers and contextual names | `native/t47_none_void.y`, `native/t50_unions_match.y`, `native/t55_parse_forms.y`, `native/t67_str_methods.y` |
@@ -49,6 +49,7 @@ reason.
 | 03-grammar | Syntax | Grammar chapter heading | none: the heading introduces grammar forms exercised in the subsections below |
 | 03-grammar | Structure and modules | Imports, exports, relative paths and namespaces | `native/t55_parse_forms.y`, `native/e20_badmodule.y` |
 | 03-grammar | Structure and modules | Embed bytes and splice imported source in order | `native/t66_embed.y`, `native/t68_splice_scan.y`, `native/e57_embed_lines.y` |
+| 03-grammar | Structure and modules | One namespace: a def replacing another file's is an error naming both; same-file and std redefinitions are allowed | `native/e132_duplicate_import_def.y`, `native/t134_import_namespace.y`, `native/t30_typeof_records.y` |
 | 03-grammar | Declarations | let, const, def, type aliases and defaults | `native/t59_const.y`, `native/t49_defaults_tco.y`, `native/t50_unions_match.y`, `native/t63_optional_args.y` |
 | 03-grammar | Declarations | Anonymous and immediately-bound function literals | `native/t26_closures.y`, `native/t29_blocks_iife.y` |
 | 03-grammar | Types | Scalar, array, fixed-array, option, pointer, function, record and map type syntax | `native/t06_ptr.y`, `native/t16_option.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t57_from_bytes_fixed.y` |
@@ -135,5 +136,4 @@ so the list cannot rot.
 | `src/y/types.y` | `is not defined on arrays (only` | `typeof_arith_arr` is only called from the `op == "+"` arm of `typeof_arith`; `-` `*` `/` `%` on an array fail as non-numeric operands instead. |
 | `src/y/types.y` | `operator '" + op + "' is unsupported in native mode` | The parser builds a `bin` node only for an operator `op_prec` knows, and the checker's operator table handles every one of them; the `bin` nodes the parser and emitter synthesize use only `+` `==` `&&` `<` and the compound-assignment operators. |
 | `src/y/types.y` | `is not a supported expression form` | Every expression node the parser builds has an arm in `typeof_expr`; `optarg` (optional-parameter metadata) is replaced with `none`/`some(...)` by `rn_fill_defaults` before checking. |
-| `src/y/native.y` | `duplicate definition '` | Known bug (TODO.md, "Cross-module duplicate definitions"): `find_dup` runs after the renamer has given every definition a unique name, so it never fires. |
 | `src/y/ycc.y` | `"error: assemble: "` | The assembler only reads the emitter's output, so a bad line is a compiler bug, not something a program can cause. |

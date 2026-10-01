@@ -26,6 +26,18 @@ import takes a line of its own: everything after \ic{import} on that
 line names the module, so a second statement on the same line becomes
 part of the name.
 
+All the files of a program share one namespace: \ic{io.f} is rewritten
+to plain \ic{f}, and the alias only says which file a name comes from.
+A later top-level \ic{def} replaces an earlier one of the same name.
+Within one file that is deliberate (the last definition wins). Across
+files it would silently hand one file's callers another file's function,
+so a \ic{def} that replaces one from another file is an error, reported
+at the later definition and naming the other (\ic{duplicate definition
+'helper': m.y:4 defines it too}). The standard-library code the compiler
+splices in itself is the exception: a program's own \ic{readline}
+replaces the prelude's. Nested \ic{def}s and top-level \ic{let}s follow
+the usual scoping, as if the files were one text.
+
 A file's bytes can be compiled in as a string: on a line of its own,
 
 \begin{lstlisting}

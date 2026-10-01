@@ -483,10 +483,13 @@ list.
 
 The file found is spliced exactly like `import x from "path"` and its defs
 are flattened into one namespace with everything else (strip_ns rewrites
-`net.listen_tcp` to `listen_tcp`), so a module picks names that will not
-collide with the other std modules — `net.close_fd`, `net.send_str` — and
-uses the namespace when calling them anyway. Modules are compile-time input
-only: the program that runs has no use for the file.
+`net.listen_tcp` to `listen_tcp`). A def that replaces one from another
+file is a compile error (`find_dup`, which knows each line's file from
+the origin map `native_resolve_x` builds while splicing), so a module
+picks names that will not collide with the other std modules —
+`net.close_fd`, `net.send_str` — and uses the namespace when calling them
+anyway. Modules are compile-time input only: the program that runs has
+no use for the file.
 
 `src/y/std/net.y` is the first optional module: TCP over raw sockets
 (`socket_tcp`/`bind_tcp`/`listen_fd`/`accept_tcp`/`connect_tcp`/

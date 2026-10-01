@@ -2,13 +2,6 @@
 
 ## Not done
 
-- **Cross-module duplicate definitions.** `find_dup` compares names after
-  rename has made them unique, so it never fires: an importer's
-  `def helper` silently replaces an imported module's own `helper`, and
-  the module's callers get the importer's. Same-file redefinition is
-  deliberately "last wins" (`t30_typeof_records.y`,
-  `examples/manytypes.y`), so the check must know which file each def
-  came from — the per-line origin map the `-g` line information needs.
 - **Map reads allocate.** A map read is an option, and an option boxes
   its value: every `m[k]` costs 16 heap bytes, even `m[k] == none`
   (`t101` bounds it). The bump allocator never frees, so a read-heavy
@@ -20,9 +13,10 @@
   prepends take ~4.5 s.
 - **`-g` has no line information.** It writes a symbol table, so tools name
   functions; DWARF (`.debug_line` + a minimal `.debug_info`) would let
-  `perf annotate`, gdb and addr2line show source lines too. Needs a map
-  from the spliced program's lines back to files, and line markers from
-  the emitter through the assembler.
+  `perf annotate`, gdb and addr2line show source lines too. The map from
+  the spliced program's lines back to files exists (the origin map,
+  `native_resolve_x`); what is missing is line markers from the emitter
+  through the assembler.
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
 
 
@@ -32,6 +26,31 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **Cross-file duplicate definitions.** Imported files share one
+  namespace, where a later def replaces an earlier one. `find_dup`
+  compared names after rename had made them unique, so it never fired.
+  An importer's `def helper` silently replaced a module's own `helper`,
+  for the module's callers too, and when two modules both defined
+  `helper`, both got the second (`e132` compiled and printed `bb`). Now a
+  top-level def that replaces one from another file is an error at the
+  later def, naming the other (`m132/a.y:5 defines it too`).
+  Redefinition within one file still means last wins (`t30`), and the std
+  code the compiler splices in can still be replaced (`t134`: a
+  program's `readline`, a module's `clear_eof`). To tell files apart,
+  `native_resolve_x` builds an origin map (each spliced line → its file
+  and line), and the driver prints error positions through it.
+  - An error in an imported file reads `path:line:col`.
+  - An error below an import is no longer pushed down by the module's
+    length: `e133` used to report 10:23 and 13:1 for the module's 9:23 and
+    the program's 9:1, and `e34` now reads 8:9, not 80:9.
+  - `e*` fixtures compile from their own directory, so module paths in
+    their messages do not depend on the machine.
+
+  Every benchmark and test program compiles to the same binary. Compile
+  instructions: single-file programs +0.1% (mapping the runtime chunk's
+  lines); programs with imports −0.4 to −0.6%; the self-compile −0.8%
+  (17.456 → 17.317 G), with peak RSS 810 → 808 MB.
 
 - **Inferred return types.** Without `->`, the checker typed each
   `return e` against the unknown type and never related it to the type it
@@ -79,8 +98,8 @@ what was deliberately *not* changed) is in `audit.md`.
   five bugs, four fixed: an unterminated block comment was silently
   accepted (fatal now, `e113`), a missing record field's runtime trap
   segfaulted (`t130`), the import-depth error exited 0, and `cycc -S`
-  ignored a failed write; the fifth (duplicate definitions) is under Not
-  done. The manual's Assignment section was wrong: `=` and `op=` are
+  ignored a failed write. The fifth, duplicate definitions, is fixed too
+  (see above). The manual's Assignment section was wrong: `=` and `op=` are
   statement forms (`t131`, `e129`).
 - **Memory-growth tests.** `t100`: tail calls (through `self`, through the
   function's own name with `return`, and a void body's last call) run 10

@@ -8,12 +8,15 @@
 #   `// expect-error: ...` line in the file. One file can mark several:
 #   the parser and the checker report all their errors, so a themed file
 #   tests a whole family of messages (the lexer stops at its first).
+#   They compile from test/y/native itself, so a message that names an
+#   imported file (`m132/a.y:5`) reads the same on every machine.
 # t10 also checks the file its program writes (see t10_filewrite.file).
 
 source "$(dirname "$0")/lib.sh"
 
 # The built ycc (override with $YCC, e.g. the ASan build for make test-asan).
 YCC="${YCC:-$ROOT/ycc}"
+case "$YCC" in /*) ;; *) YCC="$PWD/$YCC" ;; esac
 if [ ! -x "$YCC" ]; then
     echo "error: $YCC not built — run 'make ycc' (or 'make test') first" >&2
     exit 2
@@ -40,7 +43,7 @@ run_native() {
         first=$(echo "$wants" | head -1)
         nwant=$(echo "$wants" | wc -l)
         local err
-        err=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
+        err=$(cd "$dir" && timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$bin" "$base.y" </dev/null 2>&1)
         local ec=$?
         rm -f "$bin"
         if [ $ec -eq 0 ]; then
