@@ -82,7 +82,7 @@ reason.
 | 05-expressions | Increment, decrement and compound assignment | Prefix/postfix values and exactly-once target evaluation | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y` |
 | 06-arrays | Arrays | Growable homogeneous arrays are reference values | `native/t15_dynarr.y`, `native/t37_bytes.y`, `native/t40_array_ops.y`, `native/e21_hetero_append.y` |
 | 06-arrays | Structure: length and capacity | Observable length, growth across reallocations and bounds traps | `native/t13_arroob.y`, `native/t37_bytes.y`, `native/t60_arr_props.y` |
-| 06-arrays | Operators | New-array +, one-element cons, in-place append/push/prepend and self-append | `native/t40_array_ops.y`, `native/t43_spread_cons.y`, `native/t61_arr_plus_nested.y`, `native/t64_arr_of_arr_share.y` |
+| 06-arrays | Operators | New-array +, one-element cons, in-place append/push/prepend (amortized O(1) at both ends) and self-append | `native/t40_array_ops.y`, `native/t43_spread_cons.y`, `native/t61_arr_plus_nested.y`, `native/t64_arr_of_arr_share.y`, `native/t138_prepend_amortized.y` |
 | 06-arrays | Aliasing and visibility | Aliases observe mutation while + and copies leave operands unchanged | `native/t40_array_ops.y`, `native/t64_arr_of_arr_share.y`, `native/t77_reference_identity.y` |
 | 06-arrays | Fixed arrays | Fixed length, slicing, bounds traps and rejected growth | `native/t37_bytes.y`, `native/t57_from_bytes_fixed.y`, `native/t79_fixed_array_bounds.y`, `native/e09_pushfixed.y` |
 | 06-arrays | Slices | Half-open clamped slices, fresh results and slice assignment | `native/t27_loops_slices.y`, `native/t51_strings_slices.y`, `native/t52_slice_mismatch.y`, `native/t78_slice_copy.y`, `native/t80_slice_bounds.y` |

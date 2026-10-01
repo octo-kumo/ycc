@@ -5,8 +5,6 @@
 - **`s += x` is quadratic in memory.** Strings are immutable, so each
   append copies the whole string, and nothing is freed: 10,000 one-byte
   appends allocate ~50 MB. Collecting parts and calling `join` is linear.
-- **Prepend is quadratic in time.** `a *= v` moves every element: 100,000
-  prepends take ~4.5 s.
 - **`-g` has no line information.** It writes a symbol table, so tools name
   functions; DWARF (`.debug_line` + a minimal `.debug_info`) would let
   `perf annotate`, gdb and addr2line show source lines too. The map from
@@ -22,6 +20,16 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **Prepend was quadratic in time.** `a *= v` moved every element, so
+  100,000 prepends took 4.3 s. The array header gained a fourth word,
+  `front`, counting the free slots before `data` (free: `y_alloc(24)`
+  already handed out 32 zeroed bytes). A prepend with room steps `data`
+  back one slot; without room the elements move to a block with
+  `max(len, 8)` free slots in front and the same room behind, so
+  prepending is amortized O(1) like pushing. 100,000 prepends: 4.28 s →
+  0.002 s, same heap (2,097,352 bytes); a push that grows zeroes `front`,
+  one store (`t138`).
 
 - **Float negation was `0.0 - x`.** Unary minus on a `float` subtracted
   from zero, so `-0.0` was `+0.0` and `1.0 / -0.0` was `+inf`. It now

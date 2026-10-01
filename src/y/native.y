@@ -5496,9 +5496,11 @@ def elem_store_rdx_const(esz: long, base: str, k: long) -> str {
     }
 };
 
-// The array header is {len, cap, data} and NEVER moves: elements live in a
-// separate block, so growth keeps every alias valid (that is what makes
-// `arr += v` in-place). This is the block size for n elements.
+// The array header is {len, cap, data, front} and NEVER moves: elements
+// live in a separate block, so growth keeps every alias valid (that is
+// what makes `arr += v` in-place). front, the free slots before data, is
+// the header's fourth word: y_alloc(arr_header_size()) hands out 32
+// zeroed bytes (NATIVE.md). This is the block size for n elements.
 def arr_alloc_size(esz: long, n: long) -> long {
     let b = n * esz;
     if (b < 8) { 8 } else { b }

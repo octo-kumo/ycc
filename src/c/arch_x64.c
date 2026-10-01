@@ -1039,6 +1039,11 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    ret"));
     // y_arr_prepend(arr, val, esz) -> arr with val inserted at the
     // front, IN PLACE (the header never moves — every alias sees it).
+    // The header's fourth word, front, counts the free element slots
+    // before data in its block: a prepend with front > 0 steps data
+    // back one slot. Otherwise the elements move to a new block with
+    // max(len, 8) slots of room in front and the same room behind, so
+    // n prepends cost O(n) moves in all, like n pushes.
     lines = ya_push(lines, ys("y_arr_prepend:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
@@ -1051,38 +1056,51 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    mov 24(%rbp), %r12"));
     lines = ya_push(lines, ys("    mov 16(%rbp), %r9"));
     lines = ya_push(lines, ys("    mov (%rbx), %rcx"));
-    lines = ya_push(lines, ys("    mov 8(%rbx), %rdx"));
-    lines = ya_push(lines, ys("    cmp %rdx, %rcx"));
+    lines = ya_push(lines, ys("    mov 24(%rbx), %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
     lines = ya_push(lines, ys("    jz yapd_grow"));
+    lines = ya_push(lines, ys("    dec %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 24(%rbx)"));
     lines = ya_push(lines, ys("    mov 16(%rbx), %r13"));
-    lines = ya_push(lines, ys("    jmp yapd_shift"));
+    lines = ya_push(lines, ys("    sub %r9, %r13"));
+    lines = ya_push(lines, ys("    mov %r13, 16(%rbx)"));
+    lines = ya_push(lines, ys("    mov 8(%rbx), %rdx"));
+    lines = ya_push(lines, ys("    inc %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%rbx)"));
+    lines = ya_push(lines, ys("    jmp yapd_put"));
     lines = ya_push(lines, ys("yapd_grow:"));
-    lines = ya_push(lines, ys("    mov %rdx, %r13"));
-    lines = ya_push(lines, ys("    shl $1, %r13"));
-    lines = ya_push(lines, ys("    cmp $8, %r13"));
-    lines = ya_push(lines, ys("    jge yapd_cap"));
-    lines = ya_push(lines, ys("    mov $8, %r13"));
-    lines = ya_push(lines, ys("yapd_cap:"));
-    lines = ya_push(lines, ys("    mov %r13, %rdi"));
+    lines = ya_push(lines, ys("    mov %rcx, %r14"));
+    lines = ya_push(lines, ys("    cmp $8, %r14"));
+    lines = ya_push(lines, ys("    jge yapd_room"));
+    lines = ya_push(lines, ys("    mov $8, %r14"));
+    lines = ya_push(lines, ys("yapd_room:"));
+    lines = ya_push(lines, ys("    mov 8(%rbx), %rdi"));
+    lines = ya_push(lines, ys("    add %r14, %rdi"));
     lines = ya_push(lines, ys("    imul %r9, %rdi"));
     lines = ya_push(lines, ys("    push %rcx"));
     lines = ya_push(lines, ys("    push %r9"));
     lines = ya_push(lines, ys("    call y_alloc"));
     lines = ya_push(lines, ys("    pop %r9"));
     lines = ya_push(lines, ys("    pop %rcx"));
-    lines = ya_push(lines, ys("    mov %rax, %r14"));
     lines = ya_push(lines, ys("    mov 16(%rbx), %r15"));
-    lines = ya_push(lines, ys("    mov %r13, 8(%rbx)"));
-    lines = ya_push(lines, ys("    mov %r14, 16(%rbx)"));
     lines = ya_push(lines, ys("    mov %r14, %r13"));
+    lines = ya_push(lines, ys("    dec %r13"));
+    lines = ya_push(lines, ys("    mov %r13, 24(%rbx)"));
+    lines = ya_push(lines, ys("    imul %r9, %r13"));
+    lines = ya_push(lines, ys("    add %rax, %r13"));
+    lines = ya_push(lines, ys("    mov %r13, 16(%rbx)"));
+    lines = ya_push(lines, ys("    mov 8(%rbx), %rdx"));
+    lines = ya_push(lines, ys("    inc %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%rbx)"));
     lines = ya_push(lines, ys("    xor %esi, %esi"));
     lines = ya_push(lines, ys("yapd_cp:"));
     lines = ya_push(lines, ys("    cmp %rcx, %rsi"));
-    lines = ya_push(lines, ys("    jge yapd_shift2"));
+    lines = ya_push(lines, ys("    jge yapd_put"));
     lines = ya_push(lines, ys("    mov %rsi, %rax"));
     lines = ya_push(lines, ys("    imul %r9, %rax"));
     lines = ya_push(lines, ys("    add %r15, %rax"));
     lines = ya_push(lines, ys("    mov %rsi, %rdi"));
+    lines = ya_push(lines, ys("    inc %rdi"));
     lines = ya_push(lines, ys("    imul %r9, %rdi"));
     lines = ya_push(lines, ys("    add %r13, %rdi"));
     lines = ya_push(lines, ys("    cmp $1, %r9"));
@@ -1096,33 +1114,8 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("yapd_cpn:"));
     lines = ya_push(lines, ys("    inc %rsi"));
     lines = ya_push(lines, ys("    jmp yapd_cp"));
-    lines = ya_push(lines, ys("yapd_shift2:"));
-    lines = ya_push(lines, ys("    mov %r13, 16(%rbx)"));
-    lines = ya_push(lines, ys("yapd_shift:"));
-    lines = ya_push(lines, ys("    mov 16(%rbx), %r13"));
-    lines = ya_push(lines, ys("    mov %rcx, %rsi"));
-    lines = ya_push(lines, ys("yapd_sl:"));
-    lines = ya_push(lines, ys("    test %rsi, %rsi"));
-    lines = ya_push(lines, ys("    jz yapd_put"));
-    lines = ya_push(lines, ys("    dec %rsi"));
-    lines = ya_push(lines, ys("    mov %rsi, %rax"));
-    lines = ya_push(lines, ys("    imul %r9, %rax"));
-    lines = ya_push(lines, ys("    add %r13, %rax"));
-    lines = ya_push(lines, ys("    mov %rsi, %rdi"));
-    lines = ya_push(lines, ys("    imul %r9, %rdi"));
-    lines = ya_push(lines, ys("    add %r13, %rdi"));
-    lines = ya_push(lines, ys("    add %r9, %rdi"));
-    lines = ya_push(lines, ys("    cmp $1, %r9"));
-    lines = ya_push(lines, ys("    je yapd_sl1"));
-    lines = ya_push(lines, ys("    mov (%rax), %rdx"));
-    lines = ya_push(lines, ys("    mov %rdx, (%rdi)"));
-    lines = ya_push(lines, ys("    jmp yapd_sl2"));
-    lines = ya_push(lines, ys("yapd_sl1:"));
-    lines = ya_push(lines, ys("    movzbq (%rax), %rdx"));
-    lines = ya_push(lines, ys("    movb %dl, (%rdi)"));
-    lines = ya_push(lines, ys("yapd_sl2:"));
-    lines = ya_push(lines, ys("    jmp yapd_sl"));
     lines = ya_push(lines, ys("yapd_put:"));
+    lines = ya_push(lines, ys("    mov 16(%rbx), %r13"));
     lines = ya_push(lines, ys("    cmp $1, %r9"));
     lines = ya_push(lines, ys("    je yapd_p1"));
     lines = ya_push(lines, ys("    mov %r12, (%r13)"));
@@ -1143,11 +1136,12 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    ret"));
     // y_arr_push(arr, val, esz) -> arr. esz is the element width; one
     // implementation covers packed [byte] and word-per-element arrays
-    // alike. The header is {len, cap, data} and NEVER moves (elements
-    // live in a separate block), so growth is invisible to aliases,
-    // `arr += v` is truly in place, and the returned header is the one
-    // the caller passed in. Capacity doubles when reached (8 first),
-    // matching yv.c's ya_push.
+    // alike. The header is {len, cap, data, front} and NEVER moves
+    // (elements live in a separate block), so growth is invisible to
+    // aliases, `arr += v` is truly in place, and the returned header is
+    // the one the caller passed in. Capacity doubles when reached (8
+    // first), matching yv.c's ya_push; a grown block has no room in
+    // front, so front becomes 0 (y_arr_prepend).
     lines = ya_push(lines, ys("y_arr_push:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
@@ -1198,6 +1192,7 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    mov %r13, 8(%rbx)"));
     lines = ya_push(lines, ys("    mov %r14, 16(%rbx)"));
     lines = ya_push(lines, ys("    xor %esi, %esi"));
+    lines = ya_push(lines, ys("    mov %rsi, 24(%rbx)"));
     lines = ya_push(lines, ys("yap_copy:"));
     lines = ya_push(lines, ys("    cmp %rcx, %rsi"));
     lines = ya_push(lines, ys("    jge yap_copy_done"));

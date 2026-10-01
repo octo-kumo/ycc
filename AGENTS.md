@@ -310,7 +310,9 @@ code calls it by fixed label.
 
 Unboxed values (long/int/byte/bool/float/ptr/str/option/function = 8
 bytes); `[byte]` arrays are packed; stable heap headers `{len, cap,
-data}` (elements in a separate block) with capacity doubling (0→8→×2);
+data, front}` (elements in a separate block) with capacity doubling
+(0→8→×2) at the back for `+=` and room reserved in front for `*=`, so
+both are amortized O(1);
 closures as `[code, caps...]` records; `&x`, `*p`, `a[i]`, `a[lo:hi]`,
 `T?`, `x!`, `void`, `float`, `byte` types; `for`/`for..in`/`foreach`/
 `while`; block expressions; `type` aliases, record unions and `match`;

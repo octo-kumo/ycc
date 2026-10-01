@@ -6977,9 +6977,11 @@ Yv *elem_store_rdx_const(long esz, Yv *base, long k) {
     }
 }
 
-/* The array header is {len, cap, data} and NEVER moves: elements live in a
- * separate block, so growth keeps every alias valid (that is what makes
- * `arr += v` in-place). This is the block size for n elements. */
+/* The array header is {len, cap, data, front} and NEVER moves: elements
+ * live in a separate block, so growth keeps every alias valid (that is
+ * what makes `arr += v` in-place). front, the free slots before data, is
+ * the header's fourth word: y_alloc(arr_header_size()) hands out 32
+ * zeroed bytes (NATIVE.md). This is the block size for n elements. */
 long arr_alloc_size(long esz, long n) {
     long b = n * esz;
     if (b < 8) {

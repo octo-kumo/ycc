@@ -86,7 +86,9 @@ expression & result & effect on operands & value types \\
   with \ic{arr1}.
 \item \ic{+=} means in-place push (of an element) or append (of an
   array); \ic{+} always means a \emph{new} array; \ic{*=} means prepend
-  the item in place.
+  the item in place. A push and a prepend both take amortized constant
+  time: an array keeps spare room at both ends and doubles it when it
+  runs out, so building an array from either end is linear.
 \end{itemize}
 
 \paragraph{The one-thing rule.} Whether \ic{+=} pushes or appends is

@@ -61,10 +61,17 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   (`yg_<n>_<name>`, read and written `%rip`-relative), so every function —
   hoisted or not, called from anywhere — sees the same variable.
   Arrays — fixed `[v; n]` and dynamic `[v, ...]` alike — are **heap headers**
-  `{len, cap, data}` where `data` points at a separately allocated element
-  block; a local holds the header address, so `[T; N]` is as
+  `{len, cap, data, front}` where `data` points at a separately allocated
+  element block; a local holds the header address, so `[T; N]` is as
   first-class as `[T]` (it can be bound, passed, returned; only `+=`/`*=`
-  growth is rejected, since `N` is part of the type).
+  growth is rejected, since `N` is part of the type). `cap` counts the
+  slots from `data` to the end of the block, `front` the free slots
+  before `data`. A header is `y_alloc(24)`, and `y_alloc` hands out
+  `(n + 15) & -8` = 32 bytes of never-reused, zeroed memory, so `front`
+  costs nothing and starts at 0 without a store; only `y_arr_prepend`
+  makes it nonzero (stepping `data` back into room it reserved), and
+  `y_arr_push` zeroes it when it moves the elements to a bigger block.
+  So `a *= v` is amortized O(1), like `a += v`.
 - **`str`** is a length-prefixed `.rodata` header `[len, data..., NUL]`, and
   the value is that header's address — so a `str` may carry embedded NULs
   and `len` is a load, not a `strlen`.
@@ -77,9 +84,9 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
 - Heap (bump allocator over 4 MB anonymous `mmap` chunks; its state — the
   bump pointer, the chunk end and the bytes handed out so far — lives in
   three `.bss` words, `y_heap`, which a program that never allocates shakes
-  out): dynamic arrays `[v, ...]` as `{len, cap, data}` headers (element
-  block allocated separately), option boxes. A request of 256 KB or more
-  gets a mapping of its own.
+  out): dynamic arrays `[v, ...]` as `{len, cap, data, front}` headers
+  (element block allocated separately), option boxes. A request of 256 KB
+  or more gets a mapping of its own.
   Nothing is ever freed (arena); no GC to write until something needs it.
 - Expression values in `%rax`; operands that must survive nested evaluation are
   **pushed** (nothing live in caller-saved regs across a call).
