@@ -3,8 +3,9 @@
 Syntax highlighting for the Y programming language (the ycc / ysh language in this repo).
 
 Covers: `let`/`const`/`def`, control flow, types (`str`, `long`, `bool`, `float`),
-builtins (`puts`, `exec`, `spawn`, `readline`, `clear_eof`, ...), strings with
-Y escape sequences (`\n`, `\x41`), numbers, comments, and operators (`::`, `..`, `->`).
+builtins (`print`, `puts`, `eputs`, `exec`, `readline`, `clear_eof`, `len`, ...),
+strings with Y escape sequences (`\n`, `\x41`), numbers, comments, and
+operators (`::`, `..`, `->`).
 
 ## Install (user level)
 

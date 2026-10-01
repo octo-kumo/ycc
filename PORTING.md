@@ -42,7 +42,7 @@ requires byte-identical binaries).
 | `src/y/ycc.y`           | `src/c/ycc.c`         | driver + `main`                   |
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
 | `src/y/std/rt.y`, `prelude.y`, `exec.y` | (stay Y)  | runtime text spliced into programs: native.y's `embed`, the C copy's `Y_EMBED` (rule 10) |
-| `src/y/std/io.y`, `net.y`, `struct.y`   | (stay Y)  | modules a program imports; read from disk when it is compiled |
+| `src/y/std/io.y`, `net.y`, `struct.y`   | (stay Y)  | optional modules resolved **from disk** by `std_resolve` when a program imports them; not embedded |
 
 ## Translation rules
 
@@ -58,11 +58,16 @@ requires byte-identical binaries).
    Boxing at the boundaries: `yv_long(x)` / `yv_l(v)`, `yv_bool(x)` /
    `yv_b(v)`, `yv_float(x)` / `yv_f(v)`.
 
-3. **Records** are insertion-ordered key/value records (`yr*`):
+3. **Records** are insertion-ordered key/value records (`yr*`), and this
+   is what a record *literal in the compiler's own source* ports to:
    `let r = { k: "num", v: x }` → `Yv *r = yr(2, "k", ys("num"), "v", x);`
-   (n key/value pairs, **no sentinel**). Field read `r.name` →
-   `yr_get(r, "name")`; `x == none` → `yv_is_none(x)`. The Y code rebuilds records instead of mutating
-   fields; do the same.
+   (n key/value pairs, **no sentinel** — the keys are the field names).
+   Field read `r.name` → `yr_get(r, "name")`; `x == none` →
+   `yv_is_none(x)`. The Y code rebuilds records instead of mutating
+   fields; do the same. Note this is about records the *compiler* builds.
+   A record *emitted into the user's program* is not built with `yr`: the
+   emitter allocates, stores a shape-table pointer at `+0`, and writes the
+   fields at `+8+8*i` (`gen_reclit` in `native.y`).
 
 4. **Arrays**:
    `[a, b]` → `yav(2, a, b)`, `[]` → `yav(0)`, `[v; n]` → `ya_rep(v, n)`,
@@ -90,12 +95,15 @@ requires byte-identical binaries).
    an `else` arm written `{ 0 }` or `{ 0; }` ports as the bare `;`/`0`
    form it has — do not refactor while porting.
 
-8. **Smaller mappings**: `sym(x)` is an implementation detail — a unique
-   symbol name for emitter labels; port it as a static C counter string
-   (e.g. `ys_fmt("y_%ld", ++sym_counter)`), keeping the produced names
-   identical. `write_bytes(path, bytes, mode)` takes three arguments.
-   `foreach x in xs` (a unique name for the index) →
-   `for (size_t _i = 0; _i < (xs)->u.a.len; _i++) { Yv *x = (xs)->u.a.items[_i]; ... }`.
+8. **Smaller mappings**: `next_uid(st)` hands out a unique id for emitter
+   labels and table names by bumping the emit state's counter; it ports
+   like any other function (`next_uid` in `native.c`), so the produced
+   names stay identical. `write_bytes(path, bytes, mode)` takes three
+   arguments.
+
+   `foreach (x in xs) { ... }` ports as an index loop over the array,
+   with the body unchanged: `long i = 0; while (i < yv_len(xs)) { Yv *x
+   = ya_get(xs, i); ...; i = i + 1; }` (as in `asm.c` and `elf.c`).
 
 9. **Errors and exits** behave like the Y code: `exit(n)` terminates;
    diagnostics go through `puts`/`eputs` unchanged.

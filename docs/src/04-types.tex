@@ -50,9 +50,16 @@ Section~\ref{sec:poison}).
 
 \subsection{Maps}
 
-\ic{\{K => V\}} is a dynamic map from hashable keys \ty{K} (\ic{str},
-\ic{long}, \ic{byte}, \ic{bool}, \ic{float}) to one value type \ty{V}.
-Reading \ic{m[k]} always yields \ic{V?}; see Section~\ref{sec:maps}.
+\ic{\{K => V\}} is a dynamic map from hashable keys \ty{K} to one
+value type \ty{V}. Reading \ic{m[k]} always yields \ic{V?}; see
+Section~\ref{sec:maps}.
+
+\ty{K} is a hashable key type (\ic{str}, \ic{long}, \ic{byte},
+\ic{bool}, \ic{float}), but a \textbf{map literal only accepts \ic{str}
+keys} --- the checker's inference for a literal fixes the key type to
+\ic{str}, so \ic{\{ 1: 5 \}} infers a shape rather than a map. Build a
+non-\ic{str}-keyed map from an annotated empty literal and store into
+it (Section~\ref{sec:maps}).
 
 \subsection{Options and pointers}
 \label{sec:type-options}
@@ -110,10 +117,12 @@ passed, stored and called); see Section~\ref{sec:functions}.
   Adoption is restricted to literals --- assigning an existing
   \ic{[long]} to a \ic{[byte]} binding is a type error (the layouts
   differ).
-\item An empty array literal \ic{[]} needs an annotation (there is
-  nothing to infer from). An unannotated \ic{\{\}} is the empty record;
-  under a map annotation it is the empty map:
-  \ic{let m: \{str => long\} = \{\};}.
+\item An empty array literal \ic{[]} is legal unannotated: there is
+  nothing to infer an element type from, so the element type is
+  \emph{unknown} and it poisons quietly (Section~\ref{sec:poison}).
+  Annotate it to pin the element type --- \ic{let b: [byte] = [];}.
+  An unannotated \ic{\{\}} is the empty record; under a map annotation
+  it is the empty map: \ic{let m: \{str => long\} = \{\};}.
 \end{itemize}
 
 \subsection{Conversions}

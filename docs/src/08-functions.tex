@@ -4,8 +4,11 @@
 \subsection{Functions}
 
 A \ic{def} declares a function; parameters are typed, the return type is
-inferred or checked. Recursion uses \ic{self} (a function's own name is
-\emph{not} in scope inside its body --- write \ic{self(...)}):
+inferred or checked. Write recursion with \ic{self} --- that is the
+portable spelling, and it is what a function \emph{literal} (which has no
+name) has to use. A \emph{named} \ic{def}'s own name is also in scope
+inside its body, so \ic{count(n - 1, acc + 1)} and \ic{self(n - 1, ...)}
+are the same call:
 
 \begin{lstlisting}
 def fact(n: long) -> long {
@@ -110,8 +113,11 @@ let x = log("hi");         // error: cannot bind a void value to 'x'
 \item \ic{\&x} --- address of a local or parameter;
 \item \ic{\&a[i]} --- address of an array element (any array expression:
   \ic{\&grid[0][i]} is legal);
-\item \ic{\&arr} on a whole heap array, or \ic{\&} of any temporary, is
-  a compile error (temporaries have no address).
+\item \ic{\&arr} on a whole array --- \emph{both} kinds, \ic{[T]} and
+  \ic{[T; N]} --- or \ic{\&} of any temporary, is a compile error
+  (``cannot take the address of a whole array''). A binding names the
+  array \emph{header}, not its first element, so \ic{\&arr} would hand
+  out the header; write \ic{\&arr[0]}, which works for either kind.
 \end{itemize}
 
 \noindent Pointers are for interfacing with the system-call level

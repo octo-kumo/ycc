@@ -29,7 +29,8 @@ ycc -S -o prog.s prog.y
 | `std/`        | standard library in Y, spliced into compiled programs      |
 
 See `NATIVE.md` for the backend design (representations, pipeline stages,
-pointers, arrays, options, closures) and its known limitations.
+pointers, arrays, options, closures) and its known limitations, and
+`docs/src/10-errors.tex` for the catalogue of what the checker rejects.
 
 ## Language subset supported (native target)
 
@@ -43,7 +44,9 @@ are inferred), `if`/`else`, `while`, `for`, `for x in lo..hi`, `foreach`,
 `b"..."`/`c'a'` byte-string and byte literals, `a[lo:hi]` slices and
 `a[lo:hi] = b` slice assignment. Top-level `def`s are hoisted; a nested
 `def` that captures is closure-converted. Imports are spliced
-inline (no runtime maps); see `NATIVE.md` for the rejection list and why.
+inline (no runtime maps). `&a` on a whole array (either kind) is
+rejected — write `&a[i]`; see `NATIVE.md` for the backend design and
+`docs/src/10-errors.tex` for the rejection list.
 
 Also: `c ? a : b`; `print(a, b, ...)`; a block whose last statement ends
 in `;` is void (and `{}` is a legal void block); default parameter values

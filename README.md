@@ -9,7 +9,8 @@ machine code.
 ```console
 $ make            # builds ./cycc, the C copy of the compiler
 $ make ycc        # builds ./ycc and verifies it against the reference
-$ ./ycc test/y/examples/helloworld.y -o hello && ./hello
+$ printf 'print("hello, world");\n' > /tmp/hello.y
+$ ./ycc /tmp/hello.y -o /tmp/hello && /tmp/hello
 hello, world
 ```
 
@@ -33,7 +34,7 @@ let ys = xs + [11];   // a NEW array; xs untouched
 
 // the target of an assignment family is evaluated exactly once
 let grid = [[1, 2], [3, 4]];
-let f() -> long { print("called"); 0 };
+let f = def() -> long { print("called"); 0 };
 grid[f()] += 1;       // f() runs ONE time
 
 // records and arrays are reference values
@@ -62,7 +63,11 @@ ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
   -g           add a symbol table and section headers so perf, gdb and
                valgrind name the functions (the loaded code is unchanged)
   --no-exec    omit exec() -- the binary cannot reach a shell
+  -h, --help   show this text and exit
 ```
+
+FILE is required: with no input file `ycc` exits 1 with
+`error: no input file (see ycc -h)`.
 
 `./cycc` takes exactly the same flags — it is the same compiler.
 

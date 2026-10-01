@@ -39,9 +39,10 @@ same semantics.
 - `make test` runs everything: the port gate + all `test/sh/*.sh`
   suites. `./test/sh/run_all.sh [suite ...]` runs a subset.
 - `make test-compile` — tiny smoke test (both compilers, one example).
-- Compiler profiling: `./ycc --time` prints a per-phase table (elapsed
-  ms + heap bytes + counters) to **stderr**. Y-level builtins:
-  `clock_us()`, `heap_used()`, `eputs(v)`.
+- Compiler profiling: `./ycc --time file.y` prints a per-phase table
+  (elapsed ms + heap KB + counters) to **stderr**. It still needs an
+  input file — `ycc` with no FILE is the error `no input file`. Y-level
+  builtins: `clock_us()`, `heap_used()`, `eputs(v)`.
 - Program profiling/debugging: `./ycc -g` adds a symbol table and
   section headers (code and addresses unchanged), so the standard tools
   name functions: `perf record`/`report` (on WSL run
@@ -58,11 +59,12 @@ Twelve suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, identical program behavior). `test_native.sh`,
-`test_native_examples.sh` and `test_debug.sh` drive the built `./ycc`
-itself, so they skip when it is missing.
+`test_native_examples.sh`, `test_debug.sh`, `test_ycc.sh` and
+`test_fixpoint.sh` drive the built `./ycc` itself, so `run_all.sh` skips
+those **five** when it is missing (`make test-fast`).
 
-- `test_port.sh` [port] — the port gate: every `test/y/**.y` (and the
-  compiler sources themselves) compile to byte-identical binaries with
+- `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
+  `src/y/ycc.y` itself) compile to byte-identical binaries with
   `cycc` and the reference `ycc`.
 - `test_native.sh` [native] — `test/y/native/*.y`: `t*` assert
   stdout/exit (`.expected`/`.exit`, stdin from `.stdin`), `e*` assert
@@ -119,8 +121,9 @@ decided**. Never merge one on taste:
 3. **Build both sides**: `make ycc` on master, `cp ycc /tmp/ycc-base`,
    then `make ycc` on the branch and `cp ycc /tmp/ycc-new`.
 4. **Bench**: `bench/compare.sh /tmp/ycc-base /tmp/ycc-new` — scores the
-   two builds (100 = unchanged), per-benchmark deltas for compile time,
-   run time, binary size, asm size; then callgrind instruction counts
+   two builds (100 = unchanged) over compile time, run time and binary
+   size (asm bytes/lines are shown per benchmark but not scored); then
+   callgrind instruction counts
    per function (`-g` builds, needs valgrind). Keep both binaries on the
    same filesystem: under WSL a
    binary run from `/mnt/c` pages in through drvfs and measured ~30%
@@ -178,7 +181,9 @@ code calls it by fixed label.
 
 ## Array operators (the language's rules)
 
-- `arr + arr2` → a NEW array, `arr1 ++ arr2` — the operands untouched.
+- `arr + arr2` → a NEW array — the operands untouched. (There is no
+  `++` concatenation operator; `++` is increment only, and on an array
+  it is the error `'++' needs a number target`.)
   `arr + elem` / `elem + arr` → a new array with one element added
   (element types must match). An array **is** an element when the other
   side holds arrays of its type: `[[T]] + [T]` appends it whole and
