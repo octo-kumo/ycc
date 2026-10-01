@@ -1731,7 +1731,8 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         } else if (name == "eputs") {
             { k: "tvoid" }
         } else if (name == "self") {
-            // the declared return type; an inferred one stays unknown here
+            // the function's return type; one the checker could not infer
+            // stays unknown here
             let sft = cur_fn_type(st);
             let sret = sft.ret;
             if (sret.k == "tnone") { { k: "tunk" } } else { sret }
@@ -3312,8 +3313,9 @@ def gen_as(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
 };
 
 // The type of the function being emitted: emit_one_fn records it as a
-// nameless "fnty" entry (declared parameter types and declared return
-// type, tnone when `-> T` is omitted). infer_fn_ret's scope has none.
+// nameless "fnty" entry (declared parameter types; the return type as
+// declared or as the checker inferred it, tnone when it could not --
+// see types.y set_inferred_ret). infer_fn_ret's scope has none.
 def cur_fn_type(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }) -> { k: str } {
     let env = st.env;
     let i = len(env) - 1;
@@ -5923,8 +5925,8 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     };
     // The names nested functions capture (see box_names / box_bound).
     f = env_define(f, "", "frame", 0, "", { k: "tnone" });
-    // This function's declared type, for the conversions at its returns
-    // and its self calls (cur_fn_type).
+    // This function's type, for the conversions at its returns and its
+    // self calls (cur_fn_type).
     f = env_define(f, "", "fnty", 0, "", { k: "tfunc", args: func.ptypes, ret: func.ret });
     let bnames = box_names(func);
     let bi = 0;
@@ -6054,9 +6056,10 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 };
 
 // Build a tfunc type from a func node (params have annotations — checked).
-// Return type of a function whose `-> T` was omitted: the type of its
-// body's tail, inferred in a scope holding every known def plus the
-// params. types.y does the same for checking; the emitter needs it too,
+// Return type of a function whose `-> T` was omitted and which the checker
+// could not type either (types.y records every other inferred return type
+// in the node: set_inferred_ret): the type of its body's tail, inferred in
+// a scope holding every known def plus the params. The emitter needs one,
 // because a call's result type decides e.g. whether `+` must stringify.
 def infer_fn_ret(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, func) -> { k: str } {
     let f = { out: [], rodata: st.rodata, uid: st.uid,

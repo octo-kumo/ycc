@@ -2,15 +2,6 @@
 
 ## Not done
 
-- **`return` is unchecked when the return type is inferred.** Without a
-  `->` annotation the checker types each `return e` against the unknown
-  type, and never relates it to the type inferred from the body's
-  trailing value: `def f(c: bool) { if (c) { return 1.5; }; 2 }` makes
-  `f(true)` print 4609434218613702656 (the double's bits as a long),
-  `return "s"` there yields an address, and `return 1` in a function
-  whose tail is `2.5` prints 0.000000 (no conversion). Every `return`
-  must conform to the inferred type, and convert to it, as under a
-  declared one.
 - **Cross-module duplicate definitions.** `find_dup` compares names after
   rename has made them unique, so it never fires: an importer's
   `def helper` silently replaces an imported module's own `helper`, and
@@ -42,6 +33,26 @@ kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
 
+- **Inferred return types.** Without `->`, the checker typed each
+  `return e` against the unknown type and never related it to the type it
+  inferred from the body's trailing value. The emitter then re-inferred
+  the type from the tail expression alone, which cannot see the body's
+  `let`s. So `def f(c: bool) { if (c) { return 1.5; }; 2 }` made
+  `f(true)` print the double's bits, `def g() { let y = 0.5; y }` printed
+  4602678819172646912, and `1 + s()` with a string-local tail printed an
+  address. Now the checker notes every `return` of an inferred def and
+  checks it against the inferred type once the body is done. A `return`
+  converts like any store (`return 1` under a `2.5` tail gives 1.0), and a
+  valued `return` in a def that ends in a statement (void) is an error
+  (`e131`). When the tail is a `self` call, the first `return` with a
+  value decides; an `if` arm of unknown type takes the other arm's. The
+  checker records the inferred type in the def node, where `-> T` would
+  be, so the emitter types calls, `self` and returns as the checker does.
+  `t133` covers 19 cases; the old compiler got 14 of them wrong. Every
+  other test program and benchmark compiles to the same binary as before.
+  Two legacy `test/y/ycc` fixtures that were already rejected now list
+  different follow-on errors. Self-compile: 17.3087 → 17.3089 G
+  instructions (+0.001%), heap +37 KB of 809 MB.
 - **Implicit numeric conversions.** The checker admitted long→float,
   byte→float, byte→long and long→byte at annotated positions, but the
   emitter converted only inside float arithmetic: `let g: float = 3`

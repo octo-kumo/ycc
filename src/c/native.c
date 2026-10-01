@@ -2492,7 +2492,8 @@ Yv *infer_call(Yv *st, Yv *node) {
         } else if (ys_eq_lit(name, "eputs")) {
             return yr(1, "k", ys("tvoid"));
         } else if (ys_eq_lit(name, "self")) {
-            /* The declared return type; an inferred one stays unknown here. */
+            /* The function's return type; one the checker could not infer
+             * stays unknown here. */
             Yv *sft = cur_fn_type(st);
             Yv *sret = yr_get(sft, "ret");
             if (ys_eq_lit(yr_get(sret, "k"), "tnone")) {
@@ -4262,8 +4263,9 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want) {
 }
 
 /* The type of the function being emitted: emit_one_fn records it as a
- * nameless "fnty" entry (declared parameter types and declared return
- * type, tnone when `-> T` is omitted). infer_fn_ret's scope has none. */
+ * nameless "fnty" entry (declared parameter types; the return type as
+ * declared or as the checker inferred it, tnone when it could not --
+ * see types.y set_inferred_ret). infer_fn_ret's scope has none. */
 Yv *cur_fn_type(Yv *st) {
     Yv *env = yr_get(st, "env");
     long i = yv_len(env) - 1;
@@ -7404,7 +7406,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     }
     /* The names nested functions capture (see box_names / box_bound). */
     f = env_define(f, ys(""), ys("frame"), 0, ys(""), yr(1, "k", ys("tnone")));
-    /* This function's declared type, for conversions at returns and self calls. */
+    /* This function's type, for conversions at returns and self calls. */
     f = env_define(f, ys(""), ys("fnty"), 0, ys(""),
                    yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"),
                        "ret", yr_get(func, "ret")));
@@ -7561,9 +7563,10 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
 }
 
 /* Build a tfunc type from a func node (params have annotations — checked).
- * Return type of a function whose `-> T` was omitted: the type of its
- * body's tail, inferred in a scope holding every known def plus the
- * params. types.y does the same for checking; the emitter needs it too,
+ * Return type of a function whose `-> T` was omitted and which the checker
+ * could not type either (types.y records every other inferred return type
+ * in the node: set_inferred_ret): the type of its body's tail, inferred in
+ * a scope holding every known def plus the params. The emitter needs one,
  * because a call's result type decides e.g. whether `+` must stringify. */
 Yv *infer_fn_ret(Yv *st, Yv *func) {
     Yv *f = yr(11, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",

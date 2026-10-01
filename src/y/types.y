@@ -1124,7 +1124,11 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             let e = typeof_expr(st, node.els);
             st = e.st;
             if (teq(t.typ, e.typ)) {
-                { typ: t.typ, st: st }
+                // An arm of unknown type -- typically a self call, whose
+                // type is the one being inferred -- takes the other's.
+                let tt = t.typ;
+                let et = e.typ;
+                if (tt.k == "tunk" && et.k != "tnone") { { typ: et, st: st } } else { { typ: tt, st: st } }
             } else {
                 // VOID law: arms that disagree on a type (a value arm vs a
                 // statement arm, or two different values) make the whole
@@ -1238,12 +1242,18 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             { typ: t_unk(), st: st }
         } else {
             let r = typeof_expr(st, node.e);
-            st = expect_type(r.st, r.typ, st.ret, "'return'", node.line, node.col);
-            // An inferred return type (tunk while the body is checked)
-            // takes the returned value's type: a bare `return;` returns
-            // nothing, so it makes the def void.
             let rk: str = st.ret.k;
-            if (rk == "tunk") { { typ: r.typ, st: st } } else { { typ: st.ret, st: st } }
+            if (rk == "tinfer") {
+                // The def's return type is still being inferred: note the
+                // value's type, which typeof_def checks once the body's
+                // trailing type is known. A bare `return;` returns nothing,
+                // so as the body's tail it makes the def void.
+                ret_note(st.ret, r.typ, node.line, node.col);
+                { typ: r.typ, st: r.st }
+            } else {
+                st = expect_type(r.st, r.typ, st.ret, "'return'", node.line, node.col);
+                if (rk == "tunk") { { typ: r.typ, st: st } } else { { typ: st.ret, st: st } }
+            }
         }
     } else if (k == "rec") {
         // Record literal { k: v, ... }: every value checked, the type is a
@@ -2927,6 +2937,27 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
     }
 };
 
+// A `return` in a def whose return type is still being inferred: its type
+// and position go into the marker typeof_def put in st.ret (`rl`, a record
+// shared by reference), to be checked once the body's type is known.
+def ret_note(rl, typ, line: long, col: long) -> long {
+    let rets: [{ typ: { k: str }, line: long, col: long }] = rl.rets;
+    rets += { typ: typ, line: line, col: col };
+    0
+};
+
+// The inferred return type is recorded in the def node, where `-> T`
+// would be: the emitter then types calls, `self` and every `return` as
+// the checker did, instead of re-inferring from the trailing expression
+// alone (which cannot see the body's locals). A def node starts
+// { k, params, ptypes, ret, ... } (parser.y, rename.y); this alias is
+// that prefix, so `ret` is a static field.
+def set_inferred_ret(func, ret) -> long {
+    let fnode: { k: str, params: [str], ptypes: [{ k: str }], ret: { k: str } } = func;
+    fnode.ret = ret;
+    0
+};
+
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
@@ -2967,6 +2998,11 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
         };
         let ret = func.ret;
         let ret_inferred = false;
+        // An inferred def's `return`s are checked once its type is known:
+        // while the body is checked, st.ret is a marker that notes each one
+        // (ret_note) in `rets`.
+        let rets: [{ typ: { k: str }, line: long, col: long }] = [];
+        let body_ret = ret;
         if (ret.k == "tnone") {
             // OPTIONAL ANNOTATIONS + inference v1: the return type comes
             // from the body's tail value once the body has been checked.
@@ -2974,6 +3010,7 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
             // and forward calls still unify.
             ret_inferred = true;
             ret = t_unk();
+            body_ret = { k: "tinfer", rets: rets };
             0
         } else { 0; };
         let ft = { k: "tfunc", args: args, ret: ret };
@@ -2992,7 +3029,7 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
             j = j + 1;
         };
         st = st_self(st, ft);
-        st = st_ret(st, ret);
+        st = st_ret(st, body_ret);
         let b = typeof_block(st, func.body);
         st = b.st;
         if (ret_inferred) {
@@ -3003,8 +3040,37 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
                 br = t_unk();
                 0
             } else { 0; };
+            // A trailing value of unknown type -- typically a self call,
+            // whose type is the one being inferred -- leaves the type to the
+            // first `return` that knows its own.
+            let rsrc = "the end of the body";
+            let ri = 0;
+            while (ri < len(rets)) {
+                let rn = rets[ri];
+                let rt = rn.typ;
+                if (br.k == "tunk" && rt.k != "tunk" && rt.k != "tnone") {
+                    br = rt;
+                    rsrc = "the first 'return'";
+                    0
+                } else { 0; };
+                ri = ri + 1;
+            };
+            // Every `return` must conform to it, as to a written type.
+            ri = 0;
+            while (ri < len(rets)) {
+                let rn = rets[ri];
+                if (!tcompat(rn.typ, br)) {
+                    st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ")", rn.line, rn.col);
+                    0
+                } else { 0; };
+                ri = ri + 1;
+            };
             ft = { k: "tfunc", args: args, ret: br };
             st = st_bind(st, name, ft, "func");
+            if (br.k != "tunk") {
+                set_inferred_ret(func, br);
+                0
+            } else { 0; };
             0
         } else { 0; };
         if (!(ret_inferred)) {

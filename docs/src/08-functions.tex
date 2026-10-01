@@ -92,9 +92,10 @@ if (line == none) { print("eof"); } else { print(line! + "!"); };
 
 A \ic{def} whose result is not a value is \ic{void}. Write \ic{-> void}
 to say so: the body's trailing value is then discarded, and \ic{return}
-takes no value. An unannotated \ic{def} whose only exits are bare
-\ic{return;} statements (or whose body ends in a statement) infers
-\ic{void}. A void call is a statement; using it as a value --- binding
+takes no value. An unannotated \ic{def} whose body ends in a statement
+infers \ic{void}, and then every \ic{return} in it must be bare: a
+\ic{return 5;} there is an error, and so is a bare \ic{return;} in a body
+that ends in a value. A void call is a statement; using it as a value --- binding
 it, printing it, passing it as an argument --- is a compile error:
 
 \begin{lstlisting}

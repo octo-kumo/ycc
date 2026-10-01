@@ -109,8 +109,16 @@ passed, stored and called); see Section~\ref{sec:functions}.
 \item \ic{def} parameter annotations are \textbf{recommended}; a missing
   one takes the unknown type and never cascades a second diagnostic
   (Section~\ref{sec:poison}).
-\item Return types are inferred from the body when omitted; when written,
-  every \ic{return} and the body's trailing value must conform.
+\item Return types are inferred from the body when omitted: the type of
+  its trailing value, or \ic{void} when it ends in a statement; when the
+  trailing value's type is not known yet --- it is a \ic{self} call, whose
+  type is the one being inferred --- the first \ic{return} that gives a
+  value decides. Written or
+  inferred, every \ic{return} and the body's trailing value must conform,
+  converting as any store does (Section~\ref{sec:conversions}):
+  \ic{def half(c: bool) \{ if (c) \{ return 1; \}; 2.5 \}} returns
+  \ic{1.0} for \ic{true}, and a \ic{return 1.5} in a body that ends in a
+  \ic{long} is an error.
 \item \ic{let} annotations are optional and checked; an annotated
   \emph{array literal} \emph{adopts} the annotated element type:
   \ic{let b: [byte] = [104, 105];} packs those elements one byte each.
@@ -138,8 +146,9 @@ Apart from these, nothing converts: there is no cast syntax.
 
 A value converts where it is stored under a known type: an annotated
 \ic{let}; an assignment to a variable, element, field, map entry or
-pointee; an argument; a \ic{return} or trailing value under a declared
-return type; an element of an array literal; and the element that
+pointee; an argument; a \ic{return} or trailing value under the
+function's return type, declared or inferred; an element of an array
+literal; and the element that
 \ic{+=}, \ic{*=} or \ic{::} adds. Array \ic{+} and \ic{+=} with an
 array operand convert element by element into the left operand's
 element type: \ic{[0.5] + [7, 8]} is \ic{[0.5, 7.0, 8.0]}. Arithmetic

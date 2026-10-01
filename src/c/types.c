@@ -104,6 +104,8 @@ static Yv *typeof_call(Yv *st, Yv *node);
 static Yv *typeof_block(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
 static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col);
+static long ret_note(Yv *rl, Yv *typ, long line, long col);
+static long set_inferred_ret(Yv *func, Yv *ret);
 static Yv *st_fdepth(Yv *st, long d);
 static Yv *def_sig(Yv *name, Yv *func);
 static Yv *tstr_union(Yv *ts, Yv *sep);
@@ -1697,7 +1699,11 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             Yv *e = typeof_expr(st, yr_get(node, "els"));
             st = yr_get(e, "st");
             if (teq(yr_get(t, "typ"), yr_get(e, "typ"))) {
-                return yr(2, "typ", yr_get(t, "typ"), "st", st);
+                // An arm of unknown type -- typically a self call, whose
+                // type is the one being inferred -- takes the other's.
+                Yv *tt = yr_get(t, "typ");
+                Yv *et = yr_get(e, "typ");
+                if (ys_eq_lit(yr_get(tt, "k"), "tunk") && !ys_eq_lit(yr_get(et, "k"), "tnone")) { return yr(2, "typ", et, "st", st); } else { return yr(2, "typ", tt, "st", st); }
             } else {
                 // VOID law: arms that disagree on a type (a value arm vs a
                 // statement arm, or two different values) make the whole
@@ -1869,15 +1875,22 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             return yr(2, "typ", t_unk(), "st", st);
         } else {
             Yv *r = typeof_expr(st, yr_get(node, "e"));
-            st = expect_type(yr_get(r, "st"), yr_get(r, "typ"),
-                             yr_get(st, "ret"), ys("'return'"),
-                             yv_l(yr_get(node, "line")),
-                             yv_l(yr_get(node, "col")));
-            // An inferred return type (tunk while the body is checked)
-            // takes the returned value's type: a bare `return;` returns
-            // nothing, so it makes the def void.
             Yv *rk = yr_get(yr_get(st, "ret"), "k");
-            if (ys_eq_lit(rk, "tunk")) { return yr(2, "typ", yr_get(r, "typ"), "st", st); } else { return yr(2, "typ", yr_get(st, "ret"), "st", st); }
+            if (ys_eq_lit(rk, "tinfer")) {
+                // The def's return type is still being inferred: note the
+                // value's type, which typeof_def checks once the body's
+                // trailing type is known. A bare `return;` returns nothing,
+                // so as the body's tail it makes the def void.
+                ret_note(yr_get(st, "ret"), yr_get(r, "typ"),
+                         yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr_get(r, "typ"), "st", yr_get(r, "st"));
+            } else {
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"),
+                                 yr_get(st, "ret"), ys("'return'"),
+                                 yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col")));
+                if (ys_eq_lit(rk, "tunk")) { return yr(2, "typ", yr_get(r, "typ"), "st", st); } else { return yr(2, "typ", yr_get(st, "ret"), "st", st); }
+            }
         }
     } else if (ys_eq_lit(k, "rec")) {
         // Record literal { k: v, ... }: every value checked, the type is a
@@ -4301,6 +4314,26 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
     }
 }
 
+// A `return` in a def whose return type is still being inferred: its type
+// and position go into the marker typeof_def put in st.ret (`rl`, a record
+// shared by reference), to be checked once the body's type is known.
+static long ret_note(Yv *rl, Yv *typ, long line, long col) {
+    Yv *rets = yr_get(rl, "rets");
+    ya_push(rets, yr(3, "typ", typ, "line", yv_long(line), "col", yv_long(col)));
+    return 0;
+}
+
+// The inferred return type is recorded in the def node, where `-> T`
+// would be: the emitter then types calls, `self` and every `return` as
+// the checker did, instead of re-inferring from the trailing expression
+// alone (which cannot see the body's locals). A def node starts
+// { k, params, ptypes, ret, ... } (parser.y, rename.y); this alias is
+// that prefix, so `ret` is a static field.
+static long set_inferred_ret(Yv *func, Yv *ret) {
+    yr_set(func, "ret", ret);
+    return 0;
+}
+
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
@@ -4350,6 +4383,11 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         }
         Yv *ret = yr_get(func, "ret");
         int ret_inferred = 0;
+        // An inferred def's `return`s are checked once its type is known:
+        // while the body is checked, st.ret is a marker that notes each one
+        // (ret_note) in `rets`.
+        Yv *rets = yav(0);
+        Yv *body_ret = ret;
         if (ys_eq_lit(yr_get(ret, "k"), "tnone")) {
             // OPTIONAL ANNOTATIONS + inference v1: the return type comes
             // from the body's tail value once the body has been checked.
@@ -4357,6 +4395,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             // and forward calls still unify.
             ret_inferred = 1;
             ret = t_unk();
+            body_ret = yr(2, "k", ys("tinfer"), "rets", rets);
             ;
         } else {
             ;
@@ -4377,7 +4416,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             j = j + 1;
         }
         st = st_self(st, ft);
-        st = st_ret(st, ret);
+        st = st_ret(st, body_ret);
         Yv *b = typeof_block(st, yr_get(func, "body"));
         st = yr_get(b, "st");
         if (ret_inferred) {
@@ -4390,8 +4429,50 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             } else {
                 ;
             }
+            // A trailing value of unknown type -- typically a self call,
+            // whose type is the one being inferred -- leaves the type to the
+            // first `return` that knows its own.
+            Yv *rsrc = ys("the end of the body");
+            long ri = 0;
+            while (ri < yv_len(rets)) {
+                Yv *rn = ya_get(rets, ri);
+                Yv *rt = yr_get(rn, "typ");
+                if (ys_eq_lit(yr_get(br, "k"), "tunk") && !ys_eq_lit(yr_get(rt, "k"), "tunk") && !ys_eq_lit(yr_get(rt, "k"), "tnone")) {
+                    br = rt;
+                    rsrc = ys("the first 'return'");
+                    ;
+                } else {
+                    ;
+                }
+                ri = ri + 1;
+            }
+            // Every `return` must conform to it, as to a written type.
+            ri = 0;
+            while (ri < yv_len(rets)) {
+                Yv *rn = ya_get(rets, ri);
+                if (!tcompat(yr_get(rn, "typ"), br)) {
+                    st = fail(st,
+                              ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'return': expected "), tstr(br)),
+                                                                 ys(", got ")),
+                                                          tstr(yr_get(rn, "typ"))),
+                                                   ys(" (the return type is inferred from ")),
+                                            rsrc),
+                                     ys(")")),
+                              yv_l(yr_get(rn, "line")), yv_l(yr_get(rn, "col")));
+                    ;
+                } else {
+                    ;
+                }
+                ri = ri + 1;
+            }
             ft = yr(3, "k", ys("tfunc"), "args", args, "ret", br);
             st = st_bind(st, name, ft, ys("func"));
+            if (!ys_eq_lit(yr_get(br, "k"), "tunk")) {
+                set_inferred_ret(func, br);
+                ;
+            } else {
+                ;
+            }
             ;
         } else {
             ;
