@@ -84,10 +84,10 @@ informative on `self`.
 
 `bench/profile.sh BASE NEW` — the last section of `compare.sh`
 (`BENCH_PROFILE=0` leaves it out; `make check` runs it beside the tests)
-— builds every benchmark with **`ycc -g`** (symbol table) on both sides,
+— builds every benchmark with **`ycc -g`** (symbols and line info) on both sides,
 runs each once under valgrind's **callgrind**, all side by side (`YJOBS`
-at a time, default every CPU), and joins the two `callgrind_annotate`
-tables by function name — instructions executed in each function's own
+at a time, default every CPU), and joins the two `callgrind_annotate
+--auto=no` tables by function name — instructions executed in each function's own
 body (self Ir):
 
 ```

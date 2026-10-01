@@ -2,12 +2,6 @@
 
 ## Not done
 
-- **`-g` has no line information.** It writes a symbol table, so tools name
-  functions; DWARF (`.debug_line` + a minimal `.debug_info`) would let
-  `perf annotate`, gdb and addr2line show source lines too. The map from
-  the spliced program's lines back to files exists (the origin map,
-  `native_resolve_x`); what is missing is line markers from the emitter
-  through the assembler.
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
 
 
@@ -17,6 +11,19 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **`-g` had no line information.** It now also writes DWARF 4: a
+  `.debug_line` row per statement, function entry, `else if` test and
+  loop step, at the file and line it was written on (imports keep their
+  own names), plus a minimal `.debug_info`/`.debug_abbrev`. native.y puts
+  GNU as's `.file`/`.loc` directives in the asm text (so `-S -g` still
+  assembles with `as`), asm.y records their offsets, the new `dwarf.y`
+  encodes them. gdb breaks and steps by `file.y:N` and backtraces with
+  file:line; addr2line, `objdump -dl`, `perf annotate` and
+  `callgrind_annotate` show source lines. The loaded bytes are unchanged
+  (checked over the whole corpus) and plain builds are byte-identical.
+  ycc itself: 12,047 rows, `.debug_line` 30,798 bytes (+3.1% on the `-g`
+  binary), `-g` compile 2.42 → 2.58 s. `test_debug.sh` gained 10 checks.
 
 - **`s += x` was quadratic in memory.** Each append copied the whole
   string, and nothing is freed: 10,000 one-byte appends allocated 50 MB.

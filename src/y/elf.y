@@ -5,11 +5,11 @@
 // A program with globals gets a second PT_LOAD (read+write, no file bytes):
 // the zeroed .bss, on the page after the file mapping; its PHDR makes the
 // headers 176 bytes.
-// `ycc -g` appends [.symtab][.strtab][.shstrtab][section headers] AFTER
-// the loaded image (see elf_debug), and backs the first bytes of the
-// .bss with zeros from the file (for valgrind): the code, rodata and
-// every address stay the same, so the program runs the same bytes either
-// way.
+// `ycc -g` appends [.symtab][.strtab][.shstrtab][.debug_*][section
+// headers] AFTER the loaded image (see elf_debug), and backs the first
+// bytes of the .bss with zeros from the file (for valgrind): the code,
+// rodata and every address stay the same, so the program runs the same
+// bytes either way.
 //
 // Binary data flows through packed [byte] arrays; the driver writes it
 // directly so embedded NUL bytes are preserved.
@@ -35,7 +35,7 @@ def elf_bss_from_ro(ro_len: long, bss_len: long) -> long {
     elf_ro_total(ro_len) + 4096 - elf_code_off(bss_len)
 };
 
-def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms: [{ name: str, sec: long, off: long, size: long }]) -> [byte] {
+def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms: [{ name: str, sec: long, off: long, size: long }], dsecs: [{ name: str, data: [byte] }]) -> [byte] {
     let code_off = elf_code_off(bss_len);
     let base = 4194304;
     // Pad the code to a page so rodata starts page-aligned; pad rodata tail
@@ -60,7 +60,7 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
     if (rotrail != 0) { ropad = 4096 - rotrail; }
     let total = code_off + codesz + codepad + rosz + ropad;
     let entry = base + code_off + entry_off;
-    let dbg = elf_debug(code_off, codesz, codepad, len(rodata), total, bss_len, syms);
+    let dbg = elf_debug(code_off, codesz, codepad, len(rodata), total, bss_len, syms, dsecs);
     // EHDR
     let header: [byte] = [127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     out = push_bytes(out, header);
@@ -122,9 +122,10 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
 };
 
 // -g: the symbol table and section headers, as the bytes that follow the
-// loaded image: [.bss head][.symtab][.strtab][.shstrtab][pad to 8]
+// loaded image: [.bss head][.symtab][.strtab][.shstrtab][dsecs][pad to 8]
 // [section headers]. Sections: 0 null, 1 .text, 2 .rodata, 3 .bss (only
-// with a .bss), then .symtab, .strtab, .shstrtab. Symbols are local
+// with a .bss), then .symtab, .strtab, .shstrtab, then dsecs (dwarf.y's
+// .debug_* sections: no address, no flags) in order. Symbols are local
 // (STB_LOCAL, listed first, as ELF requires) except `_start`, the one
 // global; text symbols are STT_FUNC, .bss ones STT_OBJECT. No symbols:
 // no bytes, no headers — the plain build is unchanged.
@@ -134,7 +135,7 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
 // R+W PHDR's p_offset/p_filesz), at the page boundary past the image
 // (p_offset must share p_vaddr's page offset). The loader zeroes the rest
 // of that page, so memory holds the same zeros as without -g.
-def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: long, bss_len: long, syms: [{ name: str, sec: long, off: long, size: long }]) -> { bytes: [byte], shoff: long, shnum: long, shstrndx: long, bss_foff: long, bss_fsz: long } {
+def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: long, bss_len: long, syms: [{ name: str, sec: long, off: long, size: long }], dsecs: [{ name: str, data: [byte] }]) -> { bytes: [byte], shoff: long, shnum: long, shstrndx: long, bss_foff: long, bss_fsz: long } {
     if (len(syms) == 0) {
         let none_b: [byte] = [];
         { bytes: none_b, shoff: 0, shnum: 0, shstrndx: 0, bss_foff: 0, bss_fsz: 0 }
@@ -185,6 +186,12 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         shstr = push_cstr(shstr, ".strtab");
         let n_shs = len(shstr);
         shstr = push_cstr(shstr, ".shstrtab");
+        let dnames: [long] = [];
+        foreach (ds in dsecs) {
+            dnames += len(shstr);
+            shstr = push_cstr(shstr, ds.name);
+            0;
+        };
         let blob: [byte] = [];
         let bss_foff = 0;
         let bss_fsz = 0;
@@ -204,6 +211,12 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         blob += symtab;
         blob += strtab;
         blob += shstr;
+        let doffs: [long] = [];
+        foreach (ds in dsecs) {
+            doffs += total + len(blob);
+            blob += ds.data;
+            0;
+        };
         let pad = (8 - len(blob) % 8) % 8;
         blob = push_zeros(blob, pad);
         let shoff = total + len(blob);
@@ -218,7 +231,14 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         blob = push_shdr(blob, n_sym, 2, 0, 0, symtab_off, len(symtab), symtab_idx + 1, nlocal, 8, 24);
         blob = push_shdr(blob, n_str, 3, 0, 0, strtab_off, len(strtab), 0, 0, 1, 0);
         blob = push_shdr(blob, n_shs, 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0);
-        { bytes: blob, shoff: shoff, shnum: symtab_idx + 3, shstrndx: symtab_idx + 2, bss_foff: bss_foff, bss_fsz: bss_fsz }
+        let di = 0;
+        while (di < len(dsecs)) {
+            let ds = dsecs[di];
+            let dd = ds.data;
+            blob = push_shdr(blob, dnames[di], 1, 0, 0, doffs[di], len(dd), 0, 0, 1, 0);
+            di = di + 1;
+        };
+        { bytes: blob, shoff: shoff, shnum: symtab_idx + 3 + len(dsecs), shstrndx: symtab_idx + 2, bss_foff: bss_foff, bss_fsz: bss_fsz }
     }
 };
 

@@ -39,6 +39,7 @@ requires byte-identical binaries).
 | `src/y/enc64.y`         | `src/c/enc64.c`       | base64/enc helpers                |
 | `src/y/asm.y`           | `src/c/asm.c`         | the assembler                     |
 | `src/y/elf.y`           | `src/c/elf.c`         | ELF writer                        |
+| `src/y/dwarf.y`         | `src/c/dwarf.c`       | `-g` DWARF line table             |
 | `src/y/ycc.y`           | `src/c/ycc.c`         | driver + `main`                   |
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
 | `src/y/std/rt.y`, `prelude.y`, `exec.y` | (stay Y)  | runtime text spliced into programs: native.y's `embed`, the C copy's `Y_EMBED` (rule 10) |

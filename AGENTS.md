@@ -85,14 +85,16 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
   (elapsed ms + heap KB + counters) to **stderr**. It still needs an
   input file — `ycc` with no FILE is the error `no input file`. Y-level
   builtins: `clock_us()`, `heap_used()`, `eputs(v)`.
-- Program profiling/debugging: `./ycc -g` adds a symbol table and
-  section headers (code and addresses unchanged), so the standard tools
-  name functions: `perf record`/`report` (on WSL run
+- Program profiling/debugging: `./ycc -g` adds a symbol table, DWARF
+  line info and section headers (code and addresses unchanged), so the
+  standard tools name functions and source lines: `perf
+  record`/`report`/`annotate` (on WSL run
   `/usr/lib/linux-tools/*/perf` directly — the `/usr/bin/perf` wrapper
   refuses the kernel), `valgrind --tool=callgrind` + `callgrind_annotate`
   (exact instruction counts), `valgrind --tool=massif
   --pages-as-heap=yes` (the heap is `mmap`ed, not `malloc`), `gdb`
-  (`break fn`, `bt`), `nm`/`addr2line`, `strace -c`. No line info yet.
+  (`break fn`, `break file.y:N`, `next`/`step`, `bt` with file:line —
+  no variables), `nm`/`addr2line`/`objdump -dl`, `strace -c`.
 - Always feed `</dev/null` in scripts (some programs read stdin).
 
 ## Test suites (`test/sh/`)
@@ -145,8 +147,9 @@ very build was just compared (`make test`, `check`, `rebless` do);
   programs.
 - `test_debug.sh` [debug] — `ycc -g`: both compilers emit identical
   `-g` binaries, the program runs the same, code and rodata match the
-  plain build, and readelf/nm/addr2line (gdb and callgrind when
-  installed) see the functions and globals by name.
+  plain build, readelf/nm/addr2line (gdb and callgrind when installed)
+  see the functions and globals by name, and the line table maps code
+  to file:line (an import's too; `-S -g` assembles with GNU `as`).
 - `test_stdin_eof.sh` — stdin/EOF behavior.
 - `test_net.sh` [net] — the blocking `std/net` listeners over loopback:
   `test/y/net/` servers built by both compilers (identical binaries)
@@ -217,7 +220,8 @@ are exact.
 
 splice imports + std modules → strip namespaces → rename (uniquify) →
 typecheck (static, errors fatal) → hoist → tree shake → emit `.s` →
-`asm.y` assembles → `elf.y` writes a static ELF. `y_` is a **reserved
+`asm.y` assembles → `elf.y` writes a static ELF (`-g`: plus `dwarf.y`'s
+line table). `y_` is a **reserved
 prefix**: such a def is emitted under its bare name because generated
 code calls it by fixed label.
 
@@ -290,7 +294,8 @@ code calls it by fixed label.
 
 - `src/y/` — the Y compiler: `ycc.y` (driver), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `native.y` (emitter), `arch_x64.y`
-  (asm + prelude), `enc64.y`, `asm.y`, `elf.y`; `std/` (`rt.y` runtime
+  (asm + prelude), `enc64.y`, `asm.y`, `elf.y`, `dwarf.y` (`-g` line
+  info); `std/` (`rt.y` runtime
   in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string
   methods) — the four embedded into the compiler — and `io.y`, `net.y`,
   `struct.y`).

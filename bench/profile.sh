@@ -30,9 +30,10 @@ cd "$ROOT" || exit 2   # where imports of std modules resolve (src/y/std/)
 
 # ir_table <callgrind.out> — "function<TAB>Ir" lines, plus "TOTAL<TAB>Ir".
 # A row is "1,234 ( 5.67%)  file:function [object]"; recursion levels
-# (callgrind's name'2) fold into their function.
+# (callgrind's name'2) fold into their function. --auto=no: a -g build has
+# line info, and annotated source lines would look like rows.
 ir_table() {
-    callgrind_annotate --threshold=100 "$1" 2>/dev/null | awk -v q="'" '
+    callgrind_annotate --threshold=100 --auto=no "$1" 2>/dev/null | awk -v q="'" '
         /^ *[0-9,]+ +\( *[0-9.]+%\)/ {
             ir = $1; gsub(/,/, "", ir);
             fn = $0;

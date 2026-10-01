@@ -3,8 +3,9 @@
  * same names, same parameter order, same control flow.
  *
  * Usage (the driver, ycc.y):
- *   let r = emit_program(ast, imports, origin);  // { ok, asm, errors }
- *   // (imports and origin come from native_resolve_x)
+ *   let r = emit_program(ast, imports, origin, debug);  // { ok, asm, errors }
+ *   // (imports and origin come from native_resolve_x; debug is `-g`,
+ *   // which adds `.file`/`.loc` line markers -- see dbg_lines)
  *   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
  *
  * Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -69,6 +70,17 @@ Y_EMBED(RT_SRC, "src/y/std/rt.y")
 Y_EMBED(PRELUDE_SRC, "src/y/std/prelude.y")
 Y_EMBED(EXEC_SRC, "src/y/std/exec.y")
 Y_EMBED(STR_SRC, "src/y/std/str.y")
+
+/* `ycc -g` line markers, set by emit_program for each program. With
+ * dbg_lines on, the text opens with a `.file N "path"` per origin file
+ * and every statement (gen_loc_stmt) and function entry (emit_one_fn)
+ * gets a `.loc FILE LINE` before its code -- GNU as's own line-number
+ * directives, which asm.y turns into DWARF. dbg_file/dbg_line are the
+ * origin map's (native_resolve_x): the way back from a line of the
+ * spliced program to its file. Off, nothing is emitted. */
+static int dbg_lines;
+static Yv *dbg_file;
+static Yv *dbg_line;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
@@ -176,6 +188,11 @@ Yv *gen_sliceassign(Yv *st, Yv *node);
 Yv *gen_rectest_rax(Yv *st, Yv *names);
 Yv *gen_union_str_rax(Yv *st, Yv *t);
 int is_void_node(Yv *n);
+Yv *loc_dir(long ln);
+Yv *gen_loc_stmt(Yv *st, Yv *node);
+Yv *gen_loc_elif(Yv *st, Yv *els);
+Yv *gen_loc_loop(Yv *st, Yv *node);
+Yv *file_dirs(Yv *files);
 Yv *gen_un(Yv *st, Yv *node);
 Yv *gen_addr(Yv *st, Yv *node);
 Yv *gen_elem_addr(Yv *st, Yv *node);
@@ -365,7 +382,7 @@ int ret_omitted(Yv *func);
 Yv *fn_ptypes(Yv *func);
 int reads_any(Yv *func, Yv *names);
 Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
-Yv *emit_program(Yv *ast, Yv *imports, Yv *origin);
+Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug);
 
 /* ── native import resolution ───────────────────────────────────────────
  * An import is a COMPILE-TIME text splice, and both compilers splice the
@@ -5584,6 +5601,7 @@ Yv *gen_if(Yv *st, Yv *node) {
     if (yv_b(yr_get(node, "has_else"))) {
         st = emit(st, ys_cat(ys("    jmp "), yr_get(r2, "lbl")));
         st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+        st = gen_loc_elif(st, yr_get(node, "els"));
         st = gen(st, yr_get(node, "els"));
         return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
     } else {
@@ -5601,6 +5619,7 @@ Yv *gen_while(Yv *st, Yv *node) {
     st = emit(st, ys("    test %rax, %rax"));
     st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
     st = gen_discard(st, yr_get(node, "body"));
+    st = gen_loc_loop(st, node);
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
     return emit(st, ys("    xor %eax, %eax"));
@@ -5623,6 +5642,7 @@ Yv *gen_for(Yv *st, Yv *node) {
     st = emit(st, ys("    test %rax, %rax"));
     st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
     st = gen_discard(st, yr_get(node, "body"));
+    st = gen_loc_loop(st, node);
     st = gen(st, yr_get(node, "step"));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
@@ -5663,6 +5683,7 @@ Yv *gen_forrange(Yv *st, Yv *node) {
      * counter itself stays in its raw slot) */
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
+    st = gen_loc_loop(st, node);
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(voff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    inc %rax"));
@@ -5727,6 +5748,7 @@ Yv *gen_foreach(Yv *st, Yv *node) {
                          ys("(%rbp)")));
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
+    st = gen_loc_loop(st, node);
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    inc %rax"));
@@ -5824,11 +5846,13 @@ Yv *gen_tail(Yv *st, Yv *node) {
         }
         long ti = 0;
         while (ti < m - 1) {
+            st = gen_loc_stmt(st, ya_get(tl, ti));
             st = gen_stmt(st, ya_get(tl, ti));
             ti = ti + 1;
         }
         if (m > 0) {
             Yv *lastn = ya_get(tl, m - 1);
+            st = gen_loc_stmt(st, lastn);
             st = gen_tail(st, lastn);
             ;
         } else {
@@ -5849,6 +5873,7 @@ Yv *gen_tail(Yv *st, Yv *node) {
         if (yv_b(yr_get(node, "has_else"))) {
             st = emit(st, ys_cat(ys("    jmp "), lend));
             st = emit(st, ys_cat(lelse, ys(":")));
+            st = gen_loc_elif(st, yr_get(node, "els"));
             st = gen_tail(st, yr_get(node, "els"));
             return emit(st, ys_cat(lend, ys(":")));
         }
@@ -5877,6 +5902,7 @@ Yv *gen_block_as(Yv *st, Yv *node, int dropped) {
         }
         long i = 0;
         while (i < m) {
+            st = gen_loc_stmt(st, ya_get(stmts, i));
             if (dropped || i < yv_len(stmts) - 1) {
                 st = gen_stmt(st, ya_get(stmts, i));
                 ;
@@ -5892,6 +5918,83 @@ Yv *gen_block_as(Yv *st, Yv *node, int dropped) {
 
 int is_void_node(Yv *n) {
     return ys_eq_lit(yr_get(n, "k"), "void");
+}
+
+/* ── -g: line markers (see dbg_lines) ────────────────────────────────── */
+
+/* The marker for line `ln` of the spliced program: its origin file's
+ * `.file` number (the index + 1) and its line there, counted on past the
+ * end of the map like origin_at. Line 0 is DWARF's "no source line". */
+Yv *loc_dir(long ln) {
+    Yv *f = dbg_file;
+    Yv *l = dbg_line;
+    long n = yv_len(f);
+    if (ln < 1 || n == 0) {
+        return ys_cat(ys(".loc 1 "), ys_long(ln));
+    } else {
+        long k = ln;
+        if (k > n) { k = n; ; } else { ; };
+        long fid = yv_l(ya_get(f, k - 1));
+        long line = yv_l(ya_get(l, k - 1)) + ln - k;
+        return ys_cat(ys_cat(ys(".loc "), ys_long(fid + 1)),
+                      ys_cat(ys(" "), ys_long(line)));
+    }
+}
+
+/* A statement's marker, before its code. A bare `;` has no position (and
+ * no code). */
+Yv *gen_loc_stmt(Yv *st, Yv *node) {
+    if (dbg_lines) {
+        if (is_void_node(node)) {
+            return st;
+        } else {
+            return emit(st, loc_dir(yv_l(yr_get(node, "line"))));
+        }
+    } else {
+        return st;
+    }
+}
+
+/* An `else if` gets a marker of its own: its test would otherwise count
+ * as the last line of the branch before it. */
+Yv *gen_loc_elif(Yv *st, Yv *els) {
+    if (dbg_lines) {
+        Yv *k = yr_get(els, "k");
+        if (ys_eq_lit(k, "if")) {
+            return emit(st, loc_dir(yv_l(yr_get(els, "line"))));
+        } else {
+            return st;
+        }
+    } else {
+        return st;
+    }
+}
+
+/* A loop's back edge (its step, the counter's increment, the jump to the
+ * test) belongs to the loop's own line, not to the body's last one. */
+Yv *gen_loc_loop(Yv *st, Yv *node) {
+    if (dbg_lines) {
+        return emit(st, loc_dir(yv_l(yr_get(node, "line"))));
+    } else {
+        return st;
+    }
+}
+
+/* The `.file N "path"` table the markers number into: one per origin
+ * file, N = its index + 1. */
+Yv *file_dirs(Yv *files) {
+    Yv *pieces = yav(0);
+    long i = 0;
+    while (i < yv_len(files)) {
+        Yv *fname = ya_get(files, i);
+        Yv *piece = ys_cat(ys(".file "), ys_long(i + 1));
+        piece = ys_cat(piece, ys(" \""));
+        piece = ys_cat(piece, esc_asm(fname));
+        piece = ys_cat(piece, ys("\"\n"));
+        pieces = ya_push(pieces, piece);
+        i = i + 1;
+    }
+    return ys_join(pieces, ys(""));
 }
 
 /* Position of `name` in a record literal's merged field list, or -1. */
@@ -8225,6 +8328,17 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     long frame = arch_frame(yv_l(yr_get(f, "slots")));
     Yv *code = yav(0);
     code = ya_push(code, ys_cat(label, ys(":")));
+    /* -g: the prologue is the def's line; `_start` has none (line 0) */
+    if (dbg_lines) {
+        if (is_main) {
+            code = ya_push(code, loc_dir(0));
+            ;
+        } else {
+            code = ya_push(code, loc_dir(yv_l(yr_get(func, "line"))));
+            ;
+        }
+        ;
+    } else { ; };
     if (is_main) {
         if (want_argv) {
             /* _start prologue: at process entry %rsp -> [argc][argv0ptr]....
@@ -8682,7 +8796,10 @@ Yv *phase_end(Yv *times, Yv *name, long t0, long h0) {
 
 /* ── entry point ──────────────────────────────────────────────────────── */
 
-Yv *emit_program(Yv *ast, Yv *imports, Yv *origin) {
+Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
+    dbg_lines = debug;
+    dbg_file = yr_get(origin, "file");
+    dbg_line = yr_get(origin, "line");
     Yv *times = yav(0);
     long pt = clock_us();
     long ph = heap_used();
@@ -8909,6 +9026,10 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin) {
         /* `asm` is a C keyword (GNU basic asm) — the Y local is renamed
          * `asm_` here; it is a local name, not part of the API. */
         Yv *asm_ = arch_header();
+        if (dbg_lines) {
+            asm_ = ys_cat(file_dirs(yr_get(origin, "files")), asm_);
+            ;
+        } else { ; };
         Yv *prelude_text = shake_refs(arch_prelude(), body_refs);
         asm_ = ys_cat(ys_cat(asm_, arch_text()), prelude_text);
         asm_ = ys_cat(asm_, body_text);

@@ -1,13 +1,16 @@
 #!/bin/bash
-# test/sh/test_debug.sh — `ycc -g` (symbol table + section headers).
+# test/sh/test_debug.sh — `ycc -g` (symbol table, section headers and
+# DWARF line info).
 #
 # -g must not change what runs: the code, rodata and every address match
-# the plain build — it only appends .symtab/.strtab/.shstrtab and section
-# headers past the loaded image and backs the head of the .bss with file
-# zeros (valgrind needs a file-backed read+write mapping). Checks: both
+# the plain build — it only appends .symtab/.strtab/.shstrtab, the line
+# table (.debug_info/.debug_abbrev/.debug_line) and section headers past
+# the loaded image and backs the head of the .bss with file zeros
+# (valgrind needs a file-backed read+write mapping). Checks: both
 # compilers agree byte for byte, the program behaves the same, the
 # loaded bytes match the plain build, and the standard tools (readelf,
-# nm, addr2line; gdb and valgrind when installed) see the functions.
+# nm, addr2line, as; gdb and valgrind when installed) see the functions
+# and map code to file:line, an imported module's included.
 
 source "$(dirname "$0")/lib.sh"
 
@@ -39,6 +42,16 @@ print(calls);
 EOF
 printf '22\n26\n4\n' >"$TMPD/want.out"
 
+# m.y calls into an imported module: the line table names both files
+cat >"$TMPD/lib.y" <<'EOF'
+def twice(n: long) -> long {
+    let r = n * 2;
+    r
+};
+export { twice };
+EOF
+printf 'import lib from "./lib.y";\nprint(lib.twice(21));\n' >"$TMPD/m.y"
+
 CTO=$(( 120 * YTIMEOUT_SCALE ))
 build() { # build <compiler> <out> [flags...]
     local cc="$1" out="$2"
@@ -53,6 +66,13 @@ if build "$CYCC" "$TMPD/dbg_c" -g && cmp -s "$TMPD/dbg" "$TMPD/dbg_c"; then
     pass "cycc -g and ycc -g emit identical binaries"
 else
     fail "cycc -g and ycc -g emit identical binaries" "$(head -c 300 "$TMPD/cc.err")"
+fi
+if timeout "$CTO" "$YCC" -g -o "$TMPD/m" "$TMPD/m.y" </dev/null >"$TMPD/cc.err" 2>&1 \
+    && timeout "$CTO" "$CYCC" -g -o "$TMPD/m_c" "$TMPD/m.y" </dev/null >>"$TMPD/cc.err" 2>&1 \
+    && cmp -s "$TMPD/m" "$TMPD/m_c" && [ "$("$TMPD/m" </dev/null 2>&1)" = "42" ]; then
+    pass "-g with an import: both compilers agree, it runs"
+else
+    fail "-g with an import: both compilers agree, it runs" "$(head -c 300 "$TMPD/cc.err")"
 fi
 
 # 2. -g changes nothing that runs
@@ -83,11 +103,12 @@ else
     fail "plain build has no section headers" "e_shnum=$(le16 "$TMPD/plain" 60)"
 fi
 
-# 3. the symbol table, as the binutils see it
+# 3. the symbol table and the line table, as the binutils see them
 if ! command -v readelf >/dev/null 2>&1; then
     skip "readelf checks" "readelf not installed"
 else
-    if readelf -a -W "$TMPD/dbg" >"$TMPD/re.out" 2>"$TMPD/re.err" && [ ! -s "$TMPD/re.err" ]; then
+    if readelf -a -W --debug-dump=info,abbrev,line "$TMPD/dbg" >"$TMPD/re.out" 2>"$TMPD/re.err" \
+        && [ ! -s "$TMPD/re.err" ]; then
         pass "readelf accepts the -g binary"
     else
         fail "readelf accepts the -g binary" "$(head -c 300 "$TMPD/re.err")"
@@ -97,6 +118,20 @@ else
         pass "sections .text .rodata .bss .symtab .strtab .shstrtab"
     else
         fail "sections .text .rodata .bss .symtab .strtab .shstrtab" "got: $secs"
+    fi
+    dsecs=$(readelf -S -W "$TMPD/dbg" | grep -oE '\.debug_[a-z]+ ' | tr -d ' ' | tr '\n' ' ')
+    if [ "$dsecs" = ".debug_info .debug_abbrev .debug_line " ]; then
+        pass "sections .debug_info .debug_abbrev .debug_line"
+    else
+        fail "sections .debug_info .debug_abbrev .debug_line" "got: $dsecs"
+    fi
+    # a row per statement and per function entry (line 0: _start's entry)
+    rows=$(readelf --debug-dump=decodedline "$TMPD/dbg" 2>/dev/null \
+        | awk '$1 == "p.y" && $2 ~ /^[0-9]+$/ { print $2 }' | sort -nu | tr '\n' ' ')
+    if [ "$rows" = "0 1 3 4 5 8 9 12 13 14 " ]; then
+        pass "line table rows for p.y lines 1 3 4 5 8 9 12 13 14"
+    else
+        fail "line table rows for p.y lines 1 3 4 5 8 9 12 13 14" "got: $rows"
     fi
     # Num: Value Size Type Bind Vis Ndx Name
     sym() { readelf -s -W "$TMPD/dbg" | awk -v n="$1" '$8 == n { print $4, $5, ($3 > 0 ? "sized" : "empty") }'; }
@@ -125,18 +160,48 @@ if command -v nm >/dev/null 2>&1 && command -v addr2line >/dev/null 2>&1; then
     else
         fail "nm/addr2line resolve leaf" "addr '$addr' -> '$got'"
     fi
+    got=$(addr2line -e "$TMPD/dbg" "0x$addr" 2>/dev/null | head -1)
+    if [ -n "$addr" ] && [ "$got" = "$TMPD/p.y:3" ]; then
+        pass "addr2line puts leaf at p.y:3"
+    else
+        fail "addr2line puts leaf at p.y:3" "addr '$addr' -> '$got'"
+    fi
+    taddr=$(nm "$TMPD/m" 2>/dev/null | awk '$3 == "twice" { print $1 }')
+    got=$(addr2line -e "$TMPD/m" "0x$taddr" 2>/dev/null | head -1)
+    if [ -n "$taddr" ] && [ "$got" = "$TMPD/lib.y:1" ]; then
+        pass "addr2line puts the imported twice at lib.y:1"
+    else
+        fail "addr2line puts the imported twice at lib.y:1" "addr '$taddr' -> '$got'"
+    fi
 else
     skip "nm/addr2line" "binutils not installed"
 fi
 
-# 4. debuggers and profilers name the functions
+# 4. debuggers and profilers name the functions and lines
 if command -v gdb >/dev/null 2>&1; then
     timeout 60 gdb -batch -nx -ex "set debuginfod enabled off" -ex "break leaf" -ex run -ex bt \
         "$TMPD/dbg" </dev/null >"$TMPD/gdb.out" 2>&1
-    if grep -qE '^#0 .* in leaf \(\)' "$TMPD/gdb.out" && grep -qE '^#1 .* in mid \(\)' "$TMPD/gdb.out"; then
+    # frame #0 shows no address when it stopped on the start of a line
+    if grep -qE '^#0 +(0x[0-9a-f]+ in )?leaf \(\)' "$TMPD/gdb.out" && grep -qE '^#1 .* in mid \(\)' "$TMPD/gdb.out"; then
         pass "gdb breaks in leaf, called from mid"
     else
         fail "gdb breaks in leaf, called from mid" "$(grep -E '^#|Breakpoint' "$TMPD/gdb.out" | head -4 | tr '\n' '|')"
+    fi
+    timeout 60 gdb -batch -nx -ex "set debuginfod enabled off" -ex "break p.y:5" -ex run -ex bt \
+        "$TMPD/dbg" </dev/null >"$TMPD/gdb.out" 2>&1
+    if grep -qE '^#0 +(0x[0-9a-f]+ in )?leaf \(\) at .*p\.y:5$' "$TMPD/gdb.out" \
+        && grep -qE '^#1 .* in mid \(\) at .*p\.y:9$' "$TMPD/gdb.out"; then
+        pass "gdb breaks at p.y:5, called from p.y:9"
+    else
+        fail "gdb breaks at p.y:5, called from p.y:9" "$(grep -E '^#|Breakpoint' "$TMPD/gdb.out" | head -4 | tr '\n' '|')"
+    fi
+    timeout 60 gdb -batch -nx -ex "set debuginfod enabled off" -ex "break lib.y:2" -ex run -ex bt \
+        "$TMPD/m" </dev/null >"$TMPD/gdb.out" 2>&1
+    if grep -qE '^#0 +(0x[0-9a-f]+ in )?twice \(\) at .*lib\.y:2$' "$TMPD/gdb.out" \
+        && grep -qE '^#1 .* in _start \(\) at .*m\.y:2$' "$TMPD/gdb.out"; then
+        pass "gdb breaks at lib.y:2, called from m.y:2"
+    else
+        fail "gdb breaks at lib.y:2, called from m.y:2" "$(grep -E '^#|Breakpoint' "$TMPD/gdb.out" | head -4 | tr '\n' '|')"
     fi
 else
     skip "gdb" "gdb not installed"
@@ -156,19 +221,40 @@ else
     skip "callgrind" "valgrind not installed"
 fi
 
-# 5. a program with no .bss still gets a valid symbol table
+# 5. a program with no .bss still gets a valid symbol table and line table
 printf 'exit(3);\n' >"$TMPD/q.y"
 if timeout "$CTO" "$YCC" -g -o "$TMPD/q" "$TMPD/q.y" </dev/null >/dev/null 2>&1; then
     "$TMPD/q" </dev/null >/dev/null 2>&1
     ec=$?
     if [ $ec -eq 3 ] && { ! command -v readelf >/dev/null 2>&1 \
-            || { readelf -a -W "$TMPD/q" >/dev/null 2>"$TMPD/q.err" && [ ! -s "$TMPD/q.err" ]; }; }; then
+            || { readelf -a -W --debug-dump=info,abbrev,line "$TMPD/q" >/dev/null 2>"$TMPD/q.err" \
+                 && [ ! -s "$TMPD/q.err" ]; }; }; then
         pass "-g on a minimal program"
     else
         fail "-g on a minimal program" "exit $ec $(head -c 200 "$TMPD/q.err" 2>/dev/null)"
     fi
 else
     fail "-g on a minimal program" "ycc -g failed"
+fi
+
+# 6. -S -g: the line markers are GNU as's own .file/.loc directives
+if timeout "$CTO" "$YCC" -g -S "$TMPD/p.y" </dev/null >"$TMPD/p.s" 2>"$TMPD/cc.err" \
+    && grep -qxF ".file 1 \"$TMPD/p.y\"" "$TMPD/p.s" && grep -qx '\.loc 1 4' "$TMPD/p.s" \
+    && timeout "$CTO" "$YCC" -S "$TMPD/p.y" </dev/null >"$TMPD/p0.s" 2>>"$TMPD/cc.err" \
+    && ! grep -qE '^\.(file|loc) ' "$TMPD/p0.s"; then
+    pass "-S -g carries .file/.loc, plain -S none"
+else
+    fail "-S -g carries .file/.loc, plain -S none" "$(head -c 300 "$TMPD/cc.err")"
+fi
+if command -v as >/dev/null 2>&1 && command -v readelf >/dev/null 2>&1; then
+    if as -o "$TMPD/p.o" "$TMPD/p.s" 2>/dev/null \
+        && readelf --debug-dump=decodedline "$TMPD/p.o" 2>/dev/null | grep -qE '^p\.y +4 '; then
+        pass "GNU as reads the -S -g line markers"
+    else
+        fail "GNU as reads the -S -g line markers" "as or its line table failed"
+    fi
+else
+    skip "GNU as on -S -g" "binutils not installed"
 fi
 
 print_summary "debug"

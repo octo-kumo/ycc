@@ -3,7 +3,8 @@
  * Assembler for the native backend's x86-64 dialect.
  * asm_assemble(text, debug) -> {ok, bytes: [byte], error, times} (times:
  * per-phase us/heap rows for `ycc --time`; debug is `ycc -g`, which adds a
- * symbol table — see debug_syms).
+ * symbol table — see debug_syms — and, from the text's `.file`/`.loc`
+ * line markers, DWARF line info — see debug_lines).
  * ycc_assemble(text, debug) -> the driver's wrapper (see its note at the bottom).
  * Only what native.y/arch_x64.y emit is accepted; anything else is a loud
  * error with a line number — never a silent miscompile.
@@ -12,6 +13,10 @@
  * instruction lengths are known in pass 1.
  */
 #include "asm.h"
+#include "dwarf.h"
+
+#include <sys/syscall.h>
+#include <unistd.h>
 
 /* imported (module calls from asm.y, names flattened) */
 extern long reg_num(Yv *name);              /* enc64.c: enc.reg_num */
@@ -20,8 +25,9 @@ extern Yv *enc_insn(Yv *mn, Yv *ops);       /* enc64.c: enc.enc_insn */
 extern Yv *le64(long v);                    /* enc64.c: enc.le64 */
 extern Yv *le32(long v);                    /* enc64.c: enc.le32 */
 extern long elf_bss_from_ro(long ro_len, long bss_len); /* elf.c: elf.elf_bss_from_ro */
+extern long elf_code_off(long bss_len);      /* elf.c: elf.elf_code_off */
 extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
-                     Yv *syms); /* elf.c: elf.elf_build */
+                     Yv *syms, Yv *dsecs); /* elf.c: elf.elf_build */
 
 /* ── module-local defs (forward) ─────────────────────────────────────── */
 static int is_digit_ch(Yv *c);
@@ -79,6 +85,8 @@ static Yv *asm_strdata_go(Yv *line, long lno, long sec, Yv *offs, Yv *payload, i
 static Yv *asm_strdata_emit(long sec, Yv *offs, Yv *bytes, int nul);
 static Yv *asm_strdata_item(long sec, Yv *offs, Yv *bb);
 static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs);
+static Yv *asm_loc(long lno, long sec, Yv *offs, Yv *rest);
+static Yv *asm_file(long lno, long sec, Yv *offs, Yv *rest);
 static Yv *asm_section(Yv *line, long lno, long sec, Yv *offs, Yv *rest);
 static int asm_section_bad(Yv *rest);
 static Yv *asm_section_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest);
@@ -104,6 +112,8 @@ static Yv *debug_syms_sec(Yv *out, Yv *labels, long sec, long end);
 static int is_sym_label(Yv *name, long sec);
 static Yv *sym_name(Yv *lbl);
 static Yv *after_uid(Yv *s, long k);
+static Yv *debug_lines(Yv *items, long code_len, long code_off);
+static Yv *asm_cwd(void);
 static Yv *concat_bytes(Yv *a, Yv *b);
 
 static int is_digit_ch(Yv *c) {
@@ -1029,12 +1039,100 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
         return asm_quad(line, lno, sec, offs, rest);
     } else if (ys_eq_lit(dir, ".zero")) {
         return asm_zero(line, lno, sec, offs, rest);
+    } else if (ys_eq_lit(dir, ".loc")) {
+        return asm_loc(lno, sec, offs, rest);
+    } else if (ys_eq_lit(dir, ".file")) {
+        return asm_file(lno, sec, offs, rest);
     } else {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported directive '")), dir), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+    }
+}
+
+/* -g: line-number directives.
+ * GNU as's own (native.y emits them under -g, see dbg_lines): `.file N
+ * "path"` names file N, `.loc N LINE` says the code that follows comes
+ * from LINE of file N. Neither adds a byte. A .loc is an empty item at its
+ * .text offset (kind "loc", fix = [file, line] in the `off` fields); a
+ * .file one outside every section (sec -1: never laid out) with N in
+ * `off` and the path in its fix's `lbl`. asm_link hands both to dwarf.y
+ * (debug_lines). */
+static Yv *asm_loc(long lno, long sec, Yv *offs, Yv *rest) {
+    long sp = ys_index_of(rest, ys(" "));
+    Yv *fs = rest;
+    Yv *ls = ys("");
+    if (sp > 0) {
+        fs = ys_slice(rest, 0, sp);
+        ls = ys_trim(ys_slice_from(rest, sp + 1));
+        ;
+    } else { ; };
+    if (!is_num_text(fs) || !is_num_text(ls) ||
+        ys_tonum(fs) < 1 || ys_tonum(ls) < 0) {
+        return yr(4,
+                  "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)),
+                                       ys(": bad .loc '")),
+                                ys_cat(rest, ys("'"))),
+                  "sec", yv_long(sec), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0),
+                             "len", yv_long(0), "kind", ys(""),
+                             "bytes", yav(0), "fix", yav(0)));
+    } else if (sec != 0) {
+        return yr(4,
+                  "err", ys_cat(ys_cat(ys("L"), ys_long(lno)),
+                                ys(": .loc outside .text")),
+                  "sec", yv_long(sec), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0),
+                             "len", yv_long(0), "kind", ys(""),
+                             "bytes", yav(0), "fix", yav(0)));
+    } else {
+        Yv *fx = yav(
+            2,
+            yr(4, "off", yv_long(ys_tonum(fs)), "kind", ys("file"),
+               "lbl", ys(""), "lbl2", ys("")),
+            yr(4, "off", yv_long(ys_tonum(ls)), "kind", ys("line"),
+               "lbl", ys(""), "lbl2", ys("")));
+        return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
+                  "item", yr(6, "sec", yv_long(0), "off", ya_get(offs, 0),
+                             "len", yv_long(0), "kind", ys("loc"),
+                             "bytes", yav(0), "fix", fx));
+    }
+}
+
+static Yv *asm_file(long lno, long sec, Yv *offs, Yv *rest) {
+    long sp = ys_index_of(rest, ys(" "));
+    Yv *ns = rest;
+    Yv *q = ys("");
+    if (sp > 0) {
+        ns = ys_slice(rest, 0, sp);
+        q = ys_trim(ys_slice_from(rest, sp + 1));
+        ;
+    } else { ; };
+    Yv *d = decode_str(ys(""));
+    if (!asm_strdata_bad(q)) {
+        d = decode_str(ys_slice(q, 1, yv_len(q) - 1));
+        ;
+    } else { ; };
+    if (!is_num_text(ns) || ys_tonum(ns) < 1 || asm_strdata_bad(q) ||
+        !yv_b(yr_get(d, "ok"))) {
+        return yr(4,
+                  "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)),
+                                       ys(": bad .file '")),
+                                ys_cat(rest, ys("'"))),
+                  "sec", yv_long(sec), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0),
+                             "len", yv_long(0), "kind", ys(""),
+                             "bytes", yav(0), "fix", yav(0)));
+    } else {
+        Yv *fx = yav(1, yr(4, "off", yv_long(0), "kind", ys("file"),
+                           "lbl", from_bytes(yr_get(d, "bytes")),
+                           "lbl2", ys("")));
+        return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off",
+                             yv_long(ys_tonum(ns)), "len", yv_long(0),
+                             "kind", ys("file"), "bytes", yav(0), "fix", fx));
     }
 }
 
@@ -1352,11 +1450,13 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
             long lt2 = clock_us();
             long lh2 = heap_used();
             Yv *syms = yav(0);
+            Yv *dsecs = yav(0);
             if (debug) {
                 syms = debug_syms(labels, code_len, bss_len);
+                dsecs = debug_lines(items, code_len, elf_code_off(bss_len));
             }
             Yv *eb = elf_build(code, ro, yv_l(yr_get(start, "off")),
-                               bss_len, syms);
+                               bss_len, syms, dsecs);
             long lt3 = clock_us();
             long lh3 = heap_used();
             return yr(4, "ok", yv_bool(1), "bytes", eb, "error", ys(""),
@@ -1578,6 +1678,56 @@ static Yv *after_uid(Yv *s, long k) {
         return ys_slice_from(s, i + 1);
     } else {
         return s;
+    }
+}
+
+/* The `.file` table and the `.loc` rows (asm_file/asm_loc) as dwarf.y's
+ * sections. Rows are flat (offset, file, line) triples in text order; a
+ * `.file N` fills slot N-1 of the table ("?" stands in for a number never
+ * named). No row -- a text without markers -- means no sections at all. */
+static Yv *debug_lines(Yv *items, long code_len, long code_off) {
+    Yv *files = yav(0);
+    Yv *rows = yav(0);
+    long i = 0;
+    while (i < yv_len(items)) {
+        Yv *it = ya_get(items, i);
+        Yv *k = yr_get(it, "kind");
+        if (ys_eq_lit(k, "loc")) {
+            Yv *fx = yr_get(it, "fix");
+            rows = ya_push(rows, yr_get(it, "off"));
+            rows = ya_push(rows, yr_get(ya_get(fx, 0), "off"));
+            rows = ya_push(rows, yr_get(ya_get(fx, 1), "off"));
+            ;
+        } else if (ys_eq_lit(k, "file")) {
+            Yv *fx = yr_get(it, "fix");
+            long file_no = yv_l(yr_get(it, "off"));
+            while (yv_len(files) < file_no) {
+                files = ya_push(files, ys("?"));
+                ;
+            }
+            ya_set(files, file_no - 1, yr_get(ya_get(fx, 0), "lbl"));
+            ;
+        } else { ; };
+        i = i + 1;
+    }
+    if (yv_len(rows) == 0) {
+        return yav(0);
+    } else {
+        return dwarf_sections(files, rows, 4194304 + code_off, code_len,
+                              asm_cwd());
+    }
+}
+
+/* The working directory, recorded as the compile unit's DW_AT_comp_dir
+ * (as GNU as does): the raw getcwd syscall fills buf and returns the
+ * path's length with its NUL, or a negative errno -- "." then. */
+static Yv *asm_cwd(void) {
+    char buf[4096];
+    long n = syscall(SYS_getcwd, buf, 4096);
+    if (n > 1) {
+        return ys_cstr(buf);
+    } else {
+        return ys(".");
     }
 }
 

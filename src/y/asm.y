@@ -1,7 +1,8 @@
 // asm.y — assembler for the native backend's x86-64 dialect.
 // asm_assemble(text, debug) -> {ok, bytes: [byte], error, times} (times:
 // per-phase us/heap rows for `ycc --time`; debug is `ycc -g`, which adds a
-// symbol table — see debug_syms).
+// symbol table — see debug_syms — and, from the text's `.file`/`.loc`
+// line markers, DWARF line info — see debug_lines).
 // ycc_assemble(text, debug) -> the driver's wrapper (see its note at the bottom).
 // Only what native.y/arch_x64.y emit is accepted; anything else is a loud
 // error with a line number — never a silent miscompile.
@@ -16,6 +17,7 @@
 
 import enc from "./enc64.y";
 import elf from "./elf.y";
+import dwarf from "./dwarf.y";
 
 // NOTE: the master note for every "nested ifs, not `&&`/`||`" comment in
 // this file (and its C twin). `&&` and `||` are short-circuiting and fully
@@ -773,8 +775,62 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, s
         asm_quad(line, lno, sec, offs, rest)
     } else if (dir == ".zero") {
         asm_zero(line, lno, sec, offs, rest)
+    } else if (dir == ".loc") {
+        asm_loc(lno, sec, offs, rest)
+    } else if (dir == ".file") {
+        asm_file(lno, sec, offs, rest)
     } else {
         { err: "L" + tostring(lno) + ": unsupported directive '" + dir + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    }
+};
+
+// ── -g: line-number directives ─────────────────────────────────────────
+// GNU as's own (native.y emits them under -g, see dbg_lines): `.file N
+// "path"` names file N, `.loc N LINE` says the code that follows comes
+// from LINE of file N. Neither adds a byte. A .loc is an empty item at its
+// .text offset (kind "loc", fix = [file, line] in the `off` fields); a
+// .file one outside every section (sec -1: never laid out) with N in
+// `off` and the path in its fix's `lbl`. asm_link hands both to dwarf.y
+// (debug_lines).
+def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+    let sp = index_of(rest, " ");
+    let fs = rest;
+    let ls = "";
+    if (sp > 0) {
+        fs = rest[0:sp];
+        ls = trim(rest[sp + 1:]);
+        0
+    } else { 0; };
+    if (!is_num_text(fs) || !is_num_text(ls) || tonum(fs) < 1 || tonum(ls) < 0) {
+        { err: "L" + tostring(lno) + ": bad .loc '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    } else if (sec != 0) {
+        { err: "L" + tostring(lno) + ": .loc outside .text", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    } else {
+        let fx = [{ off: tonum(fs), kind: "file", lbl: "", lbl2: "" },
+                  { off: tonum(ls), kind: "line", lbl: "", lbl2: "" }];
+        { err: "", sec: sec, offs: offs, item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx } }
+    }
+};
+
+def asm_file(lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+    let sp = index_of(rest, " ");
+    let ns = rest;
+    let q = "";
+    if (sp > 0) {
+        ns = rest[0:sp];
+        q = trim(rest[sp + 1:]);
+        0
+    } else { 0; };
+    let d = decode_str("");
+    if (!asm_strdata_bad(q)) {
+        d = decode_str(q[1:len(q) - 1]);
+        0
+    } else { 0; };
+    if (!is_num_text(ns) || tonum(ns) < 1 || asm_strdata_bad(q) || !d.ok) {
+        { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    } else {
+        let fx = [{ off: 0, kind: "file", lbl: from_bytes(d.bytes), lbl2: "" }];
+        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tonum(ns), len: 0, kind: "file", bytes: [], fix: fx } }
     }
 };
 
@@ -1015,11 +1071,13 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
             let lt2 = clock_us();
             let lh2 = heap_used();
             let syms: [{ name: str, sec: long, off: long, size: long }] = [];
+            let dsecs: [{ name: str, data: [byte] }] = [];
             if (debug) {
                 syms = debug_syms(labels, code_len, bss_len);
+                dsecs = debug_lines(items, code_len, elf.elf_code_off(bss_len));
                 0;
             };
-            let eb = elf.elf_build(code, ro, start.off, bss_len, syms);
+            let eb = elf.elf_build(code, ro, start.off, bss_len, syms, dsecs);
             let lt3 = clock_us();
             let lh3 = heap_used();
             { ok: true, bytes: eb, error: "",
@@ -1222,6 +1280,51 @@ def after_uid(s: str, k: long) -> str {
     } else {
         s
     }
+};
+
+// ── -g: line info ──────────────────────────────────────────────────────
+// The `.file` table and the `.loc` rows (asm_file/asm_loc) as dwarf.y's
+// sections. Rows are flat (offset, file, line) triples in text order; a
+// `.file N` fills slot N-1 of the table ("?" stands in for a number never
+// named). No row -- a text without markers -- means no sections at all.
+def debug_lines(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], code_len: long, code_off: long) -> [{ name: str, data: [byte] }] {
+    let files: [str] = [];
+    let rows: [long] = [];
+    foreach (it in items) {
+        let k = it.kind;
+        if (k == "loc") {
+            let fx = it.fix;
+            rows += it.off;
+            rows += fx[0].off;
+            rows += fx[1].off;
+            0;
+        } else if (k == "file") {
+            let fx = it.fix;
+            while (len(files) < it.off) { files += "?"; };
+            files[it.off - 1] = fx[0].lbl;
+            0;
+        };
+    };
+    if (len(rows) == 0) {
+        let none_s: [{ name: str, data: [byte] }] = [];
+        none_s
+    } else {
+        dwarf.dwarf_sections(files, rows, 4194304 + code_off, code_len, asm_cwd())
+    }
+};
+
+// The working directory, recorded as the compile unit's DW_AT_comp_dir
+// (as GNU as does): the raw getcwd syscall fills buf and returns the
+// path's length with its NUL, or a negative errno -- "." then.
+def asm_cwd() -> str {
+    let buf: [byte] = [];
+    let i = 0;
+    while (i < 4096) {
+        buf += 0;
+        i = i + 1;
+    };
+    let n = syscall(79, ptr_addr(&buf[0]), 4096);
+    if (n > 1) { from_bytes(buf[0:n - 1]) } else { "." }
 };
 
 // Convenience for the driver: text in, bytes out. The driver writes the

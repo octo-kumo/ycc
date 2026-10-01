@@ -2,8 +2,9 @@
 // Usage:
 //   import types from "./types.y";
 //   import native from "./native.y";
-//   let r = native.emit_program(ast, imports, origin);  // { ok, asm, errors }
-//   // (imports and origin come from native_resolve_x)
+//   let r = native.emit_program(ast, imports, origin, debug);  // { ok, asm, errors }
+//   // (imports and origin come from native_resolve_x; debug is `-g`,
+//   // which adds `.file`/`.loc` line markers -- see dbg_lines)
 //   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
 //
 // Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -35,6 +36,17 @@ embed RT_SRC from "./std/rt.y";
 embed PRELUDE_SRC from "./std/prelude.y";
 embed EXEC_SRC from "./std/exec.y";
 embed STR_SRC from "./std/str.y";
+
+// `ycc -g` line markers, set by emit_program for each program. With
+// dbg_lines on, the text opens with a `.file N "path"` per origin file
+// and every statement (gen_loc_stmt) and function entry (emit_one_fn)
+// gets a `.loc FILE LINE` before its code -- GNU as's own line-number
+// directives, which asm.y turns into DWARF. dbg_file/dbg_line are the
+// origin map's (native_resolve_x): the way back from a line of the
+// spliced program to its file. Off, nothing is emitted.
+let dbg_lines = false;
+let dbg_file: [long] = [];
+let dbg_line: [long] = [];
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -4399,6 +4411,7 @@ def gen_if(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
     if (node.has_else) {
         st = emit(st, "    jmp " + r2.lbl);
         st = emit(st, r1.lbl + ":");
+        st = gen_loc_elif(st, node.els);
         st = gen(st, node.els);
         emit(st, r2.lbl + ":")
     } else {
@@ -4416,6 +4429,7 @@ def gen_while(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     st = emit(st, "    test %rax, %rax");
     st = emit(st, "    jz " + r2.lbl);
     st = gen_discard(st, node.body);
+    st = gen_loc_loop(st, node);
     st = emit(st, "    jmp " + r1.lbl);
     st = emit(st, r2.lbl + ":");
     emit(st, "    xor %eax, %eax")
@@ -4438,6 +4452,7 @@ def gen_for(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
     st = emit(st, "    test %rax, %rax");
     st = emit(st, "    jz " + r2.lbl);
     st = gen_discard(st, node.body);
+    st = gen_loc_loop(st, node);
     st = gen(st, node.step);
     st = emit(st, "    jmp " + r1.lbl);
     st = emit(st, r2.lbl + ":");
@@ -4471,6 +4486,7 @@ def gen_forrange(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     // counter itself stays in its raw slot)
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    st = gen_loc_loop(st, node);
     st = emit(st, "    mov " + tostring(voff) + "(%rbp), %rax");
     st = emit(st, "    inc %rax");
     st = emit(st, "    mov %rax, " + tostring(voff) + "(%rbp)");
@@ -4514,6 +4530,7 @@ def gen_foreach(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     st = emit(st, "    mov %rcx, " + tostring(voff) + "(%rbp)");
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    st = gen_loc_loop(st, node);
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
     st = emit(st, "    inc %rax");
     st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
@@ -4616,11 +4633,13 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; 0 } else { 0 };
         let ti = 0;
         while (ti < m - 1) {
+            st = gen_loc_stmt(st, tl[ti]);
             st = gen_stmt(st, tl[ti]);
             ti = ti + 1;
         };
         if (m > 0) {
             let lastn = tl[m - 1];
+            st = gen_loc_stmt(st, lastn);
             st = gen_tail(st, lastn);
             0
         } else {
@@ -4641,6 +4660,7 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         if (node.has_else) {
             st = emit(st, "    jmp " + lend);
             st = emit(st, lelse + ":");
+            st = gen_loc_elif(st, node.els);
             st = gen_tail(st, node.els);
             emit(st, lend + ":")
         } else {
@@ -4667,6 +4687,7 @@ def gen_block_as(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
         if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; 0 } else { 0 };
         let i = 0;
         while (i < m) {
+            st = gen_loc_stmt(st, stmts[i]);
             if (dropped || i < len(stmts) - 1) {
                 st = gen_stmt(st, stmts[i]);
                 0
@@ -4683,6 +4704,64 @@ def gen_block_as(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
 def is_void_node(n) -> bool {
     let k: str = n.k;
     k == "void"
+};
+
+// ── -g: line markers (see dbg_lines) ──────────────────────────────────
+
+// The marker for line `ln` of the spliced program: its origin file's
+// `.file` number (the index + 1) and its line there, counted on past the
+// end of the map like origin_at. Line 0 is DWARF's "no source line".
+def loc_dir(ln: long) -> str {
+    let f = dbg_file;
+    let l = dbg_line;
+    let n = len(f);
+    if (ln < 1 || n == 0) {
+        ".loc 1 " + tostring(ln)
+    } else {
+        let k = ln;
+        if (k > n) { k = n; 0; } else { 0; };
+        ".loc " + tostring(f[k - 1] + 1) + " " + tostring(l[k - 1] + ln - k)
+    }
+};
+
+// A statement's marker, before its code. A bare `;` has no position (and
+// no code).
+def gen_loc_stmt(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (dbg_lines) {
+        if (is_void_node(node)) { st } else { emit(st, loc_dir(node.line)) }
+    } else {
+        st
+    }
+};
+
+// An `else if` gets a marker of its own: its test would otherwise count
+// as the last line of the branch before it.
+def gen_loc_elif(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, els) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (dbg_lines) {
+        let k: str = els.k;
+        if (k == "if") { emit(st, loc_dir(els.line)) } else { st }
+    } else {
+        st
+    }
+};
+
+// A loop's back edge (its step, the counter's increment, the jump to the
+// test) belongs to the loop's own line, not to the body's last one.
+def gen_loc_loop(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (dbg_lines) { emit(st, loc_dir(node.line)) } else { st }
+};
+
+// The `.file N "path"` table the markers number into: one per origin
+// file, N = its index + 1.
+def file_dirs(files: [str]) -> str {
+    let pieces: [str] = [];
+    let i = 0;
+    while (i < len(files)) {
+        let fname: str = files[i];
+        pieces += ".file " + tostring(i + 1) + " \"" + esc_asm(fname) + "\"\n";
+        i = i + 1;
+    };
+    join(pieces, "")
 };
 
 // Position of `name` in a record literal's merged field list, or -1.
@@ -6565,6 +6644,11 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     let frame = arch.arch_frame(f.slots);
     let code = [];
     code += label + ":";
+    // -g: the prologue is the def's line; `_start` has none (line 0)
+    if (dbg_lines) {
+        if (is_main) { code += loc_dir(0); 0; } else { code += loc_dir(func.line); 0; };
+        0
+    } else { 0; };
     if (is_main) {
         if (want_argv) {
             // _start prologue: at process entry %rsp -> [argc][argv0ptr]....
@@ -6935,7 +7019,10 @@ def phase_end(times: [{ name: str, us: long, heap: long }], name: str, t0: long,
 
 // ── entry point ────────────────────────────────────────────────────────
 
-def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
+def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, debug: bool) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
+    dbg_lines = debug;
+    dbg_file = origin.file;
+    dbg_line = origin.line;
     let times: [{ name: str, us: long, heap: long }] = [];
     let pt = clock_us();
     let ph = heap_used();
@@ -7098,6 +7185,10 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
         };
         let body_text = join(pieces, "");
         let asm = arch.arch_header();
+        if (dbg_lines) {
+            asm = file_dirs(origin.files) + asm;
+            0
+        } else { 0; };
         let prelude_text = shake_refs(arch.arch_prelude(), body_refs);
         asm = asm + arch.arch_text() + prelude_text;
         asm = asm + body_text;

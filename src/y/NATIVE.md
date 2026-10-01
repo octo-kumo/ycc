@@ -18,7 +18,8 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect |
-| `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab` and section headers |
+| `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
+| `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
 | `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
@@ -178,8 +179,9 @@ pass 1), `asm.y` assembles (two passes + fixups + rodata), `elf.y` wraps one
 PT_LOAD (R+E) with entry `_start`, plus — when the program has globals or
 a heap — a second, RW PT_LOAD with no file bytes that the kernel
 zero-fills: the `.bss` section (`.zero N` reserves space there; data or
-code in `.bss` is an assembler error). `-g` appends a symbol table and
-section headers past all of that (see "Debugging and profiling" below).
+code in `.bss` is an assembler error). `-g` appends a symbol table, a DWARF
+line table and section headers past all of that (see "Debugging and
+profiling" below).
 Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight
 out through the `write_bytes` builtin (raw `open`/`write`/`chmod` over
@@ -564,27 +566,47 @@ the runtime library above).
 
 ## Debugging and profiling compiled output (`ycc -g`)
 
-`-g` adds what the standard tools need to name code: section headers
-(`.text`, `.rodata`, `.bss`) and a symbol table — an `STT_FUNC` per
-function (user defs, the runtime's `y_*` helpers, `readline`, …), an
-`STT_OBJECT` per global, `_start` the one global symbol. Names are the
-source names (the rename pass's `yfn_<uid>_`/`yg_<uid>_` prefix and `$N`
-suffix are stripped), so they line up across builds; a symbol's size runs
-to the next symbol. It changes nothing that runs: the tables and headers
-are appended past the loaded image, and the code, rodata and every address
-are those of the plain build (`test/sh/test_debug.sh` checks it). One
-difference is invisible to the program: valgrind reads an executable's
-symbols only once it has seen a file-backed read+write mapping, so a `-g`
-build takes the first 8 bytes of its `.bss` from zeros in the file. There
-is no line information (DWARF) yet — tools name functions, not lines.
+`-g` adds what the standard tools need to name code and map it back to
+the source: section headers (`.text`, `.rodata`, `.bss`), a symbol table
+— an `STT_FUNC` per function (user defs, the runtime's `y_*` helpers,
+`readline`, …), an `STT_OBJECT` per global, `_start` the one global
+symbol — and DWARF 4 line information. Names are the source names (the
+rename pass's `yfn_<uid>_`/`yg_<uid>_` prefix and `$N` suffix are
+stripped), so they line up across builds; a symbol's size runs to the
+next symbol.
+
+The line table has a row per statement, per function entry, per `else
+if` test and per loop step (the back edge), each at the file and line
+the code was written on: an import keeps its own file name and lines, and
+the embedded std modules show as `std/rt.y`, `std/str.y`, …. native.y
+writes GNU as's own `.file N "path"` and `.loc FILE LINE` directives into
+the asm text — so `ycc -g -S` output still assembles with `as`, which
+builds the same table — asm.y records each marker's code offset, and
+dwarf.y encodes `.debug_line` plus a minimal `.debug_info`/
+`.debug_abbrev` (one compile unit; relative paths are relative to its
+`DW_AT_comp_dir`, the directory `ycc` ran in). There are no types,
+variables or frame descriptions: gdb breaks, steps and backtraces by
+file:line, but `print x` and `info locals` know nothing, and the asm
+prelude and `_start`'s entry have no source line.
+
+It changes nothing that runs: the tables and headers are appended past
+the loaded image, and the code, rodata and every address are those of the
+plain build (`test/sh/test_debug.sh` checks it). One difference is
+invisible to the program: valgrind reads an executable's symbols only once
+it has seen a file-backed read+write mapping, so a `-g` build takes the
+first 8 bytes of its `.bss` from zeros in the file.
 
 ```
 ycc -g -o prog prog.y
 perf record ./prog && perf report      # sampled cpu, by function
+perf annotate --stdio -l               # ... and by source line
 valgrind --tool=callgrind ./prog       # exact instruction counts + call graph
-callgrind_annotate callgrind.out.*     # (what bench/compare.sh tabulates)
+callgrind_annotate callgrind.out.*     # per function, then the source annotated
 valgrind --tool=massif --pages-as-heap=yes ./prog   # memory over time
 gdb -ex 'break leaf' -ex run -ex bt ./prog          # breakpoints by name
+gdb -ex 'break prog.y:12' -ex run ./prog            # ... or by line; next/step
+addr2line -e prog 0x4002c7             # an address -> prog.y:3
+objdump -dl prog                       # disassembly with file:line
 strace -c ./prog                       # syscall counts (read/write/mmap)
 ```
 

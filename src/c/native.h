@@ -17,6 +17,6 @@ Yv *strip_ns(Yv *node, Yv *imports);
 Yv *strip_list(Yv *nodes, Yv *imports);
 Yv *strip_decl(Yv *node, Yv *imports);
 Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
-Yv *emit_program(Yv *ast, Yv *imports, Yv *origin);
+Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug);
 
 #endif /* NATIVE_H */

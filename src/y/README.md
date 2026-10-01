@@ -25,6 +25,7 @@ ycc -S -o prog.s prog.y
 | `enc64.y`     | instruction encoding for our subset                         |
 | `asm.y`       | two-pass assembler over our asm dialect                     |
 | `elf.y`       | minimal ELF64 writer (static, no libc)                      |
+| `dwarf.y`     | `-g` line info: DWARF `.debug_line`/`.debug_info`           |
 | `native.y`    | AST → assembly text (splice → strip → rename → check → emit)|
 | `std/`        | standard library in Y, spliced into compiled programs      |
 

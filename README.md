@@ -60,8 +60,9 @@ ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
   -o OUTPUT    output path (executable, or .s file with -S)
   -S           emit assembly only (stdout, or the -o file)
   -t, --time   per-phase timing table on stderr
-  -g           add a symbol table and section headers so perf, gdb and
-               valgrind name the functions (the loaded code is unchanged)
+  -g           add a symbol table, DWARF line info and section headers
+               so perf, gdb, valgrind and addr2line show function names
+               and source lines (the loaded code is unchanged)
   --no-exec    omit exec() -- the binary cannot reach a shell
   -h, --help   show this text and exit
 ```
@@ -75,7 +76,7 @@ FILE is required: with no input file `ycc` exits 1 with
 
 | path | contents |
 |---|---|
-| `src/y/` | the compiler, in Y (`ycc.y` driver, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `std/`) |
+| `src/y/` | the compiler, in Y (`ycc.y` driver, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `dwarf.y`, `std/`) |
 | `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the value model) |
 | `docs/` | the formal language definition (LaTeX/Tectonic) |
 | `refs/` | reference binaries for the byte-identical port gate (currently `cycc`'s own output — see `PORTING.md`) |

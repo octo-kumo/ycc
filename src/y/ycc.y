@@ -5,7 +5,8 @@
 //   -o OUTPUT    output path (executable, or .s file with -S)
 //   -S           emit assembly only (stdout, or the -o file)
 //   -t, --time   print per-phase time and heap use to stderr
-//   -g           add a symbol table (for perf, gdb, valgrind; see -h)
+//   -g           add a symbol table and DWARF line info (for perf, gdb,
+//                valgrind, addr2line; see -h)
 //   -h, --help   show this text and exit
 
 import lexer from "./lexer.y";
@@ -48,9 +49,10 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
             puts("  -t, --time   print per-phase time and heap use to stderr\n");
-            puts("  -g           add section headers and a symbol table (functions,\n");
-            puts("               globals) so perf, gdb and valgrind show names; the\n");
-            puts("               loaded code and data are unchanged\n");
+            puts("  -g           add section headers, a symbol table (functions,\n");
+            puts("               globals) and DWARF line info, so perf, gdb,\n");
+            puts("               valgrind and addr2line show names and source\n");
+            puts("               lines; the loaded code and data are unchanged\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
             puts("  -h, --help   show this text and exit\n");
             exit(0);
@@ -197,7 +199,7 @@ def main(cmdline: [str]) -> long {
             let ast = parser.parse_program(toks);
             ph = nativelib.phase_end(dt, "parse", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
-            let r = nativelib.emit_program(ast, nrimports, nrorigin);
+            let r = nativelib.emit_program(ast, nrimports, nrorigin, pargs.debug);
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;

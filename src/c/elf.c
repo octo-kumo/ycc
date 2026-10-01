@@ -6,11 +6,11 @@
  * A program with globals gets a second PT_LOAD (read+write, no file bytes):
  * the zeroed .bss, on the page after the file mapping; its PHDR makes the
  * headers 176 bytes.
- * `ycc -g` appends [.symtab][.strtab][.shstrtab][section headers] AFTER
- * the loaded image (see elf_debug), and backs the first bytes of the
- * .bss with zeros from the file (for valgrind): the code, rodata and
- * every address stay the same, so the program runs the same bytes either
- * way.
+ * `ycc -g` appends [.symtab][.strtab][.shstrtab][.debug_*][section
+ * headers] AFTER the loaded image (see elf_debug), and backs the first
+ * bytes of the .bss with zeros from the file (for valgrind): the code,
+ * rodata and every address stay the same, so the program runs the same
+ * bytes either way.
  *
  * Y-side binary data flows through packed [byte] arrays. The C value model
  * keeps each element as a boxed long; the driver writes it directly. */
@@ -38,7 +38,7 @@ long elf_bss_from_ro(long ro_len, long bss_len) {
 }
 
 Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
-              Yv *syms) {
+              Yv *syms, Yv *dsecs) {
     long code_off = elf_code_off(bss_len);
     long base = 4194304;
     // Pad the code to a page so rodata starts page-aligned; pad rodata tail
@@ -65,7 +65,7 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
     long total = code_off + codesz + codepad + rosz + ropad;
     long entry = base + code_off + entry_off;
     Yv *dbg = elf_debug(code_off, codesz, codepad, yv_len(rodata), total,
-                        bss_len, syms);
+                        bss_len, syms, dsecs);
     // EHDR
     Yv *header = yav(16, yv_long(127), yv_long(69), yv_long(76),
                      yv_long(70), yv_long(2), yv_long(1), yv_long(1),
@@ -140,9 +140,10 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
 }
 
 /* -g: the symbol table and section headers, as the bytes that follow the
- * loaded image: [.bss head][.symtab][.strtab][.shstrtab][pad to 8]
+ * loaded image: [.bss head][.symtab][.strtab][.shstrtab][dsecs][pad to 8]
  * [section headers]. Sections: 0 null, 1 .text, 2 .rodata, 3 .bss (only
- * with a .bss), then .symtab, .strtab, .shstrtab. Symbols are local
+ * with a .bss), then .symtab, .strtab, .shstrtab, then dsecs (dwarf.y's
+ * .debug_* sections: no address, no flags) in order. Symbols are local
  * (STB_LOCAL, listed first, as ELF requires) except `_start`, the one
  * global; text symbols are STT_FUNC, .bss ones STT_OBJECT. No symbols:
  * no bytes, no headers — the plain build is unchanged.
@@ -153,7 +154,7 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
  * (p_offset must share p_vaddr's page offset). The loader zeroes the rest
  * of that page, so memory holds the same zeros as without -g. */
 Yv *elf_debug(long code_off, long codesz, long codepad, long ro_len,
-              long total, long bss_len, Yv *syms) {
+              long total, long bss_len, Yv *syms, Yv *dsecs) {
     if (yv_len(syms) == 0) {
         Yv *none_bytes = yav(0);
         return yr(6, "bytes", none_bytes, "shoff", yv_long(0), "shnum",
@@ -210,6 +211,14 @@ Yv *elf_debug(long code_off, long codesz, long codepad, long ro_len,
         shstr = push_cstr(shstr, ys(".strtab"));
         long n_shs = yv_len(shstr);
         shstr = push_cstr(shstr, ys(".shstrtab"));
+        Yv *dnames = yav(0);
+        long di = 0;
+        while (di < yv_len(dsecs)) {
+            Yv *ds = ya_get(dsecs, di);
+            dnames = ya_push(dnames, yv_long(yv_len(shstr)));
+            shstr = push_cstr(shstr, yr_get(ds, "name"));
+            di = di + 1;
+        }
         Yv *blob = yav(0);
         long bss_foff = 0;
         long bss_fsz = 0;
@@ -232,6 +241,14 @@ Yv *elf_debug(long code_off, long codesz, long codepad, long ro_len,
         blob = push_bytes(blob, symtab);
         blob = push_bytes(blob, strtab);
         blob = push_bytes(blob, shstr);
+        Yv *doffs = yav(0);
+        di = 0;
+        while (di < yv_len(dsecs)) {
+            Yv *ds = ya_get(dsecs, di);
+            doffs = ya_push(doffs, yv_long(total + yv_len(blob)));
+            blob = push_bytes(blob, yr_get(ds, "data"));
+            di = di + 1;
+        }
         long pad = (8 - yv_len(blob) % 8) % 8;
         blob = push_zeros(blob, pad);
         long shoff = total + yv_len(blob);
@@ -251,8 +268,16 @@ Yv *elf_debug(long code_off, long codesz, long codepad, long ro_len,
                          0, 1, 0);
         blob = push_shdr(blob, n_shs, 3, 0, 0, shstr_off, yv_len(shstr), 0,
                          0, 1, 0);
+        di = 0;
+        while (di < yv_len(dsecs)) {
+            Yv *ds = ya_get(dsecs, di);
+            Yv *dd = yr_get(ds, "data");
+            blob = push_shdr(blob, yv_l(ya_get(dnames, di)), 1, 0, 0,
+                             yv_l(ya_get(doffs, di)), yv_len(dd), 0, 0, 1, 0);
+            di = di + 1;
+        }
         return yr(6, "bytes", blob, "shoff", yv_long(shoff), "shnum",
-                  yv_long(symtab_idx + 3), "shstrndx",
+                  yv_long(symtab_idx + 3 + yv_len(dsecs)), "shstrndx",
                   yv_long(symtab_idx + 2), "bss_foff", yv_long(bss_foff),
                   "bss_fsz", yv_long(bss_fsz));
     }

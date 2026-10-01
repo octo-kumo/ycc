@@ -7,7 +7,8 @@
  *   -o OUTPUT    output path (executable, or .s file with -S)
  *   -S           emit assembly only (stdout, or the -o file)
  *   -t, --time   print per-phase time and heap use to stderr
- *   -g           add a symbol table (for perf, gdb, valgrind; see -h)
+ *   -g           add a symbol table and DWARF line info (for perf, gdb,
+ *                valgrind, addr2line; see -h)
  *   -h, --help   show this text and exit
  */
 #include "ycc.h"
@@ -62,9 +63,10 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("  -o OUTPUT    output path (executable, or .s file with -S)\n"));
             puts_(ys("  -S           emit assembly only (stdout, or the -o file)\n"));
             puts_(ys("  -t, --time   print per-phase time and heap use to stderr\n"));
-            puts_(ys("  -g           add section headers and a symbol table (functions,\n"));
-            puts_(ys("               globals) so perf, gdb and valgrind show names; the\n"));
-            puts_(ys("               loaded code and data are unchanged\n"));
+            puts_(ys("  -g           add section headers, a symbol table (functions,\n"));
+            puts_(ys("               globals) and DWARF line info, so perf, gdb,\n"));
+            puts_(ys("               valgrind and addr2line show names and source\n"));
+            puts_(ys("               lines; the loaded code and data are unchanged\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
             puts_(ys("  -h, --help   show this text and exit\n"));
             exit_(0);
@@ -253,7 +255,8 @@ long y_main(Yv *cmdline) {
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));
             h0 = yv_l(yr_get(ph, "h"));
-            Yv *r = emit_program(ast, nrimports, nrorigin);
+            Yv *r = emit_program(ast, nrimports, nrorigin,
+                                 yv_b(yr_get(pargs, "debug")));
             /* emit_program reports its own sub-phases (strip_ns, rename,
              * typecheck, emit_fns, emit_start, asm_text); splice them in. */
             Yv *sub = yr_get(r, "times");
