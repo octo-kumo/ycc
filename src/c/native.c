@@ -56,18 +56,21 @@ Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
-/* src/y/std/prelude.y */
-Yv *prelude_lines(void);
-Yv *exec_lines(void);
-Yv *prelude_names(void);
-Yv *exec_names(void);
-/* src/y/std/rt.y */
-Yv *rt_lines(void);
+
+/* The runtime text native_resolve_x splices into programs: native.y's
+ * `embed RT_SRC from "./std/rt.y";` and friends (see Y_EMBED in yv.h). */
+Y_EMBED(RT_SRC, "src/y/std/rt.y")
+Y_EMBED(PRELUDE_SRC, "src/y/std/prelude.y")
+Y_EMBED(EXEC_SRC, "src/y/std/exec.y")
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
 Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec);
+Yv *prelude_names(void);
+Yv *exec_names(void);
+Yv *std_text(Yv *s);
+long count_nl(Yv *s);
 int names_mentioned(Yv *src, Yv *names);
 Yv *strip_comments(Yv *src);
 Yv *norm_path(Yv *p);
@@ -75,6 +78,9 @@ int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
 Yv *std_resolve(Yv *name, Yv *base_dir);
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen);
+int is_embed_decl(Yv *trimmed);
+Yv *embed_decl(Yv *trimmed, Yv *base_dir);
+Yv *quote_text(Yv *s);
 int is_id_b(long c);
 long skip_sp(Yv *b, long i, long hi);
 long tok_end_b(Yv *b, long i, long hi);
@@ -344,17 +350,23 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
      * generated code calls into it by fixed label (`call y_print_long`), so
      * there is no name to test for. Unused helpers cost nothing in the
      * output — prune_bodies drops them at emit time. */
-    Yv *rtl = rt_lines();
-    rsrc = ys_cat(ys_cat(ys_join(rtl, ys("\n")), ys("\n")), rsrc);
-    pre = pre + yv_len(rtl);
-    /* Prelude chunks go in front of the resolved text, but only when the
-     * program actually mentions one of their names — otherwise every binary
-     * would carry code it never calls (there is no dead-code pass). */
+    Yv *rt = std_text(RT_SRC());
+    /* What the name checks below search: the program and any chunk spliced
+     * so far, but NOT rt. rt mentions none of the trigger names, and
+     * stripping its comments twice per compile was most of the resolve
+     * time of a small program. */
+    Yv *scan = rsrc;
+    rsrc = ys_cat(rt, rsrc);
+    pre = pre + count_nl(rt);
+    /* std/exec.y and std/prelude.y go in front of the resolved text, but
+     * only when the program actually mentions one of their names —
+     * otherwise every binary would carry code it never calls. */
     if (allow_exec) {
-        if (names_mentioned(rsrc, exec_names())) {
-            Yv *xl = exec_lines();
-            rsrc = ys_cat(ys_cat(ys_join(xl, ys("\n")), ys("\n")), rsrc);
-            pre = pre + yv_len(xl);
+        if (names_mentioned(scan, exec_names())) {
+            Yv *xt = std_text(EXEC_SRC());
+            rsrc = ys_cat(xt, rsrc);
+            scan = ys_cat(xt, scan);
+            pre = pre + count_nl(xt);
             ;
         } else {
             ;
@@ -363,15 +375,62 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
     } else {
         ;
     }
-    if (names_mentioned(rsrc, prelude_names())) {
-        Yv *pl = prelude_lines();
-        rsrc = ys_cat(ys_cat(ys_join(pl, ys("\n")), ys("\n")), rsrc);
-        pre = pre + yv_len(pl);
+    if (names_mentioned(scan, prelude_names())) {
+        Yv *pt = std_text(PRELUDE_SRC());
+        rsrc = ys_cat(pt, rsrc);
+        pre = pre + count_nl(pt);
         ;
     } else {
         ;
     }
     return yr(3, "src", rsrc, "imports", rimports, "pre", yv_long(pre));
+}
+
+/* Names std/prelude.y defines. A program that mentions none of them gets
+ * no prelude at all, so a hello-world binary stays the size it was.
+ * These are the TRIGGER names native_resolve_x searches the spliced text
+ * for; a file may define more -- std/exec.y also defines exit_status,
+ * which only exec() calls. `y_stdin_sync` is how the exec file pulls this
+ * one in: exec is spliced first, so its call to y_stdin_sync is already in
+ * the text this list is matched against. */
+Yv *prelude_names(void) {
+    Yv *out = yav(0);
+    out = ya_push(out, ys("readline"));
+    out = ya_push(out, ys("clear_eof"));
+    out = ya_push(out, ys("y_stdin_sync"));
+    return out;
+}
+
+Yv *exec_names(void) {
+    return ya_push(yav(0), ys("exec"));
+}
+
+/* An embedded std file, ready to go in front of the program: newline-
+ * terminated, so the program's own first line still starts a line. */
+Yv *std_text(Yv *s) {
+    if (ys_eq_lit(ys_slice_from(s, yv_len(s) - 1), "\n")) {
+        return s;
+    } else {
+        return ys_cat(s, ys("\n"));
+    }
+}
+
+/* How many lines a newline-terminated text holds (what `pre` counts). */
+long count_nl(Yv *s) {
+    Yv *b = bytes_of(s);
+    long n = yv_len(b);
+    long c = 0;
+    long i = 0;
+    while (i < n) {
+        if (yv_l(ya_get(b, i)) == 10) {
+            c = c + 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return c;
 }
 
 /* Textual check, deliberately: it runs before tokenizing, and a false
@@ -699,6 +758,9 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                     ;
                 }
                 ;
+            } else if (is_embed_decl(trimmed)) {
+                out_lines = ya_push(out_lines, embed_decl(trimmed, base_dir));
+                ;
             } else {
                 /* NOTE: no empty if-arms here — keep the `;` filler.
                  * Export lines are dropped (defs are spliced; uses are
@@ -725,6 +787,112 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
         return yr(3, "src", ys_join(out_lines, ys("\n")), "imports", imports,
                   "seen", seen);
     }
+}
+
+/* ── embed ──────────────────────────────────────────────────────────────
+ * `embed NAME from "path";` declares `const NAME = "<the file's bytes>";`.
+ * The file is read at compile time, like an import, and the literal stays
+ * on the declaration's one line, so every line number below it holds. The
+ * path is relative to the file that says it (an absolute path stays as
+ * is). A line that only starts with the word (`embed = 1;`) is code. */
+int is_embed_decl(Yv *trimmed) {
+    if (ys_eq_lit(ys_slice(trimmed, 0, 6), "embed ")) {
+        return ys_index_of(trimmed, ys(" from \"")) > 6;
+    } else {
+        return 0;
+    }
+}
+
+Yv *embed_decl(Yv *trimmed, Yv *base_dir) {
+    Yv *rest = ys_slice_from(trimmed, 6);
+    long from_idx = ys_index_of(rest, ys(" from \""));
+    Yv *name = ys_trim(ys_slice(rest, 0, from_idx));
+    Yv *path_part = ys_trim(ys_slice_from(rest, from_idx + 6));
+    if (ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1), ";")) {
+        path_part = ys_trim(ys_slice(path_part, 0, yv_len(path_part) - 1));
+        ;
+    } else {
+        ;
+    }
+    if (yv_len(path_part) < 2 ||
+        !ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1), "\"")) {
+        puts_(ys_cat(ys_cat(ys("error: malformed embed (embed NAME from \"path\";): "),
+                            trimmed),
+                     ys("\n")));
+        exit_(1);
+        ;
+    } else {
+        ;
+    }
+    Yv *path = ys_slice(path_part, 1, yv_len(path_part) - 1);
+    Yv *full = norm_path(ys_cat(ys_cat(base_dir, ys("/")), path));
+    if (ys_eq_lit(ys_slice(path, 0, 1), "/")) {
+        full = norm_path(path);
+        ;
+    } else {
+        ;
+    }
+    Yv *data = read_file(full);
+    if (yv_is_none(data)) {
+        puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: cannot embed '"), path),
+                                   ys("' (resolved to '")),
+                            full),
+                     ys("')\n")));
+        exit_(1);
+        ;
+    } else {
+        ;
+    }
+    return ys_cat(ys_cat(ys_cat(ys_cat(ys("const "), name), ys(" = ")),
+                         quote_text(yv_unwrap(data))),
+                  ys(";"));
+}
+
+/* `s` as a Y string literal on one line: a backslash, a quote and the
+ * control bytes are escaped (`\n`, `\r`, `\xHH`; a tab stays as is) and
+ * every other byte is copied. */
+Yv *quote_text(Yv *s) {
+    Yv *b = bytes_of(s);
+    long n = yv_len(b);
+    Yv *hex = ys("0123456789abcdef");
+    Yv *out = ya_push(yav(0), ys("\""));
+    long run = 0;
+    long i = 0;
+    while (i < n) {
+        long c = yv_l(ya_get(b, i));
+        Yv *esc = ys("");
+        if (c == 92) {
+            esc = ys("\\\\");
+            ;
+        } else if (c == 34) {
+            esc = ys("\\\"");
+            ;
+        } else if (c == 10) {
+            esc = ys("\\n");
+            ;
+        } else if (c == 13) {
+            esc = ys("\\r");
+            ;
+        } else if (c < 32 && c != 9) {
+            esc = ys_cat(ys_cat(ys("\\x"), ys_slice(hex, c / 16, c / 16 + 1)),
+                         ys_slice(hex, c % 16, c % 16 + 1));
+            ;
+        } else {
+            ;
+        }
+        if (yv_len(esc) > 0) {
+            out = ya_push(out, ys_slice(s, run, i));
+            out = ya_push(out, esc);
+            run = i + 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    out = ya_push(out, ys_slice_from(s, run));
+    out = ya_push(out, ys("\""));
+    return ys_join(out, ys(""));
 }
 
 int is_id_b(long c) {
@@ -1670,34 +1838,50 @@ Yv *next_loc(Yv *st) {
 
 /* ── string escaping for GAS .string ──────────────────────────────────── */
 
+/* Runs of plain bytes are copied as one slice and the pieces joined once:
+ * appending a byte at a time was quadratic, and an embedded file is one
+ * long literal (the compiler's own runtime text cost 100 MB that way). */
 Yv *esc_asm(Yv *s) {
-    Yv *buf = ys("");
+    Yv *b = bytes_of(s);
+    long n = yv_len(b);
+    Yv *out = yav(0);
+    long run = 0;
     long i = 0;
-    long n = yv_len(s);
     while (i < n) {
-        Yv *c = ys_slice(s, i, i + 1);
-        long o = ys_ord(c);
-        if (ys_eq_lit(c, "\\")) {
-            buf = ys_cat(buf, ys("\\\\"));
-        } else if (ys_eq_lit(c, "\"")) {
-            buf = ys_cat(buf, ys("\\\""));
-        } else if (ys_eq_lit(c, "\n")) {
-            buf = ys_cat(buf, ys("\\n"));
-        } else if (ys_eq_lit(c, "\t")) {
-            buf = ys_cat(buf, ys("\\t"));
+        long o = yv_l(ya_get(b, i));
+        Yv *esc = ys("");
+        if (o == 92) {
+            esc = ys("\\\\");
+            ;
+        } else if (o == 34) {
+            esc = ys("\\\"");
+            ;
+        } else if (o == 10) {
+            esc = ys("\\n");
+            ;
+        } else if (o == 9) {
+            esc = ys("\\t");
+            ;
         } else if (o < 32 || o > 126) {
-            long d2 = o / 64;
-            long d1 = (o / 8) % 8;
-            long d0 = o % 8;
-            buf = ys_cat(ys_cat(ys_cat(ys_cat(buf, ys("\\")), ys_long(d2)),
-                                ys_long(d1)),
-                         ys_long(d0));
+            esc = ys_cat(ys_cat(ys_cat(ys("\\"), ys_long(o / 64)),
+                                ys_long((o / 8) % 8)),
+                         ys_long(o % 8));
+            ;
         } else {
-            buf = ys_cat(buf, c);
+            ;
+        }
+        if (yv_len(esc) > 0) {
+            out = ya_push(out, ys_slice(s, run, i));
+            out = ya_push(out, esc);
+            run = i + 1;
+            ;
+        } else {
+            ;
         }
         i = i + 1;
     }
-    return buf;
+    out = ya_push(out, ys_slice_from(s, run));
+    return ys_join(out, ys(""));
 }
 
 /* ── flat environment ─────────────────────────────────────────────────── */

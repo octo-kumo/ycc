@@ -59,6 +59,23 @@ Yv *ys_cstr(const char *s);           /* string from NUL-terminated text */
 Yv *ys_n(const char *p, size_t n);    /* string from raw bytes */
 Yv *ys_fmt(const char *fmt, ...);     /* formatted string (printf-style) */
 
+/* The twin of a Y top-level `embed NAME from "path";` (native.y embeds the
+ * std sources it splices into programs): the file's bytes are linked in
+ * when cycc is BUILT, by the assembler's .incbin. The path is relative to
+ * the directory gcc runs in, the repo root (where the Makefile runs it).
+ * NAME() returns the bytes as a str; the Y twin's NAME is a str const. */
+#define Y_EMBED(name, path)                                             \
+    __asm__(".pushsection .rodata\n"                                    \
+            "y_embed_" #name ":\n"                                      \
+            ".incbin \"" path "\"\n"                                    \
+            "y_embed_" #name "_end:\n"                                  \
+            ".popsection\n");                                           \
+    extern const char y_embed_##name[], y_embed_##name##_end[];         \
+    static Yv *name(void) {                                             \
+        return ys_n(y_embed_##name,                                     \
+                    (size_t)(y_embed_##name##_end - y_embed_##name));   \
+    }
+
 /* boxed scalar accessors (unchecked; used at typed boundaries) */
 long yv_l(const Yv *v);
 int yv_b(const Yv *v);

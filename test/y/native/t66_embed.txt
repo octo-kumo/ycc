@@ -1,0 +1,4 @@
+line one "quoted" \ back\slash
+	tabbed // not a comment /* nor this */
+ctrl: utf8: ω
+last line, no newline

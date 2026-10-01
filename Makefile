@@ -6,23 +6,20 @@ CY_HDRS=$(wildcard src/c/*.h)
 CYCC=cycc
 
 # The Y compiler sources: what the compiler compiles (and mirrors in C).
-YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/rt.y
+YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/exec.y src/y/std/rt.y
 
-# The std modules embed their own source as line arrays (the shipped ycc
-# is a standalone ELF); the C copy gets generated twins of those arrays.
-STD_LINES_C=src/c/std_lines.c
+# The std files the compiler splices into programs, embedded into it when
+# it is built: native.y says `embed RT_SRC from "./std/rt.y";`, the C copy
+# Y_EMBED(...) — an .incbin, so the C build reads them too (from the repo
+# root, where these rules run gcc).
+STD_EMBEDS=src/y/std/rt.y src/y/std/prelude.y src/y/std/exec.y
 
 all: cycc
 
 # [1/3] gcc builds the C copy of the compiler.
-cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_LINES_C)
+cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS)
 	$(GCC) $(CFLAGS) -o cycc $(CYC_SRCS)
 	@echo "cycc built: the C copy of the compiler ($$(stat -c%s cycc) bytes)"
-
-$(STD_LINES_C): tools/gen_std_lines.py src/y/std/rt.y src/y/std/prelude.y
-	python3 tools/gen_std_lines.py $@ src/y/std/rt.y:rt_lines \
-	    src/y/std/prelude.y:prelude_lines src/y/std/prelude.y:exec_lines \
-	    src/y/std/prelude.y:prelude_names src/y/std/prelude.y:exec_names
 
 # [2/3] the C copy compiles the compiler -> ycc (native static ELF, no
 # toolchain). [3/3] acceptance: ycc must be byte-identical to the backed-up
@@ -44,7 +41,7 @@ ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS)
 # AddressSanitizer + UBSan build of the C copy (one command, no CI).
 ASAN_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -g
 
-cycc-asan: $(CYC_SRCS) $(CY_HDRS)
+cycc-asan: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS)
 	$(GCC) $(CFLAGS) $(ASAN_FLAGS) -o cycc-asan $(CYC_SRCS)
 
 asan: cycc-asan
@@ -78,12 +75,8 @@ test-compile: cycc ycc
 	./cycc -o /tmp/hello_c test/y/examples/helloworld.y && /tmp/hello_c
 	./ycc -o /tmp/hello_y test/y/examples/helloworld.y && /tmp/hello_y
 
-# The generated file goes too; make regenerates it (src/c/std_lines.c is
-# committed — regenerating it is byte-identical, so a clean rebuild leaves
-# no diff).
 clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc a.out
-	rm -f $(STD_LINES_C)
 
 # Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y
 # value model (src/c/yv.c) never frees, so a leak gate could never be clean

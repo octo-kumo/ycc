@@ -41,7 +41,8 @@ requires byte-identical binaries).
 | `src/y/elf.y`           | `src/c/elf.c`         | ELF writer                        |
 | `src/y/ycc.y`           | `src/c/ycc.c`         | driver + `main`                   |
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
-| `src/y/std/*.y`         | (stay Y)              | spliced into every program from line arrays (`src/c/std_lines.c`) |
+| `src/y/std/rt.y`, `prelude.y`, `exec.y` | (stay Y)  | runtime text spliced into programs: native.y's `embed`, the C copy's `Y_EMBED` (rule 10) |
+| `src/y/std/io.y`, `net.y`, `struct.y`   | (stay Y)  | modules a program imports; read from disk when it is compiled |
 
 ## Translation rules
 
@@ -98,6 +99,13 @@ requires byte-identical binaries).
 
 9. **Errors and exits** behave like the Y code: `exit(n)` terminates;
    diagnostics go through `puts`/`eputs` unchanged.
+
+10. **Embedded files**: a top-level `embed NAME from "./std/rt.y";` (a str
+    const holding the file, read when the compiler is built) →
+    `Y_EMBED(NAME, "src/y/std/rt.y")` (yv.h: the assembler's `.incbin`,
+    path relative to the repo root, where the Makefile runs gcc), read as
+    `NAME()`. The Makefile lists the files in `STD_EMBEDS` so cycc rebuilds
+    when one changes.
 
 ## What the port must NOT do
 

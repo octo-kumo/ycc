@@ -20,8 +20,6 @@
   `perf annotate`, gdb and addr2line show source lines too. Needs a map
   from the spliced program's lines back to files, and line markers from
   the emitter through the assembler.
-- remove py code
-- move prelude into std
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
 - template string with f"{x} {y:.2f}" (python style)
 - string operations like trim, strip, pad etc shall be done like "str 1 2 3".split(' ')
@@ -99,6 +97,15 @@ what was deliberately *not* changed) is in `audit.md`.
   now (`y_str_slice` took over `y_str_substr`'s body), where it used to be
   a Y wrapper around `substr`. Calling `substr` says what to write instead
   (`e56`). The C copy's twin is `ys_slice`/`ys_slice_from`.
+- **The runtime is plain std files; no Python left.** `std/rt.y`,
+  `std/prelude.y` (readline) and the new `std/exec.y` are ordinary Y files
+  now, where they used to be `def rt_lines() -> [str]` line arrays with a
+  Python script (`tools/gen_std_lines.py`) generating their C twins. The
+  compiler carries them through a new declaration, `embed NAME from
+  "path";` (a str const with the file's bytes, read at compile time, line
+  numbers kept: `t66`, `e57`, `e58`); the C copy embeds the same files with
+  the assembler's `.incbin` (`Y_EMBED`). Programs compile to the same bytes
+  as before.
 - Hex/binary literals with `_` separators, scientific notation, float literals.
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),

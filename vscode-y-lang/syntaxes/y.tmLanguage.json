@@ -118,7 +118,7 @@
         },
         {
           "name": "keyword.control.import.y",
-          "match": "\\b(import|from|export)\\b"
+          "match": "\\b(import|embed|from|export)\\b"
         },
         {
           "name": "storage.type.y",

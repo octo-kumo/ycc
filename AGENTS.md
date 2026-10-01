@@ -16,10 +16,13 @@ same semantics.
   `refs/` holds the backed-up reference binaries (gitignored; see
   `refs/SHA256SUMS`).
 - Do not commit build artifacts: `*.o`, `cycc`, `cycc-asan`, `ycc`,
-  `_ycc`, `a.out` (all gitignored; `make clean` removes the binaries and
-  the generated C twin `src/c/std_lines.c` — it is tracked, so
-  `git checkout` it after a clean). `refs/` is gitignored too but is
-  **not** disposable — it is the port's ground truth.
+  `_ycc`, `a.out` (all gitignored; `make clean` removes them). `refs/` is
+  gitignored too but is **not** disposable — it is the port's ground
+  truth.
+- The runtime the compiler splices into programs is plain Y in
+  `src/y/std/rt.y`, `prelude.y`, `exec.y`, embedded into both compilers
+  when they are built (`embed` in native.y, `Y_EMBED` in native.c —
+  PORTING.md rule 10). Edit those files directly; there is no generator.
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
   Do NOT put a `ulimit -v` on sanitized runs — ASan reserves terabytes
@@ -202,7 +205,8 @@ code calls it by fixed label.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `native.y` (emitter), `arch_x64.y`
   (asm + prelude), `enc64.y`, `asm.y`, `elf.y`; `std/` (`rt.y` runtime
-  in Y, `prelude.y` (`readline`/`exec`), `io.y`, `net.y`, `struct.y`).
+  in Y, `prelude.y` (`readline`), `exec.y` (`exec`) — the three embedded
+  into the compiler — and `io.y`, `net.y`, `struct.y`).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
 - `refs/` — backed-up reference binaries for the port gate (see

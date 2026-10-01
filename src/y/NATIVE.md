@@ -19,7 +19,7 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect (+ octal payload writer) |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab` and section headers |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof` and the separate `exec` chunk), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof`) and `exec.y` (`exec`, its own file for `--no-exec`) — those three embedded into the compiler — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -299,7 +299,7 @@ examples of the same move landed earlier:
   `bytes`/`from_bytes`; stopping at the newline, growing the buffer and
   handling EOF are ordinary Y. It replaced ~90 lines of assembly. It first
   read one byte per `read(2)`; it now fills a 16 KB stdin buffer (globals
-  at the top of the prelude chunk, allocated on the first read) and slices
+  at the top of `std/prelude.y`, allocated on the first read) and slices
   lines out of it — `bench/y/lines.y`, 5 MB of short lines, went from
   1.25 s to 0.10 s. EOF is still never latched: an empty buffer always
   means a fresh `read(2)`.
@@ -310,16 +310,20 @@ examples of the same move landed earlier:
   unread part of the stdin buffer back with `lseek(0, -unread, SEEK_CUR)`
   when stdin is a file, so the child starts right after the last line
   `readline()` returned; a pipe cannot seek, and bytes already buffered
-  stay with the parent (the C stdio contract). The exec chunk calls
+  stay with the parent (the C stdio contract). `std/exec.y` calls
   `y_stdin_sync`, which is in the prelude trigger list, so splicing exec
-  always pulls the readline chunk in as well.
+  always pulls `std/prelude.y` in as well.
 
-`ycc --no-exec` simply does not splice the exec chunk, so the call fails
+`ycc --no-exec` simply does not splice `std/exec.y`, so the call fails
 with "undefined function 'exec'" and the binary has no path to a shell.
 
-The runtime text lives as line arrays inside `rt.y`/`prelude.y` because the
-shipped `ycc` is a standalone static ELF — it cannot read a support file at
-run time. A Y helper may call intrinsics (`bytes`, `from_bytes`,
+`rt.y`, `prelude.y` and `exec.y` are plain Y files, and the compiler
+carries their text: native.y says `embed RT_SRC from "./std/rt.y";` (see
+*Embedding files* below), the C copy `Y_EMBED(RT_SRC, ...)`, because the
+shipped `ycc` is a standalone static ELF — it cannot read a support file
+at run time. `rt.y` is spliced always; `prelude.y` and `exec.y` only when
+the program mentions one of their names (`prelude_names`/`exec_names` in
+native.y). A Y helper may call intrinsics (`bytes`, `from_bytes`,
 `tostring`, `syscall`, …), slice strings (`s[a:b]` is the asm
 `y_str_slice`) and call other helpers, but never an assembly-only
 label directly — the checker would call it undefined — so every bridge into
@@ -424,6 +428,26 @@ only: the program that runs has no use for the file.
 `send_str`/`recv_str`/`local_port`) and a tiny HTTP server
 (`http_response`, `http_read_head`, `http_serve_one`, `listen_http`), all Y
 over `syscall`. A `ui` module would land the same way.
+
+## Embedding files
+
+`embed NAME from "path";` on a line of its own declares `const NAME =
+"<the file's bytes>";`, read when the program is compiled:
+
+```y
+embed HELP from "help.txt";   // relative to this file, like an import
+print(HELP);
+```
+
+The program carries the bytes; the file is not needed at run time. The
+path is relative to the file that says it (an absolute path stays as is),
+a missing file is a compile error, and any bytes go — quotes, backslashes,
+control bytes, no final newline (`t66`, `e58`). `native_resolve_seen`
+handles the line like an import: `embed_decl` writes the const with the
+contents quoted onto that one line (`quote_text`), so every line number
+after it holds (`e57`). A line that merely starts with the word
+(`embed = 1;`) is code. The compiler embeds its own runtime this way (see
+the runtime library above).
 
 ## Debugging and profiling compiled output (`ycc -g`)
 

@@ -17,6 +17,16 @@ import io from "./std/io.y";   // io.f(...) addresses defs of io.y
 Paths resolve relative to the importing file's directory. A missing
 module is a fatal error.
 
+A file's bytes can be compiled in as a string: on a line of its own,
+
+\begin{lstlisting}
+embed HELP from "help.txt";   // const HELP = "<the file's bytes>";
+\end{lstlisting}
+
+\noindent declares the \ic{const} with the file's contents, read when the
+program is compiled. The path resolves like an import's, a missing file
+is a fatal error, and line numbers after the declaration are unchanged.
+
 \subsection{Declarations}
 
 \begin{align*}

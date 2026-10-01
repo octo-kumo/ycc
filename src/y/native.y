@@ -24,8 +24,14 @@
 import arch from "./arch_x64.y";
 import types from "./types.y";
 import rename from "./rename.y";
-import prelude from "./std/prelude.y";
-import yrt from "./std/rt.y";
+
+// The runtime text native_resolve_x splices into programs. `embed` (see
+// embed_decl) makes each file a str const when the compiler is BUILT: the
+// shipped ycc is a standalone static ELF and cannot read support files at
+// run time. The C copy embeds the same files (Y_EMBED in src/c/yv.h).
+embed RT_SRC from "./std/rt.y";
+embed PRELUDE_SRC from "./std/prelude.y";
+embed EXEC_SRC from "./std/exec.y";
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -59,28 +65,69 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     // generated code calls into it by fixed label (`call y_print_long`), so
     // there is no name to test for. Unused helpers cost nothing in the
     // output — prune_bodies drops them at emit time.
-    let rtl = yrt.rt_lines();
-    rsrc = join(rtl, "\n") + "\n" + rsrc;
-    pre = pre + len(rtl);
-    // Prelude chunks go in front of the resolved text, but only when the
-    // program actually mentions one of their names — otherwise every binary
-    // would carry code it never calls (there is no dead-code pass).
+    let rt = std_text(RT_SRC);
+    // What the name checks below search: the program and any chunk spliced
+    // so far, but NOT rt. rt mentions none of the trigger names, and
+    // stripping its comments twice per compile was most of the resolve
+    // time of a small program.
+    let scan = rsrc;
+    rsrc = rt + rsrc;
+    pre = pre + count_nl(rt);
+    // std/exec.y and std/prelude.y go in front of the resolved text, but
+    // only when the program actually mentions one of their names —
+    // otherwise every binary would carry code it never calls.
     if (allow_exec) {
-        if (names_mentioned(rsrc, prelude.exec_names())) {
-            let xl = prelude.exec_lines();
-            rsrc = join(xl, "\n") + "\n" + rsrc;
-            pre = pre + len(xl);
+        if (names_mentioned(scan, exec_names())) {
+            let xt = std_text(EXEC_SRC);
+            rsrc = xt + rsrc;
+            scan = xt + scan;
+            pre = pre + count_nl(xt);
             0
         } else { 0; };
         0
     } else { 0; };
-    if (names_mentioned(rsrc, prelude.prelude_names())) {
-        let pl = prelude.prelude_lines();
-        rsrc = join(pl, "\n") + "\n" + rsrc;
-        pre = pre + len(pl);
+    if (names_mentioned(scan, prelude_names())) {
+        let pt = std_text(PRELUDE_SRC);
+        rsrc = pt + rsrc;
+        pre = pre + count_nl(pt);
         0
     } else { 0; };
     { src: rsrc, imports: rimports, pre: pre }
+};
+
+// Names std/prelude.y defines. A program that mentions none of them gets
+// no prelude at all, so a hello-world binary stays the size it was.
+// These are the TRIGGER names native_resolve_x searches the spliced text
+// for; a file may define more -- std/exec.y also defines exit_status,
+// which only exec() calls. `y_stdin_sync` is how the exec file pulls this
+// one in: exec is spliced first, so its call to y_stdin_sync is already in
+// the text this list is matched against.
+def prelude_names() -> [str] {
+    ["readline", "clear_eof", "y_stdin_sync"]
+};
+
+def exec_names() -> [str] {
+    ["exec"]
+};
+
+// An embedded std file, ready to go in front of the program: newline-
+// terminated, so the program's own first line still starts a line.
+def std_text(s: str) -> str {
+    if (s[len(s) - 1:] == "\n") { s } else { s + "\n" }
+};
+
+// How many lines a newline-terminated text holds (what `pre` counts).
+def count_nl(s: str) -> long {
+    let b = bytes(s);
+    let n = len(b);
+    let c = 0;
+    let i = 0;
+    while (i < n) {
+        if (b[i] == 10) { c = c + 1; 0; } else { 0; };
+        i = i + 1;
+        0
+    };
+    c
 };
 
 // Textual check, deliberately: it runs before tokenizing, and a false
@@ -364,6 +411,9 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                     0
                 };
                 0
+            } else if (is_embed_decl(trimmed)) {
+                out_lines += embed_decl(trimmed, base_dir);
+                0
             } else {
                 // NOTE: no empty if-arms here — keep the `0;` filler.
                 // Export lines are dropped (defs are spliced; uses are
@@ -390,6 +440,89 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
         };
         { src: join(out_lines, "\n"), imports: imports, seen: seen }
     }
+};
+
+// ── embed ──────────────────────────────────────────────────────────────
+// `embed NAME from "path";` declares `const NAME = "<the file's bytes>";`.
+// The file is read at compile time, like an import, and the literal stays
+// on the declaration's one line, so every line number below it holds. The
+// path is relative to the file that says it (an absolute path stays as
+// is). A line that only starts with the word (`embed = 1;`) is code.
+def is_embed_decl(trimmed: str) -> bool {
+    if (trimmed[:6] == "embed ") {
+        index_of(trimmed, " from \"") > 6
+    } else {
+        false
+    }
+};
+
+def embed_decl(trimmed: str, base_dir: str) -> str {
+    let rest = trimmed[6:];
+    let from_idx = index_of(rest, " from \"");
+    let name = trim(rest[:from_idx]);
+    let path_part = trim(rest[from_idx + 6:]);
+    if (path_part[len(path_part) - 1:] == ";") {
+        path_part = trim(path_part[:len(path_part) - 1]);
+        0
+    } else { 0; };
+    if (len(path_part) < 2 || path_part[len(path_part) - 1:] != "\"") {
+        puts("error: malformed embed (embed NAME from \"path\";): " + trimmed + "\n");
+        exit(1);
+        0
+    } else { 0; };
+    let path = path_part[1:len(path_part) - 1];
+    let full = norm_path(base_dir + "/" + path);
+    if (path[:1] == "/") { full = norm_path(path); 0; } else { 0; };
+    let data = read_file(full);
+    if (data == none) {
+        puts("error: cannot embed '" + path + "' (resolved to '" + full + "')\n");
+        exit(1);
+        0
+    } else { 0; };
+    "const " + name + " = " + quote_text(unwrap(data)) + ";"
+};
+
+// `s` as a Y string literal on one line: a backslash, a quote and the
+// control bytes are escaped (`\n`, `\r`, `\xHH`; a tab stays as is) and
+// every other byte is copied.
+def quote_text(s: str) -> str {
+    let b = bytes(s);
+    let n = len(b);
+    let hex = "0123456789abcdef";
+    let out: [str] = ["\""];
+    let run = 0;
+    let i = 0;
+    while (i < n) {
+        let c: long = b[i];
+        let esc = "";
+        if (c == 92) {
+            esc = "\\\\";
+            0
+        } else if (c == 34) {
+            esc = "\\\"";
+            0
+        } else if (c == 10) {
+            esc = "\\n";
+            0
+        } else if (c == 13) {
+            esc = "\\r";
+            0
+        } else if (c < 32 && c != 9) {
+            esc = "\\x" + hex[c / 16:c / 16 + 1] + hex[c % 16:c % 16 + 1];
+            0
+        } else { 0; };
+        if (len(esc) > 0) {
+            out += s[run:i];
+            out += esc;
+            run = i + 1;
+            0
+        } else { 0; };
+        i = i + 1;
+        0
+    };
+    out += s[run:];
+    out += "\"";
+    join(out, "")
 };
 
 // ── tree shaking ────────────────────────────────────────────────────────
@@ -1133,28 +1266,45 @@ def next_loc(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
 
 // ── string escaping for GAS .string ────────────────────────────────────
 
+// Runs of plain bytes are copied as one slice and the pieces joined once:
+// appending a byte at a time was quadratic, and an embedded file is one
+// long literal (the compiler's own runtime text cost 100 MB that way).
 def esc_asm(s: str) -> str {
-    let buf = "";
+    let b = bytes(s);
+    let n = len(b);
+    let out: [str] = [];
+    let run = 0;
     let i = 0;
-    let n = len(s);
     while (i < n) {
-        let c = s[i:i + 1];
-        let o = ord(c);
-        if (c == "\\") { buf = buf + "\\\\"; }
-        else if (c == "\"") { buf = buf + "\\\""; }
-        else if (c == "\n") { buf = buf + "\\n"; }
-        else if (c == "\t") { buf = buf + "\\t"; }
-        else if (o < 32 || o > 126) {
-            let d2 = o / 64;
-            let d1 = (o / 8) % 8;
-            let d0 = o % 8;
-            buf = buf + "\\" + tostring(d2) + tostring(d1) + tostring(d0);
-        } else {
-            buf = buf + c;
-        };
+        let o: long = b[i];
+        let esc = "";
+        if (o == 92) {
+            esc = "\\\\";
+            0
+        } else if (o == 34) {
+            esc = "\\\"";
+            0
+        } else if (o == 10) {
+            esc = "\\n";
+            0
+        } else if (o == 9) {
+            esc = "\\t";
+            0
+        } else if (o < 32 || o > 126) {
+            esc = "\\" + tostring(o / 64) + tostring((o / 8) % 8) + tostring(o % 8);
+            0
+        } else { 0; };
+        if (len(esc) > 0) {
+            out += s[run:i];
+            out += esc;
+            run = i + 1;
+            0
+        } else { 0; };
         i = i + 1;
+        0
     };
-    buf
+    out += s[run:];
+    join(out, "")
 };
 
 // ── flat environment ───────────────────────────────────────────────────

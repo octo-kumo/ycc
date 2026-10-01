@@ -1,5 +1,8 @@
-// std/prelude.y -- runtime library written in Y, spliced into the program
-// by native.y when it is referenced.
+// std/prelude.y -- readline() and the stdin buffer behind it, written in
+// Y. native.y embeds this file's text (`embed PRELUDE_SRC from
+// "./std/prelude.y";`) and splices it in front of a program that mentions
+// one of prelude_names() -- readline, clear_eof, y_stdin_sync -- so a
+// program that reads nothing carries none of it.
 //
 // WHY THIS EXISTS: every builtin used to mean another hand-written block of
 // assembly in arch_x64.y. That does not scale and it is where the bugs
@@ -11,167 +14,86 @@
 // These are plain defs, not intrinsics: they go through the normal
 // rename/typecheck/emit path, so a bug here is a bug in Y code, not in
 // hand-rolled x86.
-//
-// The text lives as a line array rather than a separate file because the
-// shipped `ycc` is a standalone static ELF -- it cannot read a support
-// file at run time. `join` puts it back together.
 
-def prelude_lines() -> [str] {
-    [
-        "// ---- spliced from src/y/std/prelude.y ----",
-        "",
-        "// The stdin buffer readline() fills 16 KB at a time: bytes",
-        "// y_rl_pos..y_rl_end of y_rl_buf are read but not yet returned.",
-        "// The buffer itself is allocated on the first read, so a program",
-        "// that only mentions readline pays for two zeroed cells.",
-        "let y_rl_buf: [byte] = [];",
-        "let y_rl_pos = 0;",
-        "let y_rl_end = 0;",
-        "",
-        "// readline() -> str?  (a line of stdin, newline stripped; none at",
-        "// end of input). Buffered like C stdio: one read(2) per 16 KB, not",
-        "// one per byte. A terminal in canonical mode hands over one line per",
-        "// read(2) anyway. EOF is not latched -- once the buffer is empty",
-        "// every call issues a fresh read(2), so a REPL survives Ctrl-D and",
-        "// a FIFO that is reopened.",
-        "def readline() -> str? {",
-        "    let out: [byte] = [];",
-        "    let go = true;",
-        "    let got = false;",
-        "    while (go) {",
-        "        if (y_rl_pos < y_rl_end) {",
-        "            got = true;",
-        "            let buf = y_rl_buf;",
-        "            let end = y_rl_end;",
-        "            let i = y_rl_pos;",
-        "            while (i < end && buf[i] != 10) { i = i + 1; };",
-        "            out += buf[y_rl_pos:i];",
-        "            if (i < end) {",
-        "                y_rl_pos = i + 1;",
-        "                go = false;",
-        "                0;",
-        "            } else {",
-        "                y_rl_pos = end;",
-        "                0;",
-        "            };",
-        "            0;",
-        "        } else {",
-        "            if (len(y_rl_buf) == 0) {",
-        "                let fresh: [byte; 16384] = [0; 16384];",
-        "                y_rl_buf = fresh[0:16384];",
-        "                0;",
-        "            };",
-        "            let n = syscall(0, 0, &y_rl_buf[0], len(y_rl_buf));",
-        "            if (n <= 0) {",
-        "                go = false;",
-        "                0;",
-        "            } else {",
-        "                y_rl_pos = 0;",
-        "                y_rl_end = n;",
-        "                0;",
-        "            };",
-        "            0;",
-        "        };",
-        "    };",
-        "    if (got) { some(from_bytes(out)) } else { none }",
-        "};",
-        "",
-        "// y_stdin_sync() -- exec() calls this before it forks. A child",
-        "// shares fd 0 with us, so whatever readline() buffered but did not",
-        "// return yet would be lost to it. When stdin is seekable (a",
-        "// redirected file) the unread bytes are given back with",
-        "// lseek(0, -unread, SEEK_CUR) and the child starts right after the",
-        "// last line we returned. A pipe cannot seek: those bytes stay ours,",
-        "// the same contract C stdio and Python have.",
-        "def y_stdin_sync() -> long {",
-        "    let unread = y_rl_end - y_rl_pos;",
-        "    if (unread > 0) {",
-        "        if (syscall(8, 0, 0 - unread, 1) >= 0) {",
-        "            y_rl_pos = 0;",
-        "            y_rl_end = 0;",
-        "            0;",
-        "        };",
-        "        0;",
-        "    };",
-        "    0",
-        "};",
-        "",
-        "// clear_eof() -- clear the end-of-input condition so a later",
-        "// readline() reads again. Nothing to do here: EOF is never latched",
-        "// (an empty buffer always means a fresh read(2)), so there is no",
-        "// sticky flag to reset. It stays a def so sources written for a",
-        "// stdio-based implementation, which needs clearerr(stdin), compile.",
-        "def clear_eof() -> long { 0 };",
-        ""
-    ]
+// The stdin buffer readline() fills 16 KB at a time: bytes
+// y_rl_pos..y_rl_end of y_rl_buf are read but not yet returned.
+// The buffer itself is allocated on the first read, so a program
+// that only mentions readline pays for two zeroed cells.
+let y_rl_buf: [byte] = [];
+let y_rl_pos = 0;
+let y_rl_end = 0;
+
+// readline() -> str?  (a line of stdin, newline stripped; none at
+// end of input). Buffered like C stdio: one read(2) per 16 KB, not
+// one per byte. A terminal in canonical mode hands over one line per
+// read(2) anyway. EOF is not latched -- once the buffer is empty
+// every call issues a fresh read(2), so a REPL survives Ctrl-D and
+// a FIFO that is reopened.
+def readline() -> str? {
+    let out: [byte] = [];
+    let go = true;
+    let got = false;
+    while (go) {
+        if (y_rl_pos < y_rl_end) {
+            got = true;
+            let buf = y_rl_buf;
+            let end = y_rl_end;
+            let i = y_rl_pos;
+            while (i < end && buf[i] != 10) { i = i + 1; };
+            out += buf[y_rl_pos:i];
+            if (i < end) {
+                y_rl_pos = i + 1;
+                go = false;
+                0;
+            } else {
+                y_rl_pos = end;
+                0;
+            };
+            0;
+        } else {
+            if (len(y_rl_buf) == 0) {
+                let fresh: [byte; 16384] = [0; 16384];
+                y_rl_buf = fresh[0:16384];
+                0;
+            };
+            let n = syscall(0, 0, &y_rl_buf[0], len(y_rl_buf));
+            if (n <= 0) {
+                go = false;
+                0;
+            } else {
+                y_rl_pos = 0;
+                y_rl_end = n;
+                0;
+            };
+            0;
+        };
+    };
+    if (got) { some(from_bytes(out)) } else { none }
 };
 
-// exec() lives in its own chunk so --no-exec can leave it out entirely:
-// the call then fails with "undefined function 'exec'" rather than
-// compiling into a binary that can spawn a shell.
-def exec_lines() -> [str] {
-    [
-        "// exec(cmd) -> long  (exit status, or -1 if the child died on a",
-        "// signal / could not be started). The command string goes to",
-        "// /bin/sh -c verbatim, the same contract system(3) has.",
-        "//",
-        "// SECURITY: there is no sanitizing here. Never pass untrusted",
-        "// input. ycc --no-exec omits this function entirely, so a binary",
-        "// built with it cannot reach a shell at all.",
-        "//",
-        "// Written in Y over the raw syscalls: fork(57), execve(59),",
-        "// wait4(61), exit(60). envp is NULL -- sh supplies a default PATH",
-        "// -- so the parent's environment is not inherited; put VAR=val in",
-        "// the command string when a child needs one.",
-        "def exec(cmd: str) -> long {",
-        "    y_stdin_sync();",
-        "    let shpath = bytes(\"/bin/sh\");",
-        "    shpath += 0;",
-        "    let dashc = bytes(\"-c\");",
-        "    dashc += 0;",
-        "    let cmdb = bytes(cmd);",
-        "    cmdb += 0;",
-        "    let argv: [long; 4] = [0; 4];",
-        "    argv[0] = ptr_addr(&shpath[0]);",
-        "    argv[1] = ptr_addr(&dashc[0]);",
-        "    argv[2] = ptr_addr(&cmdb[0]);",
-        "    argv[3] = 0;",
-        "    let pid = syscall(57);",
-        "    if (pid == 0) {",
-        "        syscall(59, ptr_addr(&shpath[0]), ptr_addr(&argv[0]), 0);",
-        "        syscall(60, 127);",
-        "        0",
-        "    } else if (pid < 0) {",
-        "        0 - 1",
-        "    } else {",
-        "        let status: [long; 1] = [0; 1];",
-        "        let w = syscall(61, pid, ptr_addr(&status[0]), 0, 0);",
-        "        if (w < 0) { 0 - 1 } else { exit_status(status[0]) }",
-        "    }",
-        "};",
-        "",
-        "// Decode wait(2) status: low 7 bits are the terminating signal",
-        "// (0 for a normal exit), next 8 bits the exit code.",
-        "def exit_status(raw: long) -> long {",
-        "    if (raw % 128 == 0) { (raw / 256) % 256 } else { 0 - 1 }",
-        "};",
-        ""
-    ]
+// y_stdin_sync() -- exec() calls this before it forks. A child
+// shares fd 0 with us, so whatever readline() buffered but did not
+// return yet would be lost to it. When stdin is seekable (a
+// redirected file) the unread bytes are given back with
+// lseek(0, -unread, SEEK_CUR) and the child starts right after the
+// last line we returned. A pipe cannot seek: those bytes stay ours,
+// the same contract C stdio and Python have.
+def y_stdin_sync() -> long {
+    let unread = y_rl_end - y_rl_pos;
+    if (unread > 0) {
+        if (syscall(8, 0, 0 - unread, 1) >= 0) {
+            y_rl_pos = 0;
+            y_rl_end = 0;
+            0;
+        };
+        0;
+    };
+    0
 };
 
-// Names the prelude defines. A program that mentions none of them gets no
-// prelude at all, so a hello-world binary stays the size it was.
-// These are the TRIGGER names native.y searches the spliced text for; a
-// chunk may define more -- exec_lines also defines exit_status, which only
-// exec() calls. `y_stdin_sync` is how the exec chunk pulls this one in:
-// native.y splices exec first, so its call to y_stdin_sync is already in
-// the text this list is matched against.
-def prelude_names() -> [str] {
-    ["readline", "clear_eof", "y_stdin_sync"]
-};
-
-def exec_names() -> [str] {
-    ["exec"]
-};
-
-export { prelude_lines, prelude_names, exec_lines, exec_names };
+// clear_eof() -- clear the end-of-input condition so a later
+// readline() reads again. Nothing to do here: EOF is never latched
+// (an empty buffer always means a fresh read(2)), so there is no
+// sticky flag to reset. It stays a def so sources written for a
+// stdio-based implementation, which needs clearerr(stdin), compile.
+def clear_eof() -> long { 0 };

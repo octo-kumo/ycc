@@ -2,19 +2,21 @@
 //
 // This file holds the BEHAVIOUR that used to be hand-written x86 in
 // arch_x64.y: number formatting, the print/put/eput family, string
-// searching/parsing, time, files. `native.y` splices these defs in front of
-// every program; tree shaking (prune_bodies) drops the ones the program
-// never calls, and arch_x64.y keeps only the primitives that need raw
-// memory: the allocator, the traps, dynamic record lookup (y_rec_has /
-// y_dot_lookup), the byte-moving string/array cores, the str<->[byte] bridge,
-// float formatting and argv materialization.
+// searching/parsing, time, files. native.y embeds its text (`embed RT_SRC
+// from "./std/rt.y";` — the shipped ycc is a standalone static ELF and
+// cannot read support files at run time) and splices it in front of every
+// program; tree shaking (prune_bodies) drops the defs a program never
+// calls. arch_x64.y keeps only the primitives that need raw memory: the
+// allocator, the traps, dynamic record lookup (y_rec_has / y_dot_lookup),
+// the byte-moving string/array cores, the str<->[byte] bridge, float
+// formatting and argv materialization.
 //
 // Rules for code here:
-//   - the text INSIDE the line array is compiled into every program, so it
-//     may use the whole native language: `&x`, `*p`, `syscall`.
-//   - the wrapper below (the line-array building code) is part of the
-//     compiler's own source: it is compiled by BOTH ycc and the C twin
-//     (src/c, see PORTING.md), so it stays plain Y — no `&x`, no `syscall`.
+//   - it is compiled into programs, never into the compiler itself (the C
+//     copy embeds the same bytes, see Y_EMBED in src/c/yv.h), so it may
+//     use the whole native language: `&x`, `*p`, `syscall`.
+//   - every compile parses and checks all of it, used or not: what goes
+//     here costs every program's compile time.
 //   - function names starting with `y_` are emitted under their bare name
 //     (see fn_label_of in native.y): generated code calls them by fixed
 //     label, so the emitter's `call y_print_long` finds this def. The `y_`
@@ -29,414 +31,405 @@
 //     not allowed (the checker would call them undefined), so every
 //     bridge into the primitives goes through an intrinsic or an operator.
 
-def rt_lines() -> [str] {
-    [
-        "// ---- spliced from src/y/std/rt.y ----",
-        "",
-        "// One write(2) of a string's bytes to fd 1 / fd 2 (no newline).",
-        "def y_put_hstr(s: str) -> long {",
-        "    syscall(1, 1, s, len(s))",
-        "};",
-        "def y_eput_hstr(s: str) -> long {",
-        "    syscall(1, 2, s, len(s))",
-        "};",
-        "def y_print_hstr(s: str) -> long {",
-        "    y_put_hstr(s);",
-        "    y_put_hstr(\"\\n\");",
-        "    0",
-        "};",
-        "",
-        "// (long -> decimal string is y_long_tostr in arch_x64.y: one idiv",
-        "// per digit and one allocation; tostring(v) reaches it.)",
-        "def y_bool_tostr(b: bool) -> str {",
-        "    if (b) { \"true\" } else { \"false\" }",
-        "};",
-        "",
-        "// The print/put/eput family: every value becomes a string first,",
-        "// so the only output primitive is a byte write above.",
-        "def y_print_long(v: long) -> long { y_print_hstr(tostring(v)) };",
-        "def y_print_bool(b: bool) -> long { y_print_hstr(y_bool_tostr(b)) };",
-        "def y_print_float(f: float) -> long { y_print_hstr(tostring(f)) };",
-        "def y_put_long(v: long) -> long { y_put_hstr(tostring(v)) };",
-        "def y_put_bool(b: bool) -> long { y_put_hstr(y_bool_tostr(b)) };",
-        "def y_eput_long(v: long) -> long { y_eput_hstr(tostring(v)) };",
-        "def y_eput_bool(b: bool) -> long { y_eput_hstr(y_bool_tostr(b)) };",
-        "",
-        "// ord(s) = code of the first byte, -1 when empty. chr(n) is its",
-        "// inverse. Both work through the [byte] bridge.",
-        "def y_str_ord(s: str) -> long {",
-        "    if (len(s) > 0) { byte_at(s, 0) } else { 0 - 1 }",
-        "};",
-        "def y_str_chr(n: long) -> str {",
-        "    let b: [byte; 1] = [0; 1];",
-        "    b[0] = n;",
-        "    from_bytes(b)",
-        "};",
-        "",
-        "// a[lo:hi] = src, for 8-byte and packed 1-byte elements: the range",
-        "// must lie inside a and hold exactly len(src) elements.",
-        "def y_setslice_check(n: long, lo: long, hi: long, m: long) -> long {",
-        "    if (lo < 0 || hi > n || lo > hi) {",
-        "        y_put_hstr(\"runtime error: slice assignment out of bounds\\n\");",
-        "        exit(1);",
-        "        0",
-        "    } else if (hi - lo != m) {",
-        "        y_put_hstr(\"runtime error: slice assignment length mismatch\\n\");",
-        "        exit(1);",
-        "        0",
-        "    } else { 0 }",
-        "};",
-        "def y_arr_setslice8(dst: [long], lo: long, hi: long, src: [long]) -> long {",
-        "    y_setslice_check(len(dst), lo, hi, len(src));",
-        "    let i = 0;",
-        "    while (i < hi - lo) {",
-        "        dst[lo + i] = src[i];",
-        "        i = i + 1;",
-        "    };",
-        "    0",
-        "};",
-        "def y_arr_setslice1(dst: [byte], lo: long, hi: long, src: [byte]) -> long {",
-        "    y_setslice_check(len(dst), lo, hi, len(src));",
-        "    let i = 0;",
-        "    while (i < hi - lo) {",
-        "        dst[lo + i] = src[i];",
-        "        i = i + 1;",
-        "    };",
-        "    0",
-        "};",
-        "",
-        "// The fall-through of a match the checker proved exhaustive.",
-        "def y_match_fail() -> long {",
-        "    y_put_hstr(\"runtime error: no match arm matched\\n\");",
-        "    exit(1);",
-        "    0",
-        "};",
-        "",
-        "// tonum(s): optional '-', then digits; anything else stops the",
-        "// scan and is ignored (exactly the old asm behaviour).",
-        "def y_str_tonum(s: str) -> long {",
-        "    let n = len(s);",
-        "    let neg = false;",
-        "    let i = 0;",
-        "    if (n > 0) {",
-        "        if (byte_at(s, 0) == 45) {",
-        "            neg = true;",
-        "            i = 1;",
-        "            0",
-        "        } else { 0; };",
-        "        0",
-        "    } else { 0; };",
-        "    let acc = 0;",
-        "    let go = true;",
-        "    while (go) {",
-        "        if (i < n) {",
-        "            let c = byte_at(s, i);",
-        "            if (c >= 48) {",
-        "                if (c <= 57) {",
-        "                    acc = acc * 10 + (c - 48);",
-        "                    i = i + 1;",
-        "                    0",
-        "                } else { go = false; 0; };",
-        "                0",
-        "            } else { go = false; 0; };",
-        "            0",
-        "        } else { go = false; 0; };",
-        "        0",
-        "    };",
-        "    if (neg) { 0 - acc } else { acc }",
-        "};",
-        "",
-        "// trim(s): drop spaces/tabs/newlines/CR from both ends.",
-        "def y_str_trim(s: str) -> str {",
-        "    let n = len(s);",
-        "    let i = 0;",
-        "    let go = true;",
-        "    while (go) {",
-        "        if (i < n) {",
-        "            let c = byte_at(s, i);",
-        "            if (c == 32 || c == 9 || c == 10 || c == 13) { i = i + 1; 0; } else { go = false; 0; };",
-        "            0",
-        "        } else { go = false; 0; };",
-        "        0",
-        "    };",
-        "    let j = n;",
-        "    go = true;",
-        "    while (go) {",
-        "        if (j > i) {",
-        "            let c = byte_at(s, j - 1);",
-        "            if (c == 32 || c == 9 || c == 10 || c == 13) { j = j - 1; 0; } else { go = false; 0; };",
-        "            0",
-        "        } else { go = false; 0; };",
-        "        0",
-        "    };",
-        "    s[i:j]",
-        "};",
-        "",
-        "// index_of / last_index_of: first (last) match of needle in hay,",
-        "// -1 when absent. An empty needle never matches.",
-        "def y_str_index(hay: str, needle: str) -> long {",
-        "    let n = len(hay);",
-        "    let m = len(needle);",
-        "    let found = 0 - 1;",
-        "    if (m > 0) {",
-        "        if (n >= m) {",
-        "            let i = 0;",
-        "            let go = true;",
-        "            while (go) {",
-        "                if (i <= n - m) {",
-        "                    if (found < 0) {",
-        "                        let j = 0;",
-        "                        let ok = true;",
-        "                        while (j < m) {",
-        "                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };",
-        "                            j = j + 1;",
-        "                            0",
-        "                        };",
-        "                        if (ok) { found = i; 0; } else { 0; };",
-        "                        0",
-        "                    } else { go = false; 0; };",
-        "                    i = i + 1;",
-        "                    0",
-        "                } else { go = false; 0; };",
-        "                0",
-        "            };",
-        "            0",
-        "        } else { 0; };",
-        "        0",
-        "    } else { 0; };",
-        "    found",
-        "};",
-        "def y_str_lastidx(hay: str, needle: str) -> long {",
-        "    let n = len(hay);",
-        "    let m = len(needle);",
-        "    let found = 0 - 1;",
-        "    if (m > 0) {",
-        "        if (n >= m) {",
-        "            let i = n - m;",
-        "            let go = true;",
-        "            while (go) {",
-        "                if (i >= 0) {",
-        "                    if (found < 0) {",
-        "                        let j = 0;",
-        "                        let ok = true;",
-        "                        while (j < m) {",
-        "                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };",
-        "                            j = j + 1;",
-        "                            0",
-        "                        };",
-        "                        if (ok) { found = i; 0; } else { 0; };",
-        "                        0",
-        "                    } else { go = false; 0; };",
-        "                    i = i - 1;",
-        "                    0",
-        "                } else { go = false; 0; };",
-        "                0",
-        "            };",
-        "            0",
-        "        } else { 0; };",
-        "        0",
-        "    } else { 0; };",
-        "    found",
-        "};",
-        "",
-        "// split(s, sep): cut at every non-overlapping match of sep. A",
-        "// trailing empty piece is dropped (\"a,\" -> [\"a\"]); an empty sep",
-        "// yields no pieces at all.",
-        "def y_str_split(s: str, sep: str) -> [str] {",
-        "    let out: [str] = [];",
-        "    let sb = bytes(s);",
-        "    let pb = bytes(sep);",
-        "    let n = len(sb);",
-        "    let m = len(pb);",
-        "    if (m == 0) {",
-        "        out",
-        "    } else {",
-        "        let start = 0;",
-        "        let i = 0;",
-        "        let go = true;",
-        "        while (go) {",
-        "            if (i < n) {",
-        "                let hit = false;",
-        "                if (i + m <= n) {",
-        "                    let j = 0;",
-        "                    let ok = true;",
-        "                    while (j < m) {",
-        "                        if (sb[i + j] != pb[j]) { ok = false; 0; } else { 0; };",
-        "                        j = j + 1;",
-        "                        0",
-        "                    };",
-        "                    hit = ok;",
-        "                    0",
-        "                } else { 0; };",
-        "                if (hit) {",
-        "                    out += s[start:i];",
-        "                    start = i + m;",
-        "                    i = i + m;",
-        "                    0",
-        "                } else {",
-        "                    i = i + 1;",
-        "                    0",
-        "                };",
-        "                0",
-        "            } else { go = false; 0; };",
-        "            0",
-        "        };",
-        "        if (start < n) {",
-        "            out += s[start:];",
-        "            0",
-        "        } else { 0; };",
-        "        out",
-        "    }",
-        "};",
-        "",
-        "// range(n) = [0 .. n), empty for n <= 0.",
-        "def y_range(n: long) -> [long] {",
-        "    let out: [long] = [];",
-        "    let m = n;",
-        "    if (m < 0) { m = 0; 0; } else { 0; };",
-        "    let i = 0;",
-        "    while (i < m) {",
-        "        out += i;",
-        "        i = i + 1;",
-        "        0",
-        "    };",
-        "    out",
-        "};",
-        "",
-        "// Time: clock_gettime / nanosleep, straight through the syscall",
-        "// intrinsic. clock_us is CLOCK_MONOTONIC microseconds. (heap_used",
-        "// reads the allocator's own counter: y_heap_used in arch_x64.y.)",
-        "def y_clock_us() -> long {",
-        "    let ts: [long; 2] = [0; 2];",
-        "    syscall(228, 1, &ts[0]);",
-        "    ts[0] * 1000000 + ts[1] / 1000",
-        "};",
-        "def y_sleep(ms: long) -> long {",
-        "    let m = ms;",
-        "    if (m < 0) { m = 0; 0; } else { 0; };",
-        "    let ts: [long; 2] = [0; 2];",
-        "    ts[0] = m / 1000;",
-        "    ts[1] = (m % 1000) * 1000000;",
-        "    syscall(35, &ts[0], 0)",
-        "};",
-        "",
-        "// read_file(path) -> str?: openat + read loop in 4K chunks. The",
-        "// option is a box around the string, like every other T?.",
-        "def y_read_file(path: str) -> str? {",
-        "    let fd = syscall(257, -100, path, 0, 420);",
-        "    if (fd < 0) {",
-        "        none",
-        "    } else {",
-        "        let out: [byte] = [];",
-        "        let chunk: [byte; 4096] = [0; 4096];",
-        "        let go = true;",
-        "        while (go) {",
-        "            let k = syscall(0, fd, &chunk[0], 4096);",
-        "            if (k <= 0) {",
-        "                go = false;",
-        "                0",
-        "            } else {",
-        "                let i = 0;",
-        "                while (i < k) {",
-        "                    out += chunk[i];",
-        "                    i = i + 1;",
-        "                    0",
-        "                };",
-        "                0",
-        "            };",
-        "            0",
-        "        };",
-        "        syscall(3, fd);",
-        "        some(from_bytes(out))",
-        "    }",
-        "};",
-        "",
-        "// write_file(path, content) -> bool: create/truncate + one write.",
-        "def y_write_file(path: str, content: str) -> bool {",
-        "    let fd = syscall(257, -100, path, 577, 420);",
-        "    if (fd < 0) {",
-        "        false",
-        "    } else {",
-        "        let w = syscall(1, fd, content, len(content));",
-        "        syscall(3, fd);",
-        "        w >= 0",
-        "    }",
-        "};",
-        "",
-        "// write_bytes(path, data, mode) -> bool: binary-safe emit. `data`",
-        "// is the assembler's packed [byte] buffer and is written directly.",
-        "// mode -1 skips chmod; anything else is the file mode (fchmodat).",
-        "def y_write_bytes(path: str, data: [byte], mode: long) -> bool {",
-        "    let fd = syscall(257, -100, path, 577, 420);",
-        "    if (fd < 0) {",
-        "        false",
-        "    } else {",
-        "        let total = len(data);",
-        "        let off = 0;",
-        "        let ok = true;",
-        "        while (off < total) {",
-        "            let w = syscall(1, fd, &data[off], total - off);",
-        "            if (w <= 0) {",
-        "                ok = false;",
-        "                off = total;",
-        "                0",
-        "            } else {",
-        "                off = off + w;",
-        "                0",
-        "            };",
-        "            0",
-        "        };",
-        "        syscall(3, fd);",
-        "        if (ok) {",
-        "            if (mode == 0 - 1) {",
-        "                true",
-        "            } else {",
-        "                syscall(268, -100, path, mode) >= 0",
-        "            }",
-        "        } else {",
-        "            false",
-        "        }",
-        "    }",
-        "};",
-        "",
-        "// b'...' -- Python-style byte-string repr: printable ASCII verbatim,",
-        "// quote and backslash escaped, \\n \\r \\t as escapes, everything else",
-        "// as \\xHH. Built from chr() so the embedded text stays escape-free.",
-        "def y_hex_esc(c: long) -> str {",
-        "    let d = \"0123456789abcdef\";",
-        "    let hi = (c / 16) % 16;",
-        "    let lo = c % 16;",
-        "    chr(92) + \"x\" + d[hi:hi + 1] + d[lo:lo + 1]",
-        "};",
-        "def y_bytes_repr(b: [byte]) -> str {",
-        "    let bs = chr(92);",
-        "    let out = \"b\" + chr(39);",
-        "    let i = 0;",
-        "    let n = len(b);",
-        "    while (i < n) {",
-        "        let c = b[i];",
-        "        if (c == 92) { out += bs + bs; 0 }",
-        "        else if (c == 39) { out += bs + chr(39); 0 }",
-        "        else if (c == 10) { out += bs + \"n\"; 0 }",
-        "        else if (c == 13) { out += bs + \"r\"; 0 }",
-        "        else if (c == 9) { out += bs + \"t\"; 0 }",
-        "        else {",
-        "            if (c >= 32) {",
-        "                if (c < 127) { out += chr(c); 0 }",
-        "                else { out += y_hex_esc(c); 0 };",
-        "                0",
-        "            } else {",
-        "                out += y_hex_esc(c);",
-        "                0",
-        "            };",
-        "            0",
-        "        };",
-        "        i = i + 1;",
-        "    };",
-        "    out + chr(39)",
-        "};",
-        ""
-    ]
+// One write(2) of a string's bytes to fd 1 / fd 2 (no newline).
+def y_put_hstr(s: str) -> long {
+    syscall(1, 1, s, len(s))
+};
+def y_eput_hstr(s: str) -> long {
+    syscall(1, 2, s, len(s))
+};
+def y_print_hstr(s: str) -> long {
+    y_put_hstr(s);
+    y_put_hstr("\n");
+    0
 };
 
-export { rt_lines };
+// (long -> decimal string is y_long_tostr in arch_x64.y: one idiv
+// per digit and one allocation; tostring(v) reaches it.)
+def y_bool_tostr(b: bool) -> str {
+    if (b) { "true" } else { "false" }
+};
+
+// The print/put/eput family: every value becomes a string first,
+// so the only output primitive is a byte write above.
+def y_print_long(v: long) -> long { y_print_hstr(tostring(v)) };
+def y_print_bool(b: bool) -> long { y_print_hstr(y_bool_tostr(b)) };
+def y_print_float(f: float) -> long { y_print_hstr(tostring(f)) };
+def y_put_long(v: long) -> long { y_put_hstr(tostring(v)) };
+def y_put_bool(b: bool) -> long { y_put_hstr(y_bool_tostr(b)) };
+def y_eput_long(v: long) -> long { y_eput_hstr(tostring(v)) };
+def y_eput_bool(b: bool) -> long { y_eput_hstr(y_bool_tostr(b)) };
+
+// ord(s) = code of the first byte, -1 when empty. chr(n) is its
+// inverse. Both work through the [byte] bridge.
+def y_str_ord(s: str) -> long {
+    if (len(s) > 0) { byte_at(s, 0) } else { 0 - 1 }
+};
+def y_str_chr(n: long) -> str {
+    let b: [byte; 1] = [0; 1];
+    b[0] = n;
+    from_bytes(b)
+};
+
+// a[lo:hi] = src, for 8-byte and packed 1-byte elements: the range
+// must lie inside a and hold exactly len(src) elements.
+def y_setslice_check(n: long, lo: long, hi: long, m: long) -> long {
+    if (lo < 0 || hi > n || lo > hi) {
+        y_put_hstr("runtime error: slice assignment out of bounds\n");
+        exit(1);
+        0
+    } else if (hi - lo != m) {
+        y_put_hstr("runtime error: slice assignment length mismatch\n");
+        exit(1);
+        0
+    } else { 0 }
+};
+def y_arr_setslice8(dst: [long], lo: long, hi: long, src: [long]) -> long {
+    y_setslice_check(len(dst), lo, hi, len(src));
+    let i = 0;
+    while (i < hi - lo) {
+        dst[lo + i] = src[i];
+        i = i + 1;
+    };
+    0
+};
+def y_arr_setslice1(dst: [byte], lo: long, hi: long, src: [byte]) -> long {
+    y_setslice_check(len(dst), lo, hi, len(src));
+    let i = 0;
+    while (i < hi - lo) {
+        dst[lo + i] = src[i];
+        i = i + 1;
+    };
+    0
+};
+
+// The fall-through of a match the checker proved exhaustive.
+def y_match_fail() -> long {
+    y_put_hstr("runtime error: no match arm matched\n");
+    exit(1);
+    0
+};
+
+// tonum(s): optional '-', then digits; anything else stops the
+// scan and is ignored (exactly the old asm behaviour).
+def y_str_tonum(s: str) -> long {
+    let n = len(s);
+    let neg = false;
+    let i = 0;
+    if (n > 0) {
+        if (byte_at(s, 0) == 45) {
+            neg = true;
+            i = 1;
+            0
+        } else { 0; };
+        0
+    } else { 0; };
+    let acc = 0;
+    let go = true;
+    while (go) {
+        if (i < n) {
+            let c = byte_at(s, i);
+            if (c >= 48) {
+                if (c <= 57) {
+                    acc = acc * 10 + (c - 48);
+                    i = i + 1;
+                    0
+                } else { go = false; 0; };
+                0
+            } else { go = false; 0; };
+            0
+        } else { go = false; 0; };
+        0
+    };
+    if (neg) { 0 - acc } else { acc }
+};
+
+// trim(s): drop spaces/tabs/newlines/CR from both ends.
+def y_str_trim(s: str) -> str {
+    let n = len(s);
+    let i = 0;
+    let go = true;
+    while (go) {
+        if (i < n) {
+            let c = byte_at(s, i);
+            if (c == 32 || c == 9 || c == 10 || c == 13) { i = i + 1; 0; } else { go = false; 0; };
+            0
+        } else { go = false; 0; };
+        0
+    };
+    let j = n;
+    go = true;
+    while (go) {
+        if (j > i) {
+            let c = byte_at(s, j - 1);
+            if (c == 32 || c == 9 || c == 10 || c == 13) { j = j - 1; 0; } else { go = false; 0; };
+            0
+        } else { go = false; 0; };
+        0
+    };
+    s[i:j]
+};
+
+// index_of / last_index_of: first (last) match of needle in hay,
+// -1 when absent. An empty needle never matches.
+def y_str_index(hay: str, needle: str) -> long {
+    let n = len(hay);
+    let m = len(needle);
+    let found = 0 - 1;
+    if (m > 0) {
+        if (n >= m) {
+            let i = 0;
+            let go = true;
+            while (go) {
+                if (i <= n - m) {
+                    if (found < 0) {
+                        let j = 0;
+                        let ok = true;
+                        while (j < m) {
+                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };
+                            j = j + 1;
+                            0
+                        };
+                        if (ok) { found = i; 0; } else { 0; };
+                        0
+                    } else { go = false; 0; };
+                    i = i + 1;
+                    0
+                } else { go = false; 0; };
+                0
+            };
+            0
+        } else { 0; };
+        0
+    } else { 0; };
+    found
+};
+def y_str_lastidx(hay: str, needle: str) -> long {
+    let n = len(hay);
+    let m = len(needle);
+    let found = 0 - 1;
+    if (m > 0) {
+        if (n >= m) {
+            let i = n - m;
+            let go = true;
+            while (go) {
+                if (i >= 0) {
+                    if (found < 0) {
+                        let j = 0;
+                        let ok = true;
+                        while (j < m) {
+                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };
+                            j = j + 1;
+                            0
+                        };
+                        if (ok) { found = i; 0; } else { 0; };
+                        0
+                    } else { go = false; 0; };
+                    i = i - 1;
+                    0
+                } else { go = false; 0; };
+                0
+            };
+            0
+        } else { 0; };
+        0
+    } else { 0; };
+    found
+};
+
+// split(s, sep): cut at every non-overlapping match of sep. A
+// trailing empty piece is dropped ("a," -> ["a"]); an empty sep
+// yields no pieces at all.
+def y_str_split(s: str, sep: str) -> [str] {
+    let out: [str] = [];
+    let sb = bytes(s);
+    let pb = bytes(sep);
+    let n = len(sb);
+    let m = len(pb);
+    if (m == 0) {
+        out
+    } else {
+        let start = 0;
+        let i = 0;
+        let go = true;
+        while (go) {
+            if (i < n) {
+                let hit = false;
+                if (i + m <= n) {
+                    let j = 0;
+                    let ok = true;
+                    while (j < m) {
+                        if (sb[i + j] != pb[j]) { ok = false; 0; } else { 0; };
+                        j = j + 1;
+                        0
+                    };
+                    hit = ok;
+                    0
+                } else { 0; };
+                if (hit) {
+                    out += s[start:i];
+                    start = i + m;
+                    i = i + m;
+                    0
+                } else {
+                    i = i + 1;
+                    0
+                };
+                0
+            } else { go = false; 0; };
+            0
+        };
+        if (start < n) {
+            out += s[start:];
+            0
+        } else { 0; };
+        out
+    }
+};
+
+// range(n) = [0 .. n), empty for n <= 0.
+def y_range(n: long) -> [long] {
+    let out: [long] = [];
+    let m = n;
+    if (m < 0) { m = 0; 0; } else { 0; };
+    let i = 0;
+    while (i < m) {
+        out += i;
+        i = i + 1;
+        0
+    };
+    out
+};
+
+// Time: clock_gettime / nanosleep, straight through the syscall
+// intrinsic. clock_us is CLOCK_MONOTONIC microseconds. (heap_used
+// reads the allocator's own counter: y_heap_used in arch_x64.y.)
+def y_clock_us() -> long {
+    let ts: [long; 2] = [0; 2];
+    syscall(228, 1, &ts[0]);
+    ts[0] * 1000000 + ts[1] / 1000
+};
+def y_sleep(ms: long) -> long {
+    let m = ms;
+    if (m < 0) { m = 0; 0; } else { 0; };
+    let ts: [long; 2] = [0; 2];
+    ts[0] = m / 1000;
+    ts[1] = (m % 1000) * 1000000;
+    syscall(35, &ts[0], 0)
+};
+
+// read_file(path) -> str?: openat + read loop in 4K chunks. The
+// option is a box around the string, like every other T?.
+def y_read_file(path: str) -> str? {
+    let fd = syscall(257, -100, path, 0, 420);
+    if (fd < 0) {
+        none
+    } else {
+        let out: [byte] = [];
+        let chunk: [byte; 4096] = [0; 4096];
+        let go = true;
+        while (go) {
+            let k = syscall(0, fd, &chunk[0], 4096);
+            if (k <= 0) {
+                go = false;
+                0
+            } else {
+                let i = 0;
+                while (i < k) {
+                    out += chunk[i];
+                    i = i + 1;
+                    0
+                };
+                0
+            };
+            0
+        };
+        syscall(3, fd);
+        some(from_bytes(out))
+    }
+};
+
+// write_file(path, content) -> bool: create/truncate + one write.
+def y_write_file(path: str, content: str) -> bool {
+    let fd = syscall(257, -100, path, 577, 420);
+    if (fd < 0) {
+        false
+    } else {
+        let w = syscall(1, fd, content, len(content));
+        syscall(3, fd);
+        w >= 0
+    }
+};
+
+// write_bytes(path, data, mode) -> bool: binary-safe emit. `data`
+// is the assembler's packed [byte] buffer and is written directly.
+// mode -1 skips chmod; anything else is the file mode (fchmodat).
+def y_write_bytes(path: str, data: [byte], mode: long) -> bool {
+    let fd = syscall(257, -100, path, 577, 420);
+    if (fd < 0) {
+        false
+    } else {
+        let total = len(data);
+        let off = 0;
+        let ok = true;
+        while (off < total) {
+            let w = syscall(1, fd, &data[off], total - off);
+            if (w <= 0) {
+                ok = false;
+                off = total;
+                0
+            } else {
+                off = off + w;
+                0
+            };
+            0
+        };
+        syscall(3, fd);
+        if (ok) {
+            if (mode == 0 - 1) {
+                true
+            } else {
+                syscall(268, -100, path, mode) >= 0
+            }
+        } else {
+            false
+        }
+    }
+};
+
+// b'...' -- Python-style byte-string repr: printable ASCII verbatim,
+// quote and backslash escaped, \n \r \t as escapes, everything else
+// as \xHH. Built from chr() so the embedded text stays escape-free.
+def y_hex_esc(c: long) -> str {
+    let d = "0123456789abcdef";
+    let hi = (c / 16) % 16;
+    let lo = c % 16;
+    chr(92) + "x" + d[hi:hi + 1] + d[lo:lo + 1]
+};
+def y_bytes_repr(b: [byte]) -> str {
+    let bs = chr(92);
+    let out = "b" + chr(39);
+    let i = 0;
+    let n = len(b);
+    while (i < n) {
+        let c = b[i];
+        if (c == 92) { out += bs + bs; 0 }
+        else if (c == 39) { out += bs + chr(39); 0 }
+        else if (c == 10) { out += bs + "n"; 0 }
+        else if (c == 13) { out += bs + "r"; 0 }
+        else if (c == 9) { out += bs + "t"; 0 }
+        else {
+            if (c >= 32) {
+                if (c < 127) { out += chr(c); 0 }
+                else { out += y_hex_esc(c); 0 };
+                0
+            } else {
+                out += y_hex_esc(c);
+                0
+            };
+            0
+        };
+        i = i + 1;
+    };
+    out + chr(39)
+};
