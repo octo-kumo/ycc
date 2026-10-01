@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run the full y test suite (or a subset).
 # Usage: ./test/sh/run_all.sh [suite ...]
-# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof
+# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof net coverage
 # Default (no args): all suites. The port suite needs both compilers
 # (./cycc and refs/ycc.ref); the ycc/fixpoint suites need ./ycc (build it
 # via `make ycc`) and skip themselves when it is absent.
@@ -19,7 +19,7 @@ if [ ! -x "$ROOT/refs/ycc.ref" ]; then
     exit 1
 fi
 
-SUITES="${*:-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof}"
+SUITES="${*:-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof net coverage}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
     [native]="test_native.sh"
@@ -33,13 +33,15 @@ declare -A SCRIPT_FOR=(
     [comprehensive]="test_comprehensive.sh"
     [debug]="test_debug.sh"
     [stdin-eof]="test_stdin_eof.sh"
+    [net]="test_net.sh"
+    [coverage]="test_coverage.sh"
 )
 
 OVERALL=0
 for s in $SUITES; do
     script="${SCRIPT_FOR[$s]}"
     if [ -z "$script" ]; then
-        echo "error: unknown suite '$s' (pick from: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof)" >&2
+        echo "error: unknown suite '$s' (pick from: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof net coverage)" >&2
         exit 2
     fi
     # these suites exercise the built ycc binary itself.

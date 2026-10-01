@@ -93,9 +93,17 @@ Drop a `.y` file in `bench/y/`. Rules of thumb:
   put the work inside a function — top-level code lands in `_start` and
   the profile becomes one opaque row;
 - never reference the network or files; benchmarks run anywhere. The
-  one exception is a benchmark of I/O itself: `lines.y` measures
-  `readline()`, and since the harness gives every benchmark stdin at
-  `/dev/null`, it writes its input to a pid-named file under `/tmp`,
-  `dup2`s it onto fd 0 and unlinks it before reading.
+  explicit I/O benchmarks are exceptions: `lines.y` measures
+  `readline()`, so it writes a pid-named input file, `dup2`s it onto fd 0,
+  and unlinks it before reading; `std_io.y` writes a short-lived file in
+  the benchmark's working directory and removes it after reading.
+
+The standard-library benchmarks are:
+
+- `std_struct.y` exercises `pack`, `unpack`, and fixed-width getters in a
+  hot loop.
+- `std_io.y` writes and reads a 2 MiB file in 4 KiB chunks, checks the
+  byte checksum, and removes the file from the benchmark's working
+  directory.
 
 They are picked up automatically by both scripts — no registration.

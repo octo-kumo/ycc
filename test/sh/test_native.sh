@@ -4,8 +4,10 @@
 # Usage: ./test/sh/test_native.sh
 # t*.y: stdout must match t*.expected, exit must match t*.exit (default 0).
 # Stdin comes from t*.stdin when present, else /dev/null.
-# e*.y: ycc must FAIL, and its output must contain the marker from the
-#   file's `// expect-error: ...` first line.
+# e*.y: ycc must FAIL, and its output must contain the text of EVERY
+#   `// expect-error: ...` line in the file. One file can mark several:
+#   the parser and the checker report all their errors, so a themed file
+#   tests a whole family of messages (the lexer stops at its first).
 # t10 also checks the file its program writes (see t10_filewrite.file).
 
 source "$(dirname "$0")/lib.sh"
@@ -26,19 +28,36 @@ run_native() {
     bin=$(mktemp /tmp/ynative_bin_XXXXXX)
 
     if [[ "$base" == e* ]]; then
-        # negative test: compilation must fail with the marked message
-        local want
-        want=$(grep -m1 -o '// expect-error: .*' "$prog" | sed 's#// expect-error: ##')
+        # negative test: compilation must fail with every marked message
+        local wants
+        wants=$(grep -o '// expect-error: .*' "$prog" | sed 's#// expect-error: ##')
+        rm -f "$bin"
+        if [ -z "$wants" ]; then
+            fail "$base" "no // expect-error: marker"
+            return
+        fi
+        local first nwant
+        first=$(echo "$wants" | head -1)
+        nwant=$(echo "$wants" | wc -l)
         local err
         err=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
         local ec=$?
         rm -f "$bin"
         if [ $ec -eq 0 ]; then
-            fail "$base" "compilation succeeded, expected error: $want"
-        elif echo "$err" | grep -qF -- "$want"; then
-            pass "$base (rejected: $want)"
+            fail "$base" "compilation succeeded, expected error: $first"
+            return
+        fi
+        local want
+        while IFS= read -r want; do
+            if ! echo "$err" | grep -qF -- "$want"; then
+                fail "$base" "wrong error (want '$want', got: $(echo "$err" | head -c 400 | tr '\n' '|'))"
+                return
+            fi
+        done <<< "$wants"
+        if [ "$nwant" -gt 1 ]; then
+            pass "$base (rejected: $first, +$((nwant - 1)) more)"
         else
-            fail "$base" "wrong error (want '$want', got: $(echo "$err" | head -c 200 | tr '\n' '|'))"
+            pass "$base (rejected: $first)"
         fi
         return
     fi

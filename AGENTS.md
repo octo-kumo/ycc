@@ -57,7 +57,7 @@ same semantics.
 
 ## Test suites (`test/sh/`)
 
-Twelve suites, run by `test/sh/run_all.sh` (named below in brackets). Most
+Fourteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, identical program behavior). `test_native.sh`,
@@ -67,10 +67,12 @@ those **five** when it is missing (`make test-fast`).
 
 - `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
   `src/y/ycc.y` itself) compile to byte-identical binaries with
-  `cycc` and the reference `ycc`.
+  `cycc` and the reference `ycc`; a program both reject must get the
+  same diagnostics from both.
 - `test_native.sh` [native] — `test/y/native/*.y`: `t*` assert
   stdout/exit (`.expected`/`.exit`, stdin from `.stdin`), `e*` assert
-  rejection (first-line `// expect-error:` marker).
+  rejection: the output must contain every `// expect-error:` line of
+  the file (at least one; the checker reports all errors at once).
 - `test_native_examples.sh` [native-examples] — the ratchet: every
   `test/y/examples/*.y` the built `./ycc` accepts must print what the
   reference prints; its `UNSUPPORTED` list (currently empty) may only
@@ -85,7 +87,9 @@ those **five** when it is missing (`make test-fast`).
 - `test_ycc_units.sh` [ycc-units] — every `test/y/ycc/test_*.y` must
   compile and run (two legacy snapshots are skiplisted with reasons).
 - `test_ycc.sh` [ycc] — a few one-liners compiled by `./ycc` and
-  compared with the reference's output.
+  compared with the reference's output, plus the driver's failures
+  (bad flags and paths, failed writes, import depth): both compilers
+  print the same message and exit 1.
 - `test_fixpoint.sh` — three generations of self-compilation are
   byte-identical and the self-built binary still compiles working
   programs.
@@ -94,6 +98,18 @@ those **five** when it is missing (`make test-fast`).
   plain build, and readelf/nm/addr2line (gdb and callgrind when
   installed) see the functions and globals by name.
 - `test_stdin_eof.sh` — stdin/EOF behavior.
+- `test_net.sh` [net] — the blocking `std/net` listeners over loopback:
+  `test/y/net/` servers built by both compilers (identical binaries)
+  answer real HTTP/TCP clients and exit cleanly, and one serves 100
+  connections under `ulimit -n 32` (no fd leak per connection).
+- `test_coverage.sh` [coverage] — static, compiles nothing: every
+  diagnostic the compiler can print has its message in a test
+  expectation, every builtin in the manual is called by a checked test,
+  every keyword appears in a `t*.y`, and `test/COVERAGE.md` maps every
+  manual section to the checked tests that exercise it. Unreachable
+  diagnostics are listed there with a reason; a stale excuse fails the
+  suite. New diagnostic → new `e*.y` marker; new manual section → new
+  row.
 
 ### Fuzzing (`test/fuzz/`, not part of `make test`)
 
@@ -225,7 +241,8 @@ code calls it by fixed label.
   `PORTING.md` for where the current `ycc.ref` came from).
 - `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh`), `test/y/`
   (`native/` fixtures with expected/exit/stdin, `audit/` edge cases,
-  `examples/` regression corpus, `ycc/` unit fixtures).
+  `examples/` regression corpus, `ycc/` unit fixtures, `net/` servers
+  for `test_net.sh`), `test/COVERAGE.md` (feature → test matrix).
 - `bench/` — benchmarks + `compare.sh` (see the workflow above).
 
 ## Native backend (see `src/y/NATIVE.md`)

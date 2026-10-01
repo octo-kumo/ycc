@@ -148,13 +148,18 @@ static Yv *parse_num(Yv *s) {
 
 static Yv *parse_num_go(Yv *s, long i, int neg) {
     /* (split: non-empty remainder narrows; `{ok,v}` built ONLY here.)
-       NOTE: `0;` tails (see parser.y parse_binary note). */
+       NOTE: `0;` tails (see parser.y parse_binary note).
+       Y's long arithmetic wraps (NATIVE.md), and the numbers that get
+       here need it: an out-of-range literal in a program reaches the
+       assembler as written, and so does LONG_MIN's magnitude. In C that
+       is unsigned arithmetic — the same bits, without the undefined
+       behavior of signed overflow. */
     long v = 0;
     int ok = 1;
     while (i < yv_len(s)) {
         Yv *c = ys_slice(s, i, i + 1);
         if (is_digit_ch(c)) {
-            v = v * 10 + ys_ord(c) - 48;
+            v = (long)((unsigned long)v * 10 + (unsigned long)ys_ord(c) - 48);
             ;
         } else {
             ok = 0;
@@ -163,7 +168,7 @@ static Yv *parse_num_go(Yv *s, long i, int neg) {
         i = i + 1;
         ;
     };
-    if (neg) { v = 0 - v; ; } else { ; };
+    if (neg) { v = (long)(0 - (unsigned long)v); ; } else { ; };
     return yr(2, "ok", yv_bool(ok), "v", yv_long(v));
 }
 

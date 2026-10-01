@@ -2,19 +2,33 @@
 
 ## Not done
 
-- **Exhaustive tests for every feature.** The audit corpus is 65 cases; the
-  native corpus is 54 `t*` plus 25 `e*` fixtures. There is no coverage matrix,
-  so "every feature has a test" is not currently a checkable claim.
-- **Memory-growth tests.** Nothing asserts that memory does not grow for tail
-  recursion (the frame-recycling path in `emit_one_fn`), and there is no leak
-  test at all. `make test-asan` now works again (it exported `YCC`, which no
-  suite read, so the sanitized build was never exercised) — that is the place
-  to hang one.
-- **`bench/` has no coverage for the std modules.** `io.y`, `net.y` and
-  `struct.y` are exercised by one fixture each (`t10`/`t12`/`t20`, `t30`/`t31`,
-  `t44`); the error paths, `listen_tcp`/`listen_http` (which block forever, so
-  they have no test), `net`'s fd leak paths and most of `struct`'s writers are
-  untested.
+- **Implicit numeric conversions are not emitted.** The checker admits
+  long→float, byte→float, byte→long and long→byte at every annotated
+  position (`types.y` `tcompat`), but the emitter converts only inside
+  float arithmetic: `let g: float = 3` prints 0.000000 (the long's bits
+  read as a double), and so do float parameters, returns, assignments,
+  element/field/map/pointer stores and array `+=`/`+`/`::`/`*=`;
+  `let b: byte = 258` keeps 258 (only packed `[byte]` stores truncate).
+  Records and composite element copies (`[float] += [long]`, a
+  `{x: long}` passed as `{x: float}`) can never be converted — they are
+  references — so the checker has to reject those. (`test/COVERAGE.md`
+  marks the Conversions row MISMATCH.)
+- **Cross-module duplicate definitions.** `find_dup` compares names after
+  rename has made them unique, so it never fires: an importer's
+  `def helper` silently replaces an imported module's own `helper`, and
+  the module's callers get the importer's. Same-file redefinition is
+  deliberately "last wins" (`t30_typeof_records.y`,
+  `examples/manytypes.y`), so the check must know which file each def
+  came from — the per-line origin map the `-g` line information needs.
+- **Map reads allocate.** A map read is an option, and an option boxes
+  its value: every `m[k]` costs 16 heap bytes, even `m[k] == none`
+  (`t101` bounds it). The bump allocator never frees, so a read-heavy
+  loop grows the heap linearly in the number of reads.
+- **`s += x` is quadratic in memory.** Strings are immutable, so each
+  append copies the whole string, and nothing is freed: 10,000 one-byte
+  appends allocate ~50 MB. Collecting parts and calling `join` is linear.
+- **Prepend is quadratic in time.** `a *= v` moves every element: 100,000
+  prepends take ~4.5 s.
 - **`-g` has no line information.** It writes a symbol table, so tools name
   functions; DWARF (`.debug_line` + a minimal `.debug_info`) would let
   `perf annotate`, gdb and addr2line show source lines too. Needs a map
@@ -30,6 +44,37 @@ kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
 
+- **Exhaustive tests.** `test/COVERAGE.md` maps every section of the
+  manual to the tests that check it, and `test_coverage.sh` (in
+  `make test`) keeps it honest: each of the 286 diagnostic sites in the
+  compiler sources is expected by a test (276) or excused with a reason
+  (10); all 59 documented builtins and methods are called by a checked
+  test; all 12 keywords are used; all 72 manual sections have rows (86
+  rows, 269 test references, each of which must exist). The native corpus
+  grew from 54 `t*` + 25 `e*` fixtures to 98 + 109. The new tests found
+  five bugs, four fixed: an unterminated block comment was silently
+  accepted (fatal now, `e113`), a missing record field's runtime trap
+  segfaulted (`t130`), the import-depth error exited 0, and `cycc -S`
+  ignored a failed write; the fifth (duplicate definitions) is under Not
+  done. The manual's Assignment section was wrong: `=` and `op=` are
+  statement forms (`t131`, `e129`).
+- **Memory-growth tests.** `t100`: tail calls (through `self`, through the
+  function's own name with `return`, and a void body's last call) run 10
+  million levels in one frame — a local's address never moves. `t101`: a
+  million iterations over existing data allocate 0 bytes; growing an array
+  with `+=` or `*=` (8-byte and packed elements) costs at most 4x the
+  payload; `join` allocates once; options and map reads cost at most 16
+  bytes each. UBSan is fatal in `make asan` now
+  (`-fno-sanitize-recover=all`), which exposed a signed overflow in the C
+  copy's assembler (`parse_num_go` wraps unsigned now); a sanitized sweep
+  of all 349 test programs is clean.
+- **std module tests.** `t102`–`t110` cover `io` (round trip, error
+  returns), `struct` (every writer and reader, out of bounds, unknown
+  names) and `net` (error returns, fd I/O, `http_head`, response parsing;
+  2,000 refused connects leak no descriptor). `test_net.sh` runs
+  `listen_tcp` and `listen_http` servers built by both compilers, including
+  100 connections under `ulimit -n 32`. Benchmarks `bench/y/std_io.y`
+  (median 98 ms) and `bench/y/std_struct.y` (154 ms).
 - Type aliasing — `type IntList = [long]; let a: IntList = [...]` and
   `type Pair = { x: long, y: long }` both check out (verified).
 - **The memory spikes.** Self-compiling peaked at 32 GB and

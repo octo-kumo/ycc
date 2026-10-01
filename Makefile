@@ -38,8 +38,10 @@ ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS)
 	rm -f _ycc
 	@echo "verified: cycc output == refs/ycc.ref == ycc self-compile (byte-identical)"
 
-# AddressSanitizer + UBSan build of the C copy (one command, no CI).
-ASAN_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -g
+# AddressSanitizer + UBSan build of the C copy (one command, no CI). Every
+# finding is fatal (-fno-sanitize-recover): UBSan's default is to print and
+# carry on, and a suite that compares outputs never sees a report it printed.
+ASAN_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
 
 cycc-asan: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS)
 	$(GCC) $(CFLAGS) $(ASAN_FLAGS) -o cycc-asan $(CYC_SRCS)

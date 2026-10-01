@@ -44,7 +44,14 @@ lexicographically; \ic{==} compares contents.
 \label{sec:assignment}
 
 \ic{p = e} evaluates \ic{e} and stores it into the place \ic{p}.
-Assignment is an expression yielding the assigned value. Section~\ref{sec:references}
+Assignment is a statement form, not an operator: it cannot appear inside
+another expression, so \ic{let y = (x = 7);} and \ic{let y = x = 7;} are
+syntax errors (so are the compound forms of
+Section~\ref{sec:exactly-once}; only \ic{++} and \ic{--} nest). As the
+last statement of a block it gives the block its value, the value
+stored: \ic{let y = \{ x = 5 \};} sets both \ic{x} and \ic{y} to 5, and
+a function body ending in an assignment returns the assigned value.
+Section~\ref{sec:references}
 defines what storing into arrays, records and variables means for
 aliasing.
 
@@ -90,9 +97,12 @@ corresponding read and store through the captured names. Then the
    \texttt{ } op \texttt{ } e\texttt{;}~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}}
 \end{align*}
 
-\noindent for $op \in \{+,-,\times,\div,\%\}$ on numbers. Each form is
-an expression: postfix yields the \emph{old} value, prefix the
-\emph{new} one, and \ic{p op= e} the new value of the place.
+\noindent for $op \in \{+,-,\times,\div,\%\}$ on numbers. The four
+increment and decrement forms are expressions: postfix yields the
+\emph{old} value, prefix the \emph{new} one. A compound assignment is,
+like \ic{=}, a statement form (Section~\ref{sec:assignment}): it cannot
+nest inside another expression, and as the last statement of a block it
+yields the new value of the place (\ic{\{ x += 2 \}}).
 
 \paragraph{Examples.}
 \begin{lstlisting}
