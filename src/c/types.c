@@ -1400,24 +1400,23 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarr")) {
+                } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarr") ||
+                           ys_eq_lit(yr_get(yr_get(got, "typ"), "k"),
+                                     "tarrfix")) {
+                    /* One rule for BOTH array kinds: &a is not a data address.
+                       A slot holds the {len,cap,data} header (fixed arrays are
+                       heap blocks too), so `io.read(fd, &buf, n)` let the
+                       kernel write over the frame -- the array's own header
+                       was the first casualty and the next len(buf) died with
+                       SIGSEGV. Use &a[0] (or &a[i]): gen_elem_addr resolves
+                       that through header+16 to the data block. */
                     st = fail(st,
-                              ys_cat(ys_cat(ys("cannot take the address of a whole heap array (use &"),
+                              ys_cat(ys_cat(ys("cannot take the address of a whole array (use &"),
                                             disp(yr_get(yr_get(node, "e"), "v"))),
                                      ys("[i] for elements)")),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"),
-                                     "tarrfix")) {
-                    st = check_visible(st, got, yr_get(yr_get(node, "e"), "v"),
-                                       yv_l(yr_get(node, "line")),
-                                       yv_l(yr_get(node, "col")));
-                    // address of the first element (e.g. read(fd, &buf, n))
-                    return yr(2, "typ",
-                              yr(2, "k", ys("tptr"), "to",
-                                 yr_get(yr_get(got, "typ"), "of")),
-                              "st", st);
                 } else {
                     st = check_visible(st, got, yr_get(yr_get(node, "e"), "v"),
                                        yv_l(yr_get(node, "line")),
@@ -2438,7 +2437,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
     } else {
         st = fail(st,
                   ys_cat(ys_cat(ys("'"), k),
-                         ys("' is unsupported in native mode (heap planned: maps, loops, strings ops)")),
+                         ys("' is not a supported expression form")),
                   yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         return yr(2, "typ", t_unk(), "st", st);
     }
@@ -3659,7 +3658,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             } else if (!is_value_type(t)) {
                 st = fail(st,
                           ys_cat(ys_cat(ys("'"), tstr(t)),
-                                 ys("' is unsupported in native mode (heap planned)")),
+                                 ys("' cannot be bound to a variable")),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 t = t_unk();
@@ -3710,7 +3709,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                                                       disp(ya_get(fparams, i))),
                                                 ys("' has unpassable type ")),
                                          tstr(pt)),
-                                ys(" (arrays cannot cross function boundaries — pass &a plus a length)")),
+                                ys(" (a void value has no representation, and a type pattern cannot be passed by value)")),
                           line, col);
                 ok = 0;
                 ;

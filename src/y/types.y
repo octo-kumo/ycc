@@ -966,13 +966,16 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             } else if (got.kind == "func" || got.kind == "intrinsic") {
                 st = fail(st, "cannot take the address of function '" + node.e.v + "'", node.line, node.col);
                 { typ: t_unk(), st: st }
-            } else if (got.typ.k == "tarr") {
-                st = fail(st, "cannot take the address of a whole heap array (use &" + disp(node.e.v) + "[i] for elements)", node.line, node.col);
+            } else if (got.typ.k == "tarr" || got.typ.k == "tarrfix") {
+                // One rule for BOTH array kinds: &a is not a data address.
+                // A slot holds the {len,cap,data} header (fixed arrays are
+                // heap blocks too), so `io.read(fd, &buf, n)` let the kernel
+                // write over the frame -- the array's own header was the
+                // first casualty and the next len(buf) died with SIGSEGV.
+                // Use &a[0] (or &a[i]): gen_elem_addr resolves that through
+                // header+16 to the data block.
+                st = fail(st, "cannot take the address of a whole array (use &" + disp(node.e.v) + "[i] for elements)", node.line, node.col);
                 { typ: t_unk(), st: st }
-            } else if (got.typ.k == "tarrfix") {
-                st = check_visible(st, got, node.e.v, node.line, node.col);
-                // address of the first element (e.g. read(fd, &buf, n))
-                { typ: { k: "tptr", to: got.typ.of }, st: st }
             } else {
                 st = check_visible(st, got, node.e.v, node.line, node.col);
                 { typ: { k: "tptr", to: got.typ }, st: st }
@@ -1647,7 +1650,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
     } else if (k == "sliceassign") {
         typeof_sliceassign(st, node)
     } else {
-        st = fail(st, "'" + k + "' is unsupported in native mode (heap planned: maps, loops, strings ops)", node.line, node.col);
+        st = fail(st, "'" + k + "' is not a supported expression form", node.line, node.col);
         { typ: t_unk(), st: st }
     }
 };
@@ -2510,7 +2513,7 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 t = t_unk();
                 0
             } else if (!is_value_type(t)) {
-                st = fail(st, "'" + tstr(t) + "' is unsupported in native mode (heap planned)", node.line, node.col);
+                st = fail(st, "'" + tstr(t) + "' cannot be bound to a variable", node.line, node.col);
                 t = t_unk();
                 0
             } else { 0; };
@@ -2551,7 +2554,7 @@ def typeof_def(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth:
                 pt = t_unk();
                 0
             } else if (!is_value_type(pt) && pt.k != "tfunc") {
-                st = fail(st, "parameter '" + disp(fparams[i]) + "' has unpassable type " + tstr(pt) + " (arrays cannot cross function boundaries — pass &a plus a length)", line, col);
+                st = fail(st, "parameter '" + disp(fparams[i]) + "' has unpassable type " + tstr(pt) + " (a void value has no representation, and a type pattern cannot be passed by value)", line, col);
                 ok = false;
                 0
             } else { 0; };

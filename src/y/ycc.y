@@ -43,7 +43,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         } else if (a == "--prof") {
             prof = true;
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [-h] FILE\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
@@ -204,11 +204,14 @@ def main(cmdline: [str]) -> long {
                 1
             } else if (pargs.asm_only) {
                 let rasm = r.asm;
+                let wrote = true;
                 if (len(out) == 0) {
                     puts(rasm);
                     0
                 } else {
-                    write_file(out, rasm);
+                    // Checked, like the executable path below: silently
+                    // exiting 0 after a failed write hid bad -o paths.
+                    wrote = write_file(out, rasm);
                     0
                 };
                 ph = nativelib.phase_end(dt, "write", t0, h0);
@@ -222,7 +225,13 @@ def main(cmdline: [str]) -> long {
                     print_counter("asm_bytes", len(rasm));
                     0
                 } else { 0; };
-                0
+                if (!(wrote)) {
+                    puts("error: writing '" + out + "' failed\n");
+                    exit(1);
+                    1
+                } else {
+                    0
+                }
             } else {
                 // Assemble to a [byte] buffer in-process (no as/ld/cc) and write the
                 // executable DIRECTLY with the write_bytes builtin
