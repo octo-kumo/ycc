@@ -8,11 +8,12 @@
 # property from an already-built ./ycc, so `./test/sh/run_all.sh fixpoint`
 # catches a regression without a full rebuild.
 #
-# NOTE: self-compilation is memory-hungry — ycc needs tens of GB of RSS on
-# ycc.y (measured ~30 GB, ~25 s). On a busy or shared machine the kernel may
-# OOM-kill it, which shows up here as a bare "Killed" from `timeout` and four
-# failures that have nothing to do with the compiler. Re-run this suite alone
-# before believing a fixpoint failure.
+# Every compile here runs under a virtual-memory cap ($FP_MEM_KB, `ulimit -v`)
+# so a memory regression FAILS this suite instead of pushing the machine into
+# swap or the OOM killer. ycc compiling ycc.y needs ~0.8 GB / ~7 s today; it
+# once needed ~32 GB (a quadratic copy in the assembler) and every run still
+# "passed". If the cap trips, the compiler prints "out of memory": find the
+# regression before raising the cap.
 #
 # Usage: ./test/sh/test_fixpoint.sh
 # Skips (exit 0) if ./ycc is not built; build it with `make ycc`.
@@ -22,6 +23,8 @@ FAIL=0
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 YCC_BIN="$ROOT/ycc"
 SRC="$ROOT/src/y/ycc.y"
+FP_MEM_KB="${FP_MEM_KB:-2097152}"
+ulimit -v "$FP_MEM_KB"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

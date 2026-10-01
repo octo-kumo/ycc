@@ -39,6 +39,10 @@ both and prints the deltas. Per program in `bench/y/`:
 | `asm_bytes` | size of `ycc -S` output |
 | `self` (extra) | compiling `src/y/ycc.y`: also `asm_lines` and `heap_kb` |
 
+`BENCH_SELF=0 bench/compare.sh BASE NEW` leaves out the `self` rows, for
+a base build that cannot compile the current sources at all (one that
+ran out of memory there, say); the score then covers `bench/y/` only.
+
 **SCORE** = 100 x the geometric mean of `base/new` over every
 (benchmark, metric) pair of `compile_us`, `run_us` and `binary_bytes`.
 100 = no change; 105 = the new build is 5% better overall; below 100 is a

@@ -58,10 +58,15 @@ $(PROF_LINES_C): src/y/std/prof.y
 # toolchain). [3/3] acceptance: ycc must be byte-identical to the backed-up
 # reference binary — that is the C copy validated against the real ycc —
 # and to its own self-compile (fixpoint).
+# Both compiles run under a virtual-memory cap (ulimit -v, in KB), so a memory
+# regression fails the build ("out of memory") instead of swapping the
+# machine: cycc needs ~4.1 GB for ycc.y, ycc itself ~0.8 GB.
+CYCC_MEM_KB=6291456
+YCC_MEM_KB=2097152
 ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS)
-	./cycc -o ycc src/y/ycc.y
+	ulimit -v $(CYCC_MEM_KB); ./cycc -o ycc src/y/ycc.y
 	cmp ycc refs/ycc.ref
-	./ycc -o _ycc src/y/ycc.y
+	ulimit -v $(YCC_MEM_KB); ./ycc -o _ycc src/y/ycc.y
 	cmp ycc _ycc
 	rm -f _ycc
 	@echo "verified: cycc output == refs/ycc.ref == ycc self-compile (byte-identical)"

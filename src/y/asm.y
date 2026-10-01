@@ -1065,7 +1065,10 @@ def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, 
 };
 
 def patch_item_finish(code: [byte], bytes: [byte], err: str) -> {bytes: [byte], err: str} {
-    { bytes: code + bytes, err: err }
+    // In place: `code + bytes` built a fresh copy of the whole code buffer
+    // per instruction (O(n^2) arena; ~30 GB on the self-compile).
+    code += bytes;
+    { bytes: code, err: err }
 };
 
 def patch32(bytes: [byte], at: long, v: long) -> [byte] {

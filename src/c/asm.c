@@ -1370,7 +1370,10 @@ static Yv *patch_item_diff2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes
 }
 
 static Yv *patch_item_finish(Yv *code, Yv *bytes, Yv *err) {
-    return yr(2, "bytes", concat_bytes(code, bytes), "err", err);
+    /* In place: `code + bytes` built a fresh copy of the whole code buffer
+       per instruction (O(n^2) arena; ~30 GB on the self-compile). */
+    code = concat_bytes(code, bytes);
+    return yr(2, "bytes", code, "err", err);
 }
 
 static Yv *patch32(Yv *bytes, long at, long v) {
@@ -1382,10 +1385,8 @@ static Yv *patch32(Yv *bytes, long at, long v) {
     return bytes;
 }
 
-/* asm.y writes `code + bytes` (array concat -> a NEW array). The push form
-   grows `a` in place instead; that is unobservable here because the only
-   caller (asm_link) rebinds its `code` to the result and drops the old
-   array on the floor. */
+/* asm.y's `code += bytes` (yv.h has no `+=` helper for an array operand, so
+   the in-place append is spelled out as one push per element). */
 static Yv *concat_bytes(Yv *a, Yv *b) {
     long i = 0;
     while (i < yv_len(b)) {

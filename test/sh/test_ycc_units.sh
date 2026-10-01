@@ -22,6 +22,14 @@ echo "  ycc unit fixtures (reference-compiler smoke)"
 echo "═══════════════════════════════════════════"
 echo ""
 
+# Each fixture is compiled and run under a memory cap, not just a hang
+# timeout. test_all_imports.y splices every std module and is the heaviest
+# (~0.6 GB); a quadratic copy in the assembler once took it to tens of GB,
+# which a timeout reports as a "hang" at best and as an OOM-killed machine at
+# worst. Off (like YMEM_KB) for sanitized builds.
+UNIT_MEM_KB="${UNIT_MEM_KB:-1572864}"
+[ "$YMEM_KB" = unlimited ] && UNIT_MEM_KB=unlimited
+
 for f in "$ROOT"/test/y/ycc/test_*.y; do
     base=$(basename "$f")
     reason=$(skip_reason "$base")
@@ -29,11 +37,13 @@ for f in "$ROOT"/test/y/ycc/test_*.y; do
         skip "$base" "$reason"
         continue
     fi
-    out=$(timeout $(( 20 * YTIMEOUT_SCALE )) "$YBOOT" -q "$f" </dev/null 2>&1); ec=$?
+    out=$( (ulimit -v "$UNIT_MEM_KB"; timeout $(( 20 * YTIMEOUT_SCALE )) "$YBOOT" -q "$f") </dev/null 2>&1); ec=$?
     if [ $ec -eq 0 ]; then
         pass "$base"
     elif [ $ec -eq 124 ]; then
         fail "$base" "hung ($(( 20 * YTIMEOUT_SCALE ))s timeout) — re-examine, do not skiplist"
+    elif echo "$out" | grep -q "out of memory"; then
+        fail "$base" "out of memory under the ${UNIT_MEM_KB} KB cap — a memory regression, do not raise the cap blindly"
     else
         fail "$base" "exit=$ec: $(echo "$out" | tail -c 200 | tr '\n' '|')"
     fi

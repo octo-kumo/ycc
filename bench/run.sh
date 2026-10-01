@@ -79,6 +79,11 @@ for src in "$ROOT"/bench/y/*.y; do
     bench_one "$(basename "$src" .y)" "$src"
 done
 
+# BENCH_SELF=0 skips the self-compile rows (for a base build that cannot
+# finish compiling the current sources at all, e.g. one that runs out of
+# memory there); compare.sh then scores the bench/y/ programs only.
+[ "${BENCH_SELF:-1}" = "0" ] && exit 0
+
 # The compiler benchmark: ycc compiling its own source (the workload that
 # dominates development time). Heap and asm size come from --time's report.
 src="$ROOT/src/y/ycc.y"

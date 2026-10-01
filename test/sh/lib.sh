@@ -26,6 +26,21 @@ case "$CYCC$YREF" in
     *asan* | *msan* | *ubsan*) YTIMEOUT_SCALE=15 ;;
 esac
 
+# Every compile (and every compiled program) a suite runs is under a
+# virtual-memory cap, in KB (`ulimit -v`, set once here for the whole suite
+# process). Past it the allocator fails and the compiler or program exits 1
+# with "out of memory", so a memory regression is a FAILED test rather than a
+# machine pushed into swap or the OOM killer: the self-compile once peaked at
+# 32 GB, `make test` ran it twice, and every run "passed". The heaviest
+# legitimate input is cycc compiling src/y/ycc.y (~4.1 GB RSS; ./ycc needs
+# ~0.8 GB for the same file). Sanitized builds reserve terabytes of virtual
+# address space up front, so the cap is off for them.
+YMEM_KB="${YMEM_KB:-6291456}"
+case "$CYCC$YREF" in
+    *asan* | *msan* | *ubsan*) YMEM_KB=unlimited ;;
+esac
+ulimit -v "$YMEM_KB"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
