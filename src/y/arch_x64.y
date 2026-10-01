@@ -22,6 +22,10 @@ def arch_fn_label(uid: long, name: str) -> str {
     "yfn_" + uid + "_" + name
 };
 
+def arch_global_label(uid: long, name: str) -> str {
+    "yg_" + uid + "_" + name
+};
+
 def arch_loc_label(fuid: long, n: long) -> str {
     "yL_" + fuid + "_" + n
 };
@@ -40,6 +44,15 @@ def arch_rodata() -> str {
 
 def arch_text() -> str {
     ".text\n"
+};
+
+// One zeroed 8-byte cell per global (see emit_program in native.y).
+def arch_bss() -> str {
+    ".section .bss\n"
+};
+
+def arch_global_cell(label: str) -> str {
+    label + ":\n.zero 8\n"
 };
 
 def arch_frame(slots: long) -> long {
@@ -1267,4 +1280,4 @@ def arch_consts() -> str {
     ], "\n") + "\n"
 };
 
-export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_prelude, arch_consts, arch_frame, arch_exit };
+export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_prelude, arch_consts, arch_frame, arch_exit };

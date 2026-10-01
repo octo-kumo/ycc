@@ -18,7 +18,8 @@ extern long reg_size(Yv *name);             /* enc64.c: enc.reg_size */
 extern Yv *enc_insn(Yv *mn, Yv *ops);       /* enc64.c: enc.enc_insn */
 extern Yv *le64(long v);                    /* enc64.c: enc.le64 */
 extern Yv *le32(long v);                    /* enc64.c: enc.le32 */
-extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off); /* elf.c: elf.elf_build */
+extern long elf_bss_from_ro(long ro_len, long bss_len); /* elf.c: elf.elf_bss_from_ro */
+extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len); /* elf.c: elf.elf_build */
 
 /* ── module-local defs (forward) ─────────────────────────────────────── */
 static int is_digit_ch(Yv *c);
@@ -84,6 +85,7 @@ static Yv *asm_quad(Yv *line, long lno, long sec, Yv *offs, Yv *rest);
 static int asm_quad_bad(Yv *rest);
 static Yv *asm_quad_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest);
 static Yv *asm_quad_go(long sec, Yv *offs, Yv *rest);
+static Yv *asm_zero(Yv *line, long lno, long sec, Yv *offs, Yv *rest);
 static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs);
 static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs);
 static Yv *asm_link(Yv *items, Yv *labels);
@@ -746,7 +748,7 @@ Yv *asm_assemble(Yv *text) {
     Yv *items = yav(0);
     Yv *labels = yav(0);
     long sec = 0;
-    Yv *offs = yav(2, yv_long(0), yv_long(0));
+    Yv *offs = yav(3, yv_long(0), yv_long(0), yv_long(0));
     long li = 0;
     Yv *err = ys("");
     /* NOTE: threaded STATE record (see note below): sec/offs/items/labels/err
@@ -1013,6 +1015,8 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
         return asm_section(line, lno, sec, offs, rest);
     } else if (ys_eq_lit(dir, ".quad")) {
         return asm_quad(line, lno, sec, offs, rest);
+    } else if (ys_eq_lit(dir, ".zero")) {
+        return asm_zero(line, lno, sec, offs, rest);
     } else {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported directive '")), dir), ys("'")),
@@ -1035,6 +1039,7 @@ static Yv *asm_section(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
 static int asm_section_bad(Yv *rest) {
     if (ys_eq_lit(rest, ".rodata")) { return 0; }
     else if (ys_eq_lit(rest, ".text")) { return 0; }
+    else if (ys_eq_lit(rest, ".bss")) { return 0; }
     else { return 1; }
 }
 
@@ -1054,6 +1059,10 @@ static Yv *asm_section_go(long sec, Yv *offs, Yv *rest) {
     (void)sec;
     if (ys_eq_lit(rest, ".rodata")) {
         return yr(4, "err", ys(""), "sec", yv_long(1), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+    } else if (ys_eq_lit(rest, ".bss")) {
+        return yr(4, "err", ys(""), "sec", yv_long(2), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else {
@@ -1109,6 +1118,38 @@ static Yv *asm_quad_go(long sec, Yv *offs, Yv *rest) {
                   "kind", ys("data"), "bytes", bytes, "fix", yav(0));
     ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + yv_len(bytes)));
     return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
+}
+
+/* .zero N: N zero bytes. In .bss they only reserve space (no file bytes). */
+static Yv *asm_zero(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
+    if (asm_quad_bad(rest)) {
+        (void)line;
+        return yr(4,
+                  "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)),
+                                               ys(": bad .zero size '")),
+                                       rest),
+                                ys("'")),
+                  "sec", yv_long(sec), "offs", offs,
+                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+    } else {
+        (void)line;
+        long n = ys_tonum(rest);
+        Yv *zb = yav(0);
+        if (sec != 2) {
+            long i = 0;
+            while (i < n) {
+                zb = ya_push(zb, yv_long(0));
+                i = i + 1;
+            }
+        }
+        Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec),
+                      "len", yv_long(n), "kind", ys("data"), "bytes", zb,
+                      "fix", yav(0));
+        ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + n));
+        return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
+                  "item", item);
+    }
 }
 
 static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
@@ -1187,18 +1228,52 @@ static Yv *asm_link(Yv *items, Yv *labels) {
     long lt0 = clock_us();
     long lh0 = heap_used();
     long code_len = 0;
+    long ro_len = 0;
+    long bss_len = 0;
+    int bss_data = 0;
     /* NOTE: `0;` tails (see parser.y parse_binary note). `it.len` reads go
        through the bare hole (tnone unifies — see types.y typeof_def note).
-       Only the code length is needed: elf_build takes the rodata bytes and
-       sizes that segment itself. */
+       elf_build takes the rodata bytes and sizes that segment itself; the
+       rodata length only places the .bss. */
     long i = 0;
     while (i < yv_len(items)) {
         Yv *it = ya_get(items, i);
-        if (yv_l(yr_get(it, "sec")) == 0) { code_len = code_len + yv_l(yr_get(it, "len")); ; } else { ; };
+        long sec = yv_l(yr_get(it, "sec"));
+        if (sec == 0) {
+            code_len = code_len + yv_l(yr_get(it, "len"));
+            ;
+        } else if (sec == 1) {
+            ro_len = ro_len + yv_l(yr_get(it, "len"));
+            ;
+        } else if (sec == 2) {
+            bss_len = bss_len + yv_l(yr_get(it, "len"));
+            if (yv_len(yr_get(it, "bytes")) > 0) { bss_data = 1; ; } else { ; };
+            ;
+        }
         i = i + 1;
         ;
     };
-    Yv *lm = labmap_build(labels);
+    /* A .bss label resolves like a rodata one, past the padded rodata (see
+       elf_bss_from_ro), so the fixups below only know two sections. */
+    Yv *labs = labels;
+    if (bss_len > 0) {
+        long bshift = elf_bss_from_ro(ro_len, bss_len);
+        labs = yav(0);
+        long j = 0;
+        while (j < yv_len(labels)) {
+            Yv *lb = ya_get(labels, j);
+            if (yv_l(yr_get(lb, "sec")) == 2) {
+                labs = ya_push(
+                    labs,
+                    yr(3, "name", yr_get(lb, "name"), "sec", yv_long(1),
+                       "off", yv_long(bshift + yv_l(yr_get(lb, "off")))));
+            } else {
+                labs = ya_push(labs, lb);
+            }
+            j = j + 1;
+        }
+    }
+    Yv *lm = labmap_build(labs);
     long lt1 = clock_us();
     long lh1 = heap_used();
     Yv *lmap = yr_get(lm, "map");
@@ -1209,6 +1284,10 @@ static Yv *asm_link(Yv *items, Yv *labels) {
                   "times", yav(1, yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
     } else if (yv_l(yr_get(start, "sec")) != 0) {
         return yr(4, "ok", yv_bool(0), "bytes", yav(0), "error", ys("no _start label (empty program?)"),
+                  "times", yav(1, yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
+    } else if (bss_data) {
+        return yr(4, "ok", yv_bool(0), "bytes", yav(0),
+                  "error", ys("data or code in .bss"),
                   "times", yav(1, yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
     } else {
         /* pad code to a page so rodata lands page-aligned (mirrors elf.y) */
@@ -1260,7 +1339,7 @@ static Yv *asm_link(Yv *items, Yv *labels) {
         } else {
             long lt2 = clock_us();
             long lh2 = heap_used();
-            Yv *eb = elf_build(code, ro, yv_l(yr_get(start, "off")));
+            Yv *eb = elf_build(code, ro, yv_l(yr_get(start, "off")), bss_len);
             long lt3 = clock_us();
             long lh3 = heap_used();
             return yr(4, "ok", yv_bool(1), "bytes", eb, "error", ys(""),

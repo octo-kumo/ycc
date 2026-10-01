@@ -523,7 +523,7 @@ def asm_assemble(text: str) -> {ok: bool, bytes: [byte], error: str, times: [{ n
     let items = [];
     let labels = [];
     let sec = 0;
-    let offs = [0, 0];
+    let offs = [0, 0, 0];
     let li = 0;
     let err = "";
     // NOTE: threaded STATE record (see note below): sec/offs/items/labels/err
@@ -770,6 +770,8 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, s
         asm_section(line, lno, sec, offs, rest)
     } else if (dir == ".quad") {
         asm_quad(line, lno, sec, offs, rest)
+    } else if (dir == ".zero") {
+        asm_zero(line, lno, sec, offs, rest)
     } else {
         { err: "L" + tostring(lno) + ": unsupported directive '" + dir + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     }
@@ -788,6 +790,7 @@ def asm_section(line: str, lno: long, sec: long, offs: [long], rest: str) -> {er
 def asm_section_bad(rest: str) -> bool {
     if (rest == ".rodata") { false }
     else if (rest == ".text") { false }
+    else if (rest == ".bss") { false }
     else { true }
 };
 
@@ -801,6 +804,8 @@ def asm_section_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, 
     // NOTE: both arms share the key set — teq holds.
     if (rest == ".rodata") {
         { err: "", sec: 1, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    } else if (rest == ".bss") {
+        { err: "", sec: 2, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else {
         { err: "", sec: 0, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     }
@@ -842,6 +847,27 @@ def asm_quad_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, off
     let item = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [] };
     offs[sec] = offs[sec] + len(bytes);
     { err: "", sec: sec, offs: offs, item: item }
+};
+
+// .zero N: N zero bytes. In .bss they only reserve space (no file bytes).
+def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+    if (asm_quad_bad(rest)) {
+        { err: "L" + tostring(lno) + ": bad .zero size '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    } else {
+        let n = tonum(rest);
+        let zb: [byte] = [];
+        if (sec != 2) {
+            let i = 0;
+            while (i < n) {
+                zb += 0;
+                i = i + 1;
+            };
+            0
+        } else { 0; };
+        let item = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [] };
+        offs[sec] = offs[sec] + n;
+        { err: "", sec: sec, offs: offs, item: item }
+    }
 };
 
 def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
@@ -910,14 +936,33 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
     let lt0 = clock_us();
     let lh0 = heap_used();
     let code_len = 0;
+    let ro_len = 0;
+    let bss_len = 0;
+    let bss_data = false;
     // NOTE: `0;` tails (see parser.y parse_binary note). `it.len` reads go
     // through the bare hole (tnone unifies — see types.y typeof_def note).
-    // Only the code length is needed: elf_build takes the rodata bytes and
-    // sizes that segment itself.
+    // elf_build takes the rodata bytes and sizes that segment itself; the
+    // rodata length only places the .bss.
     foreach (it in items) {
-        if (it.sec == 0) { code_len = code_len + it.len; };
+        if (it.sec == 0) { code_len = code_len + it.len; }
+        else if (it.sec == 1) { ro_len = ro_len + it.len; }
+        else if (it.sec == 2) {
+            bss_len = bss_len + it.len;
+            if (len(it.bytes) > 0) { bss_data = true; };
+        };
     };
-    let lm = labmap_build(labels);
+    // A .bss label resolves like a rodata one, past the padded rodata (see
+    // elf_bss_from_ro), so the fixups below only know two sections.
+    let labs: [{name: str, sec: long, off: long}] = labels;
+    if (bss_len > 0) {
+        let bshift = elf.elf_bss_from_ro(ro_len, bss_len);
+        labs = [];
+        foreach (lb in labels) {
+            if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off }; }
+            else { labs += lb; };
+        };
+    };
+    let lm = labmap_build(labs);
     let lt1 = clock_us();
     let lh1 = heap_used();
     let lmap = lm.map;
@@ -927,6 +972,9 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
           times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else if (start.sec != 0) {
         { ok: false, bytes: [], error: "no _start label (empty program?)",
+          times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
+    } else if (bss_data) {
+        { ok: false, bytes: [], error: "data or code in .bss",
           times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else {
         // pad code to a page so rodata lands page-aligned (mirrors elf.y)
@@ -965,7 +1013,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
         } else {
             let lt2 = clock_us();
             let lh2 = heap_used();
-            let eb = elf.elf_build(code, ro, start.off);
+            let eb = elf.elf_build(code, ro, start.off, bss_len);
             let lt3 = clock_us();
             let lh3 = heap_used();
             { ok: true, bytes: eb, error: "",

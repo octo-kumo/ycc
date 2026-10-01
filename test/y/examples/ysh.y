@@ -2,6 +2,18 @@ const VERSION = { major: 6, minor: 7 };
 const SRC_PATH = "/tmp/_ysh_eval.y";
 const OUT_PATH = "/tmp/_ysh_out";
 
+// exec() gives sh no environment (it falls back to its default PATH), so
+// a ysh started by path runs the ycc next to it; otherwise plain `ycc`.
+def ycc_beside(argv0: str) -> str {
+    let parts = split(argv0, "/");
+    if (len(parts) > 1) {
+        join(parts[0:len(parts) - 1], "/") + "/ycc"
+    } else {
+        "ycc"
+    }
+};
+let YCC = ycc_beside(argv()[0]);
+
 def banner() {
     puts("    ▌ \n▌▌▛▘▛▌\n▙▌▄▌▌▌\n▄▌     \n" + VERSION.major + "." + tostring(VERSION.minor) + " — type 'help' for commands\n");
 };
@@ -36,7 +48,8 @@ def run_src(src: str) -> long {
         return 1;
     };
     write_file(SRC_PATH, src);
-    let rc = exec("YCC_RUNTIME_DIR=/app /app/ycc --no-exec --no-io --compile " + SRC_PATH + " -o " + OUT_PATH + " 2>&1");
+    // --no-exec strips exec() from the evaluated program.
+    let rc = exec(YCC + " --no-exec -o " + OUT_PATH + " " + SRC_PATH + " 2>&1");
     if (rc != 0) {
         puts("compile failed (exit " + tostring(rc) + ")\n");
         return rc;

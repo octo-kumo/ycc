@@ -3,6 +3,9 @@
  * One PT_LOAD segment (read+execute), static, no interpreter, no libc:
  * the entry point is our own `_start`, and user code only uses raw syscalls.
  * Layout: [EHDR 64][PHDR 56][code][rodata]; base vaddr 0x400000.
+ * A program with globals gets a second PT_LOAD (read+write, no file bytes):
+ * the zeroed .bss, on the page after the file mapping; its PHDR makes the
+ * headers 176 bytes.
  *
  * Y-side binary data flows through packed [byte] arrays. The C value model
  * keeps each element as a boxed long; the driver writes it directly. */
@@ -15,8 +18,22 @@
  * `def byte_of(v: long, i: long) -> long`. */
 #include "enc64.h"
 
-Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
-    long code_off = 120;
+long elf_code_off(long bss_len) {
+    if (bss_len > 0) { return 176; } else { return 120; }
+}
+
+static long elf_ro_total(long ro_len) {
+    long rosz = ro_len + 8;
+    long trail = rosz % 4096;
+    if (trail != 0) { return rosz + 4096 - trail; } else { return rosz; }
+}
+
+long elf_bss_from_ro(long ro_len, long bss_len) {
+    return elf_ro_total(ro_len) + 4096 - elf_code_off(bss_len);
+}
+
+Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len) {
+    long code_off = elf_code_off(bss_len);
     long base = 4194304;
     // Pad the code to a page so rodata starts page-aligned; pad rodata tail
     // to a page so the mapping covers every string byte (the kernel maps
@@ -57,7 +74,9 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
     out = push_le32(out, 0);
     out = push_le16(out, 64);
     out = push_le16(out, 56);
-    out = push_le16(out, 1);
+    long phnum = 1;
+    if (bss_len > 0) { phnum = 2; ; } else { ; };
+    out = push_le16(out, phnum);
     out = push_le16(out, 0);
     out = push_le16(out, 0);
     out = push_le16(out, 0);
@@ -70,6 +89,22 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off) {
     out = push_le64(out, total);
     out = push_le64(out, total);
     out = push_le64(out, 4096);
+    if (bss_len > 0) {
+        /* PHDR: PT_LOAD, R+W, nothing from the file (the kernel maps
+         * zeroed pages), on the page after the file mapping. */
+        long bss_vaddr = base + total - code_off + 4096;
+        out = push_le32(out, 1);
+        out = push_le32(out, 6);
+        out = push_le64(out, 0);
+        out = push_le64(out, bss_vaddr);
+        out = push_le64(out, bss_vaddr);
+        out = push_le64(out, 0);
+        out = push_le64(out, bss_len);
+        out = push_le64(out, 4096);
+        ;
+    } else {
+        ;
+    }
     out = push_bytes(out, code);
     long p = 0;
     while (p < codepad) {
@@ -132,4 +167,4 @@ Yv *push_le64(Yv *out, long v) {
     return out;
 }
 
-/* export { elf_build }; */
+/* export { elf_build, elf_code_off, elf_bss_from_ro }; */

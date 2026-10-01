@@ -130,7 +130,11 @@ code calls it by fixed label.
   scope where it is written** (a name declared later is an
   undefined-variable error — `let`s do not hoist, `rename.y`). Captures
   are **shared**: a write inside the closure is visible outside and the
-  other way round. Avoid *new* closures in `src/y`: the C twin's value
+  other way round — the variable lives in one heap cell from its binding
+  on, so a `for x in a..b` / `foreach` variable is fresh per iteration
+  while one declared before a loop is shared by all of the loop's
+  closures. Top-level variables are globals (`.bss` cells), never
+  captures. Avoid *new* closures in `src/y`: the C twin's value
   model (`yv.h`: `none|bool|long|float|str|array|record`) has no function
   value to store one in.
 - **Arrays, maps and records are references**, in both copies; an array

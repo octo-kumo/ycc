@@ -2636,7 +2636,7 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                                              tstr(tt)),
                                        ys(" with '")),
                                 op),
-                         ys("' (its length is part of its type; use [T] instead)")),
+                         ys("=' (its length is part of its type; use [T] instead)")),
                   yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         return yr(2, "typ", tt, "st", st);
     } else if (ys_eq_lit(yr_get(tt, "k"), "tarr")) {

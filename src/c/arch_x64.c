@@ -31,6 +31,10 @@ Yv *arch_fn_label(long uid, Yv *name) {
     return ys_cat(ys_cat(ys_cat(ys("yfn_"), ys_long(uid)), ys("_")), name);
 }
 
+Yv *arch_global_label(long uid, Yv *name) {
+    return ys_cat(ys_cat(ys_cat(ys("yg_"), ys_long(uid)), ys("_")), name);
+}
+
 Yv *arch_loc_label(long fuid, long n) {
     return ys_cat(ys_cat(ys_cat(ys("yL_"), ys_long(fuid)), ys("_")), ys_long(n));
 }
@@ -49,6 +53,15 @@ Yv *arch_rodata(void) {
 
 Yv *arch_text(void) {
     return ys(".text\n");
+}
+
+/* One zeroed 8-byte cell per global (see emit_program in native.y). */
+Yv *arch_bss(void) {
+    return ys(".section .bss\n");
+}
+
+Yv *arch_global_cell(Yv *label) {
+    return ys_cat(label, ys(":\n.zero 8\n"));
 }
 
 long arch_frame(long slots) {

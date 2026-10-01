@@ -18,7 +18,7 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect (+ octal payload writer) |
-| `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), static, entry `_start` |
+| `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals; static, entry `_start` |
 | `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof` and the separate `exec` chunk), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `prof.y` (the `--prof` runtime), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
@@ -44,6 +44,9 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   to and from `str`; a `byte` widens to `long` in arithmetic, and a `long`
   narrows to `byte` at annotated sites (there is no cast syntax).
 - Locals live at fixed `rbp` offsets (one flat frame per function, 8 bytes/slot).
+  **Top-level variables are globals**: each gets an 8-byte `.bss` cell
+  (`yg_<n>_<name>`, read and written `%rip`-relative), so every function —
+  hoisted or not, called from anywhere — sees the same variable.
   Arrays — fixed `[v; n]` and dynamic `[v, ...]` alike — are **heap headers**
   `{len, cap, data}` where `data` points at a separately allocated element
   block; a local holds the header address, so `[T; N]` is as
@@ -75,10 +78,17 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   body serves both call forms — capture-free bodies simply never read that
   slot. A capturing function is emitted at its *creation site*, because only
   the enclosing environment knows each captured name's type. Every capture
-  slot holds a pointer to one heap **cell** (`box_capture`), so a captured
-  variable is *shared* between the enclosing frame and every closure over it
-  — writes are visible in both directions, and each iteration of a loop gets
-  fresh cells.
+  slot holds a pointer to one heap **cell**, so a captured variable is
+  *shared* between the enclosing frame and every closure over it — writes
+  are visible in both directions. The cell is allocated where the variable
+  is **bound** (`box_bound`: declaration, parameter entry, each loop
+  iteration's refresh of a `for x in a..b`/`foreach` variable), never where
+  the closure is made: every read and write of a captured variable, on every
+  path, goes through the cell. So a `foreach`/range variable is fresh per
+  iteration, while a variable declared before a loop (a C-style
+  `for (let i ...)` one included) is one variable shared by all of the
+  loop's closures. A named function that captures is a closure wherever it
+  is named — calls from its siblings and from itself pass its record.
 - Maps `{K => V}` are lowered to a `{keys: [K], vals: [V]}` record and
   every map operation (literal, `m[k]`, `m[k] = v`, `len`, printing) to
   synthetic AST over those arrays -- no map-specific assembly. Reads are
@@ -96,7 +106,9 @@ source → lexer → parser (+types) → splice imports → strip namespaces
 - **Now**: direct AST→asm (stack machine + heap values). A capture-free
   `def` (top-level or nested) is hoisted to a top-level function and called
   directly; one that captures is closure-converted and emitted at its
-  creation site. No scopes/shadowing downstream of rename (flat envs).
+  creation site. Top-level defs never capture (top-level variables are
+  globals), so every top-level def is hoisted. No scopes/shadowing
+  downstream of rename (flat envs).
 - **Next**: ANF lowering (explicit eval order), defunctionalization,
   register allocation, GC (only when something must free).
 - Semantics disputes between the Y and C implementations are resolved toward
@@ -109,7 +121,10 @@ source → lexer → parser (+types) → splice imports → strip namespaces
 `ycc -o prog prog.y` writes a static ELF64 directly: `enc64.y` encodes each
 emitted instruction (fixed-size near jumps/calls, so lengths are known in
 pass 1), `asm.y` assembles (two passes + fixups + rodata), `elf.y` wraps one
-PT_LOAD (R+E) with entry `_start`. Verified byte-for-byte behaviorally against
+PT_LOAD (R+E) with entry `_start`, plus — when the program has globals — a
+second, RW PT_LOAD with no file bytes that the kernel zero-fills: the
+`.bss` section (`.zero N` reserves space there; data or code in `.bss` is an
+assembler error). Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight
 out through the `write_bytes` builtin (raw `open`/`write`/`chmod` over
 syscalls, mode 493 = 0755), so NULs pass through untouched. No cc/as/ld

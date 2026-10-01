@@ -1096,7 +1096,9 @@ def strip_decl(node, imports: [str]) -> { k: str } {
 // st = { out, rodata, uid, fuid, loc, env, slots,
 //        self_label, end_label, fns, bodies }
 // env: FLAT list of {name, kind, off, label, typ} — names are unique
-// post-rename, so no scopes or shadowing. kind: "local"|"param"|"func".
+// post-rename, so no scopes or shadowing. kind: "local"|"param" (frame
+// slot at off), "func" (label), "global" (.bss cell at label),
+// "closure" (slot holding a record), "box"/"capture" (shared cells).
 
 def st_new() -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     { out: [], rodata: [], uid: 1, fuid: 0, loc: 1, env: [],
@@ -1660,136 +1662,141 @@ def is_intrinsic_name(n: str) -> bool {
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
-// captured closure needs the name captured too).
-def fv_ids(node, out: [str]) -> [str] {
+// captured closure needs the name captured too). With `collect` false,
+// only the reads inside nested functions count (see box_names).
+def fv_walk(node, out: [str], collect: bool) -> [str] {
     let k = node.k;
     if (k == "id") {
-        out += node.v;
+        if (collect) { out += node.v; 0; } else { 0; };
         0
     } else if (k == "un") {
-        out = fv_ids(node.e, out);
+        out = fv_walk(node.e, out, collect);
         0
     } else if (k == "addr") {
-        out = fv_ids(node.e, out);
+        out = fv_walk(node.e, out, collect);
         0
     } else if (k == "deref") {
-        out = fv_ids(node.e, out);
+        out = fv_walk(node.e, out, collect);
         0
     } else if (k == "ret") {
-        out = fv_ids(node.e, out);
+        out = fv_walk(node.e, out, collect);
         0
     } else if (k == "bin") {
-        out = fv_ids(node.l, out);
-        out = fv_ids(node.r, out);
+        out = fv_walk(node.l, out, collect);
+        out = fv_walk(node.r, out, collect);
         0
     } else if (k == "array") {
-        out = fv_ids_list(node.elems, out);
+        out = fv_walk_list(node.elems, out, collect);
         0
     } else if (k == "rec") {
-        out = fv_ids_list(node.vals, out);
+        out = fv_walk_list(node.vals, out, collect);
         0
     } else if (k == "map") {
-        out = fv_ids_list(node.vals, out);
+        out = fv_walk_list(node.vals, out, collect);
         0
     } else if (k == "arrrep") {
-        out = fv_ids(node.v, out);
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "call") {
-        out = fv_ids(node.callee, out);
-        out = fv_ids_list(node.args, out);
+        out = fv_walk(node.callee, out, collect);
+        out = fv_walk_list(node.args, out, collect);
         0
     } else if (k == "index") {
-        out = fv_ids(node.arr, out);
-        out = fv_ids(node.idx, out);
+        out = fv_walk(node.arr, out, collect);
+        out = fv_walk(node.idx, out, collect);
         0
     } else if (k == "slice") {
-        out = fv_ids(node.arr, out);
-        out = fv_ids(node.lo, out);
-        out = fv_ids(node.hi, out);
+        out = fv_walk(node.arr, out, collect);
+        out = fv_walk(node.lo, out, collect);
+        out = fv_walk(node.hi, out, collect);
         0
     } else if (k == "idxassign") {
-        out = fv_ids(node.arr, out);
-        out = fv_ids(node.idx, out);
-        out = fv_ids(node.v, out);
+        out = fv_walk(node.arr, out, collect);
+        out = fv_walk(node.idx, out, collect);
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "dot") {
-        out = fv_ids(node.obj, out);
+        out = fv_walk(node.obj, out, collect);
         0
     } else if (k == "dotassign") {
-        out = fv_ids(node.obj, out);
-        out = fv_ids(node.v, out);
+        out = fv_walk(node.obj, out, collect);
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "store") {
-        out = fv_ids(node.p, out);
-        out = fv_ids(node.v, out);
+        out = fv_walk(node.p, out, collect);
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "assign") {
-        out += node.name;
-        out = fv_ids(node.v, out);
+        if (collect) { out += node.name; 0; } else { 0; };
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "incdec") {
-        out = fv_ids(node.tgt, out);
+        out = fv_walk(node.tgt, out, collect);
         0
     } else if (k == "opassign") {
-        out = fv_ids(node.tgt, out);
-        out = fv_ids(node.v, out);
+        out = fv_walk(node.tgt, out, collect);
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "decl") {
-        out = fv_ids(node.v, out);
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "if") {
-        out = fv_ids(node.cond, out);
-        out = fv_ids(node.then, out);
+        out = fv_walk(node.cond, out, collect);
+        out = fv_walk(node.then, out, collect);
         if (node.has_else) {
-            out = fv_ids(node.els, out);
+            out = fv_walk(node.els, out, collect);
             0
         } else { 0; };
         0
     } else if (k == "while") {
-        out = fv_ids(node.cond, out);
-        out = fv_ids(node.body, out);
+        out = fv_walk(node.cond, out, collect);
+        out = fv_walk(node.body, out, collect);
         0
     } else if (k == "for") {
-        out = fv_ids(node.init, out);
-        out = fv_ids(node.cond, out);
-        out = fv_ids(node.step, out);
-        out = fv_ids(node.body, out);
+        out = fv_walk(node.init, out, collect);
+        out = fv_walk(node.cond, out, collect);
+        out = fv_walk(node.step, out, collect);
+        out = fv_walk(node.body, out, collect);
         0
     } else if (k == "foreach") {
-        out = fv_ids(node.iter, out);
-        out = fv_ids(node.body, out);
+        out = fv_walk(node.iter, out, collect);
+        out = fv_walk(node.body, out, collect);
         0
     } else if (k == "forrange") {
-        out = fv_ids(node.lo, out);
-        out = fv_ids(node.hi, out);
-        out = fv_ids(node.body, out);
+        out = fv_walk(node.lo, out, collect);
+        out = fv_walk(node.hi, out, collect);
+        out = fv_walk(node.body, out, collect);
         0
     } else if (k == "block") {
-        out = fv_ids_list(node.stmts, out);
+        out = fv_walk_list(node.stmts, out, collect);
         0
     } else if (k == "func") {
-        out = fv_ids(node.body, out);
+        out = fv_walk(node.body, out, true);
         0
     } else if (k == "sliceassign") {
-        out = fv_ids(node.arr, out);
-        out = fv_ids(node.lo, out);
-        out = fv_ids(node.hi, out);
-        out = fv_ids(node.v, out);
+        out = fv_walk(node.arr, out, collect);
+        out = fv_walk(node.lo, out, collect);
+        out = fv_walk(node.hi, out, collect);
+        out = fv_walk(node.v, out, collect);
         0
     } else if (k == "rectest" || k == "narrow" || k == "matchend") {
-        out = fv_ids(node.e, out);
+        out = fv_walk(node.e, out, collect);
         0
     } else { 0; };
     out
 };
 
-def fv_ids_list(nodes: [{ k: str }], out: [str]) -> [str] {
+def fv_walk_list(nodes: [{ k: str }], out: [str], collect: bool) -> [str] {
     let i = 0;
     while (i < len(nodes)) {
-        out = fv_ids(nodes[i], out);
+        out = fv_walk(nodes[i], out, collect);
         i = i + 1;
     };
     out
+};
+
+def fv_ids(node, out: [str]) -> [str] {
+    fv_walk(node, out, true)
 };
 
 // Every name BOUND anywhere in a subtree (params of nested funcs included:
@@ -1985,18 +1992,10 @@ def fn_label_present(fns: [{ name: str, label: str, typ: { k: str } }], label: s
     found
 };
 
-def fns_find(fns: [{ name: str, label: str, typ: { k: str } }], name: str) -> { name: str, label: str, typ: { k: str } } {
-    let i = 0;
-    let found = { name: "", label: "y_missing_" + name, typ: { k: "tnone" } };
-    while (i < len(fns)) {
-        let e = fns[i];
-        if (e.name == name) {
-            found = e;
-            0
-        } else { 0; };
-        i = i + 1;
-    };
-    found
+// st.fns holds the hoisted defs and, after them, the globals (see
+// emit_program); a global's label is its .bss cell.
+def fns_kind(label: str) -> str {
+    if (substr(label, 0, 3) == "yg_") { "global" } else { "func" }
 };
 
 // ── expression emission (value in %rax) ────────────────────────────────
@@ -2159,8 +2158,20 @@ def gen_id(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
             emit(st, "    # INTERNAL: undefined " + node.v)
         } else if (e.kind == "func") {
             // A hoisted def used as a VALUE: wrap it in a closure record
-            // with no captures (top-level defs capture nothing).
-            gen_make_closure(st, e.label, [])
+            // with no captures (hoisted defs capture nothing). A capturing
+            // function naming itself hands out its own record instead.
+            let soff = -1;
+            if (e.label == st.self_label) {
+                soff = capture_off(st);
+                0
+            } else { 0; };
+            if (soff >= 0) {
+                emit(st, "    mov " + tostring(soff) + "(%rbp), %rax")
+            } else {
+                gen_make_closure(st, e.label, [])
+            }
+        } else if (e.kind == "global") {
+            emit(st, "    mov " + e.label + "(%rip), %rax")
         } else if (e.kind == "capture") {
             // Captured by the enclosing closure: load the closure record
             // (at the frame offset recorded in `off`), read slot idx+1 —
@@ -2210,11 +2221,16 @@ def gen_cap_ptr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 // every closure over it: writes through either are visible through both —
 // the scope is shared, exactly as in the C copy's value model (yv.c)
 // (the old native model copied the value at creation and could not even
-// write to a capture). box_capture runs at the closure's creation site,
-// once per captured name: the FIRST capture allocates the cell and
-// re-binds the name to it (kind "box"); later captures find it already
-// boxed. In a loop the creation code runs per iteration, so each
-// iteration's closures share one fresh cell.
+// write to a capture). The cell is allocated where the variable is BOUND
+// (box_bound: declaration, parameter entry, loop-variable refresh), so
+// every later read and write — before or after the closure exists, on
+// any path — goes through it. Boxing at the closure's creation site
+// instead would leave code emitted earlier (a loop's condition, the other
+// arm of an `if`) on the stale frame slot. box_capture allocates the cell
+// from the current value and re-binds the name to it (kind "box"); it is
+// a no-op for a name already boxed. A loop variable is bound once per
+// iteration, so each iteration's closures share one fresh cell; a
+// variable declared before a loop shares one cell across iterations.
 def box_capture(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let e = env_find(st, name);
     if (e.kind == "box" || e.kind == "capture") {
@@ -2234,6 +2250,49 @@ def box_capture(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
           bodies: st.bodies };
         env_define(st2, name, "box", boff, "", e.typ)
     }
+};
+
+// The names nested functions read: every binding of this body that a
+// closure can capture (names are unique after rename, so the others —
+// the nested functions' own locals, globals, defs — are never bound
+// here). emit_one_fn records them as "boxmark" entries past a "frame"
+// entry, named "" so no lookup can hit them, the marked name in `label`.
+def box_names(func) -> [str] {
+    let reads = fv_walk(func.body, [], false);
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(reads)) {
+        let n: str = reads[i];
+        if (name_in(out, n)) { 0; } else {
+            out += n;
+            0
+        };
+        i = i + 1;
+    };
+    out
+};
+
+// Called right after `name` is bound: a captured name moves into its
+// cell now (see box_capture). Scans back to this function's "frame".
+def box_bound(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let env = st.env;
+    let i = len(env) - 1;
+    let want = false;
+    let more = true;
+    while (more && i >= 0) {
+        let e = env[i];
+        if (e.kind == "frame") {
+            more = false;
+            0
+        } else if (e.kind == "boxmark" && e.label == name) {
+            want = true;
+            more = false;
+            0
+        } else { 0; };
+        i = i - 1;
+        0
+    };
+    if (want) { box_capture(st, name) } else { st }
 };
 
 def gen_make_closure(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, label: str, caps: [str]) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -2477,6 +2536,8 @@ def gen_addr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         if (e.kind == "box") {
             // the shared cell IS the variable's address
             emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
+        } else if (e.kind == "global") {
+            emit(st, "    lea " + e.label + "(%rip), %rax")
         } else if (e.kind == "capture") {
             let aidx = tonum(e.label);
             st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
@@ -3325,18 +3386,20 @@ def gen_direct(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         } else if (e.kind == "func") {
             label = e.label;
         } else {
-            // A local/param/capture holding a closure value: call through it.
+            // A local/param/capture/global holding a closure value: call
+            // through it.
             indirect = true;
         };
     };
     if (indirect) {
         gen_indirect(st, node, node.callee)
     } else {
-        // A recursive `self` call reaches the same body, which reads its
-        // captures through the closure record — pass this frame's record
-        // along, exactly as an indirect call would.
+        // A recursive call (`self`, or a capturing function's own name)
+        // reaches the same body, which reads its captures through the
+        // closure record — pass this frame's record along, exactly as an
+        // indirect call would.
         let soff = -1;
-        if (name == "self") {
+        if (label == st.self_label) {
             soff = capture_off(st);
             0
         } else { 0; };
@@ -3442,6 +3505,9 @@ def gen_forrange(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     st = emit(st, "    mov " + tostring(loff) + "(%rbp), %rcx");
     st = emit(st, "    cmp %rcx, %rax");
     st = emit(st, "    jge " + r2.lbl);
+    // a captured loop variable gets a fresh cell per iteration (the
+    // counter itself stays in its raw slot)
+    st = box_bound(st, node.name);
     st = gen(st, node.body);
     st = emit(st, "    mov " + tostring(voff) + "(%rbp), %rax");
     st = emit(st, "    inc %rax");
@@ -3484,6 +3550,7 @@ def gen_foreach(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     // x = arr[i]
     st = emit(st, elem_load(arr_elem_bytes(elt), "%rdx", "%rax", "%rcx"));
     st = emit(st, "    mov %rcx, " + tostring(voff) + "(%rbp)");
+    st = box_bound(st, node.name);
     st = gen(st, node.body);
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
     st = emit(st, "    inc %rax");
@@ -3513,9 +3580,8 @@ def is_self_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
             if (cv == "self") {
                 true
             } else {
-                let fe = fns_find(st.fns, cv);
                 let ee = env_find(st, cv);
-                fe.label == st.self_label && ee.kind == "func"
+                ee.kind == "func" && ee.label == st.self_label
             }
         } else {
             false
@@ -3780,9 +3846,6 @@ def gen_reclit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     emit(st, "    add $8, %rax")
 };
 
-// Bind `name` to a closure over `func`: emit the body HERE (the enclosing
-// env still knows each captured name's type — emit_program deliberately
-// skips capturing functions), build the record, store it in a fresh slot.
 // An anonymous `def(...) {...}` used as a value: it has no entry in the
 // hoisted table, so give it a fresh label, emit the body here (where the
 // capture types are known) and hand back the closure record.
@@ -3801,7 +3864,7 @@ def gen_func_literal(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
     let lbl = arch.arch_fn_label(rl.uid, "anon");
     let ru = next_uid(st);
     st = ru.st;
-    st = emit_one_fn(st, lbl, ru.uid, node, false, false, captypes);
+    st = emit_one_fn(st, lbl, ru.uid, node, false, false, captypes, "");
     let bci = 0;
     while (bci < len(caps)) {
         let bcn: str = caps[bci];
@@ -3811,8 +3874,12 @@ def gen_func_literal(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
     gen_make_closure(st, lbl, caps)
 };
 
+// Bind `name` to a closure over `func`: emit the body HERE (the enclosing
+// env still knows each captured name's type — emit_program deliberately
+// skips capturing functions), build the record, store it in a fresh slot.
+// Such a function (see capturing_defs) is not in the hoisted table, so it
+// gets its label here; its body knows its own name (emit_one_fn).
 def gen_closure_binding(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str, func, caps: [str]) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    let fe = fns_find(st.fns, name);
     let captypes: [{ k: str }] = [];
     let ci = 0;
     while (ci < len(caps)) {
@@ -3821,31 +3888,38 @@ def gen_closure_binding(st: { out: [str], rodata: [[str]], uid: long, fuid: long
         captypes += ce.typ;
         ci = ci + 1;
     };
+    let rl = next_uid(st);
+    st = rl.st;
+    let lbl = fn_label_of(rl.uid, name);
     let ru = next_uid(st);
     st = ru.st;
-    st = emit_one_fn(st, fe.label, ru.uid, func, false, false, captypes);
+    st = emit_one_fn(st, lbl, ru.uid, func, false, false, captypes, name);
     let bci = 0;
     while (bci < len(caps)) {
         let bcn: str = caps[bci];
         st = box_capture(st, bcn);
         bci = bci + 1;
     };
-    st = gen_make_closure(st, fe.label, caps);
+    st = gen_make_closure(st, lbl, caps);
     let coff = (st.slots + 1) * -8;
     st = emit(st, "    mov %rax, " + tostring(coff) + "(%rbp)");
     let st3 = { out: st.out, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies };
-    env_define(st3, name, "closure", coff, "", func_type_in(st3, func))
+    st3 = env_define(st3, name, "closure", coff, "", func_type_in(st3, func));
+    box_bound(st3, name)
 };
 
 def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     if (node.kind == "def") {
         // A nested `def` that captures is a closure just like a let-bound
         // literal; a capture-free one stays hoisted (emitted by
-        // emit_program, env pre-bound, calls go direct).
-        let dcaps = fn_captures(node.v, fn_names_of(st.fns));
+        // emit_program, env pre-bound, calls go direct). Its own name is
+        // no capture: the body reaches itself through its own record.
+        let dex = fn_names_of(st.fns);
+        dex += node.name;
+        let dcaps = fn_captures(node.v, dex);
         if (len(dcaps) == 0) {
             st
         } else {
@@ -3857,7 +3931,9 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             // env already binds them, calls go direct). One that captures
             // becomes a closure record built HERE, where the captured
             // values are live, and the binding holds that record.
-            let caps = fn_captures(node.v, fn_names_of(st.fns));
+            let lex = fn_names_of(st.fns);
+            lex += node.name;
+            let caps = fn_captures(node.v, lex);
             if (len(caps) == 0) {
                 st
             } else {
@@ -3872,13 +3948,7 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
                 t = infer(st, node.v);
             };
             st = gen_arrrep_esz(st, node.v, arr_elem_bytes(t));
-            let off = (st.slots + 1) * -8;
-            st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
-            let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-              self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-              bodies: st.bodies };
-            env_define(st2, node.name, "local", off, "", t)
+            bind_decl(st, node.name, t)
         } else if (node.v.k == "array") {
             // Heap array literal. The DECLARED element type decides the
             // element width: `let b: [byte] = [104, 105]` packs, and the
@@ -3888,13 +3958,7 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
                 t = infer(st, node.v);
             };
             st = gen_array_esz(st, node.v, arr_elem_bytes(t));
-            let off = (st.slots + 1) * -8;
-            st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
-            let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-              self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-              bodies: st.bodies };
-            env_define(st2, node.name, "local", off, "", t)
+            bind_decl(st, node.name, t)
         } else if (node.v.k == "rec") {
             // record literal: heap address (first-class value, plain slot).
             // An empty literal under a map annotation is the map itself
@@ -3904,17 +3968,11 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             } else {
                 st = gen(st, node.v)
             };
-            let off = (st.slots + 1) * -8;
-            st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
             let t = node.typ;
             if (t.k == "tnone") {
                 t = infer(st, node.v);
             };
-            let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-              self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-              bodies: st.bodies };
-            env_define(st2, node.name, "local", off, "", t)
+            bind_decl(st, node.name, t)
         } else {
             st = gen(st, node.v);
             // Reference semantics: arrays and records are heap values and
@@ -3923,19 +3981,32 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             // accumulator through helpers was O(n^2) — the assembler's
             // patch loop spent 650MB on a 20KB output. The VM and the C
             // runtime alias too, so all three engines agree.
-            let off = (st.slots + 1) * -8;
-            st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
             // bind with annotation or inferred type
             let t = node.typ;
             if (t.k == "tnone") {
                 t = infer(st, node.v);
             };
-            let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-              self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-              bodies: st.bodies };
-            env_define(st2, node.name, "local", off, "", t)
+            bind_decl(st, node.name, t)
         }
+    }
+};
+
+// Bind a declared name to the value in %rax: a top-level variable stores
+// to its global cell (see emit_program), any other takes a fresh slot.
+def bind_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let ge = env_find(st, name);
+    if (ge.kind == "global") {
+        st = emit(st, "    mov %rax, " + ge.label + "(%rip)");
+        env_define(st, name, "global", 0, ge.label, t)
+    } else {
+        let off = (st.slots + 1) * -8;
+        st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
+        let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
+          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+          bodies: st.bodies };
+        st2 = env_define(st2, name, "local", off, "", t);
+        box_bound(st2, name)
     }
 };
 
@@ -3957,6 +4028,8 @@ def gen_assign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rdx");
         st = emit(st, "    mov %rax, (%rdx)");
         st
+    } else if (e.kind == "global") {
+        emit(st, "    mov %rax, " + e.label + "(%rip)")
     } else {
         emit(st, "    mov %rax, " + tostring(e.off) + "(%rbp)")
     }
@@ -5237,10 +5310,10 @@ def gen_store(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 // Frame: locals at rbp-8, rbp-16, ...; params at rbp+16, rbp+24, ....
 // Every emitted function gets: prologue, body, end_label, epilogue.
 
-def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, label: str, fuid: long, func, is_main: bool, want_argv: bool, captypes: [{ k: str }]) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, label: str, fuid: long, func, is_main: bool, want_argv: bool, captypes: [{ k: str }], selfname: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // fresh per-function state; uid/rodata/fns flow through and back.
     // The scope is pre-loaded with every known def (like the checker's
-    // fresh_func_scope): bodies see all top-level + hoisted functions.
+    // fresh_func_scope): bodies see all hoisted functions and globals.
     let f = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0,
       self_label: label, end_label: arch.arch_loc_label(fuid, 0),
@@ -5249,9 +5322,25 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     let g = 0;
     while (g < len(fnsall)) {
         let fe = fnsall[g];
-        f = env_define(f, fe.name, "func", 0, fe.label, fe.typ);
+        f = env_define(f, fe.name, fns_kind(fe.label), 0, fe.label, fe.typ);
         g = g + 1;
     };
+    // The names nested functions capture (see box_names / box_bound).
+    f = env_define(f, "", "frame", 0, "", { k: "tnone" });
+    let bnames = box_names(func);
+    let bi = 0;
+    while (bi < len(bnames)) {
+        let bnm: str = bnames[bi];
+        f = env_define(f, "", "boxmark", 0, bnm, { k: "tnone" });
+        bi = bi + 1;
+    };
+    // A capturing named function is not in that table (see
+    // capturing_defs): bind its own name to this body, so a call by name
+    // passes the record along (gen_direct) and a value is the record.
+    if (selfname != "") {
+        f = env_define(f, selfname, "func", 0, label, func_type_in(st, func));
+        0
+    } else { 0; };
     // bind params. Caller pushes args left-to-right, so the LAST arg sits
     // at rbp+16 and param k lives at rbp+16+8*(n-1-k) (arity-dependent).
     let params = func.params;
@@ -5269,7 +5358,9 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     // body serve both direct and closure calls. `_start` has no enclosing
     // frame, so it never captures.
     if (is_main) { 0; } else {
-        let mycaps = fn_captures(func, fn_names_of(st.fns));
+        let excl = fn_names_of(st.fns);
+        if (selfname != "") { excl += selfname; 0; } else { 0; };
+        let mycaps = fn_captures(func, excl);
         let cloff = 16 + nargs * 8;
         let c = 0;
         while (c < len(mycaps)) {
@@ -5303,6 +5394,19 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
         } else { 0; };
         0
     } else { 0; };
+    // Captured parameters (and the own name) move into their cells
+    // before the body; a tail call re-enters above this, so every
+    // recycled frame gets fresh cells.
+    if (selfname != "") {
+        f = box_bound(f, selfname);
+        0
+    } else { 0; };
+    let pbi = 0;
+    while (pbi < nargs) {
+        let pbn: str = params[pbi];
+        f = box_bound(f, pbn);
+        pbi = pbi + 1;
+    };
     if (prof_on) {
         f = gen_block(f, func.body);
     } else {
@@ -5445,7 +5549,7 @@ def infer_fn_ret(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     let g = 0;
     while (g < len(fnsall)) {
         let fe = fnsall[g];
-        f = env_define(f, fe.name, "func", 0, fe.label, fe.typ);
+        f = env_define(f, fe.name, fns_kind(fe.label), 0, fe.label, fe.typ);
         g = g + 1;
     };
     let params = func.params;
@@ -5507,6 +5611,186 @@ def find_dup(defs: [{ name: str, func: { k: str } }]) -> { found: bool, err: { m
     out
 };
 
+// ── globals and hoisting ───────────────────────────────────────────────
+// Every variable bound directly in the program is a GLOBAL: one 8-byte
+// .bss cell, read and written by label from any function. So a def that
+// names one captures nothing, and every top-level def is hoisted: emitted
+// once, called directly by label, from anywhere (forward calls too).
+
+// The program's top-level variable declarations, in order (function
+// bindings are defs, not variables).
+def global_decls(stmts) -> [{ k: str }] {
+    let out: [{ k: str }] = [];
+    let i = 0;
+    while (i < len(stmts)) {
+        let s = stmts[i];
+        if (s.k == "decl") {
+            if (s.kind == "def") { 0; }
+            else if (s.v.k == "func") { 0; }
+            else { out += s; 0; };
+            0
+        } else { 0; };
+        i = i + 1;
+    };
+    out
+};
+
+def decl_name(d) -> str {
+    d.name
+};
+
+// Each global's cell label and type, in program order. A declared type
+// wins; otherwise the initializer is inferred in a scope holding the
+// hoisted defs and the globals before it (what main sees when it runs
+// the declaration).
+def global_entries(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, gdecls: [{ k: str }]) -> [{ name: str, label: str, typ: { k: str } }] {
+    let f = { out: [], rodata: st.rodata, uid: st.uid,
+      fuid: 0, loc: 1, env: [], slots: 0,
+      self_label: "", end_label: "", fns: st.fns, bodies: st.bodies };
+    let fnsall = st.fns;
+    let g = 0;
+    while (g < len(fnsall)) {
+        let fe = fnsall[g];
+        f = env_define(f, fe.name, fns_kind(fe.label), 0, fe.label, fe.typ);
+        g = g + 1;
+    };
+    let out: [{ name: str, label: str, typ: { k: str } }] = [];
+    let i = 0;
+    while (i < len(gdecls)) {
+        let d = gdecls[i];
+        let gn = decl_name(d);
+        let t = decl_type(d);
+        if (t.k == "tnone") {
+            t = infer(f, decl_value(d));
+            0
+        } else { 0; };
+        let lbl = arch.arch_global_label(i, gn);
+        out += { name: gn, label: lbl, typ: t };
+        f = env_define(f, gn, "global", 0, lbl, t);
+        i = i + 1;
+    };
+    out
+};
+
+def decl_type(d) -> { k: str } {
+    d.typ
+};
+
+def decl_value(d) -> { k: str } {
+    d.v
+};
+
+// Named functions that need a closure record: a def reading a variable
+// that is neither a global nor a function, or naming a function that
+// needs one itself (a direct call could not hand that one its record).
+// Iterated to a fixpoint. A function's own name is no capture (its body
+// reaches itself through its own record, see emit_one_fn).
+def capturing_defs(defs: [{ name: str, func: { k: str } }], gnames: [str]) -> [str] {
+    let fnames: [str] = [];
+    let i = 0;
+    while (i < len(defs)) {
+        let d = defs[i];
+        fnames += d.name;
+        i = i + 1;
+    };
+    let caps: [[str]] = [];
+    let out: [str] = [];
+    i = 0;
+    while (i < len(defs)) {
+        let d = defs[i];
+        let excl: [str] = [];
+        excl += gnames;
+        excl += d.name;
+        let cs = fn_captures(d.func, excl);
+        caps += [cs];
+        let j = 0;
+        let reads_var = false;
+        while (j < len(cs)) {
+            let cn: str = cs[j];
+            if (name_in(fnames, cn)) { 0; } else { reads_var = true; 0; };
+            j = j + 1;
+        };
+        if (reads_var) { out += d.name; 0; } else { 0; };
+        i = i + 1;
+    };
+    let changed = true;
+    while (changed) {
+        changed = false;
+        i = 0;
+        while (i < len(defs)) {
+            let d = defs[i];
+            if (name_in(out, d.name)) { 0; } else {
+                let cs = caps[i];
+                let j = 0;
+                let hit = false;
+                while (j < len(cs)) {
+                    let cn: str = cs[j];
+                    if (name_in(out, cn)) { hit = true; 0; } else { 0; };
+                    j = j + 1;
+                };
+                if (hit) {
+                    out += d.name;
+                    changed = true;
+                    0
+                } else { 0; };
+                0
+            };
+            i = i + 1;
+        };
+    };
+    out
+};
+
+// The hoisted defs' types (st.fns order) with every omitted return type
+// inferred from the body (see infer_fn_ret). With `only` non-empty, just
+// the bodies reading one of those names are re-inferred; the rest keep
+// their st.fns entry.
+def fix_fn_types(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, hdefs: [{ name: str, func: { k: str } }], only: [str]) -> [{ name: str, label: str, typ: { k: str } }] {
+    let out: [{ name: str, label: str, typ: { k: str } }] = [];
+    let ftab = st.fns;
+    let fx = 0;
+    while (fx < len(hdefs)) {
+        let d = hdefs[fx];
+        let fe0 = ftab[fx];
+        let redo = ret_omitted(d.func);
+        if (redo && len(only) > 0) {
+            redo = reads_any(d.func, only);
+            0
+        } else { 0; };
+        if (redo) {
+            out += { name: fe0.name, label: fe0.label,
+              typ: { k: "tfunc", args: fn_ptypes(d.func), ret: infer_fn_ret(st, d.func) } };
+            0
+        } else {
+            out += fe0;
+            0
+        };
+        fx = fx + 1;
+    };
+    out
+};
+
+def ret_omitted(func) -> bool {
+    let r = func.ret;
+    r.k == "tnone"
+};
+
+def fn_ptypes(func) -> [{ k: str }] {
+    func.ptypes
+};
+
+def reads_any(func, names: [str]) -> bool {
+    let reads = fv_ids(func.body, []);
+    let i = 0;
+    let found = false;
+    while (i < len(reads)) {
+        let n: str = reads[i];
+        if (name_in(names, n)) { found = true; 0; } else { 0; };
+        i = i + 1;
+    };
+    found
+};
+
 // ── phase timing ───────────────────────────────────────────────────────
 // Every phase records elapsed microseconds and heap bytes consumed, so
 // `ycc --time` can show where wall time AND memory go (the arena never
@@ -5536,7 +5820,7 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
     let errors = types.check_program(ast3);
     pr = phase_end(times, "typecheck", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
-    // collect every def (top-level + capture-free nested + let-bound)
+    // collect every named def (top-level, nested, let-bound)
     let defs = collect_from_block(ast3.stmts, []);
     let dup = find_dup(defs);
     if (dup.found) {
@@ -5546,6 +5830,17 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
     if (len(errors) > 0) {
         { ok: false, asm: "", errors: errors, times: times }
     } else {
+        let gdecls = global_decls(ast3.stmts);
+        let gnames: [str] = [];
+        let gi = 0;
+        while (gi < len(gdecls)) {
+            gnames += decl_name(gdecls[gi]);
+            gi = gi + 1;
+        };
+        // A def needing a closure record is emitted where it is created
+        // (gen_decl); every other one is hoisted: a label in st.fns.
+        let capdefs = capturing_defs(defs, gnames);
+        let hdefs: [{ name: str, func: { k: str } }] = [];
         // assign labels + env entries (also pre-binds for calls)
         let st = st_new();
         let r = next_uid(st);
@@ -5553,67 +5848,68 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
         let i = 0;
         while (i < len(defs)) {
             let d = defs[i];
-            let rl = next_uid(st);
-            st = rl.st;
-            let label = fn_label_of(rl.uid, d.name);
-            st.fns += { name: d.name, label: label, typ: func_type(d.func) };
-            let fns = st.fns
-            st = { out: st.out, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-              self_label: st.self_label, end_label: st.end_label, fns: fns,
-              bodies: st.bodies };
-            st = env_define(st, d.name, "func", 0, label, func_type(d.func));
-            i = i + 1;
-        };
-        // emit each function body. Capturing ones are emitted at their
-        // creation site instead (gen_decl), where capture types are known.
-        // First: fill in the return type of every unannotated def, so call
-        // sites know what a call yields.
-        let fixedfns: [{ name: str, label: str, typ: { k: str } }] = [];
-        let fx = 0;
-        while (fx < len(defs)) {
-            let dfx = defs[fx];
-            let ftab = st.fns;
-            let fe0 = ftab[fx];
-            let ty0 = fe0.typ;
-            if (ty0.ret.k == "tnone") {
-                let rt2 = infer_fn_ret(st, dfx.func);
-                fixedfns += { name: fe0.name, label: fe0.label,
-                  typ: { k: "tfunc", args: ty0.args, ret: rt2 } };
-                fixedfns = fixedfns
-                0
-            } else {
-                fixedfns += fe0;
+            if (name_in(capdefs, d.name)) { 0; } else {
+                hdefs += d;
+                let rl = next_uid(st);
+                st = rl.st;
+                let label = fn_label_of(rl.uid, d.name);
+                st.fns += { name: d.name, label: label, typ: func_type(d.func) };
+                let fns = st.fns
+                st = { out: st.out, rodata: st.rodata, uid: st.uid,
+                  fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+                  self_label: st.self_label, end_label: st.end_label, fns: fns,
+                  bodies: st.bodies };
+                st = env_define(st, d.name, "func", 0, label, func_type(d.func));
                 0
             };
-            fx = fx + 1;
+            i = i + 1;
         };
+        // Fill in the return type of every unannotated def, so call sites
+        // know what a call yields; then type the globals with those, and
+        // redo the defs that read a global (they now know its type). The
+        // globals sit after the defs in st.fns (see fns_kind).
+        let fixed1 = fix_fn_types(st, hdefs, []);
+        st = { out: st.out, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          self_label: st.self_label, end_label: st.end_label, fns: fixed1,
+          bodies: st.bodies };
+        let gl = global_entries(st, gdecls);
+        let fixedfns: [{ name: str, label: str, typ: { k: str } }] = [];
+        fixedfns += fixed1;
+        fixedfns += gl;
+        if (len(gl) > 0) {
+            st = { out: st.out, rodata: st.rodata, uid: st.uid,
+              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+              self_label: st.self_label, end_label: st.end_label, fns: fixedfns,
+              bodies: st.bodies };
+            let fixed2 = fix_fn_types(st, hdefs, gnames);
+            fixedfns = [];
+            fixedfns += fixed2;
+            fixedfns += gl;
+            0
+        } else { 0; };
         st = { out: st.out, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label, fns: fixedfns,
           bodies: st.bodies };
+        // emit each hoisted body
         i = 0;
-        let allfnnames = fn_names_of(st.fns);
-        while (i < len(defs)) {
-            let d = defs[i];
+        while (i < len(hdefs)) {
+            let d = hdefs[i];
             let fns = st.fns;
             let f = fns[i];
-            if (len(fn_captures(d.func, allfnnames)) == 0) {
-                let rf = next_uid(st);
-                st = rf.st;
-                st = emit_one_fn(st, f.label, rf.uid, d.func, false, false, []);
-                0
-            } else { 0; };
+            let rf = next_uid(st);
+            st = rf.st;
+            st = emit_one_fn(st, f.label, rf.uid, d.func, false, false, [], "");
             i = i + 1;
         };
         pr = phase_end(times, "emit_fns", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
-        // main = program with hoisted defs skipped. A capture-free def is
-        // emitted once by the loop above (calls go direct to its label); a
-        // CAPTURING one is emitted at its creation site instead — so its
-        // decl must run here, where gen_decl emits the body at the same
-        // label and binds the closure record (exactly what a nested `def`
-        // does).
+        // main = program with hoisted defs skipped (emitted above, calls go
+        // direct to their labels). Variable declarations store to their
+        // globals (bind_decl). A def needing a record would be created
+        // here like a nested one — but a top-level def can only read
+        // globals and functions, so none does.
         let main_stmts = [];
         let pstmts = ast3.stmts;
         let i = 0;
@@ -5621,16 +5917,16 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
             let s = pstmts[i];
             if (s.k == "decl") {
                 if (s.kind == "def") {
-                    if (len(fn_captures(s.v, allfnnames)) == 0) { 0; } else {
+                    if (name_in(capdefs, s.name)) {
                         main_stmts += s;
                         0;
-                    };
+                    } else { 0; };
                     0
                 } else if (s.v.k == "func") {
-                    if (len(fn_captures(s.v, allfnnames)) == 0) { 0; } else {
+                    if (name_in(capdefs, s.name)) {
                         main_stmts += s;
                         0;
-                    };
+                    } else { 0; };
                     0
                 } else {
                     main_stmts += s;
@@ -5647,7 +5943,7 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
         st = rm.st;
         // Only pay for argv materialization when the program uses it.
         let want = uses_scan_block(ast3.stmts, { argv: false });
-        st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, []);
+        st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, [], "");
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         // assemble the file. Body-level tree shaking comes first: its
@@ -5702,6 +5998,18 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
             s2 = s2 + 1;
         };
         asm = asm + join(rodpieces, "");
+        if (len(gl) > 0) {
+            let gpieces: [str] = [];
+            gpieces += arch.arch_bss();
+            let gk = 0;
+            while (gk < len(gl)) {
+                let ge = gl[gk];
+                gpieces += arch.arch_global_cell(ge.label);
+                gk = gk + 1;
+            };
+            asm = asm + join(gpieces, "");
+            0
+        } else { 0; };
         pr = phase_end(times, "asm_text", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         { ok: true, asm: asm, errors: errors, times: times }

@@ -2,14 +2,36 @@
 // One PT_LOAD segment (read+execute), static, no interpreter, no libc:
 // the entry point is our own `_start`, and user code only uses raw syscalls.
 // Layout: [EHDR 64][PHDR 56][code][rodata]; base vaddr 0x400000.
+// A program with globals gets a second PT_LOAD (read+write, no file bytes):
+// the zeroed .bss, on the page after the file mapping; its PHDR makes the
+// headers 176 bytes.
 //
 // Binary data flows through packed [byte] arrays; the driver writes it
 // directly so embedded NUL bytes are preserved.
 
 import elfenc from "./enc64.y";
 
-def elf_build(code: [byte], rodata: [byte], entry_off: long) -> [byte] {
-    let code_off = 120;
+// File offset of the code: EHDR plus one PHDR, or two with a .bss.
+def elf_code_off(bss_len: long) -> long {
+    if (bss_len > 0) { 176 } else { 120 }
+};
+
+// Rodata plus its 8-byte trailer, padded to a page (see elf_build).
+def elf_ro_total(ro_len: long) -> long {
+    let rosz = ro_len + 8;
+    let trail = rosz % 4096;
+    if (trail != 0) { rosz + 4096 - trail } else { rosz }
+};
+
+// Where the .bss starts, as an offset from the rodata start: past the
+// padded rodata to the end of the file mapping's last page (the headers
+// shift everything by code_off, which is less than a page).
+def elf_bss_from_ro(ro_len: long, bss_len: long) -> long {
+    elf_ro_total(ro_len) + 4096 - elf_code_off(bss_len)
+};
+
+def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long) -> [byte] {
+    let code_off = elf_code_off(bss_len);
     let base = 4194304;
     // Pad the code to a page so rodata starts page-aligned; pad rodata tail
     // to a page so the mapping covers every string byte (the kernel maps
@@ -45,7 +67,9 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long) -> [byte] {
     out = push_le32(out, 0);
     out = push_le16(out, 64);
     out = push_le16(out, 56);
-    out = push_le16(out, 1);
+    let phnum = 1;
+    if (bss_len > 0) { phnum = 2; 0; } else { 0; };
+    out = push_le16(out, phnum);
     out = push_le16(out, 0);
     out = push_le16(out, 0);
     out = push_le16(out, 0);
@@ -58,6 +82,20 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long) -> [byte] {
     out = push_le64(out, total);
     out = push_le64(out, total);
     out = push_le64(out, 4096);
+    if (bss_len > 0) {
+        // PHDR: PT_LOAD, R+W, nothing from the file (the kernel maps
+        // zeroed pages), on the page after the file mapping.
+        let bss_vaddr = base + total - code_off + 4096;
+        out = push_le32(out, 1);
+        out = push_le32(out, 6);
+        out = push_le64(out, 0);
+        out = push_le64(out, bss_vaddr);
+        out = push_le64(out, bss_vaddr);
+        out = push_le64(out, 0);
+        out = push_le64(out, bss_len);
+        out = push_le64(out, 4096);
+        0
+    } else { 0; };
     out = push_bytes(out, code);
     let p = 0;
     while (p < codepad) {
@@ -116,4 +154,4 @@ def push_le64(out: [byte], v: long) -> [byte] {
     out
 };
 
-export { elf_build };
+export { elf_build, elf_code_off, elf_bss_from_ro };
