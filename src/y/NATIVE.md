@@ -256,13 +256,17 @@ The rule is that `arch_x64.y` provides small, general **primitives** and the
 runtime provides **behaviour**. What stays in assembly is only what needs raw
 machine state: the `y_alloc` bump allocator, the trap stubs (div/0, OOB,
 unwrap-of-none, OOM), dynamic record lookup (`y_dot_lookup`), the
-byte-moving string cores (`y_str_eq/cmp/cat/substr`), `str`↔`[byte]`
+byte-moving string cores (`y_str_eq/cmp/cat/join/substr`), `str`↔`[byte]`
 conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
 `y_arr_eq` — one implementation each, parameterized by element width,
 because Y has no generics), float formatting, and argv materialization.
 Everything else —
 number formatting, the whole print/put/eput family, `trim`/`ord`/`chr`/
-`tonum`/`index_of`/`join`/`split`, `range`, time, files — is Y. Two worked
+`tonum`/`index_of`/`split`, `range`, time, files — is Y. (`join` went
+back to assembly: in Y it pushed one byte at a time through a `[byte]`
+accumulator, and the compiler joins megabytes of asm text per
+self-compile — one sizing pass and one allocation instead took 9.9% off
+the self-compile and 8.1% off its peak heap.) Two worked
 examples of the same move landed earlier:
 
 - `readline()` — the backend contributes only the `syscall` intrinsic and

@@ -1,0 +1,16 @@
+[] 0
+[] 0
+[a] 1
+[,] 1
+[] 0
+[abc----defghijkl] 16
+[xyz] 3
+[1234567|12345678|123456789] 26
+8888
+item0, item1, item2, item3, item4, item5
+996, item997, item998, item999
+[the_quick_brown_fox_jumps_over_the_lazy_dog] 43
+[a+b = c-d] 9
+[1, 22, 333] 10
+[true/false] 10
+[p<sep>q<sep>r<sep>s] 19

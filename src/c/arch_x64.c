@@ -97,7 +97,7 @@ Yv *arch_prelude(void) {
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
     // .bss cells), the trap stubs, the record field-table probes
     // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
-    // (eq/cmp/cat/substr, arr push/prepend/slice/cat/eq), float
+    // (eq/cmp/cat/join/substr, arr push/prepend/slice/cat/eq), float
     // formatting, str<->[byte] conversion and argv materialization.
     Yv *lines = yav(0);
     lines = ya_push(lines, ys("y_str_eq:"));
@@ -255,6 +255,72 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    inc %r8"));
     lines = ya_push(lines, ys("    jmp yscc_loop"));
     lines = ya_push(lines, ys("yscc_done:"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_str_join:"));
+    lines = ya_push(lines, ys("    push %rbp"));
+    lines = ya_push(lines, ys("    mov %rsp, %rbp"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    push %r12"));
+    lines = ya_push(lines, ys("    push %r13"));
+    lines = ya_push(lines, ys("    push %r14"));
+    lines = ya_push(lines, ys("    push %r15"));
+    lines = ya_push(lines, ys("    mov 24(%rbp), %rbx"));
+    lines = ya_push(lines, ys("    mov 16(%rbp), %r13"));
+    lines = ya_push(lines, ys("    mov (%rbx), %r12"));
+    lines = ya_push(lines, ys("    mov 16(%rbx), %rbx"));
+    lines = ya_push(lines, ys("    mov (%r13), %r15"));
+    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
+    lines = ya_push(lines, ys("    xor %r8d, %r8d"));
+    lines = ya_push(lines, ys("ysj_sum:"));
+    lines = ya_push(lines, ys("    cmp %r12, %r8"));
+    lines = ya_push(lines, ys("    jge ysj_sumd"));
+    lines = ya_push(lines, ys("    mov (%rbx,%r8,8), %rax"));
+    lines = ya_push(lines, ys("    mov (%rax), %rax"));
+    lines = ya_push(lines, ys("    add %rax, %rcx"));
+    lines = ya_push(lines, ys("    add %r15, %rcx"));
+    lines = ya_push(lines, ys("    inc %r8"));
+    lines = ya_push(lines, ys("    jmp ysj_sum"));
+    lines = ya_push(lines, ys("ysj_sumd:"));
+    lines = ya_push(lines, ys("    test %r12, %r12"));
+    lines = ya_push(lines, ys("    jz ysj_alloc"));
+    lines = ya_push(lines, ys("    sub %r15, %rcx"));
+    lines = ya_push(lines, ys("ysj_alloc:"));
+    lines = ya_push(lines, ys("    push %rcx"));
+    lines = ya_push(lines, ys("    mov %rcx, %rdi"));
+    lines = ya_push(lines, ys("    add $16, %rdi"));
+    lines = ya_push(lines, ys("    call y_alloc"));
+    lines = ya_push(lines, ys("    pop %rcx"));
+    lines = ya_push(lines, ys("    mov %rcx, (%rax)"));
+    lines = ya_push(lines, ys("    mov %rax, %r14"));
+    lines = ya_push(lines, ys("    lea 8(%rax), %rdi"));
+    lines = ya_push(lines, ys("    xor %r9d, %r9d"));
+    lines = ya_push(lines, ys("ysj_loop:"));
+    lines = ya_push(lines, ys("    cmp %r12, %r9"));
+    lines = ya_push(lines, ys("    jge ysj_done"));
+    lines = ya_push(lines, ys("    test %r9, %r9"));
+    lines = ya_push(lines, ys("    jz ysj_elem"));
+    lines = ya_push(lines, ys("    lea 8(%r13), %rsi"));
+    lines = ya_push(lines, ys("    mov %r15, %rcx"));
+    lines = ya_push(lines, ys("    call ysc_copy"));
+    lines = ya_push(lines, ys("    add %r15, %rdi"));
+    lines = ya_push(lines, ys("ysj_elem:"));
+    lines = ya_push(lines, ys("    mov (%rbx,%r9,8), %rsi"));
+    lines = ya_push(lines, ys("    mov (%rsi), %rcx"));
+    lines = ya_push(lines, ys("    add $8, %rsi"));
+    lines = ya_push(lines, ys("    call ysc_copy"));
+    lines = ya_push(lines, ys("    add %rcx, %rdi"));
+    lines = ya_push(lines, ys("    inc %r9"));
+    lines = ya_push(lines, ys("    jmp ysj_loop"));
+    lines = ya_push(lines, ys("ysj_done:"));
+    lines = ya_push(lines, ys("    mov (%r14), %rcx"));
+    lines = ya_push(lines, ys("    movb $0, 8(%r14,%rcx,1)"));
+    lines = ya_push(lines, ys("    mov %r14, %rax"));
+    lines = ya_push(lines, ys("    pop %r15"));
+    lines = ya_push(lines, ys("    pop %r14"));
+    lines = ya_push(lines, ys("    pop %r13"));
+    lines = ya_push(lines, ys("    pop %r12"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
     lines = ya_push(lines, ys("y_rec_has:"));
     lines = ya_push(lines, ys("    push %rbp"));
