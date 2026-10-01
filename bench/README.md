@@ -21,15 +21,19 @@ median.
 ```sh
 make ycc && cp ycc /tmp/ycc-base       # while on master
 git switch my-change && make ycc
-bench/compare.sh /tmp/ycc-base ./ycc   # 5 runs per metric by default
-bench/compare.sh /tmp/ycc-base ./ycc 9 # more runs = less noise
+bench/compare.sh /tmp/ycc-base ./ycc   # 5 rounds per metric by default
+bench/compare.sh /tmp/ycc-base ./ycc 9 # more rounds = less noise
 ```
 
 ## What is measured
 
 `bench/run.sh YCC [runs]` benchmarks one build and prints TSV
 (`bench metric value`); `bench/compare.sh BASE NEW [runs]` runs it for
-both and prints the deltas. Per program in `bench/y/`:
+both, one sample per side per round with the order flipping every round,
+and prints the deltas of the medians. Interleaving matters here: run back
+to back, whichever side went second absorbed any drift in machine load
+(two runs of the same binary differed by up to 37% per row that way).
+Per program in `bench/y/`:
 
 | metric | what |
 |---|---|

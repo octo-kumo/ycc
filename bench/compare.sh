@@ -35,17 +35,41 @@ trap 'rm -rf "$TMP"' EXIT
 
 echo "base:  $BASE"
 echo "new:   $NEW"
-echo "runs:  $RUNS per metric (median), all metrics lower-is-better"
+echo "runs:  $RUNS rounds, base and new interleaved (median per metric), all metrics lower-is-better"
 echo
 
-"$ROOT/bench/run.sh" "$BASE" "$RUNS" >"$TMP/base.tsv" || exit 1
-"$ROOT/bench/run.sh" "$NEW" "$RUNS" >"$TMP/new.tsv" || exit 1
+# The two sides take turns, one sample of every metric per turn, and the
+# order flips every round (base-new, new-base, ...). Machine load drifts
+# (other tenants, background work), and run back to back, whichever side
+# went second absorbed all of it: two runs of the SAME binary differed by
+# up to 37% per row that way, the second slower on 10 of 14 time rows.
+: >"$TMP/base.tsv"
+: >"$TMP/new.tsv"
+for ((r = 0; r < RUNS; r++)); do
+    if ((r % 2 == 0)); then
+        "$ROOT/bench/run.sh" "$BASE" 1 >>"$TMP/base.tsv" || exit 1
+        "$ROOT/bench/run.sh" "$NEW" 1 >>"$TMP/new.tsv" || exit 1
+    else
+        "$ROOT/bench/run.sh" "$NEW" 1 >>"$TMP/new.tsv" || exit 1
+        "$ROOT/bench/run.sh" "$BASE" 1 >>"$TMP/base.tsv" || exit 1
+    fi
+done
 
 # ── scalar metrics: one row per (benchmark, metric) ────────────────────
-# join wants a single sorted key, and bench names carry no underscores,
-# so `bench_metric` splits back cleanly at the first underscore.
-awk -F '\t' '{ print $1 "_" $2 "\t" $3 }' "$TMP/base.tsv" | sort >"$TMP/base.k"
-awk -F '\t' '{ print $1 "_" $2 "\t" $3 }' "$TMP/new.tsv" | sort >"$TMP/new.k"
+# medians <tsv> — "bench_metric<TAB>median over the rounds", sorted for
+# join. Bench names carry no underscores, so `bench_metric` splits back
+# cleanly at the first underscore.
+medians() {
+    awk -F '\t' '{ print $1 "_" $2 "\t" $3 }' "$1" | sort -t $'\t' -k1,1 -k2,2n | awk -F '\t' '
+        function flush() {
+            if (n) print key "\t" ((n % 2) ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2);
+        }
+        $1 != key { flush(); key = $1; n = 0 }
+        { v[++n] = $2 }
+        END { flush() }'
+}
+medians "$TMP/base.tsv" >"$TMP/base.k"
+medians "$TMP/new.tsv" >"$TMP/new.k"
 join -t $'\t' "$TMP/base.k" "$TMP/new.k" >"$TMP/joined"
 
 awk -F '\t' '
