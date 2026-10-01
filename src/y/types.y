@@ -1,5 +1,6 @@
 // types.y — static type checker for the native backend.
-// Usage: let errors = types.check_program(ast);  // [] means OK
+// Usage: let errors = types.check_program(ast, ext);  // [] means OK
+// (ext: the externs, see check_program; [] for a self-contained program)
 // Each error: { msg: str, line: long, col: long }.
 //
 // Supported types: long, byte, float, bool, str, void, options T? (the
@@ -3100,7 +3101,9 @@ def st_fdepth(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: 
 
 // ── entry point ──────────────────────────────────────────────────────────
 
-def check_program(ast) -> [{ msg: str, line: long, col: long }] {
+// `ext`: the externs -- top-level defs of the units this one links
+// against (native.y compile_unit), visible by name like the unit's own.
+def check_program(ast, ext: [{ name: str, label: str, typ: { k: str } }]) -> [{ msg: str, line: long, col: long }] {
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs = [];
     let pstmts = ast.stmts;
@@ -3132,6 +3135,12 @@ def check_program(ast) -> [{ msg: str, line: long, col: long }] {
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
     // values (e.g. `let p = print;`).
+    let x = 0;
+    while (x < len(ext)) {
+        let xe = ext[x];
+        st = st_bind(st, xe.name, xe.typ, "func");
+        x = x + 1;
+    };
     let d = 0;
     while (d < len(defs)) {
         st = st_bind(st, defs[d].name, defs[d].typ, "func");

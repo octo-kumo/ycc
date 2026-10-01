@@ -2,7 +2,8 @@
  *
  * Each parse function returns { node: <ast>, pos: <int> } as a Yv record
  * (PORTING.md type map: str -> Yv *, records/arrays -> Yv *, long -> long,
- * bool -> int). This header exports exactly the top-level defs of parser.y.
+ * bool -> int). The public exports are parse_program and parse_type_full;
+ * the remaining declarations expose parser helpers to the C modules.
  */
 #ifndef PARSER_H
 #define PARSER_H

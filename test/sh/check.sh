@@ -74,9 +74,12 @@ echo "check: new $NEW_NAME, base $BASE_NAME (full output: _check/)"
 echo
 echo "== 1/3 verify"
 t=$(date +%s)
-# alone: cycc needs ~4.5 GB for the compiler, the rest of the check < 3 GB
+# alone: cycc needs ~4.5 GB for the compiler, the rest of the check < 3 GB.
+# NEW carries its std pack (the Makefile's PACK), so the build gets its own.
 if (ulimit -v 6291456; "$T/cycc" -o "$T/self" "$ROOT/src/y/ycc.y" </dev/null) >"$LOG/self.log" 2>&1 \
-    && cmp "$T/self" "$T/new" >>"$LOG/self.log" 2>&1; then
+    && "$T/self" --std-pack "$T/self.pack" >>"$LOG/self.log" 2>&1 \
+    && cat "$T/self" "$T/self.pack" >"$T/selfp" \
+    && cmp "$T/selfp" "$T/new" >>"$LOG/self.log" 2>&1; then
     echo "  ok      cycc builds $NEW_NAME from src/y/ycc.y, byte for byte ($(since $t))"
 else
     echo "  FAILED  cycc does not build $NEW_NAME from src/y/ycc.y (_check/self.log):"

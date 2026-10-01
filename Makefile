@@ -22,20 +22,26 @@ cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS)
 	@echo "cycc built: the C copy of the compiler ($$(stat -c%s cycc) bytes)"
 
 # [2/3] the C copy compiles the compiler -> ycc (native static ELF, no
-# toolchain). [3/3] acceptance: ycc must be byte-identical to the backed-up
-# reference binary — that is the C copy validated against the real ycc —
-# and to its own self-compile (fixpoint).
+# toolchain), which then compiles the std units and carries them: PACK
+# appends `BIN --std-pack` to BIN (src/y/ycc.y self_pack reads it back), so
+# a compile links the runtime instead of compiling it. [3/3] acceptance:
+# ycc must be byte-identical to the backed-up reference binary — that is the
+# C copy validated against the real ycc, its pack included — and its own
+# self-compile (with that pack) must rebuild it (fixpoint).
 # Both compiles run under a virtual-memory cap (ulimit -v, in KB), so a memory
 # regression fails the build ("out of memory") instead of swapping the
 # machine: cycc needs ~4.1 GB for ycc.y, ycc itself ~0.8 GB.
 CYCC_MEM_KB=6291456
 YCC_MEM_KB=2097152
+# $(call PACK,BIN,OUT): OUT = BIN with its std pack attached.
+PACK = ./$(1) --std-pack $(2).pack && cat $(1) $(2).pack > $(2) && chmod 755 $(2) && rm -f $(2).pack
 ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS)
-	ulimit -v $(CYCC_MEM_KB); ./cycc -o ycc src/y/ycc.y
+	ulimit -v $(CYCC_MEM_KB); ./cycc -o _ycc0 src/y/ycc.y
+	$(call PACK,_ycc0,ycc)
 	cmp ycc refs/ycc.ref
 	ulimit -v $(YCC_MEM_KB); ./ycc -o _ycc src/y/ycc.y
-	cmp ycc _ycc
-	rm -f _ycc
+	cmp _ycc0 _ycc
+	rm -f _ycc _ycc0
 	@echo "verified: cycc output == refs/ycc.ref == ycc self-compile (byte-identical)"
 
 # AddressSanitizer + UBSan build of the C copy (one command, no CI). Every
@@ -53,8 +59,8 @@ asan: cycc-asan
 # must name cycc-asan, or the sanitized build is never exercised at all.
 # $YREF stays refs/ycc.ref: the golden reference is deliberately unsanitized,
 # and it is what the sanitized build's bytes are compared against.
-# Suites that need ./ycc (ycc, fixpoint, native, native-examples, debug) skip
-# themselves unless it is built; SUITES_ASAN is normally a subset, since a
+# Suites that need ./ycc (ycc, fixpoint, native, native-examples, debug, link)
+# skip themselves unless it is built; SUITES_ASAN is normally a subset, since a
 # sanitized self-compile wants orders of magnitude more memory than a plain one.
 test-asan: cycc-asan
 	CYCC=$(CURDIR)/cycc-asan YCC=$(CURDIR)/cycc-asan ASAN_OPTIONS=detect_leaks=0 \
@@ -69,10 +75,10 @@ JOBS ?= $(shell nproc)
 test: ycc
 	YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) $(SUITES)
 
-# Same suites without the acceptance gate: only ./cycc is built, so the five
+# Same suites without the acceptance gate: only ./cycc is built, so the six
 # suites that drive a built ./ycc (ycc, fixpoint, native, native-examples,
-# debug) announce themselves as skipped. Use for a quick signal; `make test` is
-# the real one.
+# debug, link) announce themselves as skipped. Use for a quick signal; `make
+# test` is the real one.
 test-fast: cycc
 	./test/sh/run_all.sh -j $(JOBS) $(SUITES)
 
@@ -97,14 +103,17 @@ NEW_DEP = $(if $(filter ./ynew ynew,$(NEW)),ynew)
 
 # ./ynew: src/y compiled by BOOT, then by itself twice. A change to the
 # emitter reaches the compiler's own code in the second generation, so the
-# second and third must be byte-identical (the fixpoint). Needs no C port.
+# second and third must be byte-identical (the fixpoint); the third is
+# compiled with the second's std pack attached, so that is checked too.
+# Needs no C port.
 ynew: $(YCC_SRCS) $(BOOT)
 	ulimit -v $(YCC_MEM_KB); $(abspath $(BOOT)) -o _ynew1 src/y/ycc.y
 	ulimit -v $(YCC_MEM_KB); ./_ynew1 -o _ynew2 src/y/ycc.y
-	ulimit -v $(YCC_MEM_KB); ./_ynew2 -o _ynew3 src/y/ycc.y
+	$(call PACK,_ynew2,_ynewp)
+	ulimit -v $(YCC_MEM_KB); ./_ynewp -o _ynew3 src/y/ycc.y
 	cmp _ynew2 _ynew3
-	mv _ynew2 ynew
-	rm -f _ynew1 _ynew3
+	mv _ynewp ynew
+	rm -f _ynew1 _ynew2 _ynew3
 	@echo "ynew built from src/y by $(BOOT): generations 2 and 3 are byte-identical"
 
 # Everything a change needs before `make rebless`, in one command and a few
@@ -143,22 +152,24 @@ bench-ir: $(NEW_DEP)
 
 # Accept the C copy's build of the compiler as refs/ycc.ref, once it
 # rebuilds itself byte-identically and passes the port gate (on every test
-# program; on ycc.y it is that build); it becomes ./ycc too. Run `make
-# check` first: it runs every suite on this same build.
+# program; on ycc.y it is that build) with its std pack attached; it
+# becomes ./ycc too. Run `make check` first: it runs every suite on this
+# same build.
 rebless: cycc
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _rb1 src/y/ycc.y
 	ulimit -v $(YCC_MEM_KB); ./_rb1 -o _rb2 src/y/ycc.y
 	cmp _rb1 _rb2
-	YREF=$(CURDIR)/_rb1 YQUIET=1 YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) port
-	cp _rb1 refs/ycc.ref
+	$(call PACK,_rb1,_rbp)
+	YREF=$(CURDIR)/_rbp YQUIET=1 YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) port
+	cp _rbp refs/ycc.ref
 	cd refs && sha256sum *.ref > SHA256SUMS
-	mv _rb1 ycc
-	rm -f _rb2
+	mv _rbp ycc
+	rm -f _rb1 _rb2
 	@echo "blessed refs/ycc.ref $$(sha256sum refs/ycc.ref | cut -c1-16)"
 
 clean:
-	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc a.out
-	rm -f ynew _ynew1 _ynew2 _ynew3 _rb1 _rb2
+	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc _ycc0 _ycc0.pack ycc.pack a.out
+	rm -f ynew _ynew1 _ynew2 _ynew3 _ynewp _ynewp.pack _rb1 _rb2 _rbp _rbp.pack
 	rm -rf _check
 
 # Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y

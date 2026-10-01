@@ -16,7 +16,7 @@ ycc -S -o prog.s prog.y
 
 | file          | role                                                        |
 |---------------|-------------------------------------------------------------|
-| `ycc.y`       | driver: flags, import splicing, pipeline, direct ELF output |
+| `ycc.y`       | driver: flags, pipeline, the std pack, direct ELF output    |
 | `lexer.y`     | source string → token list                                  |
 | `parser.y`    | token list → AST (nested maps) + type nodes                 |
 | `rename.y`    | uniquify pass: no scopes/shadowing downstream               |
@@ -26,8 +26,8 @@ ycc -S -o prog.s prog.y
 | `asm.y`       | two-pass assembler over our asm dialect                     |
 | `elf.y`       | minimal ELF64 writer (static, no libc)                      |
 | `dwarf.y`     | `-g` line info: DWARF `.debug_line`/`.debug_info`           |
-| `native.y`    | AST → assembly text (splice → strip → rename → check → emit)|
-| `std/`        | standard library in Y, spliced into compiled programs      |
+| `native.y`    | AST → assembly text (splice imports → per unit: strip → rename → check → emit → link) |
+| `std/`        | standard library in Y; rt/str/prelude/exec are std units linked into compiled programs (precompiled in ycc: the std pack) |
 
 See `NATIVE.md` for the backend design (representations, pipeline stages,
 pointers, arrays, options, closures) and its known limitations, and

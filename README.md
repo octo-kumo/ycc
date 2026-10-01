@@ -64,13 +64,21 @@ ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
                so perf, gdb, valgrind and addr2line show function names
                and source lines (the loaded code is unchanged)
   --no-exec    omit exec() -- the binary cannot reach a shell
+  --std-src    compile the std units (the runtime and std library)
+               from source instead of using the precompiled ones
+               attached to ycc; the output is the same
+  --std-pack FILE  compile the std units and write them to FILE,
+               to attach to a ycc binary (the build does)
   -h, --help   show this text and exit
 ```
 
 FILE is required: with no input file `ycc` exits 1 with
-`error: no input file (see ycc -h)`.
+`error: no input file (see ycc -h)` (`--std-pack FILE` alone is the
+exception).
 
-`./cycc` takes exactly the same flags — it is the same compiler.
+`./cycc` takes exactly the same flags — it is the same compiler. It has
+no std pack attached, so it always compiles the std units from source
+(`src/y/NATIVE.md`, "Compilation units and the std pack").
 
 ## Layout
 
@@ -79,7 +87,7 @@ FILE is required: with no input file `ycc` exits 1 with
 | `src/y/` | the compiler, in Y (`ycc.y` driver, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `dwarf.y`, `std/`) |
 | `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the value model) |
 | `docs/` | the formal language definition (LaTeX/Tectonic) |
-| `refs/` | reference binaries for the byte-identical port gate (currently `cycc`'s own output — see `PORTING.md`) |
+| `refs/` | reference binaries for the byte-identical port gate (currently `cycc`'s own output with its std pack attached — see `PORTING.md`) |
 | `test/` | `test/sh/` suites + `test/y/` programs (`native/`, `audit/`, `examples/`, `ycc/`) |
 | `bench/` | compile-time/runtime benchmarks + `compare.sh` |
 
@@ -87,12 +95,12 @@ FILE is required: with no input file `ycc` exits 1 with
 
 ```console
 $ make              # gcc -> cycc (the C copy)
-$ make ycc          # cycc -> ycc, then: cmp ycc refs/ycc.ref + fixpoint
-$ make test         # the port gate + all twelve suites in test/sh/
+$ make ycc          # cycc -> ycc (+ its std pack), then: cmp ycc refs/ycc.ref + fixpoint
+$ make test         # the port gate + all the suites in test/sh/
 $ ./test/sh/run_all.sh port native   # a subset (suite names: port native
                                      # native-examples examples audit ycc-units
                                      # ycc fixpoint loops comprehensive debug
-                                     # stdin-eof)
+                                     # link stdin-eof net coverage)
 ```
 
 `make asan` builds an ASan+UBSan `cycc-asan` for crash hunting.

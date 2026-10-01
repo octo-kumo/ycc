@@ -2243,4 +2243,4 @@ Yv *parse_program(Yv *toks) {
     return yr(4, "k", ys("block"), "stmts", stmts, "line", yv_long(1), "col", yv_long(1));
 }
 
-// export { parse_program };  (exported via parser.h)
+// export { parse_program, parse_type_full };  (exported via parser.h)

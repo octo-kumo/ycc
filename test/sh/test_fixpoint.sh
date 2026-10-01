@@ -47,7 +47,7 @@ fi
 
 GEN2=$(mktemp /tmp/ycc_gen2.XXXXXX)
 GEN3=$(mktemp /tmp/ycc_gen3.XXXXXX)
-trap 'rm -f "$GEN2" "$GEN3" /tmp/yfp_probe.y /tmp/yfp_probe_bin' EXIT
+trap 'rm -f "$GEN2" "$GEN3" "$GEN2.pack" "$GEN2.packed" /tmp/yfp_probe.y /tmp/yfp_probe_bin' EXIT
 
 check() {
     if [ "$2" = "ok" ]; then
@@ -67,15 +67,19 @@ else
     check "ycc compiles its own source" bad "$(head -c 200 /tmp/yfp_err)"
 fi
 
-# The fixpoint itself: same bytes.
-if [ -s "$GEN2" ] && cmp -s "$YCC_BIN" "$GEN2"; then
-    check "generation 2 is byte-identical to ./ycc" ok
+# The fixpoint itself: same bytes. ./ycc carries its std pack (the
+# Makefile's PACK) and compiled generation 2 with it; generation 2 is a
+# bare compiler, so its own pack is attached for the comparison.
+if [ -s "$GEN2" ] && "$GEN2" --std-pack "$GEN2.pack" </dev/null >/dev/null 2>&1 \
+   && cat "$GEN2" "$GEN2.pack" >"$GEN2.packed" && cmp -s "$YCC_BIN" "$GEN2.packed"; then
+    check "generation 2 (and its std pack) is byte-identical to ./ycc" ok
 else
-    check "generation 2 is byte-identical to ./ycc" bad \
-        "sizes: $(stat -c%s "$YCC_BIN" 2>/dev/null) vs $(stat -c%s "$GEN2" 2>/dev/null)"
+    check "generation 2 (and its std pack) is byte-identical to ./ycc" bad \
+        "sizes: $(stat -c%s "$YCC_BIN" 2>/dev/null) vs $(stat -c%s "$GEN2.packed" 2>/dev/null)"
 fi
 
-# Generation 3: the self-built compiler must itself compile ycc, identically.
+# Generation 3: the self-built compiler must itself compile ycc, identically
+# -- without a pack, from the std sources: the same bytes either way.
 if [ -s "$GEN2" ] && timeout 600 "$GEN2" -o "$GEN3" "$SRC" </dev/null >/dev/null 2>&1 \
    && cmp -s "$GEN2" "$GEN3"; then
     check "generation 3 reproduces generation 2" ok

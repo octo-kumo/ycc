@@ -3,9 +3,12 @@
  * same names, same parameter order, same control flow.
  *
  * Usage (the driver, ycc.y):
- *   let r = emit_program(ast, imports, origin, debug);  // { ok, asm, errors }
- *   // (imports and origin come from native_resolve_x; debug is `-g`,
- *   // which adds `.file`/`.loc` line markers -- see dbg_lines)
+ *   let nr = native_resolve_x(src, dir, 0, allow_exec, path);
+ *   let su = std_units(nr.std, pack);  // the std units it links
+ *   // (pack: ycc's std pack, or "" to compile them from source)
+ *   let r = emit_program(ast, nr.imports, nr.origin, debug, su);
+ *   // { ok, asm, errors }. debug is `-g`, which adds `.file`/`.loc`
+ *   // line markers -- see dbg_lines.
  *   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
  *
  * Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -16,6 +19,7 @@
 #include "native.h"
 
 #include "lexer.h"
+#include "parser.h"
 #include "yv.h"
 
 /* `pow10` is a native.y def (integer powers of ten) and glibc claims the
@@ -52,7 +56,8 @@ Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *tdisp(Yv *t);
 Yv *tdisp_fnval(Yv *t);
-Yv *check_program(Yv *ast);
+Yv *tstr(Yv *t);
+Yv *check_program(Yv *ast, Yv *ext);
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
 Yv *str_method(Yv *m);
 Yv *fmt_spec(Yv *spec);
@@ -64,20 +69,20 @@ int teq(Yv *a, Yv *b);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
 
-/* The runtime text native_resolve_x splices into programs: native.y's
- * `embed RT_SRC from "./std/rt.y";` and friends (see Y_EMBED in yv.h). */
+/* The std units' sources (see std_units): native.y's `embed` declarations
+ * (see Y_EMBED in yv.h). */
 Y_EMBED(RT_SRC, "src/y/std/rt.y")
 Y_EMBED(PRELUDE_SRC, "src/y/std/prelude.y")
 Y_EMBED(EXEC_SRC, "src/y/std/exec.y")
 Y_EMBED(STR_SRC, "src/y/std/str.y")
 
-/* `ycc -g` line markers, set by emit_program for each program. With
+/* `ycc -g` line markers, set by compile_unit for each unit. With
  * dbg_lines on, the text opens with a `.file N "path"` per origin file
  * and every statement (gen_loc_stmt) and function entry (emit_one_fn)
  * gets a `.loc FILE LINE` before its code -- GNU as's own line-number
  * directives, which asm.y turns into DWARF. dbg_file/dbg_line are the
- * origin map's (native_resolve_x): the way back from a line of the
- * spliced program to its file. Off, nothing is emitted. */
+ * origin map's (native_resolve_x): the way back from a line of a unit
+ * to its file. Off, nothing is emitted. */
 static int dbg_lines;
 static Yv *dbg_file;
 static Yv *dbg_line;
@@ -87,14 +92,12 @@ static Yv *dbg_line;
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
 Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
                      Yv *root);
-long origin_front(Yv *o, Yv *name, long n);
 long origin_file(Yv *o, long ln);
 Yv *origin_at(Yv *o, long ln, int bare);
 Yv *prelude_names(void);
 Yv *exec_names(void);
 Yv *str_names(void);
 Yv *std_text(Yv *s);
-long count_nl(Yv *s);
 Yv *words_seen(Yv *code, Yv *names);
 long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen);
 int word_byte(long c);
@@ -125,7 +128,7 @@ int block_falls_b(Yv *text, Yv *b, long lo, long hi);
 long name_index(Yv *names, Yv *tok);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
-Yv *prune_bodies(Yv *bodies, Yv *asm_roots);
+Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots);
 int is_all_digits(Yv *s);
 Yv *runtime_base(Yv *name);
 Yv *fn_label_of(long uid, Yv *name);
@@ -374,7 +377,7 @@ Yv *global_decls(Yv *stmts);
 Yv *decl_name(Yv *d);
 Yv *decl_type(Yv *d);
 Yv *decl_value(Yv *d);
-Yv *global_entries(Yv *st, Yv *gdecls);
+Yv *global_entries(Yv *st, Yv *gdecls, long gbase);
 Yv *app_cells(Yv *gl, Yv *stmts);
 Yv *capturing_defs(Yv *defs, Yv *gnames);
 Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only);
@@ -382,7 +385,33 @@ int ret_omitted(Yv *func);
 Yv *fn_ptypes(Yv *func);
 int reads_any(Yv *func, Yv *names);
 Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
-Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug);
+Yv *unit_empty(Yv *name);
+Yv *std_unit_src(Yv *name);
+long std_unit_base(Yv *name);
+int std_unit_bound(Yv *name);
+Yv *std_unit_names(void);
+Yv *std_units(Yv *names, Yv *pack);
+Yv *std_compile(Yv *name, Yv *ext);
+Yv *export_name(Yv *name);
+Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns);
+Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
+                 long base, Yv *ext, Yv *inits);
+Yv *link_locs(Yv *body, long file);
+Yv *rodata_pieces(Yv *pieces, Yv *allrod);
+Yv *link_units(Yv *std, Yv *prog);
+Yv *pack_version(void);
+Yv *pack_put(Yv *out, Yv *s);
+Yv *pack_strs(Yv *out, Yv *xs);
+Yv *pack_type(Yv *s);
+Yv *pack_unit_fields(Yv *unit);
+Yv *std_pack(Yv *units);
+long pack_len(Yv *cur);
+Yv *pack_get(Yv *cur);
+long pack_num(Yv *cur);
+Yv *pack_get_strs(Yv *cur);
+Yv *pack_unit(Yv *cur, Yv *name);
+Yv *std_unpack(Yv *pack, Yv *names);
+Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *std);
 
 /* ── native import resolution ───────────────────────────────────────────
  * An import is a COMPILE-TIME text splice, and both compilers splice the
@@ -395,23 +424,19 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug);
  * The ORIGIN MAP says where each line of the spliced program came from:
  * line i + 1 is line `line[i]` of file `files[file[i]]`. files[0] is the
  * program itself (`root`, the path the driver was given), then the
- * imported modules in splice order, then -- from `nuser` on -- the std
- * chunks the compiler splices in front. Error positions are printed
- * through it (ycc.c print_native_errors), and find_dup tells files apart
- * by it. */
+ * imported modules in splice order; `nuser` counts them all (the std
+ * library is no part of the text any more -- it is linked as separate
+ * units, see std_units). Error positions are printed through it (ycc.c
+ * print_native_errors), and find_dup tells files apart by it. */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
     return native_resolve_x(src, base_dir, depth, 1, ys(""));
 }
 
-/* allow_exec = false is `ycc --no-exec`: the exec chunk is not spliced, so
- * `exec(...)` fails with "undefined function" and the binary has no path
- * to a shell at all.
- *
- * The std chunks go in FRONT of the user's text. Prepending (rather than
- * appending) is deliberate: defs hoist either way, but a later def shadows
- * an earlier one, so a user's own `readline` must come after ours to win.
- * Every position downstream is shifted, which the origin map undoes. */
+/* `std` lists the std units the program links, in link order: prelude,
+ * exec, str, rt (std_units compiles them). allow_exec = false is
+ * `ycc --no-exec`: exec is left out, so `exec(...)` fails with
+ * "undefined function" and the binary has no path to a shell at all. */
 Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
                      Yv *root) {
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
@@ -429,16 +454,11 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
     }
     Yv *origin = yr(4, "files", files, "nuser", yv_long(yv_len(files)),
                     "file", yr_get(r, "ofile"), "line", yr_get(r, "oline"));
-    /* The runtime library (std/rt.y) is spliced in front of EVERY program:
-     * generated code calls into it by fixed label (`call y_print_long`), so
-     * there is no name to test for. Unused helpers cost nothing in the
-     * output — prune_bodies drops them at emit time. */
-    Yv *rt = std_text(RT_SRC());
     /* What the name checks below search: the program's own text, in one
-     * pass for all three name lists (words_seen). No std chunk is
+     * pass for all three name lists (words_seen). No std unit is
      * searched: rt and str.y call none of the trigger names, and exec.y's
-     * one call into another chunk (y_stdin_sync, a prelude def) is why
-     * splicing exec also splices the prelude. */
+     * one call into another unit (y_stdin_sync, a prelude def) is why
+     * linking exec also links the prelude. */
     Yv *pn = prelude_names();
     Yv *xn = exec_names();
     Yv *sn = str_names();
@@ -460,30 +480,19 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
     }
     Yv *seen = words_seen(rsrc, names);
     long px = yv_len(pn) + yv_len(xn);
-    rsrc = ys_cat(rt, rsrc);
-    origin_front(origin, ys("std/rt.y"), count_nl(rt));
-    /* std/str.y, std/exec.y and std/prelude.y go in front of the resolved
-     * text, but only when the program actually mentions one of their
-     * names — otherwise every binary would carry code it never calls.
-     * str.y's names count only in method-call form, `.name(`: a helper-
-     * backed string method cannot be reached any other way, so a variable
-     * called `lines` or a field `r.count` splices nothing. The last slot
-     * of seen stands for the y_fmt_* helpers: an f-string field with a
-     * format spec sets it to 2 (words_scan). */
-    if (seen_any(seen, px, yv_len(seen), 2)) {
-        Yv *tt = std_text(STR_SRC());
-        rsrc = ys_cat(tt, rsrc);
-        origin_front(origin, ys("std/str.y"), count_nl(tt));
-        ;
-    } else {
-        ;
-    }
+    /* std/prelude.y, std/exec.y and std/str.y are linked only when the
+     * program actually mentions one of their names -- otherwise every
+     * binary would carry code it never calls. str.y's names count only
+     * in method-call form, `.name(`: a helper-backed string method cannot
+     * be reached any other way, so a variable called `lines` or a field
+     * `r.count` links nothing. The last slot of seen stands for the
+     * y_fmt_* helpers: an f-string field with a format spec sets it to 2
+     * (words_scan). */
     int want_prelude = seen_any(seen, 0, yv_len(pn), 1);
+    int want_exec = 0;
     if (allow_exec) {
         if (seen_any(seen, yv_len(pn), px, 1)) {
-            Yv *xt = std_text(EXEC_SRC());
-            rsrc = ys_cat(xt, rsrc);
-            origin_front(origin, ys("std/exec.y"), count_nl(xt));
+            want_exec = 1;
             want_prelude = 1;
             ;
         } else {
@@ -493,45 +502,32 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
     } else {
         ;
     }
+    Yv *std = yav(0);
     if (want_prelude) {
-        Yv *pt = std_text(PRELUDE_SRC());
-        rsrc = ys_cat(pt, rsrc);
-        origin_front(origin, ys("std/prelude.y"), count_nl(pt));
+        std = ya_push(std, ys("prelude"));
         ;
     } else {
         ;
     }
-    return yr(3, "src", rsrc, "imports", rimports, "origin", origin);
-}
-
-/* A std chunk of `n` lines went in front of the program: its lines come
- * first in the origin map, as lines 1..n of a new file `name`. */
-long origin_front(Yv *o, Yv *name, long n) {
-    long id = yv_len(yr_get(o, "files"));
-    ya_push(yr_get(o, "files"), name);
-    Yv *f = yav(0);
-    Yv *l = yav(0);
-    long i = 0;
-    while (i < n) {
-        f = ya_push(f, yv_long(id));
-        l = ya_push(l, yv_long(i + 1));
-        i = i + 1;
+    if (want_exec) {
+        std = ya_push(std, ys("exec"));
+        ;
+    } else {
+        ;
     }
-    Yv *of = yr_get(o, "file");
-    Yv *ol = yr_get(o, "line");
-    long k = 0;
-    while (k < yv_len(of)) {
-        f = ya_push(f, ya_get(of, k));
-        k = k + 1;
+    if (seen_any(seen, px, yv_len(seen), 2)) {
+        std = ya_push(std, ys("str"));
+        ;
+    } else {
+        ;
     }
-    k = 0;
-    while (k < yv_len(ol)) {
-        l = ya_push(l, ya_get(ol, k));
-        k = k + 1;
-    }
-    yr_set(o, "file", f);
-    yr_set(o, "line", l);
-    return 0;
+    /* The runtime library (std/rt.y) is linked into EVERY program:
+     * generated code calls into it by fixed label (`call y_print_long`),
+     * so there is no name to test for. Unused helpers cost nothing in the
+     * output -- prune_bodies drops them at link time. */
+    std = ya_push(std, ys("rt"));
+    return yr(4, "src", rsrc, "imports", rimports, "origin", origin,
+              "std", std);
 }
 
 /* Which file line `ln` of the spliced program came from (0, the program
@@ -616,33 +612,14 @@ Yv *str_names(void) {
     return out;
 }
 
-/* An embedded std file, ready to go in front of the program: newline-
- * terminated, so the program's own first line still starts a line. */
+/* An embedded std file, newline-terminated (as every source file the
+ * compiler reads should be). */
 Yv *std_text(Yv *s) {
     if (ys_eq_lit(ys_slice_from(s, yv_len(s) - 1), "\n")) {
         return s;
     } else {
         return ys_cat(s, ys("\n"));
     }
-}
-
-/* How many lines a newline-terminated text holds (what a std chunk adds to
- * the origin map). */
-long count_nl(Yv *s) {
-    Yv *b = bytes_of(s);
-    long n = yv_len(b);
-    long c = 0;
-    long i = 0;
-    while (i < n) {
-        if (yv_l(ya_get(b, i)) == 10) {
-            c = c + 1;
-            ;
-        } else {
-            ;
-        }
-        i = i + 1;
-    }
-    return c;
 }
 
 /* Which trigger names the program mentions, in ONE pass over its text
@@ -1840,24 +1817,17 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
 }
 
 /* Drop function bodies nothing reaches: dead stdlib code the program never
- * calls. Bodies are referenced by label from other bodies AND from the arch
- * prelude (a prelude block may call a Y-side helper), so
- * `asm_roots` is the prelude text. Returns the kept bodies plus everything
- * they reference — the roots for shaking the arch prelude itself. */
-Yv *prune_bodies(Yv *bodies, Yv *asm_roots) {
-    long nb = yv_len(bodies);
-    Yv *labels = yav(0);
-    Yv *refs = yav(0);
-    long i = 0;
-    while (i < nb) {
-        Yv *b = ya_get(bodies, i);
-        labels = ya_push(labels, body_label(b));
-        refs = ya_push(refs, text_refs(b, 1));
-        i = i + 1;
-    }
+ * calls. A body is given by its label and the labels it references
+ * (body_meta). Bodies are referenced by label from other bodies AND from
+ * the arch prelude (a prelude block may call a Y-side helper), so
+ * `asm_roots` is the prelude text. Returns, per body, whether it was kept,
+ * plus everything the kept ones reference — the roots for shaking the
+ * arch prelude itself. */
+Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots) {
+    long nb = yv_len(labels);
     Yv *keep = yav(0);
     Yv *falls = yav(0);
-    i = 0;
+    long i = 0;
     while (i < nb) {
         keep = ya_push(keep, yv_bool(0));
         falls = ya_push(falls, yv_bool(0));
@@ -1872,13 +1842,10 @@ Yv *prune_bodies(Yv *bodies, Yv *asm_roots) {
         ;
     }
     keep = shake_keep(labels, refs, falls, keep, roots);
-    Yv *out = yav(0);
     Yv *outrefs = yav(0);
     i = 0;
     while (i < nb) {
         if (yv_b(ya_get(keep, i))) {
-            Yv *b = ya_get(bodies, i);
-            out = ya_push(out, b);
             Yv *rs = ya_get(refs, i);
             long j = 0;
             while (j < yv_len(rs)) {
@@ -1891,7 +1858,7 @@ Yv *prune_bodies(Yv *bodies, Yv *asm_roots) {
         }
         i = i + 1;
     }
-    return yr(2, "bodies", out, "refs", outrefs);
+    return yr(2, "refs", outrefs, "keep", keep);
 }
 
 int is_all_digits(Yv *s) {
@@ -3240,8 +3207,9 @@ Yv *fn_names_of(Yv *fns) {
     return out;
 }
 
-/* st.fns holds the hoisted defs and, after them, the globals (see
- * emit_program); a global's label is its .bss cell. */
+/* st.fns holds the hoisted defs, then the externs (the top-level defs of
+ * the units this one links against), then the globals (see compile_unit);
+ * a global's label is its .bss cell. */
 Yv *fns_kind(Yv *label) {
     if (ys_eq_lit(ys_slice(label, 0, 3), "yg_")) {
         return ys("global");
@@ -8463,9 +8431,9 @@ Yv *func_type_in(Yv *st, Yv *func) {
  * of the same name (rename.c rn_shadow_dups): deliberate within a file, but
  * across files it silently hands every caller -- the first file's own
  * included -- the other file's function. So a def that replaces one from
- * another file is an error, at the later def. The std chunks the compiler
- * splices in front (files from origin.nuser on) are exempt: a program may
- * replace those (its own `readline` wins). */
+ * another file is an error, at the later def. The std units are no part
+ * of this namespace (they are linked, see std_units): a program may
+ * define a std name, and its own `readline` wins. */
 Yv *find_dup(Yv *stmts, Yv *origin) {
     Yv *names = yav(0);
     Yv *fids = yav(0);
@@ -8477,16 +8445,10 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
         Yv *nm = top_def_name(s);
         if (yv_len(nm) > 0) {
             long ln = yv_l(yr_get(s, "line"));
-            long f = origin_file(origin, ln);
-            if (f < yv_l(yr_get(origin, "nuser"))) {
-                names = ya_push(names, nm);
-                fids = ya_push(fids, yv_long(f));
-                lines = ya_push(lines, yv_long(ln));
-                cols = ya_push(cols, yr_get(s, "col"));
-                ;
-            } else {
-                ;
-            }
+            names = ya_push(names, nm);
+            fids = ya_push(fids, yv_long(origin_file(origin, ln)));
+            lines = ya_push(lines, yv_long(ln));
+            cols = ya_push(cols, yr_get(s, "col"));
             ;
         } else {
             ;
@@ -8591,8 +8553,9 @@ Yv *decl_name(Yv *d) {
 /* Each global's cell label and type, in program order. A declared type
  * wins; otherwise the initializer is inferred in a scope holding the
  * hoisted defs and the globals before it (what main sees when it runs
- * the declaration). */
-Yv *global_entries(Yv *st, Yv *gdecls) {
+ * the declaration). Labels count from the unit's `gbase` (compile_unit),
+ * so two units' globals never share one. */
+Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
     Yv *f = yr(11, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(0), "loc", yv_long(1),
                "env", yav(0), "slots", yv_long(0), "self_label", ys(""),
@@ -8619,7 +8582,7 @@ Yv *global_entries(Yv *st, Yv *gdecls) {
         } else {
             ;
         }
-        Yv *lbl = arch_global_label(i, gn);
+        Yv *lbl = arch_global_label(gbase + i, gn);
         out = ya_push(out, yr(3, "name", gn, "label", lbl, "typ", t));
         f = env_define(f, gn, ys("global"), 0, lbl, t);
         i = i + 1;
@@ -8794,9 +8757,229 @@ Yv *phase_end(Yv *times, Yv *name, long t0, long h0) {
               "t", yv_long(t1), "h", yv_long(h1));
 }
 
-/* ── entry point ──────────────────────────────────────────────────────── */
+/* ── compilation units ─────────────────────────────────────────────────
+ * A program is LINKED from units: its own — the program file and the
+ * files it imports, spliced into one text (native_resolve_x) — and the
+ * std units it needs (std_units: std/prelude.y, std/exec.y, std/str.y,
+ * std/rt.y). compile_unit takes one unit from AST to assembly text, one
+ * body per function; what it sees of another unit is that unit's
+ * EXPORTS — the names, labels and types of its top-level defs — bound
+ * as externs. link_units joins the bodies of all units and shakes them
+ * together (prune_bodies), so a std function the program never reaches
+ * costs nothing.
+ *
+ * Labels cannot collide: a unit numbers its uids (function, string and
+ * local labels) and its global cells from its own base (std_unit_base;
+ * the program's is 0). A unit's top-level statements run in an INIT
+ * function; the program's `_start` calls the linked units' inits first,
+ * in link order.
+ *
+ * The program sees the exports of the LIBRARY units (prelude, exec),
+ * whose defs are its API. The RUNTIME units (rt, str) hold only `y_`
+ * helpers, which generated code calls by fixed label (runtime_base), so
+ * they are linked but never bound: the program's checker and emitter
+ * scopes stay free of a hundred-odd helper names. A program def wearing
+ * a runtime label (a `y_` def of its own) replaces the std body of that
+ * label everywhere, std-internal calls included (link_units drops the
+ * std one). */
 
-Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
+Yv *unit_empty(Yv *name) {
+    Yv *fs = yav(0);
+    Yv *xs = yav(0);
+    Yv *bs = yav(0);
+    Yv *ls = yav(0);
+    Yv *fr = yav(0);
+    Yv *rs = yav(0);
+    Yv *gs = yav(0);
+    return yr(9, "name", name, "files", fs, "exports", xs, "init", ys(""),
+              "bodies", bs, "labels", ls, "refs", fr, "rodata", rs,
+              "globals", gs);
+}
+
+Yv *std_unit_src(Yv *name) {
+    if (ys_eq_lit(name, "prelude")) {
+        return PRELUDE_SRC();
+    } else if (ys_eq_lit(name, "exec")) {
+        return EXEC_SRC();
+    } else if (ys_eq_lit(name, "str")) {
+        return STR_SRC();
+    } else {
+        return RT_SRC();
+    }
+}
+
+long std_unit_base(Yv *name) {
+    if (ys_eq_lit(name, "prelude")) {
+        return 1000000000L;
+    } else if (ys_eq_lit(name, "exec")) {
+        return 2000000000L;
+    } else if (ys_eq_lit(name, "str")) {
+        return 3000000000L;
+    } else {
+        return 4000000000L;
+    }
+}
+
+int std_unit_bound(Yv *name) {
+    return ys_eq_lit(name, "prelude") || ys_eq_lit(name, "exec");
+}
+
+Yv *std_unit_names(void) {
+    return yav(4, ys("prelude"), ys("exec"), ys("str"), ys("rt"));
+}
+
+Yv *std_units(Yv *names, Yv *pack) {
+    Yv *out = yav(0);
+    if (yv_len(pack) > 0) {
+        out = std_unpack(pack, names);
+        ;
+    } else {
+        ;
+    }
+    if (yv_len(out) == 0) {
+        long i = 0;
+        while (i < yv_len(names)) {
+            Yv *nm = ya_get(names, i);
+            Yv *ext = yav(0);
+            if (ys_eq_lit(nm, "exec")) {
+                long j = 0;
+                while (j < yv_len(out)) {
+                    Yv *u = ya_get(out, j);
+                    if (ys_eq_lit(yr_get(u, "name"), "prelude")) {
+                        Yv *exports = yr_get(u, "exports");
+                        long k = 0;
+                        while (k < yv_len(exports)) {
+                            ext = ya_push(ext, ya_get(exports, k));
+                            k = k + 1;
+                        }
+                        ;
+                    } else {
+                        ;
+                    }
+                    j = j + 1;
+                }
+                ;
+            } else {
+                ;
+            }
+            out = ya_push(out, std_compile(nm, ext));
+            i = i + 1;
+        }
+        ;
+    } else {
+        ;
+    }
+    return out;
+}
+
+/* One std unit, from its embedded source. It always carries its `.loc`
+ * markers (link_units strips them unless -g), so it compiles the same
+ * for every program. A failure here is the compiler's own bug: reported
+ * as one, and the run ends. */
+Yv *std_compile(Yv *name, Yv *ext) {
+    Yv *path = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
+    Yv *toks = tokenize(std_text(std_unit_src(name)));
+    Yv *ast = parse_program(toks);
+    Yv *noimports = yav(0);
+    Yv *nolines = yav(0);
+    Yv *noinits = yav(0);
+    Yv *origin = yr(4, "files", yav(1, path), "nuser", yv_long(1),
+                    "file", nolines, "line", nolines);
+    Yv *r = compile_unit(ast, noimports, origin, 1, name,
+                         std_unit_base(name), ext, noinits);
+    if (!yv_b(yr_get(r, "ok"))) {
+        Yv *errs = yr_get(r, "errors");
+        long k = 0;
+        while (k < yv_len(errs)) {
+            Yv *e = ya_get(errs, k);
+            Yv *msg = ys_cat(ys_cat(ys("ycc: internal error: "), path),
+                             ys(":"));
+            msg = ys_cat(msg, ys_long(yv_l(yr_get(e, "line"))));
+            msg = ys_cat(msg, ys(":"));
+            msg = ys_cat(msg, ys_long(yv_l(yr_get(e, "col"))));
+            msg = ys_cat(msg, ys(": "));
+            msg = ys_cat(msg, yr_get(e, "msg"));
+            puts_(ys_cat(msg, ys("\n")));
+            k = k + 1;
+        }
+        exit_(1);
+        ;
+    } else {
+        ;
+    }
+    return yr_get(r, "unit");
+}
+
+/* The name a renamed top-level def was written with, or "" for one a
+ * later def of the same name replaced (rename.y's `name$shadowK`). */
+Yv *export_name(Yv *name) {
+    long d = ys_index_of(name, ys("$"));
+    if (d < 0) {
+        return name;
+    } else if (is_all_digits(ys_slice_from(name, d + 1))) {
+        return ys_slice(name, 0, d);
+    } else {
+        return ys("");
+    }
+}
+
+/* A unit's exports: its top-level defs, by the names they were written
+ * with, with the labels and types `fns` gives them. hdefs holds them in
+ * statement order (a def's nested ones follow it), and fns starts with
+ * hdefs' entries. */
+Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
+    Yv *out = yav(0);
+    long h = 0;
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        Yv *nm = top_def_name(ya_get(stmts, i));
+        if (yv_len(nm) > 0) {
+            long h0 = h;
+            int found = 0;
+            while (!found && h < yv_len(hdefs)) {
+                Yv *hd = ya_get(hdefs, h);
+                if (ys_eq(yr_get(hd, "name"), nm)) {
+                    found = 1;
+                    ;
+                } else {
+                    h = h + 1;
+                    ;
+                }
+            }
+            if (found) {
+                Yv *xn = export_name(nm);
+                if (yv_len(xn) > 0) {
+                    Yv *fe = ya_get(fns, h);
+                    out = ya_push(
+                        out, yr(3, "name", xn, "label", yr_get(fe, "label"),
+                                "typ", yr_get(fe, "typ")));
+                    ;
+                } else {
+                    ;
+                }
+                h = h + 1;
+                ;
+            } else {
+                h = h0;
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+/* One unit, AST to assembly text (see the section note). `name` is ""
+ * for the program's own unit, whose top-level statements are `_start`,
+ * preceded by calls to `inits` (the linked units' init labels); any
+ * other unit's are its init function. `ext` holds the externs, bound by
+ * name in the checker and the emitter. */
+
+Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
+                 long base, Yv *ext, Yv *inits) {
     dbg_lines = debug;
     dbg_file = yr_get(origin, "file");
     dbg_line = yr_get(origin, "line");
@@ -8815,7 +8998,7 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
     times = yr_get(pr, "times");
     pt = yv_l(yr_get(pr, "t"));
     ph = yv_l(yr_get(pr, "h"));
-    Yv *errors = check_program(ast3);
+    Yv *errors = check_program(ast3, ext);
     pr = phase_end(times, ys("typecheck"), pt, ph);
     times = yr_get(pr, "times");
     pt = yv_l(yr_get(pr, "t"));
@@ -8837,8 +9020,8 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
         ;
     }
     if (yv_len(errors) > 0) {
-        return yr(4, "ok", yv_bool(0), "asm", ys(""), "errors", errors, "times",
-                  times);
+        return yr(4, "ok", yv_bool(0), "errors", errors, "times", times,
+                  "unit", unit_empty(name));
     } else {
         Yv *gdecls = global_decls(yr_get(ast3, "stmts"));
         Yv *gnames = yav(0);
@@ -8847,12 +9030,47 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
             gnames = ya_push(gnames, decl_name(ya_get(gdecls, gi)));
             gi = gi + 1;
         }
+        /* The externs, and the init functions `_start` calls by label. */
+        Yv *xfns = yav(0);
+        long xi = 0;
+        while (xi < yv_len(ext)) {
+            xfns = ya_push(xfns, ya_get(ext, xi));
+            xi = xi + 1;
+        }
+        long ii = 0;
+        while (ii < yv_len(inits)) {
+            Yv *il = ya_get(inits, ii);
+            Yv *ityp = yr(3, "k", ys("tfunc"), "args", yav(0),
+                          "ret", yr(1, "k", ys("tvoid")));
+            xfns = ya_push(xfns, yr(3, "name", il, "label", il, "typ", ityp));
+            ii = ii + 1;
+        }
         /* A def needing a closure record is emitted where it is created
-         * (gen_decl); every other one is hoisted: a label in st.fns. */
-        Yv *capdefs = capturing_defs(defs, gnames);
+         * (gen_decl); every other one is hoisted: a label in st.fns. A
+         * call to an extern is no capture either. */
+        Yv *cexcl = yav(0);
+        long ei = 0;
+        while (ei < yv_len(gnames)) {
+            cexcl = ya_push(cexcl, ya_get(gnames, ei));
+            ei = ei + 1;
+        }
+        Yv *extnames = fn_names_of(ext);
+        ei = 0;
+        while (ei < yv_len(extnames)) {
+            cexcl = ya_push(cexcl, ya_get(extnames, ei));
+            ei = ei + 1;
+        }
+        Yv *capdefs = capturing_defs(defs, cexcl);
         Yv *hdefs = yav(0);
-        /* assign labels + env entries (also pre-binds for calls) */
+        /* assign labels + env entries (also pre-binds for calls); the
+         * unit's uids count from its base */
         Yv *st = st_new();
+        st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+                "uid", yv_long(base + 1), "fuid", yr_get(st, "fuid"), "loc",
+                yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
+                yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
+                "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),
+                "bodies", yr_get(st, "bodies"));
         Yv *r = next_uid(st);
         st = yr_get(r, "st");
         long i = 0;
@@ -8883,21 +9101,55 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
             }
             i = i + 1;
         }
-        /* Fill in return types of unannotated defs, then type the globals
-         * with those, and redo defs that read a global (they now know its
-         * type). The globals sit after the defs in st.fns (see fns_kind). */
-        Yv *fixed1 = fix_fn_types(st, hdefs, yav(0));
+        /* The externs go after the hoisted defs (fix_fn_types and the
+         * emission loop read those by position), the globals after both
+         * (see fns_kind). */
+        Yv *fns0 = yav(0);
+        long f0i = 0;
+        while (f0i < yv_len(yr_get(st, "fns"))) {
+            fns0 = ya_push(fns0, ya_get(yr_get(st, "fns"), f0i));
+            f0i = f0i + 1;
+        }
+        f0i = 0;
+        while (f0i < yv_len(xfns)) {
+            fns0 = ya_push(fns0, ya_get(xfns, f0i));
+            f0i = f0i + 1;
+        }
         st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns", fixed1,
+                "end_label", yr_get(st, "end_label"), "fns", fns0,
                 "bodies", yr_get(st, "bodies"));
-        Yv *gl = app_cells(global_entries(st, gdecls), yr_get(ast3, "stmts"));
+        Yv *fixed1 = fix_fn_types(st, hdefs, yav(0));
+        Yv *fns1 = yav(0);
+        long f1i = 0;
+        while (f1i < yv_len(fixed1)) {
+            fns1 = ya_push(fns1, ya_get(fixed1, f1i));
+            f1i = f1i + 1;
+        }
+        f1i = 0;
+        while (f1i < yv_len(xfns)) {
+            fns1 = ya_push(fns1, ya_get(xfns, f1i));
+            f1i = f1i + 1;
+        }
+        st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+                "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
+                yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
+                yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
+                "end_label", yr_get(st, "end_label"), "fns", fns1,
+                "bodies", yr_get(st, "bodies"));
+        Yv *gl = app_cells(global_entries(st, gdecls, base),
+                           yr_get(ast3, "stmts"));
         Yv *fixedfns = yav(0);
         long fi = 0;
         while (fi < yv_len(fixed1)) {
             fixedfns = ya_push(fixedfns, ya_get(fixed1, fi));
+            fi = fi + 1;
+        }
+        fi = 0;
+        while (fi < yv_len(xfns)) {
+            fixedfns = ya_push(fixedfns, ya_get(xfns, fi));
             fi = fi + 1;
         }
         fi = 0;
@@ -8918,6 +9170,11 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
             fi = 0;
             while (fi < yv_len(fixed2)) {
                 fixedfns = ya_push(fixedfns, ya_get(fixed2, fi));
+                fi = fi + 1;
+            }
+            fi = 0;
+            while (fi < yv_len(xfns)) {
+                fixedfns = ya_push(fixedfns, ya_get(xfns, fi));
                 fi = fi + 1;
             }
             fi = 0;
@@ -8952,12 +9209,26 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
         times = yr_get(pr, "times");
         pt = yv_l(yr_get(pr, "t"));
         ph = yv_l(yr_get(pr, "h"));
-        /* main = program with hoisted defs skipped (emitted above, calls go
-         * direct to their labels). Variable declarations store to their
-         * globals (bind_decl). A def needing a record would be created
-         * here like a nested one — but a top-level def can only read
-         * globals and functions, so none does. */
+        Yv *exports = unit_exports(yr_get(ast3, "stmts"), hdefs,
+                                   yr_get(st, "fns"));
+        /* The top-level statements with hoisted defs skipped (emitted
+         * above, calls go direct to their labels). Variable declarations
+         * store to their globals (bind_decl). A def needing a record would
+         * be created here like a nested one — but a top-level def can only
+         * read globals and functions, so none does. */
         Yv *main_stmts = yav(0);
+        Yv *noargs = yav(0);
+        long ci = 0;
+        while (ci < yv_len(inits)) {
+            Yv *cl = ya_get(inits, ci);
+            Yv *callee = yr(4, "k", ys("id"), "v", cl, "line", yv_long(0),
+                            "col", yv_long(0));
+            main_stmts = ya_push(
+                main_stmts,
+                yr(5, "k", ys("call"), "callee", callee, "args", noargs,
+                   "line", yv_long(0), "col", yv_long(0)));
+            ci = ci + 1;
+        }
         Yv *pstmts = yr_get(ast3, "stmts");
         i = 0; /* the Y source re-lets `i` here; same value, same scope */
         while (i < yv_len(pstmts)) {
@@ -8992,113 +9263,595 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug) {
         }
         Yv *rm = next_uid(st);
         st = yr_get(rm, "st");
-        /* Only pay for argv materialization when the program uses it. */
-        Yv *want = uses_scan_block(yr_get(ast3, "stmts"),
-                                   yr(1, "argv", yv_bool(0)));
-        st = emit_one_fn(
-            st, ys("_start"), yv_l(yr_get(rm, "uid")),
-            yr(4, "params", yav(0), "ptypes", yav(0), "ret",
-               yr(1, "k", ys("tvoid")), "body",
-               yr(2, "k", ys("block"), "stmts", main_stmts)),
-            1, yv_b(yr_get(want, "argv")), yav(0), ys(""));
-        pr = phase_end(times, ys("emit_start"), pt, ph);
-        times = yr_get(pr, "times");
-        pt = yv_l(yr_get(pr, "t"));
-        ph = yv_l(yr_get(pr, "h"));
-        /* assemble the file. Body-level tree shaking comes first: its
-         * output is also the root set for shaking the arch prelude, and
-         * the kept prelude's references shake the rodata constants. */
-        Yv *allbodies = yr_get(st, "bodies");
-        Yv *shaken = prune_bodies(allbodies, arch_prelude());
-        Yv *bodies = yr_get(shaken, "bodies");
-        Yv *body_refs = yr_get(shaken, "refs");
-        /* Piece-list + single join: `asm = asm + piece` per iteration is
-         * quadratic (each concat re-copies the whole 1.4MB+ accumulator —
-         * the arena never frees), which OOMs on self-compilation. */
-        Yv *pieces = yav(0);
-        long b = 0;
-        while (b < yv_len(bodies)) {
-            pieces = ya_push(pieces, ya_get(bodies, b));
-            pieces = ya_push(pieces, ys("\n"));
-            b = b + 1;
-        }
-        Yv *body_text = ys_join(pieces, ys(""));
-        /* `asm` is a C keyword (GNU basic asm) — the Y local is renamed
-         * `asm_` here; it is a local name, not part of the API. */
-        Yv *asm_ = arch_header();
-        if (dbg_lines) {
-            asm_ = ys_cat(file_dirs(yr_get(origin, "files")), asm_);
+        Yv *init = ys("");
+        if (yv_len(name) == 0) {
+            /* Only pay for argv materialization when the program uses it. */
+            Yv *want = uses_scan_block(yr_get(ast3, "stmts"),
+                                       yr(1, "argv", yv_bool(0)));
+            st = emit_one_fn(
+                st, ys("_start"), yv_l(yr_get(rm, "uid")),
+                yr(4, "params", yav(0), "ptypes", yav(0), "ret",
+                   yr(1, "k", ys("tvoid")), "body",
+                   yr(2, "k", ys("block"), "stmts", main_stmts)),
+                1, yv_b(yr_get(want, "argv")), yav(0), ys(""));
             ;
-        } else { ; };
-        Yv *prelude_text = shake_refs(arch_prelude(), body_refs);
-        asm_ = ys_cat(ys_cat(asm_, arch_text()), prelude_text);
-        asm_ = ys_cat(asm_, body_text);
-        Yv *const_refs = text_refs(prelude_text, 1);
-        long ci = 0;
-        while (ci < yv_len(body_refs)) {
-            const_refs = ya_push(const_refs, ya_get(body_refs, ci));
-            ci = ci + 1;
-        }
-        Yv *consts_text = shake_refs(arch_consts(), const_refs);
-        asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
-        Yv *allrod = yr_get(st, "rodata");
-        long s2 = 0;
-        Yv *rodpieces = yav(0);
-        while (s2 < yv_len(allrod)) {
-            Yv *pair = ya_get(allrod, s2);
-            /* String entries are exactly [label, len, escaped]; shape
-             * tables (see gen_reclit note) are longer and all-strings. */
-            if (yv_len(pair) == 3) {
-                rodpieces = ya_push(
-                    rodpieces,
-                    ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ya_get(pair, 0),
-                                                       ys(":\n.quad ")),
-                                               ys_tostring(ya_get(pair, 1))),
-                                        ys("\n.string \"")),
-                                 ya_get(pair, 2)),
-                           ys("\"\n")));
-                ;
-            } else {
-                rodpieces = ya_push(rodpieces,
-                                    ys_cat(ya_get(pair, 0), ys(":\n")));
-                long q = 2;
-                while (q < yv_len(pair)) {
-                    rodpieces = ya_push(rodpieces,
-                                        ys_cat(ys_cat(ys(".quad "),
-                                                      ya_get(pair, q)),
-                                               ys("\n")));
-                    q = q + 1;
-                }
-                ;
-            }
-            s2 = s2 + 1;
-        }
-        asm_ = ys_cat(asm_, ys_join(rodpieces, ys("")));
-        /* .bss: the allocator's cells when the kept prelude still uses
-           them, then one cell per global. */
-        Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
-        if (yv_len(gl) > 0 || yv_len(heap_text) > 0) {
-            Yv *gpieces = yav(0);
-            gpieces = ya_push(gpieces, arch_bss());
-            gpieces = ya_push(gpieces, heap_text);
-            long gk = 0;
-            while (gk < yv_len(gl)) {
-                Yv *ge = ya_get(gl, gk);
-                gpieces = ya_push(gpieces,
-                                  arch_global_cell(yr_get(ge, "label")));
-                gk = gk + 1;
-            }
-            asm_ = ys_cat(asm_, ys_join(gpieces, ys("")));
+        } else if (yv_len(main_stmts) > 0) {
+            init = arch_fn_label(yv_l(yr_get(rm, "uid")), ys("init"));
+            st = emit_one_fn(
+                st, init, yv_l(yr_get(rm, "uid")),
+                yr(5, "params", yav(0), "ptypes", yav(0), "ret",
+                   yr(1, "k", ys("tvoid")), "body",
+                   yr(2, "k", ys("block"), "stmts", main_stmts), "line",
+                   yv_long(0)),
+                0, 0, yav(0), ys(""));
             ;
         } else {
             ;
         }
-        pr = phase_end(times, ys("asm_text"), pt, ph);
+        pr = phase_end(times, ys("emit_start"), pt, ph);
         times = yr_get(pr, "times");
         pt = yv_l(yr_get(pr, "t"));
         ph = yv_l(yr_get(pr, "h"));
-        return yr(4, "ok", yv_bool(1), "asm", asm_, "errors", errors, "times",
-                  times);
+        Yv *glabels = yav(0);
+        long gk = 0;
+        while (gk < yv_len(gl)) {
+            Yv *ge = ya_get(gl, gk);
+            glabels = ya_push(glabels, yr_get(ge, "label"));
+            gk = gk + 1;
+        }
+        /* Each body's label and the labels it references: what linking
+         * shakes by (prune_bodies), worked out once here. */
+        Yv *ubodies = yr_get(st, "bodies");
+        Yv *blabels = yav(0);
+        Yv *brefs = yav(0);
+        long bk = 0;
+        while (bk < yv_len(ubodies)) {
+            Yv *ub = ya_get(ubodies, bk);
+            blabels = ya_push(blabels, body_label(ub));
+            brefs = ya_push(brefs, text_refs(ub, 1));
+            bk = bk + 1;
+        }
+        Yv *unit = yr(9, "name", name, "files", yr_get(origin, "files"),
+                      "exports", exports, "init", init, "bodies", ubodies,
+                      "labels", blabels, "refs", brefs, "rodata",
+                      yr_get(st, "rodata"), "globals", glabels);
+        return yr(4, "ok", yv_bool(1), "errors", errors, "times", times,
+                  "unit", unit);
+    }
+}
+
+/* A std body's `.loc` markers — every one says file 1, the unit's only
+ * file (std_compile) — renumbered to the unit's place `file` in the
+ * program's `.file` table under -g, dropped otherwise. */
+Yv *link_locs(Yv *body, long file) {
+    Yv *parts = ys_split(body, ys("\n.loc 1 "));
+    if (yv_len(parts) == 1) {
+        return body;
+    } else if (dbg_lines) {
+        return ys_join(parts,
+                       ys_cat(ys_cat(ys("\n.loc "), ys_long(file)), ys(" ")));
+    } else {
+        Yv *out = yav(0);
+        out = ya_push(out, ya_get(parts, 0));
+        long i = 1;
+        while (i < yv_len(parts)) {
+            Yv *p = ya_get(parts, i);
+            long nl = ys_index_of(p, ys("\n"));
+            if (nl >= 0) {
+                out = ya_push(out, ys_slice_from(p, nl));
+                ;
+            } else {
+                ;
+            }
+            i = i + 1;
+        }
+        return ys_join(out, ys(""));
+    }
+}
+
+/* One unit's rodata entries as text. String entries are exactly [label,
+ * len, escaped]; shape tables (see gen_reclit note) are longer and
+ * all-strings. */
+Yv *rodata_pieces(Yv *pieces, Yv *allrod) {
+    long s2 = 0;
+    while (s2 < yv_len(allrod)) {
+        Yv *pair = ya_get(allrod, s2);
+        if (yv_len(pair) == 3) {
+            Yv *entry =
+                ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ya_get(pair, 0),
+                                                     ys(":\n.quad ")),
+                                             ys_tostring(ya_get(pair, 1))),
+                                      ys("\n.string \"")),
+                               ya_get(pair, 2)),
+                       ys("\"\n"));
+            pieces = ya_push(pieces, entry);
+            ;
+        } else {
+            pieces = ya_push(pieces, ys_cat(ya_get(pair, 0), ys(":\n")));
+            long q = 2;
+            while (q < yv_len(pair)) {
+                pieces = ya_push(
+                    pieces,
+                    ys_cat(ys_cat(ys(".quad "), ya_get(pair, q)), ys("\n")));
+                q = q + 1;
+            }
+            ;
+        }
+        s2 = s2 + 1;
+    }
+    return pieces;
+}
+
+/* The program's assembly text: the bodies of the std units (link order)
+ * and then the program's, shaken together; the arch prelude and
+ * constants the kept bodies reach; every unit's rodata; the .bss cells. */
+Yv *link_units(Yv *std, Yv *prog) {
+    long nstd = yv_len(std);
+    long nprog = yv_len(yr_get(prog, "files"));
+    /* -g: the program's files, then the std units' — the last linked
+     * first, the order the std chunks were numbered in when they were
+     * spliced into the program's text. */
+    Yv *files = yav(0);
+    Yv *progfiles = yr_get(prog, "files");
+    long k = 0;
+    while (k < yv_len(progfiles)) {
+        files = ya_push(files, ya_get(progfiles, k));
+        k = k + 1;
+    }
+    k = nstd - 1;
+    while (k >= 0) {
+        Yv *uk = ya_get(std, k);
+        Yv *ufiles = yr_get(uk, "files");
+        long f = 0;
+        while (f < yv_len(ufiles)) {
+            files = ya_push(files, ya_get(ufiles, f));
+            f = f + 1;
+        }
+        k = k - 1;
+    }
+    /* The runtime labels the program defines (every runtime label starts
+     * `y_`). */
+    Yv *plabels = yav(0);
+    Yv *plab = yr_get(prog, "labels");
+    long pi = 0;
+    while (pi < yv_len(plab)) {
+        Yv *pl = ya_get(plab, pi);
+        if (ys_eq_lit(ys_slice(pl, 0, 2), "y_")) {
+            plabels = ya_push(plabels, pl);
+            ;
+        } else {
+            ;
+        }
+        pi = pi + 1;
+    }
+    /* Every body, with its label, its references, and the `.file` number
+     * of its std unit (0: the program's own). */
+    Yv *all = yav(0);
+    Yv *labels = yav(0);
+    Yv *refs = yav(0);
+    Yv *fno = yav(0);
+    long j = 0;
+    while (j < nstd) {
+        Yv *u = ya_get(std, j);
+        long f = nprog + nstd - j;
+        Yv *ub = yr_get(u, "bodies");
+        Yv *ul = yr_get(u, "labels");
+        Yv *ur = yr_get(u, "refs");
+        long b = 0;
+        while (b < yv_len(ub)) {
+            Yv *lb = ya_get(ul, b);
+            int drop = 0;
+            if (yv_len(plabels) > 0) {
+                if (ys_eq_lit(ys_slice(lb, 0, 2), "y_")) {
+                    drop = name_in(plabels, lb);
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            } else {
+                ;
+            }
+            if (!drop) {
+                all = ya_push(all, ya_get(ub, b));
+                labels = ya_push(labels, lb);
+                refs = ya_push(refs, ya_get(ur, b));
+                fno = ya_push(fno, yv_long(f));
+                ;
+            } else {
+                ;
+            }
+            b = b + 1;
+        }
+        j = j + 1;
+    }
+    Yv *pbodies = yr_get(prog, "bodies");
+    Yv *prefs = yr_get(prog, "refs");
+    long pb2 = 0;
+    while (pb2 < yv_len(pbodies)) {
+        all = ya_push(all, ya_get(pbodies, pb2));
+        labels = ya_push(labels, ya_get(plab, pb2));
+        refs = ya_push(refs, ya_get(prefs, pb2));
+        fno = ya_push(fno, yv_long(0));
+        pb2 = pb2 + 1;
+    }
+    /* Body-level tree shaking comes first: its output is also the root
+     * set for shaking the arch prelude, and the kept prelude's references
+     * shake the rodata constants. */
+    Yv *shaken = prune_bodies(labels, refs, arch_prelude());
+    Yv *keep = yr_get(shaken, "keep");
+    Yv *body_refs = yr_get(shaken, "refs");
+    /* Piece-list + single join: `asm = asm + piece` per iteration is
+     * quadratic (each concat re-copies the whole 1.4MB+ accumulator —
+     * the arena never frees), which OOMs on self-compilation. */
+    Yv *pieces = yav(0);
+    long ab = 0;
+    while (ab < yv_len(all)) {
+        if (yv_b(ya_get(keep, ab))) {
+            Yv *kb = ya_get(all, ab);
+            long kf = yv_l(ya_get(fno, ab));
+            if (kf > 0) {
+                kb = link_locs(kb, kf);
+                ;
+            } else {
+                ;
+            }
+            pieces = ya_push(pieces, kb);
+            pieces = ya_push(pieces, ys("\n"));
+            ;
+        } else {
+            ;
+        }
+        ab = ab + 1;
+    }
+    Yv *body_text = ys_join(pieces, ys(""));
+    /* `asm` is a C keyword (GNU basic asm) — the Y local is renamed
+     * `asm_` here; it is a local name, not part of the API. */
+    Yv *asm_ = arch_header();
+    if (dbg_lines) {
+        asm_ = ys_cat(file_dirs(files), asm_);
+        ;
+    } else {
+        ;
+    }
+    Yv *prelude_text = shake_refs(arch_prelude(), body_refs);
+    asm_ = ys_cat(ys_cat(asm_, arch_text()), prelude_text);
+    asm_ = ys_cat(asm_, body_text);
+    Yv *const_refs = text_refs(prelude_text, 1);
+    long ci = 0;
+    while (ci < yv_len(body_refs)) {
+        const_refs = ya_push(const_refs, ya_get(body_refs, ci));
+        ci = ci + 1;
+    }
+    Yv *consts_text = shake_refs(arch_consts(), const_refs);
+    asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
+    /* every unit's rodata and globals, in link order */
+    Yv *rodpieces = yav(0);
+    Yv *gls = yav(0);
+    long ju = 0;
+    while (ju < nstd) {
+        Yv *u = ya_get(std, ju);
+        rodpieces = rodata_pieces(rodpieces, yr_get(u, "rodata"));
+        Yv *ug = yr_get(u, "globals");
+        long gi = 0;
+        while (gi < yv_len(ug)) {
+            gls = ya_push(gls, ya_get(ug, gi));
+            gi = gi + 1;
+        }
+        ju = ju + 1;
+    }
+    rodpieces = rodata_pieces(rodpieces, yr_get(prog, "rodata"));
+    Yv *pg = yr_get(prog, "globals");
+    long pgi = 0;
+    while (pgi < yv_len(pg)) {
+        gls = ya_push(gls, ya_get(pg, pgi));
+        pgi = pgi + 1;
+    }
+    asm_ = ys_cat(asm_, ys_join(rodpieces, ys("")));
+    /* .bss: the allocator's cells when the kept prelude still uses
+     * them, then one cell per global. */
+    Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
+    if (yv_len(gls) > 0 || yv_len(heap_text) > 0) {
+        Yv *gpieces = yav(0);
+        gpieces = ya_push(gpieces, arch_bss());
+        gpieces = ya_push(gpieces, heap_text);
+        long gk = 0;
+        while (gk < yv_len(gls)) {
+            gpieces = ya_push(gpieces, arch_global_cell(ya_get(gls, gk)));
+            gk = gk + 1;
+        }
+        asm_ = ys_cat(asm_, ys_join(gpieces, ys("")));
+        ;
+    } else {
+        ;
+    }
+    return asm_;
+}
+
+/* ── the std pack ───────────────────────────────────────────────────────
+ * The std units, compiled ahead of time and carried by the ycc binary
+ * itself (`ycc --std-pack FILE` writes them; the build appends that file
+ * to the ycc that wrote it, see ycc.y self_pack): a program then links
+ * them as they are instead of compiling the runtime from source every
+ * time. A pack is text: a version line, the number of units, then each
+ * unit as its name and its fields — every field a netstring
+ * (`<len>:<bytes>`), every list its count followed by its items, and a
+ * unit's fields one netstring together, so a reader steps over a unit it
+ * does not want. An export's type travels as types.tstr text, parsed
+ * back only for the units a program binds (std_unit_bound): nobody reads
+ * the types of rt's or str's. */
+
+Yv *pack_version(void) {
+    return ys("ycc-std-pack 1\n");
+}
+
+Yv *pack_put(Yv *out, Yv *s) {
+    out = ya_push(out, ys_long(yv_len(s)));
+    out = ya_push(out, ys(":"));
+    out = ya_push(out, s);
+    return out;
+}
+
+Yv *pack_strs(Yv *out, Yv *xs) {
+    out = pack_put(out, ys_long(yv_len(xs)));
+    long i = 0;
+    while (i < yv_len(xs)) {
+        out = pack_put(out, ya_get(xs, i));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* An export's type, from its tstr text. */
+Yv *pack_type(Yv *s) {
+    Yv *r = parse_type_full(tokenize(s), 0);
+    return yr_get(r, "node");
+}
+
+/* One unit's fields. Every export type must come back from its text
+ * unchanged, or the pack would hand programs a different type: ycc
+ * refuses to write such a pack. */
+Yv *pack_unit_fields(Yv *unit) {
+    Yv *out = yav(0);
+    out = pack_strs(out, yr_get(unit, "files"));
+    Yv *xs = yr_get(unit, "exports");
+    out = pack_put(out, ys_long(yv_len(xs)));
+    long j = 0;
+    while (j < yv_len(xs)) {
+        Yv *x = ya_get(xs, j);
+        Yv *ts = tstr(yr_get(x, "typ"));
+        if (!ys_eq(tstr(pack_type(ts)), ts)) {
+            Yv *msg = ys_cat(ys("ycc: internal error: std/"),
+                             yr_get(unit, "name"));
+            msg = ys_cat(msg, ys(".y: the type of "));
+            msg = ys_cat(msg, yr_get(x, "name"));
+            msg = ys_cat(msg, ys(" ("));
+            msg = ys_cat(msg, ts);
+            msg = ys_cat(msg, ys(") does not survive the pack\n"));
+            puts_(msg);
+            exit_(1);
+            ;
+        } else {
+            ;
+        }
+        out = pack_put(out, yr_get(x, "name"));
+        out = pack_put(out, yr_get(x, "label"));
+        out = pack_put(out, ts);
+        j = j + 1;
+    }
+    out = pack_put(out, yr_get(unit, "init"));
+    out = pack_strs(out, yr_get(unit, "bodies"));
+    out = pack_strs(out, yr_get(unit, "labels"));
+    Yv *rf = yr_get(unit, "refs");
+    out = pack_put(out, ys_long(yv_len(rf)));
+    j = 0;
+    while (j < yv_len(rf)) {
+        out = pack_strs(out, ya_get(rf, j));
+        j = j + 1;
+    }
+    Yv *rd = yr_get(unit, "rodata");
+    out = pack_put(out, ys_long(yv_len(rd)));
+    j = 0;
+    while (j < yv_len(rd)) {
+        out = pack_strs(out, ya_get(rd, j));
+        j = j + 1;
+    }
+    out = pack_strs(out, yr_get(unit, "globals"));
+    return ys_join(out, ys(""));
+}
+
+/* The pack of `units`. */
+Yv *std_pack(Yv *units) {
+    Yv *out = yav(0);
+    out = ya_push(out, pack_version());
+    out = pack_put(out, ys_long(yv_len(units)));
+    long i = 0;
+    while (i < yv_len(units)) {
+        Yv *u = ya_get(units, i);
+        out = pack_put(out, yr_get(u, "name"));
+        out = pack_put(out, pack_unit_fields(u));
+        i = i + 1;
+    }
+    return ys_join(out, ys(""));
+}
+
+/* Reading a pack: `cur` is the text and the position in it. pack_len
+ * reads a netstring's length, leaving the cursor at its text. */
+long pack_len(Yv *cur) {
+    Yv *s = yr_get(cur, "s");
+    long p = yv_l(yr_get(cur, "p"));
+    long n = 0;
+    long c = ys_byte_at(s, p);
+    while (c != 58 && p < yv_len(s)) {
+        n = n * 10 + c - 48;
+        p = p + 1;
+        c = ys_byte_at(s, p);
+    }
+    yr_set(cur, "p", yv_long(p + 1));
+    return n;
+}
+
+Yv *pack_get(Yv *cur) {
+    long n = pack_len(cur);
+    long p = yv_l(yr_get(cur, "p"));
+    Yv *s = yr_get(cur, "s");
+    yr_set(cur, "p", yv_long(p + n));
+    return ys_slice(s, p, p + n);
+}
+
+long pack_num(Yv *cur) {
+    return ys_tonum(pack_get(cur));
+}
+
+Yv *pack_get_strs(Yv *cur) {
+    long n = pack_num(cur);
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < n) {
+        out = ya_push(out, pack_get(cur));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* The unit `name`, from its fields at the cursor (see pack_unit_fields). */
+Yv *pack_unit(Yv *cur, Yv *name) {
+    Yv *files = pack_get_strs(cur);
+    int bound = std_unit_bound(name);
+    Yv *xs = yav(0);
+    long nx = pack_num(cur);
+    long j = 0;
+    while (j < nx) {
+        Yv *xn = pack_get(cur);
+        Yv *xl = pack_get(cur);
+        Yv *ts = pack_get(cur);
+        Yv *xt = yr(1, "k", ys("tnone"));
+        if (bound) {
+            xt = pack_type(ts);
+            ;
+        } else {
+            ;
+        }
+        xs = ya_push(xs, yr(3, "name", xn, "label", xl, "typ", xt));
+        j = j + 1;
+    }
+    Yv *init = pack_get(cur);
+    Yv *bodies = pack_get_strs(cur);
+    Yv *labels = pack_get_strs(cur);
+    Yv *refs = yav(0);
+    long nr = pack_num(cur);
+    j = 0;
+    while (j < nr) {
+        refs = ya_push(refs, pack_get_strs(cur));
+        j = j + 1;
+    }
+    Yv *rodata = yav(0);
+    long nd = pack_num(cur);
+    j = 0;
+    while (j < nd) {
+        rodata = ya_push(rodata, pack_get_strs(cur));
+        j = j + 1;
+    }
+    Yv *globals = pack_get_strs(cur);
+    return yr(9, "name", name, "files", files, "exports", xs, "init", init,
+              "bodies", bodies, "labels", labels, "refs", refs, "rodata",
+              rodata, "globals", globals);
+}
+
+/* The units `names` from a pack, in that order; [] for a pack of another
+ * version, or one missing any of them. */
+Yv *std_unpack(Yv *pack, Yv *names) {
+    Yv *out = yav(0);
+    Yv *ver = pack_version();
+    if (ys_eq(ys_slice(pack, 0, yv_len(ver)), ver)) {
+        Yv *cur = yr(2, "s", pack, "p", yv_long(yv_len(ver)));
+        long n = pack_num(cur);
+        Yv *got = yav(0);
+        long i = 0;
+        while (i < n) {
+            Yv *nm = pack_get(cur);
+            long ul = pack_len(cur);
+            long at = yv_l(yr_get(cur, "p"));
+            if (name_in(names, nm)) {
+                got = ya_push(got, pack_unit(cur, nm));
+                ;
+            } else {
+                ;
+            }
+            yr_set(cur, "p", yv_long(at + ul));
+            i = i + 1;
+        }
+        long k = 0;
+        while (k < yv_len(names)) {
+            Yv *want = ya_get(names, k);
+            long a = 0;
+            while (a < yv_len(got)) {
+                Yv *u = ya_get(got, a);
+                if (ys_eq(yr_get(u, "name"), want)) {
+                    out = ya_push(out, u);
+                    ;
+                } else {
+                    ;
+                }
+                a = a + 1;
+            }
+            k = k + 1;
+        }
+        if (yv_len(out) != yv_len(names)) {
+            out = yav(0);
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    return out;
+}
+
+/* ── entry point ────────────────────────────────────────────────────────
+ *
+ * The program's unit, compiled against the std units `std` (std_units)
+ * and linked with them. */
+Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *std) {
+    Yv *ext = yav(0);
+    Yv *inits = yav(0);
+    long i = 0;
+    while (i < yv_len(std)) {
+        Yv *u = ya_get(std, i);
+        if (std_unit_bound(yr_get(u, "name"))) {
+            Yv *exports = yr_get(u, "exports");
+            long j = 0;
+            while (j < yv_len(exports)) {
+                ext = ya_push(ext, ya_get(exports, j));
+                j = j + 1;
+            }
+            ;
+        } else {
+            ;
+        }
+        Yv *init = yr_get(u, "init");
+        if (yv_len(init) > 0) {
+            inits = ya_push(inits, init);
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    Yv *r = compile_unit(ast, imports, origin, debug, ys(""), 0, ext, inits);
+    Yv *times = yr_get(r, "times");
+    if (yv_b(yr_get(r, "ok"))) {
+        long pt = clock_us();
+        long ph = heap_used();
+        Yv *asm_ = link_units(std, yr_get(r, "unit"));
+        Yv *pr = phase_end(times, ys("asm_text"), pt, ph);
+        return yr(4, "ok", yv_bool(1), "asm", asm_, "errors",
+                  yr_get(r, "errors"), "times", yr_get(pr, "times"));
+    } else {
+        return yr(4, "ok", yv_bool(0), "asm", ys(""), "errors",
+                  yr_get(r, "errors"), "times", times);
     }
 }
 

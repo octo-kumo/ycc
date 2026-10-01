@@ -7,6 +7,8 @@
 //   -t, --time   print per-phase time and heap use to stderr
 //   -g           add a symbol table and DWARF line info (for perf, gdb,
 //                valgrind, addr2line; see -h)
+//   --std-src    compile the std units from source, not the attached pack
+//   --std-pack FILE  write the compiled std units to FILE, no program
 //   -h, --help   show this text and exit
 
 import lexer from "./lexer.y";
@@ -16,13 +18,15 @@ import nativelib from "./native.y";
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, std_src: bool, std_pack: str } {
     let out = "";
     let files = [];
     let asm_only = false;
     let timing = false;
     let allow_exec = true;
     let debug = false;
+    let std_src = false;
+    let std_pack = "";
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -43,6 +47,16 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             allow_exec = false;
         } else if (a == "-g") {
             debug = true;
+        } else if (a == "--std-src") {
+            std_src = true;
+        } else if (a == "--std-pack") {
+            if (i + 1 < n) {
+                i = i + 1;
+                std_pack = argv[i];
+            } else {
+                puts("ycc: --std-pack needs an argument\n");
+                exit(1);
+            };
         } else if (a == "--help" || a == "-h") {
             puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
@@ -54,6 +68,11 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               valgrind and addr2line show names and source\n");
             puts("               lines; the loaded code and data are unchanged\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
+            puts("  --std-src    compile the std units (the runtime and std library)\n");
+            puts("               from source instead of using the precompiled ones\n");
+            puts("               attached to ycc; the output is the same\n");
+            puts("  --std-pack FILE  compile the std units and write them to FILE,\n");
+            puts("               to attach to a ycc binary (the build does)\n");
             puts("  -h, --help   show this text and exit\n");
             exit(0);
         } else if (a[0:1] == "-") {
@@ -64,7 +83,79 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, std_src: std_src, std_pack: std_pack }
+};
+
+// ── the std pack ─────────────────────────────────────────────────────────
+// The build attaches to ycc its std units, compiled (native.y std_pack):
+// the binary ends with [pack][the pack's length, 8 digits][YCCPACK1].
+
+def pack_magic() -> str {
+    "YCCPACK1"
+};
+
+// The pack attached to this binary, or "" when there is none.
+def self_pack() -> str {
+    let fd = syscall(257, -100, "/proc/self/exe", 0, 0);
+    if (fd < 0) {
+        ""
+    } else {
+        let pack = "";
+        let size = syscall(8, fd, 0, 2);
+        if (size >= 16) {
+            let buf: [byte; 65536] = [0; 65536];
+            syscall(8, fd, size - 16, 0);
+            let k = syscall(0, fd, &buf[0], 16);
+            if (k == 16) {
+                let tail = from_bytes(buf[0:16]);
+                let n = tonum(tail[:8]);
+                if (tail[8:] == pack_magic() && n > 0 && n <= size - 16) {
+                    syscall(8, fd, size - 16 - n, 0);
+                    let pieces: [str] = [];
+                    let left = n;
+                    while (left > 0) {
+                        let want = left;
+                        if (want > 65536) { want = 65536; 0; } else { 0; };
+                        let got = syscall(0, fd, &buf[0], want);
+                        if (got <= 0) {
+                            left = -1;
+                            0
+                        } else {
+                            // (a slice copies byte by byte: only a part chunk pays it)
+                            if (got == 65536) { pieces += from_bytes(buf); 0; } else { pieces += from_bytes(buf[0:got]); 0; };
+                            left = left - got;
+                            0
+                        };
+                    };
+                    if (left == 0) { pack = join(pieces, ""); 0; } else { 0; };
+                    0
+                } else { 0; };
+                0
+            } else { 0; };
+            0
+        } else { 0; };
+        syscall(3, fd);
+        pack
+    }
+};
+
+// --std-pack FILE: every std unit, compiled from source, framed for
+// attaching (see self_pack).
+def write_std_pack(path: str) -> long {
+    let pack = nativelib.std_pack(nativelib.std_units(nativelib.std_unit_names(), ""));
+    let nd = tostring(len(pack));
+    while (len(nd) < 8) { nd = "0" + nd; };
+    if (len(nd) > 8) {
+        puts("error: the std pack is too large (" + nd + " bytes)\n");
+        exit(1);
+        0
+    } else { 0; };
+    if (!write_file(path, pack + nd + pack_magic())) {
+        puts("error: writing '" + path + "' failed\n");
+        exit(1);
+        0
+    } else { 0; };
+    0
 };
 
 // ── phase reporting (--time) ─────────────────────────────────────────────
@@ -154,7 +245,11 @@ def main(cmdline: [str]) -> long {
     let out = pargs.out;
     let files = pargs.files;
 
-    if (len(files) == 0) {
+    if (len(pargs.std_pack) > 0) {
+        write_std_pack(pargs.std_pack);
+        exit(0);
+        0
+    } else if (len(files) == 0) {
         puts("error: no input file (see ycc -h)\n");
         exit(1);
         1
@@ -199,7 +294,17 @@ def main(cmdline: [str]) -> long {
             let ast = parser.parse_program(toks);
             ph = nativelib.phase_end(dt, "parse", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
-            let r = nativelib.emit_program(ast, nrimports, nrorigin, pargs.debug);
+            // The std units the program links (native_resolve_x picked
+            // them): the ones attached to ycc, compiled when it was built,
+            // or (--std-src, or a ycc with none) compiled from the sources
+            // embedded in it.
+            let nrstd = nr.std;
+            let pack = "";
+            if (!pargs.std_src) { pack = self_pack(); 0; } else { 0; };
+            let su = nativelib.std_units(nrstd, pack);
+            ph = nativelib.phase_end(dt, "std", t0, h0);
+            dt = ph.times; t0 = ph.t; h0 = ph.h;
+            let r = nativelib.emit_program(ast, nrimports, nrorigin, pargs.debug, su);
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;

@@ -1,11 +1,11 @@
 #!/bin/bash
 # Run the full y test suite (or a subset).
 # Usage: ./test/sh/run_all.sh [-j N] [suite ...]
-# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof net coverage
+# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link stdin-eof net coverage
 # Default (no args): all suites. They compare the C copy ($CYCC, default
 # ./cycc) with the reference ($YREF, default refs/ycc.ref); the ycc,
-# fixpoint, native, native-examples and debug suites also drive a built
-# compiler ($YSELF, default ./ycc — build it via `make ycc`) and skip
+# fixpoint, native, native-examples, debug and link suites also drive a
+# built compiler ($YSELF, default ./ycc — build it via `make ycc`) and skip
 # themselves when it is absent.
 # -j N (or YJOBS=N): up to N suites at once, the long ones split into shards
 # (SHARDS below, YSHARD in lib.sh); each one's output is held until all are
@@ -31,7 +31,7 @@ if [ ! -x "${YREF:-$ROOT/refs/ycc.ref}" ]; then
 fi
 YSELF_BIN="${YSELF:-$ROOT/ycc}"
 
-ALL="port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof net coverage"
+ALL="port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link stdin-eof net coverage"
 SUITES="${*:-$ALL}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
@@ -45,6 +45,7 @@ declare -A SCRIPT_FOR=(
     [loops]="test_loops.sh"
     [comprehensive]="test_comprehensive.sh"
     [debug]="test_debug.sh"
+    [link]="test_link.sh"
     [stdin-eof]="test_stdin_eof.sh"
     [net]="test_net.sh"
     [coverage]="test_coverage.sh"
@@ -63,7 +64,7 @@ done
 # these suites exercise the built ycc binary itself.
 skipped() {
     case "$1" in
-        ycc | fixpoint | native | native-examples | debug) [ ! -x "$YSELF_BIN" ] ;;
+        ycc | fixpoint | native | native-examples | debug | link) [ ! -x "$YSELF_BIN" ] ;;
         *) return 1 ;;
     esac
 }

@@ -6,6 +6,6 @@ let toks = lexer.tokenize("let x = 5;");
 print("tokens = " + tostring(len(toks)));
 let ast = parser.parse_program(toks);
 print("parsed kind = " + ast.k);
-let r = native.emit_program(ast, [], { files: [""], nuser: 1, file: [], line: [] }, false);
+let r = native.emit_program(ast, [], { files: [""], nuser: 1, file: [], line: [] }, false, []);
 print("asm ok = " + tostring(r.ok));
 print("asm length = " + tostring(len(r.asm)));

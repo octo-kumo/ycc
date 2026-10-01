@@ -1877,4 +1877,4 @@ def parse_program(toks: [{ t: str, v: str, line: long, col: long }]) -> {k: str}
     { k: "block", stmts: stmts, line: 1, col: 1 }
 };
 
-export { parse_program };
+export { parse_program, parse_type_full };

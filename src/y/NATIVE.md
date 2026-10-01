@@ -14,17 +14,17 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/parser.y` | AST (nested maps) **plus type nodes** (`typ` fields, additive); every node carries line/col |
 | `src/y/types.y` | static checker: AST → `[errors]` with line/col; the law |
 | `src/y/arch_x64.y` | x86_64 behind the arch interface: `arch_id/word/sysno`, `arch_fn_label/loc_label/str_label`, `arch_header/rodata/text`, `arch_prelude`, `arch_consts`, `arch_frame` (16-align), `arch_exit`. The prelude is only the **primitives** that need raw machine state (allocator, traps, record lookup, the byte-moving string/array cores, float formatting, argv) |
-| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports + optional std modules) → strip namespaces → rename → check → hoist → frame layout → tree shake → arch emit |
+| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports, pick the std units) → per compilation unit: strip namespaces → rename → check → hoist → frame layout → arch emit; then link the units (tree shake across them) |
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
 | `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
-the exception: those files are spliced into *compiled programs*, never
+the exception: those files are compiled into *programs*, never
 ported, so they may use the whole native surface -- `&x`, `*p`,
 `syscall`.)
 
@@ -337,10 +337,12 @@ All of these are lowered early, so the checker and emitter see little new:
 ## Self-hosting: done
 
 `ycc` compiles its own source to a byte-identical binary. The chain is
-`cycc → ycc → _ycc`, gated by `cmp ycc refs/ycc.ref` and `cmp ycc _ycc`
-(`make ycc`), and `test/sh/test_fixpoint.sh` re-checks it from an
-already-built `./ycc`, including a third generation and a smoke compile
-with the self-built binary.
+`cycc → _ycc0 → _ycc`: `_ycc0` plus its own std pack (*Compilation
+units* below) is `ycc`, gated by `cmp ycc refs/ycc.ref` (the pack
+included) and `cmp _ycc0 _ycc` (`make ycc`), and
+`test/sh/test_fixpoint.sh` re-checks it from an already-built `./ycc`,
+including a third generation (compiled from the std sources, not the
+pack) and a smoke compile with the self-built binary.
 
 Measured on the self-compile (`ycc --time -o ycc src/y/ycc.y`, re-run
 2026-10-01): 756 KB of spliced source, 171 K tokens, 3.2 MB of assembly,
@@ -363,11 +365,11 @@ floats have all landed since.
 
 ## Runtime library: Y, not assembly
 
-`src/y/std/rt.y` holds runtime code written **in Y**, spliced in front of
-every program by `native_resolve` (always — generated code calls into it by
-fixed label, so there is no name to test for). These are ordinary defs:
-they go through rename, typecheck and emit like any user function, so a bug
-in them is a bug in Y code rather than in hand-rolled x86.
+`src/y/std/rt.y` holds runtime code written **in Y**, linked into every
+program (always — generated code calls into it by fixed label, so there
+is no name to test for). These are ordinary defs: they go through rename,
+typecheck and emit like any user function, so a bug in them is a bug in
+Y code rather than in hand-rolled x86.
 
 The rule is that `arch_x64.y` provides small, general **primitives** and the
 runtime provides **behaviour**. What stays in assembly is only what needs raw
@@ -407,17 +409,17 @@ examples of the same move landed earlier:
   when stdin is a file, so the child starts right after the last line
   `readline()` returned; a pipe cannot seek, and bytes already buffered
   stay with the parent (the C stdio contract). `std/exec.y` calls
-  `y_stdin_sync`, which is in the prelude trigger list, so splicing exec
-  always pulls `std/prelude.y` in as well.
+  `y_stdin_sync`, which is in the prelude trigger list, so linking exec
+  always links `std/prelude.y` as well.
 
-`ycc --no-exec` simply does not splice `std/exec.y`, so the call fails
+`ycc --no-exec` simply does not link `std/exec.y`, so the call fails
 with "undefined function 'exec'" and the binary has no path to a shell.
 
 `rt.y`, `prelude.y`, `exec.y` and `str.y` are plain Y files, and the
 compiler carries their text: native.y says `embed RT_SRC from
 "./std/rt.y";` (see *Embedding files* below), the C copy
 `Y_EMBED(RT_SRC, ...)`, because the shipped `ycc` is a standalone static
-ELF — it cannot read a support file at run time. `rt.y` is spliced
+ELF — it cannot read a support file at run time. `rt.y` is linked
 always; the others only when the program mentions one of their names
 (`prelude_names`/`exec_names`/`str_names` in native.y). One pass over the
 program's text, `words_seen`, checks all three lists. It reads the text
@@ -427,9 +429,9 @@ literals, and counts whole words only (`executable` is not `exec`).
 is the only way to reach a helper-backed method. `std/str.y` holds those
 methods (*String methods* above), and the `y_fmt_*` helpers behind
 f-string specs: `words_seen` walks each f-string with the lexer's own
-`fstr_walk`, scans its fields as code, and splices `str.y` when a field
+`fstr_walk`, scans its fields as code, and links `str.y` when a field
 has a spec. Even so, the scan over-approximates:
-`r.count(x)` calling a record field splices `str.y` too. So `str.y` must
+`r.count(x)` calling a record field links `str.y` too. So `str.y` must
 stay free of string literals and record values. Tree shaking drops unused
 bodies, but the string literals they emitted stay in `.rodata`, and so do
 the type descriptors of the records they build; every such program would
@@ -445,8 +447,72 @@ the primitives goes through an intrinsic or an operator.
 (`fn_label_of` in native.y) because generated code calls it by fixed label:
 `print(long)` compiles to `call y_print_long` and must find exactly that
 label, rename's `$N` suffix notwithstanding. A program may override a
-runtime helper by defining the same name later (the last def wins the bare
-label); anything else starting with `y_` is on its own.
+runtime helper by defining the same name: its body replaces the std
+unit's at link time, for every caller, the std units' own calls included
+(`link_units` drops the std body of every `y_` label the program
+defines); anything else starting with `y_` is on its own.
+
+## Compilation units and the std pack
+
+A program is **linked from units**: its own — the program file and the
+files it imports, spliced into one text — and the std units it needs, in
+link order `prelude`, `exec`, `str`, `rt` (`native_resolve_x` picks
+them, see above). `compile_unit` takes one unit from AST to assembly
+text — strip namespaces, rename, check, emit, one body per function —
+and `link_units` joins all the units' bodies and shakes them together
+(*Tree shaking* below), then appends the arch prelude, every unit's
+rodata and every unit's `.bss` cells.
+
+- **Labels** cannot collide: a unit numbers its uids (function, string
+  and local labels) and its global cells from its own base
+  (`std_unit_base`: 1e9 for the prelude up to 4e9 for rt; the program's
+  is 0, so its labels are what they always were).
+- **Exports**: a unit's top-level defs, by the names they were written
+  with (`unit_exports`), with their labels and types. The program
+  checks and calls against the exports of the **library** units
+  (prelude, exec) — bound as externs in `types.check_program(ast, ext)`
+  and in the emitter's function table, behind the program's own defs, so
+  a program's `readline` still wins. The **runtime** units (rt, str)
+  are linked but not bound: generated code calls their `y_` helpers by
+  fixed label, and the checker's and emitter's scopes stay free of a
+  hundred-odd helper names (the self-compile's typecheck got 10% faster).
+- **Init functions**: a unit's top-level statements become an init
+  function, and `_start` calls each linked unit's init first, in link
+  order. Only the prelude has one (readline's buffer globals), so a
+  program that links it starts with one call more than when the std
+  files were spliced into its text; every other program compiles to the
+  same bytes as then.
+- **Line markers**: a std unit always compiles with its `.loc` markers
+  (all `file 1`, its only file); linking renumbers them to the unit's
+  place in the program's `.file` table under `-g` — the program's files
+  first, then the std units, the last linked first: rt, str, exec,
+  prelude — and strips them otherwise.
+
+**The std pack.** The std units compile the same for every program, so
+`ycc` carries them precompiled: `ycc --std-pack FILE` compiles all four
+and writes them to FILE, and the build appends that file to the `ycc`
+that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
+Makefile's `PACK`). Each compile reads the pack back from
+`/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
+straight from it. The pack is text: a version line, then each unit's
+name and fields as netstrings — its bodies, each body's label and the
+labels it references (so linking never rescans std code), rodata,
+globals, init label, and its exports' types as `types.tstr` text, parsed
+back (`parse_type_full`) only for the library units the program binds;
+`--std-pack` refuses to write a type that does not come back unchanged.
+What is precompiled is everything up to the assembler — the std units
+are stored as **assembly text**, not machine code: the assembler still
+encodes the std bodies a program keeps, along with the program's own.
+
+`--std-src` ignores the pack and compiles the std units from the
+embedded sources, as does a ycc whose pack is missing (cycc, or a ycc
+just written by a self-compile) or of another version: the output is the
+same bytes either way (`test/sh/test_link.sh` checks it over programs
+that link every unit; `make ycc`, `ynew` and the fixpoint suite each
+compile the compiler with the pack and compare with a build from source).
+A hello world compiles in 5.1 ms instead of 13.8 ms from source (the
+spliced build before units took 14.1 ms). The pack adds 186 KB to
+`ycc`.
 
 ## Tree shaking
 
@@ -454,8 +520,10 @@ Nothing reaches the binary that the program does not reach itself:
 
 - **bodies** — `prune_bodies` drops every function nothing calls, rooted at
   `_start` plus whatever the arch prelude references from Y (so a helper
-  the prelude calls by label survives). An unused stdlib function costs
-  nothing but its parse.
+  the prelude calls by label survives). It works across units: the std
+  units' bodies and the program's are shaken together, from each body's
+  label and the labels it references (computed once per unit). An unused
+  stdlib function costs nothing — not even its parse, with the std pack.
 - **arch blocks** — `shake_refs` splits the arch prelude and the rodata
   constants into labelled blocks and keeps exactly the ones referenced from
   the surviving code or from another kept block (`call`, `lea`, a jump, or a

@@ -12,7 +12,7 @@
 
 #include "yv.h"
 
-Yv *check_program(Yv *ast);   /* -> [{ msg, line, col }] ([] means OK) */
+Yv *check_program(Yv *ast, Yv *ext); /* -> [{ msg, line, col }] ([] means OK) */
 Yv *tstr(Yv *t);              /* compiler-diagnostics rendering of a type */
 Yv *tdisp(Yv *t);             /* user-visible rendering (typeof) */
 Yv *tdisp_fnval(Yv *t);       /* "<function (params)->(ret)>" shape */

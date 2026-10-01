@@ -3,6 +3,15 @@
 ## Not done
 
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
+  - Decided: a `y.toml` manifest (any layout), dependencies from git
+    pinned in `y.lock` or vendored, ycc's own objects, ycc links. Std
+    first.
+  - Stage 1 done: the std modules (`rt`, `str`, `prelude`, `exec`) are
+    separately compiled units linked into programs, and `ycc` carries
+    them precompiled (the std pack). NATIVE.md, "Compilation units and
+    the std pack".
+  - Remaining: the manifest, dependencies, a dependency compiled once
+    into a cached object and linked, `ycc build`.
 
 
 ## Done

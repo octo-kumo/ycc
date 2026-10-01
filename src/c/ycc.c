@@ -2,13 +2,16 @@
  *
  * ycc — the Y compiler. Compiles Y source straight to a native
  * executable (Linux x86-64) with no toolchain: no cc, no as, no ld,
- * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
+ * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec]
+ * [--std-src] [--std-pack FILE] [-h] FILE
  *   (no flags)   compile FILE to a native executable (default output: a.out)
  *   -o OUTPUT    output path (executable, or .s file with -S)
  *   -S           emit assembly only (stdout, or the -o file)
  *   -t, --time   print per-phase time and heap use to stderr
  *   -g           add a symbol table and DWARF line info (for perf, gdb,
  *                valgrind, addr2line; see -h)
+ *   --std-src    compile the std units from source, not the attached pack
+ *   --std-pack FILE  write the compiled std units to FILE, no program
  *   -h, --help   show this text and exit
  */
 #include "ycc.h"
@@ -19,7 +22,10 @@
 #include "parser.h"
 #include "yv.h"
 
+#include <fcntl.h>
 #include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 /* ── argument parsing ────────────────────────────────────────────────── */
 
@@ -30,6 +36,8 @@ Yv *parse_cli_args(Yv *argv) {
     int timing = 0;
     int allow_exec = 1;
     int debug = 0;
+    int std_src = 0;
+    Yv *std_pack_path = ys("");
     long i = 1; /* skip argv[0] */
     long n = yv_len(argv);
     while (i < n) {
@@ -56,6 +64,19 @@ Yv *parse_cli_args(Yv *argv) {
         } else if (ys_eq_lit(a, "-g")) {
             debug = 1;
             ;
+        } else if (ys_eq_lit(a, "--std-src")) {
+            std_src = 1;
+            ;
+        } else if (ys_eq_lit(a, "--std-pack")) {
+            if (i + 1 < n) {
+                i = i + 1;
+                std_pack_path = ya_get(argv, i);
+                ;
+            } else {
+                puts_(ys("ycc: --std-pack needs an argument\n"));
+                exit_(1);
+                ;
+            }
         } else if (ys_eq_lit(a, "--help") || ys_eq_lit(a, "-h")) {
             puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n"));
             puts_(ys("  (no flags)   compile FILE to a native executable (default: "
@@ -68,6 +89,11 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("               valgrind and addr2line show names and source\n"));
             puts_(ys("               lines; the loaded code and data are unchanged\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
+            puts_(ys("  --std-src    compile the std units (the runtime and std library)\n"));
+            puts_(ys("               from source instead of using the precompiled ones\n"));
+            puts_(ys("               attached to ycc; the output is the same\n"));
+            puts_(ys("  --std-pack FILE  compile the std units and write them to FILE,\n"));
+            puts_(ys("               to attach to a ycc binary (the build does)\n"));
             puts_(ys("  -h, --help   show this text and exit\n"));
             exit_(0);
             ;
@@ -82,9 +108,106 @@ Yv *parse_cli_args(Yv *argv) {
         }
         i = i + 1;
     }
-    return yr(6, "out", out, "files", files, "asm_only", yv_bool(asm_only),
+    return yr(8, "out", out, "files", files, "asm_only", yv_bool(asm_only),
               "timing", yv_bool(timing), "allow_exec", yv_bool(allow_exec),
-              "debug", yv_bool(debug));
+              "debug", yv_bool(debug), "std_src", yv_bool(std_src),
+              "std_pack", std_pack_path);
+}
+
+/* ── the std pack ───────────────────────────────────────────────────────
+ * The build attaches to ycc its std units, compiled (native.y std_pack):
+ * the binary ends with [pack][the pack's length, 8 digits][YCCPACK1]. */
+
+Yv *pack_magic(void) {
+    return ys("YCCPACK1");
+}
+
+/* The pack attached to this binary, or "" when there is none. */
+Yv *self_pack(void) {
+    int fd = open("/proc/self/exe", O_RDONLY);
+    if (fd < 0) {
+        return ys("");
+    }
+    Yv *pack = ys("");
+    long size = (long)lseek(fd, 0, SEEK_END);
+    if (size >= 16) {
+        char buf[65536];
+        char tailbuf[16];
+        lseek(fd, (off_t)(size - 16), SEEK_SET);
+        ssize_t k = read(fd, tailbuf, 16);
+        if (k == 16) {
+            Yv *tail = ys_n(tailbuf, 16);
+            long n = ys_tonum(ys_slice(tail, 0, 8));
+            if (ys_eq(ys_slice(tail, 8, 16), pack_magic()) &&
+                n > 0 && n <= size - 16) {
+                lseek(fd, (off_t)(size - 16 - n), SEEK_SET);
+                Yv *pieces = yav(0);
+                long left = n;
+                while (left > 0) {
+                    long want = left;
+                    if (want > 65536) {
+                        want = 65536;
+                        ;
+                    } else {
+                        ;
+                    }
+                    ssize_t got = read(fd, buf, (size_t)want);
+                    if (got <= 0) {
+                        left = -1;
+                        ;
+                    } else {
+                        pieces = ya_push(pieces, ys_n(buf, (size_t)got));
+                        left = left - got;
+                        ;
+                    }
+                }
+                if (left == 0) {
+                    pack = ys_join(pieces, ys(""));
+                    ;
+                } else {
+                    ;
+                }
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    close(fd);
+    return pack;
+}
+
+/* --std-pack FILE: every std unit, compiled from source, framed for
+ * attaching (see self_pack). */
+long write_std_pack(Yv *path) {
+    Yv *pack = std_pack(std_units(std_unit_names(), ys("")));
+    Yv *nd = ys_long(yv_len(pack));
+    while (yv_len(nd) < 8) {
+        nd = ys_cat(ys("0"), nd);
+        ;
+    }
+    if (yv_len(nd) > 8) {
+        puts_(ys_cat(ys_cat(ys("error: the std pack is too large ("), nd),
+                      ys(" bytes)\n")));
+        exit_(1);
+        return 0;
+    } else {
+        ;
+    }
+    if (!write_file(path, ys_cat(ys_cat(pack, nd), pack_magic()))) {
+        puts_(ys_cat(ys_cat(ys("error: writing '"), path), ys("' failed\n")));
+        exit_(1);
+        return 0;
+    } else {
+        ;
+    }
+    return 0;
 }
 
 /* ── phase reporting (--time) ────────────────────────────────────────────
@@ -198,7 +321,11 @@ long y_main(Yv *cmdline) {
     Yv *out = yr_get(pargs, "out");
     Yv *files = yr_get(pargs, "files");
 
-    if (yv_len(files) == 0) {
+    if (yv_len(yr_get(pargs, "std_pack")) > 0) {
+        write_std_pack(yr_get(pargs, "std_pack"));
+        exit_(0);
+        return 0;
+    } else if (yv_len(files) == 0) {
         puts_(ys("error: no input file (see ycc -h)\n"));
         exit_(1);
         return 1;
@@ -245,6 +372,7 @@ long y_main(Yv *cmdline) {
             Yv *nrsrc = yr_get(nr, "src");
             Yv *nrimports = yr_get(nr, "imports");
             Yv *nrorigin = yr_get(nr, "origin");
+            Yv *nrstd = yr_get(nr, "std");
             Yv *toks = tokenize(nrsrc);
             ph = phase_end(dt, ys("tokenize"), t0, h0);
             dt = yr_get(ph, "times");
@@ -255,8 +383,24 @@ long y_main(Yv *cmdline) {
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));
             h0 = yv_l(yr_get(ph, "h"));
+            /* The std units the program links (native_resolve_x picked
+             * them): the ones attached to ycc, compiled when it was built,
+             * or (--std-src, or a ycc with none) compiled from the sources
+             * embedded in it. */
+            Yv *pack = ys("");
+            if (!yv_b(yr_get(pargs, "std_src"))) {
+                pack = self_pack();
+                ;
+            } else {
+                ;
+            }
+            Yv *su = std_units(nrstd, pack);
+            ph = phase_end(dt, ys("std"), t0, h0);
+            dt = yr_get(ph, "times");
+            t0 = yv_l(yr_get(ph, "t"));
+            h0 = yv_l(yr_get(ph, "h"));
             Yv *r = emit_program(ast, nrimports, nrorigin,
-                                 yv_b(yr_get(pargs, "debug")));
+                                 yv_b(yr_get(pargs, "debug")), su);
             /* emit_program reports its own sub-phases (strip_ns, rename,
              * typecheck, emit_fns, emit_start, asm_text); splice them in. */
             Yv *sub = yr_get(r, "times");

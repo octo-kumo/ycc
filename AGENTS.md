@@ -9,23 +9,26 @@ same semantics.
 ## Build
 
 - `make` → builds `./cycc`, the C copy of the compiler.
-- `make ycc` → builds `./ycc` with `cycc`, then **verifies**:
+- `make ycc` → builds the compiler with `cycc`, attaches its std pack
+  (the std units precompiled, `--std-pack`; NATIVE.md, "Compilation
+  units and the std pack") to make `./ycc`, then **verifies**:
   - `cmp ycc refs/ycc.ref` — the C copy's output is byte-identical to
-    the reference `ycc` binary (the acceptance gate for the port), and
+    the reference `ycc` binary, pack included (the acceptance gate for
+    the port), and
   - `./ycc` self-compiles byte-identically (fixpoint).
   `refs/` holds the backed-up reference binaries (gitignored; see
   `refs/SHA256SUMS`).
 - Do not commit build artifacts: `*.o`, `cycc`, `cycc-asan`, `ycc`,
-  `_ycc`, `ynew`, `a.out`, `_check/` (all gitignored; `make clean`
-  removes them).
+  `_ycc`, `_ycc0`, `ynew`, `*.pack`, `a.out`, `_check/` (all gitignored;
+  `make clean` removes them).
   `refs/` is gitignored too but is **not** disposable — it is the port's
   ground truth.
-- The runtime the compiler splices into programs is plain Y in
+- The std units the compiler links into programs are plain Y in
   `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y`, embedded into both
   compilers when they are built (`embed` in native.y, `Y_EMBED` in
   native.c — PORTING.md rule 10). Edit those files directly; there is no
-  generator. `str.y` must not contain string literals (see NATIVE.md,
-  "Runtime library").
+  generator (`make ycc`/`ynew` rebuild the pack). `str.y` must not
+  contain string literals (see NATIVE.md, "Runtime library").
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
   Do NOT put a `ulimit -v` on sanitized runs — ASan reserves terabytes
@@ -99,20 +102,20 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 
 ## Test suites (`test/sh/`)
 
-Fourteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
+Fifteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, identical program behavior). `test_native.sh`,
-`test_native_examples.sh`, `test_debug.sh`, `test_ycc.sh` and
-`test_fixpoint.sh` drive the built `./ycc` itself, so `run_all.sh` skips
-those **five** when it is missing (`make test-fast`).
+`test_native_examples.sh`, `test_debug.sh`, `test_link.sh`, `test_ycc.sh`
+and `test_fixpoint.sh` drive the built `./ycc` itself, so `run_all.sh`
+skips those **six** when it is missing (`make test-fast`).
 
 `run_all.sh -j N` runs N suites at once and splits the long ones (port,
 comprehensive, native) into shards (`YSHARD=K/N`: every Nth case, see
 `next_case` in `lib.sh`). The suites take the compilers they test from
 the environment: `CYCC` (the C copy), `YREF` (the reference, default
 `refs/ycc.ref`), `YCC` (the built compiler driven by native,
-native-examples, debug and ycc) and `YSELF` (fixpoint, stdin-eof).
+native-examples, debug and ycc) and `YSELF` (fixpoint, link, stdin-eof).
 `YPORT_SELF=0` leaves `src/y/ycc.y` out of the port gate, for when that
 very build was just compared (`make test`, `check`, `rebless` do);
 `YQUIET=1` prints failures only.
@@ -143,13 +146,20 @@ very build was just compared (`make test`, `check`, `rebless` do);
   (bad flags and paths, failed writes, import depth): both compilers
   print the same message and exit 1.
 - `test_fixpoint.sh` — three generations of self-compilation are
-  byte-identical and the self-built binary still compiles working
+  byte-identical (the second with `./ycc`'s std pack, the third from
+  the std sources) and the self-built binary still compiles working
   programs.
 - `test_debug.sh` [debug] — `ycc -g`: both compilers emit identical
   `-g` binaries, the program runs the same, code and rodata match the
   plain build, readelf/nm/addr2line (gdb and callgrind when installed)
   see the functions and globals by name, and the line table maps code
   to file:line (an import's too; `-S -g` assembles with GNU `as`).
+- `test_link.sh` [link] — std units and the std pack: `./ycc` carries a
+  well-framed pack, the one `--std-pack` writes and the C copy writes
+  too; linking from it gives the same bytes as `--std-src` (plain and
+  `-g`, programs linking every std unit); a stale or missing pack falls
+  back to source; a program's own `y_` helper or `readline` replaces
+  std's; `--no-exec`; std line markers only under `-g`, renumbered.
 - `test_stdin_eof.sh` — stdin/EOF behavior.
 - `test_net.sh` [net] — the blocking `std/net` listeners over loopback:
   `test/y/net/` servers built by both compilers (identical binaries)
@@ -218,12 +228,14 @@ are exact.
 
 ## Pipeline (`src/y/native.y`)
 
-splice imports + std modules → strip namespaces → rename (uniquify) →
-typecheck (static, errors fatal) → hoist → tree shake → emit `.s` →
-`asm.y` assembles → `elf.y` writes a static ELF (`-g`: plus `dwarf.y`'s
-line table). `y_` is a **reserved
-prefix**: such a def is emitted under its bare name because generated
-code calls it by fixed label.
+splice imports, pick the std units → per unit (the program's, and each
+std unit unless the std pack has it): strip namespaces → rename
+(uniquify) → typecheck (static, errors fatal) → hoist → emit bodies →
+link the units (tree shake across them) into `.s` → `asm.y` assembles →
+`elf.y` writes a static ELF (`-g`: plus `dwarf.y`'s line table). `y_` is
+a **reserved prefix**: such a def is emitted under its bare name because
+generated code calls it by fixed label (a program's own `y_` def
+replaces the std one at link time).
 
 ## Y code style (hard rules — keep the two copies in sync)
 
@@ -325,6 +337,7 @@ closures as `[code, caps...]` records; `&x`, `*p`, `a[i]`, `a[lo:hi]`,
 `while`; block expressions; `type` aliases, record unions and `match`;
 `def` params may be annotated (recommended: an unannotated param is a
 poison-tolerant unknown), return types are inferred. `ycc` is
-native-only: `ycc [-o OUT] [-S] [-t] [-g] [--no-exec] FILE`,
+native-only: `ycc [-o OUT] [-S] [-t] [-g] [--no-exec] [--std-src] FILE`,
 cc-style; the shipped binary needs nothing at runtime — it is a static
-ELF invoking raw syscalls.
+ELF invoking raw syscalls, carrying its std units precompiled (the std
+pack, appended by `make ycc`).

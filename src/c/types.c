@@ -1,6 +1,6 @@
 /* types.c — static type checker for the native backend.
  * 1:1 port of src/y/types.y (PORTING.md is the contract).
- * Usage: Yv *errors = check_program(ast);  // [] means OK
+ * Usage: Yv *errors = check_program(ast, ext);  // [] means OK
  * Each error: { msg: str, line: long, col: long }.
  *
  * Supported types: long, byte, float, bool, str, void, options T? (the
@@ -4512,7 +4512,7 @@ static Yv *st_fdepth(Yv *st, long d) {
 
 // ── entry point ──────────────────────────────────────────────────────────
 
-Yv *check_program(Yv *ast) {
+Yv *check_program(Yv *ast, Yv *ext) {
     // pass 1: collect top-level def signatures (allows mutual recursion).
     Yv *defs = yav(0);
     Yv *pstmts = yr_get(ast, "stmts");
@@ -4553,6 +4553,12 @@ Yv *check_program(Yv *ast) {
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
     // values (e.g. `let p = print;`).
+    long x = 0;
+    while (x < yv_len(ext)) {
+        Yv *xe = ya_get(ext, x);
+        st = st_bind(st, yr_get(xe, "name"), yr_get(xe, "typ"), ys("func"));
+        x = x + 1;
+    }
     long d = 0;
     while (d < yv_len(defs)) {
         st = st_bind(st, yr_get(ya_get(defs, d), "name"),

@@ -2,9 +2,12 @@
 // Usage:
 //   import types from "./types.y";
 //   import native from "./native.y";
-//   let r = native.emit_program(ast, imports, origin, debug);  // { ok, asm, errors }
-//   // (imports and origin come from native_resolve_x; debug is `-g`,
-//   // which adds `.file`/`.loc` line markers -- see dbg_lines)
+//   let nr = native.native_resolve_x(src, dir, 0, allow_exec, path);
+//   let su = native.std_units(nr.std, pack);  // the std units it links
+//   // (pack: ycc's std pack, or "" to compile them from source)
+//   let r = native.emit_program(ast, nr.imports, nr.origin, debug, su);
+//   // { ok, asm, errors }. debug is `-g`, which adds `.file`/`.loc`
+//   // line markers -- see dbg_lines.
 //   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
 //
 // Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -27,17 +30,18 @@ import arch from "./arch_x64.y";
 import types from "./types.y";
 import rename from "./rename.y";
 import lexer from "./lexer.y";
+import parser from "./parser.y";
 
-// The runtime text native_resolve_x splices into programs. `embed` (see
-// embed_decl) makes each file a str const when the compiler is BUILT: the
-// shipped ycc is a standalone static ELF and cannot read support files at
-// run time. The C copy embeds the same files (Y_EMBED in src/c/yv.h).
+// The std units' sources (see std_units). `embed` (see embed_decl) makes
+// each file a str const when the compiler is BUILT: the shipped ycc is a
+// standalone static ELF and cannot read support files at run time. The C
+// copy embeds the same files (Y_EMBED in src/c/yv.h).
 embed RT_SRC from "./std/rt.y";
 embed PRELUDE_SRC from "./std/prelude.y";
 embed EXEC_SRC from "./std/exec.y";
 embed STR_SRC from "./std/str.y";
 
-// `ycc -g` line markers, set by emit_program for each program. With
+// `ycc -g` line markers, set by compile_unit for each unit. With
 // dbg_lines on, the text opens with a `.file N "path"` per origin file
 // and every statement (gen_loc_stmt) and function entry (emit_one_fn)
 // gets a `.loc FILE LINE` before its code -- GNU as's own line-number
@@ -59,24 +63,20 @@ let dbg_line: [long] = [];
 // The ORIGIN MAP says where each line of the spliced program came from:
 // line i + 1 is line `line[i]` of file `files[file[i]]`. files[0] is the
 // program itself (`root`, the path the driver was given), then the
-// imported modules in splice order, then -- from `nuser` on -- the std
-// chunks the compiler splices in front. Error positions are printed
-// through it (ycc.y print_native_errors), and find_dup tells files apart
-// by it.
+// imported modules in splice order; `nuser` counts them all (the std
+// library is no part of the text any more -- it is linked as separate
+// units, see std_units). Error positions are printed through it (ycc.y
+// print_native_errors), and find_dup tells files apart by it.
 
-def native_resolve(src: str, base_dir: str, depth: long) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] } } {
+def native_resolve(src: str, base_dir: str, depth: long) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, std: [str] } {
     native_resolve_x(src, base_dir, depth, true, "")
 };
 
-// allow_exec = false is `ycc --no-exec`: the exec chunk is not spliced, so
-// `exec(...)` fails with "undefined function" and the binary has no path
-// to a shell at all.
-//
-// The std chunks go in FRONT of the user's text. Prepending (rather than
-// appending) is deliberate: defs hoist either way, but a later def shadows
-// an earlier one, so a user's own `readline` must come after ours to win.
-// Every position downstream is shifted, which the origin map undoes.
-def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] } } {
+// `std` lists the std units the program links, in link order: prelude,
+// exec, str, rt (std_units compiles them). allow_exec = false is
+// `ycc --no-exec`: exec is left out, so `exec(...)` fails with
+// "undefined function" and the binary has no path to a shell at all.
+def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, std: [str] } {
     // NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
     // enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
     // encoder splices twice and every enc64 def collides (find_dup).
@@ -86,72 +86,43 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, roo
     let files: [str] = [root];
     files += r.seen;
     let origin = { files: files, nuser: len(files), file: r.ofile, line: r.oline };
-    // The runtime library (std/rt.y) is spliced in front of EVERY program:
-    // generated code calls into it by fixed label (`call y_print_long`), so
-    // there is no name to test for. Unused helpers cost nothing in the
-    // output — prune_bodies drops them at emit time.
-    let rt = std_text(RT_SRC);
     // What the name checks below search: the program's own text, in one
-    // pass for all three name lists (words_seen). No std chunk is
+    // pass for all three name lists (words_seen). No std unit is
     // searched: rt and str.y call none of the trigger names, and exec.y's
-    // one call into another chunk (y_stdin_sync, a prelude def) is why
-    // splicing exec also splices the prelude.
+    // one call into another unit (y_stdin_sync, a prelude def) is why
+    // linking exec also links the prelude.
     let pn = prelude_names();
     let xn = exec_names();
     let seen = words_seen(rsrc, pn + xn + str_names());
     let px = len(pn) + len(xn);
-    rsrc = rt + rsrc;
-    origin_front(origin, "std/rt.y", count_nl(rt));
-    // std/str.y, std/exec.y and std/prelude.y go in front of the resolved
-    // text, but only when the program actually mentions one of their
-    // names — otherwise every binary would carry code it never calls.
-    // str.y's names count only in method-call form, `.name(`: a helper-
-    // backed string method cannot be reached any other way, so a variable
-    // called `lines` or a field `r.count` splices nothing. The last slot
-    // of seen stands for the y_fmt_* helpers: an f-string field with a
-    // format spec sets it to 2 (words_scan).
-    if (seen_any(seen, px, len(seen), 2)) {
-        let tt = std_text(STR_SRC);
-        rsrc = tt + rsrc;
-        origin_front(origin, "std/str.y", count_nl(tt));
-        0
-    } else { 0; };
+    // std/prelude.y, std/exec.y and std/str.y are linked only when the
+    // program actually mentions one of their names -- otherwise every
+    // binary would carry code it never calls. str.y's names count only
+    // in method-call form, `.name(`: a helper-backed string method cannot
+    // be reached any other way, so a variable called `lines` or a field
+    // `r.count` links nothing. The last slot of seen stands for the
+    // y_fmt_* helpers: an f-string field with a format spec sets it to 2
+    // (words_scan).
     let want_prelude = seen_any(seen, 0, len(pn), 1);
+    let want_exec = false;
     if (allow_exec) {
         if (seen_any(seen, len(pn), px, 1)) {
-            let xt = std_text(EXEC_SRC);
-            rsrc = xt + rsrc;
-            origin_front(origin, "std/exec.y", count_nl(xt));
+            want_exec = true;
             want_prelude = true;
             0
         } else { 0; };
         0
     } else { 0; };
-    if (want_prelude) {
-        let pt = std_text(PRELUDE_SRC);
-        rsrc = pt + rsrc;
-        origin_front(origin, "std/prelude.y", count_nl(pt));
-        0
-    } else { 0; };
-    { src: rsrc, imports: rimports, origin: origin }
-};
-
-// A std chunk of `n` lines went in front of the program: its lines come
-// first in the origin map, as lines 1..n of a new file `name`.
-def origin_front(o: { files: [str], nuser: long, file: [long], line: [long] }, name: str, n: long) -> long {
-    let id = len(o.files);
-    o.files += name;
-    let f: [long] = [];
-    let l: [long] = [];
-    let i = 0;
-    while (i < n) {
-        f += id;
-        l += i + 1;
-        i = i + 1;
-    };
-    o.file = f + o.file;
-    o.line = l + o.line;
-    0
+    let std: [str] = [];
+    if (want_prelude) { std += "prelude"; 0; } else { 0; };
+    if (want_exec) { std += "exec"; 0; } else { 0; };
+    if (seen_any(seen, px, len(seen), 2)) { std += "str"; 0; } else { 0; };
+    // The runtime library (std/rt.y) is linked into EVERY program:
+    // generated code calls into it by fixed label (`call y_print_long`),
+    // so there is no name to test for. Unused helpers cost nothing in the
+    // output -- prune_bodies drops them at link time.
+    std += "rt";
+    { src: rsrc, imports: rimports, origin: origin, std: std }
 };
 
 // Which file line `ln` of the spliced program came from (0, the program
@@ -203,25 +174,10 @@ def str_names() -> [str] {
      "upper", "lower", "repeat", "lines"]
 };
 
-// An embedded std file, ready to go in front of the program: newline-
-// terminated, so the program's own first line still starts a line.
+// An embedded std file, newline-terminated (as every source file the
+// compiler reads should be).
 def std_text(s: str) -> str {
     if (s[len(s) - 1:] == "\n") { s } else { s + "\n" }
-};
-
-// How many lines a newline-terminated text holds (what a std chunk adds to
-// the origin map).
-def count_nl(s: str) -> long {
-    let b = bytes(s);
-    let n = len(b);
-    let c = 0;
-    let i = 0;
-    while (i < n) {
-        if (b[i] == 10) { c = c + 1; 0; } else { 0; };
-        i = i + 1;
-        0
-    };
-    c
 };
 
 // Which trigger names the program mentions, in ONE pass over its text
@@ -1189,25 +1145,17 @@ def shake_refs(text: str, root_refs: [str]) -> str {
 };
 
 // Drop function bodies nothing reaches: dead stdlib code the program never
-// calls. Bodies are referenced by label from other bodies AND from the arch
-// prelude (a prelude block may call a Y-side helper), so
-// `asm_roots` is the prelude text. Returns the kept bodies plus everything
-// they reference — the roots for shaking the arch prelude itself.
-def prune_bodies(bodies: [str], asm_roots: str) -> { bodies: [str], refs: [str] } {
-    let nb = len(bodies);
-    let labels = [];
-    let refs = [];
-    let i = 0;
-    while (i < nb) {
-        let b = bodies[i];
-        labels += body_label(b);
-        refs += [text_refs(b, true)];
-        i = i + 1;
-        0
-    };
+// calls. A body is given by its label and the labels it references
+// (body_meta). Bodies are referenced by label from other bodies AND from
+// the arch prelude (a prelude block may call a Y-side helper), so
+// `asm_roots` is the prelude text. Returns, per body, whether it was kept,
+// plus everything the kept ones reference — the roots for shaking the
+// arch prelude itself.
+def prune_bodies(labels: [str], refs: [[str]], asm_roots: str) -> { refs: [str], keep: [bool] } {
+    let nb = len(labels);
     let keep = [];
     let falls = [];
-    i = 0;
+    let i = 0;
     while (i < nb) {
         keep += false;
         falls += false;
@@ -1221,13 +1169,10 @@ def prune_bodies(bodies: [str], asm_roots: str) -> { bodies: [str], refs: [str] 
         0
     } else { 0; };
     keep = shake_keep(labels, refs, falls, keep, roots);
-    let out = [];
     let outrefs = [];
     i = 0;
     while (i < nb) {
         if (keep[i]) {
-            let b = bodies[i];
-            out += b;
             let rs = refs[i];
             let j = 0;
             while (j < len(rs)) {
@@ -1240,7 +1185,7 @@ def prune_bodies(bodies: [str], asm_roots: str) -> { bodies: [str], refs: [str] 
         i = i + 1;
         0
     };
-    { bodies: out, refs: outrefs }
+    { refs: outrefs, keep: keep }
 };
 
 
@@ -2342,8 +2287,9 @@ def fn_names_of(fns: [{ name: str, label: str, typ: { k: str } }]) -> [str] {
     out
 };
 
-// st.fns holds the hoisted defs and, after them, the globals (see
-// emit_program); a global's label is its .bss cell.
+// st.fns holds the hoisted defs, then the externs (the top-level defs of
+// the units this one links against), then the globals (see
+// compile_unit); a global's label is its .bss cell.
 def fns_kind(label: str) -> str {
     if (label[:3] == "yg_") { "global" } else { "func" }
 };
@@ -6756,9 +6702,9 @@ def func_type_in(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
 // of the same name (rename.y rn_shadow_dups): deliberate within a file, but
 // across files it silently hands every caller -- the first file's own
 // included -- the other file's function. So a def that replaces one from
-// another file is an error, at the later def. The std chunks the compiler
-// splices in front (files from origin.nuser on) are exempt: a program may
-// replace those (its own `readline` wins).
+// another file is an error, at the later def. The std units are no part
+// of this namespace (they are linked, see std_units): a program may
+// define a std name, and its own `readline` wins.
 def find_dup(stmts: [{ k: str }], origin: { files: [str], nuser: long, file: [long], line: [long] }) -> [{ msg: str, line: long, col: long }] {
     let names: [str] = [];
     let fids: [long] = [];
@@ -6770,14 +6716,10 @@ def find_dup(stmts: [{ k: str }], origin: { files: [str], nuser: long, file: [lo
         let nm = top_def_name(s);
         if (len(nm) > 0) {
             let ln: long = s.line;
-            let f = origin_file(origin, ln);
-            if (f < origin.nuser) {
-                names += nm;
-                fids += f;
-                lines += ln;
-                cols += s.col;
-                0
-            } else { 0; };
+            names += nm;
+            fids += origin_file(origin, ln);
+            lines += ln;
+            cols += s.col;
             0
         } else { 0; };
         i = i + 1;
@@ -6856,8 +6798,9 @@ def decl_name(d) -> str {
 // Each global's cell label and type, in program order. A declared type
 // wins; otherwise the initializer is inferred in a scope holding the
 // hoisted defs and the globals before it (what main sees when it runs
-// the declaration).
-def global_entries(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, gdecls: [{ k: str }]) -> [{ name: str, label: str, typ: { k: str } }] {
+// the declaration). Labels count from the unit's `gbase` (compile_unit),
+// so two units' globals never share one.
+def global_entries(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, gdecls: [{ k: str }], gbase: long) -> [{ name: str, label: str, typ: { k: str } }] {
     let f = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: 0, loc: 1, env: [], slots: 0,
       self_label: "", end_label: "", fns: st.fns, bodies: st.bodies };
@@ -6878,7 +6821,7 @@ def global_entries(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc
             t = infer(f, decl_value(d));
             0
         } else { 0; };
-        let lbl = arch.arch_global_label(i, gn);
+        let lbl = arch.arch_global_label(gbase + i, gn);
         out += { name: gn, label: lbl, typ: t };
         f = env_define(f, gn, "global", 0, lbl, t);
         i = i + 1;
@@ -7017,9 +6960,194 @@ def phase_end(times: [{ name: str, us: long, heap: long }], name: str, t0: long,
     { times: times, t: t1, h: h1 }
 };
 
-// ── entry point ────────────────────────────────────────────────────────
+// ── compilation units ──────────────────────────────────────────────────
+// A program is LINKED from units: its own -- the program file and the
+// files it imports, spliced into one text (native_resolve_x) -- and the
+// std units it needs (std_units: std/prelude.y, std/exec.y, std/str.y,
+// std/rt.y). compile_unit takes one unit from AST to assembly text, one
+// body per function; what it sees of another unit is that unit's
+// EXPORTS -- the names, labels and types of its top-level defs -- bound
+// as externs. link_units joins the bodies of all units and shakes them
+// together (prune_bodies), so a std function the program never reaches
+// costs nothing.
+//
+// Labels cannot collide: a unit numbers its uids (function, string and
+// local labels) and its global cells from its own base (std_unit_base;
+// the program's is 0). A unit's top-level statements run in an INIT
+// function; the program's `_start` calls the linked units' inits first,
+// in link order.
+//
+// The program sees the exports of the LIBRARY units (prelude, exec),
+// whose defs are its API. The RUNTIME units (rt, str) hold only `y_`
+// helpers, which generated code calls by fixed label (runtime_base), so
+// they are linked but never bound: the program's checker and emitter
+// scopes stay free of a hundred-odd helper names. A program def wearing
+// a runtime label (a `y_` def of its own) replaces the std body of that
+// label everywhere, std-internal calls included (link_units drops the
+// std one).
 
-def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, debug: bool) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
+def unit_empty(name: str) -> { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } {
+    let fs: [str] = [];
+    let xs: [{ name: str, label: str, typ: { k: str } }] = [];
+    let bs: [str] = [];
+    let ls: [str] = [];
+    let fr: [[str]] = [];
+    let rs: [[str]] = [];
+    let gs: [str] = [];
+    { name: name, files: fs, exports: xs, init: "", bodies: bs, labels: ls, refs: fr, rodata: rs, globals: gs }
+};
+
+def std_unit_src(name: str) -> str {
+    if (name == "prelude") {
+        PRELUDE_SRC
+    } else if (name == "exec") {
+        EXEC_SRC
+    } else if (name == "str") {
+        STR_SRC
+    } else {
+        RT_SRC
+    }
+};
+
+// Where a std unit's uids and global cells start counting (see the
+// section note): far past anything one program numbers -- ycc itself
+// stays under a million.
+def std_unit_base(name: str) -> long {
+    if (name == "prelude") {
+        1000000000
+    } else if (name == "exec") {
+        2000000000
+    } else if (name == "str") {
+        3000000000
+    } else {
+        4000000000
+    }
+};
+
+// A library unit: the program sees its exports (see the section note).
+def std_unit_bound(name: str) -> bool {
+    name == "prelude" || name == "exec"
+};
+
+// Every std unit, in link order (see native_resolve_x).
+def std_unit_names() -> [str] {
+    ["prelude", "exec", "str", "rt"]
+};
+
+// The std units `names` (link order, see native_resolve_x): from `pack`
+// (std_pack) when it has them, else compiled from the embedded sources.
+// exec calls into the prelude (y_stdin_sync), so it sees the prelude's
+// exports -- linked, and so compiled, before it.
+def std_units(names: [str], pack: str) -> [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] {
+    let out: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] = [];
+    if (len(pack) > 0) {
+        out = std_unpack(pack, names);
+        0
+    } else { 0; };
+    if (len(out) == 0) {
+        let i = 0;
+        while (i < len(names)) {
+            let nm: str = names[i];
+            let ext: [{ name: str, label: str, typ: { k: str } }] = [];
+            if (nm == "exec") {
+                let j = 0;
+                while (j < len(out)) {
+                    let u = out[j];
+                    if (u.name == "prelude") { ext += u.exports; 0; } else { 0; };
+                    j = j + 1;
+                };
+                0
+            } else { 0; };
+            out += std_compile(nm, ext);
+            i = i + 1;
+        };
+        0
+    } else { 0; };
+    out
+};
+
+// One std unit, from its embedded source. It always carries its `.loc`
+// markers (link_units strips them unless -g), so it compiles the same
+// for every program. A failure here is the compiler's own bug: reported
+// as one, and the run ends.
+def std_compile(name: str, ext: [{ name: str, label: str, typ: { k: str } }]) -> { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } {
+    let path = "std/" + name + ".y";
+    let toks = lexer.tokenize(std_text(std_unit_src(name)));
+    let ast = parser.parse_program(toks);
+    let noimports: [str] = [];
+    let nolines: [long] = [];
+    let noinits: [str] = [];
+    let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines }, true, name, std_unit_base(name), ext, noinits);
+    if (!r.ok) {
+        let errs = r.errors;
+        let k = 0;
+        while (k < len(errs)) {
+            let e = errs[k];
+            puts("ycc: internal error: " + path + ":" + tostring(e.line) + ":" + tostring(e.col) + ": " + e.msg + "\n");
+            k = k + 1;
+        };
+        exit(1);
+        0
+    } else { 0; };
+    r.unit
+};
+
+// The name a renamed top-level def was written with, or "" for one a
+// later def of the same name replaced (rename.y's `name$shadowK`).
+def export_name(n: str) -> str {
+    let d = index_of(n, "$");
+    if (d < 0) {
+        n
+    } else if (is_all_digits(n[d + 1:])) {
+        n[:d]
+    } else {
+        ""
+    }
+};
+
+// A unit's exports: its top-level defs, by the names they were written
+// with, with the labels and types `fns` gives them. hdefs holds them in
+// statement order (a def's nested ones follow it), and fns starts with
+// hdefs' entries.
+def unit_exports(stmts: [{ k: str }], hdefs: [{ name: str, func: { k: str } }], fns: [{ name: str, label: str, typ: { k: str } }]) -> [{ name: str, label: str, typ: { k: str } }] {
+    let out: [{ name: str, label: str, typ: { k: str } }] = [];
+    let h = 0;
+    let i = 0;
+    while (i < len(stmts)) {
+        let nm = top_def_name(stmts[i]);
+        if (len(nm) > 0) {
+            let h0 = h;
+            let found = false;
+            while (!found && h < len(hdefs)) {
+                let hd = hdefs[h];
+                if (hd.name == nm) { found = true; 0; } else { h = h + 1; 0; };
+            };
+            if (found) {
+                let xn = export_name(nm);
+                if (len(xn) > 0) {
+                    let fe = fns[h];
+                    out += { name: xn, label: fe.label, typ: fe.typ };
+                    0
+                } else { 0; };
+                h = h + 1;
+                0
+            } else {
+                h = h0;
+                0
+            };
+            0
+        } else { 0; };
+        i = i + 1;
+    };
+    out
+};
+
+// One unit, AST to assembly text (see the section note). `name` is ""
+// for the program's own unit, whose top-level statements are `_start`,
+// preceded by calls to `inits` (the linked units' init labels); any
+// other unit's are its init function. `ext` holds the externs, bound by
+// name in the checker and the emitter.
+def compile_unit(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, debug: bool, name: str, base: long, ext: [{ name: str, label: str, typ: { k: str } }], inits: [str]) -> { ok: bool, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }], unit: { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } } {
     dbg_lines = debug;
     dbg_file = origin.file;
     dbg_line = origin.line;
@@ -7034,7 +7162,7 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
     let ast3 = rename.rename_program(ast2);
     pr = phase_end(times, "rename", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
-    let errors = types.check_program(ast3);
+    let errors = types.check_program(ast3, ext);
     pr = phase_end(times, "typecheck", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
     // collect every named def (top-level, nested, let-bound)
@@ -7048,7 +7176,7 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
         0
     } else { 0; };
     if (len(errors) > 0) {
-        { ok: false, asm: "", errors: errors, times: times }
+        { ok: false, errors: errors, times: times, unit: unit_empty(name) }
     } else {
         let gdecls = global_decls(ast3.stmts);
         let gnames: [str] = [];
@@ -7057,12 +7185,32 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
             gnames += decl_name(gdecls[gi]);
             gi = gi + 1;
         };
+        // The externs, and the init functions `_start` calls (by their
+        // labels: no Y name has that shape, and the checker never sees
+        // these).
+        let xfns: [{ name: str, label: str, typ: { k: str } }] = [];
+        xfns += ext;
+        let ii = 0;
+        while (ii < len(inits)) {
+            let il: str = inits[ii];
+            xfns += { name: il, label: il, typ: { k: "tfunc", args: [], ret: { k: "tvoid" } } };
+            ii = ii + 1;
+        };
         // A def needing a closure record is emitted where it is created
-        // (gen_decl); every other one is hoisted: a label in st.fns.
-        let capdefs = capturing_defs(defs, gnames);
+        // (gen_decl); every other one is hoisted: a label in st.fns. A
+        // call to an extern is no capture either.
+        let cexcl: [str] = [];
+        cexcl += gnames;
+        cexcl += fn_names_of(ext);
+        let capdefs = capturing_defs(defs, cexcl);
         let hdefs: [{ name: str, func: { k: str } }] = [];
-        // assign labels + env entries (also pre-binds for calls)
+        // assign labels + env entries (also pre-binds for calls); the
+        // unit's uids count from its base
         let st = st_new();
+        st = { out: st.out, rodata: st.rodata, uid: base + 1,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+          bodies: st.bodies };
         let r = next_uid(st);
         st = r.st;
         let i = 0;
@@ -7084,18 +7232,31 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
             };
             i = i + 1;
         };
-        // Fill in the return type of every unannotated def, so call sites
-        // know what a call yields; then type the globals with those, and
-        // redo the defs that read a global (they now know its type). The
-        // globals sit after the defs in st.fns (see fns_kind).
-        let fixed1 = fix_fn_types(st, hdefs, []);
+        // The externs go after the hoisted defs (fix_fn_types and the
+        // emission loop read those by position), the globals after both
+        // (see fns_kind).
+        let fns0: [{ name: str, label: str, typ: { k: str } }] = [];
+        fns0 += st.fns;
+        fns0 += xfns;
         st = { out: st.out, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-          self_label: st.self_label, end_label: st.end_label, fns: fixed1,
+          self_label: st.self_label, end_label: st.end_label, fns: fns0,
           bodies: st.bodies };
-        let gl = app_cells(global_entries(st, gdecls), ast3.stmts);
+        // Fill in the return type of every unannotated def, so call sites
+        // know what a call yields; then type the globals with those, and
+        // redo the defs that read a global (they now know its type).
+        let fixed1 = fix_fn_types(st, hdefs, []);
+        let fns1: [{ name: str, label: str, typ: { k: str } }] = [];
+        fns1 += fixed1;
+        fns1 += xfns;
+        st = { out: st.out, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          self_label: st.self_label, end_label: st.end_label, fns: fns1,
+          bodies: st.bodies };
+        let gl = app_cells(global_entries(st, gdecls, base), ast3.stmts);
         let fixedfns: [{ name: str, label: str, typ: { k: str } }] = [];
         fixedfns += fixed1;
+        fixedfns += xfns;
         fixedfns += gl;
         if (len(gl) > 0) {
             st = { out: st.out, rodata: st.rodata, uid: st.uid,
@@ -7105,6 +7266,7 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
             let fixed2 = fix_fn_types(st, hdefs, gnames);
             fixedfns = [];
             fixedfns += fixed2;
+            fixedfns += xfns;
             fixedfns += gl;
             0
         } else { 0; };
@@ -7125,12 +7287,20 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
         };
         pr = phase_end(times, "emit_fns", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
-        // main = program with hoisted defs skipped (emitted above, calls go
-        // direct to their labels). Variable declarations store to their
-        // globals (bind_decl). A def needing a record would be created
-        // here like a nested one — but a top-level def can only read
-        // globals and functions, so none does.
-        let main_stmts = [];
+        let exports = unit_exports(ast3.stmts, hdefs, st.fns);
+        // The top-level statements with hoisted defs skipped (emitted
+        // above, calls go direct to their labels). Variable declarations
+        // store to their globals (bind_decl). A def needing a record would
+        // be created here like a nested one — but a top-level def can only
+        // read globals and functions, so none does.
+        let main_stmts: [{ k: str }] = [];
+        let noargs: [{ k: str }] = [];
+        let ci = 0;
+        while (ci < len(inits)) {
+            let cl: str = inits[ci];
+            main_stmts += { k: "call", callee: { k: "id", v: cl, line: 0, col: 0 }, args: noargs, line: 0, col: 0 };
+            ci = ci + 1;
+        };
         let pstmts = ast3.stmts;
         let i = 0;
         while (i < len(pstmts)) {
@@ -7161,90 +7331,469 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
         };
         let rm = next_uid(st);
         st = rm.st;
-        // Only pay for argv materialization when the program uses it.
-        let want = uses_scan_block(ast3.stmts, { argv: false });
-        st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, [], "");
+        let init = "";
+        if (len(name) == 0) {
+            // Only pay for argv materialization when the program uses it.
+            let want = uses_scan_block(ast3.stmts, { argv: false });
+            st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, [], "");
+            0
+        } else if (len(main_stmts) > 0) {
+            init = arch.arch_fn_label(rm.uid, "init");
+            st = emit_one_fn(st, init, rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts }, line: 0 }, false, false, [], "");
+            0
+        } else { 0; };
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
-        // assemble the file. Body-level tree shaking comes first: its
-        // output is also the root set for shaking the arch prelude, and
-        // the kept prelude's references shake the rodata constants.
-        let allbodies = st.bodies;
-        let shaken = prune_bodies(allbodies, arch.arch_prelude());
-        let bodies = shaken.bodies;
-        let body_refs = shaken.refs;
-        // Piece-list + single join: `asm = asm + piece` per iteration is
-        // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
-        // the arena never frees), which OOMs on self-compilation.
-        let pieces: [str] = [];
-        let b = 0;
-        while (b < len(bodies)) {
-            pieces += bodies[b];
-            pieces += "\n";
-            b = b + 1;
+        let glabels: [str] = [];
+        let gk = 0;
+        while (gk < len(gl)) {
+            let ge = gl[gk];
+            glabels += ge.label;
+            gk = gk + 1;
         };
-        let body_text = join(pieces, "");
-        let asm = arch.arch_header();
-        if (dbg_lines) {
-            asm = file_dirs(origin.files) + asm;
-            0
-        } else { 0; };
-        let prelude_text = shake_refs(arch.arch_prelude(), body_refs);
-        asm = asm + arch.arch_text() + prelude_text;
-        asm = asm + body_text;
-        let const_refs = text_refs(prelude_text, true);
-        let ci = 0;
-        while (ci < len(body_refs)) {
-            const_refs += [body_refs[ci]];
-            ci = ci + 1;
+        // Each body's label and the labels it references: what linking
+        // shakes by (prune_bodies), worked out once here.
+        let ubodies = st.bodies;
+        let blabels: [str] = [];
+        let brefs: [[str]] = [];
+        let bk = 0;
+        while (bk < len(ubodies)) {
+            let ub: str = ubodies[bk];
+            blabels += body_label(ub);
+            brefs += [text_refs(ub, true)];
+            bk = bk + 1;
         };
-        let consts_text = shake_refs(arch.arch_consts(), const_refs);
-        asm = asm + arch.arch_rodata() + consts_text;
-        let allrod = st.rodata;
-        let s2 = 0;
-        let rodpieces: [str] = [];
-        while (s2 < len(allrod)) {
-            let pair = allrod[s2];
-            // String entries are exactly [label, len, escaped]; shape
-            // tables (see gen_reclit note) are longer and all-strings.
-            if (len(pair) == 3) {
-                rodpieces += pair[0] + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + pair[2] + "\"\n";
-                0
-            } else {
-                rodpieces += pair[0] + ":\n";
-                let q = 2;
-                while (q < len(pair)) {
-                    rodpieces += ".quad " + pair[q] + "\n";
-                    q = q + 1;
-                };
-                0
-            };
-            s2 = s2 + 1;
-        };
-        asm = asm + join(rodpieces, "");
-        // .bss: the allocator's cells when the kept prelude still uses
-        // them, then one cell per global.
-        let heap_text = shake_refs(arch.arch_heap_cells(), const_refs);
-        if (len(gl) > 0 || len(heap_text) > 0) {
-            let gpieces: [str] = [];
-            gpieces += arch.arch_bss();
-            gpieces += heap_text;
-            let gk = 0;
-            while (gk < len(gl)) {
-                let ge = gl[gk];
-                gpieces += arch.arch_global_cell(ge.label);
-                gk = gk + 1;
-            };
-            asm = asm + join(gpieces, "");
-            0
-        } else { 0; };
-        pr = phase_end(times, "asm_text", pt, ph);
-        times = pr.times; pt = pr.t; ph = pr.h;
-        { ok: true, asm: asm, errors: errors, times: times }
+        let unit = { name: name, files: origin.files, exports: exports, init: init,
+          bodies: ubodies, labels: blabels, refs: brefs, rodata: st.rodata,
+          globals: glabels };
+        { ok: true, errors: errors, times: times, unit: unit }
     }
 };
 
-export { emit_program, native_resolve, native_resolve_x, origin_at, strip_ns, strip_list, strip_decl, phase_end };
+// A std body's `.loc` markers -- every one says file 1, the unit's only
+// file (std_compile) -- renumbered to the unit's place `f` in the
+// program's `.file` table under -g, dropped otherwise.
+def link_locs(b: str, f: long) -> str {
+    let parts = split(b, "\n.loc 1 ");
+    if (len(parts) == 1) {
+        b
+    } else if (dbg_lines) {
+        join(parts, "\n.loc " + tostring(f) + " ")
+    } else {
+        let out: [str] = [];
+        out += parts[0];
+        let i = 1;
+        while (i < len(parts)) {
+            let p: str = parts[i];
+            let nl = index_of(p, "\n");
+            if (nl >= 0) { out += p[nl:]; 0; } else { 0; };
+            i = i + 1;
+        };
+        join(out, "")
+    }
+};
+
+// One unit's rodata entries as text. String entries are exactly [label,
+// len, escaped]; shape tables (see gen_reclit note) are longer and
+// all-strings.
+def rodata_pieces(pieces: [str], allrod: [[str]]) -> [str] {
+    let s2 = 0;
+    while (s2 < len(allrod)) {
+        let pair = allrod[s2];
+        if (len(pair) == 3) {
+            pieces += pair[0] + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + pair[2] + "\"\n";
+            0
+        } else {
+            pieces += pair[0] + ":\n";
+            let q = 2;
+            while (q < len(pair)) {
+                pieces += ".quad " + pair[q] + "\n";
+                q = q + 1;
+            };
+            0
+        };
+        s2 = s2 + 1;
+    };
+    pieces
+};
+
+// The program's assembly text: the bodies of the std units (link order)
+// and then the program's, shaken together; the arch prelude and
+// constants the kept bodies reach; every unit's rodata; the .bss cells.
+def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }], prog: { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }) -> str {
+    let nstd = len(std);
+    let nprog = len(prog.files);
+    // -g: the program's files, then the std units' -- the last linked
+    // first, the order the std chunks were numbered in when they were
+    // spliced into the program's text.
+    let files: [str] = [];
+    files += prog.files;
+    let k = nstd - 1;
+    while (k >= 0) {
+        let uk = std[k];
+        files += uk.files;
+        k = k - 1;
+    };
+    // The runtime labels the program defines (every runtime label starts
+    // `y_`).
+    let plabels: [str] = [];
+    let plab = prog.labels;
+    let pi = 0;
+    while (pi < len(plab)) {
+        let pl: str = plab[pi];
+        if (pl[:2] == "y_") { plabels += pl; 0; } else { 0; };
+        pi = pi + 1;
+    };
+    // Every body, with its label, its references, and the `.file` number
+    // of its std unit (0: the program's own).
+    let all: [str] = [];
+    let labels: [str] = [];
+    let refs: [[str]] = [];
+    let fno: [long] = [];
+    let j = 0;
+    while (j < nstd) {
+        let u = std[j];
+        let f = nprog + nstd - j;
+        let ub = u.bodies;
+        let ul = u.labels;
+        let ur = u.refs;
+        let b = 0;
+        while (b < len(ub)) {
+            let lb: str = ul[b];
+            let drop = false;
+            if (len(plabels) > 0) {
+                if (lb[:2] == "y_") { drop = name_in(plabels, lb); 0; } else { 0; };
+                0
+            } else { 0; };
+            if (!drop) {
+                all += ub[b];
+                labels += lb;
+                refs += [ur[b]];
+                fno += f;
+                0
+            } else { 0; };
+            b = b + 1;
+        };
+        j = j + 1;
+    };
+    let pbodies = prog.bodies;
+    let prefs = prog.refs;
+    let pb2 = 0;
+    while (pb2 < len(pbodies)) {
+        all += pbodies[pb2];
+        labels += plab[pb2];
+        refs += [prefs[pb2]];
+        fno += 0;
+        pb2 = pb2 + 1;
+    };
+    // Body-level tree shaking comes first: its output is also the root
+    // set for shaking the arch prelude, and the kept prelude's references
+    // shake the rodata constants.
+    let shaken = prune_bodies(labels, refs, arch.arch_prelude());
+    let keep = shaken.keep;
+    let body_refs = shaken.refs;
+    // Piece-list + single join: `asm = asm + piece` per iteration is
+    // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
+    // the arena never frees), which OOMs on self-compilation.
+    let pieces: [str] = [];
+    let ab = 0;
+    while (ab < len(all)) {
+        if (keep[ab]) {
+            let kb: str = all[ab];
+            let kf = fno[ab];
+            if (kf > 0) { kb = link_locs(kb, kf); 0; } else { 0; };
+            pieces += kb;
+            pieces += "\n";
+            0
+        } else { 0; };
+        ab = ab + 1;
+    };
+    let body_text = join(pieces, "");
+    let asm = arch.arch_header();
+    if (dbg_lines) {
+        asm = file_dirs(files) + asm;
+        0
+    } else { 0; };
+    let prelude_text = shake_refs(arch.arch_prelude(), body_refs);
+    asm = asm + arch.arch_text() + prelude_text;
+    asm = asm + body_text;
+    let const_refs = text_refs(prelude_text, true);
+    let ci = 0;
+    while (ci < len(body_refs)) {
+        const_refs += [body_refs[ci]];
+        ci = ci + 1;
+    };
+    let consts_text = shake_refs(arch.arch_consts(), const_refs);
+    asm = asm + arch.arch_rodata() + consts_text;
+    // every unit's rodata and globals, in link order
+    let rodpieces: [str] = [];
+    let gls: [str] = [];
+    let ju = 0;
+    while (ju < nstd) {
+        let u = std[ju];
+        rodpieces = rodata_pieces(rodpieces, u.rodata);
+        gls += u.globals;
+        ju = ju + 1;
+    };
+    rodpieces = rodata_pieces(rodpieces, prog.rodata);
+    gls += prog.globals;
+    asm = asm + join(rodpieces, "");
+    // .bss: the allocator's cells when the kept prelude still uses
+    // them, then one cell per global.
+    let heap_text = shake_refs(arch.arch_heap_cells(), const_refs);
+    if (len(gls) > 0 || len(heap_text) > 0) {
+        let gpieces: [str] = [];
+        gpieces += arch.arch_bss();
+        gpieces += heap_text;
+        let gk = 0;
+        while (gk < len(gls)) {
+            gpieces += arch.arch_global_cell(gls[gk]);
+            gk = gk + 1;
+        };
+        asm = asm + join(gpieces, "");
+        0
+    } else { 0; };
+    asm
+};
+
+// ── the std pack ───────────────────────────────────────────────────────
+// The std units, compiled ahead of time and carried by the ycc binary
+// itself (`ycc --std-pack FILE` writes them; the build appends that file
+// to the ycc that wrote it, see ycc.y self_pack): a program then links
+// them as they are instead of compiling the runtime from source every
+// time. A pack is text: a version line, the number of units, then each
+// unit as its name and its fields -- every field a netstring
+// (`<len>:<bytes>`), every list its count followed by its items, and a
+// unit's fields one netstring together, so a reader steps over a unit it
+// does not want. An export's type travels as types.tstr text, parsed
+// back only for the units a program binds (std_unit_bound): nobody reads
+// the types of rt's or str's.
+
+def pack_version() -> str {
+    "ycc-std-pack 1\n"
+};
+
+def pack_put(out: [str], s: str) -> [str] {
+    out += tostring(len(s));
+    out += ":";
+    out += s;
+    out
+};
+
+def pack_strs(out: [str], xs: [str]) -> [str] {
+    out = pack_put(out, tostring(len(xs)));
+    let i = 0;
+    while (i < len(xs)) {
+        out = pack_put(out, xs[i]);
+        i = i + 1;
+    };
+    out
+};
+
+// An export's type, from its tstr text.
+def pack_type(s: str) -> { k: str } {
+    let r = parser.parse_type_full(lexer.tokenize(s), 0);
+    r.node
+};
+
+// One unit's fields. Every export type must come back from its text
+// unchanged, or the pack would hand programs a different type: ycc
+// refuses to write such a pack.
+def pack_unit_fields(u: { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }) -> str {
+    let out: [str] = [];
+    out = pack_strs(out, u.files);
+    let xs = u.exports;
+    out = pack_put(out, tostring(len(xs)));
+    let j = 0;
+    while (j < len(xs)) {
+        let x = xs[j];
+        let ts = types.tstr(x.typ);
+        if (types.tstr(pack_type(ts)) != ts) {
+            puts("ycc: internal error: std/" + u.name + ".y: the type of " + x.name + " (" + ts + ") does not survive the pack\n");
+            exit(1);
+            0
+        } else { 0; };
+        out = pack_put(out, x.name);
+        out = pack_put(out, x.label);
+        out = pack_put(out, ts);
+        j = j + 1;
+    };
+    out = pack_put(out, u.init);
+    out = pack_strs(out, u.bodies);
+    out = pack_strs(out, u.labels);
+    let rf = u.refs;
+    out = pack_put(out, tostring(len(rf)));
+    j = 0;
+    while (j < len(rf)) {
+        out = pack_strs(out, rf[j]);
+        j = j + 1;
+    };
+    let rd = u.rodata;
+    out = pack_put(out, tostring(len(rd)));
+    j = 0;
+    while (j < len(rd)) {
+        out = pack_strs(out, rd[j]);
+        j = j + 1;
+    };
+    out = pack_strs(out, u.globals);
+    join(out, "")
+};
+
+// The pack of `units`.
+def std_pack(units: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }]) -> str {
+    let out: [str] = [];
+    out += pack_version();
+    out = pack_put(out, tostring(len(units)));
+    let i = 0;
+    while (i < len(units)) {
+        let u = units[i];
+        out = pack_put(out, u.name);
+        out = pack_put(out, pack_unit_fields(u));
+        i = i + 1;
+    };
+    join(out, "")
+};
+
+// Reading a pack: `cur` is the text and the position in it. pack_len
+// reads a netstring's length, leaving the cursor at its text.
+def pack_len(cur: { s: str, p: long }) -> long {
+    let s = cur.s;
+    let p = cur.p;
+    let n = 0;
+    let c = byte_at(s, p);
+    while (c != 58 && p < len(s)) {
+        n = n * 10 + c - 48;
+        p = p + 1;
+        c = byte_at(s, p);
+    };
+    cur.p = p + 1;
+    n
+};
+
+def pack_get(cur: { s: str, p: long }) -> str {
+    let n = pack_len(cur);
+    let p = cur.p;
+    let s = cur.s;
+    cur.p = p + n;
+    s[p:p + n]
+};
+
+def pack_num(cur: { s: str, p: long }) -> long {
+    tonum(pack_get(cur))
+};
+
+def pack_get_strs(cur: { s: str, p: long }) -> [str] {
+    let n = pack_num(cur);
+    let out: [str] = [];
+    let i = 0;
+    while (i < n) {
+        out += pack_get(cur);
+        i = i + 1;
+    };
+    out
+};
+
+// The unit `name`, from its fields at the cursor (see pack_unit_fields).
+def pack_unit(cur: { s: str, p: long }, name: str) -> { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } {
+    let files = pack_get_strs(cur);
+    let bound = std_unit_bound(name);
+    let xs: [{ name: str, label: str, typ: { k: str } }] = [];
+    let nx = pack_num(cur);
+    let j = 0;
+    while (j < nx) {
+        let xn = pack_get(cur);
+        let xl = pack_get(cur);
+        let ts = pack_get(cur);
+        let xt = { k: "tnone" };
+        if (bound) { xt = pack_type(ts); 0; } else { 0; };
+        xs += { name: xn, label: xl, typ: xt };
+        j = j + 1;
+    };
+    let init = pack_get(cur);
+    let bodies = pack_get_strs(cur);
+    let labels = pack_get_strs(cur);
+    let refs: [[str]] = [];
+    let nr = pack_num(cur);
+    j = 0;
+    while (j < nr) {
+        refs += [pack_get_strs(cur)];
+        j = j + 1;
+    };
+    let rodata: [[str]] = [];
+    let nd = pack_num(cur);
+    j = 0;
+    while (j < nd) {
+        rodata += [pack_get_strs(cur)];
+        j = j + 1;
+    };
+    let globals = pack_get_strs(cur);
+    { name: name, files: files, exports: xs, init: init, bodies: bodies,
+      labels: labels, refs: refs, rodata: rodata, globals: globals }
+};
+
+// The units `names` from a pack, in that order; [] for a pack of another
+// version, or one missing any of them.
+def std_unpack(pack: str, names: [str]) -> [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] {
+    let out: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] = [];
+    let ver = pack_version();
+    if (pack[:len(ver)] == ver) {
+        let cur = { s: pack, p: len(ver) };
+        let n = pack_num(cur);
+        let got: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] = [];
+        let i = 0;
+        while (i < n) {
+            let nm = pack_get(cur);
+            let ul = pack_len(cur);
+            let at = cur.p;
+            if (name_in(names, nm)) { got += pack_unit(cur, nm); 0; } else { 0; };
+            cur.p = at + ul;
+            i = i + 1;
+        };
+        let k = 0;
+        while (k < len(names)) {
+            let want: str = names[k];
+            let a = 0;
+            while (a < len(got)) {
+                let u = got[a];
+                if (u.name == want) { out += u; 0; } else { 0; };
+                a = a + 1;
+            };
+            k = k + 1;
+        };
+        if (len(out) != len(names)) { out = []; 0; } else { 0; };
+        0
+    } else { 0; };
+    out
+};
+
+// ── entry point ────────────────────────────────────────────────────────
+
+// The program's unit, compiled against the std units `std` (std_units)
+// and linked with them.
+def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, debug: bool, std: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }]) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
+    let ext: [{ name: str, label: str, typ: { k: str } }] = [];
+    let inits: [str] = [];
+    let i = 0;
+    while (i < len(std)) {
+        let u = std[i];
+        if (std_unit_bound(u.name)) { ext += u.exports; 0; } else { 0; };
+        if (len(u.init) > 0) { inits += u.init; 0; } else { 0; };
+        i = i + 1;
+    };
+    let r = compile_unit(ast, imports, origin, debug, "", 0, ext, inits);
+    let times = r.times;
+    if (r.ok) {
+        let pt = clock_us();
+        let ph = heap_used();
+        let asm = link_units(std, r.unit);
+        let pr = phase_end(times, "asm_text", pt, ph);
+        { ok: true, asm: asm, errors: r.errors, times: pr.times }
+    } else {
+        { ok: false, asm: "", errors: r.errors, times: times }
+    }
+};
+
+export { emit_program, std_units, std_unit_names, std_pack, native_resolve, native_resolve_x, origin_at, strip_ns, strip_list, strip_decl, phase_end };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and
