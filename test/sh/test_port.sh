@@ -7,7 +7,7 @@
 # rejection fails. Only exit 1 counts as
 # a rejection — a timeout (124), a crash or a missing file is never
 # "rejected by both", it is a bug or a wedged compiler.
-# Usage: ./test/sh/test_port.sh
+# Usage: ./test/sh/test_port.sh   (YSHARD=K/N: one shard of it, see lib.sh)
 
 source "$(dirname "$0")/lib.sh"
 
@@ -41,12 +41,13 @@ port_check() {
     rm -f "$binr" "$binc"
 }
 
-# every test program
+# every test program, then the compiler itself — the biggest and most
+# important input. YPORT_SELF=0 leaves the compiler out, for a caller that
+# has just compared the C copy's build of it with $YREF (`make test` after
+# `make ycc`, `make check`, `make rebless`).
 while IFS= read -r f; do
-    port_check "$f"
-done < <(find "$ROOT/test/y" -name '*.y' | sort)
-
-# and the compiler itself — the biggest and most important input
-port_check "$ROOT/src/y/ycc.y"
+    next_case && port_check "$f"
+done < <(find "$ROOT/test/y" -name '*.y' | sort
+         [ "${YPORT_SELF:-1}" = 0 ] || echo "$ROOT/src/y/ycc.y")
 
 print_summary "port"

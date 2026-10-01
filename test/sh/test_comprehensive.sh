@@ -2,7 +2,7 @@
 # Comprehensive test suite for the Y language: every feature group below runs
 # its snippet through BOTH compilers — the reference compiler (-q through the
 # shim) and the C copy — and the expected text must appear on both sides.
-# Usage: ./test/sh/test_comprehensive.sh
+# Usage: ./test/sh/test_comprehensive.sh   (YSHARD=K/N: one shard, lib.sh)
 
 source "$(dirname "$0")/lib.sh"   # ROOT, YBOOT, YTIMEOUT_SCALE, PASS/FAIL, colors
 
@@ -14,6 +14,7 @@ RUN_TO=10                           # run the produced binary (never sanitized)
 # on both sides. A compile failure IS the C copy's output, so the same helper
 # covers the error-message tests.
 run_test() {
+    next_case || return 0
     local name="$1"
     local code="$2"
     local expected="$3"
@@ -46,8 +47,7 @@ run_test() {
     if echo "$bin_out" | grep -qF -- "$expected"; then bin_ok=1; fi
 
     if [ $vm_ok -eq 1 ] && [ $bin_ok -eq 1 ]; then
-        echo -e "${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
+        pass "$name"
     else
         echo -e "${RED}FAIL${NC} $name"
         [ $vm_ok -eq 0 ] && echo "  REF missing: $expected (got: $vm_out)"
@@ -60,6 +60,7 @@ run_test() {
 # accepts a text match, and the empty expected value matches any output at
 # all, so this one case needs an exact comparison.
 silent_test() {
+    next_case || return 0
     local name="$1"
     local code="$2"
 
@@ -81,8 +82,7 @@ silent_test() {
     rm -f "$tmpfile" "$binfile"
 
     if [ $vm_exit -eq 0 ] && [ $bin_exit -eq 0 ] && [ -z "$vm_out" ] && [ -z "$bin_out" ]; then
-        echo -e "${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
+        pass "$name"
     else
         echo -e "${RED}FAIL${NC} $name"
         echo "  REF(ec=$vm_exit): '$vm_out'"

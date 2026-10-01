@@ -6,15 +6,17 @@
 #
 # where <bench> is a file stem from bench/y/ (or "self" for compiling the
 # compiler's own source) and metric is one of:
-#   compile_us    wall time to compile the benchmark, median of [runs]
-#   run_us        wall time to run the produced binary, median of [runs]
+#   compile_us    wall time to compile the benchmark, median of [runs] runs
+#                 (or more, see samples() below)
+#   run_us        wall time to run the produced binary, likewise
 #   binary_bytes  size of the produced executable
 #   asm_bytes     size of `ycc -S` output
 #   heap_kb       arena high water of the compile (--time, self only)
 #   asm_lines     lines of `ycc -S` output (self only)
 #
 # These programs are benchmarks, not tests: nothing under bench/ runs in
-# the test suites. See bench/README.md.
+# the test suites. See bench/README.md; bench/compare.sh measures two
+# builds side by side.
 
 set -u
 if [ $# -lt 1 ]; then
@@ -28,8 +30,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d /tmp/ybench.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
-now_us() { echo $(( $(date +%s%N) / 1000 )); }
-
 median() {
     sort -n | awk '{ a[NR] = $1 } END {
         if (NR == 0) { print 0 }
@@ -38,41 +38,46 @@ median() {
     }'
 }
 
+# samples CMD...: the wall times of CMD in us, one per line — RUNS runs,
+# and more while they add up to under 0.2 s (10 at most). One run of a
+# 20 ms program swings by 20% on a busy machine; the median of ten by a
+# few percent. Fails if CMD does.
+samples() {
+    local t0 t1 n=0 total=0
+    while [ $n -lt "$RUNS" ] || { [ $total -lt 200000 ] && [ $n -lt 10 ]; }; do
+        t0=${EPOCHREALTIME/./}
+        "$@" </dev/null >/dev/null 2>&1 || return 1
+        t1=${EPOCHREALTIME/./}
+        echo $((t1 - t0))
+        total=$((total + t1 - t0))
+        n=$((n + 1))
+    done
+}
+
 # compile_us SOURCE OUTBIN
 compile_us() {
-    local t0 t1
-    for ((i = 0; i < RUNS; i++)); do
-        t0=$(now_us)
-        if ! "$YCC" -o "$2" "$1" </dev/null >/dev/null 2>&1; then
-            echo "bench: ycc failed on $1" >&2
-            exit 1
-        fi
-        t1=$(now_us)
-        echo $((t1 - t0))
-    done | median
+    local t
+    t=$(samples "$YCC" -o "$2" "$1") || { echo "bench: ycc failed on $1" >&2; return 1; }
+    printf '%s\n' "$t" | median
 }
 
 # run_us BIN
 run_us() {
-    local t0 t1
-    for ((i = 0; i < RUNS; i++)); do
-        t0=$(now_us)
-        if ! "$1" </dev/null >/dev/null 2>&1; then
-            echo "bench: $1 exited nonzero" >&2
-            exit 1
-        fi
-        t1=$(now_us)
-        echo $((t1 - t0))
-    done | median
+    local t
+    t=$(samples "$1") || { echo "bench: $1 exited nonzero" >&2; return 1; }
+    printf '%s\n' "$t" | median
 }
 
+# (an `exit` inside $(...) would leave only the subshell: failures return)
 bench_one() {
-    local name="$1" src="$2"
+    local name="$1" src="$2" t
     local bin="$TMP/$name"
-    echo -e "$name\tcompile_us\t$(compile_us "$src" "$bin")"
+    t=$(compile_us "$src" "$bin") || exit 1
+    echo -e "$name\tcompile_us\t$t"
     echo -e "$name\tbinary_bytes\t$(wc -c <"$bin" | tr -d ' ')"
     echo -e "$name\tasm_bytes\t$("$YCC" -S "$src" </dev/null 2>/dev/null | wc -c | tr -d ' ')"
-    echo -e "$name\trun_us\t$(run_us "$bin")"
+    t=$(run_us "$bin") || exit 1
+    echo -e "$name\trun_us\t$t"
 }
 
 for src in "$ROOT"/bench/y/*.y; do
@@ -88,7 +93,8 @@ done
 # dominates development time). Heap and asm size come from --time's report.
 src="$ROOT/src/y/ycc.y"
 bin="$TMP/self"
-echo -e "self\tcompile_us\t$(compile_us "$src" "$bin")"
+t=$(compile_us "$src" "$bin") || exit 1
+echo -e "self\tcompile_us\t$t"
 echo -e "self\tbinary_bytes\t$(wc -c <"$bin" | tr -d ' ')"
 asm="$("$YCC" -S "$src" </dev/null 2>/dev/null)"
 echo -e "self\tasm_bytes\t$(printf '%s' "$asm" | wc -c | tr -d ' ')"

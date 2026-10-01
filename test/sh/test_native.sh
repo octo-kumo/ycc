@@ -1,7 +1,7 @@
 #!/bin/bash
 # Native backend tests: ycc compiles test/y/native/*.y STRAIGHT TO EXECUTABLES
 # (its own assembler + ELF writer — no cc/as/ld anywhere). Run, compare.
-# Usage: ./test/sh/test_native.sh
+# Usage: ./test/sh/test_native.sh   (YSHARD=K/N: one shard, lib.sh)
 # t*.y: stdout must match t*.expected, exit must match t*.exit (default 0).
 # Stdin comes from t*.stdin when present, else /dev/null.
 # e*.y: ycc must FAIL, and its output must contain the text of EVERY
@@ -65,7 +65,9 @@ run_native() {
         return
     fi
 
-    rm -f /tmp/ynative_test.txt
+    # the one fixed path a fixture writes; only t10 may touch it, so a
+    # shard running beside this one never removes it mid-check
+    [ "$base" = "t10_filewrite" ] && rm -f /tmp/ynative_test.txt
     local err
     err=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
     if [ $? -ne 0 ]; then
@@ -91,23 +93,23 @@ run_native() {
     [ "$ec" != "$want_ec" ] && ok=0
     # exact byte comparison (trailing newlines are significant: print("")
     # outputs a lone newline, so never use $(...) capture here).
-    if ! diff -u "$dir/$base.expected" "$outf" > /tmp/yn_diff.txt 2>&1; then
+    if ! diff -u "$dir/$base.expected" "$outf" > "$outf.diff" 2>&1; then
         ok=0
     fi
     # t10 writes a file; check its contents too
     if [ "$base" = "t10_filewrite" ]; then
         if ! diff -u "$dir/$base.file" /tmp/ynative_test.txt >/dev/null 2>&1; then
             fail "$base" "output file mismatch (want '$(cat "$dir/$base.file" | tr '\n' '|')', got '$(cat /tmp/ynative_test.txt 2>/dev/null | tr '\n' '|')')"
-            rm -f "$bin" "$outf"
+            rm -f "$bin" "$outf" "$outf.diff"
             return
         fi
     fi
     if [ $ok -eq 1 ]; then
         pass "$base"
     else
-        fail "$base" "exit=$ec (want $want_ec), diff: $(head -c 200 /tmp/yn_diff.txt | tr '\n' '|')"
+        fail "$base" "exit=$ec (want $want_ec), diff: $(head -c 200 "$outf.diff" | tr '\n' '|')"
     fi
-    rm -f "$bin" "$outf"
+    rm -f "$bin" "$outf" "$outf.diff"
 }
 
 echo "═══════════════════════════════════════════"
@@ -116,7 +118,7 @@ echo "════════════════════════�
 echo ""
 
 for f in "$ROOT"/test/y/native/t*.y "$ROOT"/test/y/native/e*.y; do
-    run_native "$f"
+    next_case && run_native "$f"
 done
 
 print_summary "native"

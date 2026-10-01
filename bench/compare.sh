@@ -6,16 +6,19 @@
 #     git switch my-change && make ycc     # on the proposal branch
 #     bench/compare.sh /tmp/ycc-base ./ycc
 #
-# Every metric is lower-is-better. The SCORE is 100 x the geometric mean
-# of base/new over every (benchmark, metric) pair of compile time, run time
-# and binary size: 100 = no change, 105 = 5% better overall. The table
-# above it is the detail behind the number — it also carries asm_bytes and
-# asm_lines, which are shown for detail but are NOT part of the score.
+# Every metric is lower-is-better. Each time is the median of [runs] (5)
+# runs per build or more, the two builds run in pairs (see below). The
+# SCORE is 100 x the geometric mean of base/new over every (benchmark,
+# metric) pair of compile time, run time and binary size: 100 = no change,
+# 105 = 5% better overall. The table above it is the detail behind the
+# number — it also carries asm_bytes, asm_lines and heap_kb, which are
+# shown for detail but are NOT part of the score.
 #
 # The last section compares the two builds per function: each benchmark
 # built with -g and run under valgrind's callgrind (instructions executed
 # per function) — that is where a regression gets explained rather than
-# merely measured. See bench/README.md.
+# merely measured. It is bench/profile.sh; BENCH_PROFILE=0 leaves it out
+# (`make check` runs it beside the tests instead). See bench/README.md.
 
 set -u
 if [ $# -lt 2 ]; then
@@ -35,48 +38,104 @@ trap 'rm -rf "$TMP"' EXIT
 
 echo "base:  $BASE"
 echo "new:   $NEW"
-echo "runs:  $RUNS rounds, base and new interleaved (median per metric), all metrics lower-is-better"
+echo "runs:  every time from $RUNS or more pairs of runs, base and new back to back (median per side); all metrics lower-is-better"
 echo
 
-# The two sides take turns, one sample of every metric per turn, and the
-# order flips every round (base-new, new-base, ...). Machine load drifts
-# (other tenants, background work), and run back to back, whichever side
-# went second absorbed all of it: two runs of the SAME binary differed by
-# up to 37% per row that way, the second slower on 10 of 14 time rows.
-: >"$TMP/base.tsv"
-: >"$TMP/new.tsv"
-for ((r = 0; r < RUNS; r++)); do
-    if ((r % 2 == 0)); then
-        "$ROOT/bench/run.sh" "$BASE" 1 >>"$TMP/base.tsv" || exit 1
-        "$ROOT/bench/run.sh" "$NEW" 1 >>"$TMP/new.tsv" || exit 1
+# Every time row is sampled in pairs: a run of base and a run of new back
+# to back, the order flipping every pair. Load on a shared machine comes in
+# bursts of seconds (other tenants, background work), and measured in
+# separate passes, one side caught a burst the other missed: two runs of
+# the SAME binary differed by up to 37% per row that way, still by 25%
+# with ten samples per pass. Paired, a burst lands on both sides alike.
+# Compiles read a copy of the sources in $TMP (under WSL a read from /mnt/c
+# goes over 9P: slow, and noisy), from its root, where imports of std
+# modules resolve (src/y/std/); the benchmarks run in $TMP too.
+TREE="$TMP/tree"
+mkdir -p "$TREE/src" "$TREE/bench" && cp -r "$ROOT/src/y" "$TREE/src/" && cp -r "$ROOT/bench/y" "$TREE/bench/" || exit 2
+cd "$TREE" || exit 2
+
+# one SIDE KIND NAME SRC — one timed run, in us, of side b (base) or n
+# (new): KIND compile builds $TMP/SIDE.NAME from SRC, KIND run runs it.
+one() {
+    local cc="$BASE" t0 t1
+    [ "$1" = n ] && cc="$NEW"
+    if [ "$2" = compile ]; then
+        t0=${EPOCHREALTIME/./}
+        "$cc" -o "$TMP/$1.$3" "$4" </dev/null >/dev/null 2>&1 \
+            || { echo "bench: $cc failed on $4" >&2; return 1; }
+        t1=${EPOCHREALTIME/./}
     else
-        "$ROOT/bench/run.sh" "$NEW" 1 >>"$TMP/new.tsv" || exit 1
-        "$ROOT/bench/run.sh" "$BASE" 1 >>"$TMP/base.tsv" || exit 1
+        cd "$TMP" || return 1
+        t0=${EPOCHREALTIME/./}
+        "./$1.$3" </dev/null >/dev/null 2>&1 \
+            || { echo "bench: $3 built by $cc exited nonzero" >&2; return 1; }
+        t1=${EPOCHREALTIME/./}
+    fi
+    echo $((t1 - t0))
+}
+
+median() {
+    sort -n | awk '{ a[NR] = $1 } END { print (NR % 2) ? a[(NR + 1) / 2] : (a[NR / 2] + a[NR / 2 + 1]) / 2 }'
+}
+
+# row KIND NAME SRC — "NAME:KIND_us<TAB>base<TAB>new": the medians of RUNS
+# pairs, or of more while base's runs add up to under 0.2 s (10 at most):
+# the shorter a program, the noisier one run of it (see bench/README.md).
+# An even number of pairs, so each side goes first equally often.
+row() {
+    local k=0 total=0 tb tn
+    : >"$TMP/sb"
+    : >"$TMP/sn"
+    while [ $k -lt "$RUNS" ] || { [ $total -lt 200000 ] && [ $k -lt 10 ]; } || ((k % 2)); do
+        if ((k % 2 == 0)); then
+            tb=$(one b "$@") && tn=$(one n "$@") || return 1
+        else
+            tn=$(one n "$@") && tb=$(one b "$@") || return 1
+        fi
+        echo "$tb" >>"$TMP/sb"
+        echo "$tn" >>"$TMP/sn"
+        total=$((total + tb))
+        k=$((k + 1))
+    done
+    printf '%s:%s_us\t%s\t%s\n' "$2" "$1" "$(median <"$TMP/sb")" "$(median <"$TMP/sn")"
+}
+
+# Keys are bench:metric — a colon, because bench names (std_io) and metric
+# names (run_us) both carry underscores. Sizes do not vary: measured once.
+# BENCH_SELF=0 leaves out compiling the compiler (the `self` rows).
+progs=("$TREE"/bench/y/*.y)
+[ "${BENCH_SELF:-1}" = 0 ] || progs+=("$TREE/src/y/ycc.y")
+J="$TMP/joined"
+: >"$J"
+for src in "${progs[@]}"; do
+    name="$(basename "$src" .y)"
+    [ "$src" = "$TREE/src/y/ycc.y" ] && name=self
+    row compile "$name" "$src" >>"$J" || exit 1
+    "$BASE" -S "$src" </dev/null >"$TMP/b.s" 2>/dev/null
+    "$NEW" -S "$src" </dev/null >"$TMP/n.s" 2>/dev/null
+    {
+        printf '%s:binary_bytes\t%s\t%s\n' "$name" "$(wc -c <"$TMP/b.$name")" "$(wc -c <"$TMP/n.$name")"
+        printf '%s:asm_bytes\t%s\t%s\n' "$name" "$(wc -c <"$TMP/b.s")" "$(wc -c <"$TMP/n.s")"
+    } >>"$J"
+    if [ "$name" = self ]; then
+        # heap: the arena high water of a whole compile, from --time's report
+        hb="$("$BASE" --time -o "$TMP/b.self" "$src" </dev/null 2>&1 | awk '/TOTAL/ { print $4 }')"
+        hn="$("$NEW" --time -o "$TMP/n.self" "$src" </dev/null 2>&1 | awk '/TOTAL/ { print $4 }')"
+        {
+            printf 'self:asm_lines\t%s\t%s\n' "$(wc -l <"$TMP/b.s")" "$(wc -l <"$TMP/n.s")"
+            printf 'self:heap_kb\t%s\t%s\n' "$hb" "$hn"
+        } >>"$J"
+    else
+        row run "$name" "$src" >>"$J" || exit 1
     fi
 done
+sort -t $'\t' -k1,1 "$J" -o "$J"
 
-# ── scalar metrics: one row per (benchmark, metric) ────────────────────
-# medians <tsv> — "bench_metric<TAB>median over the rounds", sorted for
-# join. Bench names carry no underscores, so `bench_metric` splits back
-# cleanly at the first underscore.
-medians() {
-    awk -F '\t' '{ print $1 "_" $2 "\t" $3 }' "$1" | sort -t $'\t' -k1,1 -k2,2n | awk -F '\t' '
-        function flush() {
-            if (n) print key "\t" ((n % 2) ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2);
-        }
-        $1 != key { flush(); key = $1; n = 0 }
-        { v[++n] = $2 }
-        END { flush() }'
-}
-medians "$TMP/base.tsv" >"$TMP/base.k"
-medians "$TMP/new.tsv" >"$TMP/new.k"
-join -t $'\t' "$TMP/base.k" "$TMP/new.k" >"$TMP/joined"
-
+# ── the table and the score ────────────────────────────────────────────
 awk -F '\t' '
     function fmt(v) { return (v >= 100000) ? sprintf("%d", v) : sprintf("%.1f", v) }
     {
-        split($1, km, "_"); bench = km[1];
-        metric = substr($1, length(bench) + 2);
+        split($1, km, ":"); bench = km[1]; metric = km[2];
         b = $2 + 0; n = $3 + 0;
         pct = (b > 0) ? (100 * (b - n) / b) : 0;
         sign = (pct >= 0) ? "+" : "";
@@ -91,68 +150,8 @@ echo
 SCORE=$(awk '{ s += log($1); n++ } END { if (n) printf "%.2f", 100 * exp(s / n); else print "100.00" }' "$TMP/ratios.txt")
 echo "SCORE: $SCORE   (100 = base, >100 = the new build is better overall)"
 
-# ── per-function profiles ──────────────────────────────────────────────
-# Each benchmark is built with -g on both sides and run once under
-# valgrind's callgrind: instructions executed per function (self Ir).
-# Counts are exact and repeatable where times are noisy, so this is where
-# a regression gets explained rather than merely measured. Joined by
-# function name, worst first; `-` = absent on that side (inlined, renamed,
-# or a build without -g).
-echo
-if ! command -v valgrind >/dev/null 2>&1 || ! command -v callgrind_annotate >/dev/null 2>&1; then
-    echo "per-function profile: skipped (needs valgrind and callgrind_annotate)"
-    exit 0
-fi
-
-# ir_table <callgrind.out> — "function<TAB>Ir" lines, plus "TOTAL<TAB>Ir".
-# A row is "1,234 ( 5.67%)  file:function [object]"; recursion levels
-# (callgrind's name'2) fold into their function.
-ir_table() {
-    callgrind_annotate --threshold=100 "$1" 2>/dev/null | awk -v q="'" '
-        /^ *[0-9,]+ +\( *[0-9.]+%\)/ {
-            ir = $1; gsub(/,/, "", ir);
-            fn = $0;
-            sub(/^ *[0-9,]+ +\( *[0-9.]+%\) +/, "", fn);
-            sub(/ +\[[^]]*\] *$/, "", fn);
-            if (fn == "PROGRAM TOTALS") { fn = "TOTAL" }
-            else { sub(/^[^:]*:/, "", fn); sub(q "[0-9]+$", "", fn); gsub(/ /, "_", fn) }
-            sum[fn] += ir;
-        }
-        END { for (f in sum) printf "%s\t%.0f\n", f, sum[f] }'
-}
-
-echo "per-function profile (instructions executed, self; callgrind on -g builds):"
-for src in "$ROOT"/bench/y/*.y; do
-    name="$(basename "$src" .y)"
-    for side in b n; do
-        cc="$NEW"
-        [ "$side" = b ] && cc="$BASE"
-        : >"$TMP/$side.$name.ir"
-        "$cc" -g -o "$TMP/$side.$name" "$src" </dev/null >/dev/null 2>&1 || continue
-        valgrind --tool=callgrind --show-below-main=yes --callgrind-out-file="$TMP/$side.$name.cg" \
-            "$TMP/$side.$name" </dev/null >/dev/null 2>&1
-        ir_table "$TMP/$side.$name.cg" >"$TMP/$side.$name.ir"
-    done
+# ── per-function profiles: bench/profile.sh ─────────────────────────────
+if [ "${BENCH_PROFILE:-1}" != 0 ]; then
     echo
-    awk -F '\t' -v name="$name" '
-        FILENAME == ARGV[1] { b[$1] = $2; next }
-        { n[$1] = $2 }
-        END {
-            bt = ("TOTAL" in b) ? b["TOTAL"] : "-"; nt = ("TOTAL" in n) ? n["TOTAL"] : "-";
-            d = (bt != "-" && nt != "-" && bt > 0) ? sprintf("  %+.2f%%", 100 * (nt - bt) / bt) : "";
-            printf "--- %s   total Ir: base %s, new %s%s\n", name, bt, nt, d;
-        }' "$TMP/b.$name.ir" "$TMP/n.$name.ir"
-    printf "  %-20s %14s %14s %10s\n" "function" "Ir_base" "Ir_new" "delta"
-    awk -F '\t' '
-        FILENAME == ARGV[1] { b[$1] = $2; seen[$1] = 1; next }
-        { n[$1] = $2; seen[$1] = 1 }
-        END {
-            for (f in seen) {
-                if (f == "TOTAL") continue;
-                key = (f in b) ? b[f] : n[f];
-                d = ((f in b) && (f in n) && b[f] > 0) ? sprintf("%+.1f%%", 100 * (n[f] - b[f]) / b[f]) : "n/a";
-                printf "%.0f\t%s\t%s\t%s\t%s\n", key, f, (f in b) ? b[f] : "-", (f in n) ? n[f] : "-", d;
-            }
-        }' "$TMP/b.$name.ir" "$TMP/n.$name.ir" | sort -t $'\t' -k1,1nr | head -8 | \
-    awk -F '\t' '{ printf "  %-20s %14s %14s %10s\n", $2, $3, $4, $5 }'
-done
+    "$ROOT/bench/profile.sh" "$BASE" "$NEW"
+fi

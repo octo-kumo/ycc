@@ -16,12 +16,13 @@
 # regression before raising the cap.
 #
 # Usage: ./test/sh/test_fixpoint.sh
-# Skips (exit 0) if ./ycc is not built; build it with `make ycc`.
+# Skips (exit 0) if ./ycc is not built; build it with `make ycc`. YSELF names
+# another self-hosted build to check instead (`make check`: ./ynew).
 
 PASS=0
 FAIL=0
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-YCC_BIN="$ROOT/ycc"
+YCC_BIN="${YSELF:-$ROOT/ycc}"
 SRC="$ROOT/src/y/ycc.y"
 FP_MEM_KB="${FP_MEM_KB:-2097152}"
 ulimit -v "$FP_MEM_KB"

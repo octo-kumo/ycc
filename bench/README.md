@@ -10,30 +10,43 @@ median.
 
 1. **Propose** the change and say what you expect it to move.
 2. **Branch** (`git switch -c ...`) — never benchmark in place.
-3. **Build** both sides: `make ycc` on the base branch, save the binary,
-   then `make ycc` on the branch.
-4. **Bench**: `bench/compare.sh /tmp/ycc-base ./ycc`
+3. **Build** both sides: the base is normally the last blessed compiler,
+   `refs/ycc.ref`; `make ynew` builds the branch's `src/y` as `./ynew`.
+   For another base, `make ycc` on it and save the binary.
+4. **Bench**: `make check` measures as part of checking the change (see
+   AGENTS.md, "Changing the compiler"); `make bench` alone runs
+   `bench/compare.sh` on copies of the two under `/tmp`.
 5. **Decide** from the score and the per-function tables, and say which in
    the merge request. Revert or rework when the score regresses; a
    deliberate trade (say, faster compile / bigger binary) belongs in the
    commit message with the numbers.
 
 ```sh
-make ycc && cp ycc /tmp/ycc-base       # while on master
-git switch my-change && make ycc
-bench/compare.sh /tmp/ycc-base ./ycc   # 5 rounds per metric by default
-bench/compare.sh /tmp/ycc-base ./ycc 9 # more rounds = less noise
+make check                             # verify, then compare + time vs refs/ycc.ref
+make ynew && make bench                # refs/ycc.ref vs ./ynew, 5 pairs a row
+make bench ROUNDS=9                    # more pairs = less noise
+make bench-ir                          # exact compile instruction counts
+make ycc && cp ycc /tmp/ycc-base       # another base: build it there
+make bench BASE=/tmp/ycc-base NEW=./ycc
+bench/compare.sh /tmp/ycc-base ./ycc 9 # the script itself
 ```
 
 ## What is measured
 
 `bench/run.sh YCC [runs]` benchmarks one build and prints TSV
-(`bench metric value`); `bench/compare.sh BASE NEW [runs]` runs it for
-both, one sample per side per round with the order flipping every round,
-and prints the deltas of the medians. Interleaving matters here: run back
-to back, whichever side went second absorbed any drift in machine load
-(two runs of the same binary differed by up to 37% per row that way).
-Per program in `bench/y/`:
+(`bench metric value`). `bench/compare.sh BASE NEW [runs]` measures the
+two in **pairs** — a run of base and a run of new back to back, the order
+flipping every pair — and compares each side's median. Load on a shared
+machine comes in bursts of seconds: measured in separate passes, one side
+caught a burst the other missed (two runs of the same binary differed by
+up to 37% per row that way, still by 25% with ten samples per pass);
+paired, a burst lands on both sides alike. A time row takes `runs` pairs
+(default 5; 3 in `make check`), more while they add up to under 0.2 s (ten
+at most), and always an even number, so each side goes first as often.
+Sizes are exact and measured once. The compiles read a copy of `src/y`
+and `bench/y` under `/tmp`, and the benchmarks run there: under WSL a
+read from `/mnt/c` goes over 9P, slow and noisy (`std_io` ran 50x
+slower there). Per program in `bench/y/`:
 
 | metric | what |
 |---|---|
@@ -53,16 +66,29 @@ ran out of memory there, say); the score then covers `bench/y/` only.
 regression. The table above it is the detail — look at it, not only at
 the score, because a big win on `self` can hide a loss on `strings`.
 
+How much of it is noise, on a shared laptop (WSL, a hybrid-core CPU):
+two copies of one build scored 99.7–100.6 in six runs, and one pair of
+real builds 99.8 and 102.3 on two runs, so read a SCORE within 100 ± 2.5
+as no change. A time row of 40 ms or more agrees to ~8%; a shorter one
+(the small compiles, `hello`, `std_io`, `closures`, `strings` runs)
+swings by 20% and more, whichever statistic — process start and the core
+a run lands on dominate it. So `make check` shows only the long rows that
+moved 10% or more, and a short row's real cost is its instruction count
+(below).
+
 Small programs all produce an 8312-byte binary (the ELF is page-aligned),
 so `binary_bytes` only moves once code crosses a page; it is most
 informative on `self`.
 
 ## Per-function profiles
 
-`compare.sh` ends by building every benchmark with **`ycc -g`** (symbol
-table) on both sides, running each once under valgrind's **callgrind**,
-and joining the two `callgrind_annotate` tables by function name —
-instructions executed in each function's own body (self Ir):
+`bench/profile.sh BASE NEW` — the last section of `compare.sh`
+(`BENCH_PROFILE=0` leaves it out; `make check` runs it beside the tests)
+— builds every benchmark with **`ycc -g`** (symbol table) on both sides,
+runs each once under valgrind's **callgrind**, all side by side (`YJOBS`
+at a time, default every CPU), and joins the two `callgrind_annotate`
+tables by function name — instructions executed in each function's own
+body (self Ir):
 
 ```
 --- lines   total Ir: base 918005565, new 917004120  -0.11%
@@ -80,6 +106,29 @@ skipped without valgrind; a function shown as `-` on one side is absent
 there (renamed, or the build has no `-g`). Programs with no `.bss` (no
 heap, no globals — `hello`) show raw addresses: valgrind attaches symbols
 only to executables with a read+write file mapping.
+
+## Compile instruction counts
+
+`compile_us` is wall time: on a small program its noise (see above) is
+larger than most changes in compile work.
+`bench/compile_ir.sh BASE NEW` (`make bench-ir`) runs both compilers under
+valgrind's cachegrind (`--cache-sim=no`: the instruction count alone) on
+every `bench/y/` program and on `src/y/ycc.y`, and prints the
+instructions each executed with the delta (here: the map read cache,
+commit 9a07f3f):
+
+```
+program                Ir_base          Ir_new    delta
+arrays.y              73405227        73433365   +0.04%
+maps.y                94405068        96506463   +2.23%
+ycc.y              17456984976     17458554313   +0.01%
+```
+
+The counts are exact, so a 0.1% change in compile work shows: two copies
+of one build print equal counts (both run from one directory under names
+of one length, as the compiler spends instructions on its own path and
+on the output path). They do not depend on machine load, so the runs go
+side by side, `YJOBS` at a time; `ycc.y` takes ~1 min under valgrind.
 
 ## Adding a benchmark
 

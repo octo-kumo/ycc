@@ -10,6 +10,10 @@ ycc2
 ycc3
 ycc
 _ycc
+ynew
+_ynew[123]
+_rb[12]
+_check/
 .vscode/
 wasm/ycc-single.js
 wasm/ycc.js

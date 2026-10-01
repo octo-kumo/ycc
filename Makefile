@@ -61,24 +61,105 @@ test-asan: cycc-asan
 	    ./test/sh/run_all.sh $(SUITES_ASAN)
 
 # Full suite (see test/sh/). Suites compare the C copy's output against
-# the reference ycc and run the compiled programs.
+# the reference ycc and run the compiled programs, JOBS at a time (the long
+# ones in shards); each one's output is printed whole once all are done,
+# JOBS=1 runs them one by one with live output. Building ./ycc was the port
+# gate on src/y/ycc.y itself, so the port suite leaves it out (YPORT_SELF=0).
+JOBS ?= $(shell nproc)
 test: ycc
-	./test/sh/run_all.sh $(SUITES)
+	YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) $(SUITES)
 
 # Same suites without the acceptance gate: only ./cycc is built, so the five
 # suites that drive a built ./ycc (ycc, fixpoint, native, native-examples,
 # debug) announce themselves as skipped. Use for a quick signal; `make test` is
 # the real one.
 test-fast: cycc
-	./test/sh/run_all.sh $(SUITES)
+	./test/sh/run_all.sh -j $(JOBS) $(SUITES)
 
 # Tiny smoke test: compile + run one example with both compilers.
 test-compile: cycc ycc
 	./cycc -o /tmp/hello_c test/y/examples/helloworld.y && /tmp/hello_c
 	./ycc -o /tmp/hello_y test/y/examples/helloworld.y && /tmp/hello_y
 
+# ── The development loop (AGENTS.md, "Changing the compiler") ────────────
+# A change lands in src/y and, the same, in src/c. `make check` verifies it
+# and measures it against BASE in a few minutes; `make rebless` accepts it
+# as the new reference. The steps `check` is made of, to run on their own:
+# `make ynew` builds src/y and checks it rebuilds itself (no C port needed),
+# `make port-check` holds the C copy to it, `make corpus-diff` shows what
+# it changes, `make bench` and `make bench-ir` measure it. BASE (default:
+# refs/ycc.ref, the last blessed compiler) is compared with NEW (default:
+# ./ynew, built first when it is the one compared).
+BOOT ?= refs/ycc.ref
+BASE ?= refs/ycc.ref
+NEW ?= ./ynew
+NEW_DEP = $(if $(filter ./ynew ynew,$(NEW)),ynew)
+
+# ./ynew: src/y compiled by BOOT, then by itself twice. A change to the
+# emitter reaches the compiler's own code in the second generation, so the
+# second and third must be byte-identical (the fixpoint). Needs no C port.
+ynew: $(YCC_SRCS) $(BOOT)
+	ulimit -v $(YCC_MEM_KB); $(abspath $(BOOT)) -o _ynew1 src/y/ycc.y
+	ulimit -v $(YCC_MEM_KB); ./_ynew1 -o _ynew2 src/y/ycc.y
+	ulimit -v $(YCC_MEM_KB); ./_ynew2 -o _ynew3 src/y/ycc.y
+	cmp _ynew2 _ynew3
+	mv _ynew2 ynew
+	rm -f _ynew1 _ynew3
+	@echo "ynew built from src/y by $(BOOT): generations 2 and 3 are byte-identical"
+
+# Everything a change needs before `make rebless`, in one command and a few
+# minutes (test/sh/check.sh): the C copy must build NEW byte for byte and
+# every suite pass with it; then what it changes against BASE — the test
+# programs it compiles differently, instruction counts compiling and
+# running the benchmarks, and timings (ROUNDS pairs of runs per row at
+# least, default 3). A summary on screen, each step's full output in
+# _check/.
+check: cycc $(NEW_DEP)
+	./test/sh/check.sh $(BASE) $(NEW) $(or $(ROUNDS),3)
+
+# The C copy against the Y build: the port gate (test_port.sh) aimed at
+# ./ynew instead of refs/ycc.ref. Lists only the programs that differ.
+port-check: cycc ynew
+	YREF=$(CURDIR)/ynew YQUIET=1 ./test/sh/run_all.sh -j $(JOBS) port
+
+# Every program in test/y/ and src/y/ycc.y (or FILES="a.y b.y") compiled by
+# BASE and NEW: lists each whose exit code, messages or binary differ, and
+# runs each changed binary under both to tell new code from new behavior.
+corpus-diff: $(NEW_DEP)
+	./test/sh/corpus_diff.sh $(BASE) $(NEW) $(FILES)
+
+# Benchmarks (bench/README.md): timings (ROUNDS pairs of runs per row at
+# least, default 5) and per-function run profiles; bench-ir: exact
+# instruction counts of the compiles. bench times copies of the two
+# compilers under /tmp: under WSL a binary run from /mnt/c pages in through
+# drvfs and runs ~30% slower.
+bench: $(NEW_DEP)
+	@d=$$(mktemp -d /tmp/ybench-bin.XXXXXX) && cp $(BASE) $$d/base && cp $(NEW) $$d/new \
+	  && echo "bench: base = $(BASE), new = $(NEW)" \
+	  && bench/compare.sh $$d/base $$d/new $(or $(ROUNDS),5); rc=$$?; rm -rf $$d; exit $$rc
+
+bench-ir: $(NEW_DEP)
+	bench/compile_ir.sh $(BASE) $(NEW)
+
+# Accept the C copy's build of the compiler as refs/ycc.ref, once it
+# rebuilds itself byte-identically and passes the port gate (on every test
+# program; on ycc.y it is that build); it becomes ./ycc too. Run `make
+# check` first: it runs every suite on this same build.
+rebless: cycc
+	ulimit -v $(CYCC_MEM_KB); ./cycc -o _rb1 src/y/ycc.y
+	ulimit -v $(YCC_MEM_KB); ./_rb1 -o _rb2 src/y/ycc.y
+	cmp _rb1 _rb2
+	YREF=$(CURDIR)/_rb1 YQUIET=1 YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) port
+	cp _rb1 refs/ycc.ref
+	cd refs && sha256sum *.ref > SHA256SUMS
+	mv _rb1 ycc
+	rm -f _rb2
+	@echo "blessed refs/ycc.ref $$(sha256sum refs/ycc.ref | cut -c1-16)"
+
 clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc a.out
+	rm -f ynew _ynew1 _ynew2 _ynew3 _rb1 _rb2
+	rm -rf _check
 
 # Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y
 # value model (src/c/yv.c) never frees, so a leak gate could never be clean
@@ -88,4 +169,4 @@ clean:
 valgrind: cycc
 	valgrind --error-exitcode=1 --quiet ./cycc -o /tmp/cycc-vg test/y/examples/helloworld.y
 
-.PHONY: all clean valgrind test test-fast test-compile asan test-asan ycc
+.PHONY: all clean valgrind test test-fast test-compile asan test-asan ycc check port-check corpus-diff bench bench-ir rebless

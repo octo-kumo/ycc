@@ -2,7 +2,8 @@
 # test/sh/lib.sh — shared helpers for the y test suites.
 # Usage: source "$(dirname "$0")/lib.sh"
 # Provides: ROOT, CYCC, YREF, YBOOT, YTIMEOUT_SCALE, colors, PASS/FAIL/SKIP
-# counters, pass/fail/skip reporters, run_parity(), print_summary().
+# counters, pass/fail/skip reporters, next_case (YSHARD), run_parity(),
+# print_summary().
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The toolchain is one language implementation twice over: $CYCC is the C
@@ -65,13 +66,24 @@ PASS=0
 FAIL=0
 SKIP=0
 
-pass() { echo -e "${GREEN}PASS${NC} $1"; PASS=$((PASS + 1)); }
+# YQUIET=1 lists only failures and skips (and the summary), not each pass.
+pass() { [ -n "${YQUIET:-}" ] || echo -e "${GREEN}PASS${NC} $1"; PASS=$((PASS + 1)); }
 fail() {
     echo -e "${RED}FAIL${NC} $1"
     [ -n "$2" ] && echo "  $2"
     FAIL=$((FAIL + 1))
 }
 skip() { echo -e "${YELLOW}SKIP${NC} $1${2:+ ($2)}"; SKIP=$((SKIP + 1)); }
+
+# YSHARD=K/N (run_all.sh -j sets it for the long suites): N runs of one
+# suite split its cases, each taking every Nth case from the Kth (0-based).
+# A shardable suite calls next_case before each case: true iff the case is
+# this run's. Without YSHARD every case is.
+_YCASE=-1
+next_case() {
+    _YCASE=$((_YCASE + 1))
+    [ -z "${YSHARD:-}" ] || (( _YCASE % ${YSHARD#*/} == ${YSHARD%/*} ))
+}
 
 # compile_ref <file> <bin> [timeout]  — compile with the reference ycc.
 # compile_copy <file> <bin> [timeout] — compile with the C copy.

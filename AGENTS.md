@@ -16,9 +16,10 @@ same semantics.
   `refs/` holds the backed-up reference binaries (gitignored; see
   `refs/SHA256SUMS`).
 - Do not commit build artifacts: `*.o`, `cycc`, `cycc-asan`, `ycc`,
-  `_ycc`, `a.out` (all gitignored; `make clean` removes them). `refs/` is
-  gitignored too but is **not** disposable — it is the port's ground
-  truth.
+  `_ycc`, `ynew`, `a.out`, `_check/` (all gitignored; `make clean`
+  removes them).
+  `refs/` is gitignored too but is **not** disposable — it is the port's
+  ground truth.
 - The runtime the compiler splices into programs is plain Y in
   `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y`, embedded into both
   compilers when they are built (`embed` in native.y, `Y_EMBED` in
@@ -33,7 +34,41 @@ same semantics.
   test that must see an allocation fail still does.
 - When changing `src/y/*.y`: the C copy (`src/c/`) must get the same
   change (it is a 1:1 copy — see PORTING.md), then `make ycc` must stay
-  byte-identical, and `make test` green.
+  byte-identical, and `make test` green. The Makefile has a target for
+  each step — see "Changing the compiler" below.
+
+## Changing the compiler (the development loop)
+
+`make ycc` checks the C copy against `refs/ycc.ref`, the last *blessed*
+compiler, so a compiler change runs this loop (`BASE` defaults to
+`refs/ycc.ref`, `NEW` to `./ynew`):
+
+1. Change `src/y`, port it to `src/c` (PORTING.md); fixtures, docs,
+   `test/COVERAGE.md`.
+2. `make check` — everything below in one command, ~2 minutes, a summary
+   on screen and each step's full output in `_check/`:
+   - **verify**: builds `./ynew` from `src/y` with the blessed compiler
+     (generations 2 and 3 byte-identical), requires `cycc` to build it
+     byte for byte, and every suite to pass with it as the reference and
+     the built compiler;
+   - **compare** with `BASE`: the test programs that now compile to
+     different code or behave differently (run under both), and the
+     instructions executed compiling and running every benchmark (exact);
+   - **time**: the benchmark SCORE, plus every size that changed and every
+     time of 40 ms or more that moved 10% (shorter ones are noise; their
+     instruction counts are the signal).
+
+   Check that every change it lists is intended.
+3. `make rebless` builds the compiler with `cycc`, checks its fixpoint and
+   the port gate, and installs it as `refs/ycc.ref` (and `./ycc`,
+   `refs/SHA256SUMS` updated) — `make check` already ran every suite on
+   it. Commit with the numbers.
+
+The steps on their own: `make ynew` (no C port needed yet), `make
+port-check` (the port gate against `./ynew`; prints only failures), `make
+corpus-diff` (`FILES="a.y b.y"` narrows it; fails on any change of
+behavior or diagnostics), `make bench`, `make bench-ir` (see
+"Performance" below).
 
 ## Run / verify (use these exact forms)
 
@@ -41,7 +76,10 @@ same semantics.
 - Same through the C copy: `./cycc file.y -o /tmp/t_bin && /tmp/t_bin`
 - Assembly only: `./ycc -S file.y > /tmp/t.s`
 - `make test` runs everything: the port gate + all `test/sh/*.sh`
-  suites. `./test/sh/run_all.sh [suite ...]` runs a subset.
+  suites, `JOBS` at a time (default: every CPU; ~45 s), each suite's
+  output printed whole when all are done; `JOBS=1` runs them one by one
+  with live output. `./test/sh/run_all.sh [-j N] [suite ...]` runs a
+  subset.
 - `make test-compile` — tiny smoke test (both compilers, one example).
 - Compiler profiling: `./ycc --time file.y` prints a per-phase table
   (elapsed ms + heap KB + counters) to **stderr**. It still needs an
@@ -66,6 +104,16 @@ binaries, identical program behavior). `test_native.sh`,
 `test_native_examples.sh`, `test_debug.sh`, `test_ycc.sh` and
 `test_fixpoint.sh` drive the built `./ycc` itself, so `run_all.sh` skips
 those **five** when it is missing (`make test-fast`).
+
+`run_all.sh -j N` runs N suites at once and splits the long ones (port,
+comprehensive, native) into shards (`YSHARD=K/N`: every Nth case, see
+`next_case` in `lib.sh`). The suites take the compilers they test from
+the environment: `CYCC` (the C copy), `YREF` (the reference, default
+`refs/ycc.ref`), `YCC` (the built compiler driven by native,
+native-examples, debug and ycc) and `YSELF` (fixpoint, stdin-eof).
+`YPORT_SELF=0` leaves `src/y/ycc.y` out of the port gate, for when that
+very build was just compared (`make test`, `check`, `rebless` do);
+`YQUIET=1` prints failures only.
 
 - `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
   `src/y/ycc.y` itself) compile to byte-identical binaries with
@@ -138,24 +186,32 @@ decided**. Never merge one on taste:
 
 1. **Propose**: say what the change should move.
 2. **Branch**: `git switch -c bench/whatever`.
-3. **Build both sides**: `make ycc` on master, `cp ycc /tmp/ycc-base`,
-   then `make ycc` on the branch and `cp ycc /tmp/ycc-new`.
-4. **Bench**: `bench/compare.sh /tmp/ycc-base /tmp/ycc-new` — scores the
+3. **Build both sides**: the base is normally the blessed
+   `refs/ycc.ref`, the new side `./ynew` from the branch (`make ynew`).
+   For another base: `make ycc` on it and `cp ycc /tmp/ycc-base`.
+4. **Bench**: `make check` (step 2 of the loop above) measures as part
+   of checking. On its own, `make bench` (`BASE=`, `NEW=`, `ROUNDS=`
+   override; it runs `bench/compare.sh` on copies under `/tmp`) scores the
    two builds (100 = unchanged) over compile time, run time and binary
-   size (asm bytes/lines are shown per benchmark but not scored); then
-   callgrind instruction counts
-   per function (`-g` builds, needs valgrind). Keep both binaries on the
-   same filesystem: under WSL a
-   binary run from `/mnt/c` pages in through drvfs and measured ~30%
-   slower in every phase, which is easy to mistake for a regression.
+   size (asm bytes/lines are shown per benchmark but not scored), then
+   the callgrind instruction counts per function of every benchmark
+   (`bench/profile.sh`: `-g` builds, needs valgrind). Keep both binaries
+   on the same filesystem: under WSL a binary run from `/mnt/c` pages in
+   through drvfs and measured ~30% slower in every phase, which is easy
+   to mistake for a regression. `make bench-ir` (`bench/compile_ir.sh`)
+   adds what the timings cannot resolve: the exact instructions each
+   compiler executes compiling every benchmark and `ycc.y`.
 5. **Decide**: merge or revert from the numbers; put the numbers in the
    commit message. A deliberate trade is fine — an unnoticed one is not.
 
 `bench/y/*.y` are benchmarks, **not tests**. The callgrind table (or
 `perf` on a `ycc -g` build) shows which functions moved — use it to
-explain a regression, not just to spot it. Times are noisy at the
-few-percent level (`bench/compare.sh ... 9` takes more samples);
-instruction counts are exact.
+explain a regression, not just to spot it. Times are wall clock on a
+shared machine: a SCORE within 100 ± 2.5 is no change (two copies of
+one build scored 99.7–100.6 in six runs, one real pair 99.8 and 102.3),
+a row of 40 ms or more agrees to ~8%, a shorter one swings by 20% and
+more (`bench/compare.sh ... 9` takes more samples); instruction counts
+are exact.
 
 ## Pipeline (`src/y/native.y`)
 
@@ -241,11 +297,14 @@ code calls it by fixed label.
   model; no Y twin). `PORTING.md` is the contract.
 - `refs/` — backed-up reference binaries for the port gate (see
   `PORTING.md` for where the current `ycc.ref` came from).
-- `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh`), `test/y/`
+- `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh` +
+  `corpus_diff.sh`, which is `make corpus-diff`, not a suite, + `check.sh`,
+  which is `make check`), `test/y/`
   (`native/` fixtures with expected/exit/stdin, `audit/` edge cases,
   `examples/` regression corpus, `ycc/` unit fixtures, `net/` servers
   for `test_net.sh`), `test/COVERAGE.md` (feature → test matrix).
-- `bench/` — benchmarks + `compare.sh` (see the workflow above).
+- `bench/` — benchmarks + `compare.sh` + `profile.sh` + `compile_ir.sh`
+  (see the workflow above).
 
 ## Native backend (see `src/y/NATIVE.md`)
 

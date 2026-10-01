@@ -55,8 +55,7 @@ run_test() {
     fi
 
     if [ "$vm_out" = "$bin_out" ] && [ "$vm_exit" = "$bin_exit" ]; then
-        echo -e "${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
+        pass "$name"
     else
         # Identical compilers: a differing byte here is the regression, not
         # a cosmetic wobble. Fail it.
@@ -98,8 +97,7 @@ inline_test() {
     if echo "$bin_out" | grep -qF -- "$expected"; then bin_ok=1; fi
 
     if [ $vm_ok -eq 1 ] && [ $bin_ok -eq 1 ]; then
-        echo -e "${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
+        pass "$name"
     else
         echo -e "${RED}FAIL${NC} $name"
         [ $vm_ok -eq 0 ] && echo "  REF missing: $expected (got: $vm_out)"
