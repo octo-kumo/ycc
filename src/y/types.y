@@ -921,18 +921,25 @@ def trec_compat_go(gfs, wfs, i: long) -> bool {
     }
 };
 
+// A record is a reference: a field is never copied on the way in, so
+// nothing can convert it -- its numeric type must match exactly ({x: long}
+// is not a {x: float}); every other field type unifies as tcompat says.
 def trec_has(gfs, name: str, typ) -> bool {
     let i = 0;
     let found = false;
     while (i < len(gfs)) {
         let gf = gfs[i];
         if (gf.name == name) {
-            if (tcompat(gf.typ, typ)) { found = true; 0; } else { 0; };
+            if (field_compat(gf.typ, typ)) { found = true; 0; } else { 0; };
             0
         };
         i = i + 1;
     };
     found
+};
+
+def field_compat(got, want) -> bool {
+    if (is_num_kind(got) && is_num_kind(want)) { teq(got, want) } else { tcompat(got, want) }
 };
 
 def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {

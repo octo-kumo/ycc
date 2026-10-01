@@ -80,7 +80,8 @@ expression & result & effect on operands & value types \\
   \emph{in place}.
 \item \ic{arr1 = arr2} --- both point to the same array in memory.
 \item \ic{arr1 + elem} --- a new array which is \ic{arr1} concatenated
-  with \ic{[elem]}; only allowed if the element types match.
+  with \ic{[elem]}; only allowed if \ic{elem} has, or converts to, the
+  element type (Section~\ref{sec:conversions}).
 \item \ic{elem + arr1} --- a new array which is \ic{[elem]} concatenated
   with \ic{arr1}.
 \item \ic{+=} means in-place push (of an element) or append (of an

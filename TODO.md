@@ -2,17 +2,15 @@
 
 ## Not done
 
-- **Implicit numeric conversions are not emitted.** The checker admits
-  long→float, byte→float, byte→long and long→byte at every annotated
-  position (`types.y` `tcompat`), but the emitter converts only inside
-  float arithmetic: `let g: float = 3` prints 0.000000 (the long's bits
-  read as a double), and so do float parameters, returns, assignments,
-  element/field/map/pointer stores and array `+=`/`+`/`::`/`*=`;
-  `let b: byte = 258` keeps 258 (only packed `[byte]` stores truncate).
-  Records and composite element copies (`[float] += [long]`, a
-  `{x: long}` passed as `{x: float}`) can never be converted — they are
-  references — so the checker has to reject those. (`test/COVERAGE.md`
-  marks the Conversions row MISMATCH.)
+- **`return` is unchecked when the return type is inferred.** Without a
+  `->` annotation the checker types each `return e` against the unknown
+  type, and never relates it to the type inferred from the body's
+  trailing value: `def f(c: bool) { if (c) { return 1.5; }; 2 }` makes
+  `f(true)` print 4609434218613702656 (the double's bits as a long),
+  `return "s"` there yields an address, and `return 1` in a function
+  whose tail is `2.5` prints 0.000000 (no conversion). Every `return`
+  must conform to the inferred type, and convert to it, as under a
+  declared one.
 - **Cross-module duplicate definitions.** `find_dup` compares names after
   rename has made them unique, so it never fires: an importer's
   `def helper` silently replaces an imported module's own `helper`, and
@@ -44,6 +42,21 @@ kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
 
+- **Implicit numeric conversions.** The checker admitted long→float,
+  byte→float, byte→long and long→byte at annotated positions, but the
+  emitter converted only inside float arithmetic: `let g: float = 3`
+  printed 0.000000 and `let b: byte = 258` kept 258. Every store under a
+  known type now converts (`gen_as`/`gen_conv` in `native.y`): `let` and
+  assignment; arguments to direct, indirect, `self` and tail calls;
+  returns and trailing values under a declared return type; element,
+  field, map and pointer stores; array literals, `[v; n]`, push, prepend
+  and `::`; and `+`/`+=` between arrays of different element types,
+  element by element. A byte store masks to 8 bits, and `{ b += 300 }`
+  yields the stored value. A record field cannot convert, because the
+  record is shared, so the checker now requires exact numeric field types
+  (`e130`). `t132` covers 51 store paths. Bench: every benchmark's output
+  is identical (asm, binary and instruction counts); the self-compile went
+  2.26 → 2.28 s (+1.1%, within noise) and its heap grew 0.1%.
 - **Exhaustive tests.** `test/COVERAGE.md` maps every section of the
   manual to the tests that check it, and `test_coverage.sh` (in
   `make test`) keeps it honest: each of the 286 diagnostic sites in the

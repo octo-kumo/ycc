@@ -58,6 +58,7 @@ long fmt_kind(Yv *t);
 Yv *narrow_type(Yv *s, Yv *t);
 Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
+int teq(Yv *a, Yv *b);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
 
@@ -124,6 +125,9 @@ Yv *env_find(Yv *st, Yv *name);
 Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ);
 Yv *infer(Yv *st, Yv *node);
 Yv *infer_call(Yv *st, Yv *node);
+Yv *cur_fn_type(Yv *st);
+Yv *cur_fn_ret(Yv *st);
+Yv *fn_args_of(Yv *t);
 Yv *infer_block(Yv *st, Yv *node);
 Yv *infer_decl(Yv *st, Yv *node);
 Yv *uses_scan_block(Yv *stmts, Yv *out);
@@ -142,6 +146,7 @@ Yv *fv_bind_params(Yv *ps, Yv *out);
 Yv *fn_names_of(Yv *fns);
 Yv *fns_kind(Yv *label);
 Yv *gen(Yv *st, Yv *node);
+Yv *gen_as(Yv *st, Yv *node, Yv *want);
 Yv *gen_str_const(Yv *st, Yv *s);
 Yv *gen_id(Yv *st, Yv *node);
 Yv *gen_cap_ptr(Yv *st, Yv *name);
@@ -168,6 +173,10 @@ Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op);
 Yv *gen_bin_rest(Yv *st, Yv *node);
 Yv *syscall_reg(long i);
 Yv *gen_push_args(Yv *st, Yv *args);
+Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes);
+Yv *gen_conv(Yv *st, Yv *got, Yv *want);
+Yv *arr_elem_type(Yv *t);
+Yv *store_elem_type(Yv *t, long esz);
 Yv *gen_helper1(Yv *st, Yv *label);
 Yv *gen_call(Yv *st, Yv *node);
 Yv *gen_fmt(Yv *st, Yv *node);
@@ -179,6 +188,7 @@ Yv *gen_opt_str_rax(Yv *st, Yv *t);
 Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t);
 Yv *gen_rec_str_rax(Yv *st, Yv *t);
 Yv *gen_cons(Yv *st, Yv *node);
+Yv *gen_cat_conv(Yv *st, Yv *node, Yv *lt);
 Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_acc_cat_const(Yv *st, Yv *s);
 Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft);
@@ -205,7 +215,7 @@ Yv *gen_assign(Yv *st, Yv *node);
 Yv *gen_fill(Yv *st, long base, long n);
 Yv *gen_fill_heap(Yv *st, long n, long esz);
 Yv *gen_arrrep(Yv *st, Yv *node);
-Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz);
+Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz, Yv *ety);
 long hexval_ch(Yv *c);
 int lit_is_float(Yv *s);
 Yv *norm_num(Yv *s);
@@ -229,6 +239,7 @@ Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl);
 Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl);
 Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl);
 Yv *gen_incdec(Yv *st, Yv *node);
+Yv *place_value_type(Yv *t);
 Yv *gen_opassign(Yv *st, Yv *node);
 /* maps (the section at the end of the file) */
 Yv *n_str(Yv *v, long line, long col);
@@ -280,8 +291,9 @@ Yv *gen_dot(Yv *st, Yv *node);
 Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col);
 Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t);
 long rec_field_idx(Yv *t, Yv *key);
+Yv *rec_field_type(Yv *t, Yv *key);
 Yv *gen_array(Yv *st, Yv *node);
-Yv *gen_array_esz(Yv *st, Yv *node, long esz);
+Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety);
 Yv *gen_len(Yv *st, Yv *node);
 Yv *gen_push(Yv *st, Yv *node);
 Yv *gen_some(Yv *st, Yv *node);
@@ -2142,7 +2154,7 @@ Yv *infer(Yv *st, Yv *node) {
         return yr(1, "k", ys("tvoid"));
     } else if (ys_eq_lit(k, "id")) {
         if (ys_eq_lit(yr_get(node, "v"), "self")) {
-            return yr(1, "k", ys("tfunc"));
+            return cur_fn_type(st);
         } else {
             Yv *e = env_find(st, yr_get(node, "v"));
             if (ys_eq_lit(yr_get(e, "kind"), "none")) {
@@ -2158,7 +2170,13 @@ Yv *infer(Yv *st, Yv *node) {
         }
     } else if (ys_eq_lit(k, "un")) {
         if (ys_eq_lit(yr_get(node, "op"), "-")) {
-            return infer(st, yr_get(node, "e"));
+            /* Negating a byte is long arithmetic (types.y): -b leaves 0..255. */
+            Yv *ut = infer(st, yr_get(node, "e"));
+            if (ys_eq_lit(yr_get(ut, "k"), "tbyte")) {
+                return yr(1, "k", ys("tlong"));
+            } else {
+                return ut;
+            }
         } else {
             return yr(1, "k", ys("tbool"));
         }
@@ -2473,6 +2491,15 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", ys("tvoid"));
         } else if (ys_eq_lit(name, "eputs")) {
             return yr(1, "k", ys("tvoid"));
+        } else if (ys_eq_lit(name, "self")) {
+            /* The declared return type; an inferred one stays unknown here. */
+            Yv *sft = cur_fn_type(st);
+            Yv *sret = yr_get(sft, "ret");
+            if (ys_eq_lit(yr_get(sret, "k"), "tnone")) {
+                return yr(1, "k", ys("tunk"));
+            } else {
+                return sret;
+            }
         } else {
             Yv *e = env_find(st, name);
             if (ys_eq_lit(yr_get(e, "kind"), "none")) {
@@ -3175,7 +3202,7 @@ Yv *gen(Yv *st, Yv *node) {
     } else if (ys_eq_lit(k, "store")) {
         return gen_store(st, node);
     } else if (ys_eq_lit(k, "ret")) {
-        st = gen(st, yr_get(node, "e"));
+        st = gen_as(st, yr_get(node, "e"), cur_fn_ret(st));
         return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
     } else {
         /* Unreachable: the checker rejects everything else. */
@@ -3203,7 +3230,7 @@ Yv *gen_bstr(Yv *st, Yv *node) {
     }
     Yv *barr = yr(4, "k", ys("array"), "elems", elems, "line", yr_get(node, "line"),
                   "col", yr_get(node, "col"));
-    return gen_array_esz(st, barr, 1L);
+    return gen_array_esz(st, barr, 1L, yr(1, "k", ys("tnone")));
 }
 
 Yv *gen_str_const(Yv *st, Yv *s) {
@@ -3614,9 +3641,10 @@ Yv *gen_union_str_rax(Yv *st, Yv *t) {
 Yv *gen_indirect(Yv *st, Yv *node, Yv *callee) {
     Yv *args = yr_get(node, "args");
     long n = yv_len(args);
+    Yv *iptypes = fn_args_of(infer(st, callee));
     st = gen(st, callee);
     st = emit(st, ys("    push %rax"));
-    st = gen_push_args(st, args);
+    st = gen_push_args_as(st, args, iptypes);
     /* Reload the closure (it sits just below the n pushed args) and call
      * through its code pointer. */
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * n)),
@@ -4182,6 +4210,116 @@ Yv *gen_push_args(Yv *st, Yv *args) {
     return st;
 }
 
+/* gen_push_args, with argument i converted (gen_as) to ptypes[i], the
+ * type of the parameter it binds; arguments past ptypes are pushed as is. */
+Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes) {
+    long i = 0;
+    while (i < yv_len(args)) {
+        if (i < yv_len(ptypes)) {
+            st = gen_as(st, ya_get(args, i), ya_get(ptypes, i));
+            ;
+        } else {
+            st = gen(st, ya_get(args, i));
+            ;
+        }
+        st = emit(st, ys("    push %rax"));
+        i = i + 1;
+    }
+    return st;
+}
+
+/* The implicit numeric conversions (types.y tcompat admits them): a long
+ * or byte stored where a float is declared becomes that float, and a long
+ * stored where a byte is declared keeps its low 8 bits. The value is in
+ * %rax with static type `got`; `want` is the declared type of the place it
+ * goes to. A packed [byte] element store (movb) truncates by itself, so
+ * those callers ask for no byte conversion. */
+Yv *gen_conv(Yv *st, Yv *got, Yv *want) {
+    Yv *gk = yr_get(got, "k");
+    Yv *wk = yr_get(want, "k");
+    if (ys_eq_lit(wk, "tfloat") &&
+        (ys_eq_lit(gk, "tlong") || ys_eq_lit(gk, "tbyte"))) {
+        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
+        return emit(st, ys("    movq %xmm0, %rax"));
+    } else if (ys_eq_lit(wk, "tbyte") && ys_eq_lit(gk, "tlong")) {
+        return emit(st, ys("    movzbq %al, %rax"));
+    } else {
+        return st;
+    }
+}
+
+/* gen, then gen_conv to `want`: every place a value is stored under a
+ * declared type (variable, parameter, return value, element, field,
+ * pointee) goes through here. */
+Yv *gen_as(Yv *st, Yv *node, Yv *want) {
+    st = gen(st, node);
+    Yv *wk = yr_get(want, "k");
+    if (ys_eq_lit(wk, "tfloat") || ys_eq_lit(wk, "tbyte")) {
+        return gen_conv(st, infer(st, node), want);
+    } else {
+        return st;
+    }
+}
+
+/* The type of the function being emitted: emit_one_fn records it as a
+ * nameless "fnty" entry (declared parameter types and declared return
+ * type, tnone when `-> T` is omitted). infer_fn_ret's scope has none. */
+Yv *cur_fn_type(Yv *st) {
+    Yv *env = yr_get(st, "env");
+    long i = yv_len(env) - 1;
+    Yv *ft = yr(3, "k", ys("tfunc"), "args", yav(0),
+                "ret", yr(1, "k", ys("tunk")));
+    int looking = 1;
+    while (looking && i >= 0) {
+        Yv *e = ya_get(env, i);
+        if (ys_eq_lit(yr_get(e, "kind"), "fnty")) {
+            ft = yr_get(e, "typ");
+            looking = 0;
+            ;
+        } else {
+            ;
+        }
+        i = i - 1;
+    }
+    return ft;
+}
+
+Yv *cur_fn_ret(Yv *st) {
+    return yr_get(cur_fn_type(st), "ret");
+}
+
+/* Parameter types of a function type (none for anything else). */
+Yv *fn_args_of(Yv *t) {
+    Yv *none = yav(0);
+    if (ys_eq_lit(yr_get(t, "k"), "tfunc")) {
+        return yr_get(t, "args");
+    } else {
+        return none;
+    }
+}
+
+/* Element type of an array type (tnone for anything else). */
+Yv *arr_elem_type(Yv *t) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tarr")) {
+        return yr_get(t, "of");
+    } else if (ys_eq_lit(k, "tarrfix")) {
+        return yr_get(t, "of");
+    } else {
+        return yr(1, "k", ys("tnone"));
+    }
+}
+
+/* The element type a store converts to: none for a packed [byte] (esz 1),
+ * whose movb store truncates by itself. */
+Yv *store_elem_type(Yv *t, long esz) {
+    if (esz == 1) {
+        return yr(1, "k", ys("tnone"));
+    } else {
+        return arr_elem_type(t);
+    }
+}
+
 /* Call a one-argument runtime helper. The argument is in %rax and goes on
  * the stack — the Y convention every helper written in Y (std/rt.y) and
  * every asm helper shares; the caller cleans up. (Runtime helpers used to
@@ -4474,10 +4612,11 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t) {
 Yv *gen_cons(Yv *st, Yv *node) {
     Yv *ln = yr_get(node, "line");
     Yv *cl = yr_get(node, "col");
-    long cesz = arr_elem_bytes(infer(st, yr_get(node, "r")));
+    Yv *crt = infer(st, yr_get(node, "r"));
+    long cesz = arr_elem_bytes(crt);
     Yv *one = yr(4, "k", ys("array"), "elems", args1(yr_get(node, "l")), "line",
                  ln, "col", cl);
-    st = gen_array_esz(st, one, cesz);
+    st = gen_array_esz(st, one, cesz, store_elem_type(crt, cesz));
     st = emit(st, ys("    push %rax"));
     st = gen(st, yr_get(node, "r"));
     st = emit(st, ys("    push %rax"));
@@ -4485,6 +4624,45 @@ Yv *gen_cons(Yv *st, Yv *node) {
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys("    call y_arr_cat"));
     return emit(st, ys("    add $24, %rsp"));
+}
+
+/* `l + r` on two arrays whose element types differ by an implicit numeric
+ * conversion ([float] + [long], [long] + [byte], ...): y_arr_cat copies raw
+ * elements, so build the result element by element instead --
+ * { let a = l; let b = r; let c: [L] = []; c += a; c += b; c } -- where
+ * each `+=` pushes through the element conversion (gen_push). */
+Yv *gen_cat_conv(Yv *st, Yv *node, Yv *lt) {
+    Yv *ln = yr_get(node, "line");
+    Yv *cl = yr_get(node, "col");
+    Yv *r = next_uid(st);
+    st = yr_get(r, "st");
+    Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
+    Yv *noelems = yav(0);
+    Yv *da = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("l")),
+                "v", yr_get(node, "l"), "line", ln, "col", cl);
+    Yv *db = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("r")),
+                "v", yr_get(node, "r"), "line", ln, "col", cl);
+    Yv *dc = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
+                yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
+                "name", ys_cat(t1, ys("c")),
+                "v", yr(4, "k", ys("array"), "elems", noelems,
+                        "line", ln, "col", cl),
+                "line", ln, "col", cl);
+    Yv *pa = yr(7, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
+                                                       yv_l(ln), yv_l(cl)),
+                "op", ys("+"), "v", n_id(ys_cat(t1, ys("l")),
+                                         yv_l(ln), yv_l(cl)),
+                "line", ln, "col", cl);
+    Yv *pb = yr(7, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
+                                                       yv_l(ln), yv_l(cl)),
+                "op", ys("+"), "v", n_id(ys_cat(t1, ys("r")),
+                                         yv_l(ln), yv_l(cl)),
+                "line", ln, "col", cl);
+    return gen(st, block6(da, db, dc, pa, pb,
+                          n_id(ys_cat(t1, ys("c")), yv_l(ln), yv_l(cl)),
+                          yv_l(ln), yv_l(cl)));
 }
 
 /* Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
@@ -4503,12 +4681,19 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     if (lisarr && risarr) {
         how = arr_plus_kind(lt, rt);
     }
+    if (ys_eq_lit(how, "cat") &&
+        !teq(yr_get(lt, "of"), yr_get(rt, "of"))) {
+        return gen_cat_conv(st, node, lt);
+    }
     int larr = lisarr && !ys_eq_lit(how, "prepend");
     long esz = 8;
+    Yv *ety = yr(1, "k", ys("tnone"));
     if (larr) {
         esz = arr_elem_bytes(lt);
+        ety = store_elem_type(lt, esz);
     } else {
         esz = arr_elem_bytes(rt);
+        ety = store_elem_type(rt, esz);
     }
     Yv *one = yr(4, "k", ys("array"), "elems", args1(yr_get(node, "r")), "line",
                  ln, "col", cl);
@@ -4525,10 +4710,10 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
         if (ys_eq_lit(how, "cat")) {
             st = gen(st, yr_get(node, "r"));
         } else {
-            st = gen_array_esz(st, one, esz);
+            st = gen_array_esz(st, one, esz, ety);
         }
     } else {
-        st = gen_array_esz(st, one, esz);
+        st = gen_array_esz(st, one, esz, ety);
         st = emit(st, ys("    push %rax"));
         st = gen(st, yr_get(node, "r"));
     }
@@ -4647,14 +4832,17 @@ long capture_off(Yv *st) {
 Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
     Yv *label = ys("");
     int indirect = 0;
+    Yv *dptypes = yav(0);
     if (ys_eq_lit(name, "self")) {
         label = yr_get(st, "self_label");
+        dptypes = fn_args_of(cur_fn_type(st));
     } else {
         Yv *e = env_find(st, name);
         if (ys_eq_lit(yr_get(e, "kind"), "none")) {
             label = ys_cat(ys("y_missing_"), name);
         } else if (ys_eq_lit(yr_get(e, "kind"), "func")) {
             label = yr_get(e, "label");
+            dptypes = fn_args_of(yr_get(e, "typ"));
         } else {
             /* A local/param/capture/global holding a closure value: call
              * through it. */
@@ -4683,7 +4871,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
         } else {
             ;
         }
-        st = gen_push_args(st, yr_get(node, "args"));
+        st = gen_push_args_as(st, yr_get(node, "args"), dptypes);
         st = emit(st, ys_cat(ys("    call "), label));
         long nbytes = yv_len(yr_get(node, "args")) * 8;
         if (soff >= 0) {
@@ -4893,11 +5081,18 @@ int is_self_call(Yv *st, Yv *node) {
 Yv *gen_tail_call(Yv *st, Yv *node) {
     Yv *targs = yr_get(node, "args");
     long n = yv_len(targs);
+    Yv *tptypes = fn_args_of(cur_fn_type(st));
     /* evaluate each argument into a fresh local */
     Yv *offs = yav(0);
     long i = 0;
     while (i < n) {
-        st = gen(st, ya_get(targs, i));
+        if (i < yv_len(tptypes)) {
+            st = gen_as(st, ya_get(targs, i), ya_get(tptypes, i));
+            ;
+        } else {
+            st = gen(st, ya_get(targs, i));
+            ;
+        }
         long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
         st = emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(off), ys("(%rbp)"))));
         offs = ya_push(offs, yv_long(off));
@@ -4933,11 +5128,11 @@ Yv *gen_tail(Yv *st, Yv *node) {
         if (is_self_call(st, e)) {
             return gen_tail_call(st, e);
         }
-        st = gen(st, e);
+        st = gen_as(st, e, cur_fn_ret(st));
         return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
     } else if (ys_eq_lit(k, "call")) {
         if (is_self_call(st, node)) { return gen_tail_call(st, node); }
-        return gen(st, node);
+        return gen_as(st, node, cur_fn_ret(st));
     } else if (ys_eq_lit(k, "block")) {
         Yv *tl = yr_get(node, "stmts");
         long m = yv_len(tl);
@@ -4978,7 +5173,7 @@ Yv *gen_tail(Yv *st, Yv *node) {
         }
         return emit(st, ys_cat(lelse, ys(":")));
     }
-    return gen(st, node);
+    return gen_as(st, node, cur_fn_ret(st));
 }
 
 Yv *gen_block(Yv *st, Yv *node) {
@@ -5276,7 +5471,9 @@ Yv *gen_decl(Yv *st, Yv *node) {
             if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
                 t = infer(st, yr_get(node, "v"));
             }
-            st = gen_arrrep_esz(st, yr_get(node, "v"), arr_elem_bytes(t));
+            long rsz = arr_elem_bytes(t);
+            st = gen_arrrep_esz(st, yr_get(node, "v"), rsz,
+                                store_elem_type(t, rsz));
             return bind_decl(st, yr_get(node, "name"), t);
         } else if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "array")) {
             /* Heap array literal. The DECLARED element type decides the
@@ -5286,7 +5483,9 @@ Yv *gen_decl(Yv *st, Yv *node) {
             if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
                 t = infer(st, yr_get(node, "v"));
             }
-            st = gen_array_esz(st, yr_get(node, "v"), arr_elem_bytes(t));
+            long asz = arr_elem_bytes(t);
+            st = gen_array_esz(st, yr_get(node, "v"), asz,
+                               store_elem_type(t, asz));
             return bind_decl(st, yr_get(node, "name"), t);
         } else if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "rec")) {
             /* record literal: heap address (first-class value, plain
@@ -5303,7 +5502,7 @@ Yv *gen_decl(Yv *st, Yv *node) {
             }
             return bind_decl(st, yr_get(node, "name"), t);
         } else {
-            st = gen(st, yr_get(node, "v"));
+            st = gen_as(st, yr_get(node, "v"), yr_get(node, "typ"));
             /* Reference semantics: arrays and records are heap values and
              * bindings share them (no copy-on-store). Cloning here made
              * every `let x = <call returning [T]>` O(n), so threading an
@@ -5352,7 +5551,7 @@ Yv *gen_assign(Yv *st, Yv *node) {
      * the C copy's value model uses (yv.c). A captured variable lives in
      * one shared heap cell (box_capture), so its store goes through the
      * cell and is visible in the capturing scope too. */
-    st = gen(st, yr_get(node, "v"));
+    st = gen_as(st, yr_get(node, "v"), yr_get(e, "typ"));
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
         long idx = ys_tonum(yr_get(e, "label"));
         st = emit(st, ys_cat(ys_cat(ys("    mov "),
@@ -5420,14 +5619,17 @@ Yv *gen_fill_heap(Yv *st, long n, long esz) {
  * {len, cap, data...}, fill every slot with v, leave the address in %rax.
  * Usable anywhere (let, assign, call argument, return), not just `let`. */
 Yv *gen_arrrep(Yv *st, Yv *node) {
-    return gen_arrrep_esz(st, node, elem_bytes(infer(st, yr_get(node, "v"))));
+    return gen_arrrep_esz(st, node,
+                          elem_bytes(infer(st, yr_get(node, "v"))),
+                          yr(1, "k", ys("tnone")));
 }
 
 /* Same, with the element width supplied by the declaration (`let b:
- * [byte; 4] = [0; 4]` — the literal's own elements infer as long). */
-Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz) {
+ * [byte; 4] = [0; 4]` — the literal's own elements infer as long), and
+ * `ety` the element type the fill value converts to (store_elem_type). */
+Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz, Yv *ety) {
     long n = yv_l(yr_get(node, "n"));
-    st = gen(st, yr_get(node, "v"));
+    st = gen_as(st, yr_get(node, "v"), ety);
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(arr_alloc_size(esz, n))),
                          ys(", %rdi")));
@@ -5793,7 +5995,7 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
     long idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
     st = emit(st, ys("    push %rax"));
-    st = gen(st, yr_get(node, "v"));
+    st = gen_as(st, yr_get(node, "v"), rec_field_type(dt, dkey));
     st = emit(st, ys("    pop %rdx"));
     return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * idx)),
                            ys("(%rdx)")));
@@ -5814,6 +6016,17 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
 /* Synthetic AST pieces for the ++/-- and op= desugars. Node lists are
  * built with push chains over a let-bound [] — the checker rejects
  * heterogeneous array literals (see gen_str_const's note). */
+/* The new value of `x op= v` / `++x` is bound under the place's type when
+ * that is byte: binding it masks it (gen_as), so the value the expression
+ * yields is the one stored. Any other type is left to inference. */
+Yv *place_value_type(Yv *t) {
+    if (ys_eq_lit(yr_get(t, "k"), "tbyte")) {
+        return t;
+    } else {
+        return yr(1, "k", ys("tnone"));
+    }
+}
+
 Yv *n_num(Yv *v, long line, long col) {
     return yr(4, "k", ys("num"), "v", v, "line", yv_long(line), "col",
               yv_long(col));
@@ -5923,8 +6136,9 @@ Yv *gen_incdec(Yv *st, Yv *node) {
         Yv *nv = yr(6, "k", ys("bin"), "op", binop, "l", place, "r", one,
                     "line", yv_long(ln), "col", yv_long(cl));
         Yv *d2 = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                    yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v",
-                    nv, "line", yv_long(ln), "col", yv_long(cl));
+                    place_value_type(infer(st, tgt)), "name",
+                    ys_cat(t1, ys("v")), "v", nv, "line", yv_long(ln),
+                    "col", yv_long(cl));
         Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1,
                                    ln, cl);
         return gen(st, block4(bind, d2, asg,
@@ -5968,8 +6182,8 @@ Yv *gen_opassign_arith(Yv *st, Yv *node) {
     Yv *bin = yr(6, "k", ys("bin"), "op", op, "l", rd, "r", yr_get(node, "v"),
                  "line", yv_long(ln), "col", yv_long(cl));
     Yv *d2 = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v", bin,
-                "line", yv_long(ln), "col", yv_long(cl));
+                place_value_type(infer(st, tgt)), "name", ys_cat(t1, ys("v")),
+                "v", bin, "line", yv_long(ln), "col", yv_long(cl));
     Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1, ln,
                                cl);
     return gen(st, block4(bind, d2, asg, n_id(ys_cat(t1, ys("v")), ln, cl), ln,
@@ -6202,7 +6416,7 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
     st = emit(st, ys("    push %rax"));
     st = gen(st, yr_get(node, "idx"));
     st = emit(st, ys("    push %rax"));
-    st = gen(st, yr_get(node, "v"));
+    st = gen_as(st, yr_get(node, "v"), store_elem_type(bt, iaesz));
     st = emit(st, ys("    pop %rcx"));
     st = emit(st, ys("    pop %rdx"));
     st = emit(st, ys("    test %rcx, %rcx"));
@@ -6550,19 +6764,50 @@ long rec_field_idx(Yv *t, Yv *key) {
     return idx;
 }
 
+/* Static type of field `key` in trec type t (tnone when there is none). */
+Yv *rec_field_type(Yv *t, Yv *key) {
+    Yv *ft = yr(1, "k", ys("tnone"));
+    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+        Yv *fs = yr_get(t, "fields");
+        long i = 0;
+        while (i < yv_len(fs)) {
+            Yv *f = ya_get(fs, i);
+            if (ys_eq(yr_get(f, "name"), key)) {
+                ft = yr_get(f, "typ");
+                ;
+            } else {
+                ;
+            }
+            i = i + 1;
+        }
+        ;
+    } else {
+        ;
+    }
+    return ft;
+}
+
 /* Heap array literal [v, ...]: a data block of arr_alloc_size(esz, n) and a
  * separate arr_header_size() header {len, cap, data}; the values are stored
  * into the data block through the header's pointer. The header address (an
  * 8-byte value like any other) is the expression value. */
 Yv *gen_array(Yv *st, Yv *node) {
-    return gen_array_esz(st, node, arr_elem_bytes(infer(st, node)));
+    Yv *at = infer(st, node);
+    long gsz = arr_elem_bytes(at);
+    return gen_array_esz(st, node, gsz, store_elem_type(at, gsz));
 }
 
 /* Same, with the element width supplied by the declaration (`let b:
- * [byte] = [104, 105]` — the literal's own elements infer as long). */
-Yv *gen_array_esz(Yv *st, Yv *node, long esz) {
+ * [byte] = [104, 105]` — the literal's own elements infer as long), and
+ * `ety` the element type each value converts to (store_elem_type). */
+Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety) {
     Yv *elems = yr_get(node, "elems");
-    st = gen_push_args(st, elems);
+    long gi = 0;
+    while (gi < yv_len(elems)) {
+        st = gen_as(st, ya_get(elems, gi), ety);
+        st = emit(st, ys("    push %rax"));
+        gi = gi + 1;
+    }
     long n = yv_len(elems);
     st = emit(st, ys_cat(ys_cat(ys("    mov $"),
                                 ys_long(arr_alloc_size(esz, n))),
@@ -6610,8 +6855,11 @@ Yv *gen_len(Yv *st, Yv *node) {
  * Returns the (possibly reallocated) header — rebind it: `a = push(a, v)`. */
 Yv *gen_push(Yv *st, Yv *node) {
     Yv *pargs = yr_get(node, "args");
-    long pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
-    st = gen_push_args(st, yr_get(node, "args"));
+    Yv *pat = infer(st, ya_get(pargs, 0));
+    long pesz = arr_elem_bytes(pat);
+    st = gen_push_args_as(st, yr_get(node, "args"),
+                          args2(yr(1, "k", ys("tnone")),
+                                store_elem_type(pat, pesz)));
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys("    call y_arr_push"));
@@ -6662,8 +6910,11 @@ Yv *gen_trim(Yv *st, Yv *node) {
  * moves, so every alias sees it). The `*=` operator desugars to this. */
 Yv *gen_prepend(Yv *st, Yv *node) {
     Yv *pargs = yr_get(node, "args");
-    long pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
-    st = gen_push_args(st, yr_get(node, "args"));
+    Yv *pat = infer(st, ya_get(pargs, 0));
+    long pesz = arr_elem_bytes(pat);
+    st = gen_push_args_as(st, yr_get(node, "args"),
+                          args2(yr(1, "k", ys("tnone")),
+                                store_elem_type(pat, pesz)));
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys("    call y_arr_prepend"));
@@ -7109,10 +7360,18 @@ Yv *gen_write_bytes(Yv *st, Yv *node) {
 }
 
 Yv *gen_store(Yv *st, Yv *node) {
-    long sw = ptr_width(infer(st, yr_get(node, "p")));
+    Yv *spt = infer(st, yr_get(node, "p"));
+    long sw = ptr_width(spt);
+    Yv *sto = yr(1, "k", ys("tnone"));
+    if (sw == 8 && ys_eq_lit(yr_get(spt, "k"), "tptr")) {
+        sto = yr_get(spt, "to");
+        ;
+    } else {
+        ;
+    }
     st = gen(st, yr_get(node, "p"));
     st = emit(st, ys("    push %rax"));
-    st = gen(st, yr_get(node, "v"));
+    st = gen_as(st, yr_get(node, "v"), sto);
     st = emit(st, ys("    pop %rcx"));
     if (sw == 1) {
         return emit(st, ys("    movb %al, (%rcx)"));
@@ -7145,6 +7404,10 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     }
     /* The names nested functions capture (see box_names / box_bound). */
     f = env_define(f, ys(""), ys("frame"), 0, ys(""), yr(1, "k", ys("tnone")));
+    /* This function's declared type, for conversions at returns and self calls. */
+    f = env_define(f, ys(""), ys("fnty"), 0, ys(""),
+                   yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"),
+                       "ret", yr_get(func, "ret")));
     Yv *bnames = box_names(func);
     long bi = 0;
     while (bi < yv_len(bnames)) {

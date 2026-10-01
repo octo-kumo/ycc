@@ -1464,14 +1464,18 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
     else if (k == "bool") { { k: "tbool" } }
     else if (k == "void") { { k: "tvoid" } }
     else if (k == "id") {
-        if (node.v == "self") { { k: "tfunc" } } else {
+        if (node.v == "self") { cur_fn_type(st) } else {
             let e = env_find(st, node.v);
             if (e.kind == "none") {
                 if (node.v == "none") { normnode({ k: "topt", of: { k: "tunk" } }) } else { { k: "tunk" } }
             } else { e.typ }
         }
     } else if (k == "un") {
-        if (node.op == "-") { infer(st, node.e) } else { { k: "tbool" } }
+        if (node.op == "-") {
+            // negating a byte is long arithmetic (types.y): -b leaves 0..255
+            let ut = infer(st, node.e);
+            if (ut.k == "tbyte") { { k: "tlong" } } else { ut }
+        } else { { k: "tbool" } }
     } else if (k == "bin") {
         let op = node.op;
         if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "::") {
@@ -1726,6 +1730,11 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             { k: "tvoid" }
         } else if (name == "eputs") {
             { k: "tvoid" }
+        } else if (name == "self") {
+            // the declared return type; an inferred one stays unknown here
+            let sft = cur_fn_type(st);
+            let sret = sft.ret;
+            if (sret.k == "tnone") { { k: "tunk" } } else { sret }
         } else {
             let e = env_find(st, name);
             if (e.kind == "none") {
@@ -2360,7 +2369,7 @@ def gen(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env
     } else if (k == "store") {
         gen_store(st, node)
     } else if (k == "ret") {
-        st = gen(st, node.e);
+        st = gen_as(st, node.e, cur_fn_ret(st));
         emit(st, "    jmp " + st.end_label)
     } else {
         // Unreachable: the checker rejects everything else.
@@ -2384,7 +2393,7 @@ def gen_bstr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         bi = bi + 1;
     };
     let barr = { k: "array", elems: elems, line: node.line, col: node.col };
-    gen_array_esz(st, barr, 1)
+    gen_array_esz(st, barr, 1, { k: "tnone" })
 };
 
 def gen_str_const(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, s: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -2761,9 +2770,10 @@ def gen_union_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, 
 def gen_indirect(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, callee) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let args = node.args;
     let n = len(args);
+    let iptypes = fn_args_of(infer(st, callee));
     st = gen(st, callee);
     st = emit(st, "    push %rax");
-    st = gen_push_args(st, args);
+    st = gen_push_args_as(st, args, iptypes);
     // Reload the closure (it sits just below the n pushed args) and call
     // through its code pointer.
     st = emit(st, "    mov " + tostring(8 * n) + "(%rsp), %rax");
@@ -3251,6 +3261,100 @@ def gen_push_args(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     st
 };
 
+// gen_push_args, with argument i converted (gen_as) to ptypes[i], the
+// type of the parameter it binds; arguments past ptypes are pushed as is.
+def gen_push_args_as(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, args: [{ k: str }], ptypes: [{ k: str }]) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let i = 0;
+    while (i < len(args)) {
+        if (i < len(ptypes)) {
+            st = gen_as(st, args[i], ptypes[i]);
+            0
+        } else {
+            st = gen(st, args[i]);
+            0
+        };
+        st = emit(st, "    push %rax");
+        i = i + 1;
+    };
+    st
+};
+
+// The implicit numeric conversions (types.y tcompat admits them): a long
+// or byte stored where a float is declared becomes that float, and a long
+// stored where a byte is declared keeps its low 8 bits. The value is in
+// %rax with static type `got`; `want` is the declared type of the place it
+// goes to. A packed [byte] element store (movb) truncates by itself, so
+// those callers ask for no byte conversion.
+def gen_conv(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, got, want) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let gk: str = got.k;
+    let wk: str = want.k;
+    if (wk == "tfloat" && (gk == "tlong" || gk == "tbyte")) {
+        st = emit(st, "    cvtsi2sd %rax, %xmm0");
+        emit(st, "    movq %xmm0, %rax")
+    } else if (wk == "tbyte" && gk == "tlong") {
+        emit(st, "    movzbq %al, %rax")
+    } else {
+        st
+    }
+};
+
+// gen, then gen_conv to `want`: every place a value is stored under a
+// declared type (variable, parameter, return value, element, field,
+// pointee) goes through here.
+def gen_as(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, want) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    st = gen(st, node);
+    let wk: str = want.k;
+    if (wk == "tfloat" || wk == "tbyte") {
+        gen_conv(st, infer(st, node), want)
+    } else {
+        st
+    }
+};
+
+// The type of the function being emitted: emit_one_fn records it as a
+// nameless "fnty" entry (declared parameter types and declared return
+// type, tnone when `-> T` is omitted). infer_fn_ret's scope has none.
+def cur_fn_type(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }) -> { k: str } {
+    let env = st.env;
+    let i = len(env) - 1;
+    let ft: { k: str } = { k: "tfunc", args: [], ret: { k: "tunk" } };
+    let looking = true;
+    while (looking && i >= 0) {
+        let e = env[i];
+        if (e.kind == "fnty") {
+            ft = e.typ;
+            looking = false;
+            0
+        } else { 0; };
+        i = i - 1;
+    };
+    ft
+};
+
+def cur_fn_ret(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }) -> { k: str } {
+    let ft = cur_fn_type(st);
+    ft.ret
+};
+
+// Parameter types of a function type (none for anything else).
+def fn_args_of(t) -> [{ k: str }] {
+    let none: [{ k: str }] = [];
+    if (t.k == "tfunc") { t.args } else { none }
+};
+
+// Element type of an array type (tnone for anything else).
+def arr_elem_type(t) -> { k: str } {
+    if (t.k == "tarr") { t.of }
+    else if (t.k == "tarrfix") { t.of }
+    else { { k: "tnone" } }
+};
+
+// The element type a store converts to: none for a packed [byte] (esz 1),
+// whose movb store truncates by itself.
+def store_elem_type(t, esz: long) -> { k: str } {
+    if (esz == 1) { { k: "tnone" } } else { arr_elem_type(t) }
+};
+
 // Call a one-argument runtime helper. The argument is in %rax and goes on
 // the stack — the Y convention every helper written in Y (std/rt.y) and
 // every asm helper shares; the caller cleans up. (Runtime helpers used to
@@ -3517,9 +3621,10 @@ def gen_rec_str_rax(st: { out: [str], rodata: [[str]], uid: long, fuid: long, lo
 def gen_cons(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let ln = node.line;
     let cl = node.col;
-    let cesz = arr_elem_bytes(infer(st, node.r));
+    let crt = infer(st, node.r);
+    let cesz = arr_elem_bytes(crt);
     let one = { k: "array", elems: args1(node.l), line: ln, col: cl };
-    st = gen_array_esz(st, one, cesz);
+    st = gen_array_esz(st, one, cesz, store_elem_type(crt, cesz));
     st = emit(st, "    push %rax");
     st = gen(st, node.r);
     st = emit(st, "    push %rax");
@@ -3527,6 +3632,26 @@ def gen_cons(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     st = emit(st, "    push %rax");
     st = emit(st, "    call y_arr_cat");
     emit(st, "    add $24, %rsp")
+};
+
+// `l + r` on two arrays whose element types differ by an implicit numeric
+// conversion ([float] + [long], [long] + [byte], ...): y_arr_cat copies raw
+// elements, so build the result element by element instead --
+// { let a = l; let b = r; let c: [L] = []; c += a; c += b; c } -- where
+// each `+=` pushes through the element conversion (gen_push).
+def gen_cat_conv(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, lt: { k: str }) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let ln = node.line;
+    let cl = node.col;
+    let r = next_uid(st);
+    st = r.st;
+    let t1 = "y_t" + tostring(r.uid);
+    let noelems: [{ k: str }] = [];
+    let da = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "l", v: node.l, line: ln, col: cl };
+    let db = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "r", v: node.r, line: ln, col: cl };
+    let dc = { k: "decl", kind: "let", typ: { k: "tarr", of: lt.of }, name: t1 + "c", v: { k: "array", elems: noelems, line: ln, col: cl }, line: ln, col: cl };
+    let pa = { k: "opassign", tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "l", ln, cl), line: ln, col: cl };
+    let pb = { k: "opassign", tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "r", ln, cl), line: ln, col: cl };
+    gen(st, block6(da, db, dc, pa, pb, n_id(t1 + "c", ln, cl), ln, cl))
 };
 
 // Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
@@ -3543,9 +3668,21 @@ def gen_cat_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     let risarr = rk == "tarr" || rk == "tarrfix";
     let how = "elem";
     if (lisarr && risarr) { how = types.arr_plus_kind(lt, rt); 0; };
+    if (how == "cat" && !types.teq(lt.of, rt.of)) {
+        return gen_cat_conv(st, node, lt);
+    };
     let larr = lisarr && how != "prepend";
     let esz = 8;
-    if (larr) { esz = arr_elem_bytes(lt); 0; } else { esz = arr_elem_bytes(rt); 0; };
+    let ety = { k: "tnone" };
+    if (larr) {
+        esz = arr_elem_bytes(lt);
+        ety = store_elem_type(lt, esz);
+        0;
+    } else {
+        esz = arr_elem_bytes(rt);
+        ety = store_elem_type(rt, esz);
+        0;
+    };
     let one = { k: "array", elems: args1(node.r), line: ln, col: cl };
     if (larr) {
         0
@@ -3560,12 +3697,12 @@ def gen_cat_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
             st = gen(st, node.r);
             0
         } else {
-            st = gen_array_esz(st, one, esz);
+            st = gen_array_esz(st, one, esz, ety);
             0
         };
         0
     } else {
-        st = gen_array_esz(st, one, esz);
+        st = gen_array_esz(st, one, esz, ety);
         st = emit(st, "    push %rax");
         st = gen(st, node.r);
         0
@@ -3676,14 +3813,17 @@ def capture_off(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 def gen_direct(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, name: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let label = "";
     let indirect = false;
+    let dptypes: [{ k: str }] = [];
     if (name == "self") {
         label = st.self_label;
+        dptypes = fn_args_of(cur_fn_type(st));
     } else {
         let e = env_find(st, name);
         if (e.kind == "none") {
             label = "y_missing_" + name;
         } else if (e.kind == "func") {
             label = e.label;
+            dptypes = fn_args_of(e.typ);
         } else {
             // A local/param/capture/global holding a closure value: call
             // through it.
@@ -3707,7 +3847,7 @@ def gen_direct(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             st = emit(st, "    push %rax");
             0
         } else { 0; };
-        st = gen_push_args(st, node.args);
+        st = gen_push_args_as(st, node.args, dptypes);
         st = emit(st, "    call " + label);
         let nbytes = len(node.args) * 8;
         if (soff >= 0) {
@@ -3892,11 +4032,18 @@ def is_self_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
 def gen_tail_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let targs = node.args;
     let n = len(targs);
+    let tptypes = fn_args_of(cur_fn_type(st));
     // evaluate each argument into a fresh local
     let offs: [long] = [];
     let i = 0;
     while (i < n) {
-        st = gen(st, targs[i]);
+        if (i < len(tptypes)) {
+            st = gen_as(st, targs[i], tptypes[i]);
+            0
+        } else {
+            st = gen(st, targs[i]);
+            0
+        };
         let off = (st.slots + 1) * -8;
         st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
         offs += off;
@@ -3929,14 +4076,14 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         if (is_self_call(st, e)) {
             gen_tail_call(st, e)
         } else {
-            st = gen(st, e);
+            st = gen_as(st, e, cur_fn_ret(st));
             emit(st, "    jmp " + st.end_label)
         }
     } else if (k == "call") {
         if (is_self_call(st, node)) {
             gen_tail_call(st, node)
         } else {
-            gen(st, node)
+            gen_as(st, node, cur_fn_ret(st))
         }
     } else if (k == "block") {
         let tl = node.stmts;
@@ -3977,7 +4124,7 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             st = emit(st, lelse + ":")
         }
     } else {
-        gen(st, node)
+        gen_as(st, node, cur_fn_ret(st))
     }
 };
 
@@ -4245,7 +4392,8 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             if (t.k == "tnone") {
                 t = infer(st, node.v);
             };
-            st = gen_arrrep_esz(st, node.v, arr_elem_bytes(t));
+            let rsz = arr_elem_bytes(t);
+            st = gen_arrrep_esz(st, node.v, rsz, store_elem_type(t, rsz));
             bind_decl(st, node.name, t)
         } else if (node.v.k == "array") {
             // Heap array literal. The DECLARED element type decides the
@@ -4255,7 +4403,8 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             if (t.k == "tnone") {
                 t = infer(st, node.v);
             };
-            st = gen_array_esz(st, node.v, arr_elem_bytes(t));
+            let asz = arr_elem_bytes(t);
+            st = gen_array_esz(st, node.v, asz, store_elem_type(t, asz));
             bind_decl(st, node.name, t)
         } else if (node.v.k == "rec") {
             // record literal: heap address (first-class value, plain slot).
@@ -4272,7 +4421,7 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             };
             bind_decl(st, node.name, t)
         } else {
-            st = gen(st, node.v);
+            st = gen_as(st, node.v, node.typ);
             // Reference semantics: arrays and records are heap values and
             // bindings share them (no copy-on-store). Cloning here made
             // every `let x = <call returning [T]>` O(n), so threading an
@@ -4315,7 +4464,7 @@ def gen_assign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     // the C copy's value model uses (yv.c). A captured variable lives in
     // one shared heap cell (box_capture), so its store goes through the
     // cell and is visible in the capturing scope too.
-    st = gen(st, node.v);
+    st = gen_as(st, node.v, e.typ);
     if (e.kind == "capture") {
         let idx = tonum(e.label);
         st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
@@ -4372,14 +4521,15 @@ def gen_fill_heap(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
 // {len, cap, data...}, fill every slot with v, leave the address in %rax.
 // Usable anywhere (let, assign, call argument, return), not just `let`.
 def gen_arrrep(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    gen_arrrep_esz(st, node, elem_bytes(infer(st, node.v)))
+    gen_arrrep_esz(st, node, elem_bytes(infer(st, node.v)), { k: "tnone" })
 };
 
 // Same, with the element width supplied by the declaration (`let b:
-// [byte; 4] = [0; 4]` — the literal's own elements infer as long).
-def gen_arrrep_esz(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, esz: long) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+// [byte; 4] = [0; 4]` — the literal's own elements infer as long), and
+// `ety` the element type the fill value converts to (store_elem_type).
+def gen_arrrep_esz(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, esz: long, ety) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let n = node.n;
-    st = gen(st, node.v);
+    st = gen_as(st, node.v, ety);
     st = emit(st, "    push %rax");
     st = emit(st, "    mov $" + tostring(arr_alloc_size(esz, n)) + ", %rdi");
     st = emit(st, "    call y_alloc");
@@ -4606,7 +4756,7 @@ def gen_dotassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     let idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
     st = emit(st, "    push %rax");
-    st = gen(st, node.v);
+    st = gen_as(st, node.v, rec_field_type(dt, dkey));
     st = emit(st, "    pop %rdx");
     st = emit(st, "    mov %rax, " + tostring(8 * idx) + "(%rdx)")
 };
@@ -4626,6 +4776,13 @@ def gen_dotassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
 // Synthetic AST pieces for the ++/-- and op= desugars. Node lists are
 // built with push chains over a let-bound [] — the checker rejects
 // heterogeneous array literals (see gen_str_const's note).
+// The new value of `x op= v` / `++x` is bound under the place's type when
+// that is byte: binding it masks it (gen_as), so the value the expression
+// yields is the one stored. Any other type is left to inference.
+def place_value_type(t) -> {k: str} {
+    if (t.k == "tbyte") { t } else { { k: "tnone" } }
+};
+
 def n_num(v: str, line: long, col: long) -> {k: str} {
     { k: "num", v: v, line: line, col: col }
 };
@@ -4719,7 +4876,7 @@ def gen_incdec(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
     if (node.pre) {
         // ++x -> { bind; let v = x + 1; x = v; v }
         let nv = { k: "bin", op: binop, l: place, r: one, line: ln, col: cl };
-        let d2 = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: nv, line: ln, col: cl };
+        let d2 = { k: "decl", kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
         let asg = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
         gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
     } else {
@@ -4758,7 +4915,7 @@ def gen_opassign_arith(st: { out: [str], rodata: [[str]], uid: long, fuid: long,
     let bind = gen_place_bind(tgt, t1, ln, cl);
     let rd = gen_place_read(tgt, t1, ln, cl);
     let bin = { k: "bin", op: op, l: rd, r: node.v, line: ln, col: cl };
-    let d2 = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: bin, line: ln, col: cl };
+    let d2 = { k: "decl", kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
     let asg = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
     gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
 };
@@ -4913,7 +5070,7 @@ def gen_idxassign(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc:
     st = emit(st, "    push %rax");
     st = gen(st, node.idx);
     st = emit(st, "    push %rax");
-    st = gen(st, node.v);
+    st = gen_as(st, node.v, store_elem_type(bt, iaesz));
     st = emit(st, "    pop %rcx");
     st = emit(st, "    pop %rdx");
     st = emit(st, "    test %rcx, %rcx");
@@ -5204,19 +5361,46 @@ def rec_field_idx(t, key: str) -> long {
     idx
 };
 
+// Static type of field `key` in trec type t (tnone when there is none).
+def rec_field_type(t, key: str) -> { k: str } {
+    let ft = { k: "tnone" };
+    if (t.k == "trec") {
+        let fs = t.fields;
+        let i = 0;
+        while (i < len(fs)) {
+            let f = fs[i];
+            if (f.name == key) {
+                ft = f.typ;
+                0
+            } else { 0; };
+            i = i + 1;
+        };
+        0
+    } else { 0; };
+    ft
+};
+
 // Heap array literal [v, ...]: a data block of arr_alloc_size(esz, n) and a
 // separate arr_header_size() header {len, cap, data}; the values are stored
 // into the data block through the header's pointer. The header address (an
 // 8-byte value like any other) is the expression value.
 def gen_array(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    gen_array_esz(st, node, arr_elem_bytes(infer(st, node)))
+    let at = infer(st, node);
+    let gsz = arr_elem_bytes(at);
+    gen_array_esz(st, node, gsz, store_elem_type(at, gsz))
 };
 
 // Same, with the element width supplied by the declaration (`let b:
-// [byte] = [104, 105]` — the literal's own elements infer as long).
-def gen_array_esz(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, esz: long) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+// [byte] = [104, 105]` — the literal's own elements infer as long), and
+// `ety` the element type each value converts to (store_elem_type).
+def gen_array_esz(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, esz: long, ety) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let elems = node.elems;
-    st = gen_push_args(st, elems);
+    let gi = 0;
+    while (gi < len(elems)) {
+        st = gen_as(st, elems[gi], ety);
+        st = emit(st, "    push %rax");
+        gi = gi + 1;
+    };
     let n = len(elems);
     st = emit(st, "    mov $" + tostring(arr_alloc_size(esz, n)) + ", %rdi");
     st = emit(st, "    call y_alloc");
@@ -5261,8 +5445,9 @@ def gen_len(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
 // Returns the (possibly reallocated) header — rebind it: `a += v`.
 def gen_push(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let pargs = node.args;
-    let pesz = arr_elem_bytes(infer(st, pargs[0]));
-    st = gen_push_args(st, node.args);
+    let pat = infer(st, pargs[0]);
+    let pesz = arr_elem_bytes(pat);
+    st = gen_push_args_as(st, node.args, args2({ k: "tnone" }, store_elem_type(pat, pesz)));
     st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
     st = emit(st, "    push %rax");
     st = emit(st, "    call y_arr_push");
@@ -5313,8 +5498,9 @@ def gen_trim(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
 // moves, so every alias sees it). The `*=` operator desugars to this.
 def gen_prepend(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let pargs = node.args;
-    let pesz = arr_elem_bytes(infer(st, pargs[0]));
-    st = gen_push_args(st, node.args);
+    let pat = infer(st, pargs[0]);
+    let pesz = arr_elem_bytes(pat);
+    st = gen_push_args_as(st, node.args, args2({ k: "tnone" }, store_elem_type(pat, pesz)));
     st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
     st = emit(st, "    push %rax");
     st = emit(st, "    call y_arr_prepend");
@@ -5705,10 +5891,13 @@ def gen_write_bytes(st: { out: [str], rodata: [[str]], uid: long, fuid: long, lo
 };
 
 def gen_store(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    let sw = ptr_width(infer(st, node.p));
+    let spt = infer(st, node.p);
+    let sw = ptr_width(spt);
+    let sto = { k: "tnone" };
+    if (sw == 8 && spt.k == "tptr") { sto = spt.to; 0 } else { 0; };
     st = gen(st, node.p);
     st = emit(st, "    push %rax");
-    st = gen(st, node.v);
+    st = gen_as(st, node.v, sto);
     st = emit(st, "    pop %rcx");
     if (sw == 1) { emit(st, "    movb %al, (%rcx)") } else { emit(st, "    mov %rax, (%rcx)") }
 };
@@ -5734,6 +5923,9 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     };
     // The names nested functions capture (see box_names / box_bound).
     f = env_define(f, "", "frame", 0, "", { k: "tnone" });
+    // This function's declared type, for the conversions at its returns
+    // and its self calls (cur_fn_type).
+    f = env_define(f, "", "fnty", 0, "", { k: "tfunc", args: func.ptypes, ret: func.ret });
     let bnames = box_names(func);
     let bi = 0;
     while (bi < len(bnames)) {

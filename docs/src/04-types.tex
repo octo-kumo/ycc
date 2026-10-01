@@ -126,14 +126,30 @@ passed, stored and called); see Section~\ref{sec:functions}.
 \end{itemize}
 
 \subsection{Conversions}
+\label{sec:conversions}
 
 The implicit conversions are:
 \ic{long $\bs to$ float} (the only numeric widening),
 \ic{byte $\bs to$ long}, \ic{byte $\bs to$ float}, and the narrowing
-\ic{long $\bs to$ byte} at an \emph{annotated} \ic{byte} position (where
-the value is masked to eight bits when it is stored). A \ic{str} also
+\ic{long $\bs to$ byte} at a \ic{byte} position (the value is masked to
+eight bits: \ic{let b: byte = 258;} stores 2). A \ic{str} also
 flows into a \ic{*T} position, since a string value is a byte address.
 Apart from these, nothing converts: there is no cast syntax.
+
+A value converts where it is stored under a known type: an annotated
+\ic{let}; an assignment to a variable, element, field, map entry or
+pointee; an argument; a \ic{return} or trailing value under a declared
+return type; an element of an array literal; and the element that
+\ic{+=}, \ic{*=} or \ic{::} adds. Array \ic{+} and \ic{+=} with an
+array operand convert element by element into the left operand's
+element type: \ic{[0.5] + [7, 8]} is \ic{[0.5, 7.0, 8.0]}. Arithmetic
+on a \ic{byte} is \ic{long} arithmetic (\ic{-b} is a negative
+\ic{long}); storing the result back into a \ic{byte} masks it.
+
+Nothing converts a value that is already inside another one. Arrays,
+maps and records are references and an option is a box, so an existing
+\ic{[long]} is not a \ic{[float]}, and a record \ic{\{x: long\}} is not
+a \ic{\{x: float\}}: a record's numeric field types must match exactly.
 
 \subsection{Operator typing}
 
@@ -158,7 +174,7 @@ For a target of type \ty{T} and value of type \ty{U}:
 \toprule
 \ty{T} & operators & rule \\
 \midrule
-numbers & \ic{+= -= *= /= \%=} & \ty{U} $=$ \ty{T} (or widening) \\
+numbers & \ic{+= -= *= /= \%=} & \ty{U} converts to \ty{T}; stored as \ty{T} \\
 \ic{str} & \ic{+=} only & \ty{U} $=$ \ty{str} \\
 array & \ic{+=}, \ic{*=} only & Section~\ref{sec:arrays} \\
 \bottomrule

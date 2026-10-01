@@ -96,6 +96,7 @@ static int arr_lit_adopts_go(Yv *got, Yv *want);
 static int trec_compat(Yv *got, Yv *want);
 static int trec_compat_go(Yv *gfs, Yv *wfs, long i);
 static int trec_has(Yv *gfs, Yv *name, Yv *typ);
+static int field_compat(Yv *got, Yv *want);
 static Yv *typeof_expr(Yv *st, Yv *node);
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt);
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt);
@@ -1360,13 +1361,16 @@ static int trec_compat_go(Yv *gfs, Yv *wfs, long i) {
     }
 }
 
+/* A record is a reference: a field is never copied on the way in, so
+ * nothing can convert it -- its numeric type must match exactly ({x: long}
+ * is not a {x: float}); every other field type unifies as tcompat says. */
 static int trec_has(Yv *gfs, Yv *name, Yv *typ) {
     long i = 0;
     int found = 0;
     while (i < yv_len(gfs)) {
         Yv *gf = ya_get(gfs, i);
         if (ys_eq(yr_get(gf, "name"), name)) {
-            if (tcompat(yr_get(gf, "typ"), typ)) {
+            if (field_compat(yr_get(gf, "typ"), typ)) {
                 found = 1;
                 ;
             } else {
@@ -1379,6 +1383,14 @@ static int trec_has(Yv *gfs, Yv *name, Yv *typ) {
         i = i + 1;
     }
     return found;
+}
+
+static int field_compat(Yv *got, Yv *want) {
+    if (is_num_kind(got) && is_num_kind(want)) {
+        return teq(got, want);
+    } else {
+        return tcompat(got, want);
+    }
 }
 
 static Yv *typeof_expr(Yv *st, Yv *node) {
