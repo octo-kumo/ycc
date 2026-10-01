@@ -19,7 +19,7 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab` and section headers |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof`) and `exec.y` (`exec`, its own file for `--no-exec`) — those three embedded into the compiler — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -244,6 +244,29 @@ All of these are lowered early, so the checker and emitter see little new:
   counts from 0, `hi > len` stops at len, `hi <= lo` is `""`), with
   `s[:hi]` and `s[lo:]` for the omitted bounds. There is no `substr`:
   `substr(s, a, n)` is `s[a:a + n]`. **`c'a'`** is a `byte` literal.
+- **String methods** `s.m(args)`, as in `"str 1 2 3".split(" ")`, work on
+  any `str`-typed receiver. One table, `str_method` in types.y, drives
+  both the checker (`typeof_method`: arity, argument types, result) and
+  the emitter (`gen_method`). Builtin-backed methods are the builtin with
+  the receiver as its first argument: `split`, `trim`/`strip`,
+  `index_of`, `last_index_of`, `bytes`, `tonum`, `ord`, `byte_at`, and
+  `join`, whose receiver is the separator and goes last
+  (`", ".join(xs)`). The rest are Y helpers in `std/str.y`, called by
+  fixed label (`y_str_pad_left`, …):
+  - `trim_start`/`lstrip` and `trim_end`/`rstrip`;
+  - `pad_left(w, fill = " ")`, `pad_right` and `center`. Widths are in
+    bytes; the fill repeats and is cut to fit; `center` puts the odd byte
+    on the right;
+  - `starts_with`, `ends_with`, `contains` (`""` is in everything);
+  - `count` and `replace`: non-overlapping, left to right, and an empty
+    pattern counts 0 and replaces nothing;
+  - `upper`/`lower` (ASCII), `repeat(n)` (`""` for `n <= 0`);
+  - `lines()`: split at LF, drop a CR before it, and no empty last line
+    after a final newline.
+
+  Method names are not reserved. A def, a variable or a record field may
+  use one, and `obj.f(x)` on a record still calls the field.
+  `s.length` stays a property; `s.length()` is an error that says so.
 - **Slice assignment** `a[lo:hi] = b` copies b's elements into that range;
   the range must lie inside a and hold exactly `len(b)` elements
   (`y_arr_setslice1`/`8` in rt.y trap otherwise).
@@ -327,13 +350,24 @@ examples of the same move landed earlier:
 `ycc --no-exec` simply does not splice `std/exec.y`, so the call fails
 with "undefined function 'exec'" and the binary has no path to a shell.
 
-`rt.y`, `prelude.y` and `exec.y` are plain Y files, and the compiler
-carries their text: native.y says `embed RT_SRC from "./std/rt.y";` (see
-*Embedding files* below), the C copy `Y_EMBED(RT_SRC, ...)`, because the
-shipped `ycc` is a standalone static ELF — it cannot read a support file
-at run time. `rt.y` is spliced always; `prelude.y` and `exec.y` only when
-the program mentions one of their names (`prelude_names`/`exec_names` in
-native.y). A Y helper may call intrinsics (`bytes`, `from_bytes`,
+`rt.y`, `prelude.y`, `exec.y` and `str.y` are plain Y files, and the
+compiler carries their text: native.y says `embed RT_SRC from
+"./std/rt.y";` (see *Embedding files* below), the C copy
+`Y_EMBED(RT_SRC, ...)`, because the shipped `ycc` is a standalone static
+ELF — it cannot read a support file at run time. `rt.y` is spliced
+always; the others only when the program mentions one of their names
+(`prelude_names`/`exec_names`/`str_names` in native.y). One pass over the
+program's text, `words_seen`, checks all three lists. It reads the text
+the way the lexer does, skipping comments and the insides of string
+literals, and counts whole words only (`executable` is not `exec`).
+`str.y`'s names count only in method-call form, `.name(`, because that
+is the only way to reach a helper-backed method. `std/str.y` holds those
+methods (*String methods* above). Even so, the scan over-approximates:
+`r.count(x)` calling a record field splices `str.y` too. So `str.y` must
+stay free of string literals. Tree shaking drops unused bodies, but the
+string literals they emitted stay in `.rodata`, and every such program
+would carry them; `str.y` writes `s[0:0]` for `""` and byte codes for
+`"\n"`. A Y helper may call intrinsics (`bytes`, `from_bytes`,
 `tostring`, `syscall`, …), slice strings (`s[a:b]` is the asm
 `y_str_slice`) and call other helpers, but never an assembly-only
 label directly — the checker would call it undefined — so every bridge into

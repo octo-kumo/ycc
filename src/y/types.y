@@ -1354,52 +1354,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         let dobj = node.obj;
         let dkey = node.key;
         let r = typeof_expr(st, dobj);
-        st = r.st;
-        if (r.typ.k == "trec") {
-            let found = false;
-            let ftyp = t_unk();
-            let fs = r.typ.fields;
-            let j = 0;
-            while (j < len(fs)) {
-                // NOTE: bound once (flow-snapshot, see the note above).
-                // NOTE: :str bindings (see teq note).
-                let f = fs[j];
-                let fn: str = f.name;
-                if (fn == dkey) {
-                    found = true;
-                    ftyp = f.typ;
-                    0
-                };
-                j = j + 1;
-                0
-            };
-            if (found) {
-                { typ: ftyp, st: st }
-            } else if (teq(r.typ, unk_shape())) {
-                // unknown-shape ({k}-only) reads unify quietly (tcompat
-                // law) — the missing annotation errors once at its own
-                // site, not again at every enclosing read. Concrete
-                // records still error below (emitter rejects loudly).
-                { typ: t_unk(), st: st }
-            } else {
-                st = fail(st, "record has no field '" + dkey + "'", node.line, node.col);
-                { typ: t_unk(), st: st }
-            }
-        } else if (r.typ.k == "tunk") {
-            { typ: t_unk(), st: st }
-        } else if (r.typ.k == "tnone") {
-            // bare-hole params (see typeof_def note): unify quietly.
-            { typ: t_unk(), st: st }
-        } else if (r.typ.k == "tname") {
-            { typ: t_unk(), st: st }
-        } else if (r.typ.k == "tparams") {
-            { typ: t_unk(), st: st }
-        } else if (r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "tstr") {
-            typeof_prop(st, r.typ, dkey, node.line, node.col)
-        } else {
-            st = fail(st, "cannot read field '" + node.key + "' of " + tstr(r.typ) + " (need a record)", node.line, node.col);
-            { typ: t_unk(), st: st }
-        }
+        typeof_field(r.st, r.typ, dkey, node.line, node.col)
     } else if (k == "func") {
         // Anonymous function literal in expression position. Check the body
         // like a named def would be, and give the expression its tfunc type;
@@ -1876,6 +1831,60 @@ def typeof_sliceassign(st: { bindings: [{ name: str, typ: { k: str }, kind: str,
     { typ: { k: "tvoid" }, st: st }
 };
 
+// The type of field `dkey` read from a value of type t: a record field,
+// or a built-in property of an array or a str. The dot arm of typeof_expr
+// is this after typing its object; typeof_call uses it directly for a
+// callee `x.f(...)`, so the receiver is typed once whether or not it turns
+// out to be a str (a string method) or a record (a field holding a
+// function).
+def typeof_field(st, t, dkey: str, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    if (t.k == "trec") {
+        let found = false;
+        let ftyp = t_unk();
+        let fs = t.fields;
+        let j = 0;
+        while (j < len(fs)) {
+            // NOTE: bound once (flow-snapshot, see the dot arm's note).
+            // NOTE: :str bindings (see teq note).
+            let f = fs[j];
+            let fn: str = f.name;
+            if (fn == dkey) {
+                found = true;
+                ftyp = f.typ;
+                0
+            };
+            j = j + 1;
+            0
+        };
+        if (found) {
+            { typ: ftyp, st: st }
+        } else if (teq(t, unk_shape())) {
+            // unknown-shape ({k}-only) reads unify quietly (tcompat
+            // law) — the missing annotation errors once at its own
+            // site, not again at every enclosing read. Concrete
+            // records still error below (emitter rejects loudly).
+            { typ: t_unk(), st: st }
+        } else {
+            st = fail(st, "record has no field '" + dkey + "'", line, col);
+            { typ: t_unk(), st: st }
+        }
+    } else if (t.k == "tunk") {
+        { typ: t_unk(), st: st }
+    } else if (t.k == "tnone") {
+        // bare-hole params (see typeof_def note): unify quietly.
+        { typ: t_unk(), st: st }
+    } else if (t.k == "tname") {
+        { typ: t_unk(), st: st }
+    } else if (t.k == "tparams") {
+        { typ: t_unk(), st: st }
+    } else if (t.k == "tarr" || t.k == "tarrfix" || t.k == "tstr") {
+        typeof_prop(st, t, dkey, line, col)
+    } else {
+        st = fail(st, "cannot read field '" + dkey + "' of " + tstr(t) + " (need a record)", line, col);
+        { typ: t_unk(), st: st }
+    }
+};
+
 // Built-in properties: `.length` of an array or a str is len(x); `.ptr` of
 // an array is the address of element 0 as a *T -- the data block's address,
 // so it is valid for an empty array too, where &a[0] traps. A str has no
@@ -1891,6 +1900,124 @@ def typeof_prop(st, t, key: str, line: long, col: long) -> { typ: { k: str }, st
         if (t.k == "tstr") { have = "'.length'"; 0; };
         st = fail(st, tstr(t) + " has no property '" + key + "' (it has " + have + ")", line, col);
         { typ: t_unk(), st: st }
+    }
+};
+
+// ── string methods ───────────────────────────────────────────────────────
+// `s.m(args)` with s a str calls a string method: a builtin with the
+// receiver as an argument (`s.split(",")` is split(s, ",")), or a helper
+// in std/str.y called by label (`s.pad_left(8)` is
+// y_str_pad_left(s, 8, " ")). This table is the whole definition; the
+// checker (typeof_method) and the emitter (native.y gen_method and
+// infer_call) both read it.
+//   fn      the builtin, or the helper's label; "" = no such method
+//   params  the argument types, receiver excluded
+//   nreq    how many are required; the last one may be left out only
+//           when nreq is one short, and then `dflt` (a str) is passed
+//   ret     the result type
+//   last    the receiver goes AFTER the arguments (`sep.join(xs)` is
+//           join(xs, sep))
+// A helper's method names must be in native.y str_names: that is what
+// splices std/str.y into a program that calls one.
+def str_method(m: str) -> { fn: str, params: [{ k: str }], nreq: long, ret: { k: str }, dflt: str, last: bool } {
+    let s = sm_t("tstr");
+    let l = sm_t("tlong");
+    let b = sm_t("tbool");
+    let no: [{ k: str }] = [];
+    if (m == "split") { sm_mk("split", [s], 1, sm_arr(s), "", false) }
+    else if (m == "join") { sm_mk("join", [sm_arr(sm_any())], 1, s, "", true) }
+    else if (m == "trim" || m == "strip") { sm_mk("trim", no, 0, s, "", false) }
+    else if (m == "trim_start" || m == "lstrip") { sm_mk("y_str_trim_start", no, 0, s, "", false) }
+    else if (m == "trim_end" || m == "rstrip") { sm_mk("y_str_trim_end", no, 0, s, "", false) }
+    else if (m == "pad_left") { sm_mk("y_str_pad_left", [l, s], 1, s, " ", false) }
+    else if (m == "pad_right") { sm_mk("y_str_pad_right", [l, s], 1, s, " ", false) }
+    else if (m == "center") { sm_mk("y_str_center", [l, s], 1, s, " ", false) }
+    else if (m == "starts_with") { sm_mk("y_str_starts_with", [s], 1, b, "", false) }
+    else if (m == "ends_with") { sm_mk("y_str_ends_with", [s], 1, b, "", false) }
+    else if (m == "contains") { sm_mk("y_str_contains", [s], 1, b, "", false) }
+    else if (m == "index_of") { sm_mk("index_of", [s], 1, l, "", false) }
+    else if (m == "last_index_of") { sm_mk("last_index_of", [s], 1, l, "", false) }
+    else if (m == "count") { sm_mk("y_str_count", [s], 1, l, "", false) }
+    else if (m == "replace") { sm_mk("y_str_replace", [s, s], 2, s, "", false) }
+    else if (m == "upper") { sm_mk("y_str_upper", no, 0, s, "", false) }
+    else if (m == "lower") { sm_mk("y_str_lower", no, 0, s, "", false) }
+    else if (m == "repeat") { sm_mk("y_str_repeat", [l], 1, s, "", false) }
+    else if (m == "lines") { sm_mk("y_str_lines", no, 0, sm_arr(s), "", false) }
+    else if (m == "bytes") { sm_mk("bytes", no, 0, sm_arr(sm_t("tbyte")), "", false) }
+    else if (m == "tonum") { sm_mk("tonum", no, 0, l, "", false) }
+    else if (m == "ord") { sm_mk("ord", no, 0, l, "", false) }
+    else if (m == "byte_at") { sm_mk("byte_at", [l], 1, l, "", false) }
+    else { sm_mk("", no, 0, t_unk(), "", false) }
+};
+
+def sm_mk(fn: str, params: [{ k: str }], nreq: long, ret: { k: str }, dflt: str, last: bool) -> { fn: str, params: [{ k: str }], nreq: long, ret: { k: str }, dflt: str, last: bool } {
+    { fn: fn, params: params, nreq: nreq, ret: ret, dflt: dflt, last: last }
+};
+
+def sm_t(k: str) -> { k: str } { { k: k } };
+
+def sm_arr(of: { k: str }) -> { k: str } { { k: "tarr", of: of } };
+
+// join's array: any element type (sm_accepts; prints as `T`, so an error
+// reads "expected [T]").
+def sm_any() -> { k: str } { { k: "tname", name: "T" } };
+
+// `node` is `s.m(args)` with s a str (typed already, by typeof_call).
+def typeof_method(st, node, m: str) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let sm = str_method(m);
+    let margs = node.args;
+    let na = len(margs);
+    let ps = sm.params;
+    let np = len(ps);
+    let what = "'str." + m + "'";
+    if (sm.fn == "") {
+        let hint = "";
+        if (m == "length") { hint = " ('.length' is a property: no parentheses)"; 0; };
+        st = fail(st, "str has no method '" + m + "'" + hint, node.line, node.col);
+        let i = 0;
+        while (i < na) {
+            let r = typeof_expr(st, margs[i]);
+            st = r.st;
+            i = i + 1;
+        };
+        { typ: t_unk(), st: st }
+    } else if (na < sm.nreq || na > np) {
+        let want = tostring(np);
+        if (sm.nreq < np) { want = tostring(sm.nreq) + " or " + tostring(np); 0; };
+        st = fail(st, what + " takes " + want + " args, got " + tostring(na), node.line, node.col);
+        let i = 0;
+        while (i < na) {
+            let r = typeof_expr(st, margs[i]);
+            st = r.st;
+            i = i + 1;
+        };
+        { typ: sm.ret, st: st }
+    } else {
+        let i = 0;
+        while (i < na) {
+            let r = typeof_expr(st, margs[i]);
+            st = r.st;
+            let ak: str = r.typ.k;
+            if (ak == "tvoid") {
+                st = fail(st, what + " arg " + tostring(i) + ": cannot pass a void value", node.line, node.col);
+                0
+            } else if (!sm_accepts(r.typ, ps[i])) {
+                st = fail(st, what + " arg " + tostring(i) + ": expected " + tstr(ps[i]) + ", got " + tstr(r.typ), node.line, node.col);
+                0
+            } else { 0; };
+            i = i + 1;
+        };
+        { typ: sm.ret, st: st }
+    }
+};
+
+// tcompat, except that join's [T] takes an array of any element type (as
+// the join builtin does: a [T], or poison).
+def sm_accepts(got, want: { k: str }) -> bool {
+    if (want.k == "tarr" && want.of.k == "tname") {
+        got.k == "tarr" || got.k == "tunk"
+    } else {
+        tcompat(got, want)
     }
 };
 
@@ -1992,10 +2119,32 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
     if (node.callee.k != "id") {
         // Calling an expression: legal when it yields a function value
         // (an immediately-invoked literal, an element of an array of
-        // functions, ...). The emitter goes through its code pointer.
-        let cf = typeof_expr(st, node.callee);
+        // functions, a record field holding one, ...). The emitter goes
+        // through its code pointer. `x.m(...)` with x a str is a string
+        // method instead (typeof_method); either way the receiver is
+        // typed once, here.
+        let ccal = node.callee;
+        let cf = { typ: t_unk(), st: st };
+        let smeth = false;
+        if (ccal.k == "dot") {
+            let crt = typeof_expr(st, ccal.obj);
+            if (crt.typ.k == "tstr") {
+                smeth = true;
+                cf = { typ: t_unk(), st: crt.st };
+                0
+            } else {
+                cf = typeof_field(crt.st, crt.typ, ccal.key, ccal.line, ccal.col);
+                0
+            };
+            0
+        } else {
+            cf = typeof_expr(st, ccal);
+            0
+        };
         st = cf.st;
-        if (cf.typ.k == "tfunc") {
+        if (smeth) {
+            typeof_method(st, node, ccal.key)
+        } else if (cf.typ.k == "tfunc") {
             let cft = cf.typ;
             let cfargs = cft.args;
             if (len(cargs) != len(cfargs)) {
@@ -2786,4 +2935,4 @@ def def_sig(name: str, func) -> { name: str, typ: { k: str } } {
     { name: name, typ: { k: "tfunc", args: args, ret: ret } }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_merge, narrow_type, type_names };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_merge, narrow_type, type_names, str_method };

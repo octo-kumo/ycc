@@ -51,6 +51,7 @@ Yv *tdisp(Yv *t);
 Yv *tdisp_fnval(Yv *t);
 Yv *check_program(Yv *ast);
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
+Yv *str_method(Yv *m);
 Yv *narrow_type(Yv *s, Yv *t);
 Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
@@ -62,6 +63,7 @@ Yv *rename_program(Yv *ast);
 Y_EMBED(RT_SRC, "src/y/std/rt.y")
 Y_EMBED(PRELUDE_SRC, "src/y/std/prelude.y")
 Y_EMBED(EXEC_SRC, "src/y/std/exec.y")
+Y_EMBED(STR_SRC, "src/y/std/str.y")
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
@@ -69,10 +71,14 @@ Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
 Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec);
 Yv *prelude_names(void);
 Yv *exec_names(void);
+Yv *str_names(void);
 Yv *std_text(Yv *s);
 long count_nl(Yv *s);
-int names_mentioned(Yv *src, Yv *names);
-Yv *strip_comments(Yv *src);
+Yv *words_seen(Yv *code, Yv *names);
+int word_byte(long c);
+int blank_byte(long c);
+int word_at(Yv *code, long i, Yv *nm);
+int seen_any(Yv *seen, long lo, long hi, long level);
 Yv *norm_path(Yv *p);
 int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
@@ -160,6 +166,7 @@ Yv *syscall_reg(long i);
 Yv *gen_push_args(Yv *st, Yv *args);
 Yv *gen_helper1(Yv *st, Yv *label);
 Yv *gen_call(Yv *st, Yv *node);
+Yv *gen_method(Yv *st, Yv *node);
 Yv *gen_print(Yv *st, Yv *node);
 Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t);
 Yv *gen_typeof(Yv *st, Yv *node);
@@ -351,22 +358,56 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
      * there is no name to test for. Unused helpers cost nothing in the
      * output — prune_bodies drops them at emit time. */
     Yv *rt = std_text(RT_SRC());
-    /* What the name checks below search: the program and any chunk spliced
-     * so far, but NOT rt. rt mentions none of the trigger names, and
-     * stripping its comments twice per compile was most of the resolve
-     * time of a small program. */
-    Yv *scan = rsrc;
+    /* What the name checks below search: the program's own text, in one
+     * pass for all three name lists (words_seen). No std chunk is
+     * searched: rt and str.y call none of the trigger names, and exec.y's
+     * one call into another chunk (y_stdin_sync, a prelude def) is why
+     * splicing exec also splices the prelude. */
+    Yv *pn = prelude_names();
+    Yv *xn = exec_names();
+    Yv *sn = str_names();
+    Yv *names = yav(0);
+    long ni = 0;
+    while (ni < yv_len(pn)) {
+        names = ya_push(names, ya_get(pn, ni));
+        ni = ni + 1;
+    }
+    ni = 0;
+    while (ni < yv_len(xn)) {
+        names = ya_push(names, ya_get(xn, ni));
+        ni = ni + 1;
+    }
+    ni = 0;
+    while (ni < yv_len(sn)) {
+        names = ya_push(names, ya_get(sn, ni));
+        ni = ni + 1;
+    }
+    Yv *seen = words_seen(rsrc, names);
+    long px = yv_len(pn) + yv_len(xn);
     rsrc = ys_cat(rt, rsrc);
     pre = pre + count_nl(rt);
-    /* std/exec.y and std/prelude.y go in front of the resolved text, but
-     * only when the program actually mentions one of their names —
-     * otherwise every binary would carry code it never calls. */
+    /* std/str.y, std/exec.y and std/prelude.y go in front of the resolved
+     * text, but only when the program actually mentions one of their
+     * names — otherwise every binary would carry code it never calls. */
+    /* str.y's names count only in method-call form, `.name(` (blanks and
+     * comments allowed in between). A helper-backed string method cannot
+     * be reached any other way, so a variable called `lines` or a field
+     * `r.count` splices nothing. */
+    if (seen_any(seen, px, yv_len(seen), 2)) {
+        Yv *tt = std_text(STR_SRC());
+        rsrc = ys_cat(tt, rsrc);
+        pre = pre + count_nl(tt);
+        ;
+    } else {
+        ;
+    }
+    int want_prelude = seen_any(seen, 0, yv_len(pn), 1);
     if (allow_exec) {
-        if (names_mentioned(scan, exec_names())) {
+        if (seen_any(seen, yv_len(pn), px, 1)) {
             Yv *xt = std_text(EXEC_SRC());
             rsrc = ys_cat(xt, rsrc);
-            scan = ys_cat(xt, scan);
             pre = pre + count_nl(xt);
+            want_prelude = 1;
             ;
         } else {
             ;
@@ -375,7 +416,7 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
     } else {
         ;
     }
-    if (names_mentioned(scan, prelude_names())) {
+    if (want_prelude) {
         Yv *pt = std_text(PRELUDE_SRC());
         rsrc = ys_cat(pt, rsrc);
         pre = pre + count_nl(pt);
@@ -388,11 +429,9 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
 
 /* Names std/prelude.y defines. A program that mentions none of them gets
  * no prelude at all, so a hello-world binary stays the size it was.
- * These are the TRIGGER names native_resolve_x searches the spliced text
- * for; a file may define more -- std/exec.y also defines exit_status,
- * which only exec() calls. `y_stdin_sync` is how the exec file pulls this
- * one in: exec is spliced first, so its call to y_stdin_sync is already in
- * the text this list is matched against. */
+ * These are the TRIGGER names native_resolve_x searches the program for;
+ * a file may define more -- std/exec.y also defines exit_status, which
+ * only exec() calls. */
 Yv *prelude_names(void) {
     Yv *out = yav(0);
     out = ya_push(out, ys("readline"));
@@ -403,6 +442,31 @@ Yv *prelude_names(void) {
 
 Yv *exec_names(void) {
     return ya_push(yav(0), ys("exec"));
+}
+
+/* The string methods std/str.y implements (types.y str_method maps each
+ * to its y_str_* helper). They count only in method-call form, `s.name(`
+ * (words_seen). The builtin-backed ones (split, trim, ...) need no splice,
+ * so they are not here. */
+Yv *str_names(void) {
+    Yv *out = yav(0);
+    out = ya_push(out, ys("trim_start"));
+    out = ya_push(out, ys("trim_end"));
+    out = ya_push(out, ys("lstrip"));
+    out = ya_push(out, ys("rstrip"));
+    out = ya_push(out, ys("pad_left"));
+    out = ya_push(out, ys("pad_right"));
+    out = ya_push(out, ys("center"));
+    out = ya_push(out, ys("starts_with"));
+    out = ya_push(out, ys("ends_with"));
+    out = ya_push(out, ys("contains"));
+    out = ya_push(out, ys("count"));
+    out = ya_push(out, ys("replace"));
+    out = ya_push(out, ys("upper"));
+    out = ya_push(out, ys("lower"));
+    out = ya_push(out, ys("repeat"));
+    out = ya_push(out, ys("lines"));
+    return out;
 }
 
 /* An embedded std file, ready to go in front of the program: newline-
@@ -433,99 +497,193 @@ long count_nl(Yv *s) {
     return c;
 }
 
-/* Textual check, deliberately: it runs before tokenizing, and a false
- * positive only costs an unused function in the output.
+/* Which trigger names the program mentions, in ONE pass over its text
+ * however many names there are. seen[k] is 0 when names[k] does not occur
+ * as a word of code, 1 when it does, and 2 when it also occurs in
+ * method-call form, `.name(` (blanks and comments allowed in between).
  *
- * COMMENTS ARE STRIPPED first. They used to be searched too, which meant a
- * comment containing `exec` (the word "executables" was enough) spliced the
- * whole fork/execve chunk into the binary -- the audit caught this by
- * diffing binaries and finding /bin/sh rodata and ~9 extra uids in a
- * program that never calls exec. Comments cannot call anything, so dropping
- * them removes the false positives without adding a real lexer dependency. */
-int names_mentioned(Yv *src, Yv *names) {
-    Yv *code = strip_comments(src);
-    long i = 0;
-    int want = 0;
-    while (i < yv_len(names)) {
-        Yv *nm = ya_get(names, i);
-        if (ys_index_of(code, nm) >= 0) {
-            want = 1;
-            ;
-        } else {
-            ;
-        }
-        i = i + 1;
+ * Textual, deliberately: it runs before tokenizing. It skips what the
+ * lexer skips -- blanks, line comments, and non-nesting block comments --
+ * and the insides of string literals: `"..."`, and `'...'`, since outside
+ * a literal or a comment a `'` only ever opens `b'..'` or `c'..'`; a
+ * backslash escapes the byte after it. Whole words only: `executable` is
+ * not `exec`, nor `counter` `count`. Each of those rules fixed a real
+ * failure of the scan it replaced (an index_of per name over the text
+ * with comments stripped first):
+ *   - a comment containing `exec` spliced the whole fork/execve chunk
+ *     into the binary (the audit found /bin/sh rodata and ~9 extra uids
+ *     in a program that never calls exec);
+ *   - after a non-nesting block comment the old strip dropped the rest of
+ *     the text, and a `//` inside a string literal ("http://") the rest
+ *     of its line, so a readline() there was missed: "undefined function
+ *     'readline'";
+ *   - 20 whole-text index_of scans were 10% of a self-compile.
+ * A false positive still only costs compile time and an unused function
+ * in the output; a miss is a compile error. */
+Yv *words_seen(Yv *code, Yv *names) {
+    Yv *seen = yav(0);
+    long k = 0;
+    while (k < yv_len(names)) {
+        seen = ya_push(seen, yv_long(0));
+        k = k + 1;
+        ;
     }
-    return want;
-}
-
-/* Remove line and block comments from `src`, keeping the newlines so line
- * counts (and therefore error positions) do not shift. Returns a STRING (the
- * pieces are joined): callers feed it to ys_index_of, which rejects a non-str
- * value. String literals are NOT protected: a `//` inside a string is
- * vanishingly rare next to the cost of tracking quotes here, and getting it
- * wrong only costs an unused chunk. */
-Yv *strip_comments(Yv *src) {
-    long n = yv_len(src);
-    Yv *out = yav(0);
+    long n = yv_len(code);
     long i = 0;
+    /* the first byte of the last token of code (blanks and comments skip),
+     * and a name just seen after a `.`, waiting for its `(` */
+    long prev = 0;
+    long pend = 0 - 1;
     while (i < n) {
-        Yv *c = ys_slice(src, i, i + 1);
-        if (ys_eq(c, ys("/"))) {
-            Yv *nxt = ys_slice(src, i + 1, i + 2);
-            if (ys_eq(nxt, ys("/"))) {
-                /* to end of line; keep the newline itself */
-                int done = 0;
-                while (!done) {
-                    if (i >= n) {
-                        done = 1;
-                        ;
-                    } else {
-                        Yv *d = ys_slice(src, i, i + 1);
-                        i = i + 1;
-                        if (ys_eq(d, ys("\n"))) {
-                            out = ya_push(out, ys("\n"));
-                            done = 1;
-                            ;
-                        } else {
-                            ;
-                        }
-                        ;
-                    }
+        long c = ys_byte_at(code, i);
+        if (blank_byte(c)) {
+            i = i + 1;
+            ;
+        } else if (c == 47 && i + 1 < n && ys_byte_at(code, i + 1) == 47) {
+            /* `//`: up to the newline */
+            i = i + 2;
+            while (i < n && ys_byte_at(code, i) != 10) {
+                i = i + 1;
+                ;
+            }
+            ;
+        } else if (c == 47 && i + 1 < n && ys_byte_at(code, i + 1) == 42) {
+            /* Block comment: past its first closing marker */
+            i = i + 2;
+            int open = 1;
+            while (open && i < n) {
+                if (ys_byte_at(code, i) == 42 && i + 1 < n &&
+                    ys_byte_at(code, i + 1) == 47) {
+                    open = 0;
+                    i = i + 1;
+                    ;
+                } else {
                     ;
                 }
-                ;
-            } else if (ys_eq(nxt, ys("*"))) {
-                i = i + 2;
-                while (i < n) {
-                    Yv *d = ys_slice(src, i, i + 1);
-                    if (ys_eq(d, ys("*"))) {
-                        if (ys_eq(ys_slice(src, i + 1, i + 2), ys("/"))) { i = i + 2; ; } else { i = i + 1; ; }
-                        ;
-                    } else {
-                        if (ys_eq(d, ys("\n"))) { out = ya_push(out, ys("\n")); ; } else { ; }
-                        i = i + 1;
-                        ;
-                    }
-                    ;
-                }
-                ;
-            } else {
-                out = ya_push(out, c);
                 i = i + 1;
                 ;
             }
             ;
         } else {
-            out = ya_push(out, c);
-            i = i + 1;
+            if (pend >= 0) {
+                if (c == 40) {
+                    ya_set(seen, pend, yv_long(2));
+                    ;
+                } else {
+                    ;
+                }
+                pend = 0 - 1;
+                ;
+            } else {
+                ;
+            }
+            if (c == 34 || c == 39) {
+                /* A string literal: past its closing quote */
+                i = i + 1;
+                int open = 1;
+                while (open && i < n) {
+                    long d = ys_byte_at(code, i);
+                    if (d == 92) {
+                        i = i + 2;
+                        ;
+                    } else if (d == c) {
+                        open = 0;
+                        i = i + 1;
+                        ;
+                    } else {
+                        i = i + 1;
+                        ;
+                    }
+                    ;
+                }
+                ;
+            } else if (word_byte(c)) {
+                long j = i + 1;
+                while (j < n && word_byte(ys_byte_at(code, j))) {
+                    j = j + 1;
+                    ;
+                }
+                long m = 0;
+                while (m < yv_len(names)) {
+                    Yv *nm = ya_get(names, m);
+                    if (yv_len(nm) == j - i && word_at(code, i, nm)) {
+                        if (yv_l(ya_get(seen, m)) == 0) {
+                            ya_set(seen, m, yv_long(1));
+                            ;
+                        } else {
+                            ;
+                        }
+                        if (prev == 46) {
+                            pend = m;
+                            ;
+                        } else {
+                            ;
+                        }
+                        ;
+                    } else {
+                        ;
+                    }
+                    m = m + 1;
+                    ;
+                }
+                i = j;
+                ;
+            } else {
+                i = i + 1;
+                ;
+            }
+            prev = c;
             ;
         }
         ;
     }
-    /* Y: `join(out, "")` — the pieces come back as one string, because
-       ys_index_of (below) rejects a non-str value. */
-    return ys_join(out, ys(""));
+    return seen;
+}
+
+/* A byte of an identifier-shaped word (the lexer's isalnum: letters,
+ * digits, `_`). */
+int word_byte(long c) {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) ||
+           (c >= 48 && c <= 57) || c == 95;
+}
+
+/* A blank as the lexer skips it (its isspace: space, tab, LF, CR). */
+int blank_byte(long c) {
+    return c == 32 || c == 9 || c == 10 || c == 13;
+}
+
+/* Whether code[i:i + len(nm)] is nm (the caller checked the length). */
+int word_at(Yv *code, long i, Yv *nm) {
+    int ok = 1;
+    long k = 0;
+    while (ok && k < yv_len(nm)) {
+        if (ys_byte_at(code, i + k) != ys_byte_at(nm, k)) {
+            ok = 0;
+            ;
+        } else {
+            ;
+        }
+        k = k + 1;
+        ;
+    }
+    return ok;
+}
+
+/* Whether any of seen[lo..hi) reaches `level` (see words_seen). */
+int seen_any(Yv *seen, long lo, long hi, long level) {
+    int r = 0;
+    long i = lo;
+    while (i < hi) {
+        if (yv_l(ya_get(seen, i)) >= level) {
+            r = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+        ;
+    }
+    return r;
 }
 
 /* Collapse "/./" segments so the same file resolves to one key no matter
@@ -2185,12 +2343,19 @@ Yv *infer(Yv *st, Yv *node) {
 Yv *infer_call(Yv *st, Yv *node) {
     if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "k"), "id")) {
         /* Calling an expression (immediately-invoked literal, fs[0](x), ...)
-         */
-        Yv *cft = infer(st, yr_get(node, "callee"));
-        if (ys_eq_lit(yr_get(cft, "k"), "tfunc")) {
-            return yr_get(cft, "ret");
+         * or `s.m(...)` with s a str: a string method (types.str_method). */
+        Yv *ical = yr_get(node, "callee");
+        if (ys_eq_lit(yr_get(ical, "k"), "dot") &&
+            ys_eq_lit(yr_get(infer(st, yr_get(ical, "obj")), "k"), "tstr")) {
+            Yv *ism = str_method(yr_get(ical, "key"));
+            return yr_get(ism, "ret");
         } else {
-            return yr(1, "k", ys("tunk"));
+            Yv *cft = infer(st, ical);
+            if (ys_eq_lit(yr_get(cft, "k"), "tfunc")) {
+                return yr_get(cft, "ret");
+            } else {
+                return yr(1, "k", ys("tunk"));
+            }
         }
     } else {
         Yv *name = yr_get(yr_get(node, "callee"), "v");
@@ -3986,9 +4151,14 @@ Yv *gen_helper1(Yv *st, Yv *label) {
 Yv *gen_call(Yv *st, Yv *node) {
     Yv *callee = yr_get(node, "callee");
     if (!ys_eq_lit(yr_get(callee, "k"), "id")) {
-        /* Calling the result of an expression (e.g. `fs[0](x)`): it is a
-         * closure value, so go through its code pointer. */
-        return gen_indirect(st, node, callee);
+        if (ys_eq_lit(yr_get(callee, "k"), "dot") &&
+            ys_eq_lit(yr_get(infer(st, yr_get(callee, "obj")), "k"), "tstr")) {
+            return gen_method(st, node);
+        } else {
+            /* Calling the result of an expression (e.g. `fs[0](x)`): it is
+             * a closure value, so go through its code pointer. */
+            return gen_indirect(st, node, callee);
+        }
     } else {
         Yv *name = yr_get(callee, "v");
         if (ys_eq_lit(name, "print")) {
@@ -4068,6 +4238,57 @@ Yv *gen_call(Yv *st, Yv *node) {
         } else {
             return gen_direct(st, node, name);
         }
+    }
+}
+
+/* `s.m(args)` with s a str (the checker validated it against
+ * types.str_method): the receiver becomes the first argument (the last
+ * for `sep.join(xs)`), a left-out optional argument its default, and
+ * the call goes to the builtin's own lowering, or straight to the
+ * std/str.y helper by label -- a Y function like any other, so the
+ * arguments are pushed and the caller pops them. */
+Yv *gen_method(Yv *st, Yv *node) {
+    Yv *mcal = yr_get(node, "callee");
+    Yv *mobj = yr_get(mcal, "obj");
+    Yv *sm = str_method(yr_get(mcal, "key"));
+    Yv *margs = yr_get(node, "args");
+    Yv *args = yav(0);
+    if (!yv_b(yr_get(sm, "last"))) {
+        args = ya_push(args, mobj);
+        ;
+    }
+    long i = 0;
+    while (i < yv_len(margs)) {
+        args = ya_push(args, ya_get(margs, i));
+        i = i + 1;
+    }
+    if (yv_len(margs) < yv_len(yr_get(sm, "params"))) {
+        args = ya_push(args,
+                       n_str(yr_get(sm, "dflt"),
+                             yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col"))));
+        ;
+    }
+    if (yv_b(yr_get(sm, "last"))) {
+        args = ya_push(args, mobj);
+        ;
+    }
+    Yv *fname = yr_get(sm, "fn");
+    if (yv_len(runtime_base(fname)) > 0) {
+        st = gen_push_args(st, args);
+        st = emit(st, ys_cat(ys("    call "), fname));
+        return emit(st,
+                    ys_cat(ys_cat(ys("    add $"),
+                                  ys_long(yv_len(args) * 8)),
+                            ys(", %rsp")));
+    } else {
+        return gen_call(
+            st, yr(5, "k", ys("call"), "callee",
+                   yr(4, "k", ys("id"), "v", fname,
+                      "line", yr_get(node, "line"),
+                      "col", yr_get(node, "col")),
+                   "args", args, "line", yr_get(node, "line"),
+                   "col", yr_get(node, "col")));
     }
 }
 

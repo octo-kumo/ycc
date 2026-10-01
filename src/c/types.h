@@ -1,8 +1,9 @@
 /* types.h — the static checker's exported surface (src/y/types.y `export`).
  *
  * The C compiler (src/c) is a 1:1 copy of the Y compiler (src/y); this
- * header exports exactly types.y's `export { check_program, tstr, tdisp,
- * tdisp_fnval, teq, field_merge }`. Every other def of the module is
+ * header exports types.y's `export { check_program, tstr, tdisp,
+ * tdisp_fnval, teq, field_merge, narrow_type, type_names, str_method }`.
+ * Every other def of the module is
  * private to types.c (the Y module keeps them unexported the same way).
  */
 #ifndef TYPES_H
@@ -16,6 +17,7 @@ Yv *tdisp(Yv *t);             /* user-visible rendering (typeof) */
 Yv *tdisp_fnval(Yv *t);       /* "<function (params)->(ret)>" shape */
 int teq(Yv *a, Yv *b);        /* strict type equality (branch agreement) */
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);  /* record-literal upsert */
+Yv *str_method(Yv *m);        /* string-method lowering/type table */
 Yv *narrow_type(Yv *s, Yv *t); /* static type of a match `narrow` node */
 Yv *type_names(Yv *t);        /* field names a record type / pattern tests */
 

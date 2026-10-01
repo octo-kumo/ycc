@@ -135,11 +135,14 @@ with \ic{'+='}''). Indexing is bounds-trapped like heap arrays. A fixed
 array may be sliced; the result is a heap \ic{[T]}.
 
 \subsection{Slices}
+\label{sec:slices}
 
 \ic{a[lo:hi]} evaluates to a \textbf{new} heap \ic{[T]} holding the
 elements in $[\texttt{lo}, \texttt{hi})$. Missing bounds default to
 \ic{0} and \ic{len}; bounds are clamped (no trap). All four spellings
-are legal: \ic{a[:]}, \ic{a[lo:]}, \ic{a[:hi]}, \ic{a[lo:hi]}.
+are legal: \ic{a[:]}, \ic{a[lo:]}, \ic{a[:hi]}, \ic{a[lo:hi]}. Strings
+slice the same way: \ic{s[lo:hi]} is a new \ic{str} of the bytes in that
+range, clamped alike. There is no \ic{substr}.
 
 \subsection{Byte strings}
 

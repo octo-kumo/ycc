@@ -6,13 +6,13 @@ CY_HDRS=$(wildcard src/c/*.h)
 CYCC=cycc
 
 # The Y compiler sources: what the compiler compiles (and mirrors in C).
-YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/exec.y src/y/std/rt.y
+YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/exec.y src/y/std/rt.y src/y/std/str.y
 
 # The std files the compiler splices into programs, embedded into it when
 # it is built: native.y says `embed RT_SRC from "./std/rt.y";`, the C copy
 # Y_EMBED(...) — an .incbin, so the C build reads them too (from the repo
 # root, where these rules run gcc).
-STD_EMBEDS=src/y/std/rt.y src/y/std/prelude.y src/y/std/exec.y
+STD_EMBEDS=src/y/std/rt.y src/y/std/prelude.y src/y/std/exec.y src/y/std/str.y
 
 all: cycc
 

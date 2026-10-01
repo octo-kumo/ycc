@@ -22,7 +22,6 @@
   the emitter through the assembler.
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
 - template string with f"{x} {y:.2f}" (python style)
-- string operations like trim, strip, pad etc shall be done like "str 1 2 3".split(' ')
 
 
 ## Done
@@ -106,6 +105,20 @@ what was deliberately *not* changed) is in `audit.md`.
   numbers kept: `t66`, `e57`, `e58`); the C copy embeds the same files with
   the assembler's `.incbin` (`Y_EMBED`). Programs compile to the same bytes
   as before.
+- **String methods**: `"str 1 2 3".split(" ")`, `s.pad_left(5, "0")`,
+  `", ".join(xs)` (`t67`, `e59`–`e63`). Any `str` takes the string
+  builtins as methods, plus `trim_start`/`trim_end` (`lstrip`/`rstrip`),
+  `pad_left`/`pad_right`/`center`, `starts_with`/`ends_with`/`contains`,
+  `count`, `replace`, `upper`/`lower`, `repeat` and `lines`. Those are Y
+  helpers in a fourth embedded file, `std/str.y`, spliced only when the
+  program mentions one of their names. One table (`str_method` in types.y)
+  feeds both the checker and the emitter. Method names stay usable as
+  ordinary names. On the way, the splice-trigger scan became one
+  lexer-faithful pass over whole words (`words_seen`). The old one stopped
+  reading at the first `/* */` comment, so `readline()` after one failed
+  with "undefined function". A `//` inside a string literal also hid the
+  rest of its line (`t68`). The new scan also avoids 16 whole-text
+  `index_of` scans, which had cost 10% of a self-compile.
 - Hex/binary literals, scientific notation, float literals. (`_` digit
   separators work in `0x`/`0b` literals only — a decimal literal stops at
   the first `_`, and `_` is a word character so the tail lexes as an

@@ -32,6 +32,7 @@ import rename from "./rename.y";
 embed RT_SRC from "./std/rt.y";
 embed PRELUDE_SRC from "./std/prelude.y";
 embed EXEC_SRC from "./std/exec.y";
+embed STR_SRC from "./std/str.y";
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -66,27 +67,41 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     // there is no name to test for. Unused helpers cost nothing in the
     // output — prune_bodies drops them at emit time.
     let rt = std_text(RT_SRC);
-    // What the name checks below search: the program and any chunk spliced
-    // so far, but NOT rt. rt mentions none of the trigger names, and
-    // stripping its comments twice per compile was most of the resolve
-    // time of a small program.
-    let scan = rsrc;
+    // What the name checks below search: the program's own text, in one
+    // pass for all three name lists (words_seen). No std chunk is
+    // searched: rt and str.y call none of the trigger names, and exec.y's
+    // one call into another chunk (y_stdin_sync, a prelude def) is why
+    // splicing exec also splices the prelude.
+    let pn = prelude_names();
+    let xn = exec_names();
+    let seen = words_seen(rsrc, pn + xn + str_names());
+    let px = len(pn) + len(xn);
     rsrc = rt + rsrc;
     pre = pre + count_nl(rt);
-    // std/exec.y and std/prelude.y go in front of the resolved text, but
-    // only when the program actually mentions one of their names —
-    // otherwise every binary would carry code it never calls.
+    // std/str.y, std/exec.y and std/prelude.y go in front of the resolved
+    // text, but only when the program actually mentions one of their
+    // names — otherwise every binary would carry code it never calls.
+    // str.y's names count only in method-call form, `.name(`: a helper-
+    // backed string method cannot be reached any other way, so a variable
+    // called `lines` or a field `r.count` splices nothing.
+    if (seen_any(seen, px, len(seen), 2)) {
+        let tt = std_text(STR_SRC);
+        rsrc = tt + rsrc;
+        pre = pre + count_nl(tt);
+        0
+    } else { 0; };
+    let want_prelude = seen_any(seen, 0, len(pn), 1);
     if (allow_exec) {
-        if (names_mentioned(scan, exec_names())) {
+        if (seen_any(seen, len(pn), px, 1)) {
             let xt = std_text(EXEC_SRC);
             rsrc = xt + rsrc;
-            scan = xt + scan;
             pre = pre + count_nl(xt);
+            want_prelude = true;
             0
         } else { 0; };
         0
     } else { 0; };
-    if (names_mentioned(scan, prelude_names())) {
+    if (want_prelude) {
         let pt = std_text(PRELUDE_SRC);
         rsrc = pt + rsrc;
         pre = pre + count_nl(pt);
@@ -97,17 +112,25 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
 
 // Names std/prelude.y defines. A program that mentions none of them gets
 // no prelude at all, so a hello-world binary stays the size it was.
-// These are the TRIGGER names native_resolve_x searches the spliced text
-// for; a file may define more -- std/exec.y also defines exit_status,
-// which only exec() calls. `y_stdin_sync` is how the exec file pulls this
-// one in: exec is spliced first, so its call to y_stdin_sync is already in
-// the text this list is matched against.
+// These are the TRIGGER names native_resolve_x searches the program for;
+// a file may define more -- std/exec.y also defines exit_status, which
+// only exec() calls.
 def prelude_names() -> [str] {
     ["readline", "clear_eof", "y_stdin_sync"]
 };
 
 def exec_names() -> [str] {
     ["exec"]
+};
+
+// The string methods std/str.y implements (types.y str_method maps each
+// to its y_str_* helper). They count only in method-call form, `s.name(`
+// (words_seen). The builtin-backed ones (split, trim, ...) need no splice,
+// so they are not here.
+def str_names() -> [str] {
+    ["trim_start", "trim_end", "lstrip", "rstrip", "pad_left", "pad_right",
+     "center", "starts_with", "ends_with", "contains", "count", "replace",
+     "upper", "lower", "repeat", "lines"]
 };
 
 // An embedded std file, ready to go in front of the program: newline-
@@ -130,92 +153,151 @@ def count_nl(s: str) -> long {
     c
 };
 
-// Textual check, deliberately: it runs before tokenizing, and a false
-// positive only costs an unused function in the output.
+// Which trigger names the program mentions, in ONE pass over its text
+// however many names there are. seen[k] is 0 when names[k] does not occur
+// as a word of code, 1 when it does, and 2 when it also occurs in
+// method-call form, `.name(` (blanks and comments allowed in between).
 //
-// COMMENTS ARE STRIPPED first. They used to be searched too, which meant a
-// comment containing `exec` (the word "executables" was enough) spliced the
-// whole fork/execve chunk into the binary -- the audit caught this by
-// diffing binaries and finding /bin/sh rodata and ~9 extra uids in a
-// program that never calls exec. Comments cannot call anything, so dropping
-// them removes the false positives without adding a real lexer dependency.
-def names_mentioned(src: str, names: [str]) -> bool {
-    let code = strip_comments(src);
-    let i = 0;
-    let want = false;
-    while (i < len(names)) {
-        let nm: str = names[i];
-        if (index_of(code, nm) >= 0) {
-            want = true;
-            0
-        } else { 0; };
-        i = i + 1;
+// Textual, deliberately: it runs before tokenizing. It skips what the
+// lexer skips -- blanks, `//` and `/* */` comments (which do not nest) --
+// and the insides of string literals: `"..."`, and `'...'`, since outside
+// a literal or a comment a `'` only ever opens `b'..'` or `c'..'`; a
+// backslash escapes the byte after it. Whole words only: `executable` is
+// not `exec`, nor `counter` `count`. Each of those rules fixed a real
+// failure of the scan it replaced (an index_of per name over the text
+// with comments stripped first):
+//   - a comment containing `exec` spliced the whole fork/execve chunk
+//     into the binary (the audit found /bin/sh rodata and ~9 extra uids
+//     in a program that never calls exec);
+//   - after a `/* */` comment the strip dropped the rest of the text, and
+//     a `//` inside a string literal ("http://") the rest of its line, so
+//     a readline() there was missed: "undefined function 'readline'";
+//   - 20 whole-text index_of scans were 10% of a self-compile.
+// A false positive still only costs compile time and an unused function
+// in the output; a miss is a compile error.
+def words_seen(code: str, names: [str]) -> [long] {
+    let seen: [long] = [];
+    let k = 0;
+    while (k < len(names)) {
+        seen += 0;
+        k = k + 1;
         0
     };
-    want
-};
-
-// Remove line and block comments from `src`, keeping the newlines so line
-// counts (and therefore error positions) do not shift. Returns a STRING (the
-// pieces are joined): callers feed it to index_of, and the C twin's
-// ys_index_of rejects a non-str value. String literals are NOT protected: a
-// `//` inside a string is vanishingly rare next to the cost of tracking
-// quotes here, and getting it wrong only costs an unused chunk.
-def strip_comments(src: str) -> str {
-    // A [str] of pieces, joined once at the end: O(n) overall, where
-    // `out += c` on a str would re-copy the whole prefix per character.
-    let out: [str] = [];
-    let n = len(src);
+    let n = len(code);
     let i = 0;
+    // the first byte of the last token of code (blanks and comments skip),
+    // and a name just seen after a `.`, waiting for its `(`
+    let prev = 0;
+    let pend = 0 - 1;
     while (i < n) {
-        let c = src[i:i + 1];
-        if (c == "/") {
-            let nxt = src[i + 1:i + 2];
-            if (nxt == "/") {
-                // to end of line; keep the newline itself
-                let done = false;
-                while (!done) {
-                    if (i >= n) {
-                        done = true;
-                        0
-                    } else {
-                        let d = src[i:i + 1];
-                        i = i + 1;
-                        if (d == "\n") { out += "\n"; done = true; 0; } else { 0; };
-                        0
-                    };
-                    0
-                };
+        let c = byte_at(code, i);
+        if (blank_byte(c)) {
+            i = i + 1;
+            0
+        } else if (c == 47 && i + 1 < n && byte_at(code, i + 1) == 47) {
+            // `//`: up to the newline
+            i = i + 2;
+            while (i < n && byte_at(code, i) != 10) {
+                i = i + 1;
                 0
-            } else if (nxt == "*") {
-                i = i + 2;
-                while (i < n) {
-                    let d = src[i:i + 1];
-                    if (d == "*") {
-                        if (src[i + 1:i + 2] == "/") { i = i + 2; 0; } else { i = i + 1; 0; };
-                        0
-                    } else {
-                        if (d == "\n") { out += "\n"; 0; } else { 0; };
-                        i = i + 1;
-                        0
-                    };
+            };
+            0
+        } else if (c == 47 && i + 1 < n && byte_at(code, i + 1) == 42) {
+            // `/*`: past the first `*/`
+            i = i + 2;
+            let open = true;
+            while (open && i < n) {
+                if (byte_at(code, i) == 42 && i + 1 < n && byte_at(code, i + 1) == 47) {
+                    open = false;
+                    i = i + 1;
                     0
-                };
-                0
-            } else {
-                out += c;
+                } else { 0; };
                 i = i + 1;
                 0
             };
             0
         } else {
-            out += c;
-            i = i + 1;
+            if (pend >= 0) {
+                if (c == 40) { seen[pend] = 2; 0; } else { 0; };
+                pend = 0 - 1;
+                0
+            } else { 0; };
+            if (c == 34 || c == 39) {
+                // a string literal: past its closing quote
+                i = i + 1;
+                let open = true;
+                while (open && i < n) {
+                    let d = byte_at(code, i);
+                    if (d == 92) { i = i + 2; 0; }
+                    else if (d == c) { open = false; i = i + 1; 0; }
+                    else { i = i + 1; 0; };
+                    0
+                };
+                0
+            } else if (word_byte(c)) {
+                let j = i + 1;
+                while (j < n && word_byte(byte_at(code, j))) {
+                    j = j + 1;
+                    0
+                };
+                let m = 0;
+                while (m < len(names)) {
+                    let nm: str = names[m];
+                    if (len(nm) == j - i && word_at(code, i, nm)) {
+                        if (seen[m] == 0) { seen[m] = 1; 0; } else { 0; };
+                        if (prev == 46) { pend = m; 0; } else { 0; };
+                        0
+                    } else { 0; };
+                    m = m + 1;
+                    0
+                };
+                i = j;
+                0
+            } else {
+                i = i + 1;
+                0
+            };
+            prev = c;
             0
         };
         0
     };
-    join(out, "")
+    seen
+};
+
+// A byte of an identifier-shaped word (the lexer's isalnum: letters,
+// digits, `_`).
+def word_byte(c: long) -> bool {
+    (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95
+};
+
+// A blank as the lexer skips it (its isspace: space, tab, LF, CR).
+def blank_byte(c: long) -> bool {
+    c == 32 || c == 9 || c == 10 || c == 13
+};
+
+// Whether code[i:i + len(nm)] is nm (the caller checked the length).
+def word_at(code: str, i: long, nm: str) -> bool {
+    let ok = true;
+    let k = 0;
+    while (ok && k < len(nm)) {
+        if (byte_at(code, i + k) != byte_at(nm, k)) { ok = false; 0; } else { 0; };
+        k = k + 1;
+        0
+    };
+    ok
+};
+
+// Whether any of seen[lo..hi) reaches `level` (see words_seen).
+def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
+    let r = false;
+    let i = lo;
+    while (i < hi) {
+        if (seen[i] >= level) { r = true; 0; } else { 0; };
+        i = i + 1;
+        0
+    };
+    r
 };
 
 // Collapse "/./" segments so the same file resolves to one key no matter
@@ -1543,9 +1625,16 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
 
 def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { k: str } {
     if (node.callee.k != "id") {
-        // Calling an expression (immediately-invoked literal, fs[0](x), ...)
-        let cft = infer(st, node.callee);
-        if (cft.k == "tfunc") { cft.ret } else { { k: "tunk" } }
+        // Calling an expression (immediately-invoked literal, fs[0](x), ...),
+        // or `s.m(...)` with s a str: a string method (types.str_method).
+        let ical = node.callee;
+        if (ical.k == "dot" && infer(st, ical.obj).k == "tstr") {
+            let ism = types.str_method(ical.key);
+            ism.ret
+        } else {
+            let cft = infer(st, ical);
+            if (cft.k == "tfunc") { cft.ret } else { { k: "tunk" } }
+        }
     } else {
         let name = node.callee.v;
         if (name == "print") {
@@ -3143,9 +3232,13 @@ def gen_helper1(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
 def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let callee = node.callee;
     if (callee.k != "id") {
-        // Calling the result of an expression (e.g. `fs[0](x)`): it is a
-        // closure value, so go through its code pointer.
-        gen_indirect(st, node, callee)
+        if (callee.k == "dot" && infer(st, callee.obj).k == "tstr") {
+            gen_method(st, node)
+        } else {
+            // Calling the result of an expression (e.g. `fs[0](x)`): it is a
+            // closure value, so go through its code pointer.
+            gen_indirect(st, node, callee)
+        }
     } else {
         let name = callee.v;
         if (name == "print") {
@@ -3225,6 +3318,39 @@ def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         } else {
             gen_direct(st, node, name)
         }
+    }
+};
+
+// `s.m(args)` with s a str (the checker validated it against
+// types.str_method): the receiver becomes the first argument (the last
+// for `sep.join(xs)`), a left-out optional argument its default, and
+// the call goes to the builtin's own lowering, or straight to the
+// std/str.y helper by label -- a Y function like any other, so the
+// arguments are pushed and the caller pops them.
+def gen_method(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let mcal = node.callee;
+    let mobj = mcal.obj;
+    let sm = types.str_method(mcal.key);
+    let margs = node.args;
+    let args: [{ k: str }] = [];
+    if (!sm.last) { args += mobj; 0; };
+    let i = 0;
+    while (i < len(margs)) {
+        args += margs[i];
+        i = i + 1;
+    };
+    if (len(margs) < len(sm.params)) {
+        args += n_str(sm.dflt, node.line, node.col);
+        0
+    };
+    if (sm.last) { args += mobj; 0; };
+    let fname = sm.fn;
+    if (len(runtime_base(fname)) > 0) {
+        st = gen_push_args(st, args);
+        st = emit(st, "    call " + fname);
+        emit(st, "    add $" + tostring(len(args) * 8) + ", %rsp")
+    } else {
+        gen_call(st, { k: "call", callee: { k: "id", v: fname, line: node.line, col: node.col }, args: args, line: node.line, col: node.col })
     }
 };
 

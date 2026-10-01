@@ -101,6 +101,7 @@ Yv *ys_split(const Yv *s, const Yv *sep);    /* -> [str] */
 long ys_index_of(const Yv *s, const Yv *sub);
 long ys_last_index_of(const Yv *s, const Yv *sub);
 long ys_ord(const Yv *s);             /* first byte */
+long ys_byte_at(const Yv *s, long i); /* byte i (0..255); traps out of bounds */
 Yv *ys_chr(long v);
 Yv *ys_tostring(const Yv *v);         /* the format the native tostring prints */
 Yv *ys_long(long v);                  /* tostring of a long */

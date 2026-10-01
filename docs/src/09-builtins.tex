@@ -11,9 +11,6 @@ a runtime error (Section~\ref{sec:errors}).
   (entries) as \ic{long}. Records are rejected (a record's field count
   is part of its type).
 \item[\ic{range(n)}] \ic{[0, 1, ..., n-1]}.
-\item[\ic{substr(s, i, n)}] Substring, C-clamped: \ic{i < 0} becomes
-  \ic{0}, \ic{i >= len} yields \ic{""}, \ic{n < 0} or overflow runs to
-  the end.
 \item[\ic{trim(s)}] Strip leading/trailing space, tab, CR, LF.
 \item[\ic{join(xs, sep)}] Concatenate \ic{[str]} with a separator.
 \item[\ic{split(s, sep)}] Split on every occurrence of a non-empty
@@ -25,6 +22,47 @@ a runtime error (Section~\ref{sec:errors}).
 \item[\ic{chr(n)}] One-byte string of \ic{n} (masked to 8 bits).
 \item[\ic{byte\_at(s, i)}] Byte at \ic{i} as \ic{long}; traps out of
   bounds. Cheap per-byte access (no copy).
+\end{description}
+
+\noindent There is no \ic{substr}: a substring is a slice,
+\ic{s[i:i + n]} (Section~\ref{sec:slices}).
+
+\subsection{String methods}
+\label{sec:string-methods}
+
+A \ic{str} value takes methods: \ic{"str 1 2 3".split(" ")} is
+\ic{["str", "1", "2", "3"]}. A method call is checked like a function
+call (argument count and types). Method names are not reserved: a
+function, a variable or a record field may share one, and \ic{r.f(x)} on
+a record still calls the field. \ic{s.length} is a property, so
+\ic{s.length()} is an error. Widths and positions count bytes.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[Builtins as methods] \ic{s.split(sep)}, \ic{s.trim()} (also
+  \ic{s.strip()}), \ic{s.index\_of(sub)}, \ic{s.last\_index\_of(sub)},
+  \ic{s.ord()}, \ic{s.byte\_at(i)}, \ic{s.tonum()} and \ic{s.bytes()} are
+  the builtins of the same name with \ic{s} as the first argument.
+\item[\ic{sep.join(xs)}] \ic{join(xs, sep)}: the receiver is the
+  separator.
+\item[\ic{s.trim\_start()}, \ic{s.trim\_end()}] Strip space, tab, CR and
+  LF at one end only (also spelled \ic{lstrip}, \ic{rstrip}).
+\item[\ic{s.pad\_left(w, fill)}, \ic{s.pad\_right(w, fill)}, \ic{s.center(w, fill)}]
+  Widen \ic{s} to \ic{w} bytes with \ic{fill} (default \ic{" "}, repeated
+  and cut to fit); a longer \ic{s} is returned unchanged. \ic{center}
+  puts the odd byte on the right.
+\item[\ic{s.starts\_with(p)}, \ic{s.ends\_with(p)}, \ic{s.contains(p)}]
+  \ic{bool}; \ic{""} is a prefix, suffix and part of every string.
+\item[\ic{s.count(p)}] Non-overlapping occurrences, left to right
+  (\ic{0} for an empty \ic{p}).
+\item[\ic{s.replace(p, r)}] Every non-overlapping occurrence of \ic{p},
+  left to right, replaced by \ic{r}; an empty \ic{p} replaces nothing.
+\item[\ic{s.upper()}, \ic{s.lower()}] ASCII case mapping; other bytes are
+  kept.
+\item[\ic{s.repeat(n)}] \ic{s} written \ic{n} times; \ic{""} when
+  \ic{n <= 0}.
+\item[\ic{s.lines()}] Split at each LF, dropping a CR just before it; a
+  final newline does not start an empty line, so \ic{"a\bs nb\bs n".lines()}
+  is \ic{["a", "b"]} and \ic{"".lines()} is \ic{[]}.
 \end{description}
 
 \subsection{Conversions}

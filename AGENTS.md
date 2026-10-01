@@ -20,9 +20,11 @@ same semantics.
   gitignored too but is **not** disposable — it is the port's ground
   truth.
 - The runtime the compiler splices into programs is plain Y in
-  `src/y/std/rt.y`, `prelude.y`, `exec.y`, embedded into both compilers
-  when they are built (`embed` in native.y, `Y_EMBED` in native.c —
-  PORTING.md rule 10). Edit those files directly; there is no generator.
+  `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y`, embedded into both
+  compilers when they are built (`embed` in native.y, `Y_EMBED` in
+  native.c — PORTING.md rule 10). Edit those files directly; there is no
+  generator. `str.y` must not contain string literals (see NATIVE.md,
+  "Runtime library").
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
   Do NOT put a `ulimit -v` on sanitized runs — ASan reserves terabytes
@@ -196,6 +198,10 @@ code calls it by fixed label.
 - `arr.length` (also `str.length`) is `len(arr)`; `arr.ptr` is a `*T` to
   the first element (arrays only — string bytes may live in read-only
   `.rodata`).
+- `s.m(args)` on a `str` is a string method (`"a b".split(" ")`,
+  `s.pad_left(5, "0")`, `", ".join(xs)`): one table, `str_method` in
+  types.y, feeds the checker and the emitter (NATIVE.md, "String
+  methods"). Method names are not reserved words.
 - `const x = v` cannot be rebound (`=`, `op=`, `++`/`--` are type
   errors), but what it refers to stays mutable: `+=`/`*=` on a const
   array, element and field stores all work (JS `const`).
@@ -210,8 +216,9 @@ code calls it by fixed label.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `native.y` (emitter), `arch_x64.y`
   (asm + prelude), `enc64.y`, `asm.y`, `elf.y`; `std/` (`rt.y` runtime
-  in Y, `prelude.y` (`readline`), `exec.y` (`exec`) — the three embedded
-  into the compiler — and `io.y`, `net.y`, `struct.y`).
+  in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string
+  methods) — the four embedded into the compiler — and `io.y`, `net.y`,
+  `struct.y`).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
 - `refs/` — backed-up reference binaries for the port gate (see

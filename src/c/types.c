@@ -117,6 +117,12 @@ static Yv *typeof_matchend(Yv *st, Yv *node);
 static int covered(Yv *m, Yv *cover);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
 static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col);
+static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col);
+static Yv *sm_mk(Yv *fn, Yv *params, long nreq, Yv *ret, Yv *dflt, int last);
+static Yv *sm_t(Yv *k);
+static Yv *sm_arr(Yv *of);
+static Yv *sm_any(void);
+static int sm_accepts(Yv *got, Yv *want);
 static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col);
 
 static Yv *err_at(Yv *msg, long line, long col) {
@@ -1978,77 +1984,15 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             return yr(2, "typ", t_unk(), "st", st);
         }
     } else if (ys_eq_lit(k, "dot")) {
-        // Record field read: obj must be a trec with that field.
-        // NOTE: flow-snapshot (dobj/dkey bound once, never rebound): the
-        // checker env is flow-INSENSITIVE (last shape wins per name), so a
-        // field read must go through a name bound to exactly one shape.
-        // Re-reading `node.obj` after any `node = ...` rebind in the same
-        // function would resolve against the rebound shape.
+        // The object type is bound once: the checker env is flow-insensitive,
+        // so re-reading node.obj after a rebind could resolve against the
+        // wrong shape.
         Yv *dobj = yr_get(node, "obj");
         Yv *dkey = yr_get(node, "key");
         Yv *r = typeof_expr(st, dobj);
-        st = yr_get(r, "st");
-        if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "trec")) {
-            int found = 0;
-            Yv *ftyp = t_unk();
-            Yv *fs = yr_get(yr_get(r, "typ"), "fields");
-            long j = 0;
-            while (j < yv_len(fs)) {
-                // NOTE: bound once (flow-snapshot, see the note above).
-                // NOTE: :str bindings (see teq note).
-                Yv *f = ya_get(fs, j);
-                Yv *fn = yr_get(f, "name");
-                if (ys_eq(fn, dkey)) {
-                    found = 1;
-                    ftyp = yr_get(f, "typ");
-                    ;
-                } else {
-                    ;
-                }
-                j = j + 1;
-                ;
-            }
-            if (found) {
-                return yr(2, "typ", ftyp, "st", st);
-            } else if (teq(yr_get(r, "typ"), unk_shape())) {
-                // unknown-shape ({k}-only) reads unify quietly (tcompat
-                // law) — the missing annotation errors once at its own
-                // site, not again at every enclosing read. Concrete
-                // records still error below (emitter rejects loudly).
-                return yr(2, "typ", t_unk(), "st", st);
-            } else {
-                st = fail(st,
-                          ys_cat(ys_cat(ys("record has no field '"), dkey),
-                                 ys("'")),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
-                return yr(2, "typ", t_unk(), "st", st);
-            }
-        } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
-            return yr(2, "typ", t_unk(), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tnone")) {
-            // bare-hole params (see typeof_def note): unify quietly.
-            return yr(2, "typ", t_unk(), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tname")) {
-            return yr(2, "typ", t_unk(), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tparams")) {
-            return yr(2, "typ", t_unk(), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarr") ||
-                   ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarrfix") ||
-                   ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr")) {
-            return typeof_prop(st, yr_get(r, "typ"), dkey,
-                               yv_l(yr_get(node, "line")),
-                               yv_l(yr_get(node, "col")));
-        } else {
-            st = fail(st,
-                      ys_cat(ys_cat(ys_cat(ys_cat(ys("cannot read field '"),
-                                                  yr_get(node, "key")),
-                                            ys("' of ")),
-                                     tstr(yr_get(r, "typ"))),
-                             ys(" (need a record)")),
-                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-            return yr(2, "typ", t_unk(), "st", st);
-        }
+        return typeof_field(yr_get(r, "st"), yr_get(r, "typ"), dkey,
+                            yv_l(yr_get(node, "line")),
+                            yv_l(yr_get(node, "col")));
     } else if (ys_eq_lit(k, "func")) {
         // Anonymous function literal in expression position. Check the body
         // like a named def would be, and give the expression its tfunc type;
@@ -2703,6 +2647,73 @@ static Yv *typeof_sliceassign(Yv *st, Yv *node) {
 #undef NLINE
 #undef NCOL
 
+/* The type of field `dkey` read from a value of type t: a record field,
+ * or a built-in property of an array or a str. The dot arm of typeof_expr
+ * is this after typing its object; typeof_call uses it directly for a
+ * callee `x.f(...)`, so the receiver is typed once whether or not it turns
+ * out to be a str (a string method) or a record (a field holding a
+ * function). */
+static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
+    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+        int found = 0;
+        Yv *ftyp = t_unk();
+        Yv *fs = yr_get(t, "fields");
+        long j = 0;
+        while (j < yv_len(fs)) {
+            // NOTE: bound once (flow-snapshot, see the dot arm's note).
+            // NOTE: :str bindings (see teq note).
+            Yv *f = ya_get(fs, j);
+            Yv *fn = yr_get(f, "name");
+            if (ys_eq(fn, dkey)) {
+                found = 1;
+                ftyp = yr_get(f, "typ");
+                ;
+            } else {
+                ;
+            }
+            j = j + 1;
+            ;
+        }
+        if (found) {
+            return yr(2, "typ", ftyp, "st", st);
+        } else if (teq(t, unk_shape())) {
+            // unknown-shape ({k}-only) reads unify quietly (tcompat
+            // law) — the missing annotation errors once at its own
+            // site, not again at every enclosing read. Concrete
+            // records still error below (emitter rejects loudly).
+            return yr(2, "typ", t_unk(), "st", st);
+        } else {
+            st = fail(st,
+                      ys_cat(ys_cat(ys("record has no field '"), dkey),
+                             ys("'")),
+                      line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        }
+    } else if (ys_eq_lit(yr_get(t, "k"), "tunk")) {
+        return yr(2, "typ", t_unk(), "st", st);
+    } else if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+        // bare-hole params (see typeof_def note): unify quietly.
+        return yr(2, "typ", t_unk(), "st", st);
+    } else if (ys_eq_lit(yr_get(t, "k"), "tname")) {
+        return yr(2, "typ", t_unk(), "st", st);
+    } else if (ys_eq_lit(yr_get(t, "k"), "tparams")) {
+        return yr(2, "typ", t_unk(), "st", st);
+    } else if (ys_eq_lit(yr_get(t, "k"), "tarr") ||
+               ys_eq_lit(yr_get(t, "k"), "tarrfix") ||
+               ys_eq_lit(yr_get(t, "k"), "tstr")) {
+        return typeof_prop(st, t, dkey, line, col);
+    } else {
+        st = fail(st,
+                  ys_cat(ys_cat(ys_cat(ys_cat(ys("cannot read field '"),
+                                              dkey),
+                                        ys("' of ")),
+                                 tstr(t)),
+                         ys(" (need a record)")),
+                  line, col);
+        return yr(2, "typ", t_unk(), "st", st);
+    }
+}
+
 /* Built-in properties: `.length` of an array or a str is len(x); `.ptr` of
  * an array is the address of element 0 as a *T -- the data block's address,
  * so it is valid for an empty array too, where &a[0] traps. A str has no
@@ -2727,6 +2738,191 @@ static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col) {
                          ys_cat(have, ys(")"))),
                   line, col);
         return yr(2, "typ", t_unk(), "st", st);
+    }
+}
+
+/* `s.m(args)` with s a str calls a string method: a builtin with the
+ * receiver as an argument (`s.split(",")` is split(s, ",")), or a helper
+ * in std/str.y called by label (`s.pad_left(8)` is
+ * y_str_pad_left(s, 8, " ")). This table is the whole definition; the
+ * checker (typeof_method) and the emitter (native.y gen_method and
+ * infer_call) both read it.
+ *   fn      the builtin, or the helper's label; "" = no such method
+ *   params  the argument types, receiver excluded
+ *   nreq    how many are required; the last one may be left out only
+ *           when nreq is one short, and then `dflt` (a str) is passed
+ *   ret     the result type
+ *   last    the receiver goes AFTER the arguments (`sep.join(xs)` is
+ *           join(xs, sep))
+ * A helper's method names must be in native.y str_names: that is what
+ * splices std/str.y into a program that calls one. */
+Yv *str_method(Yv *m) {
+    Yv *s = sm_t(ys("tstr"));
+    Yv *l = sm_t(ys("tlong"));
+    Yv *b = sm_t(ys("tbool"));
+    Yv *no = yav(0);
+    if (ys_eq_lit(m, "split")) {
+        return sm_mk(ys("split"), yav(1, s), 1, sm_arr(s), ys(""), 0);
+    } else if (ys_eq_lit(m, "join")) {
+        return sm_mk(ys("join"), yav(1, sm_arr(sm_any())), 1, s, ys(""), 1);
+    } else if (ys_eq_lit(m, "trim") || ys_eq_lit(m, "strip")) {
+        return sm_mk(ys("trim"), no, 0, s, ys(""), 0);
+    } else if (ys_eq_lit(m, "trim_start") || ys_eq_lit(m, "lstrip")) {
+        return sm_mk(ys("y_str_trim_start"), no, 0, s, ys(""), 0);
+    } else if (ys_eq_lit(m, "trim_end") || ys_eq_lit(m, "rstrip")) {
+        return sm_mk(ys("y_str_trim_end"), no, 0, s, ys(""), 0);
+    } else if (ys_eq_lit(m, "pad_left")) {
+        return sm_mk(ys("y_str_pad_left"), yav(2, l, s), 1, s, ys(" "), 0);
+    } else if (ys_eq_lit(m, "pad_right")) {
+        return sm_mk(ys("y_str_pad_right"), yav(2, l, s), 1, s, ys(" "), 0);
+    } else if (ys_eq_lit(m, "center")) {
+        return sm_mk(ys("y_str_center"), yav(2, l, s), 1, s, ys(" "), 0);
+    } else if (ys_eq_lit(m, "starts_with")) {
+        return sm_mk(ys("y_str_starts_with"), yav(1, s), 1, b, ys(""), 0);
+    } else if (ys_eq_lit(m, "ends_with")) {
+        return sm_mk(ys("y_str_ends_with"), yav(1, s), 1, b, ys(""), 0);
+    } else if (ys_eq_lit(m, "contains")) {
+        return sm_mk(ys("y_str_contains"), yav(1, s), 1, b, ys(""), 0);
+    } else if (ys_eq_lit(m, "index_of")) {
+        return sm_mk(ys("index_of"), yav(1, s), 1, l, ys(""), 0);
+    } else if (ys_eq_lit(m, "last_index_of")) {
+        return sm_mk(ys("last_index_of"), yav(1, s), 1, l, ys(""), 0);
+    } else if (ys_eq_lit(m, "count")) {
+        return sm_mk(ys("y_str_count"), yav(1, s), 1, l, ys(""), 0);
+    } else if (ys_eq_lit(m, "replace")) {
+        return sm_mk(ys("y_str_replace"), yav(2, s, s), 2, s, ys(""), 0);
+    } else if (ys_eq_lit(m, "upper")) {
+        return sm_mk(ys("y_str_upper"), no, 0, s, ys(""), 0);
+    } else if (ys_eq_lit(m, "lower")) {
+        return sm_mk(ys("y_str_lower"), no, 0, s, ys(""), 0);
+    } else if (ys_eq_lit(m, "repeat")) {
+        return sm_mk(ys("y_str_repeat"), yav(1, l), 1, s, ys(""), 0);
+    } else if (ys_eq_lit(m, "lines")) {
+        return sm_mk(ys("y_str_lines"), no, 0, sm_arr(s), ys(""), 0);
+    } else if (ys_eq_lit(m, "bytes")) {
+        return sm_mk(ys("bytes"), no, 0,
+                     sm_arr(sm_t(ys("tbyte"))), ys(""), 0);
+    } else if (ys_eq_lit(m, "tonum")) {
+        return sm_mk(ys("tonum"), no, 0, l, ys(""), 0);
+    } else if (ys_eq_lit(m, "ord")) {
+        return sm_mk(ys("ord"), no, 0, l, ys(""), 0);
+    } else if (ys_eq_lit(m, "byte_at")) {
+        return sm_mk(ys("byte_at"), yav(1, l), 1, l, ys(""), 0);
+    } else {
+        return sm_mk(ys(""), no, 0, t_unk(), ys(""), 0);
+    }
+}
+
+static Yv *sm_mk(Yv *fn, Yv *params, long nreq, Yv *ret, Yv *dflt,
+                 int last) {
+    return yr(6, "fn", fn, "params", params, "nreq", yv_long(nreq),
+              "ret", ret, "dflt", dflt, "last", yv_bool(last));
+}
+
+static Yv *sm_t(Yv *k) {
+    return yr(1, "k", k);
+}
+
+static Yv *sm_arr(Yv *of) {
+    return yr(2, "k", ys("tarr"), "of", of);
+}
+
+// join's array: any element type (sm_accepts; prints as `T`, so an error
+// reads "expected [T]").
+static Yv *sm_any(void) {
+    return yr(2, "k", ys("tname"), "name", ys("T"));
+}
+
+/* `node` is `s.m(args)` with s a str (typed already, by typeof_call). */
+static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
+    Yv *sm = str_method(m);
+    Yv *margs = yr_get(node, "args");
+    long na = yv_len(margs);
+    Yv *ps = yr_get(sm, "params");
+    long np = yv_len(ps);
+    Yv *what = ys_cat(ys_cat(ys("'str."), m), ys("'"));
+    if (ys_eq_lit(yr_get(sm, "fn"), "")) {
+        Yv *hint = ys("");
+        if (ys_eq_lit(m, "length")) {
+            hint = ys(" ('.length' is a property: no parentheses)");
+            ;
+        }
+        st = fail(st,
+                  ys_cat(ys_cat(ys_cat(ys("str has no method '"), m),
+                                ys("'")),
+                         hint),
+                  yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        long i = 0;
+        while (i < na) {
+            Yv *r = typeof_expr(st, ya_get(margs, i));
+            st = yr_get(r, "st");
+            i = i + 1;
+        }
+        return yr(2, "typ", t_unk(), "st", st);
+    } else if (na < yv_l(yr_get(sm, "nreq")) || na > np) {
+        Yv *want = ys_long(np);
+        if (yv_l(yr_get(sm, "nreq")) < np) {
+            want = ys_cat(ys_cat(ys_long(yv_l(yr_get(sm, "nreq"))),
+                                 ys(" or ")),
+                          ys_long(np));
+            ;
+        }
+        st = fail(st,
+                  ys_cat(ys_cat(ys_cat(ys_cat(what, ys(" takes ")), want),
+                                ys(" args, got ")),
+                         ys_long(na)),
+                  yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        long i = 0;
+        while (i < na) {
+            Yv *r = typeof_expr(st, ya_get(margs, i));
+            st = yr_get(r, "st");
+            i = i + 1;
+        }
+        return yr(2, "typ", yr_get(sm, "ret"), "st", st);
+    } else {
+        long i = 0;
+        while (i < na) {
+            Yv *r = typeof_expr(st, ya_get(margs, i));
+            st = yr_get(r, "st");
+            Yv *ak = yr_get(yr_get(r, "typ"), "k");
+            if (ys_eq_lit(ak, "tvoid")) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys_cat(what, ys(" arg ")), ys_long(i)),
+                                 ys(": cannot pass a void value")),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                ;
+            } else if (!sm_accepts(yr_get(r, "typ"), ya_get(ps, i))) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(
+                                                              what,
+                                                              ys(" arg ")),
+                                                    ys_long(i)),
+                                              ys(": expected ")),
+                                      tstr(ya_get(ps, i))),
+                                 ys_cat(ys(", got "),
+                                        tstr(yr_get(r, "typ")))),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                ;
+            } else {
+                ;
+            }
+            i = i + 1;
+        }
+        return yr(2, "typ", yr_get(sm, "ret"), "st", st);
+    }
+}
+
+// tcompat, except that join's [T] takes an array of any element type (as
+// the join builtin does: a [T], or poison).
+static int sm_accepts(Yv *got, Yv *want) {
+    if (ys_eq_lit(yr_get(want, "k"), "tarr") &&
+        ys_eq_lit(yr_get(yr_get(want, "of"), "k"), "tname")) {
+        return ys_eq_lit(yr_get(got, "k"), "tarr") ||
+               ys_eq_lit(yr_get(got, "k"), "tunk");
+    } else {
+        return tcompat(got, want);
     }
 }
 
@@ -2881,12 +3077,34 @@ static Yv *typeof_call(Yv *st, Yv *node) {
     // of an array of functions, ...).
     Yv *cargs = yr_get(node, "args");
     if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "k"), "id")) {
-        // Calling an expression: legal when it yields a function value
-        // (an immediately-invoked literal, an element of an array of
-        // functions, ...). The emitter goes through its code pointer.
-        Yv *cf = typeof_expr(st, yr_get(node, "callee"));
+        // Calling an expression: legal when it yields a function value,
+        // or a string method. Type a dot receiver once, then resolve it as
+        // a method or as a field of a record.
+        Yv *ccal = yr_get(node, "callee");
+        Yv *cf = yr(2, "typ", t_unk(), "st", st);
+        int smeth = 0;
+        if (ys_eq_lit(yr_get(ccal, "k"), "dot")) {
+            Yv *crt = typeof_expr(st, yr_get(ccal, "obj"));
+            if (ys_eq_lit(yr_get(yr_get(crt, "typ"), "k"), "tstr")) {
+                smeth = 1;
+                cf = yr(2, "typ", t_unk(), "st", yr_get(crt, "st"));
+                ;
+            } else {
+                cf = typeof_field(yr_get(crt, "st"), yr_get(crt, "typ"),
+                                  yr_get(ccal, "key"),
+                                  yv_l(yr_get(ccal, "line")),
+                                  yv_l(yr_get(ccal, "col")));
+                ;
+            }
+            ;
+        } else {
+            cf = typeof_expr(st, ccal);
+            ;
+        }
         st = yr_get(cf, "st");
-        if (ys_eq_lit(yr_get(yr_get(cf, "typ"), "k"), "tfunc")) {
+        if (smeth) {
+            return typeof_method(st, node, yr_get(ccal, "key"));
+        } else if (ys_eq_lit(yr_get(yr_get(cf, "typ"), "k"), "tfunc")) {
             Yv *cft = yr_get(cf, "typ");
             Yv *cfargs = yr_get(cft, "args");
             if (yv_len(cargs) != yv_len(cfargs)) {

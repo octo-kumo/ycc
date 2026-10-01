@@ -82,7 +82,9 @@ requires byte-identical binaries).
    `s[:b]` → `ys_slice(s, 0, b)` (clamped like the native slice);
    `tostring(v)` → `ys_tostring(v)` (the same formatting the native
    runtime's `tostring` produces);
-   `ord/chr/trim/join/split/index_of/last_index_of` keep their names.
+   `ord/chr/trim/join/split/index_of/last_index_of` keep their names;
+   `byte_at(s, i)` → `ys_byte_at(s, i)` (traps out of bounds, like the
+   native builtin). Nothing outside `yv.c` reads a string's bytes directly.
 
 6. **Functions**: `def f(a: long, s: str) -> long` → `long f(long a, Yv *s)`.
    Names are kept exactly as written (the Y modules do not collide).

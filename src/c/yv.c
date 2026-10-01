@@ -302,6 +302,14 @@ long ys_ord(const Yv *x) {
     return (long)(unsigned char)x->u.s.p[0];
 }
 
+long ys_byte_at(const Yv *s, long i) {
+    if (!s || s->tag != Y_STR || i < 0 || (size_t)i >= s->u.s.n) {
+        fprintf(stderr, "runtime error: index out of bounds\n");
+        exit(1);
+    }
+    return (long)(unsigned char)s->u.s.p[i];
+}
+
 Yv *ys_chr(long v) {
     char buf[2];
     buf[0] = (char)(v & 0xFF);
