@@ -881,7 +881,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
 
 // Drop function bodies nothing reaches: dead stdlib code the program never
 // calls. Bodies are referenced by label from other bodies AND from the arch
-// prelude (y_float_tostr's block calls the Y-side y_long_tostr), so
+// prelude (a prelude block may call a Y-side helper), so
 // `asm_roots` is the prelude text. Returns the kept bodies plus everything
 // they reference — the roots for shaking the arch prelude itself.
 def prune_bodies(bodies: [str], asm_roots: str) -> { bodies: [str], refs: [str] } {

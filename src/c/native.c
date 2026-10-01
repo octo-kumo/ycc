@@ -1327,7 +1327,7 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
 
 /* Drop function bodies nothing reaches: dead stdlib code the program never
  * calls. Bodies are referenced by label from other bodies AND from the arch
- * prelude (y_float_tostr's block calls the Y-side y_long_tostr), so
+ * prelude (a prelude block may call a Y-side helper), so
  * `asm_roots` is the prelude text. Returns the kept bodies plus everything
  * they reference — the roots for shaking the arch prelude itself. */
 Yv *prune_bodies(Yv *bodies, Yv *asm_roots) {

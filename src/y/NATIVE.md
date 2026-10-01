@@ -41,7 +41,8 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   `y_arr_push`/`y_arr_prepend`/`y_arr_slice`/`y_arr_eq` take `esz` as an
   argument, so one implementation serves both layouts. 100k elements cost
   256 KB packed versus 2 MB unpacked. `bytes(s)` and `from_bytes(b)` convert
-  to and from `str`; a `byte` widens to `long` in arithmetic, and a `long`
+  to and from `str` (`from_bytes` takes a fixed `[byte; N]` too — it is the
+  same header); a `byte` widens to `long` in arithmetic, and a `long`
   narrows to `byte` at annotated sites (there is no cast syntax).
 - Locals live at fixed `rbp` offsets (one flat frame per function, 8 bytes/slot).
   **Top-level variables are globals**: each gets an 8-byte `.bss` cell
@@ -259,14 +260,19 @@ unwrap-of-none, OOM), dynamic record lookup (`y_dot_lookup`), the
 byte-moving string cores (`y_str_eq/cmp/cat/join/substr`), `str`↔`[byte]`
 conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
 `y_arr_eq` — one implementation each, parameterized by element width,
-because Y has no generics), float formatting, and argv materialization.
-Everything else —
-number formatting, the whole print/put/eput family, `trim`/`ord`/`chr`/
+because Y has no generics), long and float formatting, and argv
+materialization. Everything else —
+the whole print/put/eput family, `trim`/`ord`/`chr`/
 `tonum`/`index_of`/`split`, `range`, time, files — is Y. (`join` went
 back to assembly: in Y it pushed one byte at a time through a `[byte]`
 accumulator, and the compiler joins megabytes of asm text per
 self-compile — one sizing pass and one allocation instead took 9.9% off
-the self-compile and 8.1% off its peak heap.) Two worked
+the self-compile and 8.1% off its peak heap. `y_long_tostr` followed: in
+Y it cost a fixed array, a slice and a copy — five allocations and two
+`idiv`s per digit — and, because `y_float_tostr` calls it, its body and
+everything it uses rode along in every program. In asm it is one `idiv`
+per digit and one allocation: `tostring`-heavy output 27% faster, a hello
+world's asm 84% smaller.) Two worked
 examples of the same move landed earlier:
 
 - `readline()` — the backend contributes only the `syscall` intrinsic and
@@ -337,13 +343,13 @@ do more work per call) and string-heavy output (`tostring`/`index_of` in
 loops) can run up to 2x slower than when they were hand-written asm. The
 self-compile slowed less than its source grew (562 KB vs 427 KB spliced,
 8% slower per KB). That trade — binary size and readable runtime for
-compile time and string-heavy speed — is deliberate; the next lever is
-the remaining hot primitives (`y_long_tostr`, `y_str_index`), which are
-either cheaper Y forms or back to being byte primitives in asm.
+compile time and string-heavy speed — is deliberate; the next lever was
+the remaining hot primitives (`y_long_tostr`, now asm again — see above;
+`y_str_index` is still Y).
 
-A hello world is 8 KB (8312 bytes, the page-aligned ELF) and ~760 asm
-lines, of which the hand-written runtime
-is `y_alloc`, `y_bytes_to_str` and the digit loop of `y_long_tostr`: the
+A hello world is 8 KB (8312 bytes, the page-aligned ELF) and under 100
+asm lines: `_start`, `y_print_hstr` and `y_put_hstr` — not even the
+allocator. `print(42)` adds `y_long_tostr` and `y_alloc` (235 lines); the
 splitter, the file layer and the float formatter are not there because the
 program does not use them.
 

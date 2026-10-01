@@ -97,8 +97,8 @@ Yv *arch_prelude(void) {
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
     // .bss cells), the trap stubs, the record field-table probes
     // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
-    // (eq/cmp/cat/join/substr, arr push/prepend/slice/cat/eq), float
-    // formatting, str<->[byte] conversion and argv materialization.
+    // (eq/cmp/cat/join/substr, arr push/prepend/slice/cat/eq), long and
+    // float formatting, str<->[byte] conversion and argv materialization.
     Yv *lines = yav(0);
     lines = ya_push(lines, ys("y_str_eq:"));
     lines = ya_push(lines, ys("    push %rbp"));
@@ -727,6 +727,59 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("yaes_done:"));
     lines = ya_push(lines, ys("    pop %r14"));
     lines = ya_push(lines, ys("    pop %r13"));
+    lines = ya_push(lines, ys("    pop %r12"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    pop %rbp"));
+    lines = ya_push(lines, ys("    ret"));
+    // long -> decimal string: digits from one idiv each into a stack
+    // buffer, filled from the end; the remainder takes the dividend's
+    // sign, so negating it per digit is exact for LONG_MIN too. One
+    // allocation of exactly the used length.
+    lines = ya_push(lines, ys("y_long_tostr:"));
+    lines = ya_push(lines, ys("    push %rbp"));
+    lines = ya_push(lines, ys("    mov %rsp, %rbp"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    push %r12"));
+    lines = ya_push(lines, ys("    sub $32, %rsp"));
+    lines = ya_push(lines, ys("    mov 16(%rbp), %rax"));
+    lines = ya_push(lines, ys("    lea -16(%rbp), %rsi"));
+    lines = ya_push(lines, ys("    mov $10, %rcx"));
+    lines = ya_push(lines, ys("ylts_loop:"));
+    lines = ya_push(lines, ys("    cqo"));
+    lines = ya_push(lines, ys("    idiv %rcx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    jns ylts_pos"));
+    lines = ya_push(lines, ys("    neg %rdx"));
+    lines = ya_push(lines, ys("ylts_pos:"));
+    lines = ya_push(lines, ys("    add $48, %rdx"));
+    lines = ya_push(lines, ys("    dec %rsi"));
+    lines = ya_push(lines, ys("    movb %dl, (%rsi)"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    jnz ylts_loop"));
+    lines = ya_push(lines, ys("    mov 16(%rbp), %rax"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    jns ylts_mk"));
+    lines = ya_push(lines, ys("    dec %rsi"));
+    lines = ya_push(lines, ys("    movb $45, (%rsi)"));
+    lines = ya_push(lines, ys("ylts_mk:"));
+    lines = ya_push(lines, ys("    lea -16(%rbp), %rbx"));
+    lines = ya_push(lines, ys("    sub %rsi, %rbx"));
+    lines = ya_push(lines, ys("    mov %rsi, %r12"));
+    lines = ya_push(lines, ys("    mov %rbx, %rdi"));
+    lines = ya_push(lines, ys("    add $16, %rdi"));
+    lines = ya_push(lines, ys("    call y_alloc"));
+    lines = ya_push(lines, ys("    mov %rbx, (%rax)"));
+    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
+    lines = ya_push(lines, ys("ylts_cp:"));
+    lines = ya_push(lines, ys("    cmp %rbx, %rcx"));
+    lines = ya_push(lines, ys("    jge ylts_done"));
+    lines = ya_push(lines, ys("    movzbq (%r12,%rcx,1), %rdx"));
+    lines = ya_push(lines, ys("    movb %dl, 8(%rax,%rcx,1)"));
+    lines = ya_push(lines, ys("    inc %rcx"));
+    lines = ya_push(lines, ys("    jmp ylts_cp"));
+    lines = ya_push(lines, ys("ylts_done:"));
+    lines = ya_push(lines, ys("    movb $0, 8(%rax,%rbx,1)"));
+    lines = ya_push(lines, ys("    add $32, %rsp"));
     lines = ya_push(lines, ys("    pop %r12"));
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));

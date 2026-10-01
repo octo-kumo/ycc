@@ -1,0 +1,23 @@
+// from_bytes takes [byte] and fixed [byte; N] alike (same header);
+// tostring/chr edge values through the asm y_long_tostr.
+let fb: [byte; 5] = [72, 101, 108, 108, 111];
+print(from_bytes(fb));
+let z: [byte; 0] = [];
+print(len(from_bytes(z)));
+let d: [byte] = bytes("dyn");
+print(from_bytes(d));
+let w: [byte; 3] = [0; 3];
+w[0] = 97;
+w[1] = 98;
+w[2] = 99;
+print(from_bytes(w) + "!");
+print(tostring(0));
+print(tostring(7));
+print(tostring(-7));
+print(tostring(10));
+print(tostring(1234567890));
+print(tostring(9223372036854775807));
+print(tostring(-9223372036854775807 - 1));
+print(chr(65) + chr(122) + chr(48));
+print(ord(chr(200)));
+print(len(chr(0)));

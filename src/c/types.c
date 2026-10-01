@@ -3278,7 +3278,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                           "st", st);
             }
         } else if (ys_eq_lit(name, "from_bytes")) {
-            // from_bytes(b) -> str: the inverse of bytes().
+            // from_bytes(b) -> str: the inverse of bytes(). A fixed
+            // [byte; N] has the same {len, cap, data} header, so it is
+            // accepted as is.
             if (yv_len(cargs) != 1) {
                 st = fail(st,
                           ys("from_bytes takes exactly 1 argument (byte array)"),
@@ -3288,11 +3290,24 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"),
-                                 yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte"))),
-                                 ys("from_bytes argument"),
-                                 yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
+                Yv *fbt = yr_get(r, "typ");
+                Yv *fbw = yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte")));
+                if (ys_eq_lit(yr_get(fbt, "k"), "tarrfix")) {
+                    if (tcompat(yr(2, "k", ys("tarr"), "of", yr_get(fbt, "of")), fbw)) {
+                        ;
+                    } else {
+                        st = fail(st,
+                                  ys_cat(ys("from_bytes argument: expected [byte] or [byte; N], got "),
+                                         tstr(fbt)),
+                                  yv_l(yr_get(node, "line")),
+                                  yv_l(yr_get(node, "col")));
+                    }
+                } else {
+                    st = expect_type(st, fbt, fbw,
+                                     ys("from_bytes argument"),
+                                     yv_l(yr_get(node, "line")),
+                                     yv_l(yr_get(node, "col")));
+                }
                 return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
             }
         } else if (ys_eq_lit(name, "write_file")) {

@@ -88,8 +88,8 @@ def arch_prelude() -> str {
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
     // .bss cells), the trap stubs, the record field-table probes
     // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
-    // (eq/cmp/cat/join/substr, arr push/prepend/slice/cat/eq), float
-    // formatting, str<->[byte] conversion and argv materialization.
+    // (eq/cmp/cat/join/substr, arr push/prepend/slice/cat/eq), long and
+    // float formatting, str<->[byte] conversion and argv materialization.
     join([
         "y_str_eq:",
         "    push %rbp",
@@ -716,6 +716,59 @@ def arch_prelude() -> str {
         "yaes_done:",
         "    pop %r14",
         "    pop %r13",
+        "    pop %r12",
+        "    pop %rbx",
+        "    pop %rbp",
+        "    ret",
+        // long -> decimal string: digits from one idiv each into a stack
+        // buffer, filled from the end; the remainder takes the dividend's
+        // sign, so negating it per digit is exact for LONG_MIN too. One
+        // allocation of exactly the used length.
+        "y_long_tostr:",
+        "    push %rbp",
+        "    mov %rsp, %rbp",
+        "    push %rbx",
+        "    push %r12",
+        "    sub $32, %rsp",
+        "    mov 16(%rbp), %rax",
+        "    lea -16(%rbp), %rsi",
+        "    mov $10, %rcx",
+        "ylts_loop:",
+        "    cqo",
+        "    idiv %rcx",
+        "    test %rdx, %rdx",
+        "    jns ylts_pos",
+        "    neg %rdx",
+        "ylts_pos:",
+        "    add $48, %rdx",
+        "    dec %rsi",
+        "    movb %dl, (%rsi)",
+        "    test %rax, %rax",
+        "    jnz ylts_loop",
+        "    mov 16(%rbp), %rax",
+        "    test %rax, %rax",
+        "    jns ylts_mk",
+        "    dec %rsi",
+        "    movb $45, (%rsi)",
+        "ylts_mk:",
+        "    lea -16(%rbp), %rbx",
+        "    sub %rsi, %rbx",
+        "    mov %rsi, %r12",
+        "    mov %rbx, %rdi",
+        "    add $16, %rdi",
+        "    call y_alloc",
+        "    mov %rbx, (%rax)",
+        "    xor %ecx, %ecx",
+        "ylts_cp:",
+        "    cmp %rbx, %rcx",
+        "    jge ylts_done",
+        "    movzbq (%r12,%rcx,1), %rdx",
+        "    movb %dl, 8(%rax,%rcx,1)",
+        "    inc %rcx",
+        "    jmp ylts_cp",
+        "ylts_done:",
+        "    movb $0, 8(%rax,%rbx,1)",
+        "    add $32, %rsp",
         "    pop %r12",
         "    pop %rbx",
         "    pop %rbp",

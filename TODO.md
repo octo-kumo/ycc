@@ -15,10 +15,6 @@
   test at all. `make test-asan` now works again (it exported `YCC`, which no
   suite read, so the sanitized build was never exercised) — that is the place
   to hang one.
-- **Performance, from the optimizer loop** (open levers, in measured order):
-  - `from_bytes` could accept a fixed `[byte; N]` (the runtime already reads
-    the same header), dropping an allocation from `y_long_tostr` and
-    `y_str_chr`.
 - **`bench/` has no coverage for the std modules.** `io.y`, `net.y` and
   `struct.y` are exercised by one fixture each (`t10`/`t12`/`t20`, `t30`/`t31`,
   `t44`); the error paths, `listen_tcp`/`listen_http` (which block forever, so
@@ -64,6 +60,13 @@ what was deliberately *not* changed) is in `audit.md`.
 - **`join` is a byte mover again** (`y_str_join` in `arch_x64.y`): one
   sizing pass, one allocation, word copies — self-compile 9.9% faster,
   8.1% less peak heap.
+- **`from_bytes` takes a fixed `[byte; N]`** (same header), which
+  `y_str_chr` uses. Using it in `y_long_tostr` (`from_bytes(b)` then a
+  string slice) measured 84% *slower* than the array slice, so
+  `y_long_tostr` became an asm primitive instead: one `idiv` per digit and
+  one allocation. `tostring`-heavy output got 27% faster. Programs also
+  got much smaller (hello's asm 84% smaller), because the Y version used
+  to ride along in every program via `y_float_tostr`.
 - Hex/binary literals with `_` separators, scientific notation, float literals.
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),

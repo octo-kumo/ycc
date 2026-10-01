@@ -2258,14 +2258,27 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 { typ: { k: "tarr", of: { k: "tbyte" } }, st: st }
             }
         } else if (name == "from_bytes") {
-            // from_bytes(b) -> str: the inverse of bytes().
+            // from_bytes(b) -> str: the inverse of bytes(). A fixed
+            // [byte; N] has the same {len, cap, data} header, so it is
+            // accepted as is.
             if (len(cargs) != 1) {
                 st = fail(st, "from_bytes takes exactly 1 argument (byte array)", node.line, node.col);
                 { typ: { k: "tstr" }, st: st }
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                st = expect_type(st, r.typ, { k: "tarr", of: { k: "tbyte" } }, "from_bytes argument", node.line, node.col);
+                let fbt = r.typ;
+                let fbw = { k: "tarr", of: { k: "tbyte" } };
+                if (fbt.k == "tarrfix") {
+                    if (tcompat({ k: "tarr", of: fbt.of }, fbw)) { 0; } else {
+                        st = fail(st, "from_bytes argument: expected [byte] or [byte; N], got " + tstr(fbt), node.line, node.col);
+                        0
+                    };
+                    0
+                } else {
+                    st = expect_type(st, fbt, fbw, "from_bytes argument", node.line, node.col);
+                    0
+                };
                 { typ: { k: "tstr" }, st: st }
             }
         } else if (name == "write_file") {
