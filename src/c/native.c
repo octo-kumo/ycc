@@ -67,6 +67,7 @@ Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
 Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
                      int prof);
 int names_mentioned(Yv *src, Yv *names);
+Yv *strip_comments(Yv *src);
 Yv *norm_path(Yv *p);
 int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
@@ -375,13 +376,21 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
 }
 
 /* Textual check, deliberately: it runs before tokenizing, and a false
- * positive only costs an unused function in the output. */
+ * positive only costs an unused function in the output.
+ *
+ * COMMENTS ARE STRIPPED first. They used to be searched too, which meant a
+ * comment containing `exec` (the word "executables" was enough) spliced the
+ * whole fork/execve chunk into the binary -- the audit caught this by
+ * diffing binaries and finding /bin/sh rodata and ~9 extra uids in a
+ * program that never calls exec. Comments cannot call anything, so dropping
+ * them removes the false positives without adding a real lexer dependency. */
 int names_mentioned(Yv *src, Yv *names) {
+    Yv *code = strip_comments(src);
     long i = 0;
     int want = 0;
     while (i < yv_len(names)) {
         Yv *nm = ya_get(names, i);
-        if (ys_index_of(src, nm) >= 0) {
+        if (ys_index_of(code, nm) >= 0) {
             want = 1;
             ;
         } else {
@@ -390,6 +399,75 @@ int names_mentioned(Yv *src, Yv *names) {
         i = i + 1;
     }
     return want;
+}
+
+/* Remove line and block comments from `src`, keeping the newlines so line
+ * counts (and therefore error positions) do not shift. Returns a STRING (the
+ * pieces are joined): callers feed it to ys_index_of, which rejects a non-str
+ * value. String literals are NOT protected: a `//` inside a string is
+ * vanishingly rare next to the cost of tracking quotes here, and getting it
+ * wrong only costs an unused chunk. */
+Yv *strip_comments(Yv *src) {
+    long n = yv_len(src);
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < n) {
+        Yv *c = ys_substr(src, i, 1);
+        if (ys_eq(c, ys("/"))) {
+            Yv *nxt = ys_substr(src, i + 1, 1);
+            if (ys_eq(nxt, ys("/"))) {
+                /* to end of line; keep the newline itself */
+                int done = 0;
+                while (!done) {
+                    if (i >= n) {
+                        done = 1;
+                        ;
+                    } else {
+                        Yv *d = ys_substr(src, i, 1);
+                        i = i + 1;
+                        if (ys_eq(d, ys("\n"))) {
+                            out = ya_push(out, ys("\n"));
+                            done = 1;
+                            ;
+                        } else {
+                            ;
+                        }
+                        ;
+                    }
+                    ;
+                }
+                ;
+            } else if (ys_eq(nxt, ys("*"))) {
+                i = i + 2;
+                while (i < n) {
+                    Yv *d = ys_substr(src, i, 1);
+                    if (ys_eq(d, ys("*"))) {
+                        if (ys_eq(ys_substr(src, i + 1, 1), ys("/"))) { i = i + 2; ; } else { i = i + 1; ; }
+                        ;
+                    } else {
+                        if (ys_eq(d, ys("\n"))) { out = ya_push(out, ys("\n")); ; } else { ; }
+                        i = i + 1;
+                        ;
+                    }
+                    ;
+                }
+                ;
+            } else {
+                out = ya_push(out, c);
+                i = i + 1;
+                ;
+            }
+            ;
+        } else {
+            out = ya_push(out, c);
+            i = i + 1;
+            ;
+        }
+        ;
+    }
+    /* Y: `join(out, "")` — the pieces come back as one string, because
+       ys_index_of (below) rejects a non-str value. */
+    return ys_join(out, ys(""));
 }
 
 /* Collapse "/./" segments so the same file resolves to one key no matter
@@ -3591,12 +3669,13 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
             st = emit(st, ys("    cmp %rcx, %rax"));
             st = emit(st, ys("    setne %al"));
             return emit(st, ys("    movzbq %al, %rax"));
-        } else if (ys_eq_lit(op, "&&")) {
-            return emit(st, ys("    and %rcx, %rax"));
-        } else {
-            return emit(st, ys("    or %rcx, %rax"));
         }
+        /* No &&/|| arms here: gen_bin routes those to gen_logic (lazy
+           jumps) BEFORE calling this, so an eager and/or would be dead
+           code. */
+        return st;
     }
+    return st;
 }
 
 /* ── calls ──────────────────────────────────────────────────────────────

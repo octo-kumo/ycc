@@ -6,7 +6,7 @@ CY_HDRS=$(wildcard src/c/*.h)
 CYCC=cycc
 
 # The Y compiler sources: what the compiler compiles (and mirrors in C).
-YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/prelude.y src/y/std/rt.y src/y/std/prof_lines.y
+YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/rt.y src/y/std/prof_lines.y
 
 # The --prof runtime is embedded as source lines (spliced into instrumented
 # programs). src/y/std/prof_lines.y is generated from prof.y; the C copy
@@ -110,7 +110,12 @@ clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc a.out
 	rm -f $(PROF_LINES_Y) $(PROF_LINES_C) $(STD_LINES_C)
 
+# Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y
+# value model (src/c/yv.c) never frees, so a leak gate could never be clean
+# and the target would fail for the wrong reason. We gate on memcheck
+# ERRORS (invalid reads/writes, uninitialised values), which is what can
+# actually regress.
 valgrind: cycc
-	valgrind --leak-check=full --quiet ./cycc
+	valgrind --error-exitcode=1 --quiet ./cycc -o /tmp/cycc-vg test/y/examples/helloworld.y
 
 .PHONY: all clean valgrind test test-fast test-compile asan test-asan ycc

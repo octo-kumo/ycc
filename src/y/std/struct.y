@@ -289,7 +289,9 @@ def unpack(fmt: str, b: [byte]) -> [long] {
     let i = 0;
     while (i < len(names)) {
         let nm = trim(names[i]);
-        out += [unpack_one(nm, b, off)];
+        // `out += v` (not `out += [v]`) appends ONE element — `+= [v]`
+        // would append the single-element array itself as an element.
+        out += unpack_one(nm, b, off);
         off += width_of(nm);
         i = i + 1;
     };

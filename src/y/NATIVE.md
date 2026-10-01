@@ -140,11 +140,11 @@ involved.
   native backend emits the `syscall` instruction with the Linux ABI
   (`rdi,rsi,rdx,r10,r8,r9`, number in `rax`). 1–7 args, each `long`/`bool`/
   `str`/`*T`; returns `long`. Type errors otherwise.
-- `src/y/std/io.y` wraps raw numbers (`write`, `exit`, `openat`, `read`,
-  `close`): file I/O with zero C code (`test/y/native/t12_cat.y` is a pure-Y
-  cat; `t10_filewrite.y` creates/writes files). C builtins get gutted as Y-side
-  replacements land; each removal must keep `make test` green on the C path
-  until the native path owns that feature.
+- `src/y/std/io.y` wraps raw numbers (`openat`, `read`, `write`, `close`,
+  `fchmodat`): file I/O with zero C code (`test/y/native/t12_cat.y` is a pure-Y
+  cat; `t10_filewrite.y` creates/writes files). It has no `exit` def on
+  purpose — a def named `exit` shadows the intrinsic program-wide and drops
+  the `--prof` report (see the export list).
 
 ## Type system (types.y) — the law, expanded over time
 

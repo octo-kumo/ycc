@@ -910,12 +910,12 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
     let lt0 = clock_us();
     let lh0 = heap_used();
     let code_len = 0;
-    let ro_len = 0;
     // NOTE: `0;` tails (see parser.y parse_binary note). `it.len` reads go
     // through the bare hole (tnone unifies — see types.y typeof_def note).
+    // Only the code length is needed: elf_build takes the rodata bytes and
+    // sizes that segment itself.
     foreach (it in items) {
         if (it.sec == 0) { code_len = code_len + it.len; };
-        if (it.sec == 1) { ro_len = ro_len + it.len; };
     };
     let lm = labmap_build(labels);
     let lt1 = clock_us();
@@ -952,12 +952,9 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
                         code = r.bytes;
                     };
                 } else if (it.sec == 1) {
-                    let rbytes = it.bytes;
-                    let j = 0;
-                    while (j < len(rbytes)) {
-                        ro += rbytes[j];
-                        j = j + 1;
-                    };
+                    // `ro += it.bytes` appends every element in place (the
+                    // array header never moves), so no per-byte loop here.
+                    ro += it.bytes;
                 };
                 i = i + 1;
             };

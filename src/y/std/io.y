@@ -12,11 +12,6 @@ def stdin_fd() -> long { 0 };
 def stdout_fd() -> long { 1 };
 def stderr_fd() -> long { 2 };
 
-// SEEK_SET = 0, the lseek(2) whence value. This module has no seek
-// wrapper, so it is here for callers that issue syscall(8, fd, off, whence)
-// themselves.
-def SEEK_SET() -> long { 0 };
-
 def O_RDONLY() -> long { 0 };
 def O_WRONLY() -> long { 1 };
 def O_RDWR() -> long { 2 };
@@ -58,32 +53,6 @@ def write_str(fd: long, s: str, count: long) -> long {
     syscall(1, fd, s, count)
 };
 
-// write_data(fd, addr, n): write n bytes from address addr, ONE BYTE per
-// write(2) -- the shape the compiler's emit path used to have, before the
-// output went out whole through the `write_bytes` builtin (rt.y's
-// y_write_bytes, which pushes the whole buffer per syscall). Nothing in
-// this repo calls it any more; prefer write_bytes when the bytes are in a
-// [byte], and this when all you have is a bare address.
-// `addr` is a plain long, so `addr + i` is ordinary arithmetic and this
-// module needs no `&x` anywhere -- that is the reason for the shape, not
-// any parser limit: `&` is an ordinary Y operator (lexer.issingleop,
-// parser parse_unary).
-def write_data(fd: long, addr: long, n: long) -> long {
-    let count = 0;
-    let i = 0;
-    while (i < n) {
-        let w = syscall(1, fd, addr + i, 1);
-        if (w != 1) {
-            count = w;
-            i = n;
-        } else {
-            count = count + 1;
-            i = i + 1;
-        };
-    };
-    count
-};
-
 // read(fd, buf, count) -> bytes read, 0 at EOF, negative errno on error.
 // `count` is in BYTES and `buf` is the CALLER's buffer: a `[long; N]` array
 // passed as `&buf[0]`, whose element address IS the data pointer (works for
@@ -97,14 +66,10 @@ def read(fd: long, buf: *long, count: long) -> long {
     syscall(0, fd, buf, count)
 };
 
-// exit(code): exit(2). The syscall never returns, so the declared `-> long`
-// is never produced. NOTE: a def named `exit` SHADOWS the `exit` intrinsic
-// for the whole spliced program -- rename.y rewrites every call named
-// `exit` to this def -- so importing io turns inline exit() calls into
-// calls here, and a --prof build then loses its report (this body has no
-// y_prof_report hook, see gen_exit).
-def exit(code: long) -> long {
-    syscall(60, code)
-};
-
-export { stdin_fd, stdout_fd, stderr_fd, SEEK_SET, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, open, close, read, write, write_str, write_data, chmod, exit };
+// This module deliberately has NO `exit` def. A def named `exit` shadows the
+// `exit` intrinsic for the whole spliced program (rename.y rewrites every
+// call named `exit` to it), and this body is a bare syscall(60) with no
+// y_prof_report hook (see gen_exit) -- so importing io would silently cost a
+// --prof build its entire report. Call the intrinsic `exit(code)` instead:
+// it is available everywhere and flushes the report on the way out.
+export { stdin_fd, stdout_fd, stderr_fd, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, open, close, read, write, write_str, chmod };

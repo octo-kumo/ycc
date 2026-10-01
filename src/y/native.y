@@ -99,12 +99,20 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, pro
 
 // Textual check, deliberately: it runs before tokenizing, and a false
 // positive only costs an unused function in the output.
+//
+// COMMENTS ARE STRIPPED first. They used to be searched too, which meant a
+// comment containing `exec` (the word "executables" was enough) spliced the
+// whole fork/execve chunk into the binary -- the audit caught this by
+// diffing binaries and finding /bin/sh rodata and ~9 extra uids in a
+// program that never calls exec. Comments cannot call anything, so dropping
+// them removes the false positives without adding a real lexer dependency.
 def names_mentioned(src: str, names: [str]) -> bool {
+    let code = strip_comments(src);
     let i = 0;
     let want = false;
     while (i < len(names)) {
         let nm: str = names[i];
-        if (index_of(src, nm) >= 0) {
+        if (index_of(code, nm) >= 0) {
             want = true;
             0
         } else { 0; };
@@ -112,6 +120,69 @@ def names_mentioned(src: str, names: [str]) -> bool {
         0
     };
     want
+};
+
+// Remove line and block comments from `src`, keeping the newlines so line
+// counts (and therefore error positions) do not shift. Returns a STRING (the
+// pieces are joined): callers feed it to index_of, and the C twin's
+// ys_index_of rejects a non-str value. String literals are NOT protected: a
+// `//` inside a string is vanishingly rare next to the cost of tracking
+// quotes here, and getting it wrong only costs an unused chunk.
+def strip_comments(src: str) -> str {
+    // A [str] of pieces, joined once at the end: O(n) overall, where
+    // `out += c` on a str would re-copy the whole prefix per character.
+    let out: [str] = [];
+    let n = len(src);
+    let i = 0;
+    while (i < n) {
+        let c = substr(src, i, 1);
+        if (c == "/") {
+            let nxt = substr(src, i + 1, 1);
+            if (nxt == "/") {
+                // to end of line; keep the newline itself
+                let done = false;
+                while (!done) {
+                    if (i >= n) {
+                        done = true;
+                        0
+                    } else {
+                        let d = substr(src, i, 1);
+                        i = i + 1;
+                        if (d == "\n") { out += "\n"; done = true; 0; } else { 0; };
+                        0
+                    };
+                    0
+                };
+                0
+            } else if (nxt == "*") {
+                i = i + 2;
+                while (i < n) {
+                    let d = substr(src, i, 1);
+                    if (d == "*") {
+                        if (substr(src, i + 1, 1) == "/") { i = i + 2; 0; } else { i = i + 1; 0; };
+                        0
+                    } else {
+                        if (d == "\n") { out += "\n"; 0; } else { 0; };
+                        i = i + 1;
+                        0
+                    };
+                    0
+                };
+                0
+            } else {
+                out += c;
+                i = i + 1;
+                0
+            };
+            0
+        } else {
+            out += c;
+            i = i + 1;
+            0
+        };
+        0
+    };
+    join(out, "")
 };
 
 // Collapse "/./" segments so the same file resolves to one key no matter
@@ -2827,11 +2898,9 @@ def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
         st = emit(st, "    cmp %rcx, %rax");
         st = emit(st, "    setne %al");
         emit(st, "    movzbq %al, %rax")
-    } else if (op == "&&") {
-        emit(st, "    and %rcx, %rax")
-    } else {
-        emit(st, "    or %rcx, %rax")
     }
+    // No &&/|| arms here: gen_bin routes those to gen_logic (lazy jumps)
+    // BEFORE calling this, so an eager and/or would be dead code.
     }
 };
 

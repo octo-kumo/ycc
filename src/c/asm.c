@@ -1187,14 +1187,14 @@ static Yv *asm_link(Yv *items, Yv *labels) {
     long lt0 = clock_us();
     long lh0 = heap_used();
     long code_len = 0;
-    long ro_len = 0;
     /* NOTE: `0;` tails (see parser.y parse_binary note). `it.len` reads go
-       through the bare hole (tnone unifies — see types.y typeof_def note). */
+       through the bare hole (tnone unifies — see types.y typeof_def note).
+       Only the code length is needed: elf_build takes the rodata bytes and
+       sizes that segment itself. */
     long i = 0;
     while (i < yv_len(items)) {
         Yv *it = ya_get(items, i);
         if (yv_l(yr_get(it, "sec")) == 0) { code_len = code_len + yv_l(yr_get(it, "len")); ; } else { ; };
-        if (yv_l(yr_get(it, "sec")) == 1) { ro_len = ro_len + yv_l(yr_get(it, "len")); ; } else { ; };
         i = i + 1;
         ;
     };
@@ -1238,6 +1238,9 @@ static Yv *asm_link(Yv *items, Yv *labels) {
                 };
                 ;
             } else if (yv_l(yr_get(it, "sec")) == 1) {
+                /* Y: `ro += it.bytes` — one push per element (yv.h has no
+                   `+=` helper, so the array form is spelled out here). The
+                   append is in place: the array header never moves. */
                 Yv *rbytes = yr_get(it, "bytes");
                 long j = 0;
                 while (j < yv_len(rbytes)) {

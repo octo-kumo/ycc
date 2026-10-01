@@ -72,7 +72,9 @@ def accept_tcp(fd: long) -> long {
     syscall(43, fd, 0, 0)
 };
 
-// connect_tcp(host, port) -> a connected fd, or a negative errno.
+// connect_tcp(host, port) -> a connected fd, or a negative errno. A failed
+// connect closes the socket before returning the errno: the caller only ever
+// gets a usable fd or an error, never an fd it would have to know to close.
 def connect_tcp(host: str, port: long) -> long {
     let fd = socket_tcp();
     if (fd < 0) {
@@ -81,7 +83,12 @@ def connect_tcp(host: str, port: long) -> long {
         let a: [byte; 16] = [0; 16];
         addr_set(a, host, port);
         let r = syscall(42, fd, &a[0], 16);
-        if (r < 0) { r } else { fd }
+        if (r < 0) {
+            syscall(3, fd);
+            r
+        } else {
+            fd
+        }
     }
 };
 

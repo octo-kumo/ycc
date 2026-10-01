@@ -2,9 +2,17 @@
 # Build the Y compiler as a single self-contained WASM file for the browser.
 # Output: wasm/ycc-single.js  (~204KB, ~72KB gzipped) — wasm embedded as base64.
 #
-# This compiles the C compiler's VM mode to WebAssembly. User .y programs are
-# interpreted by the VM inside the browser; multi-file imports resolve through
-# Emscripten's in-memory filesystem (MEMFS).
+# This compiles the C copy of the compiler (src/c — the 1:1 twin of src/y,
+# see PORTING.md). It compiles .y straight to native x86-64 ELFs, so the
+# browser build produces BINARIES to download, not interpreted programs: the
+# old VM-interpreter pipeline this script used to build (src/c/{main,vm,
+# codegen,ast,typecheck,module,map,lib,runtime,type,ast_debug,parser_debug}.c)
+# was deleted in the rewrite, and none of those files exist any more.
+#
+# UNVERIFIED: emcc is not installed on this machine, so this command has not
+# been run since the rewrite. The source list below is the current one; expect
+# to iterate on the emcc flags (the compiler leans on stdio + a few POSIX file
+# calls in src/c/yv.c, and on ALLOW_MEMORY_GROWTH for large inputs).
 set -e
 cd "$(dirname "$0")/.."
 
@@ -13,12 +21,9 @@ emcc -O2 -s WASM=1 -s MODULARIZE=1 -s EXPORT_NAME=createYcc \
   -s ALLOW_MEMORY_GROWTH=1 -s ENVIRONMENT=web,node \
   -s EXPORTED_RUNTIME_METHODS='["FS","callMain"]' \
   -s INVOKE_RUN=0 \
-  src/c/main.c src/c/parser.c src/c/codegen.c src/c/vm.c src/c/ast.c src/c/typecheck.c src/c/module.c src/c/map.c src/c/lib.c \
-  src/c/runtime.c src/c/type.c src/c/ast_debug.c src/c/parser_debug.c \
+  src/c/ycc.c src/c/yv.c src/c/lexer.c src/c/parser.c src/c/rename.c \
+  src/c/types.c src/c/native.c src/c/arch_x64.c src/c/enc64.c \
+  src/c/asm.c src/c/elf.c src/c/std_lines.c src/c/prof_lines.c \
   -o wasm/ycc-single.js
 
 echo "built wasm/ycc-single.js ($(stat -c%s wasm/ycc-single.js) bytes, $(gzip -c wasm/ycc-single.js | wc -c) gzipped)"
-
-# Deploy into the playground (single self-contained page).
-cp wasm/ycc-single.js wasm/playground/ycc-single.js
-echo "deployed to wasm/playground/ — serve with: (cd wasm/playground && python3 -m http.server 8765)"
