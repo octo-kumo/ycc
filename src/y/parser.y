@@ -217,6 +217,9 @@ def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
         } else {
             res({ k: "err", msg: "character literal must be exactly one byte, got " + tostring(len(v)), line: ln, col: cl }, p + 1)
         }
+    } else if (t == "ferr") {
+        // a broken f-string: the lexer's message, where its walk stopped
+        res({ k: "err", msg: v, line: ln, col: cl }, p + 1)
     } else if (t == "id") {
         if (v == "match") {
             parse_match_try(toks, p)

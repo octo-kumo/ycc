@@ -1,7 +1,7 @@
 /* lexer.h — tokenize a Y source string into a list of token maps.
  * 1:1 C copy of src/y/lexer.y (see PORTING.md).
  * Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based> }.
- * Token types: id, num, str, op, punct, kw, eof. */
+ * Token types: id, num, str, op, punct, kw, ferr, eof. */
 #ifndef LEXER_H
 #define LEXER_H
 
@@ -41,5 +41,6 @@ int issingleop(Yv *c);               /* (c: str) -> bool */
 Yv *slash(void);                     /* () -> str */
 int isdigitch(Yv *c);                /* (c: str) -> bool */
 Yv *tokenize(Yv *src);               /* (src: str) -> [{ t: str, v: str, line: long, col: long }] */
+Yv *fstr_walk(Yv *src, long q);      /* (src: str, q: long) -> { end: long, err: str, at: long, fields: [long] } */
 
 #endif /* LEXER_H */

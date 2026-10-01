@@ -35,6 +35,8 @@ of either operator is a \ic{bool}.
 Strings are immutable values: concatenation \ic{a + b} produces a new
 string. If exactly one side of \ic{+} is a string, the other side is
 stringified (Section~\ref{sec:builtin-tostring}) and concatenated.
+A format string, \ic{f"\{x\} of \{n:>4\}"}, writes such a concatenation
+with fields (Sections~\ref{sec:literals} and~\ref{sec:format-spec}).
 Comparisons \ic{<} \ic{<=} \ic{>} \ic{>=} on two strings compare bytes
 lexicographically; \ic{==} compares contents.
 

@@ -277,6 +277,9 @@ Yv *parse_primary(Yv *toks, long p) {
         } else {
             return res(yr(4, "k", ys("err"), "msg", ys_cat(ys("character literal must be exactly one byte, got "), ys_long(yv_len(v))), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
         }
+    } else if (ys_eq_lit(t, "ferr")) {
+        /* a broken f-string: the lexer's message, where its walk stopped */
+        return res(yr(4, "k", ys("err"), "msg", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "id")) {
         if (ys_eq_lit(v, "match")) {
             return parse_match_try(toks, p);

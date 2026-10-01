@@ -2,7 +2,8 @@
  *
  * The C compiler (src/c) is a 1:1 copy of the Y compiler (src/y); this
  * header exports types.y's `export { check_program, tstr, tdisp,
- * tdisp_fnval, teq, field_merge, narrow_type, type_names, str_method }`.
+ * tdisp_fnval, teq, field_merge, narrow_type, type_names, str_method,
+ * fmt_spec, fmt_kind }`.
  * Every other def of the module is
  * private to types.c (the Y module keeps them unexported the same way).
  */
@@ -20,5 +21,7 @@ Yv *field_merge(Yv *fields, Yv *name, Yv *typ);  /* record-literal upsert */
 Yv *str_method(Yv *m);        /* string-method lowering/type table */
 Yv *narrow_type(Yv *s, Yv *t); /* static type of a match `narrow` node */
 Yv *type_names(Yv *t);        /* field names a record type / pattern tests */
+Yv *fmt_spec(Yv *spec);       /* parsed f-string format specification */
+long fmt_kind(Yv *t);          /* integer=1, float=2, other=0 */
 
 #endif /* TYPES_H */

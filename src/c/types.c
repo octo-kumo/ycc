@@ -123,6 +123,11 @@ static Yv *sm_t(Yv *k);
 static Yv *sm_arr(Yv *of);
 static Yv *sm_any(void);
 static int sm_accepts(Yv *got, Yv *want);
+static int fmt_align(long c);
+static int fmt_digit(long c);
+static int fmt_type(long c);
+static long fmt_number(Yv *spec, long a, long b);
+static Yv *fmt_check(Yv *f, long kind, Yv *tname);
 static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col);
 
 static Yv *err_at(Yv *msg, long line, long col) {
@@ -3070,6 +3075,232 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
     }
 }
 
+/* align < > ^ =, sign + - or a space, grouping `,` or `_`, type one of
+ * s d x X o b c f F e E %. Bytes, 0 when absent (-1 for the two numbers);
+ * err is "" when the spec reads. */
+Yv *fmt_spec(Yv *spec) {
+    long n = yv_len(spec);
+    long i = 0;
+    long fill = 0;
+    long align = 0;
+    if (n >= 2 && fmt_align(ys_byte_at(spec, 1))) {
+        fill = ys_byte_at(spec, 0);
+        align = ys_byte_at(spec, 1);
+        i = 2;
+        ;
+    } else if (n >= 1 && fmt_align(ys_byte_at(spec, 0))) {
+        align = ys_byte_at(spec, 0);
+        i = 1;
+        ;
+    } else {
+        ;
+    }
+    long sign = 0;
+    if (i < n && (ys_byte_at(spec, i) == 43 ||
+                  ys_byte_at(spec, i) == 45 ||
+                  ys_byte_at(spec, i) == 32)) {
+        sign = ys_byte_at(spec, i);
+        i = i + 1;
+        ;
+    } else {
+        ;
+    }
+    int alt = 0;
+    if (i < n && ys_byte_at(spec, i) == 35) { alt = 1; i = i + 1; ; } else { ; }
+    int zero = 0;
+    if (i < n && ys_byte_at(spec, i) == 48) { zero = 1; i = i + 1; ; } else { ; }
+    long ws = i;
+    while (i < n && fmt_digit(ys_byte_at(spec, i))) {
+        i = i + 1;
+        ;
+    }
+    long width = 0 - 1;
+    if (i > ws) { width = fmt_number(spec, ws, i); ; } else { ; }
+    long grp = 0;
+    if (i < n && (ys_byte_at(spec, i) == 44 || ys_byte_at(spec, i) == 95)) {
+        grp = ys_byte_at(spec, i);
+        i = i + 1;
+        ;
+    } else {
+        ;
+    }
+    Yv *err = ys("");
+    long prec = 0 - 1;
+    if (i < n && ys_byte_at(spec, i) == 46) {
+        i = i + 1;
+        long ps = i;
+        while (i < n && fmt_digit(ys_byte_at(spec, i))) {
+            i = i + 1;
+            ;
+        }
+        if (i > ps) { prec = fmt_number(spec, ps, i); ; }
+        else { err = ys("'.' without a precision"); ; }
+        ;
+    } else {
+        ;
+    }
+    long ty = 0;
+    if (i < n && fmt_type(ys_byte_at(spec, i))) {
+        ty = ys_byte_at(spec, i);
+        i = i + 1;
+        ;
+    } else {
+        ;
+    }
+    if (!ys_eq_lit(err, "")) {
+        ;
+    } else if (i == n - 1) {
+        err = ys_cat(ys_cat(ys("unknown type '"), ys_slice(spec, i, n)),
+                     ys("'"));
+        ;
+    } else if (i < n) {
+        err = ys_cat(ys("cannot read '"), ys_cat(ys_slice(spec, i, n), ys("'")));
+        ;
+    } else if (width > 99999 || prec > 99999) {
+        err = ys("width and precision stop at 99999");
+        ;
+    } else {
+        ;
+    }
+    return yr(10, "err", err, "fill", yv_long(fill), "align", yv_long(align),
+              "sign", yv_long(sign), "alt", yv_bool(alt), "zero",
+              yv_bool(zero), "width", yv_long(width), "grp", yv_long(grp),
+              "prec", yv_long(prec), "ty", yv_long(ty));
+}
+
+static int fmt_align(long c) {
+    return c == 60 || c == 62 || c == 94 || c == 61;
+}
+
+static int fmt_digit(long c) {
+    return c >= 48 && c <= 57;
+}
+
+/* s d x X o b c f F e E % */
+static int fmt_type(long c) {
+    return c == 115 || c == 100 || c == 120 || c == 88 || c == 111 ||
+           c == 98 || c == 99 || c == 102 || c == 70 || c == 101 ||
+           c == 69 || c == 37;
+}
+
+/* The digits spec[a:b] as a number, stopping short of overflow (a value
+ * that large is over fmt_spec's limit anyway). */
+static long fmt_number(Yv *spec, long a, long b) {
+    long v = 0;
+    long i = a;
+    while (i < b) {
+        if (v < 1000000) { v = v * 10 + ys_byte_at(spec, i) - 48; ; } else { ; }
+        i = i + 1;
+        ;
+    }
+    return v;
+}
+
+/* How a value formats under a spec: 1 an integer (long, byte), 2 a float,
+ * 0 anything else -- its tostring text, like a str. */
+long fmt_kind(Yv *t) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tlong") || ys_eq_lit(k, "tbyte")) {
+        return 1;
+    } else if (ys_eq_lit(k, "tfloat")) {
+        return 2;
+    } else {
+        return 0;
+    }
+}
+
+/* What is wrong with the spec f for a value of kind `kind` (fmt_kind) and
+ * type tname: "" when nothing is. Python's rules: a sign, `#`, grouping
+ * and `=` need a number, a precision is no integer type's, `c` takes no
+ * sign, `#` or grouping, and `,` groups decimals only. */
+static Yv *fmt_check(Yv *f, long kind, Yv *tname) {
+    long ty = yv_l(yr_get(f, "ty"));
+    int ints = ty == 100 || ty == 120 || ty == 88 || ty == 111 ||
+               ty == 98 || ty == 99;
+    if (!ys_eq_lit(yr_get(f, "err"), "")) {
+        return yr_get(f, "err");
+    } else if (kind == 0) {
+        if (ty != 0 && ty != 115) {
+            return ys_cat(ys_cat(ys_cat(ys("type '"), ys_chr(ty)),
+                                 ys("' needs a number, not ")),
+                          tname);
+        } else if (yv_l(yr_get(f, "sign")) != 0) {
+            return ys_cat(ys("a sign needs a number, not "), tname);
+        } else if (yv_b(yr_get(f, "alt"))) {
+            return ys_cat(ys("'#' needs a number, not "), tname);
+        } else if (yv_l(yr_get(f, "grp")) != 0) {
+            return ys_cat(ys_cat(ys_cat(ys("'"), ys_chr(yv_l(yr_get(f, "grp")))),
+                                 ys("' needs a number, not ")),
+                          tname);
+        } else if (yv_l(yr_get(f, "align")) == 61) {
+            return ys_cat(ys("'=' alignment needs a number, not "), tname);
+        } else {
+            return ys("");
+        }
+    } else if (ty == 115) {
+        return ys_cat(ys_cat(ys_cat(ys("type '"), ys_chr(ty)),
+                             ys("' needs a string, not ")),
+                      tname);
+    } else if (kind == 2 && ints) {
+        return ys_cat(ys_cat(ys_cat(ys("type '"), ys_chr(ty)),
+                             ys("' needs an integer, not ")),
+                      tname);
+    } else if (kind == 1 && yv_l(yr_get(f, "prec")) >= 0 &&
+               (ty == 0 || ints)) {
+        return ys("a precision needs a float type (f, e or %), not an integer one");
+    } else if (ty == 99 &&
+               (yv_l(yr_get(f, "sign")) != 0 ||
+                yv_b(yr_get(f, "alt")) ||
+                yv_l(yr_get(f, "grp")) != 0)) {
+        return ys("type 'c' takes no sign, '#' or grouping");
+    } else if (yv_l(yr_get(f, "grp")) == 44 &&
+               (ty == 120 || ty == 88 || ty == 111 || ty == 98)) {
+        return ys_cat(ys_cat(ys("',' does not group type '"), ys_chr(ty)),
+                      ys("' (use '_')"));
+    } else {
+        return ys("");
+    }
+}
+
+/* #fmt(e, spec) is a str. Without a spec e is whatever tostring takes;
+ * with one, the spec has to read and to suit e's type (fmt_check). */
+static Yv *typeof_fmt(Yv *st, Yv *node) {
+    Yv *fargs = yr_get(node, "args");
+    Yv *r = typeof_expr(st, ya_get(fargs, 0));
+    st = yr_get(r, "st");
+    Yv *t = yr_get(r, "typ");
+    Yv *spec = yr_get(ya_get(fargs, 1), "v");
+    Yv *k = yr_get(t, "k");
+    if (!(ys_eq_lit(k, "tlong") || ys_eq_lit(k, "tbyte") ||
+          ys_eq_lit(k, "tbool") || ys_eq_lit(k, "tstr") ||
+          ys_eq_lit(k, "tfloat") || ys_eq_lit(k, "tunk") ||
+          ys_eq_lit(k, "tarr") || ys_eq_lit(k, "tarrfix") ||
+          ys_eq_lit(k, "trec") || ys_eq_lit(k, "tmap") ||
+          ys_eq_lit(k, "topt") || ys_eq_lit(k, "tunion"))) {
+        st = fail(st,
+                  ys_cat(ys("an f-string field takes long/bool/float/str/array/record/map/option, got "),
+                        tstr(t)),
+                  yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        ;
+    } else if (!ys_eq_lit(spec, "")) {
+        Yv *e = fmt_check(fmt_spec(spec), fmt_kind(t), tstr(t));
+        if (!ys_eq_lit(e, "")) {
+            st = fail(st,
+                      ys_cat(ys_cat(ys_cat(ys("format spec '"), spec), ys("': ")),
+                             e),
+                      yv_l(yr_get(node, "line")),
+                      yv_l(yr_get(node, "col")));
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+}
+
 static Yv *typeof_call(Yv *st, Yv *node) {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
@@ -3144,7 +3375,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
         }
     } else {
         Yv *name = yr_get(yr_get(node, "callee"), "v");
-        if (ys_eq_lit(name, "print")) {
+        if (ys_eq_lit(name, "#fmt")) {
+            return typeof_fmt(st, node);
+        } else if (ys_eq_lit(name, "print")) {
             if (yv_len(yr_get(node, "args")) != 1) {
                 st = fail(st, ys("print takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),

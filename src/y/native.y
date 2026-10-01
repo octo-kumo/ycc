@@ -24,6 +24,7 @@
 import arch from "./arch_x64.y";
 import types from "./types.y";
 import rename from "./rename.y";
+import lexer from "./lexer.y";
 
 // The runtime text native_resolve_x splices into programs. `embed` (see
 // embed_decl) makes each file a str const when the compiler is BUILT: the
@@ -83,7 +84,9 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool) -> 
     // names — otherwise every binary would carry code it never calls.
     // str.y's names count only in method-call form, `.name(`: a helper-
     // backed string method cannot be reached any other way, so a variable
-    // called `lines` or a field `r.count` splices nothing.
+    // called `lines` or a field `r.count` splices nothing. The last slot
+    // of seen stands for the y_fmt_* helpers: an f-string field with a
+    // format spec sets it to 2 (words_scan).
     if (seen_any(seen, px, len(seen), 2)) {
         let tt = std_text(STR_SRC);
         rsrc = tt + rsrc;
@@ -175,16 +178,26 @@ def count_nl(s: str) -> long {
 //   - 20 whole-text index_of scans were 10% of a self-compile.
 // A false positive still only costs compile time and an unused function
 // in the output; a miss is a compile error.
+//
+// One more slot than names: seen[len(names)] is 2 when an f-string has a
+// field with a format spec (words_scan).
 def words_seen(code: str, names: [str]) -> [long] {
     let seen: [long] = [];
     let k = 0;
-    while (k < len(names)) {
+    while (k <= len(names)) {
         seen += 0;
         k = k + 1;
         0
     };
-    let n = len(code);
-    let i = 0;
+    words_scan(code, 0, len(code), names, seen);
+    seen
+};
+
+// words_seen's pass over code[lo:n], marking seen in place. The fields of
+// an f-string are code: lexer.y fstr_walk finds them as the lexer does,
+// and each is scanned on its own.
+def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long {
+    let i = lo;
     // the first byte of the last token of code (blanks and comments skip),
     // and a name just seen after a `.`, waiting for its `(`
     let prev = 0;
@@ -240,18 +253,34 @@ def words_seen(code: str, names: [str]) -> [long] {
                     j = j + 1;
                     0
                 };
-                let m = 0;
-                while (m < len(names)) {
-                    let nm: str = names[m];
-                    if (len(nm) == j - i && word_at(code, i, nm)) {
-                        if (seen[m] == 0) { seen[m] = 1; 0; } else { 0; };
-                        if (prev == 46) { pend = m; 0; } else { 0; };
+                if (j == i + 1 && c == 102 && j < n && byte_at(code, j) == 34) {
+                    // f"...": the fields, and whether one has a spec
+                    let w = lexer.fstr_walk(code, j);
+                    let fs = w.fields;
+                    let f = 0;
+                    while (f < len(fs)) {
+                        words_scan(code, fs[f], fs[f + 1], names, seen);
+                        if (fs[f + 3] > fs[f + 2]) { seen[len(names)] = 2; 0; } else { 0; };
+                        f = f + 4;
                         0
-                    } else { 0; };
-                    m = m + 1;
+                    };
+                    i = w.end;
+                    0
+                } else {
+                    let m = 0;
+                    while (m < len(names)) {
+                        let nm: str = names[m];
+                        if (len(nm) == j - i && word_at(code, i, nm)) {
+                            if (seen[m] == 0) { seen[m] = 1; 0; } else { 0; };
+                            if (prev == 46) { pend = m; 0; } else { 0; };
+                            0
+                        } else { 0; };
+                        m = m + 1;
+                        0
+                    };
+                    i = j;
                     0
                 };
-                i = j;
                 0
             } else {
                 i = i + 1;
@@ -262,7 +291,7 @@ def words_seen(code: str, names: [str]) -> [long] {
         };
         0
     };
-    seen
+    0
 };
 
 // A byte of an identifier-shaped word (the lexer's isalnum: letters,
@@ -1658,7 +1687,7 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             if (len(sargs) != 1) { { k: "topt", of: { k: "tunk" } } } else {
                 { k: "topt", of: infer(st, sargs[0]) }
             }
-        } else if (name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof") {
+        } else if (name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof" || name == "#fmt") {
             { k: "tstr" }
         } else if (name == "read_file") {
             // str? (option): a missing file yields none at runtime
@@ -1904,7 +1933,7 @@ def is_intrinsic_name(n: str) -> bool {
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "sleep", "heap_used", "exit", "argv", "read_file", "write_file",
              "write_bytes", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "self", "none"], n)
+             "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -3271,6 +3300,8 @@ def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             gen_tonum(st, node)
         } else if (name == "tostring") {
             gen_tostring(st, node)
+        } else if (name == "#fmt") {
+            gen_fmt(st, node)
         } else if (name == "typeof") {
             gen_typeof(st, node)
         } else if (name == "index_of") {
@@ -5361,6 +5392,101 @@ def gen_tostring(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
         st = emit(st, "    call y_long_tostr");
         emit(st, "    add $8, %rsp")
     }
+};
+
+// An f-string field, #fmt(e, "spec") (lexer.y lex_fstring, checked by
+// types.y typeof_fmt). Without a spec it is tostring(e). With one, e goes
+// to a std/str.y helper with the spec read here, packed into one number
+// (fmt_code), and its width and precision: y_fmt_i for d x X o b c,
+// y_fmt_f for f F e E % (a long converted first, and a `%` multiplied by
+// 100 in floating point, as Python does it), y_fmt_s for the rest -- a
+// str, or the tostring of anything else.
+def gen_fmt(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let fargs = node.args;
+    let a0 = fargs[0];
+    let spec: str = fargs[1].v;
+    let ts = n_call1("tostring", a0, node.line, node.col);
+    if (spec == "") {
+        gen_tostring(st, ts)
+    } else {
+        let t = infer(st, a0);
+        let f = types.fmt_spec(spec);
+        let kind = types.fmt_kind(t);
+        let ty = f.ty;
+        if (ty == 0) {
+            if (kind == 1) { ty = 100; 0; } else if (kind == 2) { ty = 102; 0; } else { ty = 115; 0; };
+            0
+        } else { 0; };
+        let code = fmt_code(f, kind, ty);
+        if (ty == 115) {
+            st = gen_tostring(st, ts);
+            st = emit(st, "    push %rax");
+            st = fmt_push(st, code);
+            st = fmt_push(st, f.width);
+            st = fmt_push(st, f.prec);
+            st = emit(st, "    call y_fmt_s");
+            emit(st, "    add $32, %rsp")
+        } else if (ty == 100 || ty == 120 || ty == 88 || ty == 111 || ty == 98 || ty == 99) {
+            st = gen(st, a0);
+            st = emit(st, "    push %rax");
+            st = fmt_push(st, code);
+            st = fmt_push(st, f.width);
+            st = emit(st, "    call y_fmt_i");
+            emit(st, "    add $24, %rsp")
+        } else {
+            st = gen(st, a0);
+            if (kind == 1) {
+                st = emit(st, "    cvtsi2sd %rax, %xmm0");
+                st = emit(st, "    movq %xmm0, %rax");
+                0
+            } else { 0; };
+            if (ty == 37) {
+                st = emit(st, "    movq %rax, %xmm0");
+                st = emit(st, "    mov $100, %rax");
+                st = emit(st, "    cvtsi2sd %rax, %xmm1");
+                st = emit(st, "    mulsd %xmm1, %xmm0");
+                st = emit(st, "    movq %xmm0, %rax");
+                0
+            } else { 0; };
+            let prec = f.prec;
+            if (prec < 0) { prec = 6; 0; } else { 0; };
+            st = emit(st, "    push %rax");
+            st = fmt_push(st, code);
+            st = fmt_push(st, f.width);
+            st = fmt_push(st, prec);
+            st = emit(st, "    call y_fmt_f");
+            emit(st, "    add $32, %rsp")
+        }
+    }
+};
+
+// A spec as the y_fmt_* helpers take it (std/str.y), its defaults
+// resolved: the type letter + 256 * fill + 65536 * alignment + 16777216 *
+// (sign + 4 * `#` + 8 * grouping), sign 0 (`-`), 1 (`+`) or 2 (a space),
+// grouping 0, 1 (`,`) or 2 (`_`). A `0` is fill 0 unless a fill is given
+// and, for a number, alignment `=` unless one is; numbers go right,
+// everything else left.
+def fmt_code(f: { err: str, fill: long, align: long, sign: long, alt: bool, zero: bool, width: long, grp: long, prec: long, ty: long }, kind: long, ty: long) -> long {
+    let fill = f.fill;
+    let align = f.align;
+    if (f.zero && fill == 0) { fill = 48; 0; } else { 0; };
+    if (f.zero && align == 0 && kind != 0) { align = 61; 0; } else { 0; };
+    if (fill == 0) { fill = 32; 0; } else { 0; };
+    if (align == 0) {
+        if (kind != 0) { align = 62; 0; } else { align = 60; 0; };
+        0
+    } else { 0; };
+    let sg = 0;
+    if (f.sign == 43) { sg = 1; 0; } else if (f.sign == 32) { sg = 2; 0; } else { 0; };
+    if (f.alt) { sg = sg + 4; 0; } else { 0; };
+    if (f.grp == 44) { sg = sg + 8; 0; } else if (f.grp == 95) { sg = sg + 16; 0; } else { 0; };
+    ty + 256 * fill + 65536 * align + 16777216 * sg
+};
+
+// Push the number v (an argument of a helper call).
+def fmt_push(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, v: long) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    st = emit(st, "    mov $" + tostring(v) + ", %rax");
+    emit(st, "    push %rax")
 };
 
 def gen_index_of(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, last: bool) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {

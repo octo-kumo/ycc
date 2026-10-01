@@ -2110,6 +2110,153 @@ def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str 
     }
 };
 
+// ── f-string fields ──────────────────────────────────────────────────────
+// lexer.y lex_fstring makes each field of an f-string a call of `#fmt`, a
+// name no program can bind: f"{e:spec}" is #fmt(e, "spec"), and f"{e}"
+// #fmt(e, "").
+
+// A format spec, Python's mini-language without nested fields:
+//   [[fill]align][sign][#][0][width][grouping][.precision][type]
+// align < > ^ =, sign + - or a space, grouping `,` or `_`, type one of
+// s d x X o b c f F e E %. Bytes, 0 when absent (-1 for the two numbers);
+// err is "" when the spec reads.
+def fmt_spec(spec: str) -> { err: str, fill: long, align: long, sign: long, alt: bool, zero: bool, width: long, grp: long, prec: long, ty: long } {
+    let n = len(spec);
+    let i = 0;
+    let fill = 0;
+    let align = 0;
+    if (n >= 2 && fmt_align(byte_at(spec, 1))) {
+        fill = byte_at(spec, 0);
+        align = byte_at(spec, 1);
+        i = 2;
+        0
+    } else if (n >= 1 && fmt_align(byte_at(spec, 0))) {
+        align = byte_at(spec, 0);
+        i = 1;
+        0
+    } else { 0; };
+    let sign = 0;
+    if (i < n && (byte_at(spec, i) == 43 || byte_at(spec, i) == 45 || byte_at(spec, i) == 32)) {
+        sign = byte_at(spec, i);
+        i = i + 1;
+        0
+    } else { 0; };
+    let alt = false;
+    if (i < n && byte_at(spec, i) == 35) { alt = true; i = i + 1; 0; } else { 0; };
+    let zero = false;
+    if (i < n && byte_at(spec, i) == 48) { zero = true; i = i + 1; 0; } else { 0; };
+    let ws = i;
+    while (i < n && fmt_digit(byte_at(spec, i))) { i = i + 1; 0; };
+    let width = 0 - 1;
+    if (i > ws) { width = fmt_number(spec, ws, i); 0; } else { 0; };
+    let grp = 0;
+    if (i < n && (byte_at(spec, i) == 44 || byte_at(spec, i) == 95)) {
+        grp = byte_at(spec, i);
+        i = i + 1;
+        0
+    } else { 0; };
+    let err = "";
+    let prec = 0 - 1;
+    if (i < n && byte_at(spec, i) == 46) {
+        i = i + 1;
+        let ps = i;
+        while (i < n && fmt_digit(byte_at(spec, i))) { i = i + 1; 0; };
+        if (i > ps) { prec = fmt_number(spec, ps, i); 0; } else { err = "'.' without a precision"; 0; };
+        0
+    } else { 0; };
+    let ty = 0;
+    if (i < n && fmt_type(byte_at(spec, i))) { ty = byte_at(spec, i); i = i + 1; 0; } else { 0; };
+    if (err != "") { 0; }
+    else if (i == n - 1) { err = "unknown type '" + spec[i:n] + "'"; 0; }
+    else if (i < n) { err = "cannot read '" + spec[i:n] + "'"; 0; }
+    else if (width > 99999 || prec > 99999) { err = "width and precision stop at 99999"; 0; }
+    else { 0; };
+    { err: err, fill: fill, align: align, sign: sign, alt: alt, zero: zero, width: width, grp: grp, prec: prec, ty: ty }
+};
+
+def fmt_align(c: long) -> bool {
+    c == 60 || c == 62 || c == 94 || c == 61
+};
+
+def fmt_digit(c: long) -> bool {
+    c >= 48 && c <= 57
+};
+
+// s d x X o b c f F e E %
+def fmt_type(c: long) -> bool {
+    c == 115 || c == 100 || c == 120 || c == 88 || c == 111 || c == 98 || c == 99 ||
+    c == 102 || c == 70 || c == 101 || c == 69 || c == 37
+};
+
+// The digits spec[a:b] as a number, stopping short of overflow (a value
+// that large is over fmt_spec's limit anyway).
+def fmt_number(spec: str, a: long, b: long) -> long {
+    let v = 0;
+    let i = a;
+    while (i < b) {
+        if (v < 1000000) { v = v * 10 + byte_at(spec, i) - 48; 0; } else { 0; };
+        i = i + 1;
+        0
+    };
+    v
+};
+
+// How a value formats under a spec: 1 an integer (long, byte), 2 a float,
+// 0 anything else -- its tostring text, like a str.
+def fmt_kind(t: { k: str }) -> long {
+    if (t.k == "tlong" || t.k == "tbyte") { 1 } else if (t.k == "tfloat") { 2 } else { 0 }
+};
+
+// What is wrong with the spec f for a value of kind `kind` (fmt_kind) and
+// type tname: "" when nothing is. Python's rules: a sign, `#`, grouping
+// and `=` need a number, a precision is no integer type's, `c` takes no
+// sign, `#` or grouping, and `,` groups decimals only.
+def fmt_check(f: { err: str, fill: long, align: long, sign: long, alt: bool, zero: bool, width: long, grp: long, prec: long, ty: long }, kind: long, tname: str) -> str {
+    let ty = f.ty;
+    let ints = ty == 100 || ty == 120 || ty == 88 || ty == 111 || ty == 98 || ty == 99;
+    if (f.err != "") {
+        f.err
+    } else if (kind == 0) {
+        if (ty != 0 && ty != 115) { "type '" + chr(ty) + "' needs a number, not " + tname }
+        else if (f.sign != 0) { "a sign needs a number, not " + tname }
+        else if (f.alt) { "'#' needs a number, not " + tname }
+        else if (f.grp != 0) { "'" + chr(f.grp) + "' needs a number, not " + tname }
+        else if (f.align == 61) { "'=' alignment needs a number, not " + tname }
+        else { "" }
+    } else if (ty == 115) {
+        "type 's' needs a string, not " + tname
+    } else if (kind == 2 && ints) {
+        "type '" + chr(ty) + "' needs an integer, not " + tname
+    } else if (kind == 1 && f.prec >= 0 && (ty == 0 || ints)) {
+        "a precision needs a float type (f, e or %), not an integer one"
+    } else if (ty == 99 && (f.sign != 0 || f.alt || f.grp != 0)) {
+        "type 'c' takes no sign, '#' or grouping"
+    } else if (f.grp == 44 && (ty == 120 || ty == 88 || ty == 111 || ty == 98)) {
+        "',' does not group type '" + chr(ty) + "' (use '_')"
+    } else {
+        ""
+    }
+};
+
+// #fmt(e, spec) is a str. Without a spec e is whatever tostring takes;
+// with one, the spec has to read and to suit e's type (fmt_check).
+def typeof_fmt(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let fargs = node.args;
+    let r = typeof_expr(st, fargs[0]);
+    st = r.st;
+    let t = r.typ;
+    let spec: str = fargs[1].v;
+    if (!(t.k == "tlong" || t.k == "tbyte" || t.k == "tbool" || t.k == "tstr" || t.k == "tfloat" || t.k == "tunk" || t.k == "tarr" || t.k == "tarrfix" || t.k == "trec" || t.k == "tmap" || t.k == "topt" || t.k == "tunion")) {
+        st = fail(st, "an f-string field takes long/bool/float/str/array/record/map/option, got " + tstr(t), node.line, node.col);
+        0
+    } else if (spec != "") {
+        let e = fmt_check(fmt_spec(spec), fmt_kind(t), tstr(t));
+        if (e != "") { st = fail(st, "format spec '" + spec + "': " + e, node.line, node.col); 0; } else { 0; };
+        0
+    } else { 0; };
+    { typ: { k: "tstr" }, st: st }
+};
+
 def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
@@ -2172,7 +2319,9 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         }
     } else {
         let name = node.callee.v;
-        if (name == "print") {
+        if (name == "#fmt") {
+            typeof_fmt(st, node)
+        } else if (name == "print") {
             if (len(node.args) != 1) {
                 st = fail(st, "print takes exactly 1 argument", node.line, node.col);
                 { typ: { k: "tvoid" }, st: st }
@@ -2935,4 +3084,4 @@ def def_sig(name: str, func) -> { name: str, typ: { k: str } } {
     { name: name, typ: { k: "tfunc", args: args, ret: ret } }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_merge, narrow_type, type_names, str_method };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_merge, narrow_type, type_names, str_method, fmt_spec, fmt_kind };

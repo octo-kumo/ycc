@@ -85,6 +85,27 @@ literal. The escapes are the string escapes above, so binary data writes
 naturally: \ic{b"\bs x7fELF"} is the four-byte ELF magic. Either quote
 spells the same type; single quotes exist only for byte strings.
 
+\paragraph{Format strings.} \ic{f"..."} is a string literal with
+\emph{fields}, as in Python:
+\begin{center}
+\ic{f"\{name\} is \{age\} (\{share:.1\%\})"}
+\end{center}
+\noindent A field \ic{\{e\}} becomes \ic{tostring(e)}, and
+\ic{\{e:spec\}} becomes \ic{e} formatted as \ty{spec} says
+(Section~\ref{sec:format-spec}). The text around the fields takes the
+string escapes, and \ic{\{\{} and \ic{\}\}} (or \ic{\bs\{} and
+\ic{\bs\}}) are literal braces. An f-string is sugar for concatenation:
+\ic{f"a\{x\}b"} means \ic{"a" + tostring(x)} \ic{+ "b"}, a \ty{str} like
+any other.
+
+A field holds one expression --- calls, string literals, record literals
+and nested f-strings included --- and may span lines; an error inside it
+points at its own line and column. The expression ends at the first
+\ic{\}} or \ic{:} outside brackets, except a \ic{:} that answers a
+\ic{?}: \ic{\{ok ? a : b\}} works, while a cons has to be parenthesised,
+\ic{\{(x :: xs)\}}. The spec is plain text up to the field's \ic{\}}; it
+cannot hold another field.
+
 \paragraph{Booleans and none.} \ic{true}, \ic{false}. The empty option
 is spelled \ic{none}, a predeclared name rather than a keyword
 (Section~\ref{sec:type-options}). There is no \ic{null}: the word is an

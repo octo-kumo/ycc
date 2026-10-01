@@ -67,6 +67,8 @@ int ispunct(Yv *c) {
            ys_eq_lit(c, ":");
 }
 
+static Yv *unescape(Yv *raw, int braces);
+
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
 // decoded text and the position just past the closing quote. Escapes:
 // \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
@@ -106,44 +108,379 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
     col = col + 1;
     Yv *buf = raw;
     if (hasesc) {
-        // process escapes into a chunk list + join (O(n))
-        Yv *chunks = yav(0);
-        long k = 0;
-        long rn = yv_len(raw);
-        while (k < rn) {
-            Yv *rc = ys_slice(raw, k, k + 1);
-            if (ys_eq_lit(rc, "\\")) {
-                Yv *esc = ys_slice(raw, k + 1, k + 2);
-                if (ys_eq_lit(esc, "n")) { chunks = ya_push(chunks, ys("\n")); k = k + 2; ; }
-                else if (ys_eq_lit(esc, "t")) { chunks = ya_push(chunks, ys("\t")); k = k + 2; ; }
-                else if (ys_eq_lit(esc, "r")) { chunks = ya_push(chunks, ys("\r")); k = k + 2; ; }
-                else if (ys_eq_lit(esc, "x")) {
-                    // \xHH -- two hex digits
-                    long h1 = hexvalx(ys_slice(raw, k + 2, k + 3));
-                    long h2 = hexvalx(ys_slice(raw, k + 3, k + 4));
-                    if (h1 >= 0 && h2 >= 0) {
-                        chunks = ya_push(chunks, ys_chr(h1 * 16 + h2));
-                        k = k + 4;
-                        ;
-                    } else {
-                        chunks = ya_push(chunks, esc);
-                        k = k + 2;
-                        ;
-                    };
-                    ;
-                }
-                else { chunks = ya_push(chunks, esc); k = k + 2; ; };
-                ;
-            } else {
-                chunks = ya_push(chunks, rc);
-                k = k + 1;
-                ;
-            };
-        };
-        buf = ys_join(chunks, ys(""));
+        buf = unescape(raw, 0);
         ;
     } else { ; }
     return yr(4, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col));
+}
+
+/* A literal's text from its raw source: \n \t \r, \xHH, and `\<c>` drops
+ * the backslash (the Y literal rules). In an f-string (`braces`) `{{` and
+ * `}}` are one brace each -- fstr_walk lets no single brace through. */
+static Yv *unescape(Yv *raw, int braces) {
+    /* a chunk list + join (O(n)) */
+    Yv *chunks = yav(0);
+    long k = 0;
+    long rn = yv_len(raw);
+    while (k < rn) {
+        Yv *rc = ys_slice(raw, k, k + 1);
+        if (ys_eq_lit(rc, "\\")) {
+            Yv *esc = ys_slice(raw, k + 1, k + 2);
+            if (ys_eq_lit(esc, "n")) { chunks = ya_push(chunks, ys("\n")); k = k + 2; ; }
+            else if (ys_eq_lit(esc, "t")) { chunks = ya_push(chunks, ys("\t")); k = k + 2; ; }
+            else if (ys_eq_lit(esc, "r")) { chunks = ya_push(chunks, ys("\r")); k = k + 2; ; }
+            else if (ys_eq_lit(esc, "x")) {
+                /* \xHH -- two hex digits */
+                long h1 = hexvalx(ys_slice(raw, k + 2, k + 3));
+                long h2 = hexvalx(ys_slice(raw, k + 3, k + 4));
+                if (h1 >= 0 && h2 >= 0) {
+                    chunks = ya_push(chunks, ys_chr(h1 * 16 + h2));
+                    k = k + 4;
+                    ;
+                } else {
+                    chunks = ya_push(chunks, esc);
+                    k = k + 2;
+                    ;
+                };
+                ;
+            }
+            else { chunks = ya_push(chunks, esc); k = k + 2; ; };
+            ;
+        } else if (braces && (ys_eq_lit(rc, "{") || ys_eq_lit(rc, "}"))) {
+            chunks = ya_push(chunks, rc);
+            k = k + 2;
+            ;
+        } else {
+            chunks = ya_push(chunks, rc);
+            k = k + 1;
+            ;
+        };
+    };
+    return ys_join(chunks, ys(""));
+}
+
+/* ── f-strings ────────────────────────────────────────────────────────────
+ * f"x = {x}, mean {total / n:.2f}" -- text with fields in braces. A field
+ * is one expression, then optionally `:` and a format spec running to the
+ * closing brace (types.y fmt_spec). `{{` and `}}` are literal braces, and
+ * a backslash escapes as in any literal (`\{` too). The expression ends at
+ * the first `}` or `:` outside brackets and literals -- a `:` closing a
+ * `c ? a : b` excepted -- so strings, slices and records need no escaping
+ * in it: f"{d["k"]}", f"{s[1:3]}", f"{n == 1 ? "" : "s"}". */
+
+/* A byte of an identifier-shaped word (isalnum, on a byte). */
+static int wordbyte(long c) {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) ||
+           (c >= 48 && c <= 57) || c == 95;
+}
+
+/* Just past the literal whose opening quote is src[q] (a backslash escapes
+ * the byte after it); len(src) when it never closes. */
+static long lit_end(Yv *src, long q) {
+    long n = yv_len(src);
+    long qc = ys_byte_at(src, q);
+    long i = q + 1;
+    long end = n;
+    int open = 1;
+    while (open && i < n) {
+        long c = ys_byte_at(src, i);
+        if (c == 92) { i = i + 2; ; }
+        else if (c == qc) { end = i + 1; open = 0; ; }
+        else { i = i + 1; ; };
+    };
+    return end;
+}
+
+/* Where the expression of the f-string field starting at src[lo] ends: the
+ * first `}` or `:` outside brackets and literals (but a `:` that closes a
+ * `?`), or a `,` `;` or unmatched `)` `]` there, which fstr_walk rejects;
+ * len(src) when the source runs out first. */
+static long fstr_expr_end(Yv *src, long lo) {
+    long n = yv_len(src);
+    long depth = 0;
+    long tern = 0;
+    long i = lo;
+    long stop = n;
+    int go = 1;
+    while (go && i < n) {
+        long c = ys_byte_at(src, i);
+        if (c == 34 || c == 39) {
+            if (c == 34 && i > lo && ys_byte_at(src, i - 1) == 102 &&
+                (i - 1 == lo || !wordbyte(ys_byte_at(src, i - 2)))) {
+                /* a nested f"..." */
+                i = yv_l(yr_get(fstr_walk(src, i), "end"));
+                ;
+            } else {
+                i = lit_end(src, i);
+                ;
+            };
+            ;
+        } else if (c == 40 || c == 91 || c == 123) {
+            depth = depth + 1;
+            i = i + 1;
+            ;
+        } else if (depth > 0) {
+            if (c == 41 || c == 93 || c == 125) { depth = depth - 1; ; } else { ; };
+            i = i + 1;
+            ;
+        } else if (c == 63) {
+            tern = tern + 1;
+            i = i + 1;
+            ;
+        } else if (c == 58 && tern > 0) {
+            tern = tern - 1;
+            i = i + 1;
+            ;
+        } else if (c == 125 || c == 58 || c == 44 || c == 59 || c == 41 || c == 93) {
+            stop = i;
+            go = 0;
+            ;
+        } else {
+            i = i + 1;
+            ;
+        };
+    };
+    return stop;
+}
+
+/* Whether src[lo:hi] is all blanks. */
+static int fstr_blank(Yv *src, long lo, long hi) {
+    long i = lo;
+    int blank = 1;
+    while (blank && i < hi) {
+        long c = ys_byte_at(src, i);
+        blank = c == 32 || c == 9 || c == 10 || c == 13;
+        i = i + 1;
+        ;
+    };
+    return blank;
+}
+
+/* Walk the f-string whose opening quote is src[q]: where it ends (past the
+ * closing quote), what is wrong with it ("" when nothing is) and where, and
+ * its fields, four numbers each: the expression is src[lo:hi], the spec
+ * src[slo:shi] (both -1 without a `:`). The lexer lowers what this finds
+ * (lex_fstring) and native.y's splice scan reads the same fields as code
+ * (words_scan), so the two always agree. A broken f-string ends where a
+ * plain literal would. */
+Yv *fstr_walk(Yv *src, long q) {
+    long n = yv_len(src);
+    Yv *fields = yav(0);
+    Yv *err = ys("");
+    long at = q;
+    long i = q + 1;
+    int open = 1;
+    while (open) {
+        if (i >= n) {
+            err = ys("unterminated f-string");
+            open = 0;
+            ;
+        } else {
+            long c = ys_byte_at(src, i);
+            if (c == 92) {
+                i = i + 2;
+                ;
+            } else if (c == 34) {
+                i = i + 1;
+                open = 0;
+                ;
+            } else if ((c == 123 || c == 125) && i + 1 < n &&
+                       ys_byte_at(src, i + 1) == c) {
+                i = i + 2;
+                ;
+            } else if (c == 125) {
+                err = ys("single '}' in an f-string (a literal brace is '}}')");
+                at = i;
+                open = 0;
+                ;
+            } else if (c == 123) {
+                long lo = i + 1;
+                long hi = fstr_expr_end(src, lo);
+                long hc = 0;
+                if (hi < n) { hc = ys_byte_at(src, hi); ; } else { ; };
+                if (hc != 125 && hc != 58) {
+                    if (hi >= n) {
+                        err = ys("unterminated f-string field");
+                        at = i;
+                        ;
+                    } else {
+                        err = ys_cat(
+                            ys_cat(ys("an f-string field is one expression, got '"),
+                                   ys_slice(src, hi, hi + 1)),
+                            ys("'"));
+                        at = hi;
+                        ;
+                    };
+                    open = 0;
+                    ;
+                } else if (fstr_blank(src, lo, hi)) {
+                    err = ys("empty f-string field");
+                    at = i;
+                    open = 0;
+                    ;
+                } else if (hc == 125) {
+                    fields = ya_push(fields, yv_long(lo));
+                    fields = ya_push(fields, yv_long(hi));
+                    fields = ya_push(fields, yv_long(0 - 1));
+                    fields = ya_push(fields, yv_long(0 - 1));
+                    i = hi + 1;
+                    ;
+                } else {
+                    /* the spec: up to the closing brace */
+                    long e = hi + 1;
+                    while (e < n && ys_byte_at(src, e) != 125 &&
+                           ys_byte_at(src, e) != 123 &&
+                           ys_byte_at(src, e) != 34) {
+                        e = e + 1;
+                        ;
+                    };
+                    if (e < n && ys_byte_at(src, e) == 125) {
+                        fields = ya_push(fields, yv_long(lo));
+                        fields = ya_push(fields, yv_long(hi));
+                        fields = ya_push(fields, yv_long(hi + 1));
+                        fields = ya_push(fields, yv_long(e));
+                        i = e + 1;
+                        ;
+                    } else {
+                        if (e < n && ys_byte_at(src, e) == 123) {
+                            err = ys("a format spec cannot hold '{'");
+                            at = e;
+                            ;
+                        } else {
+                            err = ys("unterminated f-string field");
+                            at = i;
+                            ;
+                        };
+                        open = 0;
+                        ;
+                    };
+                    ;
+                };
+                ;
+            } else {
+                i = i + 1;
+                ;
+            };
+            ;
+        };
+        ;
+    };
+    long end = i;
+    if (!ys_eq_lit(err, "")) { end = lit_end(src, q); ; } else { ; };
+    return yr(4, "end", yv_long(end), "err", err, "at", yv_long(at), "fields", fields);
+}
+
+/* The position (line, col) moves to over src[a:b]. */
+static Yv *fstr_adv(Yv *src, long a, long b, long line, long col) {
+    long ln = line;
+    long cl = col;
+    long i = a;
+    while (i < b) {
+        if (ys_byte_at(src, i) == 10) { ln = ln + 1; cl = 1; ; } else { cl = cl + 1; ; };
+        i = i + 1;
+        ;
+    };
+    return yr(2, "line", yv_long(ln), "col", yv_long(cl));
+}
+
+/* The tokens of the f-string whose `f` is at (line, col) and whose opening
+ * quote is src[q], appended to toks; returns where lexing goes on. It is a
+ * concatenation, each field a call of `#fmt` -- a name no program can bind,
+ * which types.y (typeof_fmt) checks and native.y (gen_fmt) emits:
+ *   f"a{x}b{y:>5}"  ->  ( "a" + #fmt(x, "") + "b" + #fmt(y, ">5") )
+ * A field's expression is tokenized on its own, its tokens moved to where
+ * it stands; the rest sits at the field's `{`. Without fields it is a plain
+ * string; a broken one is an `ferr` token, which the parser turns into an
+ * error where the walk stopped. */
+static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
+    Yv *w = fstr_walk(src, q);
+    Yv *fs = yr_get(w, "fields");
+    if (!ys_eq_lit(yr_get(w, "err"), "")) {
+        Yv *ep = fstr_adv(src, q - 1, yv_l(yr_get(w, "at")), line, col);
+        toks = ya_push(toks, mktok(ys("ferr"), yr_get(w, "err"),
+                                  yv_l(yr_get(ep, "line")),
+                                  yv_l(yr_get(ep, "col"))));
+        ;
+    } else if (yv_len(fs) == 0) {
+        toks = ya_push(toks, mktok(ys("str"),
+                                   unescape(ys_slice(src, q + 1,
+                                                     yv_l(yr_get(w, "end")) - 1), 1),
+                                   line, col));
+        ;
+    } else {
+        toks = ya_push(toks, mktok(ys("punct"), ys("("), line, col));
+        long from = q + 1;
+        long at = q - 1;
+        long bl = line;
+        long bc = col;
+        long k = 0;
+        while (k < yv_len(fs)) {
+            long lo = yv_l(ya_get(fs, k));
+            long hi = yv_l(ya_get(fs, k + 1));
+            long slo = yv_l(ya_get(fs, k + 2));
+            Yv *bp = fstr_adv(src, at, lo - 1, bl, bc);
+            at = lo - 1;
+            bl = yv_l(yr_get(bp, "line"));
+            bc = yv_l(yr_get(bp, "col"));
+            if (k > 0) { toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc)); ; } else { ; };
+            if (lo - 1 > from) {
+                toks = ya_push(toks, mktok(ys("str"),
+                                           unescape(ys_slice(src, from, lo - 1), 1),
+                                           bl, bc));
+                toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc));
+                ;
+            } else { ; };
+            toks = ya_push(toks, mktok(ys("id"), ys("#fmt"), bl, bc));
+            toks = ya_push(toks, mktok(ys("punct"), ys("("), bl, bc));
+            Yv *sub = tokenize(ys_slice(src, lo, hi));
+            long j = 0;
+            while (j + 1 < yv_len(sub)) {
+                Yv *tk = ya_get(sub, j);
+                if (yv_l(yr_get(tk, "line")) == 1) {
+                    toks = ya_push(toks,
+                                   mktok(yr_get(tk, "t"), yr_get(tk, "v"), bl,
+                                         bc + yv_l(yr_get(tk, "col"))));
+                    ;
+                } else {
+                    toks = ya_push(toks,
+                                   mktok(yr_get(tk, "t"), yr_get(tk, "v"),
+                                         bl + yv_l(yr_get(tk, "line")) - 1,
+                                         yv_l(yr_get(tk, "col"))));
+                    ;
+                };
+                j = j + 1;
+                ;
+            };
+            toks = ya_push(toks, mktok(ys("punct"), ys(","), bl, bc));
+            if (slo >= 0) {
+                toks = ya_push(toks, mktok(ys("str"),
+                                           ys_slice(src, slo,
+                                                    yv_l(ya_get(fs, k + 3))),
+                                           bl, bc));
+                from = yv_l(ya_get(fs, k + 3)) + 1;
+                ;
+            } else {
+                toks = ya_push(toks, mktok(ys("str"), ys(""), bl, bc));
+                from = hi + 1;
+                ;
+            };
+            toks = ya_push(toks, mktok(ys("punct"), ys(")"), bl, bc));
+            k = k + 4;
+            ;
+        };
+        long end = yv_l(yr_get(w, "end"));
+        if (end - 1 > from) {
+            toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc));
+            toks = ya_push(toks, mktok(ys("str"),
+                                       unescape(ys_slice(src, from, end - 1), 1),
+                                       bl, bc));
+            ;
+        } else { ; };
+        toks = ya_push(toks, mktok(ys("punct"), ys(")"), bl, bc));
+        ;
+    };
+    Yv *e = fstr_adv(src, q - 1, yv_l(yr_get(w, "end")), line, col);
+    return yr(3, "end", yr_get(w, "end"), "line", yr_get(e, "line"), "col", yr_get(e, "col"));
 }
 
 Yv *mktok(Yv *t, Yv *v, long line, long col) {
@@ -354,6 +691,14 @@ Yv *tokenize(Yv *src) {
                 line = yv_l(yr_get(cq, "line"));
                 col = yv_l(yr_get(cq, "col"));
                 toks = ya_push(toks, mktok(ys("char"), yr_get(cq, "text"), cline, startcol));
+                ;
+            } else if (ys_eq_lit(word, "f") &&
+                       ys_eq_lit(ys_slice(src, i, i + 1), "\"")) {
+                /* f"..." -- an f-string (lex_fstring) */
+                Yv *fq = lex_fstring(src, i, line, startcol, toks);
+                i = yv_l(yr_get(fq, "end"));
+                line = yv_l(yr_get(fq, "line"));
+                col = yv_l(yr_get(fq, "col"));
                 ;
             } else {
                 toks = ya_push(toks, mktok(ty, word, line, startcol));

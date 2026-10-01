@@ -79,6 +79,65 @@ a record still calls the field. \ic{s.length} is a property, so
   (\ic{typeof(none)} is \ic{"none"}).
 \end{description}
 
+\subsection{Format specifications}
+\label{sec:format-spec}
+
+A field \ic{\{e:spec\}} of an f-string (Section~\ref{sec:literals})
+formats \ic{e} as Python's \ic{format(e, spec)} would, in the same
+mini-language:
+
+\begin{center}
+[[\ty{fill}]\ty{align}][\ty{sign}][\ic{\#}][\ic{0}][\ty{width}][\ty{grouping}][\ic{.}\ty{precision}][\ty{type}]
+\end{center}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ty{align}] \ic{<} left, \ic{>} right, \ic{\textasciicircum{}}
+  centred (the odd byte goes right), \ic{=} padding between the sign and
+  the digits. Numbers align right by default, everything else left. A
+  \ty{fill} byte in front of it replaces the default space.
+\item[\ty{sign}] \ic{+} on every number, \ic{-} on the negative ones only
+  (the default), or a space in front of the others.
+\item[\ic{\#}] The prefix \ic{0x}, \ic{0X}, \ic{0o} or \ic{0b} for the
+  radix types; a decimal point even with no digits after it for the
+  float types.
+\item[\ic{0}] Pad with zeros after the sign: fill \ic{0} and align
+  \ic{=}, unless the spec gives its own. The zeros are grouped too:
+  \ic{f"\{255:\#010\_x\}"} is \ic{0x000\_00ff}.
+\item[\ty{width}] The least number of bytes; padding makes up the rest.
+\item[\ty{grouping}] \ic{,} or \ic{\_} between groups of three digits;
+  \ic{\_} between groups of four for \ic{x}, \ic{X}, \ic{o} and \ic{b},
+  which do not take \ic{,}.
+\item[\ty{precision}] Digits after the point for \ic{f}, \ic{F} and
+  \ic{\%}, after the first digit for \ic{e} and \ic{E} (6 if omitted);
+  for a string, the most bytes kept. The integer types take none.
+\item[\ty{type}] \ic{d} decimal, \ic{x}/\ic{X} hexadecimal, \ic{o} octal,
+  \ic{b} binary, \ic{c} the byte \ic{chr(e)}: integers only. \ic{f}/\ic{F}
+  fixed point, \ic{e}/\ic{E} scientific, \ic{\%} times 100 in fixed point
+  with a \ic{\%} sign: floats and integers. \ic{s}: strings and the other
+  non-numbers. Without a type, integers use \ic{d}, floats \ic{f} and
+  everything else \ic{s}.
+\end{description}
+
+\noindent Floats print exactly: the digits are those of the binary
+value, rounded half to even. So \ic{f"\{0.125:.2f\}"} is \ic{0.12}, and
+\ic{f"\{0.1:.20f\}"} is \ic{0.10000000000000000555}. Infinities and NaNs
+print as \ic{inf} and \ic{nan} (\ic{INF} and \ic{NAN} for \ic{F} and
+\ic{E}). A value that is neither a number nor a string --- a \ic{bool},
+an array, a record, a map, an option --- formats its \ic{tostring} text
+as a string. Width and precision stop at 99999. A spec that does not
+read, or does not suit the field's static type, is a compile-time error;
+\ic{f"\{1.5:d\}"} gets
+\begin{center}
+\ic{format spec 'd': type 'd' needs an integer, not float}
+\end{center}
+
+Where Y differs from Python: a field without a spec is \ic{tostring}, so
+a float shows six decimals (\ic{f"\{2.5\}"} is \ic{2.500000}); a float
+spec without a type means \ic{f}, so \ic{\{x:.2\}} gives two decimals
+rather than two significant digits; a \ic{bool} is text, not a number;
+there are no \ic{g}, \ic{G} or \ic{n} types and no nested fields; the
+fill is one byte, and widths count bytes.
+
 \subsection{Binary data}
 \label{sec:builtin-bytes}
 

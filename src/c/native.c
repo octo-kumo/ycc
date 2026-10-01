@@ -13,6 +13,7 @@
  */
 #include "native.h"
 
+#include "lexer.h"
 #include "yv.h"
 
 /* `pow10` is a native.y def (integer powers of ten) and glibc claims the
@@ -52,6 +53,8 @@ Yv *tdisp_fnval(Yv *t);
 Yv *check_program(Yv *ast);
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
 Yv *str_method(Yv *m);
+Yv *fmt_spec(Yv *spec);
+long fmt_kind(Yv *t);
 Yv *narrow_type(Yv *s, Yv *t);
 Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
@@ -75,6 +78,7 @@ Yv *str_names(void);
 Yv *std_text(Yv *s);
 long count_nl(Yv *s);
 Yv *words_seen(Yv *code, Yv *names);
+long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen);
 int word_byte(long c);
 int blank_byte(long c);
 int word_at(Yv *code, long i, Yv *nm);
@@ -166,6 +170,7 @@ Yv *syscall_reg(long i);
 Yv *gen_push_args(Yv *st, Yv *args);
 Yv *gen_helper1(Yv *st, Yv *label);
 Yv *gen_call(Yv *st, Yv *node);
+Yv *gen_fmt(Yv *st, Yv *node);
 Yv *gen_method(Yv *st, Yv *node);
 Yv *gen_print(Yv *st, Yv *node);
 Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t);
@@ -289,6 +294,8 @@ Yv *gen_ord(Yv *st, Yv *node);
 Yv *gen_chr(Yv *st, Yv *node);
 Yv *gen_tonum(Yv *st, Yv *node);
 Yv *gen_tostring(Yv *st, Yv *node);
+long fmt_code(Yv *f, long kind, long ty);
+Yv *fmt_push(Yv *st, long v);
 Yv *gen_index_of(Yv *st, Yv *node, int last);
 Yv *gen_join(Yv *st, Yv *node);
 Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz);
@@ -388,11 +395,12 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
     pre = pre + count_nl(rt);
     /* std/str.y, std/exec.y and std/prelude.y go in front of the resolved
      * text, but only when the program actually mentions one of their
-     * names — otherwise every binary would carry code it never calls. */
-    /* str.y's names count only in method-call form, `.name(` (blanks and
-     * comments allowed in between). A helper-backed string method cannot
-     * be reached any other way, so a variable called `lines` or a field
-     * `r.count` splices nothing. */
+     * names — otherwise every binary would carry code it never calls.
+     * str.y's names count only in method-call form, `.name(`: a helper-
+     * backed string method cannot be reached any other way, so a variable
+     * called `lines` or a field `r.count` splices nothing. The last slot
+     * of seen stands for the y_fmt_* helpers: an f-string field with a
+     * format spec sets it to 2 (words_scan). */
     if (seen_any(seen, px, yv_len(seen), 2)) {
         Yv *tt = std_text(STR_SRC());
         rsrc = ys_cat(tt, rsrc);
@@ -503,7 +511,7 @@ long count_nl(Yv *s) {
  * method-call form, `.name(` (blanks and comments allowed in between).
  *
  * Textual, deliberately: it runs before tokenizing. It skips what the
- * lexer skips -- blanks, line comments, and non-nesting block comments --
+ * lexer skips -- blanks, line and non-nesting block comments --
  * and the insides of string literals: `"..."`, and `'...'`, since outside
  * a literal or a comment a `'` only ever opens `b'..'` or `c'..'`; a
  * backslash escapes the byte after it. Whole words only: `executable` is
@@ -513,23 +521,33 @@ long count_nl(Yv *s) {
  *   - a comment containing `exec` spliced the whole fork/execve chunk
  *     into the binary (the audit found /bin/sh rodata and ~9 extra uids
  *     in a program that never calls exec);
- *   - after a non-nesting block comment the old strip dropped the rest of
- *     the text, and a `//` inside a string literal ("http://") the rest
- *     of its line, so a readline() there was missed: "undefined function
+ *   - after a block comment the old strip dropped the rest of the text,
+ *     and a `//` inside a string literal ("http://") the rest of its
+ *     line, so a readline() there was missed: "undefined function
  *     'readline'";
  *   - 20 whole-text index_of scans were 10% of a self-compile.
  * A false positive still only costs compile time and an unused function
- * in the output; a miss is a compile error. */
+ * in the output; a miss is a compile error.
+ *
+ * One more slot than names: seen[len(names)] is 2 when an f-string has a
+ * field with a format spec (words_scan). */
 Yv *words_seen(Yv *code, Yv *names) {
     Yv *seen = yav(0);
     long k = 0;
-    while (k < yv_len(names)) {
+    while (k <= yv_len(names)) {
         seen = ya_push(seen, yv_long(0));
         k = k + 1;
         ;
     }
-    long n = yv_len(code);
-    long i = 0;
+    words_scan(code, 0, yv_len(code), names, seen);
+    return seen;
+}
+
+/* words_seen's pass over code[lo:n], marking seen in place. The fields of
+ * an f-string are code: lexer.y fstr_walk finds them as the lexer does,
+ * and each is scanned on its own. */
+long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
+    long i = lo;
     /* the first byte of the last token of code (blanks and comments skip),
      * and a name just seen after a `.`, waiting for its `(` */
     long prev = 0;
@@ -603,30 +621,52 @@ Yv *words_seen(Yv *code, Yv *names) {
                     j = j + 1;
                     ;
                 }
-                long m = 0;
-                while (m < yv_len(names)) {
-                    Yv *nm = ya_get(names, m);
-                    if (yv_len(nm) == j - i && word_at(code, i, nm)) {
-                        if (yv_l(ya_get(seen, m)) == 0) {
-                            ya_set(seen, m, yv_long(1));
-                            ;
-                        } else {
-                            ;
-                        }
-                        if (prev == 46) {
-                            pend = m;
-                            ;
-                        } else {
+                if (j == i + 1 && c == 102 && j < n &&
+                    ys_byte_at(code, j) == 34) {
+                    /* f"...": the fields, and whether one has a spec */
+                    Yv *w = fstr_walk(code, j);
+                    Yv *fs = yr_get(w, "fields");
+                    long f = 0;
+                    while (f < yv_len(fs)) {
+                        words_scan(code, yv_l(ya_get(fs, f)),
+                                   yv_l(ya_get(fs, f + 1)), names, seen);
+                        if (yv_l(ya_get(fs, f + 3)) >
+                            yv_l(ya_get(fs, f + 2))) {
+                            ya_set(seen, yv_len(names), yv_long(2));
                             ;
                         }
-                        ;
-                    } else {
+                        f = f + 4;
                         ;
                     }
-                    m = m + 1;
+                    i = yv_l(yr_get(w, "end"));
+                    ;
+                } else {
+                    long m = 0;
+                    while (m < yv_len(names)) {
+                        Yv *nm = ya_get(names, m);
+                        if (yv_len(nm) == j - i && word_at(code, i, nm)) {
+                            if (yv_l(ya_get(seen, m)) == 0) {
+                                ya_set(seen, m, yv_long(1));
+                                ;
+                            } else {
+                                ;
+                            }
+                            if (prev == 46) {
+                                pend = m;
+                                ;
+                            } else {
+                                ;
+                            }
+                            ;
+                        } else {
+                            ;
+                        }
+                        m = m + 1;
+                        ;
+                    }
+                    i = j;
                     ;
                 }
-                i = j;
                 ;
             } else {
                 i = i + 1;
@@ -637,7 +677,7 @@ Yv *words_seen(Yv *code, Yv *names) {
         }
         ;
     }
-    return seen;
+    return 0;
 }
 
 /* A byte of an identifier-shaped word (the lexer's isalnum: letters,
@@ -2391,7 +2431,8 @@ Yv *infer_call(Yv *st, Yv *node) {
             }
         } else if (ys_eq_lit(name, "trim") ||
                    ys_eq_lit(name, "chr") || ys_eq_lit(name, "join") ||
-                   ys_eq_lit(name, "tostring") || ys_eq_lit(name, "typeof")) {
+                   ys_eq_lit(name, "tostring") || ys_eq_lit(name, "typeof") ||
+                   ys_eq_lit(name, "#fmt")) {
             return yr(1, "k", ys("tstr"));
         } else if (ys_eq_lit(name, "read_file")) {
             /* str? (option): a missing file yields none at runtime
@@ -2680,7 +2721,7 @@ int name_in(Yv *xs, Yv *n) {
 /* Builtins are resolved by name at the call site, never captured. */
 int is_intrinsic_name(Yv *n) {
     return name_in(
-        yav(35, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+        yav(36, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
             ys("is_some"), ys("unwrap"), ys("trim"), ys("ord"),
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
@@ -2688,7 +2729,7 @@ int is_intrinsic_name(Yv *n) {
             ys("heap_used"), ys("exit"), ys("argv"), ys("read_file"),
             ys("write_file"), ys("write_bytes"), ys("range"), ys("typeof"),
             ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
-            ys("none")),
+            ys("none"), ys("#fmt")),
         n);
 }
 
@@ -4191,6 +4232,8 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_tonum(st, node);
         } else if (ys_eq_lit(name, "tostring")) {
             return gen_tostring(st, node);
+        } else if (ys_eq_lit(name, "#fmt")) {
+            return gen_fmt(st, node);
         } else if (ys_eq_lit(name, "typeof")) {
             return gen_typeof(st, node);
         } else if (ys_eq_lit(name, "index_of")) {
@@ -6708,6 +6751,126 @@ Yv *gen_tostring(Yv *st, Yv *node) {
         st = emit(st, ys("    call y_long_tostr"));
         return emit(st, ys("    add $8, %rsp"));
     }
+}
+
+/* An f-string field, #fmt(e, "spec") (lexer.y lex_fstring, checked by
+ * types.y typeof_fmt). Without a spec it is tostring(e). With one, e goes
+ * to a std/str.y helper with the spec read here, packed into one number
+ * (fmt_code), and its width and precision: y_fmt_i for d x X o b c,
+ * y_fmt_f for f F e E % (a long converted first, and a `%` multiplied by
+ * 100 in floating point, as Python does it), y_fmt_s for the rest -- a
+ * str, or the tostring of anything else. */
+Yv *gen_fmt(Yv *st, Yv *node) {
+    Yv *fargs = yr_get(node, "args");
+    Yv *a0 = ya_get(fargs, 0);
+    Yv *spec = yr_get(ya_get(fargs, 1), "v");
+    Yv *ts = n_call1(ys("tostring"), a0,
+                     yv_l(yr_get(node, "line")),
+                     yv_l(yr_get(node, "col")));
+    if (ys_eq_lit(spec, "")) {
+        return gen_tostring(st, ts);
+    } else {
+        Yv *t = infer(st, a0);
+        Yv *f = fmt_spec(spec);
+        long kind = fmt_kind(t);
+        long ty = yv_l(yr_get(f, "ty"));
+        if (ty == 0) {
+            if (kind == 1) { ty = 100; ; }
+            else if (kind == 2) { ty = 102; ; }
+            else { ty = 115; ; }
+            ;
+        } else {
+            ;
+        }
+        long code = fmt_code(f, kind, ty);
+        if (ty == 115) {
+            st = gen_tostring(st, ts);
+            st = emit(st, ys("    push %rax"));
+            st = fmt_push(st, code);
+            st = fmt_push(st, yv_l(yr_get(f, "width")));
+            st = fmt_push(st, yv_l(yr_get(f, "prec")));
+            st = emit(st, ys("    call y_fmt_s"));
+            return emit(st, ys("    add $32, %rsp"));
+        } else if (ty == 100 || ty == 120 || ty == 88 ||
+                   ty == 111 || ty == 98 || ty == 99) {
+            st = gen(st, a0);
+            st = emit(st, ys("    push %rax"));
+            st = fmt_push(st, code);
+            st = fmt_push(st, yv_l(yr_get(f, "width")));
+            st = emit(st, ys("    call y_fmt_i"));
+            return emit(st, ys("    add $24, %rsp"));
+        } else {
+            st = gen(st, a0);
+            if (kind == 1) {
+                st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
+                st = emit(st, ys("    movq %xmm0, %rax"));
+                ;
+            } else {
+                ;
+            }
+            if (ty == 37) {
+                st = emit(st, ys("    movq %rax, %xmm0"));
+                st = emit(st, ys("    mov $100, %rax"));
+                st = emit(st, ys("    cvtsi2sd %rax, %xmm1"));
+                st = emit(st, ys("    mulsd %xmm1, %xmm0"));
+                st = emit(st, ys("    movq %xmm0, %rax"));
+                ;
+            } else {
+                ;
+            }
+            long prec = yv_l(yr_get(f, "prec"));
+            if (prec < 0) { prec = 6; ; } else { ; }
+            st = emit(st, ys("    push %rax"));
+            st = fmt_push(st, code);
+            st = fmt_push(st, yv_l(yr_get(f, "width")));
+            st = fmt_push(st, prec);
+            st = emit(st, ys("    call y_fmt_f"));
+            return emit(st, ys("    add $32, %rsp"));
+        }
+    }
+}
+
+/* A spec as the y_fmt_* helpers take it (std/str.y), its defaults
+ * resolved: the type letter + 256 * fill + 65536 * alignment + 16777216 *
+ * (sign + 4 * `#` + 8 * grouping), sign 0 (`-`), 1 (`+`) or 2 (a space),
+ * grouping 0, 1 (`,`) or 2 (`_`). A `0` is fill 0 unless a fill is given
+ * and, for a number, alignment `=` unless one is; numbers go right,
+ * everything else left. */
+long fmt_code(Yv *f, long kind, long ty) {
+    long fill = yv_l(yr_get(f, "fill"));
+    long align = yv_l(yr_get(f, "align"));
+    if (yv_b(yr_get(f, "zero")) && fill == 0) { fill = 48; ; } else { ; }
+    if (yv_b(yr_get(f, "zero")) && align == 0 && kind != 0) {
+        align = 61;
+        ;
+    } else {
+        ;
+    }
+    if (fill == 0) { fill = 32; ; } else { ; }
+    if (align == 0) {
+        if (kind != 0) { align = 62; ; } else { align = 60; ; }
+        ;
+    } else {
+        ;
+    }
+    long sg = 0;
+    long sign = yv_l(yr_get(f, "sign"));
+    if (sign == 43) { sg = 1; ; }
+    else if (sign == 32) { sg = 2; ; }
+    else { ; }
+    if (yv_b(yr_get(f, "alt"))) { sg = sg + 4; ; } else { ; }
+    long grp = yv_l(yr_get(f, "grp"));
+    if (grp == 44) { sg = sg + 8; ; }
+    else if (grp == 95) { sg = sg + 16; ; }
+    else { ; }
+    return ty + 256 * fill + 65536 * align + 16777216 * sg;
+}
+
+/* Push the number v (an argument of a helper call). */
+Yv *fmt_push(Yv *st, long v) {
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(v)),
+                         ys(", %rax")));
+    return emit(st, ys("    push %rax"));
 }
 
 Yv *gen_index_of(Yv *st, Yv *node, int last) {

@@ -21,7 +21,6 @@
   from the spliced program's lines back to files, and line markers from
   the emitter through the assembler.
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
-- template string with f"{x} {y:.2f}" (python style)
 
 
 ## Done
@@ -119,6 +118,18 @@ what was deliberately *not* changed) is in `audit.md`.
   with "undefined function". A `//` inside a string literal also hid the
   rest of its line (`t68`). The new scan also avoids 16 whole-text
   `index_of` scans, which had cost 10% of a self-compile.
+- **F-strings**, Python style: `f"{name} is {age:>3} ({share:.1%})"`
+  (`t69`, `e64`–`e73`). The lexer lowers one to a concatenation of its
+  text and `#fmt(e, "spec")` calls; a field without a spec is
+  `tostring(e)`. The spec is Python's mini-language (fill, align, sign,
+  `#`, `0`, width, `,`/`_`, precision, `s d x X o b c f F e E %`), read
+  and checked against the field's type at compile time, and formatted by
+  `y_fmt_*` helpers in `std/str.y`. Floats print exactly, rounded half
+  to even. `t69`'s 1139 Python-checked cases match `format()`
+  byte for byte. Fields may hold any expression (strings, nested
+  f-strings, calls), may span lines, and errors inside them point into
+  them. The documented differences: no spec means `tostring`, a typeless
+  float spec means `f`, `bool` is text, no `g`/`n` and no nested fields.
 - Hex/binary literals, scientific notation, float literals. (`_` digit
   separators work in `0x`/`0b` literals only — a decimal literal stops at
   the first `_`, and `_` is a word character so the tail lexes as an

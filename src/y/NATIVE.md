@@ -263,6 +263,22 @@ All of these are lowered early, so the checker and emitter see little new:
   - `upper`/`lower` (ASCII), `repeat(n)` (`""` for `n <= 0`);
   - `lines()`: split at LF, drop a CR before it, and no empty last line
     after a final newline.
+- **F-strings** `f"a{x}b{y:>5}"` are lowered by the lexer (`lex_fstring`)
+  to the tokens of `("a" + #fmt(x, "") + "b" + #fmt(y, ">5"))`; `#fmt` is
+  a name no program can bind. Each field's text is tokenized on its own
+  and its tokens keep their own line and column, so an error inside a
+  field points into it; the synthesized tokens sit at the field's `{`.
+  `fstr_walk` finds the fields, the way Python does: an expression ends
+  at the first `}` or `:` outside brackets, except a `:` answering a `?`.
+  A malformed f-string (unterminated, a lone `}`, an empty field, `{` in
+  a spec, ...) lexes to one `ferr` token, which the parser turns into an
+  `err` node for the checker to report. The checker (`typeof_fmt`) reads
+  the spec (`fmt_spec`, Python's mini-language without nested fields)
+  and checks it against the field's type (`fmt_check`). The emitter
+  (`gen_fmt`) emits `tostring` for an empty spec; otherwise it packs the
+  spec into one long (`fmt_code`) and calls `y_fmt_s`, `y_fmt_i` or
+  `y_fmt_f` in `std/str.y`. A float goes as its IEEE bits, and its
+  digits are exact (base-10^9 limbs), rounded half to even.
 
   Method names are not reserved. A def, a variable or a record field may
   use one, and `obj.f(x)` on a record still calls the field.
@@ -362,12 +378,17 @@ the way the lexer does, skipping comments and the insides of string
 literals, and counts whole words only (`executable` is not `exec`).
 `str.y`'s names count only in method-call form, `.name(`, because that
 is the only way to reach a helper-backed method. `std/str.y` holds those
-methods (*String methods* above). Even so, the scan over-approximates:
+methods (*String methods* above), and the `y_fmt_*` helpers behind
+f-string specs: `words_seen` walks each f-string with the lexer's own
+`fstr_walk`, scans its fields as code, and splices `str.y` when a field
+has a spec. Even so, the scan over-approximates:
 `r.count(x)` calling a record field splices `str.y` too. So `str.y` must
-stay free of string literals. Tree shaking drops unused bodies, but the
-string literals they emitted stay in `.rodata`, and every such program
-would carry them; `str.y` writes `s[0:0]` for `""` and byte codes for
-`"\n"`. A Y helper may call intrinsics (`bytes`, `from_bytes`,
+stay free of string literals and record values. Tree shaking drops unused
+bodies, but the string literals they emitted stay in `.rodata`, and so do
+the type descriptors of the records they build; every such program would
+carry them. `str.y` writes `s[0:0]` for `""` and byte codes for
+`"\n"`, and splits a would-be record result into two functions
+(`y_fmt_exact`/`y_fmt_places`). A Y helper may call intrinsics (`bytes`, `from_bytes`,
 `tostring`, `syscall`, …), slice strings (`s[a:b]` is the asm
 `y_str_slice`) and call other helpers, but never an assembly-only
 label directly — the checker would call it undefined — so every bridge into
