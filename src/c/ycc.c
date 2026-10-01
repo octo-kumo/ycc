@@ -13,6 +13,9 @@
  *   --std-src    compile the std units from source, not the attached pack
  *   --std-pack FILE  write the compiled std units to FILE, no program
  *   -h, --help   show this text and exit
+ * A project (a directory with a y.toml manifest, see pkg.y):
+ *   ycc build [-g] [--no-exec] [--std-src] [DIR]   build its programs
+ *   ycc vendor [DIR]   copy its git dependencies into vendor/
  */
 #include "ycc.h"
 
@@ -20,6 +23,7 @@
 #include "lexer.h"
 #include "native.h"
 #include "parser.h"
+#include "pkg.h"
 #include "yv.h"
 
 #include <fcntl.h>
@@ -79,6 +83,8 @@ Yv *parse_cli_args(Yv *argv) {
             }
         } else if (ys_eq_lit(a, "--help") || ys_eq_lit(a, "-h")) {
             puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n"));
+            puts_(ys("       ycc build [-g] [--no-exec] [--std-src] [DIR]\n"));
+            puts_(ys("       ycc vendor [DIR]\n"));
             puts_(ys("  (no flags)   compile FILE to a native executable (default: "
                      "a.out)\n"));
             puts_(ys("  -o OUTPUT    output path (executable, or .s file with -S)\n"));
@@ -95,6 +101,10 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("  --std-pack FILE  compile the std units and write them to FILE,\n"));
             puts_(ys("               to attach to a ycc binary (the build does)\n"));
             puts_(ys("  -h, --help   show this text and exit\n"));
+            puts_(ys("  build [DIR]  build the project in DIR (default .) as its y.toml\n"));
+            puts_(ys("               says: each [bin] into DIR/build, every package it\n"));
+            puts_(ys("               depends on compiled once (DIR/build/obj keeps them)\n"));
+            puts_(ys("  vendor [DIR] copy the project's git dependencies into DIR/vendor\n"));
             exit_(0);
             ;
         } else if (ys_eq_lit(ys_slice(a, 0, 1), "-")) {
@@ -271,12 +281,12 @@ long print_counter(Yv *name, long v) {
 
 /* ── main ──────────────────────────────────────────────────────────────── */
 
-long print_native_errors(Yv *errors, Yv *origin) {
+long print_native_errors(Yv *errors, Yv *origin, int bare) {
     /* NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
      * Positions are lines of the spliced program (std chunks and imported
      * modules included); the origin map turns each back into the file it
-     * came from: `line:col` in the program's own file, `path:line:col` in
-     * any other. */
+     * came from: `line:col` in the program's own file (unless not `bare`:
+     * `ycc build` names every file), `path:line:col` in any other. */
     Yv *all = errors;
     /* One error per position: a malformed token can trip two checks (the
      * construct it broke, then the statement it ended), and the second
@@ -285,7 +295,7 @@ long print_native_errors(Yv *errors, Yv *origin) {
     long i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
-        Yv *at = ys_cat(ys_cat(origin_at(origin, yv_l(yr_get(e, "line")), 1),
+        Yv *at = ys_cat(ys_cat(origin_at(origin, yv_l(yr_get(e, "line")), bare),
                                ys(":")),
                         ys_long(yv_l(yr_get(e, "col"))));
         int dup = 0;
@@ -314,7 +324,366 @@ long print_native_errors(Yv *errors, Yv *origin) {
     return 0;
 }
 
+Yv *build_args(Yv *cmdline) {
+    Yv *dir = ys("");
+    int debug = 0;
+    int allow_exec = 1;
+    int std_src = 0;
+    long i = 2;
+    while (i < yv_len(cmdline)) {
+        Yv *a = ya_get(cmdline, i);
+        if (ys_eq_lit(a, "-g")) {
+            debug = 1;
+        } else if (ys_eq_lit(a, "--no-exec")) {
+            allow_exec = 0;
+        } else if (ys_eq_lit(a, "--std-src")) {
+            std_src = 1;
+        } else if (ys_eq_lit(ys_slice(a, 0, 1), "-")) {
+            puts_(ys_cat(ys_cat(ys("ycc: unknown flag '"), a),
+                         ys("' (see ycc -h)\n")));
+            exit_(1);
+            return 0;
+        } else if (yv_len(dir) > 0) {
+            puts_(ys_cat(ys_cat(ys("error: ycc "), ya_get(cmdline, 1)),
+                         ys(" takes one project directory\n")));
+            exit_(1);
+            return 0;
+        } else {
+            dir = a;
+        }
+        i = i + 1;
+    }
+    if (yv_len(dir) == 0) {
+        dir = ys(".");
+        ;
+    } else {
+        ;
+    }
+    return yr(4, "dir", dir, "debug", yv_bool(debug), "allow_exec",
+              yv_bool(allow_exec), "std_src", yv_bool(std_src));
+}
+
+Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
+    Yv *src = read_file(path);
+    if (yv_is_none(src)) {
+        puts_(ys_cat(ys_cat(ys("error: cannot read file '"), path), ys("'\n")));
+        exit_(1);
+        return 0;
+    } else {
+        ;
+    }
+    return native_resolve_pk(yv_unwrap(src), pk_dir_of(path), allow_exec,
+                             path, pkgs, roots);
+}
+
+Yv *std_order(Yv *names) {
+    Yv *all = std_unit_names();
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(all)) {
+        Yv *nm = ya_get(all, i);
+        if (pk_has(names, nm)) {
+            out = ya_push(out, nm);
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *longs_text(Yv *xs) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(xs)) {
+        out = ya_push(out, ys_long(yv_l(ya_get(xs, i))));
+        i = i + 1;
+    }
+    return ys_join(out, ys(""));
+}
+
+Yv *build_key(Yv *cid, Yv *name, long base, int allow_exec, Yv *nr,
+              Yv *units) {
+    Yv *h = pk_hash_new();
+    pk_hash_str(h, cid);
+    pk_hash_str(h, name);
+    pk_hash_str(h, ys_long(base));
+    Yv *ex = ys("exec");
+    if (!allow_exec) {
+        ex = ys("no-exec");
+        ;
+    } else {
+        ;
+    }
+    pk_hash_str(h, ex);
+    pk_hash_str(h, yr_get(nr, "src"));
+    Yv *o = yr_get(nr, "origin");
+    pk_hash_str(h, ys_join(yr_get(o, "files"), ys("\n")));
+    pk_hash_str(h, longs_text(yr_get(o, "file")));
+    pk_hash_str(h, longs_text(yr_get(o, "line")));
+    pk_hash_str(h, ys_join(yr_get(nr, "std"), ys(",")));
+    Yv *pkgs = yr_get(nr, "pkgs");
+    pk_hash_str(h, ys_join(pkgs, ys(",")));
+    long i = 0;
+    while (i < yv_len(units)) {
+        Yv *u = ya_get(units, i);
+        if (pk_has(pkgs, yr_get(u, "name"))) {
+            pk_hash_str(h, unit_iface(u));
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return pk_hash_text(h);
+}
+
+Yv *build_reach(Yv *direct, Yv *pkgs, Yv *nrs) {
+    Yv *want = yav(0);
+    long i = 0;
+    while (i < yv_len(direct)) {
+        want = ya_push(want, ya_get(direct, i));
+        i = i + 1;
+    }
+    Yv *reach = yav(0);
+    long k = 0;
+    while (k < yv_len(pkgs)) {
+        reach = ya_push(reach, yv_bool(0));
+        k = k + 1;
+    }
+    k = yv_len(pkgs) - 1;
+    while (k >= 0) {
+        Yv *p = ya_get(pkgs, k);
+        if (pk_has(want, yr_get(p, "name"))) {
+            ya_set(reach, k, yv_bool(1));
+            Yv *nr = ya_get(nrs, k);
+            Yv *imports = yr_get(nr, "pkgs");
+            long j = 0;
+            while (j < yv_len(imports)) {
+                want = ya_push(want, ya_get(imports, j));
+                j = j + 1;
+            }
+            ;
+        } else {
+            ;
+        }
+        k = k - 1;
+    }
+    return reach;
+}
+
+long build_project(Yv *dir, int debug, int allow_exec, int std_src) {
+    Yv *g = pk_load(dir);
+    Yv *bins = yr_get(g, "bins");
+    Yv *pkgs = yr_get(g, "pkgs");
+    if (yv_len(bins) == 0 && yv_len(yr_get(g, "lib")) == 0) {
+        puts_(ys_cat(ys_cat(ys("error: "), pk_join(dir, ys("y.toml"))),
+                     ys(" has no [bin] and no lib: nothing to build\n")));
+        exit_(1);
+        return 0;
+    } else {
+        ;
+    }
+    Yv *bdir = pk_join(dir, ys("build"));
+    Yv *odir = ys_cat(bdir, ys("/obj"));
+    pk_mkdir(bdir);
+    pk_mkdir(odir);
+
+    Yv *nrs = yav(0);
+    long k = 0;
+    while (k < yv_len(pkgs)) {
+        Yv *p = ya_get(pkgs, k);
+        nrs = ya_push(nrs, build_resolve(yr_get(p, "lib"), allow_exec,
+                                         yr_get(p, "deps"), yr_get(p, "roots")));
+        k = k + 1;
+    }
+    Yv *bdeps = yav(0);
+    Yv *gdeps = yr_get(g, "deps");
+    long i = 0;
+    while (i < yv_len(gdeps)) {
+        bdeps = ya_push(bdeps, ya_get(gdeps, i));
+        i = i + 1;
+    }
+    if (yv_len(yr_get(g, "lib")) > 0) {
+        bdeps = ya_push(bdeps, yr_get(g, "name"));
+        ;
+    } else {
+        ;
+    }
+    i = 0;
+    while (i < yv_len(bins)) {
+        Yv *bn = ya_get(bins, i);
+        nrs = ya_push(nrs, build_resolve(yr_get(bn, "path"), allow_exec,
+                                         bdeps, yr_get(g, "roots")));
+        i = i + 1;
+    }
+
+    Yv *needs = yav(0);
+    k = 0;
+    while (k < yv_len(nrs)) {
+        Yv *nr = ya_get(nrs, k);
+        Yv *std = yr_get(nr, "std");
+        i = 0;
+        while (i < yv_len(std)) {
+            needs = ya_push(needs, ya_get(std, i));
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    Yv *pack = ys("");
+    if (!std_src) {
+        pack = self_pack();
+        ;
+    } else {
+        ;
+    }
+    Yv *su = std_units(std_order(needs), pack);
+    Yv *cid = pk_self_id();
+    Yv *units = yav(0);
+    k = 0;
+    while (k < yv_len(pkgs)) {
+        Yv *p = ya_get(pkgs, k);
+        Yv *nr = ya_get(nrs, k);
+        long base = 5000000000L + k * 1000000000L;
+        Yv *key = build_key(cid, yr_get(p, "name"), base, allow_exec, nr, units);
+        Yv *opath = ys_cat(ys_cat(odir, ys("/")),
+                           ys_cat(yr_get(p, "name"), ys(".yo")));
+        int hit = 0;
+        Yv *ot = read_file(opath);
+        if (!yv_is_none(ot)) {
+            Yv *uo = unit_unobj(yv_unwrap(ot), key);
+            if (yv_b(yr_get(uo, "ok"))) {
+                units = ya_push(units, yr_get(uo, "unit"));
+                hit = 1;
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        if (!hit) {
+            eputs_(ys_cat(ys_cat(ys("compiling "), yr_get(p, "name")), ys("\n")));
+            Yv *ast = parse_program(tokenize(yr_get(nr, "src")));
+            Yv *r = compile_package(ast, nr, yr_get(p, "name"), base, su, units);
+            if (!yv_b(yr_get(r, "ok"))) {
+                print_native_errors(yr_get(r, "errors"), yr_get(nr, "origin"), 0);
+                exit_(1);
+                return 0;
+            } else {
+                ;
+            }
+            if (!write_file(opath, unit_obj(yr_get(r, "unit"), key))) {
+                puts_(ys_cat(ys_cat(ys("error: writing '"), opath), ys("' failed\n")));
+                exit_(1);
+                return 0;
+            } else {
+                ;
+            }
+            units = ya_push(units, yr_get(r, "unit"));
+            ;
+        } else {
+            ;
+        }
+        k = k + 1;
+    }
+
+    i = 0;
+    while (i < yv_len(bins)) {
+        Yv *bn = ya_get(bins, i);
+        Yv *nr = ya_get(nrs, yv_len(pkgs) + i);
+        Yv *reach = build_reach(yr_get(nr, "pkgs"), pkgs, nrs);
+        Yv *linked = yav(0);
+        Yv *lneeds = yav(0);
+        Yv *nrstd = yr_get(nr, "std");
+        k = 0;
+        while (k < yv_len(nrstd)) {
+            lneeds = ya_push(lneeds, ya_get(nrstd, k));
+            k = k + 1;
+        }
+        k = 0;
+        while (k < yv_len(pkgs)) {
+            if (yv_b(ya_get(reach, k))) {
+                linked = ya_push(linked, ya_get(units, k));
+                Yv *pn = ya_get(nrs, k);
+                Yv *pstd = yr_get(pn, "std");
+                long j = 0;
+                while (j < yv_len(pstd)) {
+                    lneeds = ya_push(lneeds, ya_get(pstd, j));
+                    j = j + 1;
+                }
+                ;
+            } else {
+                ;
+            }
+            k = k + 1;
+        }
+        Yv *lstd = std_order(lneeds);
+        Yv *bstd = yav(0);
+        k = 0;
+        while (k < yv_len(su)) {
+            Yv *su1 = ya_get(su, k);
+            if (pk_has(lstd, yr_get(su1, "name"))) {
+                bstd = ya_push(bstd, su1);
+                ;
+            } else {
+                ;
+            }
+            k = k + 1;
+        }
+        Yv *ast = parse_program(tokenize(yr_get(nr, "src")));
+        Yv *r = emit_program(ast, nr, debug, bstd, linked);
+        if (!yv_b(yr_get(r, "ok"))) {
+            print_native_errors(yr_get(r, "errors"), yr_get(nr, "origin"), 0);
+            exit_(1);
+            return 0;
+        } else {
+            ;
+        }
+        Yv *ab = ycc_assemble(yr_get(r, "asm"), debug);
+        if (!yv_b(yr_get(ab, "ok"))) {
+            puts_(ys_cat(ys_cat(ys("error: assemble: "), yr_get(ab, "error")),
+                         ys("\n")));
+            exit_(1);
+            return 0;
+        } else {
+            ;
+        }
+        Yv *outp = ys_cat(ys_cat(bdir, ys("/")), yr_get(bn, "name"));
+        if (!write_bytes(outp, yr_get(ab, "bytes"), 493)) {
+            puts_(ys_cat(ys_cat(ys("error: writing '"), outp), ys("' failed\n")));
+            exit_(1);
+            return 0;
+        } else {
+            ;
+        }
+        eputs_(ys_cat(ys_cat(ys("built "), outp), ys("\n")));
+        i = i + 1;
+    }
+    return 0;
+}
+
 long y_main(Yv *cmdline) {
+    if (yv_len(cmdline) > 1 &&
+        (ys_eq_lit(ya_get(cmdline, 1), "build") ||
+         ys_eq_lit(ya_get(cmdline, 1), "vendor"))) {
+        Yv *ba = build_args(cmdline);
+        if (ys_eq_lit(ya_get(cmdline, 1), "build")) {
+            build_project(yr_get(ba, "dir"), yv_b(yr_get(ba, "debug")),
+                          yv_b(yr_get(ba, "allow_exec")),
+                          yv_b(yr_get(ba, "std_src")));
+            ;
+        } else {
+            pk_vendor(yr_get(ba, "dir"));
+            ;
+        }
+        exit_(0);
+        return 0;
+    } else {
+        ;
+    }
     Yv *args = parse_cli_args(cmdline);
     /* NOTE: vestigial alias (see print_phase_rows) — `args.out` works. */
     Yv *pargs = args;
@@ -370,7 +739,6 @@ long y_main(Yv *cmdline) {
             t0 = yv_l(yr_get(ph, "t"));
             h0 = yv_l(yr_get(ph, "h"));
             Yv *nrsrc = yr_get(nr, "src");
-            Yv *nrimports = yr_get(nr, "imports");
             Yv *nrorigin = yr_get(nr, "origin");
             Yv *nrstd = yr_get(nr, "std");
             Yv *toks = tokenize(nrsrc);
@@ -399,8 +767,8 @@ long y_main(Yv *cmdline) {
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));
             h0 = yv_l(yr_get(ph, "h"));
-            Yv *r = emit_program(ast, nrimports, nrorigin,
-                                 yv_b(yr_get(pargs, "debug")), su);
+            Yv *r = emit_program(ast, nr, yv_b(yr_get(pargs, "debug")), su,
+                                 yav(0));
             /* emit_program reports its own sub-phases (strip_ns, rename,
              * typecheck, emit_fns, emit_start, asm_text); splice them in. */
             Yv *sub = yr_get(r, "times");
@@ -414,7 +782,7 @@ long y_main(Yv *cmdline) {
             h0 = heap_used();
             long rok = yv_b(yr_get(r, "ok"));
             if (!rok) {
-                print_native_errors(yr_get(r, "errors"), nrorigin);
+                print_native_errors(yr_get(r, "errors"), nrorigin, 1);
                 exit_(1);
                 return 1;
             } else if (yv_b(yr_get(pargs, "asm_only"))) {

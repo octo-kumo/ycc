@@ -6,9 +6,10 @@
  *   let nr = native_resolve_x(src, dir, 0, allow_exec, path);
  *   let su = std_units(nr.std, pack);  // the std units it links
  *   // (pack: ycc's std pack, or "" to compile them from source)
- *   let r = emit_program(ast, nr.imports, nr.origin, debug, su);
+ *   let r = emit_program(ast, nr, debug, su, []);
  *   // { ok, asm, errors }. debug is `-g`, which adds `.file`/`.loc`
  *   // line markers -- see dbg_lines.
+ *   // compile_package builds one separately linked package unit.
  *   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
  *
  * Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -68,6 +69,7 @@ Yv *arr_plus_kind(Yv *lt, Yv *rt);
 int teq(Yv *a, Yv *b);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
+Yv *rename_program_x(Yv *ast, Yv *dfl);
 
 /* The std units' sources (see std_units): native.y's `embed` declarations
  * (see Y_EMBED in yv.h). */
@@ -86,12 +88,20 @@ Y_EMBED(STR_SRC, "src/y/std/str.y")
 static int dbg_lines;
 static Yv *dbg_file;
 static Yv *dbg_line;
+static Yv *res_pkgs;
+static Yv *res_roots;
+static Yv *res_used;
+static Yv *pkg_ns;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
 Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
                      Yv *root);
+Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
+                      Yv *pkgs, Yv *roots);
+Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                 Yv *root);
 long origin_file(Yv *o, long ln);
 Yv *origin_at(Yv *o, long ln, int bare);
 Yv *prelude_names(void);
@@ -386,6 +396,7 @@ Yv *fn_ptypes(Yv *func);
 int reads_any(Yv *func, Yv *names);
 Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
 Yv *unit_empty(Yv *name);
+Yv *externs_none(void);
 Yv *std_unit_src(Yv *name);
 long std_unit_base(Yv *name);
 int std_unit_bound(Yv *name);
@@ -394,24 +405,45 @@ Yv *std_units(Yv *names, Yv *pack);
 Yv *std_compile(Yv *name, Yv *ext);
 Yv *export_name(Yv *name);
 Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns);
+int pkg_base(long base);
+Yv *pkg_exports(Yv *xs, Yv *gl);
+Yv *unit_dfl(Yv *stmts);
+Yv *dfl_codes(Yv *func);
+Yv *lit_code(Yv *d);
+Yv *lit_text(Yv *d);
+Yv *lit_neg_text(Yv *d);
+Yv *lit_decode(Yv *c);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
-                 long base, Yv *ext, Yv *inits);
+                 long base, Yv *xt);
 Yv *link_locs(Yv *body, long file);
 Yv *rodata_pieces(Yv *pieces, Yv *allrod);
-Yv *link_units(Yv *std, Yv *prog);
+Yv *link_units(Yv *std, Yv *deps, Yv *prog);
 Yv *pack_version(void);
+Yv *obj_version(void);
 Yv *pack_put(Yv *out, Yv *s);
 Yv *pack_strs(Yv *out, Yv *xs);
-Yv *pack_type(Yv *s);
+Yv *tcode(Yv *t);
+Yv *tcode_go(Yv *out, Yv *t);
+Yv *tcode_list(Yv *out, Yv *ts);
+Yv *tdecode(Yv *s);
+Yv *tdecode_go(Yv *cur);
+Yv *tdecode_list(Yv *cur);
+Yv *pack_iface(Yv *out, Yv *unit);
 Yv *pack_unit_fields(Yv *unit);
 Yv *std_pack(Yv *units);
 long pack_len(Yv *cur);
 Yv *pack_get(Yv *cur);
 long pack_num(Yv *cur);
 Yv *pack_get_strs(Yv *cur);
-Yv *pack_unit(Yv *cur, Yv *name);
+Yv *unit_read(Yv *cur, Yv *name, int bound);
 Yv *std_unpack(Yv *pack, Yv *names);
-Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *std);
+Yv *unit_obj(Yv *unit, Yv *key);
+Yv *unit_unobj(Yv *text, Yv *key);
+Yv *unit_iface(Yv *unit);
+Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs);
+Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, Yv *std,
+                    Yv *deps);
+Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps);
 
 /* ── native import resolution ───────────────────────────────────────────
  * An import is a COMPILE-TIME text splice, and both compilers splice the
@@ -439,6 +471,26 @@ Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
  * "undefined function" and the binary has no path to a shell at all. */
 Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
                      Yv *root) {
+    res_pkgs = yav(0);
+    res_roots = yav(0);
+    return resolve_unit(src, base_dir, depth, allow_exec, root);
+}
+
+/* Resolve one unit of a package build. A bare import naming one of
+ * `pkgs` is a linked package dependency rather than a spliced source
+ * file; `roots` are searched for ordinary module imports. */
+Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
+                      Yv *pkgs, Yv *roots) {
+    res_pkgs = pkgs;
+    res_roots = roots;
+    return resolve_unit(src, base_dir, 0, allow_exec, root);
+}
+
+/* Resolve one program or package unit, collecting its spliced imports,
+ * origin map, std dependencies, and linked package dependencies. */
+Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                 Yv *root) {
+    res_used = yav(0);
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
      * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
      * encoder splices twice and every enc64 def collides (find_dup). */
@@ -526,8 +578,8 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
      * so there is no name to test for. Unused helpers cost nothing in the
      * output -- prune_bodies drops them at link time. */
     std = ya_push(std, ys("rt"));
-    return yr(4, "src", rsrc, "imports", rimports, "origin", origin,
-              "std", std);
+    return yr(5, "src", rsrc, "imports", rimports, "origin", origin,
+              "std", std, "pkgs", res_used);
 }
 
 /* Which file line `ln` of the spliced program came from (0, the program
@@ -908,6 +960,13 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
                     ys_cat(ys_cat(ys_cat(base_dir, ys("/")), name), ys(".y")));
     cands = ya_push(
         cands, ys_cat(ys_cat(ys_cat(base_dir, ys("/std/")), name), ys(".y")));
+    long ri = 0;
+    while (ri < yv_len(res_roots)) {
+        Yv *rr = ya_get(res_roots, ri);
+        cands = ya_push(cands,
+                        ys_cat(ys_cat(ys_cat(rr, ys("/")), name), ys(".y")));
+        ri = ri + 1;
+    }
     cands = ya_push(cands, ys_cat(ys_cat(ys("std/"), name), ys(".y")));
     cands = ya_push(cands, ys_cat(ys_cat(ys("src/y/std/"), name), ys(".y")));
     Yv *av = argv_();
@@ -981,6 +1040,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                 Yv *name = ys("");
                 Yv *full = ys("");
                 Yv *path = ys("");
+                int is_pkg = 0;
                 if (from_idx >= 0) {
                     name = ys_trim(ys_slice(rest, 0, from_idx));
                     Yv *path_part = ys_trim(ys_slice_from(rest, from_idx + 6));
@@ -1014,10 +1074,24 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         ;
                     }
                     path = name;
-                    full = std_resolve(name, base_dir);
+                    if (name_in(res_pkgs, name)) {
+                        is_pkg = 1;
+                        if (!name_in(res_used, name)) {
+                            res_used = ya_push(res_used, name);
+                            ;
+                        } else {
+                            ;
+                        }
+                        ;
+                    } else {
+                        full = std_resolve(name, base_dir);
+                        ;
+                    }
                     ;
                 }
-                if (yv_len(name) == 0) {
+                if (is_pkg) {
+                    ;
+                } else if (yv_len(name) == 0) {
                     out_lines = ya_push(out_lines, line);
                     ofile = ya_push(ofile, yv_long(fid));
                     oline = ya_push(oline, yv_long(i + 1));
@@ -1949,6 +2023,9 @@ Yv *strip_list(Yv *nodes, Yv *imports) {
 }
 
 Yv *strip_ns(Yv *node, Yv *imports) {
+    if (pkg_ns == NULL) {
+        pkg_ns = yav(0);
+    }
     Yv *k = yr_get(node, "k");
     if (ys_eq_lit(k, "dot")) {
         Yv *dobj = yr_get(node, "obj");
@@ -1961,6 +2038,10 @@ Yv *strip_ns(Yv *node, Yv *imports) {
             if (is_ns(ov, imports)) {
                 return normnode(yr(4, "k", ys("id"), "v", okey, "line", oline,
                                    "col", ocol));
+            } else if (is_ns(ov, pkg_ns)) {
+                Yv *qname = ys_cat(ys_cat(ov, ys(".")), okey);
+                return normnode(yr(4, "k", ys("id"), "v", qname, "line",
+                                  oline, "col", ocol));
             } else {
                 return normnode(yr(5, "k", ys("dot"), "obj", obj, "key", okey,
                                    "line", oline, "col", ocol));
@@ -2073,11 +2154,22 @@ Yv *strip_ns(Yv *node, Yv *imports) {
                            strip_ns(yr_get(node, "v"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
     } else if (ys_eq_lit(k, "dotassign")) {
-        return normnode(yr(6, "k", ys("dotassign"), "obj",
-                           strip_ns(yr_get(node, "obj"), imports), "key",
-                           yr_get(node, "key"), "v",
-                           strip_ns(yr_get(node, "v"), imports), "line",
-                           yr_get(node, "line"), "col", yr_get(node, "col")));
+        Yv *dao = yr_get(node, "obj");
+        if (ys_eq_lit(yr_get(dao, "k"), "id") &&
+            is_ns(yr_get(dao, "v"), pkg_ns)) {
+            Yv *qname = ys_cat(ys_cat(yr_get(dao, "v"), ys(".")),
+                               yr_get(node, "key"));
+            return normnode(yr(5, "k", ys("assign"), "name", qname, "v",
+                               strip_ns(yr_get(node, "v"), imports), "line",
+                               yr_get(node, "line"), "col",
+                               yr_get(node, "col")));
+        } else {
+            return normnode(
+                yr(6, "k", ys("dotassign"), "obj", strip_ns(dao, imports),
+                   "key", yr_get(node, "key"), "v",
+                   strip_ns(yr_get(node, "v"), imports), "line",
+                   yr_get(node, "line"), "col", yr_get(node, "col")));
+        }
     } else if (ys_eq_lit(k, "foreach")) {
         return normnode(yr(6, "k", ys("foreach"), "name", yr_get(node, "name"),
                            "iter", strip_ns(yr_get(node, "iter"), imports),
@@ -8758,15 +8850,12 @@ Yv *phase_end(Yv *times, Yv *name, long t0, long h0) {
 }
 
 /* ── compilation units ─────────────────────────────────────────────────
- * A program is LINKED from units: its own — the program file and the
- * files it imports, spliced into one text (native_resolve_x) — and the
- * std units it needs (std_units: std/prelude.y, std/exec.y, std/str.y,
- * std/rt.y). compile_unit takes one unit from AST to assembly text, one
- * body per function; what it sees of another unit is that unit's
- * EXPORTS — the names, labels and types of its top-level defs — bound
- * as externs. link_units joins the bodies of all units and shakes them
- * together (prune_bodies), so a std function the program never reaches
- * costs nothing.
+ * The program is linked from its own resolved source (native_resolve_x),
+ * the std units it needs (std_units), and the package units it reaches.
+ * compile_unit takes one unit from AST to assembly text, one body per
+ * function; it sees another unit's exports and defaults bound as
+ * externs. link_units joins and shakes the bodies, so unreachable
+ * functions cost nothing.
  *
  * Labels cannot collide: a unit numbers its uids (function, string and
  * local labels) and its global cells from its own base (std_unit_base;
@@ -8774,14 +8863,10 @@ Yv *phase_end(Yv *times, Yv *name, long t0, long h0) {
  * function; the program's `_start` calls the linked units' inits first,
  * in link order.
  *
- * The program sees the exports of the LIBRARY units (prelude, exec),
- * whose defs are its API. The RUNTIME units (rt, str) hold only `y_`
- * helpers, which generated code calls by fixed label (runtime_base), so
- * they are linked but never bound: the program's checker and emitter
- * scopes stay free of a hundred-odd helper names. A program def wearing
- * a runtime label (a `y_` def of its own) replaces the std body of that
- * label everywhere, std-internal calls included (link_units drops the
- * std one). */
+ * The program sees the exports of bound library units and packages;
+ * runtime std units (rt, str) hold only `y_` helpers, called by fixed
+ * label. A program or package def wearing a runtime label replaces the
+ * std body of that label everywhere (link_units drops the std one). */
 
 Yv *unit_empty(Yv *name) {
     Yv *fs = yav(0);
@@ -8791,9 +8876,15 @@ Yv *unit_empty(Yv *name) {
     Yv *fr = yav(0);
     Yv *rs = yav(0);
     Yv *gs = yav(0);
-    return yr(9, "name", name, "files", fs, "exports", xs, "init", ys(""),
+    Yv *ds = yav(0);
+    return yr(10, "name", name, "files", fs, "exports", xs, "init", ys(""),
               "bodies", bs, "labels", ls, "refs", fr, "rodata", rs,
-              "globals", gs);
+              "globals", gs, "dfl", ds);
+}
+
+Yv *externs_none(void) {
+    return yr(5, "ext", yav(0), "dfl", yav(0), "pkgs", yav(0), "inits",
+              yav(0), "argv", yv_bool(0));
 }
 
 Yv *std_unit_src(Yv *name) {
@@ -8882,11 +8973,12 @@ Yv *std_compile(Yv *name, Yv *ext) {
     Yv *ast = parse_program(toks);
     Yv *noimports = yav(0);
     Yv *nolines = yav(0);
-    Yv *noinits = yav(0);
     Yv *origin = yr(4, "files", yav(1, path), "nuser", yv_long(1),
                     "file", nolines, "line", nolines);
+    Yv *xt = externs_none();
+    yr_set(xt, "ext", ext);
     Yv *r = compile_unit(ast, noimports, origin, 1, name,
-                         std_unit_base(name), ext, noinits);
+                         std_unit_base(name), xt);
     if (!yv_b(yr_get(r, "ok"))) {
         Yv *errs = yr_get(r, "errors");
         long k = 0;
@@ -8973,16 +9065,18 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
 }
 
 /* One unit, AST to assembly text (see the section note). `name` is ""
- * for the program's own unit, whose top-level statements are `_start`,
- * preceded by calls to `inits` (the linked units' init labels); any
- * other unit's are its init function. `ext` holds the externs, bound by
- * name in the checker and the emitter. */
+ * for the program's own unit, whose top-level statements are `_start`;
+ * other units have an init function. `xt` holds externs, defaults,
+ * imported package namespaces, init labels and the argv-use flag. */
 
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
-                 long base, Yv *ext, Yv *inits) {
+                 long base, Yv *xt) {
     dbg_lines = debug;
     dbg_file = yr_get(origin, "file");
     dbg_line = yr_get(origin, "line");
+    Yv *ext = yr_get(xt, "ext");
+    Yv *inits = yr_get(xt, "inits");
+    pkg_ns = yr_get(xt, "pkgs");
     Yv *times = yav(0);
     long pt = clock_us();
     long ph = heap_used();
@@ -8993,7 +9087,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
     ph = yv_l(yr_get(pr, "h"));
     /* Static name resolution: every binding gets a unique name, so neither
      * the checker nor the emitter deals with scopes or shadowing. */
-    Yv *ast3 = rename_program(ast2);
+    Yv *ast3 = rename_program_x(ast2, yr_get(xt, "dfl"));
     pr = phase_end(times, ys("rename"), pt, ph);
     times = yr_get(pr, "times");
     pt = yv_l(yr_get(pr, "t"));
@@ -9211,6 +9305,14 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         ph = yv_l(yr_get(pr, "h"));
         Yv *exports = unit_exports(yr_get(ast3, "stmts"), hdefs,
                                    yr_get(st, "fns"));
+        Yv *udfl = yav(0);
+        if (pkg_base(base)) {
+            exports = pkg_exports(exports, gl);
+            udfl = unit_dfl(yr_get(ast2, "stmts"));
+            ;
+        } else {
+            ;
+        }
         /* The top-level statements with hoisted defs skipped (emitted
          * above, calls go direct to their labels). Variable declarations
          * store to their globals (bind_decl). A def needing a record would
@@ -9265,7 +9367,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         st = yr_get(rm, "st");
         Yv *init = ys("");
         if (yv_len(name) == 0) {
-            /* Only pay for argv materialization when the program uses it. */
+            /* Only pay for argv materialization when the program or one
+             * of its linked units uses it. */
             Yv *want = uses_scan_block(yr_get(ast3, "stmts"),
                                        yr(1, "argv", yv_bool(0)));
             st = emit_one_fn(
@@ -9273,7 +9376,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                 yr(4, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", ys("tvoid")), "body",
                    yr(2, "k", ys("block"), "stmts", main_stmts)),
-                1, yv_b(yr_get(want, "argv")), yav(0), ys(""));
+                1, yv_b(yr_get(want, "argv")) || yv_b(yr_get(xt, "argv")),
+                yav(0), ys(""));
             ;
         } else if (yv_len(main_stmts) > 0) {
             init = arch_fn_label(yv_l(yr_get(rm, "uid")), ys("init"));
@@ -9311,37 +9415,230 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
             brefs = ya_push(brefs, text_refs(ub, 1));
             bk = bk + 1;
         }
-        Yv *unit = yr(9, "name", name, "files", yr_get(origin, "files"),
+        Yv *unit = yr(10, "name", name, "files", yr_get(origin, "files"),
                       "exports", exports, "init", init, "bodies", ubodies,
                       "labels", blabels, "refs", brefs, "rodata",
-                      yr_get(st, "rodata"), "globals", glabels);
+                      yr_get(st, "rodata"), "globals", glabels, "dfl",
+                      udfl);
         return yr(4, "ok", yv_bool(1), "errors", errors, "times", times,
                   "unit", unit);
     }
 }
 
-/* A std body's `.loc` markers — every one says file 1, the unit's only
- * file (std_compile) — renumbered to the unit's place `file` in the
- * program's `.file` table under -g, dropped otherwise. */
-Yv *link_locs(Yv *body, long file) {
-    Yv *parts = ys_split(body, ys("\n.loc 1 "));
+int pkg_base(long base) {
+    return base >= 5000000000L;
+}
+
+/* A package exports its top-level defs and its globals (including the
+ * companion option-cell labels of string globals). Later declarations of
+ * the same source name replace earlier exports. */
+Yv *pkg_exports(Yv *xs, Yv *gl) {
+    Yv *all = yav(0);
+    long i = 0;
+    while (i < yv_len(xs)) {
+        all = ya_push(all, ya_get(xs, i));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < yv_len(gl)) {
+        Yv *ge = ya_get(gl, i);
+        Yv *gn = yr_get(ge, "name");
+        Yv *xn = ys("");
+        long n = yv_len(gn);
+        if (n >= 2 && ys_eq_lit(ys_slice(gn, n - 2, n), "#o")) {
+            Yv *bn = export_name(ys_slice(gn, 0, n - 2));
+            if (yv_len(bn) > 0) {
+                xn = ys_cat(bn, ys("#o"));
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            xn = export_name(gn);
+            ;
+        }
+        if (yv_len(xn) > 0) {
+            all = ya_push(
+                all, yr(3, "name", xn, "label", yr_get(ge, "label"), "typ",
+                       yr_get(ge, "typ")));
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    Yv *out = yav(0);
+    long j = 0;
+    while (j < yv_len(all)) {
+        Yv *e = ya_get(all, j);
+        int later = 0;
+        long m = j + 1;
+        while (!later && m < yv_len(all)) {
+            Yv *e2 = ya_get(all, m);
+            if (ys_eq(yr_get(e2, "name"), yr_get(e, "name"))) {
+                later = 1;
+                ;
+            } else {
+                ;
+            }
+            m = m + 1;
+        }
+        if (!later) {
+            out = ya_push(out, e);
+            ;
+        } else {
+            ;
+        }
+        j = j + 1;
+    }
+    return out;
+}
+
+/* Parameter defaults by source-level top-level name; a later definition
+ * replaces the earlier entry. */
+Yv *unit_dfl(Yv *stmts) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        Yv *s = ya_get(stmts, i);
+        Yv *nm = top_def_name(s);
+        if (yv_len(nm) > 0) {
+            Yv *keep = yav(0);
+            long j = 0;
+            while (j < yv_len(out)) {
+                Yv *d = ya_get(out, j);
+                if (!ys_eq(yr_get(d, "name"), nm)) {
+                    keep = ya_push(keep, d);
+                    ;
+                } else {
+                    ;
+                }
+                j = j + 1;
+            }
+            Yv *vals = dfl_codes(decl_value(s));
+            if (yv_len(vals) > 0) {
+                keep = ya_push(keep, yr(2, "name", nm, "vals", vals));
+                ;
+            } else {
+                ;
+            }
+            out = keep;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *dfl_codes(Yv *func) {
+    Yv *dv = yr_get(func, "defs");
+    Yv *out = yav(0);
+    int any = 0;
+    long i = 0;
+    while (i < yv_len(dv)) {
+        Yv *d = ya_get(dv, i);
+        if (!ys_eq_lit(yr_get(d, "k"), "void")) {
+            any = 1;
+            ;
+        } else {
+            ;
+        }
+        out = ya_push(out, lit_code(d));
+        i = i + 1;
+    }
+    if (any) {
+        return out;
+    } else {
+        return yav(0);
+    }
+}
+
+Yv *lit_code(Yv *d) {
+    Yv *k = yr_get(d, "k");
+    if (ys_eq_lit(k, "void")) {
+        return ys("v");
+    } else if (ys_eq_lit(k, "optarg")) {
+        return ys("o");
+    } else if (ys_eq_lit(k, "num")) {
+        return ys_cat(ys("n"), lit_text(d));
+    } else if (ys_eq_lit(k, "str")) {
+        return ys_cat(ys("s"), lit_text(d));
+    } else if (ys_eq_lit(k, "bool")) {
+        return ys_cat(ys("b"), lit_text(d));
+    } else if (ys_eq_lit(k, "char")) {
+        return ys_cat(ys("c"), lit_text(d));
+    } else {
+        return ys_cat(ys("-"), lit_neg_text(d));
+    }
+}
+
+Yv *lit_text(Yv *d) {
+    return yr_get(d, "v");
+}
+
+Yv *lit_neg_text(Yv *d) {
+    return yr_get(yr_get(d, "e"), "v");
+}
+
+Yv *lit_decode(Yv *c) {
+    Yv *t = ys_slice(c, 0, 1);
+    Yv *v = ys_slice_from(c, 1);
+    if (ys_eq_lit(t, "v")) {
+        return normnode(yr(1, "k", ys("void")));
+    } else if (ys_eq_lit(t, "o")) {
+        return normnode(yr(1, "k", ys("optarg")));
+    } else if (ys_eq_lit(t, "n")) {
+        return normnode(yr(4, "k", ys("num"), "v", v, "line", yv_long(0),
+                           "col", yv_long(0)));
+    } else if (ys_eq_lit(t, "s")) {
+        return normnode(yr(4, "k", ys("str"), "v", v, "line", yv_long(0),
+                           "col", yv_long(0)));
+    } else if (ys_eq_lit(t, "b")) {
+        return normnode(yr(4, "k", ys("bool"), "v", v, "line", yv_long(0),
+                           "col", yv_long(0)));
+    } else if (ys_eq_lit(t, "c")) {
+        return normnode(yr(4, "k", ys("char"), "v", v, "line", yv_long(0),
+                           "col", yv_long(0)));
+    } else {
+        Yv *num = yr(4, "k", ys("num"), "v", v, "line", yv_long(0), "col",
+                     yv_long(0));
+        return normnode(yr(5, "k", ys("un"), "op", ys("-"), "e", num, "line",
+                           yv_long(0), "col", yv_long(0)));
+    }
+}
+
+/* A linked unit's `.loc` markers are moved by its file-table offset
+ * under -g, and dropped otherwise. */
+Yv *link_locs(Yv *body, long off) {
+    Yv *parts = ys_split(body, ys("\n.loc "));
     if (yv_len(parts) == 1) {
         return body;
-    } else if (dbg_lines) {
-        return ys_join(parts,
-                       ys_cat(ys_cat(ys("\n.loc "), ys_long(file)), ys(" ")));
     } else {
         Yv *out = yav(0);
         out = ya_push(out, ya_get(parts, 0));
         long i = 1;
         while (i < yv_len(parts)) {
             Yv *p = ya_get(parts, i);
-            long nl = ys_index_of(p, ys("\n"));
-            if (nl >= 0) {
-                out = ya_push(out, ys_slice_from(p, nl));
+            if (dbg_lines) {
+                long sp = ys_index_of(p, ys(" "));
+                Yv *n = ys_slice(p, 0, sp);
+                Yv *tail = ys_slice_from(p, sp);
+                Yv *loc = ys_cat(ys_cat(ys("\n.loc "),
+                                        ys_long(ys_tonum(n) + off)),
+                                 tail);
+                out = ya_push(out, loc);
                 ;
             } else {
-                ;
+                long nl = ys_index_of(p, ys("\n"));
+                if (nl >= 0) {
+                    out = ya_push(out, ys_slice_from(p, nl));
+                    ;
+                } else {
+                    ;
+                }
             }
             i = i + 1;
         }
@@ -9382,15 +9679,24 @@ Yv *rodata_pieces(Yv *pieces, Yv *allrod) {
     return pieces;
 }
 
-/* The program's assembly text: the bodies of the std units (link order)
- * and then the program's, shaken together; the arch prelude and
- * constants the kept bodies reach; every unit's rodata; the .bss cells. */
-Yv *link_units(Yv *std, Yv *prog) {
+/* The program's assembly text: std units, then its package dependencies
+ * (each after those it imports), then the program, shaken together; the
+ * arch prelude and constants the kept bodies reach; every unit's rodata
+ * and globals. */
+Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
+    Yv *units = yav(0);
+    long j = 0;
+    while (j < yv_len(std)) {
+        units = ya_push(units, ya_get(std, j));
+        j = j + 1;
+    }
+    j = 0;
+    while (j < yv_len(deps)) {
+        units = ya_push(units, ya_get(deps, j));
+        j = j + 1;
+    }
     long nstd = yv_len(std);
-    long nprog = yv_len(yr_get(prog, "files"));
-    /* -g: the program's files, then the std units' — the last linked
-     * first, the order the std chunks were numbered in when they were
-     * spliced into the program's text. */
+    long nu = yv_len(units);
     Yv *files = yav(0);
     Yv *progfiles = yr_get(prog, "files");
     long k = 0;
@@ -9398,9 +9704,16 @@ Yv *link_units(Yv *std, Yv *prog) {
         files = ya_push(files, ya_get(progfiles, k));
         k = k + 1;
     }
-    k = nstd - 1;
+    Yv *offs = yav(0);
+    k = 0;
+    while (k < nu) {
+        offs = ya_push(offs, yv_long(0));
+        k = k + 1;
+    }
+    k = nu - 1;
     while (k >= 0) {
-        Yv *uk = ya_get(std, k);
+        Yv *uk = ya_get(units, k);
+        ya_set(offs, k, yv_long(yv_len(files)));
         Yv *ufiles = yr_get(uk, "files");
         long f = 0;
         while (f < yv_len(ufiles)) {
@@ -9409,31 +9722,39 @@ Yv *link_units(Yv *std, Yv *prog) {
         }
         k = k - 1;
     }
-    /* The runtime labels the program defines (every runtime label starts
-     * `y_`). */
+    /* Package and program runtime labels replace std bodies. */
     Yv *plabels = yav(0);
-    Yv *plab = yr_get(prog, "labels");
-    long pi = 0;
-    while (pi < yv_len(plab)) {
-        Yv *pl = ya_get(plab, pi);
-        if (ys_eq_lit(ys_slice(pl, 0, 2), "y_")) {
-            plabels = ya_push(plabels, pl);
+    long ou = nstd;
+    while (ou <= nu) {
+        Yv *olab;
+        if (ou < nu) {
+            olab = yr_get(ya_get(units, ou), "labels");
             ;
         } else {
+            olab = yr_get(prog, "labels");
             ;
         }
-        pi = pi + 1;
+        long pi = 0;
+        while (pi < yv_len(olab)) {
+            Yv *pl = ya_get(olab, pi);
+            if (ys_eq_lit(ys_slice(pl, 0, 2), "y_")) {
+                plabels = ya_push(plabels, pl);
+                ;
+            } else {
+                ;
+            }
+            pi = pi + 1;
+        }
+        ou = ou + 1;
     }
-    /* Every body, with its label, its references, and the `.file` number
-     * of its std unit (0: the program's own). */
     Yv *all = yav(0);
     Yv *labels = yav(0);
     Yv *refs = yav(0);
     Yv *fno = yav(0);
-    long j = 0;
-    while (j < nstd) {
-        Yv *u = ya_get(std, j);
-        long f = nprog + nstd - j;
+    j = 0;
+    while (j < nu) {
+        Yv *u = ya_get(units, j);
+        long f = yv_l(ya_get(offs, j));
         Yv *ub = yr_get(u, "bodies");
         Yv *ul = yr_get(u, "labels");
         Yv *ur = yr_get(u, "refs");
@@ -9441,7 +9762,7 @@ Yv *link_units(Yv *std, Yv *prog) {
         while (b < yv_len(ub)) {
             Yv *lb = ya_get(ul, b);
             int drop = 0;
-            if (yv_len(plabels) > 0) {
+            if (j < nstd && yv_len(plabels) > 0) {
                 if (ys_eq_lit(ys_slice(lb, 0, 2), "y_")) {
                     drop = name_in(plabels, lb);
                     ;
@@ -9465,6 +9786,7 @@ Yv *link_units(Yv *std, Yv *prog) {
         }
         j = j + 1;
     }
+    Yv *plab = yr_get(prog, "labels");
     Yv *pbodies = yr_get(prog, "bodies");
     Yv *prefs = yr_get(prog, "refs");
     long pb2 = 0;
@@ -9472,7 +9794,7 @@ Yv *link_units(Yv *std, Yv *prog) {
         all = ya_push(all, ya_get(pbodies, pb2));
         labels = ya_push(labels, ya_get(plab, pb2));
         refs = ya_push(refs, ya_get(prefs, pb2));
-        fno = ya_push(fno, yv_long(0));
+        fno = ya_push(fno, yv_long(-1));
         pb2 = pb2 + 1;
     }
     /* Body-level tree shaking comes first: its output is also the root
@@ -9481,16 +9803,13 @@ Yv *link_units(Yv *std, Yv *prog) {
     Yv *shaken = prune_bodies(labels, refs, arch_prelude());
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
-    /* Piece-list + single join: `asm = asm + piece` per iteration is
-     * quadratic (each concat re-copies the whole 1.4MB+ accumulator —
-     * the arena never frees), which OOMs on self-compilation. */
     Yv *pieces = yav(0);
     long ab = 0;
     while (ab < yv_len(all)) {
         if (yv_b(ya_get(keep, ab))) {
             Yv *kb = ya_get(all, ab);
             long kf = yv_l(ya_get(fno, ab));
-            if (kf > 0) {
+            if (kf >= 0) {
                 kb = link_locs(kb, kf);
                 ;
             } else {
@@ -9505,8 +9824,6 @@ Yv *link_units(Yv *std, Yv *prog) {
         ab = ab + 1;
     }
     Yv *body_text = ys_join(pieces, ys(""));
-    /* `asm` is a C keyword (GNU basic asm) — the Y local is renamed
-     * `asm_` here; it is a local name, not part of the API. */
     Yv *asm_ = arch_header();
     if (dbg_lines) {
         asm_ = ys_cat(file_dirs(files), asm_);
@@ -9525,12 +9842,11 @@ Yv *link_units(Yv *std, Yv *prog) {
     }
     Yv *consts_text = shake_refs(arch_consts(), const_refs);
     asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
-    /* every unit's rodata and globals, in link order */
     Yv *rodpieces = yav(0);
     Yv *gls = yav(0);
     long ju = 0;
-    while (ju < nstd) {
-        Yv *u = ya_get(std, ju);
+    while (ju < nu) {
+        Yv *u = ya_get(units, ju);
         rodpieces = rodata_pieces(rodpieces, yr_get(u, "rodata"));
         Yv *ug = yr_get(u, "globals");
         long gi = 0;
@@ -9548,8 +9864,6 @@ Yv *link_units(Yv *std, Yv *prog) {
         pgi = pgi + 1;
     }
     asm_ = ys_cat(asm_, ys_join(rodpieces, ys("")));
-    /* .bss: the allocator's cells when the kept prelude still uses
-     * them, then one cell per global. */
     Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
     if (yv_len(gls) > 0 || yv_len(heap_text) > 0) {
         Yv *gpieces = yav(0);
@@ -9577,12 +9891,15 @@ Yv *link_units(Yv *std, Yv *prog) {
  * unit as its name and its fields — every field a netstring
  * (`<len>:<bytes>`), every list its count followed by its items, and a
  * unit's fields one netstring together, so a reader steps over a unit it
- * does not want. An export's type travels as types.tstr text, parsed
- * back only for the units a program binds (std_unit_bound): nobody reads
- * the types of rt's or str's. */
+ * does not want. Export types use tcode/tdecode, and package objects
+ * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 1\n");
+    return ys("ycc-std-pack 2\n");
+}
+
+Yv *obj_version(void) {
+    return ys("ycc-unit 1\n");
 }
 
 Yv *pack_put(Yv *out, Yv *s) {
@@ -9602,49 +9919,205 @@ Yv *pack_strs(Yv *out, Yv *xs) {
     return out;
 }
 
-/* An export's type, from its tstr text. */
-Yv *pack_type(Yv *s) {
-    Yv *r = parse_type_full(tokenize(s), 0);
-    return yr_get(r, "node");
+/* A complete type encoding for std packs and package objects. It keeps
+ * every type kind and record shape, unlike the user-facing tstr format. */
+Yv *tcode(Yv *t) {
+    return ys_join(tcode_go(yav(0), t), ys(""));
 }
 
-/* One unit's fields. Every export type must come back from its text
- * unchanged, or the pack would hand programs a different type: ycc
- * refuses to write such a pack. */
-Yv *pack_unit_fields(Yv *unit) {
+Yv *tcode_go(Yv *out, Yv *t) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tlong")) {
+        return ya_push(out, ys("l"));
+    } else if (ys_eq_lit(k, "tbyte")) {
+        return ya_push(out, ys("b"));
+    } else if (ys_eq_lit(k, "tfloat")) {
+        return ya_push(out, ys("f"));
+    } else if (ys_eq_lit(k, "tbool")) {
+        return ya_push(out, ys("o"));
+    } else if (ys_eq_lit(k, "tstr")) {
+        return ya_push(out, ys("s"));
+    } else if (ys_eq_lit(k, "tvoid")) {
+        return ya_push(out, ys("v"));
+    } else if (ys_eq_lit(k, "tunk")) {
+        return ya_push(out, ys("u"));
+    } else if (ys_eq_lit(k, "tnone")) {
+        return ya_push(out, ys("n"));
+    } else if (ys_eq_lit(k, "tname")) {
+        out = ya_push(out, ys("N"));
+        return pack_put(out, yr_get(t, "name"));
+    } else if (ys_eq_lit(k, "tptr")) {
+        out = ya_push(out, ys("*"));
+        return tcode_go(out, yr_get(t, "to"));
+    } else if (ys_eq_lit(k, "tarr")) {
+        out = ya_push(out, ys("["));
+        return tcode_go(out, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "topt")) {
+        out = ya_push(out, ys("?"));
+        return tcode_go(out, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "tarrfix")) {
+        out = ya_push(out, ys("F"));
+        out = pack_put(out, ys_long(yv_l(yr_get(t, "n"))));
+        return tcode_go(out, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "tmap")) {
+        out = ya_push(out, ys("M"));
+        out = tcode_go(out, yr_get(t, "key"));
+        return tcode_go(out, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "tfunc")) {
+        out = ya_push(out, ys(">"));
+        out = tcode_list(out, yr_get(t, "args"));
+        return tcode_go(out, yr_get(t, "ret"));
+    } else if (ys_eq_lit(k, "tunion")) {
+        out = ya_push(out, ys("U"));
+        return tcode_list(out, yr_get(t, "ts"));
+    } else if (ys_eq_lit(k, "tparams")) {
+        out = ya_push(out, ys("T"));
+        return tcode_list(out, yr_get(t, "ts"));
+    } else if (ys_eq_lit(k, "tpat")) {
+        out = ya_push(out, ys("P"));
+        return pack_strs(out, yr_get(t, "names"));
+    } else if (ys_eq_lit(k, "trec")) {
+        out = ya_push(out, ys("R"));
+        Yv *fs = yr_get(t, "fields");
+        out = pack_put(out, ys_long(yv_len(fs)));
+        long i = 0;
+        while (i < yv_len(fs)) {
+            Yv *f = ya_get(fs, i);
+            out = pack_put(out, yr_get(f, "name"));
+            out = tcode_go(out, yr_get(f, "typ"));
+            i = i + 1;
+        }
+        return out;
+    } else {
+        puts_(ys_cat(ys_cat(ys("ycc: internal error: no code for type kind "),
+                            k),
+                     ys("\n")));
+        exit_(1);
+        return out;
+    }
+}
+
+Yv *tcode_list(Yv *out, Yv *ts) {
+    out = pack_put(out, ys_long(yv_len(ts)));
+    long i = 0;
+    while (i < yv_len(ts)) {
+        out = tcode_go(out, ya_get(ts, i));
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *tdecode(Yv *s) {
+    return tdecode_go(yr(2, "s", s, "p", yv_long(0)));
+}
+
+Yv *tdecode_go(Yv *cur) {
+    Yv *s = yr_get(cur, "s");
+    long p = yv_l(yr_get(cur, "p"));
+    Yv *c = ys_slice(s, p, p + 1);
+    yr_set(cur, "p", yv_long(p + 1));
+    if (ys_eq_lit(c, "l")) {
+        return normnode(yr(1, "k", ys("tlong")));
+    } else if (ys_eq_lit(c, "b")) {
+        return normnode(yr(1, "k", ys("tbyte")));
+    } else if (ys_eq_lit(c, "f")) {
+        return normnode(yr(1, "k", ys("tfloat")));
+    } else if (ys_eq_lit(c, "o")) {
+        return normnode(yr(1, "k", ys("tbool")));
+    } else if (ys_eq_lit(c, "s")) {
+        return normnode(yr(1, "k", ys("tstr")));
+    } else if (ys_eq_lit(c, "v")) {
+        return normnode(yr(1, "k", ys("tvoid")));
+    } else if (ys_eq_lit(c, "u")) {
+        return normnode(yr(1, "k", ys("tunk")));
+    } else if (ys_eq_lit(c, "n")) {
+        return normnode(yr(1, "k", ys("tnone")));
+    } else if (ys_eq_lit(c, "N")) {
+        return normnode(yr(2, "k", ys("tname"), "name", pack_get(cur)));
+    } else if (ys_eq_lit(c, "*")) {
+        return normnode(yr(2, "k", ys("tptr"), "to", tdecode_go(cur)));
+    } else if (ys_eq_lit(c, "[")) {
+        return normnode(yr(2, "k", ys("tarr"), "of", tdecode_go(cur)));
+    } else if (ys_eq_lit(c, "?")) {
+        return normnode(yr(2, "k", ys("topt"), "of", tdecode_go(cur)));
+    } else if (ys_eq_lit(c, "F")) {
+        long n = pack_num(cur);
+        return normnode(yr(3, "k", ys("tarrfix"), "of", tdecode_go(cur), "n",
+                          yv_long(n)));
+    } else if (ys_eq_lit(c, "M")) {
+        Yv *kt = tdecode_go(cur);
+        return normnode(yr(3, "k", ys("tmap"), "key", kt, "of",
+                          tdecode_go(cur)));
+    } else if (ys_eq_lit(c, ">")) {
+        Yv *args = tdecode_list(cur);
+        return normnode(yr(3, "k", ys("tfunc"), "args", args, "ret",
+                          tdecode_go(cur)));
+    } else if (ys_eq_lit(c, "U")) {
+        return normnode(yr(2, "k", ys("tunion"), "ts", tdecode_list(cur)));
+    } else if (ys_eq_lit(c, "T")) {
+        return normnode(yr(2, "k", ys("tparams"), "ts", tdecode_list(cur)));
+    } else if (ys_eq_lit(c, "P")) {
+        return normnode(yr(2, "k", ys("tpat"), "names", pack_get_strs(cur)));
+    } else {
+        Yv *fields = yav(0);
+        long n = pack_num(cur);
+        long i = 0;
+        while (i < n) {
+            Yv *fname = pack_get(cur);
+            Yv *typ = tdecode_go(cur);
+            fields = ya_push(fields, yr(2, "name", fname, "typ", typ));
+            i = i + 1;
+        }
+        return normnode(yr(2, "k", ys("trec"), "fields", fields));
+    }
+}
+
+Yv *tdecode_list(Yv *cur) {
     Yv *out = yav(0);
-    out = pack_strs(out, yr_get(unit, "files"));
+    long n = pack_num(cur);
+    long i = 0;
+    while (i < n) {
+        out = ya_push(out, tdecode_go(cur));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* A unit's exports and parameter defaults: its public interface. */
+Yv *pack_iface(Yv *out, Yv *unit) {
     Yv *xs = yr_get(unit, "exports");
     out = pack_put(out, ys_long(yv_len(xs)));
     long j = 0;
     while (j < yv_len(xs)) {
         Yv *x = ya_get(xs, j);
-        Yv *ts = tstr(yr_get(x, "typ"));
-        if (!ys_eq(tstr(pack_type(ts)), ts)) {
-            Yv *msg = ys_cat(ys("ycc: internal error: std/"),
-                             yr_get(unit, "name"));
-            msg = ys_cat(msg, ys(".y: the type of "));
-            msg = ys_cat(msg, yr_get(x, "name"));
-            msg = ys_cat(msg, ys(" ("));
-            msg = ys_cat(msg, ts);
-            msg = ys_cat(msg, ys(") does not survive the pack\n"));
-            puts_(msg);
-            exit_(1);
-            ;
-        } else {
-            ;
-        }
         out = pack_put(out, yr_get(x, "name"));
         out = pack_put(out, yr_get(x, "label"));
-        out = pack_put(out, ts);
+        out = pack_put(out, tcode(yr_get(x, "typ")));
         j = j + 1;
     }
+    Yv *ds = yr_get(unit, "dfl");
+    out = pack_put(out, ys_long(yv_len(ds)));
+    j = 0;
+    while (j < yv_len(ds)) {
+        Yv *d = ya_get(ds, j);
+        out = pack_put(out, yr_get(d, "name"));
+        out = pack_strs(out, yr_get(d, "vals"));
+        j = j + 1;
+    }
+    return out;
+}
+
+/* One unit's fields. */
+Yv *pack_unit_fields(Yv *unit) {
+    Yv *out = yav(0);
+    out = pack_strs(out, yr_get(unit, "files"));
+    out = pack_iface(out, unit);
     out = pack_put(out, yr_get(unit, "init"));
     out = pack_strs(out, yr_get(unit, "bodies"));
     out = pack_strs(out, yr_get(unit, "labels"));
     Yv *rf = yr_get(unit, "refs");
     out = pack_put(out, ys_long(yv_len(rf)));
-    j = 0;
+    long j = 0;
     while (j < yv_len(rf)) {
         out = pack_strs(out, ya_get(rf, j));
         j = j + 1;
@@ -9714,25 +10187,33 @@ Yv *pack_get_strs(Yv *cur) {
     return out;
 }
 
-/* The unit `name`, from its fields at the cursor (see pack_unit_fields). */
-Yv *pack_unit(Yv *cur, Yv *name) {
+/* The unit `name`, from its fields at the cursor. Only decode export
+ * types when the unit is bound by a caller. */
+Yv *unit_read(Yv *cur, Yv *name, int bound) {
     Yv *files = pack_get_strs(cur);
-    int bound = std_unit_bound(name);
     Yv *xs = yav(0);
     long nx = pack_num(cur);
     long j = 0;
     while (j < nx) {
         Yv *xn = pack_get(cur);
         Yv *xl = pack_get(cur);
-        Yv *ts = pack_get(cur);
+        Yv *tc = pack_get(cur);
         Yv *xt = yr(1, "k", ys("tnone"));
         if (bound) {
-            xt = pack_type(ts);
+            xt = tdecode(tc);
             ;
         } else {
             ;
         }
         xs = ya_push(xs, yr(3, "name", xn, "label", xl, "typ", xt));
+        j = j + 1;
+    }
+    Yv *dfl = yav(0);
+    long nf = pack_num(cur);
+    j = 0;
+    while (j < nf) {
+        Yv *dn = pack_get(cur);
+        dfl = ya_push(dfl, yr(2, "name", dn, "vals", pack_get_strs(cur)));
         j = j + 1;
     }
     Yv *init = pack_get(cur);
@@ -9753,9 +10234,9 @@ Yv *pack_unit(Yv *cur, Yv *name) {
         j = j + 1;
     }
     Yv *globals = pack_get_strs(cur);
-    return yr(9, "name", name, "files", files, "exports", xs, "init", init,
+    return yr(10, "name", name, "files", files, "exports", xs, "init", init,
               "bodies", bodies, "labels", labels, "refs", refs, "rodata",
-              rodata, "globals", globals);
+              rodata, "globals", globals, "dfl", dfl);
 }
 
 /* The units `names` from a pack, in that order; [] for a pack of another
@@ -9773,7 +10254,8 @@ Yv *std_unpack(Yv *pack, Yv *names) {
             long ul = pack_len(cur);
             long at = yv_l(yr_get(cur, "p"));
             if (name_in(names, nm)) {
-                got = ya_push(got, pack_unit(cur, nm));
+                got = ya_push(got,
+                              unit_read(cur, nm, std_unit_bound(nm)));
                 ;
             } else {
                 ;
@@ -9810,17 +10292,57 @@ Yv *std_unpack(Yv *pack, Yv *names) {
     return out;
 }
 
-/* ── entry point ────────────────────────────────────────────────────────
- *
- * The program's unit, compiled against the std units `std` (std_units)
- * and linked with them. */
-Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *std) {
+Yv *unit_obj(Yv *unit, Yv *key) {
+    Yv *out = yav(0);
+    out = ya_push(out, obj_version());
+    out = pack_put(out, key);
+    out = pack_put(out, yr_get(unit, "name"));
+    out = pack_put(out, pack_unit_fields(unit));
+    return ys_join(out, ys(""));
+}
+
+Yv *unit_unobj(Yv *text, Yv *key) {
+    Yv *ver = obj_version();
+    int ok = 0;
+    Yv *unit = unit_empty(ys(""));
+    if (ys_eq(ys_slice(text, 0, yv_len(ver)), ver)) {
+        Yv *cur = yr(2, "s", text, "p", yv_long(yv_len(ver)));
+        if (ys_eq(pack_get(cur), key)) {
+            Yv *name = pack_get(cur);
+            long ul = pack_len(cur);
+            long p = yv_l(yr_get(cur, "p"));
+            if (p + ul == yv_len(text)) {
+                unit = unit_read(cur, name, 1);
+                ok = yv_l(yr_get(cur, "p")) == yv_len(text);
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else {
+        ;
+    }
+    return yr(2, "ok", yv_bool(ok), "unit", unit);
+}
+
+Yv *unit_iface(Yv *unit) {
+    return ys_join(pack_iface(yav(0), unit), ys(""));
+}
+
+/* Build the extern set for one unit: selected std exports, then the
+ * exports/defaults of its directly imported package namespaces. */
+Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
+    Yv *xt = externs_none();
     Yv *ext = yav(0);
-    Yv *inits = yav(0);
     long i = 0;
     while (i < yv_len(std)) {
         Yv *u = ya_get(std, i);
-        if (std_unit_bound(yr_get(u, "name"))) {
+        Yv *un = yr_get(u, "name");
+        if (std_unit_bound(un) && name_in(snames, un)) {
             Yv *exports = yr_get(u, "exports");
             long j = 0;
             while (j < yv_len(exports)) {
@@ -9831,6 +10353,81 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *std) {
         } else {
             ;
         }
+        i = i + 1;
+    }
+    Yv *dfl = yav(0);
+    i = 0;
+    while (i < yv_len(deps)) {
+        Yv *u = ya_get(deps, i);
+        Yv *un = yr_get(u, "name");
+        if (name_in(pkgs, un)) {
+            Yv *xs = yr_get(u, "exports");
+            long j = 0;
+            while (j < yv_len(xs)) {
+                Yv *x = ya_get(xs, j);
+                Yv *qname =
+                    ys_cat(ys_cat(un, ys(".")), yr_get(x, "name"));
+                ext = ya_push(
+                    ext, yr(3, "name", qname, "label", yr_get(x, "label"),
+                            "typ", yr_get(x, "typ")));
+                j = j + 1;
+            }
+            Yv *ds = yr_get(u, "dfl");
+            j = 0;
+            while (j < yv_len(ds)) {
+                Yv *d = ya_get(ds, j);
+                Yv *dv = yr_get(d, "vals");
+                Yv *vals = yav(0);
+                long m = 0;
+                while (m < yv_len(dv)) {
+                    vals = ya_push(vals, lit_decode(ya_get(dv, m)));
+                    m = m + 1;
+                }
+                Yv *qname =
+                    ys_cat(ys_cat(un, ys(".")), yr_get(d, "name"));
+                dfl = ya_push(dfl, yr(2, "name", qname, "vals", vals));
+                j = j + 1;
+            }
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    yr_set(xt, "ext", ext);
+    yr_set(xt, "dfl", dfl);
+    yr_set(xt, "pkgs", pkgs);
+    return xt;
+}
+
+Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, Yv *std,
+                    Yv *deps) {
+    Yv *xt = unit_externs(std, yr_get(nr, "std"), deps, yr_get(nr, "pkgs"));
+    return compile_unit(ast, yr_get(nr, "imports"), yr_get(nr, "origin"), 1,
+                        name, base, xt);
+}
+
+/* ── entry points ──────────────────────────────────────────────────────
+ *
+ * The program's unit, compiled against the std units `std` and package
+ * units `deps`, then linked with them. */
+Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps) {
+    Yv *xt = unit_externs(std, yr_get(nr, "std"), deps, yr_get(nr, "pkgs"));
+    Yv *units = yav(0);
+    long i = 0;
+    while (i < yv_len(std)) {
+        units = ya_push(units, ya_get(std, i));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < yv_len(deps)) {
+        units = ya_push(units, ya_get(deps, i));
+        i = i + 1;
+    }
+    Yv *inits = yav(0);
+    i = 0;
+    while (i < yv_len(units)) {
+        Yv *u = ya_get(units, i);
         Yv *init = yr_get(u, "init");
         if (yv_len(init) > 0) {
             inits = ya_push(inits, init);
@@ -9840,12 +10437,27 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *std) {
         }
         i = i + 1;
     }
-    Yv *r = compile_unit(ast, imports, origin, debug, ys(""), 0, ext, inits);
+    yr_set(xt, "inits", inits);
+    int wargv = 0;
+    i = 0;
+    while (i < yv_len(deps)) {
+        Yv *u = ya_get(deps, i);
+        Yv *rf = yr_get(u, "refs");
+        long b = 0;
+        while (!wargv && b < yv_len(rf)) {
+            wargv = name_in(ya_get(rf, b), ys("y_argv"));
+            b = b + 1;
+        }
+        i = i + 1;
+    }
+    yr_set(xt, "argv", yv_bool(wargv));
+    Yv *r = compile_unit(ast, yr_get(nr, "imports"), yr_get(nr, "origin"),
+                         debug, ys(""), 0, xt);
     Yv *times = yr_get(r, "times");
     if (yv_b(yr_get(r, "ok"))) {
         long pt = clock_us();
         long ph = heap_used();
-        Yv *asm_ = link_units(std, yr_get(r, "unit"));
+        Yv *asm_ = link_units(std, deps, yr_get(r, "unit"));
         Yv *pr = phase_end(times, ys("asm_text"), pt, ph);
         return yr(4, "ok", yv_bool(1), "asm", asm_, "errors",
                   yr_get(r, "errors"), "times", yr_get(pr, "times"));

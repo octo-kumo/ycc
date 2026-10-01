@@ -1267,12 +1267,24 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
 
 Yv *rename_program(Yv *ast) {
     return rename_program_go(yr_get(ast, "stmts"), yv_l(yr_get(ast, "line")),
-                             yv_l(yr_get(ast, "col")));
+                             yv_l(yr_get(ast, "col")), yav(0));
 }
 
-Yv *rename_program_go(Yv *stmts, long line, long col) {
-    /* NOTE: fields passed as values (see rn_func note). */
-    Yv *st = yr(4, "scopes", yav(1, yav(0)), "n", yv_long(1), "tys", yav(0), "dfl", yav(0));
+Yv *rename_program_x(Yv *ast, Yv *dfl) {
+    return rename_program_go(yr_get(ast, "stmts"), yv_l(yr_get(ast, "line")),
+                             yv_l(yr_get(ast, "col")), dfl);
+}
+
+Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl) {
+    /* NOTE: fields passed as values (see rn_func note). dfl is copied:
+     * rn_note_defaults appends to the list in place. */
+    Yv *d0 = yav(0);
+    long i = 0;
+    while (i < yv_len(dfl)) {
+        d0 = ya_push(d0, ya_get(dfl, i));
+        i = i + 1;
+    }
+    Yv *st = yr(4, "scopes", yav(1, yav(0)), "n", yv_long(1), "tys", yav(0), "dfl", d0);
     Yv *b = rn_block(stmts, st);
     return yr(4, "k", ys("block"), "stmts", yr_get(b, "stmts"), "line",
               yv_long(line), "col", yv_long(col));

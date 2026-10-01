@@ -4556,7 +4556,14 @@ Yv *check_program(Yv *ast, Yv *ext) {
     long x = 0;
     while (x < yv_len(ext)) {
         Yv *xe = ya_get(ext, x);
-        st = st_bind(st, yr_get(xe, "name"), yr_get(xe, "typ"), ys("func"));
+        Yv *kind = ys("func");
+        if (ys_eq_lit(ys_slice(yr_get(xe, "label"), 0, 3), "yg_")) {
+            kind = ys("const");
+            ;
+        } else {
+            ;
+        }
+        st = st_bind(st, yr_get(xe, "name"), yr_get(xe, "typ"), kind);
         x = x + 1;
     }
     long d = 0;

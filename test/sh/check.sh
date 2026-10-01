@@ -58,7 +58,10 @@ cleanup() {
 trap cleanup EXIT
 # Every compiler runs from a copy under /tmp: under WSL a binary on /mnt/c
 # pages in through drvfs, ~30% slower; and a rebuild cannot change it mid-run.
+# The std modules go along: a program outside the checkout (test_pkg.sh's
+# projects) finds `import struct;` next to the compiler (std_resolve).
 cp "$BASE_NAME" "$T/base" && cp "$NEW_NAME" "$T/new" && cp "${CYCC:-$ROOT/cycc}" "$T/cycc" || exit 2
+cp -R "$ROOT/src/y/std" "$T/std" || exit 2
 cd "$ROOT" || exit 2
 
 START=$(date +%s)

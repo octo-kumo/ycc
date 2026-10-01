@@ -3138,7 +3138,11 @@ def check_program(ast, ext: [{ name: str, label: str, typ: { k: str } }]) -> [{ 
     let x = 0;
     while (x < len(ext)) {
         let xe = ext[x];
-        st = st_bind(st, xe.name, xe.typ, "func");
+        // a package's global (its cell label, native.y arch_global_label)
+        // is read-only to its importers
+        let xk = "func";
+        if (xe.label[:3] == "yg_") { xk = "const"; 0; } else { 0; };
+        st = st_bind(st, xe.name, xe.typ, xk);
         x = x + 1;
     };
     let d = 0;

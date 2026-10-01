@@ -5,9 +5,11 @@
 //   let nr = native.native_resolve_x(src, dir, 0, allow_exec, path);
 //   let su = native.std_units(nr.std, pack);  // the std units it links
 //   // (pack: ycc's std pack, or "" to compile them from source)
-//   let r = native.emit_program(ast, nr.imports, nr.origin, debug, su);
+//   let r = native.emit_program(ast, nr, debug, su, []);
 //   // { ok, asm, errors }. debug is `-g`, which adds `.file`/`.loc`
-//   // line markers -- see dbg_lines.
+//   // line markers -- see dbg_lines. The last argument holds the
+//   // package units the program links (`ycc build`: native_resolve_pk,
+//   // compile_package).
 //   // r.ok: asm holds a complete .s file (cc-assemblable). else errors.
 //
 // Pipeline: types.check_program (fatal) -> collect defs (incl. hoisting of
@@ -52,6 +54,19 @@ let dbg_lines = false;
 let dbg_file: [long] = [];
 let dbg_line: [long] = [];
 
+// Packages (`ycc build`, native_resolve_pk): the names a bare `import
+// name;` may give a dependency by (res_pkgs -- such an import is not
+// spliced: the package is a unit of its own, linked), the package's
+// source roots (res_roots, searched by std_resolve), and the packages
+// the text imports (res_used: the resolution's `pkgs`).
+let res_pkgs: [str] = [];
+let res_roots: [str] = [];
+let res_used: [str] = [];
+// The packages the unit being compiled imports (compile_unit): strip_ns
+// turns `json.parse` into the QUALIFIED name `json.parse` -- an id no Y
+// source can spell, bound to the package's export -- not into `parse`.
+let pkg_ns: [str] = [];
+
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
 // way: `import io from "path"` inlines the module's source in place and drops
@@ -68,15 +83,38 @@ let dbg_line: [long] = [];
 // units, see std_units). Error positions are printed through it (ycc.y
 // print_native_errors), and find_dup tells files apart by it.
 
-def native_resolve(src: str, base_dir: str, depth: long) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, std: [str] } {
+type Origin = { files: [str], nuser: long, file: [long], line: [long] };
+// A resolved unit's text: `imports` are the spliced modules' namespaces
+// (strip_ns), `std` the std units it links (see resolve_unit), `pkgs`
+// the packages it imports (native_resolve_pk; [] otherwise).
+type Resolved = { src: str, imports: [str], origin: Origin, std: [str], pkgs: [str] };
+
+def native_resolve(src: str, base_dir: str, depth: long) -> Resolved {
     native_resolve_x(src, base_dir, depth, true, "")
+};
+
+def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> Resolved {
+    res_pkgs = [];
+    res_roots = [];
+    resolve_unit(src, base_dir, depth, allow_exec, root)
+};
+
+// One unit of a project (`ycc build`): a bare `import name;` with
+// `name` in `pkgs` (the package's dependencies) imports that package
+// instead of splicing a file -- see res_pkgs -- and one naming a module
+// looks in the package's source roots `roots` too (std_resolve).
+def native_resolve_pk(src: str, base_dir: str, allow_exec: bool, root: str, pkgs: [str], roots: [str]) -> Resolved {
+    res_pkgs = pkgs;
+    res_roots = roots;
+    resolve_unit(src, base_dir, 0, allow_exec, root)
 };
 
 // `std` lists the std units the program links, in link order: prelude,
 // exec, str, rt (std_units compiles them). allow_exec = false is
 // `ycc --no-exec`: exec is left out, so `exec(...)` fails with
 // "undefined function" and the binary has no path to a shell at all.
-def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> { src: str, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, std: [str] } {
+def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> Resolved {
+    res_used = [];
     // NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
     // enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
     // encoder splices twice and every enc64 def collides (find_dup).
@@ -122,7 +160,7 @@ def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, roo
     // so there is no name to test for. Unused helpers cost nothing in the
     // output -- prune_bodies drops them at link time.
     std += "rt";
-    { src: rsrc, imports: rimports, origin: origin, std: std }
+    { src: rsrc, imports: rimports, origin: origin, std: std, pkgs: res_used }
 };
 
 // Which file line `ln` of the spliced program came from (0, the program
@@ -411,6 +449,13 @@ def std_resolve(name: str, base_dir: str) -> str {
     let cands = [];
     cands += base_dir + "/" + name + ".y";
     cands += base_dir + "/std/" + name + ".y";
+    // a package's source roots (native_resolve_pk)
+    let ri = 0;
+    while (ri < len(res_roots)) {
+        let rr: str = res_roots[ri];
+        cands += rr + "/" + name + ".y";
+        ri = ri + 1;
+    };
     cands += "std/" + name + ".y";
     cands += "src/y/std/" + name + ".y";
     let av = argv();
@@ -472,6 +517,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], fid: 
                 let name = "";
                 let full = "";
                 let path = "";
+                let is_pkg = false;
                 if (from_idx >= 0) {
                     name = trim(rest[:from_idx]);
                     let path_part = trim(rest[from_idx + 6:]);
@@ -495,10 +541,21 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], fid: 
                         0
                     };
                     path = name;
-                    full = std_resolve(name, base_dir);
+                    if (name_in(res_pkgs, name)) {
+                        // a dependency (ycc build): a unit of its own,
+                        // linked -- strip_ns qualifies its names
+                        is_pkg = true;
+                        if (!name_in(res_used, name)) { res_used += name; 0; } else { 0; };
+                        0
+                    } else {
+                        full = std_resolve(name, base_dir);
+                        0
+                    };
                     0
                 };
-                if (len(name) == 0) {
+                if (is_pkg) {
+                    0
+                } else if (len(name) == 0) {
                     out_lines += line;
                     ofile += fid;
                     oline += i + 1;
@@ -1288,6 +1345,8 @@ def strip_ns(node, imports: [str]) -> { k: str } {
             let ov = obj.v;
             if (is_ns(ov, imports)) {
                 normnode({ k: "id", v: okey, line: oline, col: ocol })
+            } else if (is_ns(ov, pkg_ns)) {
+                normnode({ k: "id", v: ov + "." + okey, line: oline, col: ocol })
             } else {
                 normnode({ k: "dot", obj: obj, key: okey, line: oline, col: ocol })
             }
@@ -1337,7 +1396,14 @@ def strip_ns(node, imports: [str]) -> { k: str } {
     } else if (k == "idxassign") {
         normnode({ k: "idxassign", arr: strip_ns(node.arr, imports), idx: strip_ns(node.idx, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
     } else if (k == "dotassign") {
-        normnode({ k: "dotassign", obj: strip_ns(node.obj, imports), key: node.key, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        let dao = node.obj;
+        if (dao.k == "id" && is_ns(dao.v, pkg_ns)) {
+            // `json.limit = v`: a package's global, which is read-only
+            // (the checker says so of the qualified name)
+            normnode({ k: "assign", name: dao.v + "." + node.key, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        } else {
+            normnode({ k: "dotassign", obj: strip_ns(dao, imports), key: node.key, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        }
     } else if (k == "foreach") {
         normnode({ k: "foreach", name: node.name, iter: strip_ns(node.iter, imports), body: strip_ns(node.body, imports), line: node.line, col: node.col })
     } else if (k == "forrange") {
@@ -6985,16 +7051,44 @@ def phase_end(times: [{ name: str, us: long, heap: long }], name: str, t0: long,
 // a runtime label (a `y_` def of its own) replaces the std body of that
 // label everywhere, std-internal calls included (link_units drops the
 // std one).
+//
+// A PACKAGE (`ycc build`) is a unit too: its lib file and the files it
+// imports, compiled once (compile_package) and kept as an object
+// (unit_obj). A program or package importing it sees its exports under
+// qualified names (`json.parse`, see pkg_ns) -- its top-level defs, and
+// its globals, read-only -- and the default values of its defs'
+// parameters (dfl), so a call may leave them out as at home.
 
-def unit_empty(name: str) -> { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } {
+type Export = { name: str, label: str, typ: { k: str } };
+// dfl: per top-level def with defaults, rename.y's list of them (one
+// lit_code per parameter, see lit_code).
+type Unit = { name: str, files: [str], exports: [Export], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [{ name: str, vals: [str] }] };
+// What compile_unit binds besides the unit's own names: the externs
+// (`ext`) and their parameter defaults (`dfl`, as rename.y takes them),
+// the package namespaces the unit imports (`pkgs`, see pkg_ns), the
+// init labels `_start` calls first (`inits`), and whether a linked unit
+// reads argv() (`argv`: `_start` must materialize it then).
+type Externs = { ext: [Export], dfl: [{ name: str, vals: [{ k: str }] }], pkgs: [str], inits: [str], argv: bool };
+
+def unit_empty(name: str) -> Unit {
     let fs: [str] = [];
-    let xs: [{ name: str, label: str, typ: { k: str } }] = [];
+    let xs: [Export] = [];
     let bs: [str] = [];
     let ls: [str] = [];
     let fr: [[str]] = [];
     let rs: [[str]] = [];
     let gs: [str] = [];
-    { name: name, files: fs, exports: xs, init: "", bodies: bs, labels: ls, refs: fr, rodata: rs, globals: gs }
+    let ds: [{ name: str, vals: [str] }] = [];
+    { name: name, files: fs, exports: xs, init: "", bodies: bs, labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
+};
+
+// No externs at all (a std unit compiled on its own).
+def externs_none() -> Externs {
+    let xs: [Export] = [];
+    let ds: [{ name: str, vals: [{ k: str }] }] = [];
+    let ps: [str] = [];
+    let ins: [str] = [];
+    { ext: xs, dfl: ds, pkgs: ps, inits: ins, argv: false }
 };
 
 def std_unit_src(name: str) -> str {
@@ -7038,8 +7132,8 @@ def std_unit_names() -> [str] {
 // (std_pack) when it has them, else compiled from the embedded sources.
 // exec calls into the prelude (y_stdin_sync), so it sees the prelude's
 // exports -- linked, and so compiled, before it.
-def std_units(names: [str], pack: str) -> [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] {
-    let out: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] = [];
+def std_units(names: [str], pack: str) -> [Unit] {
+    let out: [Unit] = [];
     if (len(pack) > 0) {
         out = std_unpack(pack, names);
         0
@@ -7048,7 +7142,7 @@ def std_units(names: [str], pack: str) -> [{ name: str, files: [str], exports: [
         let i = 0;
         while (i < len(names)) {
             let nm: str = names[i];
-            let ext: [{ name: str, label: str, typ: { k: str } }] = [];
+            let ext: [Export] = [];
             if (nm == "exec") {
                 let j = 0;
                 while (j < len(out)) {
@@ -7070,14 +7164,15 @@ def std_units(names: [str], pack: str) -> [{ name: str, files: [str], exports: [
 // markers (link_units strips them unless -g), so it compiles the same
 // for every program. A failure here is the compiler's own bug: reported
 // as one, and the run ends.
-def std_compile(name: str, ext: [{ name: str, label: str, typ: { k: str } }]) -> { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } {
+def std_compile(name: str, ext: [Export]) -> Unit {
     let path = "std/" + name + ".y";
     let toks = lexer.tokenize(std_text(std_unit_src(name)));
     let ast = parser.parse_program(toks);
     let noimports: [str] = [];
     let nolines: [long] = [];
-    let noinits: [str] = [];
-    let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines }, true, name, std_unit_base(name), ext, noinits);
+    let xt = externs_none();
+    xt.ext = ext;
+    let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines }, true, name, std_unit_base(name), xt);
     if (!r.ok) {
         let errs = r.errors;
         let k = 0;
@@ -7144,13 +7239,16 @@ def unit_exports(stmts: [{ k: str }], hdefs: [{ name: str, func: { k: str } }], 
 
 // One unit, AST to assembly text (see the section note). `name` is ""
 // for the program's own unit, whose top-level statements are `_start`,
-// preceded by calls to `inits` (the linked units' init labels); any
-// other unit's are its init function. `ext` holds the externs, bound by
-// name in the checker and the emitter.
-def compile_unit(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, debug: bool, name: str, base: long, ext: [{ name: str, label: str, typ: { k: str } }], inits: [str]) -> { ok: bool, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }], unit: { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } } {
+// preceded by calls to `xt.inits` (the linked units' init labels); any
+// other unit's are its init function. `xt.ext` holds the externs, bound
+// by name in the checker and the emitter (see Externs).
+def compile_unit(ast, imports: [str], origin: Origin, debug: bool, name: str, base: long, xt: Externs) -> { ok: bool, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }], unit: Unit } {
     dbg_lines = debug;
     dbg_file = origin.file;
     dbg_line = origin.line;
+    let ext = xt.ext;
+    let inits = xt.inits;
+    pkg_ns = xt.pkgs;
     let times: [{ name: str, us: long, heap: long }] = [];
     let pt = clock_us();
     let ph = heap_used();
@@ -7159,7 +7257,7 @@ def compile_unit(ast, imports: [str], origin: { files: [str], nuser: long, file:
     times = pr.times; pt = pr.t; ph = pr.h;
     // Static name resolution: every binding gets a unique name, so neither
     // the checker nor the emitter deals with scopes or shadowing.
-    let ast3 = rename.rename_program(ast2);
+    let ast3 = rename.rename_program_x(ast2, xt.dfl);
     pr = phase_end(times, "rename", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
     let errors = types.check_program(ast3, ext);
@@ -7288,6 +7386,12 @@ def compile_unit(ast, imports: [str], origin: { files: [str], nuser: long, file:
         pr = phase_end(times, "emit_fns", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         let exports = unit_exports(ast3.stmts, hdefs, st.fns);
+        let udfl: [{ name: str, vals: [str] }] = [];
+        if (pkg_base(base)) {
+            exports = pkg_exports(exports, gl);
+            udfl = unit_dfl(ast2.stmts);
+            0
+        } else { 0; };
         // The top-level statements with hoisted defs skipped (emitted
         // above, calls go direct to their labels). Variable declarations
         // store to their globals (bind_decl). A def needing a record would
@@ -7333,9 +7437,10 @@ def compile_unit(ast, imports: [str], origin: { files: [str], nuser: long, file:
         st = rm.st;
         let init = "";
         if (len(name) == 0) {
-            // Only pay for argv materialization when the program uses it.
+            // Only pay for argv materialization when the program uses it
+            // (or a package it links does).
             let want = uses_scan_block(ast3.stmts, { argv: false });
-            st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv, [], "");
+            st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv || xt.argv, [], "");
             0
         } else if (len(main_stmts) > 0) {
             init = arch.arch_fn_label(rm.uid, "init");
@@ -7365,28 +7470,161 @@ def compile_unit(ast, imports: [str], origin: { files: [str], nuser: long, file:
         };
         let unit = { name: name, files: origin.files, exports: exports, init: init,
           bodies: ubodies, labels: blabels, refs: brefs, rodata: st.rodata,
-          globals: glabels };
+          globals: glabels, dfl: udfl };
         { ok: true, errors: errors, times: times, unit: unit }
     }
 };
 
-// A std body's `.loc` markers -- every one says file 1, the unit's only
-// file (std_compile) -- renumbered to the unit's place `f` in the
-// program's `.file` table under -g, dropped otherwise.
-def link_locs(b: str, f: long) -> str {
-    let parts = split(b, "\n.loc 1 ");
+// A package's unit (compile_package): its base follows the std units'.
+def pkg_base(base: long) -> bool {
+    base >= 5000000000
+};
+
+// A package's exports: its top-level defs (`xs`, unit_exports), then its
+// globals -- each str global's companion cell (app_cells) beside it, so
+// an importer's reads clear it too (gen_id). A name a later global of the
+// same name replaces is dropped.
+def pkg_exports(xs: [Export], gl: [{ name: str, label: str, typ: { k: str } }]) -> [Export] {
+    let all: [Export] = [];
+    all += xs;
+    let i = 0;
+    while (i < len(gl)) {
+        let ge = gl[i];
+        let gn: str = ge.name;
+        let xn = "";
+        if (gn[len(gn) - 2:] == "#o") {
+            let bn = export_name(gn[:len(gn) - 2]);
+            if (len(bn) > 0) { xn = bn + "#o"; 0; } else { 0; };
+            0
+        } else {
+            xn = export_name(gn);
+            0
+        };
+        if (len(xn) > 0) { all += { name: xn, label: ge.label, typ: ge.typ }; 0; } else { 0; };
+        i = i + 1;
+    };
+    let out: [Export] = [];
+    let j = 0;
+    while (j < len(all)) {
+        let e = all[j];
+        let later = false;
+        let m = j + 1;
+        while (!later && m < len(all)) {
+            let e2 = all[m];
+            if (e2.name == e.name) { later = true; 0; } else { 0; };
+            m = m + 1;
+        };
+        if (!later) { out += e; 0; } else { 0; };
+        j = j + 1;
+    };
+    out
+};
+
+// The parameter defaults of a unit's top-level defs, by the names they
+// were written with (see Unit): a later def of a name replaces an
+// earlier one's.
+def unit_dfl(stmts: [{ k: str }]) -> [{ name: str, vals: [str] }] {
+    let out: [{ name: str, vals: [str] }] = [];
+    let i = 0;
+    while (i < len(stmts)) {
+        let s = stmts[i];
+        let nm = top_def_name(s);
+        if (len(nm) > 0) {
+            let keep: [{ name: str, vals: [str] }] = [];
+            let j = 0;
+            while (j < len(out)) {
+                let d = out[j];
+                if (d.name != nm) { keep += d; 0; } else { 0; };
+                j = j + 1;
+            };
+            let vals = dfl_codes(decl_value(s));
+            if (len(vals) > 0) { keep += { name: nm, vals: vals }; 0; } else { 0; };
+            out = keep;
+            0
+        } else { 0; };
+        i = i + 1;
+    };
+    out
+};
+
+def decl_value(s) -> { k: str } {
+    s.v
+};
+
+// A def's parameter defaults (rename.y rn_note_defaults) as lit_codes,
+// or [] when it has none.
+def dfl_codes(func) -> [str] {
+    let dv: [{ k: str }] = func.defs;
+    let out: [str] = [];
+    let any = false;
+    let i = 0;
+    while (i < len(dv)) {
+        let d = dv[i];
+        let dk: str = d.k;
+        if (dk != "void") { any = true; 0; } else { 0; };
+        out += lit_code(d);
+        i = i + 1;
+    };
+    if (any) { out } else { let nd: [str] = []; nd }
+};
+
+// A parameter default as text: `v` none, `o` optional, else a kind
+// letter and the literal's text (parser.y lit_type has the kinds).
+def lit_code(d) -> str {
+    let k: str = d.k;
+    if (k == "void") { "v" }
+    else if (k == "optarg") { "o" }
+    else if (k == "num") { "n" + lit_text(d) }
+    else if (k == "str") { "s" + lit_text(d) }
+    else if (k == "bool") { "b" + lit_text(d) }
+    else if (k == "char") { "c" + lit_text(d) }
+    else { "-" + lit_neg_text(d) }
+};
+
+def lit_text(d) -> str {
+    d.v
+};
+
+def lit_neg_text(d) -> str {
+    let e = d.e;
+    e.v
+};
+
+def lit_decode(c: str) -> { k: str } {
+    let t = c[:1];
+    let v = c[1:];
+    if (t == "v") { normnode({ k: "void" }) }
+    else if (t == "o") { normnode({ k: "optarg" }) }
+    else if (t == "n") { normnode({ k: "num", v: v, line: 0, col: 0 }) }
+    else if (t == "s") { normnode({ k: "str", v: v, line: 0, col: 0 }) }
+    else if (t == "b") { normnode({ k: "bool", v: v, line: 0, col: 0 }) }
+    else if (t == "c") { normnode({ k: "char", v: v, line: 0, col: 0 }) }
+    else { normnode({ k: "un", op: "-", e: { k: "num", v: v, line: 0, col: 0 }, line: 0, col: 0 }) }
+};
+
+// A linked unit's body's `.loc` markers (std_compile and compile_package
+// always emit them, numbering the unit's own files from 1) moved by
+// `off` to the unit's place in the program's `.file` table under -g,
+// dropped otherwise.
+def link_locs(b: str, off: long) -> str {
+    let parts = split(b, "\n.loc ");
     if (len(parts) == 1) {
         b
-    } else if (dbg_lines) {
-        join(parts, "\n.loc " + tostring(f) + " ")
     } else {
         let out: [str] = [];
         out += parts[0];
         let i = 1;
         while (i < len(parts)) {
             let p: str = parts[i];
-            let nl = index_of(p, "\n");
-            if (nl >= 0) { out += p[nl:]; 0; } else { 0; };
+            if (dbg_lines) {
+                let sp = index_of(p, " ");
+                out += "\n.loc " + tostring(tonum(p[:sp]) + off) + p[sp:];
+                0
+            } else {
+                let nl = index_of(p, "\n");
+                if (nl >= 0) { out += p[nl:]; 0; } else { 0; };
+                0
+            };
             i = i + 1;
         };
         join(out, "")
@@ -7417,43 +7655,59 @@ def rodata_pieces(pieces: [str], allrod: [[str]]) -> [str] {
     pieces
 };
 
-// The program's assembly text: the bodies of the std units (link order)
-// and then the program's, shaken together; the arch prelude and
-// constants the kept bodies reach; every unit's rodata; the .bss cells.
-def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }], prog: { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }) -> str {
-    let nstd = len(std);
-    let nprog = len(prog.files);
-    // -g: the program's files, then the std units' -- the last linked
-    // first, the order the std chunks were numbered in when they were
-    // spliced into the program's text.
+// The program's assembly text: the bodies of the std units and of the
+// packages (`deps`, link order: each after those it imports) and then
+// the program's, shaken together; the arch prelude and constants the
+// kept bodies reach; every unit's rodata; the .bss cells.
+def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
+    let units: [Unit] = [];
+    units += std;
+    units += deps;
+    let nu = len(units);
+    // -g: the program's files, then the linked units' -- the last linked
+    // first (the order the std chunks were numbered in when they were
+    // spliced into the program's text). offs[j]: what unit j's own file
+    // numbers (from 1) move by.
     let files: [str] = [];
     files += prog.files;
-    let k = nstd - 1;
+    let offs: [long] = [];
+    let k = 0;
+    while (k < nu) {
+        offs += 0;
+        k = k + 1;
+    };
+    k = nu - 1;
     while (k >= 0) {
-        let uk = std[k];
+        let uk = units[k];
+        offs[k] = len(files);
         files += uk.files;
         k = k - 1;
     };
-    // The runtime labels the program defines (every runtime label starts
-    // `y_`).
+    // The runtime labels the program and the packages define (every
+    // runtime label starts `y_`): they replace the std units' own.
     let plabels: [str] = [];
-    let plab = prog.labels;
-    let pi = 0;
-    while (pi < len(plab)) {
-        let pl: str = plab[pi];
-        if (pl[:2] == "y_") { plabels += pl; 0; } else { 0; };
-        pi = pi + 1;
+    let ou = len(std);
+    while (ou <= nu) {
+        let olab: [str] = [];
+        if (ou < nu) { let du = units[ou]; olab = du.labels; 0; } else { olab = prog.labels; 0; };
+        let pi = 0;
+        while (pi < len(olab)) {
+            let pl: str = olab[pi];
+            if (pl[:2] == "y_") { plabels += pl; 0; } else { 0; };
+            pi = pi + 1;
+        };
+        ou = ou + 1;
     };
-    // Every body, with its label, its references, and the `.file` number
-    // of its std unit (0: the program's own).
+    // Every body, with its label, its references, and the `.loc` offset
+    // of its unit (-1: the program's own, numbered as they are).
     let all: [str] = [];
     let labels: [str] = [];
     let refs: [[str]] = [];
     let fno: [long] = [];
     let j = 0;
-    while (j < nstd) {
-        let u = std[j];
-        let f = nprog + nstd - j;
+    while (j < nu) {
+        let u = units[j];
+        let f = offs[j];
         let ub = u.bodies;
         let ul = u.labels;
         let ur = u.refs;
@@ -7461,7 +7715,7 @@ def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: st
         while (b < len(ub)) {
             let lb: str = ul[b];
             let drop = false;
-            if (len(plabels) > 0) {
+            if (j < len(std) && len(plabels) > 0) {
                 if (lb[:2] == "y_") { drop = name_in(plabels, lb); 0; } else { 0; };
                 0
             } else { 0; };
@@ -7476,6 +7730,7 @@ def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: st
         };
         j = j + 1;
     };
+    let plab = prog.labels;
     let pbodies = prog.bodies;
     let prefs = prog.refs;
     let pb2 = 0;
@@ -7483,7 +7738,7 @@ def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: st
         all += pbodies[pb2];
         labels += plab[pb2];
         refs += [prefs[pb2]];
-        fno += 0;
+        fno += -1;
         pb2 = pb2 + 1;
     };
     // Body-level tree shaking comes first: its output is also the root
@@ -7501,7 +7756,7 @@ def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: st
         if (keep[ab]) {
             let kb: str = all[ab];
             let kf = fno[ab];
-            if (kf > 0) { kb = link_locs(kb, kf); 0; } else { 0; };
+            if (kf >= 0) { kb = link_locs(kb, kf); 0; } else { 0; };
             pieces += kb;
             pieces += "\n";
             0
@@ -7529,8 +7784,8 @@ def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: st
     let rodpieces: [str] = [];
     let gls: [str] = [];
     let ju = 0;
-    while (ju < nstd) {
-        let u = std[ju];
+    while (ju < nu) {
+        let u = units[ju];
         rodpieces = rodata_pieces(rodpieces, u.rodata);
         gls += u.globals;
         ju = ju + 1;
@@ -7556,7 +7811,7 @@ def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: st
     asm
 };
 
-// ── the std pack ───────────────────────────────────────────────────────
+// ── the std pack and package objects ──────────────────────────────────
 // The std units, compiled ahead of time and carried by the ycc binary
 // itself (`ycc --std-pack FILE` writes them; the build appends that file
 // to the ycc that wrote it, see ycc.y self_pack): a program then links
@@ -7565,12 +7820,13 @@ def link_units(std: [{ name: str, files: [str], exports: [{ name: str, label: st
 // unit as its name and its fields -- every field a netstring
 // (`<len>:<bytes>`), every list its count followed by its items, and a
 // unit's fields one netstring together, so a reader steps over a unit it
-// does not want. An export's type travels as types.tstr text, parsed
-// back only for the units a program binds (std_unit_bound): nobody reads
-// the types of rt's or str's.
+// does not want. An export's type travels as its tcode, decoded only for
+// the units a program binds (std_unit_bound): nobody reads the types of
+// rt's or str's. A package's object (`ycc build`, unit_obj) holds one
+// unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 1\n"
+    "ycc-std-pack 2\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -7590,40 +7846,175 @@ def pack_strs(out: [str], xs: [str]) -> [str] {
     out
 };
 
-// An export's type, from its tstr text.
-def pack_type(s: str) -> { k: str } {
-    let r = parser.parse_type_full(lexer.tokenize(s), 0);
-    r.node
+// A type as text (for a pack or an object): a letter per kind, then its
+// parts -- names as netstrings, lists as a count and their items. Unlike
+// types.tstr it spells every type a unit may export (none, unknown and
+// the like too) and reads back exactly (tdecode).
+def tcode(t: { k: str }) -> str {
+    let out: [str] = [];
+    out = tcode_go(out, t);
+    join(out, "")
 };
 
-// One unit's fields. Every export type must come back from its text
-// unchanged, or the pack would hand programs a different type: ycc
-// refuses to write such a pack.
-def pack_unit_fields(u: { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }) -> str {
-    let out: [str] = [];
-    out = pack_strs(out, u.files);
+def tcode_go(out: [str], t) -> [str] {
+    let k: str = t.k;
+    if (k == "tlong") { out += "l"; out }
+    else if (k == "tbyte") { out += "b"; out }
+    else if (k == "tfloat") { out += "f"; out }
+    else if (k == "tbool") { out += "o"; out }
+    else if (k == "tstr") { out += "s"; out }
+    else if (k == "tvoid") { out += "v"; out }
+    else if (k == "tunk") { out += "u"; out }
+    else if (k == "tnone") { out += "n"; out }
+    else if (k == "tname") { out += "N"; pack_put(out, t.name) }
+    else if (k == "tptr") { out += "*"; tcode_go(out, t.to) }
+    else if (k == "tarr") { out += "["; tcode_go(out, t.of) }
+    else if (k == "topt") { out += "?"; tcode_go(out, t.of) }
+    else if (k == "tarrfix") {
+        out += "F";
+        out = pack_put(out, tostring(t.n));
+        tcode_go(out, t.of)
+    }
+    else if (k == "tmap") {
+        out += "M";
+        out = tcode_go(out, t.key);
+        tcode_go(out, t.of)
+    }
+    else if (k == "tfunc") {
+        out += ">";
+        out = tcode_list(out, t.args);
+        tcode_go(out, t.ret)
+    }
+    else if (k == "tunion") { out += "U"; tcode_list(out, t.ts) }
+    else if (k == "tparams") { out += "T"; tcode_list(out, t.ts) }
+    else if (k == "tpat") { out += "P"; pack_strs(out, t.names) }
+    else if (k == "trec") {
+        out += "R";
+        let fs = t.fields;
+        out = pack_put(out, tostring(len(fs)));
+        let i = 0;
+        while (i < len(fs)) {
+            // NOTE: bound once (see types.y tstr_go).
+            let f = fs[i];
+            out = pack_put(out, f.name);
+            out = tcode_go(out, f.typ);
+            i = i + 1;
+        };
+        out
+    }
+    else {
+        puts("ycc: internal error: no code for type kind " + k + "\n");
+        exit(1);
+        out
+    }
+};
+
+def tcode_list(out: [str], ts: [{ k: str }]) -> [str] {
+    out = pack_put(out, tostring(len(ts)));
+    let i = 0;
+    while (i < len(ts)) {
+        out = tcode_go(out, ts[i]);
+        i = i + 1;
+    };
+    out
+};
+
+def tdecode(s: str) -> { k: str } {
+    tdecode_go({ s: s, p: 0 })
+};
+
+def tdecode_go(cur: { s: str, p: long }) -> { k: str } {
+    let s = cur.s;
+    let p = cur.p;
+    let c = s[p:p + 1];
+    cur.p = p + 1;
+    if (c == "l") { normnode({ k: "tlong" }) }
+    else if (c == "b") { normnode({ k: "tbyte" }) }
+    else if (c == "f") { normnode({ k: "tfloat" }) }
+    else if (c == "o") { normnode({ k: "tbool" }) }
+    else if (c == "s") { normnode({ k: "tstr" }) }
+    else if (c == "v") { normnode({ k: "tvoid" }) }
+    else if (c == "u") { normnode({ k: "tunk" }) }
+    else if (c == "n") { normnode({ k: "tnone" }) }
+    else if (c == "N") { normnode({ k: "tname", name: pack_get(cur) }) }
+    else if (c == "*") { normnode({ k: "tptr", to: tdecode_go(cur) }) }
+    else if (c == "[") { normnode({ k: "tarr", of: tdecode_go(cur) }) }
+    else if (c == "?") { normnode({ k: "topt", of: tdecode_go(cur) }) }
+    else if (c == "F") {
+        let n = pack_num(cur);
+        normnode({ k: "tarrfix", of: tdecode_go(cur), n: n })
+    }
+    else if (c == "M") {
+        let kt = tdecode_go(cur);
+        normnode({ k: "tmap", key: kt, of: tdecode_go(cur) })
+    }
+    else if (c == ">") {
+        let args = tdecode_list(cur);
+        normnode({ k: "tfunc", args: args, ret: tdecode_go(cur) })
+    }
+    else if (c == "U") { normnode({ k: "tunion", ts: tdecode_list(cur) }) }
+    else if (c == "T") { normnode({ k: "tparams", ts: tdecode_list(cur) }) }
+    else if (c == "P") { normnode({ k: "tpat", names: pack_get_strs(cur) }) }
+    else {
+        let fields: [{ name: str, typ: { k: str } }] = [];
+        let n = pack_num(cur);
+        let i = 0;
+        while (i < n) {
+            let fname = pack_get(cur);
+            fields += { name: fname, typ: tdecode_go(cur) };
+            i = i + 1;
+        };
+        normnode({ k: "trec", fields: fields })
+    }
+};
+
+def tdecode_list(cur: { s: str, p: long }) -> [{ k: str }] {
+    let out: [{ k: str }] = [];
+    let n = pack_num(cur);
+    let i = 0;
+    while (i < n) {
+        out += tdecode_go(cur);
+        i = i + 1;
+    };
+    out
+};
+
+// A unit's exports and its parameter defaults: what a unit importing it
+// is compiled against (unit_iface).
+def pack_iface(out: [str], u: Unit) -> [str] {
     let xs = u.exports;
     out = pack_put(out, tostring(len(xs)));
     let j = 0;
     while (j < len(xs)) {
         let x = xs[j];
-        let ts = types.tstr(x.typ);
-        if (types.tstr(pack_type(ts)) != ts) {
-            puts("ycc: internal error: std/" + u.name + ".y: the type of " + x.name + " (" + ts + ") does not survive the pack\n");
-            exit(1);
-            0
-        } else { 0; };
         out = pack_put(out, x.name);
         out = pack_put(out, x.label);
-        out = pack_put(out, ts);
+        out = pack_put(out, tcode(x.typ));
         j = j + 1;
     };
+    let ds = u.dfl;
+    out = pack_put(out, tostring(len(ds)));
+    j = 0;
+    while (j < len(ds)) {
+        let d = ds[j];
+        out = pack_put(out, d.name);
+        out = pack_strs(out, d.vals);
+        j = j + 1;
+    };
+    out
+};
+
+// One unit's fields.
+def pack_unit_fields(u: Unit) -> str {
+    let out: [str] = [];
+    out = pack_strs(out, u.files);
+    out = pack_iface(out, u);
     out = pack_put(out, u.init);
     out = pack_strs(out, u.bodies);
     out = pack_strs(out, u.labels);
     let rf = u.refs;
     out = pack_put(out, tostring(len(rf)));
-    j = 0;
+    let j = 0;
     while (j < len(rf)) {
         out = pack_strs(out, rf[j]);
         j = j + 1;
@@ -7640,7 +8031,7 @@ def pack_unit_fields(u: { name: str, files: [str], exports: [{ name: str, label:
 };
 
 // The pack of `units`.
-def std_pack(units: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }]) -> str {
+def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
     out += pack_version();
     out = pack_put(out, tostring(len(units)));
@@ -7693,20 +8084,28 @@ def pack_get_strs(cur: { s: str, p: long }) -> [str] {
     out
 };
 
-// The unit `name`, from its fields at the cursor (see pack_unit_fields).
-def pack_unit(cur: { s: str, p: long }, name: str) -> { name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] } {
+// The unit `name`, from its fields at the cursor (see pack_unit_fields);
+// its exports' types decoded when `bound` (else tnone: never read).
+def unit_read(cur: { s: str, p: long }, name: str, bound: bool) -> Unit {
     let files = pack_get_strs(cur);
-    let bound = std_unit_bound(name);
-    let xs: [{ name: str, label: str, typ: { k: str } }] = [];
+    let xs: [Export] = [];
     let nx = pack_num(cur);
     let j = 0;
     while (j < nx) {
         let xn = pack_get(cur);
         let xl = pack_get(cur);
-        let ts = pack_get(cur);
+        let tc = pack_get(cur);
         let xt = { k: "tnone" };
-        if (bound) { xt = pack_type(ts); 0; } else { 0; };
+        if (bound) { xt = tdecode(tc); 0; } else { 0; };
         xs += { name: xn, label: xl, typ: xt };
+        j = j + 1;
+    };
+    let dfl: [{ name: str, vals: [str] }] = [];
+    let nf = pack_num(cur);
+    j = 0;
+    while (j < nf) {
+        let dn = pack_get(cur);
+        dfl += { name: dn, vals: pack_get_strs(cur) };
         j = j + 1;
     };
     let init = pack_get(cur);
@@ -7728,24 +8127,24 @@ def pack_unit(cur: { s: str, p: long }, name: str) -> { name: str, files: [str],
     };
     let globals = pack_get_strs(cur);
     { name: name, files: files, exports: xs, init: init, bodies: bodies,
-      labels: labels, refs: refs, rodata: rodata, globals: globals }
+      labels: labels, refs: refs, rodata: rodata, globals: globals, dfl: dfl }
 };
 
 // The units `names` from a pack, in that order; [] for a pack of another
 // version, or one missing any of them.
-def std_unpack(pack: str, names: [str]) -> [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] {
-    let out: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] = [];
+def std_unpack(pack: str, names: [str]) -> [Unit] {
+    let out: [Unit] = [];
     let ver = pack_version();
     if (pack[:len(ver)] == ver) {
         let cur = { s: pack, p: len(ver) };
         let n = pack_num(cur);
-        let got: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }] = [];
+        let got: [Unit] = [];
         let i = 0;
         while (i < n) {
             let nm = pack_get(cur);
             let ul = pack_len(cur);
             let at = cur.p;
-            if (name_in(names, nm)) { got += pack_unit(cur, nm); 0; } else { 0; };
+            if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); 0; } else { 0; };
             cur.p = at + ul;
             i = i + 1;
         };
@@ -7766,26 +8165,148 @@ def std_unpack(pack: str, names: [str]) -> [{ name: str, files: [str], exports: 
     out
 };
 
-// ── entry point ────────────────────────────────────────────────────────
+// A package's object (`ycc build` keeps one per package): its unit's
+// fields, after a version line and the key it was compiled under (ycc.y
+// build_key) -- an object of another key, or a cut-off one, is no hit.
+def obj_version() -> str {
+    "ycc-unit 1\n"
+};
 
-// The program's unit, compiled against the std units `std` (std_units)
-// and linked with them.
-def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file: [long], line: [long] }, debug: bool, std: [{ name: str, files: [str], exports: [{ name: str, label: str, typ: { k: str } }], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str] }]) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
-    let ext: [{ name: str, label: str, typ: { k: str } }] = [];
-    let inits: [str] = [];
+def unit_obj(u: Unit, key: str) -> str {
+    let out: [str] = [];
+    out += obj_version();
+    out = pack_put(out, key);
+    out = pack_put(out, u.name);
+    out = pack_put(out, pack_unit_fields(u));
+    join(out, "")
+};
+
+def unit_unobj(text: str, key: str) -> { ok: bool, unit: Unit } {
+    let ver = obj_version();
+    let ok = false;
+    let u = unit_empty("");
+    if (text[:len(ver)] == ver) {
+        let cur = { s: text, p: len(ver) };
+        if (pack_get(cur) == key) {
+            let nm = pack_get(cur);
+            let ul = pack_len(cur);
+            if (cur.p + ul == len(text)) {
+                u = unit_read(cur, nm, true);
+                ok = cur.p == len(text);
+                0
+            } else { 0; };
+            0
+        } else { 0; };
+        0
+    } else { 0; };
+    { ok: ok, unit: u }
+};
+
+// What a unit importing `u` is compiled against: its exports (labels and
+// types) and their parameter defaults. A change elsewhere in `u` leaves
+// its importers' objects as they are.
+def unit_iface(u: Unit) -> str {
+    let out: [str] = [];
+    out = pack_iface(out, u);
+    join(out, "")
+};
+
+// ── entry points ───────────────────────────────────────────────────────
+
+// What a unit is compiled against: the exports of the bound std units
+// among `snames` (the std units it links itself, its resolution's
+// `std`), and of the packages among `deps` it imports (`pkgs`), under
+// qualified names (see pkg_ns) -- with their defs' parameter defaults.
+def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Externs {
+    let xt = externs_none();
+    let ext: [Export] = [];
     let i = 0;
     while (i < len(std)) {
         let u = std[i];
-        if (std_unit_bound(u.name)) { ext += u.exports; 0; } else { 0; };
+        if (std_unit_bound(u.name) && name_in(snames, u.name)) { ext += u.exports; 0; } else { 0; };
+        i = i + 1;
+    };
+    let dfl: [{ name: str, vals: [{ k: str }] }] = [];
+    i = 0;
+    while (i < len(deps)) {
+        let u = deps[i];
+        if (name_in(pkgs, u.name)) {
+            let xs = u.exports;
+            let j = 0;
+            while (j < len(xs)) {
+                let x = xs[j];
+                ext += { name: u.name + "." + x.name, label: x.label, typ: x.typ };
+                j = j + 1;
+            };
+            let ds = u.dfl;
+            j = 0;
+            while (j < len(ds)) {
+                let d = ds[j];
+                let dv = d.vals;
+                let vals: [{ k: str }] = [];
+                let m = 0;
+                while (m < len(dv)) {
+                    vals += lit_decode(dv[m]);
+                    m = m + 1;
+                };
+                dfl += { name: u.name + "." + d.name, vals: vals };
+                j = j + 1;
+            };
+            0
+        } else { 0; };
+        i = i + 1;
+    };
+    xt.ext = ext;
+    xt.dfl = dfl;
+    xt.pkgs = pkgs;
+    xt
+};
+
+// A package's unit (`ycc build`): its text as native_resolve_pk resolved
+// it (`nr`), compiled against the std units and the packages it imports
+// (`deps` holds them, and maybe more). Always with its `.loc` markers
+// (link_units keeps them for -g only), so one object serves every build.
+def compile_package(ast, nr: Resolved, name: str, base: long, std: [Unit], deps: [Unit]) -> { ok: bool, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }], unit: Unit } {
+    compile_unit(ast, nr.imports, nr.origin, true, name, base, unit_externs(std, nr.std, deps, nr.pkgs))
+};
+
+// The program's unit, compiled against the std units `std` (std_units)
+// and the packages `deps` (`ycc build`: every package it links, each
+// after those it imports) and linked with them. `nr` is the program's
+// resolution: the std units it binds itself, the packages it imports.
+def emit_program(ast, nr: Resolved, debug: bool, std: [Unit], deps: [Unit]) -> { ok: bool, asm: str, errors: [{ msg: str, line: long, col: long }], times: [{ name: str, us: long, heap: long }] } {
+    let xt = unit_externs(std, nr.std, deps, nr.pkgs);
+    let inits: [str] = [];
+    let units: [Unit] = [];
+    units += std;
+    units += deps;
+    let i = 0;
+    while (i < len(units)) {
+        let u = units[i];
         if (len(u.init) > 0) { inits += u.init; 0; } else { 0; };
         i = i + 1;
     };
-    let r = compile_unit(ast, imports, origin, debug, "", 0, ext, inits);
+    xt.inits = inits;
+    // a package reading argv() needs `_start` to materialize it
+    let wargv = false;
+    i = 0;
+    while (i < len(deps)) {
+        let u = deps[i];
+        let rf = u.refs;
+        let b = 0;
+        while (!wargv && b < len(rf)) {
+            wargv = name_in(rf[b], "y_argv");
+            b = b + 1;
+        };
+        i = i + 1;
+    };
+    xt.argv = wargv;
+    let r = compile_unit(ast, nr.imports, nr.origin, debug, "", 0, xt);
     let times = r.times;
     if (r.ok) {
         let pt = clock_us();
         let ph = heap_used();
-        let asm = link_units(std, r.unit);
+        let asm = link_units(std, deps, r.unit);
         let pr = phase_end(times, "asm_text", pt, ph);
         { ok: true, asm: asm, errors: r.errors, times: pr.times }
     } else {
@@ -7793,7 +8314,7 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
     }
 };
 
-export { emit_program, std_units, std_unit_names, std_pack, native_resolve, native_resolve_x, origin_at, strip_ns, strip_list, strip_decl, phase_end };
+export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and

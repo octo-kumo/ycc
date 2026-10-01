@@ -10,11 +10,15 @@
 //   --std-src    compile the std units from source, not the attached pack
 //   --std-pack FILE  write the compiled std units to FILE, no program
 //   -h, --help   show this text and exit
+// A project (a directory with a y.toml manifest, see pkg.y):
+//   ycc build [-g] [--no-exec] [--std-src] [DIR]   build its programs
+//   ycc vendor [DIR]   copy its git dependencies into DIR/vendor
 
 import lexer from "./lexer.y";
 import parser from "./parser.y";
 import nasm from "./asm.y";
 import nativelib from "./native.y";
+import pkg from "./pkg.y";
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
@@ -59,6 +63,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             };
         } else if (a == "--help" || a == "-h") {
             puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n");
+            puts("       ycc build [-g] [--no-exec] [--std-src] [DIR]\n");
+            puts("       ycc vendor [DIR]\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
@@ -74,6 +80,10 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  --std-pack FILE  compile the std units and write them to FILE,\n");
             puts("               to attach to a ycc binary (the build does)\n");
             puts("  -h, --help   show this text and exit\n");
+            puts("  build [DIR]  build the project in DIR (default .) as its y.toml\n");
+            puts("               says: each [bin] into DIR/build, every package it\n");
+            puts("               depends on compiled once (DIR/build/obj keeps them)\n");
+            puts("  vendor [DIR] copy the project's git dependencies into DIR/vendor\n");
             exit(0);
         } else if (a[0:1] == "-") {
             puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
@@ -209,12 +219,12 @@ def print_counter(name: str, v: long) -> long {
 
 // ── main ─────────────────────────────────────────────────────────────────
 
-def print_native_errors(errors: [{ msg: str, line: long, col: long }], origin: { files: [str], nuser: long, file: [long], line: [long] }) -> long {
+def print_native_errors(errors: [{ msg: str, line: long, col: long }], origin: { files: [str], nuser: long, file: [long], line: [long] }, bare: bool) -> long {
     // NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
     // Positions are lines of the spliced program (std chunks and imported
     // modules included); the origin map turns each back into the file it
-    // came from: `line:col` in the program's own file, `path:line:col` in
-    // any other.
+    // came from: `line:col` in the program's own file (unless not `bare`:
+    // `ycc build` names every file), `path:line:col` in any other.
     let all = errors;
     // One error per position: a malformed token can trip two checks (the
     // construct it broke, then the statement it ended), and the second
@@ -223,7 +233,7 @@ def print_native_errors(errors: [{ msg: str, line: long, col: long }], origin: {
     let i = 0;
     while (i < len(all)) {
         let e = all[i];
-        let at = nativelib.origin_at(origin, e.line, true) + ":" + tostring(e.col);
+        let at = nativelib.origin_at(origin, e.line, bare) + ":" + tostring(e.col);
         let dup = false;
         foreach (s in seen) {
             if (s == at) { dup = true; 0; } else { 0; };
@@ -238,7 +248,270 @@ def print_native_errors(errors: [{ msg: str, line: long, col: long }], origin: {
     0
 };
 
+// ── ycc build / ycc vendor (see pkg.y) ───────────────────────────────────
+
+def build_args(cl: [str]) -> { dir: str, debug: bool, allow_exec: bool, std_src: bool } {
+    let dir = "";
+    let debug = false;
+    let allow_exec = true;
+    let std_src = false;
+    let i = 2;  // skip the program and the command
+    while (i < len(cl)) {
+        let a = cl[i];
+        if (a == "-g") {
+            debug = true;
+        } else if (a == "--no-exec") {
+            allow_exec = false;
+        } else if (a == "--std-src") {
+            std_src = true;
+        } else if (a[0:1] == "-") {
+            puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
+            exit(1);
+        } else if (len(dir) > 0) {
+            puts("error: ycc " + cl[1] + " takes one project directory\n");
+            exit(1);
+        } else {
+            dir = a;
+        };
+        i = i + 1;
+    };
+    if (len(dir) == 0) { dir = "."; 0; } else { 0; };
+    { dir: dir, debug: debug, allow_exec: allow_exec, std_src: std_src }
+};
+
+// One unit's text, resolved: its bare imports may name the packages
+// `pkgs` and look in the source roots `roots` (native_resolve_pk).
+def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Resolved {
+    let src = read_file(path);
+    if (src == none) {
+        puts("error: cannot read file '" + path + "'\n");
+        exit(1);
+        0
+    } else { 0; };
+    nativelib.native_resolve_pk(unwrap(src), pkg.pk_dir_of(path), allow_exec, path, pkgs, roots)
+};
+
+// The std units among `names`, in link order.
+def std_order(names: [str]) -> [str] {
+    let all = nativelib.std_unit_names();
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(all)) {
+        let nm: str = all[i];
+        if (pkg.pk_has(names, nm)) { out += nm; 0; } else { 0; };
+        i = i + 1;
+    };
+    out
+};
+
+def longs_text(xs: [long]) -> str {
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(xs)) {
+        out += tostring(xs[i]);
+        i = i + 1;
+    };
+    join(out, ",")
+};
+
+// What a package's object is valid for: this compiler, the package's
+// place among the units (its labels count from `base`), its resolved
+// text and where each line came from, and the interfaces of the
+// packages it imports (among `units`, unit_iface).
+def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, units: [Unit]) -> str {
+    let h = pkg.pk_hash_new();
+    pkg.pk_hash_str(h, cid);
+    pkg.pk_hash_str(h, name);
+    pkg.pk_hash_str(h, tostring(base));
+    let ex = "exec";
+    if (!allow_exec) { ex = "no-exec"; 0; } else { 0; };
+    pkg.pk_hash_str(h, ex);
+    pkg.pk_hash_str(h, nr.src);
+    let o = nr.origin;
+    pkg.pk_hash_str(h, join(o.files, "\n"));
+    pkg.pk_hash_str(h, longs_text(o.file));
+    pkg.pk_hash_str(h, longs_text(o.line));
+    pkg.pk_hash_str(h, join(nr.std, ","));
+    let ps = nr.pkgs;
+    pkg.pk_hash_str(h, join(ps, ","));
+    let i = 0;
+    while (i < len(units)) {
+        let u = units[i];
+        if (pkg.pk_has(ps, u.name)) { pkg.pk_hash_str(h, nativelib.unit_iface(u)); 0; } else { 0; };
+        i = i + 1;
+    };
+    pkg.pk_hash_text(h)
+};
+
+// Which of the packages `pkgs` (each after its dependencies) a unit
+// importing `direct` links: those, and every package they import.
+def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
+    let want: [str] = [];
+    want += direct;
+    let reach: [bool] = [];
+    let k = 0;
+    while (k < len(pkgs)) {
+        reach += false;
+        k = k + 1;
+    };
+    k = len(pkgs) - 1;
+    while (k >= 0) {
+        let p = pkgs[k];
+        if (pkg.pk_has(want, p.name)) {
+            reach[k] = true;
+            let nr = nrs[k];
+            want += nr.pkgs;
+            0
+        } else { 0; };
+        k = k - 1;
+    };
+    reach
+};
+
+// `ycc build`: every package the project depends on (and its own lib),
+// each from its object in DIR/build/obj when that is current, else
+// compiled and its object written; then each [bin], linked with the
+// packages it reaches, to DIR/build/NAME.
+def build_project(dir: str, debug: bool, allow_exec: bool, std_src: bool) -> long {
+    let g = pkg.pk_load(dir);
+    let bins = g.bins;
+    let pkgs = g.pkgs;
+    if (len(bins) == 0 && len(g.lib) == 0) {
+        puts("error: " + pkg.pk_join(dir, "y.toml") + " has no [bin] and no lib: nothing to build\n");
+        exit(1);
+        0
+    } else { 0; };
+    let bdir = pkg.pk_join(dir, "build");
+    let odir = bdir + "/obj";
+    pkg.pk_mkdir(bdir);
+    pkg.pk_mkdir(odir);
+    // every unit's text: the packages' (each importing its own
+    // dependencies), then the bins' (the project's, and its lib)
+    let nrs: [Resolved] = [];
+    let k = 0;
+    while (k < len(pkgs)) {
+        let p = pkgs[k];
+        nrs += build_resolve(p.lib, allow_exec, p.deps, p.roots);
+        k = k + 1;
+    };
+    let bdeps: [str] = [];
+    bdeps += g.deps;
+    if (len(g.lib) > 0) { bdeps += g.name; 0; } else { 0; };
+    let b = 0;
+    while (b < len(bins)) {
+        let bn = bins[b];
+        nrs += build_resolve(bn.path, allow_exec, bdeps, g.roots);
+        b = b + 1;
+    };
+    let needs: [str] = [];
+    k = 0;
+    while (k < len(nrs)) {
+        let nr = nrs[k];
+        needs += nr.std;
+        k = k + 1;
+    };
+    let pack = "";
+    if (!std_src) { pack = self_pack(); 0; } else { 0; };
+    let su = nativelib.std_units(std_order(needs), pack);
+    let cid = pkg.pk_self_id();
+    let units: [Unit] = [];
+    k = 0;
+    while (k < len(pkgs)) {
+        let p = pkgs[k];
+        let nr = nrs[k];
+        let base = 5000000000 + k * 1000000000;
+        let key = build_key(cid, p.name, base, allow_exec, nr, units);
+        let opath = odir + "/" + p.name + ".yo";
+        let hit = false;
+        let ot = read_file(opath);
+        if (ot != none) {
+            let uo = nativelib.unit_unobj(unwrap(ot), key);
+            if (uo.ok) { units += uo.unit; hit = true; 0; } else { 0; };
+            0
+        } else { 0; };
+        if (!hit) {
+            eputs("compiling " + p.name + "\n");
+            let ast = parser.parse_program(lexer.tokenize(nr.src));
+            let r = nativelib.compile_package(ast, nr, p.name, base, su, units);
+            if (!r.ok) {
+                print_native_errors(r.errors, nr.origin, false);
+                exit(1);
+                0
+            } else { 0; };
+            if (!write_file(opath, nativelib.unit_obj(r.unit, key))) {
+                puts("error: writing '" + opath + "' failed\n");
+                exit(1);
+                0
+            } else { 0; };
+            units += r.unit;
+            0
+        } else { 0; };
+        k = k + 1;
+    };
+    b = 0;
+    while (b < len(bins)) {
+        let bn = bins[b];
+        let nr = nrs[len(pkgs) + b];
+        let reach = build_reach(nr.pkgs, pkgs, nrs);
+        let linked: [Unit] = [];
+        let lneeds: [str] = [];
+        lneeds += nr.std;
+        k = 0;
+        while (k < len(pkgs)) {
+            if (reach[k]) {
+                linked += units[k];
+                let pn = nrs[k];
+                lneeds += pn.std;
+                0
+            } else { 0; };
+            k = k + 1;
+        };
+        let lstd = std_order(lneeds);
+        let bstd: [Unit] = [];
+        k = 0;
+        while (k < len(su)) {
+            let su1 = su[k];
+            if (pkg.pk_has(lstd, su1.name)) { bstd += su1; 0; } else { 0; };
+            k = k + 1;
+        };
+        let ast = parser.parse_program(lexer.tokenize(nr.src));
+        let r = nativelib.emit_program(ast, nr, debug, bstd, linked);
+        if (!r.ok) {
+            print_native_errors(r.errors, nr.origin, false);
+            exit(1);
+            0
+        } else { 0; };
+        let ab = nasm.ycc_assemble(r.asm, debug);
+        if (!ab.ok) {
+            puts("error: assemble: " + ab.error + "\n");
+            exit(1);
+            0
+        } else { 0; };
+        let outp = bdir + "/" + bn.name;
+        if (!write_bytes(outp, ab.bytes, 493)) {
+            puts("error: writing '" + outp + "' failed\n");
+            exit(1);
+            0
+        } else { 0; };
+        eputs("built " + outp + "\n");
+        b = b + 1;
+    };
+    0
+};
+
 def main(cmdline: [str]) -> long {
+    if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
+        let ba = build_args(cmdline);
+        if (cmdline[1] == "build") {
+            build_project(ba.dir, ba.debug, ba.allow_exec, ba.std_src);
+            0
+        } else {
+            pkg.pk_vendor(ba.dir);
+            0
+        };
+        exit(0);
+        0
+    } else { 0; };
     let args = parse_cli_args(cmdline);
     // NOTE: vestigial alias (see print_phase_rows) — `args.out` works.
     let pargs = args;
@@ -286,7 +559,6 @@ def main(cmdline: [str]) -> long {
             let ph = nativelib.phase_end(dt, "resolve", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let nrsrc = nr.src;
-            let nrimports = nr.imports;
             let nrorigin = nr.origin;
             let toks = lexer.tokenize(nrsrc);
             ph = nativelib.phase_end(dt, "tokenize", t0, h0);
@@ -304,7 +576,7 @@ def main(cmdline: [str]) -> long {
             let su = nativelib.std_units(nrstd, pack);
             ph = nativelib.phase_end(dt, "std", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
-            let r = nativelib.emit_program(ast, nrimports, nrorigin, pargs.debug, su);
+            let r = nativelib.emit_program(ast, nr, pargs.debug, su, []);
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;
@@ -318,7 +590,7 @@ def main(cmdline: [str]) -> long {
             h0 = heap_used();
             let rok = r.ok;
             if (!rok) {
-                print_native_errors(r.errors, nrorigin);
+                print_native_errors(r.errors, nrorigin, true);
                 exit(1);
                 1
             } else if (pargs.asm_only) {

@@ -50,6 +50,8 @@ reason.
 | 03-grammar | Structure and modules | Imports, exports, relative paths and namespaces | `native/t55_parse_forms.y`, `native/e20_badmodule.y` |
 | 03-grammar | Structure and modules | Embed bytes and splice imported source in order | `native/t66_embed.y`, `native/t68_splice_scan.y`, `native/e57_embed_lines.y` |
 | 03-grammar | Structure and modules | One namespace: a def replacing another file's is an error naming both; same-file and std redefinitions are allowed | `native/e132_duplicate_import_def.y`, `native/t134_import_namespace.y`, `native/t30_typeof_records.y` |
+| 03-grammar | Packages | y.toml manifests (every error), ycc build, path and git dependencies, y.lock, ycc vendor, the object cache and when it recompiles | `sh/test_pkg.sh` |
+| 03-grammar | Packages | Qualified package names, read-only globals, defaults and optional parameters across packages, dependencies' top level first | `sh/test_pkg.sh` |
 | 03-grammar | Declarations | let, const, def, type aliases and defaults | `native/t59_const.y`, `native/t49_defaults_tco.y`, `native/t50_unions_match.y`, `native/t63_optional_args.y` |
 | 03-grammar | Declarations | Anonymous and immediately-bound function literals | `native/t26_closures.y`, `native/t29_blocks_iife.y` |
 | 03-grammar | Types | Scalar, array, fixed-array, option, pointer, function, record and map type syntax | `native/t06_ptr.y`, `native/t16_option.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t57_from_bytes_fixed.y` |
@@ -139,3 +141,4 @@ so the list cannot rot.
 | `src/y/types.y` | `is not a supported expression form` | Every expression node the parser builds has an arm in `typeof_expr`; `optarg` (optional-parameter metadata) is replaced with `none`/`some(...)` by `rn_fill_defaults` before checking. |
 | `src/y/ycc.y` | `"error: assemble: "` | The assembler only reads the emitter's output, so a bad line is a compiler bug, not something a program can cause. |
 | `src/y/ycc.y` | `the std pack is too large` | The trailer gives the pack's length in 8 digits; the std units come to about 190 KB, so no build gets near 100 MB. |
+| `src/y/pkg.y` | `cannot read the compiler's own binary` | `/proc/self/exe` is the running compiler itself (`self_pack` reads it too); a test cannot take it away from a running process. |

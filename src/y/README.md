@@ -16,7 +16,8 @@ ycc -S -o prog.s prog.y
 
 | file          | role                                                        |
 |---------------|-------------------------------------------------------------|
-| `ycc.y`       | driver: flags, pipeline, the std pack, direct ELF output    |
+| `ycc.y`       | driver: flags, pipeline, the std pack, direct ELF output; `ycc build` |
+| `pkg.y`       | packages: `y.toml`, the dependency graph, git, `y.lock`, `ycc vendor` |
 | `lexer.y`     | source string → token list                                  |
 | `parser.y`    | token list → AST (nested maps) + type nodes                 |
 | `rename.y`    | uniquify pass: no scopes/shadowing downstream               |

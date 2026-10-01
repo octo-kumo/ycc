@@ -1031,14 +1031,23 @@ def rn_func_finish(fptypes, fret, fbody, fline: long, fcol: long, params: [str],
 
 
 def rename_program(ast) -> {k: str} {
-    rename_program_go(ast.stmts, ast.line, ast.col)
+    rename_program_go(ast.stmts, ast.line, ast.col, [])
 };
 
-def rename_program_go(stmts: [{k: str}], line: long, col: long) -> {k: str} {
-    // NOTE: fields passed as values (see rn_func note).
-    let st = { scopes: [[]], n: 1, tys: [], dfl: [] };
+// A unit importing packages (native.y compile_unit): `dfl` holds their
+// defs' parameter defaults under the qualified names calls use.
+def rename_program_x(ast, dfl: [{ name: str, vals: [{ k: str }] }]) -> {k: str} {
+    rename_program_go(ast.stmts, ast.line, ast.col, dfl)
+};
+
+def rename_program_go(stmts: [{k: str}], line: long, col: long, dfl: [{ name: str, vals: [{ k: str }] }]) -> {k: str} {
+    // NOTE: fields passed as values (see rn_func note). dfl is copied:
+    // rn_note_defaults appends to the list in place.
+    let d0: [{ name: str, vals: [{ k: str }] }] = [];
+    d0 += dfl;
+    let st = { scopes: [[]], n: 1, tys: [], dfl: d0 };
     let b = rn_block(stmts, st);
     { k: "block", stmts: b.stmts, line: line, col: col }
 };
 
-export { rename_program };
+export { rename_program, rename_program_x };

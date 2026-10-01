@@ -36,6 +36,7 @@
 #   native.y  puts("error: ...") (imports, embeds); the duplicate-definition
 #             error record
 #   ycc.y     puts("error: ...") and puts("ycc: ...") (the driver)
+#   pkg.y     pk_die(...) (prints "error: ...": ycc build and ycc vendor)
 #   anywhere  "runtime error: ..." (the trap messages compiled programs print)
 
 BEGIN { HOLE = "\001" }
@@ -181,6 +182,7 @@ f == "types.y" && infmt && /^ *"/ { site(tmpl($0, index($0, "\""))); next }
 f == "native.y" && /puts\("error: / { site(tmpl($0, index($0, "puts(") + 5)); next }
 f == "native.y" && /\{ msg: "[^"]/ { site(tmpl($0, index($0, "msg: ") + 5)); next }
 f == "ycc.y" && /puts\("(error|ycc): / { site(tmpl($0, index($0, "puts(") + 5)); next }
+f == "pkg.y" && /pk_die\(/ && !/^def / { site(tmpl($0, index($0, "pk_die(") + 7)); next }
 
 END {
     for (k = 1; k <= nexc; k++)

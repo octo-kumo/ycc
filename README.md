@@ -76,6 +76,38 @@ FILE is required: with no input file `ycc` exits 1 with
 `error: no input file (see ycc -h)` (`--std-pack FILE` alone is the
 exception).
 
+### Projects and packages
+
+```text
+ycc build [-g] [--no-exec] [--std-src] [DIR]   build the project in DIR (default .)
+ycc vendor [DIR]                               copy its git dependencies into DIR/vendor
+```
+
+A project is a directory with a `y.toml`:
+
+```toml
+[package]
+name = "app"                  # required: an identifier, no keyword
+lib = "src/lib.y"             # optional: what importers of app get
+src = ["src"]                 # optional: where bare imports also look
+
+[bin]                         # the programs: DIR/build/app from src/main.y
+app = "src/main.y"
+
+[dependencies]
+json = { path = "../json" }
+http = { git = "https://example.com/http.git", rev = "v1" }
+```
+
+`import json;` (in a bin, or in a package's `lib`) then gives
+`json.parse(s)`: each package compiles on its own, once — `build/obj`
+keeps its object until its text, the compiler, or an interface it was
+compiled against changes. Git dependencies are cloned into `build/git`
+and pinned to a commit in `y.lock`; `ycc vendor` copies them into
+`vendor/`, which then wins. The reference manual's *Packages* section
+(`docs/src/03-grammar.tex`) has the details; `src/y/NATIVE.md`,
+"Packages", how it is built.
+
 `./cycc` takes exactly the same flags — it is the same compiler. It has
 no std pack attached, so it always compiles the std units from source
 (`src/y/NATIVE.md`, "Compilation units and the std pack").
@@ -84,7 +116,7 @@ no std pack attached, so it always compiles the std units from source
 
 | path | contents |
 |---|---|
-| `src/y/` | the compiler, in Y (`ycc.y` driver, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `dwarf.y`, `std/`) |
+| `src/y/` | the compiler, in Y (`ycc.y` driver, `pkg.y` packages, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `dwarf.y`, `std/`) |
 | `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the value model) |
 | `docs/` | the formal language definition (LaTeX/Tectonic) |
 | `refs/` | reference binaries for the byte-identical port gate (currently `cycc`'s own output with its std pack attached — see `PORTING.md`) |
@@ -100,7 +132,7 @@ $ make test         # the port gate + all the suites in test/sh/
 $ ./test/sh/run_all.sh port native   # a subset (suite names: port native
                                      # native-examples examples audit ycc-units
                                      # ycc fixpoint loops comprehensive debug
-                                     # link stdin-eof net coverage)
+                                     # link pkg stdin-eof net coverage)
 ```
 
 `make asan` builds an ASan+UBSan `cycc-asan` for crash hunting.

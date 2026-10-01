@@ -2,17 +2,7 @@
 
 ## Not done
 
-- determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
-  - Decided: a `y.toml` manifest (any layout), dependencies from git
-    pinned in `y.lock` or vendored, ycc's own objects, ycc links. Std
-    first.
-  - Stage 1 done: the std modules (`rt`, `str`, `prelude`, `exec`) are
-    separately compiled units linked into programs, and `ycc` carries
-    them precompiled (the std pack). NATIVE.md, "Compilation units and
-    the std pack".
-  - Remaining: the manifest, dependencies, a dependency compiled once
-    into a cached object and linked, `ycc build`.
-
+(nothing)
 
 ## Done
 
@@ -20,6 +10,30 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **No project structure, dependencies or linking: every build re-read,
+  re-checked and re-emitted every module it imported.** A project is now
+  a directory with a `y.toml` (a TOML subset: `[package]` name, lib and
+  source roots, `[bin]` programs, `[dependencies]` by path, or by git
+  URL and rev), and `ycc build [DIR]` builds each bin into `DIR/build/`.
+  Std came first: its modules are separately compiled units, precompiled
+  into a pack `ycc` carries (NATIVE.md, "Compilation units and the std
+  pack"). Each package is compiled once into an object,
+  `build/obj/NAME.yo` (its unit, the interface its importers are checked
+  against, and a key over the compiler binary, its sources and its
+  dependencies' interfaces), and linked like the std units: a rebuild
+  with nothing changed compiles nothing (~0.17 s), a body change
+  recompiles that package only, an interface change its importers too.
+  Importers name a package's top-level defs and lets qualified
+  (`json.parse(s)`; its globals read-only, parameter defaults kept), and
+  each package's top level runs once, dependencies first. Git
+  dependencies are cloned into `build/git/`, pinned by commit in
+  `y.lock`, and `ycc vendor` copies them into `vendor/` for offline
+  builds. New `pkg.y`/`pkg.c`; NATIVE.md "Packages", the manual's
+  Packages subsection, `test_pkg.sh` (132 checks, also clean with the
+  ASan+UBSan C copy). `make check`: all 349 corpus programs compile to
+  the same code; compiling takes 0.02–1.8% fewer instructions, the
+  compiled programs run the same instructions; SCORE 100.60.
 
 - **`-g` had no line information.** It now also writes DWARF 4: a
   `.debug_line` row per statement, function entry, `else if` test and

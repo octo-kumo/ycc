@@ -102,20 +102,21 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 
 ## Test suites (`test/sh/`)
 
-Fifteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
+Sixteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, identical program behavior). `test_native.sh`,
-`test_native_examples.sh`, `test_debug.sh`, `test_link.sh`, `test_ycc.sh`
-and `test_fixpoint.sh` drive the built `./ycc` itself, so `run_all.sh`
-skips those **six** when it is missing (`make test-fast`).
+`test_native_examples.sh`, `test_debug.sh`, `test_link.sh`, `test_pkg.sh`,
+`test_ycc.sh` and `test_fixpoint.sh` drive the built `./ycc` itself, so
+`run_all.sh` skips those **seven** when it is missing (`make test-fast`).
 
 `run_all.sh -j N` runs N suites at once and splits the long ones (port,
 comprehensive, native) into shards (`YSHARD=K/N`: every Nth case, see
 `next_case` in `lib.sh`). The suites take the compilers they test from
 the environment: `CYCC` (the C copy), `YREF` (the reference, default
 `refs/ycc.ref`), `YCC` (the built compiler driven by native,
-native-examples, debug and ycc) and `YSELF` (fixpoint, link, stdin-eof).
+native-examples, debug and ycc) and `YSELF` (fixpoint, link, pkg,
+stdin-eof).
 `YPORT_SELF=0` leaves `src/y/ycc.y` out of the port gate, for when that
 very build was just compared (`make test`, `check`, `rebless` do);
 `YQUIET=1` prints failures only.
@@ -160,6 +161,16 @@ very build was just compared (`make test`, `check`, `rebless` do);
   `-g`, programs linking every std unit); a stale or missing pack falls
   back to source; a program's own `y_` helper or `readline` replaces
   std's; `--no-exec`; std line markers only under `-g`, renumbered.
+- `test_pkg.sh` [pkg] — `ycc build`/`ycc vendor` on projects made in
+  /tmp: a diamond of path dependencies (each package compiled once, its
+  top level run once, dependencies first), qualified names, defaults and
+  read-only globals across packages; the object cache (a rebuild compiles
+  nothing and gives the same bytes; a body change recompiles one
+  package, an interface change its importers; damaged or foreign objects
+  are rebuilt); imports, argv, exec, `--no-exec` and `-g` inside packages;
+  every manifest, graph and command-line error; git dependencies (local
+  repos: fetch, `y.lock` pins, revs, `ycc vendor`). The C copy must print
+  the same and build the same bytes.
 - `test_stdin_eof.sh` — stdin/EOF behavior.
 - `test_net.sh` [net] — the blocking `std/net` listeners over loopback:
   `test/y/net/` servers built by both compilers (identical binaries)
@@ -228,8 +239,9 @@ are exact.
 
 ## Pipeline (`src/y/native.y`)
 
-splice imports, pick the std units → per unit (the program's, and each
-std unit unless the std pack has it): strip namespaces → rename
+splice imports, pick the std units → per unit (the program's, each
+package's under `ycc build` unless its object in `build/obj` is current,
+and each std unit unless the std pack has it): strip namespaces → rename
 (uniquify) → typecheck (static, errors fatal) → hoist → emit bodies →
 link the units (tree shake across them) into `.s` → `asm.y` assembles →
 `elf.y` writes a static ELF (`-g`: plus `dwarf.y`'s line table). `y_` is
@@ -304,7 +316,8 @@ replaces the std one at link time).
 
 ## Layout
 
-- `src/y/` — the Y compiler: `ycc.y` (driver), `lexer.y`, `parser.y`,
+- `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
+  `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `native.y` (emitter), `arch_x64.y`
   (asm + prelude), `enc64.y`, `asm.y`, `elf.y`, `dwarf.y` (`-g` line
   info); `std/` (`rt.y` runtime
@@ -338,6 +351,7 @@ closures as `[code, caps...]` records; `&x`, `*p`, `a[i]`, `a[lo:hi]`,
 `def` params may be annotated (recommended: an unannotated param is a
 poison-tolerant unknown), return types are inferred. `ycc` is
 native-only: `ycc [-o OUT] [-S] [-t] [-g] [--no-exec] [--std-src] FILE`,
-cc-style; the shipped binary needs nothing at runtime — it is a static
+cc-style (and `ycc build [DIR]` / `ycc vendor [DIR]` for projects with a
+`y.toml`: NATIVE.md, *Packages*); the shipped binary needs nothing at runtime — it is a static
 ELF invoking raw syscalls, carrying its std units precompiled (the std
 pack, appended by `make ycc`).

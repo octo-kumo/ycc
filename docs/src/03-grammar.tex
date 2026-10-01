@@ -48,6 +48,77 @@ embed HELP from "help.txt";   // const HELP = "<the file's bytes>";
 program is compiled. The path resolves like an import's, a missing file
 is a fatal error, and line numbers after the declaration are unchanged.
 
+\subsection{Packages}
+
+A \emph{project} is a directory with a manifest, \ic{y.toml}, and
+\ic{ycc build [DIR]} builds it (\ic{DIR} defaults to the current one):
+
+\begin{lstlisting}
+[package]
+name = "app"                  # required: an identifier, no keyword
+lib = "src/lib.y"             # optional: what importers of app get
+src = ["src"]                 # optional: where bare imports also look
+
+[bin]                         # the programs: build/app from
+app = "src/main.y"            #   src/main.y, build/tool from
+tool = "src/tool.y"           #   src/tool.y
+
+[dependencies]
+json = { path = "../json" }
+http = { git = "https://example.com/http.git", rev = "v1" }
+\end{lstlisting}
+
+\noindent The manifest is a subset of TOML: one \ic{[table]} header or
+\ic{key = value} per line, a value being a string (\ic{"..."} with
+\ic{\textbackslash\textbackslash}, \ic{\textbackslash"},
+\ic{\textbackslash n} and \ic{\textbackslash t} escapes, or
+\ic{'...'} as written), an array of strings, or an inline table of
+strings; \ic{\#} starts a comment. \ic{[package]} may also carry
+\ic{version}, \ic{description}, \ic{license} and \ic{authors}, which
+the build ignores; any other key or table is an error. A bin may not be
+named \ic{obj} or \ic{git} (\ic{build/obj} keeps the package objects,
+\ic{build/git} the clones). Paths are relative to the manifest's
+directory.
+
+A dependency is another project, named by its own manifest exactly as
+the key names it, that has a \ic{lib}. Its \ic{lib} file and the files
+that file imports form a \emph{package}, compiled on its own: in a bin,
+or in a package's \ic{lib}, \ic{import json;} (on a line of its own)
+makes the top-level \ic{def}s and \ic{let}s of the \ic{json} package
+available as \ic{json.parse(s)}, \ic{json.limit}. Such names stay
+qualified: a bin's own \ic{parse} is another function. Parameter
+defaults and optional parameters work across the boundary; a package's
+globals are read-only to its importers (\ic{cannot assign to constant
+'json.limit'}), and its type aliases are its own (an importer spells
+the type out). A project's own \ic{lib}, when it has one, is a package
+its bins import the same way. A bare import names a dependency before
+any file: \ic{import json;} in a project depending on \ic{json} is the
+package even next to a \ic{json.y}; otherwise it looks next to the
+importing file, then in the \ic{src} roots of the importing file's
+project, then in the standard library.
+
+Each bin is linked with the packages it imports, directly or through
+other packages, and each package's top-level code runs once, before its
+importers' (dependencies first). A package may depend on others; a
+dependency cycle is an error, and so is one name coming from two
+different places --- unless the project itself declares that name,
+which settles it for every package. \ic{y\_} names are global across
+packages (they are the runtime's override hooks).
+
+\ic{build/obj} keeps each package's compiled object. A package compiles
+again only when its text, the paths it was read from, the compiler, or
+the interface of a package it imports (the names, types and defaults it
+exports) changed; a change elsewhere in a dependency leaves its
+importers' objects as they are. \ic{ycc build -g} links the same
+objects with line information.
+
+A git dependency is cloned into \ic{build/git} --- its \ic{rev} (a tag,
+branch or commit), or the default branch without one --- and pinned in
+\ic{y.lock} to the commit it resolved to; later builds use that commit
+until its \ic{y.lock} entry is deleted. \ic{ycc vendor [DIR]} copies the
+project's git dependencies into \ic{vendor/}, which then wins over the
+network. Git runs through \ic{/bin/sh} with the compiler's environment.
+
 \subsection{Declarations}
 
 \begin{align*}
@@ -64,9 +135,13 @@ Annotations are \textbf{strongly recommended} but not enforced: an
 unannotated parameter takes the unknown type, which poisons quietly
 (Section~\ref{sec:poison}) and is treated as a machine word by the
 backend. Return types are optional (inferred from the body,
-Section~\ref{sec:types}). A \ic{const} declaration currently behaves
-exactly like \ic{let}; the keyword records intent and is reserved for
-future immutability checking.
+Section~\ref{sec:types}). A \ic{const} name cannot be rebound: \ic{=},
+the compound assignments and \ic{++}/\ic{--} on it are rejected
+(\ic{cannot assign to constant 'n'}, with the operator in parentheses
+for the compound forms). The binding is constant, not the value: a
+\ic{const} array or record is still a reference, so \ic{a[i] = v},
+\ic{r.x = v} and the in-place \ic{+=}/\ic{*=} on a \ic{const} array
+change its contents.
 
 Function literals may also appear bound or anonymous:
 \ic{let f = def (x: long) -> long \{ x \};}.

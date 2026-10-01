@@ -20,6 +20,7 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/asm.y` | two-pass assembler over our asm dialect |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
 | `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
+| `src/y/pkg.y` | `ycc build`/`ycc vendor`: the `y.toml` reader (a TOML subset), the dependency graph, git fetching, `y.lock`, vendoring, and the hash behind the package objects' keys (*Packages* below) |
 | `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
@@ -485,8 +486,9 @@ rodata and every unit's `.bss` cells.
 - **Line markers**: a std unit always compiles with its `.loc` markers
   (all `file 1`, its only file); linking renumbers them to the unit's
   place in the program's `.file` table under `-g` — the program's files
-  first, then the std units, the last linked first: rt, str, exec,
-  prelude — and strips them otherwise.
+  first, then the units', the last linked first: packages (see
+  *Packages*), then rt, str, exec, prelude — and strips them otherwise
+  (`link_locs`).
 
 **The std pack.** The std units compile the same for every program, so
 `ycc` carries them precompiled: `ycc --std-pack FILE` compiles all four
@@ -494,12 +496,13 @@ and writes them to FILE, and the build appends that file to the `ycc`
 that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
-straight from it. The pack is text: a version line, then each unit's
-name and fields as netstrings — its bodies, each body's label and the
-labels it references (so linking never rescans std code), rodata,
-globals, init label, and its exports' types as `types.tstr` text, parsed
-back (`parse_type_full`) only for the library units the program binds;
-`--std-pack` refuses to write a type that does not come back unchanged.
+straight from it. The pack is text: a version line (`ycc-std-pack 2`),
+then each unit's name and fields as netstrings — its bodies, each
+body's label and the labels it references (so linking never rescans std
+code), rodata, globals, init label, and its exports with their types in
+a prefix code (`tcode`/`tdecode`: total over every type the checker
+produces, unions and the unknown type included), decoded only for the
+library units the program binds.
 What is precompiled is everything up to the assembler — the std units
 are stored as **assembly text**, not machine code: the assembler still
 encodes the std bodies a program keeps, along with the program's own.
@@ -513,6 +516,60 @@ compile the compiler with the pack and compare with a build from source).
 A hello world compiles in 5.1 ms instead of 13.8 ms from source (the
 spliced build before units took 14.1 ms). The pack adds 186 KB to
 `ycc`.
+
+## Packages
+
+`ycc build [DIR]` (ycc.y `build_project`) builds a project — a
+directory with a `y.toml` (the manual's *Packages* section has the
+format). pkg.y reads the manifests and walks the dependency graph
+(`pk_load`): every package the project depends on, each after the ones
+it depends on, then the project's own `lib`; git dependencies are
+cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
+`pk_lock_write`), `vendor/NAME` winning when present. Each package is
+**its own unit**:
+
+- **Resolving**: a package's `lib` is resolved like a program
+  (`native_resolve_pk`), except that a bare `import NAME;` of one of
+  its own dependencies is not spliced but recorded (`Resolved.pkgs`),
+  and its project's `src` roots join the search path (`res_roots`).
+- **Labels**: package k (in graph order) numbers its uids and cells
+  from 5e9 + k·1e9 (`pkg_base`), above the std units.
+- **Names**: an importer keeps a package's names qualified:
+  `strip_ns` rewrites `json.parse` to the identifier `json.parse` when
+  `json` is a package the unit imports (`pkg_ns`), rather than dropping
+  the namespace, and `json.x = v` to an assignment to `json.x`. The
+  package's exports (`pkg_exports`: every top-level def and let, with
+  the companion cell of a string global) are bound in the importer under
+  those names (`unit_externs`), globals as `const` — read-only, so
+  `cannot assign to constant 'json.x'`. Their parameter defaults travel
+  along (`Unit.dfl`: `unit_dfl` encodes the literals, `lit_decode`
+  rebuilds them, `rename.rename_program_x` seeds them), so a call fills
+  in defaults and optional parameters as it does for a local def.
+- **Objects**: `compile_package` compiles with line markers, like a std
+  unit, so one object serves plain and `-g` builds. `unit_obj` writes it
+  to `build/obj/NAME.yo` — `ycc-unit 1`, its key, its name, then the
+  unit's fields as in the std pack — and `unit_unobj` takes it back only
+  under the same key and at its exact length. The key (`build_key`, a
+  two-lane hash, `pk_hash_*`) covers the compiler binary itself
+  (`pk_self_id`), the package's name and base, `--no-exec`, its resolved
+  text and origin map (so the paths the build saw), its std needs, and
+  the interface (`unit_iface`: exported names, labels, types, defaults)
+  of each package it imports: a body change recompiles that package
+  alone, an interface change its importers too.
+- **Linking**: each `[bin]` is resolved and compiled by `emit_program`
+  with the units it reaches (`build_reach`: the packages it imports,
+  through other packages too) and the std units all of them need.
+  `_start` runs the std units' inits, then each package's (dependencies
+  first), then the program's top level; it captures `argv` when a linked
+  package's code reads it. A program's `y_` def still overrides the
+  runtime's, and so does a package's: `y_` labels are global.
+
+Limits: a package's type aliases stay its own (an importer spells the
+type out); its globals are read-only to importers; objects are keyed by
+the paths the build saw, so building the same project from another
+directory compiles its packages again. `test/sh/test_pkg.sh` covers the
+format's every error, the graph, the cache, git and vendoring, and
+checks that the C copy builds the same bytes.
 
 ## Tree shaking
 

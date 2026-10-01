@@ -41,6 +41,7 @@ requires byte-identical binaries).
 | `src/y/elf.y`           | `src/c/elf.c`         | ELF writer                        |
 | `src/y/dwarf.y`         | `src/c/dwarf.c`       | `-g` DWARF line table             |
 | `src/y/ycc.y`           | `src/c/ycc.c`         | driver + `main`                   |
+| `src/y/pkg.y`           | `src/c/pkg.c`         | `ycc build`/`vendor`: y.toml, graph, git, y.lock, hashing; `exec` is fork + execve(`/bin/sh`, envp NULL) like std/exec.y, `syscall` openat/mkdir the libc calls |
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
 | `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack): their sources are native.y's `embed`, the C copy's `Y_EMBED` (rule 10) |
 | `src/y/std/io.y`, `net.y`, `struct.y`   | (stay Y)  | optional modules resolved **from disk** by `std_resolve` when a program imports them; not embedded |

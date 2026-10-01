@@ -120,9 +120,11 @@ Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
 Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
                    Yv *params, Yv *stmts, Yv *st);
 
-/* the module entry point (rename.y: export { rename_program }) */
+/* the module entry points (rename.y: export { rename_program,
+ * rename_program_x }) */
 Yv *rename_program(Yv *ast);
-Yv *rename_program_go(Yv *stmts, long line, long col);
+Yv *rename_program_x(Yv *ast, Yv *dfl);
+Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl);
 
 /* defaults, type aliases, match / slice-assign nodes */
 Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func);
