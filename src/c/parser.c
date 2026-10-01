@@ -1211,6 +1211,11 @@ Yv *lit_type_neg(Yv *node) {
     }
 }
 
+/* T? -- the type an optional parameter `name?: T` has in the body. */
+Yv *topt_of(Yv *t) {
+    return yr(2, "k", ys("topt"), "of", t);
+}
+
 // float when the literal has a fraction or an exponent (radix literals
 // like 0xE1 never do).
 Yv *num_lit_type(Yv *s) {
@@ -1265,8 +1270,11 @@ Yv *parse_func(Yv *toks, long p) {
     }
     Yv *names = yav(0);
     Yv *ptypes = yav(0);
-    // defs[i]: param i's default value (a literal), `void` when it has none
+    // defs[i]: param i's default value (a literal), `void` when it has none,
+    // `optarg` for an optional `name?: T` (none when left out, some(arg) when
+    // passed -- rename.y fills both in)
     Yv *defs = yav(0);
+    Yv *optname = ys("");
     if (!hbad && !is_punct(toks, pos, ys(")"))) {
         int go = 1;
         while (go) {
@@ -1281,6 +1289,23 @@ Yv *parse_func(Yv *toks, long p) {
                 Yv *nm = tv(toks, pos);
                 names = ya_push(names, nm);
                 pos = pos + 1;  // name
+                int isopt = 0;
+                if (is_op(toks, pos, ys("?"))) {
+                    isopt = 1;
+                    pos = pos + 1;
+                    if (!is_punct(toks, pos, ys(":"))) {
+                        derrs = ya_push(
+                            derrs,
+                            yr(4, "k", ys("err"), "msg",
+                               ys_cat(
+                                   ys_cat(ys_cat(
+                                              ys("optional parameter '"), nm),
+                                          ys("' needs a type ('")),
+                                   ys_cat(nm, ys("?: T')"))),
+                               "line", yv_long(tline(toks, pos)),
+                               "col", yv_long(tcol(toks, pos))));
+                    }
+                }
                 Yv *pt = yr(1, "k", ys("tnone"));
                 if (is_punct(toks, pos, ys(":"))) {
                     Yv *tr = parse_type_full(toks, pos + 1);
@@ -1327,9 +1352,38 @@ Yv *parse_func(Yv *toks, long p) {
                         }
                         ;
                     }
+                    if (isopt) {
+                        derrs = ya_push(
+                            derrs,
+                            yr(4, "k", ys("err"), "msg",
+                               ys_cat(ys_cat(
+                                          ys("optional parameter '"), nm),
+                                      ys("' cannot have a default (it is none when left out)")),
+                               "line", yv_long(tline(toks, pos)),
+                               "col", yv_long(tcol(toks, pos))));
+                    }
                     ;
                 } else {
                     ;
+                }
+                if (isopt) {
+                    if (!ys_eq_lit(yr_get(pt, "k"), "tnone")) {
+                        pt = topt_of(pt);
+                    }
+                    dv = yr(1, "k", ys("optarg"));
+                    optname = nm;
+                } else if (!ys_eq_lit(optname, "") &&
+                           ys_eq_lit(yr_get(dv, "k"), "void")) {
+                    derrs = ya_push(
+                        derrs,
+                        yr(4, "k", ys("err"), "msg",
+                           ys_cat(ys_cat(
+                                      ys_cat(
+                                          ys("required parameter '"), nm),
+                                      ys("' cannot follow optional parameter '")),
+                                  ys_cat(optname, ys("' (optional parameters come last)"))),
+                           "line", yv_long(tline(toks, pos)),
+                           "col", yv_long(tcol(toks, pos))));
                 }
                 ptypes = ya_push(ptypes, pt);
                 defs = ya_push(defs, dv);
@@ -1956,6 +2010,7 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
     Yv *tests = yav(0);
     Yv *thens = yav(0);
     Yv *covers = yav(0);
+    long nvals = 0;
     Yv *fallback = yr(1, "k", ys("void"));
     int has_wild = 0;
     long pos = bpos + 1;
@@ -1998,6 +2053,8 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
                 Yv *pc = yr_get(pr, "cover");
                 if (!ys_eq_lit(yr_get(pc, "k"), "tnone")) {
                     covers = ya_push(covers, pc);
+                } else {
+                    nvals = nvals + 1;
                 }
             }
             if (go) {
@@ -2013,7 +2070,7 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
             }
         }
     }
-    Yv *chain = block1(yr(5, "k", ys("matchend"), "e", yr(4, "k", ys("id"), "v", tmp, "line", yv_long(ln), "col", yv_long(cl)), "cover", covers, "line", yv_long(ln), "col", yv_long(cl)), ln, cl);
+    Yv *chain = block1(yr(6, "k", ys("matchend"), "e", yr(4, "k", ys("id"), "v", tmp, "line", yv_long(ln), "col", yv_long(cl)), "cover", covers, "vals", yv_long(nvals), "line", yv_long(ln), "col", yv_long(cl)), ln, cl);
     if (has_wild) {
         chain = block1(fallback, ln, cl);
     }

@@ -1214,9 +1214,14 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             let bl = infer(st, node.l);
             let br = infer(st, node.r);
             if (op == "+" && (bl.k == "tarr" || bl.k == "tarrfix")) {
-                // array `+` concatenates into a NEW heap array (types.y
-                // typeof_arith_arr) -- the element type survives.
-                { k: "tarr", of: bl.of }
+                // array `+` builds a NEW heap array (types.y
+                // typeof_arith_arr) -- the element type survives, except
+                // that `[T] + [[T]]` prepends the left one as an element.
+                if ((br.k == "tarr" || br.k == "tarrfix") && types.arr_plus_kind(bl, br) == "prepend") {
+                    { k: "tarr", of: br.of }
+                } else {
+                    { k: "tarr", of: bl.of }
+                }
             } else if (op == "+" && (br.k == "tarr" || br.k == "tarrfix")) {
                 { k: "tarr", of: br.of }
             } else if (op == "::") {
@@ -1369,6 +1374,9 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             if (node.key == "keys") { normnode({ k: "tarr", of: dt.key }) }
             else if (node.key == "vals") { normnode({ k: "tarr", of: dt.of }) }
             else { { k: "tunk" } }
+        } else if (dt.k == "tarr" || dt.k == "tarrfix" || dt.k == "tstr") {
+            // built-in properties (types.y typeof_prop; gen_prop)
+            if (node.key == "length") { { k: "tlong" } } else { normnode({ k: "tptr", to: dt.of }) }
         } else {
             { k: "tunk" }
         }
@@ -2009,8 +2017,9 @@ def gen(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env
     } else if (k == "array") {
         gen_array(st, node)
     } else if (k == "deref") {
+        let dw = ptr_width(infer(st, node.e));
         st = gen(st, node.e);
-        emit(st, "    mov (%rax), %rax")
+        if (dw == 1) { emit(st, "    movzbq (%rax), %rax") } else { emit(st, "    mov (%rax), %rax") }
     } else if (k == "bin") {
         gen_bin(st, node)
     } else if (k == "call") {
@@ -3215,16 +3224,20 @@ def gen_cons(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
 // Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
 // y_arr_cat copies both sides; the one-element side is built with the
 // ordinary array literal emitter, so `arr + v` evaluates v exactly once.
+// Two array operands concatenate unless types.arr_plus_kind says one of
+// them is an element of the other ([[T]] + [T], [T] + [[T]]).
 def gen_cat_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, lt: { k: str }, rt: { k: str }) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let ln = node.line;
     let cl = node.col;
     let lk: str = lt.k;
     let rk: str = rt.k;
+    let lisarr = lk == "tarr" || lk == "tarrfix";
+    let risarr = rk == "tarr" || rk == "tarrfix";
+    let how = "elem";
+    if (lisarr && risarr) { how = types.arr_plus_kind(lt, rt); 0; };
+    let larr = lisarr && how != "prepend";
     let esz = 8;
-    let larr = true;
-    if (lk == "tarr") { esz = arr_elem_bytes(lt); 0; }
-    else if (lk == "tarrfix") { esz = arr_elem_bytes(lt); 0; }
-    else { larr = false; esz = arr_elem_bytes(rt); 0; };
+    if (larr) { esz = arr_elem_bytes(lt); 0; } else { esz = arr_elem_bytes(rt); 0; };
     let one = { k: "array", elems: args1(node.r), line: ln, col: cl };
     if (larr) {
         0
@@ -3235,17 +3248,11 @@ def gen_cat_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     if (larr) {
         st = gen(st, node.l);
         st = emit(st, "    push %rax");
-        if (rk == "tarr") {
+        if (how == "cat") {
             st = gen(st, node.r);
             0
         } else {
-            if (rk == "tarrfix") {
-                st = gen(st, node.r);
-                0
-            } else {
-                st = gen_array_esz(st, one, esz);
-                0
-            };
+            st = gen_array_esz(st, one, esz);
             0
         };
         0
@@ -4533,9 +4540,11 @@ def gen_place_bind(tgt, t1: str, ln: long, cl: long) -> {k: str} {
 
 def gen_opassign_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     // In-place array forms. `*=` prepends one element. `+=` pushes one
-    // element — or, when the VALUE is an array, appends its elements one
-    // by one (its length is captured first, so `a += a` is safe). The
-    // checker enforces matching element types (types.y opassign_check).
+    // element — or, when the VALUE is an array of the same element type
+    // (types.arr_plus_kind "cat"), appends its elements one by one (its
+    // length is captured first, so `a += a` is safe); `[[T]] += [T]`
+    // pushes the [T] whole. The checker enforces matching element types
+    // (types.y opassign_check).
     let tgt = node.tgt;
     let op = node.op;
     let v = node.v;
@@ -4552,7 +4561,7 @@ def gen_opassign_arr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, l
         0
     } else {
         let vt = infer(st, v);
-        if (vt.k == "tarr" || vt.k == "tarrfix") {
+        if ((vt.k == "tarr" || vt.k == "tarrfix") && types.arr_plus_kind(tt, vt) == "cat") {
             mode = "append";
             0
         } else {
@@ -4745,6 +4754,13 @@ def arr_elem_bytes(t) -> long {
     else { 8 }
 };
 
+// Width of what a pointer of static type `t` addresses: a *byte points into
+// a packed [byte] block (or at a byte local), so `*p` and `*p = v` move one
+// byte; every other pointee is a full 8-byte slot.
+def ptr_width(t) -> long {
+    if (t.k == "tptr") { elem_bytes(t.to) } else { 8 }
+};
+
 // Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
 // the index register, `dst` the result. Headers are {len, cap, data} with
 // the elements in a separate block, so the data pointer rides through %dst.
@@ -4803,6 +4819,27 @@ def gen_dot(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
     let dobj = node.obj;
     let dkey = node.key;
     let t = infer(st, dobj);
+    let tk = t.k;
+    if (tk == "tarr" || tk == "tarrfix" || tk == "tstr") {
+        gen_prop(st, dobj, dkey, node.line, node.col)
+    } else {
+        gen_dot_rec(st, dobj, dkey, t)
+    }
+};
+
+// Built-in properties (types.y typeof_prop): `.length` is len(x); `.ptr`
+// is the array header's data word — the element block's address.
+def gen_prop(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, obj, key: str, line: long, col: long) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (key == "length") {
+        gen_len(st, n_call1("len", obj, line, col))
+    } else {
+        st = gen(st, obj);
+        emit(st, "    mov 16(%rax), %rax")
+    }
+};
+
+// Record field read; `t` is the record's static type.
+def gen_dot_rec(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, dobj, dkey: str, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let idx = rec_field_idx(t, dkey);
     if (idx < 0) {
         // unknown static shape ({k}-holes, bare params): dynamic field
@@ -5271,11 +5308,12 @@ def gen_write_bytes(st: { out: [str], rodata: [[str]], uid: long, fuid: long, lo
 };
 
 def gen_store(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let sw = ptr_width(infer(st, node.p));
     st = gen(st, node.p);
     st = emit(st, "    push %rax");
     st = gen(st, node.v);
     st = emit(st, "    pop %rcx");
-    emit(st, "    mov %rax, (%rcx)")
+    if (sw == 1) { emit(st, "    movb %al, (%rcx)") } else { emit(st, "    mov %rax, (%rcx)") }
 };
 
 // ── functions ──────────────────────────────────────────────────────────

@@ -177,11 +177,20 @@ code calls it by fixed label.
 
 - `arr + arr2` → a NEW array, `arr1 ++ arr2` — the operands untouched.
   `arr + elem` / `elem + arr` → a new array with one element added
-  (element types must match).
-- `arr += v` → **in place**: an array value appends its elements
-  (element types must match); anything else pushes one element.
+  (element types must match). An array **is** an element when the other
+  side holds arrays of its type: `[[T]] + [T]` appends it whole and
+  `[T] + [[T]]` prepends it; `[[T]] + [[T]]` concatenates.
+- `arr += v` → **in place**, the same reading as `+`: an array whose
+  elements have arr's element type appends them; anything else (a `[T]`
+  on a `[[T]]` included) pushes one element. Element types must match.
 - `arr *= v` → **in place**: prepends one item (element type must match).
 - `arr = arr2` → both names alias one array.
+- `arr.length` (also `str.length`) is `len(arr)`; `arr.ptr` is a `*T` to
+  the first element (arrays only — string bytes may live in read-only
+  `.rodata`).
+- `const x = v` cannot be rebound (`=`, `op=`, `++`/`--` are type
+  errors), but what it refers to stays mutable: `+=`/`*=` on a const
+  array, element and field stores all work (JS `const`).
 - A **fixed** `[T; N]` cannot grow: `+=` / `*=` on it is a type error
   ("its length is part of its type; use `[T]` instead").
 - `x++`, `++x`, `x--`, `--x` and `x op= e` (`+= -= *= /= %=`) evaluate

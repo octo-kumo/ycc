@@ -603,6 +603,28 @@ def expect_type(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
     }
 };
 
+// expect_type for a call argument. some(v) passed for a T? -- which is what
+// the argument of an optional parameter `b?: T` becomes -- is reported as
+// v against T: "expected long, got long?", not "expected long?, got long??".
+def expect_arg(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, got, want, arg, what: str, line: long, col: long) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } {
+    if (tcompat(got, want)) {
+        st
+    } else if (got.k == "topt" && want.k == "topt" && is_some_call(arg)) {
+        fail(st, what + ": expected " + tstr(want.of) + ", got " + tstr(got.of), line, col)
+    } else {
+        fail(st, what + ": expected " + tstr(want) + ", got " + tstr(got), line, col)
+    }
+};
+
+def is_some_call(n) -> bool {
+    if (n.k == "call") {
+        let c = n.callee;
+        c.k == "id" && c.v == "some"
+    } else {
+        false
+    }
+};
+
 // Binary-operator result typing. Split out of the `bin` arm so the operator
 // table there stays a flat `op == "..."` dispatch and each operator's rule
 // lives in one named place.
@@ -659,8 +681,15 @@ def typeof_arith_arr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, f
         { typ: t_unk(), st: st }
     } else if (lk == "tarr" || lk == "tarrfix") {
         if (rt.k == "tarr" || rt.k == "tarrfix") {
-            st = expect_type(st, rt.of, lt.of, "'+' concatenated elements", line, col);
-            { typ: { k: "tarr", of: lt.of }, st: st }
+            let how = arr_plus_kind(lt, rt);
+            if (how == "append") {
+                { typ: { k: "tarr", of: lt.of }, st: st }
+            } else if (how == "prepend") {
+                { typ: { k: "tarr", of: rt.of }, st: st }
+            } else {
+                st = expect_type(st, rt.of, lt.of, "'+' concatenated elements", line, col);
+                { typ: { k: "tarr", of: lt.of }, st: st }
+            }
         } else {
             st = expect_type(st, rt, lt.of, "'+' element", line, col);
             { typ: { k: "tarr", of: lt.of }, st: st }
@@ -669,6 +698,22 @@ def typeof_arith_arr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, f
         st = expect_type(st, lt, rt.of, "'+' element", line, col);
         { typ: { k: "tarr", of: rt.of }, st: st }
     }
+};
+
+// How `l + r` combines two ARRAY operands -- the one rule the checker and
+// the emitter (native.y infer, gen_cat_arr, gen_opassign_arr) share:
+//   "cat"      the element types match: both element lists are spliced
+//   "append"   r is ONE element of l   ([[T]] + [T] -> [[T]])
+//   "prepend"  l is ONE element of r   ([T] + [[T]] -> [[T]])
+// Concatenation wins whenever it type-checks, so an unknown element type
+// keeps the long-standing meaning; for known types at most one rule fits
+// (a type is never its own element type). "cat" is also the answer when
+// nothing fits, so the caller's concatenation check reports the mismatch.
+def arr_plus_kind(lt, rt) -> str {
+    if (tcompat(rt.of, lt.of)) { "cat" }
+    else if (tcompat(rt, lt.of)) { "append" }
+    else if (tcompat(lt, rt.of)) { "prepend" }
+    else { "cat" }
 };
 
 // `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
@@ -1140,6 +1185,9 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         } else if (got.kind == "func" || got.kind == "intrinsic") {
             st = fail(st, "cannot assign to function '" + disp(node.name) + "'", node.line, node.col);
             { typ: t_unk(), st: st }
+        } else if (got.kind == "const") {
+            st = fail(st, "cannot assign to constant '" + disp(node.name) + "'", node.line, node.col);
+            { typ: got.typ, st: st }
         } else if (got.typ.k == "tarrfix") {
             st = check_visible(st, got, node.name, node.line, node.col);
             st = expect_type(st, r.typ, got.typ, "assignment to '" + disp(node.name) + "'", node.line, node.col);
@@ -1154,6 +1202,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         // concatenate, so it is a type error instead.
         let t = typeof_expr(st, node.tgt);
         st = t.st;
+        st = const_check(st, node.tgt, t.typ, node.op, node.line, node.col);
         incdec_check(st, node, t.typ)
     } else if (k == "opassign") {
         // `x op= e`: the rules live in opassign_check.
@@ -1161,6 +1210,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         st = t.st;
         let v = typeof_expr(st, node.v);
         st = v.st;
+        st = const_check(st, node.tgt, t.typ, node.op + "=", node.line, node.col);
         opassign_check(st, node, t.typ, v.typ)
     } else if (k == "store") {
         let p = typeof_expr(st, node.p);
@@ -1344,6 +1394,8 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             { typ: t_unk(), st: st }
         } else if (r.typ.k == "tparams") {
             { typ: t_unk(), st: st }
+        } else if (r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "tstr") {
+            typeof_prop(st, r.typ, dkey, node.line, node.col)
         } else {
             st = fail(st, "cannot read field '" + node.key + "' of " + tstr(r.typ) + " (need a record)", node.line, node.col);
             { typ: t_unk(), st: st }
@@ -1725,6 +1777,8 @@ def typeof_narrow(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdep
 
 // The fall-through of a match without `_`: every member of the subject's
 // union (or the subject's record type) must be covered by a type arm.
+// Value arms (`({f: 1}) x`, `1`, `"s"`) never count: they match only the
+// values they name, so when the match has any (`vals`), the error says so.
 // Its type is the poison tunk, so it never disagrees with the arms.
 def typeof_matchend(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, node) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     let r = typeof_expr(st, node.e);
@@ -1732,6 +1786,8 @@ def typeof_matchend(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fd
     let s = r.typ;
     let sk: str = s.k;
     let cover: [{k: str}] = node.cover;
+    let hint = "";
+    if (node.vals > 0) { hint = "; value patterns match only the values they name and cover no type"; 0; };
     if (sk == "tunk") {
         0
     } else if (sk == "tunion") {
@@ -1743,14 +1799,14 @@ def typeof_matchend(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fd
             i = i + 1;
         };
         if (len(missing) > 0) {
-            st = fail(st, "non-exhaustive match: nothing matches " + join(missing, ", ") + " (add an arm or '_')", node.line, node.col);
+            st = fail(st, "non-exhaustive match: nothing matches " + join(missing, ", ") + " (add an arm or '_'" + hint + ")", node.line, node.col);
             0
         } else { 0 };
         0
     } else if (sk == "trec" && covered(s, cover)) {
         0
     } else {
-        st = fail(st, "non-exhaustive match on " + tstr(s) + " (add a '_' arm)", node.line, node.col);
+        st = fail(st, "non-exhaustive match on " + tstr(s) + " (add a '_' arm" + hint + ")", node.line, node.col);
         0
     };
     { typ: t_unk(), st: st }
@@ -1820,6 +1876,39 @@ def typeof_sliceassign(st: { bindings: [{ name: str, typ: { k: str }, kind: str,
     { typ: { k: "tvoid" }, st: st }
 };
 
+// Built-in properties: `.length` of an array or a str is len(x); `.ptr` of
+// an array is the address of element 0 as a *T -- the data block's address,
+// so it is valid for an empty array too, where &a[0] traps. A str has no
+// `.ptr`: its bytes can live in read-only .rodata, where a store through
+// the pointer would fault.
+def typeof_prop(st, t, key: str, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    if (key == "length") {
+        { typ: { k: "tlong" }, st: st }
+    } else if (key == "ptr" && t.k != "tstr") {
+        { typ: { k: "tptr", to: t.of }, st: st }
+    } else {
+        let have = "'.length' and '.ptr'";
+        if (t.k == "tstr") { have = "'.length'"; 0; };
+        st = fail(st, tstr(t) + " has no property '" + key + "' (it has " + have + ")", line, col);
+        { typ: t_unk(), st: st }
+    }
+};
+
+// `const` fixes the BINDING, not the value (as in JS): `=`, `++`/`--` and
+// the `op=` forms that rebind (numbers, strings) are errors on a const name,
+// while the in-place array forms (`arr += v`, `arr *= v`) and element or
+// field writes (`a[i] = v`, `r.f = v`) still mutate the shared value. Plain
+// `=` is refused in the `assign` arm itself; this covers the other two.
+def const_check(st, tgt, tt: { k: str }, op: str, line: long, col: long) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } {
+    if (tgt.k == "id") {
+        let got = lookup(st.bindings, tgt.v);
+        let inplace = tt.k == "tarr" || tt.k == "tarrfix" || tt.k == "tunk" || tt.k == "tnone";
+        if (got.kind == "const" && !inplace) {
+            fail(st, "cannot assign to constant '" + disp(tgt.v) + "' ('" + op + "')", line, col)
+        } else { st }
+    } else { st }
+};
+
 // ++/-- target rule: numbers (long/byte/float) only.
 def incdec_check(st, node, tt: { k: str }) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     let op = node.op;
@@ -1837,7 +1926,8 @@ def incdec_check(st, node, tt: { k: str }) -> { typ: { k: str }, st: { bindings:
 //   numbers  -> the arithmetic family (+ - * / %), result the target type
 //   str      -> `+=` concatenates; the rest are errors
 //   arrays   -> in place only: `+=` pushes one element (or appends another
-//               array of the same type), `*=` prepends one element. `+`
+//               array of the same type; `[[T]] += [T]` pushes it whole),
+//               `*=` prepends one element. `+`
 //               itself is the copy form; `-=`, `/=`, `%=` are errors.
 // The result is always the target's type (the new value).
 def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
@@ -1854,10 +1944,16 @@ def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str 
             { typ: tt, st: st }
         } else if (op == "+") {
             if (vt.k == "tarr" || vt.k == "tarrfix") {
-                // `arr += arr2` appends arr2's ELEMENTS in place, so the
-                // element types must match (homogeneity).
-                st = expect_type(st, vt.of, tt.of, "'+=' appended elements", node.line, node.col);
-                { typ: tt, st: st }
+                if (arr_plus_kind(tt, vt) == "append") {
+                    // `[[T]] += [T]` pushes the array as ONE element (the
+                    // same rule as `+`, see arr_plus_kind).
+                    { typ: tt, st: st }
+                } else {
+                    // `arr += arr2` appends arr2's ELEMENTS in place, so
+                    // the element types must match (homogeneity).
+                    st = expect_type(st, vt.of, tt.of, "'+=' appended elements", node.line, node.col);
+                    { typ: tt, st: st }
+                }
             } else if (vt.k == "tunk" || vt.k == "tnone") {
                 { typ: tt, st: st }
             } else {
@@ -2414,7 +2510,7 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                             st = fail(st, "'" + disp(name) + "' arg " + tostring(i) + ": cannot pass a void value", node.line, node.col);
                             0
                         } else {
-                            st = expect_type(st, r.typ, cargs_ft[i], "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
+                            st = expect_arg(st, r.typ, cargs_ft[i], cargs[i], "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
                             0
                         };
                         i = i + 1;
@@ -2449,6 +2545,9 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         // let/const. A literal def on the right names a function WITHOUT
         // going through typeof_expr (a bare func value is only legal bound).
         // Same for the `[v; n]` array literal (binds n frame slots).
+        // A const binds as kind "const": const_check refuses to rebind it.
+        let bk = "local";
+        if (node.kind == "const") { bk = "const"; 0; };
         if (node.v.k == "func") {
             let fr = typeof_def(st, node.name, node.v, node.line, node.col);
             st = fr.st;
@@ -2462,7 +2561,7 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
             let r = typeof_expr(st, node.v);
             st = r.st;
             if (r.typ.k == "tunk") {
-                st = st_bind(st, node.name, t_unk(), "local");
+                st = st_bind(st, node.name, t_unk(), bk);
                 { typ: t_unk(), st: st }
             } else {
                 let at = r.typ;
@@ -2476,7 +2575,7 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     at = node.typ;
                     0
                 } else { 0; };
-                st = st_bind(st, node.name, at, "local");
+                st = st_bind(st, node.name, at, bk);
                 { typ: at, st: st }
             }
         } else {
@@ -2530,7 +2629,7 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 t = t_unk();
                 0
             } else { 0; };
-            st = st_bind(st, node.name, t, "local");
+            st = st_bind(st, node.name, t, bk);
             { typ: t, st: st }
         }
     }

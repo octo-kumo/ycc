@@ -194,10 +194,11 @@ Yv *rn_find_defaults(Yv *st, Yv *name) {
 }
 
 /* args + the defaults of the missing trailing parameters -- only when
- * every one of them has a default. */
-Yv *rn_fill_defaults(Yv *vals, Yv *args) {
+ * every one of them has a default. An optional parameter (`b?: T`, its
+ * default marked `optarg`) gets some(arg) when the call passes it, none when not. */
+Yv *rn_fill_defaults(Yv *vals, Yv *args, long line, long col) {
     long n = yv_len(args);
-    if (n >= yv_len(vals)) {
+    if (yv_len(vals) == 0) {
         return args;
     } else {
         int ok = 1;
@@ -208,21 +209,42 @@ Yv *rn_fill_defaults(Yv *vals, Yv *args) {
             }
             i = i + 1;
         }
+        Yv *out = yav(0);
+        long j = 0;
+        while (j < n) {
+            if (j < yv_len(vals) && rn_is_optarg(ya_get(vals, j))) {
+                Yv *one = yav(0);
+                one = ya_push(one, ya_get(args, j));
+                out = ya_push(
+                    out,
+                    yr(5, "k", ys("call"), "callee",
+                       yr(4, "k", ys("id"), "v", ys("some"), "line",
+                          yv_long(line), "col", yv_long(col)),
+                       "args", one, "line", yv_long(line), "col",
+                       yv_long(col)));
+            } else {
+                out = ya_push(out, ya_get(args, j));
+            }
+            j = j + 1;
+        }
         if (ok) {
-            Yv *out = yav(0);
-            /* Y: `out += args` — one push per element (yv.h has no `+=`
-               helper, so the array form is spelled out here). */
-            for (long a = 0; a < n; a++) out = ya_push(out, ya_get(args, a));
-            long j = n;
             while (j < yv_len(vals)) {
-                out = ya_push(out, ya_get(vals, j));
+                if (rn_is_optarg(ya_get(vals, j))) {
+                    out = ya_push(
+                        out, yr(4, "k", ys("id"), "v", ys("none"), "line",
+                                yv_long(line), "col", yv_long(col)));
+                } else {
+                    out = ya_push(out, ya_get(vals, j));
+                }
                 j = j + 1;
             }
-            return out;
-        } else {
-            return args;
         }
+        return out;
     }
+}
+
+int rn_is_optarg(Yv *d) {
+    return ys_eq_lit(yr_get(d, "k"), "optarg");
 }
 
 /* ── type aliases ─────────────────────────────────────────────────────────
@@ -687,9 +709,10 @@ Yv *rn_typed_e(Yv *node, Yv *st) {
 Yv *rn_matchend(Yv *node, Yv *st) {
     Yv *e = rn_node(yr_get(node, "e"), st);
     return yr(2, "st", yr_get(e, "st"), "node",
-              yr(5, "k", ys("matchend"), "e", yr_get(e, "node"), "cover",
-                 rn_types(yr_get(e, "st"), yr_get(node, "cover")), "line",
-                 yr_get(node, "line"), "col", yr_get(node, "col")));
+              yr(6, "k", ys("matchend"), "e", yr_get(e, "node"), "cover",
+                 rn_types(yr_get(e, "st"), yr_get(node, "cover")), "vals",
+                 yr_get(node, "vals"), "line", yr_get(node, "line"), "col",
+                 yr_get(node, "col")));
 }
 
 Yv *rn_sliceassign(Yv *node, Yv *st) {
@@ -740,7 +763,9 @@ Yv *rn_call(Yv *node, Yv *st) {
     Yv *cn = yr_get(c, "node");
     Yv *args = yr_get(a, "nodes");
     if (ys_eq_lit(yr_get(cn, "k"), "id")) {
-        args = rn_fill_defaults(rn_find_defaults(yr_get(a, "st"), yr_get(cn, "v")), args);
+        args = rn_fill_defaults(rn_find_defaults(yr_get(a, "st"), yr_get(cn, "v")),
+                                args, yv_l(yr_get(node, "line")),
+                                yv_l(yr_get(node, "col")));
     }
     return yr(2, "st", yr_get(a, "st"), "node",
               yr(5, "k", ys("call"), "callee", cn, "args",

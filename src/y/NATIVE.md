@@ -139,11 +139,14 @@ involved.
 ## Pointers, stack arrays, heap arrays, options
 
 - Syntax: `&x` address-of a local/param/fixed-array, `&a[i]` element address,
-  `*p` load, `*p = v` store, `a[i]` / `a[i] = v`, `len(a)`,
+  `*p` load, `*p = v` store, `a[i]` / `a[i] = v`, `len(a)`, `a.length`,
+  `a.ptr` (a `*T` to element 0; arrays only), `s.length`,
   `let buf = [v; n]`, `[v, ...]` (heap), `[T; N]` / `[T]` types,
   `T?` option types (`int` is `long`), `some(v)` / `none` / `is_some` / `unwrap`.
 - Types: `*T`, `[T; N]`, `[T]`, `T?`. `&x : *T`, `&a : *T` (fixed) / `&a[i] : *T`.
-  `str` flows into `*T`; `none` unifies with any `T?`.
+  `str` flows into `*T`; `none` unifies with any `T?`. A load or store through
+  a `*T` moves `T`'s width: one byte for a `*byte` (packed `[byte]`), 8 bytes
+  for everything else.
 - Fixed and heap arrays are both first-class reference values: assign, pass,
   return, alias. The difference is only the type: `[T; N]` carries its length
   statically and rejects `+=`/`*=` (growing it would break the type), while
@@ -198,6 +201,16 @@ All of these are lowered early, so the checker and emitter see little new:
 - **Default parameters** `def f(n, acc = 1)`: the default must be a
   literal and types an unannotated parameter; rename.y fills omitted
   trailing arguments of direct calls.
+- **Optional parameters** `def f(a: long, b?: long)`: the body sees `b` as
+  a `long?`; a direct call passes a plain `long` (rename.y wraps it in
+  `some`) or leaves it out (`none`). Passing an option is a type error
+  (that is what `b: long?` is for), and so is a required parameter after
+  an optional one; defaults may mix with them.
+- **`const x = v`** binds like `let` but the checker rejects rebinding it
+  (`=`, `op=`, `++`/`--`); the value it names stays mutable in place.
+- **Properties** `a.length` / `s.length` (= `len`) and `a.ptr` (`*T` to
+  element 0, arrays only) are checked in types.y (`typeof_prop`) and
+  emitted by `gen_prop`.
 - **Tail calls** recycle the frame for `self(...)` and for a call naming
   the function being emitted.
 - **`type A = T`** aliases are resolved by rename.y (scoped to their block,
@@ -214,7 +227,9 @@ All of these are lowered early, so the checker and emitter see little new:
   record patterns `{f: v} x` / `({f: v}) x` (fields equal to values) and
   literals (`1`, `"s"`, `c'a'`, `true`, `none`, `-2`, `(expr)`). Arms follow
   the `if` law. Without `_`, every union member must be covered by a type
-  arm or the match is rejected as non-exhaustive.
+  arm or the match is rejected as non-exhaustive. A value pattern (a
+  literal, or a record pattern like `({f: 10}) x`) matches only the values
+  it names, so it never counts as covering a member — the error says so.
 - **Strings**: `s[i]` is the `byte` at i (trapped out of bounds), `s[lo:hi]`
   the substring (half-open, clamped). **`c'a'`** is a `byte` literal.
 - **Slice assignment** `a[lo:hi] = b` copies b's elements into that range;

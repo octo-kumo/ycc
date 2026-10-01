@@ -127,7 +127,8 @@ Yv *rename_program_go(Yv *stmts, long line, long col);
 /* defaults, type aliases, match / slice-assign nodes */
 Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func);
 Yv *rn_find_defaults(Yv *st, Yv *name);
-Yv *rn_fill_defaults(Yv *vals, Yv *args);
+Yv *rn_fill_defaults(Yv *vals, Yv *args, long line, long col);
+int rn_is_optarg(Yv *d);
 Yv *rn_type(Yv *st, Yv *t);
 Yv *rn_types(Yv *st, Yv *ts);
 Yv *rn_type_go(Yv *st, Yv *t, long depth);

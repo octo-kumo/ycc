@@ -53,6 +53,7 @@ Yv *check_program(Yv *ast);
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
 Yv *narrow_type(Yv *s, Yv *t);
 Yv *type_names(Yv *t);
+Yv *arr_plus_kind(Yv *lt, Yv *rt);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
 /* src/y/std/prelude.y */
@@ -251,12 +252,15 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty);
 Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s);
 long elem_bytes(Yv *t);
 long arr_elem_bytes(Yv *t);
+long ptr_width(Yv *t);
 Yv *elem_load(long esz, Yv *base, Yv *idx, Yv *dst);
 Yv *elem_store_rdx(long esz, Yv *base, Yv *idx);
 Yv *elem_store_rdx_const(long esz, Yv *base, long k);
 long arr_alloc_size(long esz, long n);
 long arr_header_size(void);
 Yv *gen_dot(Yv *st, Yv *node);
+Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col);
+Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t);
 long rec_field_idx(Yv *t, Yv *key);
 Yv *gen_array(Yv *st, Yv *node);
 Yv *gen_array_esz(Yv *st, Yv *node, long esz);
@@ -1786,9 +1790,16 @@ Yv *infer(Yv *st, Yv *node) {
             if (ys_eq_lit(op, "+") &&
                 (ys_eq_lit(yr_get(bl, "k"), "tarr") ||
                  ys_eq_lit(yr_get(bl, "k"), "tarrfix"))) {
-                /* array `+` concatenates into a NEW heap array (types.y
-                 * typeof_arith_arr) -- the element type survives. */
-                return yr(2, "k", ys("tarr"), "of", yr_get(bl, "of"));
+                /* array `+` builds a NEW heap array (types.y
+                 * typeof_arith_arr) -- the element type survives, except
+                 * that `[T] + [[T]]` prepends the left one as an element. */
+                if ((ys_eq_lit(yr_get(br, "k"), "tarr") ||
+                     ys_eq_lit(yr_get(br, "k"), "tarrfix")) &&
+                    ys_eq_lit(arr_plus_kind(bl, br), "prepend")) {
+                    return yr(2, "k", ys("tarr"), "of", yr_get(br, "of"));
+                } else {
+                    return yr(2, "k", ys("tarr"), "of", yr_get(bl, "of"));
+                }
             } else if (ys_eq_lit(op, "+") &&
                 (ys_eq_lit(yr_get(br, "k"), "tarr") ||
                  ys_eq_lit(yr_get(br, "k"), "tarrfix"))) {
@@ -1967,6 +1978,16 @@ Yv *infer(Yv *st, Yv *node) {
             if (ys_eq_lit(yr_get(node, "key"), "keys")) { return normnode(yr(2, "k", ys("tarr"), "of", yr_get(dt, "key"))); }
             else if (ys_eq_lit(yr_get(node, "key"), "vals")) { return normnode(yr(2, "k", ys("tarr"), "of", yr_get(dt, "of"))); }
             else { return yr(1, "k", ys("tunk")); }
+        } else if (ys_eq_lit(yr_get(dt, "k"), "tarr") ||
+                   ys_eq_lit(yr_get(dt, "k"), "tarrfix") ||
+                   ys_eq_lit(yr_get(dt, "k"), "tstr")) {
+            /* built-in properties (types.y typeof_prop; gen_prop) */
+            if (ys_eq_lit(yr_get(node, "key"), "length")) {
+                return yr(1, "k", ys("tlong"));
+            } else {
+                return normnode(
+                    yr(2, "k", ys("tptr"), "to", yr_get(dt, "of")));
+            }
         } else {
             return yr(1, "k", ys("tunk"));
         }
@@ -2685,8 +2706,13 @@ Yv *gen(Yv *st, Yv *node) {
     } else if (ys_eq_lit(k, "array")) {
         return gen_array(st, node);
     } else if (ys_eq_lit(k, "deref")) {
+        long dw = ptr_width(infer(st, yr_get(node, "e")));
         st = gen(st, yr_get(node, "e"));
-        return emit(st, ys("    mov (%rax), %rax"));
+        if (dw == 1) {
+            return emit(st, ys("    movzbq (%rax), %rax"));
+        } else {
+            return emit(st, ys("    mov (%rax), %rax"));
+        }
     } else if (ys_eq_lit(k, "bin")) {
         return gen_bin(st, node);
     } else if (ys_eq_lit(k, "call")) {
@@ -4018,24 +4044,26 @@ Yv *gen_cons(Yv *st, Yv *node) {
 
 /* Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
  * y_arr_cat copies both sides; the one-element side is built with the
- * ordinary array literal emitter, so `arr + v` evaluates v exactly once. */
+ * ordinary array literal emitter, so `arr + v` evaluates v exactly once.
+ * Two array operands concatenate unless types.arr_plus_kind says one of
+ * them is an element of the other ([[T]] + [T], [T] + [[T]]). */
 Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     Yv *ln = yr_get(node, "line");
     Yv *cl = yr_get(node, "col");
     Yv *lk = yr_get(lt, "k");
     Yv *rk = yr_get(rt, "k");
+    int lisarr = ys_eq_lit(lk, "tarr") || ys_eq_lit(lk, "tarrfix");
+    int risarr = ys_eq_lit(rk, "tarr") || ys_eq_lit(rk, "tarrfix");
+    Yv *how = ys("elem");
+    if (lisarr && risarr) {
+        how = arr_plus_kind(lt, rt);
+    }
+    int larr = lisarr && !ys_eq_lit(how, "prepend");
     long esz = 8;
-    int larr = 1;
-    if (ys_eq_lit(lk, "tarr")) {
+    if (larr) {
         esz = arr_elem_bytes(lt);
-        ;
-    } else if (ys_eq_lit(lk, "tarrfix")) {
-        esz = arr_elem_bytes(lt);
-        ;
     } else {
-        larr = 0;
         esz = arr_elem_bytes(rt);
-        ;
     }
     Yv *one = yr(4, "k", ys("array"), "elems", args1(yr_get(node, "r")), "line",
                  ln, "col", cl);
@@ -4049,25 +4077,15 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     if (larr) {
         st = gen(st, yr_get(node, "l"));
         st = emit(st, ys("    push %rax"));
-        if (ys_eq_lit(rk, "tarr")) {
+        if (ys_eq_lit(how, "cat")) {
             st = gen(st, yr_get(node, "r"));
-            ;
         } else {
-            if (ys_eq_lit(rk, "tarrfix")) {
-                st = gen(st, yr_get(node, "r"));
-                ;
-            } else {
-                st = gen_array_esz(st, one, esz);
-                ;
-            }
-            ;
+            st = gen_array_esz(st, one, esz);
         }
-        ;
     } else {
         st = gen_array_esz(st, one, esz);
         st = emit(st, ys("    push %rax"));
         st = gen(st, yr_get(node, "r"));
-        ;
     }
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(esz)), ys(", %rax")));
@@ -5639,9 +5657,11 @@ Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl) {
 
 Yv *gen_opassign_arr(Yv *st, Yv *node) {
     /* In-place array forms. `*=` prepends one element. `+=` pushes one
-     * element — or, when the VALUE is an array, appends its elements one
-     * by one (its length is captured first, so `a += a` is safe). The
-     * checker enforces matching element types (types.y opassign_check). */
+     * element — or, when the VALUE is an array of the same element type
+     * (types.arr_plus_kind "cat"), appends its elements one by one (its
+     * length is captured first, so `a += a` is safe); `[[T]] += [T]`
+     * pushes the [T] whole. The checker enforces matching element types
+     * (types.y opassign_check). */
     Yv *tgt = yr_get(node, "tgt");
     Yv *op = yr_get(node, "op");
     Yv *v = yr_get(node, "v");
@@ -5659,14 +5679,11 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
         ;
     } else {
         Yv *vt = infer(st, v);
-        if (ys_eq_lit(yr_get(vt, "k"), "tarr") ||
-            ys_eq_lit(yr_get(vt, "k"), "tarrfix")) {
+        if ((ys_eq_lit(yr_get(vt, "k"), "tarr") ||
+             ys_eq_lit(yr_get(vt, "k"), "tarrfix")) &&
+            ys_eq_lit(arr_plus_kind(tt, vt), "cat")) {
             mode = ys("append");
-            ;
-        } else {
-            ;
         }
-        ;
     }
     if (ys_eq_lit(mode, "append")) {
         /* { let tv = v; let ti = 0; let tn = len(tv);
@@ -5914,6 +5931,17 @@ long arr_elem_bytes(Yv *t) {
     }
 }
 
+/* Width of what a pointer of static type `t` addresses: a *byte points into
+ * a packed [byte] block (or at a byte local), so `*p` and `*p = v` move one
+ * byte; every other pointee is a full 8-byte slot. */
+long ptr_width(Yv *t) {
+    if (ys_eq_lit(yr_get(t, "k"), "tptr")) {
+        return elem_bytes(yr_get(t, "to"));
+    } else {
+        return 8;
+    }
+}
+
 /* Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
  * the index register, `dst` the result. Headers are {len, cap, data} with
  * the elements in a separate block, so the data pointer rides through %dst. */
@@ -5994,6 +6022,29 @@ Yv *gen_dot(Yv *st, Yv *node) {
     Yv *dobj = yr_get(node, "obj");
     Yv *dkey = yr_get(node, "key");
     Yv *t = infer(st, dobj);
+    Yv *tk = yr_get(t, "k");
+    if (ys_eq_lit(tk, "tarr") || ys_eq_lit(tk, "tarrfix") ||
+        ys_eq_lit(tk, "tstr")) {
+        return gen_prop(st, dobj, dkey, yv_l(yr_get(node, "line")),
+                        yv_l(yr_get(node, "col")));
+    } else {
+        return gen_dot_rec(st, dobj, dkey, t);
+    }
+}
+
+/* Built-in properties (types.y typeof_prop): `.length` is len(x); `.ptr`
+ * is the array header's data word -- the element block's address. */
+Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
+    if (ys_eq_lit(key, "length")) {
+        return gen_len(st, n_call1(ys("len"), obj, line, col));
+    } else {
+        st = gen(st, obj);
+        return emit(st, ys("    mov 16(%rax), %rax"));
+    }
+}
+
+/* Record field read; `t` is the record's static type. */
+Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
     long idx = rec_field_idx(t, dkey);
     if (idx < 0) {
         /* unknown static shape ({k}-holes, bare params): dynamic field
@@ -6499,11 +6550,16 @@ Yv *gen_write_bytes(Yv *st, Yv *node) {
 }
 
 Yv *gen_store(Yv *st, Yv *node) {
+    long sw = ptr_width(infer(st, yr_get(node, "p")));
     st = gen(st, yr_get(node, "p"));
     st = emit(st, ys("    push %rax"));
     st = gen(st, yr_get(node, "v"));
     st = emit(st, ys("    pop %rcx"));
-    return emit(st, ys("    mov %rax, (%rcx)"));
+    if (sw == 1) {
+        return emit(st, ys("    movb %al, (%rcx)"));
+    } else {
+        return emit(st, ys("    mov %rax, (%rcx)"));
+    }
 }
 
 /* ── functions ──────────────────────────────────────────────────────────

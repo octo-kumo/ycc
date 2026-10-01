@@ -1,7 +1,6 @@
-// expect-error: appended elements
-// Arrays are homogeneous: `rows += [3]` would splice longs into a
-// [[long]] — under += an array VALUE appends its elements, so the
-// element types must match. Wrap it to add a whole row instead.
+// expect-error: '+=' appended elements: expected [long], got str
+// Arrays are homogeneous: on a [[long]], `+=` takes a row ([long], pushed
+// whole) or rows ([[long]], their elements appended) -- a [str] is neither.
 let rows = [[1], [2]];
-rows += [3];
+rows += ["x"];
 print(len(rows));

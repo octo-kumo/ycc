@@ -60,8 +60,11 @@ static Yv *fail(Yv *st, Yv *msg, long line, long col);
 static Yv *disp(Yv *name);
 static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col);
 static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col);
+static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what, long line, long col);
+static int is_some_call(Yv *n);
 static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
+Yv *arr_plus_kind(Yv *lt, Yv *rt);
 /* `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
  * (unlike `elem + a`, an array-typed element is never spliced). The right
  * operand must be an array; the left must be its element type. */
@@ -113,6 +116,8 @@ static Yv *typeof_narrow(Yv *st, Yv *node);
 static Yv *typeof_matchend(Yv *st, Yv *node);
 static int covered(Yv *m, Yv *cover);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
+static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col);
+static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col);
 
 static Yv *err_at(Yv *msg, long line, long col) {
     return yr(3, "msg", msg, "line", yv_long(line), "col", yv_long(col));
@@ -875,6 +880,40 @@ static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col)
     }
 }
 
+/* expect_type for a call argument. some(v) passed for a T? -- which is what
+ * the argument of an optional parameter `b?: T` becomes -- is reported as
+ * v against T: "expected long, got long?", not "expected long?, got long??". */
+static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what,
+                      long line, long col) {
+    if (tcompat(got, want)) {
+        return st;
+    } else if (ys_eq_lit(yr_get(got, "k"), "topt") &&
+               ys_eq_lit(yr_get(want, "k"), "topt") && is_some_call(arg)) {
+        return fail(st,
+                    ys_cat(ys_cat(ys_cat(ys_cat(what, ys(": expected ")),
+                                        tstr(yr_get(want, "of"))),
+                                  ys(", got ")),
+                            tstr(yr_get(got, "of"))),
+                    line, col);
+    } else {
+        return fail(st, ys_cat(ys_cat(ys_cat(ys_cat(what, ys(": expected ")),
+                                             tstr(want)),
+                                       ys(", got ")),
+                                tstr(got)),
+                    line, col);
+    }
+}
+
+static int is_some_call(Yv *n) {
+    if (ys_eq_lit(yr_get(n, "k"), "call")) {
+        Yv *c = yr_get(n, "callee");
+        return ys_eq_lit(yr_get(c, "k"), "id") &&
+               ys_eq_lit(yr_get(c, "v"), "some");
+    } else {
+        return 0;
+    }
+}
+
 // Binary-operator result typing. Split out of the `bin` arm so the operator
 // table there stays a flat `op == "..."` dispatch and each operator's rule
 // lives in one named place.
@@ -963,10 +1002,22 @@ static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col)
     } else if (ys_eq_lit(lk, "tarr") || ys_eq_lit(lk, "tarrfix")) {
         if (ys_eq_lit(yr_get(rt, "k"), "tarr") ||
             ys_eq_lit(yr_get(rt, "k"), "tarrfix")) {
-            st = expect_type(st, yr_get(rt, "of"), yr_get(lt, "of"),
-                             ys("'+' concatenated elements"), line, col);
-            return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
-                      "st", st);
+            Yv *how = arr_plus_kind(lt, rt);
+            if (ys_eq_lit(how, "append")) {
+                return yr(2, "typ",
+                          yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
+                          "st", st);
+            } else if (ys_eq_lit(how, "prepend")) {
+                return yr(2, "typ",
+                          yr(2, "k", ys("tarr"), "of", yr_get(rt, "of")),
+                          "st", st);
+            } else {
+                st = expect_type(st, yr_get(rt, "of"), yr_get(lt, "of"),
+                                 ys("'+' concatenated elements"), line, col);
+                return yr(2, "typ",
+                          yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
+                          "st", st);
+            }
         } else {
             st = expect_type(st, rt, yr_get(lt, "of"), ys("'+' element"), line,
                              col);
@@ -977,6 +1028,27 @@ static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col)
         st = expect_type(st, lt, yr_get(rt, "of"), ys("'+' element"), line, col);
         return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(rt, "of")), "st",
                   st);
+    }
+}
+
+/* How `l + r` combines two ARRAY operands -- the one rule the checker and
+ * the emitter (native.y infer, gen_cat_arr, gen_opassign_arr) share:
+ *   "cat"      the element types match: both element lists are spliced
+ *   "append"   r is ONE element of l   ([[T]] + [T] -> [[T]])
+ *   "prepend"  l is ONE element of r   ([T] + [[T]] -> [[T]])
+ * Concatenation wins whenever it type-checks, so an unknown element type
+ * keeps the long-standing meaning; for known types at most one rule fits
+ * (a type is never its own element type). "cat" is also the answer when
+ * nothing fits, so the caller's concatenation check reports the mismatch. */
+Yv *arr_plus_kind(Yv *lt, Yv *rt) {
+    if (tcompat(yr_get(rt, "of"), yr_get(lt, "of"))) {
+        return ys("cat");
+    } else if (tcompat(rt, yr_get(lt, "of"))) {
+        return ys("append");
+    } else if (tcompat(lt, yr_get(rt, "of"))) {
+        return ys("prepend");
+    } else {
+        return ys("cat");
     }
 }
 
@@ -1696,6 +1768,13 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                              ys("'")),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
+        } else if (ys_eq_lit(yr_get(got, "kind"), "const")) {
+            st = fail(st,
+                      ys_cat(ys_cat(ys("cannot assign to constant '"),
+                                    disp(yr_get(node, "name"))),
+                             ys("'")),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            return yr(2, "typ", yr_get(got, "typ"), "st", st);
         } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarrfix")) {
             st = check_visible(st, got, yr_get(node, "name"),
                                yv_l(yr_get(node, "line")),
@@ -1724,6 +1803,9 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         // concatenate, so it is a type error instead.
         Yv *t = typeof_expr(st, yr_get(node, "tgt"));
         st = yr_get(t, "st");
+        st = const_check(st, yr_get(node, "tgt"), yr_get(t, "typ"),
+                         yr_get(node, "op"), yv_l(yr_get(node, "line")),
+                         yv_l(yr_get(node, "col")));
         return incdec_check(st, node, yr_get(t, "typ"));
     } else if (ys_eq_lit(k, "opassign")) {
         // `x op= e`: the rules live in opassign_check.
@@ -1731,6 +1813,10 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         st = yr_get(t, "st");
         Yv *v = typeof_expr(st, yr_get(node, "v"));
         st = yr_get(v, "st");
+        st = const_check(st, yr_get(node, "tgt"), yr_get(t, "typ"),
+                         ys_cat(yr_get(node, "op"), ys("=")),
+                         yv_l(yr_get(node, "line")),
+                         yv_l(yr_get(node, "col")));
         return opassign_check(st, node, yr_get(t, "typ"), yr_get(v, "typ"));
     } else if (ys_eq_lit(k, "store")) {
         Yv *p = typeof_expr(st, yr_get(node, "p"));
@@ -1947,6 +2033,12 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             return yr(2, "typ", t_unk(), "st", st);
         } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tparams")) {
             return yr(2, "typ", t_unk(), "st", st);
+        } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarr") ||
+                   ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarrfix") ||
+                   ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr")) {
+            return typeof_prop(st, yr_get(r, "typ"), dkey,
+                               yv_l(yr_get(node, "line")),
+                               yv_l(yr_get(node, "col")));
         } else {
             st = fail(st,
                       ys_cat(ys_cat(ys_cat(ys_cat(ys("cannot read field '"),
@@ -2517,6 +2609,10 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
     Yv *s = yr_get(r, "typ");
     Yv *sk = yr_get(s, "k");
     Yv *cover = yr_get(node, "cover");
+    Yv *hint = ys("");
+    if (yv_l(yr_get(node, "vals")) > 0) {
+        hint = ys("; value patterns match only the values they name and cover no type");
+    }
     if (ys_eq_lit(sk, "tunk")) {
         ;
     } else if (ys_eq_lit(sk, "tunion")) {
@@ -2530,12 +2626,20 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
             i = i + 1;
         }
         if (yv_len(missing) > 0) {
-            st = fail(st, ys_cat(ys_cat(ys("non-exhaustive match: nothing matches "), ys_join(missing, ys(", "))), ys(" (add an arm or '_')")), NLINE, NCOL);
+            st = fail(st, ys_cat(ys_cat(ys_cat(ys("non-exhaustive match: nothing matches "),
+                                                ys_join(missing, ys(", "))),
+                                          ys(" (add an arm or '_'")),
+                                   ys_cat(hint, ys(")"))),
+                      NLINE, NCOL);
         }
     } else if (ys_eq_lit(sk, "trec") && covered(s, cover)) {
         ;
     } else {
-        st = fail(st, ys_cat(ys_cat(ys("non-exhaustive match on "), tstr(s)), ys(" (add a '_' arm)")), NLINE, NCOL);
+        st = fail(st, ys_cat(ys_cat(ys_cat(ys("non-exhaustive match on "),
+                                          tstr(s)),
+                                   ys(" (add a '_' arm")),
+                            ys_cat(hint, ys(")"))),
+                  NLINE, NCOL);
     }
     return yr(2, "typ", t_unk(), "st", st);
 }
@@ -2599,6 +2703,62 @@ static Yv *typeof_sliceassign(Yv *st, Yv *node) {
 #undef NLINE
 #undef NCOL
 
+/* Built-in properties: `.length` of an array or a str is len(x); `.ptr` of
+ * an array is the address of element 0 as a *T -- the data block's address,
+ * so it is valid for an empty array too, where &a[0] traps. A str has no
+ * `.ptr`: its bytes can live in read-only .rodata, where a store through
+ * the pointer would fault. */
+static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col) {
+    if (ys_eq_lit(key, "length")) {
+        return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+    } else if (ys_eq_lit(key, "ptr") &&
+               !ys_eq_lit(yr_get(t, "k"), "tstr")) {
+        return yr(2, "typ",
+                  yr(2, "k", ys("tptr"), "to", yr_get(t, "of")), "st", st);
+    } else {
+        Yv *have = ys("'.length' and '.ptr'");
+        if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+            have = ys("'.length'");
+        }
+        st = fail(st,
+                  ys_cat(ys_cat(ys_cat(ys_cat(tstr(t), ys(" has no property '")),
+                                       key),
+                                ys("' (it has ")),
+                         ys_cat(have, ys(")"))),
+                  line, col);
+        return yr(2, "typ", t_unk(), "st", st);
+    }
+}
+
+/* `const` fixes the BINDING, not the value (as in JS): `=`, `++`/`--` and
+ * the `op=` forms that rebind (numbers, strings) are errors on a const name,
+ * while the in-place array forms (`arr += v`, `arr *= v`) and element or
+ * field writes (`a[i] = v`, `r.f = v`) still mutate the shared value. Plain
+ * `=` is refused in the `assign` arm itself; this covers the other two. */
+static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
+    if (ys_eq_lit(yr_get(tgt, "k"), "id")) {
+        Yv *got = lookup(yr_get(st, "bindings"), yr_get(tgt, "v"));
+        int inplace = ys_eq_lit(yr_get(tt, "k"), "tarr") ||
+                      ys_eq_lit(yr_get(tt, "k"), "tarrfix") ||
+                      ys_eq_lit(yr_get(tt, "k"), "tunk") ||
+                      ys_eq_lit(yr_get(tt, "k"), "tnone");
+        if (ys_eq_lit(yr_get(got, "kind"), "const") && !inplace) {
+            return fail(st,
+                        ys_cat(ys_cat(ys_cat(ys_cat(
+                                                   ys("cannot assign to constant '"),
+                                                   disp(yr_get(tgt, "v"))),
+                                             ys("' ('")),
+                                      op),
+                               ys("')")),
+                        line, col);
+        } else {
+            return st;
+        }
+    } else {
+        return st;
+    }
+}
+
 // ++/-- target rule: numbers (long/byte/float) only.
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
     Yv *op = yr_get(node, "op");
@@ -2623,7 +2783,8 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
 //   numbers  -> the arithmetic family (+ - * / %), result the target type
 //   str      -> `+=` concatenates; the rest are errors
 //   arrays   -> in place only: `+=` pushes one element (or appends another
-//               array of the same type), `*=` prepends one element. `+`
+//               array of the same element type; `[[T]] += [T]` pushes the
+//               [T] whole), `*=` prepends one element. `+`
 //               itself is the copy form; `-=`, `/=`, `%=` are errors.
 // The result is always the target's type (the new value).
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
@@ -2649,13 +2810,19 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
         } else if (ys_eq_lit(op, "+")) {
             if (ys_eq_lit(yr_get(vt, "k"), "tarr") ||
                 ys_eq_lit(yr_get(vt, "k"), "tarrfix")) {
-                // `arr += arr2` appends arr2's ELEMENTS in place, so the
-                // element types must match (homogeneity).
-                st = expect_type(st, yr_get(vt, "of"), yr_get(tt, "of"),
-                                 ys("'+=' appended elements"),
-                                 yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                return yr(2, "typ", tt, "st", st);
+                if (ys_eq_lit(arr_plus_kind(tt, vt), "append")) {
+                    // `[[T]] += [T]` pushes the array as ONE element (the
+                    // same rule as `+`, see arr_plus_kind).
+                    return yr(2, "typ", tt, "st", st);
+                } else {
+                    // `arr += arr2` appends arr2's ELEMENTS in place, so
+                    // the element types must match (homogeneity).
+                    st = expect_type(st, yr_get(vt, "of"), yr_get(tt, "of"),
+                                     ys("'+=' appended elements"),
+                                     yv_l(yr_get(node, "line")),
+                                     yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", tt, "st", st);
+                }
             } else if (ys_eq_lit(yr_get(vt, "k"), "tunk") ||
                        ys_eq_lit(yr_get(vt, "k"), "tnone")) {
                 return yr(2, "typ", tt, "st", st);
@@ -3509,13 +3676,14 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                             st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), disp(name)), ys("' arg ")), ys_long(i)), ys(": cannot pass a void value")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                             ;
                         } else {
-                            st = expect_type(st, yr_get(r, "typ"),
-                                             ya_get(cargs_ft, i),
-                                             ys_cat(ys_cat(ys_cat(ys("'"), disp(name)),
-                                                           ys("' arg ")),
-                                                    ys_long(i)),
-                                             yv_l(yr_get(node, "line")),
-                                             yv_l(yr_get(node, "col")));
+                            st = expect_arg(st, yr_get(r, "typ"),
+                                            ya_get(cargs_ft, i),
+                                            ya_get(cargs, i),
+                                            ys_cat(ys_cat(ys_cat(ys("'"), disp(name)),
+                                                          ys("' arg ")),
+                                                   ys_long(i)),
+                                            yv_l(yr_get(node, "line")),
+                                            yv_l(yr_get(node, "col")));
                             ;
                         }
                         i = i + 1;
@@ -3551,6 +3719,11 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
         // let/const. A literal def on the right names a function WITHOUT
         // going through typeof_expr (a bare func value is only legal bound).
         // Same for the `[v; n]` array literal (binds n frame slots).
+        // A const binds as kind "const": const_check refuses to rebind it.
+        Yv *bk = ys("local");
+        if (ys_eq_lit(yr_get(node, "kind"), "const")) {
+            bk = ys("const");
+        }
         if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "func")) {
             Yv *fr = typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
                                 yv_l(yr_get(node, "line")),
@@ -3574,7 +3747,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             Yv *r = typeof_expr(st, yr_get(node, "v"));
             st = yr_get(r, "st");
             if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
-                st = st_bind(st, yr_get(node, "name"), t_unk(), ys("local"));
+                st = st_bind(st, yr_get(node, "name"), t_unk(), bk);
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
                 Yv *at = yr_get(r, "typ");
@@ -3596,7 +3769,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                 } else {
                     ;
                 }
-                st = st_bind(st, yr_get(node, "name"), at, ys("local"));
+                st = st_bind(st, yr_get(node, "name"), at, bk);
                 return yr(2, "typ", at, "st", st);
             }
         } else {
@@ -3681,7 +3854,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             } else {
                 ;
             }
-            st = st_bind(st, yr_get(node, "name"), t, ys("local"));
+            st = st_bind(st, yr_get(node, "name"), t, bk);
             return yr(2, "typ", t, "st", st);
         }
     }

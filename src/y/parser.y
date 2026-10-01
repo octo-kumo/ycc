@@ -992,6 +992,9 @@ def lit_type_neg(node) -> {k: str} {
     if (node.op == "-" && e.k == "num") { num_lit_type(e.v) } else { { k: "tnone" } }
 };
 
+// T? -- the type an optional parameter `name?: T` has in the body.
+def topt_of(t) -> {k: str} { { k: "topt", of: t } };
+
 // float when the literal has a fraction or an exponent (radix literals
 // like 0xE1 never do).
 def num_lit_type(s: str) -> {k: str} {
@@ -1035,8 +1038,11 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
     };
     let names = [];
     let ptypes = [];
-    // defs[i]: param i's default value (a literal), `void` when it has none
+    // defs[i]: param i's default value (a literal), `void` when it has none,
+    // `optarg` for an optional `name?: T` (none when left out, some(arg) when
+    // passed -- rename.y fills both in)
     let defs: [{k: str}] = [];
+    let optname = "";
     if (!hbad && !is_punct(toks, pos, ")")) {
         let go = true;
         while (go) {
@@ -1049,6 +1055,16 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
                 let nm = tv(toks, pos);
                 names += nm;
                 pos = pos + 1;  // name
+                let isopt = false;
+                if (is_op(toks, pos, "?")) {
+                    isopt = true;
+                    pos = pos + 1;
+                    if (!is_punct(toks, pos, ":")) {
+                        derrs += { k: "err", msg: "optional parameter '" + nm + "' needs a type ('" + nm + "?: T')", line: tline(toks, pos), col: tcol(toks, pos) };
+                        0
+                    };
+                    0
+                };
                 let pt = { k: "tnone" };
                 if (is_punct(toks, pos, ":")) {
                     let tr = parse_type_full(toks, pos + 1);
@@ -1078,6 +1094,19 @@ def parse_func(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { 
                         if (pt.k == "tnone") { pt = dt; 0 };
                         0
                     };
+                    if (isopt) {
+                        derrs += { k: "err", msg: "optional parameter '" + nm + "' cannot have a default (it is none when left out)", line: tline(toks, pos), col: tcol(toks, pos) };
+                        0
+                    };
+                    0
+                };
+                if (isopt) {
+                    if (pt.k != "tnone") { pt = topt_of(pt); 0 };
+                    dv = { k: "optarg" };
+                    optname = nm;
+                    0
+                } else if (optname != "" && dv.k == "void") {
+                    derrs += { k: "err", msg: "required parameter '" + nm + "' cannot follow optional parameter '" + optname + "' (optional parameters come last)", line: tline(toks, pos), col: tcol(toks, pos) };
                     0
                 };
                 ptypes += pt;
@@ -1622,6 +1651,7 @@ def parse_match(toks: [{ t: str, v: str, line: long, col: long }], subj, bpos: l
     let tests: [{k: str}] = [];
     let thens: [{k: str}] = [];
     let covers: [{k: str}] = [];
+    let nvals = 0;
     let fallback: {k: str} = { k: "void" };
     let has_wild = false;
     let pos = bpos + 1;
@@ -1663,7 +1693,7 @@ def parse_match(toks: [{ t: str, v: str, line: long, col: long }], subj, bpos: l
                 ts += body;
                 thens += { k: "block", stmts: ts, line: ln, col: cl };
                 let pc = pr.cover;
-                if (pc.k == "tnone") { 0 } else { covers += pc; 0 };
+                if (pc.k == "tnone") { nvals = nvals + 1; 0 } else { covers += pc; 0 };
                 0
             };
             if (go) {
@@ -1683,7 +1713,7 @@ def parse_match(toks: [{ t: str, v: str, line: long, col: long }], subj, bpos: l
             0
         };
     };
-    let chain: {k: str} = block1({ k: "matchend", e: { k: "id", v: tmp, line: ln, col: cl }, cover: covers, line: ln, col: cl }, ln, cl);
+    let chain: {k: str} = block1({ k: "matchend", e: { k: "id", v: tmp, line: ln, col: cl }, cover: covers, vals: nvals, line: ln, col: cl }, ln, cl);
     if (has_wild) {
         chain = block1(fallback, ln, cl);
         0

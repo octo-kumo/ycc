@@ -178,10 +178,11 @@ def rn_find_defaults(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [
 
 // args + the defaults of the missing trailing parameters -- only when
 // every one of them has a default (otherwise the checker reports the
-// arity mismatch as usual).
-def rn_fill_defaults(vals: [{k: str}], args: [{k: str}]) -> [{k: str}] {
+// arity mismatch as usual). An optional parameter (`b?: T`, its default
+// marked `optarg`) gets some(arg) when the call passes it, none when not.
+def rn_fill_defaults(vals: [{k: str}], args: [{k: str}], line: long, col: long) -> [{k: str}] {
     let n = len(args);
-    if (n >= len(vals)) {
+    if (len(vals) == 0) {
         args
     } else {
         let ok = true;
@@ -192,20 +193,38 @@ def rn_fill_defaults(vals: [{k: str}], args: [{k: str}]) -> [{k: str}] {
             if (dk == "void") { ok = false; 0 };
             i = i + 1;
         };
+        let out: [{k: str}] = [];
+        let j = 0;
+        while (j < n) {
+            if (j < len(vals) && rn_is_optarg(vals[j])) {
+                let one: [{k: str}] = [];
+                one += args[j];
+                out += { k: "call", callee: { k: "id", v: "some", line: line, col: col }, args: one, line: line, col: col };
+                0
+            } else {
+                out += args[j];
+                0
+            };
+            j = j + 1;
+        };
         if (ok) {
-            let out: [{k: str}] = [];
-            out += args;
-            let j = n;
             while (j < len(vals)) {
-                out += vals[j];
+                if (rn_is_optarg(vals[j])) {
+                    out += { k: "id", v: "none", line: line, col: col };
+                    0
+                } else {
+                    out += vals[j];
+                    0
+                };
                 j = j + 1;
             };
-            out
-        } else {
-            args
-        }
+            0
+        };
+        out
     }
 };
+
+def rn_is_optarg(d: {k: str}) -> bool { d.k == "optarg" };
 
 // ── type aliases ─────────────────────────────────────────────────────────
 // `type A = T` makes the name A stand for T in every annotation (and match
@@ -595,7 +614,7 @@ def rn_typed_e(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [
 
 def rn_matchend(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let e = rn_node(node.e, st);
-    { st: e.st, node: { k: "matchend", e: e.node, cover: rn_types(e.st, node.cover), line: node.line, col: node.col } }
+    { st: e.st, node: { k: "matchend", e: e.node, cover: rn_types(e.st, node.cover), vals: node.vals, line: node.line, col: node.col } }
 };
 
 def rn_sliceassign(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
@@ -634,7 +653,7 @@ def rn_call(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ n
     let cn = c.node;
     let args = a.nodes;
     if (cn.k == "id") {
-        args = rn_fill_defaults(rn_find_defaults(a.st, cn.v), args);
+        args = rn_fill_defaults(rn_find_defaults(a.st, cn.v), args, node.line, node.col);
         0
     };
     { st: a.st, node: { k: "call", callee: cn, args: args, line: node.line, col: node.col } }

@@ -2,11 +2,6 @@
 
 ## Not done
 
-- **Match coverage is still not checked.** `match` requires a catch-all arm
-  or arms covering every member of the subject's union. Verified still true:
-  `match c { A a => 1, ({bfield: 10}) b => 2 }` on a `C = A | B` is rejected —
-  a literal-value arm does not count as coverage. (The rest of `TODO.y` is
-  likewise a list of things the checker still rejects.)
 - **Exhaustive tests for every feature.** The audit corpus is 65 cases; the
   native corpus is 54 `t*` plus 25 `e*` fixtures. There is no coverage matrix,
   so "every feature has a test" is not currently a checkable claim.
@@ -29,11 +24,8 @@
 - move prelude into std
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
 - replace `substr` with string slicing, and remove substr from built ins
-- enforce `const` so they cant be reassigned values and will error at compilation
 - template string with f"{x} {y:.2f}" (python style)
 - string operations like trim, strip, pad etc shall be done like "str 1 2 3".split(' ')
-- `arr.length` and `arr.ptr`
-- optional arguments `def print(a: long, b?: long)`, b will appear as an option type, this is different from `b: long?` as `b: long?` requires you to supply an `long option` argument where `b?: long` require you to either supply or not a `long`. they must be at the end of arg list or type error is thrown.
 
 
 ## Done
@@ -84,6 +76,24 @@ what was deliberately *not* changed) is in `audit.md`.
   `--pages-as-heap=yes` for the mmap heap, `strace -c` for syscall time).
   `bench/compare.sh` now ends with a callgrind table per function.
   `test_debug.sh` checks it all.
+- **`TODO.y` compiles, and its examples are tests.** The one rejected
+  case, `match c { A a => 1, ({bfield: 10}) b => 2 }` on `C = A | B`, is
+  rejected by TODO.y's own rule (arms must cover every case): a value
+  pattern matches only the values it names. The error now says that
+  (`e55`). `t65` tours the rest; `t61`/`t64` are its array examples:
+  `[[T]] + [T]` appends the row, `[T] + [[T]]` prepends it, `[[T]] +
+  [[T]]` concatenates (sharing the rows), and `+=` reads the same way
+  (`e21` now rejects a row of the wrong type instead).
+- **`const`** cannot be rebound: `=`, `op=` and `++`/`--` on one are
+  type errors, while what it names stays mutable (`+=` on a const array,
+  element and field stores), as in JS (`t59`, `e45`–`e47`).
+- **`arr.length`, `str.length`, `arr.ptr`** (`t60`, `e48`, `e49`). On the
+  way: `*p` / `*p = v` through a `*byte` moved 8 bytes, reading the
+  neighbours and clobbering them on a store; it moves one now (`t62`).
+- **Optional parameters** `def f(a: long, b?: long)`: `b` is a `long?` in
+  the body; a call passes a `long` or nothing. Passing an option, giving
+  one a default, or a required parameter after one are errors (`t63`,
+  `e50`–`e54`).
 - Hex/binary literals with `_` separators, scientific notation, float literals.
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),
