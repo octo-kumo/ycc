@@ -75,6 +75,24 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
 - **`str`** is a length-prefixed `.rodata` header `[len, data..., NUL]`, and
   the value is that header's address — so a `str` may carry embedded NULs
   and `len` is a load, not a `strlen`.
+- **Owned strings: `s += t` appends in place.** A `str` variable that is a
+  `+=` target, whose address is never taken (`&s`) and that no closure
+  captures (those are boxed) gets a companion word `c`: locals and params
+  the slot below the value (`bind_own`, env kind `"own"`), globals a
+  `.bss` cell `ygo_<n>_<name>` (env entry `<name>#o`; `#` cannot occur
+  in a Y name). `c` is 0, 1 (an append is in flight), or the address of
+  the buffer this variable's last append produced. Every read
+  (`gen_id`) zeroes it; assignments leave it alone, since ownership is
+  checked by pointer equality. An append statement (`gen_sappend`; only
+  in discarded positions — `gen_stmt`, `gen_discard` — a value-used
+  `{ s += t }` keeps the plain `s = s + t`) pins `c := (c == s)`,
+  evaluates `t` (a read of `s` there zeroes `c`, a nested append
+  replaces it), then calls `y_str_app(s, t, c)`: with the flag still 1
+  the buffer is this variable's own, so `t` goes in place when it fits
+  and otherwise into a block of twice the size; with 0 it copies
+  exactly. Owned buffers are `[cap][len][bytes][NUL]` (the value points
+  at `len`, so to everything else it is an ordinary `str`). 10,000
+  one-byte appends: 50 MB of heap and 22.7 ms → 23 KB and 0.18 ms.
 - **Arrays and records are reference values**: a binding stores the address,
   never a copy. `let b = a`, passing, returning and storing all share, and
   `a[i] = v` / `s.f = v` are observable through every alias. Both

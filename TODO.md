@@ -2,9 +2,6 @@
 
 ## Not done
 
-- **`s += x` is quadratic in memory.** Strings are immutable, so each
-  append copies the whole string, and nothing is freed: 10,000 one-byte
-  appends allocate ~50 MB. Collecting parts and calling `join` is linear.
 - **`-g` has no line information.** It writes a symbol table, so tools name
   functions; DWARF (`.debug_line` + a minimal `.debug_info`) would let
   `perf annotate`, gdb and addr2line show source lines too. The map from
@@ -20,6 +17,17 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **`s += x` was quadratic in memory.** Each append copied the whole
+  string, and nothing is freed: 10,000 one-byte appends allocated 50 MB.
+  A `str` variable that is a `+=` target (address never taken, not
+  captured) now carries a companion word naming the buffer its last
+  append built; every read clears it, so an append whose variable still
+  owns that buffer writes in place (`y_str_app`: room doubles, old
+  owners never see the change) and any other append copies once.
+  10,000 one-byte appends: 50,280,088 → 22,880 bytes of heap, 22.7 →
+  0.18 ms (a global: 38.7 → 0.07 ms); 1,000,000 appends take 5 ms and
+  2.9 MB. Self-compilation is unchanged within noise (`t139`).
 
 - **Prepend was quadratic in time.** `a *= v` moved every element, so
   100,000 prepends took 4.3 s. The array header gained a fourth word,

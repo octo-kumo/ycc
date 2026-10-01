@@ -250,7 +250,8 @@ code calls it by fixed label.
   value to store one in.
 - **Arrays, maps and records are references**, in both copies; an array
   header never moves, so `arr += v` is visible through every alias. String
-  and number values are immutable.
+  and number values are immutable (`s += t` may append in place, but only
+  into a buffer nothing else can see — NATIVE.md, "Owned strings").
 - Arrays are **homogeneous** — element types must match; heterogeneous
   literals are rejected.
 - `--no-exec` strips the `exec()` builtin (no shell access).
@@ -312,7 +313,8 @@ Unboxed values (long/int/byte/bool/float/ptr/str/option/function = 8
 bytes); `[byte]` arrays are packed; stable heap headers `{len, cap,
 data, front}` (elements in a separate block) with capacity doubling
 (0→8→×2) at the back for `+=` and room reserved in front for `*=`, so
-both are amortized O(1);
+both are amortized O(1); `s += t` on a `str` variable appends in place
+into a buffer only that variable owns, also amortized O(1);
 closures as `[code, caps...]` records; `&x`, `*p`, `a[i]`, `a[lo:hi]`,
 `T?`, `x!`, `void`, `float`, `byte` types; `for`/`for..in`/`foreach`/
 `while`; block expressions; `type` aliases, record unions and `match`;

@@ -159,6 +159,14 @@ Yv *gen_cap_ptr(Yv *st, Yv *name);
 Yv *box_capture(Yv *st, Yv *name);
 Yv *box_names(Yv *func);
 Yv *box_bound(Yv *st, Yv *name);
+Yv *app_walk(Yv *node, Yv *out, int deep);
+Yv *app_walk_list(Yv *nodes, Yv *out, int deep);
+Yv *app_names(Yv *node, int deep, Yv *skip);
+int own_wanted(Yv *st, Yv *name);
+Yv *bind_own(Yv *st, Yv *name, Yv *t);
+Yv *gen_stmt(Yv *st, Yv *node);
+Yv *gen_sappend(Yv *st, Yv *v, Yv *var, Yv *cell);
+Yv *gen_discard(Yv *st, Yv *node);
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps);
 Yv *gen_range(Yv *st, Yv *node);
 Yv *gen_slice(Yv *st, Yv *node);
@@ -215,6 +223,7 @@ Yv *gen_tail(Yv *st, Yv *node);
 Yv *gen_tail_call(Yv *st, Yv *node);
 int is_self_call(Yv *st, Yv *node);
 Yv *gen_block(Yv *st, Yv *node);
+Yv *gen_block_as(Yv *st, Yv *node, int dropped);
 long mfield_idx(Yv *names, Yv *name);
 Yv *gen_reclit(Yv *st, Yv *node);
 Yv *gen_func_literal(Yv *st, Yv *node);
@@ -349,6 +358,7 @@ Yv *decl_name(Yv *d);
 Yv *decl_type(Yv *d);
 Yv *decl_value(Yv *d);
 Yv *global_entries(Yv *st, Yv *gdecls);
+Yv *app_cells(Yv *gl, Yv *stmts);
 Yv *capturing_defs(Yv *defs, Yv *gnames);
 Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only);
 int ret_omitted(Yv *func);
@@ -3414,8 +3424,33 @@ Yv *gen_id(Yv *st, Yv *node) {
                 return gen_make_closure(st, yr_get(e, "label"), yav(0));
             }
         } else if (ys_eq_lit(yr_get(e, "kind"), "global")) {
+            /* An appendable global gives up its buffer on every read
+             * (see gen_sappend). */
+            if (ys_eq_lit(yr_get(yr_get(e, "typ"), "k"), "tstr")) {
+                Yv *oe = env_find(st, ys_cat(yr_get(node, "v"), ys("#o")));
+                if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
+                    ;
+                } else {
+                    st = emit(st, ys("    xor %eax, %eax"));
+                    st = emit(st, ys_cat(
+                                      ys_cat(ys("    mov %rax, "),
+                                             yr_get(oe, "label")),
+                                      ys("(%rip)")));
+                }
+            } else {
+                ;
+            }
             return emit(st, ys_cat(ys_cat(ys("    mov "), yr_get(e, "label")),
                                    ys("(%rip), %rax")));
+        } else if (ys_eq_lit(yr_get(e, "kind"), "own")) {
+            /* An appendable string: a read may let its buffer escape, so
+             * the companion is cleared (see gen_sappend). */
+            long off = yv_l(yr_get(e, "off"));
+            st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(off)),
+                                 ys("(%rbp), %rax")));
+            return emit(st, ys_cat(ys_cat(ys("    mov $0, "),
+                                          ys_long(off - 8)),
+                                   ys("(%rbp)")));
         } else if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
             /* Captured by the enclosing closure: load the closure record
              * (at the frame offset recorded in `off`), read slot idx+1 —
@@ -3566,6 +3601,336 @@ Yv *box_bound(Yv *st, Yv *name) {
     } else {
         return st;
     }
+}
+
+/* -- owned strings: `s += x` in place ----------------------------------
+ * An append used to copy the whole string (s = s + x), so n appends in a
+ * loop cost O(n^2) bytes. A str variable that `+=` targets now has a
+ * companion word: an "own" local keeps it in the slot below its value, an
+ * appendable global in a second .bss cell (app_cells). It holds 0, 1
+ * (an append statement is running), or the buffer the variable's last
+ * append statement produced, and every read of the variable clears it
+ * (gen_id). So "companion == value" proves nobody else ever saw that
+ * buffer, and the append may write into its spare room (y_str_app; its
+ * buffers keep their capacity in the word before the length). A variable
+ * whose address is taken, or that a closure captures, never qualifies. */
+
+/* Every `+=` id target in a subtree, plus `&` + each name whose address
+ * is taken. With `deep` false nested functions are skipped: each gets its
+ * own walk, and a variable one of them touches is captured (boxed). */
+Yv *app_walk(Yv *node, Yv *out, int deep) {
+    Yv *k = yr_get(node, "k");
+    /* Most common kinds first: a leaf costs one compare, not the chain. */
+    if (ys_eq_lit(k, "id") || ys_eq_lit(k, "num") || ys_eq_lit(k, "str")) {
+        ;
+    } else if (ys_eq_lit(k, "call")) {
+        out = app_walk(yr_get(node, "callee"), out, deep);
+        out = app_walk_list(yr_get(node, "args"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "dot")) {
+        out = app_walk(yr_get(node, "obj"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "bin")) {
+        out = app_walk(yr_get(node, "l"), out, deep);
+        out = app_walk(yr_get(node, "r"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "block")) {
+        out = app_walk_list(yr_get(node, "stmts"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "arrrep") || ys_eq_lit(k, "decl") ||
+               ys_eq_lit(k, "assign")) {
+        out = app_walk(yr_get(node, "v"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "if")) {
+        out = app_walk(yr_get(node, "cond"), out, deep);
+        out = app_walk(yr_get(node, "then"), out, deep);
+        if (yv_b(yr_get(node, "has_else"))) {
+            out = app_walk(yr_get(node, "els"), out, deep);
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else if (ys_eq_lit(k, "opassign")) {
+        Yv *tg = yr_get(node, "tgt");
+        if (ys_eq_lit(yr_get(node, "op"), "+") &&
+            ys_eq_lit(yr_get(tg, "k"), "id")) {
+            out = ya_push(out, yr_get(tg, "v"));
+            ;
+        } else {
+            ;
+        }
+        out = app_walk(tg, out, deep);
+        out = app_walk(yr_get(node, "v"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "index")) {
+        out = app_walk(yr_get(node, "arr"), out, deep);
+        out = app_walk(yr_get(node, "idx"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "addr")) {
+        Yv *ae = yr_get(node, "e");
+        if (ys_eq_lit(yr_get(ae, "k"), "id")) {
+            out = ya_push(out, ys_cat(ys("&"), yr_get(ae, "v")));
+            ;
+        } else {
+            ;
+        }
+        out = app_walk(ae, out, deep);
+        ;
+    } else if (ys_eq_lit(k, "un") || ys_eq_lit(k, "deref") ||
+               ys_eq_lit(k, "ret") || ys_eq_lit(k, "rectest") ||
+               ys_eq_lit(k, "narrow") || ys_eq_lit(k, "matchend")) {
+        out = app_walk(yr_get(node, "e"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "array")) {
+        out = app_walk_list(yr_get(node, "elems"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "rec") || ys_eq_lit(k, "map")) {
+        out = app_walk_list(yr_get(node, "vals"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "slice")) {
+        out = app_walk(yr_get(node, "arr"), out, deep);
+        out = app_walk(yr_get(node, "lo"), out, deep);
+        out = app_walk(yr_get(node, "hi"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "idxassign")) {
+        out = app_walk(yr_get(node, "arr"), out, deep);
+        out = app_walk(yr_get(node, "idx"), out, deep);
+        out = app_walk(yr_get(node, "v"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "dotassign")) {
+        out = app_walk(yr_get(node, "obj"), out, deep);
+        out = app_walk(yr_get(node, "v"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "store")) {
+        out = app_walk(yr_get(node, "p"), out, deep);
+        out = app_walk(yr_get(node, "v"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "incdec")) {
+        out = app_walk(yr_get(node, "tgt"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "while")) {
+        out = app_walk(yr_get(node, "cond"), out, deep);
+        out = app_walk(yr_get(node, "body"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "for")) {
+        out = app_walk(yr_get(node, "init"), out, deep);
+        out = app_walk(yr_get(node, "cond"), out, deep);
+        out = app_walk(yr_get(node, "step"), out, deep);
+        out = app_walk(yr_get(node, "body"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "foreach")) {
+        out = app_walk(yr_get(node, "iter"), out, deep);
+        out = app_walk(yr_get(node, "body"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "forrange")) {
+        out = app_walk(yr_get(node, "lo"), out, deep);
+        out = app_walk(yr_get(node, "hi"), out, deep);
+        out = app_walk(yr_get(node, "body"), out, deep);
+        ;
+    } else if (ys_eq_lit(k, "func")) {
+        if (deep) {
+            out = app_walk(yr_get(node, "body"), out, deep);
+            ;
+        } else {
+            ;
+        }
+        ;
+    } else if (ys_eq_lit(k, "sliceassign")) {
+        out = app_walk(yr_get(node, "arr"), out, deep);
+        out = app_walk(yr_get(node, "lo"), out, deep);
+        out = app_walk(yr_get(node, "hi"), out, deep);
+        out = app_walk(yr_get(node, "v"), out, deep);
+        ;
+    } else {
+        ;
+    }
+    return out;
+}
+
+Yv *app_walk_list(Yv *nodes, Yv *out, int deep) {
+    long i = 0;
+    while (i < yv_len(nodes)) {
+        out = app_walk(ya_get(nodes, i), out, deep);
+        i = i + 1;
+    }
+    return out;
+}
+
+/* The names in a subtree (`deep`: a whole program) an append statement
+ * may extend in place: `+=` targets whose address is never taken, minus
+ * `skip` (the names closures capture). Only the str-typed ones are used. */
+Yv *app_names(Yv *node, int deep, Yv *skip) {
+    Yv *seen = app_walk(node, yav(0), deep);
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(seen)) {
+        Yv *n = ya_get(seen, i);
+        if (ys_eq_lit(ys_slice(n, 0, 1), "&") || name_in(out, n) ||
+            name_in(skip, n) || name_in(seen, ys_cat(ys("&"), n))) {
+            ;
+        } else {
+            out = ya_push(out, n);
+            ;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+/* Before a str variable is bound: does this function append to it (an
+ * "appmark" past its "frame", see emit_one_fn)? */
+int own_wanted(Yv *st, Yv *name) {
+    Yv *env = yr_get(st, "env");
+    long i = yv_len(env) - 1;
+    int want = 0;
+    int more = 1;
+    while (more && i >= 0) {
+        Yv *e = ya_get(env, i);
+        if (ys_eq_lit(yr_get(e, "kind"), "frame")) {
+            more = 0;
+            ;
+        } else if (ys_eq_lit(yr_get(e, "kind"), "appmark") &&
+                   ys_eq(yr_get(e, "label"), name)) {
+            want = 1;
+            more = 0;
+            ;
+        } else {
+            ;
+        }
+        i = i - 1;
+    }
+    return want;
+}
+
+/* Bind an appendable str to the value in %rax: the value slot, and its
+ * companion in the slot below, cleared. */
+Yv *bind_own(Yv *st, Yv *name, Yv *t) {
+    long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $0, "), ys_long(off - 8)),
+                         ys("(%rbp)")));
+    Yv *st2 =
+        yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+           "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
+           yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
+           yv_long(yv_l(yr_get(st, "slots")) + 2), "self_label",
+           yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
+           "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+    return env_define(st2, name, ys("own"), off, ys(""), t);
+}
+
+/* A statement nobody takes the value of. `s += x` on an appendable string
+ * (an "own" local, or a global with a companion cell) goes through
+ * gen_sappend (the checker made x a str); anything else is plain gen. */
+Yv *gen_stmt(Yv *st, Yv *node) {
+    if (ys_eq_lit(yr_get(node, "k"), "opassign") &&
+        ys_eq_lit(yr_get(node, "op"), "+") &&
+        ys_eq_lit(yr_get(yr_get(node, "tgt"), "k"), "id")) {
+        Yv *tgt = yr_get(node, "tgt");
+        Yv *e = env_find(st, yr_get(tgt, "v"));
+        if (ys_eq_lit(yr_get(e, "kind"), "own")) {
+            long off = yv_l(yr_get(e, "off"));
+            return gen_sappend(
+                st, yr_get(node, "v"), ys_cat(ys_long(off), ys("(%rbp)")),
+                ys_cat(ys_long(off - 8), ys("(%rbp)")));
+        } else if (ys_eq_lit(yr_get(e, "kind"), "global") &&
+                   ys_eq_lit(yr_get(yr_get(e, "typ"), "k"), "tstr")) {
+            Yv *oe = env_find(st, ys_cat(yr_get(tgt, "v"), ys("#o")));
+            if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
+                return gen(st, node);
+            } else {
+                return gen_sappend(
+                    st, yr_get(node, "v"),
+                    ys_cat(yr_get(e, "label"), ys("(%rip)")),
+                    ys_cat(yr_get(oe, "label"), ys("(%rip)")));
+            }
+        } else {
+            return gen(st, node);
+        }
+    }
+    return gen(st, node);
+}
+
+/* `s += v` as a statement on an appendable string; `var` and `cell` are
+ * the operands of the variable and of its companion. Ownership is decided
+ * before v runs (companion := 1 if it held the value, else 0); anything v
+ * does to the variable (a read clears the companion, a nested append
+ * stores its buffer there) leaves it != 1, and y_str_app copies. The
+ * order is s = s + v's: the old value first, then v. */
+Yv *gen_sappend(Yv *st, Yv *v, Yv *var, Yv *cell) {
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), var), ys(", %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), cell), ys(", %rdx")));
+    st = emit(st, ys("    cmp %rdx, %rax"));
+    st = emit(st, ys("    sete %al"));
+    st = emit(st, ys("    movzbq %al, %rax"));
+    st = emit(st, ys_cat(ys("    mov %rax, "), cell));
+    st = gen(st, v);
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), cell), ys(", %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_str_app"));
+    st = emit(st, ys("    add $24, %rsp"));
+    st = emit(st, ys_cat(ys("    mov %rax, "), var));
+    return emit(st, ys_cat(ys("    mov %rax, "), cell));
+}
+
+/* A loop body: its value is dropped, so a block body's last statement is
+ * a statement too (gen_stmt). */
+Yv *gen_discard(Yv *st, Yv *node) {
+    if (ys_eq_lit(yr_get(node, "k"), "block")) {
+        return gen_block_as(st, node, 1);
+    }
+    return gen_stmt(st, node);
+}
+
+/* One companion cell (see gen_sappend) per str global an append statement
+ * may extend in place, named `<global>#o` (`#` never occurs in a Y name)
+ * so gen_id and gen_stmt find it beside the global. The program is walked
+ * only when it has a str global at all. */
+Yv *app_cells(Yv *gl, Yv *stmts) {
+    int anystr = 0;
+    long i = 0;
+    while (i < yv_len(gl)) {
+        Yv *ge = ya_get(gl, i);
+        if (ys_eq_lit(yr_get(yr_get(ge, "typ"), "k"), "tstr")) {
+            anystr = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    if (anystr) {
+        Yv *block = yr(2, "k", ys("block"), "stmts", stmts);
+        Yv *names = app_names(block, 1, yav(0));
+        Yv *out = yav(0);
+        long j = 0;
+        while (j < yv_len(gl)) {
+            out = ya_push(out, ya_get(gl, j));
+            j = j + 1;
+        }
+        j = 0;
+        while (j < yv_len(gl)) {
+            Yv *g2 = ya_get(gl, j);
+            if (ys_eq_lit(yr_get(yr_get(g2, "typ"), "k"), "tstr") &&
+                name_in(names, yr_get(g2, "name"))) {
+                Yv *oname = ys_cat(yr_get(g2, "name"), ys("#o"));
+                Yv *olabel =
+                    ys_cat(ys("ygo_"), ys_slice_from(yr_get(g2, "label"), 3));
+                out = ya_push(out, yr(3, "name", oname, "label", olabel,
+                                      "typ", yr(1, "k", ys("tnone"))));
+                ;
+            } else {
+                ;
+            }
+            j = j + 1;
+        }
+        return out;
+    }
+    return gl;
 }
 
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
@@ -5235,7 +5600,7 @@ Yv *gen_while(Yv *st, Yv *node) {
     st = gen(st, yr_get(node, "cond"));
     st = emit(st, ys("    test %rax, %rax"));
     st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
-    st = gen(st, yr_get(node, "body"));
+    st = gen_discard(st, yr_get(node, "body"));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
     return emit(st, ys("    xor %eax, %eax"));
@@ -5257,7 +5622,7 @@ Yv *gen_for(Yv *st, Yv *node) {
     st = gen(st, yr_get(node, "cond"));
     st = emit(st, ys("    test %rax, %rax"));
     st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
-    st = gen(st, yr_get(node, "body"));
+    st = gen_discard(st, yr_get(node, "body"));
     st = gen(st, yr_get(node, "step"));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
@@ -5297,7 +5662,7 @@ Yv *gen_forrange(Yv *st, Yv *node) {
     /* a captured loop variable gets a fresh cell per iteration (the
      * counter itself stays in its raw slot) */
     st = box_bound(st, yr_get(node, "name"));
-    st = gen(st, yr_get(node, "body"));
+    st = gen_discard(st, yr_get(node, "body"));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(voff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    inc %rax"));
@@ -5361,7 +5726,7 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     st = emit(st, ys_cat(ys_cat(ys("    mov %rcx, "), ys_long(voff)),
                          ys("(%rbp)")));
     st = box_bound(st, yr_get(node, "name"));
-    st = gen(st, yr_get(node, "body"));
+    st = gen_discard(st, yr_get(node, "body"));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    inc %rax"));
@@ -5459,7 +5824,7 @@ Yv *gen_tail(Yv *st, Yv *node) {
         }
         long ti = 0;
         while (ti < m - 1) {
-            st = gen(st, ya_get(tl, ti));
+            st = gen_stmt(st, ya_get(tl, ti));
             ti = ti + 1;
         }
         if (m > 0) {
@@ -5493,6 +5858,12 @@ Yv *gen_tail(Yv *st, Yv *node) {
 }
 
 Yv *gen_block(Yv *st, Yv *node) {
+    return gen_block_as(st, node, 0);
+}
+
+/* `dropped`: nobody takes the block's value (a loop body), so its last
+ * statement is a statement (gen_stmt) as well as the ones before it. */
+Yv *gen_block_as(Yv *st, Yv *node, int dropped) {
     /* No scope push: names are unique post-rename, blocks share the
      * frame. */
     Yv *stmts = yr_get(node, "stmts");
@@ -5506,7 +5877,13 @@ Yv *gen_block(Yv *st, Yv *node) {
         }
         long i = 0;
         while (i < m) {
-            st = gen(st, ya_get(stmts, i));
+            if (dropped || i < yv_len(stmts) - 1) {
+                st = gen_stmt(st, ya_get(stmts, i));
+                ;
+            } else {
+                st = gen(st, ya_get(stmts, i));
+                ;
+            }
             i = i + 1;
         }
         return st;
@@ -5844,6 +6221,8 @@ Yv *bind_decl(Yv *st, Yv *name, Yv *t) {
                                    yr_get(ge, "label")),
                             ys("(%rip)")));
         return env_define(st, name, ys("global"), 0, yr_get(ge, "label"), t);
+    } else if (ys_eq_lit(yr_get(t, "k"), "tstr") && own_wanted(st, name)) {
+        return bind_own(st, name, t);
     } else {
         long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
         st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
@@ -7744,6 +8123,15 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         f = env_define(f, ys(""), ys("boxmark"), 0, bnm, yr(1, "k", ys("tnone")));
         bi = bi + 1;
     }
+    /* The names this body appends to (see own_wanted), the same way. */
+    Yv *anames = app_names(yr_get(func, "body"), 0, bnames);
+    long ai = 0;
+    while (ai < yv_len(anames)) {
+        Yv *anm = ya_get(anames, ai);
+        f = env_define(f, ys(""), ys("appmark"), 0, anm,
+                       yr(1, "k", ys("tnone")));
+        ai = ai + 1;
+    }
     /* A capturing named function is not in that table (see
      * capturing_defs): bind its own name to this body, so a call by name
      * passes the record along (gen_direct) and a value is the record. */
@@ -7815,6 +8203,23 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         Yv *pbn = ya_get(params, pbi);
         f = box_bound(f, pbn);
         pbi = pbi + 1;
+    }
+    /* An appended-to str parameter moves into an own pair (bind_own). */
+    long opi = 0;
+    while (opi < nargs) {
+        Yv *opn = ya_get(params, opi);
+        Yv *opt = ya_get(ptypes, opi);
+        if (ys_eq_lit(yr_get(opt, "k"), "tstr") && own_wanted(f, opn)) {
+            Yv *ope = env_find(f, opn);
+            f = emit(f, ys_cat(ys_cat(ys("    mov "),
+                                      ys_long(yv_l(yr_get(ope, "off")))),
+                               ys("(%rbp), %rax")));
+            f = bind_own(f, opn, opt);
+            ;
+        } else {
+            ;
+        }
+        opi = opi + 1;
     }
     f = gen_tail(f, yr_get(func, "body"));
     long frame = arch_frame(yv_l(yr_get(f, "slots")));
@@ -8371,7 +8776,7 @@ Yv *emit_program(Yv *ast, Yv *imports, Yv *origin) {
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
                 "end_label", yr_get(st, "end_label"), "fns", fixed1,
                 "bodies", yr_get(st, "bodies"));
-        Yv *gl = global_entries(st, gdecls);
+        Yv *gl = app_cells(global_entries(st, gdecls), yr_get(ast3, "stmts"));
         Yv *fixedfns = yav(0);
         long fi = 0;
         while (fi < yv_len(fixed1)) {

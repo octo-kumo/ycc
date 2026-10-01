@@ -42,6 +42,17 @@ with fields (Sections~\ref{sec:literals} and~\ref{sec:format-spec}).
 Comparisons \ic{<} \ic{<=} \ic{>} \ic{>=} on two strings compare bytes
 lexicographically; \ic{==} compares contents.
 
+\paragraph{Appending.}\label{sec:str-append} \ic{s += t} means \ic{s = s + t}, but a loop of
+appends is linear, not quadratic: when \ic{s} is a variable whose
+address is never taken and that no closure captures, and \ic{s} still
+holds the string its own previous \ic{+=} built, the bytes of \ic{t} are
+written in place behind it (the buffer doubles when full). Any other
+use of \ic{s} --- a read, a copy into another binding, an element or
+argument --- ends that ownership, and the next append copies once, so
+an append never changes a string that anything else can see. Building
+a string with \ic{+=} costs amortized $O(1)$ per appended byte, like
+pushing onto an array.
+
 \subsection{Assignment}
 \label{sec:assignment}
 
@@ -117,7 +128,8 @@ x.y.z += e;       // x and x.y evaluated once
 \paragraph{Arrays.} On array targets \ic{+=} and \ic{*=} are
 \emph{primitive in-place} operations --- they do not desugar through
 \ic{+} (which copies) --- and are defined in Section~\ref{sec:arrays}.
-On string targets only \ic{+=} is legal and concatenates. Every other
+On string targets only \ic{+=} is legal and concatenates (in place when
+it can, Section~\ref{sec:str-append}). Every other
 combination is a type error (Section~\ref{sec:opassign-typing}).
 
 \paragraph{Maps and slices.} A map store \ic{m[k] = v} evaluates \ic{m},

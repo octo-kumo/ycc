@@ -2510,7 +2510,23 @@ def gen_id(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
                 gen_make_closure(st, e.label, [])
             }
         } else if (e.kind == "global") {
+            // An appendable global gives up its buffer on every read
+            // (see gen_sappend).
+            if (e.typ.k == "tstr") {
+                let oe = env_find(st, node.v + "#o");
+                if (oe.kind == "none") { 0; } else {
+                    st = emit(st, "    xor %eax, %eax");
+                    st = emit(st, "    mov %rax, " + oe.label + "(%rip)");
+                    0
+                };
+                0
+            } else { 0; };
             emit(st, "    mov " + e.label + "(%rip), %rax")
+        } else if (e.kind == "own") {
+            // an appendable string: a read may let its buffer escape, so
+            // the companion is cleared (see gen_sappend)
+            st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax");
+            emit(st, "    mov $0, " + tostring(e.off - 8) + "(%rbp)")
         } else if (e.kind == "capture") {
             // Captured by the enclosing closure: load the closure record
             // (at the frame offset recorded in `off`), read slot idx+1 —
@@ -2632,6 +2648,279 @@ def box_bound(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
         0
     };
     if (want) { box_capture(st, name) } else { st }
+};
+
+// ── owned strings: `s += x` in place ──────────────────────────────────
+// An append used to copy the whole string (s = s + x), so n appends in a
+// loop cost O(n^2) bytes. A str variable that `+=` targets now has a
+// companion word: an "own" local keeps it in the slot below its value, an
+// appendable global in a second .bss cell (app_cells). It holds 0, 1
+// (an append statement is running), or the buffer the variable's last
+// append statement produced, and every read of the variable clears it
+// (gen_id). So "companion == value" proves nobody else ever saw that
+// buffer, and the append may write into its spare room (y_str_app; its
+// buffers keep their capacity in the word before the length). A variable
+// whose address is taken, or that a closure captures, never qualifies.
+
+// Every `+=` id target in a subtree, plus "&" + each name whose address
+// is taken. With `deep` false nested functions are skipped: each gets its
+// own walk, and a variable one of them touches is captured (boxed).
+def app_walk(node, out: [str], deep: bool) -> [str] {
+    let k = node.k;
+    // Most common kinds first: a leaf costs one compare, not the chain.
+    if (k == "id" || k == "num" || k == "str") {
+        0
+    } else if (k == "call") {
+        out = app_walk(node.callee, out, deep);
+        out = app_walk_list(node.args, out, deep);
+        0
+    } else if (k == "dot") {
+        out = app_walk(node.obj, out, deep);
+        0
+    } else if (k == "bin") {
+        out = app_walk(node.l, out, deep);
+        out = app_walk(node.r, out, deep);
+        0
+    } else if (k == "block") {
+        out = app_walk_list(node.stmts, out, deep);
+        0
+    } else if (k == "arrrep" || k == "decl" || k == "assign") {
+        out = app_walk(node.v, out, deep);
+        0
+    } else if (k == "if") {
+        out = app_walk(node.cond, out, deep);
+        out = app_walk(node.then, out, deep);
+        if (node.has_else) {
+            out = app_walk(node.els, out, deep);
+            0
+        } else { 0; };
+        0
+    } else if (k == "opassign") {
+        let tg = node.tgt;
+        if (node.op == "+" && tg.k == "id") { out += tg.v; 0; } else { 0; };
+        out = app_walk(tg, out, deep);
+        out = app_walk(node.v, out, deep);
+        0
+    } else if (k == "index") {
+        out = app_walk(node.arr, out, deep);
+        out = app_walk(node.idx, out, deep);
+        0
+    } else if (k == "addr") {
+        let ae = node.e;
+        if (ae.k == "id") { out += "&" + ae.v; 0; } else { 0; };
+        out = app_walk(ae, out, deep);
+        0
+    } else if (k == "un" || k == "deref" || k == "ret" || k == "rectest" || k == "narrow" || k == "matchend") {
+        out = app_walk(node.e, out, deep);
+        0
+    } else if (k == "array") {
+        out = app_walk_list(node.elems, out, deep);
+        0
+    } else if (k == "rec" || k == "map") {
+        out = app_walk_list(node.vals, out, deep);
+        0
+    } else if (k == "slice") {
+        out = app_walk(node.arr, out, deep);
+        out = app_walk(node.lo, out, deep);
+        out = app_walk(node.hi, out, deep);
+        0
+    } else if (k == "idxassign") {
+        out = app_walk(node.arr, out, deep);
+        out = app_walk(node.idx, out, deep);
+        out = app_walk(node.v, out, deep);
+        0
+    } else if (k == "dotassign") {
+        out = app_walk(node.obj, out, deep);
+        out = app_walk(node.v, out, deep);
+        0
+    } else if (k == "store") {
+        out = app_walk(node.p, out, deep);
+        out = app_walk(node.v, out, deep);
+        0
+    } else if (k == "incdec") {
+        out = app_walk(node.tgt, out, deep);
+        0
+    } else if (k == "while") {
+        out = app_walk(node.cond, out, deep);
+        out = app_walk(node.body, out, deep);
+        0
+    } else if (k == "for") {
+        out = app_walk(node.init, out, deep);
+        out = app_walk(node.cond, out, deep);
+        out = app_walk(node.step, out, deep);
+        out = app_walk(node.body, out, deep);
+        0
+    } else if (k == "foreach") {
+        out = app_walk(node.iter, out, deep);
+        out = app_walk(node.body, out, deep);
+        0
+    } else if (k == "forrange") {
+        out = app_walk(node.lo, out, deep);
+        out = app_walk(node.hi, out, deep);
+        out = app_walk(node.body, out, deep);
+        0
+    } else if (k == "func") {
+        if (deep) { out = app_walk(node.body, out, deep); 0; } else { 0; };
+        0
+    } else if (k == "sliceassign") {
+        out = app_walk(node.arr, out, deep);
+        out = app_walk(node.lo, out, deep);
+        out = app_walk(node.hi, out, deep);
+        out = app_walk(node.v, out, deep);
+        0
+    } else { 0; };
+    out
+};
+
+def app_walk_list(nodes: [{ k: str }], out: [str], deep: bool) -> [str] {
+    let i = 0;
+    while (i < len(nodes)) {
+        out = app_walk(nodes[i], out, deep);
+        i = i + 1;
+    };
+    out
+};
+
+// The names in a subtree (`deep`: a whole program) an append statement
+// may extend in place: `+=` targets whose address is never taken, minus
+// `skip` (the names closures capture). Only the str-typed ones are used.
+def app_names(node, deep: bool, skip: [str]) -> [str] {
+    let seen = app_walk(node, [], deep);
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(seen)) {
+        let n: str = seen[i];
+        if (n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n)) { 0; } else {
+            out += n;
+            0
+        };
+        i = i + 1;
+    };
+    out
+};
+
+// Before a str variable is bound: does this function append to it (an
+// "appmark" past its "frame", see emit_one_fn)?
+def own_wanted(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str) -> bool {
+    let env = st.env;
+    let i = len(env) - 1;
+    let want = false;
+    let more = true;
+    while (more && i >= 0) {
+        let e = env[i];
+        if (e.kind == "frame") {
+            more = false;
+            0
+        } else if (e.kind == "appmark" && e.label == name) {
+            want = true;
+            more = false;
+            0
+        } else { 0; };
+        i = i - 1;
+        0
+    };
+    want
+};
+
+// Bind an appendable str to the value in %rax: the value slot, and its
+// companion in the slot below, cleared.
+def bind_own(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let off = (st.slots + 1) * -8;
+    st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
+    st = emit(st, "    mov $0, " + tostring(off - 8) + "(%rbp)");
+    let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
+      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+      bodies: st.bodies };
+    env_define(st2, name, "own", off, "", t)
+};
+
+// A statement nobody takes the value of. `s += x` on an appendable string
+// (an "own" local, or a global with a companion cell) goes through
+// gen_sappend (the checker made x a str); anything else is plain gen.
+def gen_stmt(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (node.k == "opassign" && node.op == "+" && node.tgt.k == "id") {
+        let e = env_find(st, node.tgt.v);
+        if (e.kind == "own") {
+            gen_sappend(st, node.v, tostring(e.off) + "(%rbp)", tostring(e.off - 8) + "(%rbp)")
+        } else if (e.kind == "global" && e.typ.k == "tstr") {
+            let oe = env_find(st, node.tgt.v + "#o");
+            if (oe.kind == "none") {
+                gen(st, node)
+            } else {
+                gen_sappend(st, node.v, e.label + "(%rip)", oe.label + "(%rip)")
+            }
+        } else {
+            gen(st, node)
+        }
+    } else {
+        gen(st, node)
+    }
+};
+
+// `s += v` as a statement on an appendable string; `var` and `cell` are
+// the operands of the variable and of its companion. Ownership is decided
+// before v runs (companion := 1 if it held the value, else 0); anything v
+// does to the variable (a read clears the companion, a nested append
+// stores its buffer there) leaves it != 1, and y_str_app copies. The
+// order is s = s + v's: the old value first, then v.
+def gen_sappend(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, v, var: str, cell: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    st = emit(st, "    mov " + var + ", %rax");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov " + cell + ", %rdx");
+    st = emit(st, "    cmp %rdx, %rax");
+    st = emit(st, "    sete %al");
+    st = emit(st, "    movzbq %al, %rax");
+    st = emit(st, "    mov %rax, " + cell);
+    st = gen(st, v);
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov " + cell + ", %rax");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    call y_str_app");
+    st = emit(st, "    add $24, %rsp");
+    st = emit(st, "    mov %rax, " + var);
+    emit(st, "    mov %rax, " + cell)
+};
+
+// A loop body: its value is dropped, so a block body's last statement is
+// a statement too (gen_stmt).
+def gen_discard(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (node.k == "block") {
+        gen_block_as(st, node, true)
+    } else {
+        gen_stmt(st, node)
+    }
+};
+
+// One companion cell (see gen_sappend) per str global an append statement
+// may extend in place, named `<global>#o` (`#` never occurs in a Y name)
+// so gen_id and gen_stmt find it beside the global. The program is walked
+// only when it has a str global at all.
+def app_cells(gl: [{ name: str, label: str, typ: { k: str } }], stmts: [{ k: str }]) -> [{ name: str, label: str, typ: { k: str } }] {
+    let anystr = false;
+    let i = 0;
+    while (i < len(gl)) {
+        let ge = gl[i];
+        if (ge.typ.k == "tstr") { anystr = true; 0; } else { 0; };
+        i = i + 1;
+    };
+    if (anystr) {
+        let names = app_names({ k: "block", stmts: stmts }, true, []);
+        let out: [{ name: str, label: str, typ: { k: str } }] = [];
+        out += gl;
+        let j = 0;
+        while (j < len(gl)) {
+            let g2 = gl[j];
+            if (g2.typ.k == "tstr" && name_in(names, g2.name)) {
+                out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: { k: "tnone" } };
+                0
+            } else { 0; };
+            j = j + 1;
+        };
+        out
+    } else {
+        gl
+    }
 };
 
 def gen_make_closure(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, label: str, caps: [str]) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
@@ -4126,7 +4415,7 @@ def gen_while(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     st = gen(st, node.cond);
     st = emit(st, "    test %rax, %rax");
     st = emit(st, "    jz " + r2.lbl);
-    st = gen(st, node.body);
+    st = gen_discard(st, node.body);
     st = emit(st, "    jmp " + r1.lbl);
     st = emit(st, r2.lbl + ":");
     emit(st, "    xor %eax, %eax")
@@ -4148,7 +4437,7 @@ def gen_for(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
     st = gen(st, node.cond);
     st = emit(st, "    test %rax, %rax");
     st = emit(st, "    jz " + r2.lbl);
-    st = gen(st, node.body);
+    st = gen_discard(st, node.body);
     st = gen(st, node.step);
     st = emit(st, "    jmp " + r1.lbl);
     st = emit(st, r2.lbl + ":");
@@ -4181,7 +4470,7 @@ def gen_forrange(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     // a captured loop variable gets a fresh cell per iteration (the
     // counter itself stays in its raw slot)
     st = box_bound(st, node.name);
-    st = gen(st, node.body);
+    st = gen_discard(st, node.body);
     st = emit(st, "    mov " + tostring(voff) + "(%rbp), %rax");
     st = emit(st, "    inc %rax");
     st = emit(st, "    mov %rax, " + tostring(voff) + "(%rbp)");
@@ -4224,7 +4513,7 @@ def gen_foreach(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     st = emit(st, elem_load(arr_elem_bytes(elt), "%rdx", "%rax", "%rcx"));
     st = emit(st, "    mov %rcx, " + tostring(voff) + "(%rbp)");
     st = box_bound(st, node.name);
-    st = gen(st, node.body);
+    st = gen_discard(st, node.body);
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
     st = emit(st, "    inc %rax");
     st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
@@ -4327,7 +4616,7 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; 0 } else { 0 };
         let ti = 0;
         while (ti < m - 1) {
-            st = gen(st, tl[ti]);
+            st = gen_stmt(st, tl[ti]);
             ti = ti + 1;
         };
         if (m > 0) {
@@ -4362,7 +4651,13 @@ def gen_tail(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     }
 };
 
-def gen_block(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {    // No scope push: names are unique post-rename, blocks share the frame.
+def gen_block(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    gen_block_as(st, node, false)
+};
+
+// `dropped`: nobody takes the block's value (a loop body), so its last
+// statement is a statement (gen_stmt) as well as the ones before it.
+def gen_block_as(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, dropped: bool) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {    // No scope push: names are unique post-rename, blocks share the frame.
     let stmts = node.stmts;
     if (len(stmts) == 0) {
         emit(st, "    xor %eax, %eax")
@@ -4372,7 +4667,13 @@ def gen_block(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
         if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; 0 } else { 0 };
         let i = 0;
         while (i < m) {
-            st = gen(st, stmts[i]);
+            if (dropped || i < len(stmts) - 1) {
+                st = gen_stmt(st, stmts[i]);
+                0
+            } else {
+                st = gen(st, stmts[i]);
+                0
+            };
             i = i + 1;
         };
         st
@@ -4679,6 +4980,8 @@ def bind_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
     if (ge.kind == "global") {
         st = emit(st, "    mov %rax, " + ge.label + "(%rip)");
         env_define(st, name, "global", 0, ge.label, t)
+    } else if (t.k == "tstr" && own_wanted(st, name)) {
+        bind_own(st, name, t)
     } else {
         let off = (st.slots + 1) * -8;
         st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
@@ -6180,6 +6483,14 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
         f = env_define(f, "", "boxmark", 0, bnm, { k: "tnone" });
         bi = bi + 1;
     };
+    // The names this body appends to (see own_wanted), the same way.
+    let anames = app_names(func.body, false, bnames);
+    let ai = 0;
+    while (ai < len(anames)) {
+        let anm: str = anames[ai];
+        f = env_define(f, "", "appmark", 0, anm, { k: "tnone" });
+        ai = ai + 1;
+    };
     // A capturing named function is not in that table (see
     // capturing_defs): bind its own name to this body, so a call by name
     // passes the record along (gen_direct) and a value is the record.
@@ -6236,6 +6547,19 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
         let pbn: str = params[pbi];
         f = box_bound(f, pbn);
         pbi = pbi + 1;
+    };
+    // An appended-to str parameter moves into an own pair (bind_own).
+    let opi = 0;
+    while (opi < nargs) {
+        let opn: str = params[opi];
+        let opt = ptypes[opi];
+        if (opt.k == "tstr" && own_wanted(f, opn)) {
+            let ope = env_find(f, opn);
+            f = emit(f, "    mov " + tostring(ope.off) + "(%rbp), %rax");
+            f = bind_own(f, opn, opt);
+            0
+        } else { 0; };
+        opi = opi + 1;
     };
     f = gen_tail(f, func.body);
     let frame = arch.arch_frame(f.slots);
@@ -6682,7 +7006,7 @@ def emit_program(ast, imports: [str], origin: { files: [str], nuser: long, file:
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label, fns: fixed1,
           bodies: st.bodies };
-        let gl = global_entries(st, gdecls);
+        let gl = app_cells(global_entries(st, gdecls), ast3.stmts);
         let fixedfns: [{ name: str, label: str, typ: { k: str } }] = [];
         fixedfns += fixed1;
         fixedfns += gl;

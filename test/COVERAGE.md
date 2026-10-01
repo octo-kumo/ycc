@@ -77,6 +77,7 @@ reason.
 | 05-expressions | Numeric semantics | Signed division/remainder edges, modulo-2^64 wraparound, float arithmetic and exact float negation | `native/t28_floats.y`, `native/t32_signed_div.y`, `native/t83_integer_wrap.y`, `native/t137_float_negation.y` |
 | 05-expressions | Logic | Short-circuiting and truthiness of non-bool operands | `native/t75_eval_order.y`, `comprehensive: and: right side not evaluated`, `comprehensive: or: right side not evaluated` |
 | 05-expressions | Strings | Immutable concatenation, stringification and lexicographic comparison | `native/t28_floats.y`, `native/t33_str_compare.y`, `native/t69_fstrings.y`, `native/t77_reference_identity.y` |
+| 05-expressions | Strings | `s += t` appends in place (amortized O(1)) without changing any other binding: aliases, params, globals, snapshots, nested and self-referencing appends, captured and address-taken strings | `native/t139_string_append.y` |
 | 05-expressions | Assignment | Assignment statements store through names and mutable places | `native/t39_incdec_opassign.y`, `native/t51_strings_slices.y`, `native/t59_const.y` |
 | 05-expressions | Assignment | Assignment is a statement form: it cannot nest, and a block ending in one yields the stored value | `native/t131_assign_block_value.y`, `native/e129_assign_nested.y` |
 | 05-expressions | Increment, decrement and compound assignment | Prefix/postfix values and exactly-once target evaluation | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y` |
