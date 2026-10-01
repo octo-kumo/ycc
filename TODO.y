@@ -88,3 +88,5 @@ arr_of_arr += [[11, 12]]; // this should not change comb
 let new_arr = arr_of_arr + [13, 14]; // should be [[1, 2], [3, 4], [5, 6], [13, 14]] (in the tests the changes earlier to arr_of_arr should be in different file)
 let new_arr2 = [13, 14] + arr_of_arr; // should be [[13, 14], [1, 2], [3, 4], [5, 6]]
 
+let comb3 = [arr_of_arr, second_aarr]; // should be [[[1, 2], [3, 4], [5, 6]], [[7, 8], [9, 10]]]
+

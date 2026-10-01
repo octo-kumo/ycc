@@ -50,10 +50,18 @@
   `exec("... --no-io --compile ...")` — `ycc` accepts `-o -S -t/--time
   --no-exec --prof -h` only. It is reachable solely through `eval`, so no suite
   ever runs it. Either give the driver those flags or fix the fixture.
-- **`wasm/build.sh` is unverified.** It was rewritten to the current source
-  list during the audit (it referenced 12 deleted pre-rewrite files and could
-  not run), but emcc is not installed on this machine, so the command has
-  never been executed.
+- remove profiling from ycc itself, instead add option to compile with debug symbols like ELF symbol table, symbols and other info, so we can use linux built in `perf` to do profiling. for microbenching use valgrind. also measure time spent in kernel space with strace. and heap expansion with brk & io. and for heap profiling with massif.
+- remove py code
+- move prelude into std
+- readline is inefficient for large stdin
+- determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
+- replace `substr` with string slicing, and remove substr from built ins
+- enforce `const` so they cant be reassigned values and will error at compilation
+- template string with f"{x} {y:.2f}" (python style)
+- string operations like trim, strip, pad etc shall be done like "str 1 2 3".split(' ')
+- `arr.length` and `arr.ptr`
+- optional arguments `def print(a: long, b?: long)`, b will appear as an option type, this is different from `b: long?` as `b: long?` requires you to supply an `long option` argument where `b?: long` require you to either supply or not a `long`. they must be at the end of arg list or type error is thrown.
+
 
 ## Done
 
