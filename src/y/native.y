@@ -4143,33 +4143,7 @@ def flit_exp(s: str) -> long {
     ex - frac
 };
 
-def flit_num(s: str) -> long {
-    let v = 0;
-    let i = 0;
-    let n = len(s);
-    while (i < n) {
-        let c = substr(s, i, 1);
-        if (c == ".") { 0; } else {
-            v = v * 10 + hexval_ch(c);
-            0
-        };
-        i = i + 1;
-    };
-    v
-};
 
-def flit_den(s: str) -> long {
-    let dot = index_of(s, ".");
-    let frac = 0;
-    if (dot >= 0) { frac = len(s) - dot - 1; 0; } else { 0; };
-    let d = 1;
-    let i = 0;
-    while (i < frac) {
-        d = d * 10;
-        i = i + 1;
-    };
-    d
-};
 
 // 10^k for 0 <= k <= 18 (the largest power of ten a long holds exactly).
 def pow10(k: long) -> long {

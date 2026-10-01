@@ -189,8 +189,6 @@ Yv *norm_num(Yv *s);
 long flit_mant(Yv *s);
 long flit_ebase(Yv *s);
 long flit_exp(Yv *s);
-long flit_num(Yv *s);
-long flit_den(Yv *s);
 long pow10(long k);
 Yv *gen_lit(Yv *st, Yv *node);
 Yv *gen_scale10(Yv *st, long n);
@@ -5169,40 +5167,7 @@ long flit_exp(Yv *s) {
     return ex - frac;
 }
 
-long flit_num(Yv *s) {
-    long v = 0;
-    long i = 0;
-    long n = yv_len(s);
-    while (i < n) {
-        Yv *c = ys_substr(s, i, 1);
-        if (ys_eq_lit(c, ".")) {
-            ;
-        } else {
-            v = v * 10 + hexval_ch(c);
-            ;
-        }
-        i = i + 1;
-    }
-    return v;
-}
 
-long flit_den(Yv *s) {
-    long dot = ys_index_of(s, ys("."));
-    long frac = 0;
-    if (dot >= 0) {
-        frac = yv_len(s) - dot - 1;
-        ;
-    } else {
-        ;
-    }
-    long d = 1;
-    long i = 0;
-    while (i < frac) {
-        d = d * 10;
-        i = i + 1;
-    }
-    return d;
-}
 
 /* 10^k for 0 <= k <= 18 (the largest power of ten a long holds exactly). */
 long pow10(long k) {
