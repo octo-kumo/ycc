@@ -1,6 +1,6 @@
-print(substr("hello world", 0, 5));
-print(substr("hello", 2, 10));
-print(substr("hello", 9, 3));
+print("hello world"[:5]);
+print("hello"[2:12]);
+print("hello"[9:12]);
 print(trim("  abc  "));
 print(trim("   "));
 print(ord("A"));

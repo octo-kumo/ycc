@@ -69,7 +69,7 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("  -h, --help   show this text and exit\n"));
             exit_(0);
             ;
-        } else if (ys_eq_lit(ys_substr(a, 0, 1), "-")) {
+        } else if (ys_eq_lit(ys_slice(a, 0, 1), "-")) {
             puts_(ys_cat(ys_cat(ys("ycc: unknown flag '"), a),
                          ys("' (see ycc -h)\n")));
             exit_(1);
@@ -225,7 +225,7 @@ long y_main(Yv *cmdline) {
             long last_slash = ys_last_index_of(file, ys("/"));
             Yv *base_dir = ys(".");
             if (last_slash >= 0) {
-                base_dir = ys_substr(file, 0, last_slash);
+                base_dir = ys_slice(file, 0, last_slash);
                 ;
             } else {
                 ;

@@ -1,5 +1,5 @@
 // bench/y/strings.y — string building and searching: concat, tostring,
-// substr, index_of, comparisons. This is the compiler's own hot shape
+// string slicing, index_of, comparisons. This is the compiler's own hot shape
 // (every emitted line is built this way).
 def strings(n: long) -> long {
 let hits = 0;
@@ -11,7 +11,7 @@ while (i < n) {
         hits = hits + 1;
         0
     } else { 0; };
-    if (substr(s, 0, 4) == "item") {
+    if (s[:4] == "item") {
         hits = hits + 1;
         0
     } else { 0; };

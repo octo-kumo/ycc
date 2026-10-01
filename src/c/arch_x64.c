@@ -97,7 +97,7 @@ Yv *arch_prelude(void) {
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
     // .bss cells), the trap stubs, the record field-table probes
     // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
-    // (eq/cmp/cat/join/substr, arr push/prepend/slice/cat/eq), long and
+    // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
     Yv *lines = yav(0);
     lines = ya_push(lines, ys("y_str_eq:"));
@@ -869,9 +869,9 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    push %rax"));
     lines = ya_push(lines, ys("    mov $1, %rax"));
     lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    mov $6, %rax"));
+    lines = ya_push(lines, ys("    mov $7, %rax"));
     lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    call y_str_substr"));
+    lines = ya_push(lines, ys("    call y_str_slice"));
     lines = ya_push(lines, ys("    add $24, %rsp"));
     lines = ya_push(lines, ys("    push %rbx"));
     lines = ya_push(lines, ys("    push %rax"));
@@ -883,7 +883,10 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
-    lines = ya_push(lines, ys("y_str_substr:"));
+    // y_str_slice(s, lo, hi) -> NEW str = s[lo:hi], half-open and
+    // clamped like an array slice: lo < 0 counts from 0, hi > len stops
+    // at len, hi <= lo is "".
+    lines = ya_push(lines, ys("y_str_slice:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
     lines = ya_push(lines, ys("    push %rbx"));
@@ -891,28 +894,19 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    push %r13"));
     lines = ya_push(lines, ys("    push %r14"));
     lines = ya_push(lines, ys("    mov 32(%rbp), %rbx"));
-    lines = ya_push(lines, ys("    mov 24(%rbp), %r13"));
+    lines = ya_push(lines, ys("    mov 24(%rbp), %rax"));
     lines = ya_push(lines, ys("    mov 16(%rbp), %r14"));
     lines = ya_push(lines, ys("    mov (%rbx), %rcx"));
-    lines = ya_push(lines, ys("    mov %r13, %rax"));
     lines = ya_push(lines, ys("    cmp $0, %rax"));
-    lines = ya_push(lines, ys("    jge ysb_stok"));
+    lines = ya_push(lines, ys("    jge ysb_look"));
     lines = ya_push(lines, ys("    xor %eax, %eax"));
-    lines = ya_push(lines, ys("ysb_stok:"));
-    lines = ya_push(lines, ys("    cmp %rcx, %rax"));
-    lines = ya_push(lines, ys("    jge ysb_empty"));
-    lines = ya_push(lines, ys("    mov %rcx, %rdx"));
-    lines = ya_push(lines, ys("    sub %rax, %rdx"));
-    lines = ya_push(lines, ys("    cmp %r14, %rdx"));
-    lines = ya_push(lines, ys("    jge ysb_cntok"));
-    lines = ya_push(lines, ys("    mov %rdx, %r14"));
-    lines = ya_push(lines, ys("    jmp ysb_cntok2"));
-    lines = ya_push(lines, ys("ysb_cntok:"));
-    lines = ya_push(lines, ys("    cmp $0, %r14"));
-    lines = ya_push(lines, ys("    jge ysb_cntok2"));
-    lines = ya_push(lines, ys("    mov %rdx, %r14"));
-    lines = ya_push(lines, ys("ysb_cntok2:"));
-    lines = ya_push(lines, ys("    mov %r14, %rcx"));
+    lines = ya_push(lines, ys("ysb_look:"));
+    lines = ya_push(lines, ys("    cmp %rcx, %r14"));
+    lines = ya_push(lines, ys("    jle ysb_hiok"));
+    lines = ya_push(lines, ys("    mov %rcx, %r14"));
+    lines = ya_push(lines, ys("ysb_hiok:"));
+    lines = ya_push(lines, ys("    sub %rax, %r14"));
+    lines = ya_push(lines, ys("    jle ysb_empty"));
     lines = ya_push(lines, ys("    mov %r14, %rdi"));
     lines = ya_push(lines, ys("    add $16, %rdi"));
     lines = ya_push(lines, ys("    mov %rax, %r12"));

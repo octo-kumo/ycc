@@ -54,7 +54,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
             puts("  -h, --help   show this text and exit\n");
             exit(0);
-        } else if (substr(a, 0, 1) == "-") {
+        } else if (a[0:1] == "-") {
             puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
             exit(1);
         } else {
@@ -177,7 +177,7 @@ def main(cmdline: [str]) -> long {
             let last_slash = last_index_of(file, "/");
             let base_dir = ".";
             if (last_slash >= 0) {
-                base_dir = substr(file, 0, last_slash);
+                base_dir = file[0:last_slash];
                 0
             } else { 0; };
 

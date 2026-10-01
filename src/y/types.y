@@ -385,7 +385,7 @@ def union_accepts(got, want) -> bool {
 def num_is_float(s: str) -> bool {
     let radix = false;
     if (len(s) > 2) {
-        let p = substr(s, 0, 2);
+        let p = s[0:2];
         if (p == "0x") { radix = true; 0; } else { 0; };
         if (p == "0X") { radix = true; 0; } else { 0; };
         if (p == "0b") { radix = true; 0; } else { 0; };
@@ -580,7 +580,7 @@ def fail(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long 
 // the user's source (`$` is lexer-illegal, so it can only come from rename).
 def disp(name: str) -> str {
     let i = index_of(name, "$");
-    if (i < 0) { name } else { substr(name, 0, i) }
+    if (i < 0) { name } else { name[0:i] }
 };
 
 // A local/param binding from an enclosing function is a CAPTURE, and captures
@@ -1517,7 +1517,7 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         } else if (sr.typ.k == "tarrfix") {
             { typ: { k: "tarr", of: sr.typ.of }, st: st }
         } else if (sr.typ.k == "tstr") {
-            // s[lo:hi] -> the substring (bounds clamped, like substr)
+            // s[lo:hi] -> the substring (bounds clamped, like an array slice)
             { typ: { k: "tstr" }, st: st }
         } else if (sr.typ.k == "tunk") {
             { typ: t_unk(), st: st }
@@ -2106,23 +2106,6 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     { typ: t_unk(), st: st }
                 }
             }
-        } else if (name == "substr") {
-            // substr(s, start, count) -> str (C-clamped semantics)
-            if (len(cargs) != 3) {
-                st = fail(st, "substr takes exactly 3 arguments (string, start, count)", node.line, node.col);
-                { typ: t_unk(), st: st }
-            } else {
-                let r0 = typeof_expr(st, cargs[0]);
-                st = r0.st;
-                let r1 = typeof_expr(st, cargs[1]);
-                st = r1.st;
-                let r2 = typeof_expr(st, cargs[2]);
-                st = r2.st;
-                st = expect_type(st, r0.typ, { k: "tstr" }, "substr string", node.line, node.col);
-                st = expect_type(st, r1.typ, { k: "tlong" }, "substr start", node.line, node.col);
-                st = expect_type(st, r2.typ, { k: "tlong" }, "substr count", node.line, node.col);
-                { typ: { k: "tstr" }, st: st }
-            }
         } else if (name == "trim") {
             if (len(cargs) != 1) {
                 st = fail(st, "trim takes exactly 1 argument", node.line, node.col);
@@ -2468,6 +2451,10 @@ def typeof_call(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 let got = lookup(st.bindings, name);
                 if (got.kind == "") {
                     fterr = "undefined function '" + disp(name) + "'";
+                    if (name == "substr") {
+                        fterr = fterr + " (slice instead: s[start:end])";
+                        0
+                    } else { 0; };
                     0
                 } else if (got.typ.k == "tfunc") {
                     // Either a hoisted `def` (kind "func") or a local/param

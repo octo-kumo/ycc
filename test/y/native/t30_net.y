@@ -22,7 +22,7 @@ if (pid == 0) {
     let r = net.recv_str(c, 256);
     net.close_fd(c);
     if (is_some(r)) {
-        print("client got: " + substr(unwrap(r), 0, 15));
+        print("client got: " + unwrap(r)[:15]);
         0
     } else {
         print("client got: nothing");

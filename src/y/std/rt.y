@@ -22,12 +22,12 @@
 //   - arguments arrive on the stack (pushed left to right, caller cleans
 //     up) and the result is in %rax — the same convention every Y function
 //     uses, so these are callable from both Y code and generated code.
-//   - a helper may call intrinsics freely: `substr` here is the asm
-//     y_str_substr primitive, `bytes`/`from_bytes` the str<->[byte] bridge,
-//     `tostring` the value formatter (a float reaches the asm
-//     y_float_tostr). Direct calls to asm-only labels are not allowed (the
-//     checker would call them undefined), so every bridge into the
-//     primitives goes through an intrinsic.
+//   - a helper may call intrinsics freely: a string slice `s[a:b]` here
+//     is the asm y_str_slice primitive, `bytes`/`from_bytes` the
+//     str<->[byte] bridge, `tostring` the value formatter (a float
+//     reaches the asm y_float_tostr). Direct calls to asm-only labels are
+//     not allowed (the checker would call them undefined), so every
+//     bridge into the primitives goes through an intrinsic or an operator.
 
 def rt_lines() -> [str] {
     [
@@ -71,16 +71,6 @@ def rt_lines() -> [str] {
         "    let b: [byte; 1] = [0; 1];",
         "    b[0] = n;",
         "    from_bytes(b)",
-        "};",
-        "",
-        "// s[lo:hi]: half-open and clamped, like an array slice.",
-        "def y_str_slice(s: str, lo: long, hi: long) -> str {",
-        "    let n = len(s);",
-        "    let a = lo;",
-        "    let b = hi;",
-        "    if (a < 0) { a = 0; 0 } else { 0 };",
-        "    if (b > n) { b = n; 0 } else { 0 };",
-        "    if (b <= a) { \"\" } else { substr(s, a, b - a) }",
         "};",
         "",
         "// a[lo:hi] = src, for 8-byte and packed 1-byte elements: the range",
@@ -179,7 +169,7 @@ def rt_lines() -> [str] {
         "        } else { go = false; 0; };",
         "        0",
         "    };",
-        "    substr(s, i, j - i)",
+        "    s[i:j]",
         "};",
         "",
         "// index_of / last_index_of: first (last) match of needle in hay,",
@@ -279,7 +269,7 @@ def rt_lines() -> [str] {
         "                    0",
         "                } else { 0; };",
         "                if (hit) {",
-        "                    out += substr(s, start, i - start);",
+        "                    out += s[start:i];",
         "                    start = i + m;",
         "                    i = i + m;",
         "                    0",
@@ -292,7 +282,7 @@ def rt_lines() -> [str] {
         "            0",
         "        };",
         "        if (start < n) {",
-        "            out += substr(s, start, n - start);",
+        "            out += s[start:];",
         "            0",
         "        } else { 0; };",
         "        out",
@@ -414,7 +404,9 @@ def rt_lines() -> [str] {
         "// as \\xHH. Built from chr() so the embedded text stays escape-free.",
         "def y_hex_esc(c: long) -> str {",
         "    let d = \"0123456789abcdef\";",
-        "    chr(92) + \"x\" + substr(d, (c / 16) % 16, 1) + substr(d, c % 16, 1)",
+        "    let hi = (c / 16) % 16;",
+        "    let lo = c % 16;",
+        "    chr(92) + \"x\" + d[hi:hi + 1] + d[lo:lo + 1]",
         "};",
         "def y_bytes_repr(b: [byte]) -> str {",
         "    let bs = chr(92);",

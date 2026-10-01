@@ -121,9 +121,9 @@ def strip_comments(src: str) -> str {
     let n = len(src);
     let i = 0;
     while (i < n) {
-        let c = substr(src, i, 1);
+        let c = src[i:i + 1];
         if (c == "/") {
-            let nxt = substr(src, i + 1, 1);
+            let nxt = src[i + 1:i + 2];
             if (nxt == "/") {
                 // to end of line; keep the newline itself
                 let done = false;
@@ -132,7 +132,7 @@ def strip_comments(src: str) -> str {
                         done = true;
                         0
                     } else {
-                        let d = substr(src, i, 1);
+                        let d = src[i:i + 1];
                         i = i + 1;
                         if (d == "\n") { out += "\n"; done = true; 0; } else { 0; };
                         0
@@ -143,9 +143,9 @@ def strip_comments(src: str) -> str {
             } else if (nxt == "*") {
                 i = i + 2;
                 while (i < n) {
-                    let d = substr(src, i, 1);
+                    let d = src[i:i + 1];
                     if (d == "*") {
-                        if (substr(src, i + 1, 1) == "/") { i = i + 2; 0; } else { i = i + 1; 0; };
+                        if (src[i + 1:i + 2] == "/") { i = i + 2; 0; } else { i = i + 1; 0; };
                         0
                     } else {
                         if (d == "\n") { out += "\n"; 0; } else { 0; };
@@ -222,7 +222,7 @@ def seen_has(seen: [str], full: str) -> bool {
 
 def dir_of(p: str) -> str {
     let s = last_index_of(p, "/");
-    if (s < 0) { "" } else { substr(p, 0, s) }
+    if (s < 0) { "" } else { p[:s] }
 };
 
 def std_resolve(name: str, base_dir: str) -> str {
@@ -275,32 +275,32 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
         while (i < n) {
             let line = lines[i];
             let trimmed = trim(line);
-            if (substr(trimmed, 0, 7) == "import ") {
-                let rest = substr(trimmed, 7, len(trimmed) - 7);
+            if (trimmed[:7] == "import ") {
+                let rest = trimmed[7:];
                 let from_idx = index_of(rest, " from ");
                 let name = "";
                 let full = "";
                 let path = "";
                 if (from_idx >= 0) {
-                    name = trim(substr(rest, 0, from_idx));
-                    let path_part = trim(substr(rest, from_idx + 6, len(rest) - from_idx - 6));
-                    if (substr(path_part, len(path_part) - 1, 1) == ";") {
-                        path_part = substr(path_part, 0, len(path_part) - 1);
+                    name = trim(rest[:from_idx]);
+                    let path_part = trim(rest[from_idx + 6:]);
+                    if (path_part[len(path_part) - 1:] == ";") {
+                        path_part = path_part[:len(path_part) - 1];
                         0
                     };
-                    path = substr(path_part, 1, len(path_part) - 2);
+                    path = path_part[1:len(path_part) - 1];
                     // NOTE: normalized (see norm_path): nested base dirs
                     // accumulate "/." segments, so raw joins of the same file
                     // differ per depth and seen-dedup would never hit.
                     full = norm_path(base_dir + "/" + path);
-                    if (substr(path, 0, 1) == "/") { full = norm_path(path); 0; };
+                    if (path[:1] == "/") { full = norm_path(path); 0; };
                     0
                 } else {
                     // bare `import name;`: an optional std module (net, ui,
                     // ...) or a project-local one — see std_resolve above.
                     name = trim(rest);
-                    if (substr(name, len(name) - 1, 1) == ";") {
-                        name = trim(substr(name, 0, len(name) - 1));
+                    if (name[len(name) - 1:] == ";") {
+                        name = trim(name[:len(name) - 1]);
                         0
                     };
                     path = name;
@@ -333,7 +333,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                         let last_slash = last_index_of(full, "/");
                         let mod_dir = base_dir;
                         if (last_slash >= 0) {
-                            mod_dir = substr(full, 0, last_slash);
+                            mod_dir = full[:last_slash];
                             0
                         };
                         // mod_src is str? (read_file returns none on missing
@@ -368,7 +368,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                 // NOTE: no empty if-arms here — keep the `0;` filler.
                 // Export lines are dropped (defs are spliced; uses are
                 // rewritten by strip_namespaces).
-                if (substr(trimmed, 0, 7) != "export ") {
+                if (trimmed[:7] != "export ") {
                     out_lines += line;
                     0
                 } else {
@@ -412,7 +412,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
 // up, to whole function bodies.
 //
 // The scanners walk a `bytes()` COPY of the text and only materialize the
-// symbols they reference: per-character substr() would cost an allocation
+// symbols they reference: a per-character slice would cost an allocation
 // (two syscalls in y_alloc) per character, which dominated compiles.
 
 def is_id_b(c: long) -> bool {
@@ -494,7 +494,7 @@ def tok_at_b(text: str, b: [byte], i: long, hi: long) -> str {
         0
     } else { 0; };
     let e = tok_end_b(b, i, hi);
-    if (e > s) { substr(text, s, e - s) } else { "" }
+    if (e > s) { text[s:e] } else { "" }
 };
 
 def tok_push(out: [str], t: str) -> [str] {
@@ -553,7 +553,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
             0
         } else {
             if (want_jumps) {
-                if (substr(w, 0, 1) == "j") {
+                if (w[:1] == "j") {
                     out = tok_push(out, tok_at_b(text, b, op, hi));
                     0
                 } else { 0; };
@@ -602,7 +602,7 @@ def label_at(text: str, b: [byte], lo: long, hi: long) -> str {
             if (b[e] == 58) {
                 let s = p;
                 if (b[s] == 36) { s = s + 1; 0; } else { 0; };
-                lab = substr(text, s, e - s);
+                lab = text[s:e];
                 0
             } else { 0; };
             0
@@ -855,7 +855,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
                 let lo = starts[k];
                 let hi = n;
                 if (k + 1 < nb) { hi = starts[k + 1]; 0; } else { 0; };
-                pieces += substr(text, lo, hi - lo);
+                pieces += text[lo:hi];
                 0
             } else { 0; };
             k = k + 1;
@@ -937,7 +937,7 @@ def is_all_digits(s: str) -> bool {
         let i = 0;
         let ok = true;
         while (i < len(s)) {
-            if (index_of("0123456789", substr(s, i, 1)) < 0) { ok = false; 0; } else { 0; };
+            if (index_of("0123456789", s[i:i + 1]) < 0) { ok = false; 0; } else { 0; };
             i = i + 1;
             0
         };
@@ -950,15 +950,15 @@ def runtime_base(name: str) -> str {
     if (len(name) < 3) {
         ""
     } else {
-        if (substr(name, 0, 2) != "y_") {
+        if (name[:2] != "y_") {
             ""
         } else {
             let dollar = index_of(name, "$");
             if (dollar < 0) {
                 name
             } else {
-                if (is_all_digits(substr(name, dollar + 1, len(name) - dollar - 1))) {
-                    substr(name, 0, dollar)
+                if (is_all_digits(name[dollar + 1:])) {
+                    name[:dollar]
                 } else {
                     ""
                 }
@@ -1138,7 +1138,7 @@ def esc_asm(s: str) -> str {
     let i = 0;
     let n = len(s);
     while (i < n) {
-        let c = substr(s, i, 1);
+        let c = s[i:i + 1];
         let o = ord(c);
         if (c == "\\") { buf = buf + "\\\\"; }
         else if (c == "\"") { buf = buf + "\\\""; }
@@ -1419,7 +1419,7 @@ def infer_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
             if (len(sargs) != 1) { { k: "topt", of: { k: "tunk" } } } else {
                 { k: "topt", of: infer(st, sargs[0]) }
             }
-        } else if (name == "substr" || name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof") {
+        } else if (name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof") {
             { k: "tstr" }
         } else if (name == "read_file") {
             // str? (option): a missing file yields none at runtime
@@ -1660,7 +1660,7 @@ def name_in(xs: [str], n: str) -> bool {
 // Builtins are resolved by name at the call site, never captured.
 def is_intrinsic_name(n: str) -> bool {
     name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
-             "substr", "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
+             "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "sleep", "heap_used", "exit", "argv", "read_file", "write_file",
@@ -1987,7 +1987,7 @@ def fn_names_of(fns: [{ name: str, label: str, typ: { k: str } }]) -> [str] {
 // st.fns holds the hoisted defs and, after them, the globals (see
 // emit_program); a global's label is its .bss cell.
 def fns_kind(label: str) -> str {
-    if (substr(label, 0, 3) == "yg_") { "global" } else { "func" }
+    if (label[:3] == "yg_") { "global" } else { "func" }
 };
 
 // ── expression emission (value in %rax) ────────────────────────────────
@@ -2108,7 +2108,7 @@ def gen_bstr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
     let bi = 0;
     let bn = len(bv);
     while (bi < bn) {
-        let bnum = { k: "num", v: tostring(ord(substr(bv, bi, 1))), line: node.line, col: node.col };
+        let bnum = { k: "num", v: tostring(ord(bv[bi:bi + 1])), line: node.line, col: node.col };
         elems += bnum;
         bi = bi + 1;
     };
@@ -2350,7 +2350,7 @@ def gen_slice(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lon
 };
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
-// a missing bound means 0 / len (y_str_slice in rt.y).
+// a missing bound means 0 / len (the asm primitive y_str_slice).
 def gen_str_slice(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let lo = node.lo;
     let hi = node.hi;
@@ -3014,8 +3014,6 @@ def gen_call(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
             gen_is_some(st, node)
         } else if (name == "unwrap") {
             gen_unwrap(st, node)
-        } else if (name == "substr") {
-            gen_substr(st, node)
         } else if (name == "trim") {
             gen_trim(st, node)
         } else if (name == "prepend") {
@@ -3777,7 +3775,7 @@ def gen_reclit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         te += tostring(nl);
         let c = 0;
         while (c < nl) {
-            let ch = substr(nm, c, 1);
+            let ch = nm[c:c + 1];
             let co = ord(ch);
             te += tostring(co);
             c = c + 1;
@@ -4113,7 +4111,7 @@ def hexval_ch(c: str) -> long {
 def lit_is_float(s: str) -> bool {
     let radix = false;
     if (len(s) > 2) {
-        let p = substr(s, 0, 2);
+        let p = s[:2];
         if (p == "0x") { radix = true; 0; } else { 0; };
         if (p == "0X") { radix = true; 0; } else { 0; };
         if (p == "0b") { radix = true; 0; } else { 0; };
@@ -4132,7 +4130,7 @@ def lit_is_float(s: str) -> bool {
 def norm_num(s: str) -> str {
     let radix = 0;
     if (len(s) > 2) {
-        let p = substr(s, 0, 2);
+        let p = s[:2];
         if (p == "0x") { radix = 16; 0; } else { 0; };
         if (p == "0X") { radix = 16; 0; } else { 0; };
         if (p == "0b") { radix = 2; 0; } else { 0; };
@@ -4145,7 +4143,7 @@ def norm_num(s: str) -> str {
         let v = 0;
         let i = 2;
         while (i < len(s)) {
-            let c = substr(s, i, 1);
+            let c = s[i:i + 1];
             if (c == "_") { 0; } else {
                 v = v * radix + hexval_ch(c);
                 0
@@ -4166,7 +4164,7 @@ def flit_mant(s: str) -> long {
     let i = 0;
     let n = flit_ebase(s);
     while (i < n) {
-        let c = substr(s, i, 1);
+        let c = s[i:i + 1];
         if (c == ".") { 0; } else {
             v = v * 10 + hexval_ch(c);
             0
@@ -4193,11 +4191,11 @@ def flit_exp(s: str) -> long {
     if (eb < len(s)) {
         let i = eb + 1;
         let neg = false;
-        let sc = substr(s, i, 1);
+        let sc = s[i:i + 1];
         if (sc == "-") { neg = true; i = i + 1; 0; } else { 0; };
         if (sc == "+") { i = i + 1; 0; } else { 0; };
         while (i < len(s)) {
-            ex = ex * 10 + hexval_ch(substr(s, i, 1));
+            ex = ex * 10 + hexval_ch(s[i:i + 1]);
             i = i + 1;
         };
         if (neg) { ex = 0 - ex; 0; } else { 0; };
@@ -4995,12 +4993,6 @@ def gen_unwrap(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
 // (args pushed left-to-right, first arg deepest) and returns a header
 // address (or long) in %rax. Caller cleans the stack.
 
-def gen_substr(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    st = gen_push_args(st, node.args);
-    st = emit(st, "    call y_str_substr");
-    emit(st, "    add $24, %rsp")
-};
-
 def gen_trim(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_trim");
@@ -5510,7 +5502,7 @@ def func_type_in(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
 // Display name: strip rename's `$N` suffix (see types.y disp).
 def ndisp(name: str) -> str {
     let i = index_of(name, "$");
-    if (i < 0) { name } else { substr(name, 0, i) }
+    if (i < 0) { name } else { name[:i] }
 };
 
 // Two spliced modules may define the same name: shadowing would silently

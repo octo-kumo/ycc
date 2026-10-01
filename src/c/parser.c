@@ -11,7 +11,7 @@
 #include "parser.h"
 
 /* imported: none — parser.y is self-contained (only yv.h builtins:
- * len -> yv_len, push -> ya_push, substr -> ys_substr, tonum -> ys_tonum). */
+ * len -> yv_len, push -> ya_push, slicing -> ys_slice, tonum -> ys_tonum). */
 
 // ── token helpers ────────────────────────────────────────────────────────
 
@@ -1219,7 +1219,7 @@ Yv *topt_of(Yv *t) {
 // float when the literal has a fraction or an exponent (radix literals
 // like 0xE1 never do).
 Yv *num_lit_type(Yv *s) {
-    Yv *p = ys_substr(s, 0, 2);
+    Yv *p = ys_slice(s, 0, 2);
     if (ys_eq_lit(p, "0x") || ys_eq_lit(p, "0X") || ys_eq_lit(p, "0b") || ys_eq_lit(p, "0B")) {
         return yr(1, "k", ys("tlong"));
     } else if (ys_index_of(s, ys(".")) >= 0 || ys_index_of(s, ys("e")) >= 0 || ys_index_of(s, ys("E")) >= 0) {
@@ -1637,7 +1637,7 @@ Yv *parse_stmt_opassign(Yv *toks, long p, Yv *tgt, long epos) {
     Yv *op = tv(toks, epos);
     Yv *rhs = parse_expr(toks, epos + 1);
     // Every compound op is `X=`, so the binary op is its first character.
-    Yv *binop = ys_substr(op, 0, 1);
+    Yv *binop = ys_slice(op, 0, 1);
     return res(yr(6, "k", ys("opassign"), "op", binop, "tgt", tgt, "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, epos)), "col", yv_long(tcol(toks, epos))), yv_l(yr_get(rhs, "pos")));
 }
 

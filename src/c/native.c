@@ -269,7 +269,6 @@ Yv *gen_push(Yv *st, Yv *node);
 Yv *gen_some(Yv *st, Yv *node);
 Yv *gen_is_some(Yv *st, Yv *node);
 Yv *gen_unwrap(Yv *st, Yv *node);
-Yv *gen_substr(Yv *st, Yv *node);
 Yv *gen_trim(Yv *st, Yv *node);
 Yv *gen_prepend(Yv *st, Yv *node);
 Yv *gen_byte_at(Yv *st, Yv *node);
@@ -412,9 +411,9 @@ Yv *strip_comments(Yv *src) {
     Yv *out = yav(0);
     long i = 0;
     while (i < n) {
-        Yv *c = ys_substr(src, i, 1);
+        Yv *c = ys_slice(src, i, i + 1);
         if (ys_eq(c, ys("/"))) {
-            Yv *nxt = ys_substr(src, i + 1, 1);
+            Yv *nxt = ys_slice(src, i + 1, i + 2);
             if (ys_eq(nxt, ys("/"))) {
                 /* to end of line; keep the newline itself */
                 int done = 0;
@@ -423,7 +422,7 @@ Yv *strip_comments(Yv *src) {
                         done = 1;
                         ;
                     } else {
-                        Yv *d = ys_substr(src, i, 1);
+                        Yv *d = ys_slice(src, i, i + 1);
                         i = i + 1;
                         if (ys_eq(d, ys("\n"))) {
                             out = ya_push(out, ys("\n"));
@@ -440,9 +439,9 @@ Yv *strip_comments(Yv *src) {
             } else if (ys_eq(nxt, ys("*"))) {
                 i = i + 2;
                 while (i < n) {
-                    Yv *d = ys_substr(src, i, 1);
+                    Yv *d = ys_slice(src, i, i + 1);
                     if (ys_eq(d, ys("*"))) {
-                        if (ys_eq(ys_substr(src, i + 1, 1), ys("/"))) { i = i + 2; ; } else { i = i + 1; ; }
+                        if (ys_eq(ys_slice(src, i + 1, i + 2), ys("/"))) { i = i + 2; ; } else { i = i + 1; ; }
                         ;
                     } else {
                         if (ys_eq(d, ys("\n"))) { out = ya_push(out, ys("\n")); ; } else { ; }
@@ -525,7 +524,7 @@ Yv *dir_of(Yv *p) {
     if (s < 0) {
         return ys("");
     } else {
-        return ys_substr(p, 0, s);
+        return ys_slice(p, 0, s);
     }
 }
 
@@ -591,31 +590,28 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
         while (i < n) {
             Yv *line = ya_get(lines, i);
             Yv *trimmed = ys_trim(line);
-            if (ys_eq_lit(ys_substr(trimmed, 0, 7), "import ")) {
-                Yv *rest = ys_substr(trimmed, 7, yv_len(trimmed) - 7);
+            if (ys_eq_lit(ys_slice(trimmed, 0, 7), "import ")) {
+                Yv *rest = ys_slice_from(trimmed, 7);
                 long from_idx = ys_index_of(rest, ys(" from "));
                 Yv *name = ys("");
                 Yv *full = ys("");
                 Yv *path = ys("");
                 if (from_idx >= 0) {
-                    name = ys_trim(ys_substr(rest, 0, from_idx));
-                    Yv *path_part = ys_trim(
-                        ys_substr(rest, from_idx + 6,
-                                  yv_len(rest) - from_idx - 6));
-                    if (ys_eq_lit(ys_substr(path_part, yv_len(path_part) - 1, 1),
+                    name = ys_trim(ys_slice(rest, 0, from_idx));
+                    Yv *path_part = ys_trim(ys_slice_from(rest, from_idx + 6));
+                    if (ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1),
                                   ";")) {
-                        path_part =
-                            ys_substr(path_part, 0, yv_len(path_part) - 1);
+                        path_part = ys_slice(path_part, 0, yv_len(path_part) - 1);
                         ;
                     } else {
                         ;
                     }
-                    path = ys_substr(path_part, 1, yv_len(path_part) - 2);
+                    path = ys_slice(path_part, 1, yv_len(path_part) - 1);
                     /* NOTE: normalized (see norm_path): nested base dirs
                      * accumulate "/." segments, so raw joins of the same file
                      * differ per depth and seen-dedup would never hit. */
                     full = norm_path(ys_cat(ys_cat(base_dir, ys("/")), path));
-                    if (ys_eq_lit(ys_substr(path, 0, 1), "/")) {
+                    if (ys_eq_lit(ys_slice(path, 0, 1), "/")) {
                         full = norm_path(path);
                         ;
                     } else {
@@ -626,8 +622,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                     /* bare `import name;`: an optional std module (net, ui,
                      * ...) or a project-local one — see std_resolve above. */
                     name = ys_trim(rest);
-                    if (ys_eq_lit(ys_substr(name, yv_len(name) - 1, 1), ";")) {
-                        name = ys_trim(ys_substr(name, 0, yv_len(name) - 1));
+                    if (ys_eq_lit(ys_slice_from(name, yv_len(name) - 1), ";")) {
+                        name = ys_trim(ys_slice(name, 0, yv_len(name) - 1));
                         ;
                     } else {
                         ;
@@ -667,7 +663,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                         long last_slash = ys_last_index_of(full, ys("/"));
                         Yv *mod_dir = base_dir;
                         if (last_slash >= 0) {
-                            mod_dir = ys_substr(full, 0, last_slash);
+                            mod_dir = ys_slice(full, 0, last_slash);
                             ;
                         } else {
                             ;
@@ -707,7 +703,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                 /* NOTE: no empty if-arms here — keep the `;` filler.
                  * Export lines are dropped (defs are spliced; uses are
                  * rewritten by strip_namespaces). */
-                if (!ys_eq_lit(ys_substr(trimmed, 0, 7), "export ")) {
+                if (!ys_eq_lit(ys_slice(trimmed, 0, 7), "export ")) {
                     out_lines = ya_push(out_lines, line);
                     ;
                 } else {
@@ -854,7 +850,7 @@ Yv *tok_at_b(Yv *text, Yv *b, long i, long hi) {
     }
     long e = tok_end_b(b, i, hi);
     if (e > s) {
-        return ys_substr(text, s, e - s);
+        return ys_slice(text, s, e);
     } else {
         return ys("");
     }
@@ -925,7 +921,7 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
             ;
         } else {
             if (want_jumps) {
-                if (ys_eq_lit(ys_substr(w, 0, 1), "j")) {
+                if (ys_eq_lit(ys_slice(w, 0, 1), "j")) {
                     out = tok_push(out, tok_at_b(text, b, op, hi));
                     ;
                 } else {
@@ -986,7 +982,7 @@ Yv *label_at(Yv *text, Yv *b, long lo, long hi) {
                 } else {
                     ;
                 }
-                lab = ys_substr(text, s, e - s);
+                lab = ys_slice(text, s, e);
                 ;
             } else {
                 ;
@@ -1298,7 +1294,7 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
                 } else {
                     ;
                 }
-                pieces = ya_push(pieces, ys_substr(text, lo, hi - lo));
+                pieces = ya_push(pieces, ys_slice(text, lo, hi));
                 ;
             } else {
                 ;
@@ -1371,7 +1367,7 @@ int is_all_digits(Yv *s) {
         long i = 0;
         int ok = 1;
         while (i < yv_len(s)) {
-            if (ys_index_of(ys("0123456789"), ys_substr(s, i, 1)) < 0) {
+            if (ys_index_of(ys("0123456789"), ys_slice(s, i, i + 1)) < 0) {
                 ok = 0;
                 ;
             } else {
@@ -1388,7 +1384,7 @@ Yv *runtime_base(Yv *name) {
     if (yv_len(name) < 3) {
         return ys("");
     } else {
-        if (!ys_eq_lit(ys_substr(name, 0, 2), "y_")) {
+        if (!ys_eq_lit(ys_slice(name, 0, 2), "y_")) {
             return ys("");
         } else {
             long dollar = ys_index_of(name, ys("$"));
@@ -1396,8 +1392,8 @@ Yv *runtime_base(Yv *name) {
                 return name;
             } else {
                 if (is_all_digits(
-                        ys_substr(name, dollar + 1, yv_len(name) - dollar - 1))) {
-                    return ys_substr(name, 0, dollar);
+                        ys_slice_from(name, dollar + 1))) {
+                    return ys_slice(name, 0, dollar);
                 } else {
                     return ys("");
                 }
@@ -1679,7 +1675,7 @@ Yv *esc_asm(Yv *s) {
     long i = 0;
     long n = yv_len(s);
     while (i < n) {
-        Yv *c = ys_substr(s, i, 1);
+        Yv *c = ys_slice(s, i, i + 1);
         long o = ys_ord(c);
         if (ys_eq_lit(c, "\\")) {
             buf = ys_cat(buf, ys("\\\\"));
@@ -2044,7 +2040,7 @@ Yv *infer_call(Yv *st, Yv *node) {
                 return yr(2, "k", ys("topt"), "of",
                           infer(st, ya_get(sargs, 0)));
             }
-        } else if (ys_eq_lit(name, "substr") || ys_eq_lit(name, "trim") ||
+        } else if (ys_eq_lit(name, "trim") ||
                    ys_eq_lit(name, "chr") || ys_eq_lit(name, "join") ||
                    ys_eq_lit(name, "tostring") || ys_eq_lit(name, "typeof")) {
             return yr(1, "k", ys("tstr"));
@@ -2335,8 +2331,8 @@ int name_in(Yv *xs, Yv *n) {
 /* Builtins are resolved by name at the call site, never captured. */
 int is_intrinsic_name(Yv *n) {
     return name_in(
-        yav(36, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
-            ys("is_some"), ys("unwrap"), ys("substr"), ys("trim"), ys("ord"),
+        yav(35, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+            ys("is_some"), ys("unwrap"), ys("trim"), ys("ord"),
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
             ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("sleep"),
@@ -2672,7 +2668,7 @@ Yv *fn_names_of(Yv *fns) {
 /* st.fns holds the hoisted defs and, after them, the globals (see
  * emit_program); a global's label is its .bss cell. */
 Yv *fns_kind(Yv *label) {
-    if (ys_eq_lit(ys_substr(label, 0, 3), "yg_")) {
+    if (ys_eq_lit(ys_slice(label, 0, 3), "yg_")) {
         return ys("global");
     } else {
         return ys("func");
@@ -2807,7 +2803,7 @@ Yv *gen_bstr(Yv *st, Yv *node) {
     long bn = yv_len(bv);
     while (bi < bn) {
         Yv *bnum = yr(4, "k", ys("num"), "v",
-                       ys_long(ys_ord(ys_substr(bv, bi, 1))),
+                       ys_long(ys_ord(ys_slice(bv, bi, bi + 1))),
                        "line", yr_get(node, "line"), "col", yr_get(node, "col"));
         elems = ya_push(elems, bnum);
         bi = bi + 1;
@@ -3089,7 +3085,7 @@ Yv *gen_slice(Yv *st, Yv *node) {
 }
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
-// a missing bound means 0 / len (y_str_slice in rt.y).
+// a missing bound means 0 / len (the asm primitive y_str_slice).
 Yv *gen_str_slice(Yv *st, Yv *node) {
     Yv *lo = yr_get(node, "lo");
     Yv *hi = yr_get(node, "hi");
@@ -3827,8 +3823,6 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_is_some(st, node);
         } else if (ys_eq_lit(name, "unwrap")) {
             return gen_unwrap(st, node);
-        } else if (ys_eq_lit(name, "substr")) {
-            return gen_substr(st, node);
         } else if (ys_eq_lit(name, "trim")) {
             return gen_trim(st, node);
         } else if (ys_eq_lit(name, "prepend")) {
@@ -4651,7 +4645,7 @@ Yv *gen_reclit(Yv *st, Yv *node) {
         te = ya_push(te, ys_long(nl));
         long c = 0;
         while (c < nl) {
-            Yv *ch = ys_substr(nm, c, 1);
+            Yv *ch = ys_slice(nm, c, c + 1);
             long co = ys_ord(ch);
             te = ya_push(te, ys_long(co));
             c = c + 1;
@@ -5047,7 +5041,7 @@ long hexval_ch(Yv *c) {
 int lit_is_float(Yv *s) {
     int radix = 0;
     if (yv_len(s) > 2) {
-        Yv *p = ys_substr(s, 0, 2);
+        Yv *p = ys_slice(s, 0, 2);
         if (ys_eq_lit(p, "0x")) {
             radix = 1;
             ;
@@ -5105,7 +5099,7 @@ int lit_is_float(Yv *s) {
 Yv *norm_num(Yv *s) {
     long radix = 0;
     if (yv_len(s) > 2) {
-        Yv *p = ys_substr(s, 0, 2);
+        Yv *p = ys_slice(s, 0, 2);
         if (ys_eq_lit(p, "0x")) {
             radix = 16;
             ;
@@ -5140,7 +5134,7 @@ Yv *norm_num(Yv *s) {
         long v = 0;
         long i = 2;
         while (i < yv_len(s)) {
-            Yv *c = ys_substr(s, i, 1);
+            Yv *c = ys_slice(s, i, i + 1);
             if (ys_eq_lit(c, "_")) {
                 ;
             } else {
@@ -5163,7 +5157,7 @@ long flit_mant(Yv *s) {
     long i = 0;
     long n = flit_ebase(s);
     while (i < n) {
-        Yv *c = ys_substr(s, i, 1);
+        Yv *c = ys_slice(s, i, i + 1);
         if (ys_eq_lit(c, ".")) {
             ;
         } else {
@@ -5207,7 +5201,7 @@ long flit_exp(Yv *s) {
     if (eb < yv_len(s)) {
         long i = eb + 1;
         int neg = 0;
-        Yv *sc = ys_substr(s, i, 1);
+        Yv *sc = ys_slice(s, i, i + 1);
         if (ys_eq_lit(sc, "-")) {
             neg = 1;
             i = i + 1;
@@ -5222,7 +5216,7 @@ long flit_exp(Yv *s) {
             ;
         }
         while (i < yv_len(s)) {
-            ex = ex * 10 + hexval_ch(ys_substr(s, i, 1));
+            ex = ex * 10 + hexval_ch(ys_slice(s, i, i + 1));
             i = i + 1;
         }
         if (neg) {
@@ -6207,12 +6201,6 @@ Yv *gen_unwrap(Yv *st, Yv *node) {
  * (args pushed left-to-right, first arg deepest) and returns a header
  * address (or long) in %rax. Caller cleans the stack. */
 
-Yv *gen_substr(Yv *st, Yv *node) {
-    st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_str_substr"));
-    return emit(st, ys("    add $24, %rsp"));
-}
-
 Yv *gen_trim(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
     st = emit(st, ys("    call y_str_trim"));
@@ -6794,7 +6782,7 @@ Yv *ndisp(Yv *name) {
     if (i < 0) {
         return name;
     } else {
-        return ys_substr(name, 0, i);
+        return ys_slice(name, 0, i);
     }
 }
 

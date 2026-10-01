@@ -71,7 +71,7 @@ int ispunct(Yv *c) {
 // decoded text and the position just past the closing quote. Escapes:
 // \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
 Yv *lex_quoted(Yv *src, long i, long line, long col) {
-    Yv *q = ys_substr(src, i, 1);
+    Yv *q = ys_slice(src, i, i + 1);
     long n = yv_len(src);
     i = i + 1;
     col = col + 1;
@@ -81,7 +81,7 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
     int hasesc = 0;
     while (open) {
         if (i < n) {
-            Yv *ch = ys_substr(src, i, 1);
+            Yv *ch = ys_slice(src, i, i + 1);
             if (ys_eq_lit(ch, "\\")) { hasesc = 1; i = i + 2; col = col + 2; ; }
             else if (ys_eq(ch, q)) { open = 0; closed = 1; ; }
             else {
@@ -101,7 +101,7 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
         exit_(1);
         ;
     }
-    Yv *raw = ys_substr(src, start, i - start);
+    Yv *raw = ys_slice(src, start, i);
     i = i + 1;  // skip closing quote
     col = col + 1;
     Yv *buf = raw;
@@ -111,16 +111,16 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
         long k = 0;
         long rn = yv_len(raw);
         while (k < rn) {
-            Yv *rc = ys_substr(raw, k, 1);
+            Yv *rc = ys_slice(raw, k, k + 1);
             if (ys_eq_lit(rc, "\\")) {
-                Yv *esc = ys_substr(raw, k + 1, 1);
+                Yv *esc = ys_slice(raw, k + 1, k + 2);
                 if (ys_eq_lit(esc, "n")) { chunks = ya_push(chunks, ys("\n")); k = k + 2; ; }
                 else if (ys_eq_lit(esc, "t")) { chunks = ya_push(chunks, ys("\t")); k = k + 2; ; }
                 else if (ys_eq_lit(esc, "r")) { chunks = ya_push(chunks, ys("\r")); k = k + 2; ; }
                 else if (ys_eq_lit(esc, "x")) {
                     // \xHH -- two hex digits
-                    long h1 = hexvalx(ys_substr(raw, k + 2, 1));
-                    long h2 = hexvalx(ys_substr(raw, k + 3, 1));
+                    long h1 = hexvalx(ys_slice(raw, k + 2, k + 3));
+                    long h2 = hexvalx(ys_slice(raw, k + 3, k + 4));
                     if (h1 >= 0 && h2 >= 0) {
                         chunks = ya_push(chunks, ys_chr(h1 * 16 + h2));
                         k = k + 4;
@@ -163,7 +163,7 @@ long hexvalx(Yv *c) {
 // Maximal munch, like C: `x+++y` is `x ++ + y`. There is no `=+` operator;
 // `x =+ y` is `x = +y`.
 Yv *twocharop(Yv *src, long i) {
-    Yv *two = ys_substr(src, i, 2);
+    Yv *two = ys_slice(src, i, i + 2);
     if (ys_eq_lit(two, "==") || ys_eq_lit(two, "!=") ||
         ys_eq_lit(two, "<=") || ys_eq_lit(two, ">=") ||
         ys_eq_lit(two, "&&") || ys_eq_lit(two, "||") ||
@@ -214,7 +214,7 @@ Yv *tokenize(Yv *src) {
     long line = 1;
     long col = 1;
     while (i < n) {
-        Yv *c = ys_substr(src, i, 1);
+        Yv *c = ys_slice(src, i, i + 1);
         if (isspace(c)) {
             if (ys_eq_lit(c, "\n")) { line = line + 1; col = 1; ; }
             else { col = col + 1; ; }
@@ -226,7 +226,7 @@ Yv *tokenize(Yv *src) {
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
             long radix = 0;
             if (ys_eq_lit(c, "0")) {
-                Yv *nxt = ys_substr(src, i + 1, 1);
+                Yv *nxt = ys_slice(src, i + 1, i + 2);
                 if (ys_eq_lit(nxt, "x") || ys_eq_lit(nxt, "X")) { radix = 16; }
                 else if (ys_eq_lit(nxt, "b") || ys_eq_lit(nxt, "B")) { radix = 2; }
             }
@@ -236,7 +236,7 @@ Yv *tokenize(Yv *src) {
                 int rdone = 0;
                 while (rdone == 0) {
                     if (i < n) {
-                        if (is_radix_ch(ys_substr(src, i, 1), radix)) { i = i + 1; col = col + 1; ; }
+                        if (is_radix_ch(ys_slice(src, i, i + 1), radix)) { i = i + 1; col = col + 1; ; }
                         else { rdone = 1; ; };
                         ;
                     } else { rdone = 1; ; }
@@ -249,20 +249,20 @@ Yv *tokenize(Yv *src) {
             int ind = 0;
             while (ind == 0) {
                 if (i < n) {
-                    if (isdigit(ys_substr(src, i, 1))) { i = i + 1; col = col + 1; ; }
+                    if (isdigit(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
                     else { ind = 1; ; };
                     ;
                 } else { ind = 1; ; }
             };
             // optional fractional part (but not '..' range).
-            if (ys_eq_lit(ys_substr(src, i, 1), ".") &&
-                !ys_eq_lit(ys_substr(src, i + 1, 1), ".")) {
+            if (ys_eq_lit(ys_slice(src, i, i + 1), ".") &&
+                !ys_eq_lit(ys_slice(src, i + 1, i + 2), ".")) {
                 i = i + 1;
                 col = col + 1;
                 int frd = 0;
                 while (frd == 0) {
                     if (i < n) {
-                        if (isdigit(ys_substr(src, i, 1))) { i = i + 1; col = col + 1; ; }
+                        if (isdigit(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
                         else { frd = 1; ; };
                         ;
                     } else { frd = 1; ; }
@@ -271,18 +271,18 @@ Yv *tokenize(Yv *src) {
             // optional exponent: e / E, an optional sign, then digits. Only
             // consumed when at least one digit follows, so `1e` stays a
             // number followed by an identifier rather than a bad literal.
-            Yv *ec = ys_substr(src, i, 1);
+            Yv *ec = ys_slice(src, i, i + 1);
             if (ys_eq_lit(ec, "e") || ys_eq_lit(ec, "E")) {
                 long esign = 0;
-                Yv *sc = ys_substr(src, i + 1, 1);
+                Yv *sc = ys_slice(src, i + 1, i + 2);
                 if (ys_eq_lit(sc, "+") || ys_eq_lit(sc, "-")) { esign = 1; }
-                if (isdigit(ys_substr(src, i + 1 + esign, 1))) {
+                if (isdigit(ys_slice(src, i + 1 + esign, i + 2 + esign))) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
                     int exd = 0;
                     while (exd == 0) {
                         if (i < n) {
-                            if (isdigit(ys_substr(src, i, 1))) { i = i + 1; col = col + 1; ; }
+                            if (isdigit(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
                             else { exd = 1; ; };
                             ;
                         } else { exd = 1; ; }
@@ -291,7 +291,7 @@ Yv *tokenize(Yv *src) {
                 }
             }
             }
-            toks = ya_push(toks, mktok(ys("num"), ys_substr(src, start, i - start), line, startcol));
+            toks = ya_push(toks, mktok(ys("num"), ys_slice(src, start, i), line, startcol));
             ;
         } else if (isalpha(c)) {
             long start = i;
@@ -302,12 +302,12 @@ Yv *tokenize(Yv *src) {
             int inw = 0;
             while (inw == 0) {
                 if (i < n) {
-                    if (isalnum(ys_substr(src, i, 1))) { i = i + 1; col = col + 1; ; }
+                    if (isalnum(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
                     else { inw = 1; ; };
                     ;
                 } else { inw = 1; ; }
             };
-            Yv *word = ys_substr(src, start, i - start);
+            Yv *word = ys_slice(src, start, i);
             Yv *ty = ys("id");
             if (ys_eq_lit(word, "let")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "const")) { ty = ys("kw"); ; }
@@ -326,7 +326,7 @@ Yv *tokenize(Yv *src) {
                 // b"..." / b'...' -- a byte-string literal: the same type
                 // as [byte], spelled like a Python bytes literal.
                 long bline = line;
-                Yv *qch = ys_substr(src, i, 1);
+                Yv *qch = ys_slice(src, i, i + 1);
                 if (ys_eq_lit(qch, "\"")) {
                     Yv *bq = lex_quoted(src, i, line, col);
                     i = yv_l(yr_get(bq, "end"));
@@ -346,7 +346,7 @@ Yv *tokenize(Yv *src) {
                     ;
                 };
                 ;
-            } else if (ys_eq_lit(word, "c") && ys_eq_lit(ys_substr(src, i, 1), "'")) {
+            } else if (ys_eq_lit(word, "c") && ys_eq_lit(ys_slice(src, i, i + 1), "'")) {
                 // c'a' -- a character literal: one byte, typed `byte`.
                 long cline = line;
                 Yv *cq = lex_quoted(src, i, line, col);
@@ -381,32 +381,32 @@ Yv *tokenize(Yv *src) {
             // backend lexes division identically (parser.c skip_spaces skips
             // comments, parse_operator matches division), so parity demands
             // we emit the operator too.
-            if (ys_eq(ys_substr(src, i + 1, 1), slash())) {
+            if (ys_eq(ys_slice(src, i + 1, i + 2), slash())) {
                 // line comment
                 i = i + 2;
                 col = col + 2;
                 int done = 0;
                 while (done == 0) {
                     if (i < n) {
-                        if (!ys_eq_lit(ys_substr(src, i, 1), "\n")) { i = i + 1; col = col + 1; ; }
+                        if (!ys_eq_lit(ys_slice(src, i, i + 1), "\n")) { i = i + 1; col = col + 1; ; }
                         else { done = 1; ; };
                         ;
                     } else { done = 1; ; }
                 };
                 ;
-            } else if (ys_eq_lit(ys_substr(src, i + 1, 1), "*")) {
+            } else if (ys_eq_lit(ys_slice(src, i + 1, i + 2), "*")) {
                 i = i + 2;
                 col = col + 2;
                 int open = 1;
                 while (open) {
                     if (i + 1 < n) {
-                        if (ys_eq_lit(ys_substr(src, i, 2), "*/")) {
+                        if (ys_eq_lit(ys_slice(src, i, i + 2), "*/")) {
                             i = i + 2;
                             col = col + 2;
                             open = 0;
                             ;
                         } else {
-                            Yv *ch = ys_substr(src, i, 1);
+                            Yv *ch = ys_slice(src, i, i + 1);
                             if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
                             else { col = col + 1; ; }
                             i = i + 1;

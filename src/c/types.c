@@ -36,7 +36,7 @@
 #include "yv.h"
 
 /* imported — types.y imports nothing: every call below is a builtin
- * (len/push/substr/index_of/join/tostring) or a def of this file. */
+ * (len/push/index_of/join/tostring) or a def of this file. */
 
 /* forward declarations (Y defs are mutually visible) */
 static Yv *err_at(Yv *msg, long line, long col);
@@ -567,7 +567,7 @@ static int union_accepts(Yv *got, Yv *want) {
 static int num_is_float(Yv *s) {
     int radix = 0;
     if (yv_len(s) > 2) {
-        Yv *p = ys_substr(s, 0, 2);
+        Yv *p = ys_slice(s, 0, 2);
         if (ys_eq_lit(p, "0x")) {
             radix = 1;
             ;
@@ -850,7 +850,7 @@ static Yv *disp(Yv *name) {
     if (i < 0) {
         return name;
     } else {
-        return ys_substr(name, 0, i);
+        return ys_slice(name, 0, i);
     }
 }
 
@@ -2232,7 +2232,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                          yr_get(yr_get(sr, "typ"), "of")),
                       "st", st);
         } else if (ys_eq_lit(yr_get(yr_get(sr, "typ"), "k"), "tstr")) {
-            // s[lo:hi] -> the substring (bounds clamped, like substr)
+            // s[lo:hi] -> the substring (bounds clamped, like an array slice)
             return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
         } else if (ys_eq_lit(yr_get(yr_get(sr, "typ"), "k"), "tunk")) {
             return yr(2, "typ", t_unk(), "st", st);
@@ -3061,32 +3061,6 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     return yr(2, "typ", t_unk(), "st", st);
                 }
             }
-        } else if (ys_eq_lit(name, "substr")) {
-            // substr(s, start, count) -> str (C-clamped semantics)
-            if (yv_len(cargs) != 3) {
-                st = fail(st,
-                          ys("substr takes exactly 3 arguments (string, start, count)"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
-                return yr(2, "typ", t_unk(), "st", st);
-            } else {
-                Yv *r0 = typeof_expr(st, ya_get(cargs, 0));
-                st = yr_get(r0, "st");
-                Yv *r1 = typeof_expr(st, ya_get(cargs, 1));
-                st = yr_get(r1, "st");
-                Yv *r2 = typeof_expr(st, ya_get(cargs, 2));
-                st = yr_get(r2, "st");
-                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", ys("tstr")),
-                                 ys("substr string"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", ys("tlong")),
-                                 ys("substr start"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                st = expect_type(st, yr_get(r2, "typ"), yr(1, "k", ys("tlong")),
-                                 ys("substr count"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-            }
         } else if (ys_eq_lit(name, "trim")) {
             if (yv_len(cargs) != 1) {
                 st = fail(st, ys("trim takes exactly 1 argument"),
@@ -3624,6 +3598,10 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 if (ys_eq_lit(yr_get(got, "kind"), "")) {
                     fterr = ys_cat(ys_cat(ys("undefined function '"), disp(name)),
                                    ys("'"));
+                    if (ys_eq_lit(name, "substr")) {
+                        fterr = ys_cat(fterr, ys(" (slice instead: s[start:end])"));
+                        ;
+                    } else { ; }
                     ;
                 } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tfunc")) {
                     // Either a hoisted `def` (kind "func") or a local/param

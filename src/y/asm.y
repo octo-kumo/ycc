@@ -42,7 +42,7 @@ def is_alpha_ch(c: str) -> bool {
 def parse_num(s: str) -> {ok: bool, v: long} {
     let neg = false;
     let i = 0;
-    if (substr(s, 0, 1) == "-") {
+    if (s[0:1] == "-") {
         neg = true;
         i = 1;
     }
@@ -57,7 +57,7 @@ def parse_num_go(s: str, i: long, neg: bool) -> {ok: bool, v: long} {
     let v = 0;
     let ok = true;
     while (i < len(s)) {
-        let c = substr(s, i, 1);
+        let c = s[i:i + 1];
         if (is_digit_ch(c)) {
             v = v * 10 + ord(c) - 48;
         } else {
@@ -79,7 +79,7 @@ def split_ops(s: str) -> [str] {
     let cur = "";
     let i = 0;
     while (i < len(s)) {
-        let c = substr(s, i, 1);
+        let c = s[i:i + 1];
         if (c == "(") { depth++ };
         if (c == ")") { depth-- } ;
         if (c == ",") {
@@ -115,9 +115,9 @@ def parse_operand_empty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, 
 
 def parse_operand_nonempty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // `*%reg` — register-indirect call/jump target (closure code pointers).
-    if (substr(t, 0, 1) == "*") {
+    if (t[0:1] == "*") {
         parse_operand_ind(t)
-    } else if (substr(t, 0, 1) == "%") {
+    } else if (t[0:1] == "%") {
         parse_operand_reg(t)
     } else {
         parse_operand_noreg(t)
@@ -146,7 +146,7 @@ def parse_operand_reg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v:
 };
 
 def parse_operand_noreg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
-    if (substr(t, 0, 1) == "$") {
+    if (t[0:1] == "$") {
         parse_operand_imm(t)
     } else {
         parse_operand_memlbl(t)
@@ -178,7 +178,7 @@ def parse_imm(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a
 
 def parse_imm_alpha(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
     // (split: len>0 narrows; this body checks the alpha gate only.)
-    if (is_alpha_ch(substr(s, 0, 1))) {
+    if (is_alpha_ch(s[0:1])) {
         parse_imm_diff(s, dash)
     } else {
         parse_imm_num(s)
@@ -322,12 +322,12 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
     let n = len(s);
     let err = "";
     while (i < n) {
-        let c = substr(s, i, 1);
+        let c = s[i:i + 1];
         if (c != "\\") {
             out += ord(c);
             i = i + 1;
         } else {
-            let e = substr(s, i + 1, 1);
+            let e = s[i + 1:i + 2];
             if (e == "n") {
                 out += 10;
                 i = i + 2;
@@ -369,13 +369,13 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
     // Returns {v, k (pos after digits), err}. Split from decode_str: the
     // `{ok,bytes,error}` shape is built ONLY in decode_str.
     // NOTE: `0;` tails (see parser.y parse_binary note).
-    let e = substr(s, k - 1, 1);
+    let e = s[k - 1:k];
     let v = ord(e) - 48;
     let kk = k;
     let nd = 1;
     while (nd < 3) {
         if (kk < n) {
-            let d = substr(s, kk, 1);
+            let d = s[kk:kk + 1];
             if (is_oct_ch(d)) {
                 v = v * 8 + ord(d) - 48;
                 kk = kk + 1;
@@ -413,7 +413,7 @@ def hash_str(s: str) -> long {
     let h = 0;
     let i = 0;
     while (i < len(s)) {
-        h = (h * 31 + ord(substr(s, i, 1))) % 1000000007;
+        h = (h * 31 + ord(s[i:i + 1])) % 1000000007;
         i = i + 1;
     };
     h
@@ -582,11 +582,11 @@ def asm_assemble_line(lines: [str], li: long, sec: long, offs: [long], items: [{
     let lno = li + 1;
     if (line == "") {
         asm_state(sec, offs, items, labels, err)
-    } else if (substr(line, 0, 1) == "#") {
+    } else if (line[0:1] == "#") {
         asm_state_err(sec, offs, items, labels, lno, "unexpected comment (backend bug)")
-    } else if (substr(line, len(line) - 1, 1) == ":") {
+    } else if (line[len(line) - 1:] == ":") {
         asm_labdef(line, lno, sec, offs, items, labels, err)
-    } else if (substr(line, 0, 1) == ".") {
+    } else if (line[0:1] == ".") {
         asm_dirline(line, lno, sec, offs, items, labels, err)
     } else {
         asm_maybe_labline(line, lno, sec, offs, items, labels, err)
@@ -604,7 +604,7 @@ def asm_state_err(sec: long, offs: [long], items: [{sec: long}], labels: [{name:
 def asm_labdef(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
     // `label:` definition line.
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
-    let nm = trim(substr(line, 0, len(line) - 1));
+    let nm = trim(line[0:len(line) - 1]);
     if (nm == "") {
         asm_state_err(sec, offs, items, labels, lno, "bad label")
     } else if (index_of(nm, " ") >= 0) {
@@ -655,8 +655,8 @@ def asm_insnline(line: str, lno: long, sec: long, offs: [long], items: [{sec: lo
 
 def asm_labline(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str, ci: long) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
-    let nm = trim(substr(line, 0, ci));
-    let rest = trim(substr(line, ci + 1, len(line) - ci - 1));
+    let nm = trim(line[0:ci]);
+    let rest = trim(line[ci + 1:]);
     if (nm == "") {
         asm_state_err(sec, offs, items, labels, lno, "bad label")
     } else if (index_of(nm, " ") >= 0) {
@@ -692,7 +692,7 @@ def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], 
 };
 
 def asm_content(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
-    if (substr(line, 0, 1) == ".") {
+    if (line[0:1] == ".") {
         asm_directive(line, lno, sec, offs)
     } else {
         asm_insn(line, lno, sec, offs)
@@ -707,15 +707,15 @@ def asm_strdata(line: str, lno: long, sec: long, offs: [long], rest: str, nul: b
     if (asm_strdata_bad(rest)) {
         asm_strdata_err(line, lno, sec, offs)
     } else {
-        asm_strdata_go(line, lno, sec, offs, substr(rest, 1, len(rest) - 2), nul)
+        asm_strdata_go(line, lno, sec, offs, rest[1:len(rest) - 1], nul)
     }
 };
 
 def asm_strdata_bad(rest: str) -> bool {
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     if (len(rest) < 2) { true }
-    else if (substr(rest, 0, 1) != "\"") { true }
-    else if (substr(rest, len(rest) - 1, 1) != "\"") { true }
+    else if (rest[0:1] != "\"") { true }
+    else if (rest[len(rest) - 1:] != "\"") { true }
     else { false }
 };
 
@@ -755,8 +755,8 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, s
     let rest = "";
     // NOTE: `0;` tails (see parser.y parse_binary note).
     if (sp >= 0) {
-        dir = substr(line, 0, sp);
-        rest = trim(substr(line, sp + 1, len(line) - sp - 1));
+        dir = line[0:sp];
+        rest = trim(line[sp + 1:]);
         0
     };
     if (dir == ".text") {
@@ -885,8 +885,8 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: l
     let mn = line;
     let rest = "";
     if (cut >= 0) {
-        mn = substr(line, 0, cut);
-        rest = trim(substr(line, cut + 1, len(line) - cut - 1));
+        mn = line[0:cut];
+        rest = trim(line[cut + 1:]);
         0
     };
     let ops = [];
@@ -1179,9 +1179,9 @@ def debug_syms_sec(out: [{ name: str, sec: long, off: long, size: long }], label
 
 def is_sym_label(name: str, sec: long) -> bool {
     if (sec == 0) {
-        name == "_start" || substr(name, 0, 2) == "y_" || substr(name, 0, 4) == "yfn_"
+        name == "_start" || name[0:2] == "y_" || name[0:4] == "yfn_"
     } else {
-        substr(name, 0, 3) == "yg_" || substr(name, 0, 2) == "y_"
+        name[0:3] == "yg_" || name[0:2] == "y_"
     }
 };
 
@@ -1191,10 +1191,10 @@ def is_sym_label(name: str, sec: long) -> bool {
 // profiles of two builds harder to line up.
 def sym_name(lbl: str) -> str {
     let s = lbl;
-    if (substr(s, 0, 4) == "yfn_") {
+    if (s[0:4] == "yfn_") {
         s = after_uid(s, 4);
         0;
-    } else if (substr(s, 0, 3) == "yg_") {
+    } else if (s[0:3] == "yg_") {
         s = after_uid(s, 3);
         0;
     };
@@ -1203,10 +1203,10 @@ def sym_name(lbl: str) -> str {
         let k = d + 1;
         let digits = k < len(s);
         while (k < len(s)) {
-            if (!is_digit_ch(substr(s, k, 1))) { digits = false; 0; };
+            if (!is_digit_ch(s[k:k + 1])) { digits = false; 0; };
             k = k + 1;
         };
-        if (digits) { s = substr(s, 0, d); 0; };
+        if (digits) { s = s[0:d]; 0; };
         0;
     };
     s
@@ -1216,9 +1216,9 @@ def sym_name(lbl: str) -> str {
 // does not match.
 def after_uid(s: str, k: long) -> str {
     let i = k;
-    while (i < len(s) && is_digit_ch(substr(s, i, 1))) { i = i + 1; };
-    if (i > k && i < len(s) && substr(s, i, 1) == "_") {
-        substr(s, i + 1, len(s) - i - 1)
+    while (i < len(s) && is_digit_ch(s[i:i + 1])) { i = i + 1; };
+    if (i > k && i < len(s) && s[i:i + 1] == "_") {
+        s[i + 1:]
     } else {
         s
     }

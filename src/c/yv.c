@@ -2,10 +2,10 @@
  *
  * This is the C copy's own runtime: it gives the C modules exactly the
  * value semantics the Y modules run on when they are compiled to native
- * code — substr clamps like C, tostring prints the same format, push
- * grows in place with 0->8->doubling capacity, arrays and maps are
- * shared references. The two compilers must agree, so anything changed
- * here moves the reference semantics `make ycc` compares against.
+ * code — slices clamp like the native ones, tostring prints the same
+ * format, push grows in place with 0->8->doubling capacity, arrays and
+ * maps are shared references. The two compilers must agree, so anything
+ * changed here moves the reference semantics `make ycc` compares against.
  */
 #include "yv.h"
 
@@ -164,15 +164,20 @@ Yv *ys_cat(const Yv *a, const Yv *b) {
     return v;
 }
 
-Yv *ys_substr(const Yv *s, long start, long count) {
+/* s[lo:hi]: half-open and clamped, like the native y_str_slice — lo < 0
+ * counts from 0, hi > len stops at len, hi <= lo is "". */
+Yv *ys_slice(const Yv *s, long lo, long hi) {
     if (!s || s->tag != Y_STR) { return ys(""); }
-    long slen = (long)s->u.s.n;
-    long st = start;
-    long cnt = count;
-    if (st < 0) st = 0;
-    if (st >= slen) { return ys(""); }
-    if (cnt < 0 || st + cnt > slen) cnt = slen - st;
-    return ys_n(s->u.s.p + st, (size_t)cnt);
+    long n = (long)s->u.s.n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (hi <= lo) { return ys(""); }
+    return ys_n(s->u.s.p + lo, (size_t)(hi - lo));
+}
+
+/* s[lo:] (the omitted bound is len(s)) */
+Yv *ys_slice_from(const Yv *s, long lo) {
+    return ys_slice(s, lo, (long)yv_len(s));
 }
 
 int ys_eq(const Yv *a, const Yv *b) {

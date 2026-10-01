@@ -26,7 +26,7 @@ def mk_tok(t: str, v: str) -> { t: str, v: str } {
 };
 
 def two_char_op(src: str, i: long) -> str {
-    let two = substr(src, i, 2);
+    let two = src[i:i + 2];
     if (two == "==" || two == "!=" || two == "<=" || two == ">=" ||
         two == "&&" || two == "||" || two == "::" || two == ".." ||
         two == "->") {
@@ -47,18 +47,18 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
     let n = len(src);
     print("tokenize: n=" + tostring(n));
     while (i < n) {
-        let c = substr(src, i, 1);
+        let c = src[i:i + 1];
         print("i=" + tostring(i) + " c=" + c);
         if (is_space(c)) {
             i = i + 1;
-        } else if (c == "/" && substr(src, i + 1, 1) == "/") {
+        } else if (c == "/" && src[i + 1:i + 2] == "/") {
             i = i + 2;
-            while (i < n && substr(src, i, 1) != "\n") { i = i + 1; };
-        } else if (c == "/" && substr(src, i + 1, 1) == "*") {
+            while (i < n && src[i:i + 1] != "\n") { i = i + 1; };
+        } else if (c == "/" && src[i + 1:i + 2] == "*") {
             i = i + 2;
             let open = true;
             while (open && i + 1 < n) {
-                if (substr(src, i, 2) == "*/") {
+                if (src[i:i + 2] == "*/") {
                     i = i + 2;
                     open = false;
                     0;
@@ -68,17 +68,17 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
             };
         } else if (is_digit(c)) {
             let start = i;
-            while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; };
-            if (substr(src, i, 1) == "." && substr(src, i + 1, 1) != ".") {
+            while (i < n && is_digit(src[i:i + 1])) { i = i + 1; };
+            if (src[i:i + 1] == "." && src[i + 1:i + 2] != ".") {
                 i = i + 1;
-                while (i < n && is_digit(substr(src, i, 1))) { i = i + 1; };
+                while (i < n && is_digit(src[i:i + 1])) { i = i + 1; };
             };
-            toks += mk_tok("num", substr(src, start, i - start));
+            toks += mk_tok("num", src[start:i]);
             0;
         } else if (is_alpha(c)) {
             let start = i;
-            while (i < n && is_alnum(substr(src, i, 1))) { i = i + 1; };
-            let word = substr(src, start, i - start);
+            while (i < n && is_alnum(src[i:i + 1])) { i = i + 1; };
+            let word = src[start:i];
             let ty = "id";
             if (word == "let" || word == "const" || word == "def" ||
                 word == "if" || word == "else" || word == "while" ||
@@ -96,10 +96,10 @@ def tokenize(src: str) -> [{ t: str, v: str }] {
             let buf = "";
             let open = true;
             while (open && i < n) {
-                let ch = substr(src, i, 1);
+                let ch = src[i:i + 1];
                 print("  str i=" + tostring(i) + " ch=" + ch);
                 if (ch == "\\") {
-                    let esc = substr(src, i + 1, 1);
+                    let esc = src[i + 1:i + 2];
                     print("    escape: " + esc);
                     if (esc == "n") { buf = buf + "\n"; i = i + 2; }
                     else if (esc == "t") { buf = buf + "\t"; i = i + 2; }

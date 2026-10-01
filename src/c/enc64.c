@@ -102,13 +102,13 @@ long reg_num(Yv *name) {
 }
 
 long reg_size(Yv *name) {
-    Yv *c = ys_substr(name, 1, 1);
+    Yv *c = ys_slice(name, 1, 2);
     if (ys_eq_lit(c, "x")) {
         /* %xmmN: SSE register (size 128 marks the class apart from GPRs) */
         return 128;
     } else if (ys_eq_lit(c, "r")) {
         /* %r..: 64-bit, unless ends in d/b */
-        Yv *last = ys_substr(name, yv_len(name) - 1, 1);
+        Yv *last = ys_slice_from(name, yv_len(name) - 1);
         if (ys_eq_lit(last, "d")) { return 32; } else if (ys_eq_lit(last, "b")) { return 8; } else { return 64; }
     } else {
         /* %e..: 32-bit; %..l / %..h legacy: 8-bit; %r.. handled above */

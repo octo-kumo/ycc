@@ -57,7 +57,7 @@ def ispunct(c: str) -> bool {
 // decoded text and the position just past the closing quote. Escapes:
 // \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
 def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: long, line: long, col: long } {
-    let q = substr(src, i, 1);
+    let q = src[i:i + 1];
     let n = len(src);
     i = i + 1;
     col = col + 1;
@@ -67,7 +67,7 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
     let hasesc = false;
     while (open) {
         if (i < n) {
-            let ch = substr(src, i, 1);
+            let ch = src[i:i + 1];
             if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; 0; }
             else if (ch == q) { open = false; closed = true; 0; }
             else {
@@ -87,7 +87,7 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
         exit(1);
         0
     };
-    let raw = substr(src, start, i - start);
+    let raw = src[start:i];
     i = i + 1;  // skip closing quote
     col = col + 1;
     let buf = raw;
@@ -97,16 +97,16 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
         let k = 0;
         let rn = len(raw);
         while (k < rn) {
-            let rc = substr(raw, k, 1);
+            let rc = raw[k:k + 1];
             if (rc == "\\") {
-                let esc = substr(raw, k + 1, 1);
+                let esc = raw[k + 1:k + 2];
                 if (esc == "n") { chunks += "\n"; k = k + 2; 0; }
                 else if (esc == "t") { chunks += "\t"; k = k + 2; 0; }
                 else if (esc == "r") { chunks += "\r"; k = k + 2; 0; }
                 else if (esc == "x") {
                     // \xHH -- two hex digits
-                    let h1 = hexvalx(substr(raw, k + 2, 1));
-                    let h2 = hexvalx(substr(raw, k + 3, 1));
+                    let h1 = hexvalx(raw[k + 2:k + 3]);
+                    let h2 = hexvalx(raw[k + 3:k + 4]);
                     if (h1 >= 0 && h2 >= 0) {
                         chunks += chr(h1 * 16 + h2);
                         k = k + 4;
@@ -149,7 +149,7 @@ def hexvalx(c: str) -> long {
 // Maximal munch, like C: `x+++y` is `x ++ + y`. There is no `=+` operator;
 // `x =+ y` is `x = +y`.
 def twocharop(src: str, i: long) -> str {
-    let two = substr(src, i, 2);
+    let two = src[i:i + 2];
     if (two == "==" || two == "!=" || two == "<=" || two == ">=" ||
         two == "&&" || two == "||" || two == "::" || two == ".." ||
         two == "->" || two == "=>" || two == "++" || two == "--" ||
@@ -191,7 +191,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
     let line = 1;
     let col = 1;
     while (i < n) {
-        let c = substr(src, i, 1);
+        let c = src[i:i + 1];
         if (isspace(c)) {
             if (c == "\n") { line = line + 1; col = 1; 0; }
             else { col = col + 1; 0; };
@@ -203,7 +203,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
             let radix = 0;
             if (c == "0") {
-                let nxt = substr(src, i + 1, 1);
+                let nxt = src[i + 1:i + 2];
                 if (nxt == "x" || nxt == "X") { radix = 16; }
                 else if (nxt == "b" || nxt == "B") { radix = 2; };
             };
@@ -213,7 +213,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 let rdone = false;
                 while (rdone == false) {
                     if (i < n) {
-                        if (is_radix_ch(substr(src, i, 1), radix)) { i = i + 1; col = col + 1; 0; }
+                        if (is_radix_ch(src[i:i + 1], radix)) { i = i + 1; col = col + 1; 0; }
                         else { rdone = true; 0; };
                         0
                     } else { rdone = true; 0 };
@@ -226,19 +226,19 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             let ind = false;
             while (ind == false) {
                 if (i < n) {
-                    if (isdigit(substr(src, i, 1))) { i = i + 1; col = col + 1; 0; }
+                    if (isdigit(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
                     else { ind = true; 0; };
                     0
                 } else { ind = true; 0 };
             };
             // optional fractional part (but not '..' range).
-            if (substr(src, i, 1) == "." && substr(src, i + 1, 1) != ".") {
+            if (src[i:i + 1] == "." && src[i + 1:i + 2] != ".") {
                 i = i + 1;
                 col = col + 1;
                 let frd = false;
                 while (frd == false) {
                     if (i < n) {
-                        if (isdigit(substr(src, i, 1))) { i = i + 1; col = col + 1; 0; }
+                        if (isdigit(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
                         else { frd = true; 0; };
                         0
                     } else { frd = true; 0 };
@@ -248,18 +248,18 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             // optional exponent: e / E, an optional sign, then digits. Only
             // consumed when at least one digit follows, so `1e` stays a
             // number followed by an identifier rather than a bad literal.
-            let ec = substr(src, i, 1);
+            let ec = src[i:i + 1];
             if (ec == "e" || ec == "E") {
                 let esign = 0;
-                let sc = substr(src, i + 1, 1);
+                let sc = src[i + 1:i + 2];
                 if (sc == "+" || sc == "-") { esign = 1; };
-                if (isdigit(substr(src, i + 1 + esign, 1))) {
+                if (isdigit(src[i + 1 + esign:i + 2 + esign])) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
                     let exd = false;
                     while (exd == false) {
                         if (i < n) {
-                            if (isdigit(substr(src, i, 1))) { i = i + 1; col = col + 1; 0; }
+                            if (isdigit(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
                             else { exd = true; 0; };
                             0
                         } else { exd = true; 0 };
@@ -267,7 +267,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 };
             };
             };
-            toks += mktok("num", substr(src, start, i - start), line, startcol);
+            toks += mktok("num", src[start:i], line, startcol);
             0
         } else if (isalpha(c)) {
             let start = i;
@@ -278,12 +278,12 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             let inw = false;
             while (inw == false) {
                 if (i < n) {
-                    if (isalnum(substr(src, i, 1))) { i = i + 1; col = col + 1; 0; }
+                    if (isalnum(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
                     else { inw = true; 0; };
                     0
                 } else { inw = true; 0 };
             };
-            let word = substr(src, start, i - start);
+            let word = src[start:i];
             let ty = "id";
             if (word == "let") { ty = "kw"; 0; }
             else if (word == "const") { ty = "kw"; 0; }
@@ -302,7 +302,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 // b"..." / b'...' -- a byte-string literal: the same type
                 // as [byte], spelled like a Python bytes literal.
                 let bline = line;
-                let qch = substr(src, i, 1);
+                let qch = src[i:i + 1];
                 if (qch == "\"") {
                     let bq = lex_quoted(src, i, line, col);
                     i = bq.end;
@@ -322,7 +322,7 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                     0
                 };
                 0
-            } else if (word == "c" && substr(src, i, 1) == "'") {
+            } else if (word == "c" && src[i:i + 1] == "'") {
                 // c'a' -- a character literal: one byte, typed `byte`.
                 let cline = line;
                 let cq = lex_quoted(src, i, line, col);
@@ -355,32 +355,32 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             // slash-slash = line comment, slash-star = block comment,
             // anything else = division operator. No lone-slash error:
             // division is ordinary code, so the operator is emitted.
-            if (substr(src, i + 1, 1) == slash()) {
+            if (src[i + 1:i + 2] == slash()) {
                 // line comment
                 i = i + 2;
                 col = col + 2;
                 let done = false;
                 while (done == false) {
                     if (i < n) {
-                        if (substr(src, i, 1) != "\n") { i = i + 1; col = col + 1; 0; }
+                        if (src[i:i + 1] != "\n") { i = i + 1; col = col + 1; 0; }
                         else { done = true; 0; };
                         0
                     } else { done = true; 0 };
                 };
                 0
-            } else if (substr(src, i + 1, 1) == "*") {
+            } else if (src[i + 1:i + 2] == "*") {
                 i = i + 2;
                 col = col + 2;
                 let open = true;
                 while (open) {
                     if (i + 1 < n) {
-                        if (substr(src, i, 2) == "*/") {
+                        if (src[i:i + 2] == "*/") {
                             i = i + 2;
                             col = col + 2;
                             open = false;
                             0
                         } else {
-                            let ch = substr(src, i, 1);
+                            let ch = src[i:i + 1];
                             if (ch == "\n") { line = line + 1; col = 1; 0; }
                             else { col = col + 1; 0; };
                             i = i + 1;

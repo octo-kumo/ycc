@@ -161,7 +161,7 @@ def eval_call(node, scope) {
         i = i + 1;
     };
     let ct = typeof(callee);
-    if (substr(ct, 0, 1) == "{") {
+    if (ct[:1] == "{") {
         // Map type — check if it's a closure
         if (callee.k == "closure") { call_closure(callee, argv) }
         else { print("runtime error: calling a non-function"); null }

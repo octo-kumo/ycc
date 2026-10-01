@@ -23,7 +23,6 @@
 - remove py code
 - move prelude into std
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
-- replace `substr` with string slicing, and remove substr from built ins
 - template string with f"{x} {y:.2f}" (python style)
 - string operations like trim, strip, pad etc shall be done like "str 1 2 3".split(' ')
 
@@ -94,6 +93,12 @@ what was deliberately *not* changed) is in `audit.md`.
   the body; a call passes a `long` or nothing. Passing an option, giving
   one a default, or a required parameter after one are errors (`t63`,
   `e50`–`e54`).
+- **`substr` is gone; strings slice.** `s[a:b]`, `s[:b]`, `s[a:]` (clamped
+  like array slices) replace it everywhere — the compiler's own ~170 call
+  sites, both copies, the tests and benches. The slice is an asm primitive
+  now (`y_str_slice` took over `y_str_substr`'s body), where it used to be
+  a Y wrapper around `substr`. Calling `substr` says what to write instead
+  (`e56`). The C copy's twin is `ys_slice`/`ys_slice_from`.
 - Hex/binary literals with `_` separators, scientific notation, float literals.
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),

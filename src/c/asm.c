@@ -134,7 +134,7 @@ static Yv *parse_num(Yv *s) {
     int neg = 0;
     long i = 0;
     /* NOTE: `0;` tails (see parser.y parse_binary note). */
-    if (ys_eq_lit(ys_substr(s, 0, 1), "-")) {
+    if (ys_eq_lit(ys_slice(s, 0, 1), "-")) {
         neg = 1;
         i = 1;
         ;
@@ -152,7 +152,7 @@ static Yv *parse_num_go(Yv *s, long i, int neg) {
     long v = 0;
     int ok = 1;
     while (i < yv_len(s)) {
-        Yv *c = ys_substr(s, i, 1);
+        Yv *c = ys_slice(s, i, i + 1);
         if (is_digit_ch(c)) {
             v = v * 10 + ys_ord(c) - 48;
             ;
@@ -180,7 +180,7 @@ static Yv *split_ops(Yv *s) {
     long i = 0;
     /* NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails. */
     while (i < yv_len(s)) {
-        Yv *c = ys_substr(s, i, 1);
+        Yv *c = ys_slice(s, i, i + 1);
         if (ys_eq_lit(c, "(")) { depth = depth + 1; ; } else { ; };
         if (ys_eq_lit(c, ")")) { depth = depth - 1; ; } else { ; };
         if (ys_eq_lit(c, ",")) {
@@ -227,9 +227,9 @@ static Yv *parse_operand_empty(Yv *t) {
 
 static Yv *parse_operand_nonempty(Yv *t) {
     /* `*%reg` — register-indirect call/jump target (closure code pointers). */
-    if (ys_eq_lit(ys_substr(t, 0, 1), "*")) {
+    if (ys_eq_lit(ys_slice(t, 0, 1), "*")) {
         return parse_operand_ind(t);
-    } else if (ys_eq_lit(ys_substr(t, 0, 1), "%")) {
+    } else if (ys_eq_lit(ys_slice(t, 0, 1), "%")) {
         return parse_operand_reg(t);
     } else {
         return parse_operand_noreg(t);
@@ -238,7 +238,7 @@ static Yv *parse_operand_nonempty(Yv *t) {
 
 static Yv *parse_operand_ind(Yv *t) {
     /* (split: *-gate above narrows; the rest must be a 64-bit register.) */
-    Yv *r = ys_substr(t, 1, yv_len(t) - 1);
+    Yv *r = ys_slice_from(t, 1);
     long n = reg_num(r);
     if (n < 0) {
         return yr(3, "ok", yv_bool(0),
@@ -278,7 +278,7 @@ static Yv *parse_operand_reg(Yv *t) {
 }
 
 static Yv *parse_operand_noreg(Yv *t) {
-    if (ys_eq_lit(ys_substr(t, 0, 1), "$")) {
+    if (ys_eq_lit(ys_slice(t, 0, 1), "$")) {
         return parse_operand_imm(t);
     } else {
         return parse_operand_memlbl(t);
@@ -287,7 +287,7 @@ static Yv *parse_operand_noreg(Yv *t) {
 
 static Yv *parse_operand_imm(Yv *t) {
     /* (split: $-gate above narrows; strips the $ and parses the immediate.) */
-    return parse_imm(ys_substr(t, 1, yv_len(t) - 1));
+    return parse_imm(ys_slice_from(t, 1));
 }
 
 static Yv *parse_operand_memlbl(Yv *t) {
@@ -305,7 +305,7 @@ static Yv *parse_operand_memlbl(Yv *t) {
 
 static Yv *parse_imm(Yv *s) {
     /* $a-b label difference, else decimal number */
-    long dash = ys_index_of(ys_substr(s, 1, yv_len(s) - 1), ys("-"));
+    long dash = ys_index_of(ys_slice_from(s, 1), ys("-"));
     if (yv_len(s) > 0) {
         return parse_imm_alpha(s, dash);
     } else {
@@ -315,7 +315,7 @@ static Yv *parse_imm(Yv *s) {
 
 static Yv *parse_imm_alpha(Yv *s, long dash) {
     /* (split: len>0 narrows; this body checks the alpha gate only.) */
-    if (is_alpha_ch(ys_substr(s, 0, 1))) {
+    if (is_alpha_ch(ys_slice(s, 0, 1))) {
         return parse_imm_diff(s, dash);
     } else {
         return parse_imm_num(s);
@@ -325,8 +325,8 @@ static Yv *parse_imm_alpha(Yv *s, long dash) {
 static Yv *parse_imm_diff(Yv *s, long dash) {
     /* (split: alpha-gate above narrows; diff-shape built ONLY here.) */
     if (dash >= 0) {
-        Yv *a = ys_substr(s, 0, dash + 1);
-        Yv *b = ys_substr(s, dash + 2, yv_len(s) - dash - 2);
+        Yv *a = ys_slice(s, 0, dash + 1);
+        Yv *b = ys_slice_from(s, dash + 2);
         return yr(3, "ok", yv_bool(1),
                   "op", yr(13, "k", ys("diff"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", a, "b", b, "name", ys(""),
@@ -363,8 +363,8 @@ static Yv *parse_mem(Yv *t) {
     /* dispatch by SHAPE (see parse_operand note): `8(%rbp)` has a head,
        `(%rbx,%rcx,1)` does not. */
     long open = ys_index_of(t, ys("("));
-    Yv *head = ys_trim(ys_substr(t, 0, open));
-    Yv *inside = ys_substr(t, open + 1, yv_len(t) - open - 2);
+    Yv *head = ys_trim(ys_slice(t, 0, open));
+    Yv *inside = ys_slice(t, open + 1, yv_len(t) - 1);
     Yv *parts = split_ops(inside);
     if (!ys_eq_lit(head, "")) {
         return parse_mem_head(t, head, parts);
@@ -554,12 +554,12 @@ static Yv *decode_str(Yv *s) {
     long n = yv_len(s);
     Yv *err = ys("");
     while (i < n) {
-        Yv *c = ys_substr(s, i, 1);
+        Yv *c = ys_slice(s, i, i + 1);
         if (!ys_eq_lit(c, "\\")) {
             out = ya_push(out, yv_long(ys_ord(c)));
             i = i + 1;
         } else {
-            Yv *e = ys_substr(s, i + 1, 1);
+            Yv *e = ys_slice(s, i + 1, i + 2);
             if (ys_eq_lit(e, "n")) {
                 out = ya_push(out, yv_long(10));
                 i = i + 2;
@@ -601,13 +601,13 @@ static Yv *decode_oct(Yv *s, long k, long n) {
        Returns {v, k (pos after digits), err}. Split from decode_str: the
        `{ok,bytes,error}` shape is built ONLY in decode_str.
        NOTE: `0;` tails (see parser.y parse_binary note). */
-    Yv *e = ys_substr(s, k - 1, 1);
+    Yv *e = ys_slice(s, k - 1, k);
     long v = ys_ord(e) - 48;
     long kk = k;
     long nd = 1;
     while (nd < 3) {
         if (kk < n) {
-            Yv *d = ys_substr(s, kk, 1);
+            Yv *d = ys_slice(s, kk, kk + 1);
             if (is_oct_ch(d)) {
                 v = v * 8 + ys_ord(d) - 48;
                 kk = kk + 1;
@@ -644,7 +644,7 @@ static long hash_str(Yv *s) {
     long h = 0;
     long i = 0;
     while (i < yv_len(s)) {
-        h = (h * 31 + ys_ord(ys_substr(s, i, 1))) % 1000000007;
+        h = (h * 31 + ys_ord(ys_slice(s, i, i + 1))) % 1000000007;
         i = i + 1;
     }
     return h;
@@ -815,11 +815,11 @@ static Yv *asm_assemble_line(Yv *lines, long li, long sec, Yv *offs, Yv *items, 
     long lno = li + 1;
     if (ys_eq_lit(line, "")) {
         return asm_state(sec, offs, items, labels, err);
-    } else if (ys_eq_lit(ys_substr(line, 0, 1), "#")) {
+    } else if (ys_eq_lit(ys_slice(line, 0, 1), "#")) {
         return asm_state_err(sec, offs, items, labels, lno, ys("unexpected comment (backend bug)"));
-    } else if (ys_eq_lit(ys_substr(line, yv_len(line) - 1, 1), ":")) {
+    } else if (ys_eq_lit(ys_slice_from(line, yv_len(line) - 1), ":")) {
         return asm_labdef(line, lno, sec, offs, items, labels, err);
-    } else if (ys_eq_lit(ys_substr(line, 0, 1), ".")) {
+    } else if (ys_eq_lit(ys_slice(line, 0, 1), ".")) {
         return asm_dirline(line, lno, sec, offs, items, labels, err);
     } else {
         return asm_maybe_labline(line, lno, sec, offs, items, labels, err);
@@ -838,7 +838,7 @@ static Yv *asm_state_err(long sec, Yv *offs, Yv *items, Yv *labels, long lno, Yv
 static Yv *asm_labdef(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
     /* `label:` definition line.
        NOTE: nested ifs, not `||` (see is_digit_ch note). */
-    Yv *nm = ys_trim(ys_substr(line, 0, yv_len(line) - 1));
+    Yv *nm = ys_trim(ys_slice(line, 0, yv_len(line) - 1));
     if (ys_eq_lit(nm, "")) {
         return asm_state_err(sec, offs, items, labels, lno, ys("bad label"));
     } else if (ys_index_of(nm, ys(" ")) >= 0) {
@@ -890,8 +890,8 @@ static Yv *asm_insnline(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *l
 
 static Yv *asm_labline(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err, long ci) {
     /* NOTE: nested ifs, not `||` (see is_digit_ch note). */
-    Yv *nm = ys_trim(ys_substr(line, 0, ci));
-    Yv *rest = ys_trim(ys_substr(line, ci + 1, yv_len(line) - ci - 1));
+    Yv *nm = ys_trim(ys_slice(line, 0, ci));
+    Yv *rest = ys_trim(ys_slice_from(line, ci + 1));
     if (ys_eq_lit(nm, "")) {
         return asm_state_err(sec, offs, items, labels, lno, ys("bad label"));
     } else if (ys_index_of(nm, ys(" ")) >= 0) {
@@ -928,7 +928,7 @@ static Yv *asm_labline_content(Yv *nm, Yv *rest, long lno, long sec, Yv *offs, Y
 }
 
 static Yv *asm_content(Yv *line, long lno, long sec, Yv *offs) {
-    if (ys_eq_lit(ys_substr(line, 0, 1), ".")) {
+    if (ys_eq_lit(ys_slice(line, 0, 1), ".")) {
         return asm_directive(line, lno, sec, offs);
     } else {
         return asm_insn(line, lno, sec, offs);
@@ -943,15 +943,15 @@ static Yv *asm_strdata(Yv *line, long lno, long sec, Yv *offs, Yv *rest, int nul
     if (asm_strdata_bad(rest)) {
         return asm_strdata_err(line, lno, sec, offs);
     } else {
-        return asm_strdata_go(line, lno, sec, offs, ys_substr(rest, 1, yv_len(rest) - 2), nul);
+        return asm_strdata_go(line, lno, sec, offs, ys_slice(rest, 1, yv_len(rest) - 1), nul);
     }
 }
 
 static int asm_strdata_bad(Yv *rest) {
     /* NOTE: nested ifs, not `||` (see is_digit_ch note). */
     if (yv_len(rest) < 2) { return 1; }
-    else if (!ys_eq_lit(ys_substr(rest, 0, 1), "\"")) { return 1; }
-    else if (!ys_eq_lit(ys_substr(rest, yv_len(rest) - 1, 1), "\"")) { return 1; }
+    else if (!ys_eq_lit(ys_slice(rest, 0, 1), "\"")) { return 1; }
+    else if (!ys_eq_lit(ys_slice_from(rest, yv_len(rest) - 1), "\"")) { return 1; }
     else { return 0; }
 }
 
@@ -1002,8 +1002,8 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
     Yv *rest = ys("");
     /* NOTE: `0;` tails (see parser.y parse_binary note). */
     if (sp >= 0) {
-        dir = ys_substr(line, 0, sp);
-        rest = ys_trim(ys_substr(line, sp + 1, yv_len(line) - sp - 1));
+        dir = ys_slice(line, 0, sp);
+        rest = ys_trim(ys_slice_from(line, sp + 1));
         ;
     } else { ; };
     if (ys_eq_lit(dir, ".text")) {
@@ -1173,8 +1173,8 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
     Yv *mn = line;
     Yv *rest = ys("");
     if (cut >= 0) {
-        mn = ys_substr(line, 0, cut);
-        rest = ys_trim(ys_substr(line, cut + 1, yv_len(line) - cut - 1));
+        mn = ys_slice(line, 0, cut);
+        rest = ys_trim(ys_slice_from(line, cut + 1));
         ;
     } else { ; };
     Yv *ops = yav(0);
@@ -1526,11 +1526,11 @@ static Yv *debug_syms_sec(Yv *out, Yv *labels, long sec, long end) {
 static int is_sym_label(Yv *name, long sec) {
     if (sec == 0) {
         return ys_eq_lit(name, "_start") ||
-               ys_eq_lit(ys_substr(name, 0, 2), "y_") ||
-               ys_eq_lit(ys_substr(name, 0, 4), "yfn_");
+               ys_eq_lit(ys_slice(name, 0, 2), "y_") ||
+               ys_eq_lit(ys_slice(name, 0, 4), "yfn_");
     } else {
-        return ys_eq_lit(ys_substr(name, 0, 3), "yg_") ||
-               ys_eq_lit(ys_substr(name, 0, 2), "y_");
+        return ys_eq_lit(ys_slice(name, 0, 3), "yg_") ||
+               ys_eq_lit(ys_slice(name, 0, 2), "y_");
     }
 }
 
@@ -1540,9 +1540,9 @@ static int is_sym_label(Yv *name, long sec) {
  * profiles of two builds harder to line up. */
 static Yv *sym_name(Yv *lbl) {
     Yv *s = lbl;
-    if (ys_eq_lit(ys_substr(s, 0, 4), "yfn_")) {
+    if (ys_eq_lit(ys_slice(s, 0, 4), "yfn_")) {
         s = after_uid(s, 4);
-    } else if (ys_eq_lit(ys_substr(s, 0, 3), "yg_")) {
+    } else if (ys_eq_lit(ys_slice(s, 0, 3), "yg_")) {
         s = after_uid(s, 3);
     }
     long d = ys_last_index_of(s, ys("$"));
@@ -1550,13 +1550,13 @@ static Yv *sym_name(Yv *lbl) {
         long k = d + 1;
         int digits = k < yv_len(s);
         while (k < yv_len(s)) {
-            if (!is_digit_ch(ys_substr(s, k, 1))) {
+            if (!is_digit_ch(ys_slice(s, k, k + 1))) {
                 digits = 0;
             }
             k = k + 1;
         }
         if (digits) {
-            s = ys_substr(s, 0, d);
+            s = ys_slice(s, 0, d);
         }
     }
     return s;
@@ -1566,11 +1566,11 @@ static Yv *sym_name(Yv *lbl) {
  * does not match. */
 static Yv *after_uid(Yv *s, long k) {
     long i = k;
-    while (i < yv_len(s) && is_digit_ch(ys_substr(s, i, 1))) {
+    while (i < yv_len(s) && is_digit_ch(ys_slice(s, i, i + 1))) {
         i = i + 1;
     }
-    if (i > k && i < yv_len(s) && ys_eq_lit(ys_substr(s, i, 1), "_")) {
-        return ys_substr(s, i + 1, yv_len(s) - i - 1);
+    if (i > k && i < yv_len(s) && ys_eq_lit(ys_slice(s, i, i + 1), "_")) {
+        return ys_slice_from(s, i + 1);
     } else {
         return s;
     }

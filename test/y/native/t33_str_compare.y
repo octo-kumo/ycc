@@ -19,7 +19,7 @@ let y = "lemon";
 print(x < y);
 print(y < x);
 print(x + "!" > x);
-print(substr("zebra", 0, 1) > "a");
+print("zebra"[:1] > "a");
 
 // a comparison-driven sort (insertion sort over strings)
 let names = ["pear", "apple", "fig", "date"];

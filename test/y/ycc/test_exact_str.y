@@ -3,15 +3,15 @@ print("src = " + src);
 print("len = " + tostring(len(src)));
 let i = 8;
 let n = len(src);
-print("starting at i=" + tostring(i) + " char=" + substr(src, i, 1));
+print("starting at i=" + tostring(i) + " char=" + src[i:i + 1]);
 i = i + 1;
 let buf = "";
 let open = true;
 while (open && i < n) {
-    let ch = substr(src, i, 1);
+    let ch = src[i:i + 1];
     print("i=" + tostring(i) + " ch=" + ch);
     if (ch == "\\") {
-        let esc = substr(src, i + 1, 1);
+        let esc = src[i + 1:i + 2];
         print("  escape: " + esc);
         if (esc == "n") { buf = buf + "\n"; i = i + 2; }
         else { buf = buf + esc; i = i + 2; };

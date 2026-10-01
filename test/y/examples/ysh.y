@@ -35,7 +35,7 @@ def show_help(args: [str]) -> long {
 def has_non_ascii(s: str) -> bool {
     let found = false;
     foreach (i in range(len(s))) {
-        if (!found && ord(substr(s, i, 1)) > 127) {
+        if (!found && ord(s[i:i + 1]) > 127) {
             found = true;
         };
     };
@@ -77,8 +77,8 @@ def cmd_eval(args: [str]) -> long {
         return read_eval_body();
     };
     let code = join(args[1:], " ");
-    if (len(code) > 1 && substr(code, 0, 1) == "\"" && substr(code, len(code) - 1, 1) == "\"") {
-        code = substr(code, 1, len(code) - 2);
+    if (len(code) > 1 && code[:1] == "\"" && code[len(code) - 1:] == "\"") {
+        code = code[1:len(code) - 1];
     };
     if (len(trim(code)) == 0) {
         return read_eval_body();

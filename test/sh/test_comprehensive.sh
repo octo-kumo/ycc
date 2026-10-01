@@ -57,8 +57,8 @@ run_test() {
 }
 
 # The empty program must print NOTHING and exit 0 on both sides. run_test
-# greps for a substring and the empty string matches any output at all, so
-# this one case needs an exact comparison.
+# accepts a text match, and the empty expected value matches any output at
+# all, so this one case needs an exact comparison.
 silent_test() {
     local name="$1"
     local code="$2"
@@ -140,13 +140,13 @@ run_test "ord: a" 'print(ord("a"));' '97'
 run_test "chr: 65" 'print(chr(65));' 'A'
 run_test "chr: 97" 'print(chr(97));' 'a'
 
-# ── Builtins: substr ──
+# ── String slicing ──
 echo ""
-echo "── Builtins: substr ──"
-run_test "substr: middle" 'print(substr("hello", 1, 3));' 'ell'
-run_test "substr: from start" 'print(substr("hello", 0, 2));' 'he'
-run_test "substr: to end" 'print(substr("hello", 3, 5));' 'lo'
-run_test "substr: empty" 'print(substr("hello", 2, 2));' ''
+echo "── String slicing ──"
+run_test "slice: middle" 'print("hello"[1:4]);' 'ell'
+run_test "slice: from start" 'print("hello"[:2]);' 'he'
+run_test "slice: to end" 'print("hello"[3:]);' 'lo'
+run_test "slice: empty" 'print("hello"[2:2]);' ''
 
 # ── Builtins: split/join ──
 echo ""

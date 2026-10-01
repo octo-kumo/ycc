@@ -88,7 +88,7 @@ def arch_prelude() -> str {
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
     // .bss cells), the trap stubs, the record field-table probes
     // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
-    // (eq/cmp/cat/join/substr, arr push/prepend/slice/cat/eq), long and
+    // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
     join([
         "y_str_eq:",
@@ -858,9 +858,9 @@ def arch_prelude() -> str {
         "    push %rax",
         "    mov $1, %rax",
         "    push %rax",
-        "    mov $6, %rax",
+        "    mov $7, %rax",
         "    push %rax",
-        "    call y_str_substr",
+        "    call y_str_slice",
         "    add $24, %rsp",
         "    push %rbx",
         "    push %rax",
@@ -872,7 +872,10 @@ def arch_prelude() -> str {
         "    pop %rbx",
         "    pop %rbp",
         "    ret",
-        "y_str_substr:",
+        // y_str_slice(s, lo, hi) -> NEW str = s[lo:hi], half-open and
+        // clamped like an array slice: lo < 0 counts from 0, hi > len stops
+        // at len, hi <= lo is "".
+        "y_str_slice:",
         "    push %rbp",
         "    mov %rsp, %rbp",
         "    push %rbx",
@@ -880,28 +883,19 @@ def arch_prelude() -> str {
         "    push %r13",
         "    push %r14",
         "    mov 32(%rbp), %rbx",
-        "    mov 24(%rbp), %r13",
+        "    mov 24(%rbp), %rax",
         "    mov 16(%rbp), %r14",
         "    mov (%rbx), %rcx",
-        "    mov %r13, %rax",
         "    cmp $0, %rax",
-        "    jge ysb_stok",
+        "    jge ysb_look",
         "    xor %eax, %eax",
-        "ysb_stok:",
-        "    cmp %rcx, %rax",
-        "    jge ysb_empty",
-        "    mov %rcx, %rdx",
-        "    sub %rax, %rdx",
-        "    cmp %r14, %rdx",
-        "    jge ysb_cntok",
-        "    mov %rdx, %r14",
-        "    jmp ysb_cntok2",
-        "ysb_cntok:",
-        "    cmp $0, %r14",
-        "    jge ysb_cntok2",
-        "    mov %rdx, %r14",
-        "ysb_cntok2:",
-        "    mov %r14, %rcx",
+        "ysb_look:",
+        "    cmp %rcx, %r14",
+        "    jle ysb_hiok",
+        "    mov %rcx, %r14",
+        "ysb_hiok:",
+        "    sub %rax, %r14",
+        "    jle ysb_empty",
         "    mov %r14, %rdi",
         "    add $16, %rdi",
         "    mov %rax, %r12",

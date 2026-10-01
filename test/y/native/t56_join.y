@@ -24,8 +24,8 @@ while (i < 1000) {
 };
 let j = join(big, ", ");
 print(len(j));
-print(substr(j, 0, 40));
-print(substr(j, len(j) - 30, 30));
+print(j[:40]);
+print(j[len(j) - 30:]);
 
 let words = split("the quick brown fox jumps over the lazy dog", " ");
 show(join(words, "_"));

@@ -231,7 +231,10 @@ All of these are lowered early, so the checker and emitter see little new:
   literal, or a record pattern like `({f: 10}) x`) matches only the values
   it names, so it never counts as covering a member — the error says so.
 - **Strings**: `s[i]` is the `byte` at i (trapped out of bounds), `s[lo:hi]`
-  the substring (half-open, clamped). **`c'a'`** is a `byte` literal.
+  the substring — half-open and clamped like an array slice (`lo < 0`
+  counts from 0, `hi > len` stops at len, `hi <= lo` is `""`), with
+  `s[:hi]` and `s[lo:]` for the omitted bounds. There is no `substr`:
+  `substr(s, a, n)` is `s[a:a + n]`. **`c'a'`** is a `byte` literal.
 - **Slice assignment** `a[lo:hi] = b` copies b's elements into that range;
   the range must lie inside a and hold exactly `len(b)` elements
   (`y_arr_setslice1`/`8` in rt.y trap otherwise).
@@ -274,7 +277,7 @@ The rule is that `arch_x64.y` provides small, general **primitives** and the
 runtime provides **behaviour**. What stays in assembly is only what needs raw
 machine state: the `y_alloc` bump allocator, the trap stubs (div/0, OOB,
 unwrap-of-none, OOM), dynamic record lookup (`y_dot_lookup`), the
-byte-moving string cores (`y_str_eq/cmp/cat/join/substr`), `str`↔`[byte]`
+byte-moving string cores (`y_str_eq/cmp/cat/join/slice`), `str`↔`[byte]`
 conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
 `y_arr_eq` — one implementation each, parameterized by element width,
 because Y has no generics), long and float formatting, and argv
@@ -316,10 +319,11 @@ with "undefined function 'exec'" and the binary has no path to a shell.
 
 The runtime text lives as line arrays inside `rt.y`/`prelude.y` because the
 shipped `ycc` is a standalone static ELF — it cannot read a support file at
-run time. A Y helper may call intrinsics (`substr`, `bytes`, `from_bytes`,
-`tostring`, `syscall`, …) and other helpers, but never an assembly-only
+run time. A Y helper may call intrinsics (`bytes`, `from_bytes`,
+`tostring`, `syscall`, …), slice strings (`s[a:b]` is the asm
+`y_str_slice`) and call other helpers, but never an assembly-only
 label directly — the checker would call it undefined — so every bridge into
-the primitives goes through an intrinsic.
+the primitives goes through an intrinsic or an operator.
 
 **`y_` is a reserved prefix.** A `y_*` def is emitted under its bare name
 (`fn_label_of` in native.y) because generated code calls it by fixed label:
@@ -382,7 +386,7 @@ splitter, the file layer and the float formatter are not there because the
 program does not use them.
 
 The scanners walk a `bytes()` copy of the emitted text and materialize only
-the symbols they reference; per-character `substr` would cost an allocation
+the symbols they reference; a per-character slice would cost an allocation
 per character.
 
 ## Optional std modules
@@ -490,8 +494,8 @@ them starts compiling again, so the list can only shrink.
 - Division/modulo by zero, OOB indexing, unwrap-of-none, OOM each exit
   cleanly with a message + exit 1.
 - Maps are linear-scan (a `{keys, vals}` record): fine for small tables,
-  O(n) per lookup. Records, heap strings and the string builtins
-  (`substr`/`join`/`split`/`tostring`/`ord`/…) are supported — the compiler
+  O(n) per lookup. Records, heap strings, string slices and the string
+  builtins (`join`/`split`/`tostring`/`ord`/…) are supported — the compiler
   itself relies on them.
 - `float` is IEEE754 double, held in `%rax` as raw bits and moved through
   `%xmm` only for arithmetic and comparison, so slots and the calling

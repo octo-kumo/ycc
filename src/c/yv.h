@@ -73,7 +73,8 @@ long yv_len(const Yv *v);             /* str chars / array count / record fields
 
 /* ── strings ─────────────────────────────────────────────────────────── */
 Yv *ys_cat(const Yv *a, const Yv *b);
-Yv *ys_substr(const Yv *s, long start, long count); /* C-clamped semantics */
+Yv *ys_slice(const Yv *s, long lo, long hi);       /* s[lo:hi], clamped */
+Yv *ys_slice_from(const Yv *s, long lo);           /* s[lo:] */
 int ys_eq(const Yv *a, const Yv *b);
 int ys_eq_lit(const Yv *a, const char *lit);
 int ys_cmp(const Yv *a, const Yv *b); /* strcmp sign: <str lexicographic> */

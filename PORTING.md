@@ -72,7 +72,8 @@ requires byte-identical binaries).
 
 5. **Strings**: `"x"` (as a value) → `ys("x")`; `a + b` → `ys_cat(a, b)`;
    `s == "lit"` → `ys_eq_lit(s, "lit")`; `s == t` → `ys_eq(s, t)`;
-   `substr(s, i, n)` → `ys_substr(s, i, n)` (C-clamped semantics);
+   `s[a:b]` → `ys_slice(s, a, b)`, `s[a:]` → `ys_slice_from(s, a)`,
+   `s[:b]` → `ys_slice(s, 0, b)` (clamped like the native slice);
    `tostring(v)` → `ys_tostring(v)` (the same formatting the native
    runtime's `tostring` produces);
    `ord/chr/trim/join/split/index_of/last_index_of` keep their names.

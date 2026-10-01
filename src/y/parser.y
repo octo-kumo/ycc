@@ -998,7 +998,7 @@ def topt_of(t) -> {k: str} { { k: "topt", of: t } };
 // float when the literal has a fraction or an exponent (radix literals
 // like 0xE1 never do).
 def num_lit_type(s: str) -> {k: str} {
-    let p = substr(s, 0, 2);
+    let p = s[0:2];
     if (p == "0x" || p == "0X" || p == "0b" || p == "0B") { { k: "tlong" } }
     else if (index_of(s, ".") >= 0 || index_of(s, "e") >= 0 || index_of(s, "E") >= 0) { { k: "tfloat" } }
     else { { k: "tlong" } }
@@ -1316,7 +1316,7 @@ def parse_stmt_opassign(toks: [{ t: str, v: str, line: long, col: long }], p: lo
     let op = tv(toks, epos);
     let rhs = parse_expr(toks, epos + 1);
     // Every compound op is `X=`, so the binary op is its first character.
-    let binop = substr(op, 0, 1);
+    let binop = op[0:1];
     res({ k: "opassign", op: binop, tgt: tgt, v: rhs.node, line: tline(toks, epos), col: tcol(toks, epos) }, rhs.pos)
 };
 

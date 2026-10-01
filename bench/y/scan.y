@@ -1,5 +1,5 @@
 // bench/y/scan.y — a little tokenizer over a generated "source": the
-// mixed workload (per-char scans, substr, comparisons, token lists) that
+// mixed workload (per-char scans, string slices, comparisons, token lists) that
 // the compiler itself runs on every file.
 def tokenize(lines: long) -> long {
 let src = "";
@@ -14,7 +14,7 @@ let toks: [str] = [];
 let n = len(src);
 let p = 0;
 while (p < n) {
-    let c = substr(src, p, 1);
+    let c = src[p:p + 1];
     if (c == " " || c == "\n" || c == "\t") {
         p = p + 1;
         0
@@ -27,7 +27,7 @@ while (p < n) {
         let go = true;
         while (go) {
             if (p < n) {
-                let d = substr(src, p, 1);
+                let d = src[p:p + 1];
                 if (d >= "0" && d <= "9") {
                     p = p + 1;
                     0
@@ -42,14 +42,14 @@ while (p < n) {
             };
             0
         };
-        toks += substr(src, s, p - s);
+        toks += src[s:p];
         0
     } else {
         let s = p;
         let go = true;
         while (go) {
             if (p < n) {
-                let d = substr(src, p, 1);
+                let d = src[p:p + 1];
                 if (d >= "a" && d <= "z") {
                     p = p + 1;
                     0
@@ -67,7 +67,7 @@ while (p < n) {
             };
             0
         };
-        toks += substr(src, s, p - s);
+        toks += src[s:p];
         0
     };
     0

@@ -48,16 +48,6 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("    from_bytes(b)"));
     out = ya_push(out, ys("};"));
     out = ya_push(out, ys(""));
-    out = ya_push(out, ys("// s[lo:hi]: half-open and clamped, like an array slice."));
-    out = ya_push(out, ys("def y_str_slice(s: str, lo: long, hi: long) -> str {"));
-    out = ya_push(out, ys("    let n = len(s);"));
-    out = ya_push(out, ys("    let a = lo;"));
-    out = ya_push(out, ys("    let b = hi;"));
-    out = ya_push(out, ys("    if (a < 0) { a = 0; 0 } else { 0 };"));
-    out = ya_push(out, ys("    if (b > n) { b = n; 0 } else { 0 };"));
-    out = ya_push(out, ys("    if (b <= a) { \"\" } else { substr(s, a, b - a) }"));
-    out = ya_push(out, ys("};"));
-    out = ya_push(out, ys(""));
     out = ya_push(out, ys("// a[lo:hi] = src, for 8-byte and packed 1-byte elements: the range"));
     out = ya_push(out, ys("// must lie inside a and hold exactly len(src) elements."));
     out = ya_push(out, ys("def y_setslice_check(n: long, lo: long, hi: long, m: long) -> long {"));
@@ -154,7 +144,7 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("        } else { go = false; 0; };"));
     out = ya_push(out, ys("        0"));
     out = ya_push(out, ys("    };"));
-    out = ya_push(out, ys("    substr(s, i, j - i)"));
+    out = ya_push(out, ys("    s[i:j]"));
     out = ya_push(out, ys("};"));
     out = ya_push(out, ys(""));
     out = ya_push(out, ys("// index_of / last_index_of: first (last) match of needle in hay,"));
@@ -254,7 +244,7 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("                    0"));
     out = ya_push(out, ys("                } else { 0; };"));
     out = ya_push(out, ys("                if (hit) {"));
-    out = ya_push(out, ys("                    out += substr(s, start, i - start);"));
+    out = ya_push(out, ys("                    out += s[start:i];"));
     out = ya_push(out, ys("                    start = i + m;"));
     out = ya_push(out, ys("                    i = i + m;"));
     out = ya_push(out, ys("                    0"));
@@ -267,7 +257,7 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("            0"));
     out = ya_push(out, ys("        };"));
     out = ya_push(out, ys("        if (start < n) {"));
-    out = ya_push(out, ys("            out += substr(s, start, n - start);"));
+    out = ya_push(out, ys("            out += s[start:];"));
     out = ya_push(out, ys("            0"));
     out = ya_push(out, ys("        } else { 0; };"));
     out = ya_push(out, ys("        out"));
@@ -389,7 +379,9 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("// as \\xHH. Built from chr() so the embedded text stays escape-free."));
     out = ya_push(out, ys("def y_hex_esc(c: long) -> str {"));
     out = ya_push(out, ys("    let d = \"0123456789abcdef\";"));
-    out = ya_push(out, ys("    chr(92) + \"x\" + substr(d, (c / 16) % 16, 1) + substr(d, c % 16, 1)"));
+    out = ya_push(out, ys("    let hi = (c / 16) % 16;"));
+    out = ya_push(out, ys("    let lo = c % 16;"));
+    out = ya_push(out, ys("    chr(92) + \"x\" + d[hi:hi + 1] + d[lo:lo + 1]"));
     out = ya_push(out, ys("};"));
     out = ya_push(out, ys("def y_bytes_repr(b: [byte]) -> str {"));
     out = ya_push(out, ys("    let bs = chr(92);"));
