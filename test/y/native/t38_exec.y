@@ -20,7 +20,7 @@ puts("after\n");
 // a command that does not exist: sh reports it and exits 127
 puts(tostring(exec("definitely-not-a-real-command-xyz 2>/dev/null")) + "\n");
 
-// clear_eof() is available on every engine (a no-op natively: readline()
-// issues a raw read(2) each call, so there is no sticky flag to reset)
+// clear_eof() is available on every engine (a no-op natively: EOF is
+// never latched -- an empty stdin buffer always means a fresh read(2))
 clear_eof();
 puts("cleared\n");

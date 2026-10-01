@@ -23,7 +23,6 @@
 - remove profiling from ycc itself, instead add option to compile with debug symbols like ELF symbol table, symbols and other info, so we can use linux built in `perf` to do profiling. for microbenching use valgrind. also measure time spent in kernel space with strace. and heap expansion with brk & io. and for heap profiling with massif.
 - remove py code
 - move prelude into std
-- readline is inefficient for large stdin
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
 - replace `substr` with string slicing, and remove substr from built ins
 - enforce `const` so they cant be reassigned values and will error at compilation
@@ -67,6 +66,12 @@ what was deliberately *not* changed) is in `audit.md`.
   one allocation. `tostring`-heavy output got 27% faster. Programs also
   got much smaller (hello's asm 84% smaller), because the Y version used
   to ride along in every program via `y_float_tostr`.
+- **`readline` is buffered**: one `read(2)` per 16 KB instead of one per
+  byte, and lines are sliced out of the buffer. `bench/y/lines.y` (5 MB of
+  short lines) went from 1.25 s to 0.10 s. `exec` gives the unread part
+  back to a seekable stdin before it forks (`t58_readline_exec`). On a
+  pipe, buffered bytes stay with the parent, as with C stdio. EOF is
+  still not latched.
 - Hex/binary literals with `_` separators, scientific notation, float literals.
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),

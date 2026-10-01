@@ -85,6 +85,10 @@ Drop a `.y` file in `bench/y/`. Rules of thumb:
 - **named after what it stresses** (`strings`, `arrays`, `fib`, ...), and
   put the work inside a function — top-level code lands in `_start` and
   the profile becomes one opaque row;
-- never reference the network or files; benchmarks run anywhere.
+- never reference the network or files; benchmarks run anywhere. The
+  one exception is a benchmark of I/O itself: `lines.y` measures
+  `readline()`, and since the harness gives every benchmark stdin at
+  `/dev/null`, it writes its input to a pid-named file under `/tmp`,
+  `dup2`s it onto fd 0 and unlinks it before reading.
 
 They are picked up automatically by both scripts — no registration.

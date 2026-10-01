@@ -277,11 +277,22 @@ examples of the same move landed earlier:
 
 - `readline()` — the backend contributes only the `syscall` intrinsic and
   `bytes`/`from_bytes`; stopping at the newline, growing the buffer and
-  handling EOF are twenty lines of Y. It replaced ~90 lines of assembly.
+  handling EOF are ordinary Y. It replaced ~90 lines of assembly. It first
+  read one byte per `read(2)`; it now fills a 16 KB stdin buffer (globals
+  at the top of the prelude chunk, allocated on the first read) and slices
+  lines out of it — `bench/y/lines.y`, 5 MB of short lines, went from
+  1.25 s to 0.10 s. EOF is still never latched: an empty buffer always
+  means a fresh `read(2)`.
 - `exec(cmd)` — `fork`/`execve`/`wait4` through `syscall`, with the
   `char**` argv built out of `[byte]` buffers and `ptr_addr` (the one
   primitive that lets a pointer's value cross into `long`). No new
-  assembly at all.
+  assembly at all. It first calls `y_stdin_sync()`, which gives the
+  unread part of the stdin buffer back with `lseek(0, -unread, SEEK_CUR)`
+  when stdin is a file, so the child starts right after the last line
+  `readline()` returned; a pipe cannot seek, and bytes already buffered
+  stay with the parent (the C stdio contract). The exec chunk calls
+  `y_stdin_sync`, which is in the prelude trigger list, so splicing exec
+  always pulls the readline chunk in as well.
 
 `ycc --no-exec` simply does not splice the exec chunk, so the call fails
 with "undefined function 'exec'" and the binary has no path to a shell.

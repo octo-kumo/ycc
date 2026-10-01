@@ -67,10 +67,14 @@ a runtime error (Section~\ref{sec:errors}).
 \item[\ic{eputs(s)}] Same, to stderr (keeps \ic{--time} output and
   program output apart).
 \item[\ic{readline()}] One line from stdin without its newline, or
-  \ic{none} at end of input (\ic{str?}).
-\item[\ic{clear\_eof()}] No-op: \ic{readline()} issues a fresh read on
-  every call, so end of input is never latched. Present so the same
-  source runs on every compiler.
+  \ic{none} at end of input (\ic{str?}). Stdin is buffered (16\,KB per
+  \ic{read(2)}); before \ic{exec()} starts a child, the unread part is
+  given back when stdin is a file, so the child reads on from the next
+  line. On a pipe, lines already buffered stay with the program, as with
+  C stdio.
+\item[\ic{clear\_eof()}] No-op: \ic{readline()} reads again whenever
+  its buffer is empty, so end of input is never latched. Present so the
+  same source runs on every compiler.
 \item[\ic{read\_file(path)}] File contents as \ic{str?}: \ic{none} when
   the file cannot be read.
 \item[\ic{write\_file(path, s)}] Write a string; \ic{bool} success.
