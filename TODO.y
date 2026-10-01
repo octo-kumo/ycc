@@ -79,4 +79,10 @@ let second_aarr: [[long]] = =[[7, 8], [9, 10]];
 // [[long]] + [[long]] = [[long]]
 let comb = arr_of_arr + second_aarr; // should be [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
 // modifying the inner arrays of the original array should affect the combined array
+arr_of_arr[0][0] = 100; // this should also change the first element of comb
 // but modifying arr_of_arr itself should not affect comb
+arr_of_arr += [[11, 12]]; // this should not change comb
+
+// [[long]] + [long] = [[long]]
+// even though this is also array + array, the second item is the item type of the first
+let new_arr = arr_of_arr + [13, 14]; // should be [[1, 2], [3, 4], [5, 6], [13, 14]]
