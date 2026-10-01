@@ -46,6 +46,16 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   to and from `str` (`from_bytes` takes a fixed `[byte; N]` too — it is the
   same header); a `byte` widens to `long` in arithmetic, and a `long`
   narrows to `byte` at annotated sites (there is no cast syntax).
+- **Equality** (`gen_bin_rest`): scalars, records, maps, pointers and
+  functions compare as words (records and maps by identity), `str` with
+  `y_str_eq`, `float` with `ucomisd`. Two options compare payloads
+  (`gen_eq_opt`): both none, or both boxes with equal contents; `x == none`
+  stays a word test. Arrays compare length then elements, each with the
+  element type's own `==`: words with `y_arr_eq` (by `esz`), strings with
+  `y_arr_eq_str`, and options, arrays and floats in an inline loop
+  (`gen_eq_arr_deep`) whose state sits on the stack, since each element
+  compare may recurse or call those cores. `gen_eq_vals` is the one
+  dispatcher: left pushed, right in `%rax`, 0/1 back in `%rax`.
 - Locals live at fixed `rbp` offsets (one flat frame per function, 8 bytes/slot).
   **Top-level variables are globals**: each gets an 8-byte `.bss` cell
   (`yg_<n>_<name>`, read and written `%rip`-relative), so every function —
@@ -105,9 +115,9 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   mutated). Reads whose option cannot escape skip the box altogether:
   `m[k]!` reads `vals[i]`, and `is_some(m[k])`, `m[k] == none` and
   `m[k] != none` are the scan's verdict -- so they never allocate, and an
-  escaping read allocates at most once per entry and write. Two reads of
-  an entry with no write between return the same box, so `==` on two
-  options (which compares boxes) holds between them.
+  escaping read allocates at most once per entry and write. Sharing a
+  box is invisible to the program: `==` on two options compares their
+  payloads (`gen_eq_opt`), not their boxes.
   `is_hash_key` accepts `str`, `long`,
   `byte`, `bool` and `float`, but `map_type_of` hard-codes `tstr`, so a
   map **literal** only infers a `str` key -- build a non-`str`-keyed map

@@ -3179,6 +3179,140 @@ def gen_str_cmp(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     emit(st, "    movzbq %al, %rax")
 };
 
+// == on values whose equality looks inside them (NATIVE.md, "Equality"):
+// two options compare their payloads, and an array compares each pair of
+// elements with the element type's own ==, at any depth. Arrays of words
+// whose == is the bit pattern, and arrays of strings, keep the y_arr_eq /
+// y_arr_eq_str cores; the others loop here: options and arrays look
+// inside, and floats compare as numbers (0.0 == -0.0).
+def eq_elem_loop(t) -> bool {
+    t.k == "topt" || t.k == "tarr" || t.k == "tfloat"
+};
+
+// The left operand pushed, the right one in %rax: pops the left and leaves
+// left == right (0 or 1) in %rax, compared as type t.
+def gen_eq_vals(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, t) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    if (t.k == "topt") {
+        gen_eq_opt(st, t.of)
+    } else if (t.k == "tarr") {
+        if (eq_elem_loop(t.of)) {
+            gen_eq_arr_deep(st, t.of)
+        } else if (t.of.k == "tstr") {
+            st = emit(st, "    push %rax");
+            st = emit(st, "    call y_arr_eq_str");
+            emit(st, "    add $16, %rsp")
+        } else {
+            st = emit(st, "    push %rax");
+            st = emit(st, "    mov $" + tostring(elem_bytes(t.of)) + ", %rax");
+            st = emit(st, "    push %rax");
+            st = emit(st, "    call y_arr_eq");
+            emit(st, "    add $24, %rsp")
+        }
+    } else if (t.k == "tstr") {
+        st = emit(st, "    push %rax");
+        st = emit(st, "    call y_str_eq");
+        emit(st, "    add $16, %rsp")
+    } else if (t.k == "tfloat") {
+        // as gen_float_bin's ==
+        st = emit(st, "    movq %rax, %xmm1");
+        st = emit(st, "    pop %rax");
+        st = emit(st, "    movq %rax, %xmm0");
+        st = emit(st, "    ucomisd %xmm1, %xmm0");
+        st = emit(st, "    sete %al");
+        emit(st, "    movzbq %al, %rax")
+    } else {
+        // one word: a scalar by value, a record or map by identity
+        st = emit(st, "    pop %rcx");
+        st = emit(st, "    cmp %rax, %rcx");
+        st = emit(st, "    sete %al");
+        emit(st, "    movzbq %al, %rax")
+    }
+};
+
+// gen_eq_vals for two options of payload type pt: equal when both are
+// none, or both are some with equal payloads (a box holds one word).
+def gen_eq_opt(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, pt) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let lnone = next_loc(st);
+    st = lnone.st;
+    let lne = next_loc(st);
+    st = lne.st;
+    let ldone = next_loc(st);
+    st = ldone.st;
+    st = emit(st, "    pop %rcx");
+    st = emit(st, "    test %rcx, %rcx");
+    st = emit(st, "    jz " + lnone.lbl);
+    st = emit(st, "    test %rax, %rax");
+    st = emit(st, "    jz " + lne.lbl);
+    st = emit(st, "    mov (%rcx), %rcx");
+    st = emit(st, "    push %rcx");
+    st = emit(st, "    mov (%rax), %rax");
+    st = gen_eq_vals(st, pt);
+    st = emit(st, "    jmp " + ldone.lbl);
+    st = emit(st, lnone.lbl + ":");
+    st = emit(st, "    test %rax, %rax");
+    st = emit(st, "    sete %al");
+    st = emit(st, "    movzbq %al, %rax");
+    st = emit(st, "    jmp " + ldone.lbl);
+    st = emit(st, lne.lbl + ":");
+    st = emit(st, "    xor %eax, %eax");
+    emit(st, ldone.lbl + ":")
+};
+
+// gen_eq_vals for two arrays whose elements (of type et) need their own
+// == (eq_elem_loop): same length, then each pair compared as et. The loop
+// keeps its state on the stack, since an element compare may call the
+// string and array cores: from the top, the index, the right array, the
+// left.
+def gen_eq_arr_deep(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, et) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let lloop = next_loc(st);
+    st = lloop.st;
+    let lsame = next_loc(st);
+    st = lsame.st;
+    let ldiff = next_loc(st);
+    st = ldiff.st;
+    let lne = next_loc(st);
+    st = lne.st;
+    let ldone = next_loc(st);
+    st = ldone.st;
+    st = emit(st, "    pop %rcx");
+    st = emit(st, "    mov (%rcx), %rdx");
+    st = emit(st, "    mov (%rax), %rsi");
+    st = emit(st, "    cmp %rsi, %rdx");
+    st = emit(st, "    jne " + lne.lbl);
+    st = emit(st, "    push %rcx");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    xor %edx, %edx");
+    st = emit(st, "    push %rdx");
+    st = emit(st, lloop.lbl + ":");
+    st = emit(st, "    mov (%rsp), %rdx");
+    st = emit(st, "    mov 16(%rsp), %rcx");
+    st = emit(st, "    mov (%rcx), %rsi");
+    st = emit(st, "    cmp %rsi, %rdx");
+    st = emit(st, "    jge " + lsame.lbl);
+    st = emit(st, "    mov 16(%rcx), %rcx");
+    st = emit(st, "    mov (%rcx,%rdx,8), %rcx");
+    st = emit(st, "    mov 8(%rsp), %rax");
+    st = emit(st, "    mov 16(%rax), %rax");
+    st = emit(st, "    mov (%rax,%rdx,8), %rax");
+    st = emit(st, "    push %rcx");
+    st = gen_eq_vals(st, et);
+    st = emit(st, "    test %rax, %rax");
+    st = emit(st, "    jz " + ldiff.lbl);
+    st = emit(st, "    mov (%rsp), %rdx");
+    st = emit(st, "    inc %rdx");
+    st = emit(st, "    mov %rdx, (%rsp)");
+    st = emit(st, "    jmp " + lloop.lbl);
+    st = emit(st, lsame.lbl + ":");
+    st = emit(st, "    add $24, %rsp");
+    st = emit(st, "    mov $1, %rax");
+    st = emit(st, "    jmp " + ldone.lbl);
+    st = emit(st, ldiff.lbl + ":");
+    st = emit(st, "    add $24, %rsp");
+    st = emit(st, lne.lbl + ":");
+    st = emit(st, "    xor %eax, %eax");
+    emit(st, ldone.lbl + ":")
+};
+
 def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let op = node.op;
     let lt = infer(st, node.l);
@@ -3209,25 +3343,54 @@ def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
     } else if ((op == "==" || op == "!=") && (lt.k == "tarr" || rt.k == "tarr")) {
         // Arrays compare STRUCTURALLY (length then elements), matching
         // yv.c's yv_eq for Y_ARR — `arr == []` is an emptiness test, not a
-        // pointer comparison. String elements compare by value.
+        // pointer comparison. String elements compare by value, and
+        // elements that are arrays, options or floats by their own ==
+        // (gen_eq_vals).
         let elt = { k: "tunk" };
         if (lt.k == "tarr") { elt = lt.of; 0; } else { 0; };
         if (elt.k == "tunk") {
             if (rt.k == "tarr") { elt = rt.of; 0; } else { 0; };
             0
         } else { 0; };
-        st = gen_push_args(st, [node.l, node.r]);
-        if (elt.k == "tstr") {
-            st = emit(st, "    call y_arr_eq_str");
-            st = emit(st, "    add $16, %rsp");
+        if (eq_elem_loop(elt)) {
+            st = gen(st, node.l);
+            st = emit(st, "    push %rax");
+            st = gen(st, node.r);
+            st = gen_eq_arr_deep(st, elt);
             0
         } else {
-            st = emit(st, "    mov $" + tostring(elem_bytes(elt)) + ", %rax");
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_arr_eq");
-            st = emit(st, "    add $24, %rsp");
+            st = gen_push_args(st, [node.l, node.r]);
+            if (elt.k == "tstr") {
+                st = emit(st, "    call y_arr_eq_str");
+                st = emit(st, "    add $16, %rsp");
+                0
+            } else {
+                st = emit(st, "    mov $" + tostring(elem_bytes(elt)) + ", %rax");
+                st = emit(st, "    push %rax");
+                st = emit(st, "    call y_arr_eq");
+                st = emit(st, "    add $24, %rsp");
+                0
+            };
             0
         };
+        if (op == "!=") {
+            emit(st, "    xor $1, %rax")
+        } else {
+            st
+        }
+    } else if ((op == "==" || op == "!=") && (lt.k == "topt" || rt.k == "topt") && !is_none_id(node.l) && !is_none_id(node.r)) {
+        // Two options compare their payloads (gen_eq_opt); `x == none`
+        // stays the one-word test below.
+        let pt = { k: "tunk" };
+        if (lt.k == "topt") { pt = lt.of; 0; } else { 0; };
+        if (pt.k == "tunk") {
+            if (rt.k == "topt") { pt = rt.of; 0; } else { 0; };
+            0
+        } else { 0; };
+        st = gen(st, node.l);
+        st = emit(st, "    push %rax");
+        st = gen(st, node.r);
+        st = gen_eq_opt(st, pt);
         if (op == "!=") {
             emit(st, "    xor $1, %rax")
         } else {

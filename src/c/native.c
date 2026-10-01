@@ -176,6 +176,10 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or);
 Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op);
+int eq_elem_loop(Yv *t);
+Yv *gen_eq_vals(Yv *st, Yv *t);
+Yv *gen_eq_opt(Yv *st, Yv *pt);
+Yv *gen_eq_arr_deep(Yv *st, Yv *et);
 Yv *gen_bin_rest(Yv *st, Yv *node);
 Yv *syscall_reg(long i);
 Yv *gen_push_args(Yv *st, Yv *args);
@@ -4148,6 +4152,144 @@ Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op) {
     return emit(st, ys("    movzbq %al, %rax"));
 }
 
+/* == on values whose equality looks inside them (NATIVE.md, "Equality"):
+ * two options compare their payloads, and an array compares each pair of
+ * elements with the element type's own ==, at any depth. Arrays of words
+ * whose == is the bit pattern, and arrays of strings, keep the y_arr_eq /
+ * y_arr_eq_str cores; the others loop here: options and arrays look
+ * inside, and floats compare as numbers (0.0 == -0.0). */
+int eq_elem_loop(Yv *t) {
+    return ys_eq_lit(yr_get(t, "k"), "topt") ||
+           ys_eq_lit(yr_get(t, "k"), "tarr") ||
+           ys_eq_lit(yr_get(t, "k"), "tfloat");
+}
+
+/* The left operand pushed, the right one in %rax: pops the left and leaves
+ * left == right (0 or 1) in %rax, compared as type t. */
+Yv *gen_eq_vals(Yv *st, Yv *t) {
+    if (ys_eq_lit(yr_get(t, "k"), "topt")) {
+        return gen_eq_opt(st, yr_get(t, "of"));
+    } else if (ys_eq_lit(yr_get(t, "k"), "tarr")) {
+        if (eq_elem_loop(yr_get(t, "of"))) {
+            return gen_eq_arr_deep(st, yr_get(t, "of"));
+        } else if (ys_eq_lit(yr_get(yr_get(t, "of"), "k"), "tstr")) {
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_arr_eq_str"));
+            return emit(st, ys("    add $16, %rsp"));
+        } else {
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys_cat(ys_cat(ys("    mov $"),
+                                        ys_long(elem_bytes(yr_get(t, "of")))),
+                                 ys(", %rax")));
+            st = emit(st, ys("    push %rax"));
+            st = emit(st, ys("    call y_arr_eq"));
+            return emit(st, ys("    add $24, %rsp"));
+        }
+    } else if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    call y_str_eq"));
+        return emit(st, ys("    add $16, %rsp"));
+    } else if (ys_eq_lit(yr_get(t, "k"), "tfloat")) {
+        /* as gen_float_bin's == */
+        st = emit(st, ys("    movq %rax, %xmm1"));
+        st = emit(st, ys("    pop %rax"));
+        st = emit(st, ys("    movq %rax, %xmm0"));
+        st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
+        st = emit(st, ys("    sete %al"));
+        return emit(st, ys("    movzbq %al, %rax"));
+    } else {
+        /* one word: a scalar by value, a record or map by identity */
+        st = emit(st, ys("    pop %rcx"));
+        st = emit(st, ys("    cmp %rax, %rcx"));
+        st = emit(st, ys("    sete %al"));
+        return emit(st, ys("    movzbq %al, %rax"));
+    }
+}
+
+/* gen_eq_vals for two options of payload type pt: equal when both are
+ * none, or both are some with equal payloads (a box holds one word). */
+Yv *gen_eq_opt(Yv *st, Yv *pt) {
+    Yv *lnone = next_loc(st);
+    st = yr_get(lnone, "st");
+    Yv *lne = next_loc(st);
+    st = yr_get(lne, "st");
+    Yv *ldone = next_loc(st);
+    st = yr_get(ldone, "st");
+    st = emit(st, ys("    pop %rcx"));
+    st = emit(st, ys("    test %rcx, %rcx"));
+    st = emit(st, ys_cat(ys("    jz "), yr_get(lnone, "lbl")));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), yr_get(lne, "lbl")));
+    st = emit(st, ys("    mov (%rcx), %rcx"));
+    st = emit(st, ys("    push %rcx"));
+    st = emit(st, ys("    mov (%rax), %rax"));
+    st = gen_eq_vals(st, pt);
+    st = emit(st, ys_cat(ys("    jmp "), yr_get(ldone, "lbl")));
+    st = emit(st, ys_cat(yr_get(lnone, "lbl"), ys(":")));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys("    sete %al"));
+    st = emit(st, ys("    movzbq %al, %rax"));
+    st = emit(st, ys_cat(ys("    jmp "), yr_get(ldone, "lbl")));
+    st = emit(st, ys_cat(yr_get(lne, "lbl"), ys(":")));
+    st = emit(st, ys("    xor %eax, %eax"));
+    return emit(st, ys_cat(yr_get(ldone, "lbl"), ys(":")));
+}
+
+/* gen_eq_vals for two arrays whose elements (of type et) need their own
+ * == (eq_elem_loop): same length, then each pair compared as et. The loop
+ * keeps its state on the stack, since an element compare may call the
+ * string and array cores: from the top, the index, the right array, the
+ * left. */
+Yv *gen_eq_arr_deep(Yv *st, Yv *et) {
+    Yv *lloop = next_loc(st);
+    st = yr_get(lloop, "st");
+    Yv *lsame = next_loc(st);
+    st = yr_get(lsame, "st");
+    Yv *ldiff = next_loc(st);
+    st = yr_get(ldiff, "st");
+    Yv *lne = next_loc(st);
+    st = yr_get(lne, "st");
+    Yv *ldone = next_loc(st);
+    st = yr_get(ldone, "st");
+    st = emit(st, ys("    pop %rcx"));
+    st = emit(st, ys("    mov (%rcx), %rdx"));
+    st = emit(st, ys("    mov (%rax), %rsi"));
+    st = emit(st, ys("    cmp %rsi, %rdx"));
+    st = emit(st, ys_cat(ys("    jne "), yr_get(lne, "lbl")));
+    st = emit(st, ys("    push %rcx"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    xor %edx, %edx"));
+    st = emit(st, ys("    push %rdx"));
+    st = emit(st, ys_cat(yr_get(lloop, "lbl"), ys(":")));
+    st = emit(st, ys("    mov (%rsp), %rdx"));
+    st = emit(st, ys("    mov 16(%rsp), %rcx"));
+    st = emit(st, ys("    mov (%rcx), %rsi"));
+    st = emit(st, ys("    cmp %rsi, %rdx"));
+    st = emit(st, ys_cat(ys("    jge "), yr_get(lsame, "lbl")));
+    st = emit(st, ys("    mov 16(%rcx), %rcx"));
+    st = emit(st, ys("    mov (%rcx,%rdx,8), %rcx"));
+    st = emit(st, ys("    mov 8(%rsp), %rax"));
+    st = emit(st, ys("    mov 16(%rax), %rax"));
+    st = emit(st, ys("    mov (%rax,%rdx,8), %rax"));
+    st = emit(st, ys("    push %rcx"));
+    st = gen_eq_vals(st, et);
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), yr_get(ldiff, "lbl")));
+    st = emit(st, ys("    mov (%rsp), %rdx"));
+    st = emit(st, ys("    inc %rdx"));
+    st = emit(st, ys("    mov %rdx, (%rsp)"));
+    st = emit(st, ys_cat(ys("    jmp "), yr_get(lloop, "lbl")));
+    st = emit(st, ys_cat(yr_get(lsame, "lbl"), ys(":")));
+    st = emit(st, ys("    add $24, %rsp"));
+    st = emit(st, ys("    mov $1, %rax"));
+    st = emit(st, ys_cat(ys("    jmp "), yr_get(ldone, "lbl")));
+    st = emit(st, ys_cat(yr_get(ldiff, "lbl"), ys(":")));
+    st = emit(st, ys("    add $24, %rsp"));
+    st = emit(st, ys_cat(yr_get(lne, "lbl"), ys(":")));
+    st = emit(st, ys("    xor %eax, %eax"));
+    return emit(st, ys_cat(yr_get(ldone, "lbl"), ys(":")));
+}
+
 Yv *gen_bin_rest(Yv *st, Yv *node) {
     Yv *op = yr_get(node, "op");
     Yv *lt = infer(st, yr_get(node, "l"));
@@ -4191,7 +4333,9 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
                 ys_eq_lit(yr_get(rt, "k"), "tarr"))) {
         /* Arrays compare STRUCTURALLY (length then elements), matching
          * yv.c's yv_eq for Y_ARR — `arr == []` is an emptiness test, not a
-         * pointer comparison. String elements compare by value. */
+         * pointer comparison. String elements compare by value, and
+         * elements that are arrays, options or floats by their own ==
+         * (gen_eq_vals). */
         Yv *elt = yr(1, "k", ys("tunk"));
         if (ys_eq_lit(yr_get(lt, "k"), "tarr")) {
             elt = yr_get(lt, "of");
@@ -4210,20 +4354,63 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         } else {
             ;
         }
-        st = gen_push_args(st, yav(2, yr_get(node, "l"), yr_get(node, "r")));
-        if (ys_eq_lit(yr_get(elt, "k"), "tstr")) {
-            st = emit(st, ys("    call y_arr_eq_str"));
-            st = emit(st, ys("    add $16, %rsp"));
+        if (eq_elem_loop(elt)) {
+            st = gen(st, yr_get(node, "l"));
+            st = emit(st, ys("    push %rax"));
+            st = gen(st, yr_get(node, "r"));
+            st = gen_eq_arr_deep(st, elt);
             ;
         } else {
-            st = emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                        ys_long(elem_bytes(elt))),
-                                 ys(", %rax")));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_arr_eq"));
-            st = emit(st, ys("    add $24, %rsp"));
+            st = gen_push_args(st, yav(2, yr_get(node, "l"), yr_get(node, "r")));
+            if (ys_eq_lit(yr_get(elt, "k"), "tstr")) {
+                st = emit(st, ys("    call y_arr_eq_str"));
+                st = emit(st, ys("    add $16, %rsp"));
+                ;
+            } else {
+                st = emit(st, ys_cat(ys_cat(ys("    mov $"),
+                                            ys_long(elem_bytes(elt))),
+                                     ys(", %rax")));
+                st = emit(st, ys("    push %rax"));
+                st = emit(st, ys("    call y_arr_eq"));
+                st = emit(st, ys("    add $24, %rsp"));
+                ;
+            }
             ;
         }
+        if (ys_eq_lit(op, "!=")) {
+            return emit(st, ys("    xor $1, %rax"));
+        } else {
+            return st;
+        }
+    } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) &&
+               (ys_eq_lit(yr_get(lt, "k"), "topt") ||
+                ys_eq_lit(yr_get(rt, "k"), "topt")) &&
+               !is_none_id(yr_get(node, "l")) &&
+               !is_none_id(yr_get(node, "r"))) {
+        /* Two options compare their payloads (gen_eq_opt); `x == none`
+         * stays the one-word test below. */
+        Yv *pt = yr(1, "k", ys("tunk"));
+        if (ys_eq_lit(yr_get(lt, "k"), "topt")) {
+            pt = yr_get(lt, "of");
+            ;
+        } else {
+            ;
+        }
+        if (ys_eq_lit(yr_get(pt, "k"), "tunk")) {
+            if (ys_eq_lit(yr_get(rt, "k"), "topt")) {
+                pt = yr_get(rt, "of");
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
+            ;
+        }
+        st = gen(st, yr_get(node, "l"));
+        st = emit(st, ys("    push %rax"));
+        st = gen(st, yr_get(node, "r"));
+        st = gen_eq_opt(st, pt);
         if (ys_eq_lit(op, "!=")) {
             return emit(st, ys("    xor $1, %rax"));
         } else {

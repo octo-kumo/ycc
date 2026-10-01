@@ -72,8 +72,10 @@ option types --- a plain \ic{str} or \ic{long} can never be empty, so
 \ic{s == none} on a \ic{str} is a type error. On its own \ic{none} has
 the type ``option of anything'' (printed \ic{none}) and adopts the
 option type its context expects. A plain \ty{T} does not widen to
-\ic{T?}; write \ic{some(v)}. \ic{*T} is a raw machine pointer; \ic{\&e}
-yields one (Section~\ref{sec:pointers}).
+\ic{T?}; write \ic{some(v)}. Two options are equal when both are
+\ic{none} or both hold equal payloads (Section~\ref{sec:equality}).
+\ic{*T} is a raw machine pointer; \ic{\&e} yields one
+(Section~\ref{sec:pointers}).
 
 \subsection{Void}
 
@@ -171,7 +173,8 @@ on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} accept any
 values: a non-zero value is true and the result is \ic{bool}
 (Section~\ref{sec:evaluation}). Equality works on any two values of the
 same type; it is by content for scalars and strings, structural for
-arrays, and by identity for records and maps (Section~\ref{sec:equality}).
+arrays and options (at any depth), and by identity for records and maps
+(Section~\ref{sec:equality}).
 
 \subsection{Compound assignment typing}
 \label{sec:opassign-typing}

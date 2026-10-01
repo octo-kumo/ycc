@@ -79,8 +79,9 @@ while (i < 3) {
 \ic{none}. \ic{some(v)} boxes a value as present, \ic{is\_some(v)}
 tests, and \ic{unwrap(v)} --- or its postfix spelling \ic{v!} ---
 returns the payload and is a \emph{runtime error} on \ic{none} (it is a
-programmer error, loudly). \ic{x == none} is the is-empty check; an
-option of an array is an optional reference, not a copied one.
+programmer error, loudly). \ic{x == none} is the is-empty check, and
+two options are equal when their payloads are (Section~\ref{sec:equality});
+an option of an array is an optional reference, not a copied one.
 
 \begin{lstlisting}
 let line = readline();          // str?

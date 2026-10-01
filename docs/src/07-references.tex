@@ -121,9 +121,19 @@ arrays). Values are homogeneous: storing a \ic{str} into a
 \label{sec:equality}
 
 \ic{==} and \ic{!=} on two \textbf{arrays} are \textbf{structural}: same
-length, pairwise-equal elements (with string elements compared by
-content). It is never a pointer comparison; \ic{arr == []} is an
-emptiness test.
+length, pairwise-equal elements. It is never a pointer comparison;
+\ic{arr == []} is an emptiness test. Each pair of elements is compared
+with the element type's own \ic{==}, at any depth: numbers as numbers
+(so \ic{[0.0]} equals an array holding a negative zero), strings by
+content, arrays and options structurally (\ic{[[1, 2]] == [[1, 2]]} is
+\ic{true}), records and maps by identity.
+
+Two \textbf{options} are equal when both are \ic{none}, or both are
+\ic{some} with equal payloads, compared with the payload type's own
+\ic{==}: \ic{some("ab") == some("a" + "b")} and \ic{some([1]) ==
+some([1])} are \ic{true}, \ic{some(1) == some(2)} is \ic{false}. A map
+read is an option, so \ic{m["a"] == m["b"]} compares the two values (or
+their absence). \ic{x == none} remains the emptiness test.
 
 On two \textbf{records} or two \textbf{maps}, \ic{==} compares
 \emph{identity}: it is true exactly when both names refer to the same

@@ -14,11 +14,9 @@
   `native_resolve_x`); what is missing is line markers from the emitter
   through the assembler.
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
-- **`==` on two options compares boxes.** `some(1) == some(1)` is false.
-  The manual specifies equality for scalars, strings, arrays, records and
-  maps, but for options only `x == none`. Map reads now share a box, so
-  two reads of an unchanged entry are `==` (they never were). Decide:
-  equal payloads (like arrays) or identity (like records), and document it.
+- **Float negation is `0.0 - x`.** Unary minus on a `float` subtracts
+  from zero instead of flipping the sign bit, so `-0.0` is `+0.0` (and
+  `1.0 / -0.0` is `+inf`); `0.0 * -1.0` does give a negative zero.
 
 
 ## Done
@@ -27,6 +25,19 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **`==` on two options compared boxes**, so `some(1) == some(1)` was
+  false, and so were `[[1, 2]] == [[1, 2]]` and `[some(1)] == [some(1)]`
+  (array elements compared as words). Decided: structural. Two options
+  are equal when both are none or both hold equal payloads; an array
+  compares each pair of elements with the element type's own `==`, at
+  any depth; records and maps stay identities. Floats inside arrays now
+  compare as numbers (`[0.0]` equals an array holding a negative zero),
+  where `y_arr_eq` compared bit patterns. `gen_eq_vals` dispatches,
+  `gen_eq_opt` and `gen_eq_arr_deep` are inline; flat arrays of words
+  and of strings keep `y_arr_eq` / `y_arr_eq_str`, and `x == none` stays a
+  word test (`t136`). No program in the corpus compiled differently;
+  compiling costs +0.01% instructions.
 
 - **Map reads allocate.** A map read is an option, and an option is a
   heap box, so every `m[k]` cost 16 bytes, even `m[k] == none`; the bump
