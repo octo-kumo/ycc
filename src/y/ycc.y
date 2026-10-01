@@ -1,11 +1,11 @@
 // ycc — the Y compiler. Compiles Y source straight to a native
 // executable (Linux x86_64) with no toolchain: no cc, no as, no ld,
-// no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
+// no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
 //   (no flags)   compile FILE to a native executable (default output: a.out)
 //   -o OUTPUT    output path (executable, or .s file with -S)
 //   -S           emit assembly only (stdout, or the -o file)
 //   -t, --time   print per-phase time and heap use to stderr
-//   --prof       instrument the output (see -h)
+//   -g           add a symbol table (for perf, gdb, valgrind; see -h)
 //   -h, --help   show this text and exit
 
 import lexer from "./lexer.y";
@@ -15,13 +15,13 @@ import nativelib from "./native.y";
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, prof: bool } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool } {
     let out = "";
     let files = [];
     let asm_only = false;
     let timing = false;
     let allow_exec = true;
-    let prof = false;
+    let debug = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -40,17 +40,18 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             timing = true;
         } else if (a == "--no-exec") {
             allow_exec = false;
-        } else if (a == "--prof") {
-            prof = true;
+        } else if (a == "-g") {
+            debug = true;
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
             puts("  -t, --time   print per-phase time and heap use to stderr\n");
+            puts("  -g           add section headers and a symbol table (functions,\n");
+            puts("               globals) so perf, gdb and valgrind show names; the\n");
+            puts("               loaded code and data are unchanged\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
-            puts("  --prof       instrument the output: per-function call counts and\n");
-            puts("               cpu times printed on stderr when the program exits\n");
             puts("  -h, --help   show this text and exit\n");
             exit(0);
         } else if (substr(a, 0, 1) == "-") {
@@ -61,7 +62,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, prof: prof }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug }
 };
 
 // ── phase reporting (--time) ─────────────────────────────────────────────
@@ -186,7 +187,7 @@ def main(cmdline: [str]) -> long {
             let tstart = t0;
             let hstart = h0;
             let dt: [{ name: str, us: long, heap: long }] = [];
-            let nr = nativelib.native_resolve_x(src2, base_dir, 0, pargs.allow_exec, pargs.prof);
+            let nr = nativelib.native_resolve_x(src2, base_dir, 0, pargs.allow_exec);
             let ph = nativelib.phase_end(dt, "resolve", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let nrsrc = nr.src;
@@ -251,7 +252,7 @@ def main(cmdline: [str]) -> long {
                 // (binary-safe open/write/chmod, tinycc-style — NULs pass
                 // through as array elements, no shell, no exec/printf).
                 let rasm2 = r.asm;
-                let ab = nasm.ycc_assemble(rasm2);
+                let ab = nasm.ycc_assemble(rasm2, pargs.debug);
                 ph = nativelib.phase_end(dt, "assemble", t0, h0);
                 dt = ph.times; t0 = ph.t; h0 = ph.h;
                 // ycc_assemble reports its own sub-phases: a:split,

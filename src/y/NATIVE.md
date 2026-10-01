@@ -18,8 +18,8 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect (+ octal payload writer) |
-| `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals; static, entry `_start` |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof` and the separate `exec` chunk), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `prof.y` (the `--prof` runtime), `struct.y` (pack/unpack helpers) |
+| `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab` and section headers |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof` and the separate `exec` chunk), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -125,10 +125,12 @@ source → lexer → parser (+types) → splice imports → strip namespaces
 `ycc -o prog prog.y` writes a static ELF64 directly: `enc64.y` encodes each
 emitted instruction (fixed-size near jumps/calls, so lengths are known in
 pass 1), `asm.y` assembles (two passes + fixups + rodata), `elf.y` wraps one
-PT_LOAD (R+E) with entry `_start`, plus — when the program has globals — a
-second, RW PT_LOAD with no file bytes that the kernel zero-fills: the
-`.bss` section (`.zero N` reserves space there; data or code in `.bss` is an
-assembler error). Verified byte-for-byte behaviorally against
+PT_LOAD (R+E) with entry `_start`, plus — when the program has globals or
+a heap — a second, RW PT_LOAD with no file bytes that the kernel
+zero-fills: the `.bss` section (`.zero N` reserves space there; data or
+code in `.bss` is an assembler error). `-g` appends a symbol table and
+section headers past all of that (see "Debugging and profiling" below).
+Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight
 out through the `write_bytes` builtin (raw `open`/`write`/`chmod` over
 syscalls, mode 493 = 0755), so NULs pass through untouched. No cc/as/ld
@@ -162,8 +164,8 @@ involved.
 - `src/y/std/io.y` wraps raw numbers (`openat`, `read`, `write`, `close`,
   `fchmodat`): file I/O with zero C code (`test/y/native/t12_cat.y` is a pure-Y
   cat; `t10_filewrite.y` creates/writes files). It has no `exit` def on
-  purpose — a def named `exit` shadows the intrinsic program-wide and drops
-  the `--prof` report (see the export list).
+  purpose — a def named `exit` shadows the intrinsic program-wide (see the
+  export list).
 
 ## Type system (types.y) — the law, expanded over time
 
@@ -404,43 +406,48 @@ only: the program that runs has no use for the file.
 (`http_response`, `http_read_head`, `http_serve_one`, `listen_http`), all Y
 over `syscall`. A `ui` module would land the same way.
 
-## Profiling compiled output (`ycc --prof`)
+## Debugging and profiling compiled output (`ycc -g`)
 
-`--prof` compiles the program instrumented: every function body gets an
-enter/exit hook and a report lands on **stderr** when the process exits.
+`-g` adds what the standard tools need to name code: section headers
+(`.text`, `.rodata`, `.bss`) and a symbol table — an `STT_FUNC` per
+function (user defs, the runtime's `y_*` helpers, `readline`, …), an
+`STT_OBJECT` per global, `_start` the one global symbol. Names are the
+source names (the rename pass's `yfn_<uid>_`/`yg_<uid>_` prefix and `$N`
+suffix are stripped), so they line up across builds; a symbol's size runs
+to the next symbol. It changes nothing that runs: the tables and headers
+are appended past the loaded image, and the code, rodata and every address
+are those of the plain build (`test/sh/test_debug.sh` checks it). One
+difference is invisible to the program: valgrind reads an executable's
+symbols only once it has seen a file-backed read+write mapping, so a `-g`
+build takes the first 8 bytes of its `.bss` from zeros in the file. There
+is no line information (DWARF) yet — tools name functions, not lines.
 
 ```
-prof: 8 fns 18 calls 359838 ns cpu 1320 B alloc
-     calls      total_ns       self_ns      avg_ns      max_ns  name
-         1        359838           849         849      359838  _start
-         4        346907        346907       86726      180719  leaf
+ycc -g -o prog prog.y
+perf record ./prog && perf report      # sampled cpu, by function
+valgrind --tool=callgrind ./prog       # exact instruction counts + call graph
+callgrind_annotate callgrind.out.*     # (what bench/compare.sh tabulates)
+valgrind --tool=massif --pages-as-heap=yes ./prog   # memory over time
+gdb -ex 'break leaf' -ex run -ex bt ./prog          # breakpoints by name
+strace -c ./prog                       # syscall counts (read/write/mmap)
 ```
 
-per function: calls (exact), total cpu ns (callees included — for a
-recursive function the nesting counts once per level), self ns, the
-average ns per call in the function's own body, and the longest single
-call. Rows are sorted worst-first by total; the summary's ns is the sum
-of self times, i.e. the process's own cpu time.
-
-The runtime is Y (`src/y/std/prof.y`, embedded through the generated
-`prof_lines.y` and spliced only for `--prof` builds). State lives in one
-record the emitter parks in `%r13`: a zeroed slot table, the names, the
-clock scratch and the starting heap break. A guard word makes re-entry
-harmless — the profiler's own calls are measured with their hooks
-skipped symmetrically — and the table builder may only use intrinsics,
-because `%r13` is not live until it returns.
-
-Cost: two `clock_gettime` calls per function call, ~200 ns on a quiet
-machine. A function whose body is a few instructions therefore looks
-slower than it is; call counts are exact and the overhead is identical on
-both sides of a branch comparison, so ratios stay meaningful.
+Notes: `y_alloc` takes memory with `mmap` (not `malloc`/`brk`), so massif
+needs `--pages-as-heap=yes` to see it, and memcheck sees one big mapping,
+not separate heap blocks (it cannot flag an overrun into a neighbour). gdb unwinds through the `%rbp` frame chain. A program with no
+`.bss` at all (it never allocates and has no globals) gets no names under
+valgrind — it has no read+write mapping to back. On WSL the
+`/usr/bin/perf` wrapper may refuse the kernel; run the real binary under
+`/usr/lib/linux-tools/*/perf`. `ycc --time` is the compiler's own
+per-phase profile (time, heap, counters).
 
 ## Benchmarks
 
 `bench/` holds benchmarks for the compiler and for what it produces —
 none of it runs in the test suites. `bench/compare.sh BASE_YCC NEW_YCC`
 scores two builds (100 = unchanged) over compile time, run time, binary
-size and asm size, and joins their `--prof` reports function by function.
+size and asm size, then runs every benchmark's `-g` build of both under
+callgrind and tabulates instructions per function.
 The workflow for a performance-affecting change (propose → branch →
 bench → decide) is in AGENTS.md; the details are in `bench/README.md`.
 

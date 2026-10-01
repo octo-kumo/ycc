@@ -16,10 +16,9 @@ same semantics.
   `refs/` holds the backed-up reference binaries (gitignored; see
   `refs/SHA256SUMS`).
 - Do not commit build artifacts: `*.o`, `cycc`, `cycc-asan`, `ycc`,
-  `_ycc`, `a.out`, `src/c/prof_lines.c`, `src/c/std_lines.c`,
-  `src/y/std/prof_lines.y` (all gitignored; `make clean` removes the
-  binaries and both generated C twins — `src/c/std_lines.c` is tracked,
-  so `git checkout` it after a clean). `refs/` is gitignored too but is
+  `_ycc`, `a.out` (all gitignored; `make clean` removes the binaries and
+  the generated C twin `src/c/std_lines.c` — it is tracked, so
+  `git checkout` it after a clean). `refs/` is gitignored too but is
   **not** disposable — it is the port's ground truth.
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
@@ -37,9 +36,17 @@ same semantics.
 - `make test` runs everything: the port gate + all `test/sh/*.sh`
   suites. `./test/sh/run_all.sh [suite ...]` runs a subset.
 - `make test-compile` — tiny smoke test (both compilers, one example).
-- Profiling: `./ycc --time` prints a per-phase table (elapsed ms + heap
-  bytes + counters) to **stderr**. Y-level builtins: `clock_us()`,
-  `heap_used()`, `eputs(v)`.
+- Compiler profiling: `./ycc --time` prints a per-phase table (elapsed
+  ms + heap bytes + counters) to **stderr**. Y-level builtins:
+  `clock_us()`, `heap_used()`, `eputs(v)`.
+- Program profiling/debugging: `./ycc -g` adds a symbol table and
+  section headers (code and addresses unchanged), so the standard tools
+  name functions: `perf record`/`report` (on WSL run
+  `/usr/lib/linux-tools/*/perf` directly — the `/usr/bin/perf` wrapper
+  refuses the kernel), `valgrind --tool=callgrind` + `callgrind_annotate`
+  (exact instruction counts), `valgrind --tool=massif
+  --pages-as-heap=yes` (the heap is `mmap`ed, not `malloc`), `gdb`
+  (`break fn`, `bt`), `nm`/`addr2line`, `strace -c`. No line info yet.
 - Always feed `</dev/null` in scripts (some programs read stdin).
 
 ## Test suites (`test/sh/`)
@@ -48,7 +55,7 @@ Twelve suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, identical program behavior). `test_native.sh`,
-`test_native_examples.sh` and `test_prof.sh` drive the built `./ycc`
+`test_native_examples.sh` and `test_debug.sh` drive the built `./ycc`
 itself, so they skip when it is missing.
 
 - `test_port.sh` [port] — the port gate: every `test/y/**.y` (and the
@@ -75,9 +82,10 @@ itself, so they skip when it is missing.
 - `test_fixpoint.sh` — three generations of self-compilation are
   byte-identical and the self-built binary still compiles working
   programs.
-- `test_prof.sh` — `ycc --prof`: instrumentation leaves stdout alone,
-  the report is framed and named, call counts are exact (times are never
-  asserted).
+- `test_debug.sh` [debug] — `ycc -g`: both compilers emit identical
+  `-g` binaries, the program runs the same, code and rodata match the
+  plain build, and readelf/nm/addr2line (gdb and callgrind when
+  installed) see the functions and globals by name.
 - `test_stdin_eof.sh` — stdin/EOF behavior.
 
 ### Fuzzing (`test/fuzz/`, not part of `make test`)
@@ -109,18 +117,19 @@ decided**. Never merge one on taste:
    then `make ycc` on the branch and `cp ycc /tmp/ycc-new`.
 4. **Bench**: `bench/compare.sh /tmp/ycc-base /tmp/ycc-new` — scores the
    two builds (100 = unchanged), per-benchmark deltas for compile time,
-   run time, binary size, asm size; joins `ycc --prof` reports per
-   function. Keep both binaries on the same filesystem: under WSL a
+   run time, binary size, asm size; then callgrind instruction counts
+   per function (`-g` builds, needs valgrind). Keep both binaries on the
+   same filesystem: under WSL a
    binary run from `/mnt/c` pages in through drvfs and measured ~30%
    slower in every phase, which is easy to mistake for a regression.
 5. **Decide**: merge or revert from the numbers; put the numbers in the
    commit message. A deliberate trade is fine — an unnoticed one is not.
 
-`bench/y/*.y` are benchmarks, **not tests**. `ycc --prof` instruments a
-compiled program and reports per-function call counts and cpu times on
-stderr — use it to explain a regression, not just to spot it. Numbers
-are noisy at the few-percent level; `bench/compare.sh ... 9` takes more
-samples.
+`bench/y/*.y` are benchmarks, **not tests**. The callgrind table (or
+`perf` on a `ycc -g` build) shows which functions moved — use it to
+explain a regression, not just to spot it. Times are noisy at the
+few-percent level (`bench/compare.sh ... 9` takes more samples);
+instruction counts are exact.
 
 ## Pipeline (`src/y/native.y`)
 
@@ -184,8 +193,7 @@ code calls it by fixed label.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `native.y` (emitter), `arch_x64.y`
   (asm + prelude), `enc64.y`, `asm.y`, `elf.y`; `std/` (`rt.y` runtime
-  in Y, `prelude.y` (`readline`/`exec`), `io.y`, `net.y`, `prof.y`,
-  `struct.y`).
+  in Y, `prelude.y` (`readline`/`exec`), `io.y`, `net.y`, `struct.y`).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
 - `refs/` — backed-up reference binaries for the port gate (see
@@ -205,6 +213,6 @@ closures as `[code, caps...]` records; `&x`, `*p`, `a[i]`, `a[lo:hi]`,
 `while`; block expressions; `type` aliases, record unions and `match`;
 `def` params may be annotated (recommended: an unannotated param is a
 poison-tolerant unknown), return types are inferred. `ycc` is
-native-only: `ycc [-o OUT] [-S] [-t] [--no-exec] [--prof] FILE`,
+native-only: `ycc [-o OUT] [-S] [-t] [-g] [--no-exec] FILE`,
 cc-style; the shipped binary needs nothing at runtime — it is a static
 ELF invoking raw syscalls.

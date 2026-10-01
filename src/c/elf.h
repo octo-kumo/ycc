@@ -10,8 +10,16 @@
 
 long elf_code_off(long bss_len);
 long elf_bss_from_ro(long ro_len, long bss_len);
-Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len);
-                     /* ([long], [long], long, long) -> [long] */
+Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len, Yv *syms);
+                     /* ([long], [long], long, long, [symbol]) -> [long] */
+Yv *elf_debug(long code_off, long codesz, long codepad, long ro_len,
+              long total, long bss_len, Yv *syms);
+Yv *push_sym(Yv *out, long name_off, Yv *sy, long bss_idx, long text_addr,
+             long bss_addr, long bind);
+Yv *push_shdr(Yv *out, long name, long typ, long flags, long addr, long off,
+              long size, long link, long info, long align, long entsize);
+Yv *push_cstr(Yv *out, Yv *s);
+Yv *push_zeros(Yv *out, long n);
 Yv *push_bytes(Yv *out, Yv *bytes); /* (out: [long], bytes: [long]) -> [long] */
 Yv *push_le16(Yv *out, long v);     /* (out: [long], v: long) -> [long] */
 Yv *push_le32(Yv *out, long v);     /* (out: [long], v: long) -> [long] */

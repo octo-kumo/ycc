@@ -6,13 +6,8 @@ CY_HDRS=$(wildcard src/c/*.h)
 CYCC=cycc
 
 # The Y compiler sources: what the compiler compiles (and mirrors in C).
-YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/rt.y src/y/std/prof_lines.y
+YCC_SRCS=src/y/ycc.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/std/io.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/rt.y
 
-# The --prof runtime is embedded as source lines (spliced into instrumented
-# programs). src/y/std/prof_lines.y is generated from prof.y; the C copy
-# gets a generated twin with the same lines.
-PROF_LINES_Y=src/y/std/prof_lines.y
-PROF_LINES_C=src/c/prof_lines.c
 # The std modules embed their own source as line arrays (the shipped ycc
 # is a standalone ELF); the C copy gets generated twins of those arrays.
 STD_LINES_C=src/c/std_lines.c
@@ -20,7 +15,7 @@ STD_LINES_C=src/c/std_lines.c
 all: cycc
 
 # [1/3] gcc builds the C copy of the compiler.
-cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_LINES_C) $(PROF_LINES_C)
+cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_LINES_C)
 	$(GCC) $(CFLAGS) -o cycc $(CYC_SRCS)
 	@echo "cycc built: the C copy of the compiler ($$(stat -c%s cycc) bytes)"
 
@@ -28,31 +23,6 @@ $(STD_LINES_C): tools/gen_std_lines.py src/y/std/rt.y src/y/std/prelude.y
 	python3 tools/gen_std_lines.py $@ src/y/std/rt.y:rt_lines \
 	    src/y/std/prelude.y:prelude_lines src/y/std/prelude.y:exec_lines \
 	    src/y/std/prelude.y:prelude_names src/y/std/prelude.y:exec_names
-
-$(PROF_LINES_Y): src/y/std/prof.y
-	{ echo '// GENERATED from src/y/std/prof.y by make -- do not edit.'; \
-	  echo '// (ycc is a standalone binary: the --prof runtime is spliced'; \
-	  echo '// in from this embedded copy.)'; \
-	  echo 'def prof_lines() -> [str] {'; \
-	  echo '    ['; \
-	  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/        "/' -e 's/$$/",/' src/y/std/prof.y; \
-	  echo '        ""'; \
-	  echo '    ]'; \
-	  echo '};'; \
-	  echo ''; \
-	  echo 'export { prof_lines };'; } > $@
-
-$(PROF_LINES_C): src/y/std/prof.y
-	{ echo '/* GENERATED from src/y/std/prof.y by make -- do not edit.'; \
-	  echo ' * 1:1 twin of the generated src/y/std/prof_lines.y. */'; \
-	  echo '#include "yv.h"'; \
-	  echo ''; \
-	  echo 'Yv *prof_lines(void) {'; \
-	  echo '    Yv *out = yav(0);'; \
-	  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/    out = ya_push(out, ys("/' -e 's/$$/"));/' src/y/std/prof.y; \
-	  echo '    out = ya_push(out, ys(""));'; \
-	  echo '    return out;'; \
-	  echo '}'; } > $@
 
 # [2/3] the C copy compiles the compiler -> ycc (native static ELF, no
 # toolchain). [3/3] acceptance: ycc must be byte-identical to the backed-up
@@ -84,7 +54,7 @@ asan: cycc-asan
 # must name cycc-asan, or the sanitized build is never exercised at all.
 # $YREF stays refs/ycc.ref: the golden reference is deliberately unsanitized,
 # and it is what the sanitized build's bytes are compared against.
-# Suites that need ./ycc (ycc, fixpoint, native, native-examples, prof) skip
+# Suites that need ./ycc (ycc, fixpoint, native, native-examples, debug) skip
 # themselves unless it is built; SUITES_ASAN is normally a subset, since a
 # sanitized self-compile wants orders of magnitude more memory than a plain one.
 test-asan: cycc-asan
@@ -98,7 +68,7 @@ test: ycc
 
 # Same suites without the acceptance gate: only ./cycc is built, so the five
 # suites that drive a built ./ycc (ycc, fixpoint, native, native-examples,
-# prof) announce themselves as skipped. Use for a quick signal; `make test` is
+# debug) announce themselves as skipped. Use for a quick signal; `make test` is
 # the real one.
 test-fast: cycc
 	./test/sh/run_all.sh $(SUITES)
@@ -108,12 +78,12 @@ test-compile: cycc ycc
 	./cycc -o /tmp/hello_c test/y/examples/helloworld.y && /tmp/hello_c
 	./ycc -o /tmp/hello_y test/y/examples/helloworld.y && /tmp/hello_y
 
-# All three generated files go; make regenerates them (src/y/std/prof_lines.y
-# and src/c/prof_lines.c are gitignored, src/c/std_lines.c is committed —
-# regenerating it is byte-identical, so a clean rebuild leaves no diff).
+# The generated file goes too; make regenerates it (src/c/std_lines.c is
+# committed — regenerating it is byte-identical, so a clean rebuild leaves
+# no diff).
 clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc a.out
-	rm -f $(PROF_LINES_Y) $(PROF_LINES_C) $(STD_LINES_C)
+	rm -f $(STD_LINES_C)
 
 # Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y
 # value model (src/c/yv.c) never frees, so a leak gate could never be clean

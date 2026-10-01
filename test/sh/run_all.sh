@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run the full y test suite (or a subset).
 # Usage: ./test/sh/run_all.sh [suite ...]
-# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive prof stdin-eof
+# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof
 # Default (no args): all suites. The port suite needs both compilers
 # (./cycc and refs/ycc.ref); the ycc/fixpoint suites need ./ycc (build it
 # via `make ycc`) and skip themselves when it is absent.
@@ -19,7 +19,7 @@ if [ ! -x "$ROOT/refs/ycc.ref" ]; then
     exit 1
 fi
 
-SUITES="${*:-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive prof stdin-eof}"
+SUITES="${*:-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
     [native]="test_native.sh"
@@ -31,7 +31,7 @@ declare -A SCRIPT_FOR=(
     [fixpoint]="test_fixpoint.sh"
     [loops]="test_loops.sh"
     [comprehensive]="test_comprehensive.sh"
-    [prof]="test_prof.sh"
+    [debug]="test_debug.sh"
     [stdin-eof]="test_stdin_eof.sh"
 )
 
@@ -39,12 +39,12 @@ OVERALL=0
 for s in $SUITES; do
     script="${SCRIPT_FOR[$s]}"
     if [ -z "$script" ]; then
-        echo "error: unknown suite '$s' (pick from: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive prof stdin-eof)" >&2
+        echo "error: unknown suite '$s' (pick from: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug stdin-eof)" >&2
         exit 2
     fi
     # these suites exercise the built ycc binary itself.
     if [ "$s" = "ycc" ] || [ "$s" = "fixpoint" ] || [ "$s" = "native" ] \
-        || [ "$s" = "native-examples" ] || [ "$s" = "prof" ]; then
+        || [ "$s" = "native-examples" ] || [ "$s" = "debug" ]; then
         if [ ! -x "$ROOT/ycc" ]; then
             echo ""
             echo "################################################################"

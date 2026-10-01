@@ -62,14 +62,11 @@ Yv *prelude_names(void);
 Yv *exec_names(void);
 /* src/y/std/rt.y */
 Yv *rt_lines(void);
-/* src/y/std/prof_lines.y */
-Yv *prof_lines(void);
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
-                     int prof);
+Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec);
 int names_mentioned(Yv *src, Yv *names);
 Yv *strip_comments(Yv *src);
 Yv *norm_path(Yv *p);
@@ -126,7 +123,6 @@ Yv *fv_binds_list(Yv *nodes, Yv *out);
 Yv *fn_captures(Yv *func, Yv *fnnames);
 Yv *fv_bind_params(Yv *ps, Yv *out);
 Yv *fn_names_of(Yv *fns);
-int fn_label_present(Yv *fns, Yv *label);
 Yv *fns_kind(Yv *label);
 Yv *gen(Yv *st, Yv *node);
 Yv *gen_str_const(Yv *st, Yv *s);
@@ -320,23 +316,19 @@ Yv *emit_program(Yv *ast, Yv *imports);
  * must be defs; duplicate def names across the splice are a loud error. */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
-    return native_resolve_x(src, base_dir, depth, 1, 0);
+    return native_resolve_x(src, base_dir, depth, 1);
 }
 
 /* allow_exec = false is `ycc --no-exec`: the exec chunk is not spliced, so
  * `exec(...)` fails with "undefined function" and the binary has no path
  * to a shell at all.
  *
- * prof = true is `ycc --prof`: the profiling runtime is spliced and the
- * emitter wraps every function with its enter/exit hooks (see std/prof.y).
- *
  * `pre` is how many lines the prelude added in FRONT of the user's text.
  * Prepending (rather than appending) is deliberate: defs hoist either way,
  * but a later def shadows an earlier one, so a user's own `readline` must
  * come after ours to win. The cost is that every position downstream is
  * shifted, which the driver undoes when it prints an error. */
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
-                     int prof) {
+Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec) {
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
      * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
      * encoder splices twice and every enc64 def collides (find_dup is
@@ -352,18 +344,6 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
     Yv *rtl = rt_lines();
     rsrc = ys_cat(ys_cat(ys_join(rtl, ys("\n")), ys("\n")), rsrc);
     pre = pre + yv_len(rtl);
-    /* `--prof` builds splice the profiling runtime the same way: generated
-     * code calls y_prof_enter/y_prof_exit around every function and the
-     * report prints at exit. Non-prof builds never mention it, so tree
-     * shaking has nothing to keep. */
-    if (prof) {
-        Yv *pl = prof_lines();
-        rsrc = ys_cat(ys_cat(ys_join(pl, ys("\n")), ys("\n")), rsrc);
-        pre = pre + yv_len(pl);
-        ;
-    } else {
-        ;
-    }
     /* Prelude chunks go in front of the resolved text, but only when the
      * program actually mentions one of their names — otherwise every binary
      * would carry code it never calls (there is no dead-code pass). */
@@ -2668,25 +2648,6 @@ Yv *fn_names_of(Yv *fns) {
     return out;
 }
 
-/* Is some function emitted under exactly this label? Used to detect a
- * --prof build (the spliced std/prof.y defines y_prof_enter) without
- * threading the flag through every emitter signature. */
-int fn_label_present(Yv *fns, Yv *label) {
-    long i = 0;
-    int found = 0;
-    while (i < yv_len(fns)) {
-        Yv *e = ya_get(fns, i);
-        if (ys_eq(yr_get(e, "label"), label)) {
-            found = 1;
-            ;
-        } else {
-            ;
-        }
-        i = i + 1;
-    }
-    return found;
-}
-
 /* st.fns holds the hoisted defs and, after them, the globals (see
  * emit_program); a global's label is its .bss cell. */
 Yv *fns_kind(Yv *label) {
@@ -4451,8 +4412,7 @@ Yv *gen_foreach(Yv *st, Yv *node) {
  * first (arguments may read parameters the copy below overwrites), the
  * locals are copied over the parameter slots, and the frame tears down
  * into a `jmp` back to the prologue. Tail recursion is then constant
- * space. Instrumented builds (--prof) keep plain calls so every entry
- * stays paired with its exit. */
+ * space. */
 
 int is_self_call(Yv *st, Yv *node) {
     /* `self(...)`, or a call naming the function being emitted (after
@@ -6450,7 +6410,7 @@ Yv *gen_puts(Yv *st, Yv *node) {
 }
 
 Yv *gen_eputs(Yv *st, Yv *node) {
-    /* eputs(v): like puts, but on fd 2. Profiling/diagnostic output must
+    /* eputs(v): like puts, but on fd 2. Diagnostic output (`--time`) must
      * never land in stdout (where `-S` assembly and program output live). */
     Yv *pargs = yr_get(node, "args");
     Yv *pa = ya_get(pargs, 0);
@@ -6496,19 +6456,6 @@ Yv *gen_exit(Yv *st, Yv *node) {
     Yv *eargs = yr_get(node, "args");
     Yv *ea = ya_get(eargs, 0);
     st = gen(st, ea);
-    if (fn_label_present(yr_get(st, "fns"), ys("y_prof_report"))) {
-        /* --prof: exit() never returns, so the epilogue's report would
-         * never run — print it here. The exit code stays in %rax. */
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    mov %r13, %rax"));
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_prof_report"));
-        st = emit(st, ys("    add $8, %rsp"));
-        st = emit(st, ys("    pop %rax"));
-        ;
-    } else {
-        ;
-    }
     st = emit(st, ys("    mov %rax, %rdi"));
     st = emit(st, ys("    mov $60, %rax"));
     st = emit(st, ys("    syscall"));
@@ -6662,67 +6609,11 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         f = box_bound(f, pbn);
         pbi = pbi + 1;
     }
-    /* ── profiling (ycc --prof) ───────────────────────────────────────
-     * Wrap the body with y_prof_enter/y_prof_exit. The stats table lives
-     * in %r13 (callee-saved; generated code never touches it) and _start
-     * allocates it. The function's own label is the row name. The
-     * profiler's own functions are exempt: their calls run the
-     * instrumentation itself (std/prof.y guards the rest).
-     * (Computed before the body: tail-call recycling stays off under
-     * --prof so every enter keeps its matching exit.) */
-    int prof_on = fn_label_present(yr_get(st, "fns"), ys("y_prof_enter"));
-    if (prof_on) {
-        if (ys_eq_lit(ys_substr(label, 0, 7), "y_prof_")) {
-            prof_on = 0;
-            ;
-        } else {
-            ;
-        }
-        ;
-    } else {
-        ;
-    }
-    if (prof_on) {
-        f = gen_block(f, yr_get(func, "body"));
-    } else {
-        f = gen_tail(f, yr_get(func, "body"));
-    }
+    f = gen_tail(f, yr_get(func, "body"));
     long frame = arch_frame(yv_l(yr_get(f, "slots")));
-    Yv *pname = ys("");
-    Yv *prodata = yr_get(f, "rodata");
-    long puid = yv_l(yr_get(f, "uid"));
-    if (prof_on) {
-        Yv *ru = next_uid(f);
-        f = yr_get(ru, "st");
-        Yv *nlbl = arch_str_label(yv_l(yr_get(ru, "uid")));
-        Yv *ne = yav(0);
-        ne = ya_push(ne, nlbl);
-        ne = ya_push(ne, ys_long(yv_len(label)));
-        ne = ya_push(ne, esc_asm(label));
-        prodata = ya_push(yr_get(f, "rodata"), ne);
-        pname = nlbl;
-        puid = yv_l(yr_get(f, "uid"));
-        ;
-    } else {
-        ;
-    }
     Yv *code = yav(0);
     code = ya_push(code, ys_cat(label, ys(":")));
     if (is_main) {
-        if (prof_on) {
-            /* the table first: every later call (argv init included) is
-             * measured against it */
-            code = ya_push(code, ys_cat(ys_cat(ys("    mov $"),
-                                               ys_long(puid + 8)),
-                                        ys(", %rax")));
-            code = ya_push(code, ys("    push %rax"));
-            code = ya_push(code, ys("    call y_prof_init"));
-            code = ya_push(code, ys("    add $8, %rsp"));
-            code = ya_push(code, ys("    mov %rax, %r13"));
-            ;
-        } else {
-            ;
-        }
         if (want_argv) {
             /* _start prologue: at process entry %rsp -> [argc][argv0ptr]....
              * argv (char**) is the ADDRESS rsp+8 (lea, not a load!); argc
@@ -6757,23 +6648,6 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     } else {
         ;
     }
-    if (prof_on) {
-        /* y_prof_enter(table, slot, name) — args left to right, like any
-         * Y call; slot is the function's uid (unique per body). */
-        code = ya_push(code, ys("    mov %r13, %rax"));
-        code = ya_push(code, ys("    push %rax"));
-        code = ya_push(code, ys_cat(ys_cat(ys("    mov $"), ys_long(fuid)),
-                                    ys(", %rax")));
-        code = ya_push(code, ys("    push %rax"));
-        code = ya_push(code, ys_cat(ys_cat(ys("    lea "), pname),
-                                    ys("(%rip), %rax")));
-        code = ya_push(code, ys("    push %rax"));
-        code = ya_push(code, ys("    call y_prof_enter"));
-        code = ya_push(code, ys("    add $24, %rsp"));
-        ;
-    } else {
-        ;
-    }
     Yv *fout = yr_get(f, "out");
     long j = 0;
     while (j < yv_len(fout)) {
@@ -6781,30 +6655,6 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         j = j + 1;
     }
     code = ya_push(code, ys_cat(yr_get(f, "end_label"), ys(":")));
-    if (prof_on) {
-        /* every `return` funnels through end_label, so one exit hook sees
-         * them all. _start gets the report instead (which books anything
-         * still in flight); the epilogue below must still find the return
-         * value in %rax, hence the push/pop around the call. */
-        if (is_main) {
-            code = ya_push(code, ys("    mov %r13, %rax"));
-            code = ya_push(code, ys("    push %rax"));
-            code = ya_push(code, ys("    call y_prof_report"));
-            code = ya_push(code, ys("    add $8, %rsp"));
-            ;
-        } else {
-            code = ya_push(code, ys("    push %rax"));
-            code = ya_push(code, ys("    mov %r13, %rax"));
-            code = ya_push(code, ys("    push %rax"));
-            code = ya_push(code, ys("    call y_prof_exit"));
-            code = ya_push(code, ys("    add $8, %rsp"));
-            code = ya_push(code, ys("    pop %rax"));
-            ;
-        }
-        ;
-    } else {
-        ;
-    }
     if (is_main) {
         code = ya_push(code, ys("    mov $60, %rax"));
         code = ya_push(code, ys("    xor %edi, %edi"));
@@ -6824,8 +6674,8 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
      * defined. */
     Yv *bodies =
         ya_push(yr_get(f, "bodies"), ys_join(code, ys("\n")));
-    return yr(11, "out", yr_get(st, "out"), "rodata", prodata, "uid",
-              yv_long(puid), "fuid", yr_get(st, "fuid"), "loc",
+    return yr(11, "out", yr_get(st, "out"), "rodata", yr_get(f, "rodata"),
+              "uid", yr_get(f, "uid"), "fuid", yr_get(st, "fuid"), "loc",
               yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
               yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
               "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),

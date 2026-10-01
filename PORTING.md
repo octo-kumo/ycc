@@ -43,9 +43,6 @@ requires byte-identical binaries).
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
 | `src/y/std/*.y`         | (stay Y)              | spliced into every program from line arrays (`src/c/std_lines.c`) |
 
-`src/y/std/prof_lines.y` is generated from `prof.y` by `make`; the C copy
-gets a generated twin (`src/c/prof_lines.c`) the same way.
-
 ## Translation rules
 
 1. **Values** (`yv.h`): `none | bool | long | float | str | array | record`

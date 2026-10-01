@@ -20,7 +20,11 @@
   `t44`); the error paths, `listen_tcp`/`listen_http` (which block forever, so
   they have no test), `net`'s fd leak paths and most of `struct`'s writers are
   untested.
-- remove profiling from ycc itself, instead add option to compile with debug symbols like ELF symbol table, symbols and other info, so we can use linux built in `perf` to do profiling. for microbenching use valgrind. also measure time spent in kernel space with strace. and heap expansion with brk & io. and for heap profiling with massif.
+- **`-g` has no line information.** It writes a symbol table, so tools name
+  functions; DWARF (`.debug_line` + a minimal `.debug_info`) would let
+  `perf annotate`, gdb and addr2line show source lines too. Needs a map
+  from the spliced program's lines back to files, and line markers from
+  the emitter through the assembler.
 - remove py code
 - move prelude into std
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
@@ -72,6 +76,14 @@ what was deliberately *not* changed) is in `audit.md`.
   back to a seekable stdin before it forks (`t58_readline_exec`). On a
   pipe, buffered bytes stay with the parent, as with C stdio. EOF is
   still not latched.
+- **`--prof` is gone; `ycc -g` writes a symbol table instead.** Section
+  headers and `.symtab` (functions, runtime helpers, globals, by source
+  name) go past the loaded image, so a `-g` build runs the same code at
+  the same addresses. With it, perf, gdb, nm/addr2line and valgrind name
+  functions (callgrind for exact instruction counts, massif with
+  `--pages-as-heap=yes` for the mmap heap, `strace -c` for syscall time).
+  `bench/compare.sh` now ends with a callgrind table per function.
+  `test_debug.sh` checks it all.
 - Hex/binary literals with `_` separators, scientific notation, float literals.
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),

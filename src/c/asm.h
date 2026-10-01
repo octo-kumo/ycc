@@ -1,7 +1,7 @@
 /* asm.h — exported surface of asm.c, the 1:1 port of src/y/asm.y.
  *
  * Assembler for the native backend's x86-64 dialect:
- * asm_assemble(text) -> {ok, bytes, error, times}.
+ * asm_assemble(text, debug) -> {ok, bytes, error, times}.
  * Only what native.y/arch_x64.y emit is accepted; anything else is a loud
  * error with a line number — never a silent miscompile. Two passes:
  * (1) parse + encode with zeroed label fields, recording fixups;
@@ -15,7 +15,7 @@
 
 #include "yv.h"
 
-Yv *asm_assemble(Yv *text);
-Yv *ycc_assemble(Yv *asm_text);
+Yv *asm_assemble(Yv *text, int debug);
+Yv *ycc_assemble(Yv *asm_text, int debug);
 
 #endif /* ASM_H */

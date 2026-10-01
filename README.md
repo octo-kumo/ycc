@@ -54,14 +54,14 @@ Tectonic 0.17).
 ## Usage
 
 ```text
-ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
+ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
   (no flags)   compile FILE to a native executable (default: a.out)
   -o OUTPUT    output path (executable, or .s file with -S)
   -S           emit assembly only (stdout, or the -o file)
   -t, --time   per-phase timing table on stderr
+  -g           add a symbol table and section headers so perf, gdb and
+               valgrind name the functions (the loaded code is unchanged)
   --no-exec    omit exec() -- the binary cannot reach a shell
-  --prof       instrument the output: per-function call counts and
-               cpu times on stderr when the program exits
 ```
 
 `./cycc` takes exactly the same flags — it is the same compiler.
@@ -85,7 +85,7 @@ $ make ycc          # cycc -> ycc, then: cmp ycc refs/ycc.ref + fixpoint
 $ make test         # the port gate + all twelve suites in test/sh/
 $ ./test/sh/run_all.sh port native   # a subset (suite names: port native
                                      # native-examples examples audit ycc-units
-                                     # ycc fixpoint loops comprehensive prof
+                                     # ycc fixpoint loops comprehensive debug
                                      # stdin-eof)
 ```
 

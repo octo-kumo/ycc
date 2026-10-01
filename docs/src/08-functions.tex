@@ -34,8 +34,7 @@ def sum_to(n: long, acc: long) -> long {
 
 \noindent Calls outside tail position (\ic{self(x) + self(y)},
 \ic{let t = self(x)}, inside loops) are ordinary calls and stack as
-usual. Instrumented builds (\ic{--prof}) keep plain calls so every
-profiled entry pairs with its exit.
+usual.
 
 \subsection{Closures}
 \label{sec:closures}

@@ -55,24 +55,27 @@ informative on `self`.
 
 ## Per-function profiles
 
-`compare.sh` also compiles every benchmark with **`ycc --prof`** and
-joins the two reports by function name:
+`compare.sh` ends by building every benchmark with **`ycc -g`** (symbol
+table) on both sides, running each once under valgrind's **callgrind**,
+and joining the two `callgrind_annotate` tables by function name —
+instructions executed in each function's own body (self Ir):
 
 ```
-  function          self_base     self_new      delta     calls_base      calls_new
-  tokenize            33089067     32641612      -1.4%              1              1
-  y_long_tostr         3230227      3101047      -4.0%           3001           3001
+--- lines   total Ir: base 918005565, new 917004120  -0.11%
+  function                    Ir_base         Ir_new      delta
+  readline                  451414505      450413060      -0.2%
+  y_arr_push                273600055      273600055      +0.0%
 ```
 
-`--prof` wraps every emitted function with enter/exit hooks and prints a
-report on stderr at exit: call count (exact), total cpu ns (callees
-included), self cpu ns, avg ns per call in the function's own body, and
-the longest single call — worst first. See `src/y/std/prof.y` for the
-meaning of each column and for the ~200 ns per call that the hooks cost
-(the overhead is the same on both sides, so ratios stay honest).
-
-Call counts must match between two builds of the same program; if they
-do not, the builds are not comparable and something else changed.
+Instruction counts are exact and repeatable — unlike the timings above
+they do not move when the machine is busy, so they catch a 1% change
+and say which function it lives in. They are not time: a cache miss
+costs more than an add, which is what the run-time rows are for (and
+`perf record` on a `-g` build, see `src/y/NATIVE.md`). The section is
+skipped without valgrind; a function shown as `-` on one side is absent
+there (renamed, or the build has no `-g`). Programs with no `.bss` (no
+heap, no globals — `hello`) show raw addresses: valgrind attaches symbols
+only to executables with a read+write file mapping.
 
 ## Adding a benchmark
 

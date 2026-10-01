@@ -1,7 +1,8 @@
 // asm.y — assembler for the native backend's x86-64 dialect.
-// asm_assemble(text) -> {ok, bytes: [byte], error, times} (times: per-phase
-// us/heap rows for `ycc --time`).
-// ycc_assemble(text) -> the driver's wrapper (see its note at the bottom).
+// asm_assemble(text, debug) -> {ok, bytes: [byte], error, times} (times:
+// per-phase us/heap rows for `ycc --time`; debug is `ycc -g`, which adds a
+// symbol table — see debug_syms).
+// ycc_assemble(text, debug) -> the driver's wrapper (see its note at the bottom).
 // Only what native.y/arch_x64.y emit is accepted; anything else is a loud
 // error with a line number — never a silent miscompile.
 // Two passes: (1) parse + encode with zeroed label fields, recording fixups;
@@ -514,7 +515,7 @@ def label_addr(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: l
 
 // ── pass 1: parse lines into items ─────────────────────────────────────
 
-def asm_assemble(text: str) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
+def asm_assemble(text: str, debug: bool) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
     let t0 = clock_us();
     let h0 = heap_used();
     let lines = split(text, "\n");
@@ -554,7 +555,7 @@ def asm_assemble(text: str) -> {ok: bool, bytes: [byte], error: str, times: [{ n
           times: [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
                    { name: "a:encode", us: t2 - t1, heap: h2 - h1 } ] }
     } else {
-        let lk = asm_link(items, labels);
+        let lk = asm_link(items, labels, debug);
         let t3 = clock_us();
         let h3 = heap_used();
         let tl: [{ name: str, us: long, heap: long }] =
@@ -931,7 +932,7 @@ def asm_encode(mn: str, ops, lno: long, sec: long, offs: [long]) -> {err: str, s
 
 // ── pass 2: layout, fixups, ELF ────────────────────────────────────────
 
-def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], labels: [{name: str, sec: long, off: long}]) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
+def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], labels: [{name: str, sec: long, off: long}], debug: bool) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
     // section sizes
     let lt0 = clock_us();
     let lh0 = heap_used();
@@ -1013,7 +1014,12 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
         } else {
             let lt2 = clock_us();
             let lh2 = heap_used();
-            let eb = elf.elf_build(code, ro, start.off, bss_len);
+            let syms: [{ name: str, sec: long, off: long, size: long }] = [];
+            if (debug) {
+                syms = debug_syms(labels, code_len, bss_len);
+                0;
+            };
+            let eb = elf.elf_build(code, ro, start.off, bss_len, syms);
             let lt3 = clock_us();
             let lh3 = heap_used();
             { ok: true, bytes: eb, error: "",
@@ -1128,13 +1134,103 @@ def patch32(bytes: [byte], at: long, v: long) -> [byte] {
     bytes
 };
 
+// ── -g: the symbol table ───────────────────────────────────────────────
+// A function symbol starts at every label a body begins with: `_start`,
+// a runtime helper (`y_*`) or a compiled def (`yfn_<uid>_<name>`). Jump
+// targets (`yL_*`) and the arch prelude's internal labels (`yse_loop`,
+// `ysj_sum`, ...) belong to the function before them, and rodata strings
+// get no symbol. In the .bss, the globals (`yg_*`) and the allocator's
+// `y_heap` cells are data symbols. Each symbol is sized up to the next
+// one in its section (the last one to the section end), which is exactly
+// what perf and valgrind need to attribute an address.
+def debug_syms(labels: [{name: str, sec: long, off: long}], code_len: long, bss_len: long) -> [{ name: str, sec: long, off: long, size: long }] {
+    let out: [{ name: str, sec: long, off: long, size: long }] = [];
+    out = debug_syms_sec(out, labels, 0, code_len);
+    out = debug_syms_sec(out, labels, 2, bss_len);
+    out
+};
+
+def debug_syms_sec(out: [{ name: str, sec: long, off: long, size: long }], labels: [{name: str, sec: long, off: long}], sec: long, end: long) -> [{ name: str, sec: long, off: long, size: long }] {
+    let first = len(out);
+    foreach (lb in labels) {
+        if (lb.sec == sec) {
+            if (is_sym_label(lb.name, sec)) {
+                out += { name: sym_name(lb.name), sec: sec, off: lb.off, size: 0 };
+                0;
+            };
+            0;
+        };
+    };
+    // labels arrive in definition order, so offsets only grow
+    let i = first;
+    while (i < len(out)) {
+        let e = out[i];
+        let nxt = end;
+        if (i + 1 < len(out)) {
+            let n = out[i + 1];
+            nxt = n.off;
+            0;
+        };
+        e.size = nxt - e.off;
+        i = i + 1;
+    };
+    out
+};
+
+def is_sym_label(name: str, sec: long) -> bool {
+    if (sec == 0) {
+        name == "_start" || substr(name, 0, 2) == "y_" || substr(name, 0, 4) == "yfn_"
+    } else {
+        substr(name, 0, 3) == "yg_" || substr(name, 0, 2) == "y_"
+    }
+};
+
+// The source name behind a label: `yfn_12_foo$3` -> `foo`, `yg_0_n$7` ->
+// `n`; runtime names (`y_print_long`) stay as they are. The uid and
+// rename's `$N` change from build to build, so they would only make
+// profiles of two builds harder to line up.
+def sym_name(lbl: str) -> str {
+    let s = lbl;
+    if (substr(s, 0, 4) == "yfn_") {
+        s = after_uid(s, 4);
+        0;
+    } else if (substr(s, 0, 3) == "yg_") {
+        s = after_uid(s, 3);
+        0;
+    };
+    let d = last_index_of(s, "$");
+    if (d > 0) {
+        let k = d + 1;
+        let digits = k < len(s);
+        while (k < len(s)) {
+            if (!is_digit_ch(substr(s, k, 1))) { digits = false; 0; };
+            k = k + 1;
+        };
+        if (digits) { s = substr(s, 0, d); 0; };
+        0;
+    };
+    s
+};
+
+// `s` minus its `<prefix><digits>_` head, or `s` itself when the shape
+// does not match.
+def after_uid(s: str, k: long) -> str {
+    let i = k;
+    while (i < len(s) && is_digit_ch(substr(s, i, 1))) { i = i + 1; };
+    if (i > k && i < len(s) && substr(s, i, 1) == "_") {
+        substr(s, i + 1, len(s) - i - 1)
+    } else {
+        s
+    }
+};
+
 // Convenience for the driver: text in, bytes out. The driver writes the
 // bytes straight through the write syscall (NUL-safe). The old `octal`
 // RENDERING was removed: it cost O(n^2) string building (one malloc+copy
 // per byte) and nothing read it — it dominated -o time. The field itself
 // stays in the record shape (always "") so the shape does not change.
-def ycc_assemble(asm_text: str) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
-    let r = asm_assemble(asm_text);
+def ycc_assemble(asm_text: str, debug: bool) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
+    let r = asm_assemble(asm_text, debug);
     if (!r.ok) {
         { ok: false, bytes: [], octal: "", error: r.error, times: r.times }
     } else {

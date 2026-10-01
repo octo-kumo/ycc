@@ -12,9 +12,10 @@
 # above it is the detail behind the number — it also carries asm_bytes and
 # asm_lines, which are shown for detail but are NOT part of the score.
 #
-# The last section compares the two builds' --prof reports function by
-# function (self cpu ns and call counts) — that is where a regression gets
-# explained rather than merely measured. See bench/README.md.
+# The last section compares the two builds per function: each benchmark
+# built with -g and run under valgrind's callgrind (instructions executed
+# per function) — that is where a regression gets explained rather than
+# merely measured. See bench/README.md.
 
 set -u
 if [ $# -lt 2 ]; then
@@ -67,30 +68,67 @@ SCORE=$(awk '{ s += log($1); n++ } END { if (n) printf "%.2f", 100 * exp(s / n);
 echo "SCORE: $SCORE   (100 = base, >100 = the new build is better overall)"
 
 # ── per-function profiles ──────────────────────────────────────────────
-# Compiled with --prof on both sides; joined by function name, worst-first
-# by the base self time. Call counts should match exactly between builds
-# (same program) — if they do not, the two builds are not comparable.
+# Each benchmark is built with -g on both sides and run once under
+# valgrind's callgrind: instructions executed per function (self Ir).
+# Counts are exact and repeatable where times are noisy, so this is where
+# a regression gets explained rather than merely measured. Joined by
+# function name, worst first; `-` = absent on that side (inlined, renamed,
+# or a build without -g).
 echo
-echo "per-function profile (self cpu ns / calls, --prof):"
+if ! command -v valgrind >/dev/null 2>&1 || ! command -v callgrind_annotate >/dev/null 2>&1; then
+    echo "per-function profile: skipped (needs valgrind and callgrind_annotate)"
+    exit 0
+fi
+
+# ir_table <callgrind.out> — "function<TAB>Ir" lines, plus "TOTAL<TAB>Ir".
+# A row is "1,234 ( 5.67%)  file:function [object]"; recursion levels
+# (callgrind's name'2) fold into their function.
+ir_table() {
+    callgrind_annotate --threshold=100 "$1" 2>/dev/null | awk -v q="'" '
+        /^ *[0-9,]+ +\( *[0-9.]+%\)/ {
+            ir = $1; gsub(/,/, "", ir);
+            fn = $0;
+            sub(/^ *[0-9,]+ +\( *[0-9.]+%\) +/, "", fn);
+            sub(/ +\[[^]]*\] *$/, "", fn);
+            if (fn == "PROGRAM TOTALS") { fn = "TOTAL" }
+            else { sub(/^[^:]*:/, "", fn); sub(q "[0-9]+$", "", fn); gsub(/ /, "_", fn) }
+            sum[fn] += ir;
+        }
+        END { for (f in sum) printf "%s\t%.0f\n", f, sum[f] }'
+}
+
+echo "per-function profile (instructions executed, self; callgrind on -g builds):"
 for src in "$ROOT"/bench/y/*.y; do
     name="$(basename "$src" .y)"
-    "$BASE" --prof -o "$TMP/b.$name" "$src" </dev/null >/dev/null 2>"$TMP/b.$name.prof" || continue
-    "$TMP/b.$name" </dev/null >/dev/null 2>>"$TMP/b.$name.prof"
-    "$NEW" --prof -o "$TMP/n.$name" "$src" </dev/null >/dev/null 2>"$TMP/n.$name.prof" || continue
-    "$TMP/n.$name" </dev/null >/dev/null 2>>"$TMP/n.$name.prof"
+    for side in b n; do
+        cc="$NEW"
+        [ "$side" = b ] && cc="$BASE"
+        : >"$TMP/$side.$name.ir"
+        "$cc" -g -o "$TMP/$side.$name" "$src" </dev/null >/dev/null 2>&1 || continue
+        valgrind --tool=callgrind --show-below-main=yes --callgrind-out-file="$TMP/$side.$name.cg" \
+            "$TMP/$side.$name" </dev/null >/dev/null 2>&1
+        ir_table "$TMP/$side.$name.cg" >"$TMP/$side.$name.ir"
+    done
     echo
-    echo "--- $name"
-    printf "  %-16s %12s %12s %10s %14s %14s\n" "function" "self_base" "self_new" "delta" "calls_base" "calls_new"
-    awk '
-        FNR == NR && $1 ~ /^[0-9]+$/ { bs[$6] = $3; bc[$6] = $1; if (!($6 in seen)) { seen[$6] = 1; order[++k] = $6 }; next }
-        FNR != NR && $1 ~ /^[0-9]+$/ { ns[$6] = $3; nc[$6] = $1; if (!($6 in seen)) { seen[$6] = 1; order[++k] = $6 }; next }
+    awk -F '\t' -v name="$name" '
+        FILENAME == ARGV[1] { b[$1] = $2; next }
+        { n[$1] = $2 }
         END {
-            for (i = 1; i <= k; i++) {
-                nm = order[i];
-                printf "%d %s %d %d %d\n", bs[nm] + 0, nm, ns[nm] + 0, bc[nm] + 0, nc[nm] + 0;
+            bt = ("TOTAL" in b) ? b["TOTAL"] : "-"; nt = ("TOTAL" in n) ? n["TOTAL"] : "-";
+            d = (bt != "-" && nt != "-" && bt > 0) ? sprintf("  %+.2f%%", 100 * (nt - bt) / bt) : "";
+            printf "--- %s   total Ir: base %s, new %s%s\n", name, bt, nt, d;
+        }' "$TMP/b.$name.ir" "$TMP/n.$name.ir"
+    printf "  %-20s %14s %14s %10s\n" "function" "Ir_base" "Ir_new" "delta"
+    awk -F '\t' '
+        FILENAME == ARGV[1] { b[$1] = $2; seen[$1] = 1; next }
+        { n[$1] = $2; seen[$1] = 1 }
+        END {
+            for (f in seen) {
+                if (f == "TOTAL") continue;
+                key = (f in b) ? b[f] : n[f];
+                d = ((f in b) && (f in n) && b[f] > 0) ? sprintf("%+.1f%%", 100 * (n[f] - b[f]) / b[f]) : "n/a";
+                printf "%.0f\t%s\t%s\t%s\t%s\n", key, f, (f in b) ? b[f] : "-", (f in n) ? n[f] : "-", d;
             }
-        }
-    ' "$TMP/b.$name.prof" "$TMP/n.$name.prof" | sort -rn | head -8 | \
-    awk '{ printf "  %-16s %12d %12d %10s %14d %14d\n", $2, $1, $3, ($1 > 0 ? sprintf("%+.1f%%", 100 * ($3 - $1) / $1) : "n/a"), $4, $5 }'
-    awk '/^prof: / { print "  " $0 }' "$TMP/b.$name.prof"
+        }' "$TMP/b.$name.ir" "$TMP/n.$name.ir" | sort -t $'\t' -k1,1nr | head -8 | \
+    awk -F '\t' '{ printf "  %-20s %14s %14s %10s\n", $2, $3, $4, $5 }'
 done

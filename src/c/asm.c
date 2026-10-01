@@ -1,9 +1,10 @@
 /* asm.c — 1:1 port of src/y/asm.y (translation contract: PORTING.md).
  *
  * Assembler for the native backend's x86-64 dialect.
- * asm_assemble(text) -> {ok, bytes: [byte], error, times} (times: per-phase
- * us/heap rows for `ycc --time`).
- * ycc_assemble(text) -> the driver's wrapper (see its note at the bottom).
+ * asm_assemble(text, debug) -> {ok, bytes: [byte], error, times} (times:
+ * per-phase us/heap rows for `ycc --time`; debug is `ycc -g`, which adds a
+ * symbol table — see debug_syms).
+ * ycc_assemble(text, debug) -> the driver's wrapper (see its note at the bottom).
  * Only what native.y/arch_x64.y emit is accepted; anything else is a loud
  * error with a line number — never a silent miscompile.
  * Two passes: (1) parse + encode with zeroed label fields, recording fixups;
@@ -19,7 +20,8 @@ extern Yv *enc_insn(Yv *mn, Yv *ops);       /* enc64.c: enc.enc_insn */
 extern Yv *le64(long v);                    /* enc64.c: enc.le64 */
 extern Yv *le32(long v);                    /* enc64.c: enc.le32 */
 extern long elf_bss_from_ro(long ro_len, long bss_len); /* elf.c: elf.elf_bss_from_ro */
-extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len); /* elf.c: elf.elf_build */
+extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
+                     Yv *syms); /* elf.c: elf.elf_build */
 
 /* ── module-local defs (forward) ─────────────────────────────────────── */
 static int is_digit_ch(Yv *c);
@@ -88,7 +90,7 @@ static Yv *asm_quad_go(long sec, Yv *offs, Yv *rest);
 static Yv *asm_zero(Yv *line, long lno, long sec, Yv *offs, Yv *rest);
 static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs);
 static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs);
-static Yv *asm_link(Yv *items, Yv *labels);
+static Yv *asm_link(Yv *items, Yv *labels, int debug);
 static Yv *patch_item(Yv *code, Yv *it, Yv *lmap, long code_len, long pad);
 static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, Yv *bytes, Yv *err);
 static Yv *patch_item_kind2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at);
@@ -97,6 +99,11 @@ static Yv *patch_item_diff(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes,
 static Yv *patch_item_diff2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long ta);
 static Yv *patch_item_finish(Yv *code, Yv *bytes, Yv *err);
 static Yv *patch32(Yv *bytes, long at, long v);
+static Yv *debug_syms(Yv *labels, long code_len, long bss_len);
+static Yv *debug_syms_sec(Yv *out, Yv *labels, long sec, long end);
+static int is_sym_label(Yv *name, long sec);
+static Yv *sym_name(Yv *lbl);
+static Yv *after_uid(Yv *s, long k);
 static Yv *concat_bytes(Yv *a, Yv *b);
 
 static int is_digit_ch(Yv *c) {
@@ -739,7 +746,7 @@ static Yv *label_addr(Yv *lmap, long code_len, long pad, Yv *name) {
 
 /* ── pass 1: parse lines into items ───────────────────────────────────── */
 
-Yv *asm_assemble(Yv *text) {
+Yv *asm_assemble(Yv *text, int debug) {
     long t0 = clock_us();
     long h0 = heap_used();
     Yv *lines = ys_split(text, ys("\n"));
@@ -780,7 +787,7 @@ Yv *asm_assemble(Yv *text) {
                                yr(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
                                yr(3, "name", ys("a:encode"), "us", yv_long(t2 - t1), "heap", yv_long(h2 - h1))));
     } else {
-        Yv *lk = asm_link(items, labels);
+        Yv *lk = asm_link(items, labels, debug);
         long t3 = clock_us();
         long h3 = heap_used();
         Yv *tl = yav(3,
@@ -1223,7 +1230,7 @@ static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
 
 /* ── pass 2: layout, fixups, ELF ──────────────────────────────────────── */
 
-static Yv *asm_link(Yv *items, Yv *labels) {
+static Yv *asm_link(Yv *items, Yv *labels, int debug) {
     /* section sizes */
     long lt0 = clock_us();
     long lh0 = heap_used();
@@ -1339,7 +1346,12 @@ static Yv *asm_link(Yv *items, Yv *labels) {
         } else {
             long lt2 = clock_us();
             long lh2 = heap_used();
-            Yv *eb = elf_build(code, ro, yv_l(yr_get(start, "off")), bss_len);
+            Yv *syms = yav(0);
+            if (debug) {
+                syms = debug_syms(labels, code_len, bss_len);
+            }
+            Yv *eb = elf_build(code, ro, yv_l(yr_get(start, "off")),
+                               bss_len, syms);
             long lt3 = clock_us();
             long lh3 = heap_used();
             return yr(4, "ok", yv_bool(1), "bytes", eb, "error", ys(""),
@@ -1464,6 +1476,106 @@ static Yv *patch32(Yv *bytes, long at, long v) {
     return bytes;
 }
 
+/* ── -g: the symbol table ───────────────────────────────────────────────
+ * A function symbol starts at every label a body begins with: `_start`,
+ * a runtime helper (`y_*`) or a compiled def (`yfn_<uid>_<name>`). Jump
+ * targets (`yL_*`) and the arch prelude's internal labels (`yse_loop`,
+ * `ysj_sum`, ...) belong to the function before them, and rodata strings
+ * get no symbol. In the .bss, the globals (`yg_*`) and the allocator's
+ * `y_heap` cells are data symbols. Each symbol is sized up to the next
+ * one in its section (the last one to the section end), which is exactly
+ * what perf and valgrind need to attribute an address. */
+static Yv *debug_syms(Yv *labels, long code_len, long bss_len) {
+    Yv *out = yav(0);
+    out = debug_syms_sec(out, labels, 0, code_len);
+    out = debug_syms_sec(out, labels, 2, bss_len);
+    return out;
+}
+
+static Yv *debug_syms_sec(Yv *out, Yv *labels, long sec, long end) {
+    long first = yv_len(out);
+    long j = 0;
+    while (j < yv_len(labels)) {
+        Yv *lb = ya_get(labels, j);
+        if (yv_l(yr_get(lb, "sec")) == sec) {
+            if (is_sym_label(yr_get(lb, "name"), sec)) {
+                out = ya_push(
+                    out, yr(4, "name", sym_name(yr_get(lb, "name")), "sec",
+                            yv_long(sec), "off", yr_get(lb, "off"), "size",
+                            yv_long(0)));
+            }
+        }
+        j = j + 1;
+    }
+    /* labels arrive in definition order, so offsets only grow */
+    long i = first;
+    while (i < yv_len(out)) {
+        Yv *e = ya_get(out, i);
+        long nxt = end;
+        if (i + 1 < yv_len(out)) {
+            Yv *n = ya_get(out, i + 1);
+            nxt = yv_l(yr_get(n, "off"));
+        }
+        yr_set(e, "size",
+               yv_long(nxt - yv_l(yr_get(e, "off"))));
+        i = i + 1;
+    }
+    return out;
+}
+
+static int is_sym_label(Yv *name, long sec) {
+    if (sec == 0) {
+        return ys_eq_lit(name, "_start") ||
+               ys_eq_lit(ys_substr(name, 0, 2), "y_") ||
+               ys_eq_lit(ys_substr(name, 0, 4), "yfn_");
+    } else {
+        return ys_eq_lit(ys_substr(name, 0, 3), "yg_") ||
+               ys_eq_lit(ys_substr(name, 0, 2), "y_");
+    }
+}
+
+/* The source name behind a label: `yfn_12_foo$3` -> `foo`, `yg_0_n$7` ->
+ * `n`; runtime names (`y_print_long`) stay as they are. The uid and
+ * rename's `$N` change from build to build, so they would only make
+ * profiles of two builds harder to line up. */
+static Yv *sym_name(Yv *lbl) {
+    Yv *s = lbl;
+    if (ys_eq_lit(ys_substr(s, 0, 4), "yfn_")) {
+        s = after_uid(s, 4);
+    } else if (ys_eq_lit(ys_substr(s, 0, 3), "yg_")) {
+        s = after_uid(s, 3);
+    }
+    long d = ys_last_index_of(s, ys("$"));
+    if (d > 0) {
+        long k = d + 1;
+        int digits = k < yv_len(s);
+        while (k < yv_len(s)) {
+            if (!is_digit_ch(ys_substr(s, k, 1))) {
+                digits = 0;
+            }
+            k = k + 1;
+        }
+        if (digits) {
+            s = ys_substr(s, 0, d);
+        }
+    }
+    return s;
+}
+
+/* `s` minus its `<prefix><digits>_` head, or `s` itself when the shape
+ * does not match. */
+static Yv *after_uid(Yv *s, long k) {
+    long i = k;
+    while (i < yv_len(s) && is_digit_ch(ys_substr(s, i, 1))) {
+        i = i + 1;
+    }
+    if (i > k && i < yv_len(s) && ys_eq_lit(ys_substr(s, i, 1), "_")) {
+        return ys_substr(s, i + 1, yv_len(s) - i - 1);
+    } else {
+        return s;
+    }
+}
+
 /* asm.y's `code += bytes` (yv.h has no `+=` helper for an array operand, so
    the in-place append is spelled out as one push per element). */
 static Yv *concat_bytes(Yv *a, Yv *b) {
@@ -1480,8 +1592,8 @@ static Yv *concat_bytes(Yv *a, Yv *b) {
    RENDERING was removed: it cost O(n^2) string building (one malloc+copy
    per byte) and nothing read it — it dominated -o time. The field itself
    stays in the record shape (always "") so the shape does not change. */
-Yv *ycc_assemble(Yv *asm_text) {
-    Yv *r = asm_assemble(asm_text);
+Yv *ycc_assemble(Yv *asm_text, int debug) {
+    Yv *r = asm_assemble(asm_text, debug);
     if (!(yv_b(yr_get(r, "ok")))) {
         return yr(5, "ok", yv_bool(0), "bytes", yav(0), "octal", ys(""),
                   "error", yr_get(r, "error"), "times", yr_get(r, "times"));

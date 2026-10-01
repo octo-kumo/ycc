@@ -2,12 +2,12 @@
  *
  * ycc — the Y compiler. Compiles Y source straight to a native
  * executable (Linux x86-64) with no toolchain: no cc, no as, no ld,
- * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [--prof] [-h] FILE
+ * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
  *   (no flags)   compile FILE to a native executable (default output: a.out)
  *   -o OUTPUT    output path (executable, or .s file with -S)
  *   -S           emit assembly only (stdout, or the -o file)
  *   -t, --time   print per-phase time and heap use to stderr
- *   --prof       instrument the output (see -h)
+ *   -g           add a symbol table (for perf, gdb, valgrind; see -h)
  *   -h, --help   show this text and exit
  */
 #include "ycc.h"
@@ -28,7 +28,7 @@ Yv *parse_cli_args(Yv *argv) {
     int asm_only = 0;
     int timing = 0;
     int allow_exec = 1;
-    int prof = 0;
+    int debug = 0;
     long i = 1; /* skip argv[0] */
     long n = yv_len(argv);
     while (i < n) {
@@ -52,20 +52,20 @@ Yv *parse_cli_args(Yv *argv) {
         } else if (ys_eq_lit(a, "--no-exec")) {
             allow_exec = 0;
             ;
-        } else if (ys_eq_lit(a, "--prof")) {
-            prof = 1;
+        } else if (ys_eq_lit(a, "-g")) {
+            debug = 1;
             ;
         } else if (ys_eq_lit(a, "--help") || ys_eq_lit(a, "-h")) {
-            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [--no-exec] [-h] FILE\n"));
+            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n"));
             puts_(ys("  (no flags)   compile FILE to a native executable (default: "
                      "a.out)\n"));
             puts_(ys("  -o OUTPUT    output path (executable, or .s file with -S)\n"));
             puts_(ys("  -S           emit assembly only (stdout, or the -o file)\n"));
             puts_(ys("  -t, --time   print per-phase time and heap use to stderr\n"));
+            puts_(ys("  -g           add section headers and a symbol table (functions,\n"));
+            puts_(ys("               globals) so perf, gdb and valgrind show names; the\n"));
+            puts_(ys("               loaded code and data are unchanged\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
-            puts_(ys("  --prof       instrument the output: per-function call counts "
-                     "and\n               cpu times printed on stderr when the program "
-                     "exits\n"));
             puts_(ys("  -h, --help   show this text and exit\n"));
             exit_(0);
             ;
@@ -82,7 +82,7 @@ Yv *parse_cli_args(Yv *argv) {
     }
     return yr(6, "out", out, "files", files, "asm_only", yv_bool(asm_only),
               "timing", yv_bool(timing), "allow_exec", yv_bool(allow_exec),
-              "prof", yv_bool(prof));
+              "debug", yv_bool(debug));
 }
 
 /* ── phase reporting (--time) ────────────────────────────────────────────
@@ -238,8 +238,7 @@ long y_main(Yv *cmdline) {
             long hstart = h0;
             Yv *dt = yav(0);
             Yv *nr = native_resolve_x(src2, base_dir, 0,
-                                      yv_b(yr_get(pargs, "allow_exec")),
-                                      yv_b(yr_get(pargs, "prof")));
+                                      yv_b(yr_get(pargs, "allow_exec")));
             Yv *ph = phase_end(dt, ys("resolve"), t0, h0);
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));
@@ -309,7 +308,8 @@ long y_main(Yv *cmdline) {
                  * (binary-safe open/write/chmod, tinycc-style — NULs pass
                  * through as array elements, no shell, no exec/printf). */
                 Yv *rasm2 = yr_get(r, "asm");
-                Yv *ab = ycc_assemble(rasm2);
+                Yv *ab = ycc_assemble(rasm2,
+                                      yv_b(yr_get(pargs, "debug")));
                 ph = phase_end(dt, ys("assemble"), t0, h0);
                 dt = yr_get(ph, "times");
                 t0 = yv_l(yr_get(ph, "t"));

@@ -68,8 +68,7 @@ def read(fd: long, buf: *long, count: long) -> long {
 
 // This module deliberately has NO `exit` def. A def named `exit` shadows the
 // `exit` intrinsic for the whole spliced program (rename.y rewrites every
-// call named `exit` to it), and this body is a bare syscall(60) with no
-// y_prof_report hook (see gen_exit) -- so importing io would silently cost a
-// --prof build its entire report. Call the intrinsic `exit(code)` instead:
-// it is available everywhere and flushes the report on the way out.
+// call named `exit` to it), so importing io would silently swap the
+// intrinsic out from under every caller. Call the intrinsic `exit(code)`
+// instead: it is available everywhere.
 export { stdin_fd, stdout_fd, stderr_fd, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, open, close, read, write, write_str, chmod };

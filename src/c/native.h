@@ -9,8 +9,7 @@
 #include "yv.h"
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
-                     int prof);
+Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec);
 Yv *strip_ns(Yv *node, Yv *imports);
 Yv *strip_list(Yv *nodes, Yv *imports);
 Yv *strip_decl(Yv *node, Yv *imports);
