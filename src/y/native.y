@@ -325,14 +325,16 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                     out_lines += line;
                     0
                 } else if (len(full) == 0) {
+                    // Fatal: carrying on only reported the module's names as
+                    // undefined further down, after this message scrolled by.
                     puts("error: cannot find module '" + name + "' (import name; looks next to the importer and in std/)\n");
-                    out_lines += line;
+                    exit(1);
                     0
                 } else {
                     let mod_src = read_file(full);
                     if (mod_src == none) {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
-                        out_lines += line;
+                        exit(1);
                         0
                     } else if (seen_has(seen, full)) {
                         // NOTE: already spliced (see native_resolve note):
@@ -382,6 +384,17 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { 
                 // rewritten by strip_namespaces).
                 if (substr(trimmed, 0, 7) != "export ") {
                     out_lines += line;
+                    0
+                } else {
+                    // `export { a, b,` may run on over several lines: drop
+                    // them through the one that closes the list.
+                    if (index_of(line, "{") >= 0) {
+                        while (index_of(lines[i], "}") < 0 && i + 1 < n) {
+                            i = i + 1;
+                            0
+                        };
+                        0
+                    };
                     0
                 };
                 0
@@ -5529,7 +5542,7 @@ def emit_one_fn(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     // two compilers disagreed and ycc emitted calls to labels it never
     // defined.
     f.bodies += join(code, "\n");
-    let bodies = f.bodies
+    let bodies = f.bodies;
     { out: st.out, rodata: prodata, uid: puid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
@@ -5854,7 +5867,7 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
                 st = rl.st;
                 let label = fn_label_of(rl.uid, d.name);
                 st.fns += { name: d.name, label: label, typ: func_type(d.func) };
-                let fns = st.fns
+                let fns = st.fns;
                 st = { out: st.out, rodata: st.rodata, uid: st.uid,
                   fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
                   self_label: st.self_label, end_label: st.end_label, fns: fns,

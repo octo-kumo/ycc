@@ -341,12 +341,125 @@ Yv *rn_union_flat(Yv *ts) {
     return out;
 }
 
-Yv *rn_drop_typedefs(Yv *stmts) {
+Yv *rn_typedef_err(Yv *s, Yv *st) {
+    Yv *un = rn_unknown_type(st, yr_get(s, "typ"));
+    if (ys_eq_lit(un, "")) {
+        return yr(1, "k", ys("void"));
+    } else {
+        return rn_unknown_err(un, yv_l(yr_get(s, "line")),
+                              yv_l(yr_get(s, "col")));
+    }
+}
+
+Yv *rn_unknown_err(Yv *name, long line, long col) {
+    Yv *msg = ys_cat(ys_cat(ys("unknown type '"), name), ys("'"));
+    return yr(4, "k", ys("err"), "msg", msg, "line", yv_long(line),
+              "col", yv_long(col));
+}
+
+Yv *rn_unknown_type(Yv *st, Yv *t) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tname")) {
+        return rn_alias_known(yr_get(st, "tys"), yr_get(t, "name"));
+    } else if (ys_eq_lit(k, "tptr")) {
+        return rn_unknown_type(st, yr_get(t, "to"));
+    } else if (ys_eq_lit(k, "tarr")) {
+        return rn_unknown_type(st, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "tarrfix")) {
+        return rn_unknown_type(st, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "topt")) {
+        return rn_unknown_type(st, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "tmap")) {
+        Yv *first = rn_unknown_type(st, yr_get(t, "key"));
+        return rn_unknown_then(first, st, yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "trec")) {
+        return rn_unknown_fields(st, yr_get(t, "fields"));
+    } else if (ys_eq_lit(k, "tfunc")) {
+        Yv *first = rn_unknown_list(st, yr_get(t, "args"));
+        return rn_unknown_then(first, st, yr_get(t, "ret"));
+    } else if (ys_eq_lit(k, "tparams")) {
+        return rn_unknown_list(st, yr_get(t, "ts"));
+    } else if (ys_eq_lit(k, "tunion")) {
+        return rn_unknown_list(st, yr_get(t, "ts"));
+    } else {
+        return ys("");
+    }
+}
+
+Yv *rn_alias_known(Yv *tys, Yv *name) {
+    int found = 0;
+    long i = 0;
+    while (i < yv_len(tys)) {
+        Yv *e = ya_get(tys, i);
+        if (ys_eq(yr_get(e, "name"), name)) {
+            found = 1;
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    if (found) {
+        return ys("");
+    } else {
+        return name;
+    }
+}
+
+Yv *rn_unknown_then(Yv *first, Yv *st, Yv *t) {
+    if (!ys_eq_lit(first, "")) {
+        return first;
+    } else {
+        return rn_unknown_type(st, t);
+    }
+}
+
+Yv *rn_unknown_list(Yv *st, Yv *ts) {
+    Yv *out = ys("");
+    long i = 0;
+    while (i < yv_len(ts)) {
+        if (ys_eq_lit(out, "")) {
+            out = rn_unknown_type(st, ya_get(ts, i));
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *rn_unknown_fields(Yv *st, Yv *fs) {
+    Yv *out = ys("");
+    long i = 0;
+    while (i < yv_len(fs)) {
+        Yv *f = ya_get(fs, i);
+        if (ys_eq_lit(out, "")) {
+            out = rn_unknown_type(st, yr_get(f, "typ"));
+            ;
+        } else {
+            ;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+Yv *rn_drop_typedefs(Yv *stmts, Yv *st) {
     Yv *out = yav(0);
     long i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
-        if (!ys_eq_lit(yr_get(s, "k"), "typedef")) {
+        if (ys_eq_lit(yr_get(s, "k"), "typedef")) {
+            Yv *te = rn_typedef_err(s, st);
+            if (ys_eq_lit(yr_get(te, "k"), "err")) {
+                out = ya_push(out, te);
+                ;
+            } else {
+                ;
+            }
+            ;
+        } else {
             out = ya_push(out, s);
         }
         i = i + 1;
@@ -461,7 +574,7 @@ Yv *rn_block(Yv *stmts, Yv *st) {
     stmts = rn_shadow_dups(stmts);
     st = rn_push(st);
     st = rn_prepass(stmts, st);
-    Yv *r = rn_list(rn_drop_typedefs(stmts), st);
+    Yv *r = rn_list(rn_drop_typedefs(stmts, st), st);
     st = rn_pop(yr_get(r, "st"));
     return yr(2, "st", st, "stmts", yr_get(r, "nodes"));
 }
@@ -557,10 +670,18 @@ Yv *rn_node(Yv *node, Yv *st) {
 /* rectest / narrow: an operand plus the (alias-resolved) type it tests. */
 Yv *rn_typed_e(Yv *node, Yv *st) {
     Yv *e = rn_node(yr_get(node, "e"), st);
-    return yr(2, "st", yr_get(e, "st"), "node",
-              yr(5, "k", yr_get(node, "k"), "e", yr_get(e, "node"), "typ",
-                 rn_type(yr_get(e, "st"), yr_get(node, "typ")), "line",
-                 yr_get(node, "line"), "col", yr_get(node, "col")));
+    Yv *est = yr_get(e, "st");
+    Yv *un = rn_unknown_type(est, yr_get(node, "typ"));
+    if (ys_eq_lit(un, "")) {
+        return yr(2, "st", est, "node",
+                  yr(5, "k", yr_get(node, "k"), "e", yr_get(e, "node"),
+                     "typ", rn_type(est, yr_get(node, "typ")), "line",
+                     yr_get(node, "line"), "col", yr_get(node, "col")));
+    } else {
+        return yr(2, "st", est, "node",
+                  rn_unknown_err(un, yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col"))));
+    }
 }
 
 Yv *rn_matchend(Yv *node, Yv *st) {
@@ -1005,10 +1126,23 @@ Yv *rn_decl_val_bind(Yv *node, Yv *v, Yv *st) {
 }
 
 Yv *rn_decl_val_finish(Yv *node, Yv *v, Yv *uniq, Yv *st) {
+    Yv *un = rn_unknown_type(st, yr_get(node, "typ"));
+    Yv *v2 = v;
+    if (!ys_eq_lit(un, "")) {
+        Yv *es = yav(0);
+        es = ya_push(es, rn_unknown_err(un, yv_l(yr_get(node, "line")),
+                                        yv_l(yr_get(node, "col"))));
+        es = ya_push(es, v);
+        v2 = yr(4, "k", ys("block"), "stmts", es, "line",
+                yr_get(node, "line"), "col", yr_get(node, "col"));
+        ;
+    } else {
+        ;
+    }
     return yr(2, "st", st, "node",
               yr(7, "k", ys("decl"), "kind", yr_get(node, "kind"), "name",
-                 uniq, "typ", rn_type(st, yr_get(node, "typ")), "v", v, "line",
-                 yr_get(node, "line"), "col", yr_get(node, "col")));
+                 uniq, "typ", rn_type(st, yr_get(node, "typ")), "v", v2,
+                 "line", yr_get(node, "line"), "col", yr_get(node, "col")));
 }
 
 /* Rename a func value. `func` is annotated with the full func shape, so its
@@ -1079,10 +1213,29 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
     /* NOTE: NO record reads here — all values are params already.
      * (fbody is kept for 1:1 signature parity but never read, as in Y.) */
     (void)fbody;
+    Yv *un = rn_unknown_list(st, fptypes);
+    if (ys_eq_lit(un, "")) {
+        un = rn_unknown_type(st, fret);
+        ;
+    } else {
+        ;
+    }
+    Yv *body = yav(0);
+    if (!ys_eq_lit(un, "")) {
+        body = ya_push(body, rn_unknown_err(un, fline, fcol));
+        ;
+    } else {
+        ;
+    }
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        body = ya_push(body, ya_get(stmts, i));
+        i = i + 1;
+    }
     return yr(2, "st", st, "node",
               yr(7, "k", ys("func"), "params", params, "ptypes", rn_types(st, fptypes),
                  "ret", rn_type(st, fret), "body",
-                 yr(4, "k", ys("block"), "stmts", stmts, "line",
+                 yr(4, "k", ys("block"), "stmts", body, "line",
                     yv_long(fline), "col", yv_long(fcol)),
                  "line", yv_long(fline), "col", yv_long(fcol)));
 }

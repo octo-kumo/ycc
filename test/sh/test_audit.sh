@@ -26,6 +26,9 @@ expect_for() {
             echo "reject" ;;   # '::' needs an array on the right (static)
         t62_chained_idx.y)
             echo "reject" ;;   # chained index into a non-array stays a static error
+        t28_push.y)
+            echo "reject" ;;   # `x += 4` is a statement, not a value: `let y = x += 4`
+                              # used to compile as `let y = x` plus a silently dropped `+= 4`
         t06_div_by_zero.y)
             echo "reject" ;;   # 'array / number' is a static error now
         t48_str_index.y)

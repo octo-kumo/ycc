@@ -26,7 +26,7 @@ def rn_fresh(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: 
 
 def rn_push(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] } {
     st.scopes += [[]];
-    let scopes = st.scopes
+    let scopes = st.scopes;
     { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 
@@ -313,14 +313,79 @@ def rn_union_flat(ts: [{k: str}]) -> [{k: str}] {
     out
 };
 
-def rn_drop_typedefs(stmts: [{k: str}]) -> [{k: str}] {
+def rn_drop_typedefs(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> [{k: str}] {
     let out: [{k: str}] = [];
     let i = 0;
     while (i < len(stmts)) {
         let s = stmts[i];
         let sk: str = s.k;
-        if (sk == "typedef") { 0 } else { out += s; 0 };
+        if (sk == "typedef") {
+            // Dropped -- unless its type names something undefined.
+            let te = rn_typedef_err(s, st);
+            if (te.k == "err") { out += te; 0; } else { 0; };
+            0
+        } else { out += s; 0 };
         i = i + 1;
+    };
+    out
+};
+
+def rn_typedef_err(s, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> {k: str} {
+    let un = rn_unknown_type(st, s.typ);
+    if (un == "") { rn_tn({ k: "void" }) } else { rn_unknown_err(un, s.line, s.col) }
+};
+
+// ── unknown type names ───────────────────────────────────────────────────
+// The parser turns the builtin names into their own kinds, so a `tname`
+// left in an annotation must be an alias in scope. One that is not is an
+// error -- the checker would otherwise unify it with anything, and
+// `let s: strr = "x"` compiled with `s` silently untyped.
+
+def rn_unknown_err(name: str, line: long, col: long) -> {k: str} {
+    rn_tn({ k: "err", msg: "unknown type '" + name + "'", line: line, col: col })
+};
+
+// The first unknown name in annotation t ("" when every name resolves).
+def rn_unknown_type(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, t) -> str {
+    let k: str = t.k;
+    if (k == "tname") { rn_alias_known(st.tys, t.name) }
+    else if (k == "tptr") { rn_unknown_type(st, t.to) }
+    else if (k == "tarr") { rn_unknown_type(st, t.of) }
+    else if (k == "tarrfix") { rn_unknown_type(st, t.of) }
+    else if (k == "topt") { rn_unknown_type(st, t.of) }
+    else if (k == "tmap") { rn_unknown_then(rn_unknown_type(st, t.key), st, t.of) }
+    else if (k == "trec") { rn_unknown_fields(st, t.fields) }
+    else if (k == "tfunc") { rn_unknown_then(rn_unknown_list(st, t.args), st, t.ret) }
+    else if (k == "tparams") { rn_unknown_list(st, t.ts) }
+    else if (k == "tunion") { rn_unknown_list(st, t.ts) }
+    else { "" }
+};
+
+// "" when `name` is an alias in scope, else the name itself.
+def rn_alias_known(tys: [{ name: str, typ: { k: str } }], name: str) -> str {
+    let found = false;
+    foreach (e in tys) {
+        if (e.name == name) { found = true; 0; } else { 0; };
+    };
+    if (found) { "" } else { name }
+};
+
+def rn_unknown_then(first: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, t) -> str {
+    if (first != "") { first } else { rn_unknown_type(st, t) }
+};
+
+def rn_unknown_list(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, ts: [{k: str}]) -> str {
+    let out = "";
+    foreach (t in ts) {
+        if (out == "") { out = rn_unknown_type(st, t); 0; } else { 0; };
+    };
+    out
+};
+
+def rn_unknown_fields(st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, fs: [{ name: str, typ: {k: str} }]) -> str {
+    let out = "";
+    foreach (f in fs) {
+        if (out == "") { out = rn_unknown_type(st, f.typ); 0; } else { 0; };
     };
     out
 };
@@ -425,7 +490,7 @@ def rn_block(stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: l
     stmts = rn_shadow_dups(stmts);
     st = rn_push(st);
     st = rn_prepass(stmts, st);
-    let r = rn_list(rn_drop_typedefs(stmts), st);
+    let r = rn_list(rn_drop_typedefs(stmts, st), st);
     st = rn_pop(r.st);
     { st: st, stmts: r.nodes }
 };
@@ -520,7 +585,12 @@ def rn_node(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ n
 // rectest / narrow: an operand plus the (alias-resolved) type it tests.
 def rn_typed_e(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     let e = rn_node(node.e, st);
-    { st: e.st, node: { k: node.k, e: e.node, typ: rn_type(e.st, node.typ), line: node.line, col: node.col } }
+    let un = rn_unknown_type(e.st, node.typ);
+    if (un == "") {
+        { st: e.st, node: rn_tn({ k: node.k, e: e.node, typ: rn_type(e.st, node.typ), line: node.line, col: node.col }) }
+    } else {
+        { st: e.st, node: rn_unknown_err(un, node.line, node.col) }
+    }
 };
 
 def rn_matchend(node, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
@@ -862,7 +932,17 @@ def rn_decl_val_bind(node, v: {k: str}, st: { scopes: [[{ orig: str, uniq: str }
 };
 
 def rn_decl_val_finish(node, v: {k: str}, uniq: str, st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
-    { st: st, node: { k: "decl", kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v, line: node.line, col: node.col } }
+    let un = rn_unknown_type(st, node.typ);
+    let v2 = v;
+    if (un != "") {
+        // The value is still checked, after the error: `{ err; v }`.
+        let es: [{k: str}] = [];
+        es += rn_unknown_err(un, node.line, node.col);
+        es += v;
+        v2 = rn_tn({ k: "block", stmts: es, line: node.line, col: node.col });
+        0
+    } else { 0; };
+    { st: st, node: { k: "decl", kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v2, line: node.line, col: node.col } }
 };
 
 // Rename a func value. `func` is annotated with the full func shape, so its
@@ -921,7 +1001,12 @@ def rn_func_body(fptypes, fret, fbody: {k: str, stmts: [{k: str}]}, fline: long,
 def rn_func_finish(fptypes, fret, fbody, fline: long, fcol: long, params: [str], stmts: [{k: str}], st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }) -> { st: { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [{ name: str, typ: { k: str } }], dfl: [{ name: str, vals: [{ k: str }] }] }, node: {k: str} } {
     // NOTE: NO record reads here — all values are params already. `fbody`
     // rides along for signature parity with the C twin and is never read.
-    { st: st, node: { k: "func", params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: "block", stmts: stmts, line: fline, col: fcol }, line: fline, col: fcol } }
+    let un = rn_unknown_list(st, fptypes);
+    if (un == "") { un = rn_unknown_type(st, fret); 0; } else { 0; };
+    let body: [{k: str}] = [];
+    if (un != "") { body += rn_unknown_err(un, fline, fcol); 0; } else { 0; };
+    body += stmts;
+    { st: st, node: { k: "func", params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: "block", stmts: body, line: fline, col: fcol }, line: fline, col: fcol } }
 };
 
 

@@ -18,6 +18,11 @@ long tcol(Yv *toks, long p);
 int is_kw(Yv *toks, long p, Yv *w);
 int is_punct(Yv *toks, long p, Yv *w);
 int is_op(Yv *toks, long p, Yv *w);
+Yv *tok_desc(Yv *toks, long p);
+Yv *expect_err(Yv *toks, long p, Yv *what);
+Yv *close_res(Yv *toks, long p, Yv *closer, Yv *node);
+long skip_close(Yv *toks, long p, Yv *closer);
+int is_name_tok(Yv *toks, long p);
 
 Yv *res(Yv *node, long p);
 Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one);
@@ -50,6 +55,12 @@ Yv *parse_type_params(Yv *toks, long p);
 Yv *map_key_type(Yv *name);
 Yv *parse_type_record(Yv *toks, long p);
 Yv *parse_type_atom2(Yv *toks, long p);
+Yv *terr_at(Yv *toks, long p, Yv *what);
+Yv *tclose_res(Yv *toks, long p, Yv *closer, Yv *tnode);
+Yv *type_err(Yv *t);
+Yv *type_err_then(Yv *first, Yv *t);
+Yv *type_err_list(Yv *ts);
+Yv *type_err_fields(Yv *fs);
 Yv *parse_type_tail(Yv *toks, long apos, Yv *anode);
 Yv *parse_type_arrow(Yv *toks, long apos, Yv *anode);
 Yv *parse_type_plain(Yv *toks, long apos, Yv *anode);
@@ -62,6 +73,7 @@ Yv *parse_func(Yv *toks, long p);
 
 /* ── block { stmt; stmt; ... } ──────────────────────────────────────────── */
 Yv *parse_block(Yv *toks, long p);
+long stmt_end(Yv *toks, long pos, Yv *sn, Yv *stmts);
 
 /* ── statements ─────────────────────────────────────────────────────────── */
 Yv *parse_stmt(Yv *toks, long p);
@@ -77,12 +89,14 @@ Yv *parse_stmt_simple(Yv *toks, long p, Yv *tgt, long epos);
 Yv *parse_stmt_store(Yv *toks, long p, Yv *stgt, long epos);
 Yv *parse_stmt_plainassign(Yv *toks, long p, Yv *atgt, long epos);
 Yv *parse_decl(Yv *toks, long p);
+long sync_stmt(Yv *toks, long p);
 
 /* ── control flow ───────────────────────────────────────────────────────── */
 Yv *parse_if(Yv *toks, long p);
 Yv *parse_while(Yv *toks, long p);
 Yv *parse_foreach(Yv *toks, long p);
 Yv *parse_for_or_range(Yv *toks, long p);
+Yv *clause_err(Yv *toks, long pos, Yv *clause, Yv *sep);
 
 /* ── top level: a program is a block of statements (no surrounding braces) ─ */
 Yv *parse_program(Yv *toks);

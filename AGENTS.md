@@ -80,6 +80,23 @@ itself, so they skip when it is missing.
   asserted).
 - `test_stdin_eof.sh` — stdin/EOF behavior.
 
+### Fuzzing (`test/fuzz/`, not part of `make test`)
+
+`test/fuzz/fuzz.sh [ITER] [SEED]` mutates corpus programs (`mutate.y`:
+delete, duplicate or truncate a span, splice in a span of another
+program, insert a token, a hostile literal, a stray byte or a run of
+nesting) and compiles each with `./ycc` and `./cycc` under a memory cap
+and a timeout. A
+*crash* (signal, timeout, `runtime error:` trap, `INTERNAL`) or a
+*divergence* (exit code, messages or binary differ) is saved once per
+distinct message under `$FUZZ_OUT` (default `/tmp/yfuzz`) with the input
+and both outputs; exit 0 means nothing was found. Run it after touching
+the lexer, parser, checker or emitter (`YCC`, `CYCC`, `FUZZ_MEM_KB`,
+`FUZZ_TIMEOUT` override), and turn every fixed finding into a
+`test/y/native/e*.y` fixture. Malformed input must get an error at the
+offending token — never a crash, never silent acceptance (the parser
+plants `err` nodes; see the "malformed input" helpers in `parser.y`).
+
 ## Performance: bench before merging (mandatory workflow)
 
 Anything that can move compile time, output size, or the speed of
@@ -89,10 +106,13 @@ decided**. Never merge one on taste:
 1. **Propose**: say what the change should move.
 2. **Branch**: `git switch -c bench/whatever`.
 3. **Build both sides**: `make ycc` on master, `cp ycc /tmp/ycc-base`,
-   then `make ycc` on the branch.
-4. **Bench**: `bench/compare.sh /tmp/ycc-base ./ycc` — scores the two
-   builds (100 = unchanged), per-benchmark deltas for compile time, run
-   time, binary size, asm size; joins `ycc --prof` reports per function.
+   then `make ycc` on the branch and `cp ycc /tmp/ycc-new`.
+4. **Bench**: `bench/compare.sh /tmp/ycc-base /tmp/ycc-new` — scores the
+   two builds (100 = unchanged), per-benchmark deltas for compile time,
+   run time, binary size, asm size; joins `ycc --prof` reports per
+   function. Keep both binaries on the same filesystem: under WSL a
+   binary run from `/mnt/c` pages in through drvfs and measured ~30%
+   slower in every phase, which is easy to mistake for a regression.
 5. **Decide**: merge or revert from the numbers; put the numbers in the
    commit message. A deliberate trade is fine — an unnoticed one is not.
 

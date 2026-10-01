@@ -658,7 +658,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                     puts_(ys_cat(
                         ys_cat(ys("error: cannot find module '"), name),
                         ys("' (import name; looks next to the importer and in std/)\n")));
-                    out_lines = ya_push(out_lines, line);
+                    exit_(1);
                     ;
                 } else {
                     Yv *mod_src = read_file(full);
@@ -669,7 +669,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                                           ys("' (resolved to '")),
                                    full),
                             ys("')\n")));
-                        out_lines = ya_push(out_lines, line);
+                        exit_(1);
                         ;
                     } else if (seen_has(seen, full)) {
                         /* NOTE: already spliced (see native_resolve note):
@@ -726,7 +726,16 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
                     out_lines = ya_push(out_lines, line);
                     ;
                 } else {
-                    ;
+                    if (ys_index_of(line, ys("{")) >= 0) {
+                        while (ys_index_of(ya_get(lines, i), ys("}")) < 0 &&
+                               i + 1 < n) {
+                            i = i + 1;
+                            ;
+                        }
+                        ;
+                    } else {
+                        ;
+                    }
                 }
                 ;
             }

@@ -13,8 +13,9 @@ import io from "./std/io.y";   // io.f(...) addresses defs of io.y
 \end{lstlisting}
 
 \noindent An \ic{export \{ a, b \}} clause, when present, must be the
-\emph{last} statement of a file. Paths resolve relative to the importing
-file's directory.
+\emph{last} statement of a file; its list may run over several lines.
+Paths resolve relative to the importing file's directory. A missing
+module is a fatal error.
 
 \subsection{Declarations}
 
@@ -61,7 +62,9 @@ Function literals may also appear bound or anonymous:
 written to mean ``a record with at least a field \ic{k} of type
 \ty{str}'' and is the conventional shape-hole annotation for AST-like
 data. \ic{nat} is a non-negative integer literal. The type name
-\ic{int} is accepted as a synonym of \ic{long} in annotations.
+\ic{int} is accepted as a synonym of \ic{long} in annotations. Any other
+name must be a \ic{type} alias in scope: \ic{let s: strr = "x"} is
+rejected as an unknown type.
 
 \subsection{Statements}
 
@@ -73,7 +76,7 @@ data. \ic{nat} is a non-negative integer literal. The type name
   |~& \ty{block} \\
   |~& \ic{if}~\ic{(}~\ty{expr}~\ic{)}~\ty{block}~[\ic{else}~(\ty{block} \mid \ty{statement})] \\
   |~& \ic{while}~\ic{(}~\ty{expr}~\ic{)}~\ty{block} \\
-  |~& \ic{for}~\ic{(}~\ty{stmt}~\ic{;}~\ty{expr}~\ic{;}~\ty{stmt}~\ic{)}~\ty{block} \\
+  |~& \ic{for}~\ic{(}~[\ty{stmt}]~\ic{;}~[\ty{expr}]~\ic{;}~[\ty{stmt}]~\ic{)}~\ty{block} \\
   |~& \ic{for}~\ty{name}~\ic{in}~\ty{expr}~\ic{..}~\ty{expr}~\ty{block} \\
   |~& \ic{foreach}~\ic{(}~\ty{name}~\ic{in}~\ty{expr}~\ic{)}~\ty{block} \\
   |~& \ty{block}
@@ -82,9 +85,15 @@ data. \ic{nat} is a non-negative integer literal. The type name
 \noindent \ty{block} is \ic{\{}~\ty{statement}\(^*\)~[\ty{expr}]~\ic{\}}:
 a block is an \emph{expression} whose value is its trailing expression
 (if any). An empty block \ic{\{\}} is legal and void; a trailing \ic{;}
-makes the block void. \ic{foreach} iterates the elements of an array;
-the \ic{for} range form iterates \ic{lo..hi} with the low bound
-inclusive and the high bound exclusive.
+makes the block void. Statements are separated by \ic{;}, which may be
+left out only after a statement that ends in \ic{\}} (an \ic{if},
+loop, \ic{def} or block) or before the \ic{\}} closing the block:
+\ic{f() g()} is an error, and so is any token the grammar does not
+expect --- nothing is skipped silently. \ic{foreach} iterates
+the elements of an array; the \ic{for} range form iterates \ic{lo..hi}
+with the low bound inclusive and the high bound exclusive. A C-style
+\ic{for} without a condition loops until a \ic{return} leaves it, as in
+C.
 
 \subsection{Expressions}
 \label{sec:expr-grammar}
@@ -114,6 +123,9 @@ inclusive and the high bound exclusive.
 \ic{unwrap(e)} (Section~\ref{sec:builtin-option}) and, like every
 postfix form, binds tighter than the prefix operators --- \ic{!x!} is
 \ic{!(x!)}. The two-character token \ic{!=} is always inequality.
+In a record literal a bare name is shorthand for the field of that
+name: \ic{\{x, y\}} is \ic{\{x: x, y: y\}} (but \ic{\{ x \}} alone is a
+block whose value is \ic{x}).
 
 \subsection*{Operator precedence}
 

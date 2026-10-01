@@ -122,12 +122,25 @@ def print_native_errors(errors: [{ msg: str, line: long, col: long }], pre: long
     // A position INSIDE the prelude (line <= pre) would be a compiler bug,
     // so it is reported as-is rather than silently going negative.
     let all = errors;
+    // One error per position: a malformed token can trip two checks (the
+    // construct it broke, then the statement it ended), and the second
+    // message only repeats the first.
+    let seen: [str] = [];
     let i = 0;
     while (i < len(all)) {
         let e = all[i];
         let ln = e.line;
         if (ln > pre) { ln = ln - pre; 0; } else { 0; };
-        puts(tostring(ln) + ":" + tostring(e.col) + ": error: " + e.msg + "\n");
+        let at = tostring(ln) + ":" + tostring(e.col);
+        let dup = false;
+        foreach (s in seen) {
+            if (s == at) { dup = true; 0; } else { 0; };
+        };
+        if (!dup) {
+            seen += at;
+            puts(at + ": error: " + e.msg + "\n");
+            0
+        } else { 0; };
         i = i + 1;
     };
     0

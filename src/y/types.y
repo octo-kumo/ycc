@@ -551,7 +551,7 @@ def lookup(bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], 
 
 def st_bind(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, name: str, typ, kind: str) -> { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } {
     st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth };
-    let bindings = st.bindings
+    let bindings = st.bindings;
     { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth }
 };
 

@@ -461,7 +461,9 @@ Yv *tokenize(Yv *src) {
                 col = col + 1;
                 ;
             } else {
-                // unknown char — skip
+                // A character no token starts with: passed on as an
+                // operator nothing accepts, so the parser reports it.
+                toks = ya_push(toks, mktok(ys("op"), c, line, col));
                 i = i + 1;
                 col = col + 1;
                 ;

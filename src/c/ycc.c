@@ -153,6 +153,7 @@ long print_native_errors(Yv *errors, long pre) {
      * A position INSIDE the prelude (line <= pre) would be a compiler bug,
      * so it is reported as-is rather than silently going negative. */
     Yv *all = errors;
+    Yv *seen = yav(0);
     long i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
@@ -163,11 +164,29 @@ long print_native_errors(Yv *errors, long pre) {
         } else {
             ;
         }
-        puts_(ys_cat(
-            ys_cat(ys_cat(ys_cat(ys_long(ln), ys(":")),
-                          ys_long(yv_l(yr_get(e, "col")))),
-                   ys(": error: ")),
-            ys_cat(yr_get(e, "msg"), ys("\n"))));
+        Yv *at = ys_cat(ys_cat(ys_long(ln), ys(":")),
+                        ys_long(yv_l(yr_get(e, "col"))));
+        int dup = 0;
+        long j = 0;
+        while (j < yv_len(seen)) {
+            if (ys_eq(ya_get(seen, j), at)) {
+                dup = 1;
+                ;
+            } else {
+                ;
+            }
+            j = j + 1;
+        }
+        if (!dup) {
+            seen = ya_push(seen, at);
+            puts_(ys_cat(
+                ys_cat(ys_cat(at, ys(": error: ")),
+                       yr_get(e, "msg")),
+                ys("\n")));
+            ;
+        } else {
+            ;
+        }
         i = i + 1;
     }
     return 0;

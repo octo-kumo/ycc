@@ -27,3 +27,5 @@ refs/
 # generated twin of src/y/std/prof_lines.y
 src/c/prof_lines.c
 cycc-asan
+# test/fuzz/fuzz.sh scratch directories
+test/fuzz/work.*

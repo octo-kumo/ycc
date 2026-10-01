@@ -432,7 +432,10 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 col = col + 1;
                 0
             } else {
-                // unknown char — skip
+                // A character no token starts with: passed on as an
+                // operator nothing accepts, so the parser reports it
+                // (skipping it compiled `5 @ 3` as `5 3`).
+                toks += mktok("op", c, line, col);
                 i = i + 1;
                 col = col + 1;
                 0
