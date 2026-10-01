@@ -72,7 +72,11 @@ what was deliberately *not* changed) is in `audit.md`.
 
 - Type aliasing — `type IntList = [long]; let a: IntList = [...]` and
   `type Pair = { x: long, y: long }` both check out (verified).
-- Hex/binary literals with `_` separators, scientific notation, float literals.
+- Hex/binary literals, scientific notation, float literals. (`_` digit
+  separators work in `0x`/`0b` literals only — a decimal literal stops at
+  the first `_`, and `_` is a word character so the tail lexes as an
+  identifier. Corrected in the docs on 2026-09-30; this list had claimed
+  "any position".)
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),
   with `arch_x64.y` reduced to primitives; `readline`/`exec` moved too.

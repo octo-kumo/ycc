@@ -17,7 +17,7 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/native.y` | pipeline driver: `native_resolve` (splice imports + optional std modules) → strip namespaces → rename → check → hoist → frame layout → tree shake → arch emit |
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
-| `src/y/asm.y` | two-pass assembler over our asm dialect (+ octal payload writer) |
+| `src/y/asm.y` | two-pass assembler over our asm dialect |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), static, entry `_start` |
 | `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, spliced into every program), `prelude.y` (`readline`/`clear_eof` and the separate `exec` chunk), `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `prof.y` (the `--prof` runtime), `struct.y` (pack/unpack helpers) |
 
@@ -40,9 +40,10 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   width follow from the type alone (`movzbq`/`movb` instead of `mov`).
   `y_arr_push`/`y_arr_prepend`/`y_arr_slice`/`y_arr_eq` take `esz` as an
   argument, so one implementation serves both layouts. 100k elements cost
-  256 KB packed versus 2 MB unpacked. `bytes(s)` and `from_bytes(b)` convert
+  98 KB packed versus 781 KB unpacked. `bytes(s)` and `from_bytes(b)` convert
   to and from `str`; a `byte` widens to `long` in arithmetic, and a `long`
   narrows to `byte` at annotated sites (there is no cast syntax).
+  100k elements cost 98 KB packed versus 781 KB unpacked.
 - Locals live at fixed `rbp` offsets (one flat frame per function, 8 bytes/slot).
   Arrays — fixed `[v; n]` and dynamic `[v, ...]` alike — are **heap headers**
   `{len, cap, data}` where `data` points at a separately allocated element
@@ -82,7 +83,10 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
 - Maps `{K => V}` are lowered to a `{keys: [K], vals: [V]}` record and
   every map operation (literal, `m[k]`, `m[k] = v`, `len`, printing) to
   synthetic AST over those arrays -- no map-specific assembly. Reads are
-  always `V?` (`none` on a miss).
+  always `V?` (`none` on a miss). `is_hash_key` accepts `str`, `long`,
+  `byte`, `bool` and `float`, but `map_type_of` hard-codes `tstr`, so a
+  map **literal** only infers a `str` key -- build a non-`str`-keyed map
+  from `let m: {long => long} = {};` and store into it.
 
 ## Pipeline (now → later)
 
@@ -117,11 +121,15 @@ involved.
 
 ## Pointers, stack arrays, heap arrays, options
 
-- Syntax: `&x` address-of a local/param/fixed-array, `&a[i]` element address,
+- Syntax: `&x` address-of a local/param, `&a[i]` element address,
   `*p` load, `*p = v` store, `a[i]` / `a[i] = v`, `len(a)`,
   `let buf = [v; n]`, `[v, ...]` (heap), `[T; N]` / `[T]` types,
   `T?` option types (`int` is `long`), `some(v)` / `none` / `is_some` / `unwrap`.
-- Types: `*T`, `[T; N]`, `[T]`, `T?`. `&x : *T`, `&a : *T` (fixed) / `&a[i] : *T`.
+- Types: `*T`, `[T; N]`, `[T]`, `T?`. `&x : *T`, `&a[i] : *T`.
+  `&a` on a whole array is **rejected for both kinds**: a slot holds the
+  `{len, cap, data}` header, so `&a` would hand out the header address
+  (the kernel would then overwrite the array's own bookkeeping). Write
+  `&a[0]`, which is the data address and works for `[T]` and `[T; N]`.
   `str` flows into `*T`; `none` unifies with any `T?`.
 - Fixed and heap arrays are both first-class reference values: assign, pass,
   return, alias. The difference is only the type: `[T; N]` carries its length
@@ -208,11 +216,12 @@ All of these are lowered early, so the checker and emitter see little new:
 already-built `./ycc`, including a third generation and a smoke compile
 with the self-built binary.
 
-Measured on the self-compile (`ycc --time -o ycc src/y/ycc.y`, a slow
-shared VM — the numbers are for shape, not for speed): 714 KB of spliced
-source, 158 K tokens, 3.1 MB of assembly, a 788 KB static ELF, in ~23 s and
-~31 GB of arena, with the assembler's link phase (`a:link`/`l:patch`)
-dominating. On the development machine the same compile takes ~2 s.
+Measured on the self-compile (`ycc --time -o ycc src/y/ycc.y`, re-run
+2026-09-30): 713 KB of spliced source, 161 K tokens, 3.1 MB of assembly, a
+788 KB static ELF, in ~23 s and ~31 GB of arena, with the assembler's link
+phase (`a:link`/`l:patch`) dominating — together they are 39 of the 23
+seconds. The shape is the point, not the speed; the figures move as the
+compiler grows.
 
 What made it possible was not new features but removing copies: arrays and
 records became reference values everywhere (copy-on-store made the
@@ -314,11 +323,10 @@ compile time and string-heavy speed — is deliberate; the next lever is
 the remaining hot primitives (`y_long_tostr`, `y_str_index`), which are
 either cheaper Y forms or back to being byte primitives in asm.
 
-A hello world is 8 KB (8312 bytes, the page-aligned ELF) and ~760 asm
-lines, of which the hand-written runtime
-is `y_alloc`, `y_bytes_to_str` and the digit loop of `y_long_tostr`: the
-splitter, the file layer and the float formatter are not there because the
-program does not use them.
+A hello world is 8 KB (8312 bytes, the page-aligned ELF) and ~480 asm
+lines, of which the hand-written runtime is `y_alloc` and
+`y_bytes_to_str`: the number formatter, the splitter, the file layer and
+the float formatter are not there because the program does not use them.
 
 The scanners walk a `bytes()` copy of the emitted text and materialize only
 the symbols they reference; per-character `substr` would cost an allocation
@@ -395,15 +403,18 @@ both sides of a branch comparison, so ratios stay meaningful.
 
 `bench/` holds benchmarks for the compiler and for what it produces —
 none of it runs in the test suites. `bench/compare.sh BASE_YCC NEW_YCC`
-scores two builds (100 = unchanged) over compile time, run time, binary
-size and asm size, and joins their `--prof` reports function by function.
+scores two builds (100 = unchanged) over compile time, run time and
+binary size --- asm bytes and asm lines are reported as detail but are
+**not** part of the score --- and joins their `--prof` reports function
+by function.
 The workflow for a performance-affecting change (propose → branch →
 bench → decide) is in AGENTS.md; the details are in `bench/README.md`.
 
 ## Testing
 
-`test/sh/test_native.sh` compiles `test/y/native/*.y` → `.s` → binary via the
-**real** `ycc -S` path and checks stdout/exit. `t*.y` assert behavior
+`test/sh/test_native.sh` compiles `test/y/native/t*.y` and `e*.y`
+straight to executables with the built `./ycc` (`ycc -o bin prog.y`, no
+`-S`) and checks stdout/exit. `t*.y` assert behavior
 (`.expected` stdout, `.exit` code, `.stdin` for input); `e*.y` assert rejection (first line
 `// expect-error: <substring>` must appear in the compiler output). Native
 programs must also keep passing if the C path ever learns the feature — one

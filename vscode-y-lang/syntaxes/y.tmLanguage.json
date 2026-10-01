@@ -146,7 +146,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.y",
-          "match": "\\b(print|puts|tostring|tonum|typeof|range|readline|clear_eof|split|len|trim|exec|spawn|exit|argv|join|push|substr|read_file|write_file|ord|chr|index_of|arr_index_of|last_index_of|getenv|map_set|map_get|global_get|scope_new|scope_def|scope_find|scope_get|scope_set)\\b"
+          "match": "\\b(print|puts|eputs|tostring|tonum|typeof|range|readline|clear_eof|split|len|trim|exec|exit|argv|join|substr|read_file|write_file|write_bytes|ord|chr|index_of|last_index_of|bytes|from_bytes|syscall|clock_us|heap_used|sleep|ptr_addr|byte_at|some|is_some|unwrap)\\b"
         }
       ]
     },

@@ -75,7 +75,8 @@ a runtime error (Section~\ref{sec:errors}).
   the file cannot be read.
 \item[\ic{write\_file(path, s)}] Write a string; \ic{bool} success.
 \item[\ic{write\_bytes(path, b, mode)}] Write \ic{[byte]} binary-safe
-  and chmod (\ic{mode < 0} skips chmod); \ic{bool} success.
+  and chmod (\ic{mode == -1} skips chmod --- any other value is passed
+  to \ic{fchmodat} verbatim, so \ic{493} is \ic{0755}); \ic{bool} success.
 \item[\ic{argv()}] \ic{[str]} of the program's arguments.
 \item[\ic{exit(code)}] Terminate with an exit code.
 \item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}.

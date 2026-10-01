@@ -12,9 +12,13 @@ namespace alias:
 import io from "./std/io.y";   // io.f(...) addresses defs of io.y
 \end{lstlisting}
 
-\noindent An \ic{export \{ a, b \}} clause, when present, must be the
-\emph{last} statement of a file. Paths resolve relative to the importing
-file's directory.
+\noindent An \ic{export \{ a, b \}} clause, when present, lists what a
+file offers to importers. It is \emph{by convention} the last statement
+of a file, but nothing enforces that: an import splices the imported
+file's text and drops every \ic{export} line, so a clause anywhere in
+the file has the same effect. (A file's defs are spliced whole;
+namespaces are resolved by rewriting, not by the export list.) Paths
+resolve relative to the importing file's directory.
 
 \subsection{Declarations}
 

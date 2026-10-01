@@ -56,7 +56,7 @@ a \emph{compile error} (there is no runtime field growth), and a field
 read requires the field to exist statically.
 
 \paragraph{Record spread.} \ic{\{a: 0, ...obj\}} builds a record whose
-shape is the \emph{union} of the two shapes — entirely statically; no
+shape is the \emph{union} of the two shapes --- entirely statically; no
 dynamic shape is involved. Entries merge with last-wins values and
 first-appearance positions, so \ic{obj} may overwrite \ic{a} and a later
 explicit key may overwrite what \ic{obj} spread:
@@ -86,6 +86,24 @@ print(m["zz"]);                // none
 print(m["a"]! + 1);            // 2 -- x! unwraps
 print(m);                      // {"a": 1, "b": 2, "c": 3}
 \end{lstlisting}
+
+\paragraph{Key types.} Only \ic{str} keys can be written in a map
+\emph{literal}: the checker's literal inference fixes the key type to
+\ic{str}, so \ic{\{ 1: 5 \}} is rejected as a shape rather than
+accepted as a \ic{\{long => long\}}. Every other hashable key type
+works when the map is built from an annotated empty literal and stored
+into --- which is the only way to write one today:
+
+\begin{lstlisting}
+let m: {long => long} = {};   // the annotation is load-bearing here
+m[1] = 5;                     // insert
+print(m[1]);                  // 5 -- a read is still V? (here: long?)
+print(m[2]);                  // none
+print(m);                     // {1: 5}
+\end{lstlisting}
+
+\noindent \ic{byte}, \ic{bool} and \ic{float} keys behave the same
+way; see Section~\ref{sec:types} for the type-level rule.
 
 \noindent Keying is symbolic and exclusive: \ic{m['k']} is the map form
 and is reserved for maps; \ic{r.a} is the record form. Reading

@@ -15,11 +15,11 @@ same semantics.
   - `./ycc` self-compiles byte-identically (fixpoint).
   `refs/` holds the backed-up reference binaries (gitignored; see
   `refs/SHA256SUMS`).
-- Do not commit build artifacts: `*.o`, `cycc`, `cycc-asan`, `ycc`,
-  `_ycc`, `a.out`, `src/c/prof_lines.c`, `src/c/std_lines.c`,
-  `src/y/std/prof_lines.y` (all gitignored; `make clean` removes the
-  binaries and both generated C twins — `src/c/std_lines.c` is tracked,
-  so `git checkout` it after a clean). `refs/` is gitignored too but is
+- Do not commit build artifacts. Gitignored: `*.o`, `cycc`, `cycc-asan`,
+  `ycc`, `_ycc`, `a.out`, `src/c/prof_lines.c`, `src/y/std/prof_lines.y`,
+  and `refs/`. `src/c/std_lines.c` is generated but **tracked**, so it is
+  not gitignored — `make clean` removes it, and `git checkout` restores
+  it (regenerating it is byte-identical). `refs/` is gitignored but is
   **not** disposable — it is the port's ground truth.
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
@@ -37,8 +37,9 @@ same semantics.
 - `make test` runs everything: the port gate + all `test/sh/*.sh`
   suites. `./test/sh/run_all.sh [suite ...]` runs a subset.
 - `make test-compile` — tiny smoke test (both compilers, one example).
-- Profiling: `./ycc --time` prints a per-phase table (elapsed ms + heap
-  bytes + counters) to **stderr**. Y-level builtins: `clock_us()`,
+- Profiling: `./ycc --time file.y` prints a per-phase table (elapsed ms +
+  heap KB + counters) to **stderr**. It needs an input file — `ycc` with no
+  FILE is the error `no input file`. Y-level builtins: `clock_us()`,
   `heap_used()`, `eputs(v)`.
 - Always feed `</dev/null` in scripts (some programs read stdin).
 
@@ -48,11 +49,12 @@ Twelve suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, identical program behavior). `test_native.sh`,
-`test_native_examples.sh` and `test_prof.sh` drive the built `./ycc`
-itself, so they skip when it is missing.
+`test_native_examples.sh`, `test_prof.sh`, `test_ycc.sh` and
+`test_fixpoint.sh` drive the built `./ycc` itself, so those **five** skip
+when it is missing.
 
-- `test_port.sh` [port] — the port gate: every `test/y/**.y` (and the
-  compiler sources themselves) compile to byte-identical binaries with
+- `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
+  `src/y/ycc.y` itself) compile to byte-identical binaries with
   `cycc` and the reference `ycc`.
 - `test_native.sh` [native] — `test/y/native/*.y`: `t*` assert
   stdout/exit (`.expected`/`.exit`, stdin from `.stdin`), `e*` assert
@@ -142,7 +144,9 @@ code calls it by fixed label.
 
 ## Array operators (the language's rules)
 
-- `arr + arr2` → a NEW array, `arr1 ++ arr2` — the operands untouched.
+- `arr + arr2` → a NEW array — the operands untouched. (There is no
+  `++` concatenation operator; `++` is increment only, and on an array
+  it is the error `'++' needs a number target`.)
   `arr + elem` / `elem + arr` → a new array with one element added
   (element types must match).
 - `arr += v` → **in place**: an array value appends its elements
