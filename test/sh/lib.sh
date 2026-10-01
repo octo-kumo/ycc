@@ -76,6 +76,13 @@ run_parity() {
     local binr binc
     binr=$(mktemp /tmp/ytest_ref_XXXXXX)
     binc=$(mktemp /tmp/ytest_cop_XXXXXX)
+    # Each run's output goes to a FILE, not $(...): command substitution drops
+    # NUL bytes (bash even warns about it), so a program that prints NULs
+    # (test/y/audit/t61_null_byte2.y) was compared on truncated output. The
+    # variables are filled in by reading those files afterwards.
+    local outr outc
+    outr=$(mktemp /tmp/ytest_outr_XXXXXX)
+    outc=$(mktemp /tmp/ytest_outc_XXXXXX)
 
     compile_ref "$file" "$binr" "$cc_to"
     local rec=$?
@@ -95,10 +102,20 @@ run_parity() {
             ok=0
             differ=1
         fi
-        RUN_REF_OUT=$(timeout "$bin_to" "$binr" </dev/null 2>&1)
+        timeout "$bin_to" "$binr" </dev/null >"$outr" 2>&1
         RUN_REF_EC=$?
-        RUN_CPY_OUT=$(timeout "$bin_to" "$binc" </dev/null 2>&1)
+        timeout "$bin_to" "$binc" </dev/null >"$outc" 2>&1
         RUN_CPY_EC=$?
+        if cmp -s "$outr" "$outc"; then
+            RUN_REF_OUT=$(cat "$outr")
+            RUN_CPY_OUT=$(cat "$outc")
+        else
+            # differ: cmp is the real check (NUL-safe), the strings are only
+            # for the report
+            ok=0
+            RUN_REF_OUT="$(printf '(output differs)\n'; od -c <"$outr" | head -5)"
+            RUN_CPY_OUT="$(printf '(output differs)\n'; od -c <"$outc" | head -5)"
+        fi
         if [ $differ -eq 1 ]; then
             # Both programs behaved identically yet the binaries differ.
             # Keep that in the reported output, or the failure reads as
@@ -113,10 +130,12 @@ run_parity() {
         RUN_REF_EC="cf$rec"
         RUN_CPY_EC="cf$cec"
     fi
-    rm -f "$binr" "$binc"
+    rm -f "$binr" "$binc" "$outr" "$outc"
 
-    if [ $ok -eq 1 ] && [ "$RUN_REF_OUT" = "$RUN_CPY_OUT" ] \
-        && [ "$RUN_REF_EC" = "$RUN_CPY_EC" ] \
+    # the byte comparison already happened above (cmp on the output files);
+    # here we only re-check the exit codes and the "only 0 or 1 is a result"
+    # rule, since the strings may have been summarised for a diff report.
+    if [ $ok -eq 1 ] && [ "$RUN_REF_EC" = "$RUN_CPY_EC" ] \
         && { [ "$RUN_REF_EC" = "0" ] || [ "$RUN_REF_EC" = "1" ]; }; then
         return 0
     fi
