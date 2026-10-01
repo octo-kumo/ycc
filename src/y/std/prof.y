@@ -45,12 +45,12 @@ def y_prof_init(n: long) -> { tab: [long], names: [str], heap0: long } {
         i = i + 1;
         0
     };
-    { tab: tab, names: names, heap0: syscall(12, 0) }
+    { tab: tab, names: names, heap0: heap_used() }
 };
 
 // The cpu clock in nanoseconds (CLOCK_PROCESS_CPUTIME_ID). The timespec
 // lives in the table: a per-call `[long; 2]` would allocate a heap block
-// (two brk syscalls) and dominate what is being measured.
+// and distort what is being measured.
 def y_prof_now(t: [long]) -> long {
     syscall(228, 2, &t[3]);
     t[3] * 1000000000 + t[4]

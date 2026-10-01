@@ -55,6 +55,20 @@ def arch_global_cell(label: str) -> str {
     label + ":\n.zero 8\n"
 };
 
+// The allocator's state, three .bss words: the bump pointer, the end of
+// the current chunk, and the bytes handed out so far (heap_used). A
+// program that never allocates shakes it out with y_alloc.
+//   y_alloc(n) hands out (n + 15) & -8 bytes: the 8 spare bytes let the
+//   word-at-a-time string loops over-read past a NUL safely. The fast
+//   path is a bump; when the chunk is full, a request under 256 KB opens
+//   a fresh 4 MB anonymous mapping (the old chunk's tail is abandoned)
+//   and a larger one gets a mapping of its own. mmap memory is zeroed,
+//   like the brk memory this replaced -- and unlike brk it has no 8 MB
+//   cap under valgrind.
+def arch_heap_cells() -> str {
+    "y_heap:\n.zero 24\n"
+};
+
 def arch_frame(slots: long) -> long {
     // slots * 8, rounded up to a multiple of 16 (call alignment)
     let bytes = slots * 8;
@@ -70,8 +84,9 @@ def arch_prelude() -> str {
     // std/rt.y as ordinary Y code (tree shaking drops what a program does
     // not use, here and there: native.y's shake pass prunes this text
     // block by block, prune_bodies does the same for rt.y's functions).
-    // What stays here is what only raw machine state can do: the brk bump
-    // allocator (y_alloc), the trap stubs, the record field-table probes
+    // What stays here is what only raw machine state can do: the bump
+    // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
+    // .bss cells), the trap stubs, the record field-table probes
     // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
     // (eq/cmp/cat/substr, arr push/prepend/slice/cat/eq), float
     // formatting, str<->[byte] conversion and argv materialization.
@@ -379,29 +394,72 @@ def arch_prelude() -> str {
         "    mov $1, %rdi",
         "    syscall",
         "y_alloc:",
+        "    lea 15(%rdi), %rax",
+        "    and $-8, %rax",
+        "    lea y_heap(%rip), %rcx",
+        "    mov 16(%rcx), %rdi",
+        "    add %rax, %rdi",
+        "    mov %rdi, 16(%rcx)",
+        "    mov (%rcx), %rdx",
+        "    mov %rdx, %rdi",
+        "    add %rax, %rdi",
+        "    mov 8(%rcx), %r11",
+        "    cmp %r11, %rdi",
+        "    jg y_alloc_slow",
+        "    mov %rdi, (%rcx)",
+        "    mov %rdx, %rax",
+        "    ret",
+        "y_alloc_slow:",
         "    push %rbp",
         "    mov %rsp, %rbp",
         "    push %rbx",
+        "    push %rsi",
+        "    push %r8",
+        "    push %r9",
+        "    push %r10",
         "    push %r12",
-        "    mov %rdi, %rbx",
-        "    add $15, %rbx",
-        "    and $-8, %rbx",
-        "    mov $12, %rax",
-        "    xor %edi, %edi",
-        "    syscall",
-        "    mov %rax, %r12",
-        "    mov %r12, %rdi",
-        "    add %rbx, %rdi",
-        "    mov $12, %rax",
-        "    syscall",
-        "    mov %r12, %rdx",
+        "    mov %rax, %rbx",
+        "    mov $262144, %rsi",
+        "    cmp %rsi, %rbx",
+        "    jge y_alloc_big",
+        "    mov $4194304, %rsi",
+        "    call y_alloc_map",
+        "    lea y_heap(%rip), %rcx",
+        "    mov %rax, %rdx",
         "    add %rbx, %rdx",
-        "    cmp %rdx, %rax",
-        "    jb y_alloc_fail",
-        "    mov %r12, %rax",
+        "    mov %rdx, (%rcx)",
+        "    mov $4194304, %rdx",
+        "    add %rax, %rdx",
+        "    mov %rdx, 8(%rcx)",
+        "    jmp y_alloc_out",
+        "y_alloc_big:",
+        "    mov %rbx, %rsi",
+        "    add $4095, %rsi",
+        "    and $-4096, %rsi",
+        "    call y_alloc_map",
+        "y_alloc_out:",
         "    pop %r12",
+        "    pop %r10",
+        "    pop %r9",
+        "    pop %r8",
+        "    pop %rsi",
         "    pop %rbx",
         "    pop %rbp",
+        "    ret",
+        "y_alloc_map:",
+        "    mov $9, %rax",
+        "    xor %edi, %edi",
+        "    mov $3, %rdx",
+        "    mov $34, %r10",
+        "    mov $-1, %r8",
+        "    xor %r9d, %r9d",
+        "    syscall",
+        "    test %rax, %rax",
+        "    js y_alloc_fail",
+        "    ret",
+        "y_heap_used:",
+        "    lea y_heap(%rip), %rax",
+        "    mov 16(%rax), %rax",
         "    ret",
         "y_alloc_fail:",
         "    mov $1, %rax",
@@ -1280,4 +1338,4 @@ def arch_consts() -> str {
     ], "\n") + "\n"
 };
 
-export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_prelude, arch_consts, arch_frame, arch_exit };
+export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude, arch_consts, arch_frame, arch_exit };

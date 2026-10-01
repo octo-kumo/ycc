@@ -15,26 +15,7 @@
   test at all. `make test-asan` now works again (it exported `YCC`, which no
   suite read, so the sanitized build was never exercised) — that is the place
   to hang one.
-- **Adversarial audit of ycc.** Bad input has not been fuzzed for crashes.
-  Related, found during the 2026-09-30 audit and still open:
-  - **`make test` hides a ~31 GB spike.** Self-compiling `src/y/ycc.y` peaks
-    at 32.2 GB RSS (measured twice), and `make test` does it twice (the `port`
-    and `fixpoint` suites). It passes on a quiet 64 GB box and OOM-kills
-    anything else running. Nine parallel agents exhausted the machine twice
-    this way and killed two agents mid-run.
-  - **`test/y/ycc/test_all_imports.y` needs >6 GB** to compile (it imports the
-    whole compiler); capped at 6 GB it dies with `out of memory` after 5.8 s,
-    uncapped it reached 15.7 GB in 11 s. `test_ycc_units.sh` runs it under
-    `timeout 20`, the compile finishes inside the window, and the suite logs
-    a **pass** — so a 20 GB spike is invisible. Fix the fixture's timeout to
-    be a memory limit, and look at the O(n²) `concat` path it stresses.
 - **Performance, from the optimizer loop** (open levers, in measured order):
-  - `y_alloc` costs two `brk` syscalls per allocation and sits under every
-    string/array operation. Caching the break needs a home: `%r12` was
-    rejected (the prelude helpers push/pop it, which would rewind the cache and
-    hand out overlapping blocks) and the ELF has no writable segment — so this
-    wants either a `.data` segment in `asm.y`/`elf.y` or a helper rework that
-    frees a callee-saved register. Largest remaining lever.
   - `y_str_join` builds with push-per-byte (the `asm_text` joins move MBs per
     self-compile); either it returns to being a byte mover in `arch_x64.y` or
     the emit path stops joining into one string at all.
@@ -46,10 +27,6 @@
   `t44`); the error paths, `listen_tcp`/`listen_http` (which block forever, so
   they have no test), `net`'s fd leak paths and most of `struct`'s writers are
   untested.
-- **`test/y/examples/ysh.y` uses flags that do not exist**:
-  `exec("... --no-io --compile ...")` — `ycc` accepts `-o -S -t/--time
-  --no-exec --prof -h` only. It is reachable solely through `eval`, so no suite
-  ever runs it. Either give the driver those flags or fix the fixture.
 - remove profiling from ycc itself, instead add option to compile with debug symbols like ELF symbol table, symbols and other info, so we can use linux built in `perf` to do profiling. for microbenching use valgrind. also measure time spent in kernel space with strace. and heap expansion with brk & io. and for heap profiling with massif.
 - remove py code
 - move prelude into std
@@ -72,6 +49,21 @@ what was deliberately *not* changed) is in `audit.md`.
 
 - Type aliasing — `type IntList = [long]; let a: IntList = [...]` and
   `type Pair = { x: long, y: long }` both check out (verified).
+- **The memory spikes.** Self-compiling peaked at 32 GB and
+  `test_all_imports.y` at >15 GB: the assembler re-copied the whole code
+  buffer per patched item (O(n²)). It appends in place now (self-compile
+  ~0.9 GB), and the suites run the compilers under a memory cap, so a spike
+  fails a test instead of passing it (`edf4071`).
+- **Fuzzing.** `test/fuzz/fuzz.sh` mutates the corpus and compiles each
+  mutant with both compilers under a memory cap and a timeout; the parser
+  findings (silently accepted garbage, guesses at malformed input) are fixed
+  and each has an `e*` fixture (`d2ffa81`; see AGENTS.md "Fuzzing").
+- **`ysh.y`** no longer uses driver flags that do not exist, and
+  `test_ycc.sh` runs it (`4e9069f`).
+- **`y_alloc` without `brk`.** Globals moving to `.bss` gave the allocator a
+  writable home: it is a bump over 4 MB `mmap` chunks now, no syscall on the
+  fast path (SCORE 176.73: compiles 60-70% faster, allocation-heavy programs
+  up to 12x faster; valgrind no longer hits its 8 MB `brk` cap).
 - Hex/binary literals with `_` separators, scientific notation, float literals.
 - The `byte` type, with `[byte]` arrays packed (one byte per element).
 - The runtime in Y (`src/y/std/rt.y` spliced into every program, tree-shaken),

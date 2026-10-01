@@ -42,6 +42,7 @@ Yv *arch_rodata(void);
 Yv *arch_text(void);
 Yv *arch_bss(void);
 Yv *arch_global_cell(Yv *label);
+Yv *arch_heap_cells(void);
 long arch_frame(long slots);
 Yv *arch_prelude(void);
 Yv *arch_consts(void);
@@ -6475,7 +6476,7 @@ Yv *gen_clock_us(Yv *st, Yv *node) {
 }
 
 Yv *gen_heap_used(Yv *st, Yv *node) {
-    /* heap_used() -> long (current arena break; deltas are the signal). */
+    /* heap_used() -> long (bytes the allocator has handed out so far). */
     Yv *unused = node;
     (void)unused;
     return emit(st, ys("    call y_heap_used"));
@@ -7436,9 +7437,13 @@ Yv *emit_program(Yv *ast, Yv *imports) {
             s2 = s2 + 1;
         }
         asm_ = ys_cat(asm_, ys_join(rodpieces, ys("")));
-        if (yv_len(gl) > 0) {
+        /* .bss: the allocator's cells when the kept prelude still uses
+           them, then one cell per global. */
+        Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
+        if (yv_len(gl) > 0 || yv_len(heap_text) > 0) {
             Yv *gpieces = yav(0);
             gpieces = ya_push(gpieces, arch_bss());
+            gpieces = ya_push(gpieces, heap_text);
             long gk = 0;
             while (gk < yv_len(gl)) {
                 Yv *ge = ya_get(gl, gk);

@@ -348,8 +348,9 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("    out"));
     out = ya_push(out, ys("};"));
     out = ya_push(out, ys(""));
-    out = ya_push(out, ys("// Time and heap: clock_gettime / nanosleep / brk, straight through"));
-    out = ya_push(out, ys("// the syscall intrinsic. clock_us is CLOCK_MONOTONIC microseconds."));
+    out = ya_push(out, ys("// Time: clock_gettime / nanosleep, straight through the syscall"));
+    out = ya_push(out, ys("// intrinsic. clock_us is CLOCK_MONOTONIC microseconds. (heap_used"));
+    out = ya_push(out, ys("// reads the allocator's own counter: y_heap_used in arch_x64.y.)"));
     out = ya_push(out, ys("def y_clock_us() -> long {"));
     out = ya_push(out, ys("    let ts: [long; 2] = [0; 2];"));
     out = ya_push(out, ys("    syscall(228, 1, &ts[0]);"));
@@ -362,9 +363,6 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("    ts[0] = m / 1000;"));
     out = ya_push(out, ys("    ts[1] = (m % 1000) * 1000000;"));
     out = ya_push(out, ys("    syscall(35, &ts[0], 0)"));
-    out = ya_push(out, ys("};"));
-    out = ya_push(out, ys("def y_heap_used() -> long {"));
-    out = ya_push(out, ys("    syscall(12, 0)"));
     out = ya_push(out, ys("};"));
     out = ya_push(out, ys(""));
     out = ya_push(out, ys("// read_file(path) -> str?: openat + read loop in 4K chunks. The"));

@@ -5235,7 +5235,7 @@ def gen_clock_us(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
 };
 
 def gen_heap_used(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
-    // heap_used() -> long (current arena break; deltas are the signal).
+    // heap_used() -> long (bytes the allocator has handed out so far).
     let unused = node;
     emit(st, "    call y_heap_used")
 };
@@ -6011,9 +6011,13 @@ def emit_program(ast, imports: [str]) -> { ok: bool, asm: str, errors: [{ msg: s
             s2 = s2 + 1;
         };
         asm = asm + join(rodpieces, "");
-        if (len(gl) > 0) {
+        // .bss: the allocator's cells when the kept prelude still uses
+        // them, then one cell per global.
+        let heap_text = shake_refs(arch.arch_heap_cells(), const_refs);
+        if (len(gl) > 0 || len(heap_text) > 0) {
             let gpieces: [str] = [];
             gpieces += arch.arch_bss();
+            gpieces += heap_text;
             let gk = 0;
             while (gk < len(gl)) {
                 let ge = gl[gk];

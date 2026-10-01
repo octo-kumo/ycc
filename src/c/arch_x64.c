@@ -64,6 +64,20 @@ Yv *arch_global_cell(Yv *label) {
     return ys_cat(label, ys(":\n.zero 8\n"));
 }
 
+// The allocator's state, three .bss words: the bump pointer, the end of
+// the current chunk, and the bytes handed out so far (heap_used). A
+// program that never allocates shakes it out with y_alloc.
+//   y_alloc(n) hands out (n + 15) & -8 bytes: the 8 spare bytes let the
+//   word-at-a-time string loops over-read past a NUL safely. The fast
+//   path is a bump; when the chunk is full, a request under 256 KB opens
+//   a fresh 4 MB anonymous mapping (the old chunk's tail is abandoned)
+//   and a larger one gets a mapping of its own. mmap memory is zeroed,
+//   like the brk memory this replaced -- and unlike brk it has no 8 MB
+//   cap under valgrind.
+Yv *arch_heap_cells(void) {
+    return ys("y_heap:\n.zero 24\n");
+}
+
 long arch_frame(long slots) {
     // slots * 8, rounded up to a multiple of 16 (call alignment)
     long bytes = slots * 8;
@@ -79,8 +93,9 @@ Yv *arch_prelude(void) {
     // std/rt.y as ordinary Y code (tree shaking drops what a program does
     // not use, here and there: native.y's shake pass prunes this text
     // block by block, prune_bodies does the same for rt.y's functions).
-    // What stays here is what only raw machine state can do: the brk bump
-    // allocator (y_alloc), the trap stubs, the record field-table probes
+    // What stays here is what only raw machine state can do: the bump
+    // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
+    // .bss cells), the trap stubs, the record field-table probes
     // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
     // (eq/cmp/cat/substr, arr push/prepend/slice/cat/eq), float
     // formatting, str<->[byte] conversion and argv materialization.
@@ -388,29 +403,72 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    mov $1, %rdi"));
     lines = ya_push(lines, ys("    syscall"));
     lines = ya_push(lines, ys("y_alloc:"));
+    lines = ya_push(lines, ys("    lea 15(%rdi), %rax"));
+    lines = ya_push(lines, ys("    and $-8, %rax"));
+    lines = ya_push(lines, ys("    lea y_heap(%rip), %rcx"));
+    lines = ya_push(lines, ys("    mov 16(%rcx), %rdi"));
+    lines = ya_push(lines, ys("    add %rax, %rdi"));
+    lines = ya_push(lines, ys("    mov %rdi, 16(%rcx)"));
+    lines = ya_push(lines, ys("    mov (%rcx), %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, %rdi"));
+    lines = ya_push(lines, ys("    add %rax, %rdi"));
+    lines = ya_push(lines, ys("    mov 8(%rcx), %r11"));
+    lines = ya_push(lines, ys("    cmp %r11, %rdi"));
+    lines = ya_push(lines, ys("    jg y_alloc_slow"));
+    lines = ya_push(lines, ys("    mov %rdi, (%rcx)"));
+    lines = ya_push(lines, ys("    mov %rdx, %rax"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_alloc_slow:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
     lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    push %rsi"));
+    lines = ya_push(lines, ys("    push %r8"));
+    lines = ya_push(lines, ys("    push %r9"));
+    lines = ya_push(lines, ys("    push %r10"));
     lines = ya_push(lines, ys("    push %r12"));
-    lines = ya_push(lines, ys("    mov %rdi, %rbx"));
-    lines = ya_push(lines, ys("    add $15, %rbx"));
-    lines = ya_push(lines, ys("    and $-8, %rbx"));
-    lines = ya_push(lines, ys("    mov $12, %rax"));
-    lines = ya_push(lines, ys("    xor %edi, %edi"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    mov %rax, %r12"));
-    lines = ya_push(lines, ys("    mov %r12, %rdi"));
-    lines = ya_push(lines, ys("    add %rbx, %rdi"));
-    lines = ya_push(lines, ys("    mov $12, %rax"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    mov %r12, %rdx"));
+    lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("    mov $262144, %rsi"));
+    lines = ya_push(lines, ys("    cmp %rsi, %rbx"));
+    lines = ya_push(lines, ys("    jge y_alloc_big"));
+    lines = ya_push(lines, ys("    mov $4194304, %rsi"));
+    lines = ya_push(lines, ys("    call y_alloc_map"));
+    lines = ya_push(lines, ys("    lea y_heap(%rip), %rcx"));
+    lines = ya_push(lines, ys("    mov %rax, %rdx"));
     lines = ya_push(lines, ys("    add %rbx, %rdx"));
-    lines = ya_push(lines, ys("    cmp %rdx, %rax"));
-    lines = ya_push(lines, ys("    jb y_alloc_fail"));
-    lines = ya_push(lines, ys("    mov %r12, %rax"));
+    lines = ya_push(lines, ys("    mov %rdx, (%rcx)"));
+    lines = ya_push(lines, ys("    mov $4194304, %rdx"));
+    lines = ya_push(lines, ys("    add %rax, %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%rcx)"));
+    lines = ya_push(lines, ys("    jmp y_alloc_out"));
+    lines = ya_push(lines, ys("y_alloc_big:"));
+    lines = ya_push(lines, ys("    mov %rbx, %rsi"));
+    lines = ya_push(lines, ys("    add $4095, %rsi"));
+    lines = ya_push(lines, ys("    and $-4096, %rsi"));
+    lines = ya_push(lines, ys("    call y_alloc_map"));
+    lines = ya_push(lines, ys("y_alloc_out:"));
     lines = ya_push(lines, ys("    pop %r12"));
+    lines = ya_push(lines, ys("    pop %r10"));
+    lines = ya_push(lines, ys("    pop %r9"));
+    lines = ya_push(lines, ys("    pop %r8"));
+    lines = ya_push(lines, ys("    pop %rsi"));
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_alloc_map:"));
+    lines = ya_push(lines, ys("    mov $9, %rax"));
+    lines = ya_push(lines, ys("    xor %edi, %edi"));
+    lines = ya_push(lines, ys("    mov $3, %rdx"));
+    lines = ya_push(lines, ys("    mov $34, %r10"));
+    lines = ya_push(lines, ys("    mov $-1, %r8"));
+    lines = ya_push(lines, ys("    xor %r9d, %r9d"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    js y_alloc_fail"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_heap_used:"));
+    lines = ya_push(lines, ys("    lea y_heap(%rip), %rax"));
+    lines = ya_push(lines, ys("    mov 16(%rax), %rax"));
     lines = ya_push(lines, ys("    ret"));
     lines = ya_push(lines, ys("y_alloc_fail:"));
     lines = ya_push(lines, ys("    mov $1, %rax"));

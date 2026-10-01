@@ -61,9 +61,12 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   implementations use the same model. (Copy-on-store used to emulate value
   semantics here; it made every helper that returned an accumulator O(n), so
   the assembler was O(n²) and self-compilation OOMed past 7.5 GB.)
-- Heap (bump allocator over `brk`, stateless — no retained end pointer):
-  dynamic arrays `[v, ...]` as `{len, cap, data}` headers (element block
-  allocated separately), option boxes.
+- Heap (bump allocator over 4 MB anonymous `mmap` chunks; its state — the
+  bump pointer, the chunk end and the bytes handed out so far — lives in
+  three `.bss` words, `y_heap`, which a program that never allocates shakes
+  out): dynamic arrays `[v, ...]` as `{len, cap, data}` headers (element
+  block allocated separately), option boxes. A request of 256 KB or more
+  gets a mapping of its own.
   Nothing is ever freed (arena); no GC to write until something needs it.
 - Expression values in `%rax`; operands that must survive nested evaluation are
   **pushed** (nothing live in caller-saved regs across a call).
@@ -312,9 +315,14 @@ AGENTS.md has since paid most of it back — same benchmarks, loop start
 -18.7%, output sizes unchanged. What made the difference: `byte_at`
 (the string byte primitive) so the Y string helpers scan instead of
 copying, plus allocation-free character classification in the lexers.
-What remains on the table is written up in TODO.md — chiefly the
-allocator's second `brk` per allocation, which needs a writable segment
-or a free register first.
+What remained on the table was chiefly the allocator: two `brk` syscalls
+per allocation, because the ELF had no writable segment to cache the
+break in. Globals moving to `.bss` gave it one; `y_alloc` is now a bump
+over `mmap` chunks with its state in `.bss` (bench/compare.sh against
+`d2ffa81`: SCORE 176.73 — compiles 60-70% faster, self-compile 7.09 s ->
+2.16 s; allocation-heavy output up to 12x faster, closures 105 -> 8.6 ms,
+strings 158 -> 27 ms; peak heap and output unchanged but for one program
+header).
 
 Measured against the pre-tree-shaking compiler (bench/compare.sh of this
 work against commit `ae6cff1`, same benchmark programs on both sides):
@@ -337,7 +345,7 @@ program does not use them.
 
 The scanners walk a `bytes()` copy of the emitted text and materialize only
 the symbols they reference; per-character `substr` would cost an allocation
-(and two `brk` syscalls) per character.
+per character.
 
 ## Optional std modules
 
@@ -461,5 +469,6 @@ them starts compiling again, so the list can only shrink.
   recursion is constant-space (see above).
 - Arena heap: nothing is freed (no leaks that matter for short-lived
   binaries; long-running programs want the planned GC).
-- `y_alloc` issues two `brk` syscalls per allocation (no writable segment to
-  cache the break in), and rounds every request up by 8–15 bytes.
+- `y_alloc` rounds every request up by 8–15 bytes, and when a request
+  under 256 KB does not fit in the current 4 MB chunk the chunk's tail is
+  abandoned (at most 256 KB, ~6%, per chunk).
