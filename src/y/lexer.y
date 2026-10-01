@@ -691,12 +691,14 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 i = i + 2;
                 col = col + 2;
                 let open = true;
+                let closed = false;
                 while (open) {
                     if (i + 1 < n) {
                         if (src[i:i + 2] == "*/") {
                             i = i + 2;
                             col = col + 2;
                             open = false;
+                            closed = true;
                             0
                         } else {
                             let ch = src[i:i + 1];
@@ -708,8 +710,12 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                         0
                     } else { open = false; 0 };
                 };
-                if (open) {
+                if (!closed) {
+                    // ran off the end with the comment still open: fatal,
+                    // like an unterminated string (the rest of the file
+                    // was silently swallowed)
                     puts("error: unterminated block comment\n");
+                    exit(1);
                     0
                 };
                 0

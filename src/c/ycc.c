@@ -275,11 +275,14 @@ long y_main(Yv *cmdline) {
                 return 1;
             } else if (yv_b(yr_get(pargs, "asm_only"))) {
                 Yv *rasm = yr_get(r, "asm");
+                int wrote = 1;
                 if (yv_len(out) == 0) {
                     puts_(rasm);
                     ;
                 } else {
-                    write_file(out, rasm);
+                    /* Checked, like the executable path below: silently
+                     * exiting 0 after a failed write hid bad -o paths. */
+                    wrote = write_file(out, rasm);
                     ;
                 }
                 ph = phase_end(dt, ys("write"), t0, h0);
@@ -298,6 +301,14 @@ long y_main(Yv *cmdline) {
                     print_counter(ys("tokens"), yv_len(toks));
                     print_counter(ys("asm_bytes"), yv_len(rasm));
                     ;
+                } else {
+                    ;
+                }
+                if (!(wrote)) {
+                    puts_(ys_cat(ys("error: writing '"),
+                                 ys_cat(out, ys("' failed\n"))));
+                    exit_(1);
+                    return 1;
                 } else {
                     ;
                 }

@@ -449,7 +449,10 @@ def arch_prelude() -> str {
         "    lea ystr_dot(%rip), %rsi",
         "    mov $ystr_dot_end-ystr_dot, %rdx",
         "    syscall",
-        "    mov %r13, %rdi",
+        // y_put_hstr is a Y function: its argument goes on the stack
+        // (passing it in %rdi printed garbage and crashed). No cleanup —
+        // the trap exits below.
+        "    push %r13",
         "    call y_put_hstr",
         "    mov $1, %rax",
         "    mov $1, %rdi",

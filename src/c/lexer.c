@@ -743,12 +743,14 @@ Yv *tokenize(Yv *src) {
                 i = i + 2;
                 col = col + 2;
                 int open = 1;
+                int closed = 0;
                 while (open) {
                     if (i + 1 < n) {
                         if (ys_eq_lit(ys_slice(src, i, i + 2), "*/")) {
                             i = i + 2;
                             col = col + 2;
                             open = 0;
+                            closed = 1;
                             ;
                         } else {
                             Yv *ch = ys_slice(src, i, i + 1);
@@ -760,8 +762,12 @@ Yv *tokenize(Yv *src) {
                         ;
                     } else { open = 0; ; }
                 };
-                if (open) {
+                if (!closed) {
+                    /* ran off the end with the comment still open: fatal,
+                     * like an unterminated string (the rest of the file
+                     * was silently swallowed) */
                     puts_(ys("error: unterminated block comment\n"));
+                    exit_(1);
                     ;
                 } else { ; }
                 ;

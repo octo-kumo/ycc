@@ -422,7 +422,10 @@ def std_resolve(name: str, base_dir: str) -> str {
 
 def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str]) -> { src: str, imports: [str], seen: [str] } {
     if (depth > 32) {
+        // Fatal, like a missing module: carrying on compiled the program
+        // without the rest of the chain and exited 0.
         puts("error: native import depth exceeded (cycle?)\n");
+        exit(1);
         { src: "", imports: [], seen: seen }
     } else {
         let lines = split(src, "\n");

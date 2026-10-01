@@ -458,7 +458,10 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    lea ystr_dot(%rip), %rsi"));
     lines = ya_push(lines, ys("    mov $ystr_dot_end-ystr_dot, %rdx"));
     lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    mov %r13, %rdi"));
+    /* y_put_hstr is a Y function: its argument goes on the stack
+     * (passing it in %rdi printed garbage and crashed). No cleanup —
+     * the trap exits below. */
+    lines = ya_push(lines, ys("    push %r13"));
     lines = ya_push(lines, ys("    call y_put_hstr"));
     lines = ya_push(lines, ys("    mov $1, %rax"));
     lines = ya_push(lines, ys("    mov $1, %rdi"));

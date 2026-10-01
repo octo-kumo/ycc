@@ -79,6 +79,47 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Driver failures: each diagnostic must be identical in the self-hosted
+# compiler and its C copy, and each compiler must exit with status 1.
+expect_cli_error() {
+    local name="$1" expected="$2"
+    shift 2
+    local compiler output ec
+    for compiler in "$YCC_BIN" "$CYCC"; do
+        output=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$compiler" "$@" </dev/null 2>&1)
+        ec=$?
+        if [ "$ec" -eq 1 ] && grep -Fqx -- "$expected" <<< "$output"; then
+            pass "CLI error $name (${compiler##*/})"
+        else
+            fail "CLI error $name (${compiler##*/})" \
+                "exit=$ec, expected '$expected', got: $(printf '%s' "$output" | tr '\n' '|')"
+        fi
+    done
+}
+
+expect_cli_error "unknown flag" "ycc: unknown flag '--bad' (see ycc -h)" --bad
+expect_cli_error "no input file" "error: no input file (see ycc -h)"
+expect_cli_error "multiple input files" "error: ycc compiles one program; use imports to combine files" \
+    "$ROOT/test/y/native/t01_arith.y" "$ROOT/test/y/native/t02_recursion.y"
+expect_cli_error "cannot read input" "error: cannot read file '/no-such-cov-ycc-input.y'" \
+    /no-such-cov-ycc-input.y
+expect_cli_error "assembly write failure" "error: writing '/nonexistent/dir/out' failed" \
+    -S -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
+expect_cli_error "executable write failure" "error: writing '/nonexistent/dir/out' failed" \
+    -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
+
+# Import depth: a chain of 33 nested imports is fatal. Only a chain reaches
+# the limit -- the resolver's `seen` list stops a cycle first.
+DEPTH_DIR=$(mktemp -d /tmp/ycc_depth.XXXXXX)
+for i in $(seq 0 31); do
+    echo "import d$((i + 1));" > "$DEPTH_DIR/d$i.y"
+done
+: > "$DEPTH_DIR/d32.y"
+printf 'import d0;\nprint("unreachable");\n' > "$DEPTH_DIR/main.y"
+expect_cli_error "import depth" "error: native import depth exceeded (cycle?)" \
+    -o "$DEPTH_DIR/a.out" "$DEPTH_DIR/main.y"
+rm -rf "$DEPTH_DIR"
+
 echo ""
 echo "═══════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))

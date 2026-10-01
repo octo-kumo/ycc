@@ -836,7 +836,10 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
 
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen) {
     if (depth > 32) {
+        // Fatal, like a missing module: carrying on compiled the program
+        // without the rest of the chain and exited 0.
         puts_(ys("error: native import depth exceeded (cycle?)\n"));
+        exit_(1);
         return yr(3, "src", ys(""), "imports", yav(0), "seen", seen);
     } else {
         Yv *lines = ys_split(src, ys("\n"));
