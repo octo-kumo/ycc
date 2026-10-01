@@ -63,15 +63,19 @@ let joined = join(parts, "");
 print(heap_used() - h <= n + 64);
 
 // 3. what does allocate, by design: an option keeps its value in a box,
-// so some(v) — and a map read, which is always an option — costs at most
-// 16 bytes
+// so some(v) costs at most 16 bytes
 h = heap_used();
 for k in 0..1000 { let q: long? = some(k); acc = acc + 1; };
 print(heap_used() - h <= 16 * 1000);
+// a map read is an option too, but the map caches each entry's box: m[k]!
+// never boxes, and a read that escapes boxes once per write of the entry
 let m = { "a": 1 };
 h = heap_used();
 for k in 0..1000 { acc = acc + unwrap(m["a"]); };
-print(heap_used() - h <= 16 * 1000);
+print(heap_used() - h);
+h = heap_used();
+for k in 0..1000 { let q = m["a"]; acc = acc + q!; };
+print(heap_used() - h <= 16);
 
 print(len(xs) + len(ys) + len(packed) + len(joined));
 print(acc > 0);

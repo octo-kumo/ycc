@@ -4262,7 +4262,8 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                     ;
                 } else if (ys_eq_lit(vk, "rec") && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0 && ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tmap")) {
                     // The empty literal `{}` under a map annotation IS the
-                    // map (the emitter lowers it to the {keys, vals} shape).
+                    // map (the emitter lowers it to the {keys, vals, boxes}
+                    // shape).
                     t = yr_get(node, "typ");
                     ;
                 } else {

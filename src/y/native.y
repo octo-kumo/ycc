@@ -1670,8 +1670,8 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             normnode({ k: "trec", fields: mfields })
         }
     } else if (k == "map") {
-        // map literal: {keys, vals} record at runtime; the static type is
-        // tmap (quoted keys are strings; the values share one type).
+        // map literal: {keys, vals, boxes} record at runtime; the static
+        // type is tmap (quoted keys are strings; the values share one type).
         let glvals = node.vals;
         if (len(glvals) == 0) {
             normnode({ k: "tmap", key: { k: "tstr" }, of: { k: "tunk" } })
@@ -1702,9 +1702,10 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             };
             if (found) { ftyp } else { { k: "tunk" } }
         } else if (dt.k == "tmap") {
-            // the map lowering reads its {keys, vals} shape directly
+            // the map lowering reads its {keys, vals, boxes} shape directly
             if (node.key == "keys") { normnode({ k: "tarr", of: dt.key }) }
             else if (node.key == "vals") { normnode({ k: "tarr", of: dt.of }) }
+            else if (node.key == "boxes") { normnode({ k: "tarr", of: normnode({ k: "topt", of: dt.of }) }) }
             else { { k: "tunk" } }
         } else if (dt.k == "tarr" || dt.k == "tarrfix" || dt.k == "tstr") {
             // built-in properties (types.y typeof_prop; gen_prop)
@@ -2392,7 +2393,7 @@ def gen(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env
     } else if (k == "index") {
         // maps scan their keys; strings read a byte; arrays index directly
         let kbt = infer(st, node.arr);
-        if (kbt.k == "tmap") { gen_map_get(st, node) }
+        if (kbt.k == "tmap") { gen_map_get(st, node, "opt") }
         else if (kbt.k == "tstr") { gen_byte_at(st, n_call2("byte_at", node.arr, node.idx, node.line, node.col)) }
         else { gen_index(st, node) }
     } else if (k == "slice") {
@@ -2423,7 +2424,7 @@ def gen(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env
         // record literal anywhere (let/call-arg): heap address in %rax.
         gen_reclit(st, node)
     } else if (k == "map") {
-        // map literal: the {keys, vals} record, heap address in %rax.
+        // map literal: the {keys, vals, boxes} record, heap address in %rax.
         gen_maplit(st, node)
     } else if (k == "arrrep") {
         // [v; n] anywhere (let/assign/call-arg): heap address in %rax.
@@ -2927,6 +2928,12 @@ def gen_bin(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long,
         gen_logic(st, node, false)
     } else if (op == "||") {
         gen_logic(st, node, true)
+    } else if ((op == "==" || op == "!=") && is_none_id(node.r) && is_map_read(st, node.l)) {
+        // m[k] == none, m[k] != none: the key scan decides, nothing is
+        // boxed (gen_map_get)
+        if (op == "==") { gen_map_get(st, node.l, "none") } else { gen_map_get(st, node.l, "has") }
+    } else if ((op == "==" || op == "!=") && is_none_id(node.l) && is_map_read(st, node.r)) {
+        if (op == "==") { gen_map_get(st, node.r, "none") } else { gen_map_get(st, node.r, "has") }
     } else {
         gen_bin_rest(st, node)
     }
@@ -4475,7 +4482,7 @@ def gen_decl(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
         } else if (node.v.k == "rec") {
             // record literal: heap address (first-class value, plain slot).
             // An empty literal under a map annotation is the map itself
-            // (the {keys, vals} shape the map ops expect).
+            // (the {keys, vals, boxes} shape the map ops expect).
             if (node.typ.k == "tmap" && len(node.v.keys) == 0) {
                 st = gen_maplit(st, node.v)
             } else {
@@ -5421,8 +5428,9 @@ def rec_field_idx(t, key: str) -> long {
             i = i + 1;
         };
     } else if (t.k == "tmap") {
-        // a map is lowered to the fixed {keys, vals} record (see "maps")
-        if (key == "keys") { idx = 0; 0 } else if (key == "vals") { idx = 1; 0 };
+        // a map is lowered to the fixed {keys, vals, boxes} record (see
+        // gen_maplit)
+        if (key == "keys") { idx = 0; 0 } else if (key == "vals") { idx = 1; 0 } else if (key == "boxes") { idx = 2; 0 };
     };
     idx
 };
@@ -5535,18 +5543,28 @@ def gen_some(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long
 
 def gen_is_some(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let args = node.args;
-    st = gen(st, args[0]);
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    setne %al");
-    emit(st, "    movzbq %al, %rax")
+    if (is_map_read(st, args[0])) {
+        // is_some(m[k]): the key scan decides, nothing is boxed
+        gen_map_get(st, args[0], "has")
+    } else {
+        st = gen(st, args[0]);
+        st = emit(st, "    test %rax, %rax");
+        st = emit(st, "    setne %al");
+        emit(st, "    movzbq %al, %rax")
+    }
 };
 
 def gen_unwrap(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let args = node.args;
-    st = gen(st, args[0]);
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz y_opt_unwrap");
-    emit(st, "    mov (%rax), %rax")
+    if (is_map_read(st, args[0])) {
+        // m[k]!: the entry's value itself, nothing is boxed
+        gen_map_get(st, args[0], "val")
+    } else {
+        st = gen(st, args[0]);
+        st = emit(st, "    test %rax, %rax");
+        st = emit(st, "    jz y_opt_unwrap");
+        emit(st, "    mov (%rax), %rax")
+    }
 };
 
 // ── string builtins (all on {len, data} header objects) ────────────────
@@ -6703,7 +6721,13 @@ def block_of(sts: [{k: str}], ln: long, cl: long) -> {k: str} {
 
 // {"a": 1, "a": 2}: duplicate keys collapse at emit time -- the last
 // entry wins the value, the first appearance keeps the position (the
-// record spread rule). The result is the {keys, vals} record literal.
+// record spread rule). The result is the {keys, vals, boxes} record
+// literal: maps lower to {keys: [K], vals: [V], boxes: [V?]}. A read m[k]
+// is V?, and an option is a heap box, so boxes[i] caches the box of
+// vals[i]: the first read after the entry was written makes it, every
+// later read shares it, and a write clears it (a reader may still hold
+// the old box -- it is never mutated). Reads allocate at most once per
+// entry and write.
 def gen_maplit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let ln = node.line;
     let cl = node.col;
@@ -6738,59 +6762,119 @@ def gen_maplit(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: lo
         mi = mi + 1;
     };
     let knodes: [{k: str}] = [];
+    let bnodes: [{k: str}] = [];
     let ki = 0;
     while (ki < len(keys)) {
         let ks: str = keys[ki];
         knodes += n_str(ks, ln, cl);
+        bnodes += n_id("none", ln, cl);
         ki = ki + 1;
     };
     let keysarr = { k: "array", elems: knodes, line: ln, col: cl };
     let valsarr = { k: "array", elems: vals, line: ln, col: cl };
+    let boxesarr = { k: "array", elems: bnodes, line: ln, col: cl };
     let rkeys: [str] = [];
     rkeys += "keys";
     rkeys += "vals";
+    rkeys += "boxes";
     let rvals: [{k: str}] = [];
     rvals += keysarr;
     rvals += valsarr;
+    rvals += boxesarr;
     gen(st, { k: "rec", keys: rkeys, vals: rvals, line: ln, col: cl })
 };
 
-// m[k] read: scan the keys; a hit boxes the value (some(vals[i]) -- the
-// read's V? type), a miss leaves the starting 0 (none).
-def gen_map_get(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+// m[k] read or test (is_map_read): m[k] on a map value.
+def is_map_read(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, e) -> bool {
+    if (e.k == "index") { infer(st, e.arr).k == "tmap" } else { false }
+};
+
+def is_none_id(e) -> bool {
+    e.k == "id" && e.v == "none"
+};
+
+// The key scan every map access shares: t+"i" stops at the entry whose
+// key equals t+"k", or at t+"n" (the entry count) on a miss. The caller
+// binds t+"m" (the map), t+"k", t+"ks" = m.keys (hoisted: push grows in
+// place, so the header never moves), t+"i" = 0, t+"n" = len(t+"ks") and
+// the loop bound t+"j" = t+"n". A hit pulls the bound in to i rather than
+// testing `i < n && keys[i] != k`, which materializes a bool every step.
+def map_scan(t: str, ln: long, cl: long) -> {k: str} {
+    let i = n_id(t + "i", ln, cl);
+    let key = n_idx(n_id(t + "ks", ln, cl), i, ln, cl);
+    let hit: [{k: str}] = [];
+    hit += n_assign(t + "j", i, ln, cl);
+    hit += n_num("0", ln, cl);
+    let step: [{k: str}] = [];
+    step += n_assign(t + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
+    step += n_num("0", ln, cl);
+    let body: [{k: str}] = [];
+    body += n_if(n_bin("==", key, n_id(t + "k", ln, cl), ln, cl), block_of(hit, ln, cl), block_of(step, ln, cl), ln, cl);
+    n_while(n_bin("<", i, n_id(t + "j", ln, cl), ln, cl), block_of(body, ln, cl), ln, cl)
+};
+
+// m[k] read, by mode. "opt" is the read itself (V?): a hit hands out
+// boxes[i], boxing vals[i] first if no read since the last write has; a
+// miss is none. The reads whose option never escapes skip the box: "val"
+// is m[k]! (vals[i]; a miss traps like unwrap(none)), "has" is
+// is_some(m[k]) and m[k] != none, "none" is m[k] == none.
+def gen_map_get(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, mode: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let ln = node.line;
     let cl = node.col;
     let r = next_uid(st);
     st = r.st;
     let t = "y_t" + tostring(r.uid);
     let m = n_id(t + "m", ln, cl);
-    let k = n_id(t + "k", ln, cl);
     let i = n_id(t + "i", ln, cl);
     let n = n_id(t + "n", ln, cl);
     let sts: [{k: str}] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
+    sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
     sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
-    sts += n_decl(t + "n", n_call1("len", n_dot(m, "keys", ln, cl), ln, cl), ln, cl);
-    sts += n_decl(t + "r", n_num("0", ln, cl), ln, cl);
-    let cmp = n_bin("==", n_idx(n_dot(m, "keys", ln, cl), i, ln, cl), k, ln, cl);
-    let hit: [{k: str}] = [];
-    hit += n_assign(t + "r", n_call1("some", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl);
-    hit += n_assign(t + "i", n, ln, cl);
-    hit += n_num("0", ln, cl);
-    let miss: [{k: str}] = [];
-    miss += n_num("0", ln, cl);
-    let step = n_assign(t + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
-    let body: [{k: str}] = [];
-    body += n_if(cmp, block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl);
-    body += step;
-    sts += n_while(n_bin("<", i, n, ln, cl), block_of(body, ln, cl), ln, cl);
-    sts += n_id(t + "r", ln, cl);
+    sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
+    sts += n_decl(t + "j", n, ln, cl);
+    sts += map_scan(t, ln, cl);
+    if (mode == "has") {
+        sts += n_bin("<", i, n, ln, cl);
+        0
+    } else if (mode == "none") {
+        sts += n_bin("==", i, n, ln, cl);
+        0
+    } else if (mode == "val") {
+        let miss: [{k: str}] = [];
+        miss += n_call1("unwrap", n_id("none", ln, cl), ln, cl);
+        let hit: [{k: str}] = [];
+        hit += n_num("0", ln, cl);
+        sts += n_if(n_bin("==", i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl);
+        sts += n_idx(n_dot(m, "vals", ln, cl), i, ln, cl);
+        0
+    } else {
+        let b = n_id(t + "b", ln, cl);
+        let fill: [{k: str}] = [];
+        fill += n_assign(t + "b", n_call1("some", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl);
+        fill += { k: "idxassign", arr: n_dot(m, "boxes", ln, cl), idx: i, v: b, line: ln, col: cl };
+        fill += n_num("0", ln, cl);
+        let kept: [{k: str}] = [];
+        kept += n_num("0", ln, cl);
+        let hit: [{k: str}] = [];
+        hit += n_decl(t + "b", n_idx(n_dot(m, "boxes", ln, cl), i, ln, cl), ln, cl);
+        hit += n_if(n_call1("is_some", b, ln, cl), block_of(kept, ln, cl), block_of(fill, ln, cl), ln, cl);
+        hit += b;
+        let miss: [{k: str}] = [];
+        miss += n_id("none", ln, cl);
+        sts += n_if(n_bin("<", i, n, ln, cl), block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl);
+        0
+    };
     gen(st, block_of(sts, ln, cl))
 };
 
-// m[k] = v: scan for the key; a hit overwrites vals[i], a miss appends to
-// both arrays (in place -- every alias of the map sees the write).
+// m[k] = v: scan for the key; a hit overwrites vals[i] and clears its
+// cached box, a miss pushes onto all three arrays (in place -- every alias
+// of the map sees the write; push, not `+=`, which would append the
+// elements of an array value whose type unifies with [V], such as []).
+// The value runs before the scan counts the entries, so a value that
+// itself adds keys is seen.
 def gen_map_set(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
     let ln = node.line;
     let cl = node.col;
@@ -6801,34 +6885,27 @@ def gen_map_set(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: l
     let k = n_id(t + "k", ln, cl);
     let i = n_id(t + "i", ln, cl);
     let n = n_id(t + "n", ln, cl);
+    let v = n_id(t + "v", ln, cl);
     let sts: [{k: str}] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
     sts += n_decl(t + "v", node.v, ln, cl);
+    sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
     sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
-    sts += n_decl(t + "n", n_call1("len", n_dot(m, "keys", ln, cl), ln, cl), ln, cl);
-    sts += n_decl(t + "f", n_bool("false", ln, cl), ln, cl);
-    let cmp = n_bin("==", n_idx(n_dot(m, "keys", ln, cl), i, ln, cl), k, ln, cl);
+    sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
+    sts += n_decl(t + "j", n, ln, cl);
+    sts += map_scan(t, ln, cl);
     let hit: [{k: str}] = [];
-    hit += { k: "idxassign", arr: n_dot(m, "vals", ln, cl), idx: i, v: n_id(t + "v", ln, cl), line: ln, col: cl };
-    hit += n_assign(t + "f", n_bool("true", ln, cl), ln, cl);
-    hit += n_assign(t + "i", n, ln, cl);
+    hit += { k: "idxassign", arr: n_dot(m, "vals", ln, cl), idx: i, v: v, line: ln, col: cl };
+    hit += { k: "idxassign", arr: n_dot(m, "boxes", ln, cl), idx: i, v: n_id("none", ln, cl), line: ln, col: cl };
     hit += n_num("0", ln, cl);
-    let miss: [{k: str}] = [];
-    miss += n_num("0", ln, cl);
-    let step = n_assign(t + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
-    let body: [{k: str}] = [];
-    body += n_if(cmp, block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl);
-    body += step;
-    sts += n_while(n_bin("<", i, n, ln, cl), block_of(body, ln, cl), ln, cl);
     let grow: [{k: str}] = [];
-    grow += { k: "opassign", tgt: n_dot(m, "keys", ln, cl), op: "+", v: k, line: ln, col: cl };
-    grow += { k: "opassign", tgt: n_dot(m, "vals", ln, cl), op: "+", v: n_id(t + "v", ln, cl), line: ln, col: cl };
+    grow += n_call2("push", n_dot(m, "keys", ln, cl), k, ln, cl);
+    grow += n_call2("push", n_dot(m, "vals", ln, cl), v, ln, cl);
+    grow += n_call2("push", n_dot(m, "boxes", ln, cl), n_id("none", ln, cl), ln, cl);
     grow += n_num("0", ln, cl);
-    let nogrow: [{k: str}] = [];
-    nogrow += n_num("0", ln, cl);
-    sts += n_if(n_not(n_id(t + "f", ln, cl), ln, cl), block_of(grow, ln, cl), block_of(nogrow, ln, cl), ln, cl);
-    sts += n_id(t + "v", ln, cl);
+    sts += n_if(n_bin("<", i, n, ln, cl), block_of(hit, ln, cl), block_of(grow, ln, cl), ln, cl);
+    sts += v;
     gen(st, block_of(sts, ln, cl))
 };
 

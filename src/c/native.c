@@ -260,7 +260,10 @@ Yv *n_decl(Yv *name, Yv *v, long ln, long cl);
 Yv *n_assign(Yv *name, Yv *v, long ln, long cl);
 Yv *block_of(Yv *sts, long ln, long cl);
 Yv *gen_maplit(Yv *st, Yv *node);
-Yv *gen_map_get(Yv *st, Yv *node);
+int is_map_read(Yv *st, Yv *e);
+int is_none_id(Yv *e);
+Yv *map_scan(Yv *t, long ln, long cl);
+Yv *gen_map_get(Yv *st, Yv *node, Yv *mode);
 Yv *gen_map_set(Yv *st, Yv *node);
 Yv *map_key_repr(Yv *node, Yv *kt, long ln, long cl);
 Yv *gen_map_repr(Yv *st, Yv *arg, Yv *t);
@@ -2454,8 +2457,8 @@ Yv *infer(Yv *st, Yv *node) {
             return normnode(yr(2, "k", ys("trec"), "fields", mfields));
         }
     } else if (ys_eq_lit(k, "map")) {
-        /* map literal: {keys, vals} record at runtime; the static type is
-         * tmap (quoted keys are strings; the values share one type). */
+        /* map literal: {keys, vals, boxes} record at runtime; the static
+         * type is tmap (quoted keys are strings; the values share one type). */
         Yv *glvals = yr_get(node, "vals");
         if (yv_len(glvals) == 0) {
             return normnode(yr(3, "k", ys("tmap"), "key", yr(1, "k", ys("tstr")), "of", yr(1, "k", ys("tunk"))));
@@ -2492,9 +2495,10 @@ Yv *infer(Yv *st, Yv *node) {
                 return yr(1, "k", ys("tunk"));
             }
         } else if (ys_eq_lit(yr_get(dt, "k"), "tmap")) {
-            /* the map lowering reads its {keys, vals} shape directly */
+            /* the map lowering reads its {keys, vals, boxes} shape directly */
             if (ys_eq_lit(yr_get(node, "key"), "keys")) { return normnode(yr(2, "k", ys("tarr"), "of", yr_get(dt, "key"))); }
             else if (ys_eq_lit(yr_get(node, "key"), "vals")) { return normnode(yr(2, "k", ys("tarr"), "of", yr_get(dt, "of"))); }
+            else if (ys_eq_lit(yr_get(node, "key"), "boxes")) { return normnode(yr(2, "k", ys("tarr"), "of", normnode(yr(2, "k", ys("topt"), "of", yr_get(dt, "of"))))); }
             else { return yr(1, "k", ys("tunk")); }
         } else if (ys_eq_lit(yr_get(dt, "k"), "tarr") ||
                    ys_eq_lit(yr_get(dt, "k"), "tarrfix") ||
@@ -3277,7 +3281,7 @@ Yv *gen(Yv *st, Yv *node) {
         /* maps scan their keys; strings read a byte; arrays index directly */
         Yv *kbt = infer(st, yr_get(node, "arr"));
         if (ys_eq_lit(yr_get(kbt, "k"), "tmap")) {
-            return gen_map_get(st, node);
+            return gen_map_get(st, node, ys("opt"));
         } else if (ys_eq_lit(yr_get(kbt, "k"), "tstr")) {
             return gen_byte_at(st, n_call2(ys("byte_at"), yr_get(node, "arr"), yr_get(node, "idx"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))));
         } else {
@@ -3311,7 +3315,7 @@ Yv *gen(Yv *st, Yv *node) {
         /* record literal anywhere (let/call-arg): heap address in %rax. */
         return gen_reclit(st, node);
     } else if (ys_eq_lit(k, "map")) {
-        /* map literal: the {keys, vals} record, heap address in %rax. */
+        /* map literal: the {keys, vals, boxes} record, heap address in %rax. */
         return gen_maplit(st, node);
     } else if (ys_eq_lit(k, "arrrep")) {
         /* [v; n] anywhere (let/assign/call-arg): heap address in %rax. */
@@ -3873,6 +3877,12 @@ Yv *gen_bin(Yv *st, Yv *node) {
         return gen_logic(st, node, 0);
     } else if (ys_eq_lit(op, "||")) {
         return gen_logic(st, node, 1);
+    } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) && is_none_id(yr_get(node, "r")) && is_map_read(st, yr_get(node, "l"))) {
+        /* m[k] == none, m[k] != none: the key scan decides, nothing is
+         * boxed (gen_map_get) */
+        if (ys_eq_lit(op, "==")) { return gen_map_get(st, yr_get(node, "l"), ys("none")); } else { return gen_map_get(st, yr_get(node, "l"), ys("has")); }
+    } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) && is_none_id(yr_get(node, "l")) && is_map_read(st, yr_get(node, "r"))) {
+        if (ys_eq_lit(op, "==")) { return gen_map_get(st, yr_get(node, "r"), ys("none")); } else { return gen_map_get(st, yr_get(node, "r"), ys("has")); }
     } else {
         return gen_bin_rest(st, node);
     }
@@ -5611,7 +5621,7 @@ Yv *gen_decl(Yv *st, Yv *node) {
         } else if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "rec")) {
             /* record literal: heap address (first-class value, plain
              * slot). An empty literal under a map annotation is the map
-             * itself (the {keys, vals} shape the map ops expect). */
+             * itself (the {keys, vals, boxes} shape the map ops expect). */
             if (ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tmap") && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0) {
                 st = gen_maplit(st, yr_get(node, "v"));
             } else {
@@ -6879,8 +6889,9 @@ long rec_field_idx(Yv *t, Yv *key) {
             i = i + 1;
         }
     } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
-        /* a map is lowered to the fixed {keys, vals} record (see "maps") */
-        if (ys_eq_lit(key, "keys")) { idx = 0; ; } else if (ys_eq_lit(key, "vals")) { idx = 1; ; } else { ; }
+        /* a map is lowered to the fixed {keys, vals, boxes} record (see
+         * gen_maplit) */
+        if (ys_eq_lit(key, "keys")) { idx = 0; ; } else if (ys_eq_lit(key, "vals")) { idx = 1; ; } else if (ys_eq_lit(key, "boxes")) { idx = 2; ; } else { ; }
     }
     return idx;
 }
@@ -7002,18 +7013,28 @@ Yv *gen_some(Yv *st, Yv *node) {
 
 Yv *gen_is_some(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
-    st = gen(st, ya_get(args, 0));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys("    setne %al"));
-    return emit(st, ys("    movzbq %al, %rax"));
+    if (is_map_read(st, ya_get(args, 0))) {
+        /* is_some(m[k]): the key scan decides, nothing is boxed */
+        return gen_map_get(st, ya_get(args, 0), ys("has"));
+    } else {
+        st = gen(st, ya_get(args, 0));
+        st = emit(st, ys("    test %rax, %rax"));
+        st = emit(st, ys("    setne %al"));
+        return emit(st, ys("    movzbq %al, %rax"));
+    }
 }
 
 Yv *gen_unwrap(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
-    st = gen(st, ya_get(args, 0));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys("    jz y_opt_unwrap"));
-    return emit(st, ys("    mov (%rax), %rax"));
+    if (is_map_read(st, ya_get(args, 0))) {
+        /* m[k]!: the entry's value itself, nothing is boxed */
+        return gen_map_get(st, ya_get(args, 0), ys("val"));
+    } else {
+        st = gen(st, ya_get(args, 0));
+        st = emit(st, ys("    test %rax, %rax"));
+        st = emit(st, ys("    jz y_opt_unwrap"));
+        return emit(st, ys("    mov (%rax), %rax"));
+    }
 }
 
 /* ── string builtins (all on {len, data} header objects) ────────────────
@@ -8421,7 +8442,13 @@ Yv *block_of(Yv *sts, long ln, long cl) {
 
 /* {"a": 1, "a": 2}: duplicate keys collapse at emit time -- the last
  * entry wins the value, the first appearance keeps the position (the
- * record spread rule). The result is the {keys, vals} record literal. */
+ * record spread rule). The result is the {keys, vals, boxes} record
+ * literal: maps lower to {keys: [K], vals: [V], boxes: [V?]}. A read m[k]
+ * is V?, and an option is a heap box, so boxes[i] caches the box of
+ * vals[i]: the first read after the entry was written makes it, every
+ * later read shares it, and a write clears it (a reader may still hold
+ * the old box -- it is never mutated). Reads allocate at most once per
+ * entry and write. */
 Yv *gen_maplit(Yv *st, Yv *node) {
     long ln = yv_l(yr_get(node, "line"));
     long cl = yv_l(yr_get(node, "col"));
@@ -8456,59 +8483,119 @@ Yv *gen_maplit(Yv *st, Yv *node) {
         mi = mi + 1;
     }
     Yv *knodes = yav(0);
+    Yv *bnodes = yav(0);
     long ki = 0;
     while (ki < yv_len(keys)) {
         Yv *ks = ya_get(keys, ki);
         knodes = ya_push(knodes, n_str(ks, ln, cl));
+        bnodes = ya_push(bnodes, n_id(ys("none"), ln, cl));
         ki = ki + 1;
     }
     Yv *keysarr = yr(4, "k", ys("array"), "elems", knodes, "line", yv_long(ln), "col", yv_long(cl));
     Yv *valsarr = yr(4, "k", ys("array"), "elems", vals, "line", yv_long(ln), "col", yv_long(cl));
+    Yv *boxesarr = yr(4, "k", ys("array"), "elems", bnodes, "line", yv_long(ln), "col", yv_long(cl));
     Yv *rkeys = yav(0);
     rkeys = ya_push(rkeys, ys("keys"));
     rkeys = ya_push(rkeys, ys("vals"));
+    rkeys = ya_push(rkeys, ys("boxes"));
     Yv *rvals = yav(0);
     rvals = ya_push(rvals, keysarr);
     rvals = ya_push(rvals, valsarr);
+    rvals = ya_push(rvals, boxesarr);
     return gen(st, yr(5, "k", ys("rec"), "keys", rkeys, "vals", rvals, "line", yv_long(ln), "col", yv_long(cl)));
 }
 
-/* m[k] read: scan the keys; a hit boxes the value (some(vals[i]) -- the
- * read's V? type), a miss leaves the starting 0 (none). */
-Yv *gen_map_get(Yv *st, Yv *node) {
+/* m[k] read or test (is_map_read): m[k] on a map value. */
+int is_map_read(Yv *st, Yv *e) {
+    if (ys_eq_lit(yr_get(e, "k"), "index")) { return ys_eq_lit(yr_get(infer(st, yr_get(e, "arr")), "k"), "tmap"); } else { return 0; }
+}
+
+int is_none_id(Yv *e) {
+    return ys_eq_lit(yr_get(e, "k"), "id") && ys_eq_lit(yr_get(e, "v"), "none");
+}
+
+/* The key scan every map access shares: t+"i" stops at the entry whose
+ * key equals t+"k", or at t+"n" (the entry count) on a miss. The caller
+ * binds t+"m" (the map), t+"k", t+"ks" = m.keys (hoisted: push grows in
+ * place, so the header never moves), t+"i" = 0, t+"n" = len(t+"ks") and
+ * the loop bound t+"j" = t+"n". A hit pulls the bound in to i rather than
+ * testing `i < n && keys[i] != k`, which materializes a bool every step. */
+Yv *map_scan(Yv *t, long ln, long cl) {
+    Yv *i = n_id(ys_cat(t, ys("i")), ln, cl);
+    Yv *key = n_idx(n_id(ys_cat(t, ys("ks")), ln, cl), i, ln, cl);
+    Yv *hit = yav(0);
+    hit = ya_push(hit, n_assign(ys_cat(t, ys("j")), i, ln, cl));
+    hit = ya_push(hit, n_num(ys("0"), ln, cl));
+    Yv *step = yav(0);
+    step = ya_push(step, n_assign(ys_cat(t, ys("i")), n_bin(ys("+"), i, n_num(ys("1"), ln, cl), ln, cl), ln, cl));
+    step = ya_push(step, n_num(ys("0"), ln, cl));
+    Yv *body = yav(0);
+    body = ya_push(body, n_if(n_bin(ys("=="), key, n_id(ys_cat(t, ys("k")), ln, cl), ln, cl), block_of(hit, ln, cl), block_of(step, ln, cl), ln, cl));
+    return n_while(n_bin(ys("<"), i, n_id(ys_cat(t, ys("j")), ln, cl), ln, cl), block_of(body, ln, cl), ln, cl);
+}
+
+/* m[k] read, by mode. "opt" is the read itself (V?): a hit hands out
+ * boxes[i], boxing vals[i] first if no read since the last write has; a
+ * miss is none. The reads whose option never escapes skip the box: "val"
+ * is m[k]! (vals[i]; a miss traps like unwrap(none)), "has" is
+ * is_some(m[k]) and m[k] != none, "none" is m[k] == none. */
+Yv *gen_map_get(Yv *st, Yv *node, Yv *mode) {
     long ln = yv_l(yr_get(node, "line"));
     long cl = yv_l(yr_get(node, "col"));
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *t = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
     Yv *m = n_id(ys_cat(t, ys("m")), ln, cl);
-    Yv *k = n_id(ys_cat(t, ys("k")), ln, cl);
     Yv *i = n_id(ys_cat(t, ys("i")), ln, cl);
     Yv *n = n_id(ys_cat(t, ys("n")), ln, cl);
     Yv *sts = yav(0);
     sts = ya_push(sts, n_decl(ys_cat(t, ys("m")), yr_get(node, "arr"), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("k")), yr_get(node, "idx"), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("ks")), n_dot(m, ys("keys"), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("i")), n_num(ys("0"), ln, cl), ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(t, ys("n")), n_call1(ys("len"), n_dot(m, ys("keys"), ln, cl), ln, cl), ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(t, ys("r")), n_num(ys("0"), ln, cl), ln, cl));
-    Yv *cmp = n_bin(ys("=="), n_idx(n_dot(m, ys("keys"), ln, cl), i, ln, cl), k, ln, cl);
-    Yv *hit = yav(0);
-    hit = ya_push(hit, n_assign(ys_cat(t, ys("r")), n_call1(ys("some"), n_idx(n_dot(m, ys("vals"), ln, cl), i, ln, cl), ln, cl), ln, cl));
-    hit = ya_push(hit, n_assign(ys_cat(t, ys("i")), n, ln, cl));
-    hit = ya_push(hit, n_num(ys("0"), ln, cl));
-    Yv *miss = yav(0);
-    miss = ya_push(miss, n_num(ys("0"), ln, cl));
-    Yv *step = n_assign(ys_cat(t, ys("i")), n_bin(ys("+"), i, n_num(ys("1"), ln, cl), ln, cl), ln, cl);
-    Yv *body = yav(0);
-    body = ya_push(body, n_if(cmp, block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl));
-    body = ya_push(body, step);
-    sts = ya_push(sts, n_while(n_bin(ys("<"), i, n, ln, cl), block_of(body, ln, cl), ln, cl));
-    sts = ya_push(sts, n_id(ys_cat(t, ys("r")), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("n")), n_call1(ys("len"), n_id(ys_cat(t, ys("ks")), ln, cl), ln, cl), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("j")), n, ln, cl));
+    sts = ya_push(sts, map_scan(t, ln, cl));
+    if (ys_eq_lit(mode, "has")) {
+        sts = ya_push(sts, n_bin(ys("<"), i, n, ln, cl));
+        ;
+    } else if (ys_eq_lit(mode, "none")) {
+        sts = ya_push(sts, n_bin(ys("=="), i, n, ln, cl));
+        ;
+    } else if (ys_eq_lit(mode, "val")) {
+        Yv *miss = yav(0);
+        miss = ya_push(miss, n_call1(ys("unwrap"), n_id(ys("none"), ln, cl), ln, cl));
+        Yv *hit = yav(0);
+        hit = ya_push(hit, n_num(ys("0"), ln, cl));
+        sts = ya_push(sts, n_if(n_bin(ys("=="), i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl));
+        sts = ya_push(sts, n_idx(n_dot(m, ys("vals"), ln, cl), i, ln, cl));
+        ;
+    } else {
+        Yv *b = n_id(ys_cat(t, ys("b")), ln, cl);
+        Yv *fill = yav(0);
+        fill = ya_push(fill, n_assign(ys_cat(t, ys("b")), n_call1(ys("some"), n_idx(n_dot(m, ys("vals"), ln, cl), i, ln, cl), ln, cl), ln, cl));
+        fill = ya_push(fill, yr(6, "k", ys("idxassign"), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", b, "line", yv_long(ln), "col", yv_long(cl)));
+        fill = ya_push(fill, n_num(ys("0"), ln, cl));
+        Yv *kept = yav(0);
+        kept = ya_push(kept, n_num(ys("0"), ln, cl));
+        Yv *hit = yav(0);
+        hit = ya_push(hit, n_decl(ys_cat(t, ys("b")), n_idx(n_dot(m, ys("boxes"), ln, cl), i, ln, cl), ln, cl));
+        hit = ya_push(hit, n_if(n_call1(ys("is_some"), b, ln, cl), block_of(kept, ln, cl), block_of(fill, ln, cl), ln, cl));
+        hit = ya_push(hit, b);
+        Yv *miss = yav(0);
+        miss = ya_push(miss, n_id(ys("none"), ln, cl));
+        sts = ya_push(sts, n_if(n_bin(ys("<"), i, n, ln, cl), block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl));
+        ;
+    }
     return gen(st, block_of(sts, ln, cl));
 }
 
-/* m[k] = v: scan for the key; a hit overwrites vals[i], a miss appends to
- * both arrays (in place -- every alias of the map sees the write). */
+/* m[k] = v: scan for the key; a hit overwrites vals[i] and clears its
+ * cached box, a miss pushes onto all three arrays (in place -- every alias
+ * of the map sees the write; push, not `+=`, which would append the
+ * elements of an array value whose type unifies with [V], such as []).
+ * The value runs before the scan counts the entries, so a value that
+ * itself adds keys is seen. */
 Yv *gen_map_set(Yv *st, Yv *node) {
     long ln = yv_l(yr_get(node, "line"));
     long cl = yv_l(yr_get(node, "col"));
@@ -8519,34 +8606,27 @@ Yv *gen_map_set(Yv *st, Yv *node) {
     Yv *k = n_id(ys_cat(t, ys("k")), ln, cl);
     Yv *i = n_id(ys_cat(t, ys("i")), ln, cl);
     Yv *n = n_id(ys_cat(t, ys("n")), ln, cl);
+    Yv *v = n_id(ys_cat(t, ys("v")), ln, cl);
     Yv *sts = yav(0);
     sts = ya_push(sts, n_decl(ys_cat(t, ys("m")), yr_get(node, "arr"), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("k")), yr_get(node, "idx"), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("v")), yr_get(node, "v"), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("ks")), n_dot(m, ys("keys"), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("i")), n_num(ys("0"), ln, cl), ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(t, ys("n")), n_call1(ys("len"), n_dot(m, ys("keys"), ln, cl), ln, cl), ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(t, ys("f")), n_bool(ys("false"), ln, cl), ln, cl));
-    Yv *cmp = n_bin(ys("=="), n_idx(n_dot(m, ys("keys"), ln, cl), i, ln, cl), k, ln, cl);
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("n")), n_call1(ys("len"), n_id(ys_cat(t, ys("ks")), ln, cl), ln, cl), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("j")), n, ln, cl));
+    sts = ya_push(sts, map_scan(t, ln, cl));
     Yv *hit = yav(0);
-    hit = ya_push(hit, yr(6, "k", ys("idxassign"), "arr", n_dot(m, ys("vals"), ln, cl), "idx", i, "v", n_id(ys_cat(t, ys("v")), ln, cl), "line", yv_long(ln), "col", yv_long(cl)));
-    hit = ya_push(hit, n_assign(ys_cat(t, ys("f")), n_bool(ys("true"), ln, cl), ln, cl));
-    hit = ya_push(hit, n_assign(ys_cat(t, ys("i")), n, ln, cl));
+    hit = ya_push(hit, yr(6, "k", ys("idxassign"), "arr", n_dot(m, ys("vals"), ln, cl), "idx", i, "v", v, "line", yv_long(ln), "col", yv_long(cl)));
+    hit = ya_push(hit, yr(6, "k", ys("idxassign"), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", n_id(ys("none"), ln, cl), "line", yv_long(ln), "col", yv_long(cl)));
     hit = ya_push(hit, n_num(ys("0"), ln, cl));
-    Yv *miss = yav(0);
-    miss = ya_push(miss, n_num(ys("0"), ln, cl));
-    Yv *step = n_assign(ys_cat(t, ys("i")), n_bin(ys("+"), i, n_num(ys("1"), ln, cl), ln, cl), ln, cl);
-    Yv *body = yav(0);
-    body = ya_push(body, n_if(cmp, block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl));
-    body = ya_push(body, step);
-    sts = ya_push(sts, n_while(n_bin(ys("<"), i, n, ln, cl), block_of(body, ln, cl), ln, cl));
     Yv *grow = yav(0);
-    grow = ya_push(grow, yr(6, "k", ys("opassign"), "tgt", n_dot(m, ys("keys"), ln, cl), "op", ys("+"), "v", k, "line", yv_long(ln), "col", yv_long(cl)));
-    grow = ya_push(grow, yr(6, "k", ys("opassign"), "tgt", n_dot(m, ys("vals"), ln, cl), "op", ys("+"), "v", n_id(ys_cat(t, ys("v")), ln, cl), "line", yv_long(ln), "col", yv_long(cl)));
+    grow = ya_push(grow, n_call2(ys("push"), n_dot(m, ys("keys"), ln, cl), k, ln, cl));
+    grow = ya_push(grow, n_call2(ys("push"), n_dot(m, ys("vals"), ln, cl), v, ln, cl));
+    grow = ya_push(grow, n_call2(ys("push"), n_dot(m, ys("boxes"), ln, cl), n_id(ys("none"), ln, cl), ln, cl));
     grow = ya_push(grow, n_num(ys("0"), ln, cl));
-    Yv *nogrow = yav(0);
-    nogrow = ya_push(nogrow, n_num(ys("0"), ln, cl));
-    sts = ya_push(sts, n_if(n_not(n_id(ys_cat(t, ys("f")), ln, cl), ln, cl), block_of(grow, ln, cl), block_of(nogrow, ln, cl), ln, cl));
-    sts = ya_push(sts, n_id(ys_cat(t, ys("v")), ln, cl));
+    sts = ya_push(sts, n_if(n_bin(ys("<"), i, n, ln, cl), block_of(hit, ln, cl), block_of(grow, ln, cl), ln, cl));
+    sts = ya_push(sts, v);
     return gen(st, block_of(sts, ln, cl));
 }
 

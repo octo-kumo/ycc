@@ -95,10 +95,20 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   `for (let i ...)` one included) is one variable shared by all of the
   loop's closures. A named function that captures is a closure wherever it
   is named — calls from its siblings and from itself pass its record.
-- Maps `{K => V}` are lowered to a `{keys: [K], vals: [V]}` record and
-  every map operation (literal, `m[k]`, `m[k] = v`, `len`, printing) to
-  synthetic AST over those arrays -- no map-specific assembly. Reads are
-  always `V?` (`none` on a miss). `is_hash_key` accepts `str`, `long`,
+- Maps `{K => V}` are lowered to a `{keys: [K], vals: [V], boxes: [V?]}`
+  record and every map operation (literal, `m[k]`, `m[k] = v`, `len`,
+  printing) to synthetic AST over those arrays -- no map-specific
+  assembly. Reads are always `V?` (`none` on a miss), and an option is a
+  heap box, so `boxes[i]` caches the box of `vals[i]`: the first read
+  after the entry was written makes it, later reads share it, and a write
+  clears it (a reader may still hold the old box; boxes are never
+  mutated). Reads whose option cannot escape skip the box altogether:
+  `m[k]!` reads `vals[i]`, and `is_some(m[k])`, `m[k] == none` and
+  `m[k] != none` are the scan's verdict -- so they never allocate, and an
+  escaping read allocates at most once per entry and write. Two reads of
+  an entry with no write between return the same box, so `==` on two
+  options (which compares boxes) holds between them.
+  `is_hash_key` accepts `str`, `long`,
   `byte`, `bool` and `float`, but `map_type_of` hard-codes `tstr`, so a
   map **literal** only infers a `str` key -- build a non-`str`-keyed map
   from `let m: {long => long} = {};` and store into it.
@@ -587,8 +597,8 @@ them starts compiling again, so the list can only shrink.
   Negating `LONG_MIN` still wraps to `LONG_MIN`, as the language requires.
 - Division/modulo by zero, OOB indexing, unwrap-of-none, OOM each exit
   cleanly with a message + exit 1.
-- Maps are linear-scan (a `{keys, vals}` record): fine for small tables,
-  O(n) per lookup. Records, heap strings, string slices and the string
+- Maps are linear-scan (a `{keys, vals, boxes}` record): fine for small
+  tables, O(n) per lookup. Records, heap strings, string slices and the string
   builtins (`join`/`split`/`tostring`/`ord`/…) are supported — the compiler
   itself relies on them.
 - `float` is IEEE754 double, held in `%rax` as raw bits and moved through

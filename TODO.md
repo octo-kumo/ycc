@@ -2,10 +2,6 @@
 
 ## Not done
 
-- **Map reads allocate.** A map read is an option, and an option boxes
-  its value: every `m[k]` costs 16 heap bytes, even `m[k] == none`
-  (`t101` bounds it). The bump allocator never frees, so a read-heavy
-  loop grows the heap linearly in the number of reads.
 - **`s += x` is quadratic in memory.** Strings are immutable, so each
   append copies the whole string, and nothing is freed: 10,000 one-byte
   appends allocate ~50 MB. Collecting parts and calling `join` is linear.
@@ -18,6 +14,11 @@
   `native_resolve_x`); what is missing is line markers from the emitter
   through the assembler.
 - determine project structure, dependency management, linking (with prebuilt dependencies so no rebuild needed) propose various methods pros and cons and ask the user
+- **`==` on two options compares boxes.** `some(1) == some(1)` is false.
+  The manual specifies equality for scalars, strings, arrays, records and
+  maps, but for options only `x == none`. Map reads now share a box, so
+  two reads of an unchanged entry are `==` (they never were). Decide:
+  equal payloads (like arrays) or identity (like records), and document it.
 
 
 ## Done
@@ -26,6 +27,36 @@ Removed: items below were verified against the code and deleted rather than
 kept as history. The decisions that still constrain the code live in
 `AGENTS.md`, `PORTING.md` and `src/y/NATIVE.md`; the audit record (including
 what was deliberately *not* changed) is in `audit.md`.
+
+- **Map reads allocate.** A map read is an option, and an option is a
+  heap box, so every `m[k]` cost 16 bytes, even `m[k] == none`; the bump
+  allocator never frees, so a read-heavy loop grew the heap with every
+  read. Maps are now `{keys, vals, boxes}`: `boxes[i]` caches the box of
+  `vals[i]`, made by the first read after a write and shared by later
+  reads; a write clears it, and a reader holding the old box keeps the
+  old value. Reads whose option cannot escape box nothing: `m[k]!` and
+  `unwrap(m[k])` read `vals[i]` (a miss traps like `unwrap(none)`), and
+  `is_some(m[k])`, `m[k] == none` and `m[k] != none` (`none` on either
+  side) test the scan's result. Per 1000 reads: `m[k]!` 16000 → 0 bytes,
+  the counting idiom (`m[k] == none`, then `m[k] = m[k]! + 1`) 32000 → 0,
+  an escaping read of an unchanged entry 16000 → 16 (`t101`, `t135`).
+  - Fixed on the way: adding a key whose value is an array whose type
+    unifies with `[V]` (`m["y"] = []`, or `[[]]` in a `{str => [[long]]}`)
+    appended the array's *elements* to `vals` (the `+=` concatenation
+    rule), so `keys` and `vals` fell out of step and printing the map
+    failed with "index out of bounds". A new key is now pushed onto each
+    array.
+  - The key scan pulls its bound in on a hit (`while (i < j) { if
+    (keys[i] == k) { j = i } else { i = i + 1 } }`, `keys` hoisted)
+    rather than testing `i < n && keys[i] != k`, which materializes a
+    bool every step.
+
+  New benchmark `bench/y/maps.y` (counting, escaping lookups and misses
+  over 64 string keys): run time −6.2% (71.3 → 66.9 ms), instructions
+  −1.5% (786.4 → 774.6 M), heap 2.88 → 0.68 MB; asm +6.3% (the cache
+  code), binary size unchanged, compiling it +2.2% instructions. Programs
+  without maps compile to the same binaries, with +0.03–0.05% compile
+  instructions (the peephole checks); the self-compile +0.01%.
 
 - **Cross-file duplicate definitions.** Imported files share one
   namespace, where a later def replaces an earlier one. `find_dup`

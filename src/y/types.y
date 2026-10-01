@@ -2903,7 +2903,8 @@ def typeof_decl(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                     0
                 } else if (vk == "rec" && len(node.v.keys) == 0 && node.typ.k == "tmap") {
                     // The empty literal `{}` under a map annotation IS the
-                    // map (the emitter lowers it to the {keys, vals} shape).
+                    // map (the emitter lowers it to the {keys, vals, boxes}
+                    // shape).
                     t = node.typ;
                     0
                 } else {

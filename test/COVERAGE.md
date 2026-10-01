@@ -63,7 +63,7 @@ reason.
 | 04-types | Scalar types | long, byte, bool, float and str values | `native/t01_arith.y`, `native/t05_cmp_bool.y`, `native/t07_str.y`, `native/t28_floats.y`, `native/t37_bytes.y` |
 | 04-types | Arrays | Homogeneous heap/fixed arrays and element-type enforcement | `native/t37_bytes.y`, `native/t40_array_ops.y`, `native/t57_from_bytes_fixed.y`, `native/e21_hetero_append.y` |
 | 04-types | Records | Structural shapes, field access and shape-hole annotations | `native/t21_records.y`, `native/t50_unions_match.y`, `native/t81_record_shape_hole.y`, `native/e11_recfield.y` |
-| 04-types | Maps | Homogeneous map values, optional reads and hashable key types | `native/t46_maps.y`, `native/t76_map_key_types.y`, `native/e25_map_value_type.y`, `native/e26_map_key_type.y` |
+| 04-types | Maps | Homogeneous map values, optional reads and hashable key types | `native/t46_maps.y`, `native/t76_map_key_types.y`, `native/t135_map_read_boxes.y`, `native/e25_map_value_type.y`, `native/e26_map_key_type.y` |
 | 04-types | Options and pointers | none/some/unwrap and raw address/dereference operations | `native/t06_ptr.y`, `native/t16_option.y`, `native/t47_none_void.y`, `native/t62_byte_ptr.y`, `native/e28_unwrap_non_option.y`, `native/e34_addr_of_array.y` |
 | 04-types | Void | Void calls and disagreeing if arms used as statements | `native/t47_none_void.y`, `native/t48_ternary_void.y`, `native/e24_void_if_value.y`, `native/e31_semicolon_void.y` |
 | 04-types | Functions | Typed parameters, inferred returns, recursion and first-class values | `native/t02_recursion.y`, `native/t04_funcs.y`, `native/t26_closures.y`, `native/e05_badcall.y` |
@@ -91,7 +91,7 @@ reason.
 | 07-references | Records and maps | Static records and dynamic homogeneous maps use distinct keying | `native/t21_records.y`, `native/t46_maps.y` |
 | 07-references | The value model | Scalar/string value behavior versus shared array, record and map references | `native/t40_array_ops.y`, `native/t46_maps.y`, `native/t77_reference_identity.y` |
 | 07-references | Records | Fixed field shapes, shared field stores and static record spread | `native/t21_records.y`, `native/t43_spread_cons.y`, `native/t81_record_shape_hole.y`, `comprehensive: spread: two sources, later wins` |
-| 07-references | Maps | String and non-string hash keys, insertion order, optional reads and stores | `native/t46_maps.y`, `native/t76_map_key_types.y`, `native/e25_map_value_type.y`, `native/e26_map_key_type.y` |
+| 07-references | Maps | String and non-string hash keys, insertion order, optional reads and stores | `native/t46_maps.y`, `native/t76_map_key_types.y`, `native/t135_map_read_boxes.y`, `native/e25_map_value_type.y`, `native/e26_map_key_type.y` |
 | 07-references | Equality | Structural array equality versus record/map identity | `native/t27_loops_slices.y`, `native/t77_reference_identity.y` |
 | 07-references | Copying | Explicit array/slice copies and rebuilt records do not alias the source | `native/t40_array_ops.y`, `native/t77_reference_identity.y`, `native/t78_slice_copy.y` |
 | 08-functions | Functions, closures, options, pointers | Functions/closures/options/pointers chapter heading | none: the heading introduces the detailed subsections below |
