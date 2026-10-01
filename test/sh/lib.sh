@@ -41,6 +41,21 @@ case "$CYCC$YREF" in
 esac
 ulimit -v "$YMEM_KB"
 
+# The programs the compilers emit keep a cap even when the suite-wide one is
+# off: only a sanitized COMPILER needs the address space, and a test like
+# native t71 (an 8 TB array) must see its allocation fail, not page until
+# the timeout. run_bin <timeout> <bin> [args...] runs a compiled program.
+YPROG_MEM_KB="${YPROG_MEM_KB:-6291456}"
+run_bin() {
+    local to=$1
+    shift
+    if [ "$(ulimit -v)" = unlimited ]; then
+        (ulimit -v "$YPROG_MEM_KB"; exec timeout "$to" "$@")
+    else
+        timeout "$to" "$@"
+    fi
+}
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -117,9 +132,9 @@ run_parity() {
             ok=0
             differ=1
         fi
-        timeout "$bin_to" "$binr" </dev/null >"$outr" 2>&1
+        run_bin "$bin_to" "$binr" </dev/null >"$outr" 2>&1
         RUN_REF_EC=$?
-        timeout "$bin_to" "$binc" </dev/null >"$outc" 2>&1
+        run_bin "$bin_to" "$binc" </dev/null >"$outc" 2>&1
         RUN_CPY_EC=$?
         if cmp -s "$outr" "$outc"; then
             RUN_REF_OUT=$(cat "$outr")

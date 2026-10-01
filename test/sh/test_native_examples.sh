@@ -59,7 +59,7 @@ for f in "$ROOT"/test/y/examples/*.y; do
         continue
     fi
 
-    built_out=$(timeout 10 "$binf" </dev/null 2>&1)
+    built_out=$(run_bin 10 "$binf" </dev/null 2>&1)
     built_ec=$?
     rm -f "$binf"
     # the same example through the reference compiler (compile, then run)

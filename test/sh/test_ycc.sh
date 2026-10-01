@@ -32,7 +32,7 @@ for prog in 'def f(n: long) -> long { if (n < 2) { n } else { self(n-1) + self(n
     echo "$prog" > /tmp/sh.y
     c_out=$(timeout $(( 10 * YTIMEOUT_SCALE )) "$YBOOT" -q /tmp/sh.y </dev/null 2>&1)
     if timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" -o /tmp/sh_bin /tmp/sh.y </dev/null >/dev/null 2>&1; then
-        y_out=$(timeout 10 /tmp/sh_bin </dev/null 2>&1)
+        y_out=$(run_bin 10 /tmp/sh_bin </dev/null 2>&1)
     else
         y_out="(ycc failed)"
     fi

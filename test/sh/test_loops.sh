@@ -38,7 +38,7 @@ run_test() {
         return
     fi
 
-    bin_out=$(timeout "$RUN_TO" "$bin" </dev/null 2>&1)
+    bin_out=$(run_bin "$RUN_TO" "$bin" </dev/null 2>&1)
     bin_exit=$?
     rm -f "$bin"
 
@@ -83,7 +83,7 @@ inline_test() {
     # Reference side (quiet: only program output), then the C copy's build.
     vm_out=$(timeout "$VM_TO" "$YBOOT" -q "$tmpfile" </dev/null 2>&1)
     if timeout "$CC_TO" "$YBOOT" --compile "$tmpfile" -o "$bin" </dev/null >/dev/null 2>&1; then
-        bin_out=$(timeout "$RUN_TO" "$bin" </dev/null 2>&1)
+        bin_out=$(run_bin "$RUN_TO" "$bin" </dev/null 2>&1)
     else
         # Never fall through to a stale binary: a failed compile is the output.
         bin_out="(compilation failed)"

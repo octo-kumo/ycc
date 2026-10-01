@@ -28,7 +28,9 @@ same semantics.
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
   Do NOT put a `ulimit -v` on sanitized runs — ASan reserves terabytes
-  of *virtual* address space.
+  of *virtual* address space. The programs a sanitized compiler emits
+  still run capped (`run_bin` in `test/sh/lib.sh`, `YPROG_MEM_KB`), so a
+  test that must see an allocation fail still does.
 - When changing `src/y/*.y`: the C copy (`src/c/`) must get the same
   change (it is a 1:1 copy — see PORTING.md), then `make ycc` must stay
   byte-identical, and `make test` green.

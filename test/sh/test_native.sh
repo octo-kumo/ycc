@@ -80,7 +80,7 @@ run_native() {
     # stdin comes from <base>.stdin when present (t12 cat test), else /dev/null
     local inf="/dev/null"
     [ -f "$dir/$base.stdin" ] && inf="$dir/$base.stdin"
-    timeout 10 "$bin" <"$inf" >"$outf" 2>&1
+    run_bin 10 "$bin" <"$inf" >"$outf" 2>&1
     local ec=$?
     local want_ec=0
     [ -f "$dir/$base.exit" ] && want_ec=$(cat "$dir/$base.exit")

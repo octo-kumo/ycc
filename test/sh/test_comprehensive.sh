@@ -33,7 +33,7 @@ run_test() {
         bin_out="$compile_out"
         bin_exit=1
     else
-        bin_out=$(timeout "$RUN_TO" "$binfile" </dev/null 2>&1)
+        bin_out=$(run_bin "$RUN_TO" "$binfile" </dev/null 2>&1)
         bin_exit=$?
     fi
 
@@ -71,7 +71,7 @@ silent_test() {
     vm_out=$(timeout "$VM_TO" "$YBOOT" -q "$tmpfile" </dev/null 2>&1)
     vm_exit=$?
     if timeout "$CC_TO" "$YBOOT" --compile "$tmpfile" -o "$binfile" </dev/null >/dev/null 2>&1; then
-        bin_out=$(timeout "$RUN_TO" "$binfile" </dev/null 2>&1)
+        bin_out=$(run_bin "$RUN_TO" "$binfile" </dev/null 2>&1)
         bin_exit=$?
     else
         bin_out="(compilation failed)"
