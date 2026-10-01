@@ -254,7 +254,7 @@ Yv *rt_lines(void) {
     out = ya_push(out, ys("};"));
     out = ya_push(out, ys(""));
     out = ya_push(out, ys("// join(arr, sep): one byte at a time into a [byte] accumulator"));
-    out = ya_push(out, ys("// (push grows geometrically, so the whole join is linear)."));
+    out = ya_push(out, ys("// (`+=` grows geometrically, so the whole join is linear)."));
     out = ya_push(out, ys("def y_str_join(arr: [str], sep: str) -> str {"));
     out = ya_push(out, ys("    let out: [byte] = [];"));
     out = ya_push(out, ys("    let sb = bytes(sep);"));
@@ -493,7 +493,7 @@ Yv *prelude_lines(void) {
     out = ya_push(out, ys("// read would swallow input past the newline, which a REPL then"));
     out = ya_push(out, ys("// could not hand to a child process. EOF is not latched -- a later"));
     out = ya_push(out, ys("// call issues a fresh read(2), so a REPL survives Ctrl-D and a FIFO"));
-    out = ya_push(out, ys("// that is reopened. The C engines call clearerr(stdin) to match."));
+    out = ya_push(out, ys("// that is reopened."));
     out = ya_push(out, ys("def readline() -> str? {"));
     out = ya_push(out, ys("    let one: [byte; 1] = [0; 1];"));
     out = ya_push(out, ys("    let out: [byte] = [];"));
@@ -523,8 +523,8 @@ Yv *prelude_lines(void) {
     out = ya_push(out, ys("// clear_eof() -- clear the end-of-input condition so a later"));
     out = ya_push(out, ys("// readline() reads again. Nothing to do here: readline() issues a"));
     out = ya_push(out, ys("// raw read(2) on fd 0 every call and there is no sticky flag to"));
-    out = ya_push(out, ys("// reset. It exists so the same source runs on all three engines"));
-    out = ya_push(out, ys("// (the C engines call clearerr(stdin), which is not a no-op there)."));
+    out = ya_push(out, ys("// reset. It stays a def because a C backend of the language latches"));
+    out = ya_push(out, ys("// EOF in its stdio buffer and needs clearerr(stdin) there."));
     out = ya_push(out, ys("def clear_eof() -> long { 0 };"));
     out = ya_push(out, ys(""));
     return out;
@@ -533,13 +533,12 @@ Yv *prelude_lines(void) {
 Yv *exec_lines(void) {
     Yv *out = yav(0);
     out = ya_push(out, ys("// exec(cmd) -> long  (exit status, or -1 if the child died on a"));
-    out = ya_push(out, ys("// signal / could not be started). Same contract as the C engines'"));
-    out = ya_push(out, ys("// system(3): the command is interpreted by /bin/sh -c."));
+    out = ya_push(out, ys("// signal / could not be started). The command string goes to"));
+    out = ya_push(out, ys("// /bin/sh -c verbatim, the same contract system(3) has."));
     out = ya_push(out, ys("//"));
-    out = ya_push(out, ys("// SECURITY: there is no sanitizing here, exactly as in the C"));
-    out = ya_push(out, ys("// toolchain. Never pass untrusted input. ycc --no-exec omits this"));
-    out = ya_push(out, ys("// function entirely, so a binary built with it cannot reach a"));
-    out = ya_push(out, ys("// shell at all."));
+    out = ya_push(out, ys("// SECURITY: there is no sanitizing here. Never pass untrusted"));
+    out = ya_push(out, ys("// input. ycc --no-exec omits this function entirely, so a binary"));
+    out = ya_push(out, ys("// built with it cannot reach a shell at all."));
     out = ya_push(out, ys("//"));
     out = ya_push(out, ys("// Written in Y over the raw syscalls: fork(57), execve(59),"));
     out = ya_push(out, ys("// wait4(61), exit(60). envp is NULL -- sh supplies a default PATH"));

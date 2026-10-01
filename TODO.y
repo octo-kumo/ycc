@@ -71,3 +71,12 @@ let buf2:[byte] = [6, 7, 8];
 
 buf[0:3] = buf2; // replace the first three elements of buf with the elements of buf2
 buf[2:4] = buf2[0:2]; // replace the elements at index 2 and 3 of buf with the first two elements of buf2
+
+
+let arr_of_arr:[[long]] = [[1, 2], [3, 4], [5, 6]];
+let second_aarr: [[long]] = =[[7, 8], [9, 10]];
+
+// [[long]] + [[long]] = [[long]]
+let comb = arr_of_arr + second_aarr; // should be [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
+// modifying the inner arrays of the original array should affect the combined array
+// but modifying arr_of_arr itself should not affect comb
