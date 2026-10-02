@@ -2,6 +2,7 @@
 // short lines. The harness runs every benchmark with stdin at /dev/null,
 // so the program writes its own input under /tmp, dup2()s it onto fd 0
 // and unlinks it before reading.
+import fs;
 
 def make_input(path: str, n: long) -> long {
     let parts: [str] = [];
@@ -10,7 +11,7 @@ def make_input(path: str, n: long) -> long {
         parts += "line " + tostring(i) + " the quick brown fox jumps over the lazy dog";
         i = i + 1;
     };
-    write_file(path, join(parts, "\n") + "\n");
+    fs.write_file(path, join(parts, "\n") + "\n");
     let pb = bytes(path);
     pb += 0;
     let fd = syscall(2, &pb[0], 0);

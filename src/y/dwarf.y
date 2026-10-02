@@ -15,10 +15,13 @@
 // text_addr/text_len: where .text is loaded and its length (without the
 // page padding); comp_dir: the directory relative paths start from.
 
-def dwarf_sections(files: [str], rows: [long], text_addr: long, text_len: long, comp_dir: str) -> [{ name: str, data: [byte] }] {
+// For its alias ElfSec.
+import elf from "./elf.y";
+
+def dwarf_sections(files: [str], rows: [long], text_addr: long, text_len: long, comp_dir: str) -> [ElfSec] {
     let root = "?";
     if (len(files) > 0) { root = files[0]; 0; } else { 0; };
-    let out: [{ name: str, data: [byte] }] = [];
+    let out: [ElfSec] = [];
     out += { name: ".debug_info", data: dw_info(root, comp_dir, text_addr, text_len) };
     out += { name: ".debug_abbrev", data: dw_abbrev() };
     out += { name: ".debug_line", data: dw_line(files, rows, text_addr, text_len) };

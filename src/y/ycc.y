@@ -1,17 +1,18 @@
 // ycc — the Y compiler. Compiles Y source straight to a native
 // executable (Linux x86_64) with no toolchain: no cc, no as, no ld,
-// no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
+// no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [--no-exec] [-h] FILE
 //   (no flags)   compile FILE to a native executable (default output: a.out)
 //   -o OUTPUT    output path (executable, or .s file with -S)
 //   -S           emit assembly only (stdout, or the -o file)
 //   -t, --time   print per-phase time and heap use to stderr
 //   -g           add a symbol table and DWARF line info (for perf, gdb,
 //                valgrind, addr2line; see -h)
+//   -w           do not print warnings (lint.y)
 //   --std-src    compile the std units from source, not the attached pack
 //   --std-pack FILE  write the compiled std units to FILE, no program
 //   -h, --help   show this text and exit
 // A project (a directory with a y.toml manifest, see pkg.y):
-//   ycc build [-g] [--no-exec] [--std-src] [DIR]   build its programs
+//   ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]   build its programs
 //   ycc vendor [DIR]   copy its git dependencies into DIR/vendor
 
 import lexer from "./lexer.y";
@@ -19,16 +20,18 @@ import parser from "./parser.y";
 import nasm from "./asm.y";
 import nativelib from "./native.y";
 import pkg from "./pkg.y";
+import fs;
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, std_src: bool, std_pack: str } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, std_src: bool, std_pack: str } {
     let out = "";
     let files = [];
     let asm_only = false;
     let timing = false;
     let allow_exec = true;
     let debug = false;
+    let nowarn = false;
     let std_src = false;
     let std_pack = "";
     let i = 1;  // skip argv[0]
@@ -51,6 +54,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             allow_exec = false;
         } else if (a == "-g") {
             debug = true;
+        } else if (a == "-w") {
+            nowarn = true;
         } else if (a == "--std-src") {
             std_src = true;
         } else if (a == "--std-pack") {
@@ -62,8 +67,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
                 exit(1);
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n");
-            puts("       ycc build [-g] [--no-exec] [--std-src] [DIR]\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [--no-exec] [-h] FILE\n");
+            puts("       ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]\n");
             puts("       ycc vendor [DIR]\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
@@ -73,6 +78,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               globals) and DWARF line info, so perf, gdb,\n");
             puts("               valgrind and addr2line show names and source\n");
             puts("               lines; the loaded code and data are unchanged\n");
+            puts("  -w           do not print warnings (they go to stderr and\n");
+            puts("               never change the output)\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
             puts("  --std-src    compile the std units (the runtime and std library)\n");
             puts("               from source instead of using the precompiled ones\n");
@@ -93,7 +100,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, std_src: std_src, std_pack: std_pack }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, std_src: std_src, std_pack: std_pack }
 };
 
 // ── the std pack ─────────────────────────────────────────────────────────
@@ -160,7 +167,7 @@ def write_std_pack(path: str) -> long {
         exit(1);
         0
     } else { 0; };
-    if (!write_file(path, pack + nd + pack_magic())) {
+    if (!fs.write_file(path, pack + nd + pack_magic())) {
         puts("error: writing '" + path + "' failed\n");
         exit(1);
         0
@@ -198,7 +205,7 @@ def fmt_kb(b: long) -> str {
     tostring(b / 1024)
 };
 
-def print_phase_rows(times: [{ name: str, us: long, heap: long }]) -> long {
+def print_phase_rows(times: [Timing]) -> long {
     // NOTE: vestigial alias — `times[i]` parses and typechecks in both
     // copies today; the binding stays only because the compiled compiler
     // is byte-gated against refs/ycc.ref.
@@ -219,7 +226,7 @@ def print_counter(name: str, v: long) -> long {
 
 // ── main ─────────────────────────────────────────────────────────────────
 
-def print_native_errors(errors: [{ msg: str, line: long, col: long }], origin: { files: [str], nuser: long, file: [long], line: [long] }, bare: bool) -> long {
+def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
     // NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
     // Positions are lines of the spliced program (std chunks and imported
     // modules included); the origin map turns each back into the file it
@@ -248,11 +255,25 @@ def print_native_errors(errors: [{ msg: str, line: long, col: long }], origin: {
     0
 };
 
+// What lint.y found in a unit that compiled, as `at: warning: msg` on
+// stderr (a -S listing on stdout stays clean), each position as
+// print_native_errors gives it. lint_unit sorted them and dropped repeats.
+def print_native_warnings(warnings: [Diag], origin: Origin, bare: bool) -> long {
+    let i = 0;
+    while (i < len(warnings)) {
+        let w = warnings[i];
+        eputs(nativelib.origin_at(origin, w.line, bare) + ":" + tostring(w.col) + ": warning: " + w.msg + "\n");
+        i = i + 1;
+    };
+    0
+};
+
 // ── ycc build / ycc vendor (see pkg.y) ───────────────────────────────────
 
-def build_args(cl: [str]) -> { dir: str, debug: bool, allow_exec: bool, std_src: bool } {
+def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, allow_exec: bool, std_src: bool } {
     let dir = "";
     let debug = false;
+    let nowarn = false;
     let allow_exec = true;
     let std_src = false;
     let i = 2;  // skip the program and the command
@@ -260,6 +281,8 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, allow_exec: bool, std_src:
         let a = cl[i];
         if (a == "-g") {
             debug = true;
+        } else if (a == "-w") {
+            nowarn = true;
         } else if (a == "--no-exec") {
             allow_exec = false;
         } else if (a == "--std-src") {
@@ -276,13 +299,13 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, allow_exec: bool, std_src:
         i = i + 1;
     };
     if (len(dir) == 0) { dir = "."; 0; } else { 0; };
-    { dir: dir, debug: debug, allow_exec: allow_exec, std_src: std_src }
+    { dir: dir, debug: debug, nowarn: nowarn, allow_exec: allow_exec, std_src: std_src }
 };
 
 // One unit's text, resolved: its bare imports may name the packages
 // `pkgs` and look in the source roots `roots` (native_resolve_pk).
 def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Resolved {
-    let src = read_file(path);
+    let src = fs.read_file(path);
     if (src == none) {
         puts("error: cannot read file '" + path + "'\n");
         exit(1);
@@ -371,8 +394,9 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
 // `ycc build`: every package the project depends on (and its own lib),
 // each from its object in DIR/build/obj when that is current, else
 // compiled and its object written; then each [bin], linked with the
-// packages it reaches, to DIR/build/NAME.
-def build_project(dir: str, debug: bool, allow_exec: bool, std_src: bool) -> long {
+// packages it reaches, to DIR/build/NAME. A unit's warnings show when it
+// is compiled (unless `nowarn`), not when its object is reused.
+def build_project(dir: str, debug: bool, nowarn: bool, allow_exec: bool, std_src: bool) -> long {
     let g = pkg.pk_load(dir);
     let bins = g.bins;
     let pkgs = g.pkgs;
@@ -423,7 +447,7 @@ def build_project(dir: str, debug: bool, allow_exec: bool, std_src: bool) -> lon
         let key = build_key(cid, p.name, base, allow_exec, nr, units);
         let opath = odir + "/" + p.name + ".yo";
         let hit = false;
-        let ot = read_file(opath);
+        let ot = fs.read_file(opath);
         if (ot != none) {
             let uo = nativelib.unit_unobj(unwrap(ot), key);
             if (uo.ok) { units += uo.unit; hit = true; 0; } else { 0; };
@@ -438,7 +462,10 @@ def build_project(dir: str, debug: bool, allow_exec: bool, std_src: bool) -> lon
                 exit(1);
                 0
             } else { 0; };
-            if (!write_file(opath, nativelib.unit_obj(r.unit, key))) {
+            if (!nowarn) {
+                print_native_warnings(r.warnings, nr.origin, false);
+            };
+            if (!fs.write_file(opath, nativelib.unit_obj(r.unit, key))) {
                 puts("error: writing '" + opath + "' failed\n");
                 exit(1);
                 0
@@ -481,6 +508,9 @@ def build_project(dir: str, debug: bool, allow_exec: bool, std_src: bool) -> lon
             exit(1);
             0
         } else { 0; };
+        if (!nowarn) {
+            print_native_warnings(r.warnings, nr.origin, false);
+        };
         let ab = nasm.ycc_assemble(r.asm, debug);
         if (!ab.ok) {
             puts("error: assemble: " + ab.error + "\n");
@@ -488,7 +518,7 @@ def build_project(dir: str, debug: bool, allow_exec: bool, std_src: bool) -> lon
             0
         } else { 0; };
         let outp = bdir + "/" + bn.name;
-        if (!write_bytes(outp, ab.bytes, 493)) {
+        if (!fs.write_bytes(outp, ab.bytes, 493)) {
             puts("error: writing '" + outp + "' failed\n");
             exit(1);
             0
@@ -503,7 +533,7 @@ def main(cmdline: [str]) -> long {
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
         if (cmdline[1] == "build") {
-            build_project(ba.dir, ba.debug, ba.allow_exec, ba.std_src);
+            build_project(ba.dir, ba.debug, ba.nowarn, ba.allow_exec, ba.std_src);
             0
         } else {
             pkg.pk_vendor(ba.dir);
@@ -532,7 +562,7 @@ def main(cmdline: [str]) -> long {
         1
     } else {
         let file = files[0];
-        let src = read_file(file);
+        let src = fs.read_file(file);
         if (src == none) {
             puts("error: cannot read file '" + file + "'\n");
             exit(1);
@@ -554,7 +584,7 @@ def main(cmdline: [str]) -> long {
             let h0 = heap_used();
             let tstart = t0;
             let hstart = h0;
-            let dt: [{ name: str, us: long, heap: long }] = [];
+            let dt: [Timing] = [];
             let nr = nativelib.native_resolve_x(src2, base_dir, 0, pargs.allow_exec, file);
             let ph = nativelib.phase_end(dt, "resolve", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
@@ -578,13 +608,16 @@ def main(cmdline: [str]) -> long {
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let r = nativelib.emit_program(ast, nr, pargs.debug, su, []);
             // emit_program reports its own sub-phases (strip_ns, rename,
-            // typecheck, emit_fns, emit_start, asm_text); splice them in.
+            // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;
             let si = 0;
             while (si < len(sub)) {
                 let se = sub[si];
                 dt += se;
                 si = si + 1;
+            };
+            if (r.ok && !pargs.nowarn) {
+                print_native_warnings(r.warnings, nrorigin, true);
             };
             t0 = clock_us();
             h0 = heap_used();
@@ -602,7 +635,7 @@ def main(cmdline: [str]) -> long {
                 } else {
                     // Checked, like the executable path below: silently
                     // exiting 0 after a failed write hid bad -o paths.
-                    wrote = write_file(out, rasm);
+                    wrote = fs.write_file(out, rasm);
                     0
                 };
                 ph = nativelib.phase_end(dt, "write", t0, h0);
@@ -625,7 +658,7 @@ def main(cmdline: [str]) -> long {
                 }
             } else {
                 // Assemble to a [byte] buffer in-process (no as/ld/cc) and write the
-                // executable DIRECTLY with the write_bytes builtin
+                // executable DIRECTLY with fs.write_bytes
                 // (binary-safe open/write/chmod, tinycc-style — NULs pass
                 // through as array elements, no shell, no exec/printf).
                 let rasm2 = r.asm;
@@ -651,7 +684,7 @@ def main(cmdline: [str]) -> long {
                     if (len(out_path) == 0) { out_path = "a.out"; 0; } else { 0; };
                     let abbytes = ab.bytes;
                     // 493 = 0755 executable (chmod applied by write_bytes).
-                    let ok = write_bytes(out_path, abbytes, 493);
+                    let ok = fs.write_bytes(out_path, abbytes, 493);
                     ph = nativelib.phase_end(dt, "write", t0, h0);
                     dt = ph.times;
                     if (pargs.timing) {

@@ -19,13 +19,10 @@
 // endian (network byte order), while every other field is written a byte
 // at a time, so no host-order surprise.
 //
-// Names live in one flat namespace with the other std modules once
-// spliced (native.y strip_ns rewrites `net.foo` to `foo`), so a module
-// picks names that will not collide with the rest of std: `close_fd`
-// because io.y has `close`, and the socket verbs carry a suffix that says
-// what they do (`socket_tcp`, `listen_fd`, `accept_tcp`). `send_str` is
-// io.y's `write_str` with the length supplied. Call them as
-// net.close_fd(...) anyway -- the namespace is dropped at compile time.
+// A module imported by name keeps its own scope (rename.y): the importer
+// calls net.close_fd(...), and these names never meet the program's. The
+// socket verbs carry a suffix that says what they do (`socket_tcp`,
+// `listen_fd`, `accept_tcp`); `send_str`/`recv_str`/`close_fd` take an fd.
 
 // socket(AF_INET=2, SOCK_STREAM=1, 0) -> fd, or a negative errno.
 def socket_tcp() -> long {

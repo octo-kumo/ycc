@@ -10,8 +10,9 @@
 // result records are Yv *, long -> long, bool -> int, str -> Yv *.
 #include "parser.h"
 
-/* imported: none — parser.y is self-contained (only yv.h builtins:
- * len -> yv_len, push -> ya_push, slicing -> ys_slice, ord -> ys_ord). */
+/* imported: lexer.y, for its alias Tok only (a record is a Yv * here);
+ * otherwise only yv.h builtins: len -> yv_len, push -> ya_push, slicing
+ * -> ys_slice, ord -> ys_ord. */
 
 // ── token helpers ────────────────────────────────────────────────────────
 
@@ -1033,6 +1034,13 @@ Yv *parse_type_record(Yv *toks, long p) {
             if (is_punct(toks, pos, ys("}"))) {
                 go = 0;
                 ;
+            } else if (is_op(toks, pos, ys(".."))) {
+                // `{k: str, ..}`, `..` last: an open record, any record
+                // with these fields (types.y is_open)
+                fields = ya_push(fields, yr(2, "name", ys(".."), "typ",
+                                            yr(1, "k", ys("tunk"))));
+                pos = pos + 1;
+                go = 0;
             } else {
                 Yv *fname = tv(toks, pos);
                 if (!is_name_tok(toks, pos)) {

@@ -13,8 +13,8 @@ in `make test`). The suite reads the compiler sources, the reference manual
   test that does not exist or does not check its output.
 
 "Checked" means the test asserts what happens: a native fixture
-(`native/t*.y` against its `.expected`, `native/e*.y` against its
-`// expect-error:` markers), an inline case of `test_comprehensive.sh` or
+(`native/t*.y` against its `.expected` and its `// expect-warning:`
+markers, `native/e*.y` against its `// expect-error:` markers), an inline case of `test_comprehensive.sh` or
 `test_loops.sh`, or a `test/sh` suite. The `audit/` and `examples/`
 programs only check that the two compilers agree, so they are not evidence
 that a feature works.
@@ -53,12 +53,13 @@ reason.
 | 03-grammar | Syntax | Grammar chapter heading | none: the heading introduces grammar forms exercised in the subsections below |
 | 03-grammar | Structure and modules | Imports, exports, relative paths and namespaces | `native/t55_parse_forms.y`, `native/e20_badmodule.y` |
 | 03-grammar | Structure and modules | Embed bytes and splice imported source in order | `native/t66_embed.y`, `native/t68_splice_scan.y`, `native/e57_embed_lines.y` |
-| 03-grammar | Structure and modules | One namespace: a def replacing another file's is an error naming both; same-file and std redefinitions are allowed | `native/e132_duplicate_import_def.y`, `native/t134_import_namespace.y`, `native/t30_typeof_records.y` |
+| 03-grammar | Structure and modules | Files imported by path share one namespace: a def replacing another file's is an error naming both; same-file and std redefinitions are allowed | `native/e132_duplicate_import_def.y`, `native/t134_import_namespace.y`, `native/t30_typeof_records.y` |
+| 03-grammar | Structure and modules | A module imported by name keeps its scope: qualified names, its own names first, the program free to reuse them, a local hiding the module, defaults and globals through the name | `native/t151_module_scope.y`, `native/e144_module_scope.y` |
 | 03-grammar | Packages | y.toml manifests (every error), ycc build, path and git dependencies, y.lock, ycc vendor, the object cache and when it recompiles | `sh/test_pkg.sh` |
 | 03-grammar | Packages | Qualified package names, read-only globals, defaults and optional parameters across packages, dependencies' top level first | `sh/test_pkg.sh` |
 | 03-grammar | Declarations | let, const, def, type aliases and defaults | `native/t59_const.y`, `native/t49_defaults_tco.y`, `native/t50_unions_match.y`, `native/t63_optional_args.y` |
 | 03-grammar | Declarations | Anonymous and immediately-bound function literals | `native/t26_closures.y`, `native/t29_blocks_iife.y` |
-| 03-grammar | Types | Scalar, array, fixed-array, option, pointer, function, record and map type syntax | `native/t06_ptr.y`, `native/t16_option.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t57_from_bytes_fixed.y` |
+| 03-grammar | Types | Scalar, array, fixed-array, option, pointer, function, record, map and union type syntax | `native/t06_ptr.y`, `native/t16_option.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t57_from_bytes_fixed.y`, `native/t147_union_tags.y` |
 | 03-grammar | Types | The size of `[T; n]` and `[v; n]` is an integer literal from 0 to 2^31 - 1, decimal or radix; a float, a larger or negative number or a name is an error at the size | `native/t143_array_sizes.y`, `native/e138_array_sizes.y`, `native/e83_array_literals.y` |
 | 03-grammar | Statements | if/else, while, C-style for, range-for, foreach and return | `native/t03_while.y`, `native/t27_loops_slices.y`, `native/t55_parse_forms.y`, `loops: for: basic`, `loops: foreach: sum array`, `loops: range: 3..7` |
 | 03-grammar | Statements | Blocks as expressions, trailing semicolons and bare return | `native/t29_blocks_iife.y`, `native/t47_none_void.y`, `native/t55_parse_forms.y`, `native/e31_semicolon_void.y` |
@@ -72,14 +73,22 @@ reason.
 | 04-types | Types and static semantics | Fatal static checking and structural type errors | `native/e11_recfield.y`, `native/e21_hetero_append.y`, `native/e25_map_value_type.y` |
 | 04-types | Scalar types | long, byte, bool, float and str values | `native/t01_arith.y`, `native/t05_cmp_bool.y`, `native/t07_str.y`, `native/t28_floats.y`, `native/t37_bytes.y` |
 | 04-types | Arrays | Homogeneous heap/fixed arrays and element-type enforcement | `native/t37_bytes.y`, `native/t40_array_ops.y`, `native/t57_from_bytes_fixed.y`, `native/e21_hetero_append.y` |
-| 04-types | Records | Structural shapes, field access and shape-hole annotations | `native/t21_records.y`, `native/t50_unions_match.y`, `native/t81_record_shape_hole.y`, `native/e11_recfield.y` |
+| 04-types | Records | Record types are field sets (any order); field access (a field the type lacks is a compile error) and shape-hole annotations | `native/t21_records.y`, `native/t50_unions_match.y`, `native/t81_record_shape_hole.y`, `native/t145_record_layout.y`, `native/e11_recfield.y`, `native/e145_record_missing_field.y` |
+| 04-types | Records | Records are exact: no wider or narrower record, no void, where a record type is declared; a value of unknown type is checked when the program runs | `native/e140_record_exact.y`, `native/t146_record_cast.y` |
+| 04-types | Records | Open record types `{f: T, ..}`: any record with those fields, read through its descriptor; only k is assigned through one; printed with `..` | `native/t152_open_records.y`, `native/e146_open_record_store.y` |
+| 04-types | Records | A record literal where a record type is declared is created as that type: its values convert, nested literals likewise | `native/t145_record_layout.y`, `native/t149_recursive_aliases.y` |
+| 04-types | Unions | Exact membership; a match compares the member a value holds; a union prints as its member | `native/t50_unions_match.y`, `native/t147_union_tags.y`, `native/e30_match_nonexhaustive.y`, `native/e141_union_fields.y` |
+| 04-types | Unions | A field every member has, with one type, is read and written through the union (in one slot or several); others are errors | `native/t147_union_tags.y`, `native/e141_union_fields.y` |
+| 04-types | Unions | Type patterns name a member exactly; record patterns match the members with their fields | `native/t147_union_tags.y`, `native/e141_union_fields.y`, `native/e87_match_patterns.y` |
+| 04-types | Type aliases | Aliases name types; two of one structure are one type; recursive aliases through a record field or a function type, across packages too | `native/t50_unions_match.y`, `native/t149_recursive_aliases.y`, `sh/test_pkg.sh` |
+| 04-types | Type aliases | A cycle outside every record field and function type is an error at its declaration | `native/e142_alias_cycle.y`, `native/e87_match_patterns.y` |
 | 04-types | Maps | Homogeneous map values, optional reads and hashable key types | `native/t46_maps.y`, `native/t76_map_key_types.y`, `native/t135_map_read_boxes.y`, `native/e25_map_value_type.y`, `native/e26_map_key_type.y` |
 | 04-types | Options and pointers | none/some/unwrap, option equality by payload, and raw address/dereference operations | `native/t06_ptr.y`, `native/t16_option.y`, `native/t47_none_void.y`, `native/t62_byte_ptr.y`, `native/t136_structural_equality.y`, `native/e28_unwrap_non_option.y`, `native/e34_addr_of_array.y` |
 | 04-types | Void | Void calls and disagreeing if arms used as statements | `native/t47_none_void.y`, `native/t48_ternary_void.y`, `native/e24_void_if_value.y`, `native/e31_semicolon_void.y` |
 | 04-types | Functions | Typed parameters, inferred returns, recursion and first-class values | `native/t02_recursion.y`, `native/t04_funcs.y`, `native/t26_closures.y`, `native/e05_badcall.y` |
 | 04-types | Annotations and inference | Unannotated parameters, inferred results (every `return` conforms to and converts into the inferred type; the first `return` decides when the tail is a `self` call) and annotated byte-array literals | `native/t22_noannot.y`, `native/t37_bytes.y`, `native/t50_unions_match.y`, `native/t63_optional_args.y`, `native/t133_inferred_returns.y`, `native/e131_inferred_return_mismatch.y` |
 | 04-types | Conversions | byte-to-long and long-to-float widening; str accepted at a pointer position | `native/t28_floats.y`, `native/t37_bytes.y`, `native/t82_str_pointer_conversion.y` |
-| 04-types | Conversions | Annotated long-to-byte masking and long/byte-to-float conversion at every store under a known type, including a `return` under an inferred result; record fields never convert | `native/t132_implicit_conversions.y`, `native/t133_inferred_returns.y`, `native/e130_record_field_conversion.y` |
+| 04-types | Conversions | Annotated long-to-byte masking and long/byte-to-float conversion at every store under a known type, including a `return` under an inferred result; an existing record's fields never convert, a record literal's do | `native/t132_implicit_conversions.y`, `native/t133_inferred_returns.y`, `native/t145_record_layout.y`, `native/e130_record_field_conversion.y` |
 | 04-types | Operator typing | Numeric, string and array operators; comparisons, equality and truthy logic | `native/t28_floats.y`, `native/t33_str_compare.y`, `native/t40_array_ops.y`, `native/t75_eval_order.y`, `native/t77_reference_identity.y` |
 | 04-types | Operator typing | Bitwise operators take integers (a byte widens) and yield long; other operands rejected | `native/t140_bitwise.y`, `native/e134_bitwise_types.y` |
 | 04-types | Compound assignment typing | Valid numeric/string/array forms and rejected array operators | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y`, `native/e21_hetero_append.y`, `native/e22_array_opassign_ops.y`, `native/e74_array_operators.y` |
@@ -107,6 +116,7 @@ reason.
 | 07-references | Records and maps | Static records and dynamic homogeneous maps use distinct keying | `native/t21_records.y`, `native/t46_maps.y` |
 | 07-references | The value model | Scalar/string value behavior versus shared array, record and map references | `native/t40_array_ops.y`, `native/t46_maps.y`, `native/t77_reference_identity.y` |
 | 07-references | Records | Fixed field shapes, shared field stores and static record spread | `native/t21_records.y`, `native/t43_spread_cons.y`, `native/t81_record_shape_hole.y`, `comprehensive: spread: two sources, later wins` |
+| 07-references | Records | Fields laid out by name, whatever order a literal or a type writes them in | `native/t145_record_layout.y` |
 | 07-references | Maps | String and non-string hash keys, insertion order, optional reads and stores | `native/t46_maps.y`, `native/t76_map_key_types.y`, `native/t135_map_read_boxes.y`, `native/e25_map_value_type.y`, `native/e26_map_key_type.y` |
 | 07-references | Equality | Structural array and option equality at any depth (elements and payloads by their own `==`) versus record/map identity | `native/t27_loops_slices.y`, `native/t77_reference_identity.y`, `native/t136_structural_equality.y` |
 | 07-references | Copying | Explicit array/slice copies and rebuilt records do not alias the source | `native/t40_array_ops.y`, `native/t77_reference_identity.y`, `native/t78_slice_copy.y` |
@@ -124,15 +134,22 @@ reason.
 | 09-builtins | Format specifications | Numeric/string format mini-language and format errors | `native/t69_fstrings.y`, `native/e68_fstr_bad_spec.y`, `native/e69_fstr_spec_type.y` |
 | 09-builtins | Binary data | bytes/from_bytes and binary-safe packed byte arrays | `native/t37_bytes.y`, `native/t41_byte_strings.y`, `native/t57_from_bytes_fixed.y` |
 | 09-builtins | Options | some/is_some/unwrap and postfix unwrap | `native/t16_option.y`, `native/t18_unwrapnone.y`, `native/t47_none_void.y` |
-| 09-builtins | Input/output and the environment | stdin/EOF, files, argv, syscalls, exec and process exit | `native/t08_syscall.y`, `native/t10_filewrite.y`, `native/t20_files_argv.y`, `native/t35_readline.y`, `native/t38_exec.y`, `native/t58_readline_exec.y`, `sh/test_stdin_eof.sh` |
+| 09-builtins | Input/output and the environment | stdin/EOF, argv, syscalls, exec and process exit | `native/t08_syscall.y`, `native/t10_filewrite.y`, `native/t20_files_argv.y`, `native/t35_readline.y`, `native/t38_exec.y`, `native/t58_readline_exec.y`, `sh/test_stdin_eof.sh` |
+| 09-builtins | Files (the fs module) | Whole files as text and bytes, appends, paths, directories, fds with mode strings; the old builtins need the import | `native/t150_fs.y`, `native/t20_files_argv.y`, `native/t73_builtins_misc.y`, `native/e29_write_bytes_nonbyte.y`, `native/e143_fs_module.y` |
 | 09-builtins | Pointers | Pointer-address conversion and byte-pointer operations | `native/t06_ptr.y`, `native/t62_byte_ptr.y`, `native/t82_str_pointer_conversion.y` |
 | 10-errors | Errors and diagnostics | Errors chapter heading | none: compile-time, runtime and exit behavior are detailed below |
 | 10-errors | Compile time | Fatal rejection with source-positioned diagnostics | `native/e02_undef.y`, `native/e21_hetero_append.y`, `native/e39_missing_semicolon.y`, `native/e41_import_missing.y` |
 | 10-errors | Compile time | A closer that closes nothing in a block is reported where it stands and the parse goes on | `native/e137_parse_stray_closer.y` |
+| 10-errors | Warnings | Every warning message, at its position; what draws none (a dropped call, `ok && f()`, `x != x`, a float zero, `_` names, parameters, loop variables, top-level bindings) | `native/t144_warnings.y` |
+| 10-errors | Warnings | Warnings in fixtures that test other features | `native/t09_divzero.y`, `native/t29_blocks_iife.y`, `native/t43_spread_cons.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t54_capture_cells.y`, `native/t101_heap_growth.y` |
+| 10-errors | Warnings | stderr, an import's file named, the build goes on; `-w` drops them and the binary keeps its bytes; `-S` keeps them out of the listing; both compilers print the same | `sh/test_ycc.sh`, `sh/test_port.sh` |
+| 10-errors | Warnings | `ycc build`: a package warns when it compiles, a bin on every build; `-w` | `sh/test_pkg.sh` |
+| 10-errors | Warnings | The compiler's own source and std's files draw none | `sh/test_fixpoint.sh` |
 | 10-errors | Run time | Division, heap/fixed bounds, unwrap and slice-assignment traps | `native/t09_divzero.y`, `native/t13_arroob.y`, `native/t18_unwrapnone.y`, `native/t52_slice_mismatch.y`, `native/t79_fixed_array_bounds.y`, `native/t80_slice_bounds.y` |
 | 10-errors | Run time | Negative shift count trap | `native/t141_shift_negative.y` |
 | 10-errors | Run time | Missing dynamic record field trap | none: record fields are statically shape-checked before code generation |
-| 10-errors | Run time | Match with no matching arm | none: non-exhaustive matches are rejected during static checking |
+| 10-errors | Run time | Match with no matching arm | `native/t72_match_fail.y` |
+| 10-errors | Run time | A value of unknown type without the fields of the record type or union declared where it goes | `native/t146_record_cast.y`, `native/t148_union_cast.y` |
 | 10-errors | Run time | Out-of-memory and unbounded non-tail recursion | none: exhausting memory or the stack guard is unsafe and nondeterministic |
 | 10-errors | Exit status | Falling off, explicit exit and trapped programs' statuses | `native/t09_divzero.y`, `native/t13_arroob.y`, `native/t38_exec.y`, `native/t80_slice_bounds.y` |
 | 10-errors | Reproducibility | Deterministic cross-compiler binaries and self-compiler fixpoint | `sh/test_port.sh`, `sh/test_fixpoint.sh` |

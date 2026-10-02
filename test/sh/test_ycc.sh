@@ -79,6 +79,48 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Warnings (lint.y): on stderr, an import's as its path from the main
+# file's directory, the main file's own bare; the build goes on. -w drops
+# them without changing a byte, and -S keeps them out of the listing. The
+# self-hosted compiler and the C copy print the same.
+WARN_DIR=$(mktemp -d /tmp/ycc_warn.XXXXXX)
+mkdir "$WARN_DIR/sub"
+printf 'def f(x: long) -> long {\n    let u = 1;\n    x\n};\nexport { f };\n' > "$WARN_DIR/sub/lib.y"
+printf 'import lib from "./sub/lib.y";\ndef g() -> long {\n    let v = 2;\n    lib.f(3)\n};\nprint(g());\n' > "$WARN_DIR/main.y"
+want_warn="sub/lib.y:2:5: warning: unused variable 'u'
+3:5: warning: unused variable 'v'"
+for compiler in "$YCC_BIN" "$CYCC"; do
+    tag="${compiler##*/}"
+    rm -f "$WARN_DIR/a.out" "$WARN_DIR/w.out"
+    out=$(cd "$WARN_DIR" && timeout $(( 120 * YTIMEOUT_SCALE )) "$compiler" -o a.out main.y </dev/null 2>"$WARN_DIR/err")
+    ec=$?
+    got=$(cat "$WARN_DIR/err")
+    run=$(run_bin 10 "$WARN_DIR/a.out" </dev/null 2>&1)
+    if [ $ec -eq 0 ] && [ -z "$out" ] && [ "$got" = "$want_warn" ] && [ "$run" = 3 ]; then
+        pass "warnings on stderr, the build goes on ($tag)"
+    else
+        fail "warnings on stderr, the build goes on ($tag)" \
+            "exit=$ec, stdout '$out', stderr '$(echo "$got" | tr '\n' '|')', run '$run'"
+    fi
+    out=$(cd "$WARN_DIR" && timeout $(( 120 * YTIMEOUT_SCALE )) "$compiler" -w -o w.out main.y </dev/null 2>&1)
+    ec=$?
+    if [ $ec -eq 0 ] && [ -z "$out" ] && cmp -s "$WARN_DIR/a.out" "$WARN_DIR/w.out"; then
+        pass "-w: no warnings, the same bytes ($tag)"
+    else
+        fail "-w: no warnings, the same bytes ($tag)" "exit=$ec, output '$(echo "$out" | tr '\n' '|')'"
+    fi
+    out=$(cd "$WARN_DIR" && timeout $(( 120 * YTIMEOUT_SCALE )) "$compiler" -S main.y </dev/null 2>"$WARN_DIR/err")
+    ec=$?
+    got=$(cat "$WARN_DIR/err")
+    if [ $ec -eq 0 ] && [ -n "$out" ] && ! grep -q 'warning' <<< "$out" && [ "$got" = "$want_warn" ]; then
+        pass "-S: the listing on stdout, warnings on stderr ($tag)"
+    else
+        fail "-S: the listing on stdout, warnings on stderr ($tag)" \
+            "exit=$ec, stderr '$(echo "$got" | tr '\n' '|')'"
+    fi
+done
+rm -rf "$WARN_DIR"
+
 # Driver failures: each diagnostic must be identical in the self-hosted
 # compiler and its C copy, and each compiler must exit with status 1.
 expect_cli_error() {

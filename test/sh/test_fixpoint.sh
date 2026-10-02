@@ -2,7 +2,8 @@
 # Self-hosting fixpoint check: ycc compiling its own source must reproduce
 # ycc byte-for-byte, and the binary it produces must itself be a working
 # compiler (a compiler that miscompiles itself can still be bit-stable, so
-# generation 3 is checked too).
+# generation 3 is checked too). The compiler's source and std's files must
+# also compile without a single warning (lint.y).
 #
 # `make ycc` runs a cmp as part of the bootstrap; this suite proves the same
 # property from an already-built ./ycc, so `./test/sh/run_all.sh fixpoint`
@@ -47,7 +48,7 @@ fi
 
 GEN2=$(mktemp /tmp/ycc_gen2.XXXXXX)
 GEN3=$(mktemp /tmp/ycc_gen3.XXXXXX)
-trap 'rm -f "$GEN2" "$GEN3" "$GEN2.pack" "$GEN2.packed" /tmp/yfp_probe.y /tmp/yfp_probe_bin' EXIT
+trap 'rm -f "$GEN2" "$GEN3" "$GEN2.pack" "$GEN2.packed" /tmp/yfp_probe.y /tmp/yfp_probe_bin /tmp/yfp_std.y /tmp/yfp_std_bin /tmp/yfp_std_err' EXIT
 
 check() {
     if [ "$2" = "ok" ]; then
@@ -65,6 +66,29 @@ if timeout 600 "$YCC_BIN" -o "$GEN2" "$SRC" </dev/null >/tmp/yfp_err 2>&1; then
     check "ycc compiles its own source" ok
 else
     check "ycc compiles its own source" bad "$(head -c 200 /tmp/yfp_err)"
+fi
+
+# The compiler's source is lint-clean (lint.y): compiling it printed
+# nothing, not one warning. So are std's files, each compiled as a
+# program and the importable ones imported (a std unit linked into a
+# program is never linted, so this is where its warnings would show).
+if [ -s "$GEN2" ] && [ ! -s /tmp/yfp_err ]; then
+    check "ycc's own source compiles without a warning" ok
+else
+    check "ycc's own source compiles without a warning" bad "$(head -c 300 /tmp/yfp_err)"
+fi
+printf 'import fs;\nimport net;\nimport struct;\nputs("ok\\n");\n' > /tmp/yfp_std.y
+std_bad=""
+for f in /tmp/yfp_std.y "$ROOT"/src/y/std/*.y; do
+    if ! timeout 120 "$YCC_BIN" -o /tmp/yfp_std_bin "$f" </dev/null >/tmp/yfp_std_err 2>&1 \
+       || [ -s /tmp/yfp_std_err ]; then
+        std_bad="$std_bad $(basename "$f"): $(head -c 200 /tmp/yfp_std_err)"
+    fi
+done
+if [ -z "$std_bad" ]; then
+    check "std's files compile without a warning (and import fs, net, struct)" ok
+else
+    check "std's files compile without a warning (and import fs, net, struct)" bad "$std_bad"
 fi
 
 # The fixpoint itself: same bytes. ./ycc carries its std pack (the

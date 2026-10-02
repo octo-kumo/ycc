@@ -1,3 +1,4 @@
+import fs;
 print("before write");
-write_file("/tmp/test_write.txt", "hello world");
+fs.write_file("/tmp/test_write.txt", "hello world");
 print("after write");

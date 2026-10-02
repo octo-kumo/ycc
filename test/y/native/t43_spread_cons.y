@@ -7,7 +7,7 @@ let base = { x: 1, y: 2 };
 print({ a: 0, ...base });
 print({ ...base, ...{ y: 9, z: 3 } });
 print({ ...base, y: 100 });
-print({ x: 7, ...base, x: 8 });
+print({ x: 7, ...base, x: 8 }); // expect-warning: duplicate field 'x' in a record literal; the last one wins
 let copy = { ...base };
 print(copy.x + copy.y);
 

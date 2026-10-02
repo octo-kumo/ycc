@@ -19,6 +19,22 @@ import enc from "./enc64.y";
 import elf from "./elf.y";
 import dwarf from "./dwarf.y";
 
+// A per-phase row of `ycc --time`, and what asm_assemble returns.
+type Timing = { name: str, us: long, heap: long };
+type AsmOut = { ok: bool, bytes: [byte], error: str, times: [Timing] };
+// A parsed number, and parse_operand's result (an Operand: enc64.y).
+type AsmNum = { ok: bool, v: long };
+type OpRes = { ok: bool, op: Operand, error: str };
+// A label: its section (0 .text, 1 .rodata, 2 .bss) and offset there.
+type AsmLabel = { name: str, sec: long, off: long };
+// Pass 1: a line's bytes, where they go and the fixups pass 2 patches
+// in; what a content line yields; the state threaded from line to line
+// (asm_assemble_line). Pass 2: an item's patched bytes.
+type AsmItem = { sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [Fixup] };
+type AsmContent = { err: str, sec: long, offs: [long], item: AsmItem };
+type AsmSt = { sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str };
+type AsmBytes = { bytes: [byte], err: str };
+
 // NOTE: the master note for every "nested ifs, not `&&`/`||`" comment in
 // this file (and its C twin). `&&` and `||` are short-circuiting and fully
 // legal: the def below uses one, and types.y's typeof_logic accepts ANY
@@ -41,7 +57,7 @@ def is_alpha_ch(c: str) -> bool {
 };
 
 // parse a decimal integer (optional leading -). Returns {ok, v}.
-def parse_num(s: str) -> {ok: bool, v: long} {
+def parse_num(s: str) -> AsmNum {
     let neg = false;
     let i = 0;
     if (s[0:1] == "-") {
@@ -55,7 +71,7 @@ def parse_num(s: str) -> {ok: bool, v: long} {
     }
 };
 
-def parse_num_go(s: str, i: long, neg: bool) -> {ok: bool, v: long} {
+def parse_num_go(s: str, i: long, neg: bool) -> AsmNum {
     let v = 0;
     let ok = true;
     while (i < len(s)) {
@@ -102,7 +118,7 @@ def split_ops(s: str) -> [str] {
     out
 };
 
-def parse_operand(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand(t: str) -> OpRes {
     // NOTE: dispatch by SHAPE into dedicated callees (see parser.y
     // parse_type_tail note): each callee builds ONE op shape, so branch
     // gates never compare disjoint literals ({ok:false,op:{}} vs reg/lbl).
@@ -113,11 +129,11 @@ def parse_operand(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: lon
     }
 };
 
-def parse_operand_empty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand_empty(t: str) -> OpRes {
     { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "empty operand" }
 };
 
-def parse_operand_nonempty(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand_nonempty(t: str) -> OpRes {
     // `*%reg` — register-indirect call/jump target (closure code pointers).
     if (t[0:1] == "*") {
         parse_operand_ind(t)
@@ -128,7 +144,7 @@ def parse_operand_nonempty(t: str) -> {ok: bool, op: {k: str, n: long, size: lon
     }
 };
 
-def parse_operand_ind(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand_ind(t: str) -> OpRes {
     // (split: *-gate above narrows; the rest must be a 64-bit register.)
     let r = t[1:];
     let n = enc.reg_num(r);
@@ -139,7 +155,7 @@ def parse_operand_ind(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v:
     }
 };
 
-def parse_operand_reg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand_reg(t: str) -> OpRes {
     // (split: %-gate above narrows; this body sees registers only.)
     let n = enc.reg_num(t);
     if (n < 0) {
@@ -149,7 +165,7 @@ def parse_operand_reg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v:
     }
 };
 
-def parse_operand_noreg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand_noreg(t: str) -> OpRes {
     if (t[0:1] == "$") {
         parse_operand_imm(t)
     } else {
@@ -157,12 +173,12 @@ def parse_operand_noreg(t: str) -> {ok: bool, op: {k: str, n: long, size: long, 
     }
 };
 
-def parse_operand_imm(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand_imm(t: str) -> OpRes {
     // (split: $-gate above narrows; strips the $ and parses the immediate.)
     parse_imm(t[1:])
 };
 
-def parse_operand_memlbl(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_operand_memlbl(t: str) -> OpRes {
     if (index_of(t, "(") >= 0) {
         parse_mem(t)
     } else {
@@ -170,7 +186,7 @@ def parse_operand_memlbl(t: str) -> {ok: bool, op: {k: str, n: long, size: long,
     }
 };
 
-def parse_imm(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_imm(s: str) -> OpRes {
     // $a-b label difference, else decimal number
     let dash = index_of(s[1:], "-");
     if (len(s) > 0) {
@@ -180,7 +196,7 @@ def parse_imm(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a
     }
 };
 
-def parse_imm_alpha(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_imm_alpha(s: str, dash: long) -> OpRes {
     // (split: len>0 narrows; this body checks the alpha gate only.)
     if (is_alpha_ch(s[0:1])) {
         parse_imm_diff(s, dash)
@@ -189,7 +205,7 @@ def parse_imm_alpha(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size
     }
 };
 
-def parse_imm_diff(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_imm_diff(s: str, dash: long) -> OpRes {
     // (split: alpha-gate above narrows; diff-shape built ONLY here.)
     if (dash >= 0) {
         let a = s[0:dash + 1];
@@ -200,7 +216,7 @@ def parse_imm_diff(s: str, dash: long) -> {ok: bool, op: {k: str, n: long, size:
     }
 };
 
-def parse_imm_num(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_imm_num(s: str) -> OpRes {
     // (split from parse_imm: the label-diff gate above narrows; this body
     // sees plain decimal immediates only.)
     let r = parse_num(s);
@@ -211,7 +227,7 @@ def parse_imm_num(s: str) -> {ok: bool, op: {k: str, n: long, size: long, v: lon
     }
 };
 
-def parse_mem(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_mem(t: str) -> OpRes {
     // dispatch by SHAPE (see parse_operand note): `8(%rbp)` has a head,
     // `(%rbx,%rcx,1)` does not.
     let open = index_of(t, "(");
@@ -225,7 +241,7 @@ def parse_mem(t: str) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a
     }
 };
 
-def parse_mem_head(t: str, head: str, parts: [str]) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_mem_head(t: str, head: str, parts: [str]) -> OpRes {
     // (split: non-empty head narrows; rip-label vs numeric displacement.)
     if (is_num_text(head)) {
         parse_mem_disp(t, head, parts)
@@ -234,7 +250,7 @@ def parse_mem_head(t: str, head: str, parts: [str]) -> {ok: bool, op: {k: str, n
     }
 };
 
-def parse_mem_rip(t: str, head: str, parts: [str]) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_mem_rip(t: str, head: str, parts: [str]) -> OpRes {
     // label(%rip) — mem-shape built ONLY here.
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     if (len(parts) != 1) {
@@ -246,13 +262,13 @@ def parse_mem_rip(t: str, head: str, parts: [str]) -> {ok: bool, op: {k: str, n:
     }
 };
 
-def parse_mem_disp(t: str, head: str, parts: [str]) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_mem_disp(t: str, head: str, parts: [str]) -> OpRes {
     // numeric displacement head: parse_num cannot fail (is_num_text held).
     let r = parse_num(head);
     parse_mem_regs(t, parts, r.v)
 };
 
-def parse_mem_regs(t: str, parts: [str], disp: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def parse_mem_regs(t: str, parts: [str], disp: long) -> OpRes {
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     if (len(parts) < 1) {
         { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad memory '" + t + "'" }
@@ -268,7 +284,7 @@ def parse_mem_regs(t: str, parts: [str], disp: long) -> {ok: bool, op: {k: str, 
     }
 };
 
-def mem_rest(t: str, parts: [str], disp: long, bn: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def mem_rest(t: str, parts: [str], disp: long, bn: long) -> OpRes {
     if (len(parts) == 1) {
         { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: -1, scale: 1, disp: disp, rip: false, lbl: "" }, error: "" }
     } else {
@@ -283,7 +299,7 @@ def mem_rest(t: str, parts: [str], disp: long, bn: long) -> {ok: bool, op: {k: s
     }
 };
 
-def mem_scale(t: str, parts: [str], disp: long, bn: long, xn: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def mem_scale(t: str, parts: [str], disp: long, bn: long, xn: long) -> OpRes {
     // NOTE: nested ifs, not `||`/`&&` (see is_digit_ch note).
     let scale = 1;
     if (len(parts) == 3) {
@@ -293,7 +309,7 @@ def mem_scale(t: str, parts: [str], disp: long, bn: long, xn: long) -> {ok: bool
     }
 };
 
-def mem_scaleThree(t: str, parts: [str], disp: long, bn: long, xn: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def mem_scaleThree(t: str, parts: [str], disp: long, bn: long, xn: long) -> OpRes {
     // (split: 3-part gate above narrows; scale-shape built ONLY here.)
     let r = parse_num(parts[2]);
     if (!(r.ok)) {
@@ -303,7 +319,7 @@ def mem_scaleThree(t: str, parts: [str], disp: long, bn: long, xn: long) -> {ok:
     }
 };
 
-def mem_scaleVal(t: str, v: long, disp: long, bn: long, xn: long) -> {ok: bool, op: {k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str}, error: str} {
+def mem_scaleVal(t: str, v: long, disp: long, bn: long, xn: long) -> OpRes {
     // (split: numeric scale narrows; mem-shape built ONLY here.)
     if (v == 1) {
         { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 1, disp: disp, rip: false, lbl: "" }, error: "" }
@@ -427,7 +443,7 @@ def hash_str(s: str) -> long {
     h
 };
 
-def labmap_new(cap: long) -> [{ name: str, sec: long, off: long }] {
+def labmap_new(cap: long) -> [AsmLabel] {
     let m = [];
     let i = 0;
     while (i < cap) {
@@ -437,7 +453,7 @@ def labmap_new(cap: long) -> [{ name: str, sec: long, off: long }] {
     m
 };
 
-def labmap_put(m: [{ name: str, sec: long, off: long }], name: str, sec: long, off: long) -> { map: [{ name: str, sec: long, off: long }], dup: bool } {
+def labmap_put(m: [AsmLabel], name: str, sec: long, off: long) -> { map: [AsmLabel], dup: bool } {
     let cap = len(m);
     let i = hash_str(name) % cap;
     let dup = false;
@@ -464,7 +480,7 @@ def labmap_put(m: [{ name: str, sec: long, off: long }], name: str, sec: long, o
     { map: m, dup: dup }
 };
 
-def labmap_get(m: [{ name: str, sec: long, off: long }], name: str) -> { sec: long, off: long } {
+def labmap_get(m: [AsmLabel], name: str) -> { sec: long, off: long } {
     let cap = len(m);
     let i = hash_str(name) % cap;
     let found_sec = -1;
@@ -495,7 +511,7 @@ def labmap_get(m: [{ name: str, sec: long, off: long }], name: str) -> { sec: lo
 // Build the index from pass-1 labels; reports the first duplicate name
 // ("" when clean). Replaces the old O(L^2) definition-site scans — our
 // emitter only feeds unique labels, and no test pins dup positions.
-def labmap_build(labels: [{ name: str, sec: long, off: long }]) -> { map: [{ name: str, sec: long, off: long }], dup: str } {
+def labmap_build(labels: [AsmLabel]) -> { map: [AsmLabel], dup: str } {
     let cap = len(labels) * 2 + 16;
     let m = labmap_new(cap);
     let dup = "";
@@ -510,7 +526,7 @@ def labmap_build(labels: [{ name: str, sec: long, off: long }]) -> { map: [{ nam
     { map: m, dup: dup }
 };
 
-def label_addr(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, name: str) -> {ok: bool, addr: long} {
+def label_addr(lmap: [AsmLabel], code_len: long, pad: long, name: str) -> {ok: bool, addr: long} {
     let e = labmap_get(lmap, name);
     if (e.sec < 0) {
         { ok: false, addr: 0 }
@@ -523,7 +539,7 @@ def label_addr(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: l
 
 // ── pass 1: parse lines into items ─────────────────────────────────────
 
-def asm_assemble(text: str, debug: bool) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
+def asm_assemble(text: str, debug: bool) -> AsmOut {
     let t0 = clock_us();
     let h0 = heap_used();
     let lines = split(text, "\n");
@@ -566,7 +582,7 @@ def asm_assemble(text: str, debug: bool) -> {ok: bool, bytes: [byte], error: str
         let lk = asm_link(items, labels, debug);
         let t3 = clock_us();
         let h3 = heap_used();
-        let tl: [{ name: str, us: long, heap: long }] =
+        let tl: [Timing] =
             [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
               { name: "a:encode", us: t2 - t1, heap: h2 - h1 },
               { name: "a:link", us: t3 - t2, heap: h3 - h2 } ];
@@ -585,7 +601,7 @@ def asm_assemble(text: str, debug: bool) -> {ok: bool, bytes: [byte], error: str
 // record {sec,offs,items,labels,err} threaded through per-class callees.
 // Each callee reads ONLY its inputs and returns the full STATE — single key
 // set everywhere, no merged-shape rebinds.
-def asm_assemble_line(lines: [str], li: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_assemble_line(lines: [str], li: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     let line = trim(lines[li]);
     let lno = li + 1;
     if (line == "") {
@@ -601,15 +617,15 @@ def asm_assemble_line(lines: [str], li: long, sec: long, offs: [long], items: [{
     }
 };
 
-def asm_state(sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_state(sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     { sec: sec, offs: offs, items: items, labels: labels, err: err }
 };
 
-def asm_state_err(sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], lno: long, msg: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_state_err(sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], lno: long, msg: str) -> AsmSt {
     { sec: sec, offs: offs, items: items, labels: labels, err: "L" + tostring(lno) + ": " + msg }
 };
 
-def asm_labdef(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_labdef(line: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     // `label:` definition line.
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     let nm = trim(line[0:len(line) - 1]);
@@ -622,14 +638,14 @@ def asm_labdef(line: str, lno: long, sec: long, offs: [long], items: [{sec: long
     }
 };
 
-def asm_labdef_go(nm: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_labdef_go(nm: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     // NOTE: no definition-site duplicate scan (was O(L^2)): duplicates are
     // detected once at index build (labmap_build reports the name).
     labels += { name: nm, sec: sec, off: offs[sec] };
     asm_state(sec, offs, items, labels, err)
 };
 
-def asm_dirline(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_dirline(line: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     let r = asm_directive(line, lno, sec, offs);
     if (r.err != "") {
         asm_state(r.sec, r.offs, items, labels, r.err)
@@ -639,7 +655,7 @@ def asm_dirline(line: str, lno: long, sec: long, offs: [long], items: [{sec: lon
     }
 };
 
-def asm_maybe_labline(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_maybe_labline(line: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     // maybe `label: rest` (rodata emits `ystr_N: .string ...`); otherwise a
     // plain instruction. NOTE: misnomer fixed: the else-arm assembles an
     // INSTRUCTION (asm_insnline), not a directive.
@@ -651,7 +667,7 @@ def asm_maybe_labline(line: str, lno: long, sec: long, offs: [long], items: [{se
     }
 };
 
-def asm_insnline(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_insnline(line: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     let r = asm_content(line, lno, sec, offs);
     if (r.err != "") {
         asm_state(r.sec, r.offs, items, labels, r.err)
@@ -661,7 +677,7 @@ def asm_insnline(line: str, lno: long, sec: long, offs: [long], items: [{sec: lo
     }
 };
 
-def asm_labline(line: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str, ci: long) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_labline(line: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str, ci: long) -> AsmSt {
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     let nm = trim(line[0:ci]);
     let rest = trim(line[ci + 1:]);
@@ -676,12 +692,12 @@ def asm_labline(line: str, lno: long, sec: long, offs: [long], items: [{sec: lon
     }
 };
 
-def asm_labline_go(nm: str, rest: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_labline_go(nm: str, rest: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     // NOTE: no definition-site duplicate scan (see asm_labdef_go note).
     asm_labline_content(nm, rest, lno, sec, offs, items, labels, err)
 };
 
-def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str) -> {sec: long, offs: [long], items: [{sec: long}], labels: [{name: str, sec: long, off: long}], err: str} {
+def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     // The item builder does `offs[sec] = offs[sec] + len` IN PLACE, and
     // arrays are REFERENCE values in both toolchains (yv.c's ya_push/ya_set
     // mutate the shared array; see AGENTS.md), so offs[sec] read AFTER
@@ -699,7 +715,7 @@ def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], 
     }
 };
 
-def asm_content(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_content(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     if (line[0:1] == ".") {
         asm_directive(line, lno, sec, offs)
     } else {
@@ -707,7 +723,7 @@ def asm_content(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec
     }
 };
 
-def asm_strdata(line: str, lno: long, sec: long, offs: [long], rest: str, nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata(line: str, lno: long, sec: long, offs: [long], rest: str, nul: bool) -> AsmContent {
     // .string/.ascii quoted payload (split from asm_directive: dir-gate above
     // narrows; data-item shape built ONLY here).
     // NOTE: single gate on a BOOL (str narrowing is exact — see
@@ -727,12 +743,12 @@ def asm_strdata_bad(rest: str) -> bool {
     else { false }
 };
 
-def asm_strdata_err(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_err(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     // (split: error shape `{err,sec,offs,item:{}}` built ONLY here.)
     { err: "L" + tostring(lno) + ": bad string literal", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
 };
 
-def asm_strdata_go(line: str, lno: long, sec: long, offs: [long], payload: str, nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_go(line: str, lno: long, sec: long, offs: [long], payload: str, nul: bool) -> AsmContent {
     let d = decode_str(payload);
     if (!(d.ok)) {
         { err: "L" + tostring(lno) + ": " + d.error, sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
@@ -741,7 +757,7 @@ def asm_strdata_go(line: str, lno: long, sec: long, offs: [long], payload: str, 
     }
 };
 
-def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> AsmContent {
     // NOTE: `0;` tails (see parser.y parse_binary note).
     let bb = bytes;
     if (nul) {
@@ -751,13 +767,13 @@ def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> {err:
     asm_strdata_item(sec, offs, bb)
 };
 
-def asm_strdata_item(sec: long, offs: [long], bb: [byte]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_strdata_item(sec: long, offs: [long], bb: [byte]) -> AsmContent {
     let item = { sec: sec, off: offs[sec], len: len(bb), kind: "data", bytes: bb, fix: [] };
     offs[sec] = offs[sec] + len(bb);
     { err: "", sec: sec, offs: offs, item: item }
 };
 
-def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     let sp = index_of(line, " ");
     let dir = line;
     let rest = "";
@@ -798,7 +814,7 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> {err: str, s
 // .file one outside every section (sec -1: never laid out) with N in
 // `off` and the path in its fix's `lbl`. asm_link hands both to dwarf.y
 // (debug_lines).
-def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     let sp = index_of(rest, " ");
     let fs = rest;
     let ls = "";
@@ -818,7 +834,7 @@ def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: lo
     }
 };
 
-def asm_file(lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_file(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     let sp = index_of(rest, " ");
     let ns = rest;
     let q = "";
@@ -842,7 +858,7 @@ def asm_file(lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: l
 
 // .section payload (split from asm_directive: dir-gate above narrows).
 // NOTE: single bool gate (see asm_strdata note): marker-vs-error never mix.
-def asm_section(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_section(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (asm_section_bad(rest)) {
         asm_section_err(line, lno, sec, offs, rest)
     } else {
@@ -857,12 +873,12 @@ def asm_section_bad(rest: str) -> bool {
     else { true }
 };
 
-def asm_section_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_section_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: error shape built ONLY here.)
     { err: "L" + tostring(lno) + ": unsupported section '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
 };
 
-def asm_section_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_section_go(sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: marker shape `{err,sec,offs,item:{sec}}` built ONLY here.)
     // NOTE: both arms share the key set — teq holds.
     if (rest == ".rodata") {
@@ -875,7 +891,7 @@ def asm_section_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, 
 };
 
 // .quad payload: single non-negative long, 8 bytes little-endian (string headers).
-def asm_quad(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_quad(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     // NOTE: single bool gate (see asm_strdata note).
     if (asm_quad_bad(rest)) {
         asm_quad_err(line, lno, sec, offs, rest)
@@ -894,7 +910,7 @@ def asm_quad_bad(rest: str) -> bool {
     else { false }
 };
 
-def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: error shape built ONLY here — one message per cause.)
     // NOTE: nested ifs (see is_digit_ch note); both arms share the key set.
     if (!is_num_text(rest)) {
@@ -904,7 +920,7 @@ def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> {e
     }
 };
 
-def asm_quad_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_quad_go(sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: data-item shape built ONLY here.)
     let bytes = enc.le64(tonum(rest));
     let item = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [] };
@@ -913,7 +929,7 @@ def asm_quad_go(sec: long, offs: [long], rest: str) -> {err: str, sec: long, off
 };
 
 // .zero N: N zero bytes. In .bss they only reserve space (no file bytes).
-def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (asm_quad_bad(rest)) {
         { err: "L" + tostring(lno) + ": bad .zero size '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else {
@@ -933,7 +949,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> {err: 
     }
 };
 
-def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     let sp = index_of(line, " ");
     let tab = index_of(line, "\t");
     let cut = sp;
@@ -980,7 +996,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> {err: str, sec: l
     }
 };
 
-def asm_encode(mn: str, ops, lno: long, sec: long, offs: [long]) -> {err: str, sec: long, offs: [long], item: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}} {
+def asm_encode(mn: str, ops: [Operand], lno: long, sec: long, offs: [long]) -> AsmContent {
     let r = enc.enc_insn(mn, ops);
     if (r.err != "") {
         { err: "L" + tostring(lno) + ": " + r.err + " in '" + mn + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
@@ -994,7 +1010,7 @@ def asm_encode(mn: str, ops, lno: long, sec: long, offs: [long]) -> {err: str, s
 
 // ── pass 2: layout, fixups, ELF ────────────────────────────────────────
 
-def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], labels: [{name: str, sec: long, off: long}], debug: bool) -> {ok: bool, bytes: [byte], error: str, times: [{ name: str, us: long, heap: long }]} {
+def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
     // section sizes
     let lt0 = clock_us();
     let lh0 = heap_used();
@@ -1016,7 +1032,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
     };
     // A .bss label resolves like a rodata one, past the padded rodata (see
     // elf_bss_from_ro), so the fixups below only know two sections.
-    let labs: [{name: str, sec: long, off: long}] = labels;
+    let labs: [AsmLabel] = labels;
     if (bss_len > 0) {
         let bshift = elf.elf_bss_from_ro(ro_len, bss_len);
         labs = [];
@@ -1076,8 +1092,8 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
         } else {
             let lt2 = clock_us();
             let lh2 = heap_used();
-            let syms: [{ name: str, sec: long, off: long, size: long }] = [];
-            let dsecs: [{ name: str, data: [byte] }] = [];
+            let syms: [ElfSym] = [];
+            let dsecs: [ElfSec] = [];
             if (debug) {
                 syms = debug_syms(labels, code_len, bss_len);
                 dsecs = debug_lines(items, code_len, elf.elf_code_off(bss_len));
@@ -1094,7 +1110,7 @@ def asm_link(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte],
     }
 };
 
-def patch_item(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long) -> {bytes: [byte], err: str} {
+def patch_item(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long, pad: long) -> AsmBytes {
     let bytes = it.bytes;
     let err = "";
     // NOTE: single gate (see asm_strdata note): insn-vs-other shapes
@@ -1106,7 +1122,7 @@ def patch_item(code: [byte], it: {sec: long, off: long, len: long, kind: str, by
     }
 };
 
-def patch_item_loop(code: [byte], it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, bytes: [byte], err: str) -> {bytes: [byte], err: str} {
+def patch_item_loop(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long, pad: long, bytes: [byte], err: str) -> AsmBytes {
     let base = len(code);
     let fxlist = it.fix;
     let f = 0;
@@ -1138,7 +1154,7 @@ def patch_item_loop(code: [byte], it: {sec: long, off: long, len: long, kind: st
     patch_item_finish(code, bytes, err)
 };
 
-def patch_item_kind2(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, at: long) -> {bytes: [byte], err: str} {
+def patch_item_kind2(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes: [byte], base: long, it: AsmItem, at: long) -> AsmBytes {
     // (split: non-rel32 kinds; `{bytes,err}` built ONLY here + callees.)
     if (fx.kind == "rip32") {
         patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at)
@@ -1147,7 +1163,7 @@ def patch_item_kind2(lmap: [{name: str, sec: long, off: long}], code_len: long, 
     }
 };
 
-def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}, at: long) -> {bytes: [byte], err: str} {
+def patch_item_rel(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes: [byte], base: long, it: AsmItem, at: long) -> AsmBytes {
     // rel32/rip32: target - address past the instruction.
     // NOTE: fx/it stay BARE holes (see types.y typeof_def note): single
     // reads unify.
@@ -1160,7 +1176,7 @@ def patch_item_rel(lmap: [{name: str, sec: long, off: long}], code_len: long, pa
     }
 };
 
-def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], base: long, it: {sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}) -> {bytes: [byte], err: str} {
+def patch_item_diff(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes: [byte], base: long, it: AsmItem) -> AsmBytes {
     // (split: diff-shape fixups only; `{bytes,err}` built ONLY here.)
     // NOTE: fx/it stay BARE holes (see types.y typeof_def note): single
     // reads unify.
@@ -1173,7 +1189,7 @@ def patch_item_diff(lmap: [{name: str, sec: long, off: long}], code_len: long, p
     }
 };
 
-def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, pad: long, fx: {off: long, kind: str, lbl: str, lbl2: str}, bytes: [byte], ta: long) -> {bytes: [byte], err: str} {
+def patch_item_diff2(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes: [byte], ta: long) -> AsmBytes {
     let tb = label_addr(lmap, code_len, pad, fx.lbl2);
     if (!tb.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl2 + "'" }
@@ -1182,7 +1198,7 @@ def patch_item_diff2(lmap: [{name: str, sec: long, off: long}], code_len: long, 
     }
 };
 
-def patch_item_finish(code: [byte], bytes: [byte], err: str) -> {bytes: [byte], err: str} {
+def patch_item_finish(code: [byte], bytes: [byte], err: str) -> AsmBytes {
     // In place: `code + bytes` built a fresh copy of the whole code buffer
     // per instruction (O(n^2) arena; ~30 GB on the self-compile).
     code += bytes;
@@ -1207,14 +1223,14 @@ def patch32(bytes: [byte], at: long, v: long) -> [byte] {
 // `y_heap` cells are data symbols. Each symbol is sized up to the next
 // one in its section (the last one to the section end), which is exactly
 // what perf and valgrind need to attribute an address.
-def debug_syms(labels: [{name: str, sec: long, off: long}], code_len: long, bss_len: long) -> [{ name: str, sec: long, off: long, size: long }] {
-    let out: [{ name: str, sec: long, off: long, size: long }] = [];
+def debug_syms(labels: [AsmLabel], code_len: long, bss_len: long) -> [ElfSym] {
+    let out: [ElfSym] = [];
     out = debug_syms_sec(out, labels, 0, code_len);
     out = debug_syms_sec(out, labels, 2, bss_len);
     out
 };
 
-def debug_syms_sec(out: [{ name: str, sec: long, off: long, size: long }], labels: [{name: str, sec: long, off: long}], sec: long, end: long) -> [{ name: str, sec: long, off: long, size: long }] {
+def debug_syms_sec(out: [ElfSym], labels: [AsmLabel], sec: long, end: long) -> [ElfSym] {
     let first = len(out);
     foreach (lb in labels) {
         if (lb.sec == sec) {
@@ -1293,7 +1309,7 @@ def after_uid(s: str, k: long) -> str {
 // sections. Rows are flat (offset, file, line) triples in text order; a
 // `.file N` fills slot N-1 of the table ("?" stands in for a number never
 // named). No row -- a text without markers -- means no sections at all.
-def debug_lines(items: [{sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}]}], code_len: long, code_off: long) -> [{ name: str, data: [byte] }] {
+def debug_lines(items: [AsmItem], code_len: long, code_off: long) -> [ElfSec] {
     let files: [str] = [];
     let rows: [long] = [];
     foreach (it in items) {
@@ -1312,7 +1328,7 @@ def debug_lines(items: [{sec: long, off: long, len: long, kind: str, bytes: [byt
         };
     };
     if (len(rows) == 0) {
-        let none_s: [{ name: str, data: [byte] }] = [];
+        let none_s: [ElfSec] = [];
         none_s
     } else {
         dwarf.dwarf_sections(files, rows, 4194304 + code_off, code_len, asm_cwd())
@@ -1338,7 +1354,7 @@ def asm_cwd() -> str {
 // RENDERING was removed: it cost O(n^2) string building (one malloc+copy
 // per byte) and nothing read it — it dominated -o time. The field itself
 // stays in the record shape (always "") so the shape does not change.
-def ycc_assemble(asm_text: str, debug: bool) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [{ name: str, us: long, heap: long }]} {
+def ycc_assemble(asm_text: str, debug: bool) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [Timing]} {
     let r = asm_assemble(asm_text, debug);
     if (!r.ok) {
         { ok: false, bytes: [], octal: "", error: r.error, times: r.times }

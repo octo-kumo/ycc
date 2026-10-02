@@ -16,6 +16,11 @@
 
 import elfenc from "./enc64.y";
 
+// A symbol for -g's .symtab (push_sym), and a section appended past the
+// loaded image (elf_debug; dwarf.y makes the .debug_* ones).
+type ElfSym = { name: str, sec: long, off: long, size: long };
+type ElfSec = { name: str, data: [byte] };
+
 // File offset of the code: EHDR plus one PHDR, or two with a .bss.
 def elf_code_off(bss_len: long) -> long {
     if (bss_len > 0) { 176 } else { 120 }
@@ -35,7 +40,7 @@ def elf_bss_from_ro(ro_len: long, bss_len: long) -> long {
     elf_ro_total(ro_len) + 4096 - elf_code_off(bss_len)
 };
 
-def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms: [{ name: str, sec: long, off: long, size: long }], dsecs: [{ name: str, data: [byte] }]) -> [byte] {
+def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec]) -> [byte] {
     let code_off = elf_code_off(bss_len);
     let base = 4194304;
     // Pad the code to a page so rodata starts page-aligned; pad rodata tail
@@ -135,7 +140,7 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
 // R+W PHDR's p_offset/p_filesz), at the page boundary past the image
 // (p_offset must share p_vaddr's page offset). The loader zeroes the rest
 // of that page, so memory holds the same zeros as without -g.
-def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: long, bss_len: long, syms: [{ name: str, sec: long, off: long, size: long }], dsecs: [{ name: str, data: [byte] }]) -> { bytes: [byte], shoff: long, shnum: long, shstrndx: long, bss_foff: long, bss_fsz: long } {
+def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec]) -> { bytes: [byte], shoff: long, shnum: long, shstrndx: long, bss_foff: long, bss_fsz: long } {
     if (len(syms) == 0) {
         let none_b: [byte] = [];
         { bytes: none_b, shoff: 0, shnum: 0, shstrndx: 0, bss_foff: 0, bss_fsz: 0 }
@@ -244,7 +249,7 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
 
 // One Elf64_Sym: name offset, info (bind << 4 | type), other, section
 // index, value (the address), size.
-def push_sym(out: [byte], name_off: long, sy: { name: str, sec: long, off: long, size: long }, bss_idx: long, text_addr: long, bss_addr: long, bind: long) -> [byte] {
+def push_sym(out: [byte], name_off: long, sy: ElfSym, bss_idx: long, text_addr: long, bss_addr: long, bind: long) -> [byte] {
     out = push_le32(out, name_off);
     if (sy.sec == 0) {
         out += elfenc.byte_of(bind * 16 + 2, 0);

@@ -6,20 +6,23 @@ The programs are deterministic CPU workloads sized to run in ~0.05–0.15 s
 each; the harness runs each measurement several times and takes the
 median.
 
-## The workflow for a change that can affect performance
+## A change that can affect performance
 
-1. **Propose** the change and say what you expect it to move.
-2. **Branch** (`git switch -c ...`) — never benchmark in place.
-3. **Build** both sides: the base is normally the last blessed compiler,
-   `refs/ycc.ref`; `make ynew` builds the branch's `src/y` as `./ynew`.
-   For another base, `make ycc` on it and save the binary.
-4. **Bench**: `make check` measures as part of checking the change (see
-   AGENTS.md, "Changing the compiler"); `make bench` alone runs
-   `bench/compare.sh` on copies of the two under `/tmp`.
-5. **Decide** from the score and the per-function tables, and say which in
-   the merge request. Revert or rework when the score regresses; a
-   deliberate trade (say, faster compile / bigger binary) belongs in the
-   commit message with the numbers.
+A change like this gets a thorough bench and profiling at the end, once
+it is done:
+
+- The base is normally the last blessed compiler, `refs/ycc.ref`.
+  `make ynew` builds the current `src/y` as `./ynew`. For another base,
+  run `make ycc` on it and save the binary.
+- `make check` measures as part of checking the change (see AGENTS.md,
+  "Changing the compiler"). `make bench` on its own runs
+  `bench/compare.sh` on copies of the two under `/tmp`, and
+  `make bench-ir` counts the compilers' instructions.
+- Explain what moved with the per-function tables (below), `perf` on a
+  `-g` build, or `ycc --time`. Rework a regression unless it is a
+  deliberate trade (say, a faster compile for a bigger binary).
+
+Put the numbers in the commit message.
 
 ```sh
 make check                             # verify, then compare + time vs refs/ycc.ref
@@ -151,8 +154,8 @@ The standard-library benchmarks are:
 
 - `std_struct.y` exercises `pack`, `unpack`, and fixed-width getters in a
   hot loop.
-- `std_io.y` writes and reads a 2 MiB file in 4 KiB chunks, checks the
-  byte checksum, and removes the file from the benchmark's working
-  directory.
+- `std_io.y` writes a 2 MiB file through `std/fs.y` in 64 KiB writes,
+  reads it back with raw `read(2)` calls into a fixed buffer, checks the
+  checksum, and removes the file from the benchmark's working directory.
 
 They are picked up automatically by both scripts — no registration.

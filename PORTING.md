@@ -34,6 +34,7 @@ requires byte-identical binaries).
 | `src/y/parser.y`        | `src/c/parser.c`      | AST as Y records                  |
 | `src/y/rename.y`        | `src/c/rename.c`      | uniquifying pass                  |
 | `src/y/types.y`         | `src/c/types.c`       | the checker                       |
+| `src/y/lint.y`          | `src/c/lint.c`        | warnings                          |
 | `src/y/native.y`        | `src/c/native.c`      | the emitter                       |
 | `src/y/arch_x64.y`      | `src/c/arch_x64.c`    | asm strings + helpers             |
 | `src/y/enc64.y`         | `src/c/enc64.c`       | base64/enc helpers                |
@@ -44,7 +45,7 @@ requires byte-identical binaries).
 | `src/y/pkg.y`           | `src/c/pkg.c`         | `ycc build`/`vendor`: y.toml, graph, git, y.lock, hashing; `exec` is fork + execve(`/bin/sh`, envp NULL) like std/exec.y, `syscall` openat/mkdir the libc calls |
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
 | `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack): their sources are native.y's `embed`, the C copy's `Y_EMBED` (rule 10) |
-| `src/y/std/io.y`, `net.y`, `struct.y`   | (stay Y)  | optional modules resolved **from disk** by `std_resolve` when a program imports them; not embedded |
+| `src/y/std/fs.y`, `net.y`, `struct.y`   | (stay Y)  | optional modules resolved **from disk** by `std_resolve` when a program imports them; not embedded |
 
 ## Translation rules
 
@@ -58,7 +59,10 @@ requires byte-identical binaries).
 2. **Type map**: `long` → `long`, `float` → `double`, `bool` → `int`,
    `str` → `Yv *`, every record/array/shape-hole/option type → `Yv *`.
    Boxing at the boundaries: `yv_long(x)` / `yv_l(v)`, `yv_bool(x)` /
-   `yv_b(v)`, `yv_float(x)` / `yv_f(v)`.
+   `yv_b(v)`, `yv_float(x)` / `yv_f(v)`. A `type` alias is `Yv *` too,
+   spelled `typedef Yv *Name;` in the `.c` file where it helps (`pkg.c`,
+   `lint.c`), never in a header; a Y `import` kept only for an alias
+   needs no `#include` (a comment at the top says so).
 
 3. **Records** are insertion-ordered key/value records (`yr*`), and this
    is what a record *literal in the compiler's own source* ports to:
@@ -68,8 +72,9 @@ requires byte-identical binaries).
    `yv_is_none(x)`. The Y code rebuilds records instead of mutating
    fields; do the same. Note this is about records the *compiler* builds.
    A record *emitted into the user's program* is not built with `yr`: the
-   emitter allocates, stores a shape-table pointer at `+0`, and writes the
-   fields at `+8+8*i` (`gen_reclit` in `native.y`).
+   emitter allocates, stores its type descriptor's address at `+0`, and
+   writes the fields at `+8+8*i`, slot `i` in field-name order
+   (`gen_reclit` in `native.y`, "records at run time").
 
 4. **Arrays**:
    `[a, b]` → `yav(2, a, b)`, `[]` → `yav(0)`, `[v; n]` → `ya_rep(v, n)`,
@@ -102,8 +107,10 @@ requires byte-identical binaries).
 8. **Smaller mappings**: `next_uid(st)` hands out a unique id for emitter
    labels and table names by bumping the emit state's counter; it ports
    like any other function (`next_uid` in `native.c`), so the produced
-   names stay identical. `write_bytes(path, bytes, mode)` takes three
-   arguments.
+   names stay identical. The compiler's file calls go through std/fs.y
+   (`import fs;`, `fs.read_file(path)`, `fs.write_bytes(path, bytes,
+   mode)`); the C copy calls yv.c's `read_file`/`write_bytes` (three
+   arguments) of the same behavior instead of porting the module.
 
    `foreach (x in xs) { ... }` ports as an index loop over the array,
    with the body unchanged: `long i = 0; while (i < yv_len(xs)) { Yv *x

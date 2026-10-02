@@ -100,7 +100,8 @@ compile_copy() {
 
 # run_parity <name> <file> [compile_timeout] [bin_timeout]
 # Compiles <file> with BOTH compilers and requires:
-#   - byte-identical binaries (the port gate),
+#   - byte-identical binaries (the port gate) and the same warnings (what a
+#     compile that succeeds prints: lint.y),
 #   - identical program output and exit code when run (fed /dev/null).
 # Returns 0 on agreement, 1 otherwise.
 # RUN_REF_OUT/RUN_REF_EC carry the reference side, RUN_CPY_OUT/RUN_CPY_EC
@@ -145,6 +146,11 @@ run_parity() {
             ok=0
             differ=1
         fi
+        local wdiffer=0
+        if [ "$RUN_RERR" != "$RUN_CERR" ]; then
+            ok=0
+            wdiffer=1
+        fi
         run_bin "$bin_to" "$binr" </dev/null >"$outr" 2>&1
         RUN_REF_EC=$?
         run_bin "$bin_to" "$binc" </dev/null >"$outc" 2>&1
@@ -165,6 +171,10 @@ run_parity() {
             # "identical output" and hides the one thing that broke.
             RUN_REF_OUT="(binaries differ between compilers)"$'\n'"$RUN_REF_OUT"
             RUN_CPY_OUT="(binaries differ between compilers)"$'\n'"$RUN_CPY_OUT"
+        fi
+        if [ $wdiffer -eq 1 ]; then
+            RUN_REF_OUT="(warnings differ between compilers)"$'\n'"$RUN_RERR"$'\n'"$RUN_REF_OUT"
+            RUN_CPY_OUT="(warnings differ between compilers)"$'\n'"$RUN_CERR"$'\n'"$RUN_CPY_OUT"
         fi
     else
         ok=0

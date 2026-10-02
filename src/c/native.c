@@ -21,6 +21,7 @@
 
 #include "lexer.h"
 #include "parser.h"
+#include "lint.h"
 #include "asm.h"
 #include "yv.h"
 
@@ -69,9 +70,20 @@ Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
 int is_bits_op(Yv *op);
 int teq(Yv *a, Yv *b);
+int is_open(Yv *fs);
+long field_pos(Yv *fs, Yv *name, long hint);
+Yv *union_member(Yv *u, Yv *t);
+Yv *unfold(Yv *t);
+Yv *members(Yv *t);
+Yv *union_parts(Yv *t);
+Yv *pat_members(Yv *s, Yv *t);
+Yv *lit_target(Yv *node, Yv *want);
+Yv *tcanon(Yv *t);
+Yv *str_sorted(Yv *xs);
+Yv *rec_names(Yv *fs);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
-Yv *rename_program_x(Yv *ast, Yv *dfl);
+Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods);
 
 /* The std units' sources (see std_units): native.y's `embed` declarations
  * (see Y_EMBED in yv.h). */
@@ -94,6 +106,19 @@ static Yv *res_pkgs;
 static Yv *res_roots;
 static Yv *res_used;
 static Yv *pkg_ns;
+/* tcode's and tdecode's recursive aliases (trefs) being spelled out and
+ * read back, and the count behind the unit ids tdecode gives them. */
+static Yv *tcode_refs;
+static Yv *tdec_encs;
+static Yv *tdec_refs;
+static long tdec_n;
+/* The record-type descriptors emitted so far (ty_desc; link_units reuses
+ * it for the whole program): an open-addressing set of their labels, with
+ * each label's canonical form beside it ("" = an empty slot). compile_unit
+ * empties it for each unit. */
+static Yv *ty_seen;
+static Yv *ty_forms;
+static long ty_count;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
@@ -117,11 +142,12 @@ int blank_byte(long c);
 int word_at(Yv *code, long i, Yv *nm);
 int seen_any(Yv *seen, long lo, long hi, long level);
 Yv *norm_path(Yv *p);
+long seen_index(Yv *seen, Yv *full);
 int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
 Yv *std_resolve(Yv *name, Yv *base_dir);
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        long fid);
+                        Yv *smods, long fid);
 int is_embed_decl(Yv *trimmed);
 Yv *embed_decl(Yv *trimmed, Yv *base_dir);
 Yv *quote_text(Yv *s);
@@ -202,6 +228,12 @@ Yv *gen_indirect(Yv *st, Yv *node, Yv *callee);
 Yv *gen_str_slice(Yv *st, Yv *node);
 Yv *gen_sliceassign(Yv *st, Yv *node);
 Yv *gen_rectest_rax(Yv *st, Yv *names);
+Yv *gen_rectest(Yv *st, Yv *node);
+Yv *rectest_members(Yv *s, Yv *t);
+Yv *gen_tag_in(Yv *st, Yv *ts);
+Yv *gen_union_slot(Yv *st, Yv *t, Yv *dkey, int store);
+Yv *gen_slot_move(Yv *st, long sl, int store);
+Yv *gen_union_cast(Yv *st, Yv *t);
 Yv *gen_union_str_rax(Yv *st, Yv *t);
 int is_void_node(Yv *n);
 Yv *loc_dir(long ln);
@@ -260,7 +292,24 @@ int is_self_call(Yv *st, Yv *node);
 Yv *gen_block(Yv *st, Yv *node);
 Yv *gen_block_as(Yv *st, Yv *node, int dropped);
 long mfield_idx(Yv *names, Yv *name);
-Yv *gen_reclit(Yv *st, Yv *node);
+Yv *gen_reclit(Yv *st, Yv *node, Yv *want);
+long fnv64(Yv *s);
+Yv *hex16(long h);
+long rec_slot(Yv *fs, Yv *key);
+int is_kshape(Yv *t);
+long tyset_add(Yv *lbl, Yv *form);
+void tyset_grow(void);
+void tyset_reset(void);
+void ty_collision(Yv *lbl, Yv *form);
+Yv *ty_desc(Yv *st, Yv *rt);
+long ty_shape(Yv *t);
+int same_rec(Yv *lt, Yv *t);
+Yv *rec_lit_type(Yv *lt, Yv *want);
+Yv *infer_go(Yv *st, Yv *node);
+Yv *gen_koff(Yv *st, Yv *rec, Yv *tmp);
+Yv *gen_kload(Yv *st, Yv *rec, Yv *tmp, Yv *dst);
+Yv *gen_slot_load(Yv *st, long idx, Yv *dst);
+int layout_unknown(Yv *t);
 Yv *gen_func_literal(Yv *st, Yv *node);
 Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps);
 Yv *gen_decl(Yv *st, Yv *node);
@@ -376,9 +425,6 @@ Yv *gen_heap_used(Yv *st, Yv *node);
 Yv *gen_sleep(Yv *st, Yv *node);
 Yv *gen_exit(Yv *st, Yv *node);
 Yv *gen_argv(Yv *st, Yv *node);
-Yv *gen_read_file(Yv *st, Yv *node);
-Yv *gen_write_file(Yv *st, Yv *node);
-Yv *gen_write_bytes(Yv *st, Yv *node);
 Yv *gen_store(Yv *st, Yv *node);
 Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
                 int want_argv, Yv *captypes, Yv *selfname);
@@ -387,6 +433,7 @@ Yv *func_type(Yv *func);
 Yv *func_type_in(Yv *st, Yv *func);
 Yv *find_dup(Yv *stmts, Yv *origin);
 Yv *top_def_name(Yv *s);
+Yv *top_name_in(Yv *s, Yv *origin);
 Yv *top_def_name_go(Yv *s);
 Yv *global_decls(Yv *stmts);
 Yv *decl_name(Yv *d);
@@ -412,7 +459,7 @@ Yv *export_name(Yv *name);
 Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns);
 int pkg_base(long base);
 Yv *pkg_exports(Yv *xs, Yv *gl);
-Yv *unit_dfl(Yv *stmts);
+Yv *unit_dfl(Yv *stmts, Yv *origin);
 Yv *dfl_codes(Yv *func);
 Yv *lit_code(Yv *d);
 Yv *lit_text(Yv *d);
@@ -456,7 +503,9 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps);
  * drops its `export` line. References `io.x` are rewritten to plain `x` by
  * strip_namespaces (AST-level, so strings are untouched). Module top-levels
  * must be defs; a def that replaces one from another file is a loud error
- * (find_dup).
+ * (find_dup). A module imported by NAME (`import fs;`, std_resolve) keeps
+ * its own scope instead: rename.y binds its top-level names as `fs.x`,
+ * which is how the importer spells them (the origin map's `mods`).
  *
  * The ORIGIN MAP says where each line of the spliced program came from:
  * line i + 1 is line `line[i]` of file `files[file[i]]`. files[0] is the
@@ -464,7 +513,9 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps);
  * imported modules in splice order; `nuser` counts them all (the std
  * library is no part of the text any more -- it is linked as separate
  * units, see std_units). Error positions are printed through it (ycc.c
- * print_native_errors), and find_dup tells files apart by it. */
+ * print_native_errors), and find_dup tells files apart by it. mods[k]
+ * is the module files[k] was imported as by name (`import fs;`: "fs"),
+ * "" for the program and the files imported by path. */
 
 Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
     return native_resolve_x(src, base_dir, depth, 1, ys(""));
@@ -499,7 +550,7 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
      * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
      * encoder splices twice and every enc64 def collides (find_dup). */
-    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0), 0);
+    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
     Yv *rsrc = ys_join(yr_get(r, "lines"), ys("\n"));
     Yv *rimports = yr_get(r, "imports");
     Yv *files = yav(1, root);
@@ -509,8 +560,16 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
         files = ya_push(files, ya_get(rseen, fi));
         fi = fi + 1;
     }
-    Yv *origin = yr(4, "files", files, "nuser", yv_long(yv_len(files)),
-                    "file", yr_get(r, "ofile"), "line", yr_get(r, "oline"));
+    Yv *mods = yav(1, ys(""));
+    Yv *rsmods = yr_get(r, "smods");
+    fi = 0;
+    while (fi < yv_len(rsmods)) {
+        mods = ya_push(mods, ya_get(rsmods, fi));
+        fi = fi + 1;
+    }
+    Yv *origin = yr(5, "files", files, "nuser", yv_long(yv_len(files)),
+                    "file", yr_get(r, "ofile"), "line", yr_get(r, "oline"),
+                    "mods", mods);
     /* What the name checks below search: the program's own text, in one
      * pass for all three name lists (words_seen). No std unit is
      * searched: rt and str.y call none of the trigger names, and exec.y's
@@ -921,6 +980,19 @@ Yv *norm_path(Yv *p) {
     return ys_join(out, ys("/"));
 }
 
+/* Where full is in seen (-1: nowhere). */
+long seen_index(Yv *seen, Yv *full) {
+    long at = -1;
+    long i = 0;
+    while (at < 0 && i < yv_len(seen)) {
+        if (ys_eq(ya_get(seen, i), full)) {
+            at = i;
+        }
+        i = i + 1;
+    }
+    return at;
+}
+
 int seen_has(Yv *seen, Yv *full) {
     long i = 0;
     int found = 0;
@@ -946,9 +1018,8 @@ int seen_has(Yv *seen, Yv *full) {
  *     ./std/<name>.y                 ./src/y/std/<name>.y
  *     <ycc dir>/std/<name>.y         <ycc dir>/src/y/std/<name>.y
  *     <ycc dir>/../src/y/std/<name>.y
- * The file found is spliced exactly like `import x from "path"` and its
- * defs are called through the namespace: `net.listen_tcp(...)` and
- * friends. */
+ * The file found is spliced like `import x from "path"` and keeps its own
+ * scope: its defs are `net.listen_tcp` and friends (rename.c). */
 
 Yv *dir_of(Yv *p) {
     long s = ys_last_index_of(p, ys("/"));
@@ -1018,16 +1089,17 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
 /* The program text `src` of file `fid` (its index in the origin map's
  * files: 0 for the program itself, k for seen[k - 1]) with its imports
  * spliced in, as lines; ofile/oline map each one back (see the origin map
- * above native_resolve). */
+ * above native_resolve), and smods[k] is the module seen[k] was imported
+ * as by name ("" by path). */
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        long fid) {
+                        Yv *smods, long fid) {
     if (depth > 32) {
         // Fatal, like a missing module: carrying on compiled the program
         // without the rest of the chain and exited 0.
         puts_(ys("error: native import depth exceeded (cycle?)\n"));
         exit_(1);
-        return yr(5, "lines", yav(0), "imports", yav(0), "seen", seen,
-                  "ofile", yav(0), "oline", yav(0));
+        return yr(6, "lines", yav(0), "imports", yav(0), "seen", seen,
+                  "smods", smods, "ofile", yav(0), "oline", yav(0));
     } else {
         Yv *lines = ys_split(src, ys("\n"));
         Yv *out_lines = yav(0);
@@ -1120,12 +1192,20 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         ;
                     } else if (seen_has(seen, full)) {
                         /* NOTE: already spliced (see native_resolve note):
-                         * record the namespace name (strip_ns needs it) but
-                         * do NOT splice the text a second time. */
-                        imports = ya_push(imports, name);
+                         * record the namespace name (strip_ns needs it,
+                         * unless the file is a module with its own scope)
+                         * but do NOT splice the text a second time. */
+                        if (ys_eq_lit(ya_get(smods, seen_index(seen, full)), "")) {
+                            imports = ya_push(imports, name);
+                        }
                         ;
                     } else {
                         seen = ya_push(seen, full);
+                        if (from_idx >= 0) {
+                            smods = ya_push(smods, ys(""));
+                        } else {
+                            smods = ya_push(smods, name);
+                        }
                         long last_slash = ys_last_index_of(full, ys("/"));
                         Yv *mod_dir = base_dir;
                         if (last_slash >= 0) {
@@ -1140,10 +1220,11 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         Yv *mod_src2 = yv_unwrap(mod_src);
                         Yv *sub =
                             native_resolve_seen(mod_src2, mod_dir, depth + 1,
-                                                seen, yv_len(seen));
+                                                seen, smods, yv_len(seen));
                         Yv *subns = yr_get(sub, "imports");
                         Yv *subseen = yr_get(sub, "seen");
                         seen = subseen;
+                        smods = yr_get(sub, "smods");
                         /* splice the module text inline (its own imports
                          * first), and its lines' origins with it */
                         Yv *sub_lines = yr_get(sub, "lines");
@@ -1170,7 +1251,11 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                             imports = ya_push(imports, ya_get(subns, m));
                             m = m + 1;
                         }
-                        imports = ya_push(imports, name);
+                        /* a module imported by name keeps its namespace
+                         * (rename.y), one imported by path is flattened */
+                        if (from_idx >= 0) {
+                            imports = ya_push(imports, name);
+                        }
                         ;
                     }
                     ;
@@ -1206,8 +1291,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
             }
             i = i + 1;
         }
-        return yr(5, "lines", out_lines, "imports", imports, "seen", seen,
-                  "ofile", ofile, "oline", oline);
+        return yr(6, "lines", out_lines, "imports", imports, "seen", seen,
+                  "smods", smods, "ofile", ofile, "oline", oline);
     }
 }
 
@@ -1318,53 +1403,17 @@ Yv *quote_text(Yv *s) {
 }
 
 int is_id_b(long c) {
-    int ok = 0;
-    if (c >= 48) {
-        if (c <= 57) {
-            ok = 1;
-            ;
-        } else {
-            ;
-        }
-        ;
-    } else {
-        ;
-    }
+    // letters, digits, `_`, `$` and `.` (a module's names are qualified:
+    // `yfn_12_fs.exists$3`); most bytes are lowercase, decided first
     if (c >= 97) {
-        if (c <= 122) {
-            ok = 1;
-            ;
-        } else {
-            ;
-        }
-        ;
+        return c <= 122;
+    } else if (c >= 65) {
+        return c <= 90 || c == 95;
+    } else if (c >= 48) {
+        return c <= 57;
     } else {
-        ;
+        return c == 36 || c == 46;
     }
-    if (c >= 65) {
-        if (c <= 90) {
-            ok = 1;
-            ;
-        } else {
-            ;
-        }
-        ;
-    } else {
-        ;
-    }
-    if (c == 95) {
-        ok = 1;
-        ;
-    } else {
-        ;
-    }
-    if (c == 36) {
-        ok = 1;
-        ;
-    } else {
-        ;
-    }
-    return ok;
 }
 
 /* First non-blank offset in [i, hi); blank means space (the asm dialect
@@ -2371,7 +2420,18 @@ Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ) {
  * The checker already validated everything; this mirrors it just enough to
  * pick y_print_long / y_print_bool / y_print_cstr. */
 
+/* The static type of an expression (infer_go), a recursive alias unfolded
+ * (types.y unfold): the emitter looks into it. */
 Yv *infer(Yv *st, Yv *node) {
+    Yv *t = infer_go(st, node);
+    if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+        return unfold(t);
+    } else {
+        return t;
+    }
+}
+
+Yv *infer_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (ys_eq_lit(k, "num")) {
         if (lit_is_float(yr_get(node, "v"))) {
@@ -2611,6 +2671,14 @@ Yv *infer(Yv *st, Yv *node) {
             } else {
                 return yr(1, "k", ys("tunk"));
             }
+        } else if (ys_eq_lit(yr_get(dt, "k"), "tunion")) {
+            /* types.y union_field: the type the field has in every member */
+            Yv *uft = rec_field_type(dt, yr_get(node, "key"));
+            if (ys_eq_lit(yr_get(uft, "k"), "tnone")) {
+                return yr(1, "k", ys("tunk"));
+            } else {
+                return uft;
+            }
         } else if (ys_eq_lit(yr_get(dt, "k"), "tmap")) {
             /* the map lowering reads its {keys, vals, boxes} shape directly */
             if (ys_eq_lit(yr_get(node, "key"), "keys")) { return normnode(yr(2, "k", ys("tarr"), "of", yr_get(dt, "key"))); }
@@ -2695,11 +2763,6 @@ Yv *infer_call(Yv *st, Yv *node) {
                    ys_eq_lit(name, "tostring") || ys_eq_lit(name, "typeof") ||
                    ys_eq_lit(name, "#fmt")) {
             return yr(1, "k", ys("tstr"));
-        } else if (ys_eq_lit(name, "read_file")) {
-            /* str? (option): a missing file yields none at runtime
-             * (callers none-check with `== none`, then unwrap).
-             * Matches types.y (read_file -> str?). */
-            return yr(2, "k", ys("topt"), "of", yr(1, "k", ys("tstr")));
         } else if (ys_eq_lit(name, "bytes")) {
             return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte")));
         } else if (ys_eq_lit(name, "from_bytes")) {
@@ -2718,10 +2781,6 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tstr")));
         } else if (ys_eq_lit(name, "range")) {
             return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tlong")));
-        } else if (ys_eq_lit(name, "write_file")) {
-            return yr(1, "k", ys("tbool"));
-        } else if (ys_eq_lit(name, "write_bytes")) {
-            return yr(1, "k", ys("tbool"));
         } else if (ys_eq_lit(name, "push") || ys_eq_lit(name, "prepend")) {
             /* both yield the array they take (the header never moves, and
              * the type is the array's either way) */
@@ -2999,8 +3058,7 @@ int is_intrinsic_name(Yv *n) {
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
             ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("sleep"),
-            ys("heap_used"), ys("exit"), ys("argv"), ys("read_file"),
-            ys("write_file"), ys("write_bytes"), ys("range"), ys("typeof"),
+            ys("heap_used"), ys("exit"), ys("argv"), ys("range"), ys("typeof"),
             ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
             ys("none"), ys("#fmt")),
         n);
@@ -3415,8 +3473,7 @@ Yv *gen(Yv *st, Yv *node) {
     } else if (ys_eq_lit(k, "char")) {
         return gen_lit(st, yr(4, "k", ys("num"), "v", yr_get(node, "v"), "line", yr_get(node, "line"), "col", yr_get(node, "col")));
     } else if (ys_eq_lit(k, "rectest")) {
-        st = gen(st, yr_get(node, "e"));
-        return gen_rectest_rax(st, type_names(yr_get(node, "typ")));
+        return gen_rectest(st, node);
     } else if (ys_eq_lit(k, "narrow")) {
         /* the value itself; only its static type changes */
         return gen(st, yr_get(node, "e"));
@@ -3435,7 +3492,7 @@ Yv *gen(Yv *st, Yv *node) {
         return gen_dot(st, node);
     } else if (ys_eq_lit(k, "rec")) {
         /* record literal anywhere (let/call-arg): heap address in %rax. */
-        return gen_reclit(st, node);
+        return gen_reclit(st, node, yr(1, "k", ys("tnone")));
     } else if (ys_eq_lit(k, "map")) {
         /* map literal: the {keys, vals, boxes} record, heap address in %rax. */
         return gen_maplit(st, node);
@@ -4157,6 +4214,73 @@ Yv *gen_sliceassign(Yv *st, Yv *node) {
     return emit(st, ys("    xor %eax, %eax"));
 }
 
+// `T` / `{f: v}` pattern test (types.y typeof_rectest): 1 in %rax when the
+// value of node.e matches. A union holds exactly one member: the test
+// compares the value's descriptor with those of the members the pattern
+// matches (rectest_members). A record matches by its static type (the
+// checker rejected a pattern it cannot match). A value of unknown type is
+// probed by its field names (y_rec_has).
+Yv *gen_rectest(Yv *st, Yv *node) {
+    Yv *s = infer(st, yr_get(node, "e"));
+    Yv *sk = yr_get(s, "k");
+    st = gen(st, yr_get(node, "e"));
+    if (ys_eq_lit(sk, "tunion")) {
+        return gen_tag_in(st, rectest_members(s, yr_get(node, "typ")));
+    } else if (ys_eq_lit(sk, "trec")) {
+        return emit(st, ys("    mov $1, %rax"));
+    } else {
+        return gen_rectest_rax(st, type_names(yr_get(node, "typ")));
+    }
+}
+
+// The members of union s (as written, types.y union_parts) the pattern t
+// matches: t itself (a type pattern), or every member with the fields of
+// a record pattern.
+Yv *rectest_members(Yv *s, Yv *t) {
+    Yv *tk = yr_get(t, "k");
+    if (ys_eq_lit(tk, "tpat")) {
+        return pat_members(s, t);
+    } else {
+        Yv *out = yav(0);
+        Yv *m = union_member(s, t);
+        Yv *mk = yr_get(m, "k");
+        if (!ys_eq_lit(mk, "tnone")) {
+            out = ya_push(out, m);
+        }
+        return out;
+    }
+}
+
+// Record in %rax -> 1 when its descriptor is that of one of the record
+// types ts, else 0.
+Yv *gen_tag_in(Yv *st, Yv *ts) {
+    Yv *rno = next_loc(st);
+    st = yr_get(rno, "st");
+    Yv *rdone = next_loc(st);
+    st = yr_get(rdone, "st");
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), yr_get(rno, "lbl")));
+    st = emit(st, ys("    mov -8(%rax), %rcx"));
+    Yv *yes = next_loc(st);
+    st = yr_get(yes, "st");
+    long i = 0;
+    while (i < yv_len(ts)) {
+        Yv *dr = ty_desc(st, ya_get(ts, i));
+        st = yr_get(dr, "st");
+        st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+                             ys("(%rip), %rdx")));
+        st = emit(st, ys("    cmp %rdx, %rcx"));
+        st = emit(st, ys_cat(ys("    je "), yr_get(yes, "lbl")));
+        i = i + 1;
+    }
+    st = emit(st, ys_cat(yr_get(rno, "lbl"), ys(":")));
+    st = emit(st, ys("    xor %eax, %eax"));
+    st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
+    st = emit(st, ys_cat(yr_get(yes, "lbl"), ys(":")));
+    st = emit(st, ys("    mov $1, %rax"));
+    return emit(st, ys_cat(yr_get(rdone, "lbl"), ys(":")));
+}
+
 // Record in %rax -> 1 when it has every field in names, else 0 (the
 // record's own field table answers, through y_rec_has).
 Yv *gen_rectest_rax(Yv *st, Yv *names) {
@@ -4190,45 +4314,26 @@ Yv *gen_rectest_rax(Yv *st, Yv *names) {
     }
 }
 
-// Union value in %rax -> its string form: the member it matches, tried
-// from the one with the most fields down (the most specific shape wins).
+// Union value in %rax -> its string form: the member its descriptor names
+// ("<union>" for none).
 Yv *gen_union_str_rax(Yv *st, Yv *t) {
-    Yv *ms = yr_get(t, "ts");
-    Yv *order = yav(0);
-    long most = 0;
-    long i = 0;
-    while (i < yv_len(ms)) {
-        long n = yv_len(type_names(ya_get(ms, i)));
-        if (n > most) {
-            most = n;
-        }
-        i = i + 1;
-    }
-    long want = most;
-    while (want >= 0) {
-        long j = 0;
-        while (j < yv_len(ms)) {
-            if (yv_len(type_names(ya_get(ms, j))) == want) {
-                order = ya_push(order, ya_get(ms, j));
-            }
-            j = j + 1;
-        }
-        want = want - 1;
-    }
+    Yv *ms = union_parts(t);
     Yv *rdone = next_loc(st);
     st = yr_get(rdone, "st");
     st = emit(st, ys("    push %rax"));
     long m = 0;
-    while (m < yv_len(order)) {
+    while (m < yv_len(ms)) {
         Yv *rnext = next_loc(st);
         st = yr_get(rnext, "st");
-        Yv *mt = ya_get(order, m);
+        Yv *mt = ya_get(ms, m);
+        Yv *one = yav(0);
+        one = ya_push(one, mt);
         st = emit(st, ys("    mov (%rsp), %rax"));
-        st = gen_rectest_rax(st, type_names(mt));
+        st = gen_tag_in(st, one);
         st = emit(st, ys("    test %rax, %rax"));
         st = emit(st, ys_cat(ys("    jz "), yr_get(rnext, "lbl")));
         st = emit(st, ys("    pop %rax"));
-        st = gen_rec_str_rax(st, mt);
+        st = gen_rec_str_rax(st, unfold(mt));
         st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
         st = emit(st, ys_cat(yr_get(rnext, "lbl"), ys(":")));
         m = m + 1;
@@ -5114,14 +5219,69 @@ Yv *gen_conv(Yv *st, Yv *got, Yv *want) {
 
 /* gen, then gen_conv to `want`: every place a value is stored under a
  * declared type (variable, parameter, return value, element, field,
- * pointee) goes through here. */
-Yv *gen_as(Yv *st, Yv *node, Yv *want) {
-    st = gen(st, node);
+ * pointee) goes through here. A record literal is created as the declared
+ * record type (gen_reclit). A value whose layout the checker could not
+ * know (unknown, or behind the unknown-shape marker) going where a record
+ * type or a union is declared is checked at run time to be a record of
+ * that type's fields, or of a member's (y_rec_cast, gen_union_cast): a
+ * mismatch traps rather than read fields at the wrong offsets. */
+Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
+    Yv *want = unfold(want0);
+    Yv *nk = yr_get(node, "k");
     Yv *wk = yr_get(want, "k");
+    if (ys_eq_lit(nk, "rec") &&
+        (ys_eq_lit(wk, "trec") || ys_eq_lit(wk, "tunion"))) {
+        /* want0 as declared: a recursive alias names the descriptor */
+        st = gen_reclit(st, node, want0);
+    } else {
+        st = gen(st, node);
+    }
     if (ys_eq_lit(wk, "tfloat") || ys_eq_lit(wk, "tbyte")) {
         return gen_conv(st, infer(st, node), want);
+    } else if (ys_eq_lit(wk, "trec") && !is_kshape(want) &&
+               layout_unknown(infer(st, node))) {
+        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(ty_shape(want))),
+                             ys(", %rcx")));
+        return emit(st, ys("    call y_rec_cast"));
+    } else if (ys_eq_lit(wk, "tunion") && layout_unknown(infer(st, node))) {
+        return gen_union_cast(st, want);
     } else {
         return st;
+    }
+}
+
+/* gen_as's check of a value of unknown type going where union t is
+ * declared: a record with the fields of one of t's members, or a trap
+ * (y_cast_trap, as y_rec_cast). */
+Yv *gen_union_cast(Yv *st, Yv *t) {
+    Yv *ok = next_loc(st);
+    st = yr_get(ok, "st");
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), yr_get(ok, "lbl")));
+    st = emit(st, ys("    mov -8(%rax), %rdx"));
+    st = emit(st, ys("    mov 8(%rdx), %rdx"));
+    Yv *ms = members(t);
+    long i = 0;
+    while (i < yv_len(ms)) {
+        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(ty_shape(ya_get(ms, i)))),
+                             ys(", %rcx")));
+        st = emit(st, ys("    cmp %rcx, %rdx"));
+        st = emit(st, ys_cat(ys("    je "), yr_get(ok, "lbl")));
+        i = i + 1;
+    }
+    st = emit(st, ys("    jmp y_cast_trap"));
+    return emit(st, ys_cat(yr_get(ok, "lbl"), ys(":")));
+}
+
+/* A type that says nothing about a record's fields: unknown to the
+ * checker, or the unknown-shape marker. */
+int layout_unknown(Yv *t) {
+    Yv *tk = yr_get(t, "k");
+    if (ys_eq_lit(tk, "tunk") || ys_eq_lit(tk, "tnone") ||
+        ys_eq_lit(tk, "tname") || ys_eq_lit(tk, "tparams")) {
+        return 1;
+    } else {
+        return is_kshape(t);
     }
 }
 
@@ -5264,8 +5424,6 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_exit(st, node);
         } else if (ys_eq_lit(name, "argv")) {
             return gen_argv(st, node);
-        } else if (ys_eq_lit(name, "read_file")) {
-            return gen_read_file(st, node);
         } else if (ys_eq_lit(name, "bytes")) {
             st = gen_push_args(st, yr_get(node, "args"));
             st = emit(st, ys("    call y_str_to_bytes"));
@@ -5280,10 +5438,6 @@ Yv *gen_call(Yv *st, Yv *node) {
              * system lets the value cross into long territory. */
             Yv *paargs = yr_get(node, "args");
             return gen(st, ya_get(paargs, 0));
-        } else if (ys_eq_lit(name, "write_file")) {
-            return gen_write_file(st, node);
-        } else if (ys_eq_lit(name, "write_bytes")) {
-            return gen_write_bytes(st, node);
         } else {
             return gen_direct(st, node, name);
         }
@@ -5462,9 +5616,18 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t) {
         } else {
             ;
         }
-        st = gen_acc_cat_const(
-            st, ys_cat(ys_cat(sep, yr_get(f, "name")), ys(": ")));
-        st = gen_rec_field_str(st, i, yr_get(f, "typ"));
+        Yv *fname = yr_get(f, "name");
+        if (ys_eq_lit(fname, "..")) {
+            // an open record's marker: the value may have more fields
+            st = gen_acc_cat_const(st, ys_cat(sep, ys("..")));
+        } else {
+            st = gen_acc_cat_const(st, ys_cat(ys_cat(sep, fname), ys(": ")));
+            long slot = rec_slot(fs, fname);
+            if (is_kshape(t)) {
+                slot = -1;
+            }
+            st = gen_rec_field_str(st, slot, yr_get(f, "typ"));
+        }
         i = i + 1;
     }
     st = gen_acc_cat_const(st, ys("}"));
@@ -5600,33 +5763,42 @@ Yv *gen_acc_cat_const(Yv *st, Yv *s) {
     return emit(st, ys("    mov %rax, (%rsp)"));
 }
 
-/* acc = acc + <field idx, rendered by its static type>. */
+/* Slot idx of the record in %rcx into register dst; idx -1: field k of
+ * the unknown-shape marker (gen_kload, clobbers %rsi). */
+Yv *gen_slot_load(Yv *st, long idx, Yv *dst) {
+    if (idx < 0) {
+        return gen_kload(st, ys("%rcx"), ys("%rsi"), dst);
+    } else {
+        return emit(st, ys_cat(ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
+                                      ys("(%rcx), ")),
+                               dst));
+    }
+}
+
+/* acc = acc + <field in slot idx, rendered by its static type> (idx -1:
+ * see gen_slot_load). */
 Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft) {
     Yv *fk = yr_get(ft, "k");
     if (ys_eq_lit(fk, "tstr")) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
-                             ys("(%rcx), %rdx")));
+        st = gen_slot_load(st, idx, ys("%rdx"));
     } else if (ys_eq_lit(fk, "tlong")) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
-                             ys("(%rcx), %rax")));
+        st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_long_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
         st = emit(st, ys("    mov %rax, %rdx"));
     } else if (ys_eq_lit(fk, "tbool")) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
-                             ys("(%rcx), %rax")));
+        st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_bool_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
         st = emit(st, ys("    mov %rax, %rdx"));
     } else if (ys_eq_lit(fk, "tfloat")) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
-                             ys("(%rcx), %rax")));
+        st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_float_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
@@ -6181,21 +6353,296 @@ long mfield_idx(Yv *names, Yv *name) {
     return out;
 }
 
-/* Record literal { k: v, ... }: heap-allocate a block for the values + the
- * shape table, then store each value. The VALUE is the record address
- * (8 bytes, first-class: locals, params, returns all just copy it). Field k
- * lives at record+8k; the table pointer sits at record-8, which is what
- * y_dot_lookup reads (`mov -8(%rbx), %r14`).
+/* ── records at run time ────────────────────────────────────────────────
+ * A record is laid out by field name: its fields sorted, the one in slot
+ * i at record+8i, whatever order a literal or a type writes them in. The
+ * word at record-8 points to the descriptor of its type, `ytt_<hash>`:
+ * one per structural type, named by a 64-bit FNV-1a hash of the type's
+ * canonical form (tcanon). Each unit emits the descriptors its code uses
+ * (ty_desc), and the link keeps one per label (link_units). The canonical
+ * form travels with the descriptor, so two types with one hash are an
+ * error, never a merge. A descriptor is quads:
+ *     koff   the byte offset of field `k`, 0 when there is none: where a
+ *            value typed {k: str} (the unknown-shape marker) has its k
+ *     shape  a 31-bit hash of the sorted field names (y_rec_cast)
+ *     1498307412, n, then per field its byte offset, the length of its
+ *            name and a quad per byte of the name: the table y_dot_lookup
+ *            and y_rec_has search (`add $16` past koff and shape) */
+
+/* FNV-1a over the bytes of s, 64-bit (the multiply wraps). */
+long fnv64(Yv *s) {
+    unsigned long h = 14695981039346656037UL; /* -3750763034362895579 */
+    long n = yv_len(s);
+    long i = 0;
+    while (i < n) {
+        h = (h ^ (unsigned long)ys_byte_at(s, i)) * 1099511628211UL;
+        i = i + 1;
+    }
+    return (long)h;
+}
+
+/* h as 16 lowercase hex digits. */
+Yv *hex16(long h) {
+    Yv *digits = ys("0123456789abcdef");
+    Yv *out = ys("");
+    long sh = 60;
+    while (sh >= 0) {
+        long d = (long)(((unsigned long)h >> sh) & 15);
+        out = ys_cat(out, ys_slice(digits, d, d + 1));
+        sh = sh - 4;
+    }
+    return out;
+}
+
+/* The slot of field `key` in a record of the fields fs: how many of their
+ * names sort before it (-1 when there is no such field). */
+long rec_slot(Yv *fs, Yv *key) {
+    int found = 0;
+    long below = 0;
+    long i = 0;
+    while (i < yv_len(fs)) {
+        Yv *fname = yr_get(ya_get(fs, i), "name");
+        if (ys_eq(fname, key)) {
+            found = 1;
+        } else if (ys_cmp(fname, key) < 0) {
+            below = below + 1;
+        }
+        i = i + 1;
+    }
+    if (found) {
+        return below;
+    } else {
+        return -1;
+    }
+}
+
+/* An open record type, the unknown-shape marker {k: str, ..} (types.y
+ * is_open) -- a value of any record type may hide behind it, so its k is
+ * wherever that record's descriptor says (gen_dot_rec), and its other
+ * fields are looked up by name. */
+int is_kshape(Yv *t) {
+    Yv *tk = yr_get(t, "k");
+    if (!ys_eq_lit(tk, "trec")) {
+        return 0;
+    } else {
+        return is_open(yr_get(t, "fields"));
+    }
+}
+
+/* Adds the descriptor label lbl, of canonical form `form`, to ty_seen: 1
+ * when it is new, 0 when it is there with that form, -1 when it is there
+ * with another (two types, one hash). */
+long tyset_add(Yv *lbl, Yv *form) {
+    if (2 * (ty_count + 1) > yv_len(ty_seen)) {
+        tyset_grow();
+    }
+    long mask = yv_len(ty_seen) - 1;
+    long i = fnv64(lbl) & mask;
+    long out = 1;
+    int looking = 1;
+    while (looking) {
+        Yv *cur = ya_get(ty_seen, i);
+        if (yv_len(cur) == 0) {
+            ya_set(ty_seen, i, lbl);
+            ya_set(ty_forms, i, form);
+            ty_count = ty_count + 1;
+            looking = 0;
+        } else if (ys_eq(cur, lbl)) {
+            if (ys_eq(ya_get(ty_forms, i), form)) {
+                out = 0;
+            } else {
+                out = -1;
+            }
+            looking = 0;
+        } else {
+            i = (i + 1) & mask;
+        }
+    }
+    return out;
+}
+
+void tyset_grow(void) {
+    Yv *old = ty_seen;
+    Yv *oldf = ty_forms;
+    long cap = 2 * yv_len(old);
+    if (cap < 64) {
+        cap = 64;
+    }
+    Yv *fresh = yav(0);
+    Yv *freshf = yav(0);
+    long i = 0;
+    while (i < cap) {
+        fresh = ya_push(fresh, ys(""));
+        freshf = ya_push(freshf, ys(""));
+        i = i + 1;
+    }
+    ty_seen = fresh;
+    ty_forms = freshf;
+    ty_count = 0;
+    long j = 0;
+    while (j < yv_len(old)) {
+        Yv *lb = ya_get(old, j);
+        if (yv_len(lb) > 0) {
+            tyset_add(lb, ya_get(oldf, j));
+        }
+        j = j + 1;
+    }
+}
+
+void tyset_reset(void) {
+    ty_seen = yav(0);
+    ty_forms = yav(0);
+    ty_count = 0;
+}
+
+/* Two types with one descriptor label: stop (a 64-bit hash collision;
+ * the program cannot be linked with this compiler). */
+void ty_collision(Yv *lbl, Yv *form) {
+    puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("ycc: two record types hash to "), lbl),
+                               ys(" (")),
+                        form),
+                 ys("); cannot link this program\n")));
+    exit_(1);
+}
+
+/* The descriptor label of record type rt; its rodata entry (label,
+ * canonical form, quads) goes into the unit the first time the unit uses
+ * it. */
+Yv *ty_desc(Yv *st, Yv *rt) {
+    Yv *form = tcanon(rt);
+    Yv *lbl = ys_cat(ys("ytt_"), hex16(fnv64(form)));
+    long added = tyset_add(lbl, form);
+    if (added < 0) {
+        ty_collision(lbl, form);
+    }
+    if (added > 0) {
+        Yv *rtu = unfold(rt);
+        Yv *fs = yr_get(rtu, "fields");
+        Yv *names = rec_names(fs);
+        long n = yv_len(names);
+        long koff = 0;
+        Yv *te = yav(0);
+        te = ya_push(te, lbl);
+        te = ya_push(te, form);
+        long kslot = mfield_idx(names, ys("k"));
+        if (kslot > 0) {
+            koff = 8 * kslot;
+        }
+        te = ya_push(te, ys_long(koff));
+        te = ya_push(te, ys_long((long)((unsigned long)fnv64(ys_join(names, ys(","))) >> 33)));
+        te = ya_push(te, ys("1498307412"));
+        te = ya_push(te, ys_long(n));
+        long j = 0;
+        while (j < n) {
+            Yv *nm = ya_get(names, j);
+            te = ya_push(te, ys_long(8 * j));
+            long nl = yv_len(nm);
+            te = ya_push(te, ys_long(nl));
+            long c = 0;
+            while (c < nl) {
+                te = ya_push(te, ys_long(ys_byte_at(nm, c)));
+                c = c + 1;
+            }
+            j = j + 1;
+        }
+        ya_push(yr_get(st, "rodata"), te);
+    }
+    return yr(2, "st", st, "lbl", lbl);
+}
+
+/* The shape hash a descriptor of record type t carries (ty_desc). */
+long ty_shape(Yv *t) {
+    Yv *fs = yr_get(t, "fields");
+    return (long)((unsigned long)fnv64(ys_join(rec_names(fs), ys(","))) >> 33);
+}
+
+/* lt (a record literal's type) is the record type t: the same field names
+ * (without the unknown-shape marker's leniency) and equal types. */
+int same_rec(Yv *lt, Yv *t) {
+    if (!ys_eq_lit(yr_get(t, "k"), "trec") ||
+        !ys_eq_lit(yr_get(lt, "k"), "trec")) {
+        return 0;
+    } else {
+        Yv *lfs = yr_get(lt, "fields");
+        Yv *tfs = yr_get(t, "fields");
+        // (no record is created as an open type)
+        if (is_open(lfs) || is_open(tfs)) {
+            return 0;
+        } else if (yv_len(lfs) != yv_len(tfs)) {
+            return 0;
+        } else {
+            return teq(lt, t);
+        }
+    }
+}
+
+/* The type a record literal of type lt is created as when it goes where
+ * `want` is declared (gen_as): want itself when lt is that record type,
+ * the first member of a union want that lt is; lt otherwise. */
+Yv *rec_lit_type(Yv *lt, Yv *want) {
+    Yv *w = unfold(want);
+    Yv *wk = yr_get(w, "k");
+    if (ys_eq_lit(wk, "trec")) {
+        if (same_rec(lt, w)) {
+            return want;
+        } else {
+            return lt;
+        }
+    } else if (ys_eq_lit(wk, "tunion")) {
+        Yv *ms = union_parts(w);
+        Yv *found = lt;
+        int looking = 1;
+        long i = 0;
+        while (looking && i < yv_len(ms)) {
+            if (same_rec(lt, unfold(ya_get(ms, i)))) {
+                found = ya_get(ms, i);
+                looking = 0;
+            }
+            i = i + 1;
+        }
+        return found;
+    } else {
+        return lt;
+    }
+}
+
+/* The byte offset of field `k` in the record in register `rec`, into
+ * register `tmp`, from the record's descriptor (where a value typed as the
+ * unknown-shape marker has its k, see is_kshape). */
+Yv *gen_koff(Yv *st, Yv *rec, Yv *tmp) {
+    st = emit(st, ys_cat(ys_cat(ys_cat(ys("    mov -8("), rec), ys("), ")), tmp));
+    return emit(st, ys_cat(ys_cat(ys_cat(ys("    mov ("), tmp), ys("), ")), tmp));
+}
+
+/* Field `k` of the record in register `rec` into `dst` (gen_koff; `tmp`
+ * is clobbered). */
+Yv *gen_kload(Yv *st, Yv *rec, Yv *tmp, Yv *dst) {
+    st = gen_koff(st, rec, tmp);
+    return emit(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov ("), rec),
+                                                  ys(",")),
+                                           tmp),
+                                    ys(",1), ")),
+                             dst));
+}
+
+/* Record literal { k: v, ... }: heap-allocate the descriptor word and the
+ * fields, store the descriptor, then evaluate the values in the order they
+ * are written, each into its field's slot (see "records at run time"). The
+ * VALUE is the record address (8 bytes, first-class: locals, params,
+ * returns all just copy it). `want` is the type declared where the record
+ * goes (gen_as; tnone for none): a literal of that record type, or of a
+ * member of that union, is created as it (rec_lit_type), so its descriptor
+ * names the declared type -- `{a: none}` stored as a {a: long?} is one.
  * (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
  * empty maps are rejected by the checker anyway.) */
-Yv *gen_reclit(Yv *st, Yv *node) {
+Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
     Yv *mvals = yr_get(node, "vals");
     Yv *mkeys = yr_get(node, "keys");
     long nent = yv_len(mvals);
     /* Static merge for `...` spread entries (the types.y field_merge
-     * rule): first appearance keeps the position, a later entry wins the
-     * value. The value loop below stores into merged slots in entry
-     * order, so a later store simply overwrites -- no dynamic shape. */
+     * rule): a later entry wins the value. The value loop below stores
+     * into the fields' slots in entry order, so a later store simply
+     * overwrites -- no dynamic shape. */
     Yv *names = yav(0);
     long ni = 0;
     while (ni < nent) {
@@ -6209,70 +6656,32 @@ Yv *gen_reclit(Yv *st, Yv *node) {
                     Yv *sf = ya_get(sfs, si);
                     if (mfield_idx(names, yr_get(sf, "name")) < 0) {
                         names = ya_push(names, yr_get(sf, "name"));
-                        ;
-                    } else {
-                        ;
                     }
                     si = si + 1;
                 }
-                ;
-            } else {
-                ;
             }
-            ;
         } else {
             if (mfield_idx(names, nk) < 0) {
                 names = ya_push(names, nk);
-                ;
-            } else {
-                ;
             }
-            ;
         }
         ni = ni + 1;
     }
     long n = yv_len(names);
-    /* Shape tag for dynamic field reads (y_dot_lookup in arch_x64.y reads
-     * it): every record carries its field table; field i lives
-     * at tag_base+8+i*8 and the value (base+8) keeps today's offsets,
-     * so statically-precise reads are bit-identical. Table label per
-     * site (uid); table rows are decimal quads (both assemblers take
-     * `.quad N`; no pointers, so no fixup-kind gaps). */
-    Yv *ru = next_uid(st);
-    st = yr_get(ru, "st");
-    Yv *tlbl = ys_cat(ys("ytd_"), ys_long(yv_l(yr_get(ru, "uid"))));
-    Yv *te = yav(0);
-    te = ya_push(te, tlbl);
-    te = ya_push(te, ys("TABLE"));
-    te = ya_push(te, ys("1498307412"));
-    te = ya_push(te, ys_long(n));
-    long j = 0;
-    while (j < n) {
-        Yv *nm = ya_get(names, j);
-        te = ya_push(te, ys_long(8 * j));
-        long nl = yv_len(nm);
-        te = ya_push(te, ys_long(nl));
-        long c = 0;
-        while (c < nl) {
-            Yv *ch = ys_slice(nm, c, c + 1);
-            long co = ys_ord(ch);
-            te = ya_push(te, ys_long(co));
-            c = c + 1;
-        }
-        j = j + 1;
+    Yv *slots = str_sorted(names);
+    Yv *rt = lit_target(node, want);
+    if (ys_eq_lit(yr_get(rt, "k"), "tnone")) {
+        rt = rec_lit_type(infer(st, node), want);
     }
-    Yv *trod = ya_push(yr_get(st, "rodata"), te);
-    st = yr(11, "out", yr_get(st, "out"), "rodata", trod, "uid",
-            yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
-            yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
-            yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-            "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),
-            "bodies", yr_get(st, "bodies"));
+    Yv *rtu = unfold(rt);
+    Yv *dr = ty_desc(st, rt);
+    st = yr_get(dr, "st");
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(8 * n + 16)),
                          ys(", %rdi")));
     st = emit(st, ys("    call y_alloc"));
     st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    lea "), tlbl), ys("(%rip), %rax")));
+    st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+                         ys("(%rip), %rax")));
     st = emit(st, ys("    pop %rcx"));
     st = emit(st, ys("    mov %rax, 0(%rcx)"));
     st = emit(st, ys("    push %rcx"));
@@ -6281,11 +6690,11 @@ Yv *gen_reclit(Yv *st, Yv *node) {
         /* mv is walked twice (gen, then infer), so bind it once. */
         Yv *mv = ya_get(mvals, i);
         Yv *mk = ya_get(mkeys, i);
-        st = gen(st, mv);
-        st = emit(st, ys("    pop %rcx"));
         if (ys_eq_lit(mk, "...")) {
-            /* Spread: the source ran ONCE (just above); copy its fields
-             * into their merged slots. A later entry's store overwrites. */
+            /* Spread: the source runs ONCE; copy each of its fields into
+             * the slot it has here. A later entry's store overwrites. */
+            st = gen(st, mv);
+            st = emit(st, ys("    pop %rcx"));
             st = emit(st, ys("    mov %rax, %rdx"));
             Yv *srec2 = infer(st, mv);
             if (ys_eq_lit(yr_get(srec2, "k"), "trec")) {
@@ -6293,27 +6702,29 @@ Yv *gen_reclit(Yv *st, Yv *node) {
                 long sj = 0;
                 while (sj < yv_len(sfs2)) {
                     Yv *sf2 = ya_get(sfs2, sj);
-                    long mi2 = mfield_idx(names, yr_get(sf2, "name"));
-                    /* %rdx is the source's record VALUE (field 0 at +0);
-                     * %rcx is the fresh record's ALLOC base (fields at +8). */
-                    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(sj * 8)),
-                                         ys("(%rdx), %rsi")));
+                    long mi2 = mfield_idx(slots, yr_get(sf2, "name"));
+                    /* %rdx is the source's record VALUE (slot 0 at +0);
+                     * %rcx is the fresh record's ALLOC base (slots at +8). */
+                    if (is_kshape(srec2)) {
+                        st = gen_kload(st, ys("%rdx"), ys("%rsi"), ys("%rsi"));
+                    } else {
+                        st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                                    ys_long(8 * rec_slot(sfs2, yr_get(sf2, "name")))),
+                                             ys("(%rdx), %rsi")));
+                    }
                     st = emit(st, ys_cat(ys_cat(ys("    mov %rsi, "),
                                                 ys_long(8 + mi2 * 8)),
                                          ys("(%rcx)")));
                     sj = sj + 1;
                 }
-                ;
-            } else {
-                ;
             }
-            ;
         } else {
-            long mi = mfield_idx(names, mk);
+            st = gen_as(st, mv, rec_field_type(rtu, mk));
+            st = emit(st, ys("    pop %rcx"));
+            long mi = mfield_idx(slots, mk);
             st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
                                         ys_long(8 + mi * 8)),
                                  ys("(%rcx)")));
-            ;
         }
         st = emit(st, ys("    push %rcx"));
         i = i + 1;
@@ -6457,7 +6868,8 @@ Yv *gen_decl(Yv *st, Yv *node) {
             if (ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tmap") && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0) {
                 st = gen_maplit(st, yr_get(node, "v"));
             } else {
-                st = gen(st, yr_get(node, "v"));
+                /* created as the declared type (gen_as, gen_reclit) */
+                st = gen_as(st, yr_get(node, "v"), yr_get(node, "typ"));
             }
             Yv *t = yr_get(node, "typ");
             if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
@@ -6952,11 +7364,11 @@ Yv *gen_index(Yv *st, Yv *node) {
 
 /* s.f = v — in-place record field write, for any object expression: a
  * plain variable, a nested place (`a[0].f`), a chain (`x.y.f`). Records
- * are heap addresses; field i lives at addr+8i (same layout the static
- * gen_dot read uses), so the write is: value -> (rec + 8*idx). The object
- * runs first, then the value. Reference semantics: a field write is
- * observable through every binding (the C copy's value model shares records
- * the same way). */
+ * are heap addresses; the field in slot i lives at addr+8i (same layout
+ * the static gen_dot read uses), so the write is: value -> (rec + 8*idx).
+ * The object runs first, then the value. Reference semantics: a field
+ * write is observable through every binding (the C copy's value model
+ * shares records the same way). */
 Yv *gen_dotassign(Yv *st, Yv *node) {
     Yv *dobj = yr_get(node, "obj");
     Yv *dkey = yr_get(node, "key");
@@ -6966,8 +7378,16 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
     st = emit(st, ys("    push %rax"));
     st = gen_as(st, yr_get(node, "v"), rec_field_type(dt, dkey));
     st = emit(st, ys("    pop %rdx"));
-    return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * idx)),
-                           ys("(%rdx)")));
+    if (is_kshape(dt) && ys_eq_lit(dkey, "k")) {
+        /* the unknown-shape marker's k (gen_dot_rec) */
+        st = gen_koff(st, ys("%rdx"), ys("%rcx"));
+        return emit(st, ys("    mov %rax, (%rdx,%rcx,1)"));
+    } else if (ys_eq_lit(yr_get(dt, "k"), "tunion")) {
+        return gen_union_slot(st, dt, dkey, 1);
+    } else {
+        return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * idx)),
+                               ys("(%rdx)")));
+    }
 }
 
 /* ── ++/-- and op= ──────────────────────────────────────────────────────
@@ -7299,8 +7719,6 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
     st = yr_get(r, "st");
     Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
     Yv *tt = infer(st, tgt);
-    Yv *et = yr_get(tt, "of");
-    (void)et; /* bound in native.y too; unused there */
     Yv *mode = ys("push");
     if (ys_eq_lit(op, "*")) {
         mode = ys("prepend");
@@ -7421,6 +7839,7 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
  * arrays emit nested loops rather than needing a runtime type tag. */
 
 Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
+    t = unfold(t);
     Yv *tk = yr_get(t, "k");
     if (ys_eq_lit(tk, "tstr")) {
         return st;
@@ -7657,8 +8076,90 @@ Yv *gen_dot(Yv *st, Yv *node) {
         ys_eq_lit(tk, "tstr")) {
         return gen_prop(st, dobj, dkey, yv_l(yr_get(node, "line")),
                         yv_l(yr_get(node, "col")));
+    } else if (ys_eq_lit(tk, "tunion")) {
+        st = gen(st, dobj);
+        return gen_union_slot(st, t, dkey, 0);
     } else {
         return gen_dot_rec(st, dobj, dkey, t);
+    }
+}
+
+/* Field `dkey` of a union value (types.y union_field: every member has
+ * it, with one type): read into %rax from the record in %rax, or (store)
+ * %rax written to the record in %rdx. One move when the field has one
+ * slot in every member; else a compare of the record's descriptor per
+ * member, a move per slot. */
+Yv *gen_union_slot(Yv *st, Yv *t, Yv *dkey, int store) {
+    Yv *ms = union_parts(t);
+    Yv *slots = yav(0);
+    Yv *ds = yav(0);
+    long i = 0;
+    while (i < yv_len(ms)) {
+        long sl = rec_field_idx(unfold(ya_get(ms, i)), dkey);
+        slots = ya_push(slots, yv_long(sl));
+        int seen = 0;
+        for (long q = 0; q < yv_len(ds); q++) {
+            if (yv_l(ya_get(ds, q)) == sl) {
+                seen = 1;
+            }
+        }
+        if (!seen) {
+            ds = ya_push(ds, yv_long(sl));
+        }
+        i = i + 1;
+    }
+    Yv *rec = ys("%rax");
+    if (store) {
+        rec = ys("%rdx");
+    }
+    if (yv_len(ds) == 1) {
+        return gen_slot_move(st, yv_l(ya_get(ds, 0)), store);
+    } else {
+        Yv *done = next_loc(st);
+        st = yr_get(done, "st");
+        st = emit(st, ys_cat(ys_cat(ys("    mov -8("), rec), ys("), %rcx")));
+        Yv *lbls = yav(0);
+        long d = 0;
+        while (d < yv_len(ds) - 1) {
+            Yv *l = next_loc(st);
+            st = yr_get(l, "st");
+            lbls = ya_push(lbls, yr_get(l, "lbl"));
+            long j = 0;
+            while (j < yv_len(ms)) {
+                if (yv_l(ya_get(slots, j)) == yv_l(ya_get(ds, d))) {
+                    Yv *dr = ty_desc(st, ya_get(ms, j));
+                    st = yr_get(dr, "st");
+                    st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+                                         ys("(%rip), %rsi")));
+                    st = emit(st, ys("    cmp %rsi, %rcx"));
+                    st = emit(st, ys_cat(ys("    je "), yr_get(l, "lbl")));
+                }
+                j = j + 1;
+            }
+            d = d + 1;
+        }
+        st = gen_slot_move(st, yv_l(ya_get(ds, yv_len(ds) - 1)), store);
+        st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+        long e = 0;
+        while (e < yv_len(lbls)) {
+            st = emit(st, ys_cat(ya_get(lbls, e), ys(":")));
+            st = gen_slot_move(st, yv_l(ya_get(ds, e)), store);
+            st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+            e = e + 1;
+        }
+        return emit(st, ys_cat(yr_get(done, "lbl"), ys(":")));
+    }
+}
+
+/* gen_union_slot's move: slot sl of the record in %rax into %rax, or
+ * (store) %rax into slot sl of the record in %rdx. */
+Yv *gen_slot_move(Yv *st, long sl, int store) {
+    if (store) {
+        return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * sl)),
+                               ys("(%rdx)")));
+    } else {
+        return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * sl)),
+                               ys("(%rax), %rax")));
     }
 }
 
@@ -7676,7 +8177,17 @@ Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
 /* Record field read; `t` is the record's static type. */
 Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
     long idx = rec_field_idx(t, dkey);
-    if (idx < 0) {
+    // an open record's fields are wherever the record's own type puts them
+    if (is_kshape(t)) {
+        idx = -1;
+    }
+    if (is_kshape(t) && ys_eq_lit(dkey, "k")) {
+        /* the unknown-shape marker: k sits where the record's descriptor
+         * says (any record may hide behind {k: str}) */
+        st = gen(st, dobj);
+        st = gen_kload(st, ys("%rax"), ys("%rcx"), ys("%rax"));
+        ;
+    } else if (idx < 0) {
         /* unknown static shape ({k}-holes, bare params): dynamic field
          * lookup. The record carries its shape table (see gen_reclit note);
          * the key goes through the regular string rodata channel. */
@@ -7710,28 +8221,19 @@ Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
     return st;
 }
 
-/* Static field index of `key` in trec type t (-1 = checker drift;
- * the checker rejects unknown fields, so this is unreachable). */
+/* The slot of field `key` in a record of static type t (fields sorted by
+ * name, see "records at run time"); -1 when t has no such field (an
+ * unknown type: the read is dynamic, y_dot_lookup). */
 long rec_field_idx(Yv *t, Yv *key) {
     long idx = -1;
     if (ys_eq_lit(yr_get(t, "k"), "trec")) {
         Yv *fs = yr_get(t, "fields");
-        long i = 0;
-        while (i < yv_len(fs)) {
-            /* f is read twice: the name compare, then the field's type. */
-            Yv *f = ya_get(fs, i);
-            if (ys_eq(yr_get(f, "name"), key)) {
-                idx = i;
-                ;
-            } else {
-                ;
-            }
-            i = i + 1;
-        }
+        idx = rec_slot(fs, key);
+        ;
     } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
-        /* a map is lowered to the fixed {keys, vals, boxes} record (see
-         * gen_maplit) */
-        if (ys_eq_lit(key, "keys")) { idx = 0; ; } else if (ys_eq_lit(key, "vals")) { idx = 1; ; } else if (ys_eq_lit(key, "boxes")) { idx = 2; ; } else { ; }
+        /* a map is lowered to the {keys, vals, boxes} record (see
+         * gen_maplit), laid out boxes, keys, vals */
+        if (ys_eq_lit(key, "boxes")) { idx = 0; ; } else if (ys_eq_lit(key, "keys")) { idx = 1; ; } else if (ys_eq_lit(key, "vals")) { idx = 2; ; } else { ; }
     }
     return idx;
 }
@@ -7739,7 +8241,13 @@ long rec_field_idx(Yv *t, Yv *key) {
 /* Static type of field `key` in trec type t (tnone when there is none). */
 Yv *rec_field_type(Yv *t, Yv *key) {
     Yv *ft = yr(1, "k", ys("tnone"));
-    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+        Yv *ms = members(t);
+        if (yv_len(ms) > 0) {
+            ft = rec_field_type(ya_get(ms, 0), key);
+        }
+        ;
+    } else if (ys_eq_lit(yr_get(t, "k"), "trec")) {
         Yv *fs = yr_get(t, "fields");
         long i = 0;
         while (i < yv_len(fs)) {
@@ -8273,15 +8781,13 @@ Yv *gen_eputs(Yv *st, Yv *node) {
 
 Yv *gen_clock_us(Yv *st, Yv *node) {
     /* clock_us() -> long (monotonic microseconds, via clock_gettime). */
-    Yv *unused = node;
-    (void)unused;
+    (void)node; /* unused in native.y's def too */
     return emit(st, ys("    call y_clock_us"));
 }
 
 Yv *gen_heap_used(Yv *st, Yv *node) {
     /* heap_used() -> long (bytes the allocator has handed out so far). */
-    Yv *unused = node;
-    (void)unused;
+    (void)node; /* unused in native.y's def too */
     return emit(st, ys("    call y_heap_used"));
 }
 
@@ -8308,37 +8814,15 @@ Yv *gen_exit(Yv *st, Yv *node) {
     return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
 }
 
-/* ── process I/O + files (argv, read_file, write_file) ───────────────
+/* ── process I/O (argv) ──────────────────────────────────────────────
  * argv MAY only appear as `main(argv())`'s argument feed: ycc.y's entry is
  * `let result = main(argv())`. The _start prologue (below) builds the argv
  * array and stashes it in r15; gen_argv emits the call that materializes
- * it. read_file(path): openat+read loop into a heap string; none (0) on
- * error, else a some()-style heap box holding the string header (options
- * are 0-or-box per NATIVE.md, so unwrap() derefs uniformly).
- * write_file(path, content): openat(O_WRONLY|O_CREAT|O_TRUNC, 0644)+write;
- * returns bool. Both are straight-line syscalls, no libc. */
+ * it. (Files are std/fs.y: `import fs;`.) */
 
 Yv *gen_argv(Yv *st, Yv *node) {
     (void)node; /* native.y has no statement here; the node is unread */
     return emit(st, ys("    call y_argv"));
-}
-
-Yv *gen_read_file(Yv *st, Yv *node) {
-    st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_read_file"));
-    return emit(st, ys("    add $8, %rsp"));
-}
-
-Yv *gen_write_file(Yv *st, Yv *node) {
-    st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_write_file"));
-    return emit(st, ys("    add $16, %rsp"));
-}
-
-Yv *gen_write_bytes(Yv *st, Yv *node) {
-    st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_write_bytes"));
-    return emit(st, ys("    add $24, %rsp"));
 }
 
 Yv *gen_store(Yv *st, Yv *node) {
@@ -8645,7 +9129,7 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
     long i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
-        Yv *nm = top_def_name(s);
+        Yv *nm = top_name_in(s, origin);
         if (yv_len(nm) > 0) {
             long ln = yv_l(yr_get(s, "line"));
             names = ya_push(names, nm);
@@ -8693,6 +9177,24 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
         j = j + 1;
     }
     return errs;
+}
+
+/* top_def_name of a top-level statement as rename.c binds it: a module's
+ * (`import fs;`) qualified, `fs.exists` (rename.c rn_qualify). */
+Yv *top_name_in(Yv *s, Yv *origin) {
+    Yv *nm = top_def_name(s);
+    if (yv_len(nm) == 0 || ys_starts_with(nm, ys("y_"))) {
+        return nm;
+    } else {
+        long ln = yv_l(yr_get(s, "line"));
+        long fid = origin_file(origin, ln);
+        Yv *om = yr_get(origin, "mods");
+        if (fid < yv_len(om) && !ys_eq_lit(ya_get(om, fid), "")) {
+            return ys_cat(ys_cat(ya_get(om, fid), ys(".")), nm);
+        } else {
+            return nm;
+        }
+    }
 }
 
 /* The name a top-level statement defines as a function -- a def, or a let
@@ -9084,8 +9586,8 @@ Yv *std_compile(Yv *name, Yv *ext) {
     Yv *ast = parse_program(toks);
     Yv *noimports = yav(0);
     Yv *nolines = yav(0);
-    Yv *origin = yr(4, "files", yav(1, path), "nuser", yv_long(1),
-                    "file", nolines, "line", nolines);
+    Yv *origin = yr(5, "files", yav(1, path), "nuser", yv_long(1),
+                    "file", nolines, "line", nolines, "mods", yav(1, ys("")));
     Yv *xt = externs_none();
     yr_set(xt, "ext", ext);
     Yv *r = compile_unit(ast, noimports, origin, 1, name,
@@ -9117,7 +9619,10 @@ Yv *std_compile(Yv *name, Yv *ext) {
  * later def of the same name replaced (rename.y's `name$shadowK`). */
 Yv *export_name(Yv *name) {
     long d = ys_index_of(name, ys("$"));
-    if (d < 0) {
+    if (ys_index_of(name, ys(".")) >= 0) {
+        /* a module's (`fs.exists`): the unit's own import, not its export */
+        return ys("");
+    } else if (d < 0) {
         return name;
     } else if (is_all_digits(ys_slice_from(name, d + 1))) {
         return ys_slice(name, 0, d);
@@ -9182,6 +9687,7 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
 
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                  long base, Yv *xt) {
+    tyset_reset();
     dbg_lines = debug;
     dbg_file = yr_get(origin, "file");
     dbg_line = yr_get(origin, "line");
@@ -9198,7 +9704,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
     ph = yv_l(yr_get(pr, "h"));
     /* Static name resolution: every binding gets a unique name, so neither
      * the checker nor the emitter deals with scopes or shadowing. */
-    Yv *ast3 = rename_program_x(ast2, yr_get(xt, "dfl"));
+    Yv *ast3 = rename_program_x(ast2, yr_get(xt, "dfl"), yr_get(origin, "file"),
+                                yr_get(origin, "mods"));
     pr = phase_end(times, ys("rename"), pt, ph);
     times = yr_get(pr, "times");
     pt = yv_l(yr_get(pr, "t"));
@@ -9224,10 +9731,20 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
     } else {
         ;
     }
+    Yv *warnings = yav(0);
     if (yv_len(errors) > 0) {
-        return yr(4, "ok", yv_bool(0), "errors", errors, "times", times,
-                  "unit", unit_empty(name));
+        return yr(5, "ok", yv_bool(0), "errors", errors, "warnings",
+                  warnings, "times", times, "unit", unit_empty(name));
     } else {
+        /* The warnings (lint.c): the program's unit's and a package's,
+         * never a std unit's. */
+        if (yv_len(name) == 0 || pkg_base(base)) {
+            warnings = lint_unit(ast, ast3);
+            pr = phase_end(times, ys("lint"), pt, ph);
+            times = yr_get(pr, "times");
+            pt = yv_l(yr_get(pr, "t"));
+            ph = yv_l(yr_get(pr, "h"));
+        }
         Yv *gdecls = global_decls(yr_get(ast3, "stmts"));
         Yv *gnames = yav(0);
         long gi = 0;
@@ -9419,7 +9936,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         Yv *udfl = yav(0);
         if (pkg_base(base)) {
             exports = pkg_exports(exports, gl);
-            udfl = unit_dfl(yr_get(ast2, "stmts"));
+            udfl = unit_dfl(yr_get(ast2, "stmts"), origin);
             ;
         } else {
             ;
@@ -9531,8 +10048,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                       "labels", blabels, "refs", brefs, "rodata",
                       yr_get(st, "rodata"), "globals", glabels, "dfl",
                       udfl);
-        return yr(4, "ok", yv_bool(1), "errors", errors, "times", times,
-                  "unit", unit);
+        return yr(5, "ok", yv_bool(1), "errors", errors, "warnings",
+                  warnings, "times", times, "unit", unit);
     }
 }
 
@@ -9608,13 +10125,14 @@ Yv *pkg_exports(Yv *xs, Yv *gl) {
 
 /* Parameter defaults by source-level top-level name; a later definition
  * replaces the earlier entry. */
-Yv *unit_dfl(Yv *stmts) {
+Yv *unit_dfl(Yv *stmts, Yv *origin) {
     Yv *out = yav(0);
     long i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
-        Yv *nm = top_def_name(s);
-        if (yv_len(nm) > 0) {
+        Yv *nm = top_name_in(s, origin);
+        /* (not an imported module's: see export_name) */
+        if (yv_len(nm) > 0 && ys_index_of(nm, ys(".")) < 0) {
             Yv *keep = yav(0);
             long j = 0;
             while (j < yv_len(out)) {
@@ -9758,8 +10276,9 @@ Yv *link_locs(Yv *body, long off) {
 }
 
 /* One unit's rodata entries as text. String entries are exactly [label,
- * len, escaped]; shape tables (see gen_reclit note) are longer and
- * all-strings. */
+ * len, escaped]; record-type descriptors (ty_desc) are [label, canonical
+ * form, quads...]: one per label in the program (ty_seen, emptied by
+ * link_units), and two different forms under one label stop the link. */
 Yv *rodata_pieces(Yv *pieces, Yv *allrod) {
     long s2 = 0;
     while (s2 < yv_len(allrod)) {
@@ -9775,13 +10294,21 @@ Yv *rodata_pieces(Yv *pieces, Yv *allrod) {
             pieces = ya_push(pieces, entry);
             ;
         } else {
-            pieces = ya_push(pieces, ys_cat(ya_get(pair, 0), ys(":\n")));
-            long q = 2;
-            while (q < yv_len(pair)) {
-                pieces = ya_push(
-                    pieces,
-                    ys_cat(ys_cat(ys(".quad "), ya_get(pair, q)), ys("\n")));
-                q = q + 1;
+            Yv *lbl = ya_get(pair, 0);
+            Yv *form = ya_get(pair, 1);
+            long added = tyset_add(lbl, form);
+            if (added < 0) {
+                ty_collision(lbl, form);
+            }
+            if (added > 0) {
+                pieces = ya_push(pieces, ys_cat(lbl, ys(":\n")));
+                long q = 2;
+                while (q < yv_len(pair)) {
+                    pieces = ya_push(
+                        pieces,
+                        ys_cat(ys_cat(ys(".quad "), ya_get(pair, q)), ys("\n")));
+                    q = q + 1;
+                }
             }
             ;
         }
@@ -9953,6 +10480,8 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     }
     Yv *consts_text = shake_refs(arch_consts(), const_refs);
     asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
+    /* every unit's rodata and globals, in link order */
+    tyset_reset();
     Yv *rodpieces = yav(0);
     Yv *gls = yav(0);
     long ju = 0;
@@ -10006,11 +10535,11 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 2\n");
+    return ys("ycc-std-pack 3\n");
 }
 
 Yv *obj_version(void) {
-    return ys("ycc-unit 1\n");
+    return ys("ycc-unit 2\n");
 }
 
 Yv *pack_put(Yv *out, Yv *s) {
@@ -10033,6 +10562,9 @@ Yv *pack_strs(Yv *out, Yv *xs) {
 /* A complete type encoding for std packs and package objects. It keeps
  * every type kind and record shape, unlike the user-facing tstr format. */
 Yv *tcode(Yv *t) {
+    if (tcode_refs == NULL) {
+        tcode_refs = yav(0);
+    }
     return ys_join(tcode_go(yav(0), t), ys(""));
 }
 
@@ -10087,6 +10619,22 @@ Yv *tcode_go(Yv *out, Yv *t) {
     } else if (ys_eq_lit(k, "tpat")) {
         out = ya_push(out, ys("P"));
         return pack_strs(out, yr_get(t, "names"));
+    } else if (ys_eq_lit(k, "tref")) {
+        /* a recursive alias: spelled out where it is met first, "q" and
+           its unit id inside (tcode_refs: the trefs being spelled out) */
+        Yv *tmp = yr_get(t, "tmp");
+        if (name_in(tcode_refs, tmp)) {
+            out = ya_push(out, ys("q"));
+            return pack_put(out, tmp);
+        } else {
+            out = ya_push(out, ys("Q"));
+            out = pack_put(out, yr_get(t, "name"));
+            out = pack_put(out, tmp);
+            tcode_refs = ya_push(tcode_refs, tmp);
+            out = tcode_go(out, yr_get(t, "to"));
+            tcode_refs = ya_slice(tcode_refs, 0, yv_len(tcode_refs) - 1);
+            return out;
+        }
     } else if (ys_eq_lit(k, "trec")) {
         out = ya_push(out, ys("R"));
         Yv *fs = yr_get(t, "fields");
@@ -10119,6 +10667,10 @@ Yv *tcode_list(Yv *out, Yv *ts) {
 }
 
 Yv *tdecode(Yv *s) {
+    if (tdec_encs == NULL) {
+        tdec_encs = yav(0);
+        tdec_refs = yav(0);
+    }
     return tdecode_go(yr(2, "s", s, "p", yv_long(0)));
 }
 
@@ -10169,6 +10721,27 @@ Yv *tdecode_go(Yv *cur) {
         return normnode(yr(2, "k", ys("tparams"), "ts", tdecode_list(cur)));
     } else if (ys_eq_lit(c, "P")) {
         return normnode(yr(2, "k", ys("tpat"), "names", pack_get_strs(cur)));
+    } else if (ys_eq_lit(c, "Q")) {
+        /* a tref (tcode): a fresh unit id, `to` read with the "q"s inside
+           it pointing back at it (tdec_encs/tdec_refs) */
+        Yv *name = pack_get(cur);
+        Yv *enc = pack_get(cur);
+        tdec_n = tdec_n + 1;
+        Yv *r = yr(4, "k", ys("tref"), "name", name, "tmp",
+                   ys_cat(ys("~"), ys_long(tdec_n)), "to", yr(1, "k", ys("tnone")));
+        tdec_encs = ya_push(tdec_encs, enc);
+        tdec_refs = ya_push(tdec_refs, r);
+        yr_set(r, "to", tdecode_go(cur));
+        tdec_encs = ya_slice(tdec_encs, 0, yv_len(tdec_encs) - 1);
+        tdec_refs = ya_slice(tdec_refs, 0, yv_len(tdec_refs) - 1);
+        return normnode(r);
+    } else if (ys_eq_lit(c, "q")) {
+        Yv *enc = pack_get(cur);
+        long i = yv_len(tdec_encs) - 1;
+        while (i > 0 && !ys_eq(ya_get(tdec_encs, i), enc)) {
+            i = i - 1;
+        }
+        return normnode(ya_get(tdec_refs, i));
     } else {
         Yv *fields = yav(0);
         long n = pack_num(cur);
@@ -10570,11 +11143,13 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps) {
         long ph = heap_used();
         Yv *asm_ = link_units(std, deps, yr_get(r, "unit"));
         Yv *pr = phase_end(times, ys("asm_text"), pt, ph);
-        return yr(4, "ok", yv_bool(1), "asm", asm_, "errors",
-                  yr_get(r, "errors"), "times", yr_get(pr, "times"));
+        return yr(5, "ok", yv_bool(1), "asm", asm_, "errors",
+                  yr_get(r, "errors"), "warnings", yr_get(r, "warnings"),
+                  "times", yr_get(pr, "times"));
     } else {
-        return yr(4, "ok", yv_bool(0), "asm", ys(""), "errors",
-                  yr_get(r, "errors"), "times", times);
+        return yr(5, "ok", yv_bool(0), "asm", ys(""), "errors",
+                  yr_get(r, "errors"), "warnings", yr_get(r, "warnings"),
+                  "times", times);
     }
 }
 

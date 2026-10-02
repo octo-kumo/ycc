@@ -2,7 +2,7 @@
  *
  * ycc — the Y compiler. Compiles Y source straight to a native
  * executable (Linux x86-64) with no toolchain: no cc, no as, no ld,
- * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec]
+ * no libc. Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [--no-exec]
  * [--std-src] [--std-pack FILE] [-h] FILE
  *   (no flags)   compile FILE to a native executable (default output: a.out)
  *   -o OUTPUT    output path (executable, or .s file with -S)
@@ -10,11 +10,12 @@
  *   -t, --time   print per-phase time and heap use to stderr
  *   -g           add a symbol table and DWARF line info (for perf, gdb,
  *                valgrind, addr2line; see -h)
+ *   -w           do not print warnings (lint.c)
  *   --std-src    compile the std units from source, not the attached pack
  *   --std-pack FILE  write the compiled std units to FILE, no program
  *   -h, --help   show this text and exit
  * A project (a directory with a y.toml manifest, see pkg.y):
- *   ycc build [-g] [--no-exec] [--std-src] [DIR]   build its programs
+ *   ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]   build its programs
  *   ycc vendor [DIR]   copy its git dependencies into vendor/
  */
 #include "ycc.h"
@@ -40,6 +41,7 @@ Yv *parse_cli_args(Yv *argv) {
     int timing = 0;
     int allow_exec = 1;
     int debug = 0;
+    int nowarn = 0;
     int std_src = 0;
     Yv *std_pack_path = ys("");
     long i = 1; /* skip argv[0] */
@@ -68,6 +70,9 @@ Yv *parse_cli_args(Yv *argv) {
         } else if (ys_eq_lit(a, "-g")) {
             debug = 1;
             ;
+        } else if (ys_eq_lit(a, "-w")) {
+            nowarn = 1;
+            ;
         } else if (ys_eq_lit(a, "--std-src")) {
             std_src = 1;
             ;
@@ -82,8 +87,8 @@ Yv *parse_cli_args(Yv *argv) {
                 ;
             }
         } else if (ys_eq_lit(a, "--help") || ys_eq_lit(a, "-h")) {
-            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE\n"));
-            puts_(ys("       ycc build [-g] [--no-exec] [--std-src] [DIR]\n"));
+            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [--no-exec] [-h] FILE\n"));
+            puts_(ys("       ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]\n"));
             puts_(ys("       ycc vendor [DIR]\n"));
             puts_(ys("  (no flags)   compile FILE to a native executable (default: "
                      "a.out)\n"));
@@ -94,6 +99,8 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("               globals) and DWARF line info, so perf, gdb,\n"));
             puts_(ys("               valgrind and addr2line show names and source\n"));
             puts_(ys("               lines; the loaded code and data are unchanged\n"));
+            puts_(ys("  -w           do not print warnings (they go to stderr and\n"));
+            puts_(ys("               never change the output)\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
             puts_(ys("  --std-src    compile the std units (the runtime and std library)\n"));
             puts_(ys("               from source instead of using the precompiled ones\n"));
@@ -118,10 +125,10 @@ Yv *parse_cli_args(Yv *argv) {
         }
         i = i + 1;
     }
-    return yr(8, "out", out, "files", files, "asm_only", yv_bool(asm_only),
+    return yr(9, "out", out, "files", files, "asm_only", yv_bool(asm_only),
               "timing", yv_bool(timing), "allow_exec", yv_bool(allow_exec),
-              "debug", yv_bool(debug), "std_src", yv_bool(std_src),
-              "std_pack", std_pack_path);
+              "debug", yv_bool(debug), "nowarn", yv_bool(nowarn),
+              "std_src", yv_bool(std_src), "std_pack", std_pack_path);
 }
 
 /* ── the std pack ───────────────────────────────────────────────────────
@@ -324,9 +331,31 @@ long print_native_errors(Yv *errors, Yv *origin, int bare) {
     return 0;
 }
 
+/* What lint.c found in a unit that compiled, as `at: warning: msg` on
+ * stderr (a -S listing on stdout stays clean), each position as
+ * print_native_errors gives it. lint_unit sorted them and dropped repeats. */
+long print_native_warnings(Yv *warnings, Yv *origin, int bare) {
+    long i = 0;
+    while (i < yv_len(warnings)) {
+        Yv *w = ya_get(warnings, i);
+        eputs_(ys_cat(
+            ys_cat(ys_cat(ys_cat(ys_cat(origin_at(origin,
+                                                  yv_l(yr_get(w, "line")),
+                                                  bare),
+                                        ys(":")),
+                                 ys_tostring(yr_get(w, "col"))),
+                          ys(": warning: ")),
+                   yr_get(w, "msg")),
+            ys("\n")));
+        i = i + 1;
+    }
+    return 0;
+}
+
 Yv *build_args(Yv *cmdline) {
     Yv *dir = ys("");
     int debug = 0;
+    int nowarn = 0;
     int allow_exec = 1;
     int std_src = 0;
     long i = 2;
@@ -334,6 +363,8 @@ Yv *build_args(Yv *cmdline) {
         Yv *a = ya_get(cmdline, i);
         if (ys_eq_lit(a, "-g")) {
             debug = 1;
+        } else if (ys_eq_lit(a, "-w")) {
+            nowarn = 1;
         } else if (ys_eq_lit(a, "--no-exec")) {
             allow_exec = 0;
         } else if (ys_eq_lit(a, "--std-src")) {
@@ -359,8 +390,9 @@ Yv *build_args(Yv *cmdline) {
     } else {
         ;
     }
-    return yr(4, "dir", dir, "debug", yv_bool(debug), "allow_exec",
-              yv_bool(allow_exec), "std_src", yv_bool(std_src));
+    return yr(5, "dir", dir, "debug", yv_bool(debug), "nowarn",
+              yv_bool(nowarn), "allow_exec", yv_bool(allow_exec), "std_src",
+              yv_bool(std_src));
 }
 
 Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
@@ -473,7 +505,8 @@ Yv *build_reach(Yv *direct, Yv *pkgs, Yv *nrs) {
     return reach;
 }
 
-long build_project(Yv *dir, int debug, int allow_exec, int std_src) {
+long build_project(Yv *dir, int debug, int nowarn, int allow_exec,
+                   int std_src) {
     Yv *g = pk_load(dir);
     Yv *bins = yr_get(g, "bins");
     Yv *pkgs = yr_get(g, "pkgs");
@@ -575,6 +608,10 @@ long build_project(Yv *dir, int debug, int allow_exec, int std_src) {
             } else {
                 ;
             }
+            if (!nowarn) {
+                print_native_warnings(yr_get(r, "warnings"),
+                                      yr_get(nr, "origin"), 0);
+            }
             if (!write_file(opath, unit_obj(yr_get(r, "unit"), key))) {
                 puts_(ys_cat(ys_cat(ys("error: writing '"), opath), ys("' failed\n")));
                 exit_(1);
@@ -642,6 +679,10 @@ long build_project(Yv *dir, int debug, int allow_exec, int std_src) {
         } else {
             ;
         }
+        if (!nowarn) {
+            print_native_warnings(yr_get(r, "warnings"), yr_get(nr, "origin"),
+                                  0);
+        }
         Yv *ab = ycc_assemble(yr_get(r, "asm"), debug);
         if (!yv_b(yr_get(ab, "ok"))) {
             puts_(ys_cat(ys_cat(ys("error: assemble: "), yr_get(ab, "error")),
@@ -672,6 +713,7 @@ long y_main(Yv *cmdline) {
         Yv *ba = build_args(cmdline);
         if (ys_eq_lit(ya_get(cmdline, 1), "build")) {
             build_project(yr_get(ba, "dir"), yv_b(yr_get(ba, "debug")),
+                          yv_b(yr_get(ba, "nowarn")),
                           yv_b(yr_get(ba, "allow_exec")),
                           yv_b(yr_get(ba, "std_src")));
             ;
@@ -770,13 +812,17 @@ long y_main(Yv *cmdline) {
             Yv *r = emit_program(ast, nr, yv_b(yr_get(pargs, "debug")), su,
                                  yav(0));
             /* emit_program reports its own sub-phases (strip_ns, rename,
-             * typecheck, emit_fns, emit_start, asm_text); splice them in. */
+             * typecheck, lint, emit_fns, emit_start, asm_text); splice them
+             * in. */
             Yv *sub = yr_get(r, "times");
             long si = 0;
             while (si < yv_len(sub)) {
                 Yv *se = ya_get(sub, si);
                 dt = ya_push(dt, se);
                 si = si + 1;
+            }
+            if (yv_b(yr_get(r, "ok")) && !yv_b(yr_get(pargs, "nowarn"))) {
+                print_native_warnings(yr_get(r, "warnings"), nrorigin, 1);
             }
             t0 = clock_us();
             h0 = heap_used();

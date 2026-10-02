@@ -6,8 +6,9 @@
 #
 #  1. diagnostics: every message a diagnostic site in the compiler can print
 #     (lexer, parser, renamer, checker, imports/embeds, driver, runtime
-#     traps) has its text in a test expectation — an e*.y `// expect-error:`
-#     marker, an inline case in test/sh/*.sh, or a *.expected file. A site's
+#     traps, lint warnings) has its text in a test expectation — an e*.y
+#     `// expect-error:` or t*.y `// expect-warning:` marker, an inline
+#     case in test/sh/*.sh, or a *.expected file. A site's
 #     message is a template: its constant text, with holes where names and
 #     types go. One expectation line matching the whole template covers
 #     every site that builds that message. Sites with no constant text, and
@@ -57,6 +58,7 @@ matrix_rows() {
 # The sites, their message templates and the matching: coverage_diag.awk.
 {
     grep -h -o '// expect-error: .*' "$ROOT"/test/y/native/e*.y | sed 's#// expect-error: ##'
+    grep -h -o '// expect-warning: .*' "$ROOT"/test/y/native/t*.y | sed 's#// expect-warning: ##'
     for s in "$ROOT"/test/sh/*.sh; do
         [ "$(basename "$s")" = test_coverage.sh ] || cat "$s"
     done
@@ -66,7 +68,7 @@ matrix_rows "Untested diagnostics" | awk -F'\t' '{ gsub(/`/, "", $1); gsub(/`/, 
 awk -v EXCF="$TMP/excused" -v EXPF="$TMP/expect" -f "$ROOT/test/sh/coverage_diag.awk" \
     "$TMP/excused" "$TMP/expect" \
     "$SRC/lexer.y" "$SRC/parser.y" "$SRC/rename.y" "$SRC/types.y" "$SRC/native.y" \
-    "$SRC/ycc.y" "$SRC/pkg.y" "$SRC/arch_x64.y" "$SRC"/std/*.y > "$TMP/sites"
+    "$SRC/ycc.y" "$SRC/pkg.y" "$SRC/lint.y" "$SRC/arch_x64.y" "$SRC"/std/*.y > "$TMP/sites"
 nsites=$(grep -c -v '^stale' "$TMP/sites")
 nmiss=0
 while IFS=$'\t' read -r status loc what; do

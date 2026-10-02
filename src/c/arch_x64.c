@@ -95,8 +95,10 @@ Yv *arch_prelude(void) {
     // block by block, prune_bodies does the same for rt.y's functions).
     // What stays here is what only raw machine state can do: the bump
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
-    // .bss cells), the trap stubs, the record field-table probes
-    // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
+    // .bss cells), the trap stubs, the record descriptor probes
+    // (y_rec_has, y_dot_lookup: the field table; y_rec_cast: the shape
+    // hash, see native.y "records at run time"), the byte-moving
+    // string/array cores
     // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
     Yv *lines = yav(0);
@@ -401,6 +403,7 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    test %rbx, %rbx"));
     lines = ya_push(lines, ys("    jz yrh_no"));
     lines = ya_push(lines, ys("    mov -8(%rbx), %r14"));
+    lines = ya_push(lines, ys("    add $16, %r14"));
     lines = ya_push(lines, ys("    mov (%r14), %r10"));
     lines = ya_push(lines, ys("    mov $1498307412, %rax"));
     lines = ya_push(lines, ys("    cmp %rax, %r10"));
@@ -475,6 +478,7 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    test %rbx, %rbx"));
     lines = ya_push(lines, ys("    jz y_dot_trap"));
     lines = ya_push(lines, ys("    mov -8(%rbx), %r14"));
+    lines = ya_push(lines, ys("    add $16, %r14"));
     lines = ya_push(lines, ys("    mov (%r14), %r10"));
     lines = ya_push(lines, ys("    mov $1498307412, %rax"));
     lines = ya_push(lines, ys("    cmp %rax, %r10"));
@@ -534,6 +538,24 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    mov $1, %rdi"));
     lines = ya_push(lines, ys("    lea ystr_dot2(%rip), %rsi"));
     lines = ya_push(lines, ys("    mov $ystr_dot2_end-ystr_dot2, %rdx"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov $60, %rax"));
+    lines = ya_push(lines, ys("    mov $1, %rdi"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("y_rec_cast:"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    jz yrc_ok"));
+    lines = ya_push(lines, ys("    mov -8(%rax), %rdx"));
+    lines = ya_push(lines, ys("    mov 8(%rdx), %rdx"));
+    lines = ya_push(lines, ys("    cmp %rcx, %rdx"));
+    lines = ya_push(lines, ys("    jne y_cast_trap"));
+    lines = ya_push(lines, ys("yrc_ok:"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_cast_trap:"));
+    lines = ya_push(lines, ys("    mov $1, %rax"));
+    lines = ya_push(lines, ys("    mov $1, %rdi"));
+    lines = ya_push(lines, ys("    lea ystr_cast(%rip), %rsi"));
+    lines = ya_push(lines, ys("    mov $ystr_cast_end-ystr_cast, %rdx"));
     lines = ya_push(lines, ys("    syscall"));
     lines = ya_push(lines, ys("    mov $60, %rax"));
     lines = ya_push(lines, ys("    mov $1, %rdi"));
@@ -1520,6 +1542,8 @@ Yv *arch_consts(void) {
     lines = ya_push(lines, ys("ystr_dot_end:"));
     lines = ya_push(lines, ys("ystr_dot2: .ascii \"'\\n\""));
     lines = ya_push(lines, ys("ystr_dot2_end:"));
+    lines = ya_push(lines, ys("ystr_cast: .ascii \"runtime error: a record does not have the fields of its declared type\\n\""));
+    lines = ya_push(lines, ys("ystr_cast_end:"));
     lines = ya_push(lines, ys("ystr_oom: .ascii \"runtime error: out of memory\\n\""));
     lines = ya_push(lines, ys("ystr_oom_end:"));
     lines = ya_push(lines, ys("ystr_opt: .ascii \"runtime error: unwrap of none\\n\""));

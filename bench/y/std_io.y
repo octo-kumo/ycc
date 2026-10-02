@@ -1,4 +1,4 @@
-import io;
+import fs;
 
 def make_chunk() -> str {
     let bytes: [byte] = [];
@@ -22,22 +22,22 @@ def run() -> long {
     let chunk = make_chunk();
     let size = len(chunk);
     let chunks = 32;
-    let fd = io.open(path, io.O_WRONLY() + io.O_CREAT() + io.O_TRUNC(), 420);
+    let fd = fs.open_file(path, "w");
     let i = 0;
     let written = 0;
     while (i < chunks) {
-        written = written + io.write_str(fd, chunk, size);
+        if (fs.write_text(fd, chunk)) { written = written + size; 0 } else { 0 };
         i = i + 1;
     };
-    io.close(fd);
+    fs.close_file(fd);
 
-    let input = io.open(path, io.O_RDONLY(), 0);
+    let input = fs.open_file(path, "r");
     let buffer: [long; 8192] = [0; 8192];
     let total = 0;
     let checksum = 0;
     let reading = true;
     while (reading) {
-        let n = io.read(input, &buffer[0], size);
+        let n = syscall(0, input, &buffer[0], size);
         if (n <= 0) {
             reading = false;
             0
@@ -59,8 +59,8 @@ def run() -> long {
         };
         0
     };
-    io.close(input);
-    syscall(87, path);
+    fs.close_file(input);
+    fs.remove_file(path);
     if (written != chunks * size || total != written) { exit(1); 0 } else { 0; };
     checksum
 };

@@ -12,7 +12,7 @@ print({ let x = 3; x * x });
 // blocks nest and get their own scope
 let outer = 1;
 let nested = {
-    let outer = 100;
+    let outer = 100; // expect-warning: unused variable 'outer'
     { let outer = 5; outer + 1 }
 };
 print(outer);

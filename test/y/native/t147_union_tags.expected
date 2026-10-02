@@ -1,0 +1,11 @@
+a
+A 1
+{name: a, x: 1}
+b
+B 5
+{name: b, y: 2, z: 3}
+a! {name: a!, x: 1}
+b! {name: b!, y: 2, z: 3}
+c! {id: 7, name: c!}
+id 7: c!
+named: a!

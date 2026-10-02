@@ -9,7 +9,8 @@ imported file's text in front of the importing file's own code, under a
 namespace alias:
 
 \begin{lstlisting}
-import io from "./std/io.y";   // io.f(...) addresses defs of io.y
+import util from "./util.y";   // util.f(...) addresses defs of util.y
+import fs;                     // a module by name: fs.read_file(...)
 \end{lstlisting}
 
 \noindent An \ic{export \{ a, b \}} clause, when present, lists what a
@@ -20,14 +21,24 @@ that: an import splices the imported file's text and drops every
 effect. (A file's defs are spliced whole; namespaces are resolved by
 rewriting, not by the export list.) Paths resolve relative to the
 importing file's directory. A missing module is a fatal error. Without a
-path, \ic{import net;} finds a module by name: \ic{net.y} next to the
-importing file first, then the standard library's \ic{std/net.y}. An
+path, \ic{import fs;} finds a module by name: \ic{fs.y} next to the
+importing file first, then the standard library's \ic{std/fs.y}. An
 import takes a line of its own: everything after \ic{import} on that
 line names the module, so a second statement on the same line becomes
 part of the name.
 
-All the files of a program share one namespace: \ic{io.f} is rewritten
-to plain \ic{f}, and the alias only says which file a name comes from.
+A module imported by name keeps its own scope. Its top-level \ic{def}s
+and \ic{let}s are reached as \ic{fs.read\_file}, never bare, so they
+cannot collide with the program's names: a program may define its own
+\ic{exists}, or \ic{let cwd = fs.cwd();}. Inside the module its own
+names are bare, and they come before the program's. A binding named
+like the module hides it where it is in scope: after
+\ic{let fs = \{st: 1\};}, \ic{fs.st} is that record's field. (The type
+aliases a module declares are not scoped: they join the program's.)
+
+The files imported by path share one namespace with the program:
+\ic{util.f} is rewritten to plain \ic{f}, and the alias only says which
+file a name comes from.
 A later top-level \ic{def} replaces an earlier one of the same name.
 Within one file that is deliberate (the last definition wins). Across
 files it would silently hand one file's callers another file's function,
@@ -110,7 +121,9 @@ again only when its text, the paths it was read from, the compiler, or
 the interface of a package it imports (the names, types and defaults it
 exports) changed; a change elsewhere in a dependency leaves its
 importers' objects as they are. \ic{ycc build -g} links the same
-objects with line information.
+objects with line information. A package's warnings
+(Section~\ref{sec:warnings}) print when it compiles, and \ic{-w} drops
+them.
 
 A git dependency is cloned into \ic{build/git} --- its \ic{rev} (a tag,
 branch or commit), or the default branch without one --- and pinned in
@@ -161,13 +174,15 @@ Function literals may also appear bound or anonymous:
   |~& \ic{\{}~[\ty{name}~\ic{:}~\ty{type}
         ~\{,~\ty{name}~\ic{:}~\ty{type}\}]~\ic{\}}
                                                  && \text{(record shape)}\\
-  |~& \ic{\{}~\ty{type}~\ic{=>}~\ty{type}~\ic{\}}  && \text{(map)}
+  |~& \ic{\{}~\ty{type}~\ic{=>}~\ty{type}~\ic{\}}  && \text{(map)}\\
+  |~& \ty{type}~\ic{|}~\ty{type}                 && \text{(union of records)}
 \end{align*}
 
-\noindent A record shape is structural; the shape \ic{\{ k: str \}} is
-written to mean ``a record with at least a field \ic{k} of type
-\ty{str}'' and is the conventional shape-hole annotation for AST-like
-data. \ic{nat} is an integer literal from 0 to $2^{31}-1$ (2147483647),
+\noindent A record type is structural and its field order free
+(Section~\ref{sec:type-records}); the shape \ic{\{ k: str \}} is
+written to mean ``any record with a field \ic{k} of type \ty{str}'' and
+is the conventional shape-hole annotation for AST-like data. A union's
+members are record types (Section~\ref{sec:type-unions}). \ic{nat} is an integer literal from 0 to $2^{31}-1$ (2147483647),
 decimal or radix (\ic{[0; 0x10]}); a float, a larger or negative number
 or a name there is an error at the size. The type name
 \ic{int} is accepted as a synonym of \ic{long} in annotations. Any other

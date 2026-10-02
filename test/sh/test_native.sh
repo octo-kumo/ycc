@@ -3,7 +3,10 @@
 # (its own assembler + ELF writer — no cc/as/ld anywhere). Run, compare.
 # Usage: ./test/sh/test_native.sh   (YSHARD=K/N: one shard, lib.sh)
 # t*.y: stdout must match t*.expected, exit must match t*.exit (default 0).
-# Stdin comes from t*.stdin when present, else /dev/null.
+# Stdin comes from t*.stdin when present, else /dev/null. The compile's
+#   warnings (lint.y) must be exactly the file's `// expect-warning: MSG`
+#   markers: each draws a warning quoting MSG on the marker's own line (a
+#   line drawing two carries two markers), and an unmarked warning fails.
 # e*.y: ycc must FAIL, and its output must contain the text of EVERY
 #   `// expect-error: ...` line in the file. One file can mark several:
 #   the parser and the checker report all their errors, so a themed file
@@ -77,6 +80,33 @@ run_native() {
     fi
     if [ ! -x "$bin" ]; then
         fail "$base" "output is not executable"
+        rm -f "$bin"
+        return
+    fi
+    # the warnings: "LINE:COL: warning: MSG" (the fixture is the main file,
+    # so its positions are bare), against the markers as "LINE:MSG"
+    local warns marks m wl
+    warns=$(echo "$err" | grep -F ': warning: ')
+    marks=$(awk -v M="// expect-warning: " '{
+        s = $0
+        while ((i = index(s, M)) > 0) {
+            s = substr(s, i + length(M)); j = index(s, " " M)
+            print NR ":" (j ? substr(s, 1, j - 1) : s)
+            if (!j) break
+            s = substr(s, j + 1)
+        }
+    }' "$prog")
+    while IFS= read -r m; do
+        [ -z "$m" ] && continue
+        wl=${m%%:*}
+        if ! echo "$warns" | grep -F -- "${m#*:}" | grep -q "^$wl:"; then
+            fail "$base" "no warning '${m#*:}' on line $wl (got: $(echo "$warns" | head -c 300 | tr '\n' '|'))"
+            rm -f "$bin"
+            return
+        fi
+    done <<< "$marks"
+    if [ "$(echo "$warns" | grep -c .)" -ne "$(echo "$marks" | grep -c .)" ]; then
+        fail "$base" "unmarked warnings (got: $(echo "$warns" | head -c 300 | tr '\n' '|'))"
         rm -f "$bin"
         return
     fi

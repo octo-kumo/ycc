@@ -6,6 +6,8 @@
 // stray byte, a run of nesting). The same RNG always gives the same
 // output, so a finding is reproducible from its seed alone.
 
+import fs;
+
 const TOKENS = ["def", "let", "const", "if", "else", "while", "for",
     "foreach", "in", "return", "match", "import", "export", "type", "self",
     "none", "true", "false", "{", "}", "(", ")", "[", "]", ";", ",", ":",
@@ -83,7 +85,7 @@ def mutate_once(s: str, other: str) -> str {
 };
 
 def read_or_empty(path: str) -> str {
-    let s = read_file(path);
+    let s = fs.read_file(path);
     if (s == none) { "" } else { s! }
 };
 
@@ -98,7 +100,7 @@ let other = read_or_empty(args[2]);
 foreach (m in range(1 + rand(4))) {
     s = mutate_once(s, other);
 };
-if (!write_file(args[4], s)) {
+if (!fs.write_file(args[4], s)) {
     eputs("mutate: cannot write " + args[4] + "\n");
     exit(1);
 };

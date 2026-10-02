@@ -1,9 +1,9 @@
 #!/bin/bash
 # bench/compare.sh BASE_YCC NEW_YCC [runs] — score two ycc builds against
-# each other, e.g. two branches:
+# each other, e.g. another base against the current tree:
 #
-#     make ycc && cp ycc /tmp/ycc-base     # on the base branch
-#     git switch my-change && make ycc     # on the proposal branch
+#     make ycc && cp ycc /tmp/ycc-base     # on the base
+#     git switch - && make ycc             # back on the change
 #     bench/compare.sh /tmp/ycc-base ./ycc
 #
 # Every metric is lower-is-better. Each time is the median of [runs] (5)

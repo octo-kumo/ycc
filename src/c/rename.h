@@ -21,6 +21,7 @@ Yv *rn_push(Yv *st);
 Yv *rn_pop(Yv *st);
 Yv *rn_define(Yv *st, Yv *orig, Yv *uniq);
 Yv *rn_lookup(Yv *st, Yv *name);
+Yv *rn_lookup_to(Yv *st, Yv *name, long lo);
 Yv *rn_bind(Yv *st, Yv *orig);
 
 /* node lists and ids */
@@ -32,10 +33,8 @@ Yv *rn_prepass(Yv *stmts, Yv *st);
 Yv *rn_prepass_one(Yv *s, Yv *st);
 Yv *rn_prepass_decl(Yv *s, Yv *st);
 Yv *rn_shadow_dups(Yv *stmts);
-Yv *rn_shadow_one(Yv *s, Yv *stmts, long i);
-Yv *rn_shadow_decl(Yv *s, Yv *stmts, long i);
-Yv *rn_shadow_go(Yv *s, Yv *stmts, long i);
-int rn_redefined_later(Yv *stmts, long i, Yv *name);
+Yv *rn_later(Yv *names);
+long rn_hash(Yv *s);
 Yv *rn_decl_name(Yv *s);
 Yv *rn_decl_name_go(Yv *s);
 Yv *rn_rebuild_decl(Yv *s, Yv *newname);
@@ -73,6 +72,8 @@ Yv *rn_slice(Yv *node, Yv *st);
 Yv *rn_slice_lo(Yv *node, Yv *a, Yv *st);
 Yv *rn_slice_hi(Yv *node, Yv *a, Yv *lo, Yv *st);
 Yv *rn_dot(Yv *node, Yv *st);
+Yv *rn_qualified(Yv *st, Yv *obj, Yv *key);
+int rn_in(Yv *xs, Yv *x);
 Yv *rn_idxassign(Yv *node, Yv *st);
 Yv *rn_idxassign_idx(Yv *node, Yv *a, Yv *st);
 Yv *rn_idxassign_val(Yv *node, Yv *a, Yv *idx, Yv *st);
@@ -123,7 +124,10 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
 /* the module entry points (rename.y: export { rename_program,
  * rename_program_x }) */
 Yv *rename_program(Yv *ast);
-Yv *rename_program_x(Yv *ast, Yv *dfl);
+Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods);
+Yv *rn_stmt_mod(Yv *s);
+Yv *rn_qualify(Yv *s);
+Yv *rn_top(Yv *stmts, Yv *st);
 Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl);
 
 /* defaults, type aliases, match / slice-assign nodes */
@@ -135,6 +139,10 @@ Yv *rn_type(Yv *st, Yv *t);
 Yv *rn_types(Yv *st, Yv *ts);
 Yv *rn_type_go(Yv *st, Yv *t, long depth);
 Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth);
+long rn_alias_index(Yv *st, Yv *name);
+Yv *rn_tref(Yv *st, long id, Yv *name);
+int rn_reaches(Yv *st, long id, int bare);
+int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare);
 Yv *rn_type_list(Yv *st, Yv *ts, long depth);
 Yv *rn_type_fields(Yv *st, Yv *fs, long depth);
 Yv *rn_union_flat(Yv *ts);

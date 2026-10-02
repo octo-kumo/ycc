@@ -1,7 +1,7 @@
-import io from "../../../src/y/std/io.y";
-let buf = [0; 64];
+// A pure-Y cat over std/fs.y's fds: 0 is stdin, 1 stdout.
+import fs;
 let go = true;
 while (go) {
-    let n = io.read(0, &buf[0], 512);
-    if (n <= 0) { go = false; } else { io.write(1, &buf[0], n); go = true; };
+    let b = fs.read_some(0, 512);
+    if (len(b) == 0) { go = false; } else { fs.write_data(1, b); };
 };

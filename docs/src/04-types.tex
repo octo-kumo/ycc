@@ -40,13 +40,91 @@ let bad = [1, "two"];        // error: array element: expected long, got str
 \subsection{Records}
 \label{sec:type-records}
 
-A record literal \ic{\{ a: 1, b: "x" \}} has the structural shape
-\ic{\{ a: long, b: str \}}; field order is preserved and is part of the
-type. A field read is legal when the static shape has the field. The
-shape-hole form \ic{\{ k: str \}} matches any record with at least those
-fields and is used where the precise shape is not known statically (it
-poisons quietly rather than erroring --- see
-Section~\ref{sec:poison}).
+\begin{sloppypar}
+A record literal \ic{\{ a: 1, b: "x" \}} has the record type
+\ic{\{ a: long, b: str \}}. A record type is the set of its fields: the
+order they are written in is not part of it, so
+\ic{\{ b: str, a: long \}} is the same type (and prints its fields in
+that order). A field read or write is legal when the static type has
+the field.
+\end{sloppypar}
+
+Records are \textbf{exact}: a record goes only where its own type is
+expected, or a union that has it as a member
+(Section~\ref{sec:type-unions}). A \ic{\{ a: long, b: str \}} is not a
+\ic{\{ a: long \}}: records are shared by reference, their fields at
+fixed places, so no wider or narrower view of one is sound. The
+shape-hole form \ic{\{ k: str \}} is the exception: it takes any record
+with a field \ic{k} and is used where the precise type is not known
+statically (it poisons quietly rather than erroring --- see
+Section~\ref{sec:poison}). A value of unknown type going where a record
+type or a union is declared is checked when the program runs: a record
+without exactly those fields (a member's, for a union) traps
+(Section~\ref{sec:errors}).
+
+A record literal written where a record type is declared --- an
+annotated \ic{let}, an argument, a \ic{return} or trailing value, a
+field, an element --- is created as that type: each value is checked
+against its field's type, converting as any store does
+(Section~\ref{sec:conversions}), and a record literal among them
+likewise. Where a union is declared, the literal is the member with its
+field names.
+
+\subsection{Unions}
+\label{sec:type-unions}
+
+\ic{A | B} holds a record whose type is exactly one of the members, which
+are record types (an alias of a union among them adds its members). A
+record goes into a union when its type is a member; a union goes into
+another whose members include all of its own. A field that every member
+has, with one type, is read and written straight through the union; any
+other needs a \ic{match}, which tells the members apart:
+
+\begin{lstlisting}
+type Circle = { name: str, r: float };
+type Rect = { name: str, w: float, h: float };
+type Shape = Circle | Rect;
+def area(s: Shape) -> float {
+    match s {
+        Circle c => 3.14159 * c.r * c.r,
+        Rect { w, h } => w * h
+    }
+}
+let s: Shape = { name: "box", w: 2.0, h: 3.0 };   // a Rect
+print(s.name, " ", area(s));                       // box 6.000000
+\end{lstlisting}
+
+\begin{sloppypar}
+\noindent In a \ic{match}, a type pattern such as \ic{Circle c} must
+name a member exactly. A record pattern such as
+\ic{(\{name: "box"\}) b} matches the members with those fields, and
+binds the one member with them, or the union of those members. Without
+\ic{\_}, every member needs a type arm. A union prints as the member it
+holds.
+\end{sloppypar}
+
+\subsection{Type aliases}
+\label{sec:type-aliases}
+
+\ic{type Name = T;} names a type: the alias stands for \ty{T} wherever
+it is written (two aliases of one structure are one type). An alias may
+refer to itself, or to aliases that refer back to it, when the reference
+sits inside a record's field or a function type:
+
+\begin{lstlisting}
+type List = { head: long, tail: List? };
+type Expr = Num | Add;
+type Num = { n: long };
+type Add = { l: Expr, r: Expr };
+let e: Expr = { l: { n: 1 }, r: { l: { n: 2 }, r: { n: 3 } } };
+\end{lstlisting}
+
+\begin{sloppypar}
+\noindent A cycle with no record field or function type in it, as in
+\ic{type T = [T];} or \ic{type U = U | \{ a: long \};}, names no type,
+and is an error at its declaration: \ic{type 'T' refers to itself}
+\ic{outside any record field or function type}.
+\end{sloppypar}
 
 \subsection{Maps}
 
@@ -159,8 +237,12 @@ on a \ic{byte} is \ic{long} arithmetic (\ic{-b} is a negative
 
 Nothing converts a value that is already inside another one. Arrays,
 maps and records are references and an option is a box, so an existing
-\ic{[long]} is not a \ic{[float]}, and a record \ic{\{x: long\}} is not
-a \ic{\{x: float\}}: a record's numeric field types must match exactly.
+\ic{[long]} is not a \ic{[float]}, and an existing record
+\ic{\{x: long\}} is not a \ic{\{x: float\}}: a record's numeric field
+types must match exactly. A record \emph{literal} written where a record
+type is declared is created as that type, so its values convert:
+\ic{let p: \{x: float\} = \{x: 1\};} stores \ic{1.0}
+(Section~\ref{sec:type-records}).
 
 \subsection{Operator typing}
 

@@ -2,7 +2,8 @@
 # The port gate: the C copy of the compiler (cycc, see PORTING.md) must
 # produce BYTE-IDENTICAL binaries to the reference compiler
 # (refs/ycc.ref) — for every test program AND for the compiler's own
-# sources (src/y/ycc.y). Rejection is behavior too: a program BOTH compilers
+# sources (src/y/ycc.y) — and print the same warnings (lint.y) doing so.
+# Rejection is behavior too: a program BOTH compilers
 # reject (exit 1), printing the same diagnostics, passes; a one-sided
 # rejection fails. Only exit 1 counts as
 # a rejection — a timeout (124), a crash or a missing file is never
@@ -33,10 +34,12 @@ port_check() {
         fi
     elif [ $rec -ne 0 ] || [ $cec -ne 0 ]; then
         fail "$name" "reference exit=$rec, copy exit=$cec"
-    elif cmp -s "$binr" "$binc"; then
-        pass "$name"
-    else
+    elif ! cmp -s "$binr" "$binc"; then
         fail "$name" "binaries differ: reference=$(stat -c%s "$binr") bytes, copy=$(stat -c%s "$binc") bytes"
+    elif [ "$RUN_RERR" != "$RUN_CERR" ]; then
+        fail "$name" "different warnings: reference '$(echo "$RUN_RERR" | head -c 200 | tr '\n' '|')', copy '$(echo "$RUN_CERR" | head -c 200 | tr '\n' '|')'"
+    else
+        pass "$name"
     fi
     rm -f "$binr" "$binc"
 }

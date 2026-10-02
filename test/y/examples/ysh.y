@@ -1,3 +1,4 @@
+import fs;
 const VERSION = { major: 6, minor: 7 };
 const SRC_PATH = "/tmp/_ysh_eval.y";
 const OUT_PATH = "/tmp/_ysh_out";
@@ -47,7 +48,7 @@ def run_src(src: str) -> long {
         puts("eval rejected: non-ascii input\n");
         return 1;
     };
-    write_file(SRC_PATH, src);
+    fs.write_file(SRC_PATH, src);
     // --no-exec strips exec() from the evaluated program.
     let rc = exec(YCC + " --no-exec -o " + OUT_PATH + " " + SRC_PATH + " 2>&1");
     if (rc != 0) {

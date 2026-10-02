@@ -35,7 +35,8 @@
 #include "types.h"
 #include "yv.h"
 
-/* imported — types.y imports nothing: every call below is a builtin
+/* imported — types.y imports parser.y for its alias NamedTy only (a
+ * record is a Yv * here): every call below is a builtin
  * (len/push/index_of/join/tostring) or a def of this file. */
 
 /* forward declarations (Y defs are mutually visible) */
@@ -44,8 +45,12 @@ static Yv *t_unk(void);
 static Yv *map_type_of(Yv *v);
 static int teq_fields(Yv *af, Yv *bf, long i);
 static int teq_list(Yv *aa, Yv *bb, long i);
-static Yv *unk_shape(void);
-static int single_k(Yv *fs);
+static int teq_members(Yv *ua, Yv *ub, long i);
+static void union_parts_go(Yv *out, Yv *t, long depth);
+static int teq_ref(Yv *a, Yv *b);
+static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack);
+static int str_in(Yv *xs, Yv *s);
+int is_open(Yv *fs);
 static Yv *trec_field_type(Yv *rec, Yv *key);
 static Yv *tstr_go(Yv *t);
 static int num_is_float(Yv *s);
@@ -95,15 +100,16 @@ static Yv *typeof_logic(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static int tcompat(Yv *got, Yv *want);
 static int arr_lit_adopts(Yv *got, Yv *want);
 static int arr_lit_adopts_go(Yv *got, Yv *want);
-static int trec_compat(Yv *got, Yv *want);
-static int trec_compat_go(Yv *gfs, Yv *wfs, long i);
-static int trec_has(Yv *gfs, Yv *name, Yv *typ);
-static int field_compat(Yv *got, Yv *want);
 static Yv *typeof_expr(Yv *st, Yv *node);
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt);
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt);
 static Yv *typeof_call(Yv *st, Yv *node);
 static Yv *typeof_block(Yv *st, Yv *node);
+static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want);
+static Yv *typeof_want(Yv *st, Yv *node, Yv *want);
+static int same_names(Yv *t, Yv *keys);
+static Yv *typeof_lit(Yv *st, Yv *node, Yv *target);
+static Yv *typeof_expr_go(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
 static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col);
 static long ret_note(Yv *rl, Yv *typ, long line, long col);
@@ -120,6 +126,8 @@ static int pattern_fits(Yv *s, Yv *t);
 static Yv *typeof_narrow(Yv *st, Yv *node);
 static Yv *typeof_matchend(Yv *st, Yv *node);
 static int covered(Yv *m, Yv *cover);
+static Yv *union_field(Yv *st, Yv *t, Yv *dkey, long line, long col);
+static Yv *dotassign_union(Yv *st, Yv *t, Yv *node);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
 static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col);
 static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col);
@@ -146,7 +154,8 @@ static Yv *err_at(Yv *msg, long line, long col) {
 // tptr {to}, tarr {of}, tfunc {args, ret}, trec {fields: [{name, typ}]},
 // tparams. Internal only: tunk (error poison, unifies with everything),
 // trec (checked record type {fields: [{name, typ}]} — same shape as the
-// parser's trec; teq/tstr compare field-by-field).
+// parser's trec; teq compares the fields as a set, by name), tref (a
+// recursive alias, rename.y: see "recursive types" below).
 
 static Yv *t_unk(void) {
     return yr(1, "k", ys("tunk"));
@@ -177,7 +186,11 @@ int teq(Yv *a, Yv *b) {
     } else if (ys_eq_lit(bk, "tunk")) {
         return 1;
     } else if (!ys_eq(ak, bk)) {
-        return 0;
+        if (ys_eq_lit(ak, "tref") || ys_eq_lit(bk, "tref")) {
+            return teq_ref(a, b);
+        } else {
+            return 0;
+        }
     } else if (ys_eq_lit(ak, "tnone")) {
         return 1;
     } else if (ys_eq_lit(bk, "tnone")) {
@@ -206,9 +219,11 @@ int teq(Yv *a, Yv *b) {
     } else if (ys_eq_lit(yr_get(a, "k"), "topt")) {
         return teq(yr_get(a, "of"), yr_get(b, "of"));
     } else if (ys_eq_lit(yr_get(a, "k"), "trec")) {
-        // record types: same field names in order, pairwise-equal types.
-        // (tunk fields unify — error poison never cascades.)
-        // A single-[k] side is the unknown-shape marker: it unifies with
+        // record types: the same set of fields with pairwise-equal types;
+        // the order they are written in is not part of the type (a record
+        // is laid out by field name, NATIVE.md "Records"). tunk fields
+        // unify -- error poison never cascades.
+        // An open side ({k: str, ..}) is the unknown-shape marker: it unifies with
         // any record (the missing annotation errors once at its own site,
         // not again at every enclosing branch — same tcompat law as the
         // dot arm). Concrete mismatches still disagree (e11/e12 parity).
@@ -217,43 +232,11 @@ int teq(Yv *a, Yv *b) {
         // the `fields` shape of a, b and every other arm in teq.
         Yv *af = yr_get(a, "fields");
         Yv *bf = yr_get(b, "fields");
-        if (yv_len(af) != yv_len(bf)) {
-            if (single_k(af)) {
-                return 1;
-            } else if (single_k(bf)) {
-                return 1;
-            } else {
-                return 0;
-            }
+        if (is_open(af) || is_open(bf)) {
+            return 1;
+        } else if (yv_len(af) != yv_len(bf)) {
+            return 0;
         } else {
-            int ok = 1;
-            long i = 0;
-            // The loop below is VESTIGIAL: teq_fields(af, bf, 0) is this
-            // arm's value, so the loop's `ok` is never read. It stays only
-            // because the emitted compiler is byte-compared against
-            // refs/ycc.ref — deleting it changes the golden binary.
-            while (ok) {
-                if (i < yv_len(af)) {
-                    // NOTE: names bound with :str (see teq note): bare-param
-                    // flows infer tunk, which would make `!=` below compare
-                    // string POINTERS; annotated lets force content compare.
-                    Yv *fa = ya_get(af, i);
-                    Yv *fb = ya_get(bf, i);
-                    Yv *an = yr_get(fa, "name");
-                    Yv *bn = yr_get(fb, "name");
-                    if (!ys_eq(an, bn)) {
-                        ok = 0;
-                    } else {
-                        ok = teq(yr_get(fa, "typ"), yr_get(fb, "typ"));
-                    }
-                    i = i + 1;
-                    ;
-                } else {
-                    ok = 0;
-                    ;
-                }
-                ;
-            }
             return teq_fields(af, bf, 0);
         }
     } else if (ys_eq_lit(ak, "tfunc")) {
@@ -278,35 +261,320 @@ int teq(Yv *a, Yv *b) {
             return teq_list(aa, bb, 0);
         }
     } else if (ys_eq_lit(ak, "tunion")) {
-        // unions: the same members in the same order
-        Yv *ua = yr_get(a, "ts");
-        Yv *ub = yr_get(b, "ts");
+        // unions: the same members, in any order
+        Yv *ua = union_parts(a);
+        Yv *ub = union_parts(b);
         if (yv_len(ua) != yv_len(ub)) {
             return 0;
+        } else if (teq_members(ua, ub, 0)) {
+            return teq_members(ub, ua, 0);
         } else {
-            return teq_list(ua, ub, 0);
+            return 0;
         }
+    } else if (ys_eq_lit(ak, "tref")) {
+        return teq_ref(a, b);
     } else {
         return 1;
     }
 }
 
-// Pairwise teq over record-field lists / type lists. Index recursion (not a
-// loop) so the shape stays checker-clean and out-of-range reads impossible.
+// ── recursive types and canonical forms ──────────────────────────────────
+// A recursive alias reaches the checker spelled out once, its references
+// back to itself trefs ({k: "tref", name, tmp, to}, rename.y RnRef): `to`
+// is the alias spelled out, `tmp` names the alias within the unit. Where a
+// type is looked into, a tref is unfolded first: typeof_expr's results,
+// tcompat's sides, a union's members (members).
+
+// t, or the type a tref stands for.
+Yv *unfold(Yv *t) {
+    if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+        return yr_get(t, "to");
+    } else {
+        return t;
+    }
+}
+
+// A union's members as written -- a recursive alias that is a member
+// stays its tref (its canonical form names the member, native.y ty_desc)
+// -- with an alias of a union among them flattened in.
+Yv *union_parts(Yv *t) {
+    Yv *out = yav(0);
+    union_parts_go(out, t, 0);
+    return out;
+}
+
+static void union_parts_go(Yv *out, Yv *t, long depth) {
+    Yv *ms = yr_get(t, "ts");
+    long i = 0;
+    while (i < yv_len(ms)) {
+        Yv *m = ya_get(ms, i);
+        Yv *u = unfold(m);
+        if (ys_eq_lit(yr_get(u, "k"), "tunion") && depth < 16) {
+            union_parts_go(out, u, depth + 1);
+        } else {
+            ya_push(out, m);
+        }
+        i = i + 1;
+    }
+}
+
+// A union's members, unfolded (union_parts).
+Yv *members(Yv *t) {
+    Yv *ps = union_parts(t);
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(ps)) {
+        out = ya_push(out, unfold(ya_get(ps, i)));
+        i = i + 1;
+    }
+    return out;
+}
+
+// The members of union s, as written, with every field of the record
+// pattern t.
+Yv *pat_members(Yv *s, Yv *t) {
+    Yv *ps = union_parts(s);
+    Yv *names = yr_get(t, "names");
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(ps)) {
+        if (rec_has_names(unfold(ya_get(ps, i)), names)) {
+            out = ya_push(out, ya_get(ps, i));
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// teq with a recursive alias on a side: two trefs are equal when their
+// canonical forms are; a tref against a type written out (a literal of a
+// recursive record type, say) is unfolded, at most 64 levels deep.
+static long teq_unfolds;
+static int teq_ref(Yv *a, Yv *b) {
+    if (ys_eq_lit(yr_get(a, "k"), "tref") && ys_eq_lit(yr_get(b, "k"), "tref")) {
+        return ys_eq(tcanon(a), tcanon(b));
+    } else if (teq_unfolds >= 64) {
+        return 0;
+    } else {
+        teq_unfolds = teq_unfolds + 1;
+        int r = teq(unfold(a), unfold(b));
+        teq_unfolds = teq_unfolds - 1;
+        return r;
+    }
+}
+
+// xs sorted (insertion sort: field lists are short).
+Yv *str_sorted(Yv *xs) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(xs)) {
+        Yv *x = ya_get(xs, i);
+        out = ya_push(out, x);
+        long j = yv_len(out) - 1;
+        while (j > 0 && ys_cmp(x, ya_get(out, j - 1)) < 0) {
+            ya_set(out, j, ya_get(out, j - 1));
+            j = j - 1;
+        }
+        ya_set(out, j, x);
+        i = i + 1;
+    }
+    return out;
+}
+
+// The field names of a record type's field list, sorted: its layout
+// (native.y "records at run time").
+Yv *rec_names(Yv *fs) {
+    Yv *names = yav(0);
+    long i = 0;
+    while (i < yv_len(fs)) {
+        names = ya_push(names, yr_get(ya_get(fs, i), "name"));
+        i = i + 1;
+    }
+    return str_sorted(names);
+}
+
+// The canonical form of a type (native.y names record descriptors by its
+// hash; teq_ref compares recursive aliases by it): equal types give equal
+// strings, record fields and union members in any order. What is unknown
+// to the checker (tunk, a missing annotation, an unresolved name) is "u".
+// A tref is spelled out where it is met first; inside, a reference back
+// to it is `^N`, N counting the trefs entered since.
+Yv *tcanon(Yv *t) {
+    Yv *out = yav(0);
+    out = tcanon_go(out, t, yav(0));
+    return ys_join(out, ys(""));
+}
+
+static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tlong")) {
+        return ya_push(out, ys("l"));
+    } else if (ys_eq_lit(k, "tbyte")) {
+        return ya_push(out, ys("b"));
+    } else if (ys_eq_lit(k, "tfloat")) {
+        return ya_push(out, ys("f"));
+    } else if (ys_eq_lit(k, "tbool")) {
+        return ya_push(out, ys("o"));
+    } else if (ys_eq_lit(k, "tstr")) {
+        return ya_push(out, ys("s"));
+    } else if (ys_eq_lit(k, "tvoid")) {
+        return ya_push(out, ys("v"));
+    } else if (ys_eq_lit(k, "tptr")) {
+        out = ya_push(out, ys("*"));
+        return tcanon_go(out, yr_get(t, "to"), stack);
+    } else if (ys_eq_lit(k, "tarr")) {
+        out = ya_push(out, ys("["));
+        return tcanon_go(out, yr_get(t, "of"), stack);
+    } else if (ys_eq_lit(k, "tarrfix")) {
+        out = ya_push(out, ys_cat(ys_cat(ys("F"), ys_long(yv_l(yr_get(t, "n")))),
+                                  ys(";")));
+        return tcanon_go(out, yr_get(t, "of"), stack);
+    } else if (ys_eq_lit(k, "topt")) {
+        out = ya_push(out, ys("?"));
+        return tcanon_go(out, yr_get(t, "of"), stack);
+    } else if (ys_eq_lit(k, "tmap")) {
+        out = ya_push(out, ys("M"));
+        out = tcanon_go(out, yr_get(t, "key"), stack);
+        return tcanon_go(out, yr_get(t, "of"), stack);
+    } else if (ys_eq_lit(k, "tfunc")) {
+        Yv *args = yr_get(t, "args");
+        out = ya_push(out, ys("("));
+        long i = 0;
+        while (i < yv_len(args)) {
+            out = tcanon_go(out, ya_get(args, i), stack);
+            out = ya_push(out, ys(","));
+            i = i + 1;
+        }
+        out = ya_push(out, ys(")"));
+        return tcanon_go(out, yr_get(t, "ret"), stack);
+    } else if (ys_eq_lit(k, "trec")) {
+        Yv *fs = yr_get(t, "fields");
+        Yv *names = rec_names(fs);
+        out = ya_push(out, ys("{"));
+        long i = 0;
+        while (i < yv_len(names)) {
+            Yv *nm = ya_get(names, i);
+            Yv *f = ya_get(fs, field_pos(fs, nm, 0));
+            out = ya_push(out, ys_cat(nm, ys(":")));
+            out = tcanon_go(out, yr_get(f, "typ"), stack);
+            out = ya_push(out, ys(","));
+            i = i + 1;
+        }
+        out = ya_push(out, ys("}"));
+        return out;
+    } else if (ys_eq_lit(k, "tunion")) {
+        Yv *ms = union_parts(t);
+        Yv *forms = yav(0);
+        long i = 0;
+        while (i < yv_len(ms)) {
+            Yv *mf = ys_join(tcanon_go(yav(0), ya_get(ms, i), stack), ys(""));
+            if (!str_in(forms, mf)) {
+                forms = ya_push(forms, mf);
+            }
+            i = i + 1;
+        }
+        out = ya_push(out, ys_cat(ys_cat(ys("<"), ys_join(str_sorted(forms), ys("|"))),
+                                  ys(">")));
+        return out;
+    } else if (ys_eq_lit(k, "tref")) {
+        Yv *tmp = yr_get(t, "tmp");
+        long d = -1;
+        long i = yv_len(stack) - 1;
+        while (d < 0 && i >= 0) {
+            if (ys_eq(ya_get(stack, i), tmp)) {
+                d = yv_len(stack) - 1 - i;
+            }
+            i = i - 1;
+        }
+        if (d >= 0) {
+            return ya_push(out, ys_cat(ys("^"), ys_long(d)));
+        } else {
+            Yv *inner = yav(0);
+            for (long q = 0; q < yv_len(stack); q++) {
+                inner = ya_push(inner, ya_get(stack, q));
+            }
+            inner = ya_push(inner, tmp);
+            return tcanon_go(out, yr_get(t, "to"), inner);
+        }
+    } else {
+        return ya_push(out, ys("u"));
+    }
+}
+
+// s is one of xs.
+static int str_in(Yv *xs, Yv *s) {
+    int found = 0;
+    long i = 0;
+    while (!found && i < yv_len(xs)) {
+        if (ys_eq(ya_get(xs, i), s)) {
+            found = 1;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+// Every field of af is in bf (by name) with an equal type: with the same
+// count on both sides (teq checks it), the two are one set of fields.
+// Index recursion (not a loop) so the shape stays checker-clean and
+// out-of-range reads impossible.
 static int teq_fields(Yv *af, Yv *bf, long i) {
     if (i >= yv_len(af)) {
         return 1;
     } else {
         Yv *fa = ya_get(af, i);
-        Yv *fb = ya_get(bf, i);
-        // NOTE: :str bindings (see teq note): fa/fb flow from bare params
-        // (tunk), so a direct `!=` would compare string POINTERS.
+        // NOTE: :str binding (see teq note): fa flows from bare params
+        // (tunk), so a direct `==` would compare string POINTERS.
         Yv *an = yr_get(fa, "name");
-        Yv *bn = yr_get(fb, "name");
-        if (!ys_eq(an, bn)) {
+        long j = field_pos(bf, an, i);
+        if (j < 0) {
             return 0;
-        } else if (teq(yr_get(fa, "typ"), yr_get(fb, "typ"))) {
-            return teq_fields(af, bf, i + 1);
+        } else {
+            Yv *fb = ya_get(bf, j);
+            if (teq(yr_get(fa, "typ"), yr_get(fb, "typ"))) {
+                return teq_fields(af, bf, i + 1);
+            } else {
+                return 0;
+            }
+        }
+    }
+}
+
+// The index of the field named `name` in the field list fs, -1 when there
+// is none. `hint` is tried first: records written in the same order find
+// every field there.
+long field_pos(Yv *fs, Yv *name, long hint) {
+    long found = -1;
+    if (hint < yv_len(fs)) {
+        if (ys_eq(yr_get(ya_get(fs, hint), "name"), name)) {
+            found = hint;
+        }
+    }
+    long i = 0;
+    while (found < 0 && i < yv_len(fs)) {
+        if (ys_eq(yr_get(ya_get(fs, i), "name"), name)) {
+            found = i;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+// Every member of ua has an equal member in ub.
+static int teq_members(Yv *ua, Yv *ub, long i) {
+    if (i >= yv_len(ua)) {
+        return 1;
+    } else {
+        int found = 0;
+        long j = 0;
+        while (!found && j < yv_len(ub)) {
+            if (teq(ya_get(ua, i), ya_get(ub, j))) {
+                found = 1;
+            }
+            j = j + 1;
+        }
+        if (found) {
+            return teq_members(ua, ub, i + 1);
         } else {
             return 0;
         }
@@ -323,25 +591,25 @@ static int teq_list(Yv *aa, Yv *bb, long i) {
     }
 }
 
-// The unknown-shape marker as a value: the internal shape of a {k: str}
-// annotation (cf. parser.y trec construction). Used to probe whether a
-// subject type is unknown-shaped (single-[k]) without reading fields that
-// might not exist (reading them IS the error). Concrete singletons
-// ({x: long}) do NOT match (name differs) and stay strict (e11 parity).
-static Yv *unk_shape(void) {
-    return yr(2, "k", ys("trec"),
-              "fields", yav(1, yr(2, "name", ys("k"), "typ", yr(1, "k", ys("tstr")))));
+// An open record's field list: it ends in the `..` marker (parser.c
+// parse_type_record), `{k: str, ..}` -- the unknown-shape marker: any
+// record, its fields read through the descriptor (native.c is_kshape).
+int is_open(Yv *fs) {
+    long n = yv_len(fs);
+    if (n == 0) {
+        return 0;
+    } else if (ys_eq_lit(yr_get(ya_get(fs, n - 1), "name"), "..")) {
+        return 1;
+    } else {
+        return n == 1 && ys_eq_lit(yr_get(ya_get(fs, 0), "name"), "k");
+    }
 }
 
-// Single-[k] field list test for teq's trec arm (operates on real field
-// arrays threaded through bare params — reads stay quiet statically and
-// exact at runtime).
-static int single_k(Yv *fs) {
-    if (yv_len(fs) != 1) {
-        return 0;
-    } else {
-        return ys_eq_lit(yr_get(ya_get(fs, 0), "name"), "k");
-    }
+// A store into field `key` through open record type t that cannot be
+// done: only k is assigned through one (its offset is in every record's
+// descriptor; the other fields are found by name, which a read does).
+static int open_store(Yv *t, Yv *key) {
+    return is_open(yr_get(t, "fields")) && !ys_eq_lit(key, "k");
 }
 
 // Field type by name in a trec; tnone marker when missing (dotassign uses
@@ -384,6 +652,8 @@ static Yv *tstr_go(Yv *t) {
         return ys("<missing annotation>");
     } else if (ys_eq_lit(yr_get(t, "k"), "tname")) {
         return yr_get(t, "name");
+    } else if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+        return yr_get(t, "name");
     } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
         return tstr_union(yr_get(t, "ts"), ys(" | "));
     } else if (ys_eq_lit(yr_get(t, "k"), "tpat")) {
@@ -411,8 +681,13 @@ static Yv *tstr_go(Yv *t) {
             // NOTE: bound once — `fields` is a bare param here, so an inline
             // `fs[i]` would merge shapes across arms (see teq note).
             Yv *f = ya_get(fs, i);
-            parts = ya_push(parts, ys_cat(ys_cat(yr_get(f, "name"), ys(": ")),
-                                          tstr_go(yr_get(f, "typ"))));
+            Yv *fname = yr_get(f, "name");
+            if (ys_eq_lit(fname, "..")) {
+                parts = ya_push(parts, ys(".."));
+            } else {
+                parts = ya_push(parts, ys_cat(ys_cat(fname, ys(": ")),
+                                              tstr_go(yr_get(f, "typ"))));
+            }
             i = i + 1;
         }
         return ys_cat(ys_cat(ys("{ "), ys_join(parts, ys(", "))), ys(" }"));
@@ -457,9 +732,10 @@ static Yv *tdisp_union(Yv *ts) {
 }
 
 // ── unions and match ─────────────────────────────────────────────────────
-// A union `A | B` holds any of its record members. Records carry their
-// field names at run time, so a member is recognized by having all of its
-// fields (the first matching arm wins).
+// A union `A | B` holds a record whose type is exactly one of its members.
+// Every record carries its type's descriptor (native.y "records at run
+// time"), so a match tells the member a value holds by comparing that, a
+// compare per member (the first matching arm wins).
 
 // The field names a match pattern tests: a record type's, or a record
 // pattern's (tpat).
@@ -507,8 +783,9 @@ static int rec_has_names(Yv *r, Yv *names) {
 }
 
 // The static type of `narrow(e, t)`: t itself for a record type; for a
-// record pattern (tpat), the first member of the subject's union that has
-// those fields (the subject itself when it is a record). tunk when none.
+// record pattern (tpat), the member of the subject's union that has those
+// fields, or the union of the members that have them when there are
+// several (the subject itself when it is a record). tunk when none.
 Yv *narrow_type(Yv *s, Yv *t) {
     Yv *tk = yr_get(t, "k");
     Yv *sk = yr_get(s, "k");
@@ -521,25 +798,98 @@ Yv *narrow_type(Yv *s, Yv *t) {
             return t_unk();
         }
     } else if (ys_eq_lit(sk, "tunion")) {
-        Yv *ms = yr_get(s, "ts");
-        Yv *found = t_unk();
-        long i = yv_len(ms) - 1;
-        while (i >= 0) {
-            if (rec_has_names(ya_get(ms, i), yr_get(t, "names"))) {
-                found = ya_get(ms, i);
+        Yv *ms = members(s);
+        Yv *names = yr_get(t, "names");
+        Yv *found = yav(0);
+        long i = 0;
+        while (i < yv_len(ms)) {
+            if (rec_has_names(ya_get(ms, i), names)) {
+                found = ya_push(found, ya_get(ms, i));
             }
-            i = i - 1;
+            i = i + 1;
         }
-        return found;
+        if (yv_len(found) == 0) {
+            return t_unk();
+        } else if (yv_len(found) == 1) {
+            return ya_get(found, 0);
+        } else {
+            return yr(2, "k", ys("tunion"), "ts", found);
+        }
     } else {
         return t_unk();
     }
 }
 
+// The member of union u that is the record type t (as u writes it,
+// union_parts); tnone when there is none.
+Yv *union_member(Yv *u, Yv *t) {
+    Yv *ms = union_parts(u);
+    Yv *found = yr(1, "k", ys("tnone"));
+    long i = yv_len(ms) - 1;
+    while (i >= 0) {
+        if (teq(ya_get(ms, i), t)) {
+            found = ya_get(ms, i);
+        }
+        i = i - 1;
+    }
+    return found;
+}
+
+// `u.f` on a union: every member has f, with one type -- a field they do
+// not share is read after a match.
+static Yv *union_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
+    Yv *ms = members(t);
+    Yv *ft = t_unk();
+    int ok = 1;
+    long i = 0;
+    while (i < yv_len(ms) && ok) {
+        Yv *mt = trec_field_type(ya_get(ms, i), dkey);
+        if (ys_eq_lit(yr_get(mt, "k"), "tnone")) {
+            st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("member "), tstr(ya_get(ms, i))),
+                                                        ys(" of ")),
+                                                 tstr(t)),
+                                          ys(" has no field '")),
+                                   dkey),
+                         ys("' (match the member first)")),
+                      line, col);
+            ok = 0;
+        } else if (i == 0) {
+            ft = mt;
+        } else if (!teq(ft, mt)) {
+            st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys("field '"), dkey),
+                                               ys("' has a different type in each member of ")),
+                                        tstr(t)),
+                                 ys(" (match the member first)")),
+                      line, col);
+            ok = 0;
+        }
+        i = i + 1;
+    }
+    if (ok) {
+        return yr(2, "typ", ft, "st", st);
+    } else {
+        return yr(2, "typ", t_unk(), "st", st);
+    }
+}
+
+// `u.f = v` on a union: f as a read finds it (union_field), then v must
+// fit it.
+static Yv *dotassign_union(Yv *st, Yv *t, Yv *node) {
+    Yv *key = yr_get(node, "key");
+    Yv *fr = union_field(st, t, key, yv_l(yr_get(node, "line")),
+                         yv_l(yr_get(node, "col")));
+    st = yr_get(fr, "st");
+    Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(fr, "typ"));
+    st = expect_type(yr_get(v, "st"), yr_get(v, "typ"), yr_get(fr, "typ"),
+                     ys_cat(ys_cat(ys("record field '"), key), ys("'")),
+                     yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+    return yr(2, "typ", yr_get(fr, "typ"), "st", st);
+}
+
 // Every member of a union must be a record type (they are told apart by
 // their field names).
 static int union_ok(Yv *t) {
-    Yv *ms = yr_get(t, "ts");
+    Yv *ms = members(t);
     int ok = 1;
     long i = 0;
     while (i < yv_len(ms)) {
@@ -551,11 +901,12 @@ static int union_ok(Yv *t) {
     return ok;
 }
 
-// got flows into the union want: a member does (a record compatible with
-// some member), and so does a union whose every member does.
+// got flows into the union want: a member does (a record equal to some
+// member: membership is exact, `{a: 1, b: 2}` is no `{a: long}`), and so
+// does a union whose every member does.
 static int union_accepts(Yv *got, Yv *want) {
     if (ys_eq_lit(yr_get(got, "k"), "tunion")) {
-        Yv *gs = yr_get(got, "ts");
+        Yv *gs = members(got);
         int ok = 1;
         long i = 0;
         while (i < yv_len(gs)) {
@@ -566,7 +917,7 @@ static int union_accepts(Yv *got, Yv *want) {
         }
         return ok;
     } else {
-        Yv *ws = yr_get(want, "ts");
+        Yv *ws = members(want);
         int any = 0;
         long j = 0;
         while (j < yv_len(ws)) {
@@ -754,6 +1105,8 @@ static int is_value_type(Yv *t) {
         return is_hash_key(yr_get(t, "key"));
     } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
         return union_ok(t);
+    } else if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+        return 1;
     } else {
         return ys_eq_lit(yr_get(t, "k"), "trec");
     }
@@ -887,10 +1240,10 @@ static Yv *disp(Yv *name) {
 // Nothing is left to check here, so this is a pass-through kept at every call
 // site as the hook for a future capture rule.
 static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col) {
-    __attribute__((unused)) Yv *unused = name;
-    __attribute__((unused)) long unused2 = line;
-    __attribute__((unused)) long unused3 = col;
-    __attribute__((unused)) Yv *unused4 = got;
+    (void)got;
+    (void)name;
+    (void)line;
+    (void)col; /* unused in types.y's def too */
     return st;
 }
 
@@ -1255,13 +1608,17 @@ static Yv *typeof_logic(Yv *st, Yv *op __attribute__((unused)),
 // NOTE: unannotated shapes (tnone/tname from missing annotations) unify
 // with anything HERE so one root cause yields one error at its site
 // (the missing-annotation error), not a cascade at every use.
-// NOTE: trec shapes unify STRUCTURALLY here (superset accepts subset —
-// extra fields are ignored: native codegen reads static indexes, and the
-// C copy's yr() ignores them too): parser.y's {k}-annotated node params
-// accept call, index, dot, map, func literals without a cascade at every
-// res() site.
+// NOTE: records are exact: a record goes only where its own type (teq:
+// the same fields, in any order) or a union holding it is expected. With
+// fields at fixed offsets and records shared by reference there is no
+// sound width rule. The one exception is the unknown-shape marker ({k:
+// str, ..}, see is_open): teq lets any record in, and so does this for
+// anything but a str (parser.y's {k}-annotated node params take call,
+// index, dot, map, func literals without a cascade at every res() site).
 // Branch agreement and ==/!= keep strict teq (e11/e12 parity).
 static int tcompat(Yv *got, Yv *want) {
+    got = unfold(got);
+    want = unfold(want);
     if (teq(got, want)) {
         return 1;
     } else if (ys_eq_lit(yr_get(got, "k"), "tnone")) {
@@ -1292,19 +1649,13 @@ static int tcompat(Yv *got, Yv *want) {
             return 0;
         }
     } else if (ys_eq_lit(yr_get(got, "k"), "trec")) {
-        if (ys_eq_lit(yr_get(want, "k"), "trec")) {
-            return trec_compat(got, want);
-        } else {
-            return 0;
-        }
+        return 0;
     } else if (ys_eq_lit(yr_get(want, "k"), "trec")) {
-        // GOT is a bare {k}-shaped node (e.g. parser.y's res() param flows a
-        // call/index/dot/map/func literal into a {k:str} slot): accept — the
-        // specific literal shape is validated at its own construction site.
+        // GOT is a bare {k}-shaped node going into an unknown-shape slot.
         if (ys_eq_lit(yr_get(got, "k"), "tstr")) {
             return 0;
         } else {
-            return 1;
+            return is_open(yr_get(want, "fields"));
         }
     } else if (ys_eq_lit(yr_get(got, "k"), "tstr")) {
         if (ys_eq_lit(yr_get(want, "k"), "tptr")) {
@@ -1373,60 +1724,19 @@ static int arr_lit_adopts_go(Yv *got, Yv *want) {
     }
 }
 
-// Every field WANT declares must exist in GOT with a compatible type;
-// extra GOT fields are fine (structurally ignored downstream).
-static int trec_compat(Yv *got, Yv *want) {
-    Yv *wfs = yr_get(want, "fields");
-    Yv *gfs = yr_get(got, "fields");
-    return trec_compat_go(gfs, wfs, 0);
-}
-
-static int trec_compat_go(Yv *gfs, Yv *wfs, long i) {
-    if (i >= yv_len(wfs)) {
-        return 1;
-    } else {
-        Yv *wf = ya_get(wfs, i);
-        if (trec_has(gfs, yr_get(wf, "name"), yr_get(wf, "typ"))) {
-            return trec_compat_go(gfs, wfs, i + 1);
-        } else {
-            return 0;
-        }
-    }
-}
-
-/* A record is a reference: a field is never copied on the way in, so
- * nothing can convert it -- its numeric type must match exactly ({x: long}
- * is not a {x: float}); every other field type unifies as tcompat says. */
-static int trec_has(Yv *gfs, Yv *name, Yv *typ) {
-    long i = 0;
-    int found = 0;
-    while (i < yv_len(gfs)) {
-        Yv *gf = ya_get(gfs, i);
-        if (ys_eq(yr_get(gf, "name"), name)) {
-            if (field_compat(yr_get(gf, "typ"), typ)) {
-                found = 1;
-                ;
-            } else {
-                ;
-            }
-            ;
-        } else {
-            ;
-        }
-        i = i + 1;
-    }
-    return found;
-}
-
-static int field_compat(Yv *got, Yv *want) {
-    if (is_num_kind(got) && is_num_kind(want)) {
-        return teq(got, want);
-    } else {
-        return tcompat(got, want);
-    }
-}
-
+// The type of an expression (typeof_expr_go), a recursive alias unfolded
+// (unfold): the checker looks into it.
 static Yv *typeof_expr(Yv *st, Yv *node) {
+    Yv *r = typeof_expr_go(st, node);
+    Yv *t = yr_get(r, "typ");
+    if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+        return yr(2, "typ", unfold(t), "st", yr_get(r, "st"));
+    } else {
+        return r;
+    }
+}
+
+static Yv *typeof_expr_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (ys_eq_lit(k, "num")) {
         if (num_is_float(yr_get(node, "v"))) {
@@ -1839,9 +2149,9 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
     } else if (ys_eq_lit(k, "decl")) {
         return typeof_decl(st, node);
     } else if (ys_eq_lit(k, "assign")) {
-        Yv *r = typeof_expr(st, yr_get(node, "v"));
-        st = yr_get(r, "st");
         Yv *got = lookup(yr_get(st, "bindings"), yr_get(node, "name"));
+        Yv *r = typeof_want(st, yr_get(node, "v"), yr_get(got, "typ"));
+        st = yr_get(r, "st");
         if (ys_eq_lit(yr_get(got, "kind"), "")) {
             st = fail(st,
                       ys_cat(ys_cat(ys("undefined variable '"),
@@ -1904,7 +2214,13 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         // `x op= e`: the rules live in opassign_check.
         Yv *t = typeof_expr(st, yr_get(node, "tgt"));
         st = yr_get(t, "st");
-        Yv *v = typeof_expr(st, yr_get(node, "v"));
+        // `arr += {...}` / `arr *= {...}`: a record literal is an element
+        Yv *tt = yr_get(t, "typ");
+        Yv *vw = yr(1, "k", ys("tnone"));
+        if (ys_eq_lit(yr_get(tt, "k"), "tarr") || ys_eq_lit(yr_get(tt, "k"), "tarrfix")) {
+            vw = yr_get(tt, "of");
+        }
+        Yv *v = typeof_want(st, yr_get(node, "v"), vw);
         Yv *pc = place_check(yr_get(v, "st"), yr_get(node, "tgt"),
                              yr_get(t, "typ"),
                              ys_cat(yr_get(node, "op"), ys("=")),
@@ -1918,7 +2234,12 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         return opassign_check(st, node, yr_get(pc, "typ"), yr_get(v, "typ"));
     } else if (ys_eq_lit(k, "store")) {
         Yv *p = typeof_expr(st, yr_get(node, "p"));
-        Yv *v = typeof_expr(yr_get(p, "st"), yr_get(node, "v"));
+        Yv *pt = yr_get(p, "typ");
+        Yv *pw = yr(1, "k", ys("tnone"));
+        if (ys_eq_lit(yr_get(pt, "k"), "tptr")) {
+            pw = yr_get(pt, "to");
+        }
+        Yv *v = typeof_want(yr_get(p, "st"), yr_get(node, "v"), pw);
         st = yr_get(v, "st");
         if (ys_eq_lit(yr_get(yr_get(p, "typ"), "k"), "tptr")) {
             st = expect_type(st, yr_get(v, "typ"),
@@ -1943,7 +2264,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         } else {
-            Yv *r = typeof_expr(st, yr_get(node, "e"));
+            Yv *r = typeof_want(st, yr_get(node, "e"), yr_get(st, "ret"));
             Yv *rk = yr_get(yr_get(st, "ret"), "k");
             if (ys_eq_lit(rk, "tinfer")) {
                 // The def's return type is still being inferred: note the
@@ -2309,8 +2630,14 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
+                } else if (open_store(yr_get(got, "typ"), yr_get(node, "key"))) {
+                    st = fail(st, ys_cat(ys_cat(ys("cannot assign field '"), yr_get(node, "key")),
+                                         ys("' through an open record type (only its k)")),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
                 } else {
-                    Yv *v = typeof_expr(st, yr_get(node, "v"));
+                    Yv *v = typeof_want(st, yr_get(node, "v"), ft);
                     st = yr_get(v, "st");
                     st = expect_type(st, yr_get(v, "typ"), ft,
                                      ys_cat(ys_cat(ys("record field '"),
@@ -2320,6 +2647,8 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ", ft, "st", st);
                 }
+            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tunion")) {
+                return dotassign_union(st, yr_get(got, "typ"), node);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot field-assign "),
@@ -2345,8 +2674,14 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
+                } else if (open_store(yr_get(obr, "typ"), yr_get(node, "key"))) {
+                    st = fail(st, ys_cat(ys_cat(ys("cannot assign field '"), yr_get(node, "key")),
+                                         ys("' through an open record type (only its k)")),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
                 } else {
-                    Yv *v = typeof_expr(st, yr_get(node, "v"));
+                    Yv *v = typeof_want(st, yr_get(node, "v"), ft);
                     st = yr_get(v, "st");
                     st = expect_type(st, yr_get(v, "typ"), ft,
                                      ys_cat(ys_cat(ys("record field '"),
@@ -2356,6 +2691,8 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ", ft, "st", st);
                 }
+            } else if (ys_eq_lit(yr_get(yr_get(obr, "typ"), "k"), "tunion")) {
+                return dotassign_union(st, yr_get(obr, "typ"), node);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot field-assign "),
@@ -2388,7 +2725,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", ys("tlong")),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_expr(st, yr_get(node, "v"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(got, "typ"), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
                                  yr_get(yr_get(got, "typ"), "of"),
@@ -2406,7 +2743,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(ix, "typ"), yr_get(yr_get(got, "typ"), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_expr(st, yr_get(node, "v"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(got, "typ"), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
                                  yr_get(yr_get(got, "typ"), "of"),
@@ -2435,7 +2772,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", ys("tlong")),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_expr(st, yr_get(node, "v"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(br, "typ"), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
                                  yr_get(yr_get(br, "typ"), "of"),
@@ -2448,7 +2785,7 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(ix, "typ"), yr_get(yr_get(br, "typ"), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_expr(st, yr_get(node, "v"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(br, "typ"), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
                                  yr_get(yr_get(br, "typ"), "of"),
@@ -2585,9 +2922,11 @@ static Yv *typeof_rectest(Yv *st, Yv *node) {
     Yv *s = yr_get(r, "typ");
     Yv *t = yr_get(node, "typ");
     Yv *sk = yr_get(s, "k");
-    Yv *tk = yr_get(t, "k");
-    if (ys_eq_lit(tk, "tname")) {
-        st = fail(st, ys_cat(ys_cat(ys("unknown type '"), yr_get(t, "name")), ys("' in match pattern")), NLINE, NCOL);
+    Yv *tu = unfold(t);
+    Yv *tk = yr_get(tu, "k");
+    if (ys_eq_lit(tk, "tunk")) {
+        // an alias that stands for no type (rename.y reported it)
+        ;
     } else if (!ys_eq_lit(tk, "trec") && !ys_eq_lit(tk, "tpat")) {
         st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record type")), NLINE, NCOL);
     } else if (ys_eq_lit(sk, "tunk")) {
@@ -2607,23 +2946,14 @@ static Yv *typeof_rectest(Yv *st, Yv *node) {
     return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
 }
 
-// Some member of s (a record or a union) has every field of the record
-// type t.
+// The record type t is the subject s (a record) or one of its members (a
+// union): membership is exact.
 static int pattern_fits(Yv *s, Yv *t) {
-    Yv *names = type_names(t);
     if (ys_eq_lit(yr_get(s, "k"), "tunion")) {
-        Yv *ms = yr_get(s, "ts");
-        int any = 0;
-        long i = 0;
-        while (i < yv_len(ms)) {
-            if (rec_has_names(ya_get(ms, i), names)) {
-                any = 1;
-            }
-            i = i + 1;
-        }
-        return any;
+        Yv *m = union_member(s, t);
+        return !ys_eq_lit(yr_get(m, "k"), "tnone");
     } else {
-        return rec_has_names(s, names);
+        return teq(s, t);
     }
 }
 
@@ -2631,7 +2961,8 @@ static Yv *typeof_narrow(Yv *st, Yv *node) {
     // errors about the pattern itself are reported once, by its rectest
     Yv *r = typeof_expr(st, yr_get(node, "e"));
     Yv *t = yr_get(node, "typ");
-    Yv *tk = yr_get(t, "k");
+    Yv *tu = unfold(t);
+    Yv *tk = yr_get(tu, "k");
     if (ys_eq_lit(tk, "trec") || ys_eq_lit(tk, "tpat")) {
         return yr(2, "typ", narrow_type(yr_get(r, "typ"), t), "st", yr_get(r, "st"));
     } else {
@@ -2655,7 +2986,7 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
     if (ys_eq_lit(sk, "tunk")) {
         ;
     } else if (ys_eq_lit(sk, "tunion")) {
-        Yv *ms = yr_get(s, "ts");
+        Yv *ms = members(s);
         Yv *missing = yav(0);
         long i = 0;
         while (i < yv_len(ms)) {
@@ -2683,14 +3014,14 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
     return yr(2, "typ", t_unk(), "st", st);
 }
 
-// A member is covered by a type arm whose fields it all has.
+// A member is covered by a type arm of its type.
 static int covered(Yv *m, Yv *cover) {
     int any = 0;
     long i = 0;
     while (i < yv_len(cover)) {
-        Yv *c = ya_get(cover, i);
+        Yv *c = unfold(ya_get(cover, i));
         if (ys_eq_lit(yr_get(c, "k"), "trec")) {
-            if (rec_has_names(m, type_names(c))) {
+            if (teq(m, c)) {
                 any = 1;
             }
         }
@@ -2771,11 +3102,13 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
         }
         if (found) {
             return yr(2, "typ", ftyp, "st", st);
-        } else if (teq(t, unk_shape())) {
+        } else if (is_open(fs)) {
             // unknown-shape ({k}-only) reads unify quietly (tcompat
             // law) — the missing annotation errors once at its own
             // site, not again at every enclosing read. Concrete
-            // records still error below (emitter rejects loudly).
+            // records error below (teq against the marker was the test,
+            // but teq lets a record of any other width meet it, so
+            // `{a, b}.c` compiled and trapped at run time: e145).
             return yr(2, "typ", t_unk(), "st", st);
         } else {
             st = fail(st,
@@ -2784,6 +3117,8 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
                       line, col);
             return yr(2, "typ", t_unk(), "st", st);
         }
+    } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+        return union_field(st, t, dkey, line, col);
     } else if (ys_eq_lit(yr_get(t, "k"), "tunk")) {
         return yr(2, "typ", t_unk(), "st", st);
     } else if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
@@ -3515,7 +3850,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 long ci = 0;
                 while (ci < yv_len(cargs)) {
-                    Yv *ra = typeof_expr(st, ya_get(cargs, ci));
+                    Yv *ra = typeof_want(st, ya_get(cargs, ci), ya_get(cfargs, ci));
                     st = yr_get(ra, "st");
                     st = expect_type(st, yr_get(ra, "typ"), ya_get(cfargs, ci),
                                      ys_cat(ys("call arg "), ys_long(ci)),
@@ -3998,25 +4333,6 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tstr"))),
                           "st", st);
             }
-        } else if (ys_eq_lit(name, "read_file")) {
-            if (yv_len(cargs) != 1) {
-                st = fail(st, ys("read_file takes exactly 1 argument (path)"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
-                return yr(2, "typ", t_unk(), "st", st);
-            } else {
-                Yv *r = typeof_expr(st, ya_get(cargs, 0));
-                st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tstr")),
-                                 ys("read_file path"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                // NOTE: typed str? (option): a missing file yields none at
-                // RUNTIME on both toolchains (callers none-check with
-                // `== none`, then unwrap). Matches native.y infer.
-                return yr(2, "typ",
-                          yr(2, "k", ys("topt"), "of", yr(1, "k", ys("tstr"))),
-                          "st", st);
-            }
         } else if (ys_eq_lit(name, "bytes")) {
             // bytes(s) -> [byte]: the string's raw bytes, packed.
             if (yv_len(cargs) != 1) {
@@ -4066,75 +4382,6 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                 }
                 return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-            }
-        } else if (ys_eq_lit(name, "write_file")) {
-            if (yv_len(cargs) != 2) {
-                st = fail(st,
-                          ys("write_file takes exactly 2 arguments (path, content)"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
-                return yr(2, "typ", t_unk(), "st", st);
-            } else {
-                Yv *r0 = typeof_expr(st, ya_get(cargs, 0));
-                st = yr_get(r0, "st");
-                Yv *r1 = typeof_expr(st, ya_get(cargs, 1));
-                st = yr_get(r1, "st");
-                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", ys("tstr")),
-                                 ys("write_file path"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", ys("tstr")),
-                                 ys("write_file content"),
-                                 yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
-            }
-        } else if (ys_eq_lit(name, "write_bytes")) {
-            // write_bytes(path, bytes, mode) -> bool: tinycc-style binary
-            // emit (open/write/chmod over raw syscalls in native code).
-            // bytes is a packed heap [byte] array (elf.y output); mode is a long
-            // (493 = 0755 executable, -1 = skip chmod).
-            if (yv_len(cargs) != 3) {
-                st = fail(st,
-                          ys("write_bytes takes exactly 3 arguments (path, bytes, mode)"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
-                return yr(2, "typ", t_unk(), "st", st);
-            } else {
-                Yv *w0 = typeof_expr(st, ya_get(cargs, 0));
-                st = yr_get(w0, "st");
-                Yv *w1 = typeof_expr(st, ya_get(cargs, 1));
-                st = yr_get(w1, "st");
-                Yv *w2 = typeof_expr(st, ya_get(cargs, 2));
-                st = yr_get(w2, "st");
-                st = expect_type(st, yr_get(w0, "typ"), yr(1, "k", ys("tstr")),
-                                 ys("write_bytes path"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                Yv *w1typ = yr_get(w1, "typ");
-                Yv *w1kind = yr_get(w1typ, "k");
-                if (ys_eq_lit(w1kind, "tarr")) {
-                    /* Require packed layout; scalar compatibility does not
-                       convert an existing [long] array. */
-                    st = expect_type(st, w1typ,
-                                     yr(2, "k", ys("tarr"), "of",
-                                        yr(1, "k", ys("tbyte"))),
-                                     ys("write_bytes data"),
-                                     yv_l(yr_get(node, "line")),
-                                     yv_l(yr_get(node, "col")));
-                    ;
-                } else if (!ys_eq_lit(w1kind, "tunk")) {
-                    st = fail(st,
-                              ys_cat(ys("write_bytes needs a byte array, got "),
-                                     tstr(yr_get(w1, "typ"))),
-                              yv_l(yr_get(node, "line")),
-                              yv_l(yr_get(node, "col")));
-                    ;
-                } else {
-                    ;
-                }
-                st = expect_type(st, yr_get(w2, "typ"), yr(1, "k", ys("tlong")),
-                                 ys("write_bytes mode"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
             }
         } else if (ys_eq_lit(name, "ptr_addr")) {
             // ptr_addr(p) -> long: a pointer's numeric value. Pointers ARE
@@ -4261,7 +4508,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 } else {
                     long i = 0;
                     while (i < yv_len(cargs)) {
-                        Yv *r = typeof_expr(st, ya_get(cargs, i));
+                        Yv *r = typeof_want(st, ya_get(cargs, i), ya_get(cargs_ft, i));
                         st = yr_get(r, "st");
                         Yv *ak = yr_get(yr_get(r, "typ"), "k");
                         if (ys_eq_lit(ak, "tvoid")) {
@@ -4301,6 +4548,129 @@ static Yv *typeof_block(Yv *st, Yv *node) {
         i = i + 1;
     }
     return yr(2, "typ", last, "st", st);
+}
+
+// typeof_block with the block's value going where `want` is declared (a
+// def's body, typeof_def): its last statement through typeof_want.
+static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want) {
+    Yv *last = yr(1, "k", ys("tvoid"));
+    Yv *bstmts = yr_get(node, "stmts");
+    long i = 0;
+    while (i < yv_len(bstmts)) {
+        Yv *w = yr(1, "k", ys("tnone"));
+        if (i == yv_len(bstmts) - 1) {
+            w = want;
+        }
+        Yv *rr = typeof_want(st, ya_get(bstmts, i), w);
+        st = yr_get(rr, "st");
+        last = yr_get(rr, "typ");
+        i = i + 1;
+    }
+    return yr(2, "typ", last, "st", st);
+}
+
+// ── record literals where a type is declared ─────────────────────────────
+// A record literal going where a type is declared -- a binding, an
+// argument, a return value, a field, an element -- is checked against it
+// (bidirectionally): it is created as that record type, or as the member
+// of that union with its field names, each value checked against its
+// field's type, a record literal there likewise. So `{l: {n: 1}, r: n2}`
+// is an `Add` of `type Add = {l: Expr, r: Expr}`, its `l` an `Expr`
+// holding a `{n: long}`. (Only a fresh record can be typed so: an existing
+// one keeps its own type, a record being shared by reference.) native.y
+// gen_reclit creates it as the same type (lit_target).
+
+// The type of `node` going where `want` is declared: a record literal
+// with a target (lit_target) is checked against it (typeof_lit); anything
+// else is typeof_expr.
+static Yv *typeof_want(Yv *st, Yv *node, Yv *want) {
+    if (!ys_eq_lit(yr_get(node, "k"), "rec")) {
+        return typeof_expr(st, node);
+    } else {
+        Yv *target = lit_target(node, want);
+        if (ys_eq_lit(yr_get(target, "k"), "tnone")) {
+            return typeof_expr(st, node);
+        } else {
+            return typeof_lit(st, node, target);
+        }
+    }
+}
+
+// The record type a record literal is created as where `want` is declared:
+// want itself when it is a record type with the literal's field names, or
+// the member of a union want with them when exactly one has (as the union
+// writes it, union_parts); tnone otherwise, and for a literal with a
+// spread or no fields.
+Yv *lit_target(Yv *node, Yv *want) {
+    Yv *keys = yr_get(node, "keys");
+    Yv *w = unfold(want);
+    Yv *wk = yr_get(w, "k");
+    Yv *found = yr(1, "k", ys("tnone"));
+    if (yv_len(keys) == 0 || str_in(keys, ys("..."))) {
+        ;
+    } else if (ys_eq_lit(wk, "trec")) {
+        if (same_names(w, keys)) {
+            found = want;
+        }
+    } else if (ys_eq_lit(wk, "tunion")) {
+        Yv *ps = union_parts(w);
+        long n = 0;
+        long i = 0;
+        while (i < yv_len(ps)) {
+            if (same_names(unfold(ya_get(ps, i)), keys)) {
+                found = ya_get(ps, i);
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        if (n != 1) {
+            found = yr(1, "k", ys("tnone"));
+        }
+    }
+    return found;
+}
+
+// Record type t has exactly the field names keys (a name written twice
+// counts once).
+static int same_names(Yv *t, Yv *keys) {
+    if (!ys_eq_lit(yr_get(t, "k"), "trec")) {
+        return 0;
+    } else {
+        Yv *fs = yr_get(t, "fields");
+        Yv *distinct = yav(0);
+        int ok = 1;
+        long i = 0;
+        while (i < yv_len(keys)) {
+            Yv *key = ya_get(keys, i);
+            if (!str_in(distinct, key)) {
+                distinct = ya_push(distinct, key);
+            }
+            if (field_pos(fs, key, 0) < 0) {
+                ok = 0;
+            }
+            i = i + 1;
+        }
+        return ok && yv_len(distinct) == yv_len(fs);
+    }
+}
+
+// A record literal checked against the record type target (lit_target):
+// each value against its field's type (typeof_want). Its type is target.
+static Yv *typeof_lit(Yv *st, Yv *node, Yv *target) {
+    Yv *tu = unfold(target);
+    Yv *keys = yr_get(node, "keys");
+    Yv *vals = yr_get(node, "vals");
+    long i = 0;
+    while (i < yv_len(keys)) {
+        Yv *key = ya_get(keys, i);
+        Yv *ft = trec_field_type(tu, key);
+        Yv *r = typeof_want(st, ya_get(vals, i), ft);
+        st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), ft,
+                         ys_cat(ys_cat(ys("record field '"), key), ys("'")),
+                         yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        i = i + 1;
+    }
+    return yr(2, "typ", target, "st", st);
 }
 
 static Yv *typeof_decl(Yv *st, Yv *node) {
@@ -4367,7 +4737,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                 return yr(2, "typ", at, "st", st);
             }
         } else {
-            Yv *r = typeof_expr(st, yr_get(node, "v"));
+            Yv *r = typeof_want(st, yr_get(node, "v"), yr_get(node, "typ"));
             st = yr_get(r, "st");
             Yv *t = yr_get(r, "typ");
             Yv *vk = yr_get(yr_get(node, "v"), "k");
@@ -4467,9 +4837,9 @@ static long ret_note(Yv *rl, Yv *typ, long line, long col) {
 // The inferred return type is recorded in the def node, where `-> T`
 // would be: the emitter then types calls, `self` and every `return` as
 // the checker did, instead of re-inferring from the trailing expression
-// alone (which cannot see the body's locals). A def node starts
-// { k, params, ptypes, ret, ... } (parser.y, rename.y); this alias is
-// that prefix, so `ret` is a static field.
+// alone (which cannot see the body's locals). `fnode` is the def node
+// as rename.y builds it (rn_func_finish), so `ret` is a static field (a
+// node of another shape traps here, native.y gen_as).
 static long set_inferred_ret(Yv *func, Yv *ret) {
     yr_set(func, "ret", ret);
     return 0;
@@ -4558,7 +4928,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         }
         st = st_self(st, ft);
         st = st_ret(st, body_ret);
-        Yv *b = typeof_block(st, yr_get(func, "body"));
+        Yv *b = typeof_block_want(st, yr_get(func, "body"), body_ret);
         st = yr_get(b, "st");
         if (ret_inferred) {
             // INFERENCE: the def's return type is the body's tail value.

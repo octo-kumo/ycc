@@ -17,6 +17,8 @@
 
 #include "dwarf.h"
 
+/* imported: elf.y, for its alias ElfSec only (a record is a Yv * here). */
+
 static Yv *dw_abbrev(void);
 static Yv *dw_info(Yv *root, Yv *comp_dir, long text_addr, long text_len);
 static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len);

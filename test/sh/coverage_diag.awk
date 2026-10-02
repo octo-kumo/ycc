@@ -6,8 +6,8 @@
 #   EXCUSES  "file<TAB>code fragment" lines (COVERAGE.md, "Untested
 #            diagnostics"): a site whose code line contains the fragment
 #            needs no test
-#   EXPECT   every line a test asserts (e*.y markers, the inline cases of
-#            test/sh/*.sh, *.expected files)
+#   EXPECT   every line a test asserts (e*.y and t*.y markers, the inline
+#            cases of test/sh/*.sh, *.expected files)
 #   SRC      the compiler sources, as src/y/... paths
 #
 # A site's message TEMPLATE is its constant text with a hole (*) for each
@@ -37,6 +37,7 @@
 #             error record
 #   ycc.y     puts("error: ...") and puts("ycc: ...") (the driver)
 #   pkg.y     pk_die(...) (prints "error: ...": ycc build and ycc vendor)
+#   lint.y    lint_warn*(st, "...", ..) and `msg = ...` (the warnings)
 #   anywhere  "runtime error: ..." (the trap messages compiled programs print)
 
 BEGIN { HOLE = "\001" }
@@ -183,6 +184,8 @@ f == "native.y" && /puts\("error: / { site(tmpl($0, index($0, "puts(") + 5)); ne
 f == "native.y" && /\{ msg: "[^"]/ { site(tmpl($0, index($0, "msg: ") + 5)); next }
 f == "ycc.y" && /puts\("(error|ycc): / { site(tmpl($0, index($0, "puts(") + 5)); next }
 f == "pkg.y" && /pk_die\(/ && !/^def / { site(tmpl($0, index($0, "pk_die(") + 7)); next }
+f == "lint.y" && /lint_warn(_at|_start)?\(st, [^,]*"/ { site(tmpl($0, index($0, "(st, ") + 5)); next }
+f == "lint.y" && /msg = .*"/ { site(tmpl($0, index($0, "msg = ") + 6)); next }
 
 END {
     for (k = 1; k <= nexc; k++)

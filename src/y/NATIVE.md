@@ -13,15 +13,16 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/lexer.y` | tokens; `&` is an `op` (pointer/address-of) |
 | `src/y/parser.y` | AST (nested maps) **plus type nodes** (`typ` fields, additive); every node carries line/col |
 | `src/y/types.y` | static checker: AST → `[errors]` with line/col; the law |
+| `src/y/lint.y` | warnings: `lint_unit` reads a unit that typechecked (the renamed tree for unused or write-only locals, dropped values, unreachable code, `x = x`, `x < x`, a division by a literal zero, a key given twice; the parse tree for record and union types written out instead of named) → `[{msg,line,col}]`. Only the program's unit and packages' (never a std unit's); the driver prints them on stderr (`ycc.y` `print_native_warnings`) unless `-w`. Never fatal, and the output is the same bytes with or without them |
 | `src/y/arch_x64.y` | x86_64 behind the arch interface: `arch_id/word/sysno`, `arch_fn_label/loc_label/str_label`, `arch_header/rodata/text`, `arch_prelude`, `arch_consts`, `arch_frame` (16-align), `arch_exit`. The prelude is only the **primitives** that need raw machine state (allocator, traps, record lookup, the byte-moving string/array cores, float formatting, argv) |
-| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports, pick the std units) → per compilation unit: strip namespaces → rename → check → hoist → frame layout → arch emit; then link the units (tree shake across them) |
+| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports, pick the std units) → per compilation unit: strip namespaces → rename → check → lint (warnings) → hoist → frame layout → arch emit; then link the units (tree shake across them) |
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
 | `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
 | `src/y/pkg.y` | `ycc build`/`ycc vendor`: the `y.toml` reader (a TOML subset), the dependency graph, git fetching, `y.lock`, vendoring, and the hash behind the package objects' keys (*Packages* below) |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then `io.y` (file I/O over raw syscalls), `net.y` (TCP/HTTP, an optional module), `struct.y` (pack/unpack helpers) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP/HTTP), `struct.y` (pack/unpack helpers) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -77,6 +78,24 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
 - **`str`** is a length-prefixed `.rodata` header `[len, data..., NUL]`, and
   the value is that header's address — so a `str` may carry embedded NULs
   and `len` is a load, not a `strlen`.
+- **Records** are heap blocks laid out by field name: the fields sorted,
+  the one in slot i at `record + 8i` whatever order a literal or a type
+  writes them in, so a field read is one load at an offset fixed at
+  compile time. The word at `record - 8` points to the descriptor of the
+  record's type, `ytt_<hash>` (native.y "records at run time"): one per
+  structural type, named by a 64-bit FNV-1a hash of its canonical form
+  (`types.tcanon`: fields and union members sorted, a recursive alias's
+  references back to itself `^N`). A unit emits the descriptors its code
+  uses and the link keeps one per label (two forms under one label stop
+  the link). A descriptor holds `koff` (where field `k` is: a value typed
+  as the shape-hole `{k: str}` reads its `k` through it), a 31-bit hash of
+  the sorted field names (`y_rec_cast`), and the field table
+  `y_dot_lookup` and `y_rec_has` search (the dynamic reads of a value
+  whose type the checker does not know). A union value is the member
+  record itself: `match` compares its descriptor with the members'. A
+  record literal is created as the type declared where it goes (`gen_as`
+  passes it to `gen_reclit`), so its descriptor names that type, not the
+  literal's own.
 - **Owned strings: `s += t` appends in place.** A `str` variable that is a
   `+=` target, whose address is never taken (`&s`) and that no closure
   captures (those are boxed) gets a companion word `c`: locals and params
@@ -155,6 +174,7 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
 ```
 source → lexer → parser (+types) → splice imports → strip namespaces
   → rename (uniquify) → types.y (static check, ERRORS ARE FATAL)
+  → lint.y (warnings, stderr; never fatal)
   → [later: ANF/CPS, defunctionalization]
   → frame layout → arch emit → asm.y (assemble) → elf.y → executable
 ```
@@ -185,9 +205,9 @@ line table and section headers past all of that (see "Debugging and
 profiling" below).
 Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight
-out through the `write_bytes` builtin (raw `open`/`write`/`chmod` over
-syscalls, mode 493 = 0755), so NULs pass through untouched. No cc/as/ld
-involved.
+out through `fs.write_bytes` (std/fs.y: raw `openat`/`write`/`fchmodat`
+over syscalls, mode 493 = 0755), so NULs pass through untouched. No
+cc/as/ld involved.
 
 ## Pointers, stack arrays, heap arrays, options
 
@@ -221,16 +241,18 @@ involved.
   native backend emits the `syscall` instruction with the Linux ABI
   (`rdi,rsi,rdx,r10,r8,r9`, number in `rax`). 1–7 args, each `long`/`bool`/
   `str`/`*T`; returns `long`. Type errors otherwise.
-- `src/y/std/io.y` wraps raw numbers (`openat`, `read`, `write`, `close`,
-  `fchmodat`): file I/O with zero C code (`test/y/native/t12_cat.y` is a pure-Y
-  cat; `t10_filewrite.y` creates/writes files). It has no `exit` def on
-  purpose — a def named `exit` shadows the intrinsic program-wide (see the
-  export list).
+- `src/y/std/fs.y` wraps raw numbers (`openat`, `read`, `write`, `lseek`,
+  `close`, `newfstatat`, `getdents64`, …): file I/O with zero C code
+  (`test/y/native/t12_cat.y` is a pure-Y cat; `t10_filewrite.y` and
+  `t102_io_roundtrip.y` write files through fds).
 
 ## Type system (types.y) — the law, expanded over time
 
 Now: `long`/`int`, `bool`, `float`, `str`, `byte`, `*T`, `[T; N]`, `[T]`,
-`T?`, `{f: T}` records, `{K => V}` maps, record unions `A | B`,
+`T?`, `{f: T}` records (exact: a record goes only where its own type,
+its fields in any order, or a union holding it is expected; the
+shape-hole `{k: str}` takes any record with a `k`), `{K => V}` maps,
+record unions `A | B`, recursive type aliases,
 function types `(A, B) -> R`, monomorphic `def` (a param without an
 annotation infers the poison type `<error>` — annotate; return types and
 locals are inferred), captures resolved into closures, `if` cond must be
@@ -271,15 +293,30 @@ All of these are lowered early, so the checker and emitter see little new:
 - **Tail calls** recycle the frame for `self(...)` and for a call naming
   the function being emitted.
 - **`type A = T`** aliases are resolved by rename.y (scoped to their block,
-  hoisted like defs); unions are flattened.
-- **Unions** `A | B` hold record types only. Records carry their field
-  table, so the member a value holds is recognized at run time by its
-  field names (`y_rec_has` in the prelude). A record flows into a union
-  that has a compatible member; a union flows nowhere but another union
-  until a `match` narrows it. Unions print as the member they hold.
+  hoisted like defs); unions are flattened. An alias may be recursive
+  through a record field or a function type: every reference to it is
+  one shared `tref` node (rename.y `RnRef`, `to` the alias spelled out)
+  that the checker and the emitter unfold where they look into a type
+  (types.y `unfold`; `typeof_expr` and `infer` unfold their results).
+  Any other cycle is an error at the `type` and the unknown type.
+- **Record literals** are checked against the type declared where they go
+  (types.y `typeof_want` at a typed `let`, an argument, a `return` or a
+  def's tail, an assignment, a field, element or map store, `+=`/`*=`,
+  `*p =`): a literal of that record type, or of the union member with
+  its field names (`lit_target`), is created as it, each value checked
+  and converted against its field, nested literals likewise.
+- **Unions** `A | B` hold records whose type is exactly a member. A record
+  goes into a union when it is a member; a union goes nowhere but another
+  union holding all its members until a `match` narrows it. A field
+  every member has with one type is read and written through the union
+  (`union_field`; one move when it has one slot in every member, else a
+  branch on the descriptor, native.y `gen_union_slot`). Unions print as
+  the member they hold.
 - **`match e { pat => arm, ... }`** is lowered by the parser to
   `{ let $m = e; if (test) { binds; arm } else if ... }` over three node
-  kinds: `rectest` (has T's fields), `narrow` (the value typed as T) and
+  kinds: `rectest` (the value's descriptor is T's, or that of a member
+  with a record pattern's fields; `y_rec_has` probes a subject of unknown
+  type), `narrow` (the value typed as T) and
   `matchend` (the fall-through). Patterns: `_`, `T x`, `T {f, g: y}`, `T`,
   record patterns `{f: v} x` / `({f: v}) x` (fields equal to values) and
   literals (`1`, `"s"`, `c'a'`, `true`, `none`, `-2`, `(expr)`). Arms follow
@@ -507,7 +544,7 @@ and writes them to FILE, and the build appends that file to the `ycc`
 that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
-straight from it. The pack is text: a version line (`ycc-std-pack 2`),
+straight from it. The pack is text: a version line (`ycc-std-pack 3`),
 then each unit's name and fields as netstrings — its bodies, each
 body's label and the labels it references (so linking never rescans std
 code), rodata, globals, init label, and its exports with their types in
@@ -558,7 +595,7 @@ cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
   in defaults and optional parameters as it does for a local def.
 - **Objects**: `compile_package` compiles with line markers, like a std
   unit, so one object serves plain and `-g` builds. `unit_obj` writes it
-  to `build/obj/NAME.yo` — `ycc-unit 1`, its key, its name, then the
+  to `build/obj/NAME.yo` — `ycc-unit 2`, its key, its name, then the
   unit's fields as in the std pack — and `unit_unobj` takes it back only
   under the same key and at its exact length. The key (`build_key`, a
   two-lane hash, `pk_hash_*`) covers the compiler binary itself
@@ -566,7 +603,10 @@ cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
   text and origin map (so the paths the build saw), its std needs, and
   the interface (`unit_iface`: exported names, labels, types, defaults)
   of each package it imports: a body change recompiles that package
-  alone, an interface change its importers too.
+  alone, an interface change its importers too. A package's warnings
+  (`lint.y`) come back from `compile_package` and print when it
+  compiles (its files named as in its errors); one loaded from its
+  object prints none. Bins warn on every build.
 - **Linking**: each `[bin]` is resolved and compiled by `emit_program`
   with the units it reaches (`build_reach`: the packages it imports,
   through other packages too) and the std units all of them need.
@@ -664,17 +704,39 @@ working directory, then in the same places relative to the `ycc` binary — so
 the test suite works from any directory. `std_resolve` in native.y holds the
 list.
 
-The file found is spliced exactly like `import x from "path"` and its defs
-are flattened into one namespace with everything else (strip_ns rewrites
-`net.listen_tcp` to `listen_tcp`). A def that replaces one from another
-file is a compile error (`find_dup`, which knows each line's file from
-the origin map `native_resolve_x` builds while splicing), so a module
-picks names that will not collide with the other std modules —
-`net.close_fd`, `net.send_str` — and uses the namespace when calling them
-anyway. Modules are compile-time input only: the program that runs has
-no use for the file.
+The file found is spliced like `import x from "path"`, but it keeps its
+own scope (rename.y): its top-level defs and lets are bound as
+`fs.read_file` — one name, with a `.` no source can write — so they never
+meet the program's names, and a program may define its own `exists` or
+`let cwd = fs.cwd();`. The resolver records which file each name came in
+as (the origin map's `mods`); rename.y's `rn_top` qualifies a module's
+top-level names (`rn_qualify`; a `y_` name stays global, as generated code
+calls it by label) and renames each statement with `rn_mod` set to its
+module, so `rn_lookup` finds the module's locals, then its own top-level
+names, then the program's. `fs.x` is resolved there too (`rn_qualified`):
+when `fs` is a module and no binding named `fs` is in scope, it is the
+name `fs.x`; a local `fs` keeps its field. find_dup qualifies the same
+way, so only files imported by path, which share the program's
+namespace (strip_ns rewrites `util.f` to `f`), can collide. A module's
+type aliases are not scoped. The labels keep the `.`
+(`yfn_12_fs.exists$3`; `is_id_b` reads it as part of a symbol), so `-g`
+names the function `fs.exists`. A package's exports leave out the modules
+it imports (`export_name`). Modules are compile-time input only: the
+program that runs has no use for the file.
 
-`src/y/std/net.y` is the first optional module: TCP over raw sockets
+`src/y/std/fs.y` is the file system (the builtins `read_file`,
+`write_file` and `write_bytes` moved into it, `import fs;`): whole
+files as text or bytes (`read_file`, `read_bytes`, `read_lines`,
+`write_file`/`write_bytes` with an optional mode, `append_*`,
+`copy_file`), paths (`exists`, `is_file`, `is_dir`, `file_size`,
+`rename`, `remove_file`, `set_mode`), directories (`make_dir`,
+`make_dirs`, `list_dir` — sorted —, `remove_dir`, `remove_all`, `cwd`,
+`chdir`) and fds opened with a mode string (`open_file(path, "r" | "w" |
+"a" | "x" [+ "+"])`, `read_some`, `read_all`, `write_text`, `seek`,
+`close_file`); manual §"Files (the fs module)". The compiler itself
+reads its sources and writes its binaries through it.
+
+`src/y/std/net.y` is the first network module: TCP over raw sockets
 (`socket_tcp`/`bind_tcp`/`listen_fd`/`accept_tcp`/`connect_tcp`/
 `send_str`/`recv_str`/`local_port`) and a tiny HTTP server
 (`http_response`, `http_read_head`, `http_serve_one`, `listen_http`), all Y
@@ -763,8 +825,8 @@ scores two builds (100 = unchanged) over compile time, run time and
 binary size — asm bytes and asm lines are reported as detail but are
 **not** part of the score — then runs every benchmark's `-g` build of
 both under callgrind and tabulates instructions per function.
-The workflow for a performance-affecting change (propose → branch →
-bench → decide) is in AGENTS.md; the details are in `bench/README.md`.
+A change that can affect performance gets a thorough bench and profiling
+at the end (AGENTS.md); the details are in `bench/README.md`.
 
 ## Testing
 
@@ -772,7 +834,9 @@ bench → decide) is in AGENTS.md; the details are in `bench/README.md`.
 straight to executables with the built `./ycc` (`ycc -o bin prog.y`, no
 `-S`) and checks stdout/exit. `t*.y` assert behavior
 (`.expected` stdout, `.exit` code, `.stdin` for input); `e*.y` assert rejection (first line
-`// expect-error: <substring>` must appear in the compiler output). Native
+`// expect-error: <substring>` must appear in the compiler output). A `t*.y`
+line marked `// expect-warning: <substring>` must draw a warning containing
+it, and no unmarked line may draw one. Native
 programs must also keep passing if the C path ever learns the feature — one
 behavior, two backends.
 
@@ -813,6 +877,13 @@ them starts compiling again, so the list can only shrink.
   recursion is constant-space (see above).
 - Arena heap: nothing is freed (no leaks that matter for short-lived
   binaries; long-running programs want the planned GC).
+- A record built where no type is declared gets the descriptor of its
+  own type: `let r = {a: none};` is an `{a: none}`, not the `{a: long?}`
+  it is later stored as, so a `match` on a union holding it finds no
+  member (`no match arm matched`). Write the literal where the type is
+  declared, or annotate the binding. Two spellings of one recursive type
+  unrolled differently (`{x: {x: A?}?}` against `A = {x: A?}`) are told
+  apart the same way.
 - `y_alloc` rounds every request up by 8–15 bytes, and when a request
   under 256 KB does not fit in the current 4 MB chunk the chunk's tail is
   abandoned (at most 256 KB, ~6%, per chunk).

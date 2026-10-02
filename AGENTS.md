@@ -105,7 +105,7 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 Sixteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
-binaries, identical program behavior). `test_native.sh`,
+binaries, the same warnings, identical program behavior). `test_native.sh`,
 `test_native_examples.sh`, `test_debug.sh`, `test_link.sh`, `test_pkg.sh`,
 `test_ycc.sh` and `test_fixpoint.sh` drive the built `./ycc` itself, so
 `run_all.sh` skips those **seven** when it is missing (`make test-fast`).
@@ -123,12 +123,15 @@ very build was just compared (`make test`, `check`, `rebless` do);
 
 - `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
   `src/y/ycc.y` itself) compile to byte-identical binaries with
-  `cycc` and the reference `ycc`; a program both reject must get the
-  same diagnostics from both.
+  `cycc` and the reference `ycc`, with the same warnings; a program
+  both reject must get the same diagnostics from both.
 - `test_native.sh` [native] — `test/y/native/*.y`: `t*` assert
-  stdout/exit (`.expected`/`.exit`, stdin from `.stdin`), `e*` assert
-  rejection: the output must contain every `// expect-error:` line of
-  the file (at least one; the checker reports all errors at once).
+  stdout/exit (`.expected`/`.exit`, stdin from `.stdin`) and their
+  warnings (each `// expect-warning: MSG` marker needs a warning
+  containing MSG on its own line, and no other line may warn), `e*`
+  assert rejection: the output must contain every `// expect-error:`
+  line of the file (at least one; the checker reports all errors at
+  once).
 - `test_native_examples.sh` [native-examples] — the ratchet: every
   `test/y/examples/*.y` the built `./ycc` accepts must print what the
   reference prints; its `UNSUPPORTED` list (currently empty) may only
@@ -143,13 +146,15 @@ very build was just compared (`make test`, `check`, `rebless` do);
 - `test_ycc_units.sh` [ycc-units] — every `test/y/ycc/test_*.y` must
   compile and run (two legacy snapshots are skiplisted with reasons).
 - `test_ycc.sh` [ycc] — a few one-liners compiled by `./ycc` and
-  compared with the reference's output, plus the driver's failures
+  compared with the reference's output; warnings (an import's file
+  named, stderr only, `-w` keeps the bytes); plus the driver's failures
   (bad flags and paths, failed writes, import depth): both compilers
   print the same message and exit 1.
 - `test_fixpoint.sh` — three generations of self-compilation are
   byte-identical (the second with `./ycc`'s std pack, the third from
   the std sources) and the self-built binary still compiles working
-  programs.
+  programs; the compiler's source and every `src/y/std` file compile
+  without a warning.
 - `test_debug.sh` [debug] — `ycc -g`: both compilers emit identical
   `-g` binaries, the program runs the same, code and rodata match the
   plain build, readelf/nm/addr2line (gdb and callgrind when installed)
@@ -168,6 +173,7 @@ very build was just compared (`make test`, `check`, `rebless` do);
   nothing and gives the same bytes; a body change recompiles one
   package, an interface change its importers; damaged or foreign objects
   are rebuilt); imports, argv, exec, `--no-exec` and `-g` inside packages;
+  warnings (a package's when it compiles, a bin's on every build, `-w`);
   every manifest, graph and command-line error; git dependencies (local
   repos: fetch, `y.lock` pins, revs, `ycc vendor`). The C copy must print
   the same and build the same bytes.
@@ -182,7 +188,8 @@ very build was just compared (`make test`, `check`, `rebless` do);
   every keyword appears in a `t*.y`, and `test/COVERAGE.md` maps every
   manual section to the checked tests that exercise it. Unreachable
   diagnostics are listed there with a reason; a stale excuse fails the
-  suite. New diagnostic → new `e*.y` marker; new manual section → new
+  suite. New diagnostic → new `e*.y` marker (a new warning: an
+  `expect-warning` marker in a `t*.y`); new manual section → new
   row.
 
 ### Fuzzing (`test/fuzz/`, not part of `make test`)
@@ -202,47 +209,50 @@ the lexer, parser, checker or emitter (`YCC`, `CYCC`, `FUZZ_MEM_KB`,
 offending token — never a crash, never silent acceptance (the parser
 plants `err` nodes; see the "malformed input" helpers in `parser.y`).
 
-## Performance: bench before merging (mandatory workflow)
+## Performance: bench and profile at the end
 
-Anything that can move compile time, output size, or the speed of
-compiled programs is **proposed, benchmarked on a branch, then
-decided**. Never merge one on taste:
+A change that can affect performance (compile time, output size, or the
+speed of compiled programs) gets a **thorough bench and profiling at the
+end**, once it is done. Its numbers go in the commit message. A
+deliberate trade is fine; an unnoticed one is not. The tools compare a
+base build (normally the blessed `refs/ycc.ref`) with the new one
+(`./ynew`, from `make ynew`):
 
-1. **Propose**: say what the change should move.
-2. **Branch**: `git switch -c bench/whatever`.
-3. **Build both sides**: the base is normally the blessed
-   `refs/ycc.ref`, the new side `./ynew` from the branch (`make ynew`).
-   For another base: `make ycc` on it and `cp ycc /tmp/ycc-base`.
-4. **Bench**: `make check` (step 2 of the loop above) measures as part
-   of checking. On its own, `make bench` (`BASE=`, `NEW=`, `ROUNDS=`
-   override; it runs `bench/compare.sh` on copies under `/tmp`) scores the
-   two builds (100 = unchanged) over compile time, run time and binary
-   size (asm bytes/lines are shown per benchmark but not scored), then
-   the callgrind instruction counts per function of every benchmark
-   (`bench/profile.sh`: `-g` builds, needs valgrind). Keep both binaries
-   on the same filesystem: under WSL a binary run from `/mnt/c` pages in
-   through drvfs and measured ~30% slower in every phase, which is easy
-   to mistake for a regression. `make bench-ir` (`bench/compile_ir.sh`)
-   adds what the timings cannot resolve: the exact instructions each
-   compiler executes compiling every benchmark and `ycc.y`.
-5. **Decide**: merge or revert from the numbers; put the numbers in the
-   commit message. A deliberate trade is fine — an unnoticed one is not.
+- `make check` (step 2 of the loop above) measures as part of checking.
+- `make bench` (override with `BASE=`, `NEW=`, `ROUNDS=`; it runs
+  `bench/compare.sh` on copies under `/tmp`) scores the two builds
+  (100 = unchanged) over compile time, run time and binary size. Asm
+  bytes and lines are shown per benchmark but not scored. It then lists
+  the callgrind instruction counts per function for every benchmark
+  (`bench/profile.sh`: `-g` builds, needs valgrind). To use another base,
+  run `make ycc` on it and `cp ycc /tmp/ycc-base`.
+- `make bench-ir` (`bench/compile_ir.sh`) adds what the timings cannot
+  resolve: the exact instructions each compiler executes compiling every
+  benchmark and `ycc.y`.
+- Profile whatever moved: the callgrind table, `perf` on a `ycc -g` build,
+  or `ycc --time` for the compiler's phases. Use them to explain a
+  regression, not just to spot it.
 
-`bench/y/*.y` are benchmarks, **not tests**. The callgrind table (or
-`perf` on a `ycc -g` build) shows which functions moved — use it to
-explain a regression, not just to spot it. Times are wall clock on a
-shared machine: a SCORE within 100 ± 2.5 is no change (two copies of
-one build scored 99.7–100.6 in six runs, one real pair 99.8 and 102.3),
-a row of 40 ms or more agrees to ~8%, a shorter one swings by 20% and
-more (`bench/compare.sh ... 9` takes more samples); instruction counts
-are exact.
+Keep both binaries on the same filesystem. Under WSL, a binary run from
+`/mnt/c` pages in through drvfs and measured ~30% slower in every phase,
+which is easy to mistake for a regression. `bench/y/*.y` are benchmarks,
+**not tests**. Times are wall clock on a shared machine:
+- a SCORE within 100 ± 2.5 is no change (two copies of one build scored
+  99.7–100.6 in six runs; one real pair scored 99.8 and 102.3);
+- a row of 40 ms or more agrees to ~8%;
+- a shorter row swings by 20% or more (`bench/compare.sh ... 9` takes
+  more samples).
+
+Instruction counts are exact.
 
 ## Pipeline (`src/y/native.y`)
 
 splice imports, pick the std units → per unit (the program's, each
 package's under `ycc build` unless its object in `build/obj` is current,
 and each std unit unless the std pack has it): strip namespaces → rename
-(uniquify) → typecheck (static, errors fatal) → hoist → emit bodies →
+(uniquify) → typecheck (static, errors fatal) → lint (`lint.y`:
+warnings, to stderr; the program's unit and packages, never a std unit)
+→ hoist → emit bodies →
 link the units (tree shake across them) into `.s` → `asm.y` assembles →
 `elf.y` writes a static ELF (`-g`: plus `dwarf.y`'s line table). `y_` is
 a **reserved prefix**: such a def is emitted under its bare name because
@@ -282,7 +292,20 @@ replaces the std one at link time).
   into a buffer nothing else can see — NATIVE.md, "Owned strings").
 - Arrays are **homogeneous** — element types must match; heterogeneous
   literals are rejected.
+- **Records are exact**: a record type is its set of fields (in any
+  order), and a record goes only where its own type, or a union holding
+  it, is expected — no prefix view of a bigger record (a node of seven
+  fields is no `{k: str, params: [str]}`). The shape-hole `{k: str}` is the
+  exception. A value of unknown type going into a record type is checked
+  when the program runs (`y_rec_cast`): other fields trap.
 - `--no-exec` strips the `exec()` builtin (no shell access).
+- **No warnings**: `src/y` and `src/y/std` compile without one
+  (`test_fixpoint.sh` checks). A record or union type used in more than
+  one place gets a `type` alias, declared in the module that owns it and
+  imported where it is used (a module imported only for an alias: a
+  `// For its alias X.` line above the import — the import splicer,
+  `native_resolve_seen`, reads an `import` line whole, so a comment
+  cannot trail it). An unused parameter is fine; an unused local is not.
 
 ## Array operators (the language's rules)
 
@@ -323,12 +346,13 @@ replaces the std one at link time).
 
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
-  `rename.y`, `types.y` (checker), `native.y` (emitter), `arch_x64.y`
+  `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`
+  (emitter), `arch_x64.y`
   (asm + prelude), `enc64.y`, `asm.y`, `elf.y`, `dwarf.y` (`-g` line
   info); `std/` (`rt.y` runtime
   in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string
-  methods) — the four embedded into the compiler — and `io.y`, `net.y`,
-  `struct.y`).
+  methods) — the four embedded into the compiler — and `fs.y` (files,
+  paths, directories: `import fs;`), `io.y`, `net.y`, `struct.y`).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
 - `refs/` — backed-up reference binaries for the port gate (see
@@ -350,13 +374,17 @@ data, front}` (elements in a separate block) with capacity doubling
 (0→8→×2) at the back for `+=` and room reserved in front for `*=`, so
 both are amortized O(1); `s += t` on a `str` variable appends in place
 into a buffer only that variable owns, also amortized O(1);
-closures as `[code, caps...]` records; `&x`, `*p`, `a[i]`, `a[lo:hi]`,
-`T?`, `x!`, `void`, `float`, `byte` types; `for`/`for..in`/`foreach`/
-`while`; block expressions; `type` aliases, record unions and `match`;
+closures as `[code, caps...]` records; records laid out by field name,
+a pointer to their type's descriptor before the fields; `&x`, `*p`,
+`a[i]`, `a[lo:hi]`, `T?`, `x!`, `void`, `float`, `byte` types;
+`for`/`for..in`/`foreach`/`while`; block expressions; `type` aliases
+(recursive through a record field or a function type), record unions and
+`match`;
 `def` params may be annotated (recommended: an unannotated param is a
 poison-tolerant unknown), return types are inferred. `ycc` is
-native-only: `ycc [-o OUT] [-S] [-t] [-g] [--no-exec] [--std-src] FILE`,
-cc-style (and `ycc build [DIR]` / `ycc vendor [DIR]` for projects with a
+native-only: `ycc [-o OUT] [-S] [-t] [-g] [-w] [--no-exec] [--std-src] FILE`,
+cc-style (`-w`: no warnings; they go to stderr and never change the
+output) (and `ycc build [DIR]` / `ycc vendor [DIR]` for projects with a
 `y.toml`: NATIVE.md, *Packages*); the shipped binary needs nothing at runtime — it is a static
 ELF invoking raw syscalls, carrying its std units precompiled (the std
 pack, appended by `make ycc`).

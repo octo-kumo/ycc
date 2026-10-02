@@ -1,7 +1,8 @@
-import io from "../../../src/y/std/io.y";
-let flags = io.O_WRONLY() + io.O_CREAT() + io.O_TRUNC();
-let fd = io.open("/tmp/ynative_test.txt", flags, 420);
+// A file written through an fd (std/fs.y): the harness checks its bytes
+// (t10_filewrite.file).
+import fs;
+let fd = fs.open_file("/tmp/ynative_test.txt", "w");
 print(fd > 2);
-io.write_str(fd, "hello ", 6);
-io.write_str(fd, "native\n", 7);
-io.close(fd);
+fs.write_text(fd, "hello ");
+fs.write_text(fd, "native\n");
+fs.close_file(fd);

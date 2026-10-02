@@ -39,10 +39,13 @@ assignment, map stores) is observable through all of them.
 \subsection{Records}
 
 A record literal \ic{\{ name: "y", n: 1 \}} allocates one record object
-whose shape is the literal's fields \emph{as written}; field order is
-preserved. At run time a record is exactly a C struct: field \ty{i} is
-the word at \ic{+8i} from the record address, so \ic{r.a} compiles to a
-single load at a compile-time offset.
+of its record type (Section~\ref{sec:type-records}). At run time a
+record is a C struct laid out by field name: its fields sorted, the
+\ty{i}-th is the word at \ic{+8i} from the record address, whatever
+order a literal or a type writes them in --- so \ic{r.a} compiles to a
+single load at a compile-time offset. The word before the fields points
+to a descriptor of the record's type, which a \ic{match} on a union
+compares to tell the members apart.
 
 \begin{lstlisting}
 let r = { v: [7], n: 1 };

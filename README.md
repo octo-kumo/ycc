@@ -57,7 +57,7 @@ Tectonic 0.17).
 ## Usage
 
 ```text
-ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
+ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [--no-exec] [-h] FILE
   (no flags)   compile FILE to a native executable (default: a.out)
   -o OUTPUT    output path (executable, or .s file with -S)
   -S           emit assembly only (stdout, or the -o file)
@@ -65,6 +65,8 @@ ycc [-o OUTPUT] [-S] [-t] [-g] [--no-exec] [-h] FILE
   -g           add a symbol table, DWARF line info and section headers
                so perf, gdb, valgrind and addr2line show function names
                and source lines (the loaded code is unchanged)
+  -w           do not print warnings (they go to stderr and
+               never change the output)
   --no-exec    omit exec() -- the binary cannot reach a shell
   --std-src    compile the std units (the runtime and std library)
                from source instead of using the precompiled ones
@@ -81,8 +83,8 @@ exception).
 ### Projects and packages
 
 ```text
-ycc build [-g] [--no-exec] [--std-src] [DIR]   build the project in DIR (default .)
-ycc vendor [DIR]                               copy its git dependencies into DIR/vendor
+ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]   build the project in DIR (default .)
+ycc vendor [DIR]                                    copy its git dependencies into DIR/vendor
 ```
 
 A project is a directory with a `y.toml`:
@@ -118,7 +120,7 @@ no std pack attached, so it always compiles the std units from source
 
 | path | contents |
 |---|---|
-| `src/y/` | the compiler, in Y (`ycc.y` driver, `pkg.y` packages, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `dwarf.y`, `std/`) |
+| `src/y/` | the compiler, in Y (`ycc.y` driver, `pkg.y` packages, `lexer.y`, `parser.y`, `rename.y`, `types.y`, `lint.y`, `native.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `dwarf.y`, `std/`) |
 | `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the value model) |
 | `docs/` | the formal language definition (LaTeX/Tectonic) |
 | `refs/` | reference binaries for the byte-identical port gate (currently `cycc`'s own output with its std pack attached — see `PORTING.md`) |
@@ -146,5 +148,6 @@ are kept in lockstep — that is what "1:1 copy" means, see
 ## Contributing
 
 `AGENTS.md` is the project guide (workflow, style rules, benchmarking
-policy). Performance-relevant changes are proposed, benchmarked on a
-branch with `bench/compare.sh`, and decided by the numbers.
+policy). A change that can affect performance gets a thorough bench and
+profiling at the end (`make bench`, `bench/compare.sh`), with the numbers
+in its commit message.

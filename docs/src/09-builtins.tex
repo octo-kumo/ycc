@@ -172,12 +172,6 @@ fill is one byte, and widths count bytes.
 \item[\ic{clear\_eof()}] No-op: \ic{readline()} reads again whenever
   its buffer is empty, so end of input is never latched. Present so the
   same source runs on every compiler.
-\item[\ic{read\_file(path)}] File contents as \ic{str?}: \ic{none} when
-  the file cannot be read.
-\item[\ic{write\_file(path, s)}] Write a string; \ic{bool} success.
-\item[\ic{write\_bytes(path, b, mode)}] Write \ic{[byte]} binary-safe
-  and chmod (\ic{mode == -1} skips chmod --- any other value is passed
-  to \ic{fchmodat} verbatim, so \ic{493} is \ic{0755}); \ic{bool} success.
 \item[\ic{argv()}] \ic{[str]} of the program's arguments.
 \item[\ic{exit(code)}] Terminate with an exit code.
 \item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}.
@@ -188,6 +182,64 @@ fill is one byte, and widths count bytes.
 \item[\ic{exec(cmd)}] Run a shell command, return its exit code.
   Removed from the binary entirely by \ic{--no-exec} (then calling it
   is a compile error).
+\end{description}
+
+\noindent Files are the standard module \ic{fs} (below), not builtins.
+
+\subsection{Files (the fs module)}
+\label{sec:builtin-fs}
+
+\ic{import fs;} brings the file system: whole files as text (\ic{str})
+or bytes (\ic{[byte]}), paths, directories and file descriptors, all over
+raw syscalls. A read gives \ic{none} and a write \ic{false} when it
+fails; paths are relative to the working directory. A \ty{mode} is the
+octal permission number (\ic{420} is \ic{0644}, \ic{493} is \ic{0755});
+\ic{-1} leaves a new file at \ic{0644} minus the umask.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{fs.read\_file(path)}] The file as \ic{str?}.
+\item[\ic{fs.read\_bytes(path)}] The file as \ic{[byte]?}.
+\item[\ic{fs.read\_lines(path)}] Its lines, without their newlines, as
+  \ic{[str]?}.
+\item[\ic{fs.write\_file(path, s, mode = -1)}] Create or truncate the file,
+  write \ty{s}, then (\ty{mode} $\geq 0$) set its permissions; \ic{bool}.
+\item[\ic{fs.write\_bytes(path, b, mode = -1)}] The same with a
+  \ic{[byte]}.
+\item[\ic{fs.append\_file(path, s)}] Add \ty{s} at the end (creating the
+  file); \ic{bool}.
+\item[\ic{fs.append\_bytes(path, b)}] The same with a \ic{[byte]}.
+\item[\ic{fs.copy\_file(from, to)}] \ic{bool}.
+\item[\ic{fs.rename(from, to)}] Rename or move; \ic{bool}.
+\item[\ic{fs.remove\_file(path)}] \ic{bool}.
+\item[\ic{fs.exists(path)}] Whether there is such a path.
+\item[\ic{fs.is\_file(path)}] A regular file (following a symlink).
+\item[\ic{fs.is\_dir(path)}] A directory.
+\item[\ic{fs.file\_size(path)}] Its size in bytes, \ic{long?}.
+\item[\ic{fs.set\_mode(path, mode)}] Set the permissions; \ic{bool}.
+\item[\ic{fs.make\_dir(path, mode = 493)}] \ic{bool}.
+\item[\ic{fs.make\_dirs(path, mode = 493)}] The directory and every one
+  above it that is missing; \ic{true} when it exists already.
+\item[\ic{fs.list\_dir(path)}] The names in a directory, sorted, without
+  \ic{.} and \ic{..}; \ic{[str]?}.
+\item[\ic{fs.remove\_dir(path)}] An empty directory; \ic{bool}.
+\item[\ic{fs.remove\_all(path)}] A file, or a directory and everything in
+  it; \ic{bool}.
+\item[\ic{fs.cwd()}] The working directory.
+\item[\ic{fs.chdir(path)}] Change it; \ic{bool}.
+\item[\ic{fs.open\_file(path, how, mode = 420)}] Open with a mode string:
+  \ic{"r"} read, \ic{"w"} write (create, truncate), \ic{"a"} append
+  (create), \ic{"x"} create a file that must not exist; a trailing
+  \ic{+} adds the other direction (\ic{"r+"}, \ic{"w+"}, \ic{"a+"}). The
+  file descriptor, or \ic{-1}.
+\item[\ic{fs.read\_all(fd)}] Everything left, as \ic{str}
+  (\ic{fs.read\_all\_bytes(fd)}: as \ic{[byte]}).
+\item[\ic{fs.read\_some(fd, n)}] Up to \ty{n} bytes (at most 65536);
+  \ic{[]} at the end.
+\item[\ic{fs.write\_text(fd, s)}] \ic{bool} (\ic{fs.write\_data(fd, b)}:
+  a \ic{[byte]}).
+\item[\ic{fs.seek(fd, off, whence)}] Move: from the start (0), the current
+  position (1) or the end (2); the new position, or \ic{-1}.
+\item[\ic{fs.close\_file(fd)}] \ic{bool}.
 \end{description}
 
 \subsection{Pointers}

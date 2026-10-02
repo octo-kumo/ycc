@@ -171,5 +171,5 @@ helpers for file headers and binary layouts (\ic{u32be}, \ic{get\_i16le},
 There are no array mutator functions: \ic{+=} and \ic{*=} \emph{are}
 push and prepend. \ic{len(a)} is the only builtin whose argument is an
 array \emph{as such}; \ic{join(xs, sep)} also takes an array but of any
-element type (each element is stringified), and \ic{bytes}/\ic{from\_bytes}/
-\ic{write\_bytes} take a \ic{[byte]}.
+element type (each element is stringified), and \ic{bytes}/\ic{from\_bytes}
+and \ic{fs.write\_bytes} take a \ic{[byte]}.

@@ -1,47 +1,51 @@
-import io;
+// std/fs.y at the fd level: every mode string, the errors (-1, false,
+// []), positions, NUL bytes, and the standard fds (1 is stdout).
+import fs;
 
-print(io.stdin_fd());
-print(io.stdout_fd());
-print(io.stderr_fd());
-print([
-    io.O_RDONLY(),
-    io.O_WRONLY(),
-    io.O_RDWR(),
-    io.O_CREAT(),
-    io.O_TRUNC()
-]);
-
-print(io.open("t102_io_missing.txt", io.O_RDONLY(), 0));
-print(io.open(".", io.O_WRONLY(), 0));
-print(io.chmod("t102_io_missing.txt", 384));
+print(fs.write_text(1, "fd 1 is stdout\n"));
+print(fs.write_text(1, ""));
+print(fs.open_file("t102_io_missing.txt", "r"));
+print(fs.open_file(".", "w"));
+print(fs.open_file("/tmp", "rw"));
+print(fs.set_mode("t102_io_missing.txt", 384));
 
 // /tmp, pid-unique: the repo may sit on a filesystem where a fresh file
 // can be briefly locked, and concurrent runs must not share the file.
 let path = "/tmp/ytest_t102_" + tostring(syscall(39)) + ".txt";
-let fd = io.open(path, io.O_RDWR() + io.O_CREAT() + io.O_TRUNC(), 420);
+let fd = fs.open_file(path, "w+", 384);
 print(fd > 2);
-print(io.chmod(path, 384));
-print(io.write_str(fd, "io:", 3));
-let payload: [long; 2] = [0x0102030405060708, -1];
-print(io.write(fd, &payload[0], 16));
-print(io.close(fd));
-print(io.close(fd));
-print(io.close(-1));
+print(fs.write_text(fd, "io:"));
+let payload: [byte] = [1, 2, 3, 0, 255];
+print(fs.write_data(fd, payload));
+print(fs.seek(fd, 0, 1), " ", fs.seek(fd, 0, 0));
+print(fs.read_some(fd, 3), " ", fs.read_all_bytes(fd), " ", fs.read_some(fd, 10));
+print(fs.seek(fd, -2, 2), " ", fs.seek(fd, -100, 0));
+print(fs.close_file(fd), " ", fs.close_file(fd), " ", fs.close_file(-1));
+print(fs.file_size(path)!);
 
-let ro = io.open(path, io.O_RDONLY(), 0);
-print(ro > 2);
-let prefix: [long; 1] = [0];
-let back: [long; 2] = [0; 2];
-print(io.read(ro, &prefix[0], 3));
-print(prefix[0] == 3829609);
-print(io.read(ro, &back[0], 16));
-print(back);
-print(io.write_str(ro, "x", 1));
-print(io.close(ro));
+// read-only: no writing; at most 65536 bytes a call
+let ro = fs.open_file(path, "r");
+print(fs.write_text(ro, "x"), " ", fs.read_some(ro, 0), " ", fs.read_some(ro, -5));
+print(len(fs.read_some(ro, 100000)), " ", fs.close_file(ro));
 
-let wo = io.open(path, io.O_WRONLY(), 0);
-let unused: [long; 1] = [0];
-print(io.read(wo, &unused[0], 1));
-print(io.close(wo));
+// append: write-only, and every write lands at the end
+let ap = fs.open_file(path, "a");
+print(fs.read_some(ap, 1), " ", fs.write_text(ap, "!"));
+print(fs.seek(ap, 0, 0), " ", fs.write_text(ap, "?"), " ", fs.close_file(ap));
+print(fs.read_bytes(path)!);
 
-print(syscall(87, path));
+// r+: both ways, from the start, no truncation
+let rw = fs.open_file(path, "r+");
+print(fs.write_text(rw, "IO"), " ", fs.read_some(rw, 1), " ", fs.close_file(rw));
+print(fs.read_bytes(path)![0:4], " ", fs.file_size(path)!);
+
+// x: the file must not exist; a+ reads and appends; w truncates
+print(fs.open_file(path, "x"));
+let nx = path + ".new";
+let x = fs.open_file(nx, "x+");
+print(x > 2, " ", fs.write_text(x, "new"), " ", fs.seek(x, 0, 0), " ", fs.read_all(x), " ", fs.close_file(x));
+let ar = fs.open_file(nx, "a+");
+print(fs.write_text(ar, "er"), " ", fs.seek(ar, 0, 0), " ", fs.read_all(ar), " ", fs.close_file(ar));
+let wt = fs.open_file(nx, "w");
+print(fs.close_file(wt), " ", fs.file_size(nx)!);
+print(fs.remove_file(path), " ", fs.remove_file(nx));

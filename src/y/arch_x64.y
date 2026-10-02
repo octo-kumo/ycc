@@ -86,8 +86,10 @@ def arch_prelude() -> str {
     // block by block, prune_bodies does the same for rt.y's functions).
     // What stays here is what only raw machine state can do: the bump
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
-    // .bss cells), the trap stubs, the record field-table probes
-    // (y_rec_has, y_dot_lookup), the byte-moving string/array cores
+    // .bss cells), the trap stubs, the record descriptor probes
+    // (y_rec_has, y_dot_lookup: the field table; y_rec_cast: the shape
+    // hash, see native.y "records at run time"), the byte-moving
+    // string/array cores
     // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
     join([
@@ -392,6 +394,7 @@ def arch_prelude() -> str {
         "    test %rbx, %rbx",
         "    jz yrh_no",
         "    mov -8(%rbx), %r14",
+        "    add $16, %r14",
         "    mov (%r14), %r10",
         "    mov $1498307412, %rax",
         "    cmp %rax, %r10",
@@ -466,6 +469,7 @@ def arch_prelude() -> str {
         "    test %rbx, %rbx",
         "    jz y_dot_trap",
         "    mov -8(%rbx), %r14",
+        "    add $16, %r14",
         "    mov (%r14), %r10",
         "    mov $1498307412, %rax",
         "    cmp %rax, %r10",
@@ -525,6 +529,24 @@ def arch_prelude() -> str {
         "    mov $1, %rdi",
         "    lea ystr_dot2(%rip), %rsi",
         "    mov $ystr_dot2_end-ystr_dot2, %rdx",
+        "    syscall",
+        "    mov $60, %rax",
+        "    mov $1, %rdi",
+        "    syscall",
+        "y_rec_cast:",
+        "    test %rax, %rax",
+        "    jz yrc_ok",
+        "    mov -8(%rax), %rdx",
+        "    mov 8(%rdx), %rdx",
+        "    cmp %rcx, %rdx",
+        "    jne y_cast_trap",
+        "yrc_ok:",
+        "    ret",
+        "y_cast_trap:",
+        "    mov $1, %rax",
+        "    mov $1, %rdi",
+        "    lea ystr_cast(%rip), %rsi",
+        "    mov $ystr_cast_end-ystr_cast, %rdx",
         "    syscall",
         "    mov $60, %rax",
         "    mov $1, %rdi",
@@ -1509,6 +1531,8 @@ def arch_consts() -> str {
         "ystr_dot_end:",
         "ystr_dot2: .ascii \"'\\n\"",
         "ystr_dot2_end:",
+        "ystr_cast: .ascii \"runtime error: a record does not have the fields of its declared type\\n\"",
+        "ystr_cast_end:",
         "ystr_oom: .ascii \"runtime error: out of memory\\n\"",
         "ystr_oom_end:",
         "ystr_opt: .ascii \"runtime error: unwrap of none\\n\"",

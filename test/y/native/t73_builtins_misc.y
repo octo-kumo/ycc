@@ -1,3 +1,4 @@
+import fs;
 let value: long = 7;
 print(byte_at("A", 0));
 let values = [1, 2];
@@ -8,8 +9,8 @@ sleep(1);
 print("awake");
 // /tmp, pid-unique (see t102): syscall 39 is getpid.
 let path = "/tmp/ytest_t73_" + tostring(syscall(39)) + ".bin";
-let written = write_bytes(path, bytes("Y!"), 420);
+let written = fs.write_bytes(path, bytes("Y!"), 420);
 print(written);
-let data = read_file(path);
+let data = fs.read_file(path);
 print(unwrap(data));
 syscall(87, path);

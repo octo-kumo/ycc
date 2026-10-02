@@ -7,14 +7,16 @@
 # [bin] into DIR/build. Checks: a diamond of path dependencies builds and
 # runs, each package's top level once and dependencies first; names stay
 # qualified (a bin's own `sq` is not a package's); records, closures,
-# optionals, defaults and string globals cross the boundary, and a
+# optionals, defaults, string globals and recursive types cross the
+# boundary, and a
 # package's globals are read-only; a rebuild compiles nothing and gives
 # the same bytes; a body change recompiles that package only, an
 # interface change its importers too; a damaged object, or one another
 # compiler wrote, is rebuilt; a fresh build gives the same bytes as a
 # cached one, and the C copy the same as ycc; inside a package, std
 # modules, relative imports, its src roots, argv and exec work; --no-exec
-# and -g reach the packages; errors name the file they are in; every
+# and -g reach the packages; errors and warnings name the file they are in
+# (a package warns when it compiles, -w drops them); every
 # manifest, graph and command-line error; git dependencies are fetched,
 # pinned in y.lock, and vendored.
 
@@ -123,8 +125,9 @@ mk "$P/c/lib.y" <<'EOF'
 puts("init c\n");
 let greeting = "hello";
 let count = 3;
-def mkpt(x: long, y: long) -> { x: long, y: long } { { x: x, y: y } };
-def norm1(p: { x: long, y: long }) -> long { p.x + p.y };
+type Pt = { x: long, y: long };
+def mkpt(x: long, y: long) -> Pt { { x: x, y: y } };
+def norm1(p: Pt) -> long { p.x + p.y };
 def adder(n: long) -> (long) -> long { def(x: long) -> long { x + n } };
 def greet(who: str = "world") -> str { greeting + " " + who };
 def maybe(n: long) -> long? { if (n > 0) { some(n) } else { none } };
@@ -308,8 +311,57 @@ cp "$P/c/lib.y" "$TMPD/c.lib"
 echo 'def broken() -> long { "s" + 1 };' >>"$P/c/lib.y"
 yb "$YCC" "$P/app"
 same_text "an error in a package names its file" "compiling c
-../c/lib.y:17:1: error: 'broken' body: expected long, got str" "$TMPD/out"
+../c/lib.y:18:1: error: 'broken' body: expected long, got str" "$TMPD/out"
 cp "$TMPD/c.lib" "$P/c/lib.y"
+
+# 3b. recursive types cross a package: an exported function's type names
+# them (tcode spells a tref out once), and the bin's own structurally
+# equal union is the same type, its records the same tags
+R="$TMPD/rec"
+mk "$R/ast/y.toml" <<'EOF'
+[package]
+name = "ast"
+lib = "lib.y"
+EOF
+mk "$R/ast/lib.y" <<'EOF'
+type Expr = Num | Add;
+type Num = { n: long };
+type Add = { l: Expr, r: Expr };
+def num(n: long) -> Expr { { n: n } };
+def add(l: Expr, r: Expr) -> Expr { { l: l, r: r } };
+def ev(e: Expr) -> long {
+    match e { Num x => x.n, Add a => ev(a.l) + ev(a.r) }
+};
+EOF
+mk "$R/app/y.toml" <<'EOF'
+[package]
+name = "app"
+[bin]
+app = "main.y"
+[dependencies]
+ast = { path = "../ast" }
+EOF
+mk "$R/app/main.y" <<'EOF'
+import ast;
+type E = N | A;
+type N = { n: long };
+type A = { l: E, r: E };
+def depth(e: E) -> long {
+    match e { N => 1, A a => 1 + depth(a.l) }
+};
+let e = ast.add(ast.num(1), ast.add(ast.num(2), ast.num(3)));
+puts(tostring(ast.ev(e)) + " " + tostring(depth(e)) + "\n");
+let mine: E = { l: { n: 4 }, r: { n: 5 } };
+puts(tostring(ast.ev(mine)) + "\n");
+EOF
+if yb "$YCC" "$R/app"; then
+    pass "a package's recursive types build"
+else
+    fail "a package's recursive types build" "$(head -c 300 "$TMPD/out")"
+fi
+runs "recursive types cross a package: one type, one tag" "6 2
+9" "$R/app/build/app"
+agree "recursive types" "$R/app"
 
 # ── 4. inside a package: std, relative and root imports; argv, exec ─────
 Q="$TMPD/p2"
@@ -378,6 +430,25 @@ if command -v addr2line >/dev/null && command -v nm >/dev/null; then
 else
     skip "-g: a package's code maps to its file" "no addr2line"
 fi
+# warnings: a package's when it compiles (one built from its object prints
+# none), naming its file; a bin's on every build; -w drops them
+echo 'def warned() -> long { let w = 1; 2 };' >>"$Q/u/src/helper.y"
+echo 'def main_w() -> long { let z = 3; 0 };' >>"$Q/app/main.y"
+yb "$YCC" "$Q/app"
+same_text "warnings name their files, and the build goes on" "compiling u
+../u/src/helper.y:2:24: warning: unused variable 'w'
+compiling app
+main.y:5:24: warning: unused variable 'z'
+built build/app" "$TMPD/out"
+yb "$YCC" "$Q/app"
+same_text "a package built from its object warns no more, a bin still does" "main.y:5:24: warning: unused variable 'z'
+built build/app" "$TMPD/out"
+rm -rf "$Q/app/build"
+yb "$YCC" "$Q/app" -w
+same_text "-w drops the warnings" "compiling u
+compiling app
+built build/app" "$TMPD/out"
+agree "warnings" "$Q/app"
 
 # ── 5. errors: the manifest ──────────────────────────────────────────────
 M="$TMPD/m"

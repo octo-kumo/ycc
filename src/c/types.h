@@ -17,9 +17,20 @@ Yv *tstr(Yv *t);              /* compiler-diagnostics rendering of a type */
 Yv *tdisp(Yv *t);             /* user-visible rendering (typeof) */
 Yv *tdisp_fnval(Yv *t);       /* "<function (params)->(ret)>" shape */
 int teq(Yv *a, Yv *b);        /* strict type equality (branch agreement) */
+int is_open(Yv *fs);           /* an open record's fields: `{k: str, ..}` */
+long field_pos(Yv *fs, Yv *name, long hint); /* a field's index by name */
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);  /* record-literal upsert */
 Yv *str_method(Yv *m);        /* string-method lowering/type table */
 Yv *narrow_type(Yv *s, Yv *t); /* static type of a match `narrow` node */
+Yv *union_member(Yv *u, Yv *t); /* the member of union u that is t */
+Yv *unfold(Yv *t);            /* a tref's type, one level */
+Yv *members(Yv *t);           /* a union's members, unfolded */
+Yv *union_parts(Yv *t);       /* a union's members as written */
+Yv *pat_members(Yv *s, Yv *t); /* members with a record pattern's fields */
+Yv *lit_target(Yv *node, Yv *want); /* a record literal's declared type */
+Yv *tcanon(Yv *t);            /* a type's canonical form */
+Yv *str_sorted(Yv *xs);       /* [str] sorted */
+Yv *rec_names(Yv *fs);        /* a record's field names, sorted */
 Yv *type_names(Yv *t);        /* field names a record type / pattern tests */
 Yv *fmt_spec(Yv *spec);       /* parsed f-string format specification */
 long fmt_kind(Yv *t);          /* integer=1, float=2, other=0 */

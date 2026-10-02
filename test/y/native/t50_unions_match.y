@@ -35,7 +35,7 @@ show(c2);
 
 // a match is an expression; record patterns compare fields
 def code(v: C) -> long {
-    match v { A a => 1, ({bfield: 10}) b => 2, _ => 3 }
+    match v { A a => 1, ({bfield: 10}) b => 2, _ => 3 } // expect-warning: unused variable 'a' // expect-warning: unused variable 'b'
 }
 print(code(c), code(c2), code({bfield: 11}));
 

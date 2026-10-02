@@ -65,7 +65,7 @@ print(heap_used() - h <= n + 64);
 // 3. what does allocate, by design: an option keeps its value in a box,
 // so some(v) costs at most 16 bytes
 h = heap_used();
-for k in 0..1000 { let q: long? = some(k); acc = acc + 1; };
+for k in 0..1000 { let q: long? = some(k); acc = acc + 1; }; // expect-warning: unused variable 'q'
 print(heap_used() - h <= 16 * 1000);
 // a map read is an option too, but the map caches each entry's box: m[k]!
 // never boxes, and a read that escapes boxes once per write of the entry

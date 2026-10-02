@@ -11,6 +11,6 @@ const pi = 4*left_fold(indices, 0.0, def(s:float, i:long) {
     let sign = if ((i%2) == 0) {1.0} else {-1.0};
     let denom = (2.0 * i) + 1;
     let v = s + sign / denom;
-    v;
+    v
 });
 print("pi = "+pi);

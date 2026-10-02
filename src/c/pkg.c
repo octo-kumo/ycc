@@ -15,6 +15,10 @@ typedef Yv *PkNode;
 typedef Yv *PkDecl;
 typedef Yv *PkSt;
 typedef Yv *PkGraph;
+typedef Yv *PkGit;
+typedef Yv *PkHash;
+/* lexer.y's alias (pkg.y imports it for that) */
+typedef Yv *Cursor;
 
 /* ── module-local defs (forward) ─────────────────────────────────────── */
 static Yv *pk_cat(size_t n, ...);
@@ -23,17 +27,17 @@ static Yv *pk_nostrs(void);
 static Yv *pk_clean(Yv *path);
 static int pk_is_dir(Yv *path);
 static int pk_is_file(Yv *path);
-static Yv *pk_peek(Yv *cur);
-static long pk_skip(Yv *cur);
+static Yv *pk_peek(Cursor cur);
+static long pk_skip(Cursor cur);
 static int pk_keych(long c);
 static int pk_is_key(Yv *s);
 static int pk_is_ident(Yv *s);
 static int pk_is_kw(Yv *s);
 static Yv *pk_uncomment(Yv *line);
-static Yv *pk_qstr(Yv *cur, Yv *at);
-static Yv *pk_array(Yv *cur, Yv *at);
-static Yv *pk_bare(Yv *cur, Yv *at);
-static Yv *pk_itable(Yv *cur, Yv *at);
+static Yv *pk_qstr(Cursor cur, Yv *at);
+static Yv *pk_array(Cursor cur, Yv *at);
+static Yv *pk_bare(Cursor cur, Yv *at);
+static Yv *pk_itable(Cursor cur, Yv *at);
 static long pk_count(Yv *xs, Yv *s);
 static Yv *pk_toml(Yv *text, Yv *path);
 static Yv *pk_tq(Yv *s);
@@ -46,17 +50,17 @@ static Yv *pk_dep_names(Yv *ds);
 static Yv *pk_roots(Yv *dir, Yv *roots);
 static long pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0);
 static Yv *pk_decl_name(PkDecl e);
-static Yv *pk_git_dir(PkSt st, PkDep d);
+static PkGit pk_git_dir(PkSt st, PkDep d);
 static Yv *pk_q(Yv *s);
 static Yv *pk_env(void);
 static Yv *pk_read_environ(void);
 static long pk_exec(Yv *cmd);
 static long pk_exit_status(long raw);
-static Yv *pk_fetch(PkDep d, Yv *base, Yv *pin);
+static PkGit pk_fetch(PkDep d, Yv *base, Yv *pin);
 static Yv *pk_lock_read(Yv *dir);
 static Yv *pk_lock_find(Yv *locks, PkDep d);
 static long pk_lock_write(Yv *dir, Yv *nodes);
-static long pk_mix(Yv *h, long x);
+static long pk_mix(PkHash h, long x);
 
 static Yv *pk_cat(size_t n, ...) {
     va_list ap;
@@ -185,13 +189,13 @@ long pk_mkdir(Yv *path) {
 
 /* ── the manifest: a TOML subset ─────────────────────────────────────── */
 
-static Yv *pk_peek(Yv *cur) {
+static Yv *pk_peek(Cursor cur) {
     Yv *s = yr_get(cur, "s");
     long p = yv_l(yr_get(cur, "p"));
     return ys_slice(s, p, p + 1);
 }
 
-static long pk_skip(Yv *cur) {
+static long pk_skip(Cursor cur) {
     Yv *s = yr_get(cur, "s");
     long p = yv_l(yr_get(cur, "p"));
     while (p < yv_len(s) &&
@@ -269,7 +273,7 @@ static Yv *pk_uncomment(Yv *line) {
     return ys_slice(line, 0, end);
 }
 
-static Yv *pk_qstr(Yv *cur, Yv *at) {
+static Yv *pk_qstr(Cursor cur, Yv *at) {
     (void)pk_skip(cur);
     Yv *s = yr_get(cur, "s");
     long p = yv_l(yr_get(cur, "p"));
@@ -323,7 +327,7 @@ static Yv *pk_qstr(Yv *cur, Yv *at) {
     return ys_join(out, ys(""));
 }
 
-static Yv *pk_array(Yv *cur, Yv *at) {
+static Yv *pk_array(Cursor cur, Yv *at) {
     (void)yr_set(cur, "p", yv_long(yv_l(yr_get(cur, "p")) + 1));
     Yv *out = yav(0);
     int go = 1;
@@ -355,7 +359,7 @@ static Yv *pk_array(Yv *cur, Yv *at) {
     return out;
 }
 
-static Yv *pk_bare(Yv *cur, Yv *at) {
+static Yv *pk_bare(Cursor cur, Yv *at) {
     (void)pk_skip(cur);
     Yv *s = yr_get(cur, "s");
     long p = yv_l(yr_get(cur, "p"));
@@ -373,7 +377,7 @@ static Yv *pk_bare(Yv *cur, Yv *at) {
     return key;
 }
 
-static Yv *pk_itable(Yv *cur, Yv *at) {
+static Yv *pk_itable(Cursor cur, Yv *at) {
     (void)yr_set(cur, "p", yv_long(yv_l(yr_get(cur, "p")) + 1));
     Yv *keys = yav(0);
     Yv *vals = yav(0);
@@ -961,7 +965,7 @@ static Yv *pk_decl_name(PkDecl e) {
 
 /* ── git dependencies ────────────────────────────────────────────────── */
 
-static Yv *pk_git_dir(PkSt st, PkDep d) {
+static PkGit pk_git_dir(PkSt st, PkDep d) {
     Yv *pin = pk_lock_find(yr_get(st, "lock"), d);
     Yv *vdir = pk_join(
         yr_get(st, "rdir"),
@@ -1086,7 +1090,7 @@ static long pk_exit_status(long raw) {
     }
 }
 
-static Yv *pk_fetch(PkDep d, Yv *base, Yv *pin) {
+static PkGit pk_fetch(PkDep d, Yv *base, Yv *pin) {
     Yv *tmp = pk_cat(4, base, ys("/"), yr_get(d, "name"), ys(".tmp"));
     Yv *want = pin;
     if (yv_len(want) == 0) {
@@ -1315,11 +1319,11 @@ long pk_vendor(Yv *dir) {
 
 /* ── hashing (the object cache's keys) ───────────────────────────────── */
 
-Yv *pk_hash_new(void) {
+PkHash pk_hash_new(void) {
     return yr(2, "a", yv_long(1), "b", yv_long(7));
 }
 
-static long pk_mix(Yv *h, long x) {
+static long pk_mix(PkHash h, long x) {
     long a = yv_l(yr_get(h, "a"));
     long b = yv_l(yr_get(h, "b"));
     a = (a * 4294967296L + x) % 2147483647L;
@@ -1329,7 +1333,7 @@ static long pk_mix(Yv *h, long x) {
     return 0;
 }
 
-long pk_hash_str(Yv *h, Yv *s) {
+long pk_hash_str(PkHash h, Yv *s) {
     long n = yv_len(s);
     (void)pk_mix(h, n);
     long i = 0;
@@ -1352,7 +1356,7 @@ long pk_hash_str(Yv *h, Yv *s) {
     return 0;
 }
 
-Yv *pk_hash_text(Yv *h) {
+Yv *pk_hash_text(PkHash h) {
     return ys_cat(
         ys_cat(ys_tostring(yr_get(h, "a")), ys("-")),
         ys_tostring(yr_get(h, "b")));

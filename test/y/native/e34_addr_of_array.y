@@ -2,8 +2,7 @@
 // &a is the address of the slot holding the array's {len,cap,data}
 // header, not of its elements: handing it to read(2) let the kernel
 // write over the frame. Use &a[0]. (A heap array was already rejected;
-// a fixed one slipped through and `io.read(fd, &buf, n)` compiled.)
-import io from "../../../src/y/std/io.y";
+// a fixed one slipped through and `syscall(0, fd, &buf, n)` compiled.)
 let fixed: [long; 4] = [0; 4];
 let p = &fixed;
 print(p);

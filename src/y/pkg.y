@@ -25,6 +25,10 @@
 // Every failure here is the user's: reported as `error: ...` (pk_die),
 // and the run ends.
 
+// For its alias Cursor.
+import lexer from "./lexer.y";
+import fs;
+
 type PkEnt = { tab: str, n: long, key: str, line: long, k: str, s: str, keys: [str], items: [str] };
 type PkDep = { name: str, path: str, git: str, rev: str };
 type PkBin = { name: str, path: str };
@@ -34,6 +38,10 @@ type PkNode = { name: str, dir: str, lib: str, roots: [str], deps: [str], git: s
 type PkDecl = { name: str, src: str, by: str, dep: PkDep, fdir: str };
 type PkSt = { root: str, rdir: str, decls: [PkDecl], done: [str], stack: [str], nodes: [PkNode], lock: [PkLock] };
 type PkGraph = { dir: str, name: str, lib: str, roots: [str], bins: [PkBin], deps: [str], pkgs: [PkNode] };
+// A git dependency's checkout and the commit it holds (pk_git_dir); a
+// hash being computed (pk_hash_new).
+type PkGit = { dir: str, commit: str };
+type PkHash = { a: long, b: long };
 
 def pk_die(msg: str) -> long {
     puts("error: " + msg + "\n");
@@ -125,13 +133,13 @@ def pk_mkdir(path: str) -> long {
 // a header (k "h"), or a key with its value (k "s", "a" or "t"), under
 // the table it is in (`n`: which [[table]] element, -1 for a plain one).
 
-def pk_peek(cur: { s: str, p: long }) -> str {
+def pk_peek(cur: Cursor) -> str {
     let s = cur.s;
     let p = cur.p;
     s[p:p + 1]
 };
 
-def pk_skip(cur: { s: str, p: long }) -> long {
+def pk_skip(cur: Cursor) -> long {
     let s = cur.s;
     let p = cur.p;
     while (p < len(s) && (byte_at(s, p) == 32 || byte_at(s, p) == 9)) {
@@ -202,7 +210,7 @@ def pk_uncomment(line: str) -> str {
     line[:end]
 };
 
-def pk_qstr(cur: { s: str, p: long }, at: str) -> str {
+def pk_qstr(cur: Cursor, at: str) -> str {
     pk_skip(cur);
     let s = cur.s;
     let p = cur.p;
@@ -253,7 +261,7 @@ def pk_qstr(cur: { s: str, p: long }, at: str) -> str {
     join(out, "")
 };
 
-def pk_array(cur: { s: str, p: long }, at: str) -> [str] {
+def pk_array(cur: Cursor, at: str) -> [str] {
     cur.p = cur.p + 1;
     let out: [str] = [];
     let go = true;
@@ -285,7 +293,7 @@ def pk_array(cur: { s: str, p: long }, at: str) -> [str] {
     out
 };
 
-def pk_bare(cur: { s: str, p: long }, at: str) -> str {
+def pk_bare(cur: Cursor, at: str) -> str {
     pk_skip(cur);
     let s = cur.s;
     let p = cur.p;
@@ -298,7 +306,7 @@ def pk_bare(cur: { s: str, p: long }, at: str) -> str {
     key
 };
 
-def pk_itable(cur: { s: str, p: long }, at: str) -> { keys: [str], vals: [str] } {
+def pk_itable(cur: Cursor, at: str) -> { keys: [str], vals: [str] } {
     cur.p = cur.p + 1;
     let keys: [str] = [];
     let vals: [str] = [];
@@ -443,7 +451,7 @@ def pk_want_str(e: PkEnt, at: str) -> str {
 // The manifest in directory `dir`.
 def pk_manifest(dir: str) -> PkMan {
     let file = pk_join(dir, "y.toml");
-    let txt = read_file(file);
+    let txt = fs.read_file(file);
     if (txt == none) { pk_die("cannot read '" + file + "'"); 0; } else { 0; };
     let ents = pk_toml(unwrap(txt), file);
     let bins: [PkBin] = [];
@@ -699,7 +707,7 @@ def pk_decl_name(e: PkDecl) -> str {
 // else a fresh clone of `rev` (the default branch without one), which
 // y.lock then pins.
 
-def pk_git_dir(st: PkSt, d: PkDep) -> { dir: str, commit: str } {
+def pk_git_dir(st: PkSt, d: PkDep) -> PkGit {
     let pin = pk_lock_find(st.lock, d);
     let vdir = pk_join(st.rdir, "vendor/" + d.name);
     if (pk_is_file(vdir + "/y.toml")) {
@@ -723,7 +731,7 @@ def pk_q(s: str) -> str {
 // exec() runs sh with no environment at all: git wants this one's (HOME,
 // proxies, credentials), so a command starts by exporting it.
 def pk_env() -> str {
-    let t = read_file("/proc/self/environ");
+    let t = fs.read_file("/proc/self/environ");
     if (t == none) {
         ""
     } else {
@@ -748,7 +756,7 @@ def pk_env() -> str {
     }
 };
 
-def pk_fetch(d: PkDep, base: str, pin: str) -> { dir: str, commit: str } {
+def pk_fetch(d: PkDep, base: str, pin: str) -> PkGit {
     let tmp = base + "/" + d.name + ".tmp";
     let want = pin;
     if (len(want) == 0) { want = d.rev; 0; } else { 0; };
@@ -757,7 +765,7 @@ def pk_fetch(d: PkDep, base: str, pin: str) -> { dir: str, commit: str } {
     cmd = cmd + " && git rev-parse HEAD > .git/ycc-commit";
     eputs("fetching " + d.name + " (" + d.git + ")\n");
     if (exec(cmd) != 0) { pk_die("fetching '" + d.name + "' from " + d.git + " failed"); 0; } else { 0; };
-    let ct = read_file(tmp + "/.git/ycc-commit");
+    let ct = fs.read_file(tmp + "/.git/ycc-commit");
     let commit = "";
     if (ct != none) { commit = trim(unwrap(ct)); 0; } else { 0; };
     let dest = base + "/" + d.name + "-" + commit;
@@ -772,7 +780,7 @@ def pk_fetch(d: PkDep, base: str, pin: str) -> { dir: str, commit: str } {
 def pk_lock_read(dir: str) -> [PkLock] {
     let out: [PkLock] = [];
     let file = pk_join(dir, "y.lock");
-    let txt = read_file(file);
+    let txt = fs.read_file(file);
     if (txt != none) {
         let ents = pk_toml(unwrap(txt), file);
         let i = 0;
@@ -841,10 +849,10 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> long {
     if (any) {
         let text = join(out, "");
         let file = pk_join(dir, "y.lock");
-        let old = read_file(file);
+        let old = fs.read_file(file);
         let same = false;
         if (old != none) { same = unwrap(old) == text; 0; } else { 0; };
-        if (!same && !write_file(file, text)) { pk_die("writing '" + file + "' failed"); 0; } else { 0; };
+        if (!same && !fs.write_file(file, text)) { pk_die("writing '" + file + "' failed"); 0; } else { 0; };
         0
     } else { 0; };
     0
@@ -880,17 +888,17 @@ def pk_vendor(dir: str) -> long {
 // Two lanes, each a polynomial hash of the input's 4-byte words modulo a
 // prime near 2^31 (so a lane times 2^32 plus a word stays below 2^63).
 
-def pk_hash_new() -> { a: long, b: long } {
+def pk_hash_new() -> PkHash {
     { a: 1, b: 7 }
 };
 
-def pk_mix(h: { a: long, b: long }, x: long) -> long {
+def pk_mix(h: PkHash, x: long) -> long {
     h.a = (h.a * 4294967296 + x) % 2147483647;
     h.b = (h.b * 4294967296 + x) % 2147483629;
     0
 };
 
-def pk_hash_str(h: { a: long, b: long }, s: str) -> long {
+def pk_hash_str(h: PkHash, s: str) -> long {
     let n = len(s);
     pk_mix(h, n);
     let i = 0;
@@ -909,14 +917,14 @@ def pk_hash_str(h: { a: long, b: long }, s: str) -> long {
     0
 };
 
-def pk_hash_text(h: { a: long, b: long }) -> str {
+def pk_hash_text(h: PkHash) -> str {
     tostring(h.a) + "-" + tostring(h.b)
 };
 
 // This compiler, as a hash of its own binary: an object another ycc
 // wrote is no hit.
 def pk_self_id() -> str {
-    let t = read_file("/proc/self/exe");
+    let t = fs.read_file("/proc/self/exe");
     if (t == none) { pk_die("cannot read the compiler's own binary (/proc/self/exe)"); 0; } else { 0; };
     let h = pk_hash_new();
     pk_hash_str(h, unwrap(t));

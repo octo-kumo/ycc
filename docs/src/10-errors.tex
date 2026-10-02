@@ -30,6 +30,51 @@ through every enclosing use. Typical families:
 \item void use: \ic{cannot bind a void value to 'x'}.
 \end{itemize}
 
+\subsection{Warnings}
+\label{sec:warnings}
+
+A program that compiles can still draw \emph{warnings}: code that is
+legal but looks like a mistake. They go to \textbf{stderr}, one line
+each, positioned like errors (an imported file's naming that file),
+
+\begin{center}
+\ic{line:col: warning: message}
+\end{center}
+
+\noindent and they never change the program: the binary is the same,
+byte for byte, with them or without, and \ic{ycc -w} turns them off. The
+std units never warn; a package warns when it compiles. What draws one:
+
+\begin{sloppypar}
+\begin{itemize}[nosep]
+\item a local binding nothing reads: \ic{unused variable 'x'} (or
+  \ic{unused constant}, \ic{unused function}), or one only assigned to:
+  \ic{variable 'x' is assigned but never read};
+\item a value computed and dropped: \ic{the value of 'x' is not used},
+  \ic{the result of '+' is not used} (for \ic{==} it adds \ic{did you
+  mean '='?}). A call's value may be dropped, and so may \ic{ok \&\& f()};
+\item \ic{unreachable code}: a statement after one that always returns;
+\item \ic{'x' is assigned to itself} for \ic{x = x}, and \ic{'x < x' is
+  always false} (or \ic{>}; \ic{x != x} is the NaN test and draws
+  nothing);
+\item \ic{division by zero}: \ic{/}, \ic{\%}, \ic{/=} or \ic{\%=} by a
+  literal integer \ic{0};
+\item a key given twice in a record or map literal: \ic{duplicate field
+  'a' in a record literal} (or \ic{duplicate key}); the last one wins;
+\item a type that \ic{type} could name once: a record of two or more
+  fields, or a union, written out in full more than once (\ic{the type
+  \{...\} is written out 2 times}) or where an alias names it already
+  (\ic{... is already declared as 'Point'}); two aliases of one type
+  (\ic{type 'Spot' is the same type as 'Point'}); an alias declared
+  twice (\ic{type 'Tag' is declared more than once}), where the last
+  declaration counts.
+\end{itemize}
+\end{sloppypar}
+
+\noindent Parameters, loop variables, top-level bindings and names
+starting with \ic{\_} are never unused: \ic{let \_x = f();} keeps a
+value on purpose.
+
 \subsection{Run time}
 
 The compiled program traps --- writes a one-line message to stdout and
@@ -47,6 +92,8 @@ shift by a negative count & \ic{runtime error: negative shift count} \\
 missing dynamic field/key & \ic{runtime error: record has no field 'k'} \\
 slice assignment out of range & \ic{runtime error: slice assignment out of bounds} \\
 match with no arm covering a value & \ic{runtime error: no match arm matched} \\
+a value of unknown type, where a record & \ic{runtime error: a record does not have} \\
+\quad type or union is declared, with other fields & \quad\ic{the fields of its declared type} \\
 memory exhausted & \ic{runtime error: out of memory} \\
 unbounded (non-tail) recursion & stack exhaustion: no limit, so the
   process dies on the guard page \\
@@ -66,8 +113,8 @@ recognizable; \ic{eputs} is the way to send diagnostics to stderr.
 
 A successfully run program exits with the code it chose
 (\ic{exit(code)} or falling off the end, which is \ic{0}); a trapped
-program exits with \ic{1}. The compiler itself exits \ic{0} on success,
-\ic{1} on a rejected input.
+program exits with \ic{1}. The compiler itself exits \ic{0} on success
+(warnings or not), \ic{1} on a rejected input.
 
 \subsection{Reproducibility}
 

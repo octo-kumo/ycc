@@ -14,7 +14,7 @@ print(len(m));
 print(m["a"]! + m["c"]!);
 
 // duplicate literal keys: last value wins, first position stays
-let d = {"x": 1, "y": 2, "x": 3};
+let d = {"x": 1, "y": 2, "x": 3}; // expect-warning: duplicate key 'x' in a map literal; the last one wins
 print(d);
 
 // keys built at run time compare by content

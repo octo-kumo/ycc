@@ -4,6 +4,12 @@
 // malformed literal (a broken f-string, lex_fstring; a radix prefix without
 // digits), v its error message.
 
+// A token (see above); and a read position in a string, the cursor of
+// the small readers outside the lexer (native.y's std pack and type
+// decoders, pkg.y's y.toml reader).
+type Tok = { t: str, v: str, line: long, col: long };
+type Cursor = { s: str, p: long };
+
 // NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
 def isdigit(c: str) -> bool {
     c >= "0" && c <= "9"
@@ -380,7 +386,7 @@ def fstr_adv(src: str, a: long, b: long, line: long, col: long) -> { line: long,
 // it stands; the rest sits at the field's `{`. Without fields it is a plain
 // string; a broken one is an `ferr` token, which the parser turns into an
 // error where the walk stopped.
-def lex_fstring(src: str, q: long, line: long, col: long, toks: [{ t: str, v: str, line: long, col: long }]) -> { end: long, line: long, col: long } {
+def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end: long, line: long, col: long } {
     let w = fstr_walk(src, q);
     let fs = w.fields;
     if (w.err != "") {
@@ -453,7 +459,7 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [{ t: str, v: st
     { end: w.end, line: e.line, col: e.col }
 };
 
-def mktok(t: str, v: str, line: long, col: long) -> { t: str, v: str, line: long, col: long } {
+def mktok(t: str, v: str, line: long, col: long) -> Tok {
     { t: t, v: v, line: line, col: col }
 };
 
@@ -521,8 +527,8 @@ def isdigitch(c: str) -> bool {
     else { c == "9" }
 };
 
-def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
-    let toks: [{ t: str, v: str, line: long, col: long }] = [];
+def tokenize(src: str) -> [Tok] {
+    let toks: [Tok] = [];
     let i = 0;
     let n = len(src);
     let line = 1;

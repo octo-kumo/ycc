@@ -16,20 +16,34 @@
  *   recursion and forward calls resolve); value bindings (let/const) do NOT
  *   hoist — use-before-def stays an error, like TDZ.
  * - Map keys, dot keys, strings: untouched (not variables).
+ * - A module imported by name (`import fs;`) keeps its own scope: its
+ *   top-level defs and lets are bound as `fs.name`, which is how the
+ *   importer reaches them (`fs.read_file` is that one name, unless a
+ *   binding called `fs` is in scope), while the module's own code finds
+ *   them bare, before any program-level name (rn_top, rn_lookup).
  *
  * Type map (PORTING.md): str/records/arrays/holes -> Yv *, long -> long,
  * bool -> int. Records are insertion-ordered maps (yr), arrays are yav /
  * ya_get / ya_push / ya_set (reference semantics, as in Y).
  */
 
-/* imported */ /* none: rename.y is self-contained — it calls only its own
- * defs and the string/array builtins (`+`, len, tostring, push ->
- * ys_cat/yv_len/ys_long/ya_push). */
+/* imported */ /* parser.y, for its alias NamedTy only (a record is a
+ * Yv * here): rename.y calls only its own defs and the string/array
+ * builtins (`+`, len, tostring, push -> ys_cat/yv_len/ys_long/ya_push). */
 
 #include "rename.h"
 
-/* state = { scopes: [[{ orig: str, uniq: str }]], n: long,
- *           tys: [{ name, typ }], dfl: [{ name, vals }] } */
+/* The modules imported by name (rename_program_x): each line's file
+ * (native.c's origin map), each file's module ("" for the program's own
+ * files), the module names, and the module of the top-level statement
+ * being renamed ("" for the program's own code). */
+static Yv *rn_ofile;
+static Yv *rn_fmods;
+static Yv *rn_mods;
+static Yv *rn_mod;
+
+/* state (rename.y's RnSt) = { scopes: [[{ orig: str, uniq: str }]],
+ *           n: long, tys: [{ name, typ }], dfl: [{ name, vals }] } */
 Yv *rn_fresh(Yv *st, Yv *orig) {
     Yv *u = ys_cat(ys_cat(orig, ys("$")), ys_long(yv_l(yr_get(st, "n"))));
     Yv *nst = yr(4, "scopes", yr_get(st, "scopes"), "n",
@@ -62,12 +76,30 @@ Yv *rn_define(Yv *st, Yv *orig, Yv *uniq) {
 }
 
 Yv *rn_lookup(Yv *st, Yv *name) {
+    if (rn_mod == NULL || ys_eq_lit(rn_mod, "")) {
+        return rn_lookup_to(st, name, 0);
+    } else {
+        /* a module's code: its locals (frames 2 up: 0 is empty, 1 holds
+         * the top level), then its own top-level names, then the rest */
+        Yv *u = rn_lookup_to(st, name, 2);
+        if (ys_eq_lit(u, "")) {
+            u = rn_lookup_to(st, ys_cat(ys_cat(rn_mod, ys(".")), name), 1);
+        }
+        if (ys_eq_lit(u, "")) {
+            u = rn_lookup_to(st, name, 0);
+        }
+        return u;
+    }
+}
+
+/* rn_lookup in the frames from the innermost down to frame `lo`. */
+Yv *rn_lookup_to(Yv *st, Yv *name, long lo) {
     /* Innermost scope first; within a frame, the NEWEST binding wins
      * (a later let shadows an earlier one). */
     Yv *all = yr_get(st, "scopes");
     long i = yv_len(all) - 1;
     Yv *found = ys("");
-    while (i >= 0) {
+    while (i >= lo) {
         Yv *frame = ya_get(all, i);
         long j = yv_len(frame) - 1;
         while (j >= 0) {
@@ -250,10 +282,28 @@ int rn_is_optarg(Yv *d) {
 /* ── type aliases ─────────────────────────────────────────────────────────
  * `type A = T` makes the name A stand for T in every annotation (and match
  * pattern) seen AFTER it; resolution rewrites the type nodes, so the checker
- * and emitter never see an alias. A union's members are flattened (an alias
- * of a union inside a union adds its members). NOTE: `tys` is never popped,
- * so an alias declared inside a block stays visible for the rest of the
- * traversal, siblings included — the alias table is not scoped like names. */
+ * and emitter never see an alias name. A union's members are flattened (an
+ * alias of a union inside a union adds its members). NOTE: `tys` is never
+ * popped, so an alias declared inside a block stays visible for the rest of
+ * the traversal, siblings included — the alias table is not scoped like
+ * names.
+ *
+ * An alias may refer to itself (or to one that refers back to it) when the
+ * reference sits inside a record's field or a function type: `type L =
+ * {head: long, tail: L?}`. Every reference to such a recursive alias is
+ * one tref (an RnRef) whose `to` is the alias spelled out, its own
+ * references in it the same tref again: the type tree is cyclic through
+ * trefs only, and a recursive alias is one node wherever it is used (its
+ * canonical form, types.y tcanon, does not depend on where it is met). The
+ * checker and the emitter unfold a tref where they look inside a type
+ * (types.y unfold). A cycle outside every record field and function type
+ * (`type T = [T]`, `type T = T | {a: long}`) stands for no type: a tref to
+ * the unknown type, and an error at its `type` (rn_typedef_err). */
+
+/* The trefs made so far (rn_tref), by alias index in st.tys; emptied for
+ * each program (rename_program_x). */
+static Yv *rn_tref_ids;
+static Yv *rn_tref_nodes;
 
 Yv *rn_type(Yv *st, Yv *t) {
     if (yv_len(yr_get(st, "tys")) == 0) {
@@ -305,6 +355,22 @@ Yv *rn_type_go(Yv *st, Yv *t, long depth) {
 }
 
 Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth) {
+    long found = rn_alias_index(st, name);
+    /* (depth only guards against a bug: a recursive alias is a tref, never
+       spelled out inside itself) */
+    if (found < 0 || depth > 64) {
+        return t;
+    } else if (rn_reaches(st, found, 0)) {
+        return rn_tref(st, found, name);
+    } else {
+        return rn_type_go(st, yr_get(ya_get(yr_get(st, "tys"), found), "typ"),
+                          depth + 1);
+    }
+}
+
+/* The index in st.tys of the alias `name` stands for (the last declared:
+ * -1 for none). */
+long rn_alias_index(Yv *st, Yv *name) {
     Yv *tys = yr_get(st, "tys");
     long i = yv_len(tys) - 1;
     long found = -1;
@@ -315,13 +381,112 @@ Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth) {
         }
         i = i - 1;
     }
-    /* (depth bounds a cyclic alias: `type L = {next: L?}` stops growing at
-       depth 32 and leaves the innermost name a tname, which tcompat unifies
-       with anything — so the alias resolves, it just does not recurse.) */
-    if (found < 0 || depth > 32) {
-        return t;
+    return found;
+}
+
+/* The tref of recursive alias `id`: made, and the alias spelled out into
+ * it, the first time it is met. */
+Yv *rn_tref(Yv *st, long id, Yv *name) {
+    long at = -1;
+    long i = 0;
+    while (at < 0 && i < yv_len(rn_tref_ids)) {
+        if (yv_l(ya_get(rn_tref_ids, i)) == id) {
+            at = i;
+        }
+        i = i + 1;
+    }
+    if (at >= 0) {
+        return ya_get(rn_tref_nodes, at);
     } else {
-        return rn_type_go(st, yr_get(ya_get(tys, found), "typ"), depth + 1);
+        Yv *r = yr(4, "k", ys("tref"), "name", name, "tmp",
+                   ys_cat(ys_cat(name, ys("$")), ys_long(id)), "to",
+                   yr(1, "k", ys("tnone")));
+        rn_tref_ids = ya_push(rn_tref_ids, yv_long(id));
+        rn_tref_nodes = ya_push(rn_tref_nodes, r);
+        if (rn_reaches(st, id, 1)) {
+            yr_set(r, "to", yr(1, "k", ys("tunk")));
+        } else {
+            yr_set(r, "to", rn_type_go(st, yr_get(ya_get(yr_get(st, "tys"), id), "typ"), 0));
+        }
+        return r;
+    }
+}
+
+/* Alias `id` refers to itself, through other aliases or not -- anywhere
+ * in it, or (`bare`) outside every record field and function type. */
+int rn_reaches(Yv *st, long id, int bare) {
+    Yv *seen = yav(0);
+    return rn_reaches_go(st, yr_get(ya_get(yr_get(st, "tys"), id), "typ"), id,
+                         seen, bare);
+}
+
+int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tname")) {
+        long j = rn_alias_index(st, yr_get(t, "name"));
+        int walked = 0;
+        for (long q = 0; q < yv_len(seen); q++) {
+            if (yv_l(ya_get(seen, q)) == j) {
+                walked = 1;
+            }
+        }
+        if (j < 0 || walked) {
+            return 0;
+        } else if (j == id) {
+            return 1;
+        } else {
+            ya_push(seen, yv_long(j));
+            return rn_reaches_go(st, yr_get(ya_get(yr_get(st, "tys"), j), "typ"),
+                                 id, seen, bare);
+        }
+    } else if (ys_eq_lit(k, "tptr")) {
+        return rn_reaches_go(st, yr_get(t, "to"), id, seen, bare);
+    } else if (ys_eq_lit(k, "tarr") || ys_eq_lit(k, "tarrfix") ||
+               ys_eq_lit(k, "topt")) {
+        return rn_reaches_go(st, yr_get(t, "of"), id, seen, bare);
+    } else if (ys_eq_lit(k, "tmap")) {
+        if (rn_reaches_go(st, yr_get(t, "key"), id, seen, bare)) {
+            return 1;
+        } else {
+            return rn_reaches_go(st, yr_get(t, "of"), id, seen, bare);
+        }
+    } else if (ys_eq_lit(k, "trec")) {
+        Yv *fs = yr_get(t, "fields");
+        int hit = 0;
+        if (!bare) {
+            for (long q = 0; q < yv_len(fs); q++) {
+                if (!hit && rn_reaches_go(st, yr_get(ya_get(fs, q), "typ"), id,
+                                          seen, bare)) {
+                    hit = 1;
+                }
+            }
+        }
+        return hit;
+    } else if (ys_eq_lit(k, "tfunc")) {
+        int hit = 0;
+        if (!bare) {
+            Yv *args = yr_get(t, "args");
+            for (long q = 0; q < yv_len(args); q++) {
+                if (!hit && rn_reaches_go(st, ya_get(args, q), id, seen, bare)) {
+                    hit = 1;
+                }
+            }
+            if (!hit) {
+                hit = rn_reaches_go(st, yr_get(t, "ret"), id, seen, bare);
+            }
+        }
+        return hit;
+    } else if (ys_eq_lit(k, "tparams") || ys_eq_lit(k, "tunion")) {
+        Yv *ts = yr_get(t, "ts");
+        int hit = 0;
+        for (long q = 0; q < yv_len(ts); q++) {
+            if (!hit && rn_reaches_go(st, ya_get(ts, q), id, seen, bare)) {
+                hit = 1;
+            }
+        }
+        return hit;
+    } else {
+        return 0;
     }
 }
 
@@ -365,11 +530,18 @@ Yv *rn_union_flat(Yv *ts) {
 
 Yv *rn_typedef_err(Yv *s, Yv *st) {
     Yv *un = rn_unknown_type(st, yr_get(s, "typ"));
-    if (ys_eq_lit(un, "")) {
-        return yr(1, "k", ys("void"));
-    } else {
+    Yv *name = yr_get(s, "name");
+    long id = rn_alias_index(st, name);
+    if (!ys_eq_lit(un, "")) {
         return rn_unknown_err(un, yv_l(yr_get(s, "line")),
                               yv_l(yr_get(s, "col")));
+    } else if (id >= 0 && rn_reaches(st, id, 1)) {
+        Yv *msg = ys_cat(ys_cat(ys("type '"), name),
+                         ys("' refers to itself outside any record field or function type"));
+        return yr(4, "k", ys("err"), "msg", msg, "line", yr_get(s, "line"),
+                  "col", yr_get(s, "col"));
+    } else {
+        return yr(1, "k", ys("void"));
     }
 }
 
@@ -495,58 +667,91 @@ Yv *rn_drop_typedefs(Yv *stmts, Yv *st) {
  * otherwise collapse onto one unique name; give the earlier ones a dead name
  * instead. They are still checked and emitted — only unreachable. */
 Yv *rn_shadow_dups(Yv *stmts) {
-    Yv *out = yav(0);
+    Yv *names = yav(0);
+    long ndefs = 0;
     long i = 0;
     while (i < yv_len(stmts)) {
-        out = ya_push(out, rn_shadow_one(ya_get(stmts, i), stmts, i));
+        Yv *nm = rn_decl_name(ya_get(stmts, i));
+        names = ya_push(names, nm);
+        if (!ys_eq_lit(nm, "")) {
+            ndefs = ndefs + 1;
+        }
         i = i + 1;
-        ;
+    }
+    if (ndefs < 2) {
+        return stmts;
+    } else {
+        Yv *later = rn_later(names);
+        Yv *out = yav(0);
+        i = 0;
+        while (i < yv_len(stmts)) {
+            if (yv_b(ya_get(later, i))) {
+                out = ya_push(out, rn_rebuild_decl(ya_get(stmts, i),
+                    ys_cat(ys_cat(ya_get(names, i), ys("$shadow")), ys_long(i))));
+            } else {
+                out = ya_push(out, ya_get(stmts, i));
+            }
+            i = i + 1;
+        }
+        return out;
+    }
+}
+
+/* later[i]: whether names[i] (a def's name, "" for none) is bound again
+ * by a later statement. One pass from the back over an open-addressing
+ * set of the names seen (comparing each def with every later statement
+ * was 3% of a self-compile). */
+Yv *rn_later(Yv *names) {
+    long n = yv_len(names);
+    long size = 16;
+    while (size < 2 * n) {
+        size = size * 2;
+    }
+    Yv *slots = yav(0);
+    long k = 0;
+    while (k < size) {
+        slots = ya_push(slots, ys(""));
+        k = k + 1;
+    }
+    Yv *out = yav(0);
+    k = 0;
+    while (k < n) {
+        out = ya_push(out, yv_bool(0));
+        k = k + 1;
+    }
+    long i = n - 1;
+    while (i >= 0) {
+        Yv *nm = ya_get(names, i);
+        if (!ys_eq_lit(nm, "")) {
+            long h = rn_hash(nm) & (size - 1);
+            int go = 1;
+            while (go) {
+                Yv *e = ya_get(slots, h);
+                if (ys_eq_lit(e, "")) {
+                    ya_set(slots, h, nm);
+                    go = 0;
+                } else if (ys_eq(e, nm)) {
+                    ya_set(out, i, yv_bool(1));
+                    go = 0;
+                } else {
+                    h = (h + 1) & (size - 1);
+                }
+            }
+        }
+        i = i - 1;
     }
     return out;
 }
 
-Yv *rn_shadow_one(Yv *s, Yv *stmts, long i) {
-    if (ys_eq_lit(yr_get(s, "k"), "decl")) {
-        return rn_shadow_decl(s, stmts, i);
-    } else {
-        return s;
+/* A 24-bit hash of s (rn_later's slots). */
+long rn_hash(Yv *s) {
+    long h = 0;
+    long i = 0;
+    while (i < yv_len(s)) {
+        h = (h * 33 + ys_byte_at(s, i)) & 16777215;
+        i = i + 1;
     }
-}
-
-Yv *rn_shadow_decl(Yv *s, Yv *stmts, long i) {
-    /* NOTE: one `s.v.k` read per body (see rn_prepass_decl note). */
-    if (ys_eq_lit(yr_get(s, "kind"), "def")) {
-        return rn_shadow_go(s, stmts, i);
-    } else if (ys_eq_lit(yr_get(yr_get(s, "v"), "k"), "func")) {
-        return rn_shadow_go(s, stmts, i);
-    } else {
-        return s;
-    }
-}
-
-Yv *rn_shadow_go(Yv *s, Yv *stmts, long i) {
-    if (rn_redefined_later(stmts, i, yr_get(s, "name"))) {
-        return rn_rebuild_decl(
-            s, ys_cat(ys_cat(yr_get(s, "name"), ys("$shadow")), ys_long(i)));
-    } else {
-        return s;
-    }
-}
-
-int rn_redefined_later(Yv *stmts, long i, Yv *name) {
-    long j = i + 1;
-    int found = 0;
-    while (j < yv_len(stmts)) {
-        if (ys_eq(rn_decl_name(ya_get(stmts, j)), name)) {
-            found = 1;
-            ;
-        } else {
-            ;
-        }
-        j = j + 1;
-        ;
-    }
-    return found;
+    return h;
 }
 
 /* The name a statement binds as a hoisted def, or "" when it binds none. */
@@ -955,11 +1160,44 @@ Yv *rn_slice_hi(Yv *node, Yv *a, Yv *lo, Yv *st) {
 }
 
 Yv *rn_dot(Yv *node, Yv *st) {
-    Yv *o = rn_node(yr_get(node, "obj"), st);
-    return yr(2, "st", yr_get(o, "st"), "node",
-              yr(5, "k", ys("dot"), "obj", yr_get(o, "node"), "key",
-                 yr_get(node, "key"), "line", yr_get(node, "line"), "col",
-                 yr_get(node, "col")));
+    Yv *q = rn_qualified(st, yr_get(node, "obj"), yr_get(node, "key"));
+    if (!ys_eq_lit(q, "")) {
+        return rn_id(st, q, yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+    } else {
+        Yv *o = rn_node(yr_get(node, "obj"), st);
+        return yr(2, "st", yr_get(o, "st"), "node",
+                  yr(5, "k", ys("dot"), "obj", yr_get(o, "node"), "key",
+                     yr_get(node, "key"), "line", yr_get(node, "line"), "col",
+                     yr_get(node, "col")));
+    }
+}
+
+/* `m.key` naming a module's top-level binding: "m.key" when obj is the
+ * name of a module imported by name and no binding of that name is in
+ * scope, "" otherwise. */
+Yv *rn_qualified(Yv *st, Yv *obj, Yv *key) {
+    if (ys_eq_lit(yr_get(obj, "k"), "id") && yv_len(rn_mods) > 0) {
+        Yv *m = yr_get(obj, "v");
+        if (rn_in(rn_mods, m) && ys_eq_lit(rn_lookup(st, m), "")) {
+            return ys_cat(ys_cat(m, ys(".")), key);
+        } else {
+            return ys("");
+        }
+    } else {
+        return ys("");
+    }
+}
+
+int rn_in(Yv *xs, Yv *x) {
+    int found = 0;
+    long i = 0;
+    while (i < yv_len(xs)) {
+        if (ys_eq(ya_get(xs, i), x)) {
+            found = 1;
+        }
+        i = i + 1;
+    }
+    return found;
 }
 
 Yv *rn_idxassign(Yv *node, Yv *st) {
@@ -981,8 +1219,16 @@ Yv *rn_idxassign_val(Yv *node, Yv *a, Yv *idx, Yv *st) {
 }
 
 Yv *rn_dotassign(Yv *node, Yv *st) {
-    Yv *o = rn_node(yr_get(node, "obj"), st);
-    return rn_dotassign_val(node, yr_get(o, "node"), yr_get(o, "st"));
+    Yv *q = rn_qualified(st, yr_get(node, "obj"), yr_get(node, "key"));
+    if (!ys_eq_lit(q, "")) {
+        /* `fs.x = v`: an assignment to the module's global */
+        return rn_assign(yr(5, "k", ys("assign"), "name", q, "v", yr_get(node, "v"),
+                            "line", yr_get(node, "line"), "col", yr_get(node, "col")),
+                         st);
+    } else {
+        Yv *o = rn_node(yr_get(node, "obj"), st);
+        return rn_dotassign_val(node, yr_get(o, "node"), yr_get(o, "st"));
+    }
 }
 
 Yv *rn_dotassign_val(Yv *node, Yv *o, Yv *st) {
@@ -1266,13 +1512,102 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
 }
 
 Yv *rename_program(Yv *ast) {
-    return rename_program_go(yr_get(ast, "stmts"), yv_l(yr_get(ast, "line")),
-                             yv_l(yr_get(ast, "col")), yav(0));
+    return rename_program_x(ast, yav(0), yav(0), yav(0));
 }
 
-Yv *rename_program_x(Yv *ast, Yv *dfl) {
+/* A unit importing packages (native.c compile_unit): `dfl` holds their
+ * defs' parameter defaults under the qualified names calls use. ofile
+ * and fmods say which lines belong to a module imported by name: line
+ * i + 1 is in file ofile[i], and that file is module fmods[ofile[i]]
+ * ("" for none). */
+Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods) {
+    rn_tref_ids = yav(0);
+    rn_tref_nodes = yav(0);
+    rn_ofile = ofile;
+    rn_fmods = fmods;
+    Yv *mods = yav(0);
+    long i = 0;
+    while (i < yv_len(fmods)) {
+        Yv *m = ya_get(fmods, i);
+        if (!ys_eq_lit(m, "") && !rn_in(mods, m)) {
+            mods = ya_push(mods, m);
+        }
+        i = i + 1;
+    }
+    rn_mods = mods;
+    rn_mod = ys("");
     return rename_program_go(yr_get(ast, "stmts"), yv_l(yr_get(ast, "line")),
                              yv_l(yr_get(ast, "col")), dfl);
+}
+
+/* The module top-level statement s belongs to ("" for none). */
+Yv *rn_stmt_mod(Yv *s) {
+    if (ys_eq_lit(yr_get(s, "k"), "void")) {
+        /* (the one statement with no line) */
+        return ys("");
+    } else {
+        long ln = yv_l(yr_get(s, "line"));
+        if (ln >= 1 && ln <= yv_len(rn_ofile)) {
+            long f = yv_l(ya_get(rn_ofile, ln - 1));
+            if (f < yv_len(rn_fmods)) {
+                return ya_get(rn_fmods, f);
+            } else {
+                return ys("");
+            }
+        } else {
+            return ys("");
+        }
+    }
+}
+
+/* A module's top-level def or let, under its qualified name (`fs.exists`);
+ * a `y_` name stays as it is (generated code calls those by label). */
+Yv *rn_qualify(Yv *s) {
+    Yv *m = rn_stmt_mod(s);
+    if (ys_eq_lit(m, "") || !ys_eq_lit(yr_get(s, "k"), "decl")) {
+        return s;
+    } else {
+        Yv *nm = yr_get(s, "name");
+        if (ys_starts_with(nm, ys("y_"))) {
+            return s;
+        } else {
+            return rn_rebuild_decl(s, ys_cat(ys_cat(m, ys(".")), nm));
+        }
+    }
+}
+
+/* The unit's top level: rn_block, with a module's names qualified and
+ * each statement renamed in its own module's scope (rn_mod). */
+Yv *rn_top(Yv *stmts, Yv *st) {
+    Yv *q = yav(0);
+    if (yv_len(rn_mods) > 0) {
+        long i = 0;
+        while (i < yv_len(stmts)) {
+            q = ya_push(q, rn_qualify(ya_get(stmts, i)));
+            i = i + 1;
+        }
+    } else {
+        q = stmts;
+    }
+    q = rn_shadow_dups(q);
+    st = rn_push(st);
+    st = rn_prepass(q, st);
+    Yv *kept = rn_drop_typedefs(q, st);
+    Yv *out = yav(0);
+    long k = 0;
+    while (k < yv_len(kept)) {
+        Yv *s = ya_get(kept, k);
+        if (yv_len(rn_mods) > 0) {
+            rn_mod = rn_stmt_mod(s);
+        }
+        Yv *r = rn_node(s, st);
+        st = yr_get(r, "st");
+        out = ya_push(out, yr_get(r, "node"));
+        k = k + 1;
+    }
+    rn_mod = ys("");
+    st = rn_pop(st);
+    return yr(2, "st", st, "stmts", out);
 }
 
 Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl) {
@@ -1285,7 +1620,7 @@ Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl) {
         i = i + 1;
     }
     Yv *st = yr(4, "scopes", yav(1, yav(0)), "n", yv_long(1), "tys", yav(0), "dfl", d0);
-    Yv *b = rn_block(stmts, st);
+    Yv *b = rn_top(stmts, st);
     return yr(4, "k", ys("block"), "stmts", yr_get(b, "stmts"), "line",
               yv_long(line), "col", yv_long(col));
 }

@@ -6,6 +6,7 @@
 # static ELF, so this shim only forwards two invocations:
 #
 #   ytool.sh -q FILE              -> compile with the REFERENCE ycc, run it
+#                                    (the compile's warnings dropped)
 #   ytool.sh --compile FILE -o B  -> compile with the C COPY (cycc), stop
 #
 # The flag names are historical: the suites were written when the two
@@ -25,13 +26,18 @@ CYCC="${CYCC:-$ROOT/cycc}"
 
 case "${1:-}" in
 -q)
-    # reference side: compile, then run (stdin is the caller's).
+    # reference side: compile, then run (stdin is the caller's). The output
+    # is the program's: a compile that succeeds keeps its warnings (lint.y,
+    # on stderr) to itself; one that fails prints everything, as ever.
     file="${2:?ytool: -q needs a file}"
     bin=$(mktemp /tmp/ytool_run_XXXXXX)
-    if ! "$YREF" -o "$bin" "$file" </dev/null; then
-        rm -f "$bin"
+    err=$(mktemp /tmp/ytool_err_XXXXXX)
+    if ! "$YREF" -o "$bin" "$file" </dev/null 2>"$err"; then
+        cat "$err" >&2
+        rm -f "$bin" "$err"
         exit 1
     fi
+    rm -f "$err"
     "$bin"
     rc=$?
     rm -f "$bin"
