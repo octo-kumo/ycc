@@ -77,6 +77,7 @@ static Yv *lint_word(Yv *kind);
 static long lint_types(LintSt st, Yv *stmts);
 static long lint_tw_list(LintTy t, Yv *nodes);
 static long lint_tw(LintTy t, Yv *node);
+static long lint_tw_one(LintTy t, Yv *node);
 static long lint_tw_decl(LintTy t, Yv *node);
 static long lint_tw_func(LintTy t, Yv *node);
 static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias);
@@ -821,7 +822,7 @@ static long lint_tw(LintTy t, Yv *node) {
                ys_eq_lit(k, "addr") || ys_eq_lit(k, "deref") ||
                ys_eq_lit(k, "rectest") || ys_eq_lit(k, "narrow") ||
                ys_eq_lit(k, "matchend")) {
-        return lint_tw(t, yr_get(node, "e"));
+        return lint_tw_one(t, node);
     } else if (ys_eq_lit(k, "func")) {
         return lint_tw_func(t, node);
     } else if (ys_eq_lit(k, "typedef")) {
@@ -869,6 +870,10 @@ static long lint_tw(LintTy t, Yv *node) {
     } else {
         return 0;
     }
+}
+
+static long lint_tw_one(LintTy t, Yv *node) {
+    return lint_tw(t, yr_get(node, "e"));
 }
 
 static long lint_tw_decl(LintTy t, Yv *node) {

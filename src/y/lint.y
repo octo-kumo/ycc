@@ -24,13 +24,13 @@ import types from "./types.y";
 type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool };
 type LintSt = { warns: [Diag], vars: [LintVar], flags: [long] };
 type LintMap = { keys: [str], vals: [long], n: long };
-type LintRoot = { typ: { k: str }, line: long, col: long, alias: str };
-type LintOcc = { key: str, typ: { k: str }, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
-type LintTy = { roots: [LintRoot], atyps: [{ k: str }], amap: LintMap, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long };
+type LintRoot = { typ: Type, line: long, col: long, alias: str };
+type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
+type LintTy = { roots: [LintRoot], atyps: [Type], amap: LintMap, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long };
 
 // The warnings for one unit: `ast` as parsed, `ast3` renamed (and
 // checked), sorted by position.
-def lint_unit(ast, ast3) -> [Diag] {
+def lint_unit(ast: Block, ast3: Block) -> [Diag] {
     let warns: [Diag] = [];
     let vars: [LintVar] = [];
     let flags: [long] = [];
@@ -104,7 +104,7 @@ def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: boo
 // last statement's value is used, and only when the list's is. The first
 // statement after one that always returns never runs (a def there still
 // does: defs hoist).
-def lint_stmts(st: LintSt, stmts, used: bool, top: bool) -> long {
+def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
     let n = len(stmts);
     let dead = false;
     let told = false;
@@ -124,45 +124,59 @@ def lint_stmts(st: LintSt, stmts, used: bool, top: bool) -> long {
     0
 };
 
-def lint_warn_at(st: LintSt, msg: str, node) -> long {
+def lint_warn_at(st: LintSt, msg: str, node: Node) -> long {
     lint_warn(st, msg, node.line, node.col)
 };
 
 // At the first token of `node`: an operator's node sits at the operator,
 // a call's at its `(`.
-def lint_warn_start(st: LintSt, msg: str, node) -> long {
+def lint_warn_start(st: LintSt, msg: str, node: Node) -> long {
     let k: str = node.k;
     if (k == "call") {
-        lint_warn_start(st, msg, node.callee)
+        let call: Call = node;
+        lint_warn_start(st, msg, call.callee)
     } else if (k == "bin") {
-        lint_warn_start(st, msg, node.l)
-    } else if (k == "index" || k == "slice") {
-        lint_warn_start(st, msg, node.arr)
+        let bin: Bin = node;
+        lint_warn_start(st, msg, bin.l)
+    } else if (k == "index") {
+        let index: Index = node;
+        lint_warn_start(st, msg, index.arr)
+    } else if (k == "slice") {
+        let slice: Slice = node;
+        lint_warn_start(st, msg, slice.arr)
     } else if (k == "dot") {
-        lint_warn_start(st, msg, node.obj)
-    } else if (k == "opassign" || (k == "incdec" && !node.pre)) {
-        lint_warn_start(st, msg, node.tgt)
+        let dot: Dot = node;
+        lint_warn_start(st, msg, dot.obj)
+    } else if (k == "opassign") {
+        let opassign: OpAssign = node;
+        lint_warn_start(st, msg, opassign.tgt)
+    } else if (k == "incdec") {
+        let incdec: IncDec = node;
+        if (!incdec.pre) { lint_warn_start(st, msg, incdec.tgt) }
+        else { lint_warn_at(st, msg, node) }
     } else {
         lint_warn_at(st, msg, node)
     }
 };
 
 // A top-level binding is a global: not checked for use.
-def lint_stmt(st: LintSt, s, used: bool, top: bool) -> long {
+def lint_stmt(st: LintSt, s: Node, used: bool, top: bool) -> long {
     if (top && s.k == "decl") {
-        lint_node(st, s.v, true)
+        let decl: Decl = s;
+        lint_node(st, decl.v, true)
     } else {
         lint_node(st, s, used)
     }
 };
 
 // Not the parser's trailing void, and not a def.
-def lint_code(s) -> bool {
+def lint_code(s: Node) -> bool {
     let k: str = s.k;
     if (k == "void") {
         false
     } else if (k == "decl") {
-        s.kind != "def"
+        let decl: Decl = s;
+        decl.kind != "def"
     } else {
         true
     }
@@ -170,20 +184,22 @@ def lint_code(s) -> bool {
 
 // Whether a statement always leaves the function: a `return`, a block
 // holding one, an `if` whose two arms both do.
-def lint_diverges(s) -> bool {
+def lint_diverges(s: Node) -> bool {
     let k: str = s.k;
     if (k == "ret") {
         true
     } else if (k == "block") {
-        lint_any_diverges(s.stmts)
+        let block: Block = s;
+        lint_any_diverges(block.stmts)
     } else if (k == "if") {
-        s.has_else && lint_diverges(s.then) && lint_diverges(s.els)
+        let branch: If = s;
+        branch.has_else && lint_diverges(branch.then) && lint_diverges(branch.els)
     } else {
         false
     }
 };
 
-def lint_any_diverges(stmts) -> bool {
+def lint_any_diverges(stmts: [Node]) -> bool {
     let found = false;
     let i = 0;
     while (!found && i < len(stmts)) {
@@ -195,69 +211,94 @@ def lint_any_diverges(stmts) -> bool {
 
 // One node; `used`: its value is consumed. The kinds most nodes have
 // come first.
-def lint_node(st: LintSt, node, used: bool) -> long {
+def lint_node(st: LintSt, node: Node, used: bool) -> long {
     let k: str = node.k;
     if (k == "id") {
-        lint_id(st, node, used)
+        let leaf: Leaf = node;
+        lint_id(st, leaf, used)
     } else if (k == "call") {
-        lint_node(st, node.callee, true);
-        lint_list(st, node.args)
+        let call: Call = node;
+        lint_node(st, call.callee, true);
+        lint_list(st, call.args)
     } else if (k == "dot") {
-        lint_node(st, node.obj, true)
+        let dot: Dot = node;
+        lint_node(st, dot.obj, true)
     } else if (k == "str" || k == "num") {
         0
     } else if (k == "bin") {
-        lint_bin(st, node, used)
+        let bin: Bin = node;
+        lint_bin(st, bin, used)
     } else if (k == "decl") {
-        lint_decl(st, node)
+        let decl: Decl = node;
+        lint_decl(st, decl)
     } else if (k == "block") {
-        lint_stmts(st, node.stmts, used, false)
+        let block: Block = node;
+        lint_stmts(st, block.stmts, used, false)
     } else if (k == "if") {
-        lint_if(st, node, used)
+        let branch: If = node;
+        lint_if(st, branch, used)
     } else if (k == "assign") {
-        lint_assign(st, node)
+        let assign: Assign = node;
+        lint_assign(st, assign)
     } else if (k == "index") {
-        lint_two(st, node.arr, node.idx)
+        let index: Index = node;
+        lint_two(st, index.arr, index.idx)
     } else if (k == "rec") {
-        lint_lit(st, node, "field", "record")
+        let rec: RecLit = node;
+        lint_lit(st, rec, "field", "record")
     } else if (k == "array") {
-        lint_list(st, node.elems)
+        let array: ArrLit = node;
+        lint_list(st, array.elems)
     } else if (k == "ret" || k == "un" || k == "addr" || k == "deref" || k == "rectest" || k == "narrow" || k == "matchend") {
         lint_one(st, node, used)
     } else if (k == "opassign") {
-        lint_opassign(st, node, used)
+        let opassign: OpAssign = node;
+        lint_opassign(st, opassign, used)
     } else if (k == "while") {
-        lint_node(st, node.cond, true);
-        lint_node(st, node.body, false)
+        let loop: While = node;
+        lint_node(st, loop.cond, true);
+        lint_node(st, loop.body, false)
     } else if (k == "func") {
-        lint_func(st, node)
+        let func: Func = node;
+        lint_func(st, func)
     } else if (k == "incdec") {
-        lint_incdec(st, node, used)
+        let incdec: IncDec = node;
+        lint_incdec(st, incdec, used)
     } else if (k == "idxassign") {
-        lint_two(st, node.arr, node.idx);
-        lint_node(st, node.v, true)
+        let assign: IdxAssign = node;
+        lint_two(st, assign.arr, assign.idx);
+        lint_node(st, assign.v, true)
     } else if (k == "dotassign") {
-        lint_two(st, node.obj, node.v)
+        let assign: DotAssign = node;
+        lint_two(st, assign.obj, assign.v)
     } else if (k == "slice") {
-        lint_two(st, node.arr, node.lo);
-        lint_node(st, node.hi, true)
+        let slice: Slice = node;
+        lint_two(st, slice.arr, slice.lo);
+        lint_node(st, slice.hi, true)
     } else if (k == "for") {
-        lint_for(st, node)
+        let loop: For = node;
+        lint_for(st, loop)
     } else if (k == "foreach") {
-        lint_node(st, node.iter, true);
-        lint_node(st, node.body, false)
+        let loop: Foreach = node;
+        lint_node(st, loop.iter, true);
+        lint_node(st, loop.body, false)
     } else if (k == "forrange") {
-        lint_two(st, node.lo, node.hi);
-        lint_node(st, node.body, false)
+        let loop: ForRange = node;
+        lint_two(st, loop.lo, loop.hi);
+        lint_node(st, loop.body, false)
     } else if (k == "map") {
-        lint_lit(st, node, "key", "map")
+        let map: RecLit = node;
+        lint_lit(st, map, "key", "map")
     } else if (k == "arrrep") {
-        lint_node(st, node.v, true)
+        let rep: ArrRep = node;
+        lint_node(st, rep.v, true)
     } else if (k == "store") {
-        lint_two(st, node.p, node.v)
+        let store: Store = node;
+        lint_two(st, store.p, store.v)
     } else if (k == "sliceassign") {
-        lint_two(st, node.arr, node.lo);
-        lint_two(st, node.hi, node.v)
+        let assign: SliceAssign = node;
+        lint_two(st, assign.arr, assign.lo);
+        lint_two(st, assign.hi, assign.v)
     } else {
         0
     }
@@ -265,15 +306,23 @@ def lint_node(st: LintSt, node, used: bool) -> long {
 
 // The kinds with one operand, `e`; a unary operator's dropped result is
 // a mistake.
-def lint_one(st: LintSt, node, used: bool) -> long {
+def lint_one(st: LintSt, node: Node, used: bool) -> long {
     if (node.k == "un") {
-        lint_un(st, node, used)
+        let un: Un = node;
+        lint_un(st, un, used)
+    } else if (node.k == "rectest" || node.k == "narrow") {
+        let narrow: Narrow = node;
+        lint_node(st, narrow.e, true)
+    } else if (node.k == "matchend") {
+        let matchend: MatchEnd = node;
+        lint_node(st, matchend.e, true)
     } else {
-        lint_node(st, node.e, true)
+        let wrap: Wrap = node;
+        lint_node(st, wrap.e, true)
     }
 };
 
-def lint_list(st: LintSt, nodes) -> long {
+def lint_list(st: LintSt, nodes: [Node]) -> long {
     let i = 0;
     while (i < len(nodes)) {
         lint_node(st, nodes[i], true);
@@ -282,12 +331,12 @@ def lint_list(st: LintSt, nodes) -> long {
     0
 };
 
-def lint_two(st: LintSt, a, b) -> long {
+def lint_two(st: LintSt, a: Node, b: Node) -> long {
     lint_node(st, a, true);
     lint_node(st, b, true)
 };
 
-def lint_id(st: LintSt, node, used: bool) -> long {
+def lint_id(st: LintSt, node: Leaf, used: bool) -> long {
     let name: str = node.v;
     lint_mark(st, name, 1);
     let d = lint_disp(name);
@@ -297,7 +346,7 @@ def lint_id(st: LintSt, node, used: bool) -> long {
     0
 };
 
-def lint_un(st: LintSt, node, used: bool) -> long {
+def lint_un(st: LintSt, node: Un, used: bool) -> long {
     let e = node.e;
     lint_node(st, e, true);
     if (!used && e.k != "num") {
@@ -308,7 +357,7 @@ def lint_un(st: LintSt, node, used: bool) -> long {
 
 // `ok && f()` dropping its value is control flow: f runs only when ok.
 // Any other operator's dropped value is a mistake.
-def lint_bin(st: LintSt, node, used: bool) -> long {
+def lint_bin(st: LintSt, node: Bin, used: bool) -> long {
     let op: str = node.op;
     let l = node.l;
     let r = node.r;
@@ -325,7 +374,8 @@ def lint_bin(st: LintSt, node, used: bool) -> long {
             lint_warn_at(st, msg, node);
         };
         if ((op == "<" || op == ">") && lint_same_id(l, r)) {
-            let d = lint_disp(l.v);
+            let left: Leaf = l;
+            let d = lint_disp(left.v);
             lint_warn_at(st, "'" + d + " " + op + " " + d + "' is always false", node);
         };
         if ((op == "/" || op == "%") && lint_zero(r)) {
@@ -337,40 +387,42 @@ def lint_bin(st: LintSt, node, used: bool) -> long {
 
 // The names are compared as strings: `==` on two unannotated values
 // compares their words.
-def lint_same_id(l, r) -> bool {
+def lint_same_id(l: Node, r: Node) -> bool {
     if (l.k == "id" && r.k == "id") {
-        let lv: str = l.v;
-        let rv: str = r.v;
-        lv == rv
+        let left: Leaf = l;
+        let right: Leaf = r;
+        left.v == right.v
     } else {
         false
     }
 };
 
 // Whether evaluating a node can do more than compute its value.
-def lint_effect(node) -> bool {
+def lint_effect(node: Node) -> bool {
     let k: str = node.k;
     if (k == "call" || k == "assign" || k == "opassign" || k == "incdec" || k == "idxassign" || k == "dotassign" || k == "sliceassign" || k == "store") {
         true
     } else if (k == "block" || k == "if" || k == "while" || k == "for" || k == "foreach" || k == "forrange" || k == "ret") {
         true
     } else if (k == "bin") {
-        lint_effect_logic(node)
+        let bin: Bin = node;
+        lint_effect_logic(bin)
     } else {
         false
     }
 };
 
-def lint_effect_logic(node) -> bool {
+def lint_effect_logic(node: Bin) -> bool {
     let op: str = node.op;
     (op == "&&" || op == "||") && lint_effect(node.r)
 };
 
 // A literal integer zero (`0`, `0x0`, `0b0_0`). Not `0.0`: a float
 // division by zero is an infinity or a nan, not a trap.
-def lint_zero(node) -> bool {
+def lint_zero(node: Node) -> bool {
     if (node.k == "num") {
-        lint_zero_text(node.v)
+        let num: Leaf = node;
+        lint_zero_text(num.v)
     } else {
         false
     }
@@ -395,26 +447,26 @@ def lint_zero_text(s: str) -> bool {
 };
 
 // An `if` gives its arms' values only when it has both arms.
-def lint_if(st: LintSt, node, used: bool) -> long {
+def lint_if(st: LintSt, node: If, used: bool) -> long {
     lint_node(st, node.cond, true);
     let arms = used && node.has_else;
     lint_node(st, node.then, arms);
     lint_node(st, node.els, arms)
 };
 
-def lint_for(st: LintSt, node) -> long {
+def lint_for(st: LintSt, node: For) -> long {
     lint_node(st, node.init, false);
     lint_node(st, node.cond, true);
     lint_node(st, node.step, false);
     lint_node(st, node.body, false)
 };
 
-def lint_func(st: LintSt, node) -> long {
-    let body = node.body;
+def lint_func(st: LintSt, node: Func) -> long {
+    let body: Block = node.body;
     lint_stmts(st, body.stmts, true, false)
 };
 
-def lint_decl(st: LintSt, node) -> long {
+def lint_decl(st: LintSt, node: Decl) -> long {
     let v = node.v;
     if (node.kind == "def") {
         lint_note(st, node.name, "def", node.line, node.col, false, false);
@@ -424,7 +476,7 @@ def lint_decl(st: LintSt, node) -> long {
     lint_node(st, v, true)
 };
 
-def lint_scal(typ, v) -> bool {
+def lint_scal(typ: Type, v: Node) -> bool {
     let tk: str = typ.k;
     let vk: str = v.k;
     if (tk == "tlong" || tk == "tfloat" || tk == "tbyte" || tk == "tstr" || tk == "tbool") {
@@ -434,28 +486,32 @@ def lint_scal(typ, v) -> bool {
     }
 };
 
-def lint_fresh(v) -> bool {
+def lint_fresh(v: Node) -> bool {
     let vk: str = v.k;
     vk == "array" || vk == "arrrep"
 };
 
-def lint_assign(st: LintSt, node) -> long {
+def lint_assign(st: LintSt, node: Assign) -> long {
     let name: str = node.name;
     let v = node.v;
     lint_mark(st, name, 2);
     lint_node(st, v, true);
-    if (v.k == "id" && v.v == name) {
-        lint_warn_at(st, "'" + lint_disp(name) + "' is assigned to itself", node);
+    if (v.k == "id") {
+        let id: Leaf = v;
+        if (id.v == name) {
+            lint_warn_at(st, "'" + lint_disp(name) + "' is assigned to itself", node);
+        };
     };
     0
 };
 
-def lint_incdec(st: LintSt, node, used: bool) -> long {
+def lint_incdec(st: LintSt, node: IncDec, used: bool) -> long {
     let t = node.tgt;
     if (t.k == "id") {
-        lint_mark(st, t.v, 2);
+        let id: Leaf = t;
+        lint_mark(st, id.v, 2);
         if (used) {
-            lint_mark(st, t.v, 1);
+            lint_mark(st, id.v, 1);
         };
         0
     } else {
@@ -463,19 +519,20 @@ def lint_incdec(st: LintSt, node, used: bool) -> long {
     }
 };
 
-def lint_opassign(st: LintSt, node, used: bool) -> long {
+def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
     let t = node.tgt;
     let op: str = node.op;
     let v = node.v;
     lint_node(st, v, true);
     if (t.k == "id") {
+        let id: Leaf = t;
         if (op == "+" || op == "*") {
-            lint_mark(st, t.v, 4);
+            lint_mark(st, id.v, 4);
         } else {
-            lint_mark(st, t.v, 2);
+            lint_mark(st, id.v, 2);
         };
         if (used) {
-            lint_mark(st, t.v, 1);
+            lint_mark(st, id.v, 1);
         };
         0
     } else {
@@ -489,7 +546,7 @@ def lint_opassign(st: LintSt, node, used: bool) -> long {
 
 // A record or map literal giving a key twice keeps the last value; the
 // earlier one is computed for nothing.
-def lint_lit(st: LintSt, node, what: str, kind: str) -> long {
+def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> long {
     let keys: [str] = node.keys;
     lint_list(st, node.vals);
     let i = 0;
@@ -554,9 +611,9 @@ def lint_word(kind: str) -> str {
 // and the unions in a root are its occurrences, outer before inner, each
 // at its root's position.
 
-def lint_types(st: LintSt, stmts) -> long {
+def lint_types(st: LintSt, stmts: [Node]) -> long {
     let roots: [LintRoot] = [];
-    let atyps: [{ k: str }] = [];
+    let atyps: [Type] = [];
     let amemo: [str] = [];
     let abusy: [bool] = [];
     let occs: [LintOcc] = [];
@@ -596,7 +653,7 @@ def lint_types(st: LintSt, stmts) -> long {
     lint_report(st, t)
 };
 
-def lint_tw_list(t: LintTy, nodes) -> long {
+def lint_tw_list(t: LintTy, nodes: [Node]) -> long {
     let i = 0;
     while (i < len(nodes)) {
         lint_tw(t, nodes[i]);
@@ -605,93 +662,135 @@ def lint_tw_list(t: LintTy, nodes) -> long {
     0
 };
 
-def lint_tw(t: LintTy, node) -> long {
+def lint_tw(t: LintTy, node: Node) -> long {
     let k: str = node.k;
     if (k == "id" || k == "str" || k == "num") {
         0
     } else if (k == "call") {
-        lint_tw(t, node.callee);
-        lint_tw_list(t, node.args)
+        let call: Call = node;
+        lint_tw(t, call.callee);
+        lint_tw_list(t, call.args)
     } else if (k == "dot") {
-        lint_tw(t, node.obj)
+        let dot: Dot = node;
+        lint_tw(t, dot.obj)
     } else if (k == "bin") {
-        lint_tw(t, node.l);
-        lint_tw(t, node.r)
+        let bin: Bin = node;
+        lint_tw(t, bin.l);
+        lint_tw(t, bin.r)
     } else if (k == "decl") {
-        lint_tw_decl(t, node)
+        let decl: Decl = node;
+        lint_tw_decl(t, decl)
     } else if (k == "block") {
-        lint_tw_list(t, node.stmts)
+        let block: Block = node;
+        lint_tw_list(t, block.stmts)
     } else if (k == "if") {
-        lint_tw(t, node.cond);
-        lint_tw(t, node.then);
-        lint_tw(t, node.els)
-    } else if (k == "assign" || k == "arrrep") {
-        lint_tw(t, node.v)
+        let branch: If = node;
+        lint_tw(t, branch.cond);
+        lint_tw(t, branch.then);
+        lint_tw(t, branch.els)
+    } else if (k == "assign") {
+        let assign: Assign = node;
+        lint_tw(t, assign.v)
+    } else if (k == "arrrep") {
+        let rep: ArrRep = node;
+        lint_tw(t, rep.v)
     } else if (k == "index") {
-        lint_tw(t, node.arr);
-        lint_tw(t, node.idx)
+        let index: Index = node;
+        lint_tw(t, index.arr);
+        lint_tw(t, index.idx)
     } else if (k == "rec" || k == "map") {
-        lint_tw_list(t, node.vals)
+        let rec: RecLit = node;
+        lint_tw_list(t, rec.vals)
     } else if (k == "array") {
-        lint_tw_list(t, node.elems)
+        let array: ArrLit = node;
+        lint_tw_list(t, array.elems)
     } else if (k == "ret" || k == "un" || k == "addr" || k == "deref" || k == "rectest" || k == "narrow" || k == "matchend") {
-        lint_tw(t, node.e)
+        lint_tw_one(t, node)
     } else if (k == "func") {
-        lint_tw_func(t, node)
+        let func: Func = node;
+        lint_tw_func(t, func)
     } else if (k == "typedef") {
-        lint_root(t, node.typ, node.line, node.col, node.name)
+        let tdef: TypeDef = node;
+        lint_root(t, tdef.typ, tdef.line, tdef.col, tdef.name)
     } else if (k == "opassign") {
-        lint_tw(t, node.tgt);
-        lint_tw(t, node.v)
+        let assign: OpAssign = node;
+        lint_tw(t, assign.tgt);
+        lint_tw(t, assign.v)
     } else if (k == "while") {
-        lint_tw(t, node.cond);
-        lint_tw(t, node.body)
+        let loop: While = node;
+        lint_tw(t, loop.cond);
+        lint_tw(t, loop.body)
     } else if (k == "incdec") {
-        lint_tw(t, node.tgt)
+        let incdec: IncDec = node;
+        lint_tw(t, incdec.tgt)
     } else if (k == "idxassign") {
-        lint_tw(t, node.arr);
-        lint_tw(t, node.idx);
-        lint_tw(t, node.v)
+        let assign: IdxAssign = node;
+        lint_tw(t, assign.arr);
+        lint_tw(t, assign.idx);
+        lint_tw(t, assign.v)
     } else if (k == "dotassign") {
-        lint_tw(t, node.obj);
-        lint_tw(t, node.v)
+        let assign: DotAssign = node;
+        lint_tw(t, assign.obj);
+        lint_tw(t, assign.v)
     } else if (k == "slice") {
-        lint_tw(t, node.arr);
-        lint_tw(t, node.lo);
-        lint_tw(t, node.hi)
+        let slice: Slice = node;
+        lint_tw(t, slice.arr);
+        lint_tw(t, slice.lo);
+        lint_tw(t, slice.hi)
     } else if (k == "for") {
-        lint_tw(t, node.init);
-        lint_tw(t, node.cond);
-        lint_tw(t, node.step);
-        lint_tw(t, node.body)
+        let loop: For = node;
+        lint_tw(t, loop.init);
+        lint_tw(t, loop.cond);
+        lint_tw(t, loop.step);
+        lint_tw(t, loop.body)
     } else if (k == "foreach") {
-        lint_tw(t, node.iter);
-        lint_tw(t, node.body)
+        let loop: Foreach = node;
+        lint_tw(t, loop.iter);
+        lint_tw(t, loop.body)
     } else if (k == "forrange") {
-        lint_tw(t, node.lo);
-        lint_tw(t, node.hi);
-        lint_tw(t, node.body)
+        let loop: ForRange = node;
+        lint_tw(t, loop.lo);
+        lint_tw(t, loop.hi);
+        lint_tw(t, loop.body)
     } else if (k == "store") {
-        lint_tw(t, node.p);
-        lint_tw(t, node.v)
+        let store: Store = node;
+        lint_tw(t, store.p);
+        lint_tw(t, store.v)
     } else if (k == "sliceassign") {
-        lint_tw(t, node.arr);
-        lint_tw(t, node.lo);
-        lint_tw(t, node.hi);
-        lint_tw(t, node.v)
+        let assign: SliceAssign = node;
+        lint_tw(t, assign.arr);
+        lint_tw(t, assign.lo);
+        lint_tw(t, assign.hi);
+        lint_tw(t, assign.v)
     } else {
         0
     }
 };
 
-def lint_tw_decl(t: LintTy, node) -> long {
+def lint_tw_one(t: LintTy, node: Node) -> long {
+    if (node.k == "un") {
+        let un: Un = node;
+        lint_tw(t, un.e)
+    } else if (node.k == "rectest" || node.k == "narrow") {
+        let narrow: Narrow = node;
+        lint_tw(t, narrow.e)
+    } else if (node.k == "matchend") {
+        let matchend: MatchEnd = node;
+        lint_tw(t, matchend.e)
+    } else {
+        let wrap: Wrap = node;
+        lint_tw(t, wrap.e)
+    }
+};
+
+def lint_tw_decl(t: LintTy, node: Decl) -> long {
     if (node.kind != "def") {
         lint_root(t, node.typ, node.line, node.col, "");
     };
     lint_tw(t, node.v)
 };
 
-def lint_tw_func(t: LintTy, node) -> long {
+def lint_tw_func(t: LintTy, node: Func) -> long {
     let line: long = node.line;
     let col: long = node.col;
     let ps = node.ptypes;
@@ -704,7 +803,7 @@ def lint_tw_func(t: LintTy, node) -> long {
     lint_tw(t, node.body)
 };
 
-def lint_root(t: LintTy, typ, line: long, col: long, alias: str) -> long {
+def lint_root(t: LintTy, typ: Type, line: long, col: long, alias: str) -> long {
     if (typ.k != "tnone") {
         t.roots += { typ: typ, line: line, col: col, alias: alias };
     };
@@ -713,10 +812,11 @@ def lint_root(t: LintTy, typ, line: long, col: long, alias: str) -> long {
 
 // An occurrence: a record of two or more fields (an open record's `..`
 // is none), or a union.
-def lint_cand(ty) -> bool {
+def lint_cand(ty: Type) -> bool {
     let k: str = ty.k;
     if (k == "trec") {
-        let fs = ty.fields;
+        let rec: TRec = ty;
+        let fs: [Field] = rec.fields;
         let n = len(fs);
         if (types.is_open(fs)) { n = n - 1; 0; } else { 0; };
         n >= 2
@@ -727,36 +827,44 @@ def lint_cand(ty) -> bool {
 
 // The key of `ty`; with `rec`, its occurrences are noted (`parent`: the
 // one it is in, or -1).
-def lint_tk(t: LintTy, ty, rec: bool, parent: long) -> str {
+def lint_tk(t: LintTy, ty: Type, rec: bool, parent: long) -> str {
     let k: str = ty.k;
     if (k == "tname") {
-        lint_tk_name(t, ty.name)
+        let name: TName = ty;
+        lint_tk_name(t, name.name)
     } else if (k == "tptr") {
-        "*" + lint_tk(t, ty.to, rec, parent)
+        let ptr: TPtr = ty;
+        "*" + lint_tk(t, ptr.to, rec, parent)
     } else if (k == "tarr") {
-        "[" + lint_tk(t, ty.of, rec, parent) + "]"
+        let arr: TOf = ty;
+        "[" + lint_tk(t, arr.of, rec, parent) + "]"
     } else if (k == "tarrfix") {
-        "[" + lint_tk(t, ty.of, rec, parent) + ";" + tostring(ty.n) + "]"
+        let arr: TFix = ty;
+        "[" + lint_tk(t, arr.of, rec, parent) + ";" + tostring(arr.n) + "]"
     } else if (k == "topt") {
-        lint_tk(t, ty.of, rec, parent) + "?"
+        let opt: TOf = ty;
+        lint_tk(t, opt.of, rec, parent) + "?"
     } else if (k == "tmap") {
-        let kk = lint_tk(t, ty.key, rec, parent);
-        "{" + kk + "=>" + lint_tk(t, ty.of, rec, parent) + "}"
+        let map: TMap = ty;
+        let kk = lint_tk(t, map.key, rec, parent);
+        "{" + kk + "=>" + lint_tk(t, map.of, rec, parent) + "}"
     } else if (k == "tfunc") {
-        let ak = lint_tk_list(t, ty.args, rec, parent);
-        "(" + ak + ")->" + lint_tk(t, ty.ret, rec, parent)
-    } else if (k == "tparams") {
-        "(" + lint_tk_list(t, ty.ts, rec, parent) + ")"
+        let func: TFunc = ty;
+        let ak = lint_tk_list(t, func.args, rec, parent);
+        "(" + ak + ")->" + lint_tk(t, func.ret, rec, parent)
+    } else if (k == "tparams" || k == "tunion") {
+        let list: TList = ty;
+        if (k == "tparams") { "(" + lint_tk_list(t, list.ts, rec, parent) + ")" }
+        else { lint_tk_union(t, list, rec, parent) }
     } else if (k == "trec") {
-        lint_tk_rec(t, ty, rec, parent)
-    } else if (k == "tunion") {
-        lint_tk_union(t, ty, rec, parent)
+        let record: TRec = ty;
+        lint_tk_rec(t, record, rec, parent)
     } else {
         k
     }
 };
 
-def lint_tk_list(t: LintTy, ts, rec: bool, parent: long) -> str {
+def lint_tk_list(t: LintTy, ts: [Type], rec: bool, parent: long) -> str {
     let parts: [str] = [];
     let i = 0;
     while (i < len(ts)) {
@@ -786,7 +894,7 @@ def lint_tk_name(t: LintTy, name: str) -> str {
     }
 };
 
-def lint_tk_rec(t: LintTy, ty, rec: bool, parent: long) -> str {
+def lint_tk_rec(t: LintTy, ty: TRec, rec: bool, parent: long) -> str {
     let fs = ty.fields;
     let me = parent;
     if (rec && lint_cand(ty)) {
@@ -808,7 +916,7 @@ def lint_tk_rec(t: LintTy, ty, rec: bool, parent: long) -> str {
 
 // A union's key lists its members sorted, without repeats, an alias of a
 // union replaced by its members: `A | B`, `B | A` and `AB | A` agree.
-def lint_tk_union(t: LintTy, ty, rec: bool, parent: long) -> str {
+def lint_tk_union(t: LintTy, ty: TList, rec: bool, parent: long) -> str {
     let me = parent;
     if (rec) {
         me = lint_occ(t, ty, parent);
@@ -822,15 +930,16 @@ def lint_tk_union(t: LintTy, ty, rec: bool, parent: long) -> str {
     key
 };
 
-def lint_tk_members(t: LintTy, u, rec: bool, me: long, parts: [str]) -> long {
+def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> long {
     let ts = u.ts;
     let i = 0;
     while (i < len(ts)) {
         let m = ts[i];
         let ai = lint_union_alias(t, m);
         if (ai >= 0) {
+            let union: TList = t.atyps[ai];
             t.abusy[ai] = true;
-            lint_tk_members(t, t.atyps[ai], false, me, parts);
+            lint_tk_members(t, union, false, me, parts);
             t.abusy[ai] = false;
         } else {
             parts += lint_tk(t, m, rec, me);
@@ -842,9 +951,10 @@ def lint_tk_members(t: LintTy, u, rec: bool, me: long, parts: [str]) -> long {
 
 // The alias a union member names when it is a union (and not one being
 // expanded), or -1.
-def lint_union_alias(t: LintTy, m) -> long {
+def lint_union_alias(t: LintTy, m: Type) -> long {
     if (m.k == "tname") {
-        let ai = lint_map_get(t.amap, m.name);
+        let name: TName = m;
+        let ai = lint_map_get(t.amap, name.name);
         if (ai < 0) {
             -1
         } else if (t.abusy[ai]) {
@@ -859,11 +969,11 @@ def lint_union_alias(t: LintTy, m) -> long {
     }
 };
 
-def lint_is_union(ty) -> bool {
+def lint_is_union(ty: Type) -> bool {
     ty.k == "tunion"
 };
 
-def lint_occ(t: LintTy, ty, parent: long) -> long {
+def lint_occ(t: LintTy, ty: Type, parent: long) -> long {
     t.occs += { key: "", typ: ty, line: t.line, col: t.col, parent: parent, decl: false, alias: "", rep: false };
     len(t.occs) - 1
 };
