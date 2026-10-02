@@ -363,3 +363,15 @@ migration, before the bless):
   If the copies show in the profile, the hot dispatchers can read member
   fields with destructuring patterns (`Bin { op, l, r } => ...`), which
   read the union value in place.
+- Refinement (mine): a `match` arm's binding (`Rect r => ...`) is the union
+  value itself, its fields at the union layout's offsets -- "an A value of
+  C", in the user's words -- not a copy; it is copied only when it goes
+  where a standalone member is declared. So `match s { Rect r => r.w =
+  5.0 }` changes `s`, as a reader expects. A cast through an annotation
+  (`let r: Rect = s;`, a parameter typed `Rect`) is the conversion that may
+  copy.
+- In src/y, three writes go to a union member after a conversion:
+  types.y set_inferred_ret (`fnode.ret = ret`, a Func in Node) and the two
+  tref patches (rename.y rn_tref, native.y tdecode: `r.to = ...`, a TRef
+  in Type). They become writes through a `match` binding on the union
+  value, so they never depend on whether a cast copied.
