@@ -1693,10 +1693,15 @@ static int tcompat(Yv *got, Yv *want) {
     } else if (ys_eq_lit(yr_get(want, "k"), "tparams")) {
         return 1;
     } else if (ys_eq_lit(yr_get(want, "k"), "tunion")) {
-        return union_accepts(got, want);
+        // into a union: a member, or a union of its members; or a cast to
+        // a union of some of got's members (below)
+        return union_accepts(got, want) ||
+               (ys_eq_lit(yr_get(got, "k"), "tunion") && union_accepts(want, got));
     } else if (ys_eq_lit(yr_get(got, "k"), "tunion")) {
-        // a union is none of its members until a match says which
-        return 0;
+        // A cast: a union value goes where one of its members is declared,
+        // checked when the program runs (native.c gen_as: a value holding
+        // another member stops the program).
+        return union_accepts(want, got);
     } else if (ys_eq_lit(yr_get(want, "k"), "topt")) {
         // `none` (the option of tunk) widens to any T? through teq; a
         // plain T does NOT -- use some(v), which is the explicit box

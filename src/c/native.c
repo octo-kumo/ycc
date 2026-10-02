@@ -206,6 +206,9 @@ Yv *fn_names_of(Yv *fns);
 Yv *fns_kind(Yv *label);
 Yv *gen(Yv *st, Yv *node);
 Yv *gen_as(Yv *st, Yv *node, Yv *want);
+int union_within(Yv *s, Yv *t);
+Yv *cast_members(Yv *s, Yv *t);
+Yv *gen_cast_check(Yv *st, Yv *ts);
 Yv *gen_str_const(Yv *st, Yv *s);
 Yv *gen_id(Yv *st, Yv *node);
 Yv *gen_cap_ptr(Yv *st, Yv *name);
@@ -5240,9 +5243,74 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
         return emit(st, ys("    call y_rec_cast"));
     } else if (ys_eq_lit(wk, "tunion") && layout_unknown(infer(st, node))) {
         return gen_union_cast(st, want);
+    } else if ((ys_eq_lit(wk, "trec") || ys_eq_lit(wk, "tunion")) &&
+               ys_eq_lit(yr_get(unfold(infer(st, node)), "k"), "tunion") &&
+               !union_within(infer(st, node), want0)) {
+        return gen_cast_check(st, cast_members(infer(st, node), want0));
     } else {
         return st;
     }
+}
+
+/* Every member of union s is one of t's (t a union): s goes into t as it
+ * is, with no check. */
+int union_within(Yv *s, Yv *t) {
+    Yv *u = unfold(t);
+    if (!ys_eq_lit(yr_get(u, "k"), "tunion")) {
+        return 0;
+    }
+    Yv *ss = union_parts(unfold(s));
+    long i = 0;
+    while (i < yv_len(ss)) {
+        if (ys_eq_lit(yr_get(union_member(u, ya_get(ss, i)), "k"), "tnone")) {
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+/* The members of union s a cast to t keeps: t itself, a record (types.c
+ * tcompat lets a union value go where one of its members is declared), or
+ * each member of the union t. */
+Yv *cast_members(Yv *s, Yv *t) {
+    Yv *out = yav(0);
+    Yv *ts = yav(0);
+    Yv *su = unfold(s);
+    if (ys_eq_lit(yr_get(unfold(t), "k"), "tunion")) {
+        ts = union_parts(unfold(t));
+    } else {
+        ts = ya_push(ts, t);
+    }
+    long i = 0;
+    while (i < yv_len(ts)) {
+        Yv *m = union_member(su, ya_get(ts, i));
+        if (!ys_eq_lit(yr_get(m, "k"), "tnone")) {
+            out = ya_push(out, m);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+/* gen_as's check of a cast from a union: the record in %rax (kept) is one
+ * of the member types ts, or the program stops (y_cast_trap). */
+Yv *gen_cast_check(Yv *st, Yv *ts) {
+    Yv *ok = next_loc(st);
+    st = yr_get(ok, "st");
+    st = emit(st, ys("    mov -8(%rax), %rcx"));
+    long i = 0;
+    while (i < yv_len(ts)) {
+        Yv *dr = ty_desc(st, ya_get(ts, i));
+        st = yr_get(dr, "st");
+        st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+                             ys("(%rip), %rdx")));
+        st = emit(st, ys("    cmp %rdx, %rcx"));
+        st = emit(st, ys_cat(ys("    je "), yr_get(ok, "lbl")));
+        i = i + 1;
+    }
+    st = emit(st, ys("    jmp y_cast_trap"));
+    return emit(st, ys_cat(yr_get(ok, "lbl"), ys(":")));
 }
 
 /* gen_as's check of a value of unknown type going where union t is
