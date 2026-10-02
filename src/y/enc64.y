@@ -372,7 +372,7 @@ def enc_mem_result(r: long, b: [byte], t: MemTail) -> Encoded {
     if (t.modrm < 0) {
         { bytes: [], fix: [], err: "bad memory form" }
     } else {
-        let fx = [];
+        let fx: [Fixup] = [];
         let bb = b;
         if (t.disp32) {
             if (t.rip_lbl != "") {
@@ -745,11 +745,11 @@ def enc_movb_reg(dst: Operand, src: Operand) -> Encoded {
 
 // ── mnemonic dispatch ──────────────────────────────────────────────────
 
-def need1(mn: str, ops) -> str {
+def need1(mn: str, ops: [Operand]) -> str {
     if (len(ops) != 1) { mn + " takes 1 operand" } else { "" }
 };
 
-def need2(mn: str, ops) -> str {
+def need2(mn: str, ops: [Operand]) -> str {
     if (len(ops) != 2) { mn + " takes 2 operands" } else { "" }
 };
 

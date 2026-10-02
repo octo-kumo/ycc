@@ -92,7 +92,7 @@ def is_num_text(s: str) -> bool {
 
 // Split operands on top-level commas (ignore commas inside parens).
 def split_ops(s: str) -> [str] {
-    let out = [];
+    let out: [str] = [];
     let depth = 0;
     // One slice per FIELD, not one per character. The loop used to take
     // s[i:i + 1] and append it, so every byte of every operand allocated a
@@ -444,7 +444,7 @@ def hash_str(s: str) -> long {
 };
 
 def labmap_new(cap: long) -> [AsmLabel] {
-    let m = [];
+    let m: [AsmLabel] = [];
     let i = 0;
     while (i < cap) {
         m += { name: "", sec: 0, off: 0 };
@@ -545,8 +545,8 @@ def asm_assemble(text: str, debug: bool) -> AsmOut {
     let lines = split(text, "\n");
     let t1 = clock_us();
     let h1 = heap_used();
-    let items = [];
-    let labels = [];
+    let items: [AsmItem] = [];
+    let labels: [AsmLabel] = [];
     let sec = 0;
     let offs = [0, 0, 0];
     let li = 0;
@@ -768,7 +768,7 @@ def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> AsmCo
 };
 
 def asm_strdata_item(sec: long, offs: [long], bb: [byte]) -> AsmContent {
-    let item = { sec: sec, off: offs[sec], len: len(bb), kind: "data", bytes: bb, fix: [] };
+    let item: AsmItem = { sec: sec, off: offs[sec], len: len(bb), kind: "data", bytes: bb, fix: [] };
     offs[sec] = offs[sec] + len(bb);
     { err: "", sec: sec, offs: offs, item: item }
 };
@@ -923,7 +923,7 @@ def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> As
 def asm_quad_go(sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: data-item shape built ONLY here.)
     let bytes = enc.le64(tonum(rest));
-    let item = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [] };
+    let item: AsmItem = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [] };
     offs[sec] = offs[sec] + len(bytes);
     { err: "", sec: sec, offs: offs, item: item }
 };
@@ -943,7 +943,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
             };
             0
         } else { 0; };
-        let item = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [] };
+        let item: AsmItem = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [] };
         offs[sec] = offs[sec] + n;
         { err: "", sec: sec, offs: offs, item: item }
     }
@@ -967,7 +967,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
         rest = trim(line[cut + 1:]);
         0
     };
-    let ops = [];
+    let ops: [Operand] = [];
     if (rest != "") {
         let texts = split_ops(rest);
         let i = 0;
