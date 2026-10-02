@@ -63,6 +63,11 @@ requires byte-identical binaries).
    spelled `typedef Yv *Name;` in the `.c` file where it helps (`pkg.c`,
    `lint.c`), never in a header; a Y `import` kept only for an alias
    needs no `#include` (a comment at the top says so).
+   What only types a value in Y has no C twin: an annotation, a cast
+   through a typed `let` (`let c: Call = node;` reads `c.callee` as
+   `yr_get(node, "callee")`), and the identity helpers that give a
+   literal its type (`normnode`, `normtype`, `type_node`; `tc_res(t, st)`
+   is `yr(2, "typ", t, "st", st)`).
 
 3. **Records** are insertion-ordered key/value records (`yr*`), and this
    is what a record *literal in the compiler's own source* ports to:

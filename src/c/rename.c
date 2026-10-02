@@ -541,7 +541,8 @@ Yv *rn_typedef_err(Yv *s, Yv *st) {
         return yr(4, "k", ys("err"), "msg", msg, "line", yr_get(s, "line"),
                   "col", yr_get(s, "col"));
     } else {
-        return yr(1, "k", ys("void"));
+        return yr(3, "k", ys("void"), "line", yr_get(s, "line"), "col",
+                  yr_get(s, "col"));
     }
 }
 

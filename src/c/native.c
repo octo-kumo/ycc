@@ -4075,7 +4075,8 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
         i = i + 1;
     }
     if (anystr) {
-        Yv *block = yr(2, "k", ys("block"), "stmts", stmts);
+        Yv *block = yr(4, "k", ys("block"), "stmts", stmts, "line",
+                       yv_long(1), "col", yv_long(1));
         Yv *names = app_names(block, 1, yav(0));
         Yv *out = yav(0);
         long j = 0;
@@ -10102,9 +10103,11 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                                        yr(1, "argv", yv_bool(0)));
             st = emit_one_fn(
                 st, ys("_start"), yv_l(yr_get(rm, "uid")),
-                yr(4, "params", yav(0), "ptypes", yav(0), "ret",
+                yr(5, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", ys("tvoid")), "body",
-                   yr(2, "k", ys("block"), "stmts", main_stmts)),
+                   yr(4, "k", ys("block"), "stmts", main_stmts, "line",
+                      yv_long(0), "col", yv_long(0)),
+                   "line", yv_long(0)),
                 1, yv_b(yr_get(want, "argv")) || yv_b(yr_get(xt, "argv")),
                 yav(0), ys(""));
             ;
@@ -10114,7 +10117,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                 st, init, yv_l(yr_get(rm, "uid")),
                 yr(5, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", ys("tvoid")), "body",
-                   yr(2, "k", ys("block"), "stmts", main_stmts), "line",
+                   yr(4, "k", ys("block"), "stmts", main_stmts, "line",
+                      yv_long(0), "col", yv_long(0)), "line",
                    yv_long(0)),
                 0, 0, yav(0), ys(""));
             ;
@@ -10317,9 +10321,11 @@ Yv *lit_decode(Yv *c) {
     Yv *t = ys_slice(c, 0, 1);
     Yv *v = ys_slice_from(c, 1);
     if (ys_eq_lit(t, "v")) {
-        return normnode(yr(1, "k", ys("void")));
+        return normnode(yr(3, "k", ys("void"), "line", yv_long(0), "col",
+                           yv_long(0)));
     } else if (ys_eq_lit(t, "o")) {
-        return normnode(yr(1, "k", ys("optarg")));
+        return normnode(yr(3, "k", ys("optarg"), "line", yv_long(0), "col",
+                           yv_long(0)));
     } else if (ys_eq_lit(t, "n")) {
         return normnode(yr(4, "k", ys("num"), "v", v, "line", yv_long(0),
                            "col", yv_long(0)));
