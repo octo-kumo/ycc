@@ -67,6 +67,10 @@ def teq(a, b) -> bool {
     // compare string POINTERS; annotated lets force content comparison.
     // Sound: kind tags are always strings (parser + checker construct
     // every type node with a string k).
+    // The same type node (a recursive alias is one shared node, and unfolds
+    // to one union every time): equal, without spelling out canonical forms
+    // or comparing a big union member by member.
+    if (a == b) { return true; };
     let ak: str = a.k;
     let bk: str = b.k;
     if (ak == "tunk") { true }

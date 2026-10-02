@@ -273,6 +273,12 @@ static Yv *map_type_of(Yv *v) {
 // Sound: kind tags are always strings (parser + checker construct
 // every type node with a string k).
 int teq(Yv *a, Yv *b) {
+    // the same type node (a recursive alias is one shared node, and unfolds
+    // to one union every time): equal, without spelling out canonical forms
+    // or comparing a big union member by member
+    if (a == b) {
+        return 1;
+    }
     Yv *ak = yr_get(a, "k");
     Yv *bk = yr_get(b, "k");
     if (ys_eq_lit(ak, "tunk")) {
