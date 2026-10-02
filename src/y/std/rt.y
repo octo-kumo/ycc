@@ -178,19 +178,28 @@ def y_str_index(hay: str, needle: str) -> long {
     let found = 0 - 1;
     if (m > 0) {
         if (n >= m) {
+            // The leading byte decides most positions on its own: every
+            // needle ycc searches for is ONE character (asm.y looks for
+            // " ", "(", ":", "\t", "-"), so entering the inner loop at all
+            // was the bulk of the work -- index_of was ~1100 instructions
+            // per call, 10% of everything ycc executes.
+            let b0 = byte_at(needle, 0);
             let i = 0;
             let go = true;
             while (go) {
                 if (i <= n - m) {
                     if (found < 0) {
-                        let j = 0;
-                        let ok = true;
-                        while (j < m) {
-                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };
-                            j = j + 1;
+                        if (byte_at(hay, i) == b0) {
+                            let j = 1;
+                            let ok = true;
+                            while (j < m) {
+                                if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };
+                                j = j + 1;
+                                0
+                            };
+                            if (ok) { found = i; 0; } else { 0; };
                             0
-                        };
-                        if (ok) { found = i; 0; } else { 0; };
+                        } else { 0; };
                         0
                     } else { go = false; 0; };
                     i = i + 1;
@@ -252,16 +261,26 @@ def y_str_split(s: str, sep: str) -> [str] {
         let start = 0;
         let i = 0;
         let go = true;
+        // Leading byte first, as in y_str_index: every separator ycc splits
+        // on is one character ("\n" for the assembler's 4 MB of asm text and
+        // for the import reader's source, "/" for norm_path), so the inner
+        // loop almost never runs.
+        let b0 = pb[0];
         while (go) {
             if (i < n) {
                 let hit = false;
                 if (i + m <= n) {
-                    let j = 0;
                     let ok = true;
-                    while (j < m) {
-                        if (sb[i + j] != pb[j]) { ok = false; 0; } else { 0; };
-                        j = j + 1;
+                    if (sb[i] != b0) {
+                        ok = false;
                         0
+                    } else {
+                        let j = 1;
+                        while (j < m) {
+                            if (sb[i + j] != pb[j]) { ok = false; 0; } else { 0; };
+                            j = j + 1;
+                            0
+                        };
                     };
                     hit = ok;
                     0
