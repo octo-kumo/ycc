@@ -25,7 +25,7 @@
 // - Assignment targets keep their declared type. The only implicit
 //   conversions are the numeric widenings (see tcompat).
 
-// For its alias NamedTy.
+// For its aliases Field, Node and Type.
 import parser from "./parser.y";
 
 // A diagnostic: the checker's errors, lint.y's warnings.
@@ -33,7 +33,7 @@ type Diag = { msg: str, line: long, col: long };
 // A top-level function or global as other code sees it: its name, asm
 // label and type (a unit's exports, the externs check_program binds,
 // native.y's functions).
-type Sym = { name: str, label: str, typ: { k: str } };
+type Sym = { name: str, label: str, typ: Type };
 
 def err_at(msg: str, line: long, col: long) -> Diag {
     { msg: msg, line: line, col: col }
@@ -47,17 +47,19 @@ def err_at(msg: str, line: long, col: long) -> Diag {
 // parser's trec; teq compares the fields as a set, by name), tref (a
 // recursive alias, rename.y: see "recursive types" below).
 
-def t_unk() -> {k: str} { { k: "tunk" } };
+def t_unk() -> Type { { k: "tunk" } };
+
+def type_node(t: Type) -> Type { t };
 
 // A map type node ({K => V}). Returns through a {k: str} annotation so
 // the value's flow type is the unknown-shape marker: typeof_expr's if
 // arms only agree through such holes (see teq note), and a concrete
 // {k, key, of} shape here would disagree with the rec arm's {k, fields}.
-def map_type_of(v) -> {k: str} {
+def map_type_of(v: Type) -> Type {
     { k: "tmap", key: { k: "tstr" }, of: v }
 };
 
-def teq(a, b) -> bool {
+def teq(a: Type, b: Type) -> bool {
     // NOTE: no `||` (see lexer.y isalnum note): the C VM evaluates both sides
     // eagerly AND the checker rejects `||` mixing map-field shapes with bools
     // through one gate — and teq's OWN first line was the worst offender
@@ -84,14 +86,30 @@ def teq(a, b) -> bool {
     else if (bk == "tname") { true }
     else if (ak == "tparams") { true }
     else if (bk == "tparams") { true }
-    else if (ak == "tptr") { teq(a.to, b.to) }
-    else if (ak == "tarr") { teq(a.of, b.of) }
+    else if (ak == "tptr") {
+        let ap: TPtr = a;
+        let bp: TPtr = b;
+        teq(ap.to, bp.to)
+    }
+    else if (ak == "tarr") {
+        let aa: TOf = a;
+        let ba: TOf = b;
+        teq(aa.of, ba.of)
+    }
     else if (ak == "tarrfix") {
-        if (a.n == b.n) { teq(a.of, b.of) } else { false }
+        let aa: TFix = a;
+        let ba: TFix = b;
+        if (aa.n == ba.n) { teq(aa.of, ba.of) } else { false }
     } else if (ak == "tmap") {
         // map types: same key type, equal value types.
-        if (teq(a.key, b.key)) { teq(a.of, b.of) } else { false }
-    } else if (a.k == "topt") { teq(a.of, b.of) }
+        let am: TMap = a;
+        let bm: TMap = b;
+        if (teq(am.key, bm.key)) { teq(am.of, bm.of) } else { false }
+    } else if (ak == "topt") {
+        let ao: TOf = a;
+        let bo: TOf = b;
+        teq(ao.of, bo.of)
+    }
     else if (a.k == "trec") {
         // record types: the same set of fields with pairwise-equal types;
         // the order they are written in is not part of the type (a record
@@ -104,16 +122,20 @@ def teq(a, b) -> bool {
         // NOTE: each bound once — the checker env is flow-INSENSITIVE (one
         // shape per name, last wins), so a name read inline here would merge
         // the `fields` shape of a, b and every other arm in teq.
-        let af = a.fields;
-        let bf = b.fields;
+        let ar: TRec = a;
+        let br: TRec = b;
+        let af: [Field] = ar.fields;
+        let bf: [Field] = br.fields;
         if (is_open(af) || is_open(bf)) { true }
         else if (len(af) != len(bf)) { false }
         else { teq_fields(af, bf, 0) }
     } else if (ak == "tfunc") {
-        if (len(a.args) != len(b.args)) { false } else {
-            let ok = teq(a.ret, b.ret);
-            let aa = a.args;
-            let bb = b.args;
+        let afunc: TFunc = a;
+        let bfunc: TFunc = b;
+        if (len(afunc.args) != len(bfunc.args)) { false } else {
+            let ok = teq(afunc.ret, bfunc.ret);
+            let aa: [Type] = afunc.args;
+            let bb: [Type] = bfunc.args;
             let i = 0;
             while (ok) {
                 if (i < len(aa)) {
@@ -144,21 +166,25 @@ def teq(a, b) -> bool {
 // tcompat's sides, a union's members (members).
 
 // t, or the type a tref stands for.
-def unfold(t: {k: str}) -> {k: str} {
-    if (t.k == "tref") { t.to } else { t }
+def unfold(t: Type) -> Type {
+    if (t.k == "tref") {
+        let ref: TRef = t;
+        ref.to
+    } else { t }
 };
 
 // A union's members as written -- a recursive alias that is a member
 // stays its tref (its canonical form names the member, native.y ty_desc)
 // -- with an alias of a union among them flattened in.
-def union_parts(t) -> [{k: str}] {
-    let out: [{k: str}] = [];
+def union_parts(t: Type) -> [Type] {
+    let out: [Type] = [];
     union_parts_go(out, t, 0);
     out
 };
 
-def union_parts_go(out: [{k: str}], t, depth: long) {
-    let ms: [{k: str}] = t.ts;
+def union_parts_go(out: [Type], t: Type, depth: long) -> long {
+    let union: TList = t;
+    let ms: [Type] = union.ts;
     let i = 0;
     while (i < len(ms)) {
         let m = ms[i];
@@ -166,12 +192,13 @@ def union_parts_go(out: [{k: str}], t, depth: long) {
         if (u.k == "tunion" && depth < 16) { union_parts_go(out, u, depth + 1); 0; } else { out += m; 0; };
         i = i + 1;
     };
+    0
 };
 
 // A union's members, unfolded (union_parts).
-def members(t) -> [{k: str}] {
+def members(t: Type) -> [Type] {
     let ps = union_parts(t);
-    let out: [{k: str}] = [];
+    let out: [Type] = [];
     let i = 0;
     while (i < len(ps)) {
         out += unfold(ps[i]);
@@ -182,10 +209,11 @@ def members(t) -> [{k: str}] {
 
 // The members of union s, as written, with every field of the record
 // pattern t.
-def pat_members(s, t) -> [{k: str}] {
+def pat_members(s: Type, t: Type) -> [Type] {
     let ps = union_parts(s);
-    let names: [str] = t.names;
-    let out: [{k: str}] = [];
+    let pat: TPat = t;
+    let names: [str] = pat.names;
+    let out: [Type] = [];
     let i = 0;
     while (i < len(ps)) {
         if (rec_has_names(unfold(ps[i]), names)) { out += ps[i]; 0 } else { 0 };
@@ -198,7 +226,7 @@ def pat_members(s, t) -> [{k: str}] {
 // canonical forms are; a tref against a type written out (a literal of a
 // recursive record type, say) is unfolded, at most 64 levels deep.
 let teq_unfolds = 0;
-def teq_ref(a, b) -> bool {
+def teq_ref(a: Type, b: Type) -> bool {
     let ak: str = a.k;
     let bk: str = b.k;
     if (ak == "tref" && bk == "tref") { tcanon(a) == tcanon(b) }
@@ -231,7 +259,7 @@ def str_sorted(xs: [str]) -> [str] {
 
 // The field names of a record type's field list, sorted: its layout
 // (native.y "records at run time").
-def rec_names(fs: [NamedTy]) -> [str] {
+def rec_names(fs: [Field]) -> [str] {
     let names: [str] = [];
     let i = 0;
     while (i < len(fs)) {
@@ -248,14 +276,14 @@ def rec_names(fs: [NamedTy]) -> [str] {
 // to the checker (tunk, a missing annotation, an unresolved name) is "u".
 // A tref is spelled out where it is met first; inside, a reference back
 // to it is `^N`, N counting the trefs entered since.
-def tcanon(t) -> str {
+def tcanon(t: Type) -> str {
     let out: [str] = [];
     let none: [str] = [];
     out = tcanon_go(out, t, none);
     join(out, "")
 };
 
-def tcanon_go(out: [str], t, stack: [str]) -> [str] {
+def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
     let k: str = t.k;
     if (k == "tlong") { out += "l"; out }
     else if (k == "tbyte") { out += "b"; out }
@@ -263,16 +291,34 @@ def tcanon_go(out: [str], t, stack: [str]) -> [str] {
     else if (k == "tbool") { out += "o"; out }
     else if (k == "tstr") { out += "s"; out }
     else if (k == "tvoid") { out += "v"; out }
-    else if (k == "tptr") { out += "*"; tcanon_go(out, t.to, stack) }
-    else if (k == "tarr") { out += "["; tcanon_go(out, t.of, stack) }
-    else if (k == "tarrfix") { out += "F" + tostring(t.n) + ";"; tcanon_go(out, t.of, stack) }
-    else if (k == "topt") { out += "?"; tcanon_go(out, t.of, stack) }
+    else if (k == "tptr") {
+        let ptr: TPtr = t;
+        out += "*";
+        tcanon_go(out, ptr.to, stack)
+    }
+    else if (k == "tarr") {
+        let arr: TOf = t;
+        out += "[";
+        tcanon_go(out, arr.of, stack)
+    }
+    else if (k == "tarrfix") {
+        let arr: TFix = t;
+        out += "F" + tostring(arr.n) + ";";
+        tcanon_go(out, arr.of, stack)
+    }
+    else if (k == "topt") {
+        let opt: TOf = t;
+        out += "?";
+        tcanon_go(out, opt.of, stack)
+    }
     else if (k == "tmap") {
+        let map: TMap = t;
         out += "M";
-        out = tcanon_go(out, t.key, stack);
-        tcanon_go(out, t.of, stack)
+        out = tcanon_go(out, map.key, stack);
+        tcanon_go(out, map.of, stack)
     } else if (k == "tfunc") {
-        let args: [{ k: str }] = t.args;
+        let func: TFunc = t;
+        let args: [Type] = func.args;
         out += "(";
         let i = 0;
         while (i < len(args)) {
@@ -281,9 +327,10 @@ def tcanon_go(out: [str], t, stack: [str]) -> [str] {
             i = i + 1;
         };
         out += ")";
-        tcanon_go(out, t.ret, stack)
+        tcanon_go(out, func.ret, stack)
     } else if (k == "trec") {
-        let fs: [NamedTy] = t.fields;
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let names = rec_names(fs);
         out += "{";
         let i = 0;
@@ -298,7 +345,8 @@ def tcanon_go(out: [str], t, stack: [str]) -> [str] {
         out += "}";
         out
     } else if (k == "tunion") {
-        let ms = union_parts(t);
+        let union: TList = t;
+        let ms = union_parts(union);
         let forms: [str] = [];
         let i = 0;
         while (i < len(ms)) {
@@ -310,7 +358,8 @@ def tcanon_go(out: [str], t, stack: [str]) -> [str] {
         out += "<" + join(str_sorted(forms), "|") + ">";
         out
     } else if (k == "tref") {
-        let tmp: str = t.tmp;
+        let ref: TRef = t;
+        let tmp: str = ref.tmp;
         let d = -1;
         let i = len(stack) - 1;
         while (d < 0 && i >= 0) {
@@ -325,7 +374,7 @@ def tcanon_go(out: [str], t, stack: [str]) -> [str] {
             let inner: [str] = [];
             inner += stack;
             inner += tmp;
-            tcanon_go(out, t.to, inner)
+            tcanon_go(out, ref.to, inner)
         }
     } else { out += "u"; out }
 };
@@ -346,7 +395,7 @@ def str_in(xs: [str], s: str) -> bool {
 // count on both sides (teq checks it), the two are one set of fields.
 // Index recursion (not a loop) so the shape stays checker-clean and
 // out-of-range reads impossible.
-def teq_fields(af, bf, i: long) -> bool {
+def teq_fields(af: [Field], bf: [Field], i: long) -> bool {
     if (i >= len(af)) { true }
     else {
         let fa = af[i];
@@ -365,7 +414,7 @@ def teq_fields(af, bf, i: long) -> bool {
 // The index of the field named `name` in the field list fs, -1 when there
 // is none. `hint` is tried first: records written in the same order find
 // every field there.
-def field_pos(fs, name: str, hint: long) -> long {
+def field_pos(fs: [Field], name: str, hint: long) -> long {
     let found = -1;
     if (hint < len(fs)) {
         let fh = fs[hint];
@@ -384,7 +433,7 @@ def field_pos(fs, name: str, hint: long) -> long {
 };
 
 // Every member of ua has an equal member in ub.
-def teq_members(ua: [{k: str}], ub: [{k: str}], i: long) -> bool {
+def teq_members(ua: [Type], ub: [Type], i: long) -> bool {
     if (i >= len(ua)) { true }
     else {
         let found = false;
@@ -397,7 +446,7 @@ def teq_members(ua: [{k: str}], ub: [{k: str}], i: long) -> bool {
     }
 };
 
-def teq_list(aa, bb, i: long) -> bool {
+def teq_list(aa: [Type], bb: [Type], i: long) -> bool {
     if (i >= len(aa)) { true }
     else if (teq(aa[i], bb[i])) { teq_list(aa, bb, i + 1) }
     else { false }
@@ -406,7 +455,7 @@ def teq_list(aa, bb, i: long) -> bool {
 // An open record's field list: it ends in the `..` marker (parser.y
 // parse_type_record), `{k: str}` -- the unknown-shape marker: any
 // record, its fields read through the descriptor (native.y is_kshape).
-def is_open(fs) -> bool {
+def is_open(fs: [Field]) -> bool {
     let n = len(fs);
     if (n == 0) { false }
     else if (fs[n - 1].name == "..") { true }
@@ -416,17 +465,19 @@ def is_open(fs) -> bool {
 // A store into field `key` through open record type t that cannot be
 // done: only k is assigned through one (its offset is in every record's
 // descriptor; the other fields are found by name, which a read does).
-def open_store(t, key: str) -> bool {
-    let fs = t.fields;
+def open_store(t: Type, key: str) -> bool {
+    let rec: TRec = t;
+    let fs: [Field] = rec.fields;
     is_open(fs) && key != "k"
 };
 
 // Field type by name in a trec; tnone marker when missing (dotassign uses
 // it — the caller reports the error once at the assignment site).
-def trec_field_type(rec, key: str) -> { k: str } {
-    let found = { k: "tnone" };
+def trec_field_type(rec: Type, key: str) -> Type {
+    let found: Type = { k: "tnone" };
     if (rec.k == "trec") {
-        let fs = rec.fields;
+        let record: TRec = rec;
+        let fs: [Field] = record.fields;
         let i = 0;
         while (i < len(fs)) {
             let f = fs[i];
@@ -440,7 +491,7 @@ def trec_field_type(rec, key: str) -> { k: str } {
     found
 };
 
-def tstr_go(t) -> str {
+def tstr_go(t: Type) -> str {
     if (t.k == "tlong") { "long" }
     else if (t.k == "tbyte") { "byte" }
     else if (t.k == "tfloat") { "float" }
@@ -449,22 +500,24 @@ def tstr_go(t) -> str {
     else if (t.k == "tvoid") { "void" }
     else if (t.k == "tunk") { "<error>" }
     else if (t.k == "tnone") { "<missing annotation>" }
-    else if (t.k == "tname") { t.name }
-    else if (t.k == "tref") { t.name }
-    else if (t.k == "tunion") { tstr_union(t.ts, " | ") }
-    else if (t.k == "tpat") { let tn: [str] = t.names; "{ " + join(tn, ", ") + " }" }
-    else if (t.k == "tptr") { "*" + tstr_go(t.to) }
-    else if (t.k == "tarr") { "[" + tstr_go(t.of) + "]" }
-    else if (t.k == "tarrfix") { "[" + tstr_go(t.of) + "; " + tostring(t.n) + "]" }
+    else if (t.k == "tname") { let name: TName = t; name.name }
+    else if (t.k == "tref") { let ref: TRef = t; ref.name }
+    else if (t.k == "tunion") { let union: TList = t; tstr_union(union.ts, " | ") }
+    else if (t.k == "tpat") { let pat: TPat = t; let tn: [str] = pat.names; "{ " + join(tn, ", ") + " }" }
+    else if (t.k == "tptr") { let ptr: TPtr = t; "*" + tstr_go(ptr.to) }
+    else if (t.k == "tarr") { let arr: TOf = t; "[" + tstr_go(arr.of) + "]" }
+    else if (t.k == "tarrfix") { let arr: TFix = t; "[" + tstr_go(arr.of) + "; " + tostring(arr.n) + "]" }
     else if (t.k == "topt") {
         // `none` alone is the option of nothing-known-yet
-        let tof = t.of;
+        let opt: TOf = t;
+        let tof = opt.of;
         if (tof.k == "tunk") { "none" } else { tstr_go(tof) + "?" }
     }
-    else if (t.k == "tmap") { "{" + tstr_go(t.key) + " => " + tstr_go(t.of) + "}" }
+    else if (t.k == "tmap") { let map: TMap = t; "{" + tstr_go(map.key) + " => " + tstr_go(map.of) + "}" }
     else if (t.k == "trec") {
-        let parts = [];
-        let fs = t.fields;
+        let parts: [str] = [];
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let i = 0;
         while (i < len(fs)) {
             // NOTE: bound once — `fields` is a bare param here, so an inline
@@ -477,20 +530,21 @@ def tstr_go(t) -> str {
         "{ " + join(parts, ", ") + " }"
     }
     else if (t.k == "tfunc") {
-        let parts = [];
-        let ta = t.args;
+        let parts: [str] = [];
+        let func: TFunc = t;
+        let ta: [Type] = func.args;
         let i = 0;
         while (i < len(ta)) {
             parts += tstr_go(ta[i]);
             i = i + 1;
         };
-        "(" + join(parts, ", ") + ") -> " + tstr_go(t.ret)
+        "(" + join(parts, ", ") + ") -> " + tstr_go(func.ret)
     } else { "<" + t.k + ">" }
 };
 
-def tstr(t) -> str { tstr_go(t) };
+def tstr(t: Type) -> str { tstr_go(t) };
 
-def tstr_union(ts: [{k: str}], sep: str) -> str {
+def tstr_union(ts: [Type], sep: str) -> str {
     let parts: [str] = [];
     let i = 0;
     while (i < len(ts)) {
@@ -500,7 +554,7 @@ def tstr_union(ts: [{k: str}], sep: str) -> str {
     join(parts, sep)
 };
 
-def tdisp_union(ts: [{k: str}]) -> str {
+def tdisp_union(ts: [Type]) -> str {
     let parts: [str] = [];
     let i = 0;
     while (i < len(ts)) {
@@ -518,11 +572,12 @@ def tdisp_union(ts: [{k: str}]) -> str {
 
 // The field names a match pattern tests: a record type's, or a record
 // pattern's (tpat).
-def type_names(t) -> [str] {
+def type_names(t: Type) -> [str] {
     let out: [str] = [];
     let tk: str = t.k;
     if (tk == "trec") {
-        let fs = t.fields;
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let i = 0;
         while (i < len(fs)) {
             let f = fs[i];
@@ -531,14 +586,15 @@ def type_names(t) -> [str] {
         };
         0
     } else if (tk == "tpat") {
-        let ns: [str] = t.names;
+        let pat: TPat = t;
+        let ns: [str] = pat.names;
         out += ns;
         0
     } else { 0 };
     out
 };
 
-def rec_has_names(r, names: [str]) -> bool {
+def rec_has_names(r: Type, names: [str]) -> bool {
     let rk: str = r.k;
     if (rk != "trec") { false } else {
         let have = type_names(r);
@@ -564,16 +620,18 @@ def rec_has_names(r, names: [str]) -> bool {
 // record pattern (tpat), the member of the subject's union that has those
 // fields, or the union of the members that have them when there are
 // several (the subject itself when it is a record). tunk when none.
-def narrow_type(s, t) -> {k: str} {
+def narrow_type(s: Type, t: Type) -> Type {
     let tk: str = t.k;
     let sk: str = s.k;
     if (tk != "tpat") { t }
     else if (sk == "trec") {
-        if (rec_has_names(s, t.names)) { s } else { t_unk() }
+        let pat: TPat = t;
+        if (rec_has_names(s, pat.names)) { s } else { t_unk() }
     } else if (sk == "tunion") {
         let ms = members(s);
-        let names: [str] = t.names;
-        let found: [{k: str}] = [];
+        let pat: TPat = t;
+        let names: [str] = pat.names;
+        let found: [Type] = [];
         let i = 0;
         while (i < len(ms)) {
             if (rec_has_names(ms[i], names)) { found += ms[i]; 0 } else { 0 };
@@ -581,15 +639,18 @@ def narrow_type(s, t) -> {k: str} {
         };
         if (len(found) == 0) { t_unk() }
         else if (len(found) == 1) { found[0] }
-        else { { k: "tunion", ts: found } }
+        else {
+            let union: Type = { k: "tunion", ts: found };
+            union
+        }
     } else { t_unk() }
 };
 
 // The member of union u that is the record type t (as u writes it,
 // union_parts); tnone when there is none.
-def union_member(u, t) -> {k: str} {
+def union_member(u: Type, t: Type) -> Type {
     let ms = union_parts(u);
-    let found = { k: "tnone" };
+    let found: Type = { k: "tnone" };
     let i = len(ms) - 1;
     while (i >= 0) {
         if (teq(ms[i], t)) { found = ms[i]; 0 } else { 0 };
@@ -600,7 +661,7 @@ def union_member(u, t) -> {k: str} {
 
 // `u.f` on a union: every member has f, with one type -- a field they do
 // not share is read after a match.
-def union_field(st: TcSt, t, dkey: str, line: long, col: long) -> TcRes {
+def union_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
     let ms = members(t);
     let ft = t_unk();
     let ok = true;
@@ -626,7 +687,7 @@ def union_field(st: TcSt, t, dkey: str, line: long, col: long) -> TcRes {
 
 // `u.f = v` on a union: f as a read finds it (union_field), then v must
 // fit it.
-def dotassign_union(st: TcSt, t, node) -> TcRes {
+def dotassign_union(st: TcSt, t: Type, node: DotAssign) -> TcRes {
     let key: str = node.key;
     let fr = union_field(st, t, key, node.line, node.col);
     st = fr.st;
@@ -637,7 +698,7 @@ def dotassign_union(st: TcSt, t, node) -> TcRes {
 
 // Every member of a union must be a record type (they are told apart by
 // their field names).
-def union_ok(t) -> bool {
+def union_ok(t: Type) -> bool {
     let ms = members(t);
     let ok = true;
     let i = 0;
@@ -653,7 +714,7 @@ def union_ok(t) -> bool {
 // got flows into the union want: a member does (a record equal to some
 // member: membership is exact, `{a: 1, b: 2}` is no `{a: long}`), and so
 // does a union whose every member does.
-def union_accepts(got, want) -> bool {
+def union_accepts(got: Type, want: Type) -> bool {
     let gk: str = got.k;
     if (gk == "tunion") {
         let gs = members(got);
@@ -702,10 +763,11 @@ def num_is_float(s: str) -> bool {
 // tight spacing, no padding. tstr() stays as it is — compiler diagnostics
 // (and the tests that match on them) use the roomier spacing. The two copies
 // must agree on every type they both render.
-def tdisp(t) -> str {
+def tdisp(t: Type) -> str {
     if (t.k == "trec") {
-        let parts = [];
-        let fs = t.fields;
+        let parts: [str] = [];
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let i = 0;
         while (i < len(fs)) {
             let f = fs[i];
@@ -714,24 +776,30 @@ def tdisp(t) -> str {
         };
         "{" + join(parts, ", ") + "}"
     } else if (t.k == "tfunc") {
-        let parts = [];
-        let ta = t.args;
+        let parts: [str] = [];
+        let func: TFunc = t;
+        let ta: [Type] = func.args;
         let i = 0;
         while (i < len(ta)) {
             parts += tdisp(ta[i]);
             i = i + 1;
         };
-        "(" + join(parts, ", ") + ")->" + tdisp(t.ret)
+        "(" + join(parts, ", " ) + ")->" + tdisp(func.ret)
     } else if (t.k == "tarr") {
-        "[" + tdisp(t.of) + "]"
+        let arr: TOf = t;
+        "[" + tdisp(arr.of) + "]"
     } else if (t.k == "tarrfix") {
-        "[" + tdisp(t.of) + "; " + tostring(t.n) + "]"
+        let arr: TFix = t;
+        "[" + tdisp(arr.of) + "; " + tostring(arr.n) + "]"
     } else if (t.k == "tptr") {
-        "*" + tdisp(t.to)
+        let ptr: TPtr = t;
+        "*" + tdisp(ptr.to)
     } else if (t.k == "tunion") {
-        tdisp_union(t.ts)
+        let union: TList = t;
+        tdisp_union(union.ts)
     } else if (t.k == "topt") {
-        let tof = t.of;
+        let opt: TOf = t;
+        let tof = opt.of;
         if (tof.k == "tunk") { "none" } else { tdisp(tof) + "?" }
     } else {
         tstr_go(t)
@@ -742,8 +810,8 @@ def tdisp(t) -> str {
 // the value (and its type); the first appearance keeps the position. That
 // is the static union rule for `{a: 1, ...obj}`: obj may overwrite a, and
 // a later explicit key may overwrite what obj spread.
-def field_merge(fields, name: str, typ) -> [NamedTy] {
-    let out: [NamedTy] = [];
+def field_merge(fields: [Field], name: str, typ: Type) -> [Field] {
+    let out: [Field] = [];
     let i = 0;
     let seen = false;
     while (i < len(fields)) {
@@ -773,7 +841,7 @@ def field_merge(fields, name: str, typ) -> [NamedTy] {
     out
 };
 
-def is_value_type(t) -> bool {
+def is_value_type(t: Type) -> bool {
     if (t.k == "tlong") { true }
     else if (t.k == "tbyte") { true }
     else if (t.k == "tfloat") { true }
@@ -788,14 +856,14 @@ def is_value_type(t) -> bool {
     else if (t.k == "tarr") { true }
     else if (t.k == "tarrfix") { true }
     else if (t.k == "topt") { true }
-    else if (t.k == "tmap") { is_hash_key(t.key) }
+    else if (t.k == "tmap") { let map: TMap = t; is_hash_key(map.key) }
     else if (t.k == "tunion") { union_ok(t) }
     else if (t.k == "tref") { true }
     else { t.k == "trec" }
 };
 
 // Map keys must be hashable scalars: str, long, byte, bool, float.
-def is_hash_key(t) -> bool {
+def is_hash_key(t: Type) -> bool {
     if (t.k == "tstr") { true }
     else if (t.k == "tlong") { true }
     else if (t.k == "tbyte") { true }
@@ -805,15 +873,16 @@ def is_hash_key(t) -> bool {
 
 // A function VALUE prints as `<function (params)->(ret)>` — note the extra
 // parens around the return type, which is how both compilers render it.
-def tdisp_fnval(t) -> str {
-    let parts = [];
-    let ta = t.args;
+def tdisp_fnval(t: Type) -> str {
+    let func: TFunc = t;
+    let parts: [str] = [];
+    let ta: [Type] = func.args;
     let i = 0;
     while (i < len(ta)) {
         parts += tdisp(ta[i]);
         i = i + 1;
     };
-    "(" + join(parts, ", ") + ")->(" + tdisp(t.ret) + ")"
+    "(" + join(parts, ", ") + ")->(" + tdisp(func.ret) + ")"
 };
 
 // ── checker state ────────────────────────────────────────────────────────
@@ -824,14 +893,19 @@ def tdisp_fnval(t) -> str {
 // never tested: a nested def reading an enclosing local is a capture, and
 // captures are legal (native.y box_capture).
 
-type Binding = { name: str, typ: { k: str }, kind: str, fdepth: long };
+type Binding = { name: str, typ: Type, kind: str, fdepth: long };
+type Lookup = { typ: Type, kind: str, fdepth: long };
 // The state the checker threads (ret: the def's return type, see
 // typeof_def; self: what `self` is in it), and what the typeof_* return:
 // a type and the state after it.
-type TcSt = { bindings: [Binding], errors: [Diag], ret: { k: str }, self: { k: str }, fdepth: long };
-type TcRes = { typ: { k: str }, st: TcSt };
+type TcSt = { bindings: [Binding], errors: [Diag], ret: Type, self: Type, fdepth: long };
+type TcRes = { typ: Type, st: TcSt };
 
-def lookup(bindings: [Binding], name: str) -> { typ: { k: str }, kind: str, fdepth: long } {
+def tc_res(typ: Type, st: TcSt) -> TcRes {
+    { typ: typ, st: st }
+};
+
+def lookup(bindings: [Binding], name: str) -> Lookup {
     // Scanned from the END, and stopped at the first hit: `bindings` is the
     // flat program-wide list (check_program), so a forward scan paid for
     // all ~7k entries on every identifier reference even though 82% of the
@@ -844,7 +918,7 @@ def lookup(bindings: [Binding], name: str) -> { typ: { k: str }, kind: str, fdep
     // parse_type_node note): the env keeps ONE shape per name, so a hole
     // rebound to e.typ then read as e.kind would resolve `kind` against the
     // TYPE shape. found* snapshots are bound once in their own arms.
-    let found_typ = { k: "tnone" };
+    let found_typ: Type = { k: "tnone" };
     let found_kind = "";
     let found_fd = 0;
     while (i >= 0) {
@@ -862,7 +936,7 @@ def lookup(bindings: [Binding], name: str) -> { typ: { k: str }, kind: str, fdep
     { typ: found_typ, kind: found_kind, fdepth: found_fd }
 };
 
-def st_bind(st: TcSt, name: str, typ, kind: str) -> TcSt {
+def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
     st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth };
     let bindings = st.bindings;
     { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth }
@@ -881,8 +955,8 @@ def st_errors(st: TcSt, errs: [Diag]) -> TcSt { { bindings: st.bindings, errors:
 // language's own name for the enclosing function (see the `id` and `call`
 // arms of typeof_expr/typeof_call), so the state field and the language's
 // reserved word must not read alike.
-def st_self(st: TcSt, selfv) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: selfv, fdepth: st.fdepth } };
-def st_ret(st: TcSt, ret) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth } };
+def st_self(st: TcSt, selfv: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: selfv, fdepth: st.fdepth } };
+def st_ret(st: TcSt, ret: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth } };
 
 def fail(st: TcSt, msg: str, line: long, col: long) -> TcSt {
     st.errors += err_at(msg, line, col);
@@ -902,11 +976,11 @@ def disp(name: str) -> str {
 // (native.y box_capture), so a write inside the closure is visible outside.
 // Nothing is left to check here, so this is a pass-through kept at every call
 // site as the hook for a future capture rule.
-def check_visible(st: TcSt, got, name: str, line: long, col: long) -> TcSt {
+def check_visible(st: TcSt, got: Lookup, name: str, line: long, col: long) -> TcSt {
     st
 };
 
-def expect_type(st: TcSt, got, want, what: str, line: long, col: long) -> TcSt {
+def expect_type(st: TcSt, got: Type, want: Type, what: str, line: long, col: long) -> TcSt {
     if (tcompat(got, want)) { st } else {
         fail(st, what + ": expected " + tstr(want) + ", got " + tstr(got), line, col)
     }
@@ -915,20 +989,26 @@ def expect_type(st: TcSt, got, want, what: str, line: long, col: long) -> TcSt {
 // expect_type for a call argument. some(v) passed for a T? -- which is what
 // the argument of an optional parameter `b?: T` becomes -- is reported as
 // v against T: "expected long, got long?", not "expected long?, got long??".
-def expect_arg(st: TcSt, got, want, arg, what: str, line: long, col: long) -> TcSt {
+def expect_arg(st: TcSt, got: Type, want: Type, arg: Node, what: str, line: long, col: long) -> TcSt {
     if (tcompat(got, want)) {
         st
     } else if (got.k == "topt" && want.k == "topt" && is_some_call(arg)) {
-        fail(st, what + ": expected " + tstr(want.of) + ", got " + tstr(got.of), line, col)
+        let optgot: TOf = got;
+        let optwant: TOf = want;
+        fail(st, what + ": expected " + tstr(optwant.of) + ", got " + tstr(optgot.of), line, col)
     } else {
         fail(st, what + ": expected " + tstr(want) + ", got " + tstr(got), line, col)
     }
 };
 
-def is_some_call(n) -> bool {
+def is_some_call(n: Node) -> bool {
     if (n.k == "call") {
-        let c = n.callee;
-        c.k == "id" && c.v == "some"
+        let call: Call = n;
+        let c = call.callee;
+        if (c.k == "id") {
+            let id: Leaf = c;
+            id.v == "some"
+        } else { false }
     } else {
         false
     }
@@ -937,7 +1017,7 @@ def is_some_call(n) -> bool {
 // Binary-operator result typing. Split out of the `bin` arm so the operator
 // table there stays a flat `op == "..."` dispatch and each operator's rule
 // lives in one named place.
-def typeof_arith(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
+def typeof_arith(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     // "+" on strings concatenates (either side may be poison tunk, but at
     // least one side must be a real str — hence the per-kind arms below).
     // AUTO-STRINGIFY: str + long/bool/float (and the mirror) stringify the
@@ -953,33 +1033,33 @@ def typeof_arith(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
         } else if (rt.k == "tarr" || rt.k == "tarrfix") {
             typeof_arith_arr(st, op, lt, rt, line, col)
         } else if (lt.k == "tstr") {
-            if (rt.k == "tstr") { { typ: { k: "tstr" }, st: st } }
-            else if (rt.k == "tunk") { { typ: { k: "tstr" }, st: st } }
-            else if (rt.k == "tlong") { { typ: { k: "tstr" }, st: st } }
-            else if (rt.k == "tbyte") { { typ: { k: "tstr" }, st: st } }
-            else if (rt.k == "tfloat") { { typ: { k: "tstr" }, st: st } }
-            else if (rt.k == "tbool") { { typ: { k: "tstr" }, st: st } }
+            if (rt.k == "tstr") { tc_res({ k: "tstr" }, st) }
+            else if (rt.k == "tunk") { tc_res({ k: "tstr" }, st) }
+            else if (rt.k == "tlong") { tc_res({ k: "tstr" }, st) }
+            else if (rt.k == "tbyte") { tc_res({ k: "tstr" }, st) }
+            else if (rt.k == "tfloat") { tc_res({ k: "tstr" }, st) }
+            else if (rt.k == "tbool") { tc_res({ k: "tstr" }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else if (lt.k == "tunk") {
-            if (rt.k == "tstr") { { typ: { k: "tstr" }, st: st } }
+            if (rt.k == "tstr") { tc_res({ k: "tstr" }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else if (lt.k == "tlong") {
-            if (rt.k == "tstr") { { typ: { k: "tstr" }, st: st } }
+            if (rt.k == "tstr") { tc_res({ k: "tstr" }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else if (lt.k == "tbyte") {
-            if (rt.k == "tstr") { { typ: { k: "tstr" }, st: st } }
+            if (rt.k == "tstr") { tc_res({ k: "tstr" }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else if (lt.k == "tfloat") {
-            if (rt.k == "tstr") { { typ: { k: "tstr" }, st: st } }
+            if (rt.k == "tstr") { tc_res({ k: "tstr" }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else if (lt.k == "tbool") {
-            if (rt.k == "tstr") { { typ: { k: "tstr" }, st: st } }
+            if (rt.k == "tstr") { tc_res({ k: "tstr" }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else { typeof_arith_long(st, op, lt, rt, line, col) }
     } else { typeof_arith_long(st, op, lt, rt, line, col) }
 };
 
-def typeof_arith_arr(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
+def typeof_arith_arr(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     // The array operand decides the result type. Two arrays CONCATENATE
     // (each side's elements are spliced in, so the ELEMENT types must
     // match — arrays are homogeneous by design); a non-array operand is
@@ -991,21 +1071,38 @@ def typeof_arith_arr(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes 
     } else if (lk == "tarr" || lk == "tarrfix") {
         if (rt.k == "tarr" || rt.k == "tarrfix") {
             let how = arr_plus_kind(lt, rt);
+            let ltype: Type = t_unk();
+            let rtype: Type = t_unk();
+            if (lk == "tarr") { let arr: TOf = lt; ltype = arr.of; 0; }
+            else { let arr: TFix = lt; ltype = arr.of; 0; };
+            if (rt.k == "tarr") { let arr: TOf = rt; rtype = arr.of; 0; }
+            else { let arr: TFix = rt; rtype = arr.of; 0; };
             if (how == "append") {
-                { typ: { k: "tarr", of: lt.of }, st: st }
+                let typ: Type = { k: "tarr", of: ltype };
+                { typ: typ, st: st }
             } else if (how == "prepend") {
-                { typ: { k: "tarr", of: rt.of }, st: st }
+                let typ: Type = { k: "tarr", of: rtype };
+                { typ: typ, st: st }
             } else {
-                st = expect_type(st, rt.of, lt.of, "'+' concatenated elements", line, col);
-                { typ: { k: "tarr", of: lt.of }, st: st }
+                st = expect_type(st, rtype, ltype, "'+' concatenated elements", line, col);
+                let typ: Type = { k: "tarr", of: ltype };
+                { typ: typ, st: st }
             }
         } else {
-            st = expect_type(st, rt, lt.of, "'+' element", line, col);
-            { typ: { k: "tarr", of: lt.of }, st: st }
+            let ltype: Type = t_unk();
+            if (lk == "tarr") { let arr: TOf = lt; ltype = arr.of; 0; }
+            else { let arr: TFix = lt; ltype = arr.of; 0; };
+            st = expect_type(st, rt, ltype, "'+' element", line, col);
+            let typ: Type = { k: "tarr", of: ltype };
+            { typ: typ, st: st }
         }
     } else {
-        st = expect_type(st, lt, rt.of, "'+' element", line, col);
-        { typ: { k: "tarr", of: rt.of }, st: st }
+        let rtype: Type = t_unk();
+        if (rt.k == "tarr") { let arr: TOf = rt; rtype = arr.of; 0; }
+        else { let arr: TFix = rt; rtype = arr.of; 0; };
+        st = expect_type(st, lt, rtype, "'+' element", line, col);
+        let typ: Type = { k: "tarr", of: rtype };
+        { typ: typ, st: st }
     }
 };
 
@@ -1018,37 +1115,47 @@ def typeof_arith_arr(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes 
 // keeps the long-standing meaning; for known types at most one rule fits
 // (a type is never its own element type). "cat" is also the answer when
 // nothing fits, so the caller's concatenation check reports the mismatch.
-def arr_plus_kind(lt, rt) -> str {
-    if (tcompat(rt.of, lt.of)) { "cat" }
-    else if (tcompat(rt, lt.of)) { "append" }
-    else if (tcompat(lt, rt.of)) { "prepend" }
+def arr_plus_kind(lt: Type, rt: Type) -> str {
+    let ltype: Type = t_unk();
+    let rtype: Type = t_unk();
+    if (lt.k == "tarr") { let arr: TOf = lt; ltype = arr.of; 0; }
+    else { let arr: TFix = lt; ltype = arr.of; 0; };
+    if (rt.k == "tarr") { let arr: TOf = rt; rtype = arr.of; 0; }
+    else { let arr: TFix = rt; rtype = arr.of; 0; };
+    if (tcompat(rtype, ltype)) { "cat" }
+    else if (tcompat(rt, ltype)) { "append" }
+    else if (tcompat(lt, rtype)) { "prepend" }
     else { "cat" }
 };
 
 // `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
 // (unlike `elem + a`, an array-typed element is never spliced). The right
 // operand must be an array; the left must be its element type.
-def typeof_cons(st: TcSt, lt, rt, line: long, col: long) -> TcRes {
+def typeof_cons(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     if (rt.k == "tarr" || rt.k == "tarrfix") {
-        st = expect_type(st, lt, rt.of, "'::' element", line, col);
-        { typ: { k: "tarr", of: rt.of }, st: st }
+        let elem: Type = t_unk();
+        if (rt.k == "tarr") { let arr: TOf = rt; elem = arr.of; 0; }
+        else { let arr: TFix = rt; elem = arr.of; 0; };
+        st = expect_type(st, lt, elem, "'::' element", line, col);
+        let typ: Type = { k: "tarr", of: elem };
+        { typ: typ, st: st }
     } else {
         st = fail(st, "'::' needs an array on the right, got " + tstr(rt), line, col);
         { typ: t_unk(), st: st }
     }
 };
 
-def typeof_arith_long(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
+def typeof_arith_long(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     // Numeric arithmetic. If either side is a float the result is a float
     // and the other side widens (long -> float, the only coercion).
     if (lt.k == "tfloat" || rt.k == "tfloat") {
         st = expect_type(st, lt, { k: "tfloat" }, "'" + op + "' left operand", line, col);
         st = expect_type(st, rt, { k: "tfloat" }, "'" + op + "' right operand", line, col);
-        { typ: { k: "tfloat" }, st: st }
+        tc_res({ k: "tfloat" }, st)
     } else {
         st = expect_type(st, lt, { k: "tlong" }, "'" + op + "' left operand", line, col);
         st = expect_type(st, rt, { k: "tlong" }, "'" + op + "' right operand", line, col);
-        { typ: { k: "tlong" }, st: st }
+        tc_res({ k: "tlong" }, st)
     }
 };
 
@@ -1060,86 +1167,86 @@ def is_bits_op(op: str) -> bool {
 // `&` `|` `^` `<<` `>>` `>>>` take integers only: a byte operand widens and
 // the result is a long. No float, no bool (`&&` and `||` are the logical
 // forms).
-def typeof_bits(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
+def typeof_bits(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     st = expect_type(st, lt, { k: "tlong" }, "'" + op + "' left operand", line, col);
     st = expect_type(st, rt, { k: "tlong" }, "'" + op + "' right operand", line, col);
-    { typ: { k: "tlong" }, st: st }
+    tc_res({ k: "tlong" }, st)
 };
 
-def typeof_cmp(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
+def typeof_cmp(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     if (lt.k == "tstr") {
         // str < str is lexicographic ordering (byte by byte), matching the
         // y_str_cmp helper native.y emits.
         st = expect_type(st, rt, { k: "tstr" }, "'" + op + "' right operand", line, col);
-        { typ: { k: "tbool" }, st: st }
+        tc_res({ k: "tbool" }, st)
     } else if (lt.k == "tfloat" || rt.k == "tfloat") {
         st = expect_type(st, lt, { k: "tfloat" }, "'" + op + "' left operand", line, col);
         st = expect_type(st, rt, { k: "tfloat" }, "'" + op + "' right operand", line, col);
-        { typ: { k: "tbool" }, st: st }
+        tc_res({ k: "tbool" }, st)
     } else {
         st = expect_type(st, lt, { k: "tlong" }, "'" + op + "' left operand", line, col);
         st = expect_type(st, rt, { k: "tlong" }, "'" + op + "' right operand", line, col);
-        { typ: { k: "tbool" }, st: st }
+        tc_res({ k: "tbool" }, st)
     }
 };
 
 // Both sides numeric (long/byte/float): `==` and `!=` compare by value
 // across widths, which is what the compiled code does (native.y gen_bin_rest
 // emits a plain word compare).
-def is_num_kind(t) -> bool {
+def is_num_kind(t: Type) -> bool {
     if (t.k == "tlong") { true }
     else if (t.k == "tbyte") { true }
     else if (t.k == "tfloat") { true }
     else { false }
 };
 
-def num_eq_ok(lt, rt) -> bool {
+def num_eq_ok(lt: Type, rt: Type) -> bool {
     if (is_num_kind(lt)) { is_num_kind(rt) } else { false }
 };
 
-def typeof_eq(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
+def typeof_eq(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     // str compares by content. `x == none` is the option's is-none check.
     // Nested ifs throughout (house style — one kind per arm).
-    if (teq(lt, rt)) { { typ: { k: "tbool" }, st: st } }
+    if (teq(lt, rt)) { tc_res({ k: "tbool" }, st) }
     else if (num_eq_ok(lt, rt)) {
         // Numeric kinds compare across widths: a byte IS a small long, so
         // `c == 10` needs no cast (and long/float already coerce in `<`).
-        { typ: { k: "tbool" }, st: st }
+        tc_res({ k: "tbool" }, st)
     }
     else if (lt.k == "tstr") {
-        if (rt.k == "tstr") { { typ: { k: "tbool" }, st: st } }
-        else if (rt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
+        if (rt.k == "tstr") { tc_res({ k: "tbool" }, st) }
+        else if (rt.k == "tunk") { tc_res({ k: "tbool" }, st) }
         else {
             st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
-            { typ: { k: "tbool" }, st: st }
+            tc_res({ k: "tbool" }, st)
         }
     } else if (lt.k == "tunk") {
-        { typ: { k: "tbool" }, st: st }
+        tc_res({ k: "tbool" }, st)
     } else if (lt.k == "topt") {
         // options: the is-none check (`x == none`) plus same-option
         // comparison. Anything else is a type error (t10 parity).
-        if (rt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
-        else if (teq(lt, rt)) { { typ: { k: "tbool" }, st: st } }
+        if (rt.k == "tunk") { tc_res({ k: "tbool" }, st) }
+        else if (teq(lt, rt)) { tc_res({ k: "tbool" }, st) }
         else {
             st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
-            { typ: { k: "tbool" }, st: st }
+            tc_res({ k: "tbool" }, st)
         }
     } else if (rt.k == "topt") {
-        if (lt.k == "tunk") { { typ: { k: "tbool" }, st: st } }
+        if (lt.k == "tunk") { tc_res({ k: "tbool" }, st) }
         else {
             st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
-            { typ: { k: "tbool" }, st: st }
+            tc_res({ k: "tbool" }, st)
         }
     } else {
         st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt), line, col);
-        { typ: { k: "tbool" }, st: st }
+        tc_res({ k: "tbool" }, st)
     }
 };
 
-def typeof_logic(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
+def typeof_logic(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     // Truthiness: any 8-byte value decides (nonzero = true), like the C
     // runtime. The result is always a bool; operands keep their own types.
-    { typ: { k: "tbool" }, st: st }
+    tc_res({ k: "tbool" }, st)
 };
 
 // Compatibility (stricter than equality): a `str` value IS a NUL-terminated
@@ -1159,7 +1266,7 @@ def typeof_logic(st: TcSt, op: str, lt, rt, line: long, col: long) -> TcRes {
 // anything but a str (parser.y's {k}-annotated node params take call,
 // index, dot, map, func literals without a cascade at every res() site).
 // Branch agreement and ==/!= keep strict teq (e11/e12 parity).
-def tcompat(got, want) -> bool {
+def tcompat(got: Type, want: Type) -> bool {
     got = unfold(got);
     want = unfold(want);
     if (teq(got, want)) { true }
@@ -1179,13 +1286,21 @@ def tcompat(got, want) -> bool {
         // plain T does NOT -- use some(v), which is the explicit box
         // (options are 0-or-box, so some(0) differs from none).
         // Option-to-option unifies payloads.
-        if (got.k == "topt") { teq(got.of, want.of) }
+        if (got.k == "topt") {
+            let gopt: TOf = got;
+            let wopt: TOf = want;
+            teq(gopt.of, wopt.of)
+        }
         else { false }
     }
     else if (got.k == "trec") { false }
     else if (want.k == "trec") {
         // GOT is a bare {k}-shaped node going into an unknown-shape slot.
-        if (got.k == "tstr") { false } else { is_open(want.fields) }
+        if (got.k == "tstr") { false }
+        else {
+            let rec: TRec = want;
+            is_open(rec.fields)
+        }
     }
     else if (got.k == "tstr") {
         if (want.k == "tptr") { true } else { false }
@@ -1212,109 +1327,126 @@ def tcompat(got, want) -> bool {
 // (`let b: [byte] = [104, 105]`). Restricted to literals on purpose: the
 // layouts differ (packed vs one word each), so reinterpreting an existing
 // array would be a type pun.
-def arr_lit_adopts(got, want) -> bool {
+def arr_lit_adopts(got: Type, want: Type) -> bool {
     if (got.k == "tarr") { arr_lit_adopts_go(got, want) }
     else if (got.k == "tarrfix") { arr_lit_adopts_go(got, want) }
     else { false }
 };
 
-def arr_lit_adopts_go(got, want) -> bool {
-    if (want.k == "tarr") { tcompat(got.of, want.of) }
+def arr_lit_adopts_go(got: Type, want: Type) -> bool {
+    if (want.k == "tarr") {
+        let warr: TOf = want;
+        let ge: Type = t_unk();
+        if (got.k == "tarr") { let garr: TOf = got; ge = garr.of; 0; }
+        else { let garr: TFix = got; ge = garr.of; 0; };
+        tcompat(ge, warr.of)
+    }
     else if (want.k == "tarrfix") {
+        let warr: TFix = want;
         if (got.k == "tarrfix") {
-            if (got.n == want.n) { tcompat(got.of, want.of) } else { false }
-        } else { tcompat(got.of, want.of) }
+            let garr: TFix = got;
+            if (garr.n == warr.n) { tcompat(garr.of, warr.of) } else { false }
+        } else {
+            let garr: TOf = got;
+            tcompat(garr.of, warr.of)
+        }
     }
     else { false }
 };
 
 // The type of an expression (typeof_expr_go), a recursive alias unfolded
 // (unfold): the checker looks into it.
-def typeof_expr(st: TcSt, node) -> TcRes {
+def typeof_expr(st: TcSt, node: Node) -> TcRes {
     let r = typeof_expr_go(st, node);
-    let t: {k: str} = r.typ;
-    if (t.k == "tref") { { typ: unfold(t), st: r.st } } else { r }
+    let t: Type = r.typ;
+    if (t.k == "tref") { tc_res(unfold(t), r.st) } else { r }
 };
 
-def typeof_expr_go(st: TcSt, node) -> TcRes {
+def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
     let k = node.k;
     if (k == "num") {
-        if (num_is_float(node.v)) {
-            { typ: { k: "tfloat" }, st: st }
+        let lit: Leaf = node;
+        if (num_is_float(lit.v)) {
+            tc_res(type_node({ k: "tfloat" }), st)
         } else {
-            { typ: { k: "tlong" }, st: st }
+            tc_res(type_node({ k: "tlong" }), st)
         }
     } else if (k == "str") {
-        { typ: { k: "tstr" }, st: st }
+        tc_res(type_node({ k: "tstr" }), st)
     } else if (k == "bstr") {
         // b"..." is a [byte] literal (packed bytes, like a Python bytes)
-        { typ: { k: "tarr", of: { k: "tbyte" } }, st: st }
+        tc_res(type_node({ k: "tarr", of: type_node({ k: "tbyte" }) }), st)
     } else if (k == "err") {
         // Planted by the parser where the token stream stopped making
         // sense (parser.y has no error channel of its own).
-        st = fail(st, node.msg, node.line, node.col);
-        { typ: t_unk(), st: st }
+        let err: Err = node;
+        st = fail(st, err.msg, err.line, err.col);
+        tc_res(t_unk(), st)
     } else if (k == "bool") {
-        { typ: { k: "tbool" }, st: st }
+        tc_res(type_node({ k: "tbool" }), st)
     } else if (k == "void") {
         // An absent expression (bare `return;`, a missing else, an empty
         // for-clause): it computes nothing. The empty option is `none`
         // (an id, see below), never this node.
-        { typ: { k: "tvoid" }, st: st }
+        tc_res(type_node({ k: "tvoid" }), st)
     } else if (k == "id") {
-        if (node.v == "self") {
+        let id: Leaf = node;
+        if (id.v == "self") {
             // resolved by the enclosing def pre-pass (stored as _self in st)
             if (st.self.k == "tnone") {
-                st = fail(st, "'self' outside of a function", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "'self' outside of a function", id.line, id.col);
+                tc_res(t_unk(), st)
             } else {
-                { typ: st.self, st: st }
+                tc_res(st.self, st)
             }
         } else {
-            let got = lookup(st.bindings, node.v);
+            let got = lookup(st.bindings, id.v);
             if (got.kind == "") {
-                if (node.v == "none") {
+                if (id.v == "none") {
                     // the empty option (type from context via unification)
-                    { typ: { k: "topt", of: t_unk() }, st: st }
+                    tc_res(type_node({ k: "topt", of: t_unk() }), st)
                 } else {
-                    st = fail(st, "undefined variable '" + node.v + "'", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    st = fail(st, "undefined variable '" + id.v + "'", id.line, id.col);
+                    tc_res(t_unk(), st)
                 }
             } else {
-                st = check_visible(st, got, node.v, node.line, node.col);
-                { typ: got.typ, st: st }
+                st = check_visible(st, got, id.v, id.line, id.col);
+                tc_res(got.typ, st)
             }
         }
     } else if (k == "un") {
-        let r = typeof_expr(st, node.e);
+        let un: Un = node;
+        let r = typeof_expr(st, un.e);
         st = r.st;
-        if (node.op == "-") {
+        if (un.op == "-") {
             if (r.typ.k == "tfloat") {
-                { typ: { k: "tfloat" }, st: st }
+                tc_res(type_node({ k: "tfloat" }), st)
             } else {
-                st = expect_type(st, r.typ, { k: "tlong" }, "unary '-'", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                st = expect_type(st, r.typ, type_node({ k: "tlong" }), "unary '-'", un.line, un.col);
+                tc_res(type_node({ k: "tlong" }), st)
             }
-        } else if (node.op == "~") {
-            st = expect_type(st, r.typ, { k: "tlong" }, "unary '~'", node.line, node.col);
-            { typ: { k: "tlong" }, st: st }
+        } else if (un.op == "~") {
+            st = expect_type(st, r.typ, type_node({ k: "tlong" }), "unary '~'", un.line, un.col);
+            tc_res(type_node({ k: "tlong" }), st)
         } else {
-            st = expect_type(st, r.typ, { k: "tbool" }, "unary '!'", node.line, node.col);
-            { typ: { k: "tbool" }, st: st }
+            st = expect_type(st, r.typ, type_node({ k: "tbool" }), "unary '!'", un.line, un.col);
+            tc_res(type_node({ k: "tbool" }), st)
         }
     } else if (k == "addr") {
+        let addr: Wrap = node;
         // &x (plain local/param) or &a[i] (element address, either array).
         // NOTE: nested ifs, not a `&&` guard (house style — one failure
         // message per shape, and `&&` would be short-circuit anyway).
-        if (node.e.k == "id") {
-            if (node.e.v != "self") {
-                let got = lookup(st.bindings, node.e.v);
+        if (addr.e.k == "id") {
+            let id: Leaf = addr.e;
+            if (id.v != "self") {
+                let got = lookup(st.bindings, id.v);
                 if (got.kind == "") {
-                    st = fail(st, "undefined variable '" + node.e.v + "'", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    st = fail(st, "undefined variable '" + id.v + "'", addr.line, addr.col);
+                    tc_res(t_unk(), st)
             } else if (got.kind == "func" || got.kind == "intrinsic") {
-                st = fail(st, "cannot take the address of function '" + node.e.v + "'", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot take the address of function '" + id.v + "'", addr.line, addr.col);
+                tc_res(t_unk(), st)
             } else if (got.typ.k == "tarr" || got.typ.k == "tarrfix") {
                 // One rule for BOTH array kinds: &a is not a data address.
                 // A slot holds the {len,cap,data} header (fixed arrays are
@@ -1323,33 +1455,38 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                 // first casualty and the next len(buf) died with SIGSEGV.
                 // Use &a[0] (or &a[i]): gen_elem_addr resolves that through
                 // header+16 to the data block.
-                st = fail(st, "cannot take the address of a whole array (use &" + disp(node.e.v) + "[i] for elements)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot take the address of a whole array (use &" + disp(id.v) + "[i] for elements)", addr.line, addr.col);
+                tc_res(t_unk(), st)
             } else {
-                st = check_visible(st, got, node.e.v, node.line, node.col);
-                { typ: { k: "tptr", to: got.typ }, st: st }
+                st = check_visible(st, got, id.v, addr.line, addr.col);
+                tc_res(type_node({ k: "tptr", to: got.typ }), st)
             }
             } else {
-                st = fail(st, "'&' needs a plain variable (only locals/params have addresses)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "'&' needs a plain variable (only locals/params have addresses)", addr.line, addr.col);
+                tc_res(t_unk(), st)
             }
-        } else if (node.e.k == "index") {
-            let ix = node.e.idx;
-            let arr = node.e.arr;
+        } else if (addr.e.k == "index") {
+            let index: Index = addr.e;
+            let ix = index.idx;
+            let arr = index.arr;
             if (arr.k == "id") {
-                let got = lookup(st.bindings, arr.v);
+                let id: Leaf = arr;
+                let got = lookup(st.bindings, id.v);
                 if (got.kind == "") {
-                    st = fail(st, "undefined variable '" + arr.v + "'", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    st = fail(st, "undefined variable '" + id.v + "'", addr.line, addr.col);
+                    tc_res(t_unk(), st)
                 } else if (got.typ.k == "tarrfix" || got.typ.k == "tarr") {
-                    st = check_visible(st, got, arr.v, node.line, node.col);
+                    st = check_visible(st, got, id.v, addr.line, addr.col);
                     let r = typeof_expr(st, ix);
                     st = r.st;
-                    st = expect_type(st, r.typ, { k: "tlong" }, "array index", node.line, node.col);
-                    { typ: { k: "tptr", to: got.typ.of }, st: st }
+                    st = expect_type(st, r.typ, type_node({ k: "tlong" }), "array index", addr.line, addr.col);
+                    let elem: Type = t_unk();
+                    if (got.typ.k == "tarr") { let a: TOf = got.typ; elem = a.of; 0; }
+                    else { let a: TFix = got.typ; elem = a.of; 0; };
+                    tc_res(type_node({ k: "tptr", to: elem }), st)
                 } else {
-                    st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays)", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays)", addr.line, addr.col);
+                    tc_res(t_unk(), st)
                 }
             } else {
                 // general base (`&grid[0][i]`, `&rec.v[i]`): an element
@@ -1360,223 +1497,247 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                 if (br.typ.k == "tarrfix" || br.typ.k == "tarr") {
                     let r = typeof_expr(st, ix);
                     st = r.st;
-                    st = expect_type(st, r.typ, { k: "tlong" }, "array index", node.line, node.col);
-                    { typ: { k: "tptr", to: br.typ.of }, st: st }
+                    st = expect_type(st, r.typ, type_node({ k: "tlong" }), "array index", addr.line, addr.col);
+                    let elem: Type = t_unk();
+                    if (br.typ.k == "tarr") { let a: TOf = br.typ; elem = a.of; 0; }
+                    else { let a: TFix = br.typ; elem = a.of; 0; };
+                    tc_res(type_node({ k: "tptr", to: elem }), st)
                 } else {
-                    st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", addr.line, addr.col);
+                    tc_res(t_unk(), st)
                 }
             }
         } else {
-            st = fail(st, "'&' needs a plain variable (only locals/params have addresses)", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "'&' needs a plain variable (only locals/params have addresses)", addr.line, addr.col);
+            tc_res(t_unk(), st)
         }
     } else if (k == "deref") {
-        let r = typeof_expr(st, node.e);
+        let deref: Wrap = node;
+        let r = typeof_expr(st, deref.e);
         st = r.st;
         if (r.typ.k == "tptr") {
-            { typ: r.typ.to, st: st }
+            let ptr: TPtr = r.typ;
+            tc_res(ptr.to, st)
         } else if (r.typ.k == "tunk") {
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         } else {
-            st = fail(st, "cannot dereference " + tstr(r.typ) + " (need *T)", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "cannot dereference " + tstr(r.typ) + " (need *T)", deref.line, deref.col);
+            tc_res(t_unk(), st)
         }
     } else if (k == "bin") {
-        let l = typeof_expr(st, node.l);
-        let r = typeof_expr(l.st, node.r);
+        let bin: Bin = node;
+        let l = typeof_expr(st, bin.l);
+        let r = typeof_expr(l.st, bin.r);
         st = r.st;
-        let op = node.op;
+        let op = bin.op;
         // NOTE: one flat `op == "..."` table, deliberately not a `||`
         // chain: each row dispatches to a named helper, and only the two
         // comparison ops share one.
-        if (op == "+") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "-") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "*") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "/") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "%") { typeof_arith(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "<") { typeof_cmp(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == ">") { typeof_cmp(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "<=") { typeof_cmp(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == ">=") { typeof_cmp(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "==") { typeof_eq(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "!=") { typeof_eq(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "&&") { typeof_logic(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "||") { typeof_logic(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "::") { typeof_cons(st, l.typ, r.typ, node.line, node.col) }
-        else if (op == "&") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "|") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "^") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == "<<") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == ">>") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
-        else if (op == ">>>") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
+        if (op == "+") { typeof_arith(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "-") { typeof_arith(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "*") { typeof_arith(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "/") { typeof_arith(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "%") { typeof_arith(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "<") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == ">") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "<=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == ">=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "==") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "!=") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "&&") { typeof_logic(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "||") { typeof_logic(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "::") { typeof_cons(st, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "&") { typeof_bits(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "|") { typeof_bits(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "^") { typeof_bits(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "<<") { typeof_bits(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == ">>") { typeof_bits(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == ">>>") { typeof_bits(st, op, l.typ, r.typ, bin.line, bin.col) }
         else {
-            st = fail(st, "operator '" + op + "' is unsupported in native mode", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "operator '" + op + "' is unsupported in native mode", bin.line, bin.col);
+            tc_res(t_unk(), st)
         }
     } else if (k == "call") {
-        typeof_call(st, node)
+        let call: Call = node;
+        typeof_call(st, call)
     } else if (k == "if") {
-        let c = typeof_expr(st, node.cond);
-        st = expect_type(c.st, c.typ, { k: "tbool" }, "'if' condition", node.line, node.col);
+        let branch: If = node;
+        let c = typeof_expr(st, branch.cond);
+        st = expect_type(c.st, c.typ, type_node({ k: "tbool" }), "'if' condition", branch.line, branch.col);
         // NOTE: typeof_expr, not typeof_block — `els` may be a nested `if`
         // (else-if chain), not a block.
-        let t = typeof_expr(st, node.then);
+        let t = typeof_expr(st, branch.then);
         st = t.st;
-        if (node.has_else) {
-            let e = typeof_expr(st, node.els);
+        if (branch.has_else) {
+            let e = typeof_expr(st, branch.els);
             st = e.st;
             if (teq(t.typ, e.typ)) {
                 // An arm of unknown type -- typically a self call, whose
                 // type is the one being inferred -- takes the other's.
                 let tt = t.typ;
                 let et = e.typ;
-                if (tt.k == "tunk" && et.k != "tnone") { { typ: et, st: st } } else { { typ: tt, st: st } }
+                if (tt.k == "tunk" && et.k != "tnone") { tc_res(et, st) } else { tc_res(tt, st) }
             } else {
                 // VOID law: arms that disagree on a type (a value arm vs a
                 // statement arm, or two different values) make the whole
                 // `if` a statement -- void, not usable as a value. Using it
                 // as one errors at that use (binding, argument, print...).
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             }
         } else {
             // VOID law: an `if` without `else` is a STATEMENT — its value is
             // nothing, whatever the then-branch computes. No forced else
             // branch, no forced `0;` tail in user programs.
-            { typ: { k: "tvoid" }, st: st }
+            tc_res(type_node({ k: "tvoid" }), st)
         }
     } else if (k == "while") {
-        let c = typeof_expr(st, node.cond);
-        st = expect_type(c.st, c.typ, { k: "tbool" }, "'while' condition", node.line, node.col);
-        let b = typeof_block(st, node.body);
-        { typ: { k: "tvoid" }, st: b.st }
+        let loop: While = node;
+        let c = typeof_expr(st, loop.cond);
+        st = expect_type(c.st, c.typ, type_node({ k: "tbool" }), "'while' condition", loop.line, loop.col);
+        let b = typeof_block(st, loop.body);
+        tc_res(type_node({ k: "tvoid" }), b.st)
     } else if (k == "for") {
+        let loop: For = node;
         // for (init; cond; step) body — init/step are statements, and the
         // loop variable stays visible afterwards (same scope rule as `let`).
-        let fi = typeof_expr(st, node.init);
+        let fi = typeof_expr(st, loop.init);
         st = fi.st;
-        let fc = typeof_expr(st, node.cond);
-        st = expect_type(fc.st, fc.typ, { k: "tbool" }, "'for' condition", node.line, node.col);
-        let fb = typeof_block(st, node.body);
+        let fc = typeof_expr(st, loop.cond);
+        st = expect_type(fc.st, fc.typ, type_node({ k: "tbool" }), "'for' condition", loop.line, loop.col);
+        let fb = typeof_block(st, loop.body);
         st = fb.st;
-        let fs = typeof_expr(st, node.step);
-        { typ: { k: "tvoid" }, st: fs.st }
+        let fs = typeof_expr(st, loop.step);
+        tc_res(type_node({ k: "tvoid" }), fs.st)
     } else if (k == "foreach") {
+        let loop: Foreach = node;
         // foreach (x in arr) body — x takes the array's element type.
-        let fe = typeof_expr(st, node.iter);
+        let fe = typeof_expr(st, loop.iter);
         st = fe.st;
-        let elt = t_unk();
-        if (fe.typ.k == "tarr") { elt = fe.typ.of; 0; }
-        else if (fe.typ.k == "tarrfix") { elt = fe.typ.of; 0; }
+        let elt: Type = t_unk();
+        if (fe.typ.k == "tarr") { let arr: TOf = fe.typ; elt = arr.of; 0; }
+        else if (fe.typ.k == "tarrfix") { let arr: TFix = fe.typ; elt = arr.of; 0; }
         else if (fe.typ.k == "tunk") { 0; }
         else {
-            st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), node.line, node.col);
+            st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), loop.line, loop.col);
             0
         };
-        st = st_bind(st, node.name, elt, "local");
-        let fbb = typeof_block(st, node.body);
-        { typ: { k: "tvoid" }, st: fbb.st }
+        st = st_bind(st, loop.name, elt, "local");
+        let fbb = typeof_block(st, loop.body);
+        tc_res(type_node({ k: "tvoid" }), fbb.st)
     } else if (k == "forrange") {
+        let loop: ForRange = node;
         // for x in lo..hi { body } — x is a long.
-        let rl = typeof_expr(st, node.lo);
-        st = expect_type(rl.st, rl.typ, { k: "tlong" }, "'for' range start", node.line, node.col);
-        let rh = typeof_expr(st, node.hi);
-        st = expect_type(rh.st, rh.typ, { k: "tlong" }, "'for' range end", node.line, node.col);
-        st = st_bind(st, node.name, { k: "tlong" }, "local");
-        let rb = typeof_block(st, node.body);
-        { typ: { k: "tvoid" }, st: rb.st }
+        let rl = typeof_expr(st, loop.lo);
+        st = expect_type(rl.st, rl.typ, type_node({ k: "tlong" }), "'for' range start", loop.line, loop.col);
+        let rh = typeof_expr(st, loop.hi);
+        st = expect_type(rh.st, rh.typ, type_node({ k: "tlong" }), "'for' range end", loop.line, loop.col);
+        st = st_bind(st, loop.name, type_node({ k: "tlong" }), "local");
+        let rb = typeof_block(st, loop.body);
+        tc_res(type_node({ k: "tvoid" }), rb.st)
     } else if (k == "block") {
-        typeof_block(st, node)
+        let block: Block = node;
+        typeof_block(st, block)
     } else if (k == "decl") {
-        typeof_decl(st, node)
+        let decl: Decl = node;
+        typeof_decl(st, decl)
     } else if (k == "assign") {
-        let got = lookup(st.bindings, node.name);
-        let r = typeof_want(st, node.v, got.typ);
+        let assign: Assign = node;
+        let got = lookup(st.bindings, assign.name);
+        let r = typeof_want(st, assign.v, got.typ);
         st = r.st;
         if (got.kind == "") {
-            st = fail(st, "undefined variable '" + disp(node.name) + "'", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "undefined variable '" + disp(assign.name) + "'", assign.line, assign.col);
+            tc_res(t_unk(), st)
         } else if (got.kind == "func" || got.kind == "intrinsic") {
-            st = fail(st, "cannot assign to function '" + disp(node.name) + "'", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "cannot assign to function '" + disp(assign.name) + "'", assign.line, assign.col);
+            tc_res(t_unk(), st)
         } else if (got.kind == "const") {
-            st = fail(st, "cannot assign to constant '" + disp(node.name) + "'", node.line, node.col);
-            { typ: got.typ, st: st }
+            st = fail(st, "cannot assign to constant '" + disp(assign.name) + "'", assign.line, assign.col);
+            tc_res(got.typ, st)
         } else if (got.typ.k == "tarrfix") {
-            st = check_visible(st, got, node.name, node.line, node.col);
-            st = expect_type(st, r.typ, got.typ, "assignment to '" + disp(node.name) + "'", node.line, node.col);
-            { typ: got.typ, st: st }
+            st = check_visible(st, got, assign.name, assign.line, assign.col);
+            st = expect_type(st, r.typ, got.typ, "assignment to '" + disp(assign.name) + "'", assign.line, assign.col);
+            tc_res(got.typ, st)
         } else {
-            st = check_visible(st, got, node.name, node.line, node.col);
-            st = expect_type(st, r.typ, got.typ, "assignment to '" + disp(node.name) + "'", node.line, node.col);
-            { typ: got.typ, st: st }
+            st = check_visible(st, got, assign.name, assign.line, assign.col);
+            st = expect_type(st, r.typ, got.typ, "assignment to '" + disp(assign.name) + "'", assign.line, assign.col);
+            tc_res(got.typ, st)
         }
     } else if (k == "incdec") {
+        let incdec: IncDec = node;
         // ++x / x++: numbers only — `s++` on a string would silently
         // concatenate, so it is a type error instead.
-        let t = typeof_expr(st, node.tgt);
-        let pc = place_check(t.st, node.tgt, t.typ, node.op, node.line, node.col);
-        st = const_check(pc.st, node.tgt, pc.typ, node.op, node.line, node.col);
-        incdec_check(st, node, pc.typ)
+        let t = typeof_expr(st, incdec.tgt);
+        let pc = place_check(t.st, incdec.tgt, t.typ, incdec.op, incdec.line, incdec.col);
+        st = const_check(pc.st, incdec.tgt, pc.typ, incdec.op, incdec.line, incdec.col);
+        incdec_check(st, incdec, pc.typ)
     } else if (k == "opassign") {
+        let assign: OpAssign = node;
         // `x op= e`: the rules live in opassign_check.
-        let t = typeof_expr(st, node.tgt);
+        let t = typeof_expr(st, assign.tgt);
         st = t.st;
         // `arr += {...}` / `arr *= {...}`: a record literal is an element
-        let tt: {k: str} = t.typ;
-        let vw = { k: "tnone" };
-        if (tt.k == "tarr" || tt.k == "tarrfix") { vw = tt.of; 0; } else { 0; };
-        let v = typeof_want(st, node.v, vw);
-        let pc = place_check(v.st, node.tgt, t.typ, node.op + "=", node.line, node.col);
-        st = const_check(pc.st, node.tgt, pc.typ, node.op + "=", node.line, node.col);
-        opassign_check(st, node, pc.typ, v.typ)
+        let tt: Type = t.typ;
+        let vw: Type = type_node({ k: "tnone" });
+        if (tt.k == "tarr") { let arr: TOf = tt; vw = arr.of; 0; }
+        else if (tt.k == "tarrfix") { let arr: TFix = tt; vw = arr.of; 0; }
+        else { 0; };
+        let v = typeof_want(st, assign.v, vw);
+        let pc = place_check(v.st, assign.tgt, t.typ, assign.op + "=", assign.line, assign.col);
+        st = const_check(pc.st, assign.tgt, pc.typ, assign.op + "=", assign.line, assign.col);
+        opassign_check(st, assign, pc.typ, v.typ)
     } else if (k == "store") {
-        let p = typeof_expr(st, node.p);
-        let pt: {k: str} = p.typ;
-        let pw = { k: "tnone" };
-        if (pt.k == "tptr") { pw = pt.to; 0; } else { 0; };
-        let v = typeof_want(p.st, node.v, pw);
+        let store: Store = node;
+        let p = typeof_expr(st, store.p);
+        let pt: Type = p.typ;
+        let pw: Type = type_node({ k: "tnone" });
+        if (pt.k == "tptr") { let ptr: TPtr = pt; pw = ptr.to; 0; } else { 0; };
+        let v = typeof_want(p.st, store.v, pw);
         st = v.st;
         if (p.typ.k == "tptr") {
-            st = expect_type(st, v.typ, p.typ.to, "store through pointer", node.line, node.col);
-            { typ: p.typ.to, st: st }
+            let ptr: TPtr = p.typ;
+            st = expect_type(st, v.typ, ptr.to, "store through pointer", store.line, store.col);
+            tc_res(ptr.to, st)
         } else if (p.typ.k == "tunk" || v.typ.k == "tunk") {
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         } else {
-            st = fail(st, "store target must be *T, got " + tstr(p.typ), node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "store target must be *T, got " + tstr(p.typ), store.line, store.col);
+            tc_res(t_unk(), st)
         }
     } else if (k == "ret") {
+        let ret: Wrap = node;
         if (st.ret.k == "tnone") {
-            st = fail(st, "'return' outside of a function", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "'return' outside of a function", ret.line, ret.col);
+            tc_res(t_unk(), st)
         } else {
-            let r = typeof_want(st, node.e, st.ret);
+            let r = typeof_want(st, ret.e, st.ret);
             let rk: str = st.ret.k;
             if (rk == "tinfer") {
                 // The def's return type is still being inferred: note the
                 // value's type, which typeof_def checks once the body's
                 // trailing type is known. A bare `return;` returns nothing,
                 // so as the body's tail it makes the def void.
-                ret_note(st.ret, r.typ, node.line, node.col);
-                { typ: r.typ, st: r.st }
+                ret_note(st.ret, r.typ, ret.line, ret.col);
+                tc_res(r.typ, r.st)
             } else {
-                st = expect_type(r.st, r.typ, st.ret, "'return'", node.line, node.col);
-                if (rk == "tunk") { { typ: r.typ, st: st } } else { { typ: st.ret, st: st } }
+                st = expect_type(r.st, r.typ, st.ret, "'return'", ret.line, ret.col);
+                if (rk == "tunk") { tc_res(r.typ, st) } else { tc_res(st.ret, st) }
             }
         }
     } else if (k == "rec") {
         // Record literal { k: v, ... }: every value checked, the type is a
         // trec with field names in order.
-        let mkeys = node.keys;
-        let mvals = node.vals;
+        let rec: RecLit = node;
+        let mkeys: [str] = rec.keys;
+        let mvals: [Node] = rec.vals;
         if (len(mkeys) == 0) {
             // The empty literal `{}` is an empty record ({} prints as {}).
             // Under a map annotation it IS the map instead -- that adoption
             // happens in typeof_decl (and the emitter lowers it there).
-            { typ: { k: "trec", fields: [] }, st: st }
+            let empty: [Field] = [];
+            tc_res(type_node({ k: "trec", fields: empty }), st)
         } else {
-            let fields = [];
+            let fields: [Field] = [];
             let i = 0;
             let ok = true;
             while (i < len(mkeys)) {
@@ -1592,7 +1753,8 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                     // (field_merge: later wins the value, first appearance
                     // keeps the position). No dynamic shape is involved.
                     if (r.typ.k == "trec") {
-                        let sfs = r.typ.fields;
+                        let record: TRec = r.typ;
+                        let sfs: [Field] = record.fields;
                         let si = 0;
                         while (si < len(sfs)) {
                             let sf = sfs[si];
@@ -1605,7 +1767,7 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                         ok = false;
                         0
                     } else {
-                        st = fail(st, "'...' spread needs a record, got " + tstr(r.typ), node.line, node.col);
+                        st = fail(st, "'...' spread needs a record, got " + tstr(r.typ), rec.line, rec.col);
                         ok = false;
                         0
                     };
@@ -1620,7 +1782,7 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                     ok = false;
                     0
                 } else if (!is_value_type(r.typ)) {
-                    st = fail(st, "record field '" + mkey + "' has unsupported type " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "record field '" + mkey + "' has unsupported type " + tstr(r.typ), rec.line, rec.col);
                     ok = false;
                     0
                 } else { 0; };
@@ -1633,73 +1795,78 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                 i = i + 1;
             };
             if (ok) {
-                { typ: { k: "trec", fields: fields }, st: st }
+                tc_res(type_node({ k: "trec", fields: fields }), st)
             } else {
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             }
         }
     } else if (k == "map") {
+        let map: RecLit = node;
         // Map literal { "k": v, ... }: quoted keys (so the key type is
         // str), homogeneous values -- the first entry's type wins and
         // later entries must match. Duplicate keys collapse at emit time
         // (last entry wins the value, first appearance the position).
         // Spread is record-only.
-        let gkeys = node.keys;
-        let gvals = node.vals;
+        let gkeys: [str] = map.keys;
+        let gvals: [Node] = map.vals;
         let gok = true;
         let gi = 0;
-        let gt = t_unk();
+        let gt: Type = t_unk();
         while (gi < len(gvals)) {
             let gk: str = gkeys[gi];
             let gr = typeof_expr(st, gvals[gi]);
             st = gr.st;
             if (gk == "...") {
-                st = fail(st, "'...' spread is record-only (a map literal takes key: value entries)", node.line, node.col);
+                st = fail(st, "'...' spread is record-only (a map literal takes key: value entries)", map.line, map.col);
                 gok = false;
                 0
             } else if (gi == 0) {
                 gt = gr.typ;
                 0
             } else {
-                st = expect_type(st, gr.typ, gt, "map value", node.line, node.col);
+                st = expect_type(st, gr.typ, gt, "map value", map.line, map.col);
                 0
             };
             gi = gi + 1;
         };
         if (gok) {
-            { typ: map_type_of(gt), st: st }
+            tc_res(map_type_of(gt), st)
         } else {
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         }
     } else if (k == "dot") {
+        let dot: Dot = node;
         // Record field read: obj must be a trec with that field.
         // NOTE: flow-snapshot (dobj/dkey bound once, never rebound): the
         // checker env is flow-INSENSITIVE (last shape wins per name), so a
         // field read must go through a name bound to exactly one shape.
         // Re-reading `node.obj` after any `node = ...` rebind in the same
         // function would resolve against the rebound shape.
-        let dobj = node.obj;
-        let dkey = node.key;
+        let dobj = dot.obj;
+        let dkey = dot.key;
         let r = typeof_expr(st, dobj);
-        typeof_field(r.st, r.typ, dkey, node.line, node.col)
+        typeof_field(r.st, r.typ, dkey, dot.line, dot.col)
     } else if (k == "func") {
+        let func: Func = node;
         // Anonymous function literal in expression position. Check the body
         // like a named def would be, and give the expression its tfunc type;
         // the emitter closure-converts it with a generated label.
-        let ra = typeof_def(st, "", node, node.line, node.col);
-        { typ: ra.typ, st: ra.st }
+        let ra = typeof_def(st, "", func, func.line, func.col);
+        tc_res(ra.typ, ra.st)
     } else if (k == "arrrep") {
+        let rep: ArrRep = node;
         // [v; n]: n stack slots filled with v (the native array form)
-        let r = typeof_expr(st, node.v);
+        let r = typeof_expr(st, rep.v);
         st = r.st;
         if (!is_value_type(r.typ)) {
-            st = fail(st, "array element type " + tstr(r.typ) + " is unsupported in native mode", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "array element type " + tstr(r.typ) + " is unsupported in native mode", rep.line, rep.col);
+            tc_res(t_unk(), st)
         } else {
             // n is a literal from 0 to 2^31 - 1 (parser.y size_lit)
-            { typ: { k: "tarrfix", of: r.typ, n: node.n }, st: st }
+            tc_res(type_node({ k: "tarrfix", of: r.typ, n: rep.n }), st)
         }
     } else if (k == "index") {
+        let index: Index = node;
         // A plain-variable base (the `id` arm) and an arbitrary expression
         // base (the else arm: `grid[0][1]`, `rec.v[i]`, `f()[i]`) both work.
         // Plain locals, params, AND function params of array type alike: the
@@ -1707,243 +1874,268 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
         // checked at runtime. Fixed [T; N] and heap [T] alike. Params of
         // tunk (missing annotation) error elsewhere — here they poison
         // quietly to avoid cascades.
-        if (node.arr.k == "id") {
-            let got = lookup(st.bindings, node.arr.v);
+        if (index.arr.k == "id") {
+            let id: Leaf = index.arr;
+            let got = lookup(st.bindings, id.v);
             if (got.kind == "") {
-                st = fail(st, "undefined variable '" + node.arr.v + "'", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "undefined variable '" + id.v + "'", index.line, index.col);
+                tc_res(t_unk(), st)
             } else if (got.typ.k == "tarrfix" || got.typ.k == "tarr") {
-                st = check_visible(st, got, node.arr.v, node.line, node.col);
-                let r = typeof_expr(st, node.idx);
+                st = check_visible(st, got, id.v, index.line, index.col);
+                let r = typeof_expr(st, index.idx);
                 st = r.st;
-                st = expect_type(st, r.typ, { k: "tlong" }, "array index", node.line, node.col);
-                { typ: got.typ.of, st: st }
+                st = expect_type(st, r.typ, type_node({ k: "tlong" }), "array index", index.line, index.col);
+                let elem: Type = t_unk();
+                if (got.typ.k == "tarr") { let arr: TOf = got.typ; elem = arr.of; 0; }
+                else { let arr: TFix = got.typ; elem = arr.of; 0; };
+                tc_res(elem, st)
             } else if (got.typ.k == "tmap") {
                 // m[k]: the key must match K; a read is ALWAYS optional --
                 // V? for any V (none when the key is missing).
-                st = check_visible(st, got, node.arr.v, node.line, node.col);
-                let r = typeof_expr(st, node.idx);
+                st = check_visible(st, got, id.v, index.line, index.col);
+                let map: TMap = got.typ;
+                let r = typeof_expr(st, index.idx);
                 st = r.st;
-                st = expect_type(st, r.typ, got.typ.key, "map key", node.line, node.col);
-                { typ: { k: "topt", of: got.typ.of }, st: st }
+                st = expect_type(st, r.typ, map.key, "map key", index.line, index.col);
+                tc_res(type_node({ k: "topt", of: map.of }), st)
             } else if (got.typ.k == "tstr") {
                 // s[i]: the byte at i (trapped when out of bounds)
-                st = check_visible(st, got, node.arr.v, node.line, node.col);
-                let r = typeof_expr(st, node.idx);
+                st = check_visible(st, got, id.v, index.line, index.col);
+                let r = typeof_expr(st, index.idx);
                 st = r.st;
-                st = expect_type(st, r.typ, { k: "tlong" }, "string index", node.line, node.col);
-                { typ: { k: "tbyte" }, st: st }
+                st = expect_type(st, r.typ, type_node({ k: "tlong" }), "string index", index.line, index.col);
+                tc_res(type_node({ k: "tbyte" }), st)
             } else if (got.typ.k == "tunk" || got.typ.k == "tnone" || got.typ.k == "tname") {
-                let r = typeof_expr(st, node.idx);
+                let r = typeof_expr(st, index.idx);
                 st = r.st;
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
-                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays and maps)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays and maps)", index.line, index.col);
+                tc_res(t_unk(), st)
             }
         } else {
             // Any expression of array type: `grid[0][1]`, `rec.v[i]`,
             // `f()[i]`. The base runs once at runtime; its static type
             // carries the element type.
-            let barr = node.arr;
+            let barr = index.arr;
             let br = typeof_expr(st, barr);
             st = br.st;
             if (br.typ.k == "tarrfix" || br.typ.k == "tarr") {
-                let ri = typeof_expr(st, node.idx);
+                let ri = typeof_expr(st, index.idx);
                 st = ri.st;
-                st = expect_type(st, ri.typ, { k: "tlong" }, "array index", node.line, node.col);
-                { typ: br.typ.of, st: st }
+                st = expect_type(st, ri.typ, type_node({ k: "tlong" }), "array index", index.line, index.col);
+                let elem: Type = t_unk();
+                if (br.typ.k == "tarr") { let arr: TOf = br.typ; elem = arr.of; 0; }
+                else { let arr: TFix = br.typ; elem = arr.of; 0; };
+                tc_res(elem, st)
             } else if (br.typ.k == "tmap") {
-                let ri = typeof_expr(st, node.idx);
+                let map: TMap = br.typ;
+                let ri = typeof_expr(st, index.idx);
                 st = ri.st;
-                st = expect_type(st, ri.typ, br.typ.key, "map key", node.line, node.col);
-                { typ: { k: "topt", of: br.typ.of }, st: st }
+                st = expect_type(st, ri.typ, map.key, "map key", index.line, index.col);
+                tc_res(type_node({ k: "topt", of: map.of }), st)
             } else if (br.typ.k == "tstr") {
-                let ri = typeof_expr(st, node.idx);
+                let ri = typeof_expr(st, index.idx);
                 st = ri.st;
-                st = expect_type(st, ri.typ, { k: "tlong" }, "string index", node.line, node.col);
-                { typ: { k: "tbyte" }, st: st }
+                st = expect_type(st, ri.typ, type_node({ k: "tlong" }), "string index", index.line, index.col);
+                tc_res(type_node({ k: "tbyte" }), st)
             } else if (br.typ.k == "tunk" || br.typ.k == "tnone" || br.typ.k == "tname") {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
-                let ri = typeof_expr(st, node.idx);
+                let ri = typeof_expr(st, index.idx);
                 st = ri.st;
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
-                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", index.line, index.col);
+                tc_res(t_unk(), st)
             }
         }
     } else if (k == "slice") {
+        let slice: Slice = node;
         // arr[lo:hi] -> a new array of the same element type. Missing
         // bounds default to 0 / len; the result is always a heap [T],
         // even when slicing a fixed [T; N].
-        let sr = typeof_expr(st, node.arr);
+        let sr = typeof_expr(st, slice.arr);
         st = sr.st;
-        let slo = node.lo;
-        let shi = node.hi;
+        let slo: Node = slice.lo;
+        let shi: Node = slice.hi;
         if (slo.k == "void") { 0; } else {
             let rl = typeof_expr(st, slo);
-            st = expect_type(rl.st, rl.typ, { k: "tlong" }, "slice start", node.line, node.col);
+            st = expect_type(rl.st, rl.typ, type_node({ k: "tlong" }), "slice start", slice.line, slice.col);
             0
         };
         if (shi.k == "void") { 0; } else {
             let rh = typeof_expr(st, shi);
-            st = expect_type(rh.st, rh.typ, { k: "tlong" }, "slice end", node.line, node.col);
+            st = expect_type(rh.st, rh.typ, type_node({ k: "tlong" }), "slice end", slice.line, slice.col);
             0
         };
         if (sr.typ.k == "tarr") {
-            { typ: { k: "tarr", of: sr.typ.of }, st: st }
+            let arr: TOf = sr.typ;
+            tc_res(type_node({ k: "tarr", of: arr.of }), st)
         } else if (sr.typ.k == "tarrfix") {
-            { typ: { k: "tarr", of: sr.typ.of }, st: st }
+            let arr: TFix = sr.typ;
+            tc_res(type_node({ k: "tarr", of: arr.of }), st)
         } else if (sr.typ.k == "tstr") {
             // s[lo:hi] -> the substring (bounds clamped, like an array slice)
-            { typ: { k: "tstr" }, st: st }
+            tc_res(type_node({ k: "tstr" }), st)
         } else if (sr.typ.k == "tunk") {
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         } else {
-            st = fail(st, "cannot slice " + tstr(sr.typ) + " (only arrays)", node.line, node.col);
-            { typ: t_unk(), st: st }
+            st = fail(st, "cannot slice " + tstr(sr.typ) + " (only arrays)", slice.line, slice.col);
+            tc_res(t_unk(), st)
         }
     } else if (k == "dotassign") {
+        let assign: DotAssign = node;
         // s.f = v — in-place record field write. The object may be a plain
         // variable (`id` arm) or any record-valued expression (`a[0].f`,
         // `x.y.f` — else arm); the field must exist in its static shape
         // (checked at the record literal / annotation site).
-        if (node.obj.k == "id") {
-            let got = lookup(st.bindings, node.obj.v);
+        if (assign.obj.k == "id") {
+            let id: Leaf = assign.obj;
+            let got = lookup(st.bindings, id.v);
             if (got.kind == "") {
-                st = fail(st, "undefined variable '" + node.obj.v + "'", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "undefined variable '" + id.v + "'", assign.line, assign.col);
+                tc_res(t_unk(), st)
             } else if (got.typ.k == "trec") {
-                let ft = trec_field_type(got.typ, node.key);
+                let ft = trec_field_type(got.typ, assign.key);
                 if (ft.k == "tnone") {
-                    st = fail(st, "record has no field '" + node.key + "'", node.line, node.col);
-                    { typ: t_unk(), st: st }
-                } else if (open_store(got.typ, node.key)) {
-                    st = fail(st, "cannot assign field '" + node.key + "' through an open record type (only its k)", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    st = fail(st, "record has no field '" + assign.key + "'", assign.line, assign.col);
+                    tc_res(t_unk(), st)
+                } else if (open_store(got.typ, assign.key)) {
+                    st = fail(st, "cannot assign field '" + assign.key + "' through an open record type (only its k)", assign.line, assign.col);
+                    tc_res(t_unk(), st)
                 } else {
-                    let v = typeof_want(st, node.v, ft);
+                    let v = typeof_want(st, assign.v, ft);
                     st = v.st;
-                    st = expect_type(st, v.typ, ft, "record field '" + node.key + "'", node.line, node.col);
-                    { typ: ft, st: st }
+                    st = expect_type(st, v.typ, ft, "record field '" + assign.key + "'", assign.line, assign.col);
+                    tc_res(ft, st)
                 }
             } else if (got.typ.k == "tunion") {
-                dotassign_union(st, got.typ, node)
+                dotassign_union(st, got.typ, assign)
             } else {
-                st = fail(st, "cannot field-assign " + tstr(got.typ) + " (only records)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot field-assign " + tstr(got.typ) + " (only records)", assign.line, assign.col);
+                tc_res(t_unk(), st)
             }
         } else {
             // General object (`a[0].f = v`, `x.y.f = v`): the object
             // expression's static type must be a record with the field.
-            let dobj2 = node.obj;
+            let dobj2 = assign.obj;
             let obr = typeof_expr(st, dobj2);
             st = obr.st;
             if (obr.typ.k == "trec") {
-                let ft = trec_field_type(obr.typ, node.key);
+                let ft = trec_field_type(obr.typ, assign.key);
                 if (ft.k == "tnone") {
-                    st = fail(st, "record has no field '" + node.key + "'", node.line, node.col);
-                    { typ: t_unk(), st: st }
-                } else if (open_store(obr.typ, node.key)) {
-                    st = fail(st, "cannot assign field '" + node.key + "' through an open record type (only its k)", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    st = fail(st, "record has no field '" + assign.key + "'", assign.line, assign.col);
+                    tc_res(t_unk(), st)
+                } else if (open_store(obr.typ, assign.key)) {
+                    st = fail(st, "cannot assign field '" + assign.key + "' through an open record type (only its k)", assign.line, assign.col);
+                    tc_res(t_unk(), st)
                 } else {
-                    let v = typeof_want(st, node.v, ft);
+                    let v = typeof_want(st, assign.v, ft);
                     st = v.st;
-                    st = expect_type(st, v.typ, ft, "record field '" + node.key + "'", node.line, node.col);
-                    { typ: ft, st: st }
+                    st = expect_type(st, v.typ, ft, "record field '" + assign.key + "'", assign.line, assign.col);
+                    tc_res(ft, st)
                 }
             } else if (obr.typ.k == "tunion") {
-                dotassign_union(st, obr.typ, node)
+                dotassign_union(st, obr.typ, assign)
             } else {
-                st = fail(st, "cannot field-assign " + tstr(obr.typ) + " (only records)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot field-assign " + tstr(obr.typ) + " (only records)", assign.line, assign.col);
+                tc_res(t_unk(), st)
             }
         }
     } else if (k == "idxassign") {
-        if (node.arr.k == "id") {
-            let got = lookup(st.bindings, node.arr.v);
+        let assign: IdxAssign = node;
+        if (assign.arr.k == "id") {
+            let id: Leaf = assign.arr;
+            let got = lookup(st.bindings, id.v);
             if (got.kind == "") {
-                st = fail(st, "undefined variable '" + node.arr.v + "'", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "undefined variable '" + id.v + "'", assign.line, assign.col);
+                tc_res(t_unk(), st)
             } else if (got.typ.k == "tarrfix" || got.typ.k == "tarr") {
-                st = check_visible(st, got, node.arr.v, node.line, node.col);
-                let ix = typeof_expr(st, node.idx);
+                st = check_visible(st, got, id.v, assign.line, assign.col);
+                let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
-                st = expect_type(st, ix.typ, { k: "tlong" }, "array index", node.line, node.col);
-                let v = typeof_want(st, node.v, got.typ.of);
+                st = expect_type(st, ix.typ, type_node({ k: "tlong" }), "array index", assign.line, assign.col);
+                let elem: Type = t_unk();
+                if (got.typ.k == "tarr") { let arr: TOf = got.typ; elem = arr.of; 0; }
+                else { let arr: TFix = got.typ; elem = arr.of; 0; };
+                let v = typeof_want(st, assign.v, elem);
                 st = v.st;
-                st = expect_type(st, v.typ, got.typ.of, "array element", node.line, node.col);
-                { typ: got.typ.of, st: st }
+                st = expect_type(st, v.typ, elem, "array element", assign.line, assign.col);
+                tc_res(elem, st)
             } else if (got.typ.k == "tmap") {
+                let map: TMap = got.typ;
                 // m[k] = v: the key matches K and the value V (the store is
                 // in place -- every alias of the map sees it).
-                st = check_visible(st, got, node.arr.v, node.line, node.col);
-                let ix = typeof_expr(st, node.idx);
+                st = check_visible(st, got, id.v, assign.line, assign.col);
+                let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
-                st = expect_type(st, ix.typ, got.typ.key, "map key", node.line, node.col);
-                let v = typeof_want(st, node.v, got.typ.of);
+                st = expect_type(st, ix.typ, map.key, "map key", assign.line, assign.col);
+                let v = typeof_want(st, assign.v, map.of);
                 st = v.st;
-                st = expect_type(st, v.typ, got.typ.of, "map value", node.line, node.col);
-                { typ: got.typ.of, st: st }
+                st = expect_type(st, v.typ, map.of, "map value", assign.line, assign.col);
+                tc_res(map.of, st)
             } else {
-                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays and maps)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays and maps)", assign.line, assign.col);
+                tc_res(t_unk(), st)
             }
         } else {
             // General base (`grid[0][1] = v`, `rec.v[i] = v`): the base
             // expression's static type must be an array of the value type.
-            let barr = node.arr;
+            let barr = assign.arr;
             let br = typeof_expr(st, barr);
             st = br.st;
             if (br.typ.k == "tarrfix" || br.typ.k == "tarr") {
-                let ix = typeof_expr(st, node.idx);
+                let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
-                st = expect_type(st, ix.typ, { k: "tlong" }, "array index", node.line, node.col);
-                let v = typeof_want(st, node.v, br.typ.of);
+                st = expect_type(st, ix.typ, type_node({ k: "tlong" }), "array index", assign.line, assign.col);
+                let elem: Type = t_unk();
+                if (br.typ.k == "tarr") { let arr: TOf = br.typ; elem = arr.of; 0; }
+                else { let arr: TFix = br.typ; elem = arr.of; 0; };
+                let v = typeof_want(st, assign.v, elem);
                 st = v.st;
-                st = expect_type(st, v.typ, br.typ.of, "array element", node.line, node.col);
-                { typ: br.typ.of, st: st }
+                st = expect_type(st, v.typ, elem, "array element", assign.line, assign.col);
+                tc_res(elem, st)
             } else if (br.typ.k == "tmap") {
-                let ix = typeof_expr(st, node.idx);
+                let map: TMap = br.typ;
+                let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
-                st = expect_type(st, ix.typ, br.typ.key, "map key", node.line, node.col);
-                let v = typeof_want(st, node.v, br.typ.of);
+                st = expect_type(st, ix.typ, map.key, "map key", assign.line, assign.col);
+                let v = typeof_want(st, assign.v, map.of);
                 st = v.st;
-                st = expect_type(st, v.typ, br.typ.of, "map value", node.line, node.col);
-                { typ: br.typ.of, st: st }
+                st = expect_type(st, v.typ, map.of, "map value", assign.line, assign.col);
+                tc_res(map.of, st)
             } else if (br.typ.k == "tunk" || br.typ.k == "tnone" || br.typ.k == "tname") {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
-                let ix = typeof_expr(st, node.idx);
+                let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
-                let v = typeof_expr(st, node.v);
+                let v = typeof_expr(st, assign.v);
                 st = v.st;
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
-                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", assign.line, assign.col);
+                tc_res(t_unk(), st)
             }
         }
     } else if (k == "array") {
+        let array: ArrLit = node;
         // Heap dynamic array literal [v, ...]. Element type = first element;
         // [] needs an annotation ([T]) since there is nothing to infer from.
         // NOTE: tnone/tname element shapes (from unannotated subexpressions)
         // unify quietly here — the missing-annotation error fires once at
         // its own site, not again at every enclosing literal (tcompat law).
-        let elems = node.elems;
+        let elems: [Node] = array.elems;
         if (len(elems) == 0) {
-            { typ: { k: "tarr", of: t_unk() }, st: st }
+            tc_res(type_node({ k: "tarr", of: t_unk() }), st)
         } else {
             let e0 = elems[0];
             let r0 = typeof_expr(st, e0);
             st = r0.st;
             if (r0.typ.k == "tnone") {
-                { typ: { k: "tarr", of: t_unk() }, st: st }
+                tc_res(type_node({ k: "tarr", of: t_unk() }), st)
             } else if (r0.typ.k == "tname") {
-                { typ: { k: "tarr", of: t_unk() }, st: st }
+                tc_res(type_node({ k: "tarr", of: t_unk() }), st)
             } else if (r0.typ.k == "tarr") {
                 // nested array literal [[..], ..]: the inner literal's type
                 // IS known, so keep it as the element type ([[1], [2]] :
@@ -1951,10 +2143,10 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                 // homogeneity through `+=` / `*=` / `+`. A poisoned inner
                 // (tunk inside) still unifies quietly through teq, so the
                 // report-once law holds.
-                { typ: { k: "tarr", of: r0.typ }, st: st }
+                tc_res(type_node({ k: "tarr", of: r0.typ }), st)
             } else if (!is_value_type(r0.typ)) {
-                st = fail(st, "array element type " + tstr(r0.typ) + " is unsupported in native mode", node.line, node.col);
-                { typ: t_unk(), st: st }
+                st = fail(st, "array element type " + tstr(r0.typ) + " is unsupported in native mode", array.line, array.col);
+                tc_res(t_unk(), st)
             } else {
                 let i = 1;
                 let elt = r0.typ;
@@ -1973,33 +2165,37 @@ def typeof_expr_go(st: TcSt, node) -> TcRes {
                         if (r.typ.k == "tstr") { elt = r.typ; 0; } else { 0; };
                         0
                     } else {
-                        st = expect_type(st, r.typ, elt, "array element", node.line, node.col);
+                        st = expect_type(st, r.typ, elt, "array element", array.line, array.col);
                         0
                     };
                     i = i + 1;
                 };
-                { typ: { k: "tarr", of: elt }, st: st }
+                tc_res(type_node({ k: "tarr", of: elt }), st)
             }
         }
     } else if (k == "char") {
-        { typ: { k: "tbyte" }, st: st }
+        tc_res(type_node({ k: "tbyte" }), st)
     } else if (k == "rectest") {
-        typeof_rectest(st, node)
+        let test: Narrow = node;
+        typeof_rectest(st, test)
     } else if (k == "narrow") {
-        typeof_narrow(st, node)
+        let narrow: Narrow = node;
+        typeof_narrow(st, narrow)
     } else if (k == "matchend") {
-        typeof_matchend(st, node)
+        let matchend: MatchEnd = node;
+        typeof_matchend(st, matchend)
     } else if (k == "sliceassign") {
-        typeof_sliceassign(st, node)
+        let assign: SliceAssign = node;
+        typeof_sliceassign(st, assign)
     } else {
         st = fail(st, "'" + k + "' is not a supported expression form", node.line, node.col);
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     }
 };
 
 // `T` / `{f: v}` pattern test: the subject must be a record or a union,
 // and the pattern must be able to match one of its members.
-def typeof_rectest(st: TcSt, node) -> TcRes {
+def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
     let r = typeof_expr(st, node.e);
     st = r.st;
     let s = r.typ;
@@ -2032,12 +2228,12 @@ def typeof_rectest(st: TcSt, node) -> TcRes {
         st = fail(st, "cannot match a record pattern against " + tstr(s), node.line, node.col);
         0
     };
-    { typ: { k: "tbool" }, st: st }
+    tc_res(type_node({ k: "tbool" }), st)
 };
 
 // The record type t is the subject s (a record) or one of its members (a
 // union): membership is exact.
-def pattern_fits(s, t) -> bool {
+def pattern_fits(s: Type, t: Type) -> bool {
     let sk: str = s.k;
     if (sk == "tunion") {
         let m = union_member(s, t);
@@ -2047,16 +2243,16 @@ def pattern_fits(s, t) -> bool {
     }
 };
 
-def typeof_narrow(st: TcSt, node) -> TcRes {
+def typeof_narrow(st: TcSt, node: Narrow) -> TcRes {
     // errors about the pattern itself are reported once, by its rectest
     let r = typeof_expr(st, node.e);
     let t = node.typ;
     let tu = unfold(t);
     let tk: str = tu.k;
     if (tk == "trec" || tk == "tpat") {
-        { typ: narrow_type(r.typ, t), st: r.st }
+        tc_res(narrow_type(r.typ, t), r.st)
     } else {
-        { typ: t_unk(), st: r.st }
+        tc_res(t_unk(), r.st)
     }
 };
 
@@ -2065,12 +2261,12 @@ def typeof_narrow(st: TcSt, node) -> TcRes {
 // Value arms (`({f: 1}) x`, `1`, `"s"`) never count: they match only the
 // values they name, so when the match has any (`vals`), the error says so.
 // Its type is the poison tunk, so it never disagrees with the arms.
-def typeof_matchend(st: TcSt, node) -> TcRes {
+def typeof_matchend(st: TcSt, node: MatchEnd) -> TcRes {
     let r = typeof_expr(st, node.e);
     st = r.st;
     let s = r.typ;
     let sk: str = s.k;
-    let cover: [{k: str}] = node.cover;
+    let cover: [Type] = node.cover;
     let hint = "";
     if (node.vals > 0) { hint = "; value patterns match only the values they name and cover no type"; 0; };
     if (sk == "tunk") {
@@ -2094,11 +2290,11 @@ def typeof_matchend(st: TcSt, node) -> TcRes {
         st = fail(st, "non-exhaustive match on " + tstr(s) + " (add a '_' arm" + hint + ")", node.line, node.col);
         0
     };
-    { typ: t_unk(), st: st }
+    tc_res(t_unk(), st)
 };
 
 // A member is covered by a type arm of its type.
-def covered(m, cover: [{k: str}]) -> bool {
+def covered(m: Type, cover: [Type]) -> bool {
     let any = false;
     let i = 0;
     while (i < len(cover)) {
@@ -2114,7 +2310,7 @@ def covered(m, cover: [{k: str}]) -> bool {
 };
 
 // a[lo:hi] = src: a is an array, src an array of the same element type.
-def typeof_sliceassign(st: TcSt, node) -> TcRes {
+def typeof_sliceassign(st: TcSt, node: SliceAssign) -> TcRes {
     let ar = typeof_expr(st, node.arr);
     st = ar.st;
     let slo = node.lo;
@@ -2131,13 +2327,19 @@ def typeof_sliceassign(st: TcSt, node) -> TcRes {
     };
     let vr = typeof_expr(st, node.v);
     st = vr.st;
-    let at = ar.typ;
-    let vt = vr.typ;
+    let at: Type = ar.typ;
+    let vt: Type = vr.typ;
     let akk: str = at.k;
     let vkk: str = vt.k;
     if (akk == "tarr" || akk == "tarrfix") {
         if (vkk == "tarr" || vkk == "tarrfix") {
-            if (teq(vt.of, at.of)) { 0 } else {
+            let ae: Type = t_unk();
+            let ve: Type = t_unk();
+            if (akk == "tarr") { let arr: TOf = at; ae = arr.of; 0; }
+            else { let arr: TFix = at; ae = arr.of; 0; };
+            if (vkk == "tarr") { let arr: TOf = vt; ve = arr.of; 0; }
+            else { let arr: TFix = vt; ve = arr.of; 0; };
+            if (teq(ve, ae)) { 0 } else {
                 st = fail(st, "slice assignment: cannot store " + tstr(vt) + " into " + tstr(at), node.line, node.col);
                 0
             };
@@ -2158,7 +2360,7 @@ def typeof_sliceassign(st: TcSt, node) -> TcRes {
         st = fail(st, "cannot slice-assign " + tstr(at) + " (only arrays)", node.line, node.col);
         0
     };
-    { typ: { k: "tvoid" }, st: st }
+    tc_res(type_node({ k: "tvoid" }), st)
 };
 
 // The type of field `dkey` read from a value of type t: a record field,
@@ -2167,11 +2369,12 @@ def typeof_sliceassign(st: TcSt, node) -> TcRes {
 // callee `x.f(...)`, so the receiver is typed once whether or not it turns
 // out to be a str (a string method) or a record (a field holding a
 // function).
-def typeof_field(st, t, dkey: str, line: long, col: long) -> TcRes {
+def typeof_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
     if (t.k == "trec") {
         let found = false;
-        let ftyp = t_unk();
-        let fs = t.fields;
+        let ftyp: Type = t_unk();
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let j = 0;
         while (j < len(fs)) {
             // NOTE: bound once (flow-snapshot, see the dot arm's note).
@@ -2187,7 +2390,7 @@ def typeof_field(st, t, dkey: str, line: long, col: long) -> TcRes {
             0
         };
         if (found) {
-            { typ: ftyp, st: st }
+            tc_res(ftyp, st)
         } else if (is_open(fs)) {
             // unknown-shape ({k}-only) reads unify quietly (tcompat
             // law) — the missing annotation errors once at its own
@@ -2195,27 +2398,27 @@ def typeof_field(st, t, dkey: str, line: long, col: long) -> TcRes {
             // records error below (teq against the marker was the test,
             // but teq lets a record of any other width meet it, so
             // `{a, b}.c` compiled and trapped at run time: e145).
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         } else {
             st = fail(st, "record has no field '" + dkey + "'", line, col);
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         }
     } else if (t.k == "tunion") {
         union_field(st, t, dkey, line, col)
     } else if (t.k == "tunk") {
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else if (t.k == "tnone") {
         // bare-hole params (see typeof_def note): unify quietly.
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else if (t.k == "tname") {
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else if (t.k == "tparams") {
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else if (t.k == "tarr" || t.k == "tarrfix" || t.k == "tstr") {
         typeof_prop(st, t, dkey, line, col)
     } else {
         st = fail(st, "cannot read field '" + dkey + "' of " + tstr(t) + " (need a record)", line, col);
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     }
 };
 
@@ -2224,16 +2427,20 @@ def typeof_field(st, t, dkey: str, line: long, col: long) -> TcRes {
 // so it is valid for an empty array too, where &a[0] traps. A str has no
 // `.ptr`: its bytes can live in read-only .rodata, where a store through
 // the pointer would fault.
-def typeof_prop(st, t, key: str, line: long, col: long) -> TcRes {
+def typeof_prop(st: TcSt, t: Type, key: str, line: long, col: long) -> TcRes {
     if (key == "length") {
-        { typ: { k: "tlong" }, st: st }
-    } else if (key == "ptr" && t.k != "tstr") {
-        { typ: { k: "tptr", to: t.of }, st: st }
+        tc_res(type_node({ k: "tlong" }), st)
+    } else if (key == "ptr" && t.k == "tarr") {
+        let arr: TOf = t;
+        tc_res(type_node({ k: "tptr", to: arr.of }), st)
+    } else if (key == "ptr" && t.k == "tarrfix") {
+        let arr: TFix = t;
+        tc_res(type_node({ k: "tptr", to: arr.of }), st)
     } else {
         let have = "'.length' and '.ptr'";
         if (t.k == "tstr") { have = "'.length'"; 0; };
         st = fail(st, tstr(t) + " has no property '" + key + "' (it has " + have + ")", line, col);
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     }
 };
 
@@ -2253,12 +2460,12 @@ def typeof_prop(st, t, key: str, line: long, col: long) -> TcRes {
 //           join(xs, sep))
 // A helper's method names must be in native.y str_names: that is what
 // splices std/str.y into a program that calls one.
-type StrMethod = { fn: str, params: [{ k: str }], nreq: long, ret: { k: str }, dflt: str, last: bool };
+type StrMethod = { fn: str, params: [Type], nreq: long, ret: Type, dflt: str, last: bool };
 def str_method(m: str) -> StrMethod {
     let s = sm_t("tstr");
     let l = sm_t("tlong");
     let b = sm_t("tbool");
-    let no: [{ k: str }] = [];
+    let no: [Type] = [];
     if (m == "split") { sm_mk("split", [s], 1, sm_arr(s), "", false) }
     else if (m == "join") { sm_mk("join", [sm_arr(sm_any())], 1, s, "", true) }
     else if (m == "trim" || m == "strip") { sm_mk("trim", no, 0, s, "", false) }
@@ -2285,22 +2492,22 @@ def str_method(m: str) -> StrMethod {
     else { sm_mk("", no, 0, t_unk(), "", false) }
 };
 
-def sm_mk(fn: str, params: [{ k: str }], nreq: long, ret: { k: str }, dflt: str, last: bool) -> StrMethod {
+def sm_mk(fn: str, params: [Type], nreq: long, ret: Type, dflt: str, last: bool) -> StrMethod {
     { fn: fn, params: params, nreq: nreq, ret: ret, dflt: dflt, last: last }
 };
 
-def sm_t(k: str) -> { k: str } { { k: k } };
+def sm_t(k: str) -> Type { { k: k } };
 
-def sm_arr(of: { k: str }) -> { k: str } { { k: "tarr", of: of } };
+def sm_arr(of: Type) -> Type { { k: "tarr", of: of } };
 
 // join's array: any element type (sm_accepts; prints as `T`, so an error
 // reads "expected [T]").
-def sm_any() -> { k: str } { { k: "tname", name: "T" } };
+def sm_any() -> Type { { k: "tname", name: "T" } };
 
 // `node` is `s.m(args)` with s a str (typed already, by typeof_call).
-def typeof_method(st, node, m: str) -> TcRes {
+def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
     let sm = str_method(m);
-    let margs = node.args;
+    let margs: [Node] = node.args;
     let na = len(margs);
     let ps = sm.params;
     let np = len(ps);
@@ -2315,7 +2522,7 @@ def typeof_method(st, node, m: str) -> TcRes {
             st = r.st;
             i = i + 1;
         };
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else if (na < sm.nreq || na > np) {
         let want = tostring(np);
         if (sm.nreq < np) { want = tostring(sm.nreq) + " or " + tostring(np); 0; };
@@ -2326,7 +2533,7 @@ def typeof_method(st, node, m: str) -> TcRes {
             st = r.st;
             i = i + 1;
         };
-        { typ: sm.ret, st: st }
+        tc_res(sm.ret, st)
     } else {
         let i = 0;
         while (i < na) {
@@ -2342,15 +2549,20 @@ def typeof_method(st, node, m: str) -> TcRes {
             } else { 0; };
             i = i + 1;
         };
-        { typ: sm.ret, st: st }
+        tc_res(sm.ret, st)
     }
 };
 
 // tcompat, except that join's [T] takes an array of any element type (as
 // the join builtin does: a [T], or poison).
-def sm_accepts(got, want: { k: str }) -> bool {
-    if (want.k == "tarr" && want.of.k == "tname") {
-        got.k == "tarr" || got.k == "tunk"
+def sm_accepts(got: Type, want: Type) -> bool {
+    if (want.k == "tarr") {
+        let arr: TOf = want;
+        if (arr.of.k == "tname") {
+            got.k == "tarr" || got.k == "tunk"
+        } else {
+            tcompat(got, want)
+        }
     } else {
         tcompat(got, want)
     }
@@ -2361,12 +2573,13 @@ def sm_accepts(got, want: { k: str }) -> bool {
 // while the in-place array forms (`arr += v`, `arr *= v`) and element or
 // field writes (`a[i] = v`, `r.f = v`) still mutate the shared value. Plain
 // `=` is refused in the `assign` arm itself; this covers the other two.
-def const_check(st, tgt, tt: { k: str }, op: str, line: long, col: long) -> TcSt {
+def const_check(st: TcSt, tgt: Node, tt: Type, op: str, line: long, col: long) -> TcSt {
     if (tgt.k == "id") {
-        let got = lookup(st.bindings, tgt.v);
+        let id: Leaf = tgt;
+        let got = lookup(st.bindings, id.v);
         let inplace = tt.k == "tarr" || tt.k == "tarrfix" || tt.k == "tunk" || tt.k == "tnone";
         if (got.kind == "const" && !inplace) {
-            fail(st, "cannot assign to constant '" + disp(tgt.v) + "' ('" + op + "')", line, col)
+            fail(st, "cannot assign to constant '" + disp(id.v) + "' ('" + op + "')", line, col)
         } else { st }
     } else { st }
 };
@@ -2378,18 +2591,20 @@ def const_check(st, tgt, tt: { k: str }, op: str, line: long, col: long) -> TcSt
 // operator's own rules stay quiet. (`*p = v` is a store of its own; `*p`
 // is no target here.) Only a target that can be one of those -- a byte
 // element, a `.length` or `.ptr` -- has its base looked at.
-def place_check(st, tgt, tt: { k: str }, op: str, line: long, col: long) -> TcRes {
+def place_check(st: TcSt, tgt: Node, tt: Type, op: str, line: long, col: long) -> TcRes {
     let k: str = tgt.k;
     let ok = true;
     if (k == "index") {
-        if (tt.k == "tbyte" && base_type(st, tgt.arr).k == "tstr") {
+        let index: Index = tgt;
+        if (tt.k == "tbyte" && base_type(st, index.arr).k == "tstr") {
             st = fail(st, "cannot index str (only arrays and maps)", line, col);
             ok = false;
         };
     } else if (k == "dot") {
-        let key: str = tgt.key;
+        let dot: Dot = tgt;
+        let key: str = dot.key;
         if (tt.k != "tunk" && (key == "length" || key == "ptr")) {
-            let bt = base_type(st, tgt.obj);
+            let bt = base_type(st, dot.obj);
             if (bt.k == "tarr" || bt.k == "tarrfix" || bt.k == "tstr") {
                 st = fail(st, "cannot field-assign " + tstr(bt) + " (only records)", line, col);
                 ok = false;
@@ -2399,15 +2614,16 @@ def place_check(st, tgt, tt: { k: str }, op: str, line: long, col: long) -> TcRe
         st = fail(st, "cannot assign to this expression ('" + op + "')", line, col);
         ok = false;
     };
-    if (ok) { { typ: tt, st: st } } else { { typ: t_unk(), st: st } }
+    if (ok) { tc_res(tt, st) } else { tc_res(t_unk(), st) }
 };
 
 // The static type of a place's base (`a` in `a[i]`, `o` in `o.f`). The
 // whole target was typed already, its errors reported: a base other than
 // a name is typed again on a scratch error list.
-def base_type(st, e) -> { k: str } {
+def base_type(st: TcSt, e: Node) -> Type {
     if (e.k == "id") {
-        lookup(st.bindings, e.v).typ
+        let id: Leaf = e;
+        lookup(st.bindings, id.v).typ
     } else {
         let none: [Diag] = [];
         typeof_expr(st_errors(st, none), e).typ
@@ -2415,15 +2631,15 @@ def base_type(st, e) -> { k: str } {
 };
 
 // ++/-- target rule: numbers (long/byte/float) only.
-def incdec_check(st, node, tt: { k: str }) -> TcRes {
+def incdec_check(st: TcSt, node: IncDec, tt: Type) -> TcRes {
     let op = node.op;
     if (tt.k == "tlong" || tt.k == "tbyte" || tt.k == "tfloat") {
-        { typ: tt, st: st }
+        tc_res(tt, st)
     } else if (tt.k == "tunk" || tt.k == "tnone") {
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else {
         st = fail(st, "'" + op + "' needs a number target, got " + tstr(tt), node.line, node.col);
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     }
 };
 
@@ -2438,63 +2654,69 @@ def incdec_check(st, node, tt: { k: str }) -> TcRes {
 //               `*=` prepends one element. `+`
 //               itself is the copy form; `-=`, `/=`, `%=` are errors.
 // The result is always the target's type (the new value).
-def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> TcRes {
+def opassign_check(st: TcSt, node: OpAssign, tt: Type, vt: Type) -> TcRes {
     let op = node.op;
     if (is_bits_op(op)) {
         if (tt.k == "tlong" || tt.k == "tbyte") {
-            st = expect_type(st, vt, { k: "tlong" }, "'" + op + "=' value", node.line, node.col);
-            { typ: tt, st: st }
+            st = expect_type(st, vt, type_node({ k: "tlong" }), "'" + op + "=' value", node.line, node.col);
+            tc_res(tt, st)
         } else if (tt.k == "tunk" || tt.k == "tnone") {
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         } else {
             st = fail(st, "'" + op + "=' needs an integer target, got " + tstr(tt), node.line, node.col);
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         }
     } else if (tt.k == "tarrfix") {
         // A fixed array's length is part of its type: growth is a type
         // error (the old push-on-fixed rejection, now on the operators).
         st = fail(st, "cannot grow fixed array " + tstr(tt) + " with '" + op + "=' (its length is part of its type; use [T] instead)", node.line, node.col);
-        { typ: tt, st: st }
+        tc_res(tt, st)
     } else if (tt.k == "tarr") {
         if (op == "*") {
             // `*= ` prepends ONE item — its type must be the element type.
-            st = expect_type(st, vt, tt.of, "'*=' element", node.line, node.col);
-            { typ: tt, st: st }
+            let target: TOf = tt;
+            st = expect_type(st, vt, target.of, "'*=' element", node.line, node.col);
+            tc_res(tt, st)
         } else if (op == "+") {
             if (vt.k == "tarr" || vt.k == "tarrfix") {
                 if (arr_plus_kind(tt, vt) == "append") {
                     // `[[T]] += [T]` pushes the array as ONE element (the
                     // same rule as `+`, see arr_plus_kind).
-                    { typ: tt, st: st }
+                    tc_res(tt, st)
                 } else {
                     // `arr += arr2` appends arr2's ELEMENTS in place, so
                     // the element types must match (homogeneity).
-                    st = expect_type(st, vt.of, tt.of, "'+=' appended elements", node.line, node.col);
-                    { typ: tt, st: st }
+                    let target: TOf = tt;
+                    let value: Type = t_unk();
+                    if (vt.k == "tarr") { let arr: TOf = vt; value = arr.of; 0; }
+                    else { let fixed: TFix = vt; value = fixed.of; 0; };
+                    st = expect_type(st, value, target.of, "'+=' appended elements", node.line, node.col);
+                    tc_res(tt, st)
                 }
             } else if (vt.k == "tunk" || vt.k == "tnone") {
-                { typ: tt, st: st }
+                tc_res(tt, st)
             } else {
-                st = expect_type(st, vt, tt.of, "'+=' element", node.line, node.col);
-                { typ: tt, st: st }
+                let target: TOf = tt;
+                st = expect_type(st, vt, target.of, "'+=' element", node.line, node.col);
+                tc_res(tt, st)
             }
         } else {
             st = fail(st, "arrays support only '+=' and '*=' (in place), not '" + op + "='", node.line, node.col);
-            { typ: tt, st: st }
+            tc_res(tt, st)
         }
     } else if (tt.k == "tstr") {
         if (op == "+") {
-            st = expect_type(st, vt, { k: "tstr" }, "'+=' string", node.line, node.col);
-            { typ: tt, st: st }
+            st = expect_type(st, vt, type_node({ k: "tstr" }), "'+=' string", node.line, node.col);
+            tc_res(tt, st)
         } else {
             st = fail(st, "strings support only '+=' (concatenate), not '" + op + "='", node.line, node.col);
-            { typ: tt, st: st }
+            tc_res(tt, st)
         }
     } else if (tt.k == "tlong" || tt.k == "tbyte" || tt.k == "tfloat") {
         st = expect_type(st, vt, tt, "'" + op + "=' value", node.line, node.col);
-        { typ: tt, st: st }
+        tc_res(tt, st)
     } else if (tt.k == "tunk" || tt.k == "tnone") {
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else {
         st = fail(st, "'" + op + "=' needs a number, string or array target, got " + tstr(tt), node.line, node.col);
         { typ: t_unk(), st: st }
@@ -2632,12 +2854,13 @@ def fmt_check(f: FmtSpec, kind: long, tname: str) -> str {
 
 // #fmt(e, spec) is a str. Without a spec e is whatever tostring takes;
 // with one, the spec has to read and to suit e's type (fmt_check).
-def typeof_fmt(st: TcSt, node) -> TcRes {
-    let fargs = node.args;
+def typeof_fmt(st: TcSt, node: Call) -> TcRes {
+    let fargs: [Node] = node.args;
     let r = typeof_expr(st, fargs[0]);
     st = r.st;
-    let t = r.typ;
-    let spec: str = fargs[1].v;
+    let t: Type = r.typ;
+    let specnode: Leaf = fargs[1];
+    let spec: str = specnode.v;
     if (!(t.k == "tlong" || t.k == "tbyte" || t.k == "tbool" || t.k == "tstr" || t.k == "tfloat" || t.k == "tunk" || t.k == "tarr" || t.k == "tarrfix" || t.k == "trec" || t.k == "tmap" || t.k == "topt" || t.k == "tunion")) {
         st = fail(st, "an f-string field takes long/bool/float/str/array/record/map/option, got " + tstr(t), node.line, node.col);
         0
@@ -2646,33 +2869,35 @@ def typeof_fmt(st: TcSt, node) -> TcRes {
         if (e != "") { st = fail(st, "format spec '" + spec + "': " + e, node.line, node.col); 0; } else { 0; };
         0
     } else { 0; };
-    { typ: { k: "tstr" }, st: st }
+    tc_res(type_node({ k: "tstr" }), st)
 };
 
-def typeof_call(st: TcSt, node) -> TcRes {
+def typeof_call(st: TcSt, node: Call) -> TcRes {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
     // expression (the `if` arm — an immediately-invoked literal, an element
     // of an array of functions, ...).
-    let cargs = node.args;
-    if (node.callee.k != "id") {
+    let cargs: [Node] = node.args;
+    let callee: Node = node.callee;
+    if (callee.k != "id") {
         // Calling an expression: legal when it yields a function value
         // (an immediately-invoked literal, an element of an array of
         // functions, a record field holding one, ...). The emitter goes
         // through its code pointer. `x.m(...)` with x a str is a string
         // method instead (typeof_method); either way the receiver is
         // typed once, here.
-        let ccal = node.callee;
-        let cf = { typ: t_unk(), st: st };
+        let ccal: Node = callee;
+        let cf: TcRes = { typ: t_unk(), st: st };
         let smeth = false;
         if (ccal.k == "dot") {
-            let crt = typeof_expr(st, ccal.obj);
+            let dot: Dot = ccal;
+            let crt = typeof_expr(st, dot.obj);
             if (crt.typ.k == "tstr") {
                 smeth = true;
                 cf = { typ: t_unk(), st: crt.st };
                 0
             } else {
-                cf = typeof_field(crt.st, crt.typ, ccal.key, ccal.line, ccal.col);
+                cf = typeof_field(crt.st, crt.typ, dot.key, dot.line, dot.col);
                 0
             };
             0
@@ -2682,13 +2907,14 @@ def typeof_call(st: TcSt, node) -> TcRes {
         };
         st = cf.st;
         if (smeth) {
-            typeof_method(st, node, ccal.key)
+            let dot: Dot = ccal;
+            typeof_method(st, node, dot.key)
         } else if (cf.typ.k == "tfunc") {
-            let cft = cf.typ;
-            let cfargs = cft.args;
+            let cft: TFunc = cf.typ;
+            let cfargs: [Type] = cft.args;
             if (len(cargs) != len(cfargs)) {
                 st = fail(st, "call takes " + tostring(len(cfargs)) + " args, got " + tostring(len(cargs)), node.line, node.col);
-                { typ: cft.ret, st: st }
+                tc_res(cft.ret, st)
             } else {
                 let ci = 0;
                 while (ci < len(cargs)) {
@@ -2697,7 +2923,7 @@ def typeof_call(st: TcSt, node) -> TcRes {
                     st = expect_type(st, ra.typ, cfargs[ci], "call arg " + tostring(ci), node.line, node.col);
                     ci = ci + 1;
                 };
-                { typ: cft.ret, st: st }
+                tc_res(cft.ret, st)
             }
         } else {
             st = fail(st, "cannot call " + tstr(cf.typ) + " (not a function)", node.line, node.col);
@@ -2707,121 +2933,123 @@ def typeof_call(st: TcSt, node) -> TcRes {
                 st = r.st;
                 i = i + 1;
             };
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         }
     } else {
-        let name = node.callee.v;
+        let id: Leaf = callee;
+        let name = id.v;
         if (name == "#fmt") {
             typeof_fmt(st, node)
         } else if (name == "print") {
             if (len(node.args) != 1) {
                 st = fail(st, "print takes exactly 1 argument", node.line, node.col);
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "tfunc" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "topt" || r.typ.k == "tunion") {
-                    { typ: { k: "tvoid" }, st: st }
+                    tc_res(type_node({ k: "tvoid" }), st)
                 } else {
                     st = fail(st, "print supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
-                    { typ: { k: "tvoid" }, st: st }
+                    tc_res(type_node({ k: "tvoid" }), st)
                 }
             }
         } else if (name == "len") {
             if (len(cargs) != 1) {
                 st = fail(st, "len takes exactly 1 argument", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "tarrfix" || r.typ.k == "tarr" || r.typ.k == "tstr" || r.typ.k == "tmap") {
-                    { typ: { k: "tlong" }, st: st }
+                    tc_res(type_node({ k: "tlong" }), st)
                 } else if (r.typ.k == "tunk" || r.typ.k == "tnone" || r.typ.k == "tname") {
                     // poison/unannotated shape (tcompat law): root cause
                     // errors once at its own site; len() unifies quietly.
-                    { typ: { k: "tlong" }, st: st }
+                    tc_res(type_node({ k: "tlong" }), st)
                 } else {
                     st = fail(st, "len supports arrays, strings and maps, got " + tstr(r.typ), node.line, node.col);
-                    { typ: { k: "tlong" }, st: st }
+                    tc_res(type_node({ k: "tlong" }), st)
                 }
             }
         } else if (name == "some") {
             // some(v) -> typeof(v)? (boxes v on the heap; 0 = none)
             if (len(cargs) != 1) {
                 st = fail(st, "some takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (!is_value_type(r.typ)) {
                     st = fail(st, "cannot put " + tstr(r.typ) + " in an option", node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    tc_res(t_unk(), st)
                 } else {
-                    { typ: { k: "topt", of: r.typ }, st: st }
+                    tc_res(type_node({ k: "topt", of: r.typ }), st)
                 }
             }
         } else if (name == "is_some") {
             if (len(cargs) != 1) {
                 st = fail(st, "is_some takes exactly 1 argument", node.line, node.col);
-                { typ: { k: "tbool" }, st: st }
+                tc_res(type_node({ k: "tbool" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "topt" || r.typ.k == "tunk") {
-                    { typ: { k: "tbool" }, st: st }
+                    tc_res(type_node({ k: "tbool" }), st)
                 } else {
                     st = fail(st, "is_some needs an option, got " + tstr(r.typ), node.line, node.col);
-                    { typ: { k: "tbool" }, st: st }
+                    tc_res(type_node({ k: "tbool" }), st)
                 }
             }
         } else if (name == "unwrap") {
             if (len(cargs) != 1) {
                 st = fail(st, "unwrap takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "topt") {
-                    { typ: r.typ.of, st: st }
+                    let opt: TOf = r.typ;
+                    tc_res(opt.of, st)
                 } else if (r.typ.k == "tunk") {
-                    { typ: t_unk(), st: st }
+                    tc_res(t_unk(), st)
                 } else if (r.typ.k == "tnone") {
-                    { typ: t_unk(), st: st }
+                    tc_res(t_unk(), st)
                 } else if (r.typ.k == "tname") {
-                    { typ: t_unk(), st: st }
+                    tc_res(t_unk(), st)
                 } else if (r.typ.k == "tparams") {
-                    { typ: t_unk(), st: st }
+                    tc_res(t_unk(), st)
                 } else {
                     st = fail(st, "unwrap needs an option, got " + tstr(r.typ), node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    tc_res(t_unk(), st)
                 }
             }
         } else if (name == "trim") {
             if (len(cargs) != 1) {
                 st = fail(st, "trim takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tstr" }, "trim string", node.line, node.col);
-                { typ: { k: "tstr" }, st: st }
+                tc_res(type_node({ k: "tstr" }), st)
             }
         } else if (name == "ord") {
             // ord(s) -> long (first byte, -1 if empty)
             if (len(cargs) != 1) {
                 st = fail(st, "ord takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tstr" }, "ord string", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             }
         } else if (name == "byte_at") {
             // byte_at(s, i) -> long (byte i of s, trapped out of bounds)
             if (len(cargs) != 2) {
                 st = fail(st, "byte_at takes exactly 2 arguments", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
@@ -2829,55 +3057,55 @@ def typeof_call(st: TcSt, node) -> TcRes {
                 let r2 = typeof_expr(st, cargs[1]);
                 st = r2.st;
                 st = expect_type(st, r2.typ, { k: "tlong" }, "byte_at index", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             }
         } else if (name == "chr") {
             if (len(cargs) != 1) {
                 st = fail(st, "chr takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tlong" }, "chr code", node.line, node.col);
-                { typ: { k: "tstr" }, st: st }
+                tc_res(type_node({ k: "tstr" }), st)
             }
         } else if (name == "tonum") {
             if (len(cargs) != 1) {
                 st = fail(st, "tonum takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tstr" }, "tonum string", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             }
         } else if (name == "tostring") {
             if (len(cargs) != 1) {
                 st = fail(st, "tostring takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "tlong" || r.typ.k == "tbyte" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk" || r.typ.k == "tarr" || r.typ.k == "tarrfix" || r.typ.k == "trec" || r.typ.k == "tmap" || r.typ.k == "topt" || r.typ.k == "tunion") {
-                    { typ: { k: "tstr" }, st: st }
+                    tc_res(type_node({ k: "tstr" }), st)
                 } else {
                     st = fail(st, "tostring supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
-                    { typ: t_unk(), st: st }
+                    tc_res(t_unk(), st)
                 }
             }
         } else if (name == "typeof") {
             if (len(cargs) != 1) {
                 st = fail(st, "typeof takes exactly 1 argument", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                { typ: { k: "tstr" }, st: st }
+                tc_res(type_node({ k: "tstr" }), st)
             }
         } else if (name == "index_of" || name == "last_index_of") {
             if (len(cargs) != 2) {
                 st = fail(st, name + " takes exactly 2 arguments (string, sub)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r0 = typeof_expr(st, cargs[0]);
                 st = r0.st;
@@ -2885,13 +3113,13 @@ def typeof_call(st: TcSt, node) -> TcRes {
                 st = r1.st;
                 st = expect_type(st, r0.typ, { k: "tstr" }, name + " string", node.line, node.col);
                 st = expect_type(st, r1.typ, { k: "tstr" }, name + " sub", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             }
         } else if (name == "join") {
             // join(arr, delim) -> str (elements via tostring, like C)
             if (len(cargs) != 2) {
                 st = fail(st, "join takes exactly 2 arguments (array, delimiter)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r0 = typeof_expr(st, cargs[0]);
                 st = r0.st;
@@ -2902,13 +3130,13 @@ def typeof_call(st: TcSt, node) -> TcRes {
                     0
                 } else { 0; };
                 st = expect_type(st, r1.typ, { k: "tstr" }, "join delimiter", node.line, node.col);
-                { typ: { k: "tstr" }, st: st }
+                tc_res(type_node({ k: "tstr" }), st)
             }
         } else if (name == "split") {
             // split(s, delim) -> [str]
             if (len(cargs) != 2) {
                 st = fail(st, "split takes exactly 2 arguments (string, delimiter)", node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
                 let r0 = typeof_expr(st, cargs[0]);
                 st = r0.st;
@@ -2916,102 +3144,102 @@ def typeof_call(st: TcSt, node) -> TcRes {
                 st = r1.st;
                 st = expect_type(st, r0.typ, { k: "tstr" }, "split string", node.line, node.col);
                 st = expect_type(st, r1.typ, { k: "tstr" }, "split delimiter", node.line, node.col);
-                { typ: { k: "tarr", of: { k: "tstr" } }, st: st }
+                tc_res(type_node({ k: "tarr", of: type_node({ k: "tstr" }) }), st)
             }
         } else if (name == "range") {
             // range(n) -> [long]: 0, 1, ..., n-1
             if (len(cargs) != 1) {
                 st = fail(st, "range takes exactly 1 argument", node.line, node.col);
-                { typ: { k: "tarr", of: { k: "tlong" } }, st: st }
+                tc_res(type_node({ k: "tarr", of: type_node({ k: "tlong" }) }), st)
             } else {
                 let rr = typeof_expr(st, cargs[0]);
                 st = expect_type(rr.st, rr.typ, { k: "tlong" }, "range count", node.line, node.col);
-                { typ: { k: "tarr", of: { k: "tlong" } }, st: st }
+                tc_res(type_node({ k: "tarr", of: type_node({ k: "tlong" }) }), st)
             }
         } else if (name == "eputs") {
             // eputs(v) -> void: like puts, but to stderr (fd 2), so
             // diagnostics never mix into program stdout or `-S` output.
             if (len(cargs) != 1) {
                 st = fail(st, "eputs takes exactly 1 argument", node.line, node.col);
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "tlong" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk") {
-                    { typ: { k: "tvoid" }, st: st }
+                    tc_res(type_node({ k: "tvoid" }), st)
                 } else {
                     st = fail(st, "eputs supports long/bool/str, got " + tstr(r.typ), node.line, node.col);
-                    { typ: { k: "tvoid" }, st: st }
+                    tc_res(type_node({ k: "tvoid" }), st)
                 }
             }
         } else if (name == "clock_us") {
             // clock_us() -> long: monotonic microseconds (differences only).
             if (len(cargs) != 0) {
                 st = fail(st, "clock_us takes no arguments", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             } else {
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             }
         } else if (name == "heap_used") {
             // heap_used() -> long: arena bytes handed out so far.
             if (len(cargs) != 0) {
                 st = fail(st, "heap_used takes no arguments", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             } else {
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             }
         } else if (name == "sleep") {
             // sleep(ms): suspend the caller for ms milliseconds.
             if (len(cargs) != 1) {
                 st = fail(st, "sleep takes exactly 1 argument (milliseconds)", node.line, node.col);
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tlong" }, "sleep duration", node.line, node.col);
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             }
         } else if (name == "puts") {
             if (len(cargs) != 1) {
                 st = fail(st, "puts takes exactly 1 argument", node.line, node.col);
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "tlong" || r.typ.k == "tbool" || r.typ.k == "tstr" || r.typ.k == "tfloat" || r.typ.k == "tunk") {
-                    { typ: { k: "tvoid" }, st: st }
+                    tc_res(type_node({ k: "tvoid" }), st)
                 } else {
                     st = fail(st, "puts supports long/bool/str, got " + tstr(r.typ), node.line, node.col);
-                    { typ: { k: "tvoid" }, st: st }
+                    tc_res(type_node({ k: "tvoid" }), st)
                 }
             }
         } else if (name == "exit") {
             if (len(cargs) != 1) {
                 st = fail(st, "exit takes exactly 1 argument", node.line, node.col);
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tlong" }, "exit code", node.line, node.col);
-                { typ: { k: "tvoid" }, st: st }
+                tc_res(type_node({ k: "tvoid" }), st)
             }
         } else if (name == "argv") {
             if (len(cargs) != 0) {
                 st = fail(st, "argv takes no arguments", node.line, node.col);
-                { typ: { k: "tarr", of: { k: "tstr" } }, st: st }
+                tc_res(type_node({ k: "tarr", of: type_node({ k: "tstr" }) }), st)
             } else {
-                { typ: { k: "tarr", of: { k: "tstr" } }, st: st }
+                tc_res(type_node({ k: "tarr", of: type_node({ k: "tstr" }) }), st)
             }
         } else if (name == "bytes") {
             // bytes(s) -> [byte]: the string's raw bytes, packed.
             if (len(cargs) != 1) {
                 st = fail(st, "bytes takes exactly 1 argument (string)", node.line, node.col);
-                { typ: { k: "tarr", of: { k: "tbyte" } }, st: st }
+                tc_res(type_node({ k: "tarr", of: type_node({ k: "tbyte" }) }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 st = expect_type(st, r.typ, { k: "tstr" }, "bytes argument", node.line, node.col);
-                { typ: { k: "tarr", of: { k: "tbyte" } }, st: st }
+                tc_res(type_node({ k: "tarr", of: type_node({ k: "tbyte" }) }), st)
             }
         } else if (name == "from_bytes") {
             // from_bytes(b) -> str: the inverse of bytes(). A fixed
@@ -3019,14 +3247,15 @@ def typeof_call(st: TcSt, node) -> TcRes {
             // accepted as is.
             if (len(cargs) != 1) {
                 st = fail(st, "from_bytes takes exactly 1 argument (byte array)", node.line, node.col);
-                { typ: { k: "tstr" }, st: st }
+                tc_res(type_node({ k: "tstr" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                let fbt = r.typ;
-                let fbw = { k: "tarr", of: { k: "tbyte" } };
+                let fbt: Type = r.typ;
+                let fbw: Type = type_node({ k: "tarr", of: type_node({ k: "tbyte" }) });
                 if (fbt.k == "tarrfix") {
-                    if (tcompat({ k: "tarr", of: fbt.of }, fbw)) { 0; } else {
+                    let fixed: TFix = fbt;
+                    if (tcompat(type_node({ k: "tarr", of: fixed.of }), fbw)) { 0; } else {
                         st = fail(st, "from_bytes argument: expected [byte] or [byte; N], got " + tstr(fbt), node.line, node.col);
                         0
                     };
@@ -3035,7 +3264,7 @@ def typeof_call(st: TcSt, node) -> TcRes {
                     st = expect_type(st, fbt, fbw, "from_bytes argument", node.line, node.col);
                     0
                 };
-                { typ: { k: "tstr" }, st: st }
+                tc_res(type_node({ k: "tstr" }), st)
             }
         } else if (name == "ptr_addr") {
             // ptr_addr(p) -> long: a pointer's numeric value. Pointers ARE
@@ -3044,23 +3273,24 @@ def typeof_call(st: TcSt, node) -> TcRes {
             // addresses) without the emitter growing a bespoke helper.
             if (len(cargs) != 1) {
                 st = fail(st, "ptr_addr takes exactly 1 argument (pointer)", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
                 if (r.typ.k == "tptr" || r.typ.k == "tstr" || r.typ.k == "tunk") {
-                    { typ: { k: "tlong" }, st: st }
+                    tc_res(type_node({ k: "tlong" }), st)
                 } else {
                     st = fail(st, "ptr_addr needs a pointer, got " + tstr(r.typ), node.line, node.col);
-                    { typ: { k: "tlong" }, st: st }
+                    tc_res(type_node({ k: "tlong" }), st)
                 }
             }
-        } else if (name == "syscall") {            if (len(node.args) < 1 || len(node.args) > 7) {
+        } else if (name == "syscall") {
+            if (len(cargs) < 1 || len(cargs) > 7) {
                 st = fail(st, "syscall needs 1-7 arguments (number + up to 6 args)", node.line, node.col);
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             } else {
                 let i = 0;
-                while (i < len(node.args)) {
+                while (i < len(cargs)) {
                     let r = typeof_expr(st, cargs[i]);
                     st = r.st;
                     if (r.typ.k != "tlong" && r.typ.k != "tbool" && r.typ.k != "tstr" && r.typ.k != "tptr" && r.typ.k != "tunk") {
@@ -3069,12 +3299,12 @@ def typeof_call(st: TcSt, node) -> TcRes {
                     } else { 0; };
                     i = i + 1;
                 };
-                { typ: { k: "tlong" }, st: st }
+                tc_res(type_node({ k: "tlong" }), st)
             }
         } else {
             // resolve the callee to a function type: `self`, then scope
             let fterr = "";
-            let ft = t_unk();
+            let ft: Type = t_unk();
             if (name == "self") {
                 if (st.self.k == "tnone" || st.self.k == "tunk") {
                     fterr = "'self' outside of a function";
@@ -3104,7 +3334,7 @@ def typeof_call(st: TcSt, node) -> TcRes {
             };
             if (fterr != "") {
                 st = fail(st, fterr, node.line, node.col);
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else if (ft.k != "tfunc") {
                 // poisoned binding (tunk) from an earlier error — don't
                 // cascade new errors, but still check the arguments for
@@ -3115,12 +3345,13 @@ def typeof_call(st: TcSt, node) -> TcRes {
                     st = r.st;
                     i = i + 1;
                 };
-                { typ: t_unk(), st: st }
+                tc_res(t_unk(), st)
             } else {
-                let cargs_ft = ft.args;
+                let func: TFunc = ft;
+                let cargs_ft: [Type] = func.args;
                 if (len(cargs) != len(cargs_ft)) {
                     st = fail(st, "'" + disp(name) + "' takes " + tostring(len(cargs_ft)) + " args, got " + tostring(len(cargs)), node.line, node.col);
-                    { typ: ft.ret, st: st }
+                    tc_res(func.ret, st)
                 } else {
                     let i = 0;
                     while (i < len(cargs)) {
@@ -3138,17 +3369,17 @@ def typeof_call(st: TcSt, node) -> TcRes {
                         };
                         i = i + 1;
                     };
-                    { typ: ft.ret, st: st }
+                    tc_res(func.ret, st)
                 }
             }
         }
     }
 };
 
-def typeof_block(st: TcSt, node) -> TcRes {
+def typeof_block(st: TcSt, node: Block) -> TcRes {
     // No scope push: names are unique post-rename, blocks share the frame.
-    let last = { k: "tvoid" };
-    let bstmts = node.stmts;
+    let last: Type = type_node({ k: "tvoid" });
+    let bstmts: [Node] = node.stmts;
     let i = 0;
     while (i < len(bstmts)) {
         let r = typeof_expr(st, bstmts[i]);
@@ -3156,24 +3387,24 @@ def typeof_block(st: TcSt, node) -> TcRes {
         last = r.typ;
         i = i + 1;
     };
-    { typ: last, st: st }
+    tc_res(last, st)
 };
 
 // typeof_block with the block's value going where `want` is declared (a
 // def's body, typeof_def): its last statement through typeof_want.
-def typeof_block_want(st: TcSt, node, want) -> TcRes {
-    let last = { k: "tvoid" };
-    let bstmts: [{k: str}] = node.stmts;
+def typeof_block_want(st: TcSt, node: Block, want: Type) -> TcRes {
+    let last: Type = type_node({ k: "tvoid" });
+    let bstmts: [Node] = node.stmts;
     let i = 0;
     while (i < len(bstmts)) {
-        let w = { k: "tnone" };
+        let w: Type = type_node({ k: "tnone" });
         if (i == len(bstmts) - 1) { w = want; 0; } else { 0; };
         let rr = typeof_want(st, bstmts[i], w);
         st = rr.st;
         last = rr.typ;
         i = i + 1;
     };
-    { typ: last, st: st }
+    tc_res(last, st)
 };
 
 // ── record literals where a type is declared ─────────────────────────────
@@ -3190,7 +3421,7 @@ def typeof_block_want(st: TcSt, node, want) -> TcRes {
 // The type of `node` going where `want` is declared: a record literal
 // with a target (lit_target) is checked against it (typeof_lit); anything
 // else is typeof_expr.
-def typeof_want(st: TcSt, node, want) -> TcRes {
+def typeof_want(st: TcSt, node: Node, want: Type) -> TcRes {
     let nk: str = node.k;
     if (nk != "rec") { typeof_expr(st, node) }
     else {
@@ -3204,11 +3435,11 @@ def typeof_want(st: TcSt, node, want) -> TcRes {
 // the member of a union want with them when exactly one has (as the union
 // writes it, union_parts); tnone otherwise, and for a literal with a
 // spread or no fields.
-def lit_target(node, want) -> {k: str} {
+def lit_target(node: RecLit, want: Type) -> Type {
     let keys: [str] = node.keys;
     let w = unfold(want);
     let wk: str = w.k;
-    let found = { k: "tnone" };
+    let found: Type = type_node({ k: "tnone" });
     if (len(keys) == 0 || str_in(keys, "...")) {
         0
     } else if (wk == "trec") {
@@ -3222,7 +3453,7 @@ def lit_target(node, want) -> {k: str} {
             if (same_names(unfold(ps[i]), keys)) { found = ps[i]; n = n + 1; 0 } else { 0 };
             i = i + 1;
         };
-        if (n != 1) { found = { k: "tnone" }; 0 } else { 0 };
+        if (n != 1) { found = type_node({ k: "tnone" }); 0 } else { 0 };
         0
     } else { 0 };
     found
@@ -3230,11 +3461,12 @@ def lit_target(node, want) -> {k: str} {
 
 // Record type t has exactly the field names keys (a name written twice
 // counts once).
-def same_names(t, keys: [str]) -> bool {
+def same_names(t: Type, keys: [str]) -> bool {
     let tk: str = t.k;
     if (tk != "trec") { false }
     else {
-        let fs: [NamedTy] = t.fields;
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let distinct: [str] = [];
         let ok = true;
         let i = 0;
@@ -3250,10 +3482,10 @@ def same_names(t, keys: [str]) -> bool {
 
 // A record literal checked against the record type target (lit_target):
 // each value against its field's type (typeof_want). Its type is target.
-def typeof_lit(st: TcSt, node, target) -> TcRes {
+def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
     let tu = unfold(target);
     let keys: [str] = node.keys;
-    let vals: [{k: str}] = node.vals;
+    let vals: [Node] = node.vals;
     let i = 0;
     while (i < len(keys)) {
         let key: str = keys[i];
@@ -3262,11 +3494,11 @@ def typeof_lit(st: TcSt, node, target) -> TcRes {
         st = expect_type(r.st, r.typ, ft, "record field '" + key + "'", node.line, node.col);
         i = i + 1;
     };
-    { typ: target, st: st }
+    tc_res(target, st)
 };
 
 
-def typeof_decl(st: TcSt, node) -> TcRes {
+def typeof_decl(st: TcSt, node: Decl) -> TcRes {
     if (node.kind == "def") {
         // named function: full check (signature + body)
         typeof_def(st, node.name, node.v, node.line, node.col)
@@ -3328,12 +3560,19 @@ def typeof_decl(st: TcSt, node) -> TcRes {
                     };
                     t = node.typ;
                     0
-                } else if (vk == "rec" && len(node.v.keys) == 0 && node.typ.k == "tmap") {
-                    // The empty literal `{}` under a map annotation IS the
-                    // map (the emitter lowers it to the {keys, vals, boxes}
-                    // shape).
-                    t = node.typ;
-                    0
+                } else if (vk == "rec") {
+                    let rec: RecLit = node.v;
+                    if (len(rec.keys) == 0 && node.typ.k == "tmap") {
+                        // The empty literal `{}` under a map annotation IS
+                        // the map (the emitter lowers it to the {keys, vals,
+                        // boxes} shape).
+                        t = node.typ;
+                        0
+                    } else {
+                        st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
+                        t = node.typ;
+                        0
+                    };
                 } else {
                     st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                     t = node.typ;
@@ -3368,8 +3607,8 @@ def typeof_decl(st: TcSt, node) -> TcRes {
 // A `return` in a def whose return type is still being inferred: its type
 // and position go into the marker typeof_def put in st.ret (`rl`, a record
 // shared by reference), to be checked once the body's type is known.
-type RetNote = { typ: { k: str }, line: long, col: long };
-def ret_note(rl, typ, line: long, col: long) -> long {
+type RetNote = { typ: Type, line: long, col: long };
+def ret_note(rl: TInfer, typ: Type, line: long, col: long) -> long {
     let rets: [RetNote] = rl.rets;
     rets += { typ: typ, line: line, col: col };
     0
@@ -3381,8 +3620,8 @@ def ret_note(rl, typ, line: long, col: long) -> long {
 // alone (which cannot see the body's locals). `fnode` is the def node
 // as rename.y builds it (rn_func_finish), so `ret` is a static field (a
 // node of another shape traps here, native.y gen_as).
-def set_inferred_ret(func, ret) -> long {
-    let fnode: { k: str, params: [str], ptypes: [{ k: str }], ret: { k: str }, body: { k: str }, line: long, col: long } = func;
+def set_inferred_ret(func: Func, ret: Type) -> long {
+    let fnode: { k: str, params: [str], ptypes: [Type], ret: Type, body: Node, line: long, col: long, defs: [Node] } = func;
     fnode.ret = ret;
     0
 };
@@ -3390,21 +3629,21 @@ def set_inferred_ret(func, ret) -> long {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
-def typeof_def(st: TcSt, name: str, func, line: long, col: long) -> TcRes {
+def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes {
     if (len(func.params) != len(func.ptypes)) {
         st = fail(st, "internal: params/ptypes length mismatch", line, col);
-        { typ: t_unk(), st: st }
+        tc_res(t_unk(), st)
     } else {
-        let args = [];
+        let args: [Type] = [];
         // NOTE: bound once (flow-snapshot: `params`/`ptypes` are bare node
         // fields; an inline `func.params[i]` would re-read the node through
         // whatever shape the env holds for `func`).
-        let fparams = func.params;
-        let fptypes = func.ptypes;
+        let fparams: [str] = func.params;
+        let fptypes: [Type] = func.ptypes;
         let i = 0;
         let ok = true;
         while (i < len(fparams)) {
-            let pt = fptypes[i];
+            let pt: Type = fptypes[i];
             if (pt.k == "tnone") {
                 // OPTIONAL ANNOTATIONS v1: a missing param annotation is a
                 // poison-tolerant unknown (t_unk). That covers BOTH the ycc
@@ -3425,13 +3664,13 @@ def typeof_def(st: TcSt, name: str, func, line: long, col: long) -> TcRes {
             args += pt;
             i = i + 1;
         };
-        let ret = func.ret;
+        let ret: Type = func.ret;
         let ret_inferred = false;
         // An inferred def's `return`s are checked once its type is known:
         // while the body is checked, st.ret is a marker that notes each one
         // (ret_note) in `rets`.
         let rets: [RetNote] = [];
-        let body_ret = ret;
+        let body_ret: Type = ret;
         if (ret.k == "tnone") {
             // OPTIONAL ANNOTATIONS + inference v1: the return type comes
             // from the body's tail value once the body has been checked.
@@ -3439,10 +3678,10 @@ def typeof_def(st: TcSt, name: str, func, line: long, col: long) -> TcRes {
             // and forward calls still unify.
             ret_inferred = true;
             ret = t_unk();
-            body_ret = { k: "tinfer", rets: rets };
+            body_ret = type_node({ k: "tinfer", rets: rets });
             0
         } else { 0; };
-        let ft = { k: "tfunc", args: args, ret: ret };
+        let ft: Type = type_node({ k: "tfunc", args: args, ret: ret });
         // bind early so recursion via `self`/name works
         st = st_bind(st, name, ft, "func");
         // check the body one level deeper. Outer locals/params stay in the
@@ -3459,7 +3698,8 @@ def typeof_def(st: TcSt, name: str, func, line: long, col: long) -> TcRes {
         };
         st = st_self(st, ft);
         st = st_ret(st, body_ret);
-        let b = typeof_block_want(st, func.body, body_ret);
+        let body: Block = func.body;
+        let b = typeof_block_want(st, body, body_ret);
         st = b.st;
         if (ret_inferred) {
             // INFERENCE: the def's return type is the body's tail value.
@@ -3494,7 +3734,7 @@ def typeof_def(st: TcSt, name: str, func, line: long, col: long) -> TcRes {
                 } else { 0; };
                 ri = ri + 1;
             };
-            ft = { k: "tfunc", args: args, ret: br };
+            ft = type_node({ k: "tfunc", args: args, ret: br });
             st = st_bind(st, name, ft, "func");
             if (br.k != "tunk") {
                 set_inferred_ret(func, br);
@@ -3515,11 +3755,11 @@ def typeof_def(st: TcSt, name: str, func, line: long, col: long) -> TcRes {
         st = st_self(st, saved_self);
         st = st_ret(st, saved_ret);
         if (ok) {
-            { typ: ft, st: st }
+            tc_res(ft, st)
         } else {
             // poison the binding so follow-on errors don't cascade weirdly
             st = st_bind(st, name, t_unk(), "func");
-            { typ: t_unk(), st: st }
+            tc_res(t_unk(), st)
         }
     }
 };
@@ -3530,23 +3770,26 @@ def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.e
 
 // `ext`: the externs -- top-level defs of the units this one links
 // against (native.y compile_unit), visible by name like the unit's own.
-def check_program(ast, ext: [Sym]) -> [Diag] {
+def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // pass 1: collect top-level def signatures (allows mutual recursion).
-    let defs = [];
-    let pstmts = ast.stmts;
+    let defs: [Field] = [];
+    let pstmts: [Node] = ast.stmts;
     let i = 0;
     while (i < len(pstmts)) {
-        let s = pstmts[i];
+        let s: Node = pstmts[i];
         // NOTE: nested ifs, not `&&` (house style — the `s.v.k` read is
         // only reached once `s` is known to be a decl; `&&` would
         // short-circuit to the same place).
         if (s.k == "decl") {
-            if (s.kind == "def") {
-                defs += def_sig(s.name, s.v);
+            let decl: Decl = s;
+            if (decl.kind == "def") {
+                let func: Func = decl.v;
+                defs += def_sig(decl.name, func);
                 0
-            } else if (s.v.k == "func") {
+            } else if (decl.v.k == "func") {
                 // top-level let f = def... : also hoisted for mutual recursion
-                defs += def_sig(s.name, s.v);
+                let func: Func = decl.v;
+                defs += def_sig(decl.name, func);
                 0
             } else { 0; };
             0
@@ -3554,10 +3797,11 @@ def check_program(ast, ext: [Sym]) -> [Diag] {
         i = i + 1;
     };
     // pass 2: check everything in order (depth 0 = top level)
-    let st = { bindings: [], errors: [], ret: { k: "tnone" }, self: { k: "tnone" }, fdepth: 0 };
+    let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: "tnone" }), self: type_node({ k: "tnone" }), fdepth: 0 };
     // top-level defs are visible at top level
-    st = st_bind(st, "print", { k: "tfunc", args: [{ k: "tlong" }], ret: { k: "tvoid" } }, "intrinsic");
-    st = st_bind(st, "syscall", { k: "tlong" }, "intrinsic");
+    let print_type: Type = type_node({ k: "tfunc", args: [type_node({ k: "tlong" })], ret: type_node({ k: "tvoid" }) });
+    st = st_bind(st, "print", print_type, "intrinsic");
+    st = st_bind(st, "syscall", type_node({ k: "tlong" }), "intrinsic");
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
@@ -3581,21 +3825,21 @@ def check_program(ast, ext: [Sym]) -> [Diag] {
     r.st.errors
 };
 
-def def_sig(name: str, func) -> NamedTy {
+def def_sig(name: str, func: Func) -> Field {
     // Signature for the pre-pass. Missing annotations are poison (tunk);
     // pass 2 (typeof_def) reports each exactly once.
-    let args = [];
-    let fpt = func.ptypes;
+    let args: [Type] = [];
+    let fpt: [Type] = func.ptypes;
     let i = 0;
     while (i < len(func.params)) {
-        let pt = fpt[i];
+        let pt: Type = fpt[i];
         if (pt.k == "tnone") { pt = t_unk(); };
         args += pt;
         i = i + 1;
     };
-    let ret = func.ret;
+    let ret: Type = func.ret;
     if (ret.k == "tnone") { ret = t_unk(); };
-    { name: name, typ: { k: "tfunc", args: args, ret: ret } }
+    { name: name, typ: type_node({ k: "tfunc", args: args, ret: ret }) }
 };
 
 export { check_program, tstr, tdisp, tdisp_fnval, teq, is_open, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

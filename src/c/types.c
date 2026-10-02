@@ -35,13 +35,15 @@
 #include "types.h"
 #include "yv.h"
 
-/* imported — types.y imports parser.y for its alias NamedTy only (a
- * record is a Yv * here): every call below is a builtin
+/* imported — types.y imports parser.y for its Field, Node and Type aliases
+ * (a record is a Yv * here): every call below is a builtin
  * (len/push/index_of/join/tostring) or a def of this file. */
 
 /* forward declarations (Y defs are mutually visible) */
 static Yv *err_at(Yv *msg, long line, long col);
 static Yv *t_unk(void);
+static Yv *type_node(Yv *t);
+static Yv *tc_res(Yv *typ, Yv *st);
 static Yv *t_free(void);
 static Yv *t_pend(void);
 static Yv *t_pend_self(void);
@@ -164,6 +166,14 @@ static Yv *err_at(Yv *msg, long line, long col) {
 
 static Yv *t_unk(void) {
     return yr(1, "k", ys("tunk"));
+}
+
+static Yv *type_node(Yv *t) {
+    return t;
+}
+
+static Yv *tc_res(Yv *typ, Yv *st) {
+    return yr(2, "typ", typ, "st", st);
 }
 
 // `[]` or `none` where no type is declared: the element or payload is not
@@ -1550,7 +1560,7 @@ static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
         st = expect_type(st, rt, yr(1, "k", ys("tstr")),
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+        return tc_res(type_node(yr(1, "k", ys("tbool"))), st);
     } else if (ys_eq_lit(yr_get(lt, "k"), "tfloat") ||
                ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
         st = expect_type(st, lt, yr(1, "k", ys("tfloat")),
