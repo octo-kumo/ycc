@@ -1,183 +1,282 @@
-# PERF.md — making `ycc` itself faster/smaller
+# PERF.md — optimising `ycc` itself
 
-No language features, no behaviour change. This file records where `ycc`'s
-own time and memory go, what has been fixed, and what is next.
+No language features, no behaviour change. This is the record of one
+investigation: where `ycc`'s own time and memory go, what was fixed, what was
+tried and rejected **with numbers**, and what is still open — including a
+**live miscompile** it turned up.
 
-## How the numbers were taken
+## Status
+
+Three commits on `bench/ycc-perf`, cumulative against `refs/ycc.ref`:
+
+| | base | now | |
+|---|---|---|---|
+| instructions compiling `ycc.y` | 22.47 G | 8.74 G | **−61.1%** |
+| `compile_us` | 1,060,160 | 479,091 | **−54.8%** |
+| peak heap (massif) | 921.9 MB | 820.4 MB | −11.0% |
+
+`SCORE 105.24`. All suites green, 349 programs 0 different, instructions run
+by compiled programs +0.00%, port gate 43/43, fuzz 0 findings.
+
+**`make rebless` has not been run** — `refs/ycc.ref` is still the pre-change
+compiler, so `make test`'s `cmp ycc refs/ycc.ref` gate fails until it is.
+
+## Measuring
 
 `yccd` = `./ycc -g -o yccd src/y/ycc.y` (the compiler with symbols), run on
-`src/y/ycc.y` — the biggest input there is (964 KB spliced, 209,316 tokens,
-831 `def`s). Machine: i5-14600KF, 20 threads.
+`src/y/ycc.y` — the largest input (964 KB spliced, 209,316 tokens, 831 `def`s).
+i5-14600KF, 20 threads.
 
 ```
-./yccd --time -o /tmp/t src/y/ycc.y                      # per-phase ms + heap KB
-valgrind --tool=callgrind --cache-sim=no ./yccd ...     # exact instruction counts
-valgrind --tool=cachegrind --cache-sim=yes ...          # D1/LL misses
-valgrind --tool=massif --pages-as-heap=yes --detailed-freq=1 ...   # by allocation site
-perf record -F 4000 -e cycles:u ; perf stat -e cycles,instructions,branches,...
+./yccd --time -o /tmp/t src/y/ycc.y          # per-phase ms + heap KB
+valgrind --tool=callgrind --cache-sim=no     # exact instruction counts
+valgrind --tool=cachegrind --cache-sim=yes   # D1/LL misses
+valgrind --tool=massif --pages-as-heap=yes --detailed-freq=1
+perf record -F 4000 -e cycles:u ; perf stat -e cycles,instructions,...
 ```
 
-Heap figures are cumulative allocation: `y_alloc` is a bump arena that never
-frees, so *live heap == total allocated* and memory is proportional to the
-number of allocations, not to anything a scope could release.
+Two traps that cost real time:
 
-## The finding that shapes everything
+- **A `str` is `[len:8][bytes]`** — reading one in gdb needs `+8`, or you
+  compare lengths and quietly measure nonsense.
+- **`./ycc -g` bakes in `./ycc`'s own embedded `std/*.y`**, not the tree's.
+  Profiling a runtime change with `./ycc -g` silently measures the *previous*
+  runtime. Use `./ynew -g`.
 
-Baseline `ycc` compiling `ycc.y`: **22.4 G instructions, 5.56 G cycles,
-IPC 4.03**. That IPC is near the machine's issue width: `ycc` is
-**instruction-throughput bound, not stalled**. Branch misses are 0.51% and
-dTLB misses are ~29 k, so there is no latency hiding to win back — *the only
-lever is executing fewer instructions.* Instruction counts taken under
-valgrind therefore predict wall time almost exactly (a change measured at
-−42.5% instructions came in at −40.6% time).
+Heap is a bump arena that never frees, so live heap == total allocated:
+memory tracks allocation volume, and no scope can give it back.
 
-## Root cause: scopes are the whole program, searched linearly
+## The baseline, and the one framing fact
 
-Four functions were **66% of all instructions and 96% of all L1 data read
-misses**:
+22.4 G instructions, 5.56 G cycles, **IPC 4.03** — near the machine's issue
+width. Branch misses 0.51%, dTLB misses ~29 k. So `ycc` is
+**instruction-throughput bound, not stalled**: there is no latency to hide,
+and the only lever is executing fewer instructions. Valgrind instruction
+counts therefore predict wall time almost exactly (−42.5% instructions came
+in at −40.6% time).
 
-| function | Ir | share | calls x compares |
-|---|---|---|---|
-| `y_str_eq` | 5.00 G | 22.3% | **226.8 M calls** total |
-| `lookup` (`types.y`) | 4.75 G | 21.2% | 28,679 x **3,942** |
-| `name_index` (`native.y`) | 2.91 G | 13.0% | 191,414 x 274, **92.5% misses** |
-| `env_find` (`native.y`) | 2.13 G | 9.5% | 53,509 x **924** |
-
-Why the lists are so long — one design decision, documented in the source:
-
-> *"The scope is pre-loaded with every known def (like the checker's
-> fresh_func_scope)"* — `native.y`, `emit_one_fn`
-
-- `check_program` (`types.y:3130`) builds **one flat, program-wide**
-  `bindings` list: every def of every linked unit, plus every local and
-  parameter, appended as the walk proceeds. It reaches **6,801 entries** for
-  `ycc.y`, and `lookup` scanned **all** of it per identifier, with no early
-  exit at all.
-- `emit_one_fn`, `infer_fn_ret` and `global_entries` each build a fresh
-  `env: []` and then re-insert **every def in the unit** — so `env` is ~1,605
-  entries and `env_define` runs O(defs²) times.
-
-Measured with gdb (note: a `str` is `[len:8][bytes]`, so reading a string in
-a debugger needs `+8`):
-
-- **81.7% of `lookup` hits and 85% of `env_find` hits are in the last decile**
-  of the array — a reference almost always resolves to a binding added
-  moments ago.
-- Both functions **return the last match** (they overwrite `found` on every
-  hit). So a scan from the end that stops at the first hit returns *exactly*
-  the same entry. `rename.y`'s `rn_lookup` already uses that idiom.
-
-### It is quadratic in program size
-
-Synthetic programs of N top-level functions, total instructions:
-
-| N | 400 | 1600 | ratio (4x source) |
-|---|---|---|---|
-| base | 1.56 G | 18.06 G | **11.55x** |
-| `lookup` | 1.3% | 15.78x growth | **quadratic** |
-
-At N=6400 the base compiler needs **9.2 s and 9.7 GB**.
-
-## Fixed in this change
-
-All six are semantics-preserving; `make check` reports **349 programs, 0
-compiling to different code and 0 behaving differently**.
+## Landed
 
 | # | change | file |
 |---|---|---|
-| 1 | `lookup`: scan `bindings` **from the end, stop at first hit** (was: full forward scan) | `types.y` |
-| 2 | `env_find`: same | `native.y` |
-| 3 | `name_in`: stop at first hit (result is a `bool`, so order is irrelevant) | `native.y` |
-| 4 | `fns_kind`: `label[:3] == "yg_"` -> `label.starts_with("yg_")` — the slice allocated a throwaway string on every call, 836 k times | `native.y` |
-| 5 | `check_program`, `is_sym_label`, `sym_name`: same prefix-test change | `types.y`, `asm.y` |
-| 6 | `split_ops`: **one slice per field** instead of `s[i:i+1]` + append per character — was the single largest allocation site in the compiler | `asm.y` |
+| 1 | `lookup`/`env_find` scan **from the end, stop at first hit**; `name_in` stops at its first hit; four `label[:n] == "…"` tests become allocation-free `starts_with`; `split_ops` slices each operand **field** once instead of allocating a 1-byte string per character | `types.y`, `native.y`, `asm.y` |
+| 2 | Tree shaker resolves names through **`asm.y`'s existing `labmap`** instead of scanning (no second hash map) | `native.y`, `asm.y` |
+| 3 | `index_of`/`split` settle the needle on its **leading byte** before the inner loop | `std/rt.y` |
 
-`starts_with` already existed (`std/str.y`, `types.y str_method`), so no new
-language surface; the C twin gets `ys_at`/`ys_starts_with`/`ys_ends_with` in
-`yv.c`, mirroring `y_str_at`.
+**1.** The scopes are the whole program: `check_program` builds one flat
+`bindings` list (6,801 entries for `ycc.y`) and `emit_one_fn` re-inserts every
+def of the unit into each function's `env` (~1,605 entries). Measured with
+gdb: **81.7% of `lookup` hits and 85% of `env_find` hits are in the last
+decile**, and both return the *last* match — so scanning backwards is
+**exactly equivalent**, which is why it is safe. A forward scan with early
+exit would have bought only 17%; backwards buys 83%.
 
-### Result (`make check`, base `refs/ycc.ref`)
+```
+Ir 22.44G -> 12.34G (-45.0%)   compile 1055 -> 584 ms   typecheck 381 -> 46 ms
+```
 
-| | base | new | |
-|---|---|---|---|
-| instructions compiling `ycc.y` | 22,438,496,990 | 12,341,885,393 | **−45.00%** |
-| `compile_us` | 1,060,390 | 586,424 | **−44.70%** |
-| `heap_kb` | 938,571 | 829,961 | **−11.57%** |
-| peak heap (massif) | 921.9 MB | 820.4 MB | −11.0% |
-| instructions compiling the small `bench/y/*` | — | — | −0.4% .. −8.3% |
-| instructions **running** compiled programs | — | — | **+0.00%** (all) |
+**2.** `name_index` was **24.4% of all instructions** — 191,387 linear scans
+from `shake_keep`. Reusing `labmap` (open addressing, linear probing) needed
+one gotcha: `labmap`'s empty slot is `""` and an unnamed block's name *is*
+`""`, so `""` is not inserted — safe because `tok_push` drops empty tokens, so
+no key looked up is ever empty.
 
-Per phase: typecheck **381 -> 46 ms (−88%)**, emit_fns 212.5 -> 111.6 ms
-(−48%), assemble 224.9 -> 197.1 ms (−12%), TOTAL 1055 -> 584 ms.
+```
+name_index 2.91G -> ~0   y_str_eq 5.00G -> 1.91G (-61.7%)
+Ir 12.36G -> 9.40G (-24.0%)   asm_text 98.5 -> 17.4 ms (-82.3%)
+```
 
-By allocation site: `y_str_slice` **312 -> 216 MB**, the sub-threshold bucket
-184 -> 140 MB; `y_arr_push` rose 106 -> 136 MB, absorbing the per-field
-pushes `split_ops` no longer does one character at a time.
+**3.** Every needle `ycc` uses is one byte (`" "`, `"("`, `":"`, `"\t"`,
+`"-"`, `"\n"`, `"/"`), yet both compared the whole needle at every position.
 
-### And it fixes the asymptotics
+```
+y_str_index 937.1M -> 543.5M (-42%)   y_str_split 671.9M -> 410.4M (-39%)
+Ir 9.50G -> 8.84G (-6.95%)   assemble 194 -> 173 ms
+```
 
-`typecheck`, ms, by number of top-level defs:
+## Rejected, with numbers
 
-| defs | 400 | 1600 | 3200 | 6400 |
-|---|---|---|---|---|
-| base | 7.5 | 113 | 860 | 4,689 |
-| new | **1.6** | **4.5** | **9.2** | **19.2** |
+**Pointer fast path in `y_str_eq`** (`cmp %rbx,%r13; je eq` before the byte
+walk) — the obvious way to make tag compares cheap:
 
-n^2.45 -> **n^1.05, i.e. linear**. A forward scan with early exit would only
-have bought 17%; scanning backwards buys 83% because the hot names are at the
-end.
+```
+HEAD  Ir 8,725,986,651  ->  +fast 8,845,933,954    +1.4%  REGRESSION
+```
 
-### Verification
+**Per-unit literal dedup** (`gen_str_const` reuses one `.rodata` label per
+distinct content, so `node.k == "num"` compares the same object) plus the
+fast path:
 
-`make check`: cycc builds `./ynew` byte for byte, **every suite passes**,
-349 programs identical. Plus `make port-check` (43/43), `test/fuzz/fuzz.sh`
-(60 inputs, 0 findings) and valgrind memcheck clean.
-`make asan` cannot run here — the machine has no `libubsan.so.1.0.0` (and no
-`libasan`), which is pre-existing and unrelated.
+```
+        Ir              out_bytes   time
+HEAD    8,751,127,436   1,052,848   483 ms
++dedup  9,142,371,019     975,024   511 ms     +4.5% Ir, -7.4% size, +5.7% time
+```
 
-Also fixed: `test/sh/test_pkg.sh`'s throwaway git repos are now created with
-`-c commit.gpgsign=false -c tag.gpgsign=false`. Without it a developer whose
-**global** git config signs commits gets a pinentry prompt per commit — and
-with no tty, an empty repo and 10–16 bogus `pkg` failures that look like
-compiler bugs. (The repo lives in `$TMPD`, so this project's own local
-`commit.gpgsign=false` never reached it.)
+Dedup shrinks binaries 7.4% (a real win, wrong direction for a compiler) but
+the fast path *still* never hits — `y_str_eq` went **up**, 1.599 G → 1.694 G.
+Reason: **the hot tag comparisons are cross-unit.** `parser.y` builds
+`node.k` from *its* `"num"`, `native.y`'s dispatch compares against *its*
+`"num"`, and units compile independently with their own `.rodata`. Only a
+program-wide literal table (unit B referencing unit A's label) would unify
+them, and that crosses the unit/label boundaries `ycc build` and the object
+cache depend on. Not worth it.
+
+**The tag enum** (`"trec"` → `K_TREC`) — 1,690 `k: str` annotations and
+~1,750 tag literals across `types/native/parser/rename`, applied mechanically;
+errors fell 227 → 110 and then stopped, for the reason in the next section.
+
+## The `{k: str}` backdoor
+
+`{ k: str }` is not just an annotation. It is the checker's
+**unknown-shape marker**, and it makes missing-field reads succeed silently:
+
+| receiver shape | read a missing field | dot-**assign** |
+|---|---|---|
+| `{ k: str }` | **compiles** → runtime trap | compile error |
+| `{ k: str, zzz: long }` | **compiles** → runtime trap | — |
+| `{ k: bool }` | compile error | — |
+| `{ z: str }` | compile error | — |
+
+The trigger is exactly **a field named `k` whose type is `str`**. A plain user
+record `{ k: "hello" }` compiles, and instead of a compile error you get
+`runtime error: record has no field 'of'` at run time. It is a deferred
+error, not a miscompile — the emitter still checks (`y_dot_lookup` traps) and
+the write side is still caught statically — but a real usability wart.
+
+It exists because of this, in `types.y`:
+
+```y
+} else if (teq(t, unk_shape())) {
+    // unknown-shape ({k}-only) reads unify quietly (tcompat
+    // law) — the missing annotation errors once at its own
+    // site, not again at every enclosing read.
+```
+
+`unk_shape()` is a trec whose single field is `k` — its whole identity is
+"**`k` is a `str`**". 1,690 annotations lean on it: `lookup` declares
+`{typ: {k: str}}` and callers legitimately read `got.typ.of`.
+
+## The shape rule underneath
+
+Records must agree on field **count**, each field matching by name and type —
+except a value whose only field is `k`, which matches anything:
+
+| value | annotation | result |
+|---|---|---|
+| `{k, name, of}` | `{k, name, of}` | ok |
+| `{k, name}` | `{k, name, of}` | **error** |
+| `{k}` | `{k, name, of}` | **ok** ← the wildcard |
+| `{k, yy}` | `{k, zz}` | **error** |
+
+That is `teq`'s trec arm, verbatim: `if (len(af) != len(bf)) { if
+(single_k(af)) … else if (single_k(bf)) … else { false } }`.
+
+**So `single_k` is the only widening mechanism in the whole type system.**
+That has two consequences:
+
+- A `type Type = {…}` alias **cannot** express "a type node of any kind" —
+  every kind has a different field count. Measured: the alias got 1,631
+  annotations down to **4 errors**, all unfixable by aliasing. Recursive
+  aliases parse but a self-referential `of: Type` **runs the compiler out of
+  memory** at 265 uses, so they have to be hand-unrolled by depth anyway.
+- Making `k` a `long` **deletes the marker**, which is why the tag enum
+  stalled: it isn't an annotation problem, it is the shape model.
+
+Unions are the right concept and do not rescue it: `TLeaf | TArr | TPtr`
+accepts a member for assignment, but **no field of a union can be read at
+all** — `t.k` errors even though all three members have `k`.
+
+## Field access is a runtime string scan
+
+```asm
+y_dot_lookup:              ; arch_x64.y
+    mov -8(%rbx), %r14     ; the record's own shape table (stored before it)
+    mov 8(%r14), %r15      ; field count
+    lea 16(%r14), %r14     ; the field-NAME array
+ydl_cmp:
+    movzbq 16(%r14,%rdx,8), %rax   ; shape's name, byte j
+    movzbq (%r11,%rdx,1), %rcx     ; requested name, byte j
+    cmp %rcx, %rax
+```
+
+Access is **name-resolved at run time**, not offset-based: every record
+carries its own shape table, `[tag][count][name₀][len₀]…` — **two words per
+field plus the name's bytes in `.rodata`**. Maps are records too (`{keys,
+vals}`), so they pay it twice per operation.
+
+**`y_dot_lookup`: 9,274,608 calls, 666,504,002 Ir — 7.5% of everything `ycc`
+executes.** Top callers: `teq` 21.4%, `rn_decl_name_go` 9.1%, `enc_mov` 6.2%,
+`teq_fields` 5.5%, `fv_walk` 5.1%.
+
+**But the fast path already exists.** `gen_dot_rec` bakes the offset whenever
+it can:
+
+```y
+let idx = rec_field_idx(t, dkey);
+if (idx < 0) { … call y_dot_lookup … }
+else { st = gen(st, dobj);
+       st = emit(st, "    mov " + tostring(idx * 8) + "(%rax), %rax"); }
+```
+
+Verified: an annotated record param bakes every access (`mov 0/8(%rax)`),
+a bare param falls back. **100% of the 9.27 M lookups are the `idx < 0`
+fallback**, whose own comment names the cause — *"unknown static shape
+({k}-holes, bare params)"*. So retiring the wildcard and inferring param
+shapes delete the runtime string scan outright; no interning and no runtime
+representation change are needed.
+
+## BUG: the baked path is order-sensitive and miscompiles
+
+A live miscompile in the shipped compiler, found while checking the above:
+
+```y
+def rd(p: { alpha: long, beta: long }) -> long { p.alpha * 10 + p.beta };
+puts(tostring(rd({ beta: 2, alpha: 1 })));
+```
+
+```
+12  matching literal order   (correct)
+21  reversed literal order   WRONG — want 12
+12  reversed, bare param     (correct: the dynamic path re-resolves by name)
+```
+
+`rec_field_idx` takes the index from the **annotation's** field order;
+`gen_reclit` lays the value out in the **literal's** first-appearance order.
+Nothing makes them agree, so a baked `mov 0(%rax)` for `.alpha` reads beta's
+value. Reachable whenever a param is annotated *and* the call site's literal
+key order differs. Nothing in `test/` covers it.
+
+Root cause is the same missing thing: baking an offset needs **one canonical
+field order the checker and emitter both agree on**, and today the checker
+doesn't commit to shapes so there is none.
 
 ## Next steps, ranked
 
-**1. `emit_fns` is still quadratic — the biggest one left.**
-`emit_one_fn` still inserts every def of the unit into `env` for every
-function. At N=6400 that is **3,112 ms and 10 GB** of allocation.
-*Fix:* keep a program-wide `defs` map (name -> label) consulted for calls and
-globals, and put only the function's own locals/params in `env`. Then
-`env_find` is O(locals) and `env_define` is O(locals), not O(defs) per
-function. Expect this to remove most of the remaining growth; it is the only
-superlinear term left.
-
-**2. `name_index` — now the #1 function at 22.6% of instructions.**
-191,414 calls from `shake_keep`, **92.5% of them misses**, each scanning all
-274 fn names with a pointer chase per element (47 M L1 misses; ~55
-instructions per iteration because each `len(nm)` is a dependent load).
-*Fix, cheapest first:* hoist the lengths into a flat `[long]` once per
-`shake_keep` so the inner loop touches a compact array. *Fix, best:* have
-`refs` store **indices** instead of names — resolve at scan time — making it
-O(1) with no hashing in the shaker at all.
-
-**3. `rename` — now #2 at N=6400 (486 ms).**
-`rn_redefined_later` measured 15.85x per 4x source. It scans all later
-top-level statements for a duplicate name and, in the common case (no
-duplicate), always scans everything. *Fix:* one name -> count map per unit.
-
-**4. Memory, still ~820 MB.** By far the largest item is structural:
-`env_define` allocates **136 MB (17%)** purely to rebuild an 11-field state
-record when only an array changed; arrays are references, so
-`st.env += e` already mutated in place and the rebuild is dead weight.
-`emit` (`native.y:1443`) does the same for 35 MB. Needs care: it changes the
-thread-by-value discipline the modules rely on. Also: `y_str_index`/`index_of`
-(7.2% of instructions) is a naive O(n*m) scan, `y_dot_lookup` (5.1%) walks
-field names per `.` access, and `enc64.y`'s `concat` pushes byte by byte.
-
-**5. Smaller:** `is_id_b`-style byte predicates already exist, but `lexer.y`'s
-`isdigit`/`islower`/`isalpha`/`isspace` take a **`str`** and compare it with
-`>=`/`<=`, i.e. a full `y_str_cmp` per character. Switching the tokenize loop
-to byte predicates would remove `y_str_cmp` and the 1-char slices; only
-0.37% of instructions today, so low priority.
+1. **Fix the miscompile** (correctness; it is shipping). Interim: refuse to
+   bake unless the layout is provably the annotation's — costs a little speed,
+   removes a wrong-answer bug today. Needs a `test/y/native/` fixture either
+   way.
+2. **Canonical layout + checker commitment** — union `Type` plus narrowing on
+   a discriminant test (`got.typ.k == K_TARR` already precedes
+   `got.typ.of` at the call sites; the checker is flow-insensitive and cannot
+   see it). Retires `single_k`, `unk_shape` and `typeof_field`'s quiet arms,
+   makes baking sound in general, and unblocks the tag enum. Biggest change
+   of the three, and it moves diagnostics.
+3. **Param shape inference** — replace `pt = t_unk()` (`types.y:3001`) with a
+   scan of the body's own `dot` reads, synthesising `{name: tunk, …}`. Field
+   *names* are all `rec_field_idx` needs. Purely additive (infer more, never
+   less; anything missed keeps the sound dynamic path) and no checker change
+   — but it multiplies bug (1) if done before 2, so it waits.
+4. **`emit_fns` is still quadratic** — 81% of time and 8.7 GB at 6,400 defs,
+   because `emit_one_fn` copies every unit def into each function's `env`.
+   At `ycc.y`'s own scale it is only 1.12%, and the clean fix needs a field on
+   the emit state (144 signatures in `native.y` + 40 record builds in
+   `native.c`), so it is a poor trade for the common case.
+5. **Smaller, still open:** `name_index` is gone but `y_str_eq` is now #1 at
+   18.1% (65.1 M calls, 286 callers — 44.4% name comparisons, 55.6% tags, no
+   dominant caller); `y_str_index` 6.1% and `y_str_split` 4.6% have the same
+   one-byte-needle shape as commit 3 and would take the same fix;
+   `rn_redefined_later` is quadratic; `env_define` allocates 140 MB rebuilding
+   an 11-field state record when arrays being references means the rebuild is
+   dead weight.
