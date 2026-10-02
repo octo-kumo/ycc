@@ -1,5 +1,7 @@
 # y — the Y compiler
 
+> ycc might mean 'y code compiler' or 'yun's crappy compiler' or 'y compiler collections'
+
 A compiler for **Y**, a small statically-checked systems language, and
 its **1:1 copy in C**. Both compilers build on Linux x86-64 and emit
 *static* ELF executables using only their own assembler and ELF writer —
