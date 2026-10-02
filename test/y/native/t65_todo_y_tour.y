@@ -9,7 +9,7 @@ def printa() {
     print("a = ", a);
 }
 a ? printa() : none;
-def factorial(n, acc = 1) {
+def factorial(n: long, acc = 1) {
     if (n <= 1) {
         return acc;
     }

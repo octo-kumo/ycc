@@ -42,6 +42,12 @@
 /* forward declarations (Y defs are mutually visible) */
 static Yv *err_at(Yv *msg, long line, long col);
 static Yv *t_unk(void);
+static Yv *t_free(void);
+static Yv *t_pend(void);
+static Yv *t_pend_self(void);
+static Yv *call_result(Yv *ft);
+static int has_free(Yv *t);
+static int ret_pending(Yv *t);
 static Yv *map_type_of(Yv *v);
 static int teq_fields(Yv *af, Yv *bf, long i);
 static int teq_list(Yv *aa, Yv *bb, long i);
@@ -158,6 +164,95 @@ static Yv *err_at(Yv *msg, long line, long col) {
 
 static Yv *t_unk(void) {
     return yr(1, "k", ys("tunk"));
+}
+
+// `[]` or `none` where no type is declared: the element or payload is not
+// known, so it unifies like tunk, but a binding or an inferred return of a
+// type with one inside needs an annotation (has_free) -- error poison
+// (plain tunk) stays quiet.
+static Yv *t_free(void) {
+    return yr(2, "k", ys("tunk"), "free", yv_bool(1));
+}
+
+// A def's return type before it is known: a call to it then (a forward
+// call) needs the return type annotated.
+static Yv *t_pend(void) {
+    return yr(1, "k", ys("tpend"));
+}
+
+// The return type of a def while its body is checked to infer it: a call
+// to the def from its own body gives an unknown and notes itself
+// (call_result), and typeof_def checks the body again with the type the
+// rest of the body gave.
+static Yv *t_pend_self(void) {
+    return yr(2, "k", ys("tpend"), "self", yv_bool(1));
+}
+
+static int has_free(Yv *t) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tunk")) {
+        return yr_has(t, "free");
+    } else if (ys_eq_lit(k, "tarr") || ys_eq_lit(k, "tarrfix") ||
+               ys_eq_lit(k, "topt")) {
+        return has_free(yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "tptr")) {
+        return has_free(yr_get(t, "to"));
+    } else if (ys_eq_lit(k, "tmap")) {
+        return has_free(yr_get(t, "key")) || has_free(yr_get(t, "of"));
+    } else if (ys_eq_lit(k, "trec")) {
+        Yv *fs = yr_get(t, "fields");
+        long i = 0;
+        while (i < yv_len(fs)) {
+            if (has_free(yr_get(ya_get(fs, i), "typ"))) {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    } else if (ys_eq_lit(k, "tunion")) {
+        Yv *ts = yr_get(t, "ts");
+        long i = 0;
+        while (i < yv_len(ts)) {
+            if (has_free(ya_get(ts, i))) {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    } else if (ys_eq_lit(k, "tfunc")) {
+        Yv *as = yr_get(t, "args");
+        long i = 0;
+        while (i < yv_len(as)) {
+            if (has_free(ya_get(as, i))) {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return has_free(yr_get(t, "ret"));
+    } else {
+        return 0;
+    }
+}
+
+// A function type whose return type is not known yet (t_pend), and not
+// the def being inferred (t_pend_self) calling itself.
+static int ret_pending(Yv *t) {
+    return ys_eq_lit(yr_get(t, "k"), "tfunc") &&
+           ys_eq_lit(yr_get(yr_get(t, "ret"), "k"), "tpend") &&
+           !yr_has(yr_get(t, "ret"), "self");
+}
+
+// The type of a call to ft: its return type; a def calling itself while
+// its return type is inferred gets an unknown, and the def is checked
+// again (typeof_def).
+static Yv *call_result(Yv *ft) {
+    Yv *r = yr_get(ft, "ret");
+    if (ys_eq_lit(yr_get(r, "k"), "tpend")) {
+        yr_set(r, "used", yv_bool(1));
+        return t_unk();
+    } else {
+        return r;
+    }
 }
 
 // A map type node ({K => V}). Returns through a {k: str} annotation so
@@ -1728,6 +1823,10 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 st = fail(st, ys("'self' outside of a function"),
                           yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
+            } else if (ys_eq_lit(yr_get(yr_get(yr_get(st, "self"), "ret"), "k"), "tpend")) {
+                st = fail(st, ys("'self' is used before its return type is known (annotate it)"),
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
             } else {
                 return yr(2, "typ", yr_get(st, "self"), "st", st);
             }
@@ -1736,7 +1835,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             if (ys_eq_lit(yr_get(got, "kind"), "")) {
                 if (ys_eq_lit(yr_get(node, "v"), "none")) {
                     // the empty option (type from context via unification)
-                    return yr(2, "typ", yr(2, "k", ys("topt"), "of", t_unk()),
+                    return yr(2, "typ", yr(2, "k", ys("topt"), "of", t_free()),
                               "st", st);
                 } else {
                     st = fail(st,
@@ -1747,6 +1846,14 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
                 }
+            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tfunc") &&
+                       ys_eq_lit(yr_get(yr_get(yr_get(got, "typ"), "ret"), "k"), "tpend")) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("'"), disp(yr_get(node, "v"))),
+                                 ys("' is used before its return type is known (annotate it)")),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
             } else {
                 st = check_visible(st, got, yr_get(node, "v"),
                                    yv_l(yr_get(node, "line")),
@@ -2767,7 +2874,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         // its own site, not again at every enclosing literal (tcompat law).
         Yv *elems = yr_get(node, "elems");
         if (yv_len(elems) == 0) {
-            return yr(2, "typ", yr(2, "k", ys("tarr"), "of", t_unk()), "st", st);
+            return yr(2, "typ", yr(2, "k", ys("tarr"), "of", t_free()), "st", st);
         } else {
             Yv *e0 = ya_get(elems, 0);
             Yv *r0 = typeof_expr(st, e0);
@@ -4420,6 +4527,19 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, fterr, yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
+            } else if (ret_pending(ft)) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("'"), disp(name)),
+                                 ys("' is used before its return type is known (annotate it)")),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                long i = 0;
+                while (i < yv_len(cargs)) {
+                    Yv *r = typeof_expr(st, ya_get(cargs, i));
+                    st = yr_get(r, "st");
+                    i = i + 1;
+                }
+                return yr(2, "typ", t_unk(), "st", st);
             } else if (!ys_eq_lit(yr_get(ft, "k"), "tfunc")) {
                 // poisoned binding (tunk) from an earlier error — don't
                 // cascade new errors, but still check the arguments for
@@ -4443,7 +4563,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                                 ys_long(yv_len(cargs))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", yr_get(ft, "ret"), "st", st);
+                    return yr(2, "typ", call_result(ft), "st", st);
                 } else {
                     long i = 0;
                     while (i < yv_len(cargs)) {
@@ -4468,7 +4588,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                         }
                         i = i + 1;
                     }
-                    return yr(2, "typ", yr_get(ft, "ret"), "st", st);
+                    return yr(2, "typ", call_result(ft), "st", st);
                 }
             }
         }
@@ -4755,6 +4875,14 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "col")));
                 t = t_unk();
                 ;
+            } else if (has_free(t)) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("the type of '"),
+                                        disp(yr_get(node, "name"))),
+                                 ys("' is not fully known (annotate it)")),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                ;
             } else {
                 ;
             }
@@ -4803,15 +4931,12 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         while (i < yv_len(fparams)) {
             Yv *pt = ya_get(fptypes, i);
             if (ys_eq_lit(yr_get(pt, "k"), "tnone")) {
-                // OPTIONAL ANNOTATIONS v1: a missing param annotation is a
-                // poison-tolerant unknown (t_unk). That covers BOTH the ycc
-                // pipeline's bare-hole plumbing params AND user-written defs
-                // without annotations — holes and user params type
-                // identically. (Record shapes CAN be annotated on a param —
-                // `def f(r: {a: long})` — they are simply not required.)
-                // Caveat: the emitter has no runtime tag, so a richer value
-                // (str/record) flowing into an unannotated param behaves as
-                // a plain long there; annotate those sites.
+                // No value of unknown type: a parameter says its type.
+                st = fail(st,
+                          ys_cat(ys_cat(ys("parameter '"),
+                                        disp(ya_get(fparams, i))),
+                                 ys("' has no type (annotate it)")),
+                          line, col);
                 pt = t_unk();
                 ;
             } else if (!is_value_type(pt) &&
@@ -4839,12 +4964,11 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         Yv *rets = yav(0);
         Yv *body_ret = ret;
         if (ys_eq_lit(yr_get(ret, "k"), "tnone")) {
-            // OPTIONAL ANNOTATIONS + inference v1: the return type comes
-            // from the body's tail value once the body has been checked.
-            // Until then the signature carries poison tunk so recursion
-            // and forward calls still unify.
+            // The return type comes from the body's tail value once the
+            // body has been checked; a call before then (the def calling
+            // itself) needs it annotated (t_pend).
             ret_inferred = 1;
-            ret = t_unk();
+            ret = t_pend_self();
             body_ret = yr(2, "k", ys("tinfer"), "rets", rets);
             ;
         } else {
@@ -4867,6 +4991,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         }
         st = st_self(st, ft);
         st = st_ret(st, body_ret);
+        long nerr = yv_len(yr_get(st, "errors"));
         Yv *b = typeof_block_want(st, yr_get(func, "body"), body_ret);
         st = yr_get(b, "st");
         if (ret_inferred) {
@@ -4914,6 +5039,34 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                     ;
                 }
                 ri = ri + 1;
+            }
+            if ((has_free(br) || (yr_has(ret, "used") &&
+                                  ys_eq_lit(yr_get(br, "k"), "tunk"))) &&
+                yv_len(yr_get(st, "errors")) == nerr) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("the return type of '"), disp(name)),
+                                 ys("' is not fully known (annotate it)")),
+                          line, col);
+                br = t_unk();
+                ;
+            } else if (yr_has(ret, "used") && !ys_eq_lit(yr_get(br, "k"), "tunk")) {
+                // The body calls the def itself, so it was checked with
+                // that call's type unknown: check it again with the type
+                // the rest of it gave, as if `-> br` were written (the
+                // first pass's errors go; this one reports them).
+                st = st_errors(st, ya_slice(yr_get(st, "errors"), 0, nerr));
+                Yv *ft2 = yr(3, "k", ys("tfunc"), "args", args, "ret", br);
+                st = st_bind(st, name, ft2, ys("func"));
+                st = st_self(st, ft2);
+                st = st_ret(st, br);
+                Yv *b2 = typeof_block_want(st, yr_get(func, "body"), br);
+                st = yr_get(b2, "st");
+                st = expect_type(st, yr_get(b2, "typ"), br,
+                                 ys_cat(ys_cat(ys("'"), disp(name)), ys("' body")),
+                                 line, col);
+                ;
+            } else {
+                ;
             }
             ft = yr(3, "k", ys("tfunc"), "args", args, "ret", br);
             st = st_bind(st, name, ft, ys("func"));
@@ -5041,7 +5194,7 @@ static Yv *def_sig(Yv *name, Yv *func) {
     }
     Yv *ret = yr_get(func, "ret");
     if (ys_eq_lit(yr_get(ret, "k"), "tnone")) {
-        ret = t_unk();
+        ret = t_pend();
     }
     return yr(2, "name", name,
               "typ", yr(3, "k", ys("tfunc"), "args", args, "ret", ret));

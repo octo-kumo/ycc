@@ -98,7 +98,7 @@ def op_prec(op: str) -> long {
 };
 
 def to_rpn(toks: [str]) -> [str] {
-    let out = [];
+    let out: [str] = [];
     let ops = ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""];
     let sp = 0;
     foreach (tok in toks) {
@@ -173,7 +173,7 @@ def cmd_echo(args: [str]) -> long {
 };
 
 def cmd_rev(args: [str]) -> long {
-    let out = [];
+    let out: [str] = [];
     foreach (a in args[1:]) {
         out = a :: out;
     };

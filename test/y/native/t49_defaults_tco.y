@@ -1,5 +1,5 @@
 // default parameter values and tail calls through the function's own name
-def factorial(n, acc = 1) {
+def factorial(n: long, acc = 1) {
     if (n <= 1) {
         return acc;
     }

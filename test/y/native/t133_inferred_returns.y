@@ -40,9 +40,10 @@ print(1 + rep(2, ""));      // 1aa
 def dbl(n: long, a: float) { if (n > 0) { self(n - 1, a * 2.0) } else { a } };
 print(dbl(2, 0.5));         // 2.000000
 
-// calls between inferred defs, either way round
+// calls between defs either way round: a call before the callee's body
+// (b1 here) needs the callee's return type written
 def a1(n: long) { if (n == 0) { let z = 0.25; z } else { b1(n - 1) } };
-def b1(n: long) { a1(n) * 2.0 };
+def b1(n: long) -> float { a1(n) * 2.0 };
 print(b1(2));               // 2.000000
 
 // a function literal, and a closure capturing a float
