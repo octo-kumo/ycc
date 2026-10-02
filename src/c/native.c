@@ -70,7 +70,6 @@ Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
 int is_bits_op(Yv *op);
 int teq(Yv *a, Yv *b);
-int is_open(Yv *fs);
 long field_pos(Yv *fs, Yv *name, long hint);
 Yv *union_member(Yv *u, Yv *t);
 Yv *unfold(Yv *t);
@@ -296,7 +295,6 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want);
 long fnv64(Yv *s);
 Yv *hex16(long h);
 long rec_slot(Yv *fs, Yv *key);
-int is_kshape(Yv *t);
 long tyset_add(Yv *lbl, Yv *form);
 void tyset_grow(void);
 void tyset_reset(void);
@@ -306,8 +304,6 @@ long ty_shape(Yv *t);
 int same_rec(Yv *lt, Yv *t);
 Yv *rec_lit_type(Yv *lt, Yv *want);
 Yv *infer_go(Yv *st, Yv *node);
-Yv *gen_koff(Yv *st, Yv *rec, Yv *tmp);
-Yv *gen_kload(Yv *st, Yv *rec, Yv *tmp, Yv *dst);
 Yv *gen_slot_load(Yv *st, long idx, Yv *dst);
 int layout_unknown(Yv *t);
 Yv *gen_func_literal(Yv *st, Yv *node);
@@ -5238,8 +5234,7 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
     }
     if (ys_eq_lit(wk, "tfloat") || ys_eq_lit(wk, "tbyte")) {
         return gen_conv(st, infer(st, node), want);
-    } else if (ys_eq_lit(wk, "trec") && !is_kshape(want) &&
-               layout_unknown(infer(st, node))) {
+    } else if (ys_eq_lit(wk, "trec") && layout_unknown(infer(st, node))) {
         st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(ty_shape(want))),
                              ys(", %rcx")));
         return emit(st, ys("    call y_rec_cast"));
@@ -5274,15 +5269,11 @@ Yv *gen_union_cast(Yv *st, Yv *t) {
 }
 
 /* A type that says nothing about a record's fields: unknown to the
- * checker, or the unknown-shape marker. */
+ * checker. */
 int layout_unknown(Yv *t) {
     Yv *tk = yr_get(t, "k");
-    if (ys_eq_lit(tk, "tunk") || ys_eq_lit(tk, "tnone") ||
-        ys_eq_lit(tk, "tname") || ys_eq_lit(tk, "tparams")) {
-        return 1;
-    } else {
-        return is_kshape(t);
-    }
+    return ys_eq_lit(tk, "tunk") || ys_eq_lit(tk, "tnone") ||
+           ys_eq_lit(tk, "tname") || ys_eq_lit(tk, "tparams");
 }
 
 /* The type of the function being emitted: emit_one_fn records it as a
@@ -5617,17 +5608,8 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t) {
             ;
         }
         Yv *fname = yr_get(f, "name");
-        if (ys_eq_lit(fname, "..")) {
-            // an open record's marker: the value may have more fields
-            st = gen_acc_cat_const(st, ys_cat(sep, ys("..")));
-        } else {
-            st = gen_acc_cat_const(st, ys_cat(ys_cat(sep, fname), ys(": ")));
-            long slot = rec_slot(fs, fname);
-            if (is_kshape(t)) {
-                slot = -1;
-            }
-            st = gen_rec_field_str(st, slot, yr_get(f, "typ"));
-        }
+        st = gen_acc_cat_const(st, ys_cat(ys_cat(sep, fname), ys(": ")));
+        st = gen_rec_field_str(st, rec_slot(fs, fname), yr_get(f, "typ"));
         i = i + 1;
     }
     st = gen_acc_cat_const(st, ys("}"));
@@ -5763,20 +5745,14 @@ Yv *gen_acc_cat_const(Yv *st, Yv *s) {
     return emit(st, ys("    mov %rax, (%rsp)"));
 }
 
-/* Slot idx of the record in %rcx into register dst; idx -1: field k of
- * the unknown-shape marker (gen_kload, clobbers %rsi). */
+/* Slot idx of the record in %rcx into register dst. */
 Yv *gen_slot_load(Yv *st, long idx, Yv *dst) {
-    if (idx < 0) {
-        return gen_kload(st, ys("%rcx"), ys("%rsi"), dst);
-    } else {
-        return emit(st, ys_cat(ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
-                                      ys("(%rcx), ")),
-                               dst));
-    }
+    return emit(st, ys_cat(ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
+                                  ys("(%rcx), ")),
+                           dst));
 }
 
-/* acc = acc + <field in slot idx, rendered by its static type> (idx -1:
- * see gen_slot_load). */
+/* acc = acc + <field in slot idx, rendered by its static type>. */
 Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft) {
     Yv *fk = yr_get(ft, "k");
     if (ys_eq_lit(fk, "tstr")) {
@@ -6416,19 +6392,6 @@ long rec_slot(Yv *fs, Yv *key) {
     }
 }
 
-/* An open record type, the unknown-shape marker {k: str, ..} (types.y
- * is_open) -- a value of any record type may hide behind it, so its k is
- * wherever that record's descriptor says (gen_dot_rec), and its other
- * fields are looked up by name. */
-int is_kshape(Yv *t) {
-    Yv *tk = yr_get(t, "k");
-    if (!ys_eq_lit(tk, "trec")) {
-        return 0;
-    } else {
-        return is_open(yr_get(t, "fields"));
-    }
-}
-
 /* Adds the descriptor label lbl, of canonical form `form`, to ty_seen: 1
  * when it is new, 0 when it is there with that form, -1 when it is there
  * with another (two types, one hash). */
@@ -6565,10 +6528,7 @@ int same_rec(Yv *lt, Yv *t) {
     } else {
         Yv *lfs = yr_get(lt, "fields");
         Yv *tfs = yr_get(t, "fields");
-        // (no record is created as an open type)
-        if (is_open(lfs) || is_open(tfs)) {
-            return 0;
-        } else if (yv_len(lfs) != yv_len(tfs)) {
+        if (yv_len(lfs) != yv_len(tfs)) {
             return 0;
         } else {
             return teq(lt, t);
@@ -6604,25 +6564,6 @@ Yv *rec_lit_type(Yv *lt, Yv *want) {
     } else {
         return lt;
     }
-}
-
-/* The byte offset of field `k` in the record in register `rec`, into
- * register `tmp`, from the record's descriptor (where a value typed as the
- * unknown-shape marker has its k, see is_kshape). */
-Yv *gen_koff(Yv *st, Yv *rec, Yv *tmp) {
-    st = emit(st, ys_cat(ys_cat(ys_cat(ys("    mov -8("), rec), ys("), ")), tmp));
-    return emit(st, ys_cat(ys_cat(ys_cat(ys("    mov ("), tmp), ys("), ")), tmp));
-}
-
-/* Field `k` of the record in register `rec` into `dst` (gen_koff; `tmp`
- * is clobbered). */
-Yv *gen_kload(Yv *st, Yv *rec, Yv *tmp, Yv *dst) {
-    st = gen_koff(st, rec, tmp);
-    return emit(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov ("), rec),
-                                                  ys(",")),
-                                           tmp),
-                                    ys(",1), ")),
-                             dst));
 }
 
 /* Record literal { k: v, ... }: heap-allocate the descriptor word and the
@@ -6705,13 +6646,9 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
                     long mi2 = mfield_idx(slots, yr_get(sf2, "name"));
                     /* %rdx is the source's record VALUE (slot 0 at +0);
                      * %rcx is the fresh record's ALLOC base (slots at +8). */
-                    if (is_kshape(srec2)) {
-                        st = gen_kload(st, ys("%rdx"), ys("%rsi"), ys("%rsi"));
-                    } else {
-                        st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                                    ys_long(8 * rec_slot(sfs2, yr_get(sf2, "name")))),
-                                             ys("(%rdx), %rsi")));
-                    }
+                    st = emit(st, ys_cat(ys_cat(ys("    mov "),
+                                                ys_long(8 * rec_slot(sfs2, yr_get(sf2, "name")))),
+                                         ys("(%rdx), %rsi")));
                     st = emit(st, ys_cat(ys_cat(ys("    mov %rsi, "),
                                                 ys_long(8 + mi2 * 8)),
                                          ys("(%rcx)")));
@@ -7378,11 +7315,7 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
     st = emit(st, ys("    push %rax"));
     st = gen_as(st, yr_get(node, "v"), rec_field_type(dt, dkey));
     st = emit(st, ys("    pop %rdx"));
-    if (is_kshape(dt) && ys_eq_lit(dkey, "k")) {
-        /* the unknown-shape marker's k (gen_dot_rec) */
-        st = gen_koff(st, ys("%rdx"), ys("%rcx"));
-        return emit(st, ys("    mov %rax, (%rdx,%rcx,1)"));
-    } else if (ys_eq_lit(yr_get(dt, "k"), "tunion")) {
+    if (ys_eq_lit(yr_get(dt, "k"), "tunion")) {
         return gen_union_slot(st, dt, dkey, 1);
     } else {
         return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * idx)),
@@ -8177,17 +8110,7 @@ Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
 /* Record field read; `t` is the record's static type. */
 Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
     long idx = rec_field_idx(t, dkey);
-    // an open record's fields are wherever the record's own type puts them
-    if (is_kshape(t)) {
-        idx = -1;
-    }
-    if (is_kshape(t) && ys_eq_lit(dkey, "k")) {
-        /* the unknown-shape marker: k sits where the record's descriptor
-         * says (any record may hide behind {k: str}) */
-        st = gen(st, dobj);
-        st = gen_kload(st, ys("%rax"), ys("%rcx"), ys("%rax"));
-        ;
-    } else if (idx < 0) {
+    if (idx < 0) {
         /* unknown static shape ({k}-holes, bare params): dynamic field
          * lookup. The record carries its shape table (see gen_reclit note);
          * the key goes through the regular string rodata channel. */

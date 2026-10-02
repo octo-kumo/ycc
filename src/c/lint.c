@@ -901,17 +901,12 @@ static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias) {
     return 0;
 }
 
-/* An occurrence: a record of two or more fields (an open record's `..`
- * is none), or a union. */
+/* An occurrence: a record of two or more fields, or a union. */
 static int lint_cand(Yv *ty) {
     Yv *k = yr_get(ty, "k");
     if (ys_eq_lit(k, "trec")) {
         Yv *fs = yr_get(ty, "fields");
-        long n = yv_len(fs);
-        if (is_open(fs)) {
-            n = n - 1;
-        }
-        return n >= 2;
+        return yv_len(fs) >= 2;
     } else {
         return ys_eq_lit(k, "tunion");
     }

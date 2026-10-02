@@ -1034,13 +1034,6 @@ Yv *parse_type_record(Yv *toks, long p) {
             if (is_punct(toks, pos, ys("}"))) {
                 go = 0;
                 ;
-            } else if (is_op(toks, pos, ys(".."))) {
-                // `{k: str, ..}`, `..` last: an open record, any record
-                // with these fields (types.y is_open)
-                fields = ya_push(fields, yr(2, "name", ys(".."), "typ",
-                                            yr(1, "k", ys("tunk"))));
-                pos = pos + 1;
-                go = 0;
             } else {
                 Yv *fname = tv(toks, pos);
                 if (!is_name_tok(toks, pos)) {

@@ -17,7 +17,6 @@ Yv *tstr(Yv *t);              /* compiler-diagnostics rendering of a type */
 Yv *tdisp(Yv *t);             /* user-visible rendering (typeof) */
 Yv *tdisp_fnval(Yv *t);       /* "<function (params)->(ret)>" shape */
 int teq(Yv *a, Yv *b);        /* strict type equality (branch agreement) */
-int is_open(Yv *fs);           /* an open record's fields: `{k: str, ..}` */
 long field_pos(Yv *fs, Yv *name, long hint); /* a field's index by name */
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);  /* record-literal upsert */
 Yv *str_method(Yv *m);        /* string-method lowering/type table */

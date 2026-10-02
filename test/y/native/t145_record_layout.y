@@ -45,10 +45,6 @@ def pick(c: bool) -> AB {
 };
 print(pick(true).beta, " ", pick(false).beta);
 
-// {k: str} takes any record with a k, wherever its k is
-def key(x: { k: str }) -> str { x.k };
-print(key({ name: "a", k: "b" }));
-
 // a union member written in another order
 type A = { field1: long; field2: long; };
 type B = { bfield: long; };

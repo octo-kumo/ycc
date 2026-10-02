@@ -50,7 +50,6 @@ static void union_parts_go(Yv *out, Yv *t, long depth);
 static int teq_ref(Yv *a, Yv *b);
 static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack);
 static int str_in(Yv *xs, Yv *s);
-int is_open(Yv *fs);
 static Yv *trec_field_type(Yv *rec, Yv *key);
 static Yv *tstr_go(Yv *t);
 static int num_is_float(Yv *s);
@@ -223,18 +222,12 @@ int teq(Yv *a, Yv *b) {
         // the order they are written in is not part of the type (a record
         // is laid out by field name, NATIVE.md "Records"). tunk fields
         // unify -- error poison never cascades.
-        // An open side ({k: str, ..}) is the unknown-shape marker: it unifies with
-        // any record (the missing annotation errors once at its own site,
-        // not again at every enclosing branch — same tcompat law as the
-        // dot arm). Concrete mismatches still disagree (e11/e12 parity).
         // NOTE: each bound once — the checker env is flow-INSENSITIVE (one
         // shape per name, last wins), so a name read inline here would merge
         // the `fields` shape of a, b and every other arm in teq.
         Yv *af = yr_get(a, "fields");
         Yv *bf = yr_get(b, "fields");
-        if (is_open(af) || is_open(bf)) {
-            return 1;
-        } else if (yv_len(af) != yv_len(bf)) {
+        if (yv_len(af) != yv_len(bf)) {
             return 0;
         } else {
             return teq_fields(af, bf, 0);
@@ -591,27 +584,6 @@ static int teq_list(Yv *aa, Yv *bb, long i) {
     }
 }
 
-// An open record's field list: it ends in the `..` marker (parser.c
-// parse_type_record), `{k: str, ..}` -- the unknown-shape marker: any
-// record, its fields read through the descriptor (native.c is_kshape).
-int is_open(Yv *fs) {
-    long n = yv_len(fs);
-    if (n == 0) {
-        return 0;
-    } else if (ys_eq_lit(yr_get(ya_get(fs, n - 1), "name"), "..")) {
-        return 1;
-    } else {
-        return n == 1 && ys_eq_lit(yr_get(ya_get(fs, 0), "name"), "k");
-    }
-}
-
-// A store into field `key` through open record type t that cannot be
-// done: only k is assigned through one (its offset is in every record's
-// descriptor; the other fields are found by name, which a read does).
-static int open_store(Yv *t, Yv *key) {
-    return is_open(yr_get(t, "fields")) && !ys_eq_lit(key, "k");
-}
-
 // Field type by name in a trec; tnone marker when missing (dotassign uses
 // it — the caller reports the error once at the assignment site).
 static Yv *trec_field_type(Yv *rec, Yv *key) {
@@ -682,12 +654,8 @@ static Yv *tstr_go(Yv *t) {
             // `fs[i]` would merge shapes across arms (see teq note).
             Yv *f = ya_get(fs, i);
             Yv *fname = yr_get(f, "name");
-            if (ys_eq_lit(fname, "..")) {
-                parts = ya_push(parts, ys(".."));
-            } else {
-                parts = ya_push(parts, ys_cat(ys_cat(fname, ys(": ")),
-                                              tstr_go(yr_get(f, "typ"))));
-            }
+            parts = ya_push(parts, ys_cat(ys_cat(fname, ys(": ")),
+                                          tstr_go(yr_get(f, "typ"))));
             i = i + 1;
         }
         return ys_cat(ys_cat(ys("{ "), ys_join(parts, ys(", "))), ys(" }"));
@@ -1611,11 +1579,7 @@ static Yv *typeof_logic(Yv *st, Yv *op __attribute__((unused)),
 // NOTE: records are exact: a record goes only where its own type (teq:
 // the same fields, in any order) or a union holding it is expected. With
 // fields at fixed offsets and records shared by reference there is no
-// sound width rule. The one exception is the unknown-shape marker ({k:
-// str, ..}, see is_open): teq lets any record in, and so does this for
-// anything but a str (parser.y's {k}-annotated node params take call,
-// index, dot, map, func literals without a cascade at every res() site).
-// Branch agreement and ==/!= keep strict teq (e11/e12 parity).
+// sound width rule. Branch agreement and ==/!= keep strict teq (e11/e12 parity).
 static int tcompat(Yv *got, Yv *want) {
     got = unfold(got);
     want = unfold(want);
@@ -1651,12 +1615,7 @@ static int tcompat(Yv *got, Yv *want) {
     } else if (ys_eq_lit(yr_get(got, "k"), "trec")) {
         return 0;
     } else if (ys_eq_lit(yr_get(want, "k"), "trec")) {
-        // GOT is a bare {k}-shaped node going into an unknown-shape slot.
-        if (ys_eq_lit(yr_get(got, "k"), "tstr")) {
-            return 0;
-        } else {
-            return is_open(yr_get(want, "fields"));
-        }
+        return 0;
     } else if (ys_eq_lit(yr_get(got, "k"), "tstr")) {
         if (ys_eq_lit(yr_get(want, "k"), "tptr")) {
             return 1;
@@ -2630,12 +2589,6 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (open_store(yr_get(got, "typ"), yr_get(node, "key"))) {
-                    st = fail(st, ys_cat(ys_cat(ys("cannot assign field '"), yr_get(node, "key")),
-                                         ys("' through an open record type (only its k)")),
-                              yv_l(yr_get(node, "line")),
-                              yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", t_unk(), "st", st);
                 } else {
                     Yv *v = typeof_want(st, yr_get(node, "v"), ft);
                     st = yr_get(v, "st");
@@ -2671,12 +2624,6 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               ys_cat(ys_cat(ys("record has no field '"),
                                             yr_get(node, "key")),
                                      ys("'")),
-                              yv_l(yr_get(node, "line")),
-                              yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", t_unk(), "st", st);
-                } else if (open_store(yr_get(obr, "typ"), yr_get(node, "key"))) {
-                    st = fail(st, ys_cat(ys_cat(ys("cannot assign field '"), yr_get(node, "key")),
-                                         ys("' through an open record type (only its k)")),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
@@ -3102,14 +3049,6 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
         }
         if (found) {
             return yr(2, "typ", ftyp, "st", st);
-        } else if (is_open(fs)) {
-            // unknown-shape ({k}-only) reads unify quietly (tcompat
-            // law) — the missing annotation errors once at its own
-            // site, not again at every enclosing read. Concrete
-            // records error below (teq against the marker was the test,
-            // but teq lets a record of any other width meet it, so
-            // `{a, b}.c` compiled and trapped at run time: e145).
-            return yr(2, "typ", t_unk(), "st", st);
         } else {
             st = fail(st,
                       ys_cat(ys_cat(ys("record has no field '"), dkey),
