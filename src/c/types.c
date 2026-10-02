@@ -789,7 +789,14 @@ Yv *tdisp_fnval(Yv *t) {
 // captures are legal (native.y box_capture).
 
 static Yv *lookup(Yv *bindings, Yv *name) {
-    long i = 0;
+    /* Scanned from the END, and stopped at the first hit: `bindings` is the
+     * flat program-wide list (check_program), so a forward scan paid for
+     * all ~7k entries on every identifier reference even though 82% of the
+     * names resolve to a binding added moments ago. `bindings` is appended
+     * in definition order, so the newest match IS the one a forward scan
+     * would have ended on -- the two agree exactly, and rename.y already
+     * uses this idiom (rn_lookup). */
+    long i = yv_len(bindings) - 1;
     // NOTE: NO shared `found` hole rebound across arms (see parser.y
     // parse_type_node note): the env keeps ONE shape per name, so a hole
     // rebound to e.typ then read as e.kind would resolve `kind` against the
@@ -797,17 +804,18 @@ static Yv *lookup(Yv *bindings, Yv *name) {
     Yv *found_typ = yr(1, "k", ys("tnone"));
     Yv *found_kind = ys("");
     long found_fd = 0;
-    while (i < yv_len(bindings)) {
+    while (i >= 0) {
         Yv *e = ya_get(bindings, i);
         if (ys_eq(yr_get(e, "name"), name)) {
             found_typ = yr_get(e, "typ");
             found_kind = yr_get(e, "kind");
             found_fd = yv_l(yr_get(e, "fdepth"));
+            i = -1;
             ;
         } else {
             ;
         }
-        i = i + 1;
+        i = i - 1;
         ;
     }
     return yr(3, "typ", found_typ, "kind", found_kind, "fdepth",
@@ -4557,7 +4565,7 @@ Yv *check_program(Yv *ast, Yv *ext) {
     while (x < yv_len(ext)) {
         Yv *xe = ya_get(ext, x);
         Yv *kind = ys("func");
-        if (ys_eq_lit(ys_slice(yr_get(xe, "label"), 0, 3), "yg_")) {
+        if (ys_starts_with(yr_get(xe, "label"), ys("yg_"))) {
             kind = ys("const");
             ;
         } else {

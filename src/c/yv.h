@@ -100,6 +100,11 @@ Yv *ys_join(const Yv *arr, const Yv *sep);   /* [str] join */
 Yv *ys_split(const Yv *s, const Yv *sep);    /* -> [str] */
 long ys_index_of(const Yv *s, const Yv *sub);
 long ys_last_index_of(const Yv *s, const Yv *sub);
+/* std/str.y's y_str_at / y_str_starts_with, as the C twin uses them:
+ * `p` occurs in `s` at byte offset `at` (false past the end of s). */
+int ys_at(const Yv *s, const Yv *p, long at);
+int ys_starts_with(const Yv *s, const Yv *p);
+int ys_ends_with(const Yv *s, const Yv *p);
 long ys_ord(const Yv *s);             /* first byte */
 long ys_byte_at(const Yv *s, long i); /* byte i (0..255); traps out of bounds */
 Yv *ys_chr(long v);

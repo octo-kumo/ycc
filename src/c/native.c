@@ -2314,19 +2314,26 @@ Yv *esc_asm(Yv *s) {
 Yv *env_find(Yv *st, Yv *name) {
     /* Miss marker: kind "none". Real entries have name/kind/off/label/typ
      * but NO k field — never test e.k. */
+    /* Scanned from the END and stopped at the first hit, like types.y lookup:
+     * `env` holds every def of the unit plus this function's own locals, so
+     * it is ~1.6k entries, and a name almost always belongs to one of the
+     * last few. A forward scan overwrote `found` on every match, so the
+     * entry it settled on was the LAST one -- the one this scan reaches
+     * first. Same answer, 85% fewer string compares. */
     Yv *env = yr_get(st, "env");
-    long i = 0;
+    long i = yv_len(env) - 1;
     Yv *found = yr(5, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
                    "label", ys(""), "typ", yr(1, "k", ys("tnone")));
-    while (i < yv_len(env)) {
+    while (i >= 0) {
         Yv *e = ya_get(env, i);
         if (ys_eq(yr_get(e, "name"), name)) {
             found = e;
+            i = -1;
             ;
         } else {
             ;
         }
-        i = i + 1;
+        i = i - 1;
     }
     return found;
 }
@@ -2949,7 +2956,9 @@ Yv *collect_from_node(Yv *node, Yv *out) {
 int name_in(Yv *xs, Yv *n) {
     long i = 0;
     int found = 0;
-    while (i < yv_len(xs)) {
+    /* Stops at the first hit: the answer is a bool, so unlike types.y
+     * lookup the order does not matter and the tail cannot change it. */
+    while (i < yv_len(xs) && !found) {
         Yv *x = ya_get(xs, i);
         if (ys_eq(x, n)) {
             found = 1;
@@ -3303,7 +3312,9 @@ Yv *fn_names_of(Yv *fns) {
  * the units this one links against), then the globals (see compile_unit);
  * a global's label is its .bss cell. */
 Yv *fns_kind(Yv *label) {
-    if (ys_eq_lit(ys_slice(label, 0, 3), "yg_")) {
+    /* starts_with, not label[:3] == "yg_": the slice allocated a throwaway
+     * string on every call, and this runs once per identifier emitted. */
+    if (ys_starts_with(label, ys("yg_"))) {
         return ys("global");
     } else {
         return ys("func");

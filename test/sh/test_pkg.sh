@@ -548,7 +548,15 @@ if ! command -v git >/dev/null; then
 else
     R="$TMPD/repo"
     W="$TMPD/gp"
-    gitc() { git -C "$R" -c user.name=t -c user.email=t@t "$@" >/dev/null 2>&1; }
+    # -c user.name/user.email so the throwaway repo needs no identity, and
+    # -c commit.gpgsign=false -c tag.gpgsign=false so a developer whose GLOBAL
+    # git config signs its commits and tags (commit.gpgsign/tag.gpgsign=true
+    # plus user.signingkey) gets neither a pinentry prompt nor, with no tty, a
+    # silently unsigned failure: without these the commits below leave an EMPTY
+    # repo and the tag never exists, and the git tests blame the compiler. The
+    # repo lives in $TMPD, so this project's own local commit.gpgsign=false
+    # never reaches it.
+    gitc() { git -C "$R" -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false "$@" >/dev/null 2>&1; }
     mkdir -p "$R"
     git -C "$R" init --quiet >/dev/null 2>&1
     printf '[package]\nname = "gl"\nlib = "gl.y"\n' >"$R/y.toml"

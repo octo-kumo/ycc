@@ -191,31 +191,35 @@ static int is_num_text(Yv *s) {
 static Yv *split_ops(Yv *s) {
     Yv *out = yav(0);
     long depth = 0;
-    Yv *cur = ys("");
+    /* One slice per FIELD, not one per character. The loop used to take
+     * s[i:i + 1] and append it, so every byte of every operand allocated a
+     * throwaway 1-byte string -- ycc's single largest allocation site, at
+     * ~10% of all heap. Tracking where the field starts slices each field
+     * once instead, with the same bytes in the same order. */
+    long start = 0;
     long i = 0;
+    long n = yv_len(s);
     /* NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails. */
-    while (i < yv_len(s)) {
-        Yv *c = ys_slice(s, i, i + 1);
-        if (ys_eq_lit(c, "(")) { depth = depth + 1; ; } else { ; };
-        if (ys_eq_lit(c, ")")) { depth = depth - 1; ; } else { ; };
-        if (ys_eq_lit(c, ",")) {
+    while (i < n) {
+        long b = ys_byte_at(s, i);
+        if (b == 40) { depth = depth + 1; ; } else { ; };  /* '(' */
+        if (b == 41) { depth = depth - 1; ; } else { ; };  /* ')' */
+        if (b == 44) {  /* ',' */
             if (depth == 0) {
-                out = ya_push(out, ys_trim(cur));
-                cur = ys("");
+                out = ya_push(out, ys_trim(ys_slice(s, start, i)));
+                start = i + 1;
                 ;
             } else {
-                cur = ys_cat(cur, c);
                 ;
             };
             ;
         } else {
-            cur = ys_cat(cur, c);
             ;
         };
         i = i + 1;
         ;
     };
-    out = ya_push(out, ys_trim(cur));
+    out = ya_push(out, ys_trim(ys_slice(s, start, n)));
     return out;
 }
 
@@ -1631,11 +1635,11 @@ static Yv *debug_syms_sec(Yv *out, Yv *labels, long sec, long end) {
 static int is_sym_label(Yv *name, long sec) {
     if (sec == 0) {
         return ys_eq_lit(name, "_start") ||
-               ys_eq_lit(ys_slice(name, 0, 2), "y_") ||
-               ys_eq_lit(ys_slice(name, 0, 4), "yfn_");
+               ys_starts_with(name, ys("y_")) ||
+               ys_starts_with(name, ys("yfn_"));
     } else {
-        return ys_eq_lit(ys_slice(name, 0, 3), "yg_") ||
-               ys_eq_lit(ys_slice(name, 0, 2), "y_");
+        return ys_starts_with(name, ys("yg_")) ||
+               ys_starts_with(name, ys("y_"));
     }
 }
 
@@ -1645,9 +1649,9 @@ static int is_sym_label(Yv *name, long sec) {
  * profiles of two builds harder to line up. */
 static Yv *sym_name(Yv *lbl) {
     Yv *s = lbl;
-    if (ys_eq_lit(ys_slice(s, 0, 4), "yfn_")) {
+    if (ys_starts_with(s, ys("yfn_"))) {
         s = after_uid(s, 4);
-    } else if (ys_eq_lit(ys_slice(s, 0, 3), "yg_")) {
+    } else if (ys_starts_with(s, ys("yg_"))) {
         s = after_uid(s, 3);
     }
     long d = ys_last_index_of(s, ys("$"));

@@ -297,6 +297,23 @@ long ys_last_index_of(const Yv *s, const Yv *sub) {
     return -1;
 }
 
+/* std/str.y's y_str_at / y_str_starts_with / y_str_ends_with. `at` past the
+ * end of s is false rather than a trap (str.y), so a shorter string simply
+ * does not match -- the same answer as the s[lo:hi] == lit it replaces. */
+int ys_at(const Yv *s, const Yv *p, long at) {
+    if (!s || s->tag != Y_STR || !p || p->tag != Y_STR) { return 0; }
+    size_t m = p->u.s.n;
+    if (at < 0 || (size_t)at + m > s->u.s.n) { return 0; }
+    return m == 0 || memcmp(s->u.s.p + at, p->u.s.p, m) == 0;
+}
+
+int ys_starts_with(const Yv *s, const Yv *p) { return ys_at(s, p, 0); }
+
+int ys_ends_with(const Yv *s, const Yv *p) {
+    if (!s || s->tag != Y_STR || !p || p->tag != Y_STR) { return 0; }
+    return ys_at(s, p, (long)(s->u.s.n - p->u.s.n));
+}
+
 long ys_ord(const Yv *x) {
     if (!x || x->tag != Y_STR || x->u.s.n == 0) { return -1; }
     return (long)(unsigned char)x->u.s.p[0];

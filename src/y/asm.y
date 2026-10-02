@@ -78,25 +78,27 @@ def is_num_text(s: str) -> bool {
 def split_ops(s: str) -> [str] {
     let out = [];
     let depth = 0;
-    let cur = "";
+    // One slice per FIELD, not one per character. The loop used to take
+    // s[i:i + 1] and append it, so every byte of every operand allocated a
+    // throwaway 1-byte string -- ycc's single largest allocation site, at
+    // ~10% of all heap. Tracking where the field starts slices each field
+    // once instead, with the same bytes in the same order.
+    let start = 0;
     let i = 0;
-    while (i < len(s)) {
-        let c = s[i:i + 1];
-        if (c == "(") { depth++ };
-        if (c == ")") { depth-- } ;
-        if (c == ",") {
+    let n = len(s);
+    while (i < n) {
+        let b = byte_at(s, i);
+        if (b == 40) { depth++ };        // '('
+        if (b == 41) { depth-- };        // ')'
+        if (b == 44) {                   // ','
             if (depth == 0) {
-                out += trim(cur);
-                cur = "";
-            } else {
-                cur += c;
-            };
-        } else {
-            cur += c;
-        };
+                out += trim(s[start:i]);
+                start = i + 1;
+            } else { 0; };
+        } else { 0; };
         i ++;
     };
-    out += trim(cur);
+    out += trim(s[start:n]);
     out
 };
 
@@ -1237,9 +1239,9 @@ def debug_syms_sec(out: [{ name: str, sec: long, off: long, size: long }], label
 
 def is_sym_label(name: str, sec: long) -> bool {
     if (sec == 0) {
-        name == "_start" || name[0:2] == "y_" || name[0:4] == "yfn_"
+        name == "_start" || name.starts_with("y_") || name.starts_with("yfn_")
     } else {
-        name[0:3] == "yg_" || name[0:2] == "y_"
+        name.starts_with("yg_") || name.starts_with("y_")
     }
 };
 
@@ -1249,10 +1251,10 @@ def is_sym_label(name: str, sec: long) -> bool {
 // profiles of two builds harder to line up.
 def sym_name(lbl: str) -> str {
     let s = lbl;
-    if (s[0:4] == "yfn_") {
+    if (s.starts_with("yfn_")) {
         s = after_uid(s, 4);
         0;
-    } else if (s[0:3] == "yg_") {
+    } else if (s.starts_with("yg_")) {
         s = after_uid(s, 3);
         0;
     };

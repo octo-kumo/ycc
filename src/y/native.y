@@ -1513,16 +1513,23 @@ def esc_asm(s: str) -> str {
 def env_find(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, name: str) -> { name: str, kind: str, off: long, label: str, typ: { k: str } } {
     // Miss marker: kind "none". Real entries have name/kind/off/label/typ
     // but NO k field — never test e.k.
+    // Scanned from the END and stopped at the first hit, like types.y lookup:
+    // `env` holds every def of the unit plus this function's own locals, so
+    // it is ~1.6k entries, and a name almost always belongs to one of the
+    // last few. A forward scan overwrote `found` on every match, so the
+    // entry it settled on was the LAST one -- the one this scan reaches
+    // first. Same answer, 85% fewer string compares.
     let env = st.env;
-    let i = 0;
+    let i = len(env) - 1;
     let found = { name: "", kind: "none", off: 0, label: "", typ: { k: "tnone" } };
-    while (i < len(env)) {
+    while (i >= 0) {
         let e = env[i];
         if (e.name == name) {
             found = e;
+            i = -1;
             0
         } else { 0; };
-        i = i + 1;
+        i = i - 1;
         0
     };
     found
@@ -2018,7 +2025,9 @@ def collect_from_node(node, out: [{ name: str, func: { k: str } }]) -> [{ name: 
 def name_in(xs: [str], n: str) -> bool {
     let i = 0;
     let found = false;
-    while (i < len(xs)) {
+    // Stops at the first hit: the answer is a bool, so unlike types.y
+    // lookup the order does not matter and the tail cannot change it.
+    while ((i < len(xs)) && (!found)) {
         let x: str = xs[i];
         if (x == n) { found = true; 0; } else { 0; };
         i = i + 1;
@@ -2357,7 +2366,9 @@ def fn_names_of(fns: [{ name: str, label: str, typ: { k: str } }]) -> [str] {
 // the units this one links against), then the globals (see
 // compile_unit); a global's label is its .bss cell.
 def fns_kind(label: str) -> str {
-    if (label[:3] == "yg_") { "global" } else { "func" }
+    // starts_with, not label[:3] == "yg_": the slice allocated a throwaway
+    // string on every call, and this runs once per identifier emitted.
+    if (label.starts_with("yg_")) { "global" } else { "func" }
 };
 
 // ── expression emission (value in %rax) ────────────────────────────────
