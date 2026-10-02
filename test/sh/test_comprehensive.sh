@@ -457,7 +457,7 @@ run_test "HOF: reduce" 'def reduce(f: (long, long) -> long, acc: long, xs: [long
 # ── Functions: anonymous ──
 echo ""
 echo "── Functions: anonymous ──"
-run_test "anonymous: immediate" 'print((def(x) { x * 2 })(5));' '10'
+run_test "anonymous: immediate" 'print((def(x: long) { x * 2 })(5));' '10'
 run_test "anonymous: as arg" 'def apply(f: (long) -> long, x: long) { f(x) }; print(apply(def(n: long) { n + 1 }, 10));' '11'
 
 # ── Data types: arrays ──
@@ -476,7 +476,7 @@ run_test "map: literal" 'print({a: 1, b: 2});' '{a: 1, b: 2}'
 run_test "map: empty" 'print({});' '{}'
 run_test "map: dot access" 'let m = {x: 42}; print(m.x);' '42'
 run_test "map: nested" 'let m = {a: {b: 1}}; print(m.a.b);' '1'
-run_test "map: function value" 'let m = {f: def(x) { x * 2 }}; print(m.f(5));' '10'
+run_test "map: function value" 'let m = {f: def(x: long) { x * 2 }}; print(m.f(5));' '10'
 
 # ── Data types: strings ──
 echo ""

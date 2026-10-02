@@ -82,6 +82,11 @@ let tdec_n = 0;
 let ty_seen: [str] = [];
 let ty_forms: [str] = [];
 let ty_count = 0;
+// ty_desc's canonical forms of the recursive aliases a unit has met, by
+// their names in the unit (tmp): a big recursive union's form is long, and
+// a field read through it asks for every member's (tyset_reset clears).
+let ty_ref_tmps: [str] = [];
+let ty_ref_forms: [str] = [];
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -4343,14 +4348,76 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
     };
     if (wk == "tfloat" || wk == "tbyte") {
         gen_conv(st, infer(st, node), want)
-    } else if (wk == "trec" && !is_kshape(want) && layout_unknown(infer(st, node))) {
+    } else if (wk == "trec" && layout_unknown(infer(st, node))) {
         st = emit(st, "    mov $" + tostring(ty_shape(want)) + ", %rcx");
         emit(st, "    call y_rec_cast")
     } else if (wk == "tunion" && layout_unknown(infer(st, node))) {
         gen_union_cast(st, want)
+    } else if ((wk == "trec" || wk == "tunion") && types.unfold(infer(st, node)).k == "tunion" && !union_within(infer(st, node), want0)) {
+        gen_cast_check(st, cast_members(infer(st, node), want0))
     } else {
         st
     }
+};
+
+// Every member of union s is one of t's (t a union): s goes into t as it
+// is, with no check.
+def union_within(s: Type, t: Type) -> bool {
+    let u = types.unfold(t);
+    if (u.k != "tunion") { false }
+    else if (types.teq(types.unfold(s), u)) { true }
+    else {
+        let ss = types.union_parts(types.unfold(s));
+        let ok = true;
+        let i = 0;
+        while (ok && i < len(ss)) {
+            if (types.union_member(u, ss[i]).k == "tnone") { ok = false; };
+            i = i + 1;
+        };
+        ok
+    }
+};
+
+// The members of union s a cast to t keeps: t itself, a record (types.y
+// cast_ok lets a union value go where one of its members is written), or
+// each member of the union t.
+def cast_members(s: Type, t: Type) -> [Type] {
+    let out: [Type] = [];
+    let ts: [Type] = [];
+    let su = types.unfold(s);
+    if (types.unfold(t).k == "tunion") {
+        ts = types.union_parts(types.unfold(t));
+        0
+    } else {
+        ts += t;
+        0
+    };
+    let i = 0;
+    while (i < len(ts)) {
+        let m = types.union_member(su, ts[i]);
+        if (m.k != "tnone") { out += m; };
+        i = i + 1;
+    };
+    out
+};
+
+// gen_as's check of a cast from a union: the record in %rax (kept) is one
+// of the member types ts, or the program stops (y_cast_trap).
+def gen_cast_check(st: EmitSt, ts: [Type]) -> EmitSt {
+    let ok = next_loc(st);
+    st = ok.st;
+    st = emit(st, "    mov -8(%rax), %rcx");
+    let i = 0;
+    while (i < len(ts)) {
+        let dr = ty_desc(st, ts[i]);
+        st = dr.st;
+        st = emit(st, "    lea " + dr.lbl + "(%rip), %rdx");
+        st = emit(st, "    cmp %rdx, %rcx");
+        st = emit(st, "    je " + ok.lbl);
+        i = i + 1;
+    };
+    st = emit(st, "    jmp y_cast_trap");
+    emit(st, ok.lbl + ":")
 };
 
 // gen_as's check of a value of unknown type going where union t is
@@ -4376,11 +4443,10 @@ def gen_union_cast(st: EmitSt, t: Type) -> EmitSt {
 };
 
 // A type that says nothing about a record's fields: unknown to the
-// checker, or the unknown-shape marker.
+// checker.
 def layout_unknown(t: Type) -> bool {
     let tk: str = t.k;
-    if (tk == "tunk" || tk == "tnone" || tk == "tname" || tk == "tparams") { true }
-    else { is_kshape(t) }
+    tk == "tunk" || tk == "tnone" || tk == "tname" || tk == "tparams"
 };
 
 // The type of the function being emitted: emit_one_fn records it as a
@@ -4696,17 +4762,8 @@ def gen_rec_str_rax(st: EmitSt, t: Type) -> EmitSt {
         let fname: str = f.name;
         let sep = "";
         if (i > 0) { sep = ", "; 0; } else { 0; };
-        if (fname == "..") {
-            // an open record's marker: the value may have more fields
-            st = gen_acc_cat_const(st, sep + "..");
-            0
-        } else {
-            st = gen_acc_cat_const(st, sep + fname + ": ");
-            let slot = rec_slot(fs, fname);
-            if (is_kshape(t)) { slot = -1; 0; };
-            st = gen_rec_field_str(st, slot, f.typ);
-            0
-        };
+        st = gen_acc_cat_const(st, sep + fname + ": ");
+        st = gen_rec_field_str(st, rec_slot(fs, fname), f.typ);
         i = i + 1;
         0
     };
@@ -4831,18 +4888,12 @@ def gen_acc_cat_const(st: EmitSt, s: str) -> EmitSt {
     emit(st, "    mov %rax, (%rsp)")
 };
 
-// Slot idx of the record in %rcx into register dst; idx -1: field k of
-// the unknown-shape marker (gen_kload, clobbers %rsi).
+// Slot idx of the record in %rcx into register dst.
 def gen_slot_load(st: EmitSt, idx: long, dst: str) -> EmitSt {
-    if (idx < 0) {
-        gen_kload(st, "%rcx", "%rsi", dst)
-    } else {
-        emit(st, "    mov " + tostring(8 * idx) + "(%rcx), " + dst)
-    }
+    emit(st, "    mov " + tostring(8 * idx) + "(%rcx), " + dst)
 };
 
-// acc = acc + <field in slot idx, rendered by its static type> (idx -1:
-// see gen_slot_load).
+// acc = acc + <field in slot idx, rendered by its static type>.
 def gen_rec_field_str(st: EmitSt, idx: long, ft: Type) -> EmitSt {
     let fk = ft.k;
     if (fk == "tstr") {
@@ -5438,20 +5489,6 @@ def rec_slot(fs: [Field], key: str) -> long {
     if (found) { below } else { -1 }
 };
 
-// An open record type, the unknown-shape marker {k: str} (types.y
-// is_open) -- a value of any record type may hide behind it, so its k is
-// wherever that record's descriptor says (gen_dot_rec), and its other
-// fields are looked up by name.
-def is_kshape(t: Type) -> bool {
-    let tk: str = t.k;
-    if (tk != "trec") { false }
-    else {
-        let rec: TRec = t;
-        let fs: [Field] = rec.fields;
-        types.is_open(fs)
-    }
-};
-
 // Adds the descriptor label lbl, of canonical form `form`, to ty_seen: 1
 // when it is new, 0 when it is there with that form, -1 when it is there
 // with another (two types, one hash).
@@ -5513,6 +5550,101 @@ def tyset_reset() {
     ty_seen = none;
     ty_forms = nonef;
     ty_count = 0;
+    let nort: [str] = [];
+    let norf: [str] = [];
+    ty_ref_tmps = nort;
+    ty_ref_forms = norf;
+};
+
+// The canonical form of record type rt (types.y tcanon), remembered for a
+// recursive alias (ty_ref_tmps). A record type spelled out that equals a
+// recursive alias (alias_of) takes the alias's form.
+def ty_form(rt: Type) -> str {
+    let rk: str = rt.k;
+    if (rk == "trec") {
+        let al = alias_of(rt);
+        if (al.k == "tref") { self(al) } else { types.tcanon(rt) }
+    } else if (rk != "tref") {
+        types.tcanon(rt)
+    } else {
+        let ref: TRef = rt;
+        let tmp: str = ref.tmp;
+        let found = -1;
+        let i = 0;
+        while (found < 0 && i < len(ty_ref_tmps)) {
+            if (ty_ref_tmps[i] == tmp) { found = i; };
+            i = i + 1;
+        };
+        if (found >= 0) { ty_ref_forms[found] } else {
+            let form = types.tcanon(rt);
+            ty_ref_tmps += tmp;
+            ty_ref_forms += form;
+            form
+        }
+    }
+};
+
+// The recursive alias equal (types.y teq) to record type t, spelled out --
+// a record literal's inferred type, say ({k: str, to: Type} is the alias
+// TPtr) -- among the aliases reachable from t; tnone when none is. Equal
+// types must have one descriptor, or a read through a union holding the
+// record finds no member's tag.
+def alias_of(t: Type) -> Type {
+    let trec: TRec = t;
+    let names = join(types.rec_names(trec.fields), ",");
+    let seen: [str] = [];
+    let todo: [Type] = [];
+    todo += t;
+    let found: Type = { k: "tnone" };
+    let looking = true;
+    let i = 0;
+    while (looking && i < len(todo)) {
+        let x = todo[i];
+        let k: str = x.k;
+        if (k == "tref") {
+            let ref: TRef = x;
+            let tmp: str = ref.tmp;
+            let met = false;
+            foreach (s in seen) { if (s == tmp) { met = true; }; };
+            if (!met) {
+                seen += tmp;
+                let u = types.unfold(x);
+                if (u.k == "trec") {
+                    let urec: TRec = u;
+                    if (join(types.rec_names(urec.fields), ",") == names && types.teq(t, x)) {
+                        found = x;
+                        looking = false;
+                    };
+                };
+                todo += u;
+            };
+        } else if (k == "trec") {
+            let r: TRec = x;
+            foreach (f in r.fields) { todo += f.typ; };
+        } else if (k == "tunion") {
+            let u: TList = x;
+            foreach (m in u.ts) { todo += m; };
+        } else if (k == "tfunc") {
+            let ftype: TFunc = x;
+            foreach (a in ftype.args) { todo += a; };
+            todo += ftype.ret;
+        } else if (k == "tmap") {
+            let m: TMap = x;
+            todo += m.key;
+            todo += m.of;
+        } else if (k == "tptr") {
+            let p: TPtr = x;
+            todo += p.to;
+        } else if (k == "tarrfix") {
+            let a: TFix = x;
+            todo += a.of;
+        } else if (k == "tarr" || k == "topt") {
+            let a: TOf = x;
+            todo += a.of;
+        };
+        i = i + 1;
+    };
+    found
 };
 
 // Two types with one descriptor label: stop (a 64-bit hash collision;
@@ -5526,7 +5658,7 @@ def ty_collision(lbl: str, form: str) {
 // canonical form, quads) goes into the unit the first time the unit uses
 // it.
 def ty_desc(st: EmitSt, rt: Type) -> StLbl {
-    let form = types.tcanon(rt);
+    let form = ty_form(rt);
     let lbl = "ytt_" + hex16(fnv64(form));
     let added = tyset_add(lbl, form);
     if (added < 0) { ty_collision(lbl, form); };
@@ -5583,9 +5715,7 @@ def same_rec(lt: Type, t: Type) -> bool {
         let trec: TRec = t;
         let lfs: [Field] = lrec.fields;
         let tfs: [Field] = trec.fields;
-        // (no record is created as an open type)
-        if (types.is_open(lfs) || types.is_open(tfs)) { false }
-        else if (len(lfs) != len(tfs)) { false } else { types.teq(lt, t) }
+        if (len(lfs) != len(tfs)) { false } else { types.teq(lt, t) }
     }
 };
 
@@ -5608,21 +5738,6 @@ def rec_lit_type(lt: Type, want: Type) -> Type {
         };
         found
     } else { lt }
-};
-
-// The byte offset of field `k` in the record in register `rec`, into
-// register `tmp`, from the record's descriptor (where a value typed as the
-// unknown-shape marker has its k, see is_kshape).
-def gen_koff(st: EmitSt, rec: str, tmp: str) -> EmitSt {
-    st = emit(st, "    mov -8(" + rec + "), " + tmp);
-    emit(st, "    mov (" + tmp + "), " + tmp)
-};
-
-// Field `k` of the record in register `rec` into `dst` (gen_koff; `tmp`
-// is clobbered).
-def gen_kload(st: EmitSt, rec: str, tmp: str, dst: str) -> EmitSt {
-    st = gen_koff(st, rec, tmp);
-    emit(st, "    mov (" + rec + "," + tmp + ",1), " + dst)
 };
 
 // Record literal { k: v, ... }: heap-allocate the descriptor word and the
@@ -5708,13 +5823,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                     let mi2 = mfield_idx(slots, sf2.name);
                     // %rdx is the source's record VALUE (slot 0 at +0);
                     // %rcx is the fresh record's ALLOC base (slots at +8).
-                    if (is_kshape(srec2)) {
-                        st = gen_kload(st, "%rdx", "%rsi", "%rsi");
-                        0
-                    } else {
-                        st = emit(st, "    mov " + tostring(8 * rec_slot(sfs2, sf2.name)) + "(%rdx), %rsi");
-                        0
-                    };
+                    st = emit(st, "    mov " + tostring(8 * rec_slot(sfs2, sf2.name)) + "(%rdx), %rsi");
                     st = emit(st, "    mov %rsi, " + tostring(8 + mi2 * 8) + "(%rcx)");
                     sj = sj + 1;
                 };
@@ -6211,11 +6320,7 @@ def gen_dotassign(st: EmitSt, node: DotAssign) -> EmitSt {
     st = emit(st, "    push %rax");
     st = gen_as(st, node.v, rec_field_type(dt, dkey));
     st = emit(st, "    pop %rdx");
-    if (is_kshape(dt) && dkey == "k") {
-        // the unknown-shape marker's k (gen_dot_rec)
-        st = gen_koff(st, "%rdx", "%rcx");
-        emit(st, "    mov %rax, (%rdx,%rcx,1)")
-    } else if (dt.k == "tunion") {
+    if (dt.k == "tunion") {
         gen_union_slot(st, dt, dkey, true)
     } else {
         emit(st, "    mov %rax, " + tostring(8 * idx) + "(%rdx)")
@@ -6889,15 +6994,7 @@ def gen_prop(st: EmitSt, obj: Node, key: str, line: long, col: long) -> EmitSt {
 // Record field read; `t` is the record's static type.
 def gen_dot_rec(st: EmitSt, dobj: Node, dkey: str, t: Type) -> EmitSt {
     let idx = rec_field_idx(t, dkey);
-    // an open record's fields are wherever the record's own type puts them
-    if (is_kshape(t)) { idx = -1; 0; } else { 0; };
-    if (is_kshape(t) && dkey == "k") {
-        // the unknown-shape marker: k sits where the record's descriptor
-        // says (any record may hide behind {k: str})
-        st = gen(st, dobj);
-        st = gen_kload(st, "%rax", "%rcx", "%rax");
-        0
-    } else if (idx < 0) {
+    if (idx < 0) {
         // unknown static shape ({k}-holes, bare params): dynamic field
         // lookup. The record carries its shape table (see gen_reclit note);
         // the key goes through the regular string rodata channel.

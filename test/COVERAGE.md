@@ -165,13 +165,14 @@ so the list cannot rot.
 | Source | Code | Why |
 |---|---|---|
 | `src/y/parser.y` | `msg: v, line: ln` | Re-raises a lexer error token as a parse error; the lexer's messages are checked at their own sites. |
-| `src/y/parser.y` | `msg: t.msg` | Re-raises a type-syntax error (`terr`) as an expression error; the `terr` site is checked. |
-| `src/y/types.y` | `fail(st, node.msg` | The checker reporting a parser error node; the parser's sites are checked. |
+| `src/y/parser.y` | `msg: e.msg` | Re-raises a type-syntax error (`terr`) as an expression error; the `terr` site is checked. |
+| `src/y/types.y` | `fail(st, err.msg` | The checker reporting a parser error node; the parser's sites are checked. |
 | `src/y/types.y` | `fail(st, fterr` | Reports the call-target error chosen just above; each `fterr = "..."` site is checked. |
 | `src/y/types.y` | `internal: params/ptypes length mismatch` | An internal consistency check: the parser appends a parameter's name and its type in the same loop iteration, so the two lists always match. |
 | `src/y/types.y` | `is not defined on arrays (only` | `typeof_arith_arr` is only called from the `op == "+"` arm of `typeof_arith`; `-` `*` `/` `%` on an array fail as non-numeric operands instead. |
 | `src/y/types.y` | `operator '" + op + "' is unsupported in native mode` | The parser builds a `bin` node only for an operator `op_prec` knows, and the checker's operator table handles every one of them; the `bin` nodes the parser and emitter synthesize use only `+` `==` `&&` `<` and the compound-assignment operators. |
 | `src/y/types.y` | `is not a supported expression form` | Every expression node the parser builds has an arm in `typeof_expr`; `optarg` (optional-parameter metadata) is replaced with `none`/`some(...)` by `rn_fill_defaults` before checking. |
 | `src/y/ycc.y` | `"error: assemble: "` | The assembler only reads the emitter's output, so a bad line is a compiler bug, not something a program can cause. |
+| `src/y/arch_x64.y` | `record has no field '` | `y_dot_lookup` reads a field of a value whose type the checker did not know; with no unknown types it is never called, and it goes in the next step with the descriptors' field tables. |
 | `src/y/ycc.y` | `the std pack is too large` | The trailer gives the pack's length in 8 digits; the std units come to about 190 KB, so no build gets near 100 MB. |
 | `src/y/pkg.y` | `cannot read the compiler's own binary` | `/proc/self/exe` is the running compiler itself (`self_pack` reads it too); a test cannot take it away from a running process. |

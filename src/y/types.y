@@ -51,6 +51,116 @@ def t_unk() -> Type { { k: "tunk" } };
 
 def type_node(t: Type) -> Type { t };
 
+// `[]` or `none` where no type is declared: the element or payload is not
+// known, so it unifies like tunk, but a binding or an inferred return of a
+// type with one inside needs an annotation (has_free) -- error poison
+// (plain tunk) stays quiet.
+def t_free() -> Type {
+    let f: TFree = { k: "tunk", free: true };
+    f
+};
+
+// A def's return type before it is known: a call to it then (a forward
+// call) needs the return type annotated.
+def t_pend() -> Type {
+    let p: TPend = { k: "tpend", self: false, used: false };
+    p
+};
+
+// The return type of a def while its body is checked to infer it: a call
+// to the def from its own body gives an unknown and notes itself
+// (call_result), and typeof_def checks the body again with the type the
+// rest of the body gave.
+def t_pend_self() -> Type {
+    let p: TPend = { k: "tpend", self: true, used: false };
+    p
+};
+
+def has_free(t: Type) -> bool {
+    let k: str = t.k;
+    if (k == "tunk") {
+        match t { TFree f => f.free, _ => false }
+    } else if (k == "tarr" || k == "topt") {
+        let o: TOf = t;
+        self(o.of)
+    } else if (k == "tarrfix") {
+        let o: TFix = t;
+        self(o.of)
+    } else if (k == "tptr") {
+        let p: TPtr = t;
+        self(p.to)
+    } else if (k == "tmap") {
+        let m: TMap = t;
+        self(m.key) || self(m.of)
+    } else if (k == "trec") {
+        let r: TRec = t;
+        let fs: [Field] = r.fields;
+        let found = false;
+        let i = 0;
+        while (!found && i < len(fs)) {
+            let f = fs[i];
+            if (self(f.typ)) { found = true; };
+            i = i + 1;
+        };
+        found
+    } else if (k == "tunion") {
+        let u: TList = t;
+        let ts: [Type] = u.ts;
+        let found = false;
+        let i = 0;
+        while (!found && i < len(ts)) {
+            if (self(ts[i])) { found = true; };
+            i = i + 1;
+        };
+        found
+    } else if (k == "tfunc") {
+        let ftype: TFunc = t;
+        let as: [Type] = ftype.args;
+        let found = false;
+        let i = 0;
+        while (!found && i < len(as)) {
+            if (self(as[i])) { found = true; };
+            i = i + 1;
+        };
+        found || self(ftype.ret)
+    } else { false }
+};
+
+// A function type whose return type is not known yet (t_pend), and not
+// the def being inferred (t_pend_self) calling itself.
+def ret_pending(t: Type) -> bool {
+    if (t.k != "tfunc") { false } else {
+        let ftype: TFunc = t;
+        let r = ftype.ret;
+        if (r.k != "tpend") { false } else {
+            let p: TPend = r;
+            !p.self
+        }
+    }
+};
+
+// A function type whose return type is not known yet, the def being
+// inferred included: its name (or `self`) used as a value.
+def ret_unknown(t: Type) -> bool {
+    if (t.k != "tfunc") { false } else {
+        let ftype: TFunc = t;
+        let r = ftype.ret;
+        r.k == "tpend"
+    }
+};
+
+// The type of a call to ft: its return type; a def calling itself while
+// its return type is inferred gets an unknown, and the def is checked
+// again (typeof_def).
+def call_result(ft: TFunc) -> Type {
+    let r = ft.ret;
+    if (r.k == "tpend") {
+        let p: TPend = r;
+        p.used = true;
+        t_unk()
+    } else { r }
+};
+
 // A map type node ({K => V}). Returns through a {k: str} annotation so
 // the value's flow type is the unknown-shape marker: typeof_expr's if
 // arms only agree through such holes (see teq note), and a concrete
@@ -115,10 +225,6 @@ def teq(a: Type, b: Type) -> bool {
         // the order they are written in is not part of the type (a record
         // is laid out by field name, NATIVE.md "Records"). tunk fields
         // unify -- error poison never cascades.
-        // An open side ({k: str}) is the unknown-shape marker: it unifies with
-        // any record (the missing annotation errors once at its own site,
-        // not again at every enclosing branch — same tcompat law as the
-        // dot arm). Concrete mismatches still disagree (e11/e12 parity).
         // NOTE: each bound once — the checker env is flow-INSENSITIVE (one
         // shape per name, last wins), so a name read inline here would merge
         // the `fields` shape of a, b and every other arm in teq.
@@ -126,8 +232,7 @@ def teq(a: Type, b: Type) -> bool {
         let br: TRec = b;
         let af: [Field] = ar.fields;
         let bf: [Field] = br.fields;
-        if (is_open(af) || is_open(bf)) { true }
-        else if (len(af) != len(bf)) { false }
+        if (len(af) != len(bf)) { false }
         else { teq_fields(af, bf, 0) }
     } else if (ak == "tfunc") {
         let afunc: TFunc = a;
@@ -226,10 +331,27 @@ def pat_members(s: Type, t: Type) -> [Type] {
 // canonical forms are; a tref against a type written out (a literal of a
 // recursive record type, say) is unfolded, at most 64 levels deep.
 let teq_unfolds = 0;
+// Two recursive aliases whose types visibly differ -- other kinds, or
+// records of other field names -- have other canonical forms: teq_ref
+// answers without spelling them out (long, for a big recursive union).
+def ref_shapes_differ(a: Type, b: Type) -> bool {
+    let ua = unfold(a);
+    let ub = unfold(b);
+    let uak: str = ua.k;
+    let ubk: str = ub.k;
+    if (uak != ubk) { true }
+    else if (uak == "trec") {
+        let rb: TRec = ub;
+        !same_names(ua, rec_names(rb.fields))
+    } else { false }
+};
+
 def teq_ref(a: Type, b: Type) -> bool {
     let ak: str = a.k;
     let bk: str = b.k;
-    if (ak == "tref" && bk == "tref") { tcanon(a) == tcanon(b) }
+    if (ak == "tref" && bk == "tref") {
+        if (ref_shapes_differ(a, b)) { false } else { tcanon(a) == tcanon(b) }
+    }
     else if (teq_unfolds >= 64) { false }
     else {
         teq_unfolds = teq_unfolds + 1;
@@ -452,25 +574,6 @@ def teq_list(aa: [Type], bb: [Type], i: long) -> bool {
     else { false }
 };
 
-// An open record's field list: it ends in the `..` marker (parser.y
-// parse_type_record), `{k: str}` -- the unknown-shape marker: any
-// record, its fields read through the descriptor (native.y is_kshape).
-def is_open(fs: [Field]) -> bool {
-    let n = len(fs);
-    if (n == 0) { false }
-    else if (fs[n - 1].name == "..") { true }
-    else { n == 1 && fs[0].name == "k" }
-};
-
-// A store into field `key` through open record type t that cannot be
-// done: only k is assigned through one (its offset is in every record's
-// descriptor; the other fields are found by name, which a read does).
-def open_store(t: Type, key: str) -> bool {
-    let rec: TRec = t;
-    let fs: [Field] = rec.fields;
-    is_open(fs) && key != "k"
-};
-
 // Field type by name in a trec; tnone marker when missing (dotassign uses
 // it — the caller reports the error once at the assignment site).
 def trec_field_type(rec: Type, key: str) -> Type {
@@ -524,7 +627,7 @@ def tstr_go(t: Type) -> str {
             // `fs[i]` would merge shapes across arms (see teq note).
             let f = fs[i];
             let fname: str = f.name;
-            if (fname == "..") { parts += ".."; 0; } else { parts += fname + ": " + tstr_go(f.typ); 0; };
+            parts += fname + ": " + tstr_go(f.typ);
             i = i + 1;
         };
         "{ " + join(parts, ", ") + " }"
@@ -986,11 +1089,29 @@ def expect_type(st: TcSt, got: Type, want: Type, what: str, line: long, col: lon
     }
 };
 
+// A union value where one of its members, or a union of some of them, is
+// written: a cast, checked when the program runs (native.y gen_as: a value
+// holding another member stops the program).
+def cast_ok(got: Type, want: Type) -> bool {
+    let g = unfold(got);
+    if (tcompat(got, want)) { true }
+    else if (g.k == "tunion") { union_accepts(unfold(want), g) }
+    else { false }
+};
+
+// expect_type where the type is written at the site -- an annotated let, a
+// parameter, a declared return type -- so a union value casts to it. Where
+// the type was inferred (an assignment, a field, an element) a union value
+// does not: a binding inferred too narrow is an error, not a trap.
+def expect_cast(st: TcSt, got: Type, want: Type, what: str, line: long, col: long) -> TcSt {
+    if (cast_ok(got, want)) { st } else { expect_type(st, got, want, what, line, col) }
+};
+
 // expect_type for a call argument. some(v) passed for a T? -- which is what
 // the argument of an optional parameter `b?: T` becomes -- is reported as
 // v against T: "expected long, got long?", not "expected long?, got long??".
 def expect_arg(st: TcSt, got: Type, want: Type, arg: Node, what: str, line: long, col: long) -> TcSt {
-    if (tcompat(got, want)) {
+    if (cast_ok(got, want)) {
         st
     } else if (got.k == "topt" && want.k == "topt" && is_some_call(arg)) {
         let optgot: TOf = got;
@@ -1261,11 +1382,7 @@ def typeof_logic(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -
 // NOTE: records are exact: a record goes only where its own type (teq:
 // the same fields, in any order) or a union holding it is expected. With
 // fields at fixed offsets and records shared by reference there is no
-// sound width rule. The one exception is the unknown-shape marker ({k:
-// str, ..}, see is_open): teq lets any record in, and so does this for
-// anything but a str (parser.y's {k}-annotated node params take call,
-// index, dot, map, func literals without a cascade at every res() site).
-// Branch agreement and ==/!= keep strict teq (e11/e12 parity).
+// sound width rule. Branch agreement and ==/!= keep strict teq (e11/e12 parity).
 def tcompat(got: Type, want: Type) -> bool {
     got = unfold(got);
     want = unfold(want);
@@ -1278,7 +1395,8 @@ def tcompat(got: Type, want: Type) -> bool {
     else if (want.k == "tparams") { true }
     else if (want.k == "tunion") { union_accepts(got, want) }
     else if (got.k == "tunion") {
-        // a union is none of its members until a match says which
+        // a union is none of its members until a match says which, or a
+        // cast where the member type is written (expect_cast)
         false
     }
     else if (want.k == "topt") {
@@ -1294,14 +1412,7 @@ def tcompat(got: Type, want: Type) -> bool {
         else { false }
     }
     else if (got.k == "trec") { false }
-    else if (want.k == "trec") {
-        // GOT is a bare {k}-shaped node going into an unknown-shape slot.
-        if (got.k == "tstr") { false }
-        else {
-            let rec: TRec = want;
-            is_open(rec.fields)
-        }
-    }
+    else if (want.k == "trec") { false }
     else if (got.k == "tstr") {
         if (want.k == "tptr") { true } else { false }
     } else if (got.k == "tlong") {
@@ -1396,6 +1507,9 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (st.self.k == "tnone") {
                 st = fail(st, "'self' outside of a function", id.line, id.col);
                 tc_res(t_unk(), st)
+            } else if (ret_unknown(st.self)) {
+                st = fail(st, "'self' is used before its return type is known (annotate it)", id.line, id.col);
+                tc_res(t_unk(), st)
             } else {
                 tc_res(st.self, st)
             }
@@ -1404,11 +1518,14 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (got.kind == "") {
                 if (id.v == "none") {
                     // the empty option (type from context via unification)
-                    tc_res(type_node({ k: "topt", of: t_unk() }), st)
+                    tc_res(type_node({ k: "topt", of: t_free() }), st)
                 } else {
                     st = fail(st, "undefined variable '" + id.v + "'", id.line, id.col);
                     tc_res(t_unk(), st)
                 }
+            } else if (ret_unknown(got.typ)) {
+                st = fail(st, "'" + disp(id.v) + "' is used before its return type is known (annotate it)", id.line, id.col);
+                tc_res(t_unk(), st)
             } else {
                 st = check_visible(st, got, id.v, id.line, id.col);
                 tc_res(got.typ, st)
@@ -1720,7 +1837,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 ret_note(st.ret, r.typ, ret.line, ret.col);
                 tc_res(r.typ, r.st)
             } else {
-                st = expect_type(r.st, r.typ, st.ret, "'return'", ret.line, ret.col);
+                st = expect_cast(r.st, r.typ, st.ret, "'return'", ret.line, ret.col);
                 if (rk == "tunk") { tc_res(r.typ, st) } else { tc_res(st.ret, st) }
             }
         }
@@ -1996,13 +2113,10 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (got.kind == "") {
                 st = fail(st, "undefined variable '" + id.v + "'", assign.line, assign.col);
                 tc_res(t_unk(), st)
-            } else if (got.typ.k == "trec") {
-                let ft = trec_field_type(got.typ, assign.key);
+            } else if (unfold(got.typ).k == "trec") {
+                let ft = trec_field_type(unfold(got.typ), assign.key);
                 if (ft.k == "tnone") {
                     st = fail(st, "record has no field '" + assign.key + "'", assign.line, assign.col);
-                    tc_res(t_unk(), st)
-                } else if (open_store(got.typ, assign.key)) {
-                    st = fail(st, "cannot assign field '" + assign.key + "' through an open record type (only its k)", assign.line, assign.col);
                     tc_res(t_unk(), st)
                 } else {
                     let v = typeof_want(st, assign.v, ft);
@@ -2010,8 +2124,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                     st = expect_type(st, v.typ, ft, "record field '" + assign.key + "'", assign.line, assign.col);
                     tc_res(ft, st)
                 }
-            } else if (got.typ.k == "tunion") {
-                dotassign_union(st, got.typ, assign)
+            } else if (unfold(got.typ).k == "tunion") {
+                dotassign_union(st, unfold(got.typ), assign)
             } else {
                 st = fail(st, "cannot field-assign " + tstr(got.typ) + " (only records)", assign.line, assign.col);
                 tc_res(t_unk(), st)
@@ -2026,9 +2140,6 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 let ft = trec_field_type(obr.typ, assign.key);
                 if (ft.k == "tnone") {
                     st = fail(st, "record has no field '" + assign.key + "'", assign.line, assign.col);
-                    tc_res(t_unk(), st)
-                } else if (open_store(obr.typ, assign.key)) {
-                    st = fail(st, "cannot assign field '" + assign.key + "' through an open record type (only its k)", assign.line, assign.col);
                     tc_res(t_unk(), st)
                 } else {
                     let v = typeof_want(st, assign.v, ft);
@@ -2127,7 +2238,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         // its own site, not again at every enclosing literal (tcompat law).
         let elems: [Node] = array.elems;
         if (len(elems) == 0) {
-            tc_res(type_node({ k: "tarr", of: t_unk() }), st)
+            tc_res(type_node({ k: "tarr", of: t_free() }), st)
         } else {
             let e0 = elems[0];
             let r0 = typeof_expr(st, e0);
@@ -2391,14 +2502,6 @@ def typeof_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
         };
         if (found) {
             tc_res(ftyp, st)
-        } else if (is_open(fs)) {
-            // unknown-shape ({k}-only) reads unify quietly (tcompat
-            // law) — the missing annotation errors once at its own
-            // site, not again at every enclosing read. Concrete
-            // records error below (teq against the marker was the test,
-            // but teq lets a record of any other width meet it, so
-            // `{a, b}.c` compiled and trapped at run time: e145).
-            tc_res(t_unk(), st)
         } else {
             st = fail(st, "record has no field '" + dkey + "'", line, col);
             tc_res(t_unk(), st)
@@ -2920,7 +3023,7 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                 while (ci < len(cargs)) {
                     let ra = typeof_want(st, cargs[ci], cfargs[ci]);
                     st = ra.st;
-                    st = expect_type(st, ra.typ, cfargs[ci], "call arg " + tostring(ci), node.line, node.col);
+                    st = expect_cast(st, ra.typ, cfargs[ci], "call arg " + tostring(ci), node.line, node.col);
                     ci = ci + 1;
                 };
                 tc_res(cft.ret, st)
@@ -3335,6 +3438,15 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
             if (fterr != "") {
                 st = fail(st, fterr, node.line, node.col);
                 tc_res(t_unk(), st)
+            } else if (ret_pending(ft)) {
+                st = fail(st, "'" + disp(name) + "' is used before its return type is known (annotate it)", node.line, node.col);
+                let i = 0;
+                while (i < len(cargs)) {
+                    let r = typeof_expr(st, cargs[i]);
+                    st = r.st;
+                    i = i + 1;
+                };
+                tc_res(t_unk(), st)
             } else if (ft.k != "tfunc") {
                 // poisoned binding (tunk) from an earlier error — don't
                 // cascade new errors, but still check the arguments for
@@ -3351,7 +3463,7 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                 let cargs_ft: [Type] = func.args;
                 if (len(cargs) != len(cargs_ft)) {
                     st = fail(st, "'" + disp(name) + "' takes " + tostring(len(cargs_ft)) + " args, got " + tostring(len(cargs)), node.line, node.col);
-                    tc_res(func.ret, st)
+                    tc_res(call_result(func), st)
                 } else {
                     let i = 0;
                     while (i < len(cargs)) {
@@ -3369,7 +3481,7 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                         };
                         i = i + 1;
                     };
-                    tc_res(func.ret, st)
+                    tc_res(call_result(func), st)
                 }
             }
         }
@@ -3569,12 +3681,12 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                         t = node.typ;
                         0
                     } else {
-                        st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
+                        st = expect_cast(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                         t = node.typ;
                         0
                     };
                 } else {
-                    st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
+                    st = expect_cast(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                     t = node.typ;
                     0
                 };
@@ -3597,6 +3709,9 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                 st = fail(st, "'" + tstr(t) + "' cannot be bound to a variable", node.line, node.col);
                 t = t_unk();
                 0
+            } else if (has_free(t)) {
+                st = fail(st, "the type of '" + disp(node.name) + "' is not fully known (annotate it)", node.line, node.col);
+                0
             } else { 0; };
             st = st_bind(st, node.name, t, bk);
             { typ: t, st: st }
@@ -3607,7 +3722,6 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
 // A `return` in a def whose return type is still being inferred: its type
 // and position go into the marker typeof_def put in st.ret (`rl`, a record
 // shared by reference), to be checked once the body's type is known.
-type RetNote = { typ: Type, line: long, col: long };
 def ret_note(rl: TInfer, typ: Type, line: long, col: long) -> long {
     let rets: [RetNote] = rl.rets;
     rets += { typ: typ, line: line, col: col };
@@ -3621,8 +3735,7 @@ def ret_note(rl: TInfer, typ: Type, line: long, col: long) -> long {
 // as rename.y builds it (rn_func_finish), so `ret` is a static field (a
 // node of another shape traps here, native.y gen_as).
 def set_inferred_ret(func: Func, ret: Type) -> long {
-    let fnode: { k: str, params: [str], ptypes: [Type], ret: Type, body: Node, line: long, col: long, defs: [Node] } = func;
-    fnode.ret = ret;
+    func.ret = ret;
     0
 };
 
@@ -3645,15 +3758,8 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
         while (i < len(fparams)) {
             let pt: Type = fptypes[i];
             if (pt.k == "tnone") {
-                // OPTIONAL ANNOTATIONS v1: a missing param annotation is a
-                // poison-tolerant unknown (t_unk). That covers BOTH the ycc
-                // pipeline's bare-hole plumbing params AND user-written defs
-                // without annotations — holes and user params type
-                // identically. (Record shapes CAN be annotated on a param —
-                // `def f(r: {a: long})` — they are simply not required.)
-                // Caveat: the emitter has no runtime tag, so a richer value
-                // (str/record) flowing into an unannotated param behaves as
-                // a plain long there; annotate those sites.
+                // No value of unknown type: a parameter says its type.
+                st = fail(st, "parameter '" + disp(fparams[i]) + "' has no type (annotate it)", line, col);
                 pt = t_unk();
                 0
             } else if (!is_value_type(pt) && pt.k != "tfunc") {
@@ -3672,12 +3778,11 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
         let rets: [RetNote] = [];
         let body_ret: Type = ret;
         if (ret.k == "tnone") {
-            // OPTIONAL ANNOTATIONS + inference v1: the return type comes
-            // from the body's tail value once the body has been checked.
-            // Until then the signature carries poison tunk so recursion
-            // and forward calls still unify.
+            // The return type comes from the body's tail value once the
+            // body has been checked; a call before then (the def calling
+            // itself) needs it annotated (t_pend).
             ret_inferred = true;
-            ret = t_unk();
+            ret = t_pend_self();
             body_ret = type_node({ k: "tinfer", rets: rets });
             0
         } else { 0; };
@@ -3698,6 +3803,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
         };
         st = st_self(st, ft);
         st = st_ret(st, body_ret);
+        let nerr = len(st.errors);
         let body: Block = func.body;
         let b = typeof_block_want(st, body, body_ret);
         st = b.st;
@@ -3734,6 +3840,37 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 } else { 0; };
                 ri = ri + 1;
             };
+            let pend: TPend = ret;
+            if ((has_free(br) || (pend.used && br.k == "tunk")) && len(st.errors) == nerr) {
+                st = fail(st, "the return type of '" + disp(name) + "' is not fully known (annotate it)", line, col);
+                br = t_unk();
+                0
+            } else if (pend.used && br.k != "tunk") {
+                // The body calls the def itself, so it was checked with
+                // that call's type unknown: check it again, the call now
+                // typed br, its `return`s and tail as before (the first
+                // pass's errors go; this one reports them).
+                let kept: [Diag] = st.errors;
+                st = st_errors(st, kept[0:nerr]);
+                let ft2: Type = type_node({ k: "tfunc", args: args, ret: br });
+                st = st_bind(st, name, ft2, "func");
+                st = st_self(st, ft2);
+                let rets2: [RetNote] = [];
+                st = st_ret(st, type_node({ k: "tinfer", rets: rets2 }));
+                let b2 = typeof_block_want(st, body, br);
+                st = b2.st;
+                st = expect_type(st, b2.typ, br, "'" + disp(name) + "' body", line, col);
+                let ri2 = 0;
+                while (ri2 < len(rets2)) {
+                    let rn2 = rets2[ri2];
+                    if (!tcompat(rn2.typ, br)) {
+                        st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ")", rn2.line, rn2.col);
+                        0
+                    } else { 0; };
+                    ri2 = ri2 + 1;
+                };
+                0
+            } else { 0; };
             ft = type_node({ k: "tfunc", args: args, ret: br });
             st = st_bind(st, name, ft, "func");
             if (br.k != "tunk") {
@@ -3746,7 +3883,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             // `-> void` discards the body's tail value (no value returns)
             let rtk: str = ret.k;
             if (rtk == "tvoid") { 0; } else {
-                st = expect_type(st, b.typ, ret, "'" + disp(name) + "' body", line, col);
+                st = expect_cast(st, b.typ, ret, "'" + disp(name) + "' body", line, col);
                 0
             };
             0
@@ -3838,8 +3975,8 @@ def def_sig(name: str, func: Func) -> Field {
         i = i + 1;
     };
     let ret: Type = func.ret;
-    if (ret.k == "tnone") { ret = t_unk(); };
+    if (ret.k == "tnone") { ret = t_pend(); };
     { name: name, typ: type_node({ k: "tfunc", args: args, ret: ret }) }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, is_open, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

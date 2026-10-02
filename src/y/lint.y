@@ -810,16 +810,13 @@ def lint_root(t: LintTy, typ: Type, line: long, col: long, alias: str) -> long {
     0
 };
 
-// An occurrence: a record of two or more fields (an open record's `..`
-// is none), or a union.
+// An occurrence: a record of two or more fields, or a union.
 def lint_cand(ty: Type) -> bool {
     let k: str = ty.k;
     if (k == "trec") {
         let rec: TRec = ty;
         let fs: [Field] = rec.fields;
-        let n = len(fs);
-        if (types.is_open(fs)) { n = n - 1; 0; } else { 0; };
-        n >= 2
+        len(fs) >= 2
     } else {
         k == "tunion"
     }

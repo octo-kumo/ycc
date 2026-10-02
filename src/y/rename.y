@@ -31,7 +31,8 @@ import parser from "./parser.y";
 // the type aliases (rn_prepass_one); dfl, the default parameter values
 // of the defs, by unique name (rn_note_defaults).
 type Dfl = { name: str, vals: [Node] };
-type RnSt = { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [Field], dfl: [Dfl] };
+type RnBind = { orig: str, uniq: str };
+type RnSt = { scopes: [[RnBind]], n: long, tys: [Field], dfl: [Dfl] };
 type RnRes = { st: RnSt, node: Node };
 type RnStmts = { st: RnSt, stmts: [Node] };
 
@@ -52,12 +53,12 @@ def rn_fresh(st: RnSt, orig: str) -> { st: RnSt, name: str } {
 
 def rn_push(st: RnSt) -> RnSt {
     st.scopes += [[]];
-    let scopes: [[{ orig: str, uniq: str }]] = st.scopes;
+    let scopes: [[RnBind]] = st.scopes;
     { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 
 def rn_pop(st: RnSt) -> RnSt {
-    let scopes: [[{ orig: str, uniq: str }]] = [];
+    let scopes: [[RnBind]] = [];
     let old = st.scopes;
     let i = 0;
     while (i < len(old) - 1) {

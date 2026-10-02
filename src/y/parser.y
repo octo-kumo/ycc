@@ -65,7 +65,14 @@ type TPat = { k: str, names: [str] };
 type TPtr = { k: str, to: Type };
 type TRef = { k: str, name: str, tmp: str, to: Type };
 type TInfer = { k: str, rets: [RetNote] };
-type Type = TPrim | TOf | TFix | TMap | TRec | TFunc | TName | TList | TPat | TPtr | TRef | TInfer | Err;
+// A `return` noted while a def's return type is inferred (types.y ret_note).
+type RetNote = { typ: Type, line: long, col: long };
+// The checker's own markers (types.y): an unknown part nothing stated yet
+// (`[]`, `none`: k "tunk", free), and a def's return type before it is
+// known (k "tpend"; self: the def being checked; used: it called itself).
+type TFree = { k: str, free: bool };
+type TPend = { k: str, self: bool, used: bool };
+type Type = TPrim | TOf | TFix | TMap | TRec | TFunc | TName | TList | TPat | TPtr | TRef | TInfer | TFree | TPend | Err;
 
 // A parse result for expressions, and one for types.
 type Parsed = { node: Node, pos: long };
@@ -947,13 +954,6 @@ def parse_type_record(toks: [Tok], p: long) -> PType {
         let go = true;
         while (go) {
             if (is_punct(toks, pos, "}")) {
-                go = false;
-                0
-            } else if (is_op(toks, pos, "..")) {
-                // `{k: str}`, `..` last: an open record, any record
-                // with these fields (types.y is_open)
-                fields += { name: "..", typ: { k: "tunk" } };
-                pos = pos + 1;
                 go = false;
                 0
             } else {

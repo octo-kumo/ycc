@@ -50,6 +50,7 @@ static Yv *t_pend_self(void);
 static Yv *call_result(Yv *ft);
 static int has_free(Yv *t);
 static int ret_pending(Yv *t);
+static int ret_unknown(Yv *t);
 static Yv *map_type_of(Yv *v);
 static int teq_fields(Yv *af, Yv *bf, long i);
 static int teq_list(Yv *aa, Yv *bb, long i);
@@ -189,7 +190,7 @@ static Yv *t_free(void) {
 // A def's return type before it is known: a call to it then (a forward
 // call) needs the return type annotated.
 static Yv *t_pend(void) {
-    return yr(1, "k", ys("tpend"));
+    return yr(3, "k", ys("tpend"), "self", yv_bool(0), "used", yv_bool(0));
 }
 
 // The return type of a def while its body is checked to infer it: a call
@@ -197,7 +198,7 @@ static Yv *t_pend(void) {
 // (call_result), and typeof_def checks the body again with the type the
 // rest of the body gave.
 static Yv *t_pend_self(void) {
-    return yr(2, "k", ys("tpend"), "self", yv_bool(1));
+    return yr(3, "k", ys("tpend"), "self", yv_bool(1), "used", yv_bool(0));
 }
 
 static int has_free(Yv *t) {
@@ -251,7 +252,14 @@ static int has_free(Yv *t) {
 static int ret_pending(Yv *t) {
     return ys_eq_lit(yr_get(t, "k"), "tfunc") &&
            ys_eq_lit(yr_get(yr_get(t, "ret"), "k"), "tpend") &&
-           !yr_has(yr_get(t, "ret"), "self");
+           !yv_b(yr_get(yr_get(t, "ret"), "self"));
+}
+
+// A function type whose return type is not known yet, the def being
+// inferred included: its name (or `self`) used as a value.
+static int ret_unknown(Yv *t) {
+    return ys_eq_lit(yr_get(t, "k"), "tfunc") &&
+           ys_eq_lit(yr_get(yr_get(t, "ret"), "k"), "tpend");
 }
 
 // The type of a call to ft: its return type; a def calling itself while
@@ -1889,7 +1897,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 st = fail(st, ys("'self' outside of a function"),
                           yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(yr_get(st, "self"), "ret"), "k"), "tpend")) {
+            } else if (ret_unknown(yr_get(st, "self"))) {
                 st = fail(st, ys("'self' is used before its return type is known (annotate it)"),
                           yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
@@ -1912,8 +1920,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
                 }
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tfunc") &&
-                       ys_eq_lit(yr_get(yr_get(yr_get(got, "typ"), "ret"), "k"), "tpend")) {
+            } else if (ret_unknown(yr_get(got, "typ"))) {
                 st = fail(st,
                           ys_cat(ys_cat(ys("'"), disp(yr_get(node, "v"))),
                                  ys("' is used before its return type is known (annotate it)")),
@@ -5106,7 +5113,8 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                 }
                 ri = ri + 1;
             }
-            if ((has_free(br) || (yr_has(ret, "used") &&
+            int used = yv_b(yr_get(ret, "used"));
+            if ((has_free(br) || (used &&
                                   ys_eq_lit(yr_get(br, "k"), "tunk"))) &&
                 yv_len(yr_get(st, "errors")) == nerr) {
                 st = fail(st,
@@ -5115,7 +5123,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                           line, col);
                 br = t_unk();
                 ;
-            } else if (yr_has(ret, "used") && !ys_eq_lit(yr_get(br, "k"), "tunk")) {
+            } else if (used && !ys_eq_lit(yr_get(br, "k"), "tunk")) {
                 // The body calls the def itself, so it was checked with
                 // that call's type unknown: check it again, the call now
                 // typed br, its `return`s and tail as before (the first

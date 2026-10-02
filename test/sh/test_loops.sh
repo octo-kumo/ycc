@@ -305,7 +305,7 @@ inline_test "cons operator" \
     '[0, 1, 2, 3]'
 
 inline_test "empty array slice" \
-    'let a = []; print(a[0:1]);' \
+    'let a: [long] = []; print(a[0:1]);' \
     '[]'
 
 inline_test "modulo precedence" \
