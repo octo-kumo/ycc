@@ -2,18 +2,38 @@
 
 ## State
 
-- On `master` (HEAD 042526f). Uncommitted, finished and blessed: the
-  warning system (task 1), stage 1 of the record redesign (task 2) and
-  std/fs.y with module scope (task 4). `make check`, `make rebless` and
-  `make test` passed. `refs/ycc.ref` sha256 starts with `297b2bb3`.
-  Earlier refs are backed up in the session's files folder:
-  `ycc.ref.pre-e145` (`ef862701`), `ycc.ref.pre-enc` (`f697b225`), `ycc.ref.pre-shadow` (`392d7a25`,
-  after fs), `ycc.ref.pre-fs`
-  (`aaece322`, after stage 1), `ycc.ref.pre-records`
-  (`a7ab6a4e`, after the warnings) and `ycc.ref.pre-lint` (`a3dcb1a3`).
+- On `master`. Committed: 9b69861 (everything blessed up to open records
+  step 1: warnings, records/unions stage 1, std/fs + module scope, the
+  speedups, e145), cb89e46 (cycc: `{k: str}` exact, no `..`; spec
+  fixtures e147/e148/t81), 7eec451 (cycc: no value of unknown type;
+  e149), f1b147f (cycc: union -> member is a checked cast).
+  `refs/ycc.ref` = `02651975` (open records step 1). Backups in the
+  session's files folder: `ycc.ref.pre-open` (`297b2bb3`),
+  `ycc.ref.pre-e145` (`ef862701`), `ycc.ref.pre-enc` (`f697b225`),
+  `ycc.ref.pre-shadow` (`392d7a25`), `ycc.ref.pre-fs` (`aaece322`),
+  `ycc.ref.pre-records` (`a7ab6a4e`), `ycc.ref.pre-lint` (`a3dcb1a3`).
+- **The tree is red on purpose** (the user: make the backdoors errors
+  immediately, change cycc, then the compiler's source until it does not
+  error): `./cycc src/y/ycc.y` fails until src/y is annotated. A gpt-6-luna
+  sub-agent (as the user asked) is adding the annotations (Node/Type
+  unions, CHOICES_MADE.md 22), committing per file. Its check: `./cycc
+  src/y/ycc.y -o ycc1` with no errors, then `/tmp/mt/cmp_ref.sh $PWD/ycc1`
+  = 0 of 314 programs differ from the reference (byte-identical output),
+  `/tmp/mt/runt.sh $PWD/ycc1` (t71 needs a memory cap; t81 needs the Y
+  port). `make ynew` cannot build the annotated source (CHOICES 23).
+- Then (me): port cb89e46 + 7eec451 + f1b147f to src/y (types.y: no
+  is_open/open_store/single_k, t_free, t_pend/t_pend_self, has_free,
+  ret_pending, call_result, the second pass for self calls, tcompat's
+  union casts; parser.y: no `..`; lint.y; native.y: no is_kshape/koff
+  loads, gen_cast_check/cast_members/union_within), docs (04-types
+  records/unions/inference, 10-errors cast row, NATIVE.md, AGENTS.md
+  "Records are exact", PORTING.md, COVERAGE.md for the new messages),
+  bless through cycc (`make rebless`), `make test`, bench + profile.
+  Expect a compile-time and size regression: `node.k`/`.line`/`.col`
+  through a 31-member union dispatch on the tag until CHOICES 25.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
   and test/y/examples/tail.y. Leave them alone.
-- Commit only when asked. Never push.
+- The user wants frequent commits now. Never push. No sed (edit tool).
 - The user's note (2026-10-02, in README_AND_DELETE_WHEN_YOU_SEE_THIS.md,
   deleted after reading as it asked): do not ask questions until told
   otherwise; where a question would come up, choose (going for: less code
@@ -106,15 +126,14 @@
      (`{a: 1, b: 2}.c`, or `p.z` with `p: P`) compiled and trapped at
      run time. Now single_k: a compile error (e145); the self-compile
      never relied on it; unk_shape removed.
-   - Stage 3 blocker (CHOICES_MADE.md 16): the union members for k-only
-     nodes -- AST `{k: "void"}`, the primitive types `{k: "tlong"}` ...
-     (341 constructions) -- would be `{k: str}`, which IS the hole, and a
-     hole in a union swallows it. Plan: spell the hole explicitly as an
-     open record, `{k: str, ..}` (a `..` marker field in the trec:
-     single_k/is_kshape test the marker, tstr prints `..`; parser accepts
-     `..` last in a record type; pack/unit versions bump), rewrite src/y's
-     395 holes and the tests' 10, so `{k: str}` is exact; then the node
-     unions (stage 3), then stage 4 removes `..` once nothing uses it.
+   - Open records (`{f: T, ..}`, step 1, blessed 02651975) were REJECTED
+     by the user (the same backdoor as the hole); the step-2 rewrite was
+     reverted unblessed. The plan now: no unknown type at all (State
+     above; CHOICES_MADE.md 18-25). After the bless: remove the dead
+     unknown-type machinery (y_dot_lookup, y_rec_has, y_rec_cast,
+     gen_union_cast, layout_unknown, descriptor field tables/koff/shape31;
+     pack/unit versions bump), then CHOICES 25 (written order is the
+     layout) once the user has seen it.
    - Stage 2 (inference): a first cut (2a) was built and SHELVED, not
      blessed (CHOICES_MADE.md 11). The patch is in the session files
      folder, `stage2a-inference.patch` (types.y only, no C port):
@@ -127,11 +146,9 @@
      f)` called with (2, 1.5) and (3, 2) types f float), but on src/y
      it types 14 of 604 unannotated params after one pass and 25 after
      four -- their arguments are holes/unknown -- while typecheck goes
-     97 -> 467 ms (+28% self-compile). Revised order: stage 3 (src/y
-     off `{k: str}`) before inference pays on src/y, and inference only
-     with the incremental checker (2d: re-check only the defs whose
-     params or callee signatures changed; callers-first order), so the
-     cost stays a few %.
+     97 -> 467 ms (+28% self-compile). Superseded by the user's ruling
+     ("if type cannot be inferred just ANNOTATE"): parameters are
+     annotated; only returns and lets are inferred (CHOICES_MADE.md 18).
 3. http prerequisites, in order: optional record fields, a wall-clock
    builtin, DNS, pure-Y crypto + TLS 1.3, the http client, `http.session`.
    The style decisions are in memory `http-client-design.md`.

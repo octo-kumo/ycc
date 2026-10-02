@@ -23,6 +23,10 @@ program runs. Compare what?
 
 - COMPLETELY INCORRECT!!!! REMOVE THIS BACKDOOR FROM THE LANGUAGE
 
+**User's ruling:** there is no unknown type at all ("the whole
+compilation is known"; "if type cannot be inferred just ANNOTATE"). The
+question goes away with the backdoor: see 18-24.
+
 ### 2. Which cycles a recursive alias may have
 
 The approved design allowed a cycle through a field, array, option, map
@@ -72,6 +76,13 @@ field names. How far does that go?
   when the value is another member.
 - b. **The member with those fields, or the union of the members that
   have them**, so `x.f` reads through the union. Chosen: sound.
+
+**User's ruling:** if all the shared fields are at the start, no mapping
+is needed, because a shared field has one offset whatever the member is;
+and "a union type is different from a normal type: if C = A|B, an A value
+of C need not have the memory structure of an A on its own; an assignment
+from one to the other is a cast, and a cast can move memory". See 21 and
+25.
 
 ### 6. Fields through a union
 
@@ -124,6 +135,10 @@ arguments are `{k: str}` holes or unknown), while typecheck goes from
   which removes the holes that keep src/y's arguments unknown. Chosen:
   performance and binary size come first, and the design's cost target is
   a few percent.
+
+**Superseded** by the user's ruling ("if type cannot be inferred just
+ANNOTATE"): parameters are annotated, not inferred from calls (18). The
+patch stays shelved.
 
 ## The file system module, std/fs.y (2026-10-02)
 
@@ -224,6 +239,10 @@ a union with it would accept everything.
   to any node, and stage 4 can drop `..` or keep it as a general
   "has at least these fields" type.
 
+**Superseded** — the user: `..` is the same backdoor respelled. Open
+records are gone (cycc cb89e46); `{k: str}` is an ordinary exact record,
+and the compiler's nodes get precise union types (22).
+
 ### 17. A field the record type lacks
 
 Found while planning 16: `{a: 1, b: 2}.c` and `p.z` with `p: {x, y}`
@@ -232,3 +251,103 @@ the record "is" the hole, and teq lets any record of another width meet
 it. Fixed to test the hole exactly (single_k): a compile error (e145).
 No option to weigh: records are exact since stage 1, so the read can
 never succeed.
+
+## No unknown types (2026-10-02, after the user's rulings on 1, 5, 11, 16)
+
+The user: no type backdoors; make them errors immediately; change cycc,
+then fix the compiler's own source until cycc accepts it; where a type
+cannot be inferred, annotate. Done in cycc first (cb89e46, 7eec451,
+f1b147f), then src/y (annotations, by a gpt-6-luna sub-agent as the
+user asked), then the Y checker.
+
+### 18. What "cannot be inferred" covers
+
+- a. Infer parameters from call sites (2a, entry 11): order effects, a
+  whole-program fixpoint, 4x typecheck time.
+- b. Demand-driven checking (check a def when first called): its body
+  needs the environment of its definition, not of the call.
+- c. **Local inference only.** A parameter is always annotated ("parameter
+  'x' has no type (annotate it)"). A `let` takes its initializer's type,
+  but `[]` and `none` need a declared type where they are bound ("the type
+  of 'xs' is not fully known (annotate it)"). A return type is inferred
+  from the body, so a call made before the body is checked -- a forward
+  call -- needs it written ("'f' is used before its return type is known
+  (annotate it)"). Chosen: predictable, one pass, no new cost. A def's
+  signature is its documentation anyway.
+
+### 19. A def calling itself
+
+- a. Require its return type (simple, but `def fact(n: long)` needs
+  `-> long` for no reason the reader sees).
+- b. **Infer it soundly**: check the body with the self call's type
+  unknown, take the type the rest of the body gives, then check the body
+  again as if `-> T` were written (only defs that call themselves pay the
+  second pass). Chosen: keeps the common recursive def annotation-free,
+  with no unchecked use of the self call. A body whose only value is the
+  self call gets "the return type of 'f' is not fully known".
+
+### 20. `[]`/`none` versus error poison
+
+Both were tunk. **`[]` and `none` now mark their unknown part as free**
+(t_free); only a free part makes a binding an error. Poison after a
+reported error stays quiet, so one mistake gives one message.
+
+### 21. A union value where a member is declared
+
+The user: "an assignment from one to the other is a cast".
+
+- a. Only `match` reaches a member's fields: sound statically, but every
+  `k` dispatch in the compiler would become a match.
+- b. **An implicit cast at every store** (typed let, argument, return,
+  field, element): legal when the declared type is a member of the union,
+  or a union of some of its members; the program checks the value's tag
+  and stops on a mismatch (y_cast_trap). Chosen: the user's model, and it
+  makes annotations enough to type the compiler. Unions that merely
+  overlap do not convert.
+
+### 22. The compiler's own nodes
+
+`Node` is a union of one record type per AST node shape, each with `k`,
+`line`, `col` (so those read straight through any Node); `Type` likewise
+for type nodes (`k` shared). The few k-only AST nodes (`void`, `optarg`)
+and three line-less blocks get a line and col. A function that builds
+both AST and type nodes splits its result type (`Parsed`/`PType`).
+
+### 23. Bootstrapping through the C copy
+
+The blessed reference treats `{k: str}` as the hole even inside a union
+(a `match` on such a union fails), and rejects union-to-member casts, so
+it cannot build the annotated compiler correctly. The migration is
+checked with compilers that cycc builds, which must produce byte-identical
+binaries to the reference on every test program; the bless goes through
+cycc (`make rebless`), not `make ynew`.
+
+### 24. Messages
+
+"parameter 'x' has no type (annotate it)"; "the type of 'x' is not fully
+known (annotate it)"; "the return type of 'f' is not fully known
+(annotate it)"; "'f' is used before its return type is known (annotate
+it)"; a failed cast stops with y_cast_trap's message.
+
+### 25. Shared fields first (the user's ruling on 5) -- proposed, for review
+
+Today a record is laid out by field name, so a field every member of a
+union has can sit at a different offset in each member, and reading it
+through the union dispatches on the tag (the compiler's `node.line` would
+compare up to 31 tags).
+
+- a. The user's model: a union lays out each member with the shared fields
+  first; a member converted to or from the union is copied into the other
+  layout. Sound, but the compiler casts on every dispatch (21), so it would
+  allocate a copy per node per pass (there is no collector), and a write
+  through the cast copy (`fnode.ret = ...`) would be lost.
+- b. A union member keeps the union's layout and a cast yields a view of
+  it ("A in C" as a type of its own): no copy, but a second kind of record
+  type, and a helper taking a member would have to say which union's.
+- c. **The written order is the layout** (and part of the type, as in Go):
+  write the shared fields first and they have one offset in every member;
+  a union of members that do not is still read by tag dispatch. No copies,
+  no new kind of type, and the fields sit where the declaration says.
+  The cost: `{x, y}` and `{y, x}` written as two annotations are two types
+  (a literal still takes the declared type wherever one is declared).
+  Proposed: c, after the no-unknown-types migration lands. Not done yet.
