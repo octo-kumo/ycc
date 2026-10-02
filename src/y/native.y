@@ -29,6 +29,7 @@
 // emitted `sub $N, %rsp`.
 
 import arch from "./arch_x64.y";
+import asm from "./asm.y";
 import types from "./types.y";
 import rename from "./rename.y";
 import lexer from "./lexer.y";
@@ -1014,24 +1015,40 @@ def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
     falls
 };
 
-// Index of `tok` in `names`, or -1 (length first: most misses are free).
-def name_index(names: [str], tok: str) -> long {
-    let tl = len(tok);
+// ── name -> index, for the tree shaker ───────────────────────────────────
+// `shake_keep` resolves one name per reference, ~191k of them per compile
+// against a few hundred names, so scanning the names each time was 24% of
+// everything ycc executes (and grew with the program). These two are thin
+// wrappers over asm.y's labmap -- the open-addressing table ycc already has
+// -- not a second implementation of it.
+//
+// labmap marks an empty slot with the empty string, and an unnamed block's
+// name IS "" (shake_refs keys keep[k] on it), so "" is not inserted. That
+// costs nothing: every key the shaker looks up is a real identifier or
+// label, because tok_push drops empty tokens when refs/roots are built.
+// The index travels in labmap's `sec` field, which labmap_get leaves at -1
+// when the name is absent -- so one read answers both questions.
+
+def namemap_build(names: [str]) -> [{ name: str, sec: long, off: long }] {
+    let m = asm.labmap_new(len(names) * 2 + 16);
     let i = 0;
-    let found = -1;
     while (i < len(names)) {
-        if (found < 0) {
-            let nm: str = names[i];
-            if (len(nm) == tl) {
-                if (nm == tok) { found = i; 0; } else { 0; };
-                0
-            } else { 0; };
+        let nm: str = names[i];
+        if (len(nm) > 0) {
+            // First insert wins, as a scan for the first match did.
+            let r = asm.labmap_put(m, nm, i, 0);
+            m = r.map;
             0
         } else { 0; };
         i = i + 1;
-        0
     };
-    found
+    m
+};
+
+// Index of `name` among the names it was built from, or -1.
+def namemap_get(m: [{ name: str, sec: long, off: long }], name: str) -> long {
+    let r = asm.labmap_get(m, name);
+    r.sec
 };
 
 // Mark every names[i] some entry of `roots` points at, then close over kept
@@ -1039,9 +1056,10 @@ def name_index(names: [str], tok: str) -> long {
 // their successor. `falls[i]` says block i falls through to block i+1.
 def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: [str]) -> [bool] {
     let n = len(names);
+    let map = namemap_build(names);
     let r = 0;
     while (r < len(roots)) {
-        let idx = name_index(names, roots[r]);
+        let idx = namemap_get(map, roots[r]);
         if (idx >= 0) { keep[idx] = true; 0; } else { 0; };
         r = r + 1;
         0
@@ -1072,7 +1090,7 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
                     let rs = refs[b];
                     let j = 0;
                     while (j < len(rs)) {
-                        let idx = name_index(names, rs[j]);
+                        let idx = namemap_get(map, rs[j]);
                         if (idx >= 0) {
                             if (!(keep[idx])) { keep[idx] = true; 0; } else { 0; };
                             0
@@ -1220,7 +1238,7 @@ def prune_bodies(labels: [str], refs: [[str]], asm_roots: str) -> { refs: [str],
         0
     };
     let roots = text_refs(asm_roots, true);
-    let root = name_index(labels, "_start");
+    let root = namemap_get(namemap_build(labels), "_start");
     if (root >= 0) {
         roots += "_start";
         0

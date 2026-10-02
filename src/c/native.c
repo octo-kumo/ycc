@@ -21,6 +21,7 @@
 
 #include "lexer.h"
 #include "parser.h"
+#include "asm.h"
 #include "yv.h"
 
 /* `pow10` is a native.y def (integer powers of ten) and glibc claims the
@@ -135,7 +136,8 @@ Yv *label_at(Yv *text, Yv *b, long lo, long hi);
 Yv *body_label(Yv *body);
 int is_data_line_b(Yv *text, Yv *b, long lo, long hi);
 int block_falls_b(Yv *text, Yv *b, long lo, long hi);
-long name_index(Yv *names, Yv *tok);
+Yv *namemap_build(Yv *names);
+long namemap_get(Yv *m, Yv *name);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
 Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots);
@@ -1659,32 +1661,42 @@ int block_falls_b(Yv *text, Yv *b, long lo, long hi) {
     return falls;
 }
 
-/* Index of `tok` in `names`, or -1 (length first: most misses are free). */
-long name_index(Yv *names, Yv *tok) {
-    long tl = yv_len(tok);
+/* ── name -> index, for the tree shaker ───────────────────────────────────
+ * `shake_keep` resolves one name per reference, ~191k of them per compile
+ * against a few hundred names, so scanning the names each time was 24% of
+ * everything ycc executes (and grew with the program). These two are thin
+ * wrappers over asm.c's labmap -- the open-addressing table ycc already has
+ * -- not a second implementation of it.
+ *
+ * labmap marks an empty slot with the empty string, and an unnamed block's
+ * name IS "" (shake_refs keys keep[k] on it), so "" is not inserted. That
+ * costs nothing: every key the shaker looks up is a real identifier or
+ * label, because tok_push drops empty tokens when refs/roots are built.
+ * The index travels in labmap's `sec` field, which labmap_get leaves at -1
+ * when the name is absent -- so one read answers both questions. */
+
+Yv *namemap_build(Yv *names) {
+    Yv *m = labmap_new(yv_len(names) * 2 + 16);
     long i = 0;
-    long found = -1;
     while (i < yv_len(names)) {
-        if (found < 0) {
-            Yv *nm = ya_get(names, i);
-            if (yv_len(nm) == tl) {
-                if (ys_eq(nm, tok)) {
-                    found = i;
-                    ;
-                } else {
-                    ;
-                }
-                ;
-            } else {
-                ;
-            }
+        Yv *nm = ya_get(names, i);
+        if (yv_len(nm) > 0) {
+            /* First insert wins, as a scan for the first match did. */
+            Yv *r = labmap_put(m, nm, i, 0);
+            m = yr_get(r, "map");
             ;
         } else {
             ;
         }
         i = i + 1;
     }
-    return found;
+    return m;
+}
+
+/* Index of `name` among the names it was built from, or -1. */
+long namemap_get(Yv *m, Yv *name) {
+    Yv *r = labmap_get(m, name);
+    return yv_l(yr_get(r, "sec"));
 }
 
 /* Mark every names[i] some entry of `roots` points at, then close over kept
@@ -1692,9 +1704,10 @@ long name_index(Yv *names, Yv *tok) {
  * their successor. `falls[i]` says block i falls through to block i+1. */
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
     long n = yv_len(names);
+    Yv *map = namemap_build(names);
     long r = 0;
     while (r < yv_len(roots)) {
-        long idx = name_index(names, ya_get(roots, r));
+        long idx = namemap_get(map, ya_get(roots, r));
         if (idx >= 0) {
             ya_set(keep, idx, yv_bool(1));
             ;
@@ -1737,7 +1750,7 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
                     Yv *rs = ya_get(refs, b);
                     long j = 0;
                     while (j < yv_len(rs)) {
-                        long idx = name_index(names, ya_get(rs, j));
+                        long idx = namemap_get(map, ya_get(rs, j));
                         if (idx >= 0) {
                             if (!(yv_b(ya_get(keep, idx)))) {
                                 ya_set(keep, idx, yv_bool(1));
@@ -1908,7 +1921,7 @@ Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots) {
         i = i + 1;
     }
     Yv *roots = text_refs(asm_roots, 1);
-    long root = name_index(labels, ys("_start"));
+    long root = namemap_get(namemap_build(labels), ys("_start"));
     if (root >= 0) {
         roots = ya_push(roots, ys("_start"));
         ;

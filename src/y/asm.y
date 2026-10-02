@@ -414,10 +414,14 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
 // longs, strings, ord) — nothing the C twin's yv.c lacks already.
 
 def hash_str(s: str) -> long {
+    // byte_at, not ord(s[i:i + 1]): the slice allocated a throwaway string
+    // per character, and the tree shaker hashes ~191k names per compile
+    // through this (native.y namemap_build/namemap_get).
     let h = 0;
     let i = 0;
-    while (i < len(s)) {
-        h = (h * 31 + ord(s[i:i + 1])) % 1000000007;
+    let n = len(s);
+    while (i < n) {
+        h = (h * 31 + byte_at(s, i)) % 1000000007;
         i = i + 1;
     };
     h
@@ -1343,4 +1347,4 @@ def ycc_assemble(asm_text: str, debug: bool) -> {ok: bool, bytes: [byte], octal:
     }
 };
 
-export { asm_assemble, ycc_assemble };
+export { asm_assemble, ycc_assemble, labmap_new, labmap_put, labmap_get };

@@ -61,9 +61,9 @@ static Yv *mem_scaleVal(Yv *t, long v, long disp, long bn, long xn);
 static Yv *decode_str(Yv *s);
 static Yv *decode_oct(Yv *s, long k, long n);
 static long hash_str(Yv *s);
-static Yv *labmap_new(long cap);
-static Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
-static Yv *labmap_get(Yv *m, Yv *name);
+Yv *labmap_new(long cap);
+Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
+Yv *labmap_get(Yv *m, Yv *name);
 static Yv *labmap_build(Yv *labels);
 static Yv *label_addr(Yv *lmap, long code_len, long pad, Yv *name);
 static Yv *asm_assemble_line(Yv *lines, long li, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err);
@@ -660,16 +660,20 @@ static Yv *decode_oct(Yv *s, long k, long n) {
    longs, strings, ord) — nothing yv.c lacks already. */
 
 static long hash_str(Yv *s) {
+    /* byte_at, not ord(s[i:i + 1]): the slice allocated a throwaway string
+     * per character, and the tree shaker hashes ~191k names per compile
+     * through this (native.c namemap_build/namemap_get). */
     long h = 0;
     long i = 0;
-    while (i < yv_len(s)) {
-        h = (h * 31 + ys_ord(ys_slice(s, i, i + 1))) % 1000000007;
+    long n = yv_len(s);
+    while (i < n) {
+        h = (h * 31 + ys_byte_at(s, i)) % 1000000007;
         i = i + 1;
     }
     return h;
 }
 
-static Yv *labmap_new(long cap) {
+Yv *labmap_new(long cap) {
     Yv *m = yav(0);
     long i = 0;
     while (i < cap) {
@@ -679,7 +683,7 @@ static Yv *labmap_new(long cap) {
     return m;
 }
 
-static Yv *labmap_put(Yv *m, Yv *name, long sec, long off) {
+Yv *labmap_put(Yv *m, Yv *name, long sec, long off) {
     long cap = yv_len(m);
     long i = hash_str(name) % cap;
     int dup = 0;
@@ -706,7 +710,7 @@ static Yv *labmap_put(Yv *m, Yv *name, long sec, long off) {
     return yr(2, "map", m, "dup", yv_bool(dup));
 }
 
-static Yv *labmap_get(Yv *m, Yv *name) {
+Yv *labmap_get(Yv *m, Yv *name) {
     long cap = yv_len(m);
     long i = hash_str(name) % cap;
     long found_sec = -1;

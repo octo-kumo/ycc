@@ -8,7 +8,10 @@
  * (2) resolve labels and patch. All jumps/calls use rel32 (fixed size), so
  * instruction lengths are known in pass 1.
  *
- * Mirrors `export { asm_assemble, ycc_assemble };` from asm.y.
+ * Mirrors `export { asm_assemble, ycc_assemble, labmap_new, labmap_put,
+ * labmap_get };` from asm.y. The labmap is the assembler's own open-addressing
+ * label table; native.y reuses it for the tree shaker's name -> index table,
+ * so it is exported too (see namemap_build in native.c).
  */
 #ifndef ASM_H
 #define ASM_H
@@ -17,5 +20,9 @@
 
 Yv *asm_assemble(Yv *text, int debug);
 Yv *ycc_assemble(Yv *asm_text, int debug);
+
+Yv *labmap_new(long cap);
+Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
+Yv *labmap_get(Yv *m, Yv *name);
 
 #endif /* ASM_H */
