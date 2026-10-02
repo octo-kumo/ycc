@@ -57,7 +57,7 @@ requires byte-identical binaries).
    else allocates Y values directly.
 
 2. **Type map**: `long` → `long`, `float` → `double`, `bool` → `int`,
-   `str` → `Yv *`, every record/array/shape-hole/option type → `Yv *`.
+   `str` → `Yv *`, every record/array/union/option type → `Yv *`.
    Boxing at the boundaries: `yv_long(x)` / `yv_l(v)`, `yv_bool(x)` /
    `yv_b(v)`, `yv_float(x)` / `yv_f(v)`. A `type` alias is `Yv *` too,
    spelled `typedef Yv *Name;` in the `.c` file where it helps (`pkg.c`,

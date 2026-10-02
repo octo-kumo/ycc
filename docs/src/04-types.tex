@@ -53,14 +53,9 @@ Records are \textbf{exact}: a record goes only where its own type is
 expected, or a union that has it as a member
 (Section~\ref{sec:type-unions}). A \ic{\{ a: long, b: str \}} is not a
 \ic{\{ a: long \}}: records are shared by reference, their fields at
-fixed places, so no wider or narrower view of one is sound. The
-shape-hole form \ic{\{ k: str \}} is the exception: it takes any record
-with a field \ic{k} and is used where the precise type is not known
-statically (it poisons quietly rather than erroring --- see
-Section~\ref{sec:poison}). A value of unknown type going where a record
-type or a union is declared is checked when the program runs: a record
-without exactly those fields (a member's, for a union) traps
-(Section~\ref{sec:errors}).
+fixed places, so no wider or narrower view of one is sound. There is no
+record type that takes ``any record'': \ic{\{ k: str \}} is the record
+with exactly one field, \ic{k}.
 
 A record literal written where a record type is declared --- an
 annotated \ic{let}, an argument, a \ic{return} or trailing value, a
@@ -102,6 +97,20 @@ binds the one member with them, or the union of those members. Without
 \ic{\_}, every member needs a type arm. A union prints as the member it
 holds.
 \end{sloppypar}
+
+A union value also goes where one of its members is declared --- an
+annotated \ic{let}, an argument, a \ic{return}, a field or an element ---
+or a union of some of its members: that is a \emph{cast}, checked when
+the program runs. A value holding another member stops the program
+(Section~\ref{sec:errors}). After the cast the member's own fields read
+directly:
+
+\begin{lstlisting}
+def radius(s: Shape) -> float {
+    let c: Circle = s;       // stops the program if s holds a Rect
+    c.r
+}
+\end{lstlisting}
 
 \subsection{Type aliases}
 \label{sec:type-aliases}
@@ -175,43 +184,62 @@ let w = if (ok) { 1 } else { "one" };    // error: cannot bind a void value to '
 
 \subsection{Functions}
 
-\ic{(T, T, ...) -> R}. Return types are inferred when omitted and
-checked when written. A parameter annotation is optional: without one
-the parameter takes the unknown type, which poisons quietly
-(Section~\ref{sec:poison}) and is treated as a machine word by the
-backend --- so annotate every parameter that carries a string, array,
-record or option. Function values are first-class (they may be bound,
-passed, stored and called); see Section~\ref{sec:functions}.
+\ic{(T, T, ...) -> R}. Every parameter has a type: written, or the type
+of its default value (\ic{punct = "!"}); a parameter with neither is an
+error. Return types are inferred when omitted and checked when written.
+Function values are first-class (they may be bound, passed, stored and
+called); see Section~\ref{sec:functions}.
 
 \subsection{Annotations and inference}
+\label{sec:annotations}
 
+Every value has a type the program states or the checker can see; there
+is no unknown type. Where the type cannot be inferred, annotate:
+
+\begin{sloppypar}
 \begin{itemize}[nosep]
-\item \ic{def} parameter annotations are \textbf{recommended}; a missing
-  one takes the unknown type and never cascades a second diagnostic
-  (Section~\ref{sec:poison}).
+\item \ic{def} parameters are annotated (or have a default):
+  \ic{parameter 'x' has no type (annotate it)}.
 \item Return types are inferred from the body when omitted: the type of
-  its trailing value, or \ic{void} when it ends in a statement; when the
-  trailing value's type is not known yet --- it is a \ic{self} call, whose
-  type is the one being inferred --- the first \ic{return} that gives a
-  value decides. Written or
+  its trailing value, or \ic{void} when it ends in a statement. Written or
   inferred, every \ic{return} and the body's trailing value must conform,
-  converting as any store does (Section~\ref{sec:conversions}):
-  \ic{def half(c: bool) \{ if (c) \{ return 1; \}; 2.5 \}} returns
-  \ic{1.0} for \ic{true}, and a \ic{return 1.5} in a body that ends in a
-  \ic{long} is an error.
+  converting as any store does (Section~\ref{sec:conversions}): \ic{half}
+  below returns \ic{1.0} for \ic{true}, and a \ic{return 1.5} in a body
+  that ends in a \ic{long} is an error.
+
+\begin{lstlisting}
+def half(c: bool) { if (c) { return 1; }; 2.5 };
+\end{lstlisting}
+\item An inferred return type is known once the body has been checked,
+  in program order. A call before that --- to a \ic{def} further down
+  that has no \ic{->}, or a value use of it --- is an error,
+  \ic{'f' is used before its return type is known (annotate it)}: write
+  the callee's return type. A \ic{def} calling itself needs none. Its body
+  is checked with the call's type unknown, then again as if the type
+  the rest of the body gives were written, so \ic{fact} below is a
+  \ic{long}; a body whose only value is the call itself, like
+  \ic{spin}'s, is an error:
+
+\begin{lstlisting}
+def fact(n: long) { if (n < 2) { 1 } else { n * self(n - 1) } };
+def spin(n: long) { self(n) };
+// error: the return type of 'spin' is not fully known (annotate it)
+\end{lstlisting}
 \item \ic{let} annotations are optional and checked; an annotated
   \emph{array literal} \emph{adopts} the annotated element type:
   \ic{let b: [byte] = [104, 105];} packs those elements one byte each.
   Adoption is restricted to literals --- assigning an existing
   \ic{[long]} to a \ic{[byte]} binding is a type error (the layouts
   differ).
-\item An empty array literal \ic{[]} is legal unannotated: there is
-  nothing to infer an element type from, so the element type is
-  \emph{unknown} and it poisons quietly (Section~\ref{sec:poison}).
-  Annotate it to pin the element type --- \ic{let b: [byte] = [];}.
-  An unannotated \ic{\{\}} is the empty record; under a map annotation
-  it is the empty map: \ic{let m: \{str => long\} = \{\};}.
+\item An empty array literal \ic{[]} and \ic{none} take their type from
+  where they go (an annotated \ic{let}, an argument, an assignment, a
+  comparison). Bound with nothing to say it, the type is not known:
+  \ic{let xs = [];} is an error, \ic{the type of 'xs' is not fully known
+  (annotate it)}; write \ic{let xs: [str] = [];}. An unannotated
+  \ic{\{\}} is the empty record; under a map annotation it is the empty
+  map: \ic{let m: \{str => long\} = \{\};}.
 \end{itemize}
+\end{sloppypar}
 
 \subsection{Conversions}
 \label{sec:conversions}
@@ -222,7 +250,9 @@ The implicit conversions are:
 \ic{long $\bs to$ byte} at a \ic{byte} position (the value is masked to
 eight bits: \ic{let b: byte = 258;} stores 2). A \ic{str} also
 flows into a \ic{*T} position, since a string value is a byte address.
-Apart from these, nothing converts: there is no cast syntax.
+A union value converts to one of its members (a cast checked when the
+program runs, Section~\ref{sec:type-unions}). Apart from these, nothing
+converts: there is no cast syntax.
 
 A value converts where it is stored under a known type: an annotated
 \ic{let}; an assignment to a variable, element, field, map entry or
@@ -289,10 +319,9 @@ numeric target.
 \subsection{The poison law}
 \label{sec:poison}
 
-Missing information (a missing annotation, an unanalyzable expression)
-produces an \emph{unknown} type that unifies with everything. The law
-this enables: \textbf{the root cause is reported exactly once} --- an
-unknown-typed piece never generates follow-on errors at every enclosing
-use. Concretely, unknown unifies silently in element checks, call
-arguments and branches (so an unknown arm never makes an \ic{if}
-void); the missing annotation itself is the single diagnostic.
+Every error is reported once, at its cause. After an error, the
+expression it was found in gets the \emph{error type} \ic{<error>}, which
+fits wherever it goes, so it never generates follow-on errors at every
+enclosing use: in element checks, call arguments and branches (an error
+arm never makes an \ic{if} void). The error type exists only where an
+error was reported; a program that compiles has none.

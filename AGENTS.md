@@ -295,9 +295,17 @@ replaces the std one at link time).
 - **Records are exact**: a record type is its set of fields (in any
   order), and a record goes only where its own type, or a union holding
   it, is expected — no prefix view of a bigger record (a node of seven
-  fields is no `{k: str, params: [str]}`). The shape-hole `{k: str}` is the
-  exception. A value of unknown type going into a record type is checked
-  when the program runs (`y_rec_cast`): other fields trap.
+  fields is no `{k: str, params: [str]}`), and no record type takes "any
+  record": `{k: str}` is the record of one field.
+- **No unknown types**: every parameter is annotated (or has a literal
+  default); `[]` and `none` get their type from where they go, or the
+  `let` binding them is annotated; a def called before its body is
+  checked (a forward call) has its return type written. The compiler's
+  own AST and type nodes are the unions `Node` and `Type` (parser.y): a
+  field every member has (`k`, and `line`/`col` on AST nodes) reads
+  straight through, any other after a cast to the member
+  (`let c: Call = node;`, or a parameter typed `Call`), which the program
+  checks against the value's tag.
 - `--no-exec` strips the `exec()` builtin (no shell access).
 - **No warnings**: `src/y` and `src/y/std` compile without one
   (`test_fixpoint.sh` checks). A record or union type used in more than
@@ -380,8 +388,8 @@ a pointer to their type's descriptor before the fields; `&x`, `*p`,
 `for`/`for..in`/`foreach`/`while`; block expressions; `type` aliases
 (recursive through a record field or a function type), record unions and
 `match`;
-`def` params may be annotated (recommended: an unannotated param is a
-poison-tolerant unknown), return types are inferred. `ycc` is
+`def` params are annotated (or have a literal default; there is no
+unknown type), return types are inferred. `ycc` is
 native-only: `ycc [-o OUT] [-S] [-t] [-g] [-w] [--no-exec] [--std-src] FILE`,
 cc-style (`-w`: no warnings; they go to stderr and never change the
 output) (and `ycc build [DIR]` / `ycc vendor [DIR]` for projects with a

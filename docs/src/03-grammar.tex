@@ -142,13 +142,12 @@ network. Git runs through \ic{/bin/sh} with the compiler's environment.
 \end{align*}
 
 \ty{params} is a comma-separated list of \ty{name}~\ic{:}~\ty{type},
-each optionally followed by a literal default
-(\ic{name = literal}, which types an unannotated parameter).
-Annotations are \textbf{strongly recommended} but not enforced: an
-unannotated parameter takes the unknown type, which poisons quietly
-(Section~\ref{sec:poison}) and is treated as a machine word by the
-backend. Return types are optional (inferred from the body,
-Section~\ref{sec:types}). A \ic{const} name cannot be rebound: \ic{=},
+each optionally followed by a literal default (\ic{name: T = literal}).
+A parameter with a default may leave its type out: it is the literal's
+(\ic{punct = "!"} is a \ic{str}). Every parameter has a type --- one with
+neither is an error, \ic{parameter 'x' has no type (annotate it)}.
+Return types are optional (inferred from the body,
+Section~\ref{sec:annotations}). A \ic{const} name cannot be rebound: \ic{=},
 the compound assignments and \ic{++}/\ic{--} on it are rejected
 (\ic{cannot assign to constant 'n'}, with the operator in parentheses
 for the compound forms). The binding is constant, not the value: a
@@ -179,9 +178,8 @@ Function literals may also appear bound or anonymous:
 \end{align*}
 
 \noindent A record type is structural and its field order free
-(Section~\ref{sec:type-records}); the shape \ic{\{ k: str \}} is
-written to mean ``any record with a field \ic{k} of type \ty{str}'' and
-is the conventional shape-hole annotation for AST-like data. A union's
+(Section~\ref{sec:type-records}); it lists every field of its records
+(\ic{\{ k: str \}} is the record with the one field \ic{k}). A union's
 members are record types (Section~\ref{sec:type-unions}). \ic{nat} is an integer literal from 0 to $2^{31}-1$ (2147483647),
 decimal or radix (\ic{[0; 0x10]}); a float, a larger or negative number
 or a name there is an error at the size. The type name

@@ -250,12 +250,15 @@ cc/as/ld involved.
 
 Now: `long`/`int`, `bool`, `float`, `str`, `byte`, `*T`, `[T; N]`, `[T]`,
 `T?`, `{f: T}` records (exact: a record goes only where its own type,
-its fields in any order, or a union holding it is expected; the
-shape-hole `{k: str}` takes any record with a `k`), `{K => V}` maps,
-record unions `A | B`, recursive type aliases,
-function types `(A, B) -> R`, monomorphic `def` (a param without an
-annotation infers the poison type `<error>` — annotate; return types and
-locals are inferred), captures resolved into closures, `if` cond must be
+its fields in any order, or a union holding it is expected; `{k: str}`
+is the record of one field `k`), `{K => V}` maps,
+record unions `A | B` (a union value converts to a member type, or a
+union of some members, with a cast checked at run time),
+recursive type aliases,
+function types `(A, B) -> R`, monomorphic `def` (every param has a type,
+written or its default's; return types and locals are inferred, and a
+call before the callee's body is checked needs its return type written
+-- there is no unknown type), captures resolved into closures, `if` cond must be
 `bool`, `if` arms that disagree make the `if` `void` (a statement; using it
 as a value errors), `while` is `void`-typed, and the only implicit
 conversions are `long`→`float`, `byte`→`long`/`float`, `long`→`byte` at an
@@ -277,9 +280,9 @@ All of these are lowered early, so the checker and emitter see little new:
   emits nothing for that `void`, and a tail call before it stays a tail
   call.
 - **`print(a, b, ...)`** is `print(tostring(a) + tostring(b) + ...)`.
-- **Default parameters** `def f(n, acc = 1)`: the default must be a
-  literal and types an unannotated parameter; rename.y fills omitted
-  trailing arguments of direct calls.
+- **Default parameters** `def f(n: long, acc = 1)`: the default must be a
+  literal, and gives an unannotated parameter its type; rename.y fills
+  omitted trailing arguments of direct calls.
 - **Optional parameters** `def f(a: long, b?: long)`: the body sees `b` as
   a `long?`; a direct call passes a plain `long` (rename.y wraps it in
   `some`) or leaves it out (`none`). Passing an option is a type error

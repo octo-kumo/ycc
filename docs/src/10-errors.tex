@@ -15,9 +15,9 @@ splices imported files or prelude/runtime code into it. An error in an
 imported file names that file, \ic{path:line:col: error: message}, with
 the line counted in that file and the path as the import resolved it.
 The checker reports a root
-cause \emph{once} (Section~\ref{sec:poison}): a missing annotation or
-unanalyzable expression poisons quietly instead of cascading errors
-through every enclosing use. Typical families:
+cause \emph{once} (Section~\ref{sec:poison}): after an error, the
+expression gets the error type, which causes no follow-on errors
+through the enclosing uses. Typical families:
 
 \begin{itemize}[nosep]
 \item name errors: \ic{undefined variable 'x'};
@@ -89,11 +89,10 @@ array index outside \ic{[0, len)} & \ic{runtime error: index out of bounds} \\
 division or remainder by zero & \ic{runtime error: division by zero} \\
 shift by a negative count & \ic{runtime error: negative shift count} \\
 \ic{unwrap(none)}, \ic{none!} & \ic{runtime error: unwrap of none} \\
-missing dynamic field/key & \ic{runtime error: record has no field 'k'} \\
 slice assignment out of range & \ic{runtime error: slice assignment out of bounds} \\
 match with no arm covering a value & \ic{runtime error: no match arm matched} \\
-a value of unknown type, where a record & \ic{runtime error: a record does not have} \\
-\quad type or union is declared, with other fields & \quad\ic{the fields of its declared type} \\
+a union value cast to a member & \ic{runtime error: a record does not have} \\
+\quad it does not hold (Section~\ref{sec:type-unions}) & \quad\ic{the fields of its declared type} \\
 memory exhausted & \ic{runtime error: out of memory} \\
 unbounded (non-tail) recursion & stack exhaustion: no limit, so the
   process dies on the guard page \\
