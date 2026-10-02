@@ -310,9 +310,14 @@ replaces the std one at link time).
   array, element and field stores all work (JS `const`).
 - A **fixed** `[T; N]` cannot grow: `+=` / `*=` on it is a type error
   ("its length is part of its type; use `[T]` instead").
-- `x++`, `++x`, `x--`, `--x` and `x op= e` (`+= -= *= /= %=`) evaluate
-  the target's subexpressions **exactly once**; numbers take the
-  arithmetic, strings only `+=`, arrays the two in-place forms above.
+- `x++`, `++x`, `x--`, `--x` and `x op= e` (`+= -= *= /= %=`, and
+  `&= |= ^= <<= >>= >>>=` on integers) evaluate the target's
+  subexpressions **exactly once**; numbers take the arithmetic, strings
+  only `+=`, arrays the two in-place forms above.
+- The bitwise operators `& | ^ ~ << >> >>>` take integers and yield a
+  long; they bind tighter than the comparisons (`x & 1 == 0` is
+  `(x & 1) == 0`, unlike C). `>>` is arithmetic, `>>>` logical; a count
+  of 64 or more shifts every bit out and a negative count traps.
 
 ## Layout
 

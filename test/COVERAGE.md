@@ -42,10 +42,14 @@ reason.
 | 02-lexical | Identifiers and keywords | Underscored identifiers and contextual names | `native/t47_none_void.y`, `native/t50_unions_match.y`, `native/t55_parse_forms.y`, `native/t67_str_methods.y` |
 | 02-lexical | Identifiers and keywords | Reserved y_ generated-code prefix | none: y_ is reserved for compiler-generated labels, not user-program behavior |
 | 02-lexical | Literals | Decimal, radix, binary and hexadecimal integer spellings | `native/t25_radix.y` |
+| 02-lexical | Literals | A radix literal is its 64 bits: top-bit masks such as `0xFFFF_FFFF_FFFF_FFFF` | `native/t140_bitwise.y` |
+| 02-lexical | Literals | `_` digit separators in decimal integers and floats, wherever a literal is read (array lengths, shift counts, defaults, f-string fields); not right after the dot or the `e` | `native/t142_digit_separators.y`, `native/e135_digit_separators.y` |
+| 02-lexical | Literals | A radix prefix needs a digit of its radix: `0x`, `0X_`, `0b2` are errors, one for the whole word | `native/e139_radix_no_digits.y` |
 | 02-lexical | Literals | Float, boolean and none literal forms | `native/t28_floats.y`, `native/t34_sci_literals.y`, `native/t47_none_void.y` |
 | 02-lexical | Literals | String, byte, character and format-string escapes | `native/t41_byte_strings.y`, `native/t45_byte_repr.y`, `native/t51_strings_slices.y`, `native/t69_fstrings.y` |
 | 02-lexical | Operators and punctuation | Maximal munch for adjacent increment and arithmetic tokens | `native/t74_lexical_operators.y`, `native/t39_incdec_opassign.y` |
 | 02-lexical | Operators and punctuation | Compound operators, range, cons and match punctuation | `native/t39_incdec_opassign.y`, `native/t43_spread_cons.y`, `native/t50_unions_match.y` |
+| 02-lexical | Operators and punctuation | Bitwise and shift tokens up to the four-character `>>>=`, written without spaces | `native/t140_bitwise.y`, `native/e134_bitwise_types.y` |
 | 03-grammar | Syntax | Grammar chapter heading | none: the heading introduces grammar forms exercised in the subsections below |
 | 03-grammar | Structure and modules | Imports, exports, relative paths and namespaces | `native/t55_parse_forms.y`, `native/e20_badmodule.y` |
 | 03-grammar | Structure and modules | Embed bytes and splice imported source in order | `native/t66_embed.y`, `native/t68_splice_scan.y`, `native/e57_embed_lines.y` |
@@ -55,12 +59,16 @@ reason.
 | 03-grammar | Declarations | let, const, def, type aliases and defaults | `native/t59_const.y`, `native/t49_defaults_tco.y`, `native/t50_unions_match.y`, `native/t63_optional_args.y` |
 | 03-grammar | Declarations | Anonymous and immediately-bound function literals | `native/t26_closures.y`, `native/t29_blocks_iife.y` |
 | 03-grammar | Types | Scalar, array, fixed-array, option, pointer, function, record and map type syntax | `native/t06_ptr.y`, `native/t16_option.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t57_from_bytes_fixed.y` |
+| 03-grammar | Types | The size of `[T; n]` and `[v; n]` is an integer literal from 0 to 2^31 - 1, decimal or radix; a float, a larger or negative number or a name is an error at the size | `native/t143_array_sizes.y`, `native/e138_array_sizes.y`, `native/e83_array_literals.y` |
 | 03-grammar | Statements | if/else, while, C-style for, range-for, foreach and return | `native/t03_while.y`, `native/t27_loops_slices.y`, `native/t55_parse_forms.y`, `loops: for: basic`, `loops: foreach: sum array`, `loops: range: 3..7` |
 | 03-grammar | Statements | Blocks as expressions, trailing semicolons and bare return | `native/t29_blocks_iife.y`, `native/t47_none_void.y`, `native/t55_parse_forms.y`, `native/e31_semicolon_void.y` |
 | 03-grammar | Expressions | Literals, arrays, records, maps, blocks, closures and f-strings | `native/t29_blocks_iife.y`, `native/t40_array_ops.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t69_fstrings.y` |
 | 03-grammar | Expressions | Calls, indexing, slicing, fields, unwrap and prefix/postfix forms | `native/t39_incdec_opassign.y`, `native/t47_none_void.y`, `native/t51_strings_slices.y`, `native/t67_str_methods.y` |
 | 03-grammar | Operator precedence | Arithmetic precedence, associativity, parentheses and right-associative cons | `comprehensive: precedence: mul before add`, `comprehensive: precedence: left-assoc div`, `comprehensive: precedence: parens`, `loops: precedence: mixed`, `native/t43_spread_cons.y` |
+| 03-grammar | Operator precedence | Bitwise levels between cons and `+ -` (or, then xor, then and, then the shifts), tighter than comparisons; unary `~` | `native/t140_bitwise.y` |
 | 03-grammar | Assignment forms | Name, index, slice, field and pointer places with compound/inc-dec forms | `native/t06_ptr.y`, `native/t39_incdec_opassign.y`, `native/t51_strings_slices.y`, `native/e89_slice_assignment.y` |
+| 03-grammar | Assignment forms | The bitwise compound forms on name, index, `[byte]` element and field places | `native/t140_bitwise.y` |
+| 03-grammar | Assignment forms | `++`, `--` and the compound forms take a name, an element or a field: a slice, `*p`, `o!`, a str's bytes and an array's or str's `.length` and `.ptr` are rejected | `native/e136_place_targets.y` |
 | 04-types | Types and static semantics | Fatal static checking and structural type errors | `native/e11_recfield.y`, `native/e21_hetero_append.y`, `native/e25_map_value_type.y` |
 | 04-types | Scalar types | long, byte, bool, float and str values | `native/t01_arith.y`, `native/t05_cmp_bool.y`, `native/t07_str.y`, `native/t28_floats.y`, `native/t37_bytes.y` |
 | 04-types | Arrays | Homogeneous heap/fixed arrays and element-type enforcement | `native/t37_bytes.y`, `native/t40_array_ops.y`, `native/t57_from_bytes_fixed.y`, `native/e21_hetero_append.y` |
@@ -73,16 +81,21 @@ reason.
 | 04-types | Conversions | byte-to-long and long-to-float widening; str accepted at a pointer position | `native/t28_floats.y`, `native/t37_bytes.y`, `native/t82_str_pointer_conversion.y` |
 | 04-types | Conversions | Annotated long-to-byte masking and long/byte-to-float conversion at every store under a known type, including a `return` under an inferred result; record fields never convert | `native/t132_implicit_conversions.y`, `native/t133_inferred_returns.y`, `native/e130_record_field_conversion.y` |
 | 04-types | Operator typing | Numeric, string and array operators; comparisons, equality and truthy logic | `native/t28_floats.y`, `native/t33_str_compare.y`, `native/t40_array_ops.y`, `native/t75_eval_order.y`, `native/t77_reference_identity.y` |
+| 04-types | Operator typing | Bitwise operators take integers (a byte widens) and yield long; other operands rejected | `native/t140_bitwise.y`, `native/e134_bitwise_types.y` |
 | 04-types | Compound assignment typing | Valid numeric/string/array forms and rejected array operators | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y`, `native/e21_hetero_append.y`, `native/e22_array_opassign_ops.y`, `native/e74_array_operators.y` |
+| 04-types | Compound assignment typing | Bitwise compound forms need an integer target and value; a byte target keeps the low 8 bits | `native/t140_bitwise.y`, `native/e134_bitwise_types.y` |
 | 04-types | The poison law | Unknown types do not cascade from unannotated parameters | `native/t22_noannot.y` |
 | 05-expressions | Expressions and evaluation | Strict left-to-right operand evaluation and exactly-once place evaluation | `native/t39_incdec_opassign.y`, `native/t75_eval_order.y` |
 | 05-expressions | Numeric semantics | Signed division/remainder edges, modulo-2^64 wraparound, float arithmetic and exact float negation | `native/t28_floats.y`, `native/t32_signed_div.y`, `native/t83_integer_wrap.y`, `native/t137_float_negation.y` |
+| 05-expressions | Bitwise operators | And, or, exclusive or and not on 64 bits; byte operands widen to a long result | `native/t140_bitwise.y` |
+| 05-expressions | Bitwise operators | Arithmetic `>>` and logical `>>>`; counts of 64 or more shift every bit out; a negative count traps | `native/t140_bitwise.y`, `native/t141_shift_negative.y` |
 | 05-expressions | Logic | Short-circuiting and truthiness of non-bool operands | `native/t75_eval_order.y`, `comprehensive: and: right side not evaluated`, `comprehensive: or: right side not evaluated` |
 | 05-expressions | Strings | Immutable concatenation, stringification and lexicographic comparison | `native/t28_floats.y`, `native/t33_str_compare.y`, `native/t69_fstrings.y`, `native/t77_reference_identity.y` |
 | 05-expressions | Strings | `s += t` appends in place (amortized O(1)) without changing any other binding: aliases, params, globals, snapshots, nested and self-referencing appends, captured and address-taken strings | `native/t139_string_append.y` |
 | 05-expressions | Assignment | Assignment statements store through names and mutable places | `native/t39_incdec_opassign.y`, `native/t51_strings_slices.y`, `native/t59_const.y` |
 | 05-expressions | Assignment | Assignment is a statement form: it cannot nest, and a block ending in one yields the stored value | `native/t131_assign_block_value.y`, `native/e129_assign_nested.y` |
 | 05-expressions | Increment, decrement and compound assignment | Prefix/postfix values and exactly-once target evaluation | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y` |
+| 05-expressions | Increment, decrement and compound assignment | Bitwise compound forms: index evaluated once, the block yields the stored value | `native/t140_bitwise.y` |
 | 06-arrays | Arrays | Growable homogeneous arrays are reference values | `native/t15_dynarr.y`, `native/t37_bytes.y`, `native/t40_array_ops.y`, `native/e21_hetero_append.y` |
 | 06-arrays | Structure: length and capacity | Observable length, growth across reallocations and bounds traps | `native/t13_arroob.y`, `native/t37_bytes.y`, `native/t60_arr_props.y` |
 | 06-arrays | Operators | New-array +, one-element cons, in-place append/push/prepend (amortized O(1) at both ends) and self-append | `native/t40_array_ops.y`, `native/t43_spread_cons.y`, `native/t61_arr_plus_nested.y`, `native/t64_arr_of_arr_share.y`, `native/t138_prepend_amortized.y` |
@@ -115,7 +128,9 @@ reason.
 | 09-builtins | Pointers | Pointer-address conversion and byte-pointer operations | `native/t06_ptr.y`, `native/t62_byte_ptr.y`, `native/t82_str_pointer_conversion.y` |
 | 10-errors | Errors and diagnostics | Errors chapter heading | none: compile-time, runtime and exit behavior are detailed below |
 | 10-errors | Compile time | Fatal rejection with source-positioned diagnostics | `native/e02_undef.y`, `native/e21_hetero_append.y`, `native/e39_missing_semicolon.y`, `native/e41_import_missing.y` |
+| 10-errors | Compile time | A closer that closes nothing in a block is reported where it stands and the parse goes on | `native/e137_parse_stray_closer.y` |
 | 10-errors | Run time | Division, heap/fixed bounds, unwrap and slice-assignment traps | `native/t09_divzero.y`, `native/t13_arroob.y`, `native/t18_unwrapnone.y`, `native/t52_slice_mismatch.y`, `native/t79_fixed_array_bounds.y`, `native/t80_slice_bounds.y` |
+| 10-errors | Run time | Negative shift count trap | `native/t141_shift_negative.y` |
 | 10-errors | Run time | Missing dynamic record field trap | none: record fields are statically shape-checked before code generation |
 | 10-errors | Run time | Match with no matching arm | none: non-exhaustive matches are rejected during static checking |
 | 10-errors | Run time | Out-of-memory and unbounded non-tail recursion | none: exhausting memory or the stack guard is unsafe and nondeterministic |

@@ -319,7 +319,8 @@ All of these are lowered early, so the checker and emitter see little new:
   `fstr_walk` finds the fields, the way Python does: an expression ends
   at the first `}` or `:` outside brackets, except a `:` answering a `?`.
   A malformed f-string (unterminated, a lone `}`, an empty field, `{` in
-  a spec, ...) lexes to one `ferr` token, which the parser turns into an
+  a spec, ...) lexes to one `ferr` token, as does a radix prefix without
+  a digit (`0x`, `0b2`), which the parser turns into an
   `err` node for the checker to report. The checker (`typeof_fmt`) reads
   the spec (`fmt_spec`, Python's mini-language without nested fields)
   and checks it against the field's type (`fmt_check`). The emitter
@@ -334,6 +335,16 @@ All of these are lowered early, so the checker and emitter see little new:
 - **Slice assignment** `a[lo:hi] = b` copies b's elements into that range;
   the range must lie inside a and hold exactly `len(b)` elements
   (`y_arr_setslice1`/`8` in rt.y trap otherwise).
+- **Bitwise operators** `& | ^ ~ << >> >>>` take integers (a byte widens)
+  and yield a long (`typeof_bits` in types.y); their compound forms
+  `&= |= ^= <<= >>= >>>=` lower through `gen_opassign_arith` like `+=`, so
+  a byte target keeps the low 8 bits. `&`, `|`, `^` and `~` are one
+  instruction each; `gen_shift` emits `shl`, `sar` (`>>`) or `shr`
+  (`>>>`). A literal count of 0 to 63 is the immediate. Any other count is
+  tested first, because x86 would use only its low 6 bits: a negative one
+  jumps to `y_shift_neg` (rt.y), and 64 or more gives 0 (`sar` by 63 for
+  `>>`). The precedence sits between `::` and `+ -` (`|` < `^` < `&` <
+  shifts), so unlike C, `x & 1 == 0` is `(x & 1) == 0`.
 
 ## Self-hosting: done
 
@@ -777,8 +788,8 @@ them starts compiling again, so the list can only shrink.
   `LONG_MIN / -1` and `LONG_MIN % -1` (`idiv` raises `#DE` on that pair, so
   divisor `-1` is compiled as a negation / a constant zero instead).
   Negating `LONG_MIN` still wraps to `LONG_MIN`, as the language requires.
-- Division/modulo by zero, OOB indexing, unwrap-of-none, OOM each exit
-  cleanly with a message + exit 1.
+- Division/modulo by zero, a negative shift count, OOB indexing,
+  unwrap-of-none, OOM each exit cleanly with a message + exit 1.
 - Maps are linear-scan (a `{keys, vals, boxes}` record): fine for small
   tables, O(n) per lookup. Records, heap strings, string slices and the string
   builtins (`join`/`split`/`tostring`/`ord`/…) are supported — the compiler

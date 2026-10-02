@@ -167,7 +167,9 @@ Function literals may also appear bound or anonymous:
 \noindent A record shape is structural; the shape \ic{\{ k: str \}} is
 written to mean ``a record with at least a field \ic{k} of type
 \ty{str}'' and is the conventional shape-hole annotation for AST-like
-data. \ic{nat} is a non-negative integer literal. The type name
+data. \ic{nat} is an integer literal from 0 to $2^{31}-1$ (2147483647),
+decimal or radix (\ic{[0; 0x10]}); a float, a larger or negative number
+or a name there is an error at the size. The type name
 \ic{int} is accepted as a synonym of \ic{long} in annotations. Any other
 name must be a \ic{type} alias in scope: \ic{let s: strr = "x"} is
 rejected as an unknown type.
@@ -222,7 +224,7 @@ C.
    ~\{~\ic{(}~[\ty{args}]~\ic{)} \mid \ic{[}~\ty{expr}~\ic{]}
    \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name}
    \mid \ic{!} \mid \ic{++} \mid \ic{--}~\} \\
-\ty{unary} ::={}& [\ic{!} \mid \ic{-} \mid \ic{*} \mid \ic{\&}
+\ty{unary} ::={}& [\ic{!} \mid \ic{-} \mid \ic{\textasciitilde{}} \mid \ic{*} \mid \ic{\&}
    \mid \ic{++} \mid \ic{--}]~\ty{postfix}
 \end{align*}
 
@@ -250,11 +252,19 @@ level & operators & notes \\
 3 & \ic{==} \ic{!=} & structural equality \\
 4 & \ic{<} \ic{>} \ic{<=} \ic{>=} & numeric, or lexicographic \ty{str} \\
 5 & \ic{::} & one-element cons (Section~\ref{sec:arrays}) \\
-6 & \ic{+} \ic{-} & numeric, string/array \ic{+} \\
-7 & \ic{*} \ic{/} \ic{\%} & numeric \\
+6 & \ic{|} & bitwise or (Section~\ref{sec:bitwise}) \\
+7 & \ic{\textasciicircum{}} & bitwise exclusive or \\
+8 & \ic{\&} & bitwise and \\
+% `<{}<`: the {} keeps T1's << and >> ligatures (guillemets) out.
+9 & \ic{<{}<} \ic{>{}>} \ic{>{}>{}>} & shifts \\
+10 & \ic{+} \ic{-} & numeric, string/array \ic{+} \\
+11 & \ic{*} \ic{/} \ic{\%} & numeric \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\noindent Unlike C, the bitwise operators bind tighter than the
+comparisons, so \ic{x \& 1 == 0} means \ic{(x \& 1) == 0}.
 
 \subsection*{Assignment forms}
 
@@ -262,6 +272,7 @@ level & operators & notes \\
 \ty{assignment} ::={}& \ty{place}~\ic{=}~\ty{expr} \\
   |~& \ty{place}~\ty{compound-op}~\ty{expr}
      && \ic{+=}~\ic{-=}~\ic{*=}~\ic{/=}~\ic{\%=} \\
+  &&& \ic{\&=}~\ic{|=}~\ic{\textasciicircum{}=}~\ic{<{}<=}~\ic{>{}>=}~\ic{>{}>{}>=} \\
   |~& \ty{place}~\ic{++} \mid \ic{++}~\ty{place}
    \mid \ty{place}~\ic{--} \mid \ic{--}~\ty{place}
 \end{align*}
@@ -273,6 +284,11 @@ and maps), a slice \ic{a[lo:hi]}, or a field expression \ic{o.f}
 Field access is
 symbolic and exclusive: \ic{r.f} for records, \ic{m['k']} for maps.
 Pointers add \ic{*p = e}.
+\ic{++}, \ic{--} and the compound forms store back into the place they
+read, so they take a name, an element or a field: a slice, \ic{*p} or
+\ic{o!} there is \ic{cannot assign to this expression ('+=')}, with the
+operator in parentheses. The bytes of a \ty{str} and the \ic{.length}
+and \ic{.ptr} of an array or a string are read-only to every form.
 Section~\ref{sec:exactly-once} defines the exact evaluation of every
 form; all of them evaluate the place's subexpressions \textbf{exactly
 once}.

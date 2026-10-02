@@ -1587,7 +1587,8 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             // negating a byte is long arithmetic (types.y): -b leaves 0..255
             let ut = infer(st, node.e);
             if (ut.k == "tbyte") { { k: "tlong" } } else { ut }
-        } else { { k: "tbool" } }
+        } else if (node.op == "~") { { k: "tlong" } }
+        else { { k: "tbool" } }
     } else if (k == "bin") {
         let op = node.op;
         if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "::") {
@@ -1616,6 +1617,8 @@ def infer(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, e
             } else {
                 { k: "tlong" }
             }
+        } else if (types.is_bits_op(op)) {
+            { k: "tlong" }
         } else {
             { k: "tbool" }
         }
@@ -3202,6 +3205,8 @@ def gen_un(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, 
         } else {
             emit(st, "    neg %rax")
         }
+    } else if (node.op == "~") {
+        emit(st, "    not %rax")
     } else {
         emit(st, "    xor $1, %rax")
     }
@@ -3665,6 +3670,8 @@ def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
         gen_cat(st, node, lt, rt)
     } else if (op == "::") {
         gen_cons(st, node)
+    } else if (op == "<<" || op == ">>" || op == ">>>") {
+        gen_shift(st, node, op)
     } else if (lt.k == "tfloat" || rt.k == "tfloat") {
         gen_float_bin(st, node, lt, rt)
     } else if ((op == "==" || op == "!=") && (lt.k == "tstr" || rt.k == "tstr")) {
@@ -3808,10 +3815,66 @@ def gen_bin_rest(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: 
         st = emit(st, "    cmp %rcx, %rax");
         st = emit(st, "    setne %al");
         emit(st, "    movzbq %al, %rax")
+    } else if (op == "&") {
+        emit(st, "    and %rcx, %rax")
+    } else if (op == "|") {
+        emit(st, "    or %rcx, %rax")
+    } else if (op == "^") {
+        emit(st, "    xor %rcx, %rax")
     }
     // No &&/|| arms here: gen_bin routes those to gen_logic (lazy jumps)
     // BEFORE calling this, so an eager and/or would be dead code.
     }
+};
+
+// `x << n`, `x >> n` (arithmetic: the sign fills in) and `x >>> n`
+// (logical: zeros fill in). x86 uses only the count's low 6 bits; Y does
+// not wrap: a count of 64 or more shifts every bit out (0, or all sign
+// bits for `>>`) and a negative count stops the program (y_shift_neg). A
+// literal count of 0 to 63 is the instruction's immediate and needs
+// neither check.
+def gen_shift(st: { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] }, node, op: str) -> { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [{ name: str, kind: str, off: long, label: str, typ: { k: str } }], slots: long, self_label: str, end_label: str, fns: [{ name: str, label: str, typ: { k: str } }], bodies: [str] } {
+    let mn = "shl";
+    if (op == ">>") { mn = "sar"; 0; }
+    else if (op == ">>>") { mn = "shr"; 0; }
+    let n = shift_imm(node.r);
+    st = gen(st, node.l);
+    if (n >= 0) {
+        emit(st, "    " + mn + " $" + tostring(n) + ", %rax")
+    } else {
+        st = emit(st, "    push %rax");
+        st = gen(st, node.r);
+        st = emit(st, "    mov %rax, %rcx");
+        st = emit(st, "    pop %rax");
+        st = emit(st, "    test %rcx, %rcx");
+        st = emit(st, "    js y_shift_neg");
+        let ok = next_loc(st);
+        st = ok.st;
+        st = emit(st, "    cmp $64, %rcx");
+        st = emit(st, "    jb " + ok.lbl);
+        if (mn == "sar") {
+            st = emit(st, "    mov $63, %rcx");
+            0
+        } else {
+            st = emit(st, "    xor %eax, %eax");
+            0
+        };
+        st = emit(st, ok.lbl + ":");
+        emit(st, "    " + mn + " %cl, %rax")
+    }
+};
+
+// The count of a shift when it is a literal from 0 to 63 (gen_shift), else
+// -1. A radix literal may wrap negative (0xFFFF_FFFF_FFFF_FFFF is -1).
+def shift_imm(r) -> long {
+    if (r.k == "num") {
+        if (lit_is_float(r.v)) { -1 } else {
+            let s = norm_num(r.v);
+            if (len(s) > 2 || s[0:1] == "-") { -1 }
+            else if (tonum(s) < 64) { tonum(s) }
+            else { -1 }
+        }
+    } else { -1 }
 };
 
 // ── calls ──────────────────────────────────────────────────────────────

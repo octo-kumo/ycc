@@ -44,6 +44,7 @@ Yv *parse_unary(Yv *toks, long p);
 Yv *parse_expr(Yv *toks, long p);
 
 /* ── compound literals ──────────────────────────────────────────────────── */
+long size_lit(Yv *s);
 Yv *parse_array(Yv *toks, long p);
 int brace_is_map(Yv *toks, long p);
 Yv *parse_map(Yv *toks, long p);
@@ -74,7 +75,7 @@ Yv *parse_func(Yv *toks, long p);
 
 /* ── block { stmt; stmt; ... } ──────────────────────────────────────────── */
 Yv *parse_block(Yv *toks, long p);
-long stmt_end(Yv *toks, long pos, Yv *sn, Yv *stmts);
+long stmt_end(Yv *toks, long start, long pos, Yv *sn, Yv *stmts);
 
 /* ── statements ─────────────────────────────────────────────────────────── */
 Yv *parse_stmt(Yv *toks, long p);

@@ -168,7 +168,11 @@ Arithmetic requires numbers; if either side is \ic{float} the result is
 \ic{float} and the other side widens. \ic{+} additionally allows
 strings (concatenation, with auto-stringification of the non-string
 side) and arrays (Section~\ref{sec:arrays}); arrays win over strings
-when both appear. Comparisons yield \ic{bool}; \ic{<}\,\ldots\ic{>=}
+when both appear. The bitwise operators \ic{\&} \ic{|}
+\ic{\textasciicircum{}} \ic{<{}<} \ic{>{}>} \ic{>{}>{}>} and unary
+\ic{\textasciitilde{}} take integers only --- a \ic{byte} widens --- and
+yield \ic{long}; any other operand is an error naming it (\ic{'\&' left
+operand: expected long, got float}). Comparisons yield \ic{bool}; \ic{<}\,\ldots\ic{>=}
 on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} accept any
 values: a non-zero value is true and the result is \ic{bool}
 (Section~\ref{sec:evaluation}). Equality works on any two values of the
@@ -187,6 +191,8 @@ For a target of type \ty{T} and value of type \ty{U}:
 \ty{T} & operators & rule \\
 \midrule
 numbers & \ic{+= -= *= /= \%=} & \ty{U} converts to \ty{T}; stored as \ty{T} \\
+integers & \ic{\&= |= \textasciicircum{}= <{}<= >{}>= >{}>{}>=} & \ty{U} an
+  integer; a \ic{byte} keeps the low 8 bits \\
 \ic{str} & \ic{+=} only & \ty{U} $=$ \ty{str} \\
 array & \ic{+=}, \ic{*=} only & Section~\ref{sec:arrays} \\
 \bottomrule
@@ -194,7 +200,8 @@ array & \ic{+=}, \ic{*=} only & Section~\ref{sec:arrays} \\
 \end{center}
 
 \noindent Anything else is a compile error, e.g. ``\ic{arrays support
-only '+=' and '*=' (in place), not '-='}''. \ic{++}/\ic{--} require a
+only '+=' and '*=' (in place), not '-='}'' or ``\ic{'\&=' needs an
+integer target, got float}''. \ic{++}/\ic{--} require a
 numeric target.
 
 \subsection{The poison law}

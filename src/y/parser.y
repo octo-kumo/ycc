@@ -166,7 +166,7 @@ def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: st
             // checker rejects — dropping the leftovers silently compiled
             // `print(1 zzz)` into `print(1)`.
             if (is_punct(toks, pos, close)) { 0; } else {
-                xs += { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or '" + close + "')", line: tline(toks, pos), col: tcol(toks, pos) };
+                xs += { k: "err", msg: "unexpected " + tok_desc(toks, pos) + " (expected ',' or '" + close + "')", line: tline(toks, pos), col: tcol(toks, pos) };
                 0;
             };
             go = false;
@@ -178,6 +178,8 @@ def sep_by(toks: [{ t: str, v: str, line: long, col: long }], p: long, close: st
 
 // ── operator precedence ──────────────────────────────────────────────────
 
+// The bitwise operators bind tighter than the comparisons (unlike C, where
+// `a & m == 0` is `a & (m == 0)`): `|` < `^` < `&` < the shifts < `+ -`.
 def op_prec(op: str) -> long {
     if (op == "||") { 1 }
     else if (op == "&&") { 2 }
@@ -188,11 +190,17 @@ def op_prec(op: str) -> long {
     else if (op == "<=") { 4 }
     else if (op == ">=") { 4 }
     else if (op == "::") { 5 }
-    else if (op == "+") { 6 }
-    else if (op == "-") { 6 }
-    else if (op == "*") { 7 }
-    else if (op == "/") { 7 }
-    else if (op == "%") { 7 }
+    else if (op == "|") { 6 }
+    else if (op == "^") { 7 }
+    else if (op == "&") { 8 }
+    else if (op == "<<") { 9 }
+    else if (op == ">>") { 9 }
+    else if (op == ">>>") { 9 }
+    else if (op == "+") { 10 }
+    else if (op == "-") { 10 }
+    else if (op == "*") { 11 }
+    else if (op == "/") { 11 }
+    else if (op == "%") { 11 }
     else { 0 }
 };
 
@@ -218,7 +226,8 @@ def parse_primary(toks: [{ t: str, v: str, line: long, col: long }], p: long) ->
             res({ k: "err", msg: "character literal must be exactly one byte, got " + tostring(len(v)), line: ln, col: cl }, p + 1)
         }
     } else if (t == "ferr") {
-        // a broken f-string: the lexer's message, where its walk stopped
+        // a malformed literal (a broken f-string, `0x` without digits):
+        // the lexer's message, where it found the fault
         res({ k: "err", msg: v, line: ln, col: cl }, p + 1)
     } else if (t == "id") {
         if (v == "match") {
@@ -430,6 +439,10 @@ def parse_unary(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
     } else if (is_op(toks, p, "!")) {
         let inner = parse_unary(toks, p + 1);
         res({ k: "un", op: tv(toks, p), e: inner.node, line: tline(toks, p), col: tcol(toks, p) }, inner.pos)
+    } else if (is_op(toks, p, "~")) {
+        // bitwise not: ~x
+        let inner = parse_unary(toks, p + 1);
+        res({ k: "un", op: tv(toks, p), e: inner.node, line: tline(toks, p), col: tcol(toks, p) }, inner.pos)
     } else if (is_op(toks, p, "&")) {
         // address-of: &x
         let inner = parse_unary(toks, p + 1);
@@ -483,6 +496,36 @@ def block1(e, ln: long, cl: long) -> {k: str} {
 
 // ── compound literals ────────────────────────────────────────────────────
 
+// The size in `[v; n]` and `[T; n]`: a decimal or radix integer literal
+// from 0 to 2147483647 (2^31 - 1). Its value, or -1 for any other num
+// token (a float, a larger number).
+def size_lit(s: str) -> long {
+    let p = s[0:2];
+    let radix = 10;
+    let i = 0;
+    if (p == "0x" || p == "0X") { radix = 16; i = 2; }
+    else if (p == "0b" || p == "0B") { radix = 2; i = 2; };
+    let v = 0;
+    while (i < len(s) && v >= 0) {
+        let o = ord(s[i:i + 1]);
+        // the digit's value: `.`, `e` (and a hex digit in a decimal) are
+        // past the radix
+        let d = 99;
+        if (o >= 48 && o <= 57) { d = o - 48; }
+        else if (o >= 97 && o <= 102) { d = o - 87; }
+        else if (o >= 65 && o <= 70) { d = o - 55; };
+        if (o == 95) {
+            // a radix literal keeps its `_` separators
+        } else if (d >= radix || v > (2147483647 - d) / radix) {
+            v = -1;
+        } else {
+            v = v * radix + d;
+        };
+        i = i + 1;
+    };
+    v
+};
+
 def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
     // p is AT '['. Forms: [] and [a, b] (heap literals, later),
     // [v; n] (stack repeat: n copies of v — the native array form).
@@ -494,23 +537,17 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
         let first = parse_expr(toks, p + 1);
         let pos = first.pos;
         if (is_punct(toks, pos, ";")) {
-            // repeat: size must be a num literal (else n = -1 sentinel,
-            // rejected with a clear error by the checker).
-            // Both paths leave the optional count check with a long-valued
-            // tail.
+            // repeat: the size is an integer literal (size_lit); anything
+            // else is parsed past and reported where it starts.
+            let at = pos + 1;
             let n = -1;
-            pos = pos + 1;
-            if (tt(toks, pos) == "num") {
-                n = tonum(tv(toks, pos));
-                pos = pos + 1;
-                0
+            if (tt(toks, at) == "num") { n = size_lit(tv(toks, at)); };
+            if (n >= 0) {
+                close_res(toks, at + 1, "]", { k: "arrrep", v: first.node, n: n, line: ln, col: cl })
             } else {
-                // not a literal: parsed past (n stays -1 for the checker)
-                let cnt = parse_expr(toks, pos);
-                pos = cnt.pos;
-                0
-            };
-            close_res(toks, pos, "]", { k: "arrrep", v: first.node, n: n, line: ln, col: cl })
+                let cnt = parse_expr(toks, at);
+                close_res(toks, cnt.pos, "]", expect_err(toks, at, "an array size (an integer literal from 0 to 2147483647)"))
+            }
         } else {
             // literal, with trailing-comma tolerance
             let elems = [first.node];
@@ -533,7 +570,7 @@ def parse_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
             // means the stream is malformed, and dropping it silently would
             // compile `[1, 2 zzz]` as `[1, 2]`.
             if (is_punct(toks, pos, "]")) { 0; } else {
-                elems += { k: "err", msg: "unexpected '" + tv(toks, pos) + "' (expected ',' or ']')", line: tline(toks, pos), col: tcol(toks, pos) };
+                elems += { k: "err", msg: "unexpected " + tok_desc(toks, pos) + " (expected ',' or ']')", line: tline(toks, pos), col: tcol(toks, pos) };
                 0;
             };
             res({ k: "array", elems: elems, line: ln, col: cl }, skip_close(toks, pos, "]"))
@@ -700,15 +737,15 @@ def parse_type_node(toks: [{ t: str, v: str, line: long, col: long }], p: long) 
 def parse_type_array(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> { node: {k: str}, pos: long } {
     let inner = parse_type_node(toks, p + 1);
     if (is_punct(toks, inner.pos, ";")) {
-        let n = -1;
         let np = inner.pos + 1;
-        if (tt(toks, np) == "num") {
-            n = tonum(tv(toks, np));
-            np = np + 1;
-            0
-        };
-        let fc = tclose_res(toks, np, "]", { k: "tarrfix", of: inner.node, n: n });
-        parse_type_tail(toks, fc.pos, fc.node)
+        let n = -1;
+        if (tt(toks, np) == "num") { n = size_lit(tv(toks, np)); };
+        if (n >= 0) {
+            let fc = tclose_res(toks, np + 1, "]", { k: "tarrfix", of: inner.node, n: n });
+            parse_type_tail(toks, fc.pos, fc.node)
+        } else {
+            res(terr_at(toks, np, "an array size (an integer literal from 0 to 2147483647)"), np)
+        }
     } else {
         let ac = tclose_res(toks, inner.pos, "]", { k: "tarr", of: inner.node });
         parse_type_tail(toks, ac.pos, ac.node)
@@ -1199,8 +1236,7 @@ def parse_block(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
         } else {
             let s = parse_stmt(toks, pos);
             stmts += s.node;
-            pos = s.pos;
-            pos = stmt_end(toks, pos, s.node, stmts);
+            pos = stmt_end(toks, pos, s.pos, s.node, stmts);
             last_semi = is_punct(toks, pos - 1, ";");
             0
         };
@@ -1212,18 +1248,20 @@ def parse_block(toks: [{ t: str, v: str, line: long, col: long }], p: long) -> {
     res({ k: "block", stmts: stmts, line: ln, col: cl }, skip_close(toks, pos, "}"))
 };
 
-// After a statement at pos: past its `;`. A statement not followed by `;`
-// must end its block (`}`) or the input, or itself end in `}` (an
-// if/while/def/block runs straight into the next statement). Anything else
-// is two statements run together, `f() g()`: an error goes into `stmts`
-// (unless the statement is itself one) and parsing resumes after the next
-// `;`.
-def stmt_end(toks: [{ t: str, v: str, line: long, col: long }], pos: long, sn: {k: str}, stmts: [{k: str}]) -> long {
+// After a statement that began at `start` and ended at pos: past its `;`.
+// A statement not followed by `;` must end its block (`}`) or the input,
+// or itself end in `}` (an if/while/def/block runs straight into the next
+// statement). Anything else is two statements run together, `f() g()`: an
+// error goes into `stmts` (unless the statement is itself one) and parsing
+// resumes after the next `;`. A statement that consumed nothing (a stray
+// `)` after `if c { }`) does not end in the `}` before it -- taking it
+// for one would parse the same token forever.
+def stmt_end(toks: [{ t: str, v: str, line: long, col: long }], start: long, pos: long, sn: {k: str}, stmts: [{k: str}]) -> long {
     if (is_punct(toks, pos, ";")) {
         pos + 1
     } else if (is_punct(toks, pos, "}") || tt(toks, pos) == "eof") {
         pos
-    } else if (pos > 0 && is_punct(toks, pos - 1, "}")) {
+    } else if (pos > start && is_punct(toks, pos - 1, "}")) {
         pos
     } else {
         if (sn.k != "err") { stmts += expect_err(toks, pos, "';'"); 0; } else { 0; };
@@ -1310,7 +1348,13 @@ def is_compound_assign(toks: [{ t: str, v: str, line: long, col: long }], p: lon
     else if (is_op(toks, p, "-=")) { true }
     else if (is_op(toks, p, "*=")) { true }
     else if (is_op(toks, p, "/=")) { true }
-    else { is_op(toks, p, "%=") }
+    else if (is_op(toks, p, "%=")) { true }
+    else if (is_op(toks, p, "&=")) { true }
+    else if (is_op(toks, p, "|=")) { true }
+    else if (is_op(toks, p, "^=")) { true }
+    else if (is_op(toks, p, "<<=")) { true }
+    else if (is_op(toks, p, ">>=")) { true }
+    else { is_op(toks, p, ">>>=") }
 };
 
 def parse_stmt_opassign(toks: [{ t: str, v: str, line: long, col: long }], p: long, tgt: {k: str}, epos: long) -> { node: {k: str}, pos: long } {
@@ -1318,8 +1362,9 @@ def parse_stmt_opassign(toks: [{ t: str, v: str, line: long, col: long }], p: lo
     // come from there too (the C twin marks it `(void)p;`).
     let op = tv(toks, epos);
     let rhs = parse_expr(toks, epos + 1);
-    // Every compound op is `X=`, so the binary op is its first character.
-    let binop = op[0:1];
+    // Every compound op is `X=`, so the binary op is all but its last
+    // character (`>>>=` is `>>>`).
+    let binop = op[0:len(op) - 1];
     res({ k: "opassign", op: binop, tgt: tgt, v: rhs.node, line: tline(toks, epos), col: tcol(toks, epos) }, rhs.pos)
 };
 
@@ -1864,7 +1909,7 @@ def parse_program(toks: [{ t: str, v: str, line: long, col: long }]) -> {k: str}
         let before = pos;
         let s = parse_stmt(toks, pos);
         stmts += s.node;
-        pos = stmt_end(toks, s.pos, s.node, stmts);
+        pos = stmt_end(toks, before, s.pos, s.node, stmts);
         // safety: if a statement made no progress, bail to avoid infinite loop
         // NOTE: `0;` tail — the while body must be void-typed (see the
         // parse_block note).

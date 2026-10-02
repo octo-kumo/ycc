@@ -67,6 +67,7 @@ long fmt_kind(Yv *t);
 Yv *narrow_type(Yv *s, Yv *t);
 Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
+int is_bits_op(Yv *op);
 int teq(Yv *a, Yv *b);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
@@ -221,6 +222,8 @@ Yv *gen_eq_vals(Yv *st, Yv *t);
 Yv *gen_eq_opt(Yv *st, Yv *pt);
 Yv *gen_eq_arr_deep(Yv *st, Yv *et);
 Yv *gen_bin_rest(Yv *st, Yv *node);
+Yv *gen_shift(Yv *st, Yv *node, Yv *op);
+long shift_imm(Yv *r);
 Yv *syscall_reg(long i);
 Yv *gen_push_args(Yv *st, Yv *args);
 Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes);
@@ -2409,6 +2412,8 @@ Yv *infer(Yv *st, Yv *node) {
             } else {
                 return ut;
             }
+        } else if (ys_eq_lit(yr_get(node, "op"), "~")) {
+            return yr(1, "k", ys("tlong"));
         } else {
             return yr(1, "k", ys("tbool"));
         }
@@ -2449,6 +2454,8 @@ Yv *infer(Yv *st, Yv *node) {
             } else {
                 return yr(1, "k", ys("tlong"));
             }
+        } else if (is_bits_op(op)) {
+            return yr(1, "k", ys("tlong"));
         } else {
             return yr(1, "k", ys("tbool"));
         }
@@ -4261,6 +4268,8 @@ Yv *gen_un(Yv *st, Yv *node) {
         } else {
             return emit(st, ys("    neg %rax"));
         }
+    } else if (ys_eq_lit(yr_get(node, "op"), "~")) {
+        return emit(st, ys("    not %rax"));
     } else {
         return emit(st, ys("    xor $1, %rax"));
     }
@@ -4772,6 +4781,9 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         return gen_cat(st, node, lt, rt);
     } else if (ys_eq_lit(op, "::")) {
         return gen_cons(st, node);
+    } else if (ys_eq_lit(op, "<<") || ys_eq_lit(op, ">>") ||
+               ys_eq_lit(op, ">>>")) {
+        return gen_shift(st, node, op);
     } else if (ys_eq_lit(yr_get(lt, "k"), "tfloat") ||
                ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
         return gen_float_bin(st, node, lt, rt);
@@ -4953,6 +4965,12 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
             st = emit(st, ys("    cmp %rcx, %rax"));
             st = emit(st, ys("    setne %al"));
             return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, "&")) {
+            return emit(st, ys("    and %rcx, %rax"));
+        } else if (ys_eq_lit(op, "|")) {
+            return emit(st, ys("    or %rcx, %rax"));
+        } else if (ys_eq_lit(op, "^")) {
+            return emit(st, ys("    xor %rcx, %rax"));
         }
         /* No &&/|| arms here: gen_bin routes those to gen_logic (lazy
            jumps) BEFORE calling this, so an eager and/or would be dead
@@ -4960,6 +4978,71 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         return st;
     }
     return st;
+}
+
+/* `x << n`, `x >> n` (arithmetic: the sign fills in) and `x >>> n`
+ * (logical: zeros fill in). x86 uses only the count's low 6 bits; Y does
+ * not wrap: a count of 64 or more shifts every bit out (0, or all sign
+ * bits for `>>`) and a negative count stops the program (y_shift_neg). A
+ * literal count of 0 to 63 is the instruction's immediate and needs
+ * neither check. */
+Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
+    Yv *mn = ys("shl");
+    if (ys_eq_lit(op, ">>")) {
+        mn = ys("sar");
+        ;
+    } else if (ys_eq_lit(op, ">>>")) {
+        mn = ys("shr");
+        ;
+    }
+    long n = shift_imm(yr_get(node, "r"));
+    st = gen(st, yr_get(node, "l"));
+    if (n >= 0) {
+        return emit(st, ys_cat(ys_cat(ys_cat(ys_cat(ys("    "), mn), ys(" $")),
+                                      ys_long(n)),
+                               ys(", %rax")));
+    } else {
+        st = emit(st, ys("    push %rax"));
+        st = gen(st, yr_get(node, "r"));
+        st = emit(st, ys("    mov %rax, %rcx"));
+        st = emit(st, ys("    pop %rax"));
+        st = emit(st, ys("    test %rcx, %rcx"));
+        st = emit(st, ys("    js y_shift_neg"));
+        Yv *ok = next_loc(st);
+        st = yr_get(ok, "st");
+        st = emit(st, ys("    cmp $64, %rcx"));
+        st = emit(st, ys_cat(ys("    jb "), yr_get(ok, "lbl")));
+        if (ys_eq_lit(mn, "sar")) {
+            st = emit(st, ys("    mov $63, %rcx"));
+            ;
+        } else {
+            st = emit(st, ys("    xor %eax, %eax"));
+            ;
+        }
+        st = emit(st, ys_cat(yr_get(ok, "lbl"), ys(":")));
+        return emit(st, ys_cat(ys_cat(ys("    "), mn), ys(" %cl, %rax")));
+    }
+}
+
+/* The count of a shift when it is a literal from 0 to 63 (gen_shift), else
+ * -1. A radix literal may wrap negative (0xFFFF_FFFF_FFFF_FFFF is -1). */
+long shift_imm(Yv *r) {
+    if (ys_eq_lit(yr_get(r, "k"), "num")) {
+        if (lit_is_float(yr_get(r, "v"))) {
+            return -1;
+        } else {
+            Yv *s = norm_num(yr_get(r, "v"));
+            if (yv_len(s) > 2 || ys_eq_lit(ys_slice(s, 0, 1), "-")) {
+                return -1;
+            } else if (ys_tonum(s) < 64) {
+                return ys_tonum(s);
+            } else {
+                return -1;
+            }
+        }
+    } else {
+        return -1;
+    }
 }
 
 /* ── calls ──────────────────────────────────────────────────────────────
@@ -6673,7 +6756,11 @@ Yv *norm_num(Yv *s) {
             if (ys_eq_lit(c, "_")) {
                 ;
             } else {
-                v = v * radix + hexval_ch(c);
+                /* Y's long arithmetic wraps: a literal with the top bit
+                 * set (0xFFFF_FFFF_FFFF_FFFF is -1) is its 64 bits. In C
+                 * that is unsigned arithmetic (see parse_num_go in asm.c). */
+                v = (long)((unsigned long)v * (unsigned long)radix +
+                           (unsigned long)hexval_ch(c));
                 ;
             }
             i = i + 1;

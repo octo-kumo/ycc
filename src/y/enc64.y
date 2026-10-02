@@ -506,41 +506,36 @@ def enc_alu_imm_body(op: str, dst, v: long) -> {bytes: [byte], fix: [{off: long,
     }
 };
 
-def enc_shl(dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
-    // shl $imm8, %r64
+def enc_shift(mn: str, dst, cnt) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
+    // shl/shr/sar $imm8 (0-63) or %cl, %r64: C1 /ext ib and D3 /ext, where
+    // ext is shl 4, shr 5 (logical), sar 7 (arithmetic)
+    let ext = 4;
+    if (mn == "shr") { ext = 5; 0; }
+    else if (mn == "sar") { ext = 7; 0; }
     if (dst.k != "reg") {
-        { bytes: [], fix: [], err: "shl dst" }
+        { bytes: [], fix: [], err: mn + " dst" }
     } else if (op_size(dst) != 64) {
-        { bytes: [], fix: [], err: "shl dst" }
-    } else if (v < 0) {
-        { bytes: [], fix: [], err: "shl count range" }
-    } else if (v > 63) {
-        { bytes: [], fix: [], err: "shl count range" }
+        { bytes: [], fix: [], err: mn + " dst" }
+    } else if (cnt.k == "reg") {
+        if (cnt.n == 1 && op_size(cnt) == 8) {
+            let r = rex(true, -1, -1, dst.n);
+            let b: [byte] = [211, modrm(3, ext, dst.n)];
+            { bytes: with_rex(r, b), fix: [], err: "" }
+        } else {
+            { bytes: [], fix: [], err: mn + " count register is %cl" }
+        }
+    } else if (cnt.k == "imm") {
+        if (cnt.v < 0 || cnt.v > 63) {
+            { bytes: [], fix: [], err: mn + " count range" }
+        } else {
+            let r = rex(true, -1, -1, dst.n);
+            let prefix: [byte] = [193, modrm(3, ext, dst.n)];
+            let imm: [byte] = [u8(cnt.v)];
+            let b = concat(prefix, imm);
+            { bytes: with_rex(r, b), fix: [], err: "" }
+        }
     } else {
-        let r = rex(true, -1, -1, dst.n);
-        let prefix: [byte] = [193, modrm(3, 4, dst.n)];
-        let imm: [byte] = [u8(v)];
-        let b = concat(prefix, imm);
-        { bytes: with_rex(r, b), fix: [], err: "" }
-    }
-};
-
-def enc_shr(dst, v: long) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: str, lbl2: str}], err: str} {
-    // shr $imm8, %r64 (logical, for unsigned divide-by-pow2)
-    if (dst.k != "reg") {
-        { bytes: [], fix: [], err: "shr dst" }
-    } else if (op_size(dst) != 64) {
-        { bytes: [], fix: [], err: "shr dst" }
-    } else if (v < 0) {
-        { bytes: [], fix: [], err: "shr count range" }
-    } else if (v > 63) {
-        { bytes: [], fix: [], err: "shr count range" }
-    } else {
-        let r = rex(true, -1, -1, dst.n);
-        let prefix: [byte] = [193, modrm(3, 5, dst.n)];
-        let imm: [byte] = [u8(v)];
-        let b = concat(prefix, imm);
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        { bytes: [], fix: [], err: mn + " count" }
     }
 };
 
@@ -661,6 +656,7 @@ def enc_unary(op: str, o) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: s
         let opc = 247;
         if (op == "idiv") { ext = 7; 0; }
         else if (op == "div") { ext = 6; 0; }
+        else if (op == "not") { ext = 2; 0; }
         else if (op == "dec") { ext = 1; opc = 255; 0; }
         else if (op == "inc") { ext = 0; opc = 255; 0; }
         let r = rex(true, -1, -1, o.n);
@@ -791,24 +787,9 @@ def enc_insn(mn: str, ops) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: 
                 enc_arith(mn, dst, src)
             }
         }
-    } else if (mn == "shl") {
+    } else if (mn == "shl" || mn == "shr" || mn == "sar") {
         let e = need2(mn, ops);
-        if (e != "") {
-            { bytes: [], fix: [], err: e }
-        } else if (ops[0].k != "imm") {
-            { bytes: [], fix: [], err: "shl needs imm" }
-        } else {
-            enc_shl(ops[1], ops[0].v)
-        }
-    } else if (mn == "shr") {
-        let e = need2(mn, ops);
-        if (e != "") {
-            { bytes: [], fix: [], err: e }
-        } else if (ops[0].k != "imm") {
-            { bytes: [], fix: [], err: "shr needs imm" }
-        } else {
-            enc_shr(ops[1], ops[0].v)
-        }
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_shift(mn, ops[1], ops[0]) }
     } else if (mn == "addsd" || mn == "subsd" || mn == "mulsd" || mn == "divsd") {
         let e = need2(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_sse_arith(mn, ops[1], ops[0]) }
@@ -827,7 +808,7 @@ def enc_insn(mn: str, ops) -> {bytes: [byte], fix: [{off: long, kind: str, lbl: 
     } else if (mn == "imul") {
         let e = need2(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_imul(ops[1], ops[0]) }
-    } else if (mn == "neg" || mn == "idiv" || mn == "div" || mn == "dec" || mn == "inc") {
+    } else if (mn == "neg" || mn == "not" || mn == "idiv" || mn == "div" || mn == "dec" || mn == "inc") {
         let e = need1(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_unary(mn, ops[0]) }
     } else if (mn == "jmp") {

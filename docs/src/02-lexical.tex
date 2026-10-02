@@ -41,20 +41,28 @@ The keywords are:
 \label{sec:literals}
 
 \paragraph{Integers.} Decimal, binary (\ic{0b1010}) and hexadecimal
-(\ic{0x1F}) radix literals are supported. A radix literal (\ic{0x} /
-\ic{0b}, either case) may separate digits with \ic{\_} in any position
-after the prefix: \ic{0xFF\_FF}, \ic{0b1010\_1010}. A \emph{decimal}
-literal may not --- \ic{1\_000\_000} is a parse error, because the
-digit scan stops at the first \ic{\_} (and \ic{\_} is a word character,
-so the tail then lexes as an identifier). There is no octal form:
-\ic{017} is decimal seventeen. All integer literals are \ty{long}
-(64-bit).
+(\ic{0x1F}) radix literals are supported. Any of them may group digits
+with \ic{\_}, which is ignored: a radix literal (\ic{0x} / \ic{0b},
+either case) in any position after the prefix (\ic{0xFF\_FF},
+\ic{0b1010\_1010}), a decimal one anywhere after its first digit
+(\ic{1\_000\_000}; a leading \ic{\_} starts an identifier instead).
+A prefix needs a digit of its radix: \ic{0x}, \ic{0b\_} and \ic{0b2}
+are errors (\ic{binary literal '0b2' has no digits}), one for the whole
+word.
+There is no octal form: \ic{017} is decimal seventeen. All integer
+literals are \ty{long} (64-bit). A radix literal spells the 64 bits
+themselves, so a mask may set the top bit:
+\ic{0xFFFF\_FFFF\_FFFF\_FFFF} is \ic{-1} and
+\ic{0x8000\_0000\_0000\_0000} the smallest \ty{long}; digits past 64
+bits wrap away (modulo $2^{64}$).
 
 \paragraph{Floats.} A digit sequence with a decimal point and/or an
-exponent: \ic{1.5}, \ic{1.5e+3}, \ic{2.0e-1}. A dot followed by a
-non-digit is \emph{not} a fractional part --- \ic{a..b} lexes as
-\ic{a}, \ic{..}, \ic{b}. Float literals are IEEE-754 binary64
-(\ty{float}).
+exponent: \ic{1.5}, \ic{1.5e+3}, \ic{2.0e-1}. \ic{\_} may group digits
+after the first digit of the whole part, of the fraction and of the
+exponent: \ic{1\_000.5}, \ic{0.000\_001}, \ic{1e1\_0} (\ic{1.\_5} and
+\ic{1e\_5} are parse errors). A dot followed by a non-digit is
+\emph{not} a fractional part --- \ic{a..b} lexes as \ic{a}, \ic{..},
+\ic{b}. Float literals are IEEE-754 binary64 (\ty{float}).
 
 \paragraph{Strings.} Double-quoted byte strings:
 
@@ -118,12 +126,18 @@ ordinary (undefined) identifier.
 \toprule
 kind & tokens \\
 \midrule
+% `<{}<`: the {} keeps T1's << and >> ligatures (guillemets) out.
+three- and four-character &
+  \ic{>{}>{}>} \ic{<{}<=} \ic{>{}>=} \ic{>{}>{}>=} \\
 two-character &
   \ic{==} \ic{!=} \ic{<=} \ic{>=} \ic{\&\&} \ic{||} \ic{::} \ic{..}
-  \ic{->} \ic{=>} \ic{++} \ic{--} \ic{+=} \ic{-=} \ic{*=} \ic{/=} \ic{\%=} \\
+  \ic{->} \ic{=>} \ic{++} \ic{--} \ic{<{}<} \ic{>{}>} \\
+ &
+  \ic{+=} \ic{-=} \ic{*=} \ic{/=} \ic{\%=}
+  \ic{\&=} \ic{|=} \ic{\textasciicircum{}=} \\
 single-character &
   \ic{+} \ic{-} \ic{*} \ic{/} \ic{\%} \ic{<} \ic{>} \ic{=} \ic{!}
-  \ic{\&} \ic{.} \ic{?} \ic{|} \\
+  \ic{\&} \ic{.} \ic{?} \ic{|} \ic{\textasciicircum{}} \ic{\textasciitilde{}} \\
 punctuation &
   \ic{(} \ic{)} \ic{\{} \ic{\}} \ic{[} \ic{]} \ic{,} \ic{;} \ic{:} \\
 \bottomrule
@@ -138,6 +152,7 @@ that matches, exactly like C:
       write \ic{x - -y} when negation is meant;
 \item \ic{/=} is one token; \ic{//} starts a comment, and
       \ic{/ == y} must be written with a space to divide;
+\item \ic{x>{}>{}>=1} is the compound \ic{x >{}>{}>= 1};
 \end{itemize}
 
 \paragraph{Contextual keywords.} \ic{none}, \ic{match}, \ic{type} and

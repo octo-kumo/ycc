@@ -110,6 +110,14 @@ def y_match_fail() -> long {
     0
 };
 
+// A shift by a negative count: `x << n`, `>>` and `>>>` jump here (x86
+// would quietly shift by the count's low 6 bits).
+def y_shift_neg() -> long {
+    y_put_hstr("runtime error: negative shift count\n");
+    exit(1);
+    0
+};
+
 // tonum(s): optional '-', then digits; anything else stops the
 // scan and is ignored (exactly the old asm behaviour).
 def y_str_tonum(s: str) -> long {

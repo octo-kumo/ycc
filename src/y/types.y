@@ -752,6 +752,20 @@ def typeof_arith_long(st: { bindings: [{ name: str, typ: { k: str }, kind: str, 
     }
 };
 
+// The bitwise binary operators. (native.y asks too: their result is a long.)
+def is_bits_op(op: str) -> bool {
+    op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>"
+};
+
+// `&` `|` `^` `<<` `>>` `>>>` take integers only: a byte operand widens and
+// the result is a long. No float, no bool (`&&` and `||` are the logical
+// forms).
+def typeof_bits(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    st = expect_type(st, lt, { k: "tlong" }, "'" + op + "' left operand", line, col);
+    st = expect_type(st, rt, { k: "tlong" }, "'" + op + "' right operand", line, col);
+    { typ: { k: "tlong" }, st: st }
+};
+
 def typeof_cmp(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long }, op: str, lt, rt, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     if (lt.k == "tstr") {
         // str < str is lexicographic ordering (byte by byte), matching the
@@ -1010,6 +1024,9 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
                 st = expect_type(st, r.typ, { k: "tlong" }, "unary '-'", node.line, node.col);
                 { typ: { k: "tlong" }, st: st }
             }
+        } else if (node.op == "~") {
+            st = expect_type(st, r.typ, { k: "tlong" }, "unary '~'", node.line, node.col);
+            { typ: { k: "tlong" }, st: st }
         } else {
             st = expect_type(st, r.typ, { k: "tbool" }, "unary '!'", node.line, node.col);
             { typ: { k: "tbool" }, st: st }
@@ -1116,6 +1133,12 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         else if (op == "&&") { typeof_logic(st, op, l.typ, r.typ, node.line, node.col) }
         else if (op == "||") { typeof_logic(st, op, l.typ, r.typ, node.line, node.col) }
         else if (op == "::") { typeof_cons(st, l.typ, r.typ, node.line, node.col) }
+        else if (op == "&") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
+        else if (op == "|") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
+        else if (op == "^") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
+        else if (op == "<<") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
+        else if (op == ">>") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
+        else if (op == ">>>") { typeof_bits(st, op, l.typ, r.typ, node.line, node.col) }
         else {
             st = fail(st, "operator '" + op + "' is unsupported in native mode", node.line, node.col);
             { typ: t_unk(), st: st }
@@ -1221,17 +1244,17 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         // ++x / x++: numbers only — `s++` on a string would silently
         // concatenate, so it is a type error instead.
         let t = typeof_expr(st, node.tgt);
-        st = t.st;
-        st = const_check(st, node.tgt, t.typ, node.op, node.line, node.col);
-        incdec_check(st, node, t.typ)
+        let pc = place_check(t.st, node.tgt, t.typ, node.op, node.line, node.col);
+        st = const_check(pc.st, node.tgt, pc.typ, node.op, node.line, node.col);
+        incdec_check(st, node, pc.typ)
     } else if (k == "opassign") {
         // `x op= e`: the rules live in opassign_check.
         let t = typeof_expr(st, node.tgt);
         st = t.st;
         let v = typeof_expr(st, node.v);
-        st = v.st;
-        st = const_check(st, node.tgt, t.typ, node.op + "=", node.line, node.col);
-        opassign_check(st, node, t.typ, v.typ)
+        let pc = place_check(v.st, node.tgt, t.typ, node.op + "=", node.line, node.col);
+        st = const_check(pc.st, node.tgt, pc.typ, node.op + "=", node.line, node.col);
+        opassign_check(st, node, pc.typ, v.typ)
     } else if (k == "store") {
         let p = typeof_expr(st, node.p);
         let v = typeof_expr(p.st, node.v);
@@ -1394,10 +1417,8 @@ def typeof_expr(st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth
         if (!is_value_type(r.typ)) {
             st = fail(st, "array element type " + tstr(r.typ) + " is unsupported in native mode", node.line, node.col);
             { typ: t_unk(), st: st }
-        } else if (node.n < 0) {
-            st = fail(st, "array size must be a non-negative integer literal ([v; n])", node.line, node.col);
-            { typ: t_unk(), st: st }
         } else {
+            // n is a literal from 0 to 2^31 - 1 (parser.y size_lit)
             { typ: { k: "tarrfix", of: r.typ, n: node.n }, st: st }
         }
     } else if (k == "index") {
@@ -2062,6 +2083,49 @@ def const_check(st, tgt, tt: { k: str }, op: str, line: long, col: long) -> { bi
     } else { st }
 };
 
+// `++`/`--` and `op=` store back into their target, so it must be a place
+// `=` stores to: a variable, an array or map element, or a record field.
+// A str's bytes and the `.length`/`.ptr` properties are read-only, as they
+// are to `=`. Returns the target's type, or t_unk() after an error, so the
+// operator's own rules stay quiet. (`*p = v` is a store of its own; `*p`
+// is no target here.) Only a target that can be one of those -- a byte
+// element, a `.length` or `.ptr` -- has its base looked at.
+def place_check(st, tgt, tt: { k: str }, op: str, line: long, col: long) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
+    let k: str = tgt.k;
+    let ok = true;
+    if (k == "index") {
+        if (tt.k == "tbyte" && base_type(st, tgt.arr).k == "tstr") {
+            st = fail(st, "cannot index str (only arrays and maps)", line, col);
+            ok = false;
+        };
+    } else if (k == "dot") {
+        let key: str = tgt.key;
+        if (tt.k != "tunk" && (key == "length" || key == "ptr")) {
+            let bt = base_type(st, tgt.obj);
+            if (bt.k == "tarr" || bt.k == "tarrfix" || bt.k == "tstr") {
+                st = fail(st, "cannot field-assign " + tstr(bt) + " (only records)", line, col);
+                ok = false;
+            };
+        };
+    } else if (k != "id" && k != "err") {
+        st = fail(st, "cannot assign to this expression ('" + op + "')", line, col);
+        ok = false;
+    };
+    if (ok) { { typ: tt, st: st } } else { { typ: t_unk(), st: st } }
+};
+
+// The static type of a place's base (`a` in `a[i]`, `o` in `o.f`). The
+// whole target was typed already, its errors reported: a base other than
+// a name is typed again on a scratch error list.
+def base_type(st, e) -> { k: str } {
+    if (e.k == "id") {
+        lookup(st.bindings, e.v).typ
+    } else {
+        let none: [{ msg: str, line: long, col: long }] = [];
+        typeof_expr(st_errors(st, none), e).typ
+    }
+};
+
 // ++/-- target rule: numbers (long/byte/float) only.
 def incdec_check(st, node, tt: { k: str }) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     let op = node.op;
@@ -2077,6 +2141,9 @@ def incdec_check(st, node, tt: { k: str }) -> { typ: { k: str }, st: { bindings:
 
 // `x op= e` rules by target type:
 //   numbers  -> the arithmetic family (+ - * / %), result the target type
+//   integers -> the bitwise family (& | ^ << >> >>>) too: a long or byte
+//               target, an integer value (a byte target keeps the low 8
+//               bits, like every byte store)
 //   str      -> `+=` concatenates; the rest are errors
 //   arrays   -> in place only: `+=` pushes one element (or appends another
 //               array of the same type; `[[T]] += [T]` pushes it whole),
@@ -2085,7 +2152,17 @@ def incdec_check(st, node, tt: { k: str }) -> { typ: { k: str }, st: { bindings:
 // The result is always the target's type (the new value).
 def opassign_check(st, node, tt: { k: str }, vt: { k: str }) -> { typ: { k: str }, st: { bindings: [{ name: str, typ: { k: str }, kind: str, fdepth: long }], errors: [{ msg: str, line: long, col: long }], ret: { k: str }, self: { k: str }, fdepth: long } } {
     let op = node.op;
-    if (tt.k == "tarrfix") {
+    if (is_bits_op(op)) {
+        if (tt.k == "tlong" || tt.k == "tbyte") {
+            st = expect_type(st, vt, { k: "tlong" }, "'" + op + "=' value", node.line, node.col);
+            { typ: tt, st: st }
+        } else if (tt.k == "tunk" || tt.k == "tnone") {
+            { typ: t_unk(), st: st }
+        } else {
+            st = fail(st, "'" + op + "=' needs an integer target, got " + tstr(tt), node.line, node.col);
+            { typ: t_unk(), st: st }
+        }
+    } else if (tt.k == "tarrfix") {
         // A fixed array's length is part of its type: growth is a type
         // error (the old push-on-fixed rejection, now on the operators).
         st = fail(st, "cannot grow fixed array " + tstr(tt) + " with '" + op + "=' (its length is part of its type; use [T] instead)", node.line, node.col);

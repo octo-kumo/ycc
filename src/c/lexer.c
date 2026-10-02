@@ -1,7 +1,9 @@
 /* lexer.c — tokenize a Y source string into a list of token maps.
  * 1:1 C copy of src/y/lexer.y (see PORTING.md).
  * Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based> }.
- * Token types: id, num, str, op, punct, kw, eof.
+ * Token types: id, num, str, bstr, char, op, punct, kw, eof, and ferr -- a
+ * malformed literal (a broken f-string, lex_fstring; a radix prefix without
+ * digits), v its error message.
  *
  * NOTE: short underscore-free names (isdigit/isalpha/...) — see below. */
 
@@ -42,6 +44,15 @@ int is_radix_ch(Yv *c, long radix) {
     else { return isdigit(c) ||
         (ys_cmp(c, ys("a")) >= 0 && ys_cmp(c, ys("f")) <= 0) ||
         (ys_cmp(c, ys("A")) >= 0 && ys_cmp(c, ys("F")) <= 0); }
+}
+
+// A decimal literal's text without its `_` digit separators: its num token
+// carries this, so whatever reads the literal (tonum, norm_num, the float
+// helpers) sees plain digits. A radix literal keeps them (norm_num skips
+// them).
+Yv *strip_seps(Yv *s) {
+    if (ys_index_of(s, ys("_")) < 0) { return s; }
+    else { return ys_join(ys_split(s, ys("_")), ys("")); }
 }
 
 int isspace(Yv *c) {
@@ -496,9 +507,25 @@ long hexvalx(Yv *c) {
     else { return -1; }
 }
 
+// Try to read an operator of two or more chars at position i (c is the char
+// there): the longest one, or "". Maximal munch, like C: `x+++y` is
+// `x ++ + y` and `a>>>=b` is `a >>>= b`. There is no `=+` operator;
+// `x =+ y` is `x = +y`. Only the shifts are longer than two chars, so only
+// `<` and `>` look further ahead.
+Yv *multicharop(Yv *src, long i, Yv *c) {
+    if (ys_eq_lit(c, "<") || ys_eq_lit(c, ">")) {
+        Yv *four = ys_slice(src, i, i + 4);
+        Yv *three = ys_slice(src, i, i + 3);
+        if (ys_eq_lit(four, ">>>=")) { return four; }
+        else if (ys_eq_lit(three, ">>>") || ys_eq_lit(three, ">>=") ||
+                 ys_eq_lit(three, "<<=")) { return three; }
+        else { return twocharop(src, i); }
+    } else {
+        return twocharop(src, i);
+    }
+}
+
 // Try to read a two-char operator at position i. Returns the operator or "".
-// Maximal munch, like C: `x+++y` is `x ++ + y`. There is no `=+` operator;
-// `x =+ y` is `x = +y`.
 Yv *twocharop(Yv *src, long i) {
     Yv *two = ys_slice(src, i, i + 2);
     if (ys_eq_lit(two, "==") || ys_eq_lit(two, "!=") ||
@@ -509,7 +536,9 @@ Yv *twocharop(Yv *src, long i) {
         ys_eq_lit(two, "++") || ys_eq_lit(two, "--") ||
         ys_eq_lit(two, "+=") || ys_eq_lit(two, "-=") ||
         ys_eq_lit(two, "*=") || ys_eq_lit(two, "/=") ||
-        ys_eq_lit(two, "%=")) { return two; }
+        ys_eq_lit(two, "%=") || ys_eq_lit(two, "&=") ||
+        ys_eq_lit(two, "|=") || ys_eq_lit(two, "^=") ||
+        ys_eq_lit(two, "<<") || ys_eq_lit(two, ">>")) { return two; }
     else { return ys(""); }
 }
 
@@ -519,7 +548,8 @@ int issingleop(Yv *c) {
            ys_eq_lit(c, "%") || ys_eq_lit(c, "<") ||
            ys_eq_lit(c, ">") || ys_eq_lit(c, "=") ||
            ys_eq_lit(c, ".") || ys_eq_lit(c, "!") ||
-           ys_eq_lit(c, "&") || ys_eq_lit(c, "?") || ys_eq_lit(c, "|");
+           ys_eq_lit(c, "&") || ys_eq_lit(c, "?") || ys_eq_lit(c, "|") ||
+           ys_eq_lit(c, "^") || ys_eq_lit(c, "~");
 }
 
 // The slash character, built without a literal: Y string literals cannot
@@ -567,26 +597,44 @@ Yv *tokenize(Yv *src) {
                 if (ys_eq_lit(nxt, "x") || ys_eq_lit(nxt, "X")) { radix = 16; }
                 else if (ys_eq_lit(nxt, "b") || ys_eq_lit(nxt, "B")) { radix = 2; }
             }
+            // the message of a malformed literal (an ferr token), or ""
+            Yv *err = ys("");
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
+                int digits = 0;
                 int rdone = 0;
                 while (rdone == 0) {
                     if (i < n) {
-                        if (is_radix_ch(ys_slice(src, i, i + 1), radix)) { i = i + 1; col = col + 1; ; }
-                        else { rdone = 1; ; };
+                        Yv *rc = ys_slice(src, i, i + 1);
+                        if (is_radix_ch(rc, radix)) {
+                            if (!ys_eq_lit(rc, "_")) { digits = 1; }
+                            i = i + 1;
+                            col = col + 1;
+                        } else { rdone = 1; ; };
                         ;
                     } else { rdone = 1; ; }
                 };
+                if (!digits) {
+                    // A prefix without a digit (`0x`, `0b_`, `0b2`) is no
+                    // number: the word characters after it are taken into
+                    // the bad literal, reported once, where it starts.
+                    while (i < n && isalnum(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; }
+                    if (radix == 16) { err = ys_cat(ys_cat(ys("hex literal '"), ys_slice(src, start, i)), ys("' has no digits")); }
+                    else { err = ys_cat(ys_cat(ys("binary literal '"), ys_slice(src, start, i)), ys("' has no digits")); }
+                }
                 ;
             } else {
             // The first digit is already known from the branch condition.
+            // After the first digit of each part (whole, fraction,
+            // exponent) `_` may separate digits: 1_000_000, 0.000_1.
             i = i + 1;
             col = col + 1;
             int ind = 0;
             while (ind == 0) {
                 if (i < n) {
-                    if (isdigit(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
+                    Yv *dc = ys_slice(src, i, i + 1);
+                    if (isdigit(dc) || ys_eq_lit(dc, "_")) { i = i + 1; col = col + 1; ; }
                     else { ind = 1; ; };
                     ;
                 } else { ind = 1; ; }
@@ -596,10 +644,12 @@ Yv *tokenize(Yv *src) {
                 !ys_eq_lit(ys_slice(src, i + 1, i + 2), ".")) {
                 i = i + 1;
                 col = col + 1;
+                long fs = i;
                 int frd = 0;
                 while (frd == 0) {
                     if (i < n) {
-                        if (isdigit(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
+                        Yv *fc = ys_slice(src, i, i + 1);
+                        if (isdigit(fc) || (ys_eq_lit(fc, "_") && i > fs)) { i = i + 1; col = col + 1; ; }
                         else { frd = 1; ; };
                         ;
                     } else { frd = 1; ; }
@@ -619,7 +669,8 @@ Yv *tokenize(Yv *src) {
                     int exd = 0;
                     while (exd == 0) {
                         if (i < n) {
-                            if (isdigit(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
+                            Yv *xc = ys_slice(src, i, i + 1);
+                            if (isdigit(xc) || ys_eq_lit(xc, "_")) { i = i + 1; col = col + 1; ; }
                             else { exd = 1; ; };
                             ;
                         } else { exd = 1; ; }
@@ -628,7 +679,13 @@ Yv *tokenize(Yv *src) {
                 }
             }
             }
-            toks = ya_push(toks, mktok(ys("num"), ys_slice(src, start, i), line, startcol));
+            Yv *txt = ys_slice(src, start, i);
+            if (!ys_eq_lit(err, "")) {
+                toks = ya_push(toks, mktok(ys("ferr"), err, line, startcol));
+            } else {
+                if (radix == 0) { txt = strip_seps(txt); }
+                toks = ya_push(toks, mktok(ys("num"), txt, line, startcol));
+            }
             ;
         } else if (isalpha(c)) {
             long start = i;
@@ -792,14 +849,14 @@ Yv *tokenize(Yv *src) {
             }
         } else {
             // operator / punct / unknown-char dispatch. NOTE: bound once —
-            // twocharop(src, i) inline inside a call misparses on the C
+            // multicharop(src, i, c) inline inside a call misparses on the C
             // backend (it reads `f(g(x), ...)` args with dot/index shapes
             // as field access; see native.y strip_ns note).
-            Yv *two = twocharop(src, i);
-            if (!ys_eq_lit(two, "")) {
-                toks = ya_push(toks, mktok(ys("op"), two, line, col));
-                i = i + 2;
-                col = col + 2;
+            Yv *op = multicharop(src, i, c);
+            if (!ys_eq_lit(op, "")) {
+                toks = ya_push(toks, mktok(ys("op"), op, line, col));
+                i = i + yv_len(op);
+                col = col + yv_len(op);
                 ;
             } else if (issingleop(c)) {
                 toks = ya_push(toks, mktok(ys("op"), c, line, col));

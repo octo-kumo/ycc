@@ -1,2 +1,2 @@
-let huge = [0; 1099511627776];
+let huge = [0; 2147483647];
 print(len(huge));

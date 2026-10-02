@@ -25,6 +25,36 @@ widen the long side. Unary minus on a \ic{float} flips the sign, so
 \ic{-0.0} is a negative zero (\ic{1.0 / -0.0} is $-\infty$) and
 \ic{-(-x)} is \ic{x} for every \ic{x}.
 
+\subsection{Bitwise operators}
+\label{sec:bitwise}
+
+\ic{\&}, \ic{|} and \ic{\textasciicircum{}} are the and, or and exclusive
+or of two integers' 64 bits, and \ic{\textasciitilde{}x} flips every bit
+of \ic{x} (it is \ic{-x - 1}). A \ic{byte} operand widens first, so
+\ic{\textasciitilde{}b} of a \ic{byte} is a negative \ic{long}; the
+result is always a \ic{long}, and storing it into a \ic{byte} keeps its
+low 8 bits.
+
+The shifts move the bits of the left operand by the count on the right:
+\ic{x <{}< n} towards the top, zeros filling in; \ic{x >{}> n} towards
+the bottom, the sign bit filling in (arithmetic: \ic{-16 >{}> 2} is
+\ic{-4}); and \ic{x >{}>{}> n} towards the bottom, zeros filling in
+(logical: \ic{-16 >{}>{}> 60} is \ic{15}). Unlike C, and unlike the x86
+instructions, which use only the count's low 6 bits, every count has a
+meaning:
+
+\begin{itemize}[nosep]
+\item a count of 64 or more shifts every bit out: \ic{x <{}< 64} and
+  \ic{x >{}>{}> 64} are \ic{0}, and \ic{x >{}> 64} is \ic{0} or \ic{-1}
+  by the sign of \ic{x};
+\item a negative count is a runtime error (Section~\ref{sec:errors}).
+\end{itemize}
+
+\noindent The bitwise operators bind tighter than the comparisons
+(Section~\ref{sec:expr-grammar}), and a condition still takes a
+\ic{bool}: \ic{if (flags \& 4 != 0)} tests a bit. Radix literals spell
+masks with the top bit set as they are (Section~\ref{sec:literals}).
+
 \subsection{Logic}
 
 \ic{\&\&} and \ic{||} short-circuit: the right operand is evaluated
@@ -71,7 +101,7 @@ aliasing.
 \subsection{Increment, decrement and compound assignment}
 \label{sec:exactly-once}
 
-The four increment/decrement forms and the five compound-assignment
+The four increment/decrement forms and the eleven compound-assignment
 operators share one rule:
 
 \begin{quote}
@@ -110,7 +140,10 @@ corresponding read and store through the captured names. Then the
    \texttt{ } op \texttt{ } e\texttt{;}~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}}
 \end{align*}
 
-\noindent for $op \in \{+,-,\times,\div,\%\}$ on numbers. The four
+\noindent for $op \in \{+,-,\times,\div,\%\}$ on numbers and for the
+bitwise \ic{\&} \ic{|} \ic{\textasciicircum{}} \ic{<{}<} \ic{>{}>}
+\ic{>{}>{}>} on integers (on a \ic{byte} place, \ic{t} is a \ic{byte}:
+the low 8 bits). The four
 increment and decrement forms are expressions: postfix yields the
 \emph{old} value, prefix the \emph{new} one. A compound assignment is,
 like \ic{=}, a statement form (Section~\ref{sec:assignment}): it cannot

@@ -44,8 +44,9 @@ ulimit -v "$YMEM_KB"
 
 # The programs the compilers emit keep a cap even when the suite-wide one is
 # off: only a sanitized COMPILER needs the address space, and a test like
-# native t71 (an 8 TB array) must see its allocation fail, not page until
-# the timeout. run_bin <timeout> <bin> [args...] runs a compiled program.
+# native t71 (a 16 GB array, the largest `[0; n]` there is) must see its
+# allocation fail, not page until the timeout. run_bin <timeout> <bin>
+# [args...] runs a compiled program.
 YPROG_MEM_KB="${YPROG_MEM_KB:-6291456}"
 run_bin() {
     local to=$1

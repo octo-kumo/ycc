@@ -46,3 +46,50 @@ res.read(0)       // full -> [byte] blocks until all data is read, returns [byte
 res.text()        // full -> str blocks until all data is read, returns str
 
 http.header("Content-Type", "application/json"); // set a header for the next request, and returns self
+
+// OR
+// just do js fetch style
+http.get("...", {
+    headers: ...
+})
+// propose different apis for me to choose, my style is minimal code and intuitive, and fit many use cases (few unique requests and many requests that look similar)
+
+
+
+
+let pid = fork {
+    // only the child process executes this block
+}
+
+
+// internally each is a number? maybe?
+// might want extra functions to convert between the enum and its underlying number or string representation?\
+// goal of enum is purely type safety and performance
+enum Color {
+    Red,
+    Green,
+    Blue
+};
+// or is there some kind of more functional programming way to do this? coz enum feels OOP
+// we could just make the user declare const records too
+// e.g.
+const Color = {
+    Red: 0,
+    Green: 1,
+    Blue: 2
+};
+// maybe we could sugar it?
+
+
+
+// native functions
+
+def foo(x: long) -> long {
+    // some way to write assembly directly over here that would work nicely
+}
+
+
+// some kind of full featured LSP, which can be used by vs code etc
+// will provide features like autocompletion, go-to-definition, and real-time error checking
+// will also support formatting code
+// a new entrypoint in src/y/lsp.y, which will make a seperate binary, but it can share code with ycc

@@ -29,6 +29,7 @@ int islower(Yv *c);                  /* (c: str) -> bool */
 int isalpha(Yv *c);                  /* (c: str) -> bool */
 int isalnum(Yv *c);                  /* (c: str) -> bool */
 int is_radix_ch(Yv *c, long radix);  /* (c: str, radix: long) -> bool */
+Yv *strip_seps(Yv *s);               /* (s: str) -> str */
 int isspace(Yv *c);                  /* (c: str) -> bool */
 int ispunct(Yv *c);                  /* (c: str) -> bool */
 Yv *lex_quoted(Yv *src, long i, long line, long col);
@@ -36,6 +37,8 @@ Yv *lex_quoted(Yv *src, long i, long line, long col);
 Yv *mktok(Yv *t, Yv *v, long line, long col);
                                      /* -> { t: str, v: str, line: long, col: long } */
 long hexvalx(Yv *c);                 /* (c: str) -> long */
+Yv *multicharop(Yv *src, long i, Yv *c);
+                                     /* (src: str, i: long, c: str) -> str */
 Yv *twocharop(Yv *src, long i);      /* (src: str, i: long) -> str */
 int issingleop(Yv *c);               /* (c: str) -> bool */
 Yv *slash(void);                     /* () -> str */

@@ -85,6 +85,8 @@ static Yv *typeof_cons(Yv *st, Yv *lt, Yv *rt, long line, long col) {
 }
 
 static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
+int is_bits_op(Yv *op);
+static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static int is_num_kind(Yv *t);
 static int num_eq_ok(Yv *lt, Yv *rt);
@@ -132,6 +134,8 @@ static int fmt_type(long c);
 static long fmt_number(Yv *spec, long a, long b);
 static Yv *fmt_check(Yv *f, long kind, Yv *tname);
 static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col);
+static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col);
+static Yv *base_type(Yv *st, Yv *e);
 
 static Yv *err_at(Yv *msg, long line, long col) {
     return yr(3, "msg", msg, "line", yv_long(line), "col", yv_long(col));
@@ -1098,6 +1102,25 @@ static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, long line,
     }
 }
 
+// The bitwise binary operators. (native.y asks too: their result is a long.)
+int is_bits_op(Yv *op) {
+    return ys_eq_lit(op, "&") || ys_eq_lit(op, "|") || ys_eq_lit(op, "^") ||
+           ys_eq_lit(op, "<<") || ys_eq_lit(op, ">>") || ys_eq_lit(op, ">>>");
+}
+
+// `&` `|` `^` `<<` `>>` `>>>` take integers only: a byte operand widens and
+// the result is a long. No float, no bool (`&&` and `||` are the logical
+// forms).
+static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
+    st = expect_type(st, lt, yr(1, "k", ys("tlong")),
+                     ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
+                     col);
+    st = expect_type(st, rt, yr(1, "k", ys("tlong")),
+                     ys_cat(ys_cat(ys("'"), op), ys("' right operand")), line,
+                     col);
+    return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+}
+
 static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
     if (ys_eq_lit(yr_get(lt, "k"), "tstr")) {
         // str < str is lexicographic ordering (byte by byte), matching the
@@ -1474,6 +1497,11 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
             }
+        } else if (ys_eq_lit(yr_get(node, "op"), "~")) {
+            st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                             ys("unary '~'"), yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col")));
+            return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
         } else {
             st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tbool")),
                              ys("unary '!'"), yv_l(yr_get(node, "line")),
@@ -1685,6 +1713,30 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
             return typeof_cons(st, yr_get(l, "typ"), yr_get(r, "typ"),
                                yv_l(yr_get(node, "line")),
                                yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(op, "&")) {
+            return typeof_bits(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
+                               yv_l(yr_get(node, "line")),
+                               yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(op, "|")) {
+            return typeof_bits(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
+                               yv_l(yr_get(node, "line")),
+                               yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(op, "^")) {
+            return typeof_bits(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
+                               yv_l(yr_get(node, "line")),
+                               yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(op, "<<")) {
+            return typeof_bits(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
+                               yv_l(yr_get(node, "line")),
+                               yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(op, ">>")) {
+            return typeof_bits(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
+                               yv_l(yr_get(node, "line")),
+                               yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(op, ">>>")) {
+            return typeof_bits(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
+                               yv_l(yr_get(node, "line")),
+                               yv_l(yr_get(node, "col")));
         } else {
             st = fail(st,
                       ys_cat(ys_cat(ys("operator '"), op),
@@ -1839,22 +1891,31 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
         // ++x / x++: numbers only — `s++` on a string would silently
         // concatenate, so it is a type error instead.
         Yv *t = typeof_expr(st, yr_get(node, "tgt"));
-        st = yr_get(t, "st");
-        st = const_check(st, yr_get(node, "tgt"), yr_get(t, "typ"),
-                         yr_get(node, "op"), yv_l(yr_get(node, "line")),
+        Yv *pc = place_check(yr_get(t, "st"), yr_get(node, "tgt"),
+                             yr_get(t, "typ"), yr_get(node, "op"),
+                             yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col")));
+        st = const_check(yr_get(pc, "st"), yr_get(node, "tgt"),
+                         yr_get(pc, "typ"), yr_get(node, "op"),
+                         yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
-        return incdec_check(st, node, yr_get(t, "typ"));
+        return incdec_check(st, node, yr_get(pc, "typ"));
     } else if (ys_eq_lit(k, "opassign")) {
         // `x op= e`: the rules live in opassign_check.
         Yv *t = typeof_expr(st, yr_get(node, "tgt"));
         st = yr_get(t, "st");
         Yv *v = typeof_expr(st, yr_get(node, "v"));
-        st = yr_get(v, "st");
-        st = const_check(st, yr_get(node, "tgt"), yr_get(t, "typ"),
+        Yv *pc = place_check(yr_get(v, "st"), yr_get(node, "tgt"),
+                             yr_get(t, "typ"),
+                             ys_cat(yr_get(node, "op"), ys("=")),
+                             yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col")));
+        st = const_check(yr_get(pc, "st"), yr_get(node, "tgt"),
+                         yr_get(pc, "typ"),
                          ys_cat(yr_get(node, "op"), ys("=")),
                          yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
-        return opassign_check(st, node, yr_get(t, "typ"), yr_get(v, "typ"));
+        return opassign_check(st, node, yr_get(pc, "typ"), yr_get(v, "typ"));
     } else if (ys_eq_lit(k, "store")) {
         Yv *p = typeof_expr(st, yr_get(node, "p"));
         Yv *v = typeof_expr(yr_get(p, "st"), yr_get(node, "v"));
@@ -2049,12 +2110,8 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
                              ys(" is unsupported in native mode")),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
-        } else if (yv_l(yr_get(node, "n")) < 0) {
-            st = fail(st,
-                      ys("array size must be a non-negative integer literal ([v; n])"),
-                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-            return yr(2, "typ", t_unk(), "st", st);
         } else {
+            // n is a literal from 0 to 2^31 - 1 (parser.c size_lit)
             return yr(2, "typ",
                       yr(3, "k", ys("tarrfix"), "of", yr_get(r, "typ"), "n",
                          yr_get(node, "n")),
@@ -2993,6 +3050,59 @@ static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
     }
 }
 
+/* `++`/`--` and `op=` store back into their target, so it must be a place
+ * `=` stores to: a variable, an array or map element, or a record field.
+ * A str's bytes and the `.length`/`.ptr` properties are read-only, as they
+ * are to `=`. Returns the target's type, or t_unk() after an error, so the
+ * operator's own rules stay quiet. (`*p = v` is a store of its own; `*p`
+ * is no target here.) Only a target that can be one of those -- a byte
+ * element, a `.length` or `.ptr` -- has its base looked at. */
+static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
+    Yv *k = yr_get(tgt, "k");
+    int ok = 1;
+    if (ys_eq_lit(k, "index")) {
+        if (ys_eq_lit(yr_get(tt, "k"), "tbyte") &&
+            ys_eq_lit(yr_get(base_type(st, yr_get(tgt, "arr")), "k"), "tstr")) {
+            st = fail(st, ys("cannot index str (only arrays and maps)"), line, col);
+            ok = 0;
+        }
+    } else if (ys_eq_lit(k, "dot")) {
+        Yv *key = yr_get(tgt, "key");
+        if (!ys_eq_lit(yr_get(tt, "k"), "tunk") &&
+            (ys_eq_lit(key, "length") || ys_eq_lit(key, "ptr"))) {
+            Yv *bt = base_type(st, yr_get(tgt, "obj"));
+            if (ys_eq_lit(yr_get(bt, "k"), "tarr") ||
+                ys_eq_lit(yr_get(bt, "k"), "tarrfix") ||
+                ys_eq_lit(yr_get(bt, "k"), "tstr")) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("cannot field-assign "), tstr(bt)),
+                                 ys(" (only records)")),
+                          line, col);
+                ok = 0;
+            }
+        }
+    } else if (!ys_eq_lit(k, "id") && !ys_eq_lit(k, "err")) {
+        st = fail(st,
+                  ys_cat(ys_cat(ys("cannot assign to this expression ('"), op),
+                         ys("')")),
+                  line, col);
+        ok = 0;
+    }
+    if (ok) { return yr(2, "typ", tt, "st", st); } else { return yr(2, "typ", t_unk(), "st", st); }
+}
+
+/* The static type of a place's base (`a` in `a[i]`, `o` in `o.f`). The
+ * whole target was typed already, its errors reported: a base other than
+ * a name is typed again on a scratch error list. */
+static Yv *base_type(Yv *st, Yv *e) {
+    if (ys_eq_lit(yr_get(e, "k"), "id")) {
+        return yr_get(lookup(yr_get(st, "bindings"), yr_get(e, "v")), "typ");
+    } else {
+        Yv *none = yav(0);
+        return yr_get(typeof_expr(st_errors(st, none), e), "typ");
+    }
+}
+
 // ++/-- target rule: numbers (long/byte/float) only.
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
     Yv *op = yr_get(node, "op");
@@ -3015,6 +3125,9 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
 
 // `x op= e` rules by target type:
 //   numbers  -> the arithmetic family (+ - * / %), result the target type
+//   integers -> the bitwise family (& | ^ << >> >>>) too: a long or byte
+//               target, an integer value (a byte target keeps the low 8
+//               bits, like every byte store)
 //   str      -> `+=` concatenates; the rest are errors
 //   arrays   -> in place only: `+=` pushes one element (or appends another
 //               array of the same element type; `[[T]] += [T]` pushes the
@@ -3023,7 +3136,26 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
 // The result is always the target's type (the new value).
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
     Yv *op = yr_get(node, "op");
-    if (ys_eq_lit(yr_get(tt, "k"), "tarrfix")) {
+    if (is_bits_op(op)) {
+        if (ys_eq_lit(yr_get(tt, "k"), "tlong") ||
+            ys_eq_lit(yr_get(tt, "k"), "tbyte")) {
+            st = expect_type(st, vt, yr(1, "k", ys("tlong")),
+                             ys_cat(ys_cat(ys("'"), op), ys("=' value")),
+                             yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col")));
+            return yr(2, "typ", tt, "st", st);
+        } else if (ys_eq_lit(yr_get(tt, "k"), "tunk") ||
+                   ys_eq_lit(yr_get(tt, "k"), "tnone")) {
+            return yr(2, "typ", t_unk(), "st", st);
+        } else {
+            st = fail(st,
+                      ys_cat(ys_cat(ys_cat(ys("'"), op),
+                                   ys("=' needs an integer target, got ")),
+                             tstr(tt)),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            return yr(2, "typ", t_unk(), "st", st);
+        }
+    } else if (ys_eq_lit(yr_get(tt, "k"), "tarrfix")) {
         /* A fixed array's length is part of its type: growth is a type
          * error (the old push-on-fixed rejection, now on the operators). */
         st = fail(st,

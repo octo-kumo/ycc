@@ -1,7 +1,8 @@
 // lexer.y — tokenize a Y source string into a list of token maps.
 // Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based> }.
 // Token types: id, num, str, bstr, char, op, punct, kw, eof, and ferr -- a
-// broken f-string, v its error message (lex_fstring).
+// malformed literal (a broken f-string, lex_fstring; a radix prefix without
+// digits), v its error message.
 
 // NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
 def isdigit(c: str) -> bool {
@@ -34,6 +35,14 @@ def is_radix_ch(c: str, radix: long) -> bool {
     if (c == "_") { true }
     else if (radix == 2) { c == "0" || c == "1" }
     else { isdigit(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F") }
+};
+
+// A decimal literal's text without its `_` digit separators: its num token
+// carries this, so whatever reads the literal (tonum, norm_num, the float
+// helpers) sees plain digits. A radix literal keeps them (norm_num skips
+// them).
+def strip_seps(s: str) -> str {
+    if (index_of(s, "_") < 0) { s } else { join(split(s, "_"), "") }
 };
 
 def isspace(c: str) -> bool {
@@ -457,23 +466,39 @@ def hexvalx(c: str) -> long {
     else { -1 }
 };
 
+// Try to read an operator of two or more chars at position i (c is the char
+// there): the longest one, or "". Maximal munch, like C: `x+++y` is
+// `x ++ + y` and `a>>>=b` is `a >>>= b`. There is no `=+` operator;
+// `x =+ y` is `x = +y`. Only the shifts are longer than two chars, so only
+// `<` and `>` look further ahead.
+def multicharop(src: str, i: long, c: str) -> str {
+    if (c == "<" || c == ">") {
+        let four = src[i:i + 4];
+        let three = src[i:i + 3];
+        if (four == ">>>=") { four }
+        else if (three == ">>>" || three == ">>=" || three == "<<=") { three }
+        else { twocharop(src, i) }
+    } else {
+        twocharop(src, i)
+    }
+};
+
 // Try to read a two-char operator at position i. Returns the operator or "".
-// Maximal munch, like C: `x+++y` is `x ++ + y`. There is no `=+` operator;
-// `x =+ y` is `x = +y`.
 def twocharop(src: str, i: long) -> str {
     let two = src[i:i + 2];
     if (two == "==" || two == "!=" || two == "<=" || two == ">=" ||
         two == "&&" || two == "||" || two == "::" || two == ".." ||
         two == "->" || two == "=>" || two == "++" || two == "--" ||
         two == "+=" || two == "-=" || two == "*=" || two == "/=" ||
-        two == "%=") { two }
+        two == "%=" || two == "&=" || two == "|=" || two == "^=" ||
+        two == "<<" || two == ">>") { two }
     else { "" }
 };
 
 def issingleop(c: str) -> bool {
     c == "+" || c == "-" || c == "*" || c == slash() || c == "%" ||
     c == "<" || c == ">" || c == "=" || c == "." || c == "!" ||
-    c == "&" || c == "?" || c == "|"
+    c == "&" || c == "?" || c == "|" || c == "^" || c == "~"
 };
 
 // The slash character, in one place: this file's own source contains no bare
@@ -519,26 +544,44 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 if (nxt == "x" || nxt == "X") { radix = 16; }
                 else if (nxt == "b" || nxt == "B") { radix = 2; };
             };
+            // the message of a malformed literal (an ferr token), or ""
+            let err = "";
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
+                let digits = false;
                 let rdone = false;
                 while (rdone == false) {
                     if (i < n) {
-                        if (is_radix_ch(src[i:i + 1], radix)) { i = i + 1; col = col + 1; 0; }
-                        else { rdone = true; 0; };
+                        let rc = src[i:i + 1];
+                        if (is_radix_ch(rc, radix)) {
+                            if (rc != "_") { digits = true; };
+                            i = i + 1;
+                            col = col + 1;
+                        } else { rdone = true; 0; };
                         0
                     } else { rdone = true; 0 };
+                };
+                if (!digits) {
+                    // A prefix without a digit (`0x`, `0b_`, `0b2`) is no
+                    // number: the word characters after it are taken into
+                    // the bad literal, reported once, where it starts.
+                    while (i < n && isalnum(src[i:i + 1])) { i = i + 1; col = col + 1; };
+                    if (radix == 16) { err = "hex literal '" + src[start:i] + "' has no digits"; }
+                    else { err = "binary literal '" + src[start:i] + "' has no digits"; };
                 };
                 0
             } else {
             // The first digit is already known from the branch condition.
+            // After the first digit of each part (whole, fraction,
+            // exponent) `_` may separate digits: 1_000_000, 0.000_1.
             i = i + 1;
             col = col + 1;
             let ind = false;
             while (ind == false) {
                 if (i < n) {
-                    if (isdigit(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
+                    let dc = src[i:i + 1];
+                    if (isdigit(dc) || dc == "_") { i = i + 1; col = col + 1; 0; }
                     else { ind = true; 0; };
                     0
                 } else { ind = true; 0 };
@@ -547,10 +590,12 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             if (src[i:i + 1] == "." && src[i + 1:i + 2] != ".") {
                 i = i + 1;
                 col = col + 1;
+                let fs = i;
                 let frd = false;
                 while (frd == false) {
                     if (i < n) {
-                        if (isdigit(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
+                        let fc = src[i:i + 1];
+                        if (isdigit(fc) || (fc == "_" && i > fs)) { i = i + 1; col = col + 1; 0; }
                         else { frd = true; 0; };
                         0
                     } else { frd = true; 0 };
@@ -571,7 +616,8 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                     let exd = false;
                     while (exd == false) {
                         if (i < n) {
-                            if (isdigit(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
+                            let xc = src[i:i + 1];
+                            if (isdigit(xc) || xc == "_") { i = i + 1; col = col + 1; 0; }
                             else { exd = true; 0; };
                             0
                         } else { exd = true; 0 };
@@ -579,7 +625,13 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
                 };
             };
             };
-            toks += mktok("num", src[start:i], line, startcol);
+            let txt = src[start:i];
+            if (err != "") {
+                toks += mktok("ferr", err, line, startcol);
+            } else {
+                if (radix == 0) { txt = strip_seps(txt); };
+                toks += mktok("num", txt, line, startcol);
+            };
             0
         } else if (isalpha(c)) {
             let start = i;
@@ -740,11 +792,11 @@ def tokenize(src: str) -> [{ t: str, v: str, line: long, col: long }] {
             };
         } else {
             // operator / punct / unknown-char dispatch.
-            let two = twocharop(src, i);
-            if (two != "") {
-                toks += mktok("op", two, line, col);
-                i = i + 2;
-                col = col + 2;
+            let op = multicharop(src, i, c);
+            if (op != "") {
+                toks += mktok("op", op, line, col);
+                i = i + len(op);
+                col = col + len(op);
                 0
             } else if (issingleop(c)) {
                 toks += mktok("op", c, line, col);

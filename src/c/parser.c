@@ -11,7 +11,7 @@
 #include "parser.h"
 
 /* imported: none — parser.y is self-contained (only yv.h builtins:
- * len -> yv_len, push -> ya_push, slicing -> ys_slice, tonum -> ys_tonum). */
+ * len -> yv_len, push -> ya_push, slicing -> ys_slice, ord -> ys_ord). */
 
 // ── token helpers ────────────────────────────────────────────────────────
 
@@ -208,7 +208,7 @@ Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one) {
                 ;
             } else {
                 xs = ya_push(xs, yr(4, "k", ys("err"),
-                                          "msg", ys_cat(ys_cat(ys_cat(ys_cat(ys("unexpected '"), tv(toks, pos)), ys("' (expected ',' or '")), close), ys("')")),
+                                          "msg", ys_cat(ys_cat(ys_cat(ys_cat(ys("unexpected "), tok_desc(toks, pos)), ys(" (expected ',' or '")), close), ys("')")),
                                           "line", yv_long(tline(toks, pos)),
                                           "col", yv_long(tcol(toks, pos))));
                 ;
@@ -222,6 +222,8 @@ Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one) {
 
 // ── operator precedence ──────────────────────────────────────────────────
 
+// The bitwise operators bind tighter than the comparisons (unlike C, where
+// `a & m == 0` is `a & (m == 0)`): `|` < `^` < `&` < the shifts < `+ -`.
 long op_prec(Yv *op) {
     if (ys_eq_lit(op, "||")) {
         return 1;
@@ -241,16 +243,28 @@ long op_prec(Yv *op) {
         return 4;
     } else if (ys_eq_lit(op, "::")) {
         return 5;
+    } else if (ys_eq_lit(op, "|")) {
+        return 6;
+    } else if (ys_eq_lit(op, "^")) {
+        return 7;
+    } else if (ys_eq_lit(op, "&")) {
+        return 8;
+    } else if (ys_eq_lit(op, "<<")) {
+        return 9;
+    } else if (ys_eq_lit(op, ">>")) {
+        return 9;
+    } else if (ys_eq_lit(op, ">>>")) {
+        return 9;
     } else if (ys_eq_lit(op, "+")) {
-        return 6;
+        return 10;
     } else if (ys_eq_lit(op, "-")) {
-        return 6;
+        return 10;
     } else if (ys_eq_lit(op, "*")) {
-        return 7;
+        return 11;
     } else if (ys_eq_lit(op, "/")) {
-        return 7;
+        return 11;
     } else if (ys_eq_lit(op, "%")) {
-        return 7;
+        return 11;
     } else {
         return 0;
     }
@@ -278,7 +292,8 @@ Yv *parse_primary(Yv *toks, long p) {
             return res(yr(4, "k", ys("err"), "msg", ys_cat(ys("character literal must be exactly one byte, got "), ys_long(yv_len(v))), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
         }
     } else if (ys_eq_lit(t, "ferr")) {
-        /* a broken f-string: the lexer's message, where its walk stopped */
+        /* a malformed literal (a broken f-string, `0x` without digits):
+         * the lexer's message, where it found the fault */
         return res(yr(4, "k", ys("err"), "msg", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "id")) {
         if (ys_eq_lit(v, "match")) {
@@ -524,6 +539,10 @@ Yv *parse_unary(Yv *toks, long p) {
     } else if (is_op(toks, p, ys("!"))) {
         Yv *inner = parse_unary(toks, p + 1);
         return res(yr(5, "k", ys("un"), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+    } else if (is_op(toks, p, ys("~"))) {
+        // bitwise not: ~x
+        Yv *inner = parse_unary(toks, p + 1);
+        return res(yr(5, "k", ys("un"), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else if (is_op(toks, p, ys("&"))) {
         // address-of: &x
         Yv *inner = parse_unary(toks, p + 1);
@@ -577,6 +596,36 @@ Yv *block1(Yv *e, long ln, long cl) {
 
 // ── compound literals ────────────────────────────────────────────────────
 
+// The size in `[v; n]` and `[T; n]`: a decimal or radix integer literal
+// from 0 to 2147483647 (2^31 - 1). Its value, or -1 for any other num
+// token (a float, a larger number).
+long size_lit(Yv *s) {
+    Yv *p = ys_slice(s, 0, 2);
+    long radix = 10;
+    long i = 0;
+    if (ys_eq_lit(p, "0x") || ys_eq_lit(p, "0X")) { radix = 16; i = 2; }
+    else if (ys_eq_lit(p, "0b") || ys_eq_lit(p, "0B")) { radix = 2; i = 2; }
+    long v = 0;
+    while (i < yv_len(s) && v >= 0) {
+        long o = ys_ord(ys_slice(s, i, i + 1));
+        // the digit's value: `.`, `e` (and a hex digit in a decimal) are
+        // past the radix
+        long d = 99;
+        if (o >= 48 && o <= 57) { d = o - 48; }
+        else if (o >= 97 && o <= 102) { d = o - 87; }
+        else if (o >= 65 && o <= 70) { d = o - 55; }
+        if (o == 95) {
+            // a radix literal keeps its `_` separators
+        } else if (d >= radix || v > (2147483647 - d) / radix) {
+            v = -1;
+        } else {
+            v = v * radix + d;
+        }
+        i = i + 1;
+    }
+    return v;
+}
+
 Yv *parse_array(Yv *toks, long p) {
     // p is AT '['. Forms: [] and [a, b] (heap literals, later),
     // [v; n] (stack repeat: n copies of v — the native array form).
@@ -588,25 +637,21 @@ Yv *parse_array(Yv *toks, long p) {
         Yv *first = parse_expr(toks, p + 1);
         long pos = yv_l(yr_get(first, "pos"));
         if (is_punct(toks, pos, ys(";"))) {
-            // repeat: size must be a num literal (else n = -1 sentinel,
-            // rejected with a clear error by the checker).
-            // Both paths leave the optional count check with a long-valued
-            // tail.
+            // repeat: the size is an integer literal (size_lit); anything
+            // else is parsed past and reported where it starts.
+            long at = pos + 1;
             long n = -1;
-            pos = pos + 1;
-            if (ys_eq_lit(tt(toks, pos), "num")) {
-                n = ys_tonum(tv(toks, pos));
-                pos = pos + 1;
-                ;
+            if (ys_eq_lit(tt(toks, at), "num")) { n = size_lit(tv(toks, at)); }
+            if (n >= 0) {
+                return close_res(
+                    toks, at + 1, ys("]"),
+                    yr(5, "k", ys("arrrep"), "v", yr_get(first, "node"),
+                       "n", yv_long(n), "line", yv_long(ln), "col", yv_long(cl)));
             } else {
-                Yv *cnt = parse_expr(toks, pos);
-                pos = yv_l(yr_get(cnt, "pos"));
-                ;
+                Yv *cnt = parse_expr(toks, at);
+                return close_res(toks, yv_l(yr_get(cnt, "pos")), ys("]"),
+                                 expect_err(toks, at, ys("an array size (an integer literal from 0 to 2147483647)")));
             }
-            return close_res(
-                toks, pos, ys("]"),
-                yr(5, "k", ys("arrrep"), "v", yr_get(first, "node"),
-                   "n", yv_long(n), "line", yv_long(ln), "col", yv_long(cl)));
         } else {
             // literal, with trailing-comma tolerance
             // NOTE: statement-form init (not `let go = is_punct(...)`): the
@@ -639,7 +684,7 @@ Yv *parse_array(Yv *toks, long p) {
                 ;
             } else {
                 elems = ya_push(elems, yr(4, "k", ys("err"),
-                                          "msg", ys_cat(ys_cat(ys("unexpected '"), tv(toks, pos)), ys("' (expected ',' or ']')")),
+                                          "msg", ys_cat(ys_cat(ys("unexpected "), tok_desc(toks, pos)), ys(" (expected ',' or ']')")),
                                           "line", yv_long(tline(toks, pos)),
                                           "col", yv_long(tcol(toks, pos))));
                 ;
@@ -820,21 +865,19 @@ Yv *parse_type_node(Yv *toks, long p) {
 Yv *parse_type_array(Yv *toks, long p) {
     Yv *inner = parse_type_node(toks, p + 1);
     if (is_punct(toks, yv_l(yr_get(inner, "pos")), ys(";"))) {
-        long n = -1;
         long np = yv_l(yr_get(inner, "pos")) + 1;
-        if (ys_eq_lit(tt(toks, np), "num")) {
-            n = ys_tonum(tv(toks, np));
-            np = np + 1;
-            ;
+        long n = -1;
+        if (ys_eq_lit(tt(toks, np), "num")) { n = size_lit(tv(toks, np)); }
+        if (n >= 0) {
+            Yv *fc = tclose_res(
+                toks, np + 1, ys("]"),
+                yr(3, "k", ys("tarrfix"), "of", yr_get(inner, "node"), "n",
+                   yv_long(n)));
+            return parse_type_tail(toks, yv_l(yr_get(fc, "pos")),
+                                   yr_get(fc, "node"));
         } else {
-            ;
+            return res(terr_at(toks, np, ys("an array size (an integer literal from 0 to 2147483647)")), np);
         }
-        Yv *fc = tclose_res(
-            toks, np, ys("]"),
-            yr(3, "k", ys("tarrfix"), "of", yr_get(inner, "node"), "n",
-               yv_long(n)));
-        return parse_type_tail(toks, yv_l(yr_get(fc, "pos")),
-                               yr_get(fc, "node"));
     } else {
         Yv *ac = tclose_res(
             toks, yv_l(yr_get(inner, "pos")), ys("]"),
@@ -1493,8 +1536,7 @@ Yv *parse_block(Yv *toks, long p) {
             Yv *s = parse_stmt(toks, pos);
             Yv *snode = yr_get(s, "node");
             stmts = ya_push(stmts, snode);
-            pos = yv_l(yr_get(s, "pos"));
-            pos = stmt_end(toks, pos, snode, stmts);
+            pos = stmt_end(toks, pos, yv_l(yr_get(s, "pos")), snode, stmts);
             last_semi = is_punct(toks, pos - 1, ys(";"));
             ;
         }
@@ -1505,13 +1547,13 @@ Yv *parse_block(Yv *toks, long p) {
     return res(yr(4, "k", ys("block"), "stmts", stmts, "line", yv_long(ln), "col", yv_long(cl)), skip_close(toks, pos, ys("}")));
 }
 
-long stmt_end(Yv *toks, long pos, Yv *sn, Yv *stmts) {
+long stmt_end(Yv *toks, long start, long pos, Yv *sn, Yv *stmts) {
     if (is_punct(toks, pos, ys(";"))) {
         return pos + 1;
     } else if (is_punct(toks, pos, ys("}")) ||
                ys_eq_lit(tt(toks, pos), "eof")) {
         return pos;
-    } else if (pos > 0 && is_punct(toks, pos - 1, ys("}"))) {
+    } else if (pos > start && is_punct(toks, pos - 1, ys("}"))) {
         return pos;
     } else {
         if (!ys_eq_lit(yr_get(sn, "k"), "err")) {
@@ -1630,8 +1672,20 @@ int is_compound_assign(Yv *toks, long p) {
         return 1;
     } else if (is_op(toks, p, ys("/="))) {
         return 1;
+    } else if (is_op(toks, p, ys("%="))) {
+        return 1;
+    } else if (is_op(toks, p, ys("&="))) {
+        return 1;
+    } else if (is_op(toks, p, ys("|="))) {
+        return 1;
+    } else if (is_op(toks, p, ys("^="))) {
+        return 1;
+    } else if (is_op(toks, p, ys("<<="))) {
+        return 1;
+    } else if (is_op(toks, p, ys(">>="))) {
+        return 1;
     } else {
-        return is_op(toks, p, ys("%="));
+        return is_op(toks, p, ys(">>>="));
     }
 }
 
@@ -1639,8 +1693,9 @@ Yv *parse_stmt_opassign(Yv *toks, long p, Yv *tgt, long epos) {
     (void)p;  // unused in the Y source too (line/col come from epos)
     Yv *op = tv(toks, epos);
     Yv *rhs = parse_expr(toks, epos + 1);
-    // Every compound op is `X=`, so the binary op is its first character.
-    Yv *binop = ys_slice(op, 0, 1);
+    // Every compound op is `X=`, so the binary op is all but its last
+    // character (`>>>=` is `>>>`).
+    Yv *binop = ys_slice(op, 0, yv_len(op) - 1);
     return res(yr(6, "k", ys("opassign"), "op", binop, "tgt", tgt, "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, epos)), "col", yv_long(tcol(toks, epos))), yv_l(yr_get(rhs, "pos")));
 }
 
@@ -2229,7 +2284,7 @@ Yv *parse_program(Yv *toks) {
         Yv *s = parse_stmt(toks, pos);
         Yv *snode = yr_get(s, "node");
         stmts = ya_push(stmts, snode);
-        pos = stmt_end(toks, yv_l(yr_get(s, "pos")), snode, stmts);
+        pos = stmt_end(toks, before, yv_l(yr_get(s, "pos")), snode, stmts);
         // safety: if a statement made no progress, bail to avoid infinite loop
         // NOTE: `0;` tail — the while body must be void-typed (see note).
         if (pos == before) {
