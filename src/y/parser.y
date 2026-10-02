@@ -1578,7 +1578,7 @@ def parse_decl(toks: [Tok], p: long) -> Parsed {
     let pos = p + 2;
     // optional ': type' (kept as a type node for the static checker)
     // The optional annotation updates the local type and position.
-    let typ = { k: "tnone" };
+    let typ: Type = { k: "tnone" };
     if (is_punct(toks, pos, ":")) {
         let tr = parse_type_full(toks, pos + 1);
         typ = tr.node;

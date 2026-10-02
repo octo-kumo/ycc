@@ -72,6 +72,8 @@ static Yv *fail(Yv *st, Yv *msg, long line, long col);
 static Yv *disp(Yv *name);
 static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col);
 static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col);
+static int cast_ok(Yv *got, Yv *want);
+static Yv *expect_cast(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col);
 static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what, long line, long col);
 static int is_some_call(Yv *n);
 static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
@@ -454,9 +456,30 @@ Yv *pat_members(Yv *s, Yv *t) {
 // canonical forms are; a tref against a type written out (a literal of a
 // recursive record type, say) is unfolded, at most 64 levels deep.
 static long teq_unfolds;
+// Two recursive aliases whose types visibly differ -- other kinds, or
+// records of other field names -- have other canonical forms: teq_ref
+// answers without spelling them out (long, for a big recursive union).
+static int ref_shapes_differ(Yv *a, Yv *b) {
+    Yv *ua = unfold(a);
+    Yv *ub = unfold(b);
+    Yv *uak = yr_get(ua, "k");
+    Yv *ubk = yr_get(ub, "k");
+    if (!ys_eq(uak, ubk)) {
+        return 1;
+    } else if (ys_eq_lit(uak, "trec")) {
+        return !same_names(ua, rec_names(yr_get(ub, "fields")));
+    } else {
+        return 0;
+    }
+}
+
 static int teq_ref(Yv *a, Yv *b) {
     if (ys_eq_lit(yr_get(a, "k"), "tref") && ys_eq_lit(yr_get(b, "k"), "tref")) {
-        return ys_eq(tcanon(a), tcanon(b));
+        if (ref_shapes_differ(a, b)) {
+            return 0;
+        } else {
+            return ys_eq(tcanon(a), tcanon(b));
+        }
     } else if (teq_unfolds >= 64) {
         return 0;
     } else {
@@ -1338,12 +1361,38 @@ static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col)
     }
 }
 
+// A union value where one of its members, or a union of some of them, is
+// written: a cast, checked when the program runs (native.c gen_as: a value
+// holding another member stops the program).
+static int cast_ok(Yv *got, Yv *want) {
+    Yv *g = unfold(got);
+    if (tcompat(got, want)) {
+        return 1;
+    } else if (ys_eq_lit(yr_get(g, "k"), "tunion")) {
+        return union_accepts(unfold(want), g);
+    } else {
+        return 0;
+    }
+}
+
+// expect_type where the type is written at the site -- an annotated let, a
+// parameter, a declared return type -- so a union value casts to it. Where
+// the type was inferred (an assignment, a field, an element) a union value
+// does not: a binding inferred too narrow is an error, not a trap.
+static Yv *expect_cast(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col) {
+    if (cast_ok(got, want)) {
+        return st;
+    } else {
+        return expect_type(st, got, want, what, line, col);
+    }
+}
+
 /* expect_type for a call argument. some(v) passed for a T? -- which is what
  * the argument of an optional parameter `b?: T` becomes -- is reported as
  * v against T: "expected long, got long?", not "expected long?, got long??". */
 static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what,
                       long line, long col) {
-    if (tcompat(got, want)) {
+    if (cast_ok(got, want)) {
         return st;
     } else if (ys_eq_lit(yr_get(got, "k"), "topt") &&
                ys_eq_lit(yr_get(want, "k"), "topt") && is_some_call(arg)) {
@@ -1709,15 +1758,11 @@ static int tcompat(Yv *got, Yv *want) {
     } else if (ys_eq_lit(yr_get(want, "k"), "tparams")) {
         return 1;
     } else if (ys_eq_lit(yr_get(want, "k"), "tunion")) {
-        // into a union: a member, or a union of its members; or a cast to
-        // a union of some of got's members (below)
-        return union_accepts(got, want) ||
-               (ys_eq_lit(yr_get(got, "k"), "tunion") && union_accepts(want, got));
+        return union_accepts(got, want);
     } else if (ys_eq_lit(yr_get(got, "k"), "tunion")) {
-        // A cast: a union value goes where one of its members is declared,
-        // checked when the program runs (native.c gen_as: a value holding
-        // another member stops the program).
-        return union_accepts(want, got);
+        // a union is none of its members until a match says which, or a
+        // cast where the member type is written (expect_cast)
+        return 0;
     } else if (ys_eq_lit(yr_get(want, "k"), "topt")) {
         // `none` (the option of tunk) widens to any T? through teq; a
         // plain T does NOT -- use some(v), which is the explicit box
@@ -2362,7 +2407,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr_get(r, "typ"), "st", yr_get(r, "st"));
             } else {
-                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"),
+                st = expect_cast(yr_get(r, "st"), yr_get(r, "typ"),
                                  yr_get(st, "ret"), ys("'return'"),
                                  yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
@@ -2706,8 +2751,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "trec")) {
-                Yv *ft = trec_field_type(yr_get(got, "typ"),
+            } else if (ys_eq_lit(yr_get(unfold(yr_get(got, "typ")), "k"), "trec")) {
+                Yv *ft = trec_field_type(unfold(yr_get(got, "typ")),
                                          yr_get(node, "key"));
                 if (ys_eq_lit(yr_get(ft, "k"), "tnone")) {
                     st = fail(st,
@@ -2728,8 +2773,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ", ft, "st", st);
                 }
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tunion")) {
-                return dotassign_union(st, yr_get(got, "typ"), node);
+            } else if (ys_eq_lit(yr_get(unfold(yr_get(got, "typ")), "k"), "tunion")) {
+                return dotassign_union(st, unfold(yr_get(got, "typ")), node);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot field-assign "),
@@ -3919,7 +3964,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 while (ci < yv_len(cargs)) {
                     Yv *ra = typeof_want(st, ya_get(cargs, ci), ya_get(cfargs, ci));
                     st = yr_get(ra, "st");
-                    st = expect_type(st, yr_get(ra, "typ"), ya_get(cfargs, ci),
+                    st = expect_cast(st, yr_get(ra, "typ"), ya_get(cfargs, ci),
                                      ys_cat(ys("call arg "), ys_long(ci)),
                                      yv_l(yr_get(node, "line")),
                                      yv_l(yr_get(node, "col")));
@@ -4857,7 +4902,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                     t = yr_get(node, "typ");
                     ;
                 } else {
-                    st = expect_type(st, yr_get(r, "typ"), yr_get(node, "typ"),
+                    st = expect_cast(st, yr_get(r, "typ"), yr_get(node, "typ"),
                                      ys_cat(ys_cat(ys("let '"),
                                                    disp(yr_get(node, "name"))),
                                             ys("'")),
@@ -5072,19 +5117,38 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                 ;
             } else if (yr_has(ret, "used") && !ys_eq_lit(yr_get(br, "k"), "tunk")) {
                 // The body calls the def itself, so it was checked with
-                // that call's type unknown: check it again with the type
-                // the rest of it gave, as if `-> br` were written (the
-                // first pass's errors go; this one reports them).
+                // that call's type unknown: check it again, the call now
+                // typed br, its `return`s and tail as before (the first
+                // pass's errors go; this one reports them).
                 st = st_errors(st, ya_slice(yr_get(st, "errors"), 0, nerr));
                 Yv *ft2 = yr(3, "k", ys("tfunc"), "args", args, "ret", br);
                 st = st_bind(st, name, ft2, ys("func"));
                 st = st_self(st, ft2);
-                st = st_ret(st, br);
+                Yv *rets2 = yav(0);
+                st = st_ret(st, yr(2, "k", ys("tinfer"), "rets", rets2));
                 Yv *b2 = typeof_block_want(st, yr_get(func, "body"), br);
                 st = yr_get(b2, "st");
                 st = expect_type(st, yr_get(b2, "typ"), br,
                                  ys_cat(ys_cat(ys("'"), disp(name)), ys("' body")),
                                  line, col);
+                long ri2 = 0;
+                while (ri2 < yv_len(rets2)) {
+                    Yv *rn2 = ya_get(rets2, ri2);
+                    if (!tcompat(yr_get(rn2, "typ"), br)) {
+                        st = fail(st,
+                                  ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'return': expected "), tstr(br)),
+                                                                     ys(", got ")),
+                                                              tstr(yr_get(rn2, "typ"))),
+                                                       ys(" (the return type is inferred from ")),
+                                                rsrc),
+                                         ys(")")),
+                                  yv_l(yr_get(rn2, "line")), yv_l(yr_get(rn2, "col")));
+                        ;
+                    } else {
+                        ;
+                    }
+                    ri2 = ri2 + 1;
+                }
                 ;
             } else {
                 ;
@@ -5105,7 +5169,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             // `-> void` discards the body's tail value (no value returns)
             Yv *rtk = yr_get(ret, "k");
             if (ys_eq_lit(rtk, "tvoid")) { ; } else {
-                st = expect_type(st, yr_get(b, "typ"), ret,
+                st = expect_cast(st, yr_get(b, "typ"), ret,
                                  ys_cat(ys_cat(ys("'"), disp(name)), ys("' body")),
                                  line, col);
                 ;

@@ -23,17 +23,17 @@
 // The C copy in src/c compiles this file, so every construct used here
 // needs a twin there (PORTING.md).
 
-// For its alias NamedTy.
+// For its AST and type aliases.
 import parser from "./parser.y";
 
 // The renamer's state: the scopes, innermost last, each binding names
 // to their unique names; n, the counter behind the `$N` suffixes; tys,
 // the type aliases (rn_prepass_one); dfl, the default parameter values
 // of the defs, by unique name (rn_note_defaults).
-type Dfl = { name: str, vals: [{ k: str }] };
-type RnSt = { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [NamedTy], dfl: [Dfl] };
-type RnRes = { st: RnSt, node: { k: str } };
-type RnStmts = { st: RnSt, stmts: [{ k: str }] };
+type Dfl = { name: str, vals: [Node] };
+type RnSt = { scopes: [[{ orig: str, uniq: str }]], n: long, tys: [Field], dfl: [Dfl] };
+type RnRes = { st: RnSt, node: Node };
+type RnStmts = { st: RnSt, stmts: [Node] };
 
 // The modules imported by name (rename_program_x): each line's file
 // (native.y's origin map), each file's module ("" for the program's own
@@ -52,12 +52,12 @@ def rn_fresh(st: RnSt, orig: str) -> { st: RnSt, name: str } {
 
 def rn_push(st: RnSt) -> RnSt {
     st.scopes += [[]];
-    let scopes = st.scopes;
+    let scopes: [[{ orig: str, uniq: str }]] = st.scopes;
     { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 
 def rn_pop(st: RnSt) -> RnSt {
-    let scopes = [];
+    let scopes: [[{ orig: str, uniq: str }]] = [];
     let old = st.scopes;
     let i = 0;
     while (i < len(old) - 1) {
@@ -122,8 +122,8 @@ def rn_bind(st: RnSt, orig: str) -> { st: RnSt, uniq: str } {
     { st: st, uniq: r.name }
 };
 
-def rn_list(nodes: [{k: str}], st: RnSt) -> { st: RnSt, nodes: [{k: str}] } {
-    let out = [];
+def rn_list(nodes: [Node], st: RnSt) -> { st: RnSt, nodes: [Node] } {
+    let out: [Node] = [];
     let i = 0;
     while (i < len(nodes)) {
         let r = rn_node(nodes[i], st);
@@ -136,16 +136,14 @@ def rn_list(nodes: [{k: str}], st: RnSt) -> { st: RnSt, nodes: [{k: str}] } {
 
 def rn_id(st: RnSt, name: str, line: long, col: long) -> RnRes {
     let u = rn_lookup(st, name);
-    if (u == "") {
-        { st: st, node: { k: "id", v: name, line: line, col: col } }
-    } else {
-        { st: st, node: { k: "id", v: u, line: line, col: col } }
-    }
+    let id: Leaf = if (u == "") { { k: "id", v: name, line: line, col: col } } else { { k: "id", v: u, line: line, col: col } };
+    let node: Node = id;
+    { st: st, node: node }
 };
 
 // Pre-bind all def names (named defs + let-bound anonymous defs) in a
 // statement list so mutual recursion resolves.
-def rn_prepass(stmts: [{k: str}], st: RnSt) -> RnSt {
+def rn_prepass(stmts: [Node], st: RnSt) -> RnSt {
     // NOTE: stmts elements are bare {k}-holes at the boundary (like res);
     // pass each element as a BARE value (rn_prepass_one takes unannotated
     // s) so field reads resolve via the tcompat law, not merged shapes.
@@ -158,19 +156,21 @@ def rn_prepass(stmts: [{k: str}], st: RnSt) -> RnSt {
     st
 };
 
-def rn_prepass_one(s, st: RnSt) -> RnSt {
+def rn_prepass_one(s: Node, st: RnSt) -> RnSt {
     if (s.k == "decl") {
-        rn_prepass_decl(s, st)
+        let decl: Decl = s;
+        rn_prepass_decl(decl, st)
     } else if (s.k == "typedef") {
         // aliases hoist like defs: every annotation in the block sees them
-        st.tys += { name: s.name, typ: s.typ };
+        let td: TypeDef = s;
+        st.tys += { name: td.name, typ: td.typ };
         st
     } else {
         st
     }
 };
 
-def rn_prepass_decl(s, st: RnSt) -> RnSt {
+def rn_prepass_decl(s: Decl, st: RnSt) -> RnSt {
     // decl shapes only (named def vs let-bound func): one `s.v.k` read in
     // this body (see parse_type_arrow note — two reads in one body merge).
     if (s.kind == "def") {
@@ -186,8 +186,8 @@ def rn_prepass_decl(s, st: RnSt) -> RnSt {
 
 // Remember a def's default parameter values under its unique name, so a
 // direct call that leaves trailing arguments out gets them filled in.
-def rn_note_defaults(st: RnSt, uniq: str, func) -> RnSt {
-    let dv: [{k: str}] = func.defs;
+def rn_note_defaults(st: RnSt, uniq: str, func: Func) -> RnSt {
+    let dv: [Node] = func.defs;
     let i = 0;
     let any = false;
     while (i < len(dv)) {
@@ -204,8 +204,8 @@ def rn_note_defaults(st: RnSt, uniq: str, func) -> RnSt {
 };
 
 // The defaults of the def a call names ([] for anything else).
-def rn_find_defaults(st: RnSt, name: str) -> [{k: str}] {
-    let out: [{k: str}] = [];
+def rn_find_defaults(st: RnSt, name: str) -> [Node] {
+    let out: [Node] = [];
     let ds = st.dfl;
     let i = 0;
     while (i < len(ds)) {
@@ -220,7 +220,7 @@ def rn_find_defaults(st: RnSt, name: str) -> [{k: str}] {
 // every one of them has a default (otherwise the checker reports the
 // arity mismatch as usual). An optional parameter (`b?: T`, its default
 // marked `optarg`) gets some(arg) when the call passes it, none when not.
-def rn_fill_defaults(vals: [{k: str}], args: [{k: str}], line: long, col: long) -> [{k: str}] {
+def rn_fill_defaults(vals: [Node], args: [Node], line: long, col: long) -> [Node] {
     let n = len(args);
     if (len(vals) == 0) {
         args
@@ -233,11 +233,11 @@ def rn_fill_defaults(vals: [{k: str}], args: [{k: str}], line: long, col: long) 
             if (dk == "void") { ok = false; 0 };
             i = i + 1;
         };
-        let out: [{k: str}] = [];
+        let out: [Node] = [];
         let j = 0;
         while (j < n) {
             if (j < len(vals) && rn_is_optarg(vals[j])) {
-                let one: [{k: str}] = [];
+                let one: [Node] = [];
                 one += args[j];
                 out += { k: "call", callee: { k: "id", v: "some", line: line, col: col }, args: one, line: line, col: col };
                 0
@@ -264,7 +264,7 @@ def rn_fill_defaults(vals: [{k: str}], args: [{k: str}], line: long, col: long) 
     }
 };
 
-def rn_is_optarg(d: {k: str}) -> bool { d.k == "optarg" };
+def rn_is_optarg(d: Node) -> bool { d.k == "optarg" };
 
 // ── type aliases ─────────────────────────────────────────────────────────
 // `type A = T` makes the name A stand for T in every annotation (and match
@@ -278,7 +278,7 @@ def rn_is_optarg(d: {k: str}) -> bool { d.k == "optarg" };
 // An alias may refer to itself (or to one that refers back to it) when the
 // reference sits inside a record's field or a function type: `type L =
 // {head: long, tail: L?}`. Every reference to such a recursive alias is
-// one tref (an RnRef) whose `to` is the alias spelled out, its own
+// one tref (a TRef) whose `to` is the alias spelled out, its own
 // references in it the same tref again: the type tree is cyclic through
 // trefs only, and a recursive alias is one node wherever it is used (its
 // canonical form, types.y tcanon, does not depend on where it is met). The
@@ -286,22 +286,20 @@ def rn_is_optarg(d: {k: str}) -> bool { d.k == "optarg" };
 // (types.y unfold). A cycle outside every record field and function type
 // (`type T = [T]`, `type T = T | {a: long}`) stands for no type: a tref to
 // the unknown type, and an error at its `type` (rn_typedef_err).
-type RnRef = { k: str, name: str, tmp: str, to: { k: str } };
-
 // The trefs made so far (rn_tref), by alias index in st.tys; emptied for
 // each program (rename_program_x).
 let rn_tref_ids: [long] = [];
-let rn_tref_nodes: [RnRef] = [];
+let rn_tref_nodes: [TRef] = [];
 
-def rn_type(st: RnSt, t) -> {k: str} {
+def rn_type(st: RnSt, t: Type) -> Type {
     if (len(st.tys) == 0) { t } else { rn_type_go(st, t, 0) }
 };
 
-def rn_types(st: RnSt, ts: [{k: str}]) -> [{k: str}] {
+def rn_types(st: RnSt, ts: [Type]) -> [Type] {
     if (len(st.tys) == 0) {
         ts
     } else {
-        let out: [{k: str}] = [];
+        let out: [Type] = [];
         let i = 0;
         while (i < len(ts)) {
             out += rn_type(st, ts[i]);
@@ -311,27 +309,22 @@ def rn_types(st: RnSt, ts: [{k: str}]) -> [{k: str}] {
     }
 };
 
-// Identity with a declared {k: str} return: launders a rebuilt type node's
-// real shape into the unknown-shape flow type, so the arms of a type dispatch
-// agree (the normnode trick in native.y strip_ns).
-def rn_tn(t) -> {k: str} { t };
-
-def rn_type_go(st: RnSt, t, depth: long) -> {k: str} {
+def rn_type_go(st: RnSt, t: Type, depth: long) -> Type {
     let k: str = t.k;
-    if (k == "tname") { rn_type_name(st, t.name, t, depth) }
-    else if (k == "tptr") { rn_tn({ k: "tptr", to: rn_type_go(st, t.to, depth) }) }
-    else if (k == "tarr") { rn_tn({ k: "tarr", of: rn_type_go(st, t.of, depth) }) }
-    else if (k == "tarrfix") { rn_tn({ k: "tarrfix", of: rn_type_go(st, t.of, depth), n: t.n }) }
-    else if (k == "topt") { rn_tn({ k: "topt", of: rn_type_go(st, t.of, depth) }) }
-    else if (k == "tmap") { rn_tn({ k: "tmap", key: rn_type_go(st, t.key, depth), of: rn_type_go(st, t.of, depth) }) }
-    else if (k == "trec") { rn_tn({ k: "trec", fields: rn_type_fields(st, t.fields, depth) }) }
-    else if (k == "tfunc") { rn_tn({ k: "tfunc", args: rn_type_list(st, t.args, depth), ret: rn_type_go(st, t.ret, depth) }) }
-    else if (k == "tparams") { rn_tn({ k: "tparams", ts: rn_type_list(st, t.ts, depth) }) }
-    else if (k == "tunion") { rn_tn({ k: "tunion", ts: rn_union_flat(rn_type_list(st, t.ts, depth)) }) }
+    if (k == "tname") { let name: TName = t; rn_type_name(st, name.name, t, depth) }
+    else if (k == "tptr") { let ptr: TPtr = t; let out: TPtr = { k: "tptr", to: rn_type_go(st, ptr.to, depth) }; let result: Type = out; result }
+    else if (k == "tarr") { let arr: TOf = t; let out: TOf = { k: "tarr", of: rn_type_go(st, arr.of, depth) }; let result: Type = out; result }
+    else if (k == "tarrfix") { let arr: TFix = t; let out: TFix = { k: "tarrfix", of: rn_type_go(st, arr.of, depth), n: arr.n }; let result: Type = out; result }
+    else if (k == "topt") { let opt: TOf = t; let out: TOf = { k: "topt", of: rn_type_go(st, opt.of, depth) }; let result: Type = out; result }
+    else if (k == "tmap") { let map: TMap = t; let out: TMap = { k: "tmap", key: rn_type_go(st, map.key, depth), of: rn_type_go(st, map.of, depth) }; let result: Type = out; result }
+    else if (k == "trec") { let rec: TRec = t; let out: TRec = { k: "trec", fields: rn_type_fields(st, rec.fields, depth) }; let result: Type = out; result }
+    else if (k == "tfunc") { let func: TFunc = t; let out: TFunc = { k: "tfunc", args: rn_type_list(st, func.args, depth), ret: rn_type_go(st, func.ret, depth) }; let result: Type = out; result }
+    else if (k == "tparams") { let list: TList = t; let out: TList = { k: "tparams", ts: rn_type_list(st, list.ts, depth) }; let result: Type = out; result }
+    else if (k == "tunion") { let list: TList = t; let out: TList = { k: "tunion", ts: rn_union_flat(rn_type_list(st, list.ts, depth)) }; let result: Type = out; result }
     else { t }
 };
 
-def rn_type_name(st: RnSt, name: str, t, depth: long) -> {k: str} {
+def rn_type_name(st: RnSt, name: str, t: Type, depth: long) -> Type {
     let found = rn_alias_index(st, name);
     // (depth only guards against a bug: a recursive alias is a tref, never
     // spelled out inside itself)
@@ -340,7 +333,7 @@ def rn_type_name(st: RnSt, name: str, t, depth: long) -> {k: str} {
     } else if (rn_reaches(st, found, false)) {
         rn_tref(st, found, name)
     } else {
-        let e = st.tys[found];
+        let e: Field = st.tys[found];
         rn_type_go(st, e.typ, depth + 1)
     }
 };
@@ -361,7 +354,7 @@ def rn_alias_index(st: RnSt, name: str) -> long {
 
 // The tref of recursive alias `id`: made, and the alias spelled out into
 // it, the first time it is met.
-def rn_tref(st: RnSt, id: long, name: str) -> {k: str} {
+def rn_tref(st: RnSt, id: long, name: str) -> Type {
     let at = -1;
     let i = 0;
     while (at < 0 && i < len(rn_tref_ids)) {
@@ -369,20 +362,20 @@ def rn_tref(st: RnSt, id: long, name: str) -> {k: str} {
         i = i + 1;
     };
     if (at >= 0) {
-        rn_tn(rn_tref_nodes[at])
+        rn_tref_nodes[at]
     } else {
-        let r: RnRef = { k: "tref", name: name, tmp: name + "$" + tostring(id), to: { k: "tnone" } };
+        let tref: TRef = { k: "tref", name: name, tmp: name + "$" + tostring(id), to: { k: "tnone" } };
         rn_tref_ids += id;
-        rn_tref_nodes += r;
+        rn_tref_nodes += tref;
         if (rn_reaches(st, id, true)) {
-            r.to = { k: "tunk" };
+            tref.to = { k: "tunk" };
             0
         } else {
-            let e = st.tys[id];
-            r.to = rn_type_go(st, e.typ, 0);
+            let e: Field = st.tys[id];
+            tref.to = rn_type_go(st, e.typ, 0);
             0
         };
-        rn_tn(r)
+        tref
     }
 };
 
@@ -394,10 +387,11 @@ def rn_reaches(st: RnSt, id: long, bare: bool) -> bool {
     rn_reaches_go(st, e.typ, id, seen, bare)
 };
 
-def rn_reaches_go(st: RnSt, t, id: long, seen: [long], bare: bool) -> bool {
+def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool {
     let k: str = t.k;
     if (k == "tname") {
-        let j = rn_alias_index(st, t.name);
+        let name: TName = t;
+        let j = rn_alias_index(st, name.name);
         let walked = false;
         foreach (s in seen) { if (s == j) { walked = true; 0; } else { 0; }; };
         if (j < 0 || walked) { false }
@@ -408,13 +402,17 @@ def rn_reaches_go(st: RnSt, t, id: long, seen: [long], bare: bool) -> bool {
             rn_reaches_go(st, e.typ, id, seen, bare)
         }
     }
-    else if (k == "tptr") { rn_reaches_go(st, t.to, id, seen, bare) }
-    else if (k == "tarr" || k == "tarrfix" || k == "topt") { rn_reaches_go(st, t.of, id, seen, bare) }
+    else if (k == "tptr") { let ptr: TPtr = t; rn_reaches_go(st, ptr.to, id, seen, bare) }
+    else if (k == "tarr") { let arr: TOf = t; rn_reaches_go(st, arr.of, id, seen, bare) }
+    else if (k == "tarrfix") { let arr: TFix = t; rn_reaches_go(st, arr.of, id, seen, bare) }
+    else if (k == "topt") { let opt: TOf = t; rn_reaches_go(st, opt.of, id, seen, bare) }
     else if (k == "tmap") {
-        if (rn_reaches_go(st, t.key, id, seen, bare)) { true } else { rn_reaches_go(st, t.of, id, seen, bare) }
+        let map: TMap = t;
+        if (rn_reaches_go(st, map.key, id, seen, bare)) { true } else { rn_reaches_go(st, map.of, id, seen, bare) }
     }
     else if (k == "trec") {
-        let fs: [NamedTy] = t.fields;
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let hit = false;
         if (!bare) {
             foreach (f in fs) {
@@ -425,19 +423,21 @@ def rn_reaches_go(st: RnSt, t, id: long, seen: [long], bare: bool) -> bool {
         hit
     }
     else if (k == "tfunc") {
+        let func: TFunc = t;
         let hit = false;
         if (!bare) {
-            let args: [{k: str}] = t.args;
+            let args: [Type] = func.args;
             foreach (a in args) {
                 if (!hit && rn_reaches_go(st, a, id, seen, bare)) { hit = true; 0; } else { 0; };
             };
-            if (!hit) { hit = rn_reaches_go(st, t.ret, id, seen, bare); 0; } else { 0; };
+            if (!hit) { hit = rn_reaches_go(st, func.ret, id, seen, bare); 0; } else { 0; };
             0
         } else { 0; };
         hit
     }
     else if (k == "tparams" || k == "tunion") {
-        let ts: [{k: str}] = t.ts;
+        let list: TList = t;
+        let ts: [Type] = list.ts;
         let hit = false;
         foreach (m in ts) {
             if (!hit && rn_reaches_go(st, m, id, seen, bare)) { hit = true; 0; } else { 0; };
@@ -447,8 +447,8 @@ def rn_reaches_go(st: RnSt, t, id: long, seen: [long], bare: bool) -> bool {
     else { false }
 };
 
-def rn_type_list(st: RnSt, ts: [{k: str}], depth: long) -> [{k: str}] {
-    let out: [{k: str}] = [];
+def rn_type_list(st: RnSt, ts: [Type], depth: long) -> [Type] {
+    let out: [Type] = [];
     let i = 0;
     while (i < len(ts)) {
         out += rn_type_go(st, ts[i], depth);
@@ -457,8 +457,8 @@ def rn_type_list(st: RnSt, ts: [{k: str}], depth: long) -> [{k: str}] {
     out
 };
 
-def rn_type_fields(st: RnSt, fs: [NamedTy], depth: long) -> [NamedTy] {
-    let out: [NamedTy] = [];
+def rn_type_fields(st: RnSt, fs: [Field], depth: long) -> [Field] {
+    let out: [Field] = [];
     let i = 0;
     while (i < len(fs)) {
         let f = fs[i];
@@ -468,14 +468,15 @@ def rn_type_fields(st: RnSt, fs: [NamedTy], depth: long) -> [NamedTy] {
     out
 };
 
-def rn_union_flat(ts: [{k: str}]) -> [{k: str}] {
-    let out: [{k: str}] = [];
+def rn_union_flat(ts: [Type]) -> [Type] {
+    let out: [Type] = [];
     let i = 0;
     while (i < len(ts)) {
         let t = ts[i];
         let tk: str = t.k;
         if (tk == "tunion") {
-            let inner: [{k: str}] = t.ts;
+            let list: TList = t;
+            let inner: [Type] = list.ts;
             out += inner;
             0
         } else {
@@ -487,15 +488,16 @@ def rn_union_flat(ts: [{k: str}]) -> [{k: str}] {
     out
 };
 
-def rn_drop_typedefs(stmts: [{k: str}], st: RnSt) -> [{k: str}] {
-    let out: [{k: str}] = [];
+def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
+    let out: [Node] = [];
     let i = 0;
     while (i < len(stmts)) {
         let s = stmts[i];
         let sk: str = s.k;
         if (sk == "typedef") {
             // Dropped -- unless its type names something undefined.
-            let te = rn_typedef_err(s, st);
+            let td: TypeDef = s;
+            let te = rn_typedef_err(td, st);
             if (te.k == "err") { out += te; 0; } else { 0; };
             0
         } else { out += s; 0 };
@@ -504,14 +506,20 @@ def rn_drop_typedefs(stmts: [{k: str}], st: RnSt) -> [{k: str}] {
     out
 };
 
-def rn_typedef_err(s, st: RnSt) -> {k: str} {
+def rn_typedef_err(s: TypeDef, st: RnSt) -> Node {
     let un = rn_unknown_type(st, s.typ);
     let name: str = s.name;
     let id = rn_alias_index(st, name);
     if (un != "") { rn_unknown_err(un, s.line, s.col) }
     else if (id >= 0 && rn_reaches(st, id, true)) {
-        rn_tn({ k: "err", msg: "type '" + name + "' refers to itself outside any record field or function type", line: s.line, col: s.col })
-    } else { rn_tn({ k: "void" }) }
+        let err: Err = { k: "err", msg: "type '" + name + "' refers to itself outside any record field or function type", line: s.line, col: s.col };
+        let node: Node = err;
+        node
+    } else {
+        let bare: Bare = { k: "void", line: s.line, col: s.col };
+        let node: Node = bare;
+        node
+    }
 };
 
 // ── unknown type names ───────────────────────────────────────────────────
@@ -520,28 +528,28 @@ def rn_typedef_err(s, st: RnSt) -> {k: str} {
 // error -- the checker would otherwise unify it with anything, and
 // `let s: strr = "x"` compiled with `s` silently untyped.
 
-def rn_unknown_err(name: str, line: long, col: long) -> {k: str} {
-    rn_tn({ k: "err", msg: "unknown type '" + name + "'", line: line, col: col })
+def rn_unknown_err(name: str, line: long, col: long) -> Node {
+    { k: "err", msg: "unknown type '" + name + "'", line: line, col: col }
 };
 
 // The first unknown name in annotation t ("" when every name resolves).
-def rn_unknown_type(st: RnSt, t) -> str {
+def rn_unknown_type(st: RnSt, t: Type) -> str {
     let k: str = t.k;
-    if (k == "tname") { rn_alias_known(st.tys, t.name) }
-    else if (k == "tptr") { rn_unknown_type(st, t.to) }
-    else if (k == "tarr") { rn_unknown_type(st, t.of) }
-    else if (k == "tarrfix") { rn_unknown_type(st, t.of) }
-    else if (k == "topt") { rn_unknown_type(st, t.of) }
-    else if (k == "tmap") { rn_unknown_then(rn_unknown_type(st, t.key), st, t.of) }
-    else if (k == "trec") { rn_unknown_fields(st, t.fields) }
-    else if (k == "tfunc") { rn_unknown_then(rn_unknown_list(st, t.args), st, t.ret) }
-    else if (k == "tparams") { rn_unknown_list(st, t.ts) }
-    else if (k == "tunion") { rn_unknown_list(st, t.ts) }
+    if (k == "tname") { let name: TName = t; rn_alias_known(st.tys, name.name) }
+    else if (k == "tptr") { let ptr: TPtr = t; rn_unknown_type(st, ptr.to) }
+    else if (k == "tarr") { let arr: TOf = t; rn_unknown_type(st, arr.of) }
+    else if (k == "tarrfix") { let arr: TFix = t; rn_unknown_type(st, arr.of) }
+    else if (k == "topt") { let opt: TOf = t; rn_unknown_type(st, opt.of) }
+    else if (k == "tmap") { let map: TMap = t; rn_unknown_then(rn_unknown_type(st, map.key), st, map.of) }
+    else if (k == "trec") { let rec: TRec = t; rn_unknown_fields(st, rec.fields) }
+    else if (k == "tfunc") { let func: TFunc = t; rn_unknown_then(rn_unknown_list(st, func.args), st, func.ret) }
+    else if (k == "tparams") { let list: TList = t; rn_unknown_list(st, list.ts) }
+    else if (k == "tunion") { let list: TList = t; rn_unknown_list(st, list.ts) }
     else { "" }
 };
 
 // "" when `name` is an alias in scope, else the name itself.
-def rn_alias_known(tys: [NamedTy], name: str) -> str {
+def rn_alias_known(tys: [Field], name: str) -> str {
     let found = false;
     foreach (e in tys) {
         if (e.name == name) { found = true; 0; } else { 0; };
@@ -549,11 +557,11 @@ def rn_alias_known(tys: [NamedTy], name: str) -> str {
     if (found) { "" } else { name }
 };
 
-def rn_unknown_then(first: str, st: RnSt, t) -> str {
+def rn_unknown_then(first: str, st: RnSt, t: Type) -> str {
     if (first != "") { first } else { rn_unknown_type(st, t) }
 };
 
-def rn_unknown_list(st: RnSt, ts: [{k: str}]) -> str {
+def rn_unknown_list(st: RnSt, ts: [Type]) -> str {
     let out = "";
     foreach (t in ts) {
         if (out == "") { out = rn_unknown_type(st, t); 0; } else { 0; };
@@ -561,7 +569,7 @@ def rn_unknown_list(st: RnSt, ts: [{k: str}]) -> str {
     out
 };
 
-def rn_unknown_fields(st: RnSt, fs: [NamedTy]) -> str {
+def rn_unknown_fields(st: RnSt, fs: [Field]) -> str {
     let out = "";
     foreach (f in fs) {
         if (out == "") { out = rn_unknown_type(st, f.typ); 0; } else { 0; };
@@ -574,7 +582,7 @@ def rn_unknown_fields(st: RnSt, fs: [NamedTy]) -> str {
 // resolves def names through the prepass binding, so two same-named defs would
 // otherwise collapse onto one unique name; give the earlier ones a dead name
 // instead. They are still checked and emitted — only unreachable.
-def rn_shadow_dups(stmts: [{k: str}]) -> [{k: str}] {
+def rn_shadow_dups(stmts: [Node]) -> [Node] {
     let names: [str] = [];
     let ndefs = 0;
     foreach (s in stmts) {
@@ -586,11 +594,12 @@ def rn_shadow_dups(stmts: [{k: str}]) -> [{k: str}] {
         stmts
     } else {
         let later = rn_later(names);
-        let out: [{k: str}] = [];
+        let out: [Node] = [];
         let i = 0;
         while (i < len(stmts)) {
             if (later[i]) {
-                out += rn_rebuild_decl(stmts[i], names[i] + "$shadow" + tostring(i));
+                let decl: Decl = stmts[i];
+                out += rn_rebuild_decl(decl, names[i] + "$shadow" + tostring(i));
                 0
             } else { out += stmts[i]; 0; };
             i = i + 1;
@@ -643,15 +652,16 @@ def rn_hash(s: str) -> long {
 };
 
 // The name a statement binds as a hoisted def, or "" when it binds none.
-def rn_decl_name(s) -> str {
+def rn_decl_name(s: Node) -> str {
     if (s.k == "decl") {
-        rn_decl_name_go(s)
+        let decl: Decl = s;
+        rn_decl_name_go(decl)
     } else {
         ""
     }
 };
 
-def rn_decl_name_go(s) -> str {
+def rn_decl_name_go(s: Decl) -> str {
     // NOTE: one `s.v.k` read per body (see rn_prepass_decl note).
     if (s.kind == "def") {
         s.name
@@ -662,7 +672,7 @@ def rn_decl_name_go(s) -> str {
     }
 };
 
-def rn_rebuild_decl(s, newname: str) -> {k: str} {
+def rn_rebuild_decl(s: Decl, newname: str) -> Decl {
     // NOTE: one literal per arm would merge two key sets through the same
     // `if` (see parse_type_arrow note) — dispatch to single-call arms so
     // each shape unifies against the {k}-hole return type instead.
@@ -673,15 +683,15 @@ def rn_rebuild_decl(s, newname: str) -> {k: str} {
     }
 };
 
-def rn_rebuild_def(s, newname: str) -> {k: str} {
-    { k: "decl", kind: "def", name: newname, v: s.v, line: s.line, col: s.col }
+def rn_rebuild_def(s: Decl, newname: str) -> Decl {
+    { k: "decl", kind: "def", name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col }
 };
 
-def rn_rebuild_let(s, newname: str) -> {k: str} {
+def rn_rebuild_let(s: Decl, newname: str) -> Decl {
     { k: "decl", kind: s.kind, name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col }
 };
 
-def rn_block(stmts: [{k: str}], st: RnSt) -> RnStmts {
+def rn_block(stmts: [Node], st: RnSt) -> RnStmts {
     stmts = rn_shadow_dups(stmts);
     st = rn_push(st);
     st = rn_prepass(stmts, st);
@@ -690,7 +700,7 @@ def rn_block(stmts: [{k: str}], st: RnSt) -> RnStmts {
     { st: st, stmts: r.nodes }
 };
 
-def rn_node(node, st: RnSt) -> RnRes {
+def rn_node(node: Node, st: RnSt) -> RnRes {
     // NOTE: dispatch WITHOUT a shared-shape if-chain (see parser.y
     // parse_type_arrow note): a long arm chain on one name merges every
     // arm's node shape through the flow-insensitive env (each arm's return
@@ -709,7 +719,8 @@ def rn_node(node, st: RnSt) -> RnRes {
     } else if (k == "void") {
         { st: st, node: node }
     } else if (k == "id") {
-        rn_id(st, node.v, node.line, node.col)
+        let id: Leaf = node;
+        rn_id(st, id.v, id.line, id.col)
     } else if (k == "un") {
         rn_un(node, st)
     } else if (k == "addr") {
@@ -778,22 +789,24 @@ def rn_node(node, st: RnSt) -> RnRes {
 };
 
 // rectest / narrow: an operand plus the (alias-resolved) type it tests.
-def rn_typed_e(node, st: RnSt) -> RnRes {
+def rn_typed_e(node: Narrow, st: RnSt) -> RnRes {
     let e = rn_node(node.e, st);
     let un = rn_unknown_type(e.st, node.typ);
     if (un == "") {
-        { st: e.st, node: rn_tn({ k: node.k, e: e.node, typ: rn_type(e.st, node.typ), line: node.line, col: node.col }) }
+        let narrowed: Narrow = { k: node.k, e: e.node, typ: rn_type(e.st, node.typ), line: node.line, col: node.col };
+        let result: Node = narrowed;
+        { st: e.st, node: result }
     } else {
         { st: e.st, node: rn_unknown_err(un, node.line, node.col) }
     }
 };
 
-def rn_matchend(node, st: RnSt) -> RnRes {
+def rn_matchend(node: MatchEnd, st: RnSt) -> RnRes {
     let e = rn_node(node.e, st);
     { st: e.st, node: { k: "matchend", e: e.node, cover: rn_types(e.st, node.cover), vals: node.vals, line: node.line, col: node.col } }
 };
 
-def rn_sliceassign(node, st: RnSt) -> RnRes {
+def rn_sliceassign(node: SliceAssign, st: RnSt) -> RnRes {
     let a = rn_node(node.arr, st);
     let l = rn_node(node.lo, a.st);
     let h = rn_node(node.hi, l.st);
@@ -806,180 +819,196 @@ def rn_sliceassign(node, st: RnSt) -> RnRes {
 // annotated scope state, and returns the uniform R. Field reads off the
 // bare hole unify quietly via the tcompat law (tnone); each body reads
 // ONLY its own shape's fields.
-def rn_un(node, st: RnSt) -> RnRes {
+def rn_un(node: Un, st: RnSt) -> RnRes {
     let r = rn_node(node.e, st);
     { st: r.st, node: { k: "un", op: node.op, e: r.node, line: node.line, col: node.col } }
 };
 
-def rn_addrderef(node, st: RnSt) -> RnRes {
+def rn_addrderef(node: Wrap, st: RnSt) -> RnRes {
     let k = node.k;
     let r = rn_node(node.e, st);
     { st: r.st, node: { k: k, e: r.node, line: node.line, col: node.col } }
 };
 
-def rn_bin(node, st: RnSt) -> RnRes {
+def rn_bin(node: Bin, st: RnSt) -> RnRes {
     let l = rn_node(node.l, st);
     let r = rn_node(node.r, l.st);
     { st: r.st, node: { k: "bin", op: node.op, l: l.node, r: r.node, line: node.line, col: node.col } }
 };
 
-def rn_call(node, st: RnSt) -> RnRes {
+def rn_call(node: Call, st: RnSt) -> RnRes {
     let c = rn_node(node.callee, st);
     let a = rn_list(node.args, c.st);
     let cn = c.node;
     let args = a.nodes;
     if (cn.k == "id") {
-        args = rn_fill_defaults(rn_find_defaults(a.st, cn.v), args, node.line, node.col);
+        let id: Leaf = cn;
+        args = rn_fill_defaults(rn_find_defaults(a.st, id.v), args, node.line, node.col);
         0
     };
     { st: a.st, node: { k: "call", callee: cn, args: args, line: node.line, col: node.col } }
 };
 
-def rn_if(node, st: RnSt) -> RnRes {
+def rn_if(node: If, st: RnSt) -> RnRes {
     let c = rn_node(node.cond, st);
-    rn_if_then(node, c.node, c.st)
+    let then: Block = node.then;
+    rn_if_then(node, c.node, then, c.st)
 };
 
-def rn_if_then(node, cond: {k: str}, st: RnSt) -> RnRes {
-    let tb = rn_block(node.then.stmts, st);
-    rn_if_finish(node, cond, tb.stmts, tb.st)
+def rn_if_then(node: If, cond: Node, then: Block, st: RnSt) -> RnRes {
+    let tb = rn_block(then.stmts, st);
+    rn_if_finish(node, cond, then, tb.stmts, tb.st)
 };
 
-def rn_if_finish(node, cond: {k: str}, tstmts: [{k: str}], st: RnSt) -> RnRes {
+def rn_if_finish(node: If, cond: Node, then: Block, tstmts: [Node], st: RnSt) -> RnRes {
     // NOTE: both arms build the SAME key set (cond/then/els/has_else);
     // els differs (renamed vs passthrough) but both unify — teq holds.
+    let body: Block = { k: "block", stmts: tstmts, line: then.line, col: then.col };
+    let then_node: Node = body;
     if (node.has_else) {
         let e = rn_node(node.els, st);
-        { st: e.st, node: { k: "if", cond: cond, then: { k: "block", stmts: tstmts, line: node.then.line, col: node.then.col }, els: e.node, has_else: true, line: node.line, col: node.col } }
+        let result: If = { k: "if", cond: cond, then: then_node, els: e.node, has_else: true, line: node.line, col: node.col };
+        let out: Node = result;
+        { st: e.st, node: out }
     } else {
-        { st: st, node: { k: "if", cond: cond, then: { k: "block", stmts: tstmts, line: node.then.line, col: node.then.col }, els: node.els, has_else: false, line: node.line, col: node.col } }
+        let result: If = { k: "if", cond: cond, then: then_node, els: node.els, has_else: false, line: node.line, col: node.col };
+        let out: Node = result;
+        { st: st, node: out }
     }
 };
 
-def rn_while(node, st: RnSt) -> RnRes {
+def rn_while(node: While, st: RnSt) -> RnRes {
     let c = rn_node(node.cond, st);
-    rn_while_body(node, c.node, c.st)
+    let body: Block = node.body;
+    rn_while_body(node, c.node, body, c.st)
 };
 
-def rn_while_body(node, cond: {k: str}, st: RnSt) -> RnRes {
-    let b = rn_block(node.body.stmts, st);
-    { st: b.st, node: { k: "while", cond: cond, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
+def rn_while_body(node: While, cond: Node, body: Block, st: RnSt) -> RnRes {
+    let b = rn_block(body.stmts, st);
+    { st: b.st, node: { k: "while", cond: cond, body: { k: "block", stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
 };
 
-def rn_blocknode(node, st: RnSt) -> RnRes {
+def rn_blocknode(node: Block, st: RnSt) -> RnRes {
     let b = rn_block(node.stmts, st);
     { st: b.st, node: { k: "block", stmts: b.stmts, line: node.line, col: node.col } }
 };
 
-def rn_assign(node, st: RnSt) -> RnRes {
+def rn_assign(node: Assign, st: RnSt) -> RnRes {
     let r = rn_node(node.v, st);
     rn_assign_lookup(node, r.node, r.st)
 };
 
-def rn_assign_lookup(node, v: {k: str}, st: RnSt) -> RnRes {
+def rn_assign_lookup(node: Assign, v: Node, st: RnSt) -> RnRes {
     let u = rn_lookup(st, node.name);
     rn_assign_finish(node, v, u, st)
 };
 
-def rn_assign_finish(node, v: {k: str}, u: str, st: RnSt) -> RnRes {
+def rn_assign_finish(node: Assign, v: Node, u: str, st: RnSt) -> RnRes {
     // NOTE: both arms share the key set; name differs (passthrough vs
     // renamed) but str vs hole unifies — teq holds.
     if (u == "") {
-        { st: st, node: { k: "assign", name: node.name, v: v, line: node.line, col: node.col } }
+        let assign: Assign = { k: "assign", name: node.name, v: v, line: node.line, col: node.col };
+        let out: Node = assign;
+        { st: st, node: out }
     } else {
-        { st: st, node: { k: "assign", name: u, v: v, line: node.line, col: node.col } }
+        let assign: Assign = { k: "assign", name: u, v: v, line: node.line, col: node.col };
+        let out: Node = assign;
+        { st: st, node: out }
     }
 };
 
 // ++x / x++: the target is an expression (id, index, dot) and is renamed
 // like any other — it is evaluated exactly once at run time.
-def rn_incdec(node, st: RnSt) -> RnRes {
+def rn_incdec(node: IncDec, st: RnSt) -> RnRes {
     let r = rn_node(node.tgt, st);
     { st: r.st, node: { k: "incdec", op: node.op, pre: node.pre, tgt: r.node, line: node.line, col: node.col } }
 };
 
-def rn_opassign(node, st: RnSt) -> RnRes {
+def rn_opassign(node: OpAssign, st: RnSt) -> RnRes {
     let t = rn_node(node.tgt, st);
     let v = rn_node(node.v, t.st);
     { st: v.st, node: { k: "opassign", op: node.op, tgt: t.node, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_store(node, st: RnSt) -> RnRes {
+def rn_store(node: Store, st: RnSt) -> RnRes {
     let p = rn_node(node.p, st);
     rn_store_val(node, p.node, p.st)
 };
 
-def rn_store_val(node, p: {k: str}, st: RnSt) -> RnRes {
+def rn_store_val(node: Store, p: Node, st: RnSt) -> RnRes {
     let v = rn_node(node.v, st);
     { st: v.st, node: { k: "store", p: p, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_ret(node, st: RnSt) -> RnRes {
+def rn_ret(node: Wrap, st: RnSt) -> RnRes {
     let r = rn_node(node.e, st);
     { st: r.st, node: { k: "ret", e: r.node, line: node.line, col: node.col } }
 };
 
-def rn_array(node, st: RnSt) -> RnRes {
+def rn_array(node: ArrLit, st: RnSt) -> RnRes {
     let r = rn_list(node.elems, st);
     { st: r.st, node: { k: "array", elems: r.nodes, line: node.line, col: node.col } }
 };
 
-def rn_arrrep(node, st: RnSt) -> RnRes {
+def rn_arrrep(node: ArrRep, st: RnSt) -> RnRes {
     let r = rn_node(node.v, st);
     { st: r.st, node: { k: "arrrep", v: r.node, n: node.n, line: node.line, col: node.col } }
 };
 
-def rn_reclit(node, st: RnSt) -> RnRes {
+def rn_reclit(node: RecLit, st: RnSt) -> RnRes {
     let r = rn_list(node.vals, st);
     { st: r.st, node: { k: "rec", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
 };
 
-def rn_maplit(node, st: RnSt) -> RnRes {
+def rn_maplit(node: RecLit, st: RnSt) -> RnRes {
     let r = rn_list(node.vals, st);
     { st: r.st, node: { k: "map", keys: node.keys, vals: r.nodes, line: node.line, col: node.col } }
 };
 
-def rn_index(node: {k: str, arr: {k: str}, idx: {k: str}, line: long, col: long}, st: RnSt) -> RnRes {
+def rn_index(node: Index, st: RnSt) -> RnRes {
     let a = rn_node(node.arr, st);
     rn_index_idx(node, a.node, a.st)
 };
 
-def rn_index_idx(node, a: {k: str}, st: RnSt) -> RnRes {
+def rn_index_idx(node: Index, a: Node, st: RnSt) -> RnRes {
     let x = rn_node(node.idx, st);
     { st: x.st, node: { k: "index", arr: a, idx: x.node, line: node.line, col: node.col } }
 };
 
-def rn_slice(node, st: RnSt) -> RnRes {
+def rn_slice(node: Slice, st: RnSt) -> RnRes {
     let a = rn_node(node.arr, st);
     rn_slice_lo(node, a.node, a.st)
 };
 
-def rn_slice_lo(node, a: {k: str}, st: RnSt) -> RnRes {
+def rn_slice_lo(node: Slice, a: Node, st: RnSt) -> RnRes {
     let l = rn_node(node.lo, st);
     rn_slice_hi(node, a, l.node, l.st)
 };
 
-def rn_slice_hi(node, a: {k: str}, lo: {k: str}, st: RnSt) -> RnRes {
+def rn_slice_hi(node: Slice, a: Node, lo: Node, st: RnSt) -> RnRes {
     let h = rn_node(node.hi, st);
     { st: h.st, node: { k: "slice", arr: a, lo: lo, hi: h.node, line: node.line, col: node.col } }
 };
 
-def rn_dot(node: {k: str, obj: {k: str}, key: str, line: long, col: long}, st: RnSt) -> RnRes {
+def rn_dot(node: Dot, st: RnSt) -> RnRes {
     let q = rn_qualified(st, node.obj, node.key);
     if (q != "") {
         rn_id(st, q, node.line, node.col)
     } else {
         let o = rn_node(node.obj, st);
-        { st: o.st, node: { k: "dot", obj: o.node, key: node.key, line: node.line, col: node.col } }
+        let dot: Dot = { k: "dot", obj: o.node, key: node.key, line: node.line, col: node.col };
+        let out: Node = dot;
+        { st: o.st, node: out }
     }
 };
 
 // `m.key` naming a module's top-level binding: "m.key" when obj is the
 // name of a module imported by name and no binding of that name is in
 // scope, "" otherwise.
-def rn_qualified(st: RnSt, obj: {k: str}, key: str) -> str {
+def rn_qualified(st: RnSt, obj: Node, key: str) -> str {
     if (obj.k == "id" && len(rn_mods) > 0) {
-        let m: str = obj.v;
+        let id: Leaf = obj;
+        let m: str = id.v;
         if (rn_in(rn_mods, m) && rn_lookup(st, m) == "") { m + "." + key } else { "" }
     } else { "" }
 };
@@ -992,22 +1021,22 @@ def rn_in(xs: [str], x: str) -> bool {
     found
 };
 
-def rn_idxassign(node, st: RnSt) -> RnRes {
+def rn_idxassign(node: IdxAssign, st: RnSt) -> RnRes {
     let a = rn_node(node.arr, st);
     rn_idxassign_idx(node, a.node, a.st)
 };
 
-def rn_idxassign_idx(node, a: {k: str}, st: RnSt) -> RnRes {
+def rn_idxassign_idx(node: IdxAssign, a: Node, st: RnSt) -> RnRes {
     let x = rn_node(node.idx, st);
     rn_idxassign_val(node, a, x.node, x.st)
 };
 
-def rn_idxassign_val(node, a: {k: str}, idx: {k: str}, st: RnSt) -> RnRes {
+def rn_idxassign_val(node: IdxAssign, a: Node, idx: Node, st: RnSt) -> RnRes {
     let v = rn_node(node.v, st);
     { st: v.st, node: { k: "idxassign", arr: a, idx: idx, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_dotassign(node, st: RnSt) -> RnRes {
+def rn_dotassign(node: DotAssign, st: RnSt) -> RnRes {
     let q = rn_qualified(st, node.obj, node.key);
     if (q != "") {
         // `fs.x = v`: an assignment to the module's global
@@ -1018,71 +1047,74 @@ def rn_dotassign(node, st: RnSt) -> RnRes {
     }
 };
 
-def rn_dotassign_val(node, o: {k: str}, st: RnSt) -> RnRes {
+def rn_dotassign_val(node: DotAssign, o: Node, st: RnSt) -> RnRes {
     let v = rn_node(node.v, st);
     { st: v.st, node: { k: "dotassign", obj: o, key: node.key, v: v.node, line: node.line, col: node.col } }
 };
 
-def rn_foreach(node, st: RnSt) -> RnRes {
+def rn_foreach(node: Foreach, st: RnSt) -> RnRes {
     let it = rn_node(node.iter, st);
     rn_foreach_body(node, it.node, it.st)
 };
 
-def rn_foreach_body(node, iter: {k: str}, st: RnSt) -> RnRes {
+def rn_foreach_body(node: Foreach, iter: Node, st: RnSt) -> RnRes {
     let st1 = rn_push(st);
     let nb = rn_bind(st1, node.name);
     rn_foreach_block(node, iter, nb.uniq, nb.st)
 };
 
-def rn_foreach_block(node, iter: {k: str}, uniq: str, st: RnSt) -> RnRes {
-    let b = rn_block(node.body.stmts, st);
+def rn_foreach_block(node: Foreach, iter: Node, uniq: str, st: RnSt) -> RnRes {
+    let body: Block = node.body;
+    let b = rn_block(body.stmts, st);
     let st2 = rn_pop(b.st);
-    { st: st2, node: { k: "foreach", name: uniq, iter: iter, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
+    { st: st2, node: { k: "foreach", name: uniq, iter: iter, body: { k: "block", stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
 };
 
-def rn_forrange(node, st: RnSt) -> RnRes {
+def rn_forrange(node: ForRange, st: RnSt) -> RnRes {
     let l = rn_node(node.lo, st);
     rn_forrange_hi(node, l.node, l.st)
 };
 
-def rn_forrange_hi(node, lo: {k: str}, st: RnSt) -> RnRes {
+def rn_forrange_hi(node: ForRange, lo: Node, st: RnSt) -> RnRes {
     let h = rn_node(node.hi, st);
     rn_forrange_body(node, lo, h.node, h.st)
 };
 
-def rn_forrange_body(node, lo: {k: str}, hi: {k: str}, st: RnSt) -> RnRes {
+def rn_forrange_body(node: ForRange, lo: Node, hi: Node, st: RnSt) -> RnRes {
     let st1 = rn_push(st);
     let nb = rn_bind(st1, node.name);
     rn_forrange_block(node, lo, hi, nb.uniq, nb.st)
 };
 
-def rn_forrange_block(node, lo: {k: str}, hi: {k: str}, uniq: str, st: RnSt) -> RnRes {
-    let b = rn_block(node.body.stmts, st);
+def rn_forrange_block(node: ForRange, lo: Node, hi: Node, uniq: str, st: RnSt) -> RnRes {
+    let body: Block = node.body;
+    let b = rn_block(body.stmts, st);
     let st2 = rn_pop(b.st);
-    { st: st2, node: { k: "forrange", name: uniq, lo: lo, hi: hi, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
+    { st: st2, node: { k: "forrange", name: uniq, lo: lo, hi: hi, body: { k: "block", stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
 };
 
-def rn_for(node, st: RnSt) -> RnRes {
+def rn_for(node: For, st: RnSt) -> RnRes {
     let ri = rn_node(node.init, st);
     rn_for_cond(node, ri.node, ri.st)
 };
 
-def rn_for_cond(node, init: {k: str}, st: RnSt) -> RnRes {
+def rn_for_cond(node: For, init: Node, st: RnSt) -> RnRes {
     let rc = rn_node(node.cond, st);
     rn_for_step(node, init, rc.node, rc.st)
 };
 
-def rn_for_step(node, init: {k: str}, cond: {k: str}, st: RnSt) -> RnRes {
+def rn_for_step(node: For, init: Node, cond: Node, st: RnSt) -> RnRes {
     let rs = rn_node(node.step, st);
     rn_for_body(node, init, cond, rs.node, rs.st)
 };
 
-def rn_for_body(node, init: {k: str}, cond: {k: str}, step: {k: str}, st: RnSt) -> RnRes {
-    let b = rn_block(node.body.stmts, st);
-    { st: b.st, node: { k: "for", init: init, cond: cond, step: step, body: { k: "block", stmts: b.stmts, line: node.body.line, col: node.body.col }, line: node.line, col: node.col } }
+def rn_for_body(node: For, init: Node, cond: Node, step: Node, st: RnSt) -> RnRes {
+    let body: Block = node.body;
+    let b = rn_block(body.stmts, st);
+    { st: b.st, node: { k: "for", init: init, cond: cond, step: step, body: { k: "block", stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
 };
 
-def rn_decl(node: {k: str}, st: RnSt) -> RnRes {
+def rn_decl(node: Decl, st: RnSt) -> RnRes {
     // NOTE: dispatch by shape into dedicated callees (see rn_node note):
     // named-def vs let-bound-func vs plain value — each body reads ONLY
     // its own shape's fields.
@@ -1093,13 +1125,13 @@ def rn_decl(node: {k: str}, st: RnSt) -> RnRes {
     }
 };
 
-def rn_decl_def(node, st: RnSt) -> RnRes {
+def rn_decl_def(node: Decl, st: RnSt) -> RnRes {
     // name pre-bound by rn_prepass; look it up (the empty arm below is a
     // fallback for a decl that never went through the prepass)
     rn_decl_def_lookup(node, rn_lookup(st, node.name), st)
 };
 
-def rn_decl_def_lookup(node, u: str, st: RnSt) -> RnRes {
+def rn_decl_def_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
     // NOTE: both arms share the key set (kind/def/name/v) — teq holds.
     if (u == "") {
         let b = rn_bind(st, node.name);
@@ -1109,12 +1141,12 @@ def rn_decl_def_lookup(node, u: str, st: RnSt) -> RnRes {
     }
 };
 
-def rn_decl_def_go(node, u: str, st: RnSt) -> RnRes {
+def rn_decl_def_go(node: Decl, u: str, st: RnSt) -> RnRes {
     let f = rn_func(node.v, st);
-    { st: f.st, node: { k: "decl", kind: "def", name: u, v: f.node, line: node.line, col: node.col } }
+    { st: f.st, node: { k: "decl", kind: "def", name: u, typ: rn_type(st, node.typ), v: f.node, line: node.line, col: node.col } }
 };
 
-def rn_decl_rest(node, st: RnSt) -> RnRes {
+def rn_decl_rest(node: Decl, st: RnSt) -> RnRes {
     if (node.v.k == "func") {
         rn_decl_func(node, st)
     } else {
@@ -1122,11 +1154,11 @@ def rn_decl_rest(node, st: RnSt) -> RnRes {
     }
 };
 
-def rn_decl_func(node, st: RnSt) -> RnRes {
+def rn_decl_func(node: Decl, st: RnSt) -> RnRes {
     rn_decl_func_lookup(node, rn_lookup(st, node.name), st)
 };
 
-def rn_decl_func_lookup(node, u: str, st: RnSt) -> RnRes {
+def rn_decl_func_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
     // NOTE: both arms share the key set — teq holds.
     if (u == "") {
         let b = rn_bind(st, node.name);
@@ -1136,34 +1168,34 @@ def rn_decl_func_lookup(node, u: str, st: RnSt) -> RnRes {
     }
 };
 
-def rn_decl_func_go(node, u: str, st: RnSt) -> RnRes {
+def rn_decl_func_go(node: Decl, u: str, st: RnSt) -> RnRes {
     let f = rn_func(node.v, st);
     rn_decl_func_finish(node, u, f.node, f.st)
 };
 
-def rn_decl_func_finish(node, u: str, fv: {k: str}, st: RnSt) -> RnRes {
+def rn_decl_func_finish(node: Decl, u: str, fv: Node, st: RnSt) -> RnRes {
     { st: st, node: { k: "decl", kind: node.kind, name: u, typ: rn_type(st, node.typ), v: fv, line: node.line, col: node.col } }
 };
 
-def rn_decl_val(node, st: RnSt) -> RnRes {
+def rn_decl_val(node: Decl, st: RnSt) -> RnRes {
     let r = rn_node(node.v, st);
     rn_decl_val_bind(node, r.node, r.st)
 };
 
-def rn_decl_val_bind(node, v: {k: str}, st: RnSt) -> RnRes {
+def rn_decl_val_bind(node: Decl, v: Node, st: RnSt) -> RnRes {
     let b = rn_bind(st, node.name);
     rn_decl_val_finish(node, v, b.uniq, b.st)
 };
 
-def rn_decl_val_finish(node, v: {k: str}, uniq: str, st: RnSt) -> RnRes {
+def rn_decl_val_finish(node: Decl, v: Node, uniq: str, st: RnSt) -> RnRes {
     let un = rn_unknown_type(st, node.typ);
-    let v2 = v;
+    let v2: Node = v;
     if (un != "") {
         // The value is still checked, after the error: `{ err; v }`.
-        let es: [{k: str}] = [];
+        let es: [Node] = [];
         es += rn_unknown_err(un, node.line, node.col);
         es += v;
-        v2 = rn_tn({ k: "block", stmts: es, line: node.line, col: node.col });
+        v2 = { k: "block", stmts: es, line: node.line, col: node.col };
         0
     } else { 0; };
     { st: st, node: { k: "decl", kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v2, line: node.line, col: node.col } }
@@ -1175,36 +1207,36 @@ def rn_decl_val_finish(node, v: {k: str}, uniq: str, st: RnSt) -> RnRes {
 // pass each one on as a plain VALUE (params/ptypes/ret/body/line/col) so no
 // callee carries a body full of `func.x` reads — rn_func_p4 is the one
 // place with two, the two longs.
-type RnFunc = { k: str, params: [{ k: str }], ptypes: [{ k: str }], ret: { k: str }, body: { k: str }, line: long, col: long, defs: [{ k: str }] };
-def rn_func(func: RnFunc, st: RnSt) -> RnRes {
+def rn_func(func: Func, st: RnSt) -> RnRes {
     rn_func_p1(func, func.params, rn_push(st))
 };
 
-def rn_func_p1(func: RnFunc, fparams, st: RnSt) -> RnRes {
+def rn_func_p1(func: Func, fparams: [str], st: RnSt) -> RnRes {
     rn_func_p2(func, fparams, func.ptypes, st)
 };
 
-def rn_func_p2(func: RnFunc, fparams, fptypes, st: RnSt) -> RnRes {
+def rn_func_p2(func: Func, fparams: [str], fptypes: [Type], st: RnSt) -> RnRes {
     rn_func_p3(func, fparams, fptypes, func.ret, st)
 };
 
-def rn_func_p3(func: RnFunc, fparams, fptypes, fret, st: RnSt) -> RnRes {
-    rn_func_p4(func, fparams, fptypes, fret, func.body, st)
+def rn_func_p3(func: Func, fparams: [str], fptypes: [Type], fret: Type, st: RnSt) -> RnRes {
+    let body: Block = func.body;
+    rn_func_p4(func, fparams, fptypes, fret, body, st)
 };
 
-def rn_func_p4(func: RnFunc, fparams, fptypes, fret, fbody, st: RnSt) -> RnRes {
+def rn_func_p4(func: Func, fparams: [str], fptypes: [Type], fret: Type, fbody: Block, st: RnSt) -> RnRes {
     rn_func_p5(fparams, fptypes, fret, fbody, func.line, func.col, st)
 };
 
-def rn_func_p5(fparams, fptypes, fret, fbody, fline: long, fcol: long, st: RnSt) -> RnRes {
+def rn_func_p5(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, st: RnSt) -> RnRes {
     rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, st)
 };
 
-def rn_func_params(fparams, fptypes, fret, fbody, fline: long, fcol: long, st: RnSt) -> RnRes {
+def rn_func_params(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, st: RnSt) -> RnRes {
     rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, [], 0, st)
 };
 
-def rn_func_go(fparams, fptypes, fret, fbody, fline: long, fcol: long, params: [str], i: long, st: RnSt) -> RnRes {
+def rn_func_go(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], i: long, st: RnSt) -> RnRes {
     // NOTE: recursion over the param list (replaces the while loop): the
     // loop's `st = b.st` rebind poisoned the merged-shape read of st.
     // fparams stays BARE (like res(node)): the single `fparams[i]` read
@@ -1218,26 +1250,26 @@ def rn_func_go(fparams, fptypes, fret, fbody, fline: long, fcol: long, params: [
     }
 };
 
-def rn_func_body(fptypes, fret, fbody: {k: str, stmts: [{k: str}], line: long, col: long}, fline: long, fcol: long, params: [str], st: RnSt) -> RnRes {
+def rn_func_body(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], st: RnSt) -> RnRes {
     // NOTE: fbody read ONCE here (one read site — no merge).
     let b = rn_block(fbody.stmts, st);
     rn_func_finish(fptypes, fret, fbody, fline, fcol, params, b.stmts, rn_pop(b.st))
 };
 
-def rn_func_finish(fptypes, fret, fbody, fline: long, fcol: long, params: [str], stmts: [{k: str}], st: RnSt) -> RnRes {
+def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], stmts: [Node], st: RnSt) -> RnRes {
     // NOTE: NO record reads here — all values are params already. `fbody`
     // rides along for signature parity with the C twin and is never read.
     let un = rn_unknown_list(st, fptypes);
     if (un == "") { un = rn_unknown_type(st, fret); 0; } else { 0; };
-    let body: [{k: str}] = [];
+    let body: [Node] = [];
     if (un != "") { body += rn_unknown_err(un, fline, fcol); 0; } else { 0; };
     body += stmts;
-    { st: st, node: { k: "func", params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: "block", stmts: body, line: fline, col: fcol }, line: fline, col: fcol } }
+    { st: st, node: { k: "func", params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: "block", stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [] } }
 };
 
 
 
-def rename_program(ast) -> {k: str} {
+def rename_program(ast: Block) -> Block {
     let none: [Dfl] = [];
     let nofile: [long] = [];
     let nomods: [str] = [];
@@ -1249,9 +1281,9 @@ def rename_program(ast) -> {k: str} {
 // and fmods say which lines belong to a module imported by name: line
 // i + 1 is in file ofile[i], and that file is module fmods[ofile[i]]
 // ("" for none).
-def rename_program_x(ast, dfl: [Dfl], ofile: [long], fmods: [str]) -> {k: str} {
+def rename_program_x(ast: Block, dfl: [Dfl], ofile: [long], fmods: [str]) -> Block {
     let noids: [long] = [];
-    let nonodes: [RnRef] = [];
+    let nonodes: [TRef] = [];
     rn_tref_ids = noids;
     rn_tref_nodes = nonodes;
     rn_ofile = ofile;
@@ -1266,9 +1298,8 @@ def rename_program_x(ast, dfl: [Dfl], ofile: [long], fmods: [str]) -> {k: str} {
 };
 
 // The module top-level statement s belongs to ("" for none).
-def rn_stmt_mod(s: {k: str}) -> str {
+def rn_stmt_mod(s: Node) -> str {
     if (s.k == "void") {
-        // (the one statement with no line)
         ""
     } else {
         let ln: long = s.line;
@@ -1281,20 +1312,27 @@ def rn_stmt_mod(s: {k: str}) -> str {
 
 // A module's top-level def or let, under its qualified name (`fs.exists`);
 // a `y_` name stays as it is (generated code calls those by label).
-def rn_qualify(s) -> {k: str} {
+def rn_qualify(s: Node) -> Node {
     let m = rn_stmt_mod(s);
     if (m == "" || s.k != "decl") {
         s
     } else {
-        let nm: str = s.name;
-        if (nm.starts_with("y_")) { s } else { rn_rebuild_decl(s, m + "." + nm) }
+        let decl: Decl = s;
+        let nm: str = decl.name;
+        if (nm.starts_with("y_")) {
+            s
+        } else {
+            let rebuilt: Decl = rn_rebuild_decl(decl, m + "." + nm);
+            let node: Node = rebuilt;
+            node
+        }
     }
 };
 
 // The unit's top level: rn_block, with a module's names qualified and
 // each statement renamed in its own module's scope (rn_mod).
-def rn_top(stmts: [{k: str}], st: RnSt) -> RnStmts {
-    let q: [{k: str}] = [];
+def rn_top(stmts: [Node], st: RnSt) -> RnStmts {
+    let q: [Node] = [];
     if (len(rn_mods) > 0) {
         foreach (s in stmts) { q += rn_qualify(s); };
         0
@@ -1303,7 +1341,7 @@ def rn_top(stmts: [{k: str}], st: RnSt) -> RnStmts {
     st = rn_push(st);
     st = rn_prepass(q, st);
     let kept = rn_drop_typedefs(q, st);
-    let out: [{k: str}] = [];
+    let out: [Node] = [];
     foreach (s in kept) {
         if (len(rn_mods) > 0) { rn_mod = rn_stmt_mod(s); 0; } else { 0; };
         let r = rn_node(s, st);
@@ -1315,12 +1353,12 @@ def rn_top(stmts: [{k: str}], st: RnSt) -> RnStmts {
     { st: st, stmts: out }
 };
 
-def rename_program_go(stmts: [{k: str}], line: long, col: long, dfl: [Dfl]) -> {k: str} {
+def rename_program_go(stmts: [Node], line: long, col: long, dfl: [Dfl]) -> Block {
     // NOTE: fields passed as values (see rn_func note). dfl is copied:
     // rn_note_defaults appends to the list in place.
     let d0: [Dfl] = [];
     d0 += dfl;
-    let st = { scopes: [[]], n: 1, tys: [], dfl: d0 };
+    let st: RnSt = { scopes: [[]], n: 1, tys: [], dfl: d0 };
     let b = rn_top(stmts, st);
     { k: "block", stmts: b.stmts, line: line, col: col }
 };

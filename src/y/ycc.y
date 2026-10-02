@@ -26,7 +26,7 @@ import fs;
 
 def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, std_src: bool, std_pack: str } {
     let out = "";
-    let files = [];
+    let files: [str] = [];
     let asm_only = false;
     let timing = false;
     let allow_exec = true;

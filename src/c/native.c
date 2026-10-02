@@ -118,6 +118,11 @@ static long tdec_n;
 static Yv *ty_seen;
 static Yv *ty_forms;
 static long ty_count;
+/* ty_desc's canonical forms of the recursive aliases a unit has met, by
+ * their names in the unit (tmp): a big recursive union's form is long, and
+ * a field read through it asks for every member's (tyset_reset clears). */
+static Yv *ty_ref_tmps;
+static Yv *ty_ref_forms;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
@@ -303,6 +308,8 @@ void tyset_grow(void);
 void tyset_reset(void);
 void ty_collision(Yv *lbl, Yv *form);
 Yv *ty_desc(Yv *st, Yv *rt);
+Yv *ty_form(Yv *rt);
+Yv *alias_of(Yv *t);
 long ty_shape(Yv *t);
 int same_rec(Yv *lt, Yv *t);
 Yv *rec_lit_type(Yv *lt, Yv *want);
@@ -5259,6 +5266,9 @@ int union_within(Yv *s, Yv *t) {
     if (!ys_eq_lit(yr_get(u, "k"), "tunion")) {
         return 0;
     }
+    if (teq(unfold(s), u)) {
+        return 1;
+    }
     Yv *ss = union_parts(unfold(s));
     long i = 0;
     while (i < yv_len(ss)) {
@@ -6524,6 +6534,106 @@ void tyset_reset(void) {
     ty_seen = yav(0);
     ty_forms = yav(0);
     ty_count = 0;
+    ty_ref_tmps = yav(0);
+    ty_ref_forms = yav(0);
+}
+
+/* The canonical form of record type rt (types.c tcanon), remembered for a
+ * recursive alias (ty_ref_tmps). A record type spelled out that equals a
+ * recursive alias (alias_of) takes the alias's form. */
+Yv *ty_form(Yv *rt) {
+    if (ys_eq_lit(yr_get(rt, "k"), "trec")) {
+        Yv *al = alias_of(rt);
+        if (ys_eq_lit(yr_get(al, "k"), "tref")) {
+            return ty_form(al);
+        }
+        return tcanon(rt);
+    }
+    if (!ys_eq_lit(yr_get(rt, "k"), "tref")) {
+        return tcanon(rt);
+    }
+    Yv *tmp = yr_get(rt, "tmp");
+    long i = 0;
+    while (i < yv_len(ty_ref_tmps)) {
+        if (ys_eq(ya_get(ty_ref_tmps, i), tmp)) {
+            return ya_get(ty_ref_forms, i);
+        }
+        i = i + 1;
+    }
+    Yv *form = tcanon(rt);
+    ty_ref_tmps = ya_push(ty_ref_tmps, tmp);
+    ty_ref_forms = ya_push(ty_ref_forms, form);
+    return form;
+}
+
+/* The recursive alias equal (types.c teq) to record type t, spelled out --
+ * a record literal's inferred type, say ({k: str, to: Type} is the alias
+ * TPtr) -- among the aliases reachable from t; tnone when none is. Equal
+ * types must have one descriptor, or a read through a union holding the
+ * record finds no member's tag. */
+Yv *alias_of(Yv *t) {
+    Yv *names = ys_join(rec_names(yr_get(t, "fields")), ys(","));
+    Yv *seen = yav(0);
+    Yv *todo = yav(0);
+    todo = ya_push(todo, t);
+    long i = 0;
+    while (i < yv_len(todo)) {
+        Yv *x = ya_get(todo, i);
+        Yv *k = yr_get(x, "k");
+        if (ys_eq_lit(k, "tref")) {
+            Yv *tmp = yr_get(x, "tmp");
+            long j = 0;
+            int met = 0;
+            while (j < yv_len(seen)) {
+                if (ys_eq(ya_get(seen, j), tmp)) {
+                    met = 1;
+                }
+                j = j + 1;
+            }
+            if (!met) {
+                seen = ya_push(seen, tmp);
+                Yv *u = unfold(x);
+                if (ys_eq_lit(yr_get(u, "k"), "trec") &&
+                    ys_eq(ys_join(rec_names(yr_get(u, "fields")), ys(",")), names) &&
+                    teq(t, x)) {
+                    return x;
+                }
+                todo = ya_push(todo, u);
+            }
+        } else if (ys_eq_lit(k, "trec")) {
+            Yv *fs = yr_get(x, "fields");
+            long j = 0;
+            while (j < yv_len(fs)) {
+                todo = ya_push(todo, yr_get(ya_get(fs, j), "typ"));
+                j = j + 1;
+            }
+        } else if (ys_eq_lit(k, "tunion")) {
+            Yv *ms = yr_get(x, "ts");
+            long j = 0;
+            while (j < yv_len(ms)) {
+                todo = ya_push(todo, ya_get(ms, j));
+                j = j + 1;
+            }
+        } else if (ys_eq_lit(k, "tfunc")) {
+            Yv *as = yr_get(x, "args");
+            long j = 0;
+            while (j < yv_len(as)) {
+                todo = ya_push(todo, ya_get(as, j));
+                j = j + 1;
+            }
+            todo = ya_push(todo, yr_get(x, "ret"));
+        } else if (ys_eq_lit(k, "tmap")) {
+            todo = ya_push(todo, yr_get(x, "key"));
+            todo = ya_push(todo, yr_get(x, "of"));
+        } else if (ys_eq_lit(k, "tptr")) {
+            todo = ya_push(todo, yr_get(x, "to"));
+        } else if (ys_eq_lit(k, "tarr") || ys_eq_lit(k, "tarrfix") ||
+                   ys_eq_lit(k, "topt")) {
+            todo = ya_push(todo, yr_get(x, "of"));
+        }
+        i = i + 1;
+    }
+    return yr(1, "k", ys("tnone"));
 }
 
 /* Two types with one descriptor label: stop (a 64-bit hash collision;
@@ -6540,7 +6650,7 @@ void ty_collision(Yv *lbl, Yv *form) {
  * canonical form, quads) goes into the unit the first time the unit uses
  * it. */
 Yv *ty_desc(Yv *st, Yv *rt) {
-    Yv *form = tcanon(rt);
+    Yv *form = ty_form(rt);
     Yv *lbl = ys_cat(ys("ytt_"), hex16(fnv64(form)));
     long added = tyset_add(lbl, form);
     if (added < 0) {

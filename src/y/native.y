@@ -73,7 +73,7 @@ let pkg_ns: [str] = [];
 // read back, and the count behind the unit ids tdecode gives them.
 let tcode_refs: [str] = [];
 let tdec_encs: [str] = [];
-let tdec_refs: [RnRef] = [];
+let tdec_refs: [TRef] = [];
 let tdec_n = 0;
 // The record-type descriptors emitted so far (ty_desc; link_units reuses
 // it for the whole program): an open-addressing set of their labels, with
@@ -419,7 +419,7 @@ def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
 // inputs always yield the same key (sufficient for seen-dedup).
 def norm_path(p: str) -> str {
     let parts = split(p, "/");
-    let out = [];
+    let out: [str] = [];
     let i = 0;
     while (i < len(parts)) {
         let seg = parts[i];
@@ -479,7 +479,7 @@ def dir_of(p: str) -> str {
 };
 
 def std_resolve(name: str, base_dir: str) -> str {
-    let cands = [];
+    let cands: [str] = [];
     cands += base_dir + "/" + name + ".y";
     cands += base_dir + "/std/" + name + ".y";
     // a package's source roots (native_resolve_pk)
@@ -539,7 +539,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
         let out_lines: [str] = [];
         let ofile: [long] = [];
         let oline: [long] = [];
-        let imports = [];
+        let imports: [str] = [];
         let i = 0;
         let n = len(lines);
         while (i < n) {
@@ -1092,7 +1092,7 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
         r = r + 1;
         0
     };
-    let scanned = [];
+    let scanned: [bool] = [];
     let i = 0;
     while (i < n) {
         scanned += false;
@@ -1145,8 +1145,8 @@ def shake_refs(text: str, root_refs: [str]) -> str {
     let n = len(b);
     // every label starts a block; lines before the first label (directives)
     // form a head block that is always kept
-    let names = [];
-    let starts = [];
+    let names: [str] = [];
+    let starts: [long] = [];
     let i = 0;
     let ls = 0;
     while (i < n) {
@@ -1191,8 +1191,8 @@ def shake_refs(text: str, root_refs: [str]) -> str {
         text
     } else {
         // per-block references + fall-through flags
-        let refs = [];
-        let falls = [];
+        let refs: [[str]] = [];
+        let falls: [bool] = [];
         let k = 0;
         while (k < nb) {
             let lo = starts[k];
@@ -1215,7 +1215,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
             k = k + 1;
             0
         };
-        let keep = [];
+        let keep: [bool] = [];
         k = 0;
         while (k < nb) {
             if (len(names[k]) == 0) {
@@ -1230,7 +1230,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
         };
         keep = shake_keep(names, refs, falls, keep, root_refs);
         // reassemble kept blocks (their byte ranges), in order
-        let pieces = [];
+        let pieces: [str] = [];
         k = 0;
         while (k < nb) {
             if (keep[k]) {
@@ -1256,8 +1256,8 @@ def shake_refs(text: str, root_refs: [str]) -> str {
 // arch prelude itself.
 def prune_bodies(labels: [str], refs: [[str]], asm_roots: str) -> { refs: [str], keep: [bool] } {
     let nb = len(labels);
-    let keep = [];
-    let falls = [];
+    let keep: [bool] = [];
+    let falls: [bool] = [];
     let i = 0;
     while (i < nb) {
         keep += false;
@@ -1272,7 +1272,7 @@ def prune_bodies(labels: [str], refs: [[str]], asm_roots: str) -> { refs: [str],
         0
     } else { 0; };
     keep = shake_keep(labels, refs, falls, keep, roots);
-    let outrefs = [];
+    let outrefs: [str] = [];
     i = 0;
     while (i < nb) {
         if (keep[i]) {
@@ -1359,18 +1359,17 @@ def is_ns(name: str, imports: [str]) -> bool {
     found
 };
 
-// Identity with a declared {k: str} return: normalizes multi-shape
-// expression arms (strip_*/infer rebuilds a different node kind per arm,
-// which strict branch-teq rejects) into unknown-shaped flows. Callers read
-// .k/.line/.col directly; deeper reads unify quietly (tcompat law). The
-// RUNTIME value passes through untouched (same node object).
-def normnode(anode) -> { k: str } { anode };
+// Identity helper giving rebuilt expression arms the shared AST union type.
+def normnode(anode: Node) -> Node { anode };
+
+// Type constructors flow through their separate type-node union.
+def normtype(ty: Type) -> Type { ty };
 
 // strip_namespaces: dot(NAME, key) with NAME an import namespace -> id(key).
 // Full AST rebuild (only dot nodes change, but uniform rebuild is simplest).
 
-def strip_list(nodes: [{ k: str }], imports: [str]) -> [{ k: str }] {
-    let out = [];
+def strip_list(nodes: [Node], imports: [str]) -> [Node] {
+    let out: [Node] = [];
     let i = 0;
     while (i < len(nodes)) {
         out += strip_ns(nodes[i], imports);
@@ -1379,16 +1378,18 @@ def strip_list(nodes: [{ k: str }], imports: [str]) -> [{ k: str }] {
     out
 };
 
-def strip_ns(node, imports: [str]) -> { k: str } {
+def strip_ns(node: Node, imports: [str]) -> Node {
     let k = node.k;
     if (k == "dot") {
-        let dobj = node.obj;
+        let dot: Dot = node;
+        let dobj = dot.obj;
         let obj = strip_ns(dobj, imports);
-        let okey = node.key;
-        let oline = node.line;
-        let ocol = node.col;
+        let okey = dot.key;
+        let oline = dot.line;
+        let ocol = dot.col;
         if (obj.k == "id") {
-            let ov = obj.v;
+            let id: Leaf = obj;
+            let ov = id.v;
             if (is_ns(ov, imports)) {
                 normnode({ k: "id", v: okey, line: oline, col: ocol })
             } else if (is_ns(ov, pkg_ns)) {
@@ -1400,72 +1401,103 @@ def strip_ns(node, imports: [str]) -> { k: str } {
             normnode({ k: "dot", obj: obj, key: okey, line: oline, col: ocol })
         }
     } else if (k == "un") {
-        normnode({ k: "un", op: node.op, e: strip_ns(node.e, imports), line: node.line, col: node.col })
+        let un: Un = node;
+        normnode({ k: "un", op: un.op, e: strip_ns(un.e, imports), line: un.line, col: un.col })
     } else if (k == "addr" || k == "deref") {
-        normnode({ k: k, e: strip_ns(node.e, imports), line: node.line, col: node.col })
+        let wrap: Wrap = node;
+        normnode({ k: k, e: strip_ns(wrap.e, imports), line: wrap.line, col: wrap.col })
     } else if (k == "bin") {
-        normnode({ k: "bin", op: node.op, l: strip_ns(node.l, imports), r: strip_ns(node.r, imports), line: node.line, col: node.col })
+        let bin: Bin = node;
+        normnode({ k: "bin", op: bin.op, l: strip_ns(bin.l, imports), r: strip_ns(bin.r, imports), line: bin.line, col: bin.col })
     } else if (k == "call") {
-        normnode({ k: "call", callee: strip_ns(node.callee, imports), args: strip_list(node.args, imports), line: node.line, col: node.col })
+        let call: Call = node;
+        normnode({ k: "call", callee: strip_ns(call.callee, imports), args: strip_list(call.args, imports), line: call.line, col: call.col })
     } else if (k == "if") {
-        normnode({ k: "if", cond: strip_ns(node.cond, imports), then: strip_ns(node.then, imports), els: strip_ns(node.els, imports), has_else: node.has_else, line: node.line, col: node.col })
+        let branch: If = node;
+        normnode({ k: "if", cond: strip_ns(branch.cond, imports), then: strip_ns(branch.then, imports), els: strip_ns(branch.els, imports), has_else: branch.has_else, line: branch.line, col: branch.col })
     } else if (k == "while") {
-        normnode({ k: "while", cond: strip_ns(node.cond, imports), body: strip_ns(node.body, imports), line: node.line, col: node.col })
+        let loop: While = node;
+        normnode({ k: "while", cond: strip_ns(loop.cond, imports), body: strip_ns(loop.body, imports), line: loop.line, col: loop.col })
     } else if (k == "block") {
-        normnode({ k: "block", stmts: strip_list(node.stmts, imports), line: node.line, col: node.col })
+        let block: Block = node;
+        normnode({ k: "block", stmts: strip_list(block.stmts, imports), line: block.line, col: block.col })
     } else if (k == "decl") {
-        strip_decl(node, imports)
+        let decl: Decl = node;
+        strip_decl(decl, imports)
     } else if (k == "func") {
-        normnode({ k: "func", params: node.params, ptypes: node.ptypes, ret: node.ret, body: strip_ns(node.body, imports), line: node.line, col: node.col, defs: node.defs })
+        let func: Func = node;
+        normnode({ k: "func", params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs })
     } else if (k == "assign") {
-        normnode({ k: "assign", name: node.name, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        let assign: Assign = node;
+        normnode({ k: "assign", name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
     } else if (k == "incdec") {
-        normnode({ k: "incdec", op: node.op, pre: node.pre, tgt: strip_ns(node.tgt, imports), line: node.line, col: node.col })
+        let incdec: IncDec = node;
+        normnode({ k: "incdec", op: incdec.op, pre: incdec.pre, tgt: strip_ns(incdec.tgt, imports), line: incdec.line, col: incdec.col })
     } else if (k == "opassign") {
-        normnode({ k: "opassign", op: node.op, tgt: strip_ns(node.tgt, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        let assign: OpAssign = node;
+        normnode({ k: "opassign", op: assign.op, tgt: strip_ns(assign.tgt, imports), v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
     } else if (k == "store") {
-        normnode({ k: "store", p: strip_ns(node.p, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        let store: Store = node;
+        normnode({ k: "store", p: strip_ns(store.p, imports), v: strip_ns(store.v, imports), line: store.line, col: store.col })
     } else if (k == "ret") {
-        normnode({ k: "ret", e: strip_ns(node.e, imports), line: node.line, col: node.col })
+        let ret: Wrap = node;
+        normnode({ k: "ret", e: strip_ns(ret.e, imports), line: ret.line, col: ret.col })
     } else if (k == "array") {
-        normnode({ k: "array", elems: strip_list(node.elems, imports), line: node.line, col: node.col })
+        let array: ArrLit = node;
+        normnode({ k: "array", elems: strip_list(array.elems, imports), line: array.line, col: array.col })
     } else if (k == "arrrep") {
-        normnode({ k: "arrrep", v: strip_ns(node.v, imports), n: node.n, line: node.line, col: node.col })
+        let rep: ArrRep = node;
+        normnode({ k: "arrrep", v: strip_ns(rep.v, imports), n: rep.n, line: rep.line, col: rep.col })
     } else if (k == "rec") {
-        normnode({ k: "rec", keys: node.keys, vals: strip_list(node.vals, imports), line: node.line, col: node.col })
+        let rec: RecLit = node;
+        normnode({ k: "rec", keys: rec.keys, vals: strip_list(rec.vals, imports), line: rec.line, col: rec.col })
     } else if (k == "map") {
-        normnode({ k: "map", keys: node.keys, vals: strip_list(node.vals, imports), line: node.line, col: node.col })
+        let map: RecLit = node;
+        normnode({ k: "map", keys: map.keys, vals: strip_list(map.vals, imports), line: map.line, col: map.col })
     } else if (k == "index") {
-        normnode({ k: "index", arr: strip_ns(node.arr, imports), idx: strip_ns(node.idx, imports), line: node.line, col: node.col })
+        let index: Index = node;
+        normnode({ k: "index", arr: strip_ns(index.arr, imports), idx: strip_ns(index.idx, imports), line: index.line, col: index.col })
     } else if (k == "slice") {
-        normnode({ k: "slice", arr: strip_ns(node.arr, imports), lo: strip_ns(node.lo, imports), hi: strip_ns(node.hi, imports), line: node.line, col: node.col })
+        let slice: Slice = node;
+        normnode({ k: "slice", arr: strip_ns(slice.arr, imports), lo: strip_ns(slice.lo, imports), hi: strip_ns(slice.hi, imports), line: slice.line, col: slice.col })
     } else if (k == "idxassign") {
-        normnode({ k: "idxassign", arr: strip_ns(node.arr, imports), idx: strip_ns(node.idx, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        let assign: IdxAssign = node;
+        normnode({ k: "idxassign", arr: strip_ns(assign.arr, imports), idx: strip_ns(assign.idx, imports), v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
     } else if (k == "dotassign") {
-        let dao = node.obj;
-        if (dao.k == "id" && is_ns(dao.v, pkg_ns)) {
-            // `json.limit = v`: a package's global, which is read-only
-            // (the checker says so of the qualified name)
-            normnode({ k: "assign", name: dao.v + "." + node.key, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        let assign: DotAssign = node;
+        let dao = assign.obj;
+        if (dao.k == "id") {
+            let id: Leaf = dao;
+            if (is_ns(id.v, pkg_ns)) {
+                // `json.limit = v`: a package's global, which is read-only
+                // (the checker says so of the qualified name)
+                normnode({ k: "assign", name: id.v + "." + assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+            } else {
+                normnode({ k: "dotassign", obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+            }
         } else {
-            normnode({ k: "dotassign", obj: strip_ns(dao, imports), key: node.key, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+            normnode({ k: "dotassign", obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
         }
     } else if (k == "foreach") {
-        normnode({ k: "foreach", name: node.name, iter: strip_ns(node.iter, imports), body: strip_ns(node.body, imports), line: node.line, col: node.col })
+        let loop: Foreach = node;
+        normnode({ k: "foreach", name: loop.name, iter: strip_ns(loop.iter, imports), body: strip_ns(loop.body, imports), line: loop.line, col: loop.col })
     } else if (k == "forrange") {
-        normnode({ k: "forrange", name: node.name, lo: strip_ns(node.lo, imports), hi: strip_ns(node.hi, imports), body: strip_ns(node.body, imports), line: node.line, col: node.col })
+        let loop: ForRange = node;
+        normnode({ k: "forrange", name: loop.name, lo: strip_ns(loop.lo, imports), hi: strip_ns(loop.hi, imports), body: strip_ns(loop.body, imports), line: loop.line, col: loop.col })
     } else if (k == "for") {
-        normnode({ k: "for", init: strip_ns(node.init, imports), cond: strip_ns(node.cond, imports), step: strip_ns(node.step, imports), body: strip_ns(node.body, imports), line: node.line, col: node.col })
+        let loop: For = node;
+        normnode({ k: "for", init: strip_ns(loop.init, imports), cond: strip_ns(loop.cond, imports), step: strip_ns(loop.step, imports), body: strip_ns(loop.body, imports), line: loop.line, col: loop.col })
     } else if (k == "sliceassign") {
-        normnode({ k: "sliceassign", arr: strip_ns(node.arr, imports), lo: strip_ns(node.lo, imports), hi: strip_ns(node.hi, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        let assign: SliceAssign = node;
+        normnode({ k: "sliceassign", arr: strip_ns(assign.arr, imports), lo: strip_ns(assign.lo, imports), hi: strip_ns(assign.hi, imports), v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
     } else {
         normnode(node)
     }
 };
 
-def strip_decl(node, imports: [str]) -> { k: str } {
+def strip_decl(node: Decl, imports: [str]) -> Node {
     if (node.kind == "def") {
-        normnode({ k: "decl", kind: "def", name: node.name, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: "decl", kind: "def", name: node.name, typ: normtype({ k: "tnone" }), v: strip_ns(node.v, imports), line: node.line, col: node.col })
     } else {
         normnode({ k: "decl", kind: node.kind, name: node.name, typ: node.typ, v: strip_ns(node.v, imports), line: node.line, col: node.col })
     }
@@ -1476,7 +1508,12 @@ def strip_decl(node, imports: [str]) -> { k: str } {
 // post-rename, so no scopes or shadowing. kind: "local"|"param" (frame
 // slot at off), "func" (label), "global" (.bss cell at label),
 // "closure" (slot holding a record), "box"/"capture" (shared cells).
-type Slot = { name: str, kind: str, off: long, label: str, typ: { k: str } };
+type Slot = { name: str, kind: str, off: long, label: str, typ: Type };
+type ArrTy = TOf | TFix;
+type NodeE = Wrap | Un | Narrow | MatchEnd;
+type NodeV = ArrRep | Assign | Decl;
+type EmitMain = { params: [str], ptypes: [Type], ret: Type, body: Node, line: long };
+type EmitFunc = Func | EmitMain;
 type EmitSt = { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: str, end_label: str, fns: [Sym], bodies: [str] };
 // The state after making a label (next_loc, ty_desc), and the label.
 type StLbl = { st: EmitSt, lbl: str };
@@ -1569,7 +1606,7 @@ def env_find(st: EmitSt, name: str) -> Slot {
     // first. Same answer, 85% fewer string compares.
     let env = st.env;
     let i = len(env) - 1;
-    let found = { name: "", kind: "none", off: 0, label: "", typ: { k: "tnone" } };
+    let found: Slot = { name: "", kind: "none", off: 0, label: "", typ: normtype({ k: "tnone" }) };
     while (i >= 0) {
         let e = env[i];
         if (e.name == name) {
@@ -1583,7 +1620,7 @@ def env_find(st: EmitSt, name: str) -> Slot {
     found
 };
 
-def env_define(st: EmitSt, name: str, kind: str, off: long, label: str, typ) -> EmitSt {
+def env_define(st: EmitSt, name: str, kind: str, off: long, label: str, typ: Type) -> EmitSt {
     st.env += { name: name, kind: kind, off: off, label: label, typ: typ };
     let env = st.env;
     { out: st.out, rodata: st.rodata, uid: st.uid,
@@ -1598,138 +1635,177 @@ def env_define(st: EmitSt, name: str, kind: str, off: long, label: str, typ) -> 
 
 // The static type of an expression (infer_go), a recursive alias unfolded
 // (types.y unfold): the emitter looks into it.
-def infer(st: EmitSt, node) -> { k: str } {
+def infer(st: EmitSt, node: Node) -> Type {
     let t = infer_go(st, node);
-    if (t.k == "tref") { types.unfold(t) } else { t }
+    if (t.k == "tref") {
+        let unfolded: Type = types.unfold(t);
+        unfolded
+    } else { t }
 };
 
-def infer_go(st: EmitSt, node) -> { k: str } {
+def infer_go(st: EmitSt, node: Node) -> Type {
     let k = node.k;
     if (k == "num") {
-        if (lit_is_float(node.v)) { { k: "tfloat" } } else { { k: "tlong" } }
+        let leaf: Leaf = node;
+        if (lit_is_float(leaf.v)) { normtype({ k: "tfloat" }) } else { normtype({ k: "tlong" }) }
     }
-    else if (k == "str") { { k: "tstr" } }
-    else if (k == "bstr") { { k: "tarr", of: { k: "tbyte" } } }
-    else if (k == "bool") { { k: "tbool" } }
-    else if (k == "void") { { k: "tvoid" } }
+    else if (k == "str") { normtype({ k: "tstr" }) }
+    else if (k == "bstr") { normtype({ k: "tarr", of: normtype({ k: "tbyte" }) }) }
+    else if (k == "bool") { normtype({ k: "tbool" }) }
+    else if (k == "void") { normtype({ k: "tvoid" }) }
     else if (k == "id") {
-        if (node.v == "self") { cur_fn_type(st) } else {
-            let e = env_find(st, node.v);
+        let id: Leaf = node;
+        if (id.v == "self") { normtype(cur_fn_type(st)) } else {
+            let e = env_find(st, id.v);
             if (e.kind == "none") {
-                if (node.v == "none") { normnode({ k: "topt", of: { k: "tunk" } }) } else { { k: "tunk" } }
+                if (id.v == "none") { normtype({ k: "topt", of: normtype({ k: "tunk" }) }) } else { normtype({ k: "tunk" }) }
             } else { e.typ }
         }
     } else if (k == "un") {
-        if (node.op == "-") {
+        let un: Un = node;
+        if (un.op == "-") {
             // negating a byte is long arithmetic (types.y): -b leaves 0..255
-            let ut = infer(st, node.e);
-            if (ut.k == "tbyte") { { k: "tlong" } } else { ut }
-        } else if (node.op == "~") { { k: "tlong" } }
-        else { { k: "tbool" } }
+            let ut = infer(st, un.e);
+            if (ut.k == "tbyte") { normtype({ k: "tlong" }) } else { ut }
+        } else if (un.op == "~") { normtype({ k: "tlong" }) }
+        else { normtype({ k: "tbool" }) }
     } else if (k == "bin") {
-        let op = node.op;
+        let bin: Bin = node;
+        let op = bin.op;
         if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "::") {
-            let bl = infer(st, node.l);
-            let br = infer(st, node.r);
+            let bl = infer(st, bin.l);
+            let br = infer(st, bin.r);
             if (op == "+" && (bl.k == "tarr" || bl.k == "tarrfix")) {
                 // array `+` builds a NEW heap array (types.y
                 // typeof_arith_arr) -- the element type survives, except
                 // that `[T] + [[T]]` prepends the left one as an element.
                 if ((br.k == "tarr" || br.k == "tarrfix") && types.arr_plus_kind(bl, br) == "prepend") {
-                    { k: "tarr", of: br.of }
+                    let right: ArrTy = br;
+                    normtype({ k: "tarr", of: right.of })
                 } else {
-                    { k: "tarr", of: bl.of }
+                    let left: ArrTy = bl;
+                    normtype({ k: "tarr", of: left.of })
                 }
             } else if (op == "+" && (br.k == "tarr" || br.k == "tarrfix")) {
-                { k: "tarr", of: br.of }
+                let right: ArrTy = br;
+                normtype({ k: "tarr", of: right.of })
             } else if (op == "::") {
                 // cons: one element prepended to the right's array
-                { k: "tarr", of: br.of }
+                let right: ArrTy = br;
+                normtype({ k: "tarr", of: right.of })
             } else if (op == "+" && (bl.k == "tstr" || br.k == "tstr")) {
-                { k: "tstr" }
+                normtype({ k: "tstr" })
             } else if (bl.k == "tfloat") {
-                { k: "tfloat" }
+                normtype({ k: "tfloat" })
             } else if (br.k == "tfloat") {
-                { k: "tfloat" }
+                normtype({ k: "tfloat" })
             } else {
-                { k: "tlong" }
+                normtype({ k: "tlong" })
             }
         } else if (types.is_bits_op(op)) {
-            { k: "tlong" }
+            normtype({ k: "tlong" })
         } else {
-            { k: "tbool" }
+            normtype({ k: "tbool" })
         }
     } else if (k == "func") {
-        normnode(func_type_in(st, node))
+        let func: Func = node;
+        normtype(func_type_in(st, func))
     } else if (k == "addr") {
-        normnode({ k: "tptr", to: infer(st, node.e) })
+        let addr: Wrap = node;
+        normtype({ k: "tptr", to: infer(st, addr.e) })
     } else if (k == "arrrep") {
-        normnode({ k: "tarrfix", of: infer(st, node.v), n: node.n })
+        let rep: ArrRep = node;
+        normtype({ k: "tarrfix", of: infer(st, rep.v), n: rep.n })
     } else if (k == "array") {
-        let elems = node.elems;
+        let array: ArrLit = node;
+        let elems: [Node] = array.elems;
         if (len(elems) == 0) {
-            normnode({ k: "tarr", of: { k: "tunk" } })
+            normtype({ k: "tarr", of: normtype({ k: "tunk" }) })
         } else {
-            normnode({ k: "tarr", of: infer(st, elems[0]) })
+            normtype({ k: "tarr", of: infer(st, elems[0]) })
         }
     } else if (k == "index") {
         // checker guarantees an array base (any expression); the element
         // type is the base type's `of`.
-        let iarr = node.arr;
+        let index: Index = node;
+        let iarr = index.arr;
         let bt = infer(st, iarr);
         if (bt.k == "tarrfix" || bt.k == "tarr") {
-            bt.of
+            let arr: ArrTy = bt;
+            arr.of
         } else if (bt.k == "tmap") {
             // m[k] is always optional: V? for any V
-            normnode({ k: "topt", of: bt.of })
+            let map: TMap = bt;
+            normtype({ k: "topt", of: map.of })
         } else if (bt.k == "tstr") {
-            { k: "tbyte" }
+            normtype({ k: "tbyte" })
         } else {
-            { k: "tunk" }
+            normtype({ k: "tunk" })
         }
     } else if (k == "slice") {
         // arr[lo:hi] keeps the element type but is always a heap [T].
-        let ts = infer(st, node.arr);
-        if (ts.k == "tarr") { { k: "tarr", of: ts.of } }
-        else if (ts.k == "tarrfix") { { k: "tarr", of: ts.of } }
-        else if (ts.k == "tstr") { { k: "tstr" } }
-        else { { k: "tunk" } }
+        let slice: Slice = node;
+        let ts = infer(st, slice.arr);
+        if (ts.k == "tarr") {
+            let arr: TOf = ts;
+            normtype({ k: "tarr", of: arr.of })
+        }
+        else if (ts.k == "tarrfix") {
+            let arr: TFix = ts;
+            normtype({ k: "tarr", of: arr.of })
+        }
+        else if (ts.k == "tstr") { normtype({ k: "tstr" }) }
+        else { normtype({ k: "tunk" }) }
     } else if (k == "char") {
-        { k: "tbyte" }
+        normtype({ k: "tbyte" })
     } else if (k == "rectest") {
-        { k: "tbool" }
+        normtype({ k: "tbool" })
     } else if (k == "narrow") {
-        types.narrow_type(infer(st, node.e), node.typ)
+        let narrow: Narrow = node;
+        types.narrow_type(infer(st, narrow.e), narrow.typ)
     } else if (k == "sliceassign") {
-        { k: "tvoid" }
+        normtype({ k: "tvoid" })
     } else if (k == "deref") {
-        let t = infer(st, node.e);
-        if (t.k == "tptr") { t.to } else { { k: "tunk" } }
+        let deref: Wrap = node;
+        let t = infer(st, deref.e);
+        if (t.k == "tptr") {
+            let ptr: TPtr = t;
+            ptr.to
+        } else { normtype({ k: "tunk" }) }
     } else if (k == "call") {
-        infer_call(st, node)
+        let call: Call = node;
+        infer_call(st, call)
     } else if (k == "if") {
-        infer(st, node.then)
+        let branch: If = node;
+        infer(st, branch.then)
     } else if (k == "block") {
-        infer_block(st, node)
+        let block: Block = node;
+        infer_block(st, block)
     } else if (k == "decl") {
-        infer_decl(st, node)
+        let decl: Decl = node;
+        infer_decl(st, decl)
     } else if (k == "assign") {
-        infer(st, node.v)
+        let assign: Assign = node;
+        infer(st, assign.v)
     } else if (k == "incdec") {
-        infer(st, node.tgt)
+        let incdec: IncDec = node;
+        infer(st, incdec.tgt)
     } else if (k == "opassign") {
-        infer(st, node.tgt)
+        let assign: OpAssign = node;
+        infer(st, assign.tgt)
     } else if (k == "rec") {
         // record literal: field types from the values (checker validated).
-        let melems = node.vals;
-        let mkeys = node.keys;
+        let rec: RecLit = node;
+        let melems: [Node] = rec.vals;
+        let mkeys: [str] = rec.keys;
         if (len(melems) == 0) {
-            normnode({ k: "trec", fields: [] })
+            let fields: [Field] = [];
+            normtype({ k: "trec", fields: fields })
         } else {
             // `...` spread entries merge the source's fields (static
             // union: first appearance keeps the position, later wins the
             // value) -- the same rule as types.y's rec arm.
-            let mfields = [];
+            let mfields: [Field] = [];
             let mi = 0;
             while (mi < len(melems)) {
                 let mf = infer(st, melems[mi]);
@@ -1737,7 +1813,8 @@ def infer_go(st: EmitSt, node) -> { k: str } {
                 let mk = mkeys[mi];
                 if (mk == "...") {
                     if (mf.k == "trec") {
-                        let msfs = mf.fields;
+                        let rec: TRec = mf;
+                        let msfs: [Field] = rec.fields;
                         let msi = 0;
                         while (msi < len(msfs)) {
                             let msf = msfs[msi];
@@ -1755,25 +1832,28 @@ def infer_go(st: EmitSt, node) -> { k: str } {
                 };
                 mi = mi + 1;
             };
-            normnode({ k: "trec", fields: mfields })
+            normtype({ k: "trec", fields: mfields })
         }
     } else if (k == "map") {
         // map literal: {keys, vals, boxes} record at runtime; the static
         // type is tmap (quoted keys are strings; the values share one type).
-        let glvals = node.vals;
+        let map: RecLit = node;
+        let glvals: [Node] = map.vals;
         if (len(glvals) == 0) {
-            normnode({ k: "tmap", key: { k: "tstr" }, of: { k: "tunk" } })
+            normtype({ k: "tmap", key: normtype({ k: "tstr" }), of: normtype({ k: "tunk" }) })
         } else {
-            normnode({ k: "tmap", key: { k: "tstr" }, of: infer(st, glvals[0]) })
+            normtype({ k: "tmap", key: normtype({ k: "tstr" }), of: infer(st, glvals[0]) })
         }
     } else if (k == "dot") {
         // field read: static index into the trec (checker validated).
-        let dobj = node.obj;
+        let dot: Dot = node;
+        let dobj = dot.obj;
         let dt = infer(st, dobj);
         if (dt.k == "trec") {
             let found = false;
-            let ftyp = { k: "tunk" };
-            let dfs = dt.fields;
+            let ftyp: Type = normtype({ k: "tunk" });
+            let rec: TRec = dt;
+            let dfs: [Field] = rec.fields;
             let di = 0;
             while (di < len(dfs)) {
                 let df = dfs[di];
@@ -1781,134 +1861,163 @@ def infer_go(st: EmitSt, node) -> { k: str } {
                 // from bare values (tunk), so a direct `==` would compare
                 // string POINTERS; annotated let forces content compare.
                 let dfn: str = df.name;
-                if (dfn == node.key) {
+                if (dfn == dot.key) {
                     found = true;
                     ftyp = df.typ;
                     0
                 } else { 0; };
                 di = di + 1;
             };
-            if (found) { ftyp } else { { k: "tunk" } }
+            if (found) { ftyp } else { normtype({ k: "tunk" }) }
         } else if (dt.k == "tunion") {
             // types.y union_field: the type the field has in every member
-            let uft = rec_field_type(dt, node.key);
-            if (uft.k == "tnone") { { k: "tunk" } } else { uft }
+            let uft = rec_field_type(dt, dot.key);
+            if (uft.k == "tnone") { normtype({ k: "tunk" }) } else { uft }
         } else if (dt.k == "tmap") {
+            let map: TMap = dt;
             // the map lowering reads its {keys, vals, boxes} shape directly
-            if (node.key == "keys") { normnode({ k: "tarr", of: dt.key }) }
-            else if (node.key == "vals") { normnode({ k: "tarr", of: dt.of }) }
-            else if (node.key == "boxes") { normnode({ k: "tarr", of: normnode({ k: "topt", of: dt.of }) }) }
-            else { { k: "tunk" } }
-        } else if (dt.k == "tarr" || dt.k == "tarrfix" || dt.k == "tstr") {
+            if (dot.key == "keys") { normtype({ k: "tarr", of: map.key }) }
+            else if (dot.key == "vals") { normtype({ k: "tarr", of: map.of }) }
+            else if (dot.key == "boxes") { normtype({ k: "tarr", of: normtype({ k: "topt", of: map.of }) }) }
+            else { normtype({ k: "tunk" }) }
+        } else if (dt.k == "tarr" || dt.k == "tarrfix") {
             // built-in properties (types.y typeof_prop; gen_prop)
-            if (node.key == "length") { { k: "tlong" } } else { normnode({ k: "tptr", to: dt.of }) }
+            if (dot.key == "length") { normtype({ k: "tlong" }) }
+            else {
+                let arr: ArrTy = dt;
+                normtype({ k: "tptr", to: arr.of })
+            }
+        } else if (dt.k == "tstr") {
+            if (dot.key == "length") { normtype({ k: "tlong" }) }
+            else { normtype({ k: "tptr", to: normtype({ k: "tbyte" }) }) }
         } else {
-            { k: "tunk" }
+            normtype({ k: "tunk" })
         }
     } else if (k == "store") {
-        infer(st, node.v)
+        let store: Store = node;
+        infer(st, store.v)
     } else if (k == "while") {
-        { k: "tvoid" }
+        normtype({ k: "tvoid" })
     } else if (k == "ret") {
-        infer(st, node.e)
+        let ret: Wrap = node;
+        infer(st, ret.e)
     } else {
-        { k: "tunk" }
+        normtype({ k: "tunk" })
     }
 };
 
-def infer_call(st: EmitSt, node) -> { k: str } {
-    if (node.callee.k != "id") {
+def infer_call(st: EmitSt, node: Call) -> Type {
+    let callee: Node = node.callee;
+    if (callee.k != "id") {
         // Calling an expression (immediately-invoked literal, fs[0](x), ...),
         // or `s.m(...)` with s a str: a string method (types.str_method).
-        let ical = node.callee;
-        if (ical.k == "dot" && infer(st, ical.obj).k == "tstr") {
-            let ism = types.str_method(ical.key);
-            ism.ret
+        if (callee.k == "dot") {
+            let dot: Dot = callee;
+            if (infer(st, dot.obj).k == "tstr") {
+                let method = types.str_method(dot.key);
+                method.ret
+            } else {
+                let cft = infer(st, callee);
+                if (cft.k == "tfunc") {
+                    let func: TFunc = cft;
+                    func.ret
+                } else { normtype({ k: "tunk" }) }
+            }
         } else {
-            let cft = infer(st, ical);
-            if (cft.k == "tfunc") { cft.ret } else { { k: "tunk" } }
+            let cft = infer(st, callee);
+            if (cft.k == "tfunc") {
+                let func: TFunc = cft;
+                func.ret
+            } else { normtype({ k: "tunk" }) }
         }
     } else {
-        let name = node.callee.v;
+        let id: Leaf = callee;
+        let name = id.v;
         if (name == "print") {
-            { k: "tvoid" }
+            normtype({ k: "tvoid" })
         } else if (name == "syscall") {
-            { k: "tlong" }
+            normtype({ k: "tlong" })
         } else if (name == "len") {
-            { k: "tlong" }
+            normtype({ k: "tlong" })
         } else if (name == "is_some") {
-            { k: "tbool" }
+            normtype({ k: "tbool" })
         } else if (name == "unwrap") {
             // unwrap(x): payload type when x is statically an option.
-            let uargs = node.args;
-            if (len(uargs) != 1) { { k: "tunk" } } else {
+            let uargs: [Node] = node.args;
+            if (len(uargs) != 1) { normtype({ k: "tunk" }) } else {
                 let ut = infer(st, uargs[0]);
-                if (ut.k == "topt") { ut.of } else { { k: "tunk" } }
+                if (ut.k == "topt") {
+                    let opt: TOf = ut;
+                    opt.of
+                } else { normtype({ k: "tunk" }) }
             }
         } else if (name == "some") {
             // some(x): option of x's type.
-            let sargs = node.args;
-            if (len(sargs) != 1) { { k: "topt", of: { k: "tunk" } } } else {
-                { k: "topt", of: infer(st, sargs[0]) }
+            let sargs: [Node] = node.args;
+            if (len(sargs) != 1) {
+                normtype({ k: "topt", of: normtype({ k: "tunk" }) })
+            } else {
+                normtype({ k: "topt", of: infer(st, sargs[0]) })
             }
         } else if (name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof" || name == "#fmt") {
-            { k: "tstr" }
+            normtype({ k: "tstr" })
         } else if (name == "bytes") {
-            { k: "tarr", of: { k: "tbyte" } }
+            normtype({ k: "tarr", of: normtype({ k: "tbyte" }) })
         } else if (name == "from_bytes") {
-            { k: "tstr" }
+            normtype({ k: "tstr" })
         } else if (name == "ptr_addr") {
-            { k: "tlong" }
+            normtype({ k: "tlong" })
         } else if (name == "tonum" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
-            { k: "tlong" }
+            normtype({ k: "tlong" })
         } else if (name == "clock_us" || name == "heap_used") {
-            { k: "tlong" }
+            normtype({ k: "tlong" })
         } else if (name == "sleep") {
-            { k: "tvoid" }
+            normtype({ k: "tvoid" })
         } else if (name == "split" || name == "argv") {
-            { k: "tarr", of: { k: "tstr" } }
+            normtype({ k: "tarr", of: normtype({ k: "tstr" }) })
         } else if (name == "range") {
-            { k: "tarr", of: { k: "tlong" } }
+            normtype({ k: "tarr", of: normtype({ k: "tlong" }) })
         } else if (name == "push" || name == "prepend") {
             // both yield the array they take (the header never moves, and
             // the type is the array's either way)
-            let gargs = node.args;
+            let gargs: [Node] = node.args;
             infer(st, gargs[0])
         } else if (name == "puts" || name == "exit") {
-            { k: "tvoid" }
+            normtype({ k: "tvoid" })
         } else if (name == "eputs") {
-            { k: "tvoid" }
+            normtype({ k: "tvoid" })
         } else if (name == "self") {
             // the function's return type; one the checker could not infer
             // stays unknown here
-            let sft = cur_fn_type(st);
-            let sret = sft.ret;
-            if (sret.k == "tnone") { { k: "tunk" } } else { sret }
+            let sft: TFunc = cur_fn_type(st);
+            let sret: Type = sft.ret;
+            if (sret.k == "tnone") { normtype({ k: "tunk" }) } else { sret }
         } else {
             let e = env_find(st, name);
             if (e.kind == "none") {
-                { k: "tunk" }
+                normtype({ k: "tunk" })
             } else if (e.typ.k == "tfunc") {
-                e.typ.ret
+                let func: TFunc = e.typ;
+                func.ret
             } else {
-                { k: "tunk" }
+                normtype({ k: "tunk" })
             }
         }
     }
 };
 
-def infer_block(st: EmitSt, node) -> { k: str } {
-    let stmts = node.stmts;
+def infer_block(st: EmitSt, node: Block) -> Type {
+    let stmts: [Node] = node.stmts;
     if (len(stmts) == 0) {
-        { k: "tvoid" }
+        normtype({ k: "tvoid" })
     } else {
         infer(st, stmts[len(stmts) - 1])
     }
 };
 
-def infer_decl(st: EmitSt, node) -> { k: str } {
+def infer_decl(st: EmitSt, node: Decl) -> Type {
     if (node.kind == "def") {
-        { k: "tfunc", args: [], ret: { k: "tvoid" } }
+        normtype({ k: "tfunc", args: [], ret: normtype({ k: "tvoid" }) })
     } else {
         // an annotated `let` takes the declared type; otherwise infer the
         // initializer's
@@ -1926,7 +2035,7 @@ def infer_decl(st: EmitSt, node) -> { k: str } {
 // Everything else (y_alloc, y_print_*, ...) is position-independent.
 // Returns { argv: bool }.
 
-def uses_scan_block(stmts: [{ k: str }], out: { argv: bool }) -> { argv: bool } {
+def uses_scan_block(stmts: [Node], out: { argv: bool }) -> { argv: bool } {
     let i = 0;
     while (i < len(stmts)) {
         out = uses_scan_node(stmts[i], out);
@@ -1935,16 +2044,18 @@ def uses_scan_block(stmts: [{ k: str }], out: { argv: bool }) -> { argv: bool } 
     out
 };
 
-def uses_scan_node(node, out: { argv: bool }) -> { argv: bool } {
+def uses_scan_node(node: Node, out: { argv: bool }) -> { argv: bool } {
     let k = node.k;
     if (k == "call") {
         // scan callee + args (argv() could nest inside an argument).
         // ncallee is read three times: the argv test, the id test, the walk.
-        let ncallee = node.callee;
-        let nargs = node.args;
+        let call: Call = node;
+        let ncallee = call.callee;
+        let nargs: [Node] = call.args;
         let found = out;
         if (ncallee.k == "id") {
-            if (ncallee.v == "argv") {
+            let id: Leaf = ncallee;
+            if (id.v == "argv") {
                 found = { argv: true };
                 0
             } else { 0; };
@@ -1953,57 +2064,83 @@ def uses_scan_node(node, out: { argv: bool }) -> { argv: bool } {
         let o2 = uses_scan_node(ncallee, found);
         uses_scan_block(nargs, o2)
     } else if (k == "un") {
-        uses_scan_node(node.e, out)
+        let child: NodeE = node;
+        uses_scan_node(child.e, out)
     } else if (k == "bin") {
-        uses_scan_node(node.r, uses_scan_node(node.l, out))
+        let bin: Bin = node;
+        uses_scan_node(bin.r, uses_scan_node(bin.l, out))
     } else if (k == "addr" || k == "deref") {
-        uses_scan_node(node.e, out)
+        let child: NodeE = node;
+        uses_scan_node(child.e, out)
     } else if (k == "if") {
-        uses_scan_node(node.els, uses_scan_node(node.then, uses_scan_node(node.cond, out)))
+        let branch: If = node;
+        uses_scan_node(branch.els, uses_scan_node(branch.then, uses_scan_node(branch.cond, out)))
     } else if (k == "while") {
-        uses_scan_node(node.body, uses_scan_node(node.cond, out))
+        let loop: While = node;
+        uses_scan_node(loop.body, uses_scan_node(loop.cond, out))
     } else if (k == "block") {
-        uses_scan_block(node.stmts, out)
+        let block: Block = node;
+        uses_scan_block(block.stmts, out)
     } else if (k == "decl") {
-        uses_scan_node(node.v, out)
+        let decl: Decl = node;
+        uses_scan_node(decl.v, out)
     } else if (k == "func") {
-        uses_scan_node(node.body, out)
+        let func: Func = node;
+        uses_scan_node(func.body, out)
     } else if (k == "assign") {
-        uses_scan_node(node.v, out)
+        let assign: Assign = node;
+        uses_scan_node(assign.v, out)
     } else if (k == "incdec") {
-        uses_scan_node(node.tgt, out)
+        let incdec: IncDec = node;
+        uses_scan_node(incdec.tgt, out)
     } else if (k == "opassign") {
-        uses_scan_node(node.v, uses_scan_node(node.tgt, out))
+        let assign: OpAssign = node;
+        uses_scan_node(assign.v, uses_scan_node(assign.tgt, out))
     } else if (k == "store") {
-        uses_scan_node(node.v, uses_scan_node(node.p, out))
+        let store: Store = node;
+        uses_scan_node(store.v, uses_scan_node(store.p, out))
     } else if (k == "ret") {
-        uses_scan_node(node.e, out)
+        let child: NodeE = node;
+        uses_scan_node(child.e, out)
     } else if (k == "array") {
-        uses_scan_block(node.elems, out)
+        let array: ArrLit = node;
+        uses_scan_block(array.elems, out)
     } else if (k == "arrrep") {
-        uses_scan_node(node.v, out)
+        let rep: ArrRep = node;
+        uses_scan_node(rep.v, out)
     } else if (k == "rec") {
-        uses_scan_block(node.vals, out)
+        let rec: RecLit = node;
+        uses_scan_block(rec.vals, out)
     } else if (k == "map") {
-        uses_scan_block(node.vals, out)
+        let map: RecLit = node;
+        uses_scan_block(map.vals, out)
     } else if (k == "index") {
-        uses_scan_node(node.idx, uses_scan_node(node.arr, out))
+        let index: Index = node;
+        uses_scan_node(index.idx, uses_scan_node(index.arr, out))
     } else if (k == "slice") {
-        uses_scan_node(node.hi, uses_scan_node(node.lo, uses_scan_node(node.arr, out)))
+        let slice: Slice = node;
+        uses_scan_node(slice.hi, uses_scan_node(slice.lo, uses_scan_node(slice.arr, out)))
     } else if (k == "idxassign") {
-        uses_scan_node(node.v, uses_scan_node(node.idx, uses_scan_node(node.arr, out)))
+        let assign: IdxAssign = node;
+        uses_scan_node(assign.v, uses_scan_node(assign.idx, uses_scan_node(assign.arr, out)))
     } else if (k == "dotassign") {
-        uses_scan_node(node.v, uses_scan_node(node.obj, out))
+        let assign: DotAssign = node;
+        uses_scan_node(assign.v, uses_scan_node(assign.obj, out))
     } else if (k == "foreach") {
-        uses_scan_node(node.body, uses_scan_node(node.iter, out))
+        let loop: Foreach = node;
+        uses_scan_node(loop.body, uses_scan_node(loop.iter, out))
     } else if (k == "forrange") {
-        uses_scan_node(node.body, uses_scan_node(node.hi, uses_scan_node(node.lo, out)))
+        let loop: ForRange = node;
+        uses_scan_node(loop.body, uses_scan_node(loop.hi, uses_scan_node(loop.lo, out)))
     } else if (k == "for") {
-        uses_scan_node(node.body, uses_scan_node(node.step, uses_scan_node(node.cond, uses_scan_node(node.init, out))))
+        let loop: For = node;
+        uses_scan_node(loop.body, uses_scan_node(loop.step, uses_scan_node(loop.cond, uses_scan_node(loop.init, out))))
     } else if (k == "sliceassign") {
-        uses_scan_node(node.v, uses_scan_node(node.hi, uses_scan_node(node.lo, uses_scan_node(node.arr, out))))
+        let assign: SliceAssign = node;
+        uses_scan_node(assign.v, uses_scan_node(assign.hi, uses_scan_node(assign.lo, uses_scan_node(assign.arr, out))))
     } else if (k == "rectest" || k == "narrow" || k == "matchend") {
-        uses_scan_node(node.e, out)
+        let child: NodeE = node;
+        uses_scan_node(child.e, out)
     } else {
         out
     }
@@ -2013,9 +2150,9 @@ def uses_scan_node(node, out: { argv: bool }) -> { argv: bool } {
 // Walk blocks/ifs/whiles/func-bodies; every named def and every let-bound
 // anonymous def becomes a top-level function (they capture nothing — the
 // checker proved it). Returns [FnDef].
-type FnDef = { name: str, func: { k: str } };
+type FnDef = { name: str, func: Func };
 
-def collect_from_block(stmts: [{ k: str }], out: [FnDef]) -> [FnDef] {
+def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
     let i = 0;
     while (i < len(stmts)) {
         out = collect_from_node(stmts[i], out);
@@ -2024,47 +2161,58 @@ def collect_from_block(stmts: [{ k: str }], out: [FnDef]) -> [FnDef] {
     out
 };
 
-def collect_from_node(node, out: [FnDef]) -> [FnDef] {
+def collect_from_node(node: Node, out: [FnDef]) -> [FnDef] {
     let k = node.k;
     if (k == "decl") {
-        if (node.kind == "def") {
-            out += { name: node.name, func: node.v };
-            out = collect_from_node(node.v, out);
+        let decl: Decl = node;
+        if (decl.kind == "def") {
+            let func: Func = decl.v;
+            out += { name: decl.name, func: func };
+            out = collect_from_node(decl.v, out);
             0
         } else {
-            if (node.v.k == "func") {
-                out += { name: node.name, func: node.v };
+            if (decl.v.k == "func") {
+                let func: Func = decl.v;
+                out += { name: decl.name, func: func };
                 0
             } else { 0; };
-            out = collect_from_node(node.v, out);
+            out = collect_from_node(decl.v, out);
             0
         }
     } else if (k == "func") {
-        out = collect_from_block(node.body.stmts, out);
+        let func: Func = node;
+        let body: Block = func.body;
+        out = collect_from_block(body.stmts, out);
         0
     } else if (k == "if") {
-        out = collect_from_node(node.then, out);
-        if (node.has_else) {
-            out = collect_from_node(node.els, out);
+        let branch: If = node;
+        out = collect_from_node(branch.then, out);
+        if (branch.has_else) {
+            out = collect_from_node(branch.els, out);
             0
         } else { 0; };
         0
     } else if (k == "while") {
-        out = collect_from_node(node.body, out);
+        let loop: While = node;
+        out = collect_from_node(loop.body, out);
         0
     } else if (k == "for") {
-        out = collect_from_node(node.init, out);
-        out = collect_from_node(node.body, out);
-        out = collect_from_node(node.step, out);
+        let loop: For = node;
+        out = collect_from_node(loop.init, out);
+        out = collect_from_node(loop.body, out);
+        out = collect_from_node(loop.step, out);
         0
     } else if (k == "foreach") {
-        out = collect_from_node(node.body, out);
+        let loop: Foreach = node;
+        out = collect_from_node(loop.body, out);
         0
     } else if (k == "forrange") {
-        out = collect_from_node(node.body, out);
+        let loop: ForRange = node;
+        out = collect_from_node(loop.body, out);
         0
     } else if (k == "block") {
-        out = collect_from_block(node.stmts, out);
+        let block: Block = node;
+        out = collect_from_block(block.stmts, out);
         0
     } else { 0; };
     out
@@ -2102,129 +2250,159 @@ def is_intrinsic_name(n: str) -> bool {
 // Every identifier READ in a subtree (callee names included: calling a
 // captured closure needs the name captured too). With `collect` false,
 // only the reads inside nested functions count (see box_names).
-def fv_walk(node, out: [str], collect: bool) -> [str] {
+def fv_walk(node: Node, out: [str], collect: bool) -> [str] {
     let k = node.k;
     if (k == "id") {
-        if (collect) { out += node.v; 0; } else { 0; };
+        let id: Leaf = node;
+        if (collect) { out += id.v; 0; } else { 0; };
         0
     } else if (k == "un") {
-        out = fv_walk(node.e, out, collect);
+        let child: NodeE = node;
+        out = fv_walk(child.e, out, collect);
         0
     } else if (k == "addr") {
-        out = fv_walk(node.e, out, collect);
+        let child: NodeE = node;
+        out = fv_walk(child.e, out, collect);
         0
     } else if (k == "deref") {
-        out = fv_walk(node.e, out, collect);
+        let child: NodeE = node;
+        out = fv_walk(child.e, out, collect);
         0
     } else if (k == "ret") {
-        out = fv_walk(node.e, out, collect);
+        let child: NodeE = node;
+        out = fv_walk(child.e, out, collect);
         0
     } else if (k == "bin") {
-        out = fv_walk(node.l, out, collect);
-        out = fv_walk(node.r, out, collect);
+        let bin: Bin = node;
+        out = fv_walk(bin.l, out, collect);
+        out = fv_walk(bin.r, out, collect);
         0
     } else if (k == "array") {
-        out = fv_walk_list(node.elems, out, collect);
+        let array: ArrLit = node;
+        out = fv_walk_list(array.elems, out, collect);
         0
     } else if (k == "rec") {
-        out = fv_walk_list(node.vals, out, collect);
+        let rec: RecLit = node;
+        out = fv_walk_list(rec.vals, out, collect);
         0
     } else if (k == "map") {
-        out = fv_walk_list(node.vals, out, collect);
+        let map: RecLit = node;
+        out = fv_walk_list(map.vals, out, collect);
         0
     } else if (k == "arrrep") {
-        out = fv_walk(node.v, out, collect);
+        let rep: ArrRep = node;
+        out = fv_walk(rep.v, out, collect);
         0
     } else if (k == "call") {
-        out = fv_walk(node.callee, out, collect);
-        out = fv_walk_list(node.args, out, collect);
+        let call: Call = node;
+        out = fv_walk(call.callee, out, collect);
+        out = fv_walk_list(call.args, out, collect);
         0
     } else if (k == "index") {
-        out = fv_walk(node.arr, out, collect);
-        out = fv_walk(node.idx, out, collect);
+        let index: Index = node;
+        out = fv_walk(index.arr, out, collect);
+        out = fv_walk(index.idx, out, collect);
         0
     } else if (k == "slice") {
-        out = fv_walk(node.arr, out, collect);
-        out = fv_walk(node.lo, out, collect);
-        out = fv_walk(node.hi, out, collect);
+        let slice: Slice = node;
+        out = fv_walk(slice.arr, out, collect);
+        out = fv_walk(slice.lo, out, collect);
+        out = fv_walk(slice.hi, out, collect);
         0
     } else if (k == "idxassign") {
-        out = fv_walk(node.arr, out, collect);
-        out = fv_walk(node.idx, out, collect);
-        out = fv_walk(node.v, out, collect);
+        let assign: IdxAssign = node;
+        out = fv_walk(assign.arr, out, collect);
+        out = fv_walk(assign.idx, out, collect);
+        out = fv_walk(assign.v, out, collect);
         0
     } else if (k == "dot") {
-        out = fv_walk(node.obj, out, collect);
+        let dot: Dot = node;
+        out = fv_walk(dot.obj, out, collect);
         0
     } else if (k == "dotassign") {
-        out = fv_walk(node.obj, out, collect);
-        out = fv_walk(node.v, out, collect);
+        let assign: DotAssign = node;
+        out = fv_walk(assign.obj, out, collect);
+        out = fv_walk(assign.v, out, collect);
         0
     } else if (k == "store") {
-        out = fv_walk(node.p, out, collect);
-        out = fv_walk(node.v, out, collect);
+        let store: Store = node;
+        out = fv_walk(store.p, out, collect);
+        out = fv_walk(store.v, out, collect);
         0
     } else if (k == "assign") {
-        if (collect) { out += node.name; 0; } else { 0; };
-        out = fv_walk(node.v, out, collect);
+        let assign: Assign = node;
+        if (collect) { out += assign.name; 0; } else { 0; };
+        out = fv_walk(assign.v, out, collect);
         0
     } else if (k == "incdec") {
-        out = fv_walk(node.tgt, out, collect);
+        let incdec: IncDec = node;
+        out = fv_walk(incdec.tgt, out, collect);
         0
     } else if (k == "opassign") {
-        out = fv_walk(node.tgt, out, collect);
-        out = fv_walk(node.v, out, collect);
+        let assign: OpAssign = node;
+        out = fv_walk(assign.tgt, out, collect);
+        out = fv_walk(assign.v, out, collect);
         0
     } else if (k == "decl") {
-        out = fv_walk(node.v, out, collect);
+        let decl: Decl = node;
+        out = fv_walk(decl.v, out, collect);
         0
     } else if (k == "if") {
-        out = fv_walk(node.cond, out, collect);
-        out = fv_walk(node.then, out, collect);
-        if (node.has_else) {
-            out = fv_walk(node.els, out, collect);
+        let branch: If = node;
+        out = fv_walk(branch.cond, out, collect);
+        out = fv_walk(branch.then, out, collect);
+        if (branch.has_else) {
+            out = fv_walk(branch.els, out, collect);
             0
         } else { 0; };
         0
     } else if (k == "while") {
-        out = fv_walk(node.cond, out, collect);
-        out = fv_walk(node.body, out, collect);
+        let loop: While = node;
+        out = fv_walk(loop.cond, out, collect);
+        out = fv_walk(loop.body, out, collect);
         0
     } else if (k == "for") {
-        out = fv_walk(node.init, out, collect);
-        out = fv_walk(node.cond, out, collect);
-        out = fv_walk(node.step, out, collect);
-        out = fv_walk(node.body, out, collect);
+        let loop: For = node;
+        out = fv_walk(loop.init, out, collect);
+        out = fv_walk(loop.cond, out, collect);
+        out = fv_walk(loop.step, out, collect);
+        out = fv_walk(loop.body, out, collect);
         0
     } else if (k == "foreach") {
-        out = fv_walk(node.iter, out, collect);
-        out = fv_walk(node.body, out, collect);
+        let loop: Foreach = node;
+        out = fv_walk(loop.iter, out, collect);
+        out = fv_walk(loop.body, out, collect);
         0
     } else if (k == "forrange") {
-        out = fv_walk(node.lo, out, collect);
-        out = fv_walk(node.hi, out, collect);
-        out = fv_walk(node.body, out, collect);
+        let loop: ForRange = node;
+        out = fv_walk(loop.lo, out, collect);
+        out = fv_walk(loop.hi, out, collect);
+        out = fv_walk(loop.body, out, collect);
         0
     } else if (k == "block") {
-        out = fv_walk_list(node.stmts, out, collect);
+        let block: Block = node;
+        out = fv_walk_list(block.stmts, out, collect);
         0
     } else if (k == "func") {
-        out = fv_walk(node.body, out, true);
+        let func: Func = node;
+        out = fv_walk(func.body, out, true);
         0
     } else if (k == "sliceassign") {
-        out = fv_walk(node.arr, out, collect);
-        out = fv_walk(node.lo, out, collect);
-        out = fv_walk(node.hi, out, collect);
-        out = fv_walk(node.v, out, collect);
+        let assign: SliceAssign = node;
+        out = fv_walk(assign.arr, out, collect);
+        out = fv_walk(assign.lo, out, collect);
+        out = fv_walk(assign.hi, out, collect);
+        out = fv_walk(assign.v, out, collect);
         0
     } else if (k == "rectest" || k == "narrow" || k == "matchend") {
-        out = fv_walk(node.e, out, collect);
+        let child: NodeE = node;
+        out = fv_walk(child.e, out, collect);
         0
     } else { 0; };
     out
 };
 
-def fv_walk_list(nodes: [{ k: str }], out: [str], collect: bool) -> [str] {
+def fv_walk_list(nodes: [Node], out: [str], collect: bool) -> [str] {
     let i = 0;
     while (i < len(nodes)) {
         out = fv_walk(nodes[i], out, collect);
@@ -2233,7 +2411,7 @@ def fv_walk_list(nodes: [{ k: str }], out: [str], collect: bool) -> [str] {
     out
 };
 
-def fv_ids(node, out: [str]) -> [str] {
+def fv_ids(node: Node, out: [str]) -> [str] {
     fv_walk(node, out, true)
 };
 
@@ -2242,126 +2420,154 @@ def fv_ids(node, out: [str]) -> [str] {
 // same positions as fv_ids — a function literal can appear in any
 // expression, e.g. `apply(def(x: long) -> long { ... }, 1)`, and its
 // params must not leak out as captures of the enclosing function.
-def fv_binds(node, out: [str]) -> [str] {
+def fv_binds(node: Node, out: [str]) -> [str] {
     let k = node.k;
     if (k == "decl") {
-        out += node.name;
-        out = fv_binds(node.v, out);
+        let decl: Decl = node;
+        out += decl.name;
+        out = fv_binds(decl.v, out);
         0
     } else if (k == "func") {
-        out = fv_bind_params(node.params, out);
-        out = fv_binds(node.body, out);
+        let func: Func = node;
+        out = fv_bind_params(func.params, out);
+        out = fv_binds(func.body, out);
         0
     } else if (k == "block") {
-        out = fv_binds_list(node.stmts, out);
+        let block: Block = node;
+        out = fv_binds_list(block.stmts, out);
         0
     } else if (k == "if") {
-        out = fv_binds(node.cond, out);
-        out = fv_binds(node.then, out);
-        if (node.has_else) {
-            out = fv_binds(node.els, out);
+        let branch: If = node;
+        out = fv_binds(branch.cond, out);
+        out = fv_binds(branch.then, out);
+        if (branch.has_else) {
+            out = fv_binds(branch.els, out);
             0
         } else { 0; };
         0
     } else if (k == "while") {
-        out = fv_binds(node.cond, out);
-        out = fv_binds(node.body, out);
+        let loop: While = node;
+        out = fv_binds(loop.cond, out);
+        out = fv_binds(loop.body, out);
         0
     } else if (k == "for") {
-        out = fv_binds(node.init, out);
-        out = fv_binds(node.cond, out);
-        out = fv_binds(node.step, out);
-        out = fv_binds(node.body, out);
+        let loop: For = node;
+        out = fv_binds(loop.init, out);
+        out = fv_binds(loop.cond, out);
+        out = fv_binds(loop.step, out);
+        out = fv_binds(loop.body, out);
         0
     } else if (k == "foreach") {
-        out += node.name;
-        out = fv_binds(node.iter, out);
-        out = fv_binds(node.body, out);
+        let loop: Foreach = node;
+        out += loop.name;
+        out = fv_binds(loop.iter, out);
+        out = fv_binds(loop.body, out);
         0
     } else if (k == "forrange") {
-        out += node.name;
-        out = fv_binds(node.lo, out);
-        out = fv_binds(node.hi, out);
-        out = fv_binds(node.body, out);
+        let loop: ForRange = node;
+        out += loop.name;
+        out = fv_binds(loop.lo, out);
+        out = fv_binds(loop.hi, out);
+        out = fv_binds(loop.body, out);
         0
     } else if (k == "ret") {
-        out = fv_binds(node.e, out);
+        let child: NodeE = node;
+        out = fv_binds(child.e, out);
         0
     } else if (k == "un") {
-        out = fv_binds(node.e, out);
+        let child: NodeE = node;
+        out = fv_binds(child.e, out);
         0
     } else if (k == "addr") {
-        out = fv_binds(node.e, out);
+        let child: NodeE = node;
+        out = fv_binds(child.e, out);
         0
     } else if (k == "deref") {
-        out = fv_binds(node.e, out);
+        let child: NodeE = node;
+        out = fv_binds(child.e, out);
         0
     } else if (k == "bin") {
-        out = fv_binds(node.l, out);
-        out = fv_binds(node.r, out);
+        let bin: Bin = node;
+        out = fv_binds(bin.l, out);
+        out = fv_binds(bin.r, out);
         0
     } else if (k == "array") {
-        out = fv_binds_list(node.elems, out);
+        let array: ArrLit = node;
+        out = fv_binds_list(array.elems, out);
         0
     } else if (k == "rec") {
-        out = fv_binds_list(node.vals, out);
+        let rec: RecLit = node;
+        out = fv_binds_list(rec.vals, out);
         0
     } else if (k == "map") {
-        out = fv_binds_list(node.vals, out);
+        let map: RecLit = node;
+        out = fv_binds_list(map.vals, out);
         0
     } else if (k == "arrrep") {
-        out = fv_binds(node.v, out);
+        let rep: ArrRep = node;
+        out = fv_binds(rep.v, out);
         0
     } else if (k == "call") {
-        out = fv_binds(node.callee, out);
-        out = fv_binds_list(node.args, out);
+        let call: Call = node;
+        out = fv_binds(call.callee, out);
+        out = fv_binds_list(call.args, out);
         0
     } else if (k == "index") {
-        out = fv_binds(node.arr, out);
-        out = fv_binds(node.idx, out);
+        let index: Index = node;
+        out = fv_binds(index.arr, out);
+        out = fv_binds(index.idx, out);
         0
     } else if (k == "slice") {
-        out = fv_binds(node.arr, out);
-        out = fv_binds(node.lo, out);
-        out = fv_binds(node.hi, out);
+        let slice: Slice = node;
+        out = fv_binds(slice.arr, out);
+        out = fv_binds(slice.lo, out);
+        out = fv_binds(slice.hi, out);
         0
     } else if (k == "idxassign") {
-        out = fv_binds(node.arr, out);
-        out = fv_binds(node.idx, out);
-        out = fv_binds(node.v, out);
+        let assign: IdxAssign = node;
+        out = fv_binds(assign.arr, out);
+        out = fv_binds(assign.idx, out);
+        out = fv_binds(assign.v, out);
         0
     } else if (k == "dot") {
-        out = fv_binds(node.obj, out);
+        let dot: Dot = node;
+        out = fv_binds(dot.obj, out);
         0
     } else if (k == "dotassign") {
-        out = fv_binds(node.obj, out);
-        out = fv_binds(node.v, out);
+        let assign: DotAssign = node;
+        out = fv_binds(assign.obj, out);
+        out = fv_binds(assign.v, out);
         0
     } else if (k == "store") {
-        out = fv_binds(node.p, out);
-        out = fv_binds(node.v, out);
+        let store: Store = node;
+        out = fv_binds(store.p, out);
+        out = fv_binds(store.v, out);
         0
     } else if (k == "assign") {
-        out = fv_binds(node.v, out);
+        let assign: Assign = node;
+        out = fv_binds(assign.v, out);
         0
     } else if (k == "incdec") {
-        out = fv_binds(node.tgt, out);
+        let incdec: IncDec = node;
+        out = fv_binds(incdec.tgt, out);
         0
     } else if (k == "opassign") {
-        out = fv_binds(node.tgt, out);
-        out = fv_binds(node.v, out);
+        let assign: OpAssign = node;
+        out = fv_binds(assign.tgt, out);
+        out = fv_binds(assign.v, out);
         0
     } else if (k == "sliceassign") {
-        out = fv_binds(node.arr, out);
-        out = fv_binds(node.lo, out);
-        out = fv_binds(node.hi, out);
-        out = fv_binds(node.v, out);
+        let assign: SliceAssign = node;
+        out = fv_binds(assign.arr, out);
+        out = fv_binds(assign.lo, out);
+        out = fv_binds(assign.hi, out);
+        out = fv_binds(assign.v, out);
         0
     } else { 0; };
     out
 };
 
-def fv_binds_list(nodes: [{ k: str }], out: [str]) -> [str] {
+def fv_binds_list(nodes: [Node], out: [str]) -> [str] {
     let i = 0;
     while (i < len(nodes)) {
         out = fv_binds(nodes[i], out);
@@ -2374,7 +2580,7 @@ def fv_binds_list(nodes: [{ k: str }], out: [str]) -> [str] {
 // not bind, minus the hoisted top-level function names and the intrinsics.
 // NOTE: reads only `params` and `body`, never `func.k` — `_start` is a
 // synthesized record without a `k` field.
-def fn_captures(func, fnnames: [str]) -> [str] {
+def fn_captures(func: EmitFunc, fnnames: [str]) -> [str] {
     let bound = fv_bind_params(func.params, fv_binds(func.body, []));
     let reads = fv_ids(func.body, []);
     let caps: [str] = [];
@@ -2426,103 +2632,139 @@ def fns_kind(label: str) -> str {
 
 // ── expression emission (value in %rax) ────────────────────────────────
 
-def gen(st: EmitSt, node) -> EmitSt {
+def gen(st: EmitSt, node: Node) -> EmitSt {
     let k = node.k;
     if (k == "num") {
-        gen_lit(st, node)
+        let lit: Leaf = node;
+        gen_lit(st, lit)
     } else if (k == "bool") {
-        if (node.v == "true") {
+        let lit: Leaf = node;
+        if (lit.v == "true") {
             emit(st, "    mov $1, %rax")
         } else {
             emit(st, "    xor %eax, %eax")
         }
     } else if (k == "str") {
-        gen_str_const(st, node.v)
+        let lit: Leaf = node;
+        gen_str_const(st, lit.v)
     } else if (k == "bstr") {
-        gen_bstr(st, node)
+        let lit: Leaf = node;
+        gen_bstr(st, lit)
     } else if (k == "void") {
         emit(st, "    xor %eax, %eax")
     } else if (k == "id") {
-        gen_id(st, node)
+        let id: Leaf = node;
+        gen_id(st, id)
     } else if (k == "un") {
-        gen_un(st, node)
+        let un: Un = node;
+        gen_un(st, un)
     } else if (k == "addr") {
-        gen_addr(st, node)
+        let addr: Wrap = node;
+        gen_addr(st, addr)
     } else if (k == "array") {
-        gen_array(st, node)
+        let array: ArrLit = node;
+        gen_array(st, array)
     } else if (k == "deref") {
-        let dw = ptr_width(infer(st, node.e));
-        st = gen(st, node.e);
+        let deref: Wrap = node;
+        let dw = ptr_width(infer(st, deref.e));
+        st = gen(st, deref.e);
         if (dw == 1) { emit(st, "    movzbq (%rax), %rax") } else { emit(st, "    mov (%rax), %rax") }
     } else if (k == "bin") {
-        gen_bin(st, node)
+        let bin: Bin = node;
+        gen_bin(st, bin)
     } else if (k == "call") {
-        gen_call(st, node)
+        let call: Call = node;
+        gen_call(st, call)
     } else if (k == "if") {
-        gen_if(st, node)
+        let branch: If = node;
+        gen_if(st, branch)
     } else if (k == "while") {
-        gen_while(st, node)
+        let loop: While = node;
+        gen_while(st, loop)
     } else if (k == "for") {
-        gen_for(st, node)
+        let loop: For = node;
+        gen_for(st, loop)
     } else if (k == "forrange") {
-        gen_forrange(st, node)
+        let loop: ForRange = node;
+        gen_forrange(st, loop)
     } else if (k == "foreach") {
-        gen_foreach(st, node)
+        let loop: Foreach = node;
+        gen_foreach(st, loop)
     } else if (k == "block") {
-        gen_block(st, node)
+        let block: Block = node;
+        gen_block(st, block)
     } else if (k == "decl") {
-        gen_decl(st, node)
+        let decl: Decl = node;
+        gen_decl(st, decl)
     } else if (k == "assign") {
-        gen_assign(st, node)
+        let assign: Assign = node;
+        gen_assign(st, assign)
     } else if (k == "incdec") {
-        gen_incdec(st, node)
+        let incdec: IncDec = node;
+        gen_incdec(st, incdec)
     } else if (k == "opassign") {
-        gen_opassign(st, node)
+        let assign: OpAssign = node;
+        gen_opassign(st, assign)
     } else if (k == "index") {
+        let index: Index = node;
         // maps scan their keys; strings read a byte; arrays index directly
-        let kbt = infer(st, node.arr);
-        if (kbt.k == "tmap") { gen_map_get(st, node, "opt") }
-        else if (kbt.k == "tstr") { gen_byte_at(st, n_call2("byte_at", node.arr, node.idx, node.line, node.col)) }
-        else { gen_index(st, node) }
+        let kbt = infer(st, index.arr);
+        if (kbt.k == "tmap") { gen_map_get(st, index, "opt") }
+        else if (kbt.k == "tstr") { gen_byte_at(st, n_call2("byte_at", index.arr, index.idx, index.line, index.col)) }
+        else { gen_index(st, index) }
     } else if (k == "slice") {
-        let sbt = infer(st, node.arr);
-        if (sbt.k == "tstr") { gen_str_slice(st, node) } else { gen_slice(st, node) }
+        let slice: Slice = node;
+        let sbt = infer(st, slice.arr);
+        if (sbt.k == "tstr") { gen_str_slice(st, slice) } else { gen_slice(st, slice) }
     } else if (k == "char") {
-        gen_lit(st, { k: "num", v: node.v, line: node.line, col: node.col })
+        let lit: Leaf = node;
+        gen_lit(st, { k: "num", v: lit.v, line: lit.line, col: lit.col })
     } else if (k == "rectest") {
-        gen_rectest(st, node)
+        let test: Narrow = node;
+        gen_rectest(st, test)
     } else if (k == "narrow") {
         // the value itself; only its static type changes
-        gen(st, node.e)
+        let narrow: Narrow = node;
+        gen(st, narrow.e)
     } else if (k == "matchend") {
         // unreachable when the checker accepted the match
         st = emit(st, "    call y_match_fail");
         emit(st, "    xor %eax, %eax")
     } else if (k == "sliceassign") {
-        gen_sliceassign(st, node)
+        let assign: SliceAssign = node;
+        gen_sliceassign(st, assign)
     } else if (k == "idxassign") {
-        let kbt = infer(st, node.arr);
-        if (kbt.k == "tmap") { gen_map_set(st, node) } else { gen_idxassign(st, node) }
+        let assign: IdxAssign = node;
+        let kbt = infer(st, assign.arr);
+        if (kbt.k == "tmap") { gen_map_set(st, assign) } else { gen_idxassign(st, assign) }
     } else if (k == "dotassign") {
-        gen_dotassign(st, node)
+        let assign: DotAssign = node;
+        gen_dotassign(st, assign)
     } else if (k == "dot") {
-        gen_dot(st, node)
+        let dot: Dot = node;
+        gen_dot(st, dot)
     } else if (k == "rec") {
         // record literal anywhere (let/call-arg): heap address in %rax.
-        gen_reclit(st, node, { k: "tnone" })
+        let rec: RecLit = node;
+        gen_reclit(st, rec, { k: "tnone" })
     } else if (k == "map") {
         // map literal: the {keys, vals, boxes} record, heap address in %rax.
-        gen_maplit(st, node)
+        let map: RecLit = node;
+        gen_maplit(st, map)
     } else if (k == "arrrep") {
         // [v; n] anywhere (let/assign/call-arg): heap address in %rax.
-        gen_arrrep(st, node)
+        let rep: ArrRep = node;
+        gen_arrrep(st, rep)
     } else if (k == "func") {
         // Anonymous function literal in expression position.
-        gen_func_literal(st, node)
+        let func: Func = node;
+        gen_func_literal(st, func)
     } else if (k == "store") {
-        gen_store(st, node)
+        let store: Store = node;
+        gen_store(st, store)
     } else if (k == "ret") {
-        st = gen_as(st, node.e, cur_fn_ret(st));
+        let ret: Wrap = node;
+        st = gen_as(st, ret.e, cur_fn_ret(st));
         emit(st, "    jmp " + st.end_label)
     } else {
         // Unreachable: the checker rejects everything else.
@@ -2535,17 +2777,17 @@ def gen(st: EmitSt, node) -> EmitSt {
 // constant (typeof, function/record formatting).
 // b"..." / b'...' -- a packed [byte] literal: desugar to a
 // one-byte-per-element array literal and let gen_array_esz do the packing.
-def gen_bstr(st: EmitSt, node) -> EmitSt {
+def gen_bstr(st: EmitSt, node: Leaf) -> EmitSt {
     let bv: str = node.v;
-    let elems: [{k: str}] = [];
+    let elems: [Node] = [];
     let bi = 0;
     let bn = len(bv);
     while (bi < bn) {
-        let bnum = { k: "num", v: tostring(ord(bv[bi:bi + 1])), line: node.line, col: node.col };
+        let bnum: Leaf = { k: "num", v: tostring(ord(bv[bi:bi + 1])), line: node.line, col: node.col };
         elems += bnum;
         bi = bi + 1;
     };
-    let barr = { k: "array", elems: elems, line: node.line, col: node.col };
+    let barr: ArrLit = { k: "array", elems: elems, line: node.line, col: node.col };
     gen_array_esz(st, barr, 1, { k: "tnone" })
 };
 
@@ -2557,7 +2799,7 @@ def gen_str_const(st: EmitSt, s: str) -> EmitSt {
     // rejects heterogeneous array literals ([str, long, str]); these three
     // parts are all str, so a literal would check too — the push-chain is
     // just the shape the other node-list builders use.
-    let rod0 = [];
+    let rod0: [str] = [];
     rod0 += lbl;
     rod0 += tostring(len(s));
     rod0 += esc_asm(s);
@@ -2570,7 +2812,7 @@ def gen_str_const(st: EmitSt, s: str) -> EmitSt {
     emit(st, "    lea " + lbl + "(%rip), %rax")
 };
 
-def gen_id(st: EmitSt, node) -> EmitSt {
+def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
     if (node.v == "self") {
         // Bare `self` as a value: only legal in discarded positions
         // (the checker rejects every typed use). Emit zero (none).
@@ -2699,7 +2941,7 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
 // the nested functions' own locals, globals, defs — are never bound
 // here). emit_one_fn records them as "boxmark" entries past a "frame"
 // entry, named "" so no lookup can hit them, the marked name in `label`.
-def box_names(func) -> [str] {
+def box_names(func: EmitFunc) -> [str] {
     let reads = fv_walk(func.body, [], false);
     let out: [str] = [];
     let i = 0;
@@ -2752,114 +2994,145 @@ def box_bound(st: EmitSt, name: str) -> EmitSt {
 // Every `+=` id target in a subtree, plus "&" + each name whose address
 // is taken. With `deep` false nested functions are skipped: each gets its
 // own walk, and a variable one of them touches is captured (boxed).
-def app_walk(node, out: [str], deep: bool) -> [str] {
+def app_walk(node: Node, out: [str], deep: bool) -> [str] {
     let k = node.k;
     // Most common kinds first: a leaf costs one compare, not the chain.
     if (k == "id" || k == "num" || k == "str") {
         0
     } else if (k == "call") {
-        out = app_walk(node.callee, out, deep);
-        out = app_walk_list(node.args, out, deep);
+        let call: Call = node;
+        out = app_walk(call.callee, out, deep);
+        out = app_walk_list(call.args, out, deep);
         0
     } else if (k == "dot") {
-        out = app_walk(node.obj, out, deep);
+        let dot: Dot = node;
+        out = app_walk(dot.obj, out, deep);
         0
     } else if (k == "bin") {
-        out = app_walk(node.l, out, deep);
-        out = app_walk(node.r, out, deep);
+        let bin: Bin = node;
+        out = app_walk(bin.l, out, deep);
+        out = app_walk(bin.r, out, deep);
         0
     } else if (k == "block") {
-        out = app_walk_list(node.stmts, out, deep);
+        let block: Block = node;
+        out = app_walk_list(block.stmts, out, deep);
         0
     } else if (k == "arrrep" || k == "decl" || k == "assign") {
-        out = app_walk(node.v, out, deep);
+        let with_v: NodeV = node;
+        out = app_walk(with_v.v, out, deep);
         0
     } else if (k == "if") {
-        out = app_walk(node.cond, out, deep);
-        out = app_walk(node.then, out, deep);
-        if (node.has_else) {
-            out = app_walk(node.els, out, deep);
+        let branch: If = node;
+        out = app_walk(branch.cond, out, deep);
+        out = app_walk(branch.then, out, deep);
+        if (branch.has_else) {
+            out = app_walk(branch.els, out, deep);
             0
         } else { 0; };
         0
     } else if (k == "opassign") {
-        let tg = node.tgt;
-        if (node.op == "+" && tg.k == "id") { out += tg.v; 0; } else { 0; };
+        let assign: OpAssign = node;
+        let tg = assign.tgt;
+        if (assign.op == "+" && tg.k == "id") {
+            let id: Leaf = tg;
+            out += id.v;
+            0
+        } else { 0; };
         out = app_walk(tg, out, deep);
-        out = app_walk(node.v, out, deep);
+        out = app_walk(assign.v, out, deep);
         0
     } else if (k == "index") {
-        out = app_walk(node.arr, out, deep);
-        out = app_walk(node.idx, out, deep);
+        let index: Index = node;
+        out = app_walk(index.arr, out, deep);
+        out = app_walk(index.idx, out, deep);
         0
     } else if (k == "addr") {
-        let ae = node.e;
-        if (ae.k == "id") { out += "&" + ae.v; 0; } else { 0; };
+        let addr: Wrap = node;
+        let ae = addr.e;
+        if (ae.k == "id") {
+            let id: Leaf = ae;
+            out += "&" + id.v;
+            0
+        } else { 0; };
         out = app_walk(ae, out, deep);
         0
     } else if (k == "un" || k == "deref" || k == "ret" || k == "rectest" || k == "narrow" || k == "matchend") {
-        out = app_walk(node.e, out, deep);
+        let child: NodeE = node;
+        out = app_walk(child.e, out, deep);
         0
     } else if (k == "array") {
-        out = app_walk_list(node.elems, out, deep);
+        let array: ArrLit = node;
+        out = app_walk_list(array.elems, out, deep);
         0
     } else if (k == "rec" || k == "map") {
-        out = app_walk_list(node.vals, out, deep);
+        let rec: RecLit = node;
+        out = app_walk_list(rec.vals, out, deep);
         0
     } else if (k == "slice") {
-        out = app_walk(node.arr, out, deep);
-        out = app_walk(node.lo, out, deep);
-        out = app_walk(node.hi, out, deep);
+        let slice: Slice = node;
+        out = app_walk(slice.arr, out, deep);
+        out = app_walk(slice.lo, out, deep);
+        out = app_walk(slice.hi, out, deep);
         0
     } else if (k == "idxassign") {
-        out = app_walk(node.arr, out, deep);
-        out = app_walk(node.idx, out, deep);
-        out = app_walk(node.v, out, deep);
+        let assign: IdxAssign = node;
+        out = app_walk(assign.arr, out, deep);
+        out = app_walk(assign.idx, out, deep);
+        out = app_walk(assign.v, out, deep);
         0
     } else if (k == "dotassign") {
-        out = app_walk(node.obj, out, deep);
-        out = app_walk(node.v, out, deep);
+        let assign: DotAssign = node;
+        out = app_walk(assign.obj, out, deep);
+        out = app_walk(assign.v, out, deep);
         0
     } else if (k == "store") {
-        out = app_walk(node.p, out, deep);
-        out = app_walk(node.v, out, deep);
+        let store: Store = node;
+        out = app_walk(store.p, out, deep);
+        out = app_walk(store.v, out, deep);
         0
     } else if (k == "incdec") {
-        out = app_walk(node.tgt, out, deep);
+        let incdec: IncDec = node;
+        out = app_walk(incdec.tgt, out, deep);
         0
     } else if (k == "while") {
-        out = app_walk(node.cond, out, deep);
-        out = app_walk(node.body, out, deep);
+        let loop: While = node;
+        out = app_walk(loop.cond, out, deep);
+        out = app_walk(loop.body, out, deep);
         0
     } else if (k == "for") {
-        out = app_walk(node.init, out, deep);
-        out = app_walk(node.cond, out, deep);
-        out = app_walk(node.step, out, deep);
-        out = app_walk(node.body, out, deep);
+        let loop: For = node;
+        out = app_walk(loop.init, out, deep);
+        out = app_walk(loop.cond, out, deep);
+        out = app_walk(loop.step, out, deep);
+        out = app_walk(loop.body, out, deep);
         0
     } else if (k == "foreach") {
-        out = app_walk(node.iter, out, deep);
-        out = app_walk(node.body, out, deep);
+        let loop: Foreach = node;
+        out = app_walk(loop.iter, out, deep);
+        out = app_walk(loop.body, out, deep);
         0
     } else if (k == "forrange") {
-        out = app_walk(node.lo, out, deep);
-        out = app_walk(node.hi, out, deep);
-        out = app_walk(node.body, out, deep);
+        let loop: ForRange = node;
+        out = app_walk(loop.lo, out, deep);
+        out = app_walk(loop.hi, out, deep);
+        out = app_walk(loop.body, out, deep);
         0
     } else if (k == "func") {
-        if (deep) { out = app_walk(node.body, out, deep); 0; } else { 0; };
+        let func: Func = node;
+        if (deep) { out = app_walk(func.body, out, deep); 0; } else { 0; };
         0
     } else if (k == "sliceassign") {
-        out = app_walk(node.arr, out, deep);
-        out = app_walk(node.lo, out, deep);
-        out = app_walk(node.hi, out, deep);
-        out = app_walk(node.v, out, deep);
+        let assign: SliceAssign = node;
+        out = app_walk(assign.arr, out, deep);
+        out = app_walk(assign.lo, out, deep);
+        out = app_walk(assign.hi, out, deep);
+        out = app_walk(assign.v, out, deep);
         0
     } else { 0; };
     out
 };
 
-def app_walk_list(nodes: [{ k: str }], out: [str], deep: bool) -> [str] {
+def app_walk_list(nodes: [Node], out: [str], deep: bool) -> [str] {
     let i = 0;
     while (i < len(nodes)) {
         out = app_walk(nodes[i], out, deep);
@@ -2871,7 +3144,7 @@ def app_walk_list(nodes: [{ k: str }], out: [str], deep: bool) -> [str] {
 // The names in a subtree (`deep`: a whole program) an append statement
 // may extend in place: `+=` targets whose address is never taken, minus
 // `skip` (the names closures capture). Only the str-typed ones are used.
-def app_names(node, deep: bool, skip: [str]) -> [str] {
+def app_names(node: Node, deep: bool, skip: [str]) -> [str] {
     let seen = app_walk(node, [], deep);
     let out: [str] = [];
     let i = 0;
@@ -2911,7 +3184,7 @@ def own_wanted(st: EmitSt, name: str) -> bool {
 
 // Bind an appendable str to the value in %rax: the value slot, and its
 // companion in the slot below, cleared.
-def bind_own(st: EmitSt, name: str, t) -> EmitSt {
+def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
     let off = (st.slots + 1) * -8;
     st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
     st = emit(st, "    mov $0, " + tostring(off - 8) + "(%rbp)");
@@ -2925,17 +3198,23 @@ def bind_own(st: EmitSt, name: str, t) -> EmitSt {
 // A statement nobody takes the value of. `s += x` on an appendable string
 // (an "own" local, or a global with a companion cell) goes through
 // gen_sappend (the checker made x a str); anything else is plain gen.
-def gen_stmt(st: EmitSt, node) -> EmitSt {
-    if (node.k == "opassign" && node.op == "+" && node.tgt.k == "id") {
-        let e = env_find(st, node.tgt.v);
-        if (e.kind == "own") {
-            gen_sappend(st, node.v, tostring(e.off) + "(%rbp)", tostring(e.off - 8) + "(%rbp)")
-        } else if (e.kind == "global" && e.typ.k == "tstr") {
-            let oe = env_find(st, node.tgt.v + "#o");
-            if (oe.kind == "none") {
-                gen(st, node)
+def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
+    if (node.k == "opassign") {
+        let assign: OpAssign = node;
+        if (assign.op == "+" && assign.tgt.k == "id") {
+            let id: Leaf = assign.tgt;
+            let e = env_find(st, id.v);
+            if (e.kind == "own") {
+                gen_sappend(st, assign.v, tostring(e.off) + "(%rbp)", tostring(e.off - 8) + "(%rbp)")
+            } else if (e.kind == "global" && e.typ.k == "tstr") {
+                let oe = env_find(st, id.v + "#o");
+                if (oe.kind == "none") {
+                    gen(st, node)
+                } else {
+                    gen_sappend(st, assign.v, e.label + "(%rip)", oe.label + "(%rip)")
+                }
             } else {
-                gen_sappend(st, node.v, e.label + "(%rip)", oe.label + "(%rip)")
+                gen(st, node)
             }
         } else {
             gen(st, node)
@@ -2951,7 +3230,7 @@ def gen_stmt(st: EmitSt, node) -> EmitSt {
 // does to the variable (a read clears the companion, a nested append
 // stores its buffer there) leaves it != 1, and y_str_app copies. The
 // order is s = s + v's: the old value first, then v.
-def gen_sappend(st: EmitSt, v, var: str, cell: str) -> EmitSt {
+def gen_sappend(st: EmitSt, v: Node, var: str, cell: str) -> EmitSt {
     st = emit(st, "    mov " + var + ", %rax");
     st = emit(st, "    push %rax");
     st = emit(st, "    mov " + cell + ", %rdx");
@@ -2971,9 +3250,10 @@ def gen_sappend(st: EmitSt, v, var: str, cell: str) -> EmitSt {
 
 // A loop body: its value is dropped, so a block body's last statement is
 // a statement too (gen_stmt).
-def gen_discard(st: EmitSt, node) -> EmitSt {
+def gen_discard(st: EmitSt, node: Node) -> EmitSt {
     if (node.k == "block") {
-        gen_block_as(st, node, true)
+        let block: Block = node;
+        gen_block_as(st, block, true)
     } else {
         gen_stmt(st, node)
     }
@@ -2983,7 +3263,7 @@ def gen_discard(st: EmitSt, node) -> EmitSt {
 // may extend in place, named `<global>#o` (`#` never occurs in a Y name)
 // so gen_id and gen_stmt find it beside the global. The program is walked
 // only when it has a str global at all.
-def app_cells(gl: [Sym], stmts: [{ k: str }]) -> [Sym] {
+def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
     let anystr = false;
     let i = 0;
     while (i < len(gl)) {
@@ -2992,14 +3272,14 @@ def app_cells(gl: [Sym], stmts: [{ k: str }]) -> [Sym] {
         i = i + 1;
     };
     if (anystr) {
-        let names = app_names({ k: "block", stmts: stmts }, true, []);
+        let names = app_names({ k: "block", stmts: stmts, line: 1, col: 1 }, true, []);
         let out: [Sym] = [];
         out += gl;
         let j = 0;
         while (j < len(gl)) {
             let g2 = gl[j];
             if (g2.typ.k == "tstr" && name_in(names, g2.name)) {
-                out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: { k: "tnone" } };
+                out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: normtype({ k: "tnone" }) };
                 0
             } else { 0; };
             j = j + 1;
@@ -3032,7 +3312,7 @@ def gen_make_closure(st: EmitSt, label: str, caps: [str]) -> EmitSt {
 
 // range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin;
 // y_range in std/rt.y).
-def gen_range(st: EmitSt, node) -> EmitSt {
+def gen_range(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_range");
     emit(st, "    add $8, %rsp")
@@ -3040,7 +3320,7 @@ def gen_range(st: EmitSt, node) -> EmitSt {
 
 // arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands
 // are untouched, like `+` on arrays). A missing bound means 0 / len.
-def gen_slice(st: EmitSt, node) -> EmitSt {
+def gen_slice(st: EmitSt, node: Slice) -> EmitSt {
     let lo = node.lo;
     let hi = node.hi;
     let slesz = arr_elem_bytes(infer(st, node.arr));
@@ -3073,7 +3353,7 @@ def gen_slice(st: EmitSt, node) -> EmitSt {
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
 // a missing bound means 0 / len (the asm primitive y_str_slice).
-def gen_str_slice(st: EmitSt, node) -> EmitSt {
+def gen_str_slice(st: EmitSt, node: Slice) -> EmitSt {
     let lo = node.lo;
     let hi = node.hi;
     st = gen(st, node.arr);
@@ -3101,7 +3381,7 @@ def gen_str_slice(st: EmitSt, node) -> EmitSt {
 
 // a[lo:hi] = src: y_arr_setslice{1,8} (rt.y) check the range and the
 // length, then copy src's elements in. Evaluation order: a, lo, hi, src.
-def gen_sliceassign(st: EmitSt, node) -> EmitSt {
+def gen_sliceassign(st: EmitSt, node: SliceAssign) -> EmitSt {
     let lo = node.lo;
     let hi = node.hi;
     let esz = arr_elem_bytes(infer(st, node.arr));
@@ -3137,7 +3417,7 @@ def gen_sliceassign(st: EmitSt, node) -> EmitSt {
 // matches (rectest_members). A record matches by its static type (the
 // checker rejected a pattern it cannot match). A value of unknown type is
 // probed by its field names (y_rec_has).
-def gen_rectest(st: EmitSt, node) -> EmitSt {
+def gen_rectest(st: EmitSt, node: Narrow) -> EmitSt {
     let s = infer(st, node.e);
     let sk: str = s.k;
     st = gen(st, node.e);
@@ -3153,12 +3433,12 @@ def gen_rectest(st: EmitSt, node) -> EmitSt {
 // The members of union s (as written, types.y union_parts) the pattern t
 // matches: t itself (a type pattern), or every member with the fields of
 // a record pattern.
-def rectest_members(s, t) -> [{ k: str }] {
+def rectest_members(s: Type, t: Type) -> [Type] {
     let tk: str = t.k;
     if (tk == "tpat") {
         types.pat_members(s, t)
     } else {
-        let out: [{ k: str }] = [];
+        let out: [Type] = [];
         let m = types.union_member(s, t);
         let mk: str = m.k;
         if (mk != "tnone") { out += m; 0; } else { 0; };
@@ -3168,7 +3448,7 @@ def rectest_members(s, t) -> [{ k: str }] {
 
 // Record in %rax -> 1 when its descriptor is that of one of the record
 // types ts, else 0.
-def gen_tag_in(st: EmitSt, ts: [{ k: str }]) -> EmitSt {
+def gen_tag_in(st: EmitSt, ts: [Type]) -> EmitSt {
     let rno = next_loc(st);
     st = rno.st;
     let rdone = next_loc(st);
@@ -3230,7 +3510,7 @@ def gen_rectest_rax(st: EmitSt, names: [str]) -> EmitSt {
 
 // Union value in %rax -> its string form: the member its descriptor names
 // ("<union>" for none).
-def gen_union_str_rax(st: EmitSt, t) -> EmitSt {
+def gen_union_str_rax(st: EmitSt, t: Type) -> EmitSt {
     let ms = types.union_parts(t);
     let rdone = next_loc(st);
     st = rdone.st;
@@ -3240,7 +3520,7 @@ def gen_union_str_rax(st: EmitSt, t) -> EmitSt {
         let rnext = next_loc(st);
         st = rnext.st;
         let mt = ms[m];
-        let one: [{k: str}] = [];
+        let one: [Type] = [];
         one += mt;
         st = emit(st, "    mov (%rsp), %rax");
         st = gen_tag_in(st, one);
@@ -3258,8 +3538,8 @@ def gen_union_str_rax(st: EmitSt, t) -> EmitSt {
 };
 
 // Indirect call through a closure value produced by `callee`.
-def gen_indirect(st: EmitSt, node, callee) -> EmitSt {
-    let args = node.args;
+def gen_indirect(st: EmitSt, node: Call, callee: Node) -> EmitSt {
+    let args: [Node] = node.args;
     let n = len(args);
     let iptypes = fn_args_of(infer(st, callee));
     st = gen(st, callee);
@@ -3273,7 +3553,7 @@ def gen_indirect(st: EmitSt, node, callee) -> EmitSt {
     emit(st, "    add $" + tostring(8 * (n + 1)) + ", %rsp")
 };
 
-def gen_un(st: EmitSt, node) -> EmitSt {
+def gen_un(st: EmitSt, node: Un) -> EmitSt {
     let ut = infer(st, node.e);
     st = gen(st, node.e);
     if (node.op == "-") {
@@ -3292,12 +3572,14 @@ def gen_un(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_addr(st: EmitSt, node) -> EmitSt {
+def gen_addr(st: EmitSt, node: Wrap) -> EmitSt {
     // Checker guarantees plain ids, or id-rooted index into an array.
     if (node.e.k == "index") {
-        gen_elem_addr(st, node.e)
+        let index: Index = node.e;
+        gen_elem_addr(st, index)
     } else {
-        let e = env_find(st, node.e.v);
+        let id: Leaf = node.e;
+        let e = env_find(st, id.v);
         if (e.kind == "box") {
             // the shared cell IS the variable's address
             emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
@@ -3315,7 +3597,7 @@ def gen_addr(st: EmitSt, node) -> EmitSt {
 
 // Address of element arr[idx] in %rax (bounds-trapped). Works for both
 // array kinds: fixed (frame SIB) and heap (header load + SIB).
-def gen_elem_addr(st: EmitSt, node) -> EmitSt {
+def gen_elem_addr(st: EmitSt, node: Index) -> EmitSt {
     // &a[i] — an element's address. The base is any array expression
     // (`&grid[0][i]` too) and runs once, before the index (the same order
     // gen_index and the VM use).
@@ -3332,7 +3614,8 @@ def gen_elem_addr(st: EmitSt, node) -> EmitSt {
     st = emit(st, "    test %rcx, %rcx");
     st = emit(st, "    js y_oob");
     if (bt.k == "tarrfix") {
-        st = emit(st, "    cmp $" + tostring(bt.n) + ", %rcx");
+        let arr: TFix = bt;
+        st = emit(st, "    cmp $" + tostring(arr.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
         0
     } else {
@@ -3345,7 +3628,7 @@ def gen_elem_addr(st: EmitSt, node) -> EmitSt {
     emit(st, "    lea (%rax,%rcx," + eascale + "), %rax")
 };
 
-def gen_bin(st: EmitSt, node) -> EmitSt {
+def gen_bin(st: EmitSt, node: Bin) -> EmitSt {
     let op = node.op;
     // Lazy &&/||: short-circuit jumps, not eager and/or (the right operand
     // must not run when the left already decides).
@@ -3368,7 +3651,7 @@ def gen_bin(st: EmitSt, node) -> EmitSt {
 // the left operand does not already decide the result.
 //   a && b : test a -> jz F; test b -> jz F; 1; jmp E; F: 0; E:
 //   a || b : test a -> jnz T; test b -> jnz T; 0; jmp E; T: 1; E:
-def gen_logic(st: EmitSt, node, is_or: bool) -> EmitSt {
+def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
     let rT = next_loc(st);
     st = rT.st;
     let rF = next_loc(st);
@@ -3428,7 +3711,7 @@ def gen_logic(st: EmitSt, node, is_or: bool) -> EmitSt {
 // types.y's typeof_arith gives. tstr+tstr is a plain concat; tstr+tunk falls
 // back to the raw pointer concat (the old behavior) since the runtime type
 // is unknown statically.
-def gen_cat(st: EmitSt, node, lt: { k: str }, rt: { k: str }) -> EmitSt {
+def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     // NOTE: y_long_tostr / y_bool_tostr take ONE STACK ARG (push; call;
     // add $8) — gen_tostring's pattern. y_str_cat takes two stack args.
     if (lt.k == "tarr" || lt.k == "tarrfix" || rt.k == "tarr" || rt.k == "tarrfix") {
@@ -3526,7 +3809,7 @@ def gen_cat(st: EmitSt, node, lt: { k: str }, rt: { k: str }) -> EmitSt {
 
 // Float arithmetic and comparison. Operands arrive in %rax as raw bits;
 // a long operand is widened with cvtsi2sd first (the only coercion).
-def gen_float_bin(st: EmitSt, node, lt: { k: str }, rt: { k: str }) -> EmitSt {
+def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     let op = node.op;
     st = gen(st, node.l);
     if (lt.k == "tfloat") { 0; } else {
@@ -3583,7 +3866,7 @@ def gen_float_bin(st: EmitSt, node, lt: { k: str }, rt: { k: str }) -> EmitSt {
     }
 };
 
-def gen_str_cmp(st: EmitSt, node, op: str) -> EmitSt {
+def gen_str_cmp(st: EmitSt, node: Bin, op: str) -> EmitSt {
     st = gen_push_args(st, [node.l, node.r]);
     st = emit(st, "    call y_str_cmp");
     st = emit(st, "    add $16, %rsp");
@@ -3610,25 +3893,27 @@ def gen_str_cmp(st: EmitSt, node, op: str) -> EmitSt {
 // whose == is the bit pattern, and arrays of strings, keep the y_arr_eq /
 // y_arr_eq_str cores; the others loop here: options and arrays look
 // inside, and floats compare as numbers (0.0 == -0.0).
-def eq_elem_loop(t) -> bool {
+def eq_elem_loop(t: Type) -> bool {
     t.k == "topt" || t.k == "tarr" || t.k == "tfloat"
 };
 
 // The left operand pushed, the right one in %rax: pops the left and leaves
 // left == right (0 or 1) in %rax, compared as type t.
-def gen_eq_vals(st: EmitSt, t) -> EmitSt {
+def gen_eq_vals(st: EmitSt, t: Type) -> EmitSt {
     if (t.k == "topt") {
-        gen_eq_opt(st, t.of)
+        let opt: TOf = t;
+        gen_eq_opt(st, opt.of)
     } else if (t.k == "tarr") {
-        if (eq_elem_loop(t.of)) {
-            gen_eq_arr_deep(st, t.of)
-        } else if (t.of.k == "tstr") {
+        let arr: TOf = t;
+        if (eq_elem_loop(arr.of)) {
+            gen_eq_arr_deep(st, arr.of)
+        } else if (arr.of.k == "tstr") {
             st = emit(st, "    push %rax");
             st = emit(st, "    call y_arr_eq_str");
             emit(st, "    add $16, %rsp")
         } else {
             st = emit(st, "    push %rax");
-            st = emit(st, "    mov $" + tostring(elem_bytes(t.of)) + ", %rax");
+            st = emit(st, "    mov $" + tostring(elem_bytes(arr.of)) + ", %rax");
             st = emit(st, "    push %rax");
             st = emit(st, "    call y_arr_eq");
             emit(st, "    add $24, %rsp")
@@ -3656,7 +3941,7 @@ def gen_eq_vals(st: EmitSt, t) -> EmitSt {
 
 // gen_eq_vals for two options of payload type pt: equal when both are
 // none, or both are some with equal payloads (a box holds one word).
-def gen_eq_opt(st: EmitSt, pt) -> EmitSt {
+def gen_eq_opt(st: EmitSt, pt: Type) -> EmitSt {
     let lnone = next_loc(st);
     st = lnone.st;
     let lne = next_loc(st);
@@ -3688,7 +3973,7 @@ def gen_eq_opt(st: EmitSt, pt) -> EmitSt {
 // keeps its state on the stack, since an element compare may call the
 // string and array cores: from the top, the index, the right array, the
 // left.
-def gen_eq_arr_deep(st: EmitSt, et) -> EmitSt {
+def gen_eq_arr_deep(st: EmitSt, et: Type) -> EmitSt {
     let lloop = next_loc(st);
     st = lloop.st;
     let lsame = next_loc(st);
@@ -3738,7 +4023,7 @@ def gen_eq_arr_deep(st: EmitSt, et) -> EmitSt {
     emit(st, ldone.lbl + ":")
 };
 
-def gen_bin_rest(st: EmitSt, node) -> EmitSt {
+def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
     let op = node.op;
     let lt = infer(st, node.l);
     let rt = infer(st, node.r);
@@ -3773,10 +4058,18 @@ def gen_bin_rest(st: EmitSt, node) -> EmitSt {
         // pointer comparison. String elements compare by value, and
         // elements that are arrays, options or floats by their own ==
         // (gen_eq_vals).
-        let elt = { k: "tunk" };
-        if (lt.k == "tarr") { elt = lt.of; 0; } else { 0; };
+        let elt: Type = normtype({ k: "tunk" });
+        if (lt.k == "tarr") {
+            let larr: TOf = lt;
+            elt = larr.of;
+            0
+        } else { 0; };
         if (elt.k == "tunk") {
-            if (rt.k == "tarr") { elt = rt.of; 0; } else { 0; };
+            if (rt.k == "tarr") {
+                let rarr: TOf = rt;
+                elt = rarr.of;
+                0
+            } else { 0; };
             0
         } else { 0; };
         if (eq_elem_loop(elt)) {
@@ -3808,10 +4101,18 @@ def gen_bin_rest(st: EmitSt, node) -> EmitSt {
     } else if ((op == "==" || op == "!=") && (lt.k == "topt" || rt.k == "topt") && !is_none_id(node.l) && !is_none_id(node.r)) {
         // Two options compare their payloads (gen_eq_opt); `x == none`
         // stays the one-word test below.
-        let pt = { k: "tunk" };
-        if (lt.k == "topt") { pt = lt.of; 0; } else { 0; };
+        let pt: Type = normtype({ k: "tunk" });
+        if (lt.k == "topt") {
+            let lopt: TOf = lt;
+            pt = lopt.of;
+            0
+        } else { 0; };
         if (pt.k == "tunk") {
-            if (rt.k == "topt") { pt = rt.of; 0; } else { 0; };
+            if (rt.k == "topt") {
+                let ropt: TOf = rt;
+                pt = ropt.of;
+                0
+            } else { 0; };
             0
         } else { 0; };
         st = gen(st, node.l);
@@ -3915,7 +4216,7 @@ def gen_bin_rest(st: EmitSt, node) -> EmitSt {
 // bits for `>>`) and a negative count stops the program (y_shift_neg). A
 // literal count of 0 to 63 is the instruction's immediate and needs
 // neither check.
-def gen_shift(st: EmitSt, node, op: str) -> EmitSt {
+def gen_shift(st: EmitSt, node: Bin, op: str) -> EmitSt {
     let mn = "shl";
     if (op == ">>") { mn = "sar"; 0; }
     else if (op == ">>>") { mn = "shr"; 0; }
@@ -3948,10 +4249,11 @@ def gen_shift(st: EmitSt, node, op: str) -> EmitSt {
 
 // The count of a shift when it is a literal from 0 to 63 (gen_shift), else
 // -1. A radix literal may wrap negative (0xFFFF_FFFF_FFFF_FFFF is -1).
-def shift_imm(r) -> long {
+def shift_imm(r: Node) -> long {
     if (r.k == "num") {
-        if (lit_is_float(r.v)) { -1 } else {
-            let s = norm_num(r.v);
+        let num: Leaf = r;
+        if (lit_is_float(num.v)) { -1 } else {
+            let s = norm_num(num.v);
             if (len(s) > 2 || s[0:1] == "-") { -1 }
             else if (tonum(s) < 64) { tonum(s) }
             else { -1 }
@@ -3971,7 +4273,7 @@ def syscall_reg(i: long) -> str {
     else { "%r9" }
 };
 
-def gen_push_args(st: EmitSt, args: [{ k: str }]) -> EmitSt {
+def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
     let i = 0;
     while (i < len(args)) {
         st = gen(st, args[i]);
@@ -3983,7 +4285,7 @@ def gen_push_args(st: EmitSt, args: [{ k: str }]) -> EmitSt {
 
 // gen_push_args, with argument i converted (gen_as) to ptypes[i], the
 // type of the parameter it binds; arguments past ptypes are pushed as is.
-def gen_push_args_as(st: EmitSt, args: [{ k: str }], ptypes: [{ k: str }]) -> EmitSt {
+def gen_push_args_as(st: EmitSt, args: [Node], ptypes: [Type]) -> EmitSt {
     let i = 0;
     while (i < len(args)) {
         if (i < len(ptypes)) {
@@ -4005,7 +4307,7 @@ def gen_push_args_as(st: EmitSt, args: [{ k: str }], ptypes: [{ k: str }]) -> Em
 // %rax with static type `got`; `want` is the declared type of the place it
 // goes to. A packed [byte] element store (movb) truncates by itself, so
 // those callers ask for no byte conversion.
-def gen_conv(st: EmitSt, got, want) -> EmitSt {
+def gen_conv(st: EmitSt, got: Type, want: Type) -> EmitSt {
     let gk: str = got.k;
     let wk: str = want.k;
     if (wk == "tfloat" && (gk == "tlong" || gk == "tbyte")) {
@@ -4026,13 +4328,14 @@ def gen_conv(st: EmitSt, got, want) -> EmitSt {
 // type or a union is declared is checked at run time to be a record of
 // that type's fields, or of a member's (y_rec_cast, gen_union_cast): a
 // mismatch traps rather than read fields at the wrong offsets.
-def gen_as(st: EmitSt, node, want0) -> EmitSt {
+def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
     let want = types.unfold(want0);
     let nk: str = node.k;
     let wk: str = want.k;
     if (nk == "rec" && (wk == "trec" || wk == "tunion")) {
         // want0 as declared: a recursive alias names the descriptor
-        st = gen_reclit(st, node, want0);
+        let rec: RecLit = node;
+        st = gen_reclit(st, rec, want0);
         0
     } else {
         st = gen(st, node);
@@ -4053,7 +4356,7 @@ def gen_as(st: EmitSt, node, want0) -> EmitSt {
 // gen_as's check of a value of unknown type going where union t is
 // declared: a record with the fields of one of t's members, or a trap
 // (y_cast_trap, as y_rec_cast).
-def gen_union_cast(st: EmitSt, t) -> EmitSt {
+def gen_union_cast(st: EmitSt, t: Type) -> EmitSt {
     let ok = next_loc(st);
     st = ok.st;
     st = emit(st, "    test %rax, %rax");
@@ -4074,7 +4377,7 @@ def gen_union_cast(st: EmitSt, t) -> EmitSt {
 
 // A type that says nothing about a record's fields: unknown to the
 // checker, or the unknown-shape marker.
-def layout_unknown(t) -> bool {
+def layout_unknown(t: Type) -> bool {
     let tk: str = t.k;
     if (tk == "tunk" || tk == "tnone" || tk == "tname" || tk == "tparams") { true }
     else { is_kshape(t) }
@@ -4084,15 +4387,16 @@ def layout_unknown(t) -> bool {
 // nameless "fnty" entry (declared parameter types; the return type as
 // declared or as the checker inferred it, tnone when it could not --
 // see types.y set_inferred_ret). infer_fn_ret's scope has none.
-def cur_fn_type(st: EmitSt) -> { k: str } {
+def cur_fn_type(st: EmitSt) -> FuncTy {
     let env = st.env;
     let i = len(env) - 1;
-    let ft: { k: str } = { k: "tfunc", args: [], ret: { k: "tunk" } };
+    let ft: FuncTy = { k: "tfunc", args: [], ret: { k: "tunk" } };
     let looking = true;
     while (looking && i >= 0) {
         let e = env[i];
         if (e.kind == "fnty") {
-            ft = e.typ;
+            let fty: FuncTy = e.typ;
+            ft = fty;
             looking = false;
             0
         } else { 0; };
@@ -4101,28 +4405,36 @@ def cur_fn_type(st: EmitSt) -> { k: str } {
     ft
 };
 
-def cur_fn_ret(st: EmitSt) -> { k: str } {
+def cur_fn_ret(st: EmitSt) -> Type {
     let ft = cur_fn_type(st);
-    ft.ret
+    let ret: Type = ft.ret;
+    ret
 };
 
 // Parameter types of a function type (none for anything else).
-def fn_args_of(t) -> [{ k: str }] {
-    let none: [{ k: str }] = [];
-    if (t.k == "tfunc") { t.args } else { none }
+def fn_args_of(t: Type) -> [Type] {
+    let none: [Type] = [];
+    if (t.k == "tfunc") {
+        let func: TFunc = t;
+        func.args
+    } else { none }
 };
 
 // Element type of an array type (tnone for anything else).
-def arr_elem_type(t) -> { k: str } {
-    if (t.k == "tarr") { t.of }
-    else if (t.k == "tarrfix") { t.of }
-    else { { k: "tnone" } }
+def arr_elem_type(t: Type) -> Type {
+    if (t.k == "tarr") {
+        let arr: TOf = t;
+        arr.of
+    } else if (t.k == "tarrfix") {
+        let arr: TFix = t;
+        arr.of
+    } else { normtype({ k: "tnone" }) }
 };
 
 // The element type a store converts to: none for a packed [byte] (esz 1),
 // whose movb store truncates by itself.
-def store_elem_type(t, esz: long) -> { k: str } {
-    if (esz == 1) { { k: "tnone" } } else { arr_elem_type(t) }
+def store_elem_type(t: Type, esz: long) -> Type {
+    if (esz == 1) { normtype({ k: "tnone" }) } else { arr_elem_type(t) }
 };
 
 // Call a one-argument runtime helper. The argument is in %rax and goes on
@@ -4135,18 +4447,26 @@ def gen_helper1(st: EmitSt, label: str) -> EmitSt {
     emit(st, "    add $8, %rsp")
 };
 
-def gen_call(st: EmitSt, node) -> EmitSt {
-    let callee = node.callee;
+def gen_call(st: EmitSt, node: Call) -> EmitSt {
+    let callee: Node = node.callee;
     if (callee.k != "id") {
-        if (callee.k == "dot" && infer(st, callee.obj).k == "tstr") {
-            gen_method(st, node)
+        if (callee.k == "dot") {
+            let dot: Dot = callee;
+            if (infer(st, dot.obj).k == "tstr") {
+                gen_method(st, node)
+            } else {
+                // Calling the result of an expression (e.g. `fs[0](x)`): it is a
+                // closure value, so go through its code pointer.
+                gen_indirect(st, node, callee)
+            }
         } else {
             // Calling the result of an expression (e.g. `fs[0](x)`): it is a
             // closure value, so go through its code pointer.
             gen_indirect(st, node, callee)
         }
     } else {
-        let name = callee.v;
+        let id: Leaf = callee;
+        let name = id.v;
         if (name == "print") {
             gen_print(st, node)
         } else if (name == "syscall") {
@@ -4204,18 +4524,20 @@ def gen_call(st: EmitSt, node) -> EmitSt {
         } else if (name == "argv") {
             gen_argv(st, node)
         } else if (name == "bytes") {
-            st = gen_push_args(st, node.args);
+            let args: [Node] = node.args;
+            st = gen_push_args(st, args);
             st = emit(st, "    call y_str_to_bytes");
             emit(st, "    add $8, %rsp")
         } else if (name == "from_bytes") {
-            st = gen_push_args(st, node.args);
+            let args: [Node] = node.args;
+            st = gen_push_args(st, args);
             st = emit(st, "    call y_bytes_to_str");
             emit(st, "    add $8, %rsp")
         } else if (name == "ptr_addr") {
             // A pointer IS its numeric value at run time: nothing to emit
             // beyond evaluating the operand. This exists only so the type
             // system lets the value cross into long territory.
-            let paargs = node.args;
+            let paargs: [Node] = node.args;
             gen(st, paargs[0])
         } else {
             gen_direct(st, node, name)
@@ -4229,12 +4551,12 @@ def gen_call(st: EmitSt, node) -> EmitSt {
 // the call goes to the builtin's own lowering, or straight to the
 // std/str.y helper by label -- a Y function like any other, so the
 // arguments are pushed and the caller pops them.
-def gen_method(st: EmitSt, node) -> EmitSt {
-    let mcal = node.callee;
+def gen_method(st: EmitSt, node: Call) -> EmitSt {
+    let mcal: Dot = node.callee;
     let mobj = mcal.obj;
     let sm = types.str_method(mcal.key);
-    let margs = node.args;
-    let args: [{ k: str }] = [];
+    let margs: [Node] = node.args;
+    let args: [Node] = [];
     if (!sm.last) { args += mobj; 0; };
     let i = 0;
     while (i < len(margs)) {
@@ -4256,10 +4578,10 @@ def gen_method(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_print(st: EmitSt, node) -> EmitSt {
-    let args = node.args;
+def gen_print(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
     let pa0 = args[0];
-    let t = infer(st, pa0);
+    let t: Type = infer(st, pa0);
     if (t.k == "trec") {
         // Records are formatted field by field from their static shape.
         st = gen_rec_str(st, pa0, t);
@@ -4276,11 +4598,12 @@ def gen_print(st: EmitSt, node) -> EmitSt {
         // Arrays print like tostring: "[e0, e1, ...]", or b'...' for
         // [byte] (Python-style byte strings).
         st = gen(st, pa0);
-        if (t.of.k == "tbyte") {
+        let arr: ArrTy = t;
+        if (arr.of.k == "tbyte") {
             st = gen_helper1(st, "y_bytes_repr");
             0
         } else {
-            st = gen_arr_tostr_rax(st, t.of);
+            st = gen_arr_tostr_rax(st, arr.of);
             0
         };
         st = gen_helper1(st, "y_print_hstr");
@@ -4305,7 +4628,7 @@ def gen_print(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_print_scalar(st: EmitSt, arg, t) -> EmitSt {
+def gen_print_scalar(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     st = gen(st, arg);
     if (t.k == "tbool") {
         st = gen_helper1(st, "y_print_bool");
@@ -4324,8 +4647,8 @@ def gen_print_scalar(st: EmitSt, arg, t) -> EmitSt {
 
 // `typeof(e)` is resolved statically: the checker has already pinned e's
 // type, so this is a plain string constant.
-def gen_typeof(st: EmitSt, node) -> EmitSt {
-    let targs = node.args;
+def gen_typeof(st: EmitSt, node: Call) -> EmitSt {
+    let targs: [Node] = node.args;
     gen_str_const(st, types.tdisp(infer(st, targs[0])))
 };
 
@@ -4336,7 +4659,7 @@ def gen_typeof(st: EmitSt, node) -> EmitSt {
 
 // Option value in %rax (0 = none, else the box address): leave "none" or
 // the payload's string form in %rax. Options are 0-or-box (NATIVE.md).
-def gen_opt_str_rax(st: EmitSt, t) -> EmitSt {
+def gen_opt_str_rax(st: EmitSt, t: Type) -> EmitSt {
     let rdone = next_loc(st);
     st = rdone.st;
     let rnul = next_loc(st);
@@ -4344,14 +4667,15 @@ def gen_opt_str_rax(st: EmitSt, t) -> EmitSt {
     st = emit(st, "    test %rax, %rax");
     st = emit(st, "    jz " + rnul.lbl);
     st = emit(st, "    mov (%rax), %rax");
-    st = gen_val_tostr_rax(st, t.of);
+    let opt: TOf = t;
+    st = gen_val_tostr_rax(st, opt.of);
     st = emit(st, "    jmp " + rdone.lbl);
     st = emit(st, rnul.lbl + ":");
     st = gen_str_const(st, "none");
     emit(st, rdone.lbl + ":")
 };
 
-def gen_rec_str(st: EmitSt, arg, t) -> EmitSt {
+def gen_rec_str(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     st = gen(st, arg);
     gen_rec_str_rax(st, t)
 };
@@ -4360,11 +4684,12 @@ def gen_rec_str(st: EmitSt, arg, t) -> EmitSt {
 // Values are formatted from the static shape (the walk is unrolled at
 // compile time). Stack layout while building: [record][accumulator], the
 // record pushed first (8(%rsp)), the accumulator on top (0(%rsp)).
-def gen_rec_str_rax(st: EmitSt, t) -> EmitSt {
+def gen_rec_str_rax(st: EmitSt, t: Type) -> EmitSt {
     st = emit(st, "    push %rax");
     st = gen_str_const(st, "{");
     st = emit(st, "    push %rax");
-    let fs = t.fields;
+    let rec: TRec = t;
+    let fs: [Field] = rec.fields;
     let i = 0;
     while (i < len(fs)) {
         let f = fs[i];
@@ -4392,7 +4717,7 @@ def gen_rec_str_rax(st: EmitSt, t) -> EmitSt {
 
 // `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
 // (types.y typeof_cons keeps even array-typed elements whole).
-def gen_cons(st: EmitSt, node) -> EmitSt {
+def gen_cons(st: EmitSt, node: Bin) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let crt = infer(st, node.r);
@@ -4413,19 +4738,22 @@ def gen_cons(st: EmitSt, node) -> EmitSt {
 // elements, so build the result element by element instead --
 // { let a = l; let b = r; let c: [L] = []; c += a; c += b; c } -- where
 // each `+=` pushes through the element conversion (gen_push).
-def gen_cat_conv(st: EmitSt, node, lt: { k: str }) -> EmitSt {
+def gen_cat_conv(st: EmitSt, node: Bin, lt: Type) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let r = next_uid(st);
     st = r.st;
     let t1 = "y_t" + tostring(r.uid);
-    let noelems: [{ k: str }] = [];
-    let da = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "l", v: node.l, line: ln, col: cl };
-    let db = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "r", v: node.r, line: ln, col: cl };
-    let dc = { k: "decl", kind: "let", typ: { k: "tarr", of: lt.of }, name: t1 + "c", v: { k: "array", elems: noelems, line: ln, col: cl }, line: ln, col: cl };
-    let pa = { k: "opassign", tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "l", ln, cl), line: ln, col: cl };
-    let pb = { k: "opassign", tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "r", ln, cl), line: ln, col: cl };
-    gen(st, block6(da, db, dc, pa, pb, n_id(t1 + "c", ln, cl), ln, cl))
+    let noelems: [Node] = [];
+    let da: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1 + "l", v: node.l, line: ln, col: cl };
+    let db: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1 + "r", v: node.r, line: ln, col: cl };
+    let arr_type: ArrTy = lt;
+    let dc: Decl = { k: "decl", kind: "let", typ: type_node({ k: "tarr", of: arr_type.of }), name: t1 + "c", v: { k: "array", elems: noelems, line: ln, col: cl }, line: ln, col: cl };
+    let pa: OpAssign = { k: "opassign", tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "l", ln, cl), line: ln, col: cl };
+    let pb: OpAssign = { k: "opassign", tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "r", ln, cl), line: ln, col: cl };
+    let panode: Node = pa;
+    let pbnode: Node = pb;
+    gen(st, block6(da, db, dc, panode, pbnode, n_id(t1 + "c", ln, cl), ln, cl))
 };
 
 // Array `+`: always a NEW array (arr + arr, arr + elem, elem + arr).
@@ -4433,7 +4761,7 @@ def gen_cat_conv(st: EmitSt, node, lt: { k: str }) -> EmitSt {
 // ordinary array literal emitter, so `arr + v` evaluates v exactly once.
 // Two array operands concatenate unless types.arr_plus_kind says one of
 // them is an element of the other ([[T]] + [T], [T] + [[T]]).
-def gen_cat_arr(st: EmitSt, node, lt: { k: str }, rt: { k: str }) -> EmitSt {
+def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let lk: str = lt.k;
@@ -4442,12 +4770,16 @@ def gen_cat_arr(st: EmitSt, node, lt: { k: str }, rt: { k: str }) -> EmitSt {
     let risarr = rk == "tarr" || rk == "tarrfix";
     let how = "elem";
     if (lisarr && risarr) { how = types.arr_plus_kind(lt, rt); 0; };
-    if (how == "cat" && !types.teq(lt.of, rt.of)) {
-        return gen_cat_conv(st, node, lt);
+    if (how == "cat") {
+        let la: ArrTy = lt;
+        let ra: ArrTy = rt;
+        if (!types.teq(la.of, ra.of)) {
+            return gen_cat_conv(st, node, lt);
+        };
     };
     let larr = lisarr && how != "prepend";
     let esz = 8;
-    let ety = { k: "tnone" };
+    let ety: Type = { k: "tnone" };
     if (larr) {
         esz = arr_elem_bytes(lt);
         ety = store_elem_type(lt, esz);
@@ -4511,7 +4843,7 @@ def gen_slot_load(st: EmitSt, idx: long, dst: str) -> EmitSt {
 
 // acc = acc + <field in slot idx, rendered by its static type> (idx -1:
 // see gen_slot_load).
-def gen_rec_field_str(st: EmitSt, idx: long, ft) -> EmitSt {
+def gen_rec_field_str(st: EmitSt, idx: long, ft: Type) -> EmitSt {
     let fk = ft.k;
     if (fk == "tstr") {
         st = emit(st, "    mov 8(%rsp), %rcx");
@@ -4555,8 +4887,8 @@ def gen_rec_field_str(st: EmitSt, idx: long, ft) -> EmitSt {
     emit(st, "    mov %rax, (%rsp)")
 };
 
-def gen_syscall(st: EmitSt, node) -> EmitSt {
-    let args = node.args;
+def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
     // args[0] is the number; rest are a1..a6. Push all, pop into regs.
     st = gen_push_args(st, args);
     let n = len(args) - 1;
@@ -4595,10 +4927,10 @@ def capture_off(st: EmitSt) -> long {
     res
 };
 
-def gen_direct(st: EmitSt, node, name: str) -> EmitSt {
+def gen_direct(st: EmitSt, node: Call, name: str) -> EmitSt {
     let label = "";
     let indirect = false;
-    let dptypes: [{ k: str }] = [];
+    let dptypes: [Type] = [];
     if (name == "self") {
         label = st.self_label;
         dptypes = fn_args_of(cur_fn_type(st));
@@ -4649,7 +4981,7 @@ def gen_direct(st: EmitSt, node, name: str) -> EmitSt {
 
 // ── control flow ───────────────────────────────────────────────────────
 
-def gen_if(st: EmitSt, node) -> EmitSt {
+def gen_if(st: EmitSt, node: If) -> EmitSt {
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
@@ -4669,7 +5001,7 @@ def gen_if(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_while(st: EmitSt, node) -> EmitSt {
+def gen_while(st: EmitSt, node: While) -> EmitSt {
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
@@ -4690,7 +5022,7 @@ def gen_while(st: EmitSt, node) -> EmitSt {
 // body, a step, and a jump back. The loop variable is a normal local slot,
 // so nothing new is needed at runtime.
 
-def gen_for(st: EmitSt, node) -> EmitSt {
+def gen_for(st: EmitSt, node: For) -> EmitSt {
     // for (init; cond; step) body
     st = gen(st, node.init);
     let r1 = next_loc(st);
@@ -4709,7 +5041,7 @@ def gen_for(st: EmitSt, node) -> EmitSt {
     emit(st, "    xor %eax, %eax")
 };
 
-def gen_forrange(st: EmitSt, node) -> EmitSt {
+def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     // for (x in lo..hi) body — half-open: lo inclusive, hi exclusive.
     // Slot layout: [var][limit]; the limit is evaluated once.
     let voff = (st.slots + 1) * -8;
@@ -4722,7 +5054,7 @@ def gen_forrange(st: EmitSt, node) -> EmitSt {
     st = emit(st, "    mov %rax, " + tostring(loff) + "(%rbp)");
     st = gen(st, node.lo);
     st = emit(st, "    mov %rax, " + tostring(voff) + "(%rbp)");
-    st = env_define(st, node.name, "local", voff, "", { k: "tlong" });
+    st = env_define(st, node.name, "local", voff, "", normtype({ k: "tlong" }));
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
@@ -4745,7 +5077,7 @@ def gen_forrange(st: EmitSt, node) -> EmitSt {
     emit(st, "    xor %eax, %eax")
 };
 
-def gen_foreach(st: EmitSt, node) -> EmitSt {
+def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     // foreach (x in arr) body. Slots: [x][arr][i]. The array is evaluated
     // once; `x` is refreshed from arr[i] at the top of every iteration.
     let voff = (st.slots + 1) * -8;
@@ -4755,10 +5087,18 @@ def gen_foreach(st: EmitSt, node) -> EmitSt {
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies };
-    let elt = infer(st, node.iter);
-    let eltyp = { k: "tunk" };
-    if (elt.k == "tarr") { eltyp = elt.of; 0; } else { 0; };
-    if (elt.k == "tarrfix") { eltyp = elt.of; 0; } else { 0; };
+    let elt: Type = infer(st, node.iter);
+    let eltyp: Type = normtype({ k: "tunk" });
+    if (elt.k == "tarr") {
+        let arr: TOf = elt;
+        eltyp = arr.of;
+        0
+    } else { 0; };
+    if (elt.k == "tarrfix") {
+        let arr: TFix = elt;
+        eltyp = arr.of;
+        0
+    } else { 0; };
     st = gen(st, node.iter);
     st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
     st = emit(st, "    xor %eax, %eax");
@@ -4798,13 +5138,14 @@ def gen_foreach(st: EmitSt, node) -> EmitSt {
 // into a `jmp` back to the prologue. Tail recursion is then constant
 // space.
 
-def is_self_call(st: EmitSt, node) -> bool {
+def is_self_call(st: EmitSt, node: Call) -> bool {
     // `self(...)`, or a call naming the function being emitted (after
     // rename every def has a unique name, so the label decides).
     if (node.k == "call") {
         let cal = node.callee;
         if (cal.k == "id") {
-            let cv: str = cal.v;
+            let id: Leaf = cal;
+            let cv: str = id.v;
             if (cv == "self") {
                 true
             } else {
@@ -4819,7 +5160,7 @@ def is_self_call(st: EmitSt, node) -> bool {
     }
 };
 
-def gen_tail_call(st: EmitSt, node) -> EmitSt {
+def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
     let targs = node.args;
     let n = len(targs);
     let tptypes = fn_args_of(cur_fn_type(st));
@@ -4859,24 +5200,33 @@ def gen_tail_call(st: EmitSt, node) -> EmitSt {
     emit(st, "    jmp " + st.self_label)
 };
 
-def gen_tail(st: EmitSt, node) -> EmitSt {
+def gen_tail(st: EmitSt, node: Node) -> EmitSt {
     let k = node.k;
     if (k == "ret") {
-        let e = node.e;
-        if (is_self_call(st, e)) {
-            gen_tail_call(st, e)
+        let ret: Wrap = node;
+        let e: Node = ret.e;
+        if (e.k == "call") {
+            let call: Call = e;
+            if (is_self_call(st, call)) {
+                gen_tail_call(st, call)
+            } else {
+                st = gen_as(st, e, cur_fn_ret(st));
+                emit(st, "    jmp " + st.end_label)
+            }
         } else {
             st = gen_as(st, e, cur_fn_ret(st));
             emit(st, "    jmp " + st.end_label)
         }
     } else if (k == "call") {
-        if (is_self_call(st, node)) {
-            gen_tail_call(st, node)
+        let call: Call = node;
+        if (is_self_call(st, call)) {
+            gen_tail_call(st, call)
         } else {
-            gen_as(st, node, cur_fn_ret(st))
+            gen_as(st, call, cur_fn_ret(st))
         }
     } else if (k == "block") {
-        let tl = node.stmts;
+        let block: Block = node;
+        let tl: [Node] = block.stmts;
         let m = len(tl);
         // a trailing `;` (void) leaves the statement before it in tail
         // position: the block's value is void either way
@@ -4897,7 +5247,8 @@ def gen_tail(st: EmitSt, node) -> EmitSt {
         };
         st
     } else if (k == "if") {
-        st = gen(st, node.cond);
+        let branch: If = node;
+        st = gen(st, branch.cond);
         st = emit(st, "    test %rax, %rax");
         let rl1 = next_loc(st);
         st = rl1.st;
@@ -4906,12 +5257,12 @@ def gen_tail(st: EmitSt, node) -> EmitSt {
         st = rl2.st;
         let lend = rl2.lbl;
         st = emit(st, "    jz " + lelse);
-        st = gen_tail(st, node.then);
-        if (node.has_else) {
+        st = gen_tail(st, branch.then);
+        if (branch.has_else) {
             st = emit(st, "    jmp " + lend);
             st = emit(st, lelse + ":");
-            st = gen_loc_elif(st, node.els);
-            st = gen_tail(st, node.els);
+            st = gen_loc_elif(st, branch.els);
+            st = gen_tail(st, branch.els);
             emit(st, lend + ":")
         } else {
             st = emit(st, lelse + ":")
@@ -4921,13 +5272,13 @@ def gen_tail(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_block(st: EmitSt, node) -> EmitSt {
+def gen_block(st: EmitSt, node: Block) -> EmitSt {
     gen_block_as(st, node, false)
 };
 
 // `dropped`: nobody takes the block's value (a loop body), so its last
 // statement is a statement (gen_stmt) as well as the ones before it.
-def gen_block_as(st: EmitSt, node, dropped: bool) -> EmitSt {    // No scope push: names are unique post-rename, blocks share the frame.
+def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No scope push: names are unique post-rename, blocks share the frame.
     let stmts = node.stmts;
     if (len(stmts) == 0) {
         emit(st, "    xor %eax, %eax")
@@ -4951,7 +5302,7 @@ def gen_block_as(st: EmitSt, node, dropped: bool) -> EmitSt {    // No scope pus
     }
 };
 
-def is_void_node(n) -> bool {
+def is_void_node(n: Node) -> bool {
     let k: str = n.k;
     k == "void"
 };
@@ -4976,7 +5327,7 @@ def loc_dir(ln: long) -> str {
 
 // A statement's marker, before its code. A bare `;` has no position (and
 // no code).
-def gen_loc_stmt(st: EmitSt, node) -> EmitSt {
+def gen_loc_stmt(st: EmitSt, node: Node) -> EmitSt {
     if (dbg_lines) {
         if (is_void_node(node)) { st } else { emit(st, loc_dir(node.line)) }
     } else {
@@ -4986,7 +5337,7 @@ def gen_loc_stmt(st: EmitSt, node) -> EmitSt {
 
 // An `else if` gets a marker of its own: its test would otherwise count
 // as the last line of the branch before it.
-def gen_loc_elif(st: EmitSt, els) -> EmitSt {
+def gen_loc_elif(st: EmitSt, els: Node) -> EmitSt {
     if (dbg_lines) {
         let k: str = els.k;
         if (k == "if") { emit(st, loc_dir(els.line)) } else { st }
@@ -4997,7 +5348,7 @@ def gen_loc_elif(st: EmitSt, els) -> EmitSt {
 
 // A loop's back edge (its step, the counter's increment, the jump to the
 // test) belongs to the loop's own line, not to the body's last one.
-def gen_loc_loop(st: EmitSt, node) -> EmitSt {
+def gen_loc_loop(st: EmitSt, node: Node) -> EmitSt {
     if (dbg_lines) { emit(st, loc_dir(node.line)) } else { st }
 };
 
@@ -5072,7 +5423,7 @@ def hex16(h: long) -> str {
 
 // The slot of field `key` in a record of the fields fs: how many of their
 // names sort before it (-1 when there is no such field).
-def rec_slot(fs: [NamedTy], key: str) -> long {
+def rec_slot(fs: [Field], key: str) -> long {
     let found = false;
     let below = 0;
     let i = 0;
@@ -5091,11 +5442,12 @@ def rec_slot(fs: [NamedTy], key: str) -> long {
 // is_open) -- a value of any record type may hide behind it, so its k is
 // wherever that record's descriptor says (gen_dot_rec), and its other
 // fields are looked up by name.
-def is_kshape(t) -> bool {
+def is_kshape(t: Type) -> bool {
     let tk: str = t.k;
     if (tk != "trec") { false }
     else {
-        let fs: [NamedTy] = t.fields;
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         types.is_open(fs)
     }
 };
@@ -5130,7 +5482,7 @@ def tyset_add(lbl: str, form: str) -> long {
     out
 };
 
-def tyset_grow() {
+def tyset_grow() -> long {
     let old = ty_seen;
     let oldf = ty_forms;
     let cap = 2 * len(old);
@@ -5152,6 +5504,7 @@ def tyset_grow() {
         if (len(lb) > 0) { tyset_add(lb, oldf[j]); };
         j = j + 1;
     };
+    0
 };
 
 def tyset_reset() {
@@ -5172,14 +5525,15 @@ def ty_collision(lbl: str, form: str) {
 // The descriptor label of record type rt; its rodata entry (label,
 // canonical form, quads) goes into the unit the first time the unit uses
 // it.
-def ty_desc(st: EmitSt, rt) -> StLbl {
+def ty_desc(st: EmitSt, rt: Type) -> StLbl {
     let form = types.tcanon(rt);
     let lbl = "ytt_" + hex16(fnv64(form));
     let added = tyset_add(lbl, form);
     if (added < 0) { ty_collision(lbl, form); };
     if (added > 0) {
-        let rtu = types.unfold(rt);
-        let fs: [NamedTy] = rtu.fields;
+        let rtu: Type = types.unfold(rt);
+        let rec: TRec = rtu;
+        let fs: [Field] = rec.fields;
         let names = types.rec_names(fs);
         let n = len(names);
         let koff = 0;
@@ -5212,20 +5566,23 @@ def ty_desc(st: EmitSt, rt) -> StLbl {
 };
 
 // The shape hash a descriptor of record type t carries (ty_desc).
-def ty_shape(t) -> long {
-    let fs: [NamedTy] = t.fields;
+def ty_shape(t: Type) -> long {
+    let rec: TRec = t;
+    let fs: [Field] = rec.fields;
     fnv64(join(types.rec_names(fs), ",")) >>> 33
 };
 
 // lt (a record literal's type) is the record type t: the same field names
 // (without the unknown-shape marker's leniency) and equal types.
-def same_rec(lt, t) -> bool {
+def same_rec(lt: Type, t: Type) -> bool {
     let tk: str = t.k;
     let lk: str = lt.k;
     if (tk != "trec" || lk != "trec") { false }
     else {
-        let lfs: [NamedTy] = lt.fields;
-        let tfs: [NamedTy] = t.fields;
+        let lrec: TRec = lt;
+        let trec: TRec = t;
+        let lfs: [Field] = lrec.fields;
+        let tfs: [Field] = trec.fields;
         // (no record is created as an open type)
         if (types.is_open(lfs) || types.is_open(tfs)) { false }
         else if (len(lfs) != len(tfs)) { false } else { types.teq(lt, t) }
@@ -5235,14 +5592,14 @@ def same_rec(lt, t) -> bool {
 // The type a record literal of type lt is created as when it goes where
 // `want` is declared (gen_as): want itself when lt is that record type,
 // the first member of a union want that lt is; lt otherwise.
-def rec_lit_type(lt, want) -> { k: str } {
-    let w = types.unfold(want);
+def rec_lit_type(lt: Type, want: Type) -> Type {
+    let w: Type = types.unfold(want);
     let wk: str = w.k;
     if (wk == "trec") {
         if (same_rec(lt, w)) { want } else { lt }
     } else if (wk == "tunion") {
         let ms = types.union_parts(w);
-        let found = lt;
+        let found: Type = lt;
         let looking = true;
         let i = 0;
         while (looking && i < len(ms)) {
@@ -5278,9 +5635,9 @@ def gen_kload(st: EmitSt, rec: str, tmp: str, dst: str) -> EmitSt {
 // names the declared type -- `{a: none}` stored as a {a: long?} is one.
 // (y_alloc(0) is fine — bump allocators return a valid, if empty, block;
 // empty maps are rejected by the checker anyway.)
-def gen_reclit(st: EmitSt, node, want) -> EmitSt {
-    let mvals = node.vals;
-    let mkeys = node.keys;
+def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
+    let mvals: [Node] = node.vals;
+    let mkeys: [str] = node.keys;
     let nent = len(mvals);
     // Static merge for `...` spread entries (the types.y field_merge
     // rule): a later entry wins the value. The value loop below stores
@@ -5293,7 +5650,8 @@ def gen_reclit(st: EmitSt, node, want) -> EmitSt {
         if (nk == "...") {
             let srec = infer(st, mvals[ni]);
             if (srec.k == "trec") {
-                let sfs = srec.fields;
+                let spread: TRec = srec;
+                let sfs: [Field] = spread.fields;
                 let si = 0;
                 while (si < len(sfs)) {
                     let sf = sfs[si];
@@ -5317,9 +5675,9 @@ def gen_reclit(st: EmitSt, node, want) -> EmitSt {
     };
     let n = len(names);
     let slots = types.str_sorted(names);
-    let rt = types.lit_target(node, want);
+    let rt: Type = types.lit_target(node, want);
     if (rt.k == "tnone") { rt = rec_lit_type(infer(st, node), want); 0; } else { 0; };
-    let rtu = types.unfold(rt);
+    let rtu: Type = types.unfold(rt);
     let dr = ty_desc(st, rt);
     st = dr.st;
     st = emit(st, "    mov $" + tostring(8 * n + 16) + ", %rdi");
@@ -5342,7 +5700,8 @@ def gen_reclit(st: EmitSt, node, want) -> EmitSt {
             st = emit(st, "    mov %rax, %rdx");
             let srec2 = infer(st, mv);
             if (srec2.k == "trec") {
-                let sfs2: [NamedTy] = srec2.fields;
+                let spread: TRec = srec2;
+                let sfs2: [Field] = spread.fields;
                 let sj = 0;
                 while (sj < len(sfs2)) {
                     let sf2 = sfs2[sj];
@@ -5379,9 +5738,9 @@ def gen_reclit(st: EmitSt, node, want) -> EmitSt {
 // An anonymous `def(...) {...}` used as a value: it has no entry in the
 // hoisted table, so give it a fresh label, emit the body here (where the
 // capture types are known) and hand back the closure record.
-def gen_func_literal(st: EmitSt, node) -> EmitSt {
+def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
     let caps = fn_captures(node, fn_names_of(st.fns));
-    let captypes: [{ k: str }] = [];
+    let captypes: [Type] = [];
     let ci = 0;
     while (ci < len(caps)) {
         let cn: str = caps[ci];
@@ -5409,8 +5768,8 @@ def gen_func_literal(st: EmitSt, node) -> EmitSt {
 // skips capturing functions), build the record, store it in a fresh slot.
 // Such a function (see capturing_defs) is not in the hoisted table, so it
 // gets its label here; its body knows its own name (emit_one_fn).
-def gen_closure_binding(st: EmitSt, name: str, func, caps: [str]) -> EmitSt {
-    let captypes: [{ k: str }] = [];
+def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitSt {
+    let captypes: [Type] = [];
     let ci = 0;
     while (ci < len(caps)) {
         let cn2: str = caps[ci];
@@ -5441,7 +5800,7 @@ def gen_closure_binding(st: EmitSt, name: str, func, caps: [str]) -> EmitSt {
     box_bound(st3, name)
 };
 
-def gen_decl(st: EmitSt, node) -> EmitSt {
+def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
     if (node.kind == "def") {
         // A nested `def` that captures is a closure just like a let-bound
         // literal; a capture-free one stays hoisted (emitted by
@@ -5449,11 +5808,12 @@ def gen_decl(st: EmitSt, node) -> EmitSt {
         // no capture: the body reaches itself through its own record.
         let dex = fn_names_of(st.fns);
         dex += node.name;
-        let dcaps = fn_captures(node.v, dex);
+        let func: Func = node.v;
+        let dcaps = fn_captures(func, dex);
         if (len(dcaps) == 0) {
             st
         } else {
-            gen_closure_binding(st, node.name, node.v, dcaps)
+            gen_closure_binding(st, node.name, func, dcaps)
         }
     } else {
         if (node.v.k == "func") {
@@ -5463,47 +5823,51 @@ def gen_decl(st: EmitSt, node) -> EmitSt {
             // values are live, and the binding holds that record.
             let lex = fn_names_of(st.fns);
             lex += node.name;
-            let caps = fn_captures(node.v, lex);
+            let func: Func = node.v;
+            let caps = fn_captures(func, lex);
             if (len(caps) == 0) {
                 st
             } else {
-                gen_closure_binding(st, node.name, node.v, caps)
+                gen_closure_binding(st, node.name, func, caps)
             }
         } else if (node.v.k == "arrrep") {
+            let rep: ArrRep = node.v;
             // heap array: [v; n] allocates a header {len, cap, data}.
             // Reference value like every other array: the binding holds
             // the header address.
-            let t = node.typ;
+            let t: Type = node.typ;
             if (t.k == "tnone") {
-                t = infer(st, node.v);
+                t = infer(st, rep);
             };
             let rsz = arr_elem_bytes(t);
-            st = gen_arrrep_esz(st, node.v, rsz, store_elem_type(t, rsz));
+            st = gen_arrrep_esz(st, rep, rsz, store_elem_type(t, rsz));
             bind_decl(st, node.name, t)
         } else if (node.v.k == "array") {
+            let array: ArrLit = node.v;
             // Heap array literal. The DECLARED element type decides the
             // element width: `let b: [byte] = [104, 105]` packs, and the
             // literal's own elements only ever infer as long.
-            let t = node.typ;
+            let t: Type = node.typ;
             if (t.k == "tnone") {
-                t = infer(st, node.v);
+                t = infer(st, array);
             };
             let asz = arr_elem_bytes(t);
-            st = gen_array_esz(st, node.v, asz, store_elem_type(t, asz));
+            st = gen_array_esz(st, array, asz, store_elem_type(t, asz));
             bind_decl(st, node.name, t)
         } else if (node.v.k == "rec") {
+            let rec: RecLit = node.v;
             // record literal: heap address (first-class value, plain slot).
             // An empty literal under a map annotation is the map itself
             // (the {keys, vals, boxes} shape the map ops expect).
-            if (node.typ.k == "tmap" && len(node.v.keys) == 0) {
-                st = gen_maplit(st, node.v)
+            if (node.typ.k == "tmap" && len(rec.keys) == 0) {
+                st = gen_maplit(st, rec)
             } else {
                 // created as the declared type (gen_as, gen_reclit)
-                st = gen_as(st, node.v, node.typ)
+                st = gen_as(st, rec, node.typ)
             };
-            let t = node.typ;
+            let t: Type = node.typ;
             if (t.k == "tnone") {
-                t = infer(st, node.v);
+                t = infer(st, rec);
             };
             bind_decl(st, node.name, t)
         } else {
@@ -5515,7 +5879,7 @@ def gen_decl(st: EmitSt, node) -> EmitSt {
             // patch loop spent 650MB on a 20KB output. The VM and the C
             // runtime alias too, so all three engines agree.
             // bind with annotation or inferred type
-            let t = node.typ;
+            let t: Type = node.typ;
             if (t.k == "tnone") {
                 t = infer(st, node.v);
             };
@@ -5526,7 +5890,7 @@ def gen_decl(st: EmitSt, node) -> EmitSt {
 
 // Bind a declared name to the value in %rax: a top-level variable stores
 // to its global cell (see emit_program), any other takes a fresh slot.
-def bind_decl(st: EmitSt, name: str, t) -> EmitSt {
+def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
     let ge = env_find(st, name);
     if (ge.kind == "global") {
         st = emit(st, "    mov %rax, " + ge.label + "(%rip)");
@@ -5545,7 +5909,7 @@ def bind_decl(st: EmitSt, name: str, t) -> EmitSt {
     }
 };
 
-def gen_assign(st: EmitSt, node) -> EmitSt {
+def gen_assign(st: EmitSt, node: Assign) -> EmitSt {
     let e = env_find(st, node.name);
     // Reference semantics: arrays and records are heap values shared by
     // every binding that names them (no copy-on-store) — the same model
@@ -5608,14 +5972,14 @@ def gen_fill_heap(st: EmitSt, n: long, esz: long) -> EmitSt {
 // [v; n] as a first-class expression: allocate a heap header
 // {len, cap, data...}, fill every slot with v, leave the address in %rax.
 // Usable anywhere (let, assign, call argument, return), not just `let`.
-def gen_arrrep(st: EmitSt, node) -> EmitSt {
-    gen_arrrep_esz(st, node, elem_bytes(infer(st, node.v)), { k: "tnone" })
+def gen_arrrep(st: EmitSt, node: ArrRep) -> EmitSt {
+    gen_arrrep_esz(st, node, elem_bytes(infer(st, node.v)), type_node({ k: "tnone" }))
 };
 
 // Same, with the element width supplied by the declaration (`let b:
 // [byte; 4] = [0; 4]` — the literal's own elements infer as long), and
 // `ety` the element type the fill value converts to (store_elem_type).
-def gen_arrrep_esz(st: EmitSt, node, esz: long, ety) -> EmitSt {
+def gen_arrrep_esz(st: EmitSt, node: ArrRep, esz: long, ety: Type) -> EmitSt {
     let n = node.n;
     st = gen_as(st, node.v, ety);
     st = emit(st, "    push %rax");
@@ -5765,7 +6129,7 @@ def pow10(k: long) -> long {
     d
 };
 
-def gen_lit(st: EmitSt, node) -> EmitSt {
+def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
     if (lit_is_float(node.v)) {
         // Float literal: mantissa scaled by 10^n, where n folds together the
         // fraction length and any explicit exponent. Floats live in %rax as
@@ -5802,7 +6166,7 @@ def gen_scale10(st: EmitSt, n: long) -> EmitSt {
     emit(st, "    movq %xmm0, %rax")
 };
 
-def gen_index(st: EmitSt, node) -> EmitSt {
+def gen_index(st: EmitSt, node: Index) -> EmitSt {
     // Checker: an array expression — a plain variable or a nested place
     // (`grid[0][1]`, `rec.v[i]`); the base is evaluated once, here.
     // Bounds-trapped at runtime. Fixed arrays are heap headers now (same
@@ -5819,7 +6183,8 @@ def gen_index(st: EmitSt, node) -> EmitSt {
     st = emit(st, "    test %rcx, %rcx");
     st = emit(st, "    js y_oob");
     if (bt.k == "tarrfix") {
-        st = emit(st, "    cmp $" + tostring(bt.n) + ", %rcx");
+        let fixed: TFix = bt;
+        st = emit(st, "    cmp $" + tostring(fixed.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
         emit(st, elem_load(ixesz, "%rax", "%rcx", "%rax"))
     } else {
@@ -5837,7 +6202,7 @@ def gen_index(st: EmitSt, node) -> EmitSt {
 // The object runs first, then the value. Reference semantics: a field
 // write is observable through every binding (the C copy's value model
 // shares records the same way).
-def gen_dotassign(st: EmitSt, node) -> EmitSt {
+def gen_dotassign(st: EmitSt, node: DotAssign) -> EmitSt {
     let dobj = node.obj;
     let dkey = node.key;
     let dt = infer(st, dobj);
@@ -5875,56 +6240,56 @@ def gen_dotassign(st: EmitSt, node) -> EmitSt {
 // The new value of `x op= v` / `++x` is bound under the place's type when
 // that is byte: binding it masks it (gen_as), so the value the expression
 // yields is the one stored. Any other type is left to inference.
-def place_value_type(t) -> {k: str} {
-    if (t.k == "tbyte") { t } else { { k: "tnone" } }
+def place_value_type(t: Type) -> Type {
+    if (t.k == "tbyte") { t } else { normtype({ k: "tnone" }) }
 };
 
-def n_num(v: str, line: long, col: long) -> {k: str} {
+def n_num(v: str, line: long, col: long) -> Leaf {
     { k: "num", v: v, line: line, col: col }
 };
 
-def n_id(v: str, line: long, col: long) -> {k: str} {
+def n_id(v: str, line: long, col: long) -> Leaf {
     { k: "id", v: v, line: line, col: col }
 };
 
-def args1(a) -> [{k: str}] {
-    let out: [{k: str}] = [];
+def args1(a: Node) -> [Node] {
+    let out: [Node] = [];
     out += a;
     out
 };
 
-def args2(a, b) -> [{k: str}] {
-    let out: [{k: str}] = [];
+def args2(a: Node, b: Node) -> [Node] {
+    let out: [Node] = [];
     out += a;
     out += b;
     out
 };
 
-def n_call1(name: str, a0, line: long, col: long) -> {k: str} {
+def n_call1(name: str, a0: Node, line: long, col: long) -> Call {
     { k: "call", callee: n_id(name, line, col), args: args1(a0), line: line, col: col }
 };
 
-def n_call2(name: str, a0, a1, line: long, col: long) -> {k: str} {
+def n_call2(name: str, a0: Node, a1: Node, line: long, col: long) -> Call {
     { k: "call", callee: n_id(name, line, col), args: args2(a0, a1), line: line, col: col }
 };
 
-def block2(a, b, ln: long, cl: long) -> {k: str} {
-    let st: [{k: str}] = [];
+def block2(a: Node, b: Node, ln: long, cl: long) -> Block {
+    let st: [Node] = [];
     st += a;
     st += b;
     { k: "block", stmts: st, line: ln, col: cl }
 };
 
-def block3(a, b, c, ln: long, cl: long) -> {k: str} {
-    let st: [{k: str}] = [];
+def block3(a: Node, b: Node, c: Node, ln: long, cl: long) -> Block {
+    let st: [Node] = [];
     st += a;
     st += b;
     st += c;
     { k: "block", stmts: st, line: ln, col: cl }
 };
 
-def block4(a, b, c, d, ln: long, cl: long) -> {k: str} {
-    let st: [{k: str}] = [];
+def block4(a: Node, b: Node, c: Node, d: Node, ln: long, cl: long) -> Block {
+    let st: [Node] = [];
     st += a;
     st += b;
     st += c;
@@ -5932,8 +6297,8 @@ def block4(a, b, c, d, ln: long, cl: long) -> {k: str} {
     { k: "block", stmts: st, line: ln, col: cl }
 };
 
-def block5(a, b, c, d, e, ln: long, cl: long) -> {k: str} {
-    let st: [{k: str}] = [];
+def block5(a: Node, b: Node, c: Node, d: Node, e: Node, ln: long, cl: long) -> Block {
+    let st: [Node] = [];
     st += a;
     st += b;
     st += c;
@@ -5942,8 +6307,8 @@ def block5(a, b, c, d, e, ln: long, cl: long) -> {k: str} {
     { k: "block", stmts: st, line: ln, col: cl }
 };
 
-def block6(a, b, c, d, e, f, ln: long, cl: long) -> {k: str} {
-    let st: [{k: str}] = [];
+def block6(a: Node, b: Node, c: Node, d: Node, e: Node, f: Node, ln: long, cl: long) -> Block {
+    let st: [Node] = [];
     st += a;
     st += b;
     st += c;
@@ -5953,7 +6318,7 @@ def block6(a, b, c, d, e, f, ln: long, cl: long) -> {k: str} {
     { k: "block", stmts: st, line: ln, col: cl }
 };
 
-def gen_incdec(st: EmitSt, node) -> EmitSt {
+def gen_incdec(st: EmitSt, node: IncDec) -> EmitSt {
     let op = node.op;
     let binop = "+";
     if (op == "--") { binop = "-"; 0; } else { 0; };
@@ -5967,19 +6332,19 @@ def gen_incdec(st: EmitSt, node) -> EmitSt {
     // One shape for every place: capture the base/index exactly once (a
     // no-op let for a plain variable), read the place, step it, write it
     // back. The arithmetic goes through gen_bin (LONG_MIN / -1 safe).
-    let bind = gen_place_bind(tgt, t1, ln, cl);
-    let place = gen_place_read(tgt, t1, ln, cl);
+    let bind: Node = gen_place_bind(tgt, t1, ln, cl);
+    let place: Node = gen_place_read(tgt, t1, ln, cl);
     if (node.pre) {
         // ++x -> { bind; let v = x + 1; x = v; v }
-        let nv = { k: "bin", op: binop, l: place, r: one, line: ln, col: cl };
-        let d2 = { k: "decl", kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
-        let asg = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
+        let nv: Bin = { k: "bin", op: binop, l: place, r: one, line: ln, col: cl };
+        let d2: Decl = { k: "decl", kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
+        let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
         gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
     } else {
         // x++ -> { bind; let v = x; x = v + 1; v }
-        let d2 = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: place, line: ln, col: cl };
-        let nv = { k: "bin", op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
-        let asg = gen_place_assign(tgt, nv, t1, ln, cl);
+        let d2: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1 + "v", v: place, line: ln, col: cl };
+        let nv: Bin = { k: "bin", op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
+        let asg: Node = gen_place_assign(tgt, nv, t1, ln, cl);
         gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
     }
 };
@@ -5989,7 +6354,7 @@ def gen_incdec(st: EmitSt, node) -> EmitSt {
 // the arithmetic desugar. Arrays are homogeneous by design, so `+=` on an
 // array is either a same-typed element (push) or a same-typed array
 // (append) — never a mix.
-def gen_opassign(st: EmitSt, node) -> EmitSt {
+def gen_opassign(st: EmitSt, node: OpAssign) -> EmitSt {
     let t = infer(st, node.tgt);
     if (t.k == "tarr" || t.k == "tarrfix") {
         gen_opassign_arr(st, node)
@@ -5998,7 +6363,7 @@ def gen_opassign(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_opassign_arith(st: EmitSt, node) -> EmitSt {
+def gen_opassign_arith(st: EmitSt, node: OpAssign) -> EmitSt {
     // `x op= v` for numbers and strings -> `x = x op v`, with the target's
     // index/base evaluated once through a synthetic let.
     let tgt = node.tgt;
@@ -6008,11 +6373,11 @@ def gen_opassign_arith(st: EmitSt, node) -> EmitSt {
     let r = next_uid(st);
     st = r.st;
     let t1 = "y_t" + tostring(r.uid);
-    let bind = gen_place_bind(tgt, t1, ln, cl);
-    let rd = gen_place_read(tgt, t1, ln, cl);
-    let bin = { k: "bin", op: op, l: rd, r: node.v, line: ln, col: cl };
-    let d2 = { k: "decl", kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
-    let asg = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
+    let bind: Node = gen_place_bind(tgt, t1, ln, cl);
+    let rd: Node = gen_place_read(tgt, t1, ln, cl);
+    let bin: Bin = { k: "bin", op: op, l: rd, r: node.v, line: ln, col: cl };
+    let d2: Decl = { k: "decl", kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
+    let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
     gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
 };
 
@@ -6020,7 +6385,7 @@ def gen_opassign_arith(st: EmitSt, node) -> EmitSt {
 // captured the target's index (a[i]) or base (o.f) — an id target needs
 // no capture (re-reading a variable has no side effects). Each target
 // shape gets its own arm (single-call dispatch, see normnode note).
-def place_read_id(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+def place_read_id(tgt: Leaf, t1: str, ln: long, cl: long) -> Leaf {
     n_id(tgt.v, ln, cl)
 };
 
@@ -6028,78 +6393,115 @@ def place_read_id(tgt, t1: str, ln: long, cl: long) -> {k: str} {
 // directly (re-reading it has no side effects); any other base expression
 // was captured in `t1 + "a"` (see place_bind_idx), so the desugared forms
 // read and write it through a plain variable and evaluate it exactly once.
-def place_arr(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+def place_arr(tgt: Index, t1: str, ln: long, cl: long) -> Leaf {
     let ba = tgt.arr;
-    if (ba.k == "id") { n_id(ba.v, ln, cl) } else { n_id(t1 + "a", ln, cl) }
+    if (ba.k == "id") {
+        let id: Leaf = ba;
+        n_id(id.v, ln, cl)
+    } else { n_id(t1 + "a", ln, cl) }
 };
 
-def place_read_idx(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+def place_read_idx(tgt: Index, t1: str, ln: long, cl: long) -> Index {
     { k: "index", arr: place_arr(tgt, t1, ln, cl), idx: n_id(t1, ln, cl), line: ln, col: cl }
 };
 
-def place_read_dot(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+def place_read_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Dot {
     { k: "dot", obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl }
 };
 
-def gen_place_read(tgt, t1: str, ln: long, cl: long) -> {k: str} {
-    if (tgt.k == "id") { place_read_id(tgt, t1, ln, cl) }
-    else if (tgt.k == "index") { place_read_idx(tgt, t1, ln, cl) }
-    else { place_read_dot(tgt, t1, ln, cl) }
+def gen_place_read(tgt: Node, t1: str, ln: long, cl: long) -> Node {
+    if (tgt.k == "id") {
+        let id: Leaf = tgt;
+        let node: Node = place_read_id(id, t1, ln, cl);
+        node
+    } else if (tgt.k == "index") {
+        let index: Index = tgt;
+        let node: Node = place_read_idx(index, t1, ln, cl);
+        node
+    } else {
+        let dot: Dot = tgt;
+        let node: Node = place_read_dot(dot, t1, ln, cl);
+        node
+    }
 };
 
-def place_asg_id(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
+def place_asg_id(tgt: Leaf, valnode: Node, t1: str, ln: long, cl: long) -> Assign {
     { k: "assign", name: tgt.v, v: valnode, line: ln, col: cl }
 };
 
-def place_asg_idx(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
+def place_asg_idx(tgt: Index, valnode: Node, t1: str, ln: long, cl: long) -> IdxAssign {
     { k: "idxassign", arr: place_arr(tgt, t1, ln, cl), idx: n_id(t1, ln, cl), v: valnode, line: ln, col: cl }
 };
 
-def place_asg_dot(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
+def place_asg_dot(tgt: Dot, valnode: Node, t1: str, ln: long, cl: long) -> DotAssign {
     { k: "dotassign", obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl }
 };
 
-def gen_place_assign(tgt, valnode, t1: str, ln: long, cl: long) -> {k: str} {
-    if (tgt.k == "id") { place_asg_id(tgt, valnode, t1, ln, cl) }
-    else if (tgt.k == "index") { place_asg_idx(tgt, valnode, t1, ln, cl) }
-    else { place_asg_dot(tgt, valnode, t1, ln, cl) }
+def gen_place_assign(tgt: Node, valnode: Node, t1: str, ln: long, cl: long) -> Node {
+    if (tgt.k == "id") {
+        let id: Leaf = tgt;
+        let node: Node = place_asg_id(id, valnode, t1, ln, cl);
+        node
+    } else if (tgt.k == "index") {
+        let index: Index = tgt;
+        let node: Node = place_asg_idx(index, valnode, t1, ln, cl);
+        node
+    } else {
+        let dot: Dot = tgt;
+        let node: Node = place_asg_dot(dot, valnode, t1, ln, cl);
+        node
+    }
 };
 
-def place_bind_id(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+def place_bind_id(tgt: Leaf, t1: str, ln: long, cl: long) -> Block {
     { k: "block", stmts: [], line: ln, col: cl }
 };
 
-def place_bind_idx_id(tgt, t1: str, ln: long, cl: long) -> {k: str} {
-    { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1, v: tgt.idx, line: ln, col: cl }
+def place_bind_idx_id(tgt: Index, t1: str, ln: long, cl: long) -> Decl {
+    { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1, v: tgt.idx, line: ln, col: cl }
 };
 
-def place_bind_idx_nest(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+def place_bind_idx_nest(tgt: Index, t1: str, ln: long, cl: long) -> Block {
     // nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
     // `t1 + "a"` as well, so the place evaluates it exactly once.
-    let tba = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "a", v: tgt.arr, line: ln, col: cl };
-    let tib = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1, v: tgt.idx, line: ln, col: cl };
+    let tba: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1 + "a", v: tgt.arr, line: ln, col: cl };
+    let tib: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1, v: tgt.idx, line: ln, col: cl };
     block2(tba, tib, ln, cl)
 };
 
-def place_bind_idx(tgt, t1: str, ln: long, cl: long) -> {k: str} {
+def place_bind_idx(tgt: Index, t1: str, ln: long, cl: long) -> Node {
     let ba = tgt.arr;
-    if (ba.k == "id") { place_bind_idx_id(tgt, t1, ln, cl) }
-    else { place_bind_idx_nest(tgt, t1, ln, cl) }
+    if (ba.k == "id") {
+        let node: Node = place_bind_idx_id(tgt, t1, ln, cl);
+        node
+    } else {
+        let node: Node = place_bind_idx_nest(tgt, t1, ln, cl);
+        node
+    }
 };
 
-def place_bind_dot(tgt, t1: str, ln: long, cl: long) -> {k: str} {
-    { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1, v: tgt.obj, line: ln, col: cl }
+def place_bind_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Decl {
+    { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1, v: tgt.obj, line: ln, col: cl }
 };
 
 // The synthetic `let` that runs the target's index/base exactly once (a
 // no-op statement for id targets).
-def gen_place_bind(tgt, t1: str, ln: long, cl: long) -> {k: str} {
-    if (tgt.k == "id") { place_bind_id(tgt, t1, ln, cl) }
-    else if (tgt.k == "index") { place_bind_idx(tgt, t1, ln, cl) }
-    else { place_bind_dot(tgt, t1, ln, cl) }
+def gen_place_bind(tgt: Node, t1: str, ln: long, cl: long) -> Node {
+    if (tgt.k == "id") {
+        let id: Leaf = tgt;
+        let node: Node = place_bind_id(id, t1, ln, cl);
+        node
+    } else if (tgt.k == "index") {
+        let index: Index = tgt;
+        place_bind_idx(index, t1, ln, cl)
+    } else {
+        let dot: Dot = tgt;
+        let node: Node = place_bind_dot(dot, t1, ln, cl);
+        node
+    }
 };
 
-def gen_opassign_arr(st: EmitSt, node) -> EmitSt {
+def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
     // In-place array forms. `*=` prepends one element. `+=` pushes one
     // element — or, when the VALUE is an array of the same element type
     // (types.arr_plus_kind "cat"), appends its elements one by one (its
@@ -6133,13 +6535,13 @@ def gen_opassign_arr(st: EmitSt, node) -> EmitSt {
         // { let tv = v; let ti = 0; let tn = len(tv);
         //   while (ti < tn) { place += tv[ti]; ti = ti + 1 }
         //   place }
-        let tv = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "v", v: v, line: ln, col: cl };
-        let ti = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl };
-        let tn = { k: "decl", kind: "let", typ: { k: "tnone" }, name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl };
-        let elem = { k: "index", arr: n_id(t1 + "v", ln, cl), idx: n_id(t1 + "i", ln, cl), line: ln, col: cl };
-        let put = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
-        let step = { k: "assign", name: t1 + "i", v: { k: "bin", op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
-        let loop = { k: "while", cond: { k: "bin", op: "<", l: n_id(t1 + "i", ln, cl), r: n_id(t1 + "n", ln, cl), line: ln, col: cl }, body: block2(put, step, ln, cl), line: ln, col: cl };
+        let tv: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1 + "v", v: v, line: ln, col: cl };
+        let ti: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl };
+        let tn: Decl = { k: "decl", kind: "let", typ: normtype({ k: "tnone" }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl };
+        let elem: Index = { k: "index", arr: n_id(t1 + "v", ln, cl), idx: n_id(t1 + "i", ln, cl), line: ln, col: cl };
+        let put: Node = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
+        let step: Assign = { k: "assign", name: t1 + "i", v: { k: "bin", op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
+        let loop: While = { k: "while", cond: { k: "bin", op: "<", l: n_id(t1 + "i", ln, cl), r: n_id(t1 + "n", ln, cl), line: ln, col: cl }, body: block2(put, step, ln, cl), line: ln, col: cl };
         gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
     } else {
         let fname = "push";
@@ -6149,7 +6551,7 @@ def gen_opassign_arr(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_idxassign(st: EmitSt, node) -> EmitSt {
+def gen_idxassign(st: EmitSt, node: IdxAssign) -> EmitSt {
     // Fixed arrays are heap headers now: one layout for both kinds.
     // Fixed uses the static bound n; heap uses the runtime len.
     // Reference semantics: `x[i] = v` writes through to the array every
@@ -6159,7 +6561,7 @@ def gen_idxassign(st: EmitSt, node) -> EmitSt {
     // the header pointer never moves, so the store through it is already
     // visible through every binding.
     let garr = node.arr;
-    let bt = infer(st, garr);
+    let bt: Type = infer(st, garr);
     let iaesz = arr_elem_bytes(bt);
     st = gen(st, garr);
     st = emit(st, "    push %rax");
@@ -6171,7 +6573,8 @@ def gen_idxassign(st: EmitSt, node) -> EmitSt {
     st = emit(st, "    test %rcx, %rcx");
     st = emit(st, "    js y_oob");
     if (bt.k == "tarrfix") {
-        st = emit(st, "    cmp $" + tostring(bt.n) + ", %rcx");
+        let fixed: TFix = bt;
+        st = emit(st, "    cmp $" + tostring(fixed.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
         st = emit(st, "    mov %rdx, %r10");
         st = emit(st, "    mov %rax, %rdx");
@@ -6198,7 +6601,7 @@ def gen_idxassign(st: EmitSt, node) -> EmitSt {
 // The walk is unrolled at compile time (the type is static), so nested
 // arrays emit nested loops rather than needing a runtime type tag.
 
-def gen_val_tostr_rax(st: EmitSt, t) -> EmitSt {
+def gen_val_tostr_rax(st: EmitSt, t: Type) -> EmitSt {
     t = types.unfold(t);
     let tk = t.k;
     if (tk == "tstr") {
@@ -6212,17 +6615,19 @@ def gen_val_tostr_rax(st: EmitSt, t) -> EmitSt {
         st = emit(st, "    call y_float_tostr");
         emit(st, "    add $8, %rsp")
     } else if (tk == "tarr") {
-        if (t.of.k == "tbyte") {
+        let arr: TOf = t;
+        if (arr.of.k == "tbyte") {
             // [byte] stringifies Python-style: b'...' with escapes
             gen_helper1(st, "y_bytes_repr")
         } else {
-            gen_arr_tostr_rax(st, t.of)
+            gen_arr_tostr_rax(st, arr.of)
         }
     } else if (tk == "tarrfix") {
-        if (t.of.k == "tbyte") {
+        let arr: TFix = t;
+        if (arr.of.k == "tbyte") {
             gen_helper1(st, "y_bytes_repr")
         } else {
-            gen_arr_tostr_rax(st, t.of)
+            gen_arr_tostr_rax(st, arr.of)
         }
     } else if (tk == "topt") {
         gen_opt_str_rax(st, t)
@@ -6239,7 +6644,7 @@ def gen_val_tostr_rax(st: EmitSt, t) -> EmitSt {
 
 // Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
 // gives. Slots: [src][acc][i].
-def gen_arr_tostr_rax(st: EmitSt, elty) -> EmitSt {
+def gen_arr_tostr_rax(st: EmitSt, elty: Type) -> EmitSt {
     let soff = (st.slots + 1) * -8;
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
@@ -6305,21 +6710,29 @@ def gen_acc_cat_slot(st: EmitSt, off: long, s: str) -> EmitSt {
 // the load/store width all follow from the element type. Everything else
 // stays 8 bytes (one machine word per value).
 
-def elem_bytes(t) -> long {
+def elem_bytes(t: Type) -> long {
     if (t.k == "tbyte") { 1 } else { 8 }
 };
 
-def arr_elem_bytes(t) -> long {
-    if (t.k == "tarr") { elem_bytes(t.of) }
-    else if (t.k == "tarrfix") { elem_bytes(t.of) }
+def arr_elem_bytes(t: Type) -> long {
+    if (t.k == "tarr") {
+        let arr: TOf = t;
+        elem_bytes(arr.of)
+    } else if (t.k == "tarrfix") {
+        let arr: TFix = t;
+        elem_bytes(arr.of)
+    }
     else { 8 }
 };
 
 // Width of what a pointer of static type `t` addresses: a *byte points into
 // a packed [byte] block (or at a byte local), so `*p` and `*p = v` move one
 // byte; every other pointee is a full 8-byte slot.
-def ptr_width(t) -> long {
-    if (t.k == "tptr") { elem_bytes(t.to) } else { 8 }
+def ptr_width(t: Type) -> long {
+    if (t.k == "tptr") {
+        let ptr: TPtr = t;
+        elem_bytes(ptr.to)
+    } else { 8 }
 };
 
 // Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
@@ -6377,7 +6790,7 @@ def arr_header_size() -> long {
 // Records are heap addresses; field k lives at addr+8k. Static index via
 // infer (checker validated). Works for locals, params, and call results
 // alike — every record value is just an address in %rax.
-def gen_dot(st: EmitSt, node) -> EmitSt {
+def gen_dot(st: EmitSt, node: Dot) -> EmitSt {
     // dobj is read twice (infer, then gen).
     let dobj = node.obj;
     let dkey = node.key;
@@ -6398,8 +6811,8 @@ def gen_dot(st: EmitSt, node) -> EmitSt {
 // %rax written to the record in %rdx. One move when the field has one
 // slot in every member; else a compare of the record's descriptor per
 // member, a move per slot.
-def gen_union_slot(st: EmitSt, t, dkey: str, store: bool) -> EmitSt {
-    let ms = types.union_parts(t);
+def gen_union_slot(st: EmitSt, t: Type, dkey: str, store: bool) -> EmitSt {
+    let ms: [Type] = types.union_parts(t);
     let slots: [long] = [];
     let ds: [long] = [];
     let i = 0;
@@ -6464,7 +6877,7 @@ def gen_slot_move(st: EmitSt, sl: long, store: bool) -> EmitSt {
 
 // Built-in properties (types.y typeof_prop): `.length` is len(x); `.ptr`
 // is the array header's data word — the element block's address.
-def gen_prop(st: EmitSt, obj, key: str, line: long, col: long) -> EmitSt {
+def gen_prop(st: EmitSt, obj: Node, key: str, line: long, col: long) -> EmitSt {
     if (key == "length") {
         gen_len(st, n_call1("len", obj, line, col))
     } else {
@@ -6474,7 +6887,7 @@ def gen_prop(st: EmitSt, obj, key: str, line: long, col: long) -> EmitSt {
 };
 
 // Record field read; `t` is the record's static type.
-def gen_dot_rec(st: EmitSt, dobj, dkey: str, t) -> EmitSt {
+def gen_dot_rec(st: EmitSt, dobj: Node, dkey: str, t: Type) -> EmitSt {
     let idx = rec_field_idx(t, dkey);
     // an open record's fields are wherever the record's own type puts them
     if (is_kshape(t)) { idx = -1; 0; } else { 0; };
@@ -6491,7 +6904,7 @@ def gen_dot_rec(st: EmitSt, dobj, dkey: str, t) -> EmitSt {
         let r = next_uid(st);
         st = r.st;
         let klbl = arch.arch_str_label(r.uid);
-        let krod = [];
+        let krod: [str] = [];
         krod += klbl;
         krod += tostring(len(dkey));
         krod += esc_asm(dkey);
@@ -6519,10 +6932,11 @@ def gen_dot_rec(st: EmitSt, dobj, dkey: str, t) -> EmitSt {
 // The slot of field `key` in a record of static type t (fields sorted by
 // name, see "records at run time"); -1 when t has no such field (an
 // unknown type: the read is dynamic, y_dot_lookup).
-def rec_field_idx(t, key: str) -> long {
+def rec_field_idx(t: Type, key: str) -> long {
     let idx = -1;
     if (t.k == "trec") {
-        let fs: [NamedTy] = t.fields;
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         idx = rec_slot(fs, key);
         0
     } else if (t.k == "tmap") {
@@ -6536,14 +6950,15 @@ def rec_field_idx(t, key: str) -> long {
 // Static type of field `key` in trec type t (tnone when there is none);
 // in a union, the type the field has in every member (types.y
 // union_field).
-def rec_field_type(t, key: str) -> { k: str } {
-    let ft = { k: "tnone" };
+def rec_field_type(t: Type, key: str) -> Type {
+    let ft: Type = { k: "tnone" };
     if (t.k == "tunion") {
         let ms = types.members(t);
         if (len(ms) > 0) { ft = rec_field_type(ms[0], key); 0; } else { 0; };
         0
     } else if (t.k == "trec") {
-        let fs = t.fields;
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
         let i = 0;
         while (i < len(fs)) {
             let f = fs[i];
@@ -6562,7 +6977,7 @@ def rec_field_type(t, key: str) -> { k: str } {
 // separate arr_header_size() header {len, cap, data}; the values are stored
 // into the data block through the header's pointer. The header address (an
 // 8-byte value like any other) is the expression value.
-def gen_array(st: EmitSt, node) -> EmitSt {
+def gen_array(st: EmitSt, node: ArrLit) -> EmitSt {
     let at = infer(st, node);
     let gsz = arr_elem_bytes(at);
     gen_array_esz(st, node, gsz, store_elem_type(at, gsz))
@@ -6571,8 +6986,8 @@ def gen_array(st: EmitSt, node) -> EmitSt {
 // Same, with the element width supplied by the declaration (`let b:
 // [byte] = [104, 105]` — the literal's own elements infer as long), and
 // `ety` the element type each value converts to (store_elem_type).
-def gen_array_esz(st: EmitSt, node, esz: long, ety) -> EmitSt {
-    let elems = node.elems;
+def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
+    let elems: [Node] = node.elems;
     let gi = 0;
     while (gi < len(elems)) {
         st = gen_as(st, elems[gi], ety);
@@ -6599,7 +7014,7 @@ def gen_array_esz(st: EmitSt, node, esz: long, ety) -> EmitSt {
     emit(st, "    mov %r10, %rax")
 };
 
-def gen_len(st: EmitSt, node) -> EmitSt {
+def gen_len(st: EmitSt, node: Call) -> EmitSt {
     // Checker: single array or string argument. Fixed size is immediate
     // (from the inferred type itself); heap length (array header or string
     // header) loads from address+0. NOTE: the argument is any array-typed
@@ -6621,11 +7036,14 @@ def gen_len(st: EmitSt, node) -> EmitSt {
 
 // arr += v: Y calling convention straight into the prelude helper.
 // Returns the (possibly reallocated) header — rebind it: `a += v`.
-def gen_push(st: EmitSt, node) -> EmitSt {
-    let pargs = node.args;
+def gen_push(st: EmitSt, node: Call) -> EmitSt {
+    let pargs: [Node] = node.args;
     let pat = infer(st, pargs[0]);
     let pesz = arr_elem_bytes(pat);
-    st = gen_push_args_as(st, node.args, args2({ k: "tnone" }, store_elem_type(pat, pesz)));
+    let ptypes: [Type] = [];
+    ptypes += type_node({ k: "tnone" });
+    ptypes += store_elem_type(pat, pesz);
+    st = gen_push_args_as(st, node.args, ptypes);
     st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
     st = emit(st, "    push %rax");
     st = emit(st, "    call y_arr_push");
@@ -6634,8 +7052,8 @@ def gen_push(st: EmitSt, node) -> EmitSt {
 };
 
 // some(v): box v in 8 heap bytes; the box address (nonzero) is the value.
-def gen_some(st: EmitSt, node) -> EmitSt {
-    let args = node.args;
+def gen_some(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
     st = gen(st, args[0]);
     st = emit(st, "    push %rax");
     st = emit(st, "    mov $8, %rdi");
@@ -6645,8 +7063,8 @@ def gen_some(st: EmitSt, node) -> EmitSt {
     st
 };
 
-def gen_is_some(st: EmitSt, node) -> EmitSt {
-    let args = node.args;
+def gen_is_some(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
     if (is_map_read(st, args[0])) {
         // is_some(m[k]): the key scan decides, nothing is boxed
         gen_map_get(st, args[0], "has")
@@ -6658,8 +7076,8 @@ def gen_is_some(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_unwrap(st: EmitSt, node) -> EmitSt {
-    let args = node.args;
+def gen_unwrap(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
     if (is_map_read(st, args[0])) {
         // m[k]!: the entry's value itself, nothing is boxed
         gen_map_get(st, args[0], "val")
@@ -6676,7 +7094,7 @@ def gen_unwrap(st: EmitSt, node) -> EmitSt {
 // (args pushed left-to-right, first arg deepest) and returns a header
 // address (or long) in %rax. Caller cleans the stack.
 
-def gen_trim(st: EmitSt, node) -> EmitSt {
+def gen_trim(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_trim");
     emit(st, "    add $8, %rsp")
@@ -6684,11 +7102,14 @@ def gen_trim(st: EmitSt, node) -> EmitSt {
 
 // arr *= v -> arr: in-place insert at the front (the header never
 // moves, so every alias sees it). The `*=` operator desugars to this.
-def gen_prepend(st: EmitSt, node) -> EmitSt {
-    let pargs = node.args;
+def gen_prepend(st: EmitSt, node: Call) -> EmitSt {
+    let pargs: [Node] = node.args;
     let pat = infer(st, pargs[0]);
     let pesz = arr_elem_bytes(pat);
-    st = gen_push_args_as(st, node.args, args2({ k: "tnone" }, store_elem_type(pat, pesz)));
+    let ptypes: [Type] = [];
+    ptypes += type_node({ k: "tnone" });
+    ptypes += store_elem_type(pat, pesz);
+    st = gen_push_args_as(st, node.args, ptypes);
     st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
     st = emit(st, "    push %rax");
     st = emit(st, "    call y_arr_prepend");
@@ -6700,8 +7121,8 @@ def gen_prepend(st: EmitSt, node) -> EmitSt {
 // the primitive every string helper is built on — reading one byte must
 // not copy the string the way bytes() does. Inline, four instructions,
 // because scanning loops call it per character.
-def gen_byte_at(st: EmitSt, node) -> EmitSt {
-    let args = node.args;
+def gen_byte_at(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
     st = gen(st, args[0]);
     st = emit(st, "    push %rax");
     st = gen(st, args[1]);
@@ -6714,27 +7135,27 @@ def gen_byte_at(st: EmitSt, node) -> EmitSt {
     emit(st, "    movzbq 8(%rcx,%rax,1), %rax")
 };
 
-def gen_ord(st: EmitSt, node) -> EmitSt {
+def gen_ord(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_ord");
     emit(st, "    add $8, %rsp")
 };
 
-def gen_chr(st: EmitSt, node) -> EmitSt {
+def gen_chr(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_chr");
     emit(st, "    add $8, %rsp")
 };
 
-def gen_tonum(st: EmitSt, node) -> EmitSt {
+def gen_tonum(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_tonum");
     emit(st, "    add $8, %rsp")
 };
 
-def gen_tostring(st: EmitSt, node) -> EmitSt {
+def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
     // dispatch on the static type: long/bool need conversion, str is identity
-    let targs = node.args;
+    let targs: [Node] = node.args;
     let a0 = targs[0];
     let t = infer(st, a0);
     if (t.k == "tstr") {
@@ -6749,10 +7170,12 @@ def gen_tostring(st: EmitSt, node) -> EmitSt {
         emit(st, "    add $8, %rsp")
     } else if (t.k == "tarr") {
         st = gen(st, a0);
-        if (t.of.k == "tbyte") { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, t.of) }
+        let arr: TOf = t;
+        if (arr.of.k == "tbyte") { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, arr.of) }
     } else if (t.k == "tarrfix") {
         st = gen(st, a0);
-        if (t.of.k == "tbyte") { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, t.of) }
+        let arr: TFix = t;
+        if (arr.of.k == "tbyte") { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, arr.of) }
     } else if (t.k == "topt") {
         st = gen(st, a0);
         gen_opt_str_rax(st, t)
@@ -6778,10 +7201,11 @@ def gen_tostring(st: EmitSt, node) -> EmitSt {
 // y_fmt_f for f F e E % (a long converted first, and a `%` multiplied by
 // 100 in floating point, as Python does it), y_fmt_s for the rest -- a
 // str, or the tostring of anything else.
-def gen_fmt(st: EmitSt, node) -> EmitSt {
-    let fargs = node.args;
+def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
+    let fargs: [Node] = node.args;
     let a0 = fargs[0];
-    let spec: str = fargs[1].v;
+    let specnode: Leaf = fargs[1];
+    let spec: str = specnode.v;
     let ts = n_call1("tostring", a0, node.line, node.col);
     if (spec == "") {
         gen_tostring(st, ts)
@@ -6866,7 +7290,7 @@ def fmt_push(st: EmitSt, v: long) -> EmitSt {
     emit(st, "    push %rax")
 };
 
-def gen_index_of(st: EmitSt, node, last: bool) -> EmitSt {
+def gen_index_of(st: EmitSt, node: Call, last: bool) -> EmitSt {
     st = gen_push_args(st, node.args);
     if (last) {
         st = emit(st, "    call y_str_lastidx");
@@ -6883,12 +7307,12 @@ def gen_index_of(st: EmitSt, node, last: bool) -> EmitSt {
 // path: most of them really are strings (the compiler's own arrays infer
 // as tunk through {k}-holes), and guessing wrong there would corrupt
 // output rather than crash.
-def gen_join(st: EmitSt, node) -> EmitSt {
-    let jargs = node.args;
-    let at = infer(st, jargs[0]);
-    let eltyp = { k: "tunk" };
-    if (at.k == "tarr") { eltyp = at.of; 0; } else { 0; };
-    if (at.k == "tarrfix") { eltyp = at.of; 0; } else { 0; };
+def gen_join(st: EmitSt, node: Call) -> EmitSt {
+    let jargs: [Node] = node.args;
+    let at: Type = infer(st, jargs[0]);
+    let eltyp: Type = type_node({ k: "tunk" });
+    if (at.k == "tarr") { let arr: TOf = at; eltyp = arr.of; 0; } else { 0; };
+    if (at.k == "tarrfix") { let arr: TFix = at; eltyp = arr.of; 0; } else { 0; };
     let ek = eltyp.k;
     if (ek == "tlong") {
         gen_join_conv(st, node, "y_long_tostr", 8)
@@ -6906,7 +7330,7 @@ def gen_join(st: EmitSt, node) -> EmitSt {
 };
 
 // Slots: [src][dst][i]. Builds dst = [tostr(src[0]), ...] then joins it.
-def gen_join_conv(st: EmitSt, node, tostr_fn: str, esz: long) -> EmitSt {
+def gen_join_conv(st: EmitSt, node: Call, tostr_fn: str, esz: long) -> EmitSt {
     let soff = (st.slots + 1) * -8;
     let doff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
@@ -6914,7 +7338,7 @@ def gen_join_conv(st: EmitSt, node, tostr_fn: str, esz: long) -> EmitSt {
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies };
-    let jargs = node.args;
+    let jargs: [Node] = node.args;
     st = gen(st, jargs[0]);
     st = emit(st, "    mov %rax, " + tostring(soff) + "(%rbp)");
     st = emit(st, "    mov (%rax), %rdi");
@@ -6962,16 +7386,16 @@ def gen_join_conv(st: EmitSt, node, tostr_fn: str, esz: long) -> EmitSt {
     emit(st, "    add $16, %rsp")
 };
 
-def gen_split(st: EmitSt, node) -> EmitSt {
+def gen_split(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit(st, "    call y_str_split");
     emit(st, "    add $16, %rsp")
 };
 
-def gen_puts(st: EmitSt, node) -> EmitSt {
+def gen_puts(st: EmitSt, node: Call) -> EmitSt {
     // puts(v): write the value WITHOUT trailing newline (C semantics:
     // fputs + flush). Like print but no newline; returns nothing (void).
-    let pargs = node.args;
+    let pargs: [Node] = node.args;
     let pa = pargs[0];
     st = gen(st, pa);
     let t = infer(st, pa);
@@ -6987,10 +7411,10 @@ def gen_puts(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_eputs(st: EmitSt, node) -> EmitSt {
+def gen_eputs(st: EmitSt, node: Call) -> EmitSt {
     // eputs(v): like puts, but on fd 2. Diagnostic output (`--time`) must
     // never land in stdout (where `-S` assembly and program output live).
-    let pargs = node.args;
+    let pargs: [Node] = node.args;
     let pa = pargs[0];
     st = gen(st, pa);
     let t = infer(st, pa);
@@ -7006,29 +7430,29 @@ def gen_eputs(st: EmitSt, node) -> EmitSt {
     }
 };
 
-def gen_clock_us(st: EmitSt, node) -> EmitSt {
+def gen_clock_us(st: EmitSt, node: Call) -> EmitSt {
     // clock_us() -> long (monotonic microseconds, via clock_gettime).
     emit(st, "    call y_clock_us")
 };
 
-def gen_heap_used(st: EmitSt, node) -> EmitSt {
+def gen_heap_used(st: EmitSt, node: Call) -> EmitSt {
     // heap_used() -> long (bytes the allocator has handed out so far).
     emit(st, "    call y_heap_used")
 };
 
-def gen_sleep(st: EmitSt, node) -> EmitSt {
+def gen_sleep(st: EmitSt, node: Call) -> EmitSt {
     // sleep(ms): suspend the caller for ms milliseconds (nanosleep, EINTR
     // cannot happen in single-threaded code, so one syscall is enough).
-    let sargs = node.args;
+    let sargs: [Node] = node.args;
     let sa = sargs[0];
     st = gen(st, sa);
     gen_helper1(st, "y_sleep")
 };
 
 
-def gen_exit(st: EmitSt, node) -> EmitSt {
+def gen_exit(st: EmitSt, node: Call) -> EmitSt {
     // exit(code): terminate the process with the exit-code syscall.
-    let eargs = node.args;
+    let eargs: [Node] = node.args;
     let ea = eargs[0];
     st = gen(st, ea);
     st = emit(st, "    mov %rax, %rdi");
@@ -7046,15 +7470,15 @@ def gen_exit(st: EmitSt, node) -> EmitSt {
 // array and stashes it in r15; gen_argv emits the call that materializes it.
 // (Files are std/fs.y: `import fs;`.)
 
-def gen_argv(st: EmitSt, node) -> EmitSt {
+def gen_argv(st: EmitSt, node: Call) -> EmitSt {
     emit(st, "    call y_argv")
 };
 
-def gen_store(st: EmitSt, node) -> EmitSt {
+def gen_store(st: EmitSt, node: Store) -> EmitSt {
     let spt = infer(st, node.p);
     let sw = ptr_width(spt);
-    let sto = { k: "tnone" };
-    if (sw == 8 && spt.k == "tptr") { sto = spt.to; 0 } else { 0; };
+    let sto: Type = type_node({ k: "tnone" });
+    if (sw == 8 && spt.k == "tptr") { let ptr: TPtr = spt; sto = ptr.to; 0 } else { 0; };
     st = gen(st, node.p);
     st = emit(st, "    push %rax");
     st = gen_as(st, node.v, sto);
@@ -7066,11 +7490,11 @@ def gen_store(st: EmitSt, node) -> EmitSt {
 // Frame: locals at rbp-8, rbp-16, ...; params at rbp+16, rbp+24, ....
 // Every emitted function gets: prologue, body, end_label, epilogue.
 
-def emit_one_fn(st: EmitSt, label: str, fuid: long, func, is_main: bool, want_argv: bool, captypes: [{ k: str }], selfname: str) -> EmitSt {
+def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: bool, want_argv: bool, captypes: [Type], selfname: str) -> EmitSt {
     // fresh per-function state; uid/rodata/fns flow through and back.
     // The scope is pre-loaded with every known def (like the checker's
     // fresh_func_scope): bodies see all hoisted functions and globals.
-    let f = { out: [], rodata: st.rodata, uid: st.uid,
+    let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0,
       self_label: label, end_label: arch.arch_loc_label(fuid, 0),
       fns: st.fns, bodies: st.bodies };
@@ -7082,15 +7506,16 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func, is_main: bool, want_ar
         g = g + 1;
     };
     // The names nested functions capture (see box_names / box_bound).
-    f = env_define(f, "", "frame", 0, "", { k: "tnone" });
+    f = env_define(f, "", "frame", 0, "", type_node({ k: "tnone" }));
     // This function's type, for the conversions at its returns and its
     // self calls (cur_fn_type).
-    f = env_define(f, "", "fnty", 0, "", { k: "tfunc", args: func.ptypes, ret: func.ret });
+    let ftype: Type = type_node({ k: "tfunc", args: func.ptypes, ret: func.ret });
+    f = env_define(f, "", "fnty", 0, "", ftype);
     let bnames = box_names(func);
     let bi = 0;
     while (bi < len(bnames)) {
         let bnm: str = bnames[bi];
-        f = env_define(f, "", "boxmark", 0, bnm, { k: "tnone" });
+        f = env_define(f, "", "boxmark", 0, bnm, type_node({ k: "tnone" }));
         bi = bi + 1;
     };
     // The names this body appends to (see own_wanted), the same way.
@@ -7098,20 +7523,21 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func, is_main: bool, want_ar
     let ai = 0;
     while (ai < len(anames)) {
         let anm: str = anames[ai];
-        f = env_define(f, "", "appmark", 0, anm, { k: "tnone" });
+        f = env_define(f, "", "appmark", 0, anm, type_node({ k: "tnone" }));
         ai = ai + 1;
     };
     // A capturing named function is not in that table (see
     // capturing_defs): bind its own name to this body, so a call by name
     // passes the record along (gen_direct) and a value is the record.
     if (selfname != "") {
-        f = env_define(f, selfname, "func", 0, label, func_type_in(st, func));
+        let func_node: Func = func;
+        f = env_define(f, selfname, "func", 0, label, func_type_in(st, func_node));
         0
     } else { 0; };
     // bind params. Caller pushes args left-to-right, so the LAST arg sits
     // at rbp+16 and param k lives at rbp+16+8*(n-1-k) (arity-dependent).
-    let params = func.params;
-    let ptypes = func.ptypes;
+    let params: [str] = func.params;
+    let ptypes: [Type] = func.ptypes;
     let nargs = len(params);
     let i = 0;
     while (i < nargs) {
@@ -7135,7 +7561,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func, is_main: bool, want_ar
             // Capture types come from the creation site (the enclosing env
             // knows them); without one the emitter would pick long for a
             // captured string in print/puts and in `+`.
-            let ct = { k: "tnone" };
+            let ct: Type = type_node({ k: "tnone" });
             if (c < len(captypes)) {
                 ct = captypes[c];
                 0
@@ -7173,7 +7599,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func, is_main: bool, want_ar
     };
     f = gen_tail(f, func.body);
     let frame = arch.arch_frame(f.slots);
-    let code = [];
+    let code: [str] = [];
     code += label + ":";
     // -g: the prologue is the def's line; `_start` has none (line 0)
     if (dbg_lines) {
@@ -7207,7 +7633,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func, is_main: bool, want_ar
         code += "    sub $" + tostring(frame) + ", %rsp";
         0
     } else { 0; };
-    let fout = f.out;
+    let fout: [str] = f.out;
     let j = 0;
     while (j < len(fout)) {
         code += fout[j];
@@ -7245,8 +7671,8 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func, is_main: bool, want_ar
 // in the node: set_inferred_ret): the type of its body's tail, inferred in
 // a scope holding every known def plus the params. The emitter needs one,
 // because a call's result type decides e.g. whether `+` must stringify.
-def infer_fn_ret(st: EmitSt, func) -> { k: str } {
-    let f = { out: [], rodata: st.rodata, uid: st.uid,
+def infer_fn_ret(st: EmitSt, func: Func) -> Type {
+    let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: 0, loc: 1, env: [], slots: 0,
       self_label: "", end_label: "", fns: st.fns, bodies: st.bodies };
     let fnsall = st.fns;
@@ -7256,8 +7682,8 @@ def infer_fn_ret(st: EmitSt, func) -> { k: str } {
         f = env_define(f, fe.name, fns_kind(fe.label), 0, fe.label, fe.typ);
         g = g + 1;
     };
-    let params = func.params;
-    let ptypes = func.ptypes;
+    let params: [str] = func.params;
+    let ptypes: [Type] = func.ptypes;
     let n = len(params);
     let i = 0;
     while (i < n) {
@@ -7268,17 +7694,17 @@ def infer_fn_ret(st: EmitSt, func) -> { k: str } {
 };
 
 // A function's type node.
-type FuncTy = { k: str, args: [{ k: str }], ret: { k: str } };
+type FuncTy = TFunc;
 
-def func_type(func) -> FuncTy {
+def func_type(func: Func) -> FuncTy {
     { k: "tfunc", args: func.ptypes, ret: func.ret }
 };
 
 // Same, but with an unannotated return type resolved from the body — the
 // checker infers it too, so a literal's call sites must agree (whether `+`
 // stringifies, which print arm runs, ...).
-def func_type_in(st: EmitSt, func) -> FuncTy {
-    let r = func.ret;
+def func_type_in(st: EmitSt, func: Func) -> FuncTy {
+    let r: Type = func.ret;
     if (r.k == "tnone") {
         r = infer_fn_ret(st, func);
         0
@@ -7293,14 +7719,14 @@ def func_type_in(st: EmitSt, func) -> FuncTy {
 // another file is an error, at the later def. The std units are no part
 // of this namespace (they are linked, see std_units): a program may
 // define a std name, and its own `readline` wins.
-def find_dup(stmts: [{ k: str }], origin: Origin) -> [Diag] {
+def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
     let names: [str] = [];
     let fids: [long] = [];
     let lines: [long] = [];
     let cols: [long] = [];
     let i = 0;
     while (i < len(stmts)) {
-        let s = stmts[i];
+        let s: Node = stmts[i];
         let nm = top_name_in(s, origin);
         if (len(nm) > 0) {
             let ln: long = s.line;
@@ -7336,7 +7762,7 @@ def find_dup(stmts: [{ k: str }], origin: Origin) -> [Diag] {
 
 // top_def_name of a top-level statement as rename.y binds it: a module's
 // (`import fs;`) qualified, `fs.exists` (rename.y rn_qualify).
-def top_name_in(s, origin: Origin) -> str {
+def top_name_in(s: Node, origin: Origin) -> str {
     let nm = top_def_name(s);
     if (len(nm) == 0 || nm.starts_with("y_")) {
         nm
@@ -7350,15 +7776,16 @@ def top_name_in(s, origin: Origin) -> str {
 
 // The name a top-level statement defines as a function -- a def, or a let
 // bound to a function literal; both hoist -- or "" (rename.y rn_decl_name).
-def top_def_name(s) -> str {
+def top_def_name(s: Node) -> str {
     if (s.k == "decl") {
-        top_def_name_go(s)
+        let decl: Decl = s;
+        top_def_name_go(decl)
     } else {
         ""
     }
 };
 
-def top_def_name_go(s) -> str {
+def top_def_name_go(s: Decl) -> str {
     // NOTE: one `s.v.k` read per body (see rename.y rn_prepass_decl note).
     if (s.kind == "def") {
         s.name
@@ -7377,15 +7804,16 @@ def top_def_name_go(s) -> str {
 
 // The program's top-level variable declarations, in order (function
 // bindings are defs, not variables).
-def global_decls(stmts) -> [{ k: str }] {
-    let out: [{ k: str }] = [];
+def global_decls(stmts: [Node]) -> [Node] {
+    let out: [Node] = [];
     let i = 0;
     while (i < len(stmts)) {
-        let s = stmts[i];
+        let s: Node = stmts[i];
         if (s.k == "decl") {
-            if (s.kind == "def") { 0; }
-            else if (s.v.k == "func") { 0; }
-            else { out += s; 0; };
+            let decl: Decl = s;
+            if (decl.kind == "def") { 0; }
+            else if (decl.v.k == "func") { 0; }
+            else { out += decl; 0; };
             0
         } else { 0; };
         i = i + 1;
@@ -7393,7 +7821,7 @@ def global_decls(stmts) -> [{ k: str }] {
     out
 };
 
-def decl_name(d) -> str {
+def decl_name(d: Decl) -> str {
     d.name
 };
 
@@ -7402,8 +7830,8 @@ def decl_name(d) -> str {
 // hoisted defs and the globals before it (what main sees when it runs
 // the declaration). Labels count from the unit's `gbase` (compile_unit),
 // so two units' globals never share one.
-def global_entries(st: EmitSt, gdecls: [{ k: str }], gbase: long) -> [Sym] {
-    let f = { out: [], rodata: st.rodata, uid: st.uid,
+def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
+    let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: 0, loc: 1, env: [], slots: 0,
       self_label: "", end_label: "", fns: st.fns, bodies: st.bodies };
     let fnsall = st.fns;
@@ -7416,9 +7844,9 @@ def global_entries(st: EmitSt, gdecls: [{ k: str }], gbase: long) -> [Sym] {
     let out: [Sym] = [];
     let i = 0;
     while (i < len(gdecls)) {
-        let d = gdecls[i];
+        let d: Decl = gdecls[i];
         let gn = decl_name(d);
-        let t = decl_type(d);
+        let t: Type = decl_type(d);
         if (t.k == "tnone") {
             t = infer(f, decl_value(d));
             0
@@ -7431,11 +7859,11 @@ def global_entries(st: EmitSt, gdecls: [{ k: str }], gbase: long) -> [Sym] {
     out
 };
 
-def decl_type(d) -> { k: str } {
+def decl_type(d: Decl) -> Type {
     d.typ
 };
 
-def decl_value(d) -> { k: str } {
+def decl_value(d: Decl) -> Node {
     d.v
 };
 
@@ -7518,7 +7946,7 @@ def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
         } else { 0; };
         if (redo) {
             out += { name: fe0.name, label: fe0.label,
-              typ: { k: "tfunc", args: fn_ptypes(d.func), ret: infer_fn_ret(st, d.func) } };
+              typ: type_node({ k: "tfunc", args: fn_ptypes(d.func), ret: infer_fn_ret(st, d.func) }) };
             0
         } else {
             out += fe0;
@@ -7529,16 +7957,16 @@ def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
     out
 };
 
-def ret_omitted(func) -> bool {
+def ret_omitted(func: Func) -> bool {
     let r = func.ret;
     r.k == "tnone"
 };
 
-def fn_ptypes(func) -> [{ k: str }] {
+def fn_ptypes(func: Func) -> [Type] {
     func.ptypes
 };
 
-def reads_any(func, names: [str]) -> bool {
+def reads_any(func: Func, names: [str]) -> bool {
     let reads = fv_ids(func.body, []);
     let i = 0;
     let found = false;
@@ -7743,7 +8171,7 @@ def export_name(n: str) -> str {
 // with, with the labels and types `fns` gives them. hdefs holds them in
 // statement order (a def's nested ones follow it), and fns starts with
 // hdefs' entries.
-def unit_exports(stmts: [{ k: str }], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
+def unit_exports(stmts: [Node], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
     let out: [Sym] = [];
     let h = 0;
     let i = 0;
@@ -7785,7 +8213,7 @@ type UnitRes = { ok: bool, errors: [Diag], warnings: [Diag], times: [Timing], un
 // preceded by calls to `xt.inits` (the linked units' init labels); any
 // other unit's are its init function. `xt.ext` holds the externs, bound
 // by name in the checker and the emitter (see Externs).
-def compile_unit(ast, imports: [str], origin: Origin, debug: bool, name: str, base: long, xt: Externs) -> UnitRes {
+def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: str, base: long, xt: Externs) -> UnitRes {
     tyset_reset();
     dbg_lines = debug;
     dbg_file = origin.file;
@@ -7796,12 +8224,12 @@ def compile_unit(ast, imports: [str], origin: Origin, debug: bool, name: str, ba
     let times: [Timing] = [];
     let pt = clock_us();
     let ph = heap_used();
-    let ast2 = strip_ns(ast, imports);
+    let ast2: Block = strip_ns(ast, imports);
     let pr = phase_end(times, "strip_ns", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
     // Static name resolution: every binding gets a unique name, so neither
     // the checker nor the emitter deals with scopes or shadowing.
-    let ast3 = rename.rename_program_x(ast2, xt.dfl, origin.file, origin.mods);
+    let ast3: Block = rename.rename_program_x(ast2, xt.dfl, origin.file, origin.mods);
     pr = phase_end(times, "rename", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
     let errors = types.check_program(ast3, ext);
@@ -7832,7 +8260,8 @@ def compile_unit(ast, imports: [str], origin: Origin, debug: bool, name: str, ba
         let gnames: [str] = [];
         let gi = 0;
         while (gi < len(gdecls)) {
-            gnames += decl_name(gdecls[gi]);
+            let gdecl: Decl = gdecls[gi];
+            gnames += decl_name(gdecl);
             gi = gi + 1;
         };
         // The externs, and the init functions `_start` calls (by their
@@ -7949,33 +8378,35 @@ def compile_unit(ast, imports: [str], origin: Origin, debug: bool, name: str, ba
         // store to their globals (bind_decl). A def needing a record would
         // be created here like a nested one — but a top-level def can only
         // read globals and functions, so none does.
-        let main_stmts: [{ k: str }] = [];
-        let noargs: [{ k: str }] = [];
+        let main_stmts: [Node] = [];
+        let noargs: [Node] = [];
         let ci = 0;
         while (ci < len(inits)) {
             let cl: str = inits[ci];
-            main_stmts += { k: "call", callee: { k: "id", v: cl, line: 0, col: 0 }, args: noargs, line: 0, col: 0 };
+            let call: Call = { k: "call", callee: { k: "id", v: cl, line: 0, col: 0 }, args: noargs, line: 0, col: 0 };
+            main_stmts += call;
             ci = ci + 1;
         };
-        let pstmts = ast3.stmts;
+        let pstmts: [Node] = ast3.stmts;
         let i = 0;
         while (i < len(pstmts)) {
-            let s = pstmts[i];
+            let s: Node = pstmts[i];
             if (s.k == "decl") {
-                if (s.kind == "def") {
-                    if (name_in(capdefs, s.name)) {
-                        main_stmts += s;
+                let decl: Decl = s;
+                if (decl.kind == "def") {
+                    if (name_in(capdefs, decl.name)) {
+                        main_stmts += decl;
                         0;
                     } else { 0; };
                     0
-                } else if (s.v.k == "func") {
-                    if (name_in(capdefs, s.name)) {
-                        main_stmts += s;
+                } else if (decl.v.k == "func") {
+                    if (name_in(capdefs, decl.name)) {
+                        main_stmts += decl;
                         0;
                     } else { 0; };
                     0
                 } else {
-                    main_stmts += s;
+                    main_stmts += decl;
                     0;
                 };
                 0
@@ -7992,11 +8423,15 @@ def compile_unit(ast, imports: [str], origin: Origin, debug: bool, name: str, ba
             // Only pay for argv materialization when the program uses it
             // (or a package it links does).
             let want = uses_scan_block(ast3.stmts, { argv: false });
-            st = emit_one_fn(st, "_start", rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts } }, true, want.argv || xt.argv, [], "");
+            let main_body: Block = { k: "block", stmts: main_stmts, line: 0, col: 0 };
+            let start_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: "tvoid" }), body: main_body, line: 0 };
+            st = emit_one_fn(st, "_start", rm.uid, start_fn, true, want.argv || xt.argv, [], "");
             0
         } else if (len(main_stmts) > 0) {
             init = arch.arch_fn_label(rm.uid, "init");
-            st = emit_one_fn(st, init, rm.uid, { params: [], ptypes: [], ret: { k: "tvoid" }, body: { k: "block", stmts: main_stmts }, line: 0 }, false, false, [], "");
+            let init_body: Block = { k: "block", stmts: main_stmts, line: 0, col: 0 };
+            let init_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: "tvoid" }), body: init_body, line: 0 };
+            st = emit_one_fn(st, init, rm.uid, init_fn, false, false, [], "");
             0
         } else { 0; };
         pr = phase_end(times, "emit_start", pt, ph);
@@ -8075,11 +8510,11 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
 // The parameter defaults of a unit's top-level defs, by the names they
 // were written with (see Unit): a later def of a name replaces an
 // earlier one's.
-def unit_dfl(stmts: [{ k: str }], origin: Origin) -> [DflCode] {
+def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
     let out: [DflCode] = [];
     let i = 0;
     while (i < len(stmts)) {
-        let s = stmts[i];
+        let s: Node = stmts[i];
         let nm = top_name_in(s, origin);
         // (not an imported module's: see export_name)
         if (len(nm) > 0 && index_of(nm, ".") < 0) {
@@ -8090,7 +8525,9 @@ def unit_dfl(stmts: [{ k: str }], origin: Origin) -> [DflCode] {
                 if (d.name != nm) { keep += d; 0; } else { 0; };
                 j = j + 1;
             };
-            let vals = dfl_codes(decl_value(s));
+            let decl: Decl = s;
+            let func: Func = decl.v;
+            let vals = dfl_codes(func);
             if (len(vals) > 0) { keep += { name: nm, vals: vals }; 0; } else { 0; };
             out = keep;
             0
@@ -8100,14 +8537,10 @@ def unit_dfl(stmts: [{ k: str }], origin: Origin) -> [DflCode] {
     out
 };
 
-def decl_value(s) -> { k: str } {
-    s.v
-};
-
 // A def's parameter defaults (rename.y rn_note_defaults) as lit_codes,
 // or [] when it has none.
-def dfl_codes(func) -> [str] {
-    let dv: [{ k: str }] = func.defs;
+def dfl_codes(func: Func) -> [str] {
+    let dv: [Node] = func.defs;
     let out: [str] = [];
     let any = false;
     let i = 0;
@@ -8123,31 +8556,31 @@ def dfl_codes(func) -> [str] {
 
 // A parameter default as text: `v` none, `o` optional, else a kind
 // letter and the literal's text (parser.y lit_type has the kinds).
-def lit_code(d) -> str {
+def lit_code(d: Node) -> str {
     let k: str = d.k;
     if (k == "void") { "v" }
     else if (k == "optarg") { "o" }
-    else if (k == "num") { "n" + lit_text(d) }
-    else if (k == "str") { "s" + lit_text(d) }
-    else if (k == "bool") { "b" + lit_text(d) }
-    else if (k == "char") { "c" + lit_text(d) }
-    else { "-" + lit_neg_text(d) }
+    else if (k == "num") { let leaf: Leaf = d; "n" + lit_text(leaf) }
+    else if (k == "str") { let leaf: Leaf = d; "s" + lit_text(leaf) }
+    else if (k == "bool") { let leaf: Leaf = d; "b" + lit_text(leaf) }
+    else if (k == "char") { let leaf: Leaf = d; "c" + lit_text(leaf) }
+    else { let un: Un = d; "-" + lit_neg_text(un) }
 };
 
-def lit_text(d) -> str {
+def lit_text(d: Leaf) -> str {
     d.v
 };
 
-def lit_neg_text(d) -> str {
-    let e = d.e;
+def lit_neg_text(d: Un) -> str {
+    let e: Leaf = d.e;
     e.v
 };
 
-def lit_decode(c: str) -> { k: str } {
+def lit_decode(c: str) -> Node {
     let t = c[:1];
     let v = c[1:];
-    if (t == "v") { normnode({ k: "void" }) }
-    else if (t == "o") { normnode({ k: "optarg" }) }
+    if (t == "v") { normnode({ k: "void", line: 0, col: 0 }) }
+    else if (t == "o") { normnode({ k: "optarg", line: 0, col: 0 }) }
     else if (t == "n") { normnode({ k: "num", v: v, line: 0, col: 0 }) }
     else if (t == "s") { normnode({ k: "str", v: v, line: 0, col: 0 }) }
     else if (t == "b") { normnode({ k: "bool", v: v, line: 0, col: 0 }) }
@@ -8412,13 +8845,13 @@ def pack_strs(out: [str], xs: [str]) -> [str] {
 // parts -- names as netstrings, lists as a count and their items. Unlike
 // types.tstr it spells every type a unit may export (none, unknown and
 // the like too) and reads back exactly (tdecode).
-def tcode(t: { k: str }) -> str {
+def tcode(t: Type) -> str {
     let out: [str] = [];
     out = tcode_go(out, t);
     join(out, "")
 };
 
-def tcode_go(out: [str], t) -> [str] {
+def tcode_go(out: [str], t: Type) -> [str] {
     let k: str = t.k;
     if (k == "tlong") { out += "l"; out }
     else if (k == "tbyte") { out += "b"; out }
@@ -8428,48 +8861,53 @@ def tcode_go(out: [str], t) -> [str] {
     else if (k == "tvoid") { out += "v"; out }
     else if (k == "tunk") { out += "u"; out }
     else if (k == "tnone") { out += "n"; out }
-    else if (k == "tname") { out += "N"; pack_put(out, t.name) }
-    else if (k == "tptr") { out += "*"; tcode_go(out, t.to) }
-    else if (k == "tarr") { out += "["; tcode_go(out, t.of) }
-    else if (k == "topt") { out += "?"; tcode_go(out, t.of) }
+    else if (k == "tname") { let name: TName = t; out += "N"; pack_put(out, name.name) }
+    else if (k == "tptr") { let ptr: TPtr = t; out += "*"; tcode_go(out, ptr.to) }
+    else if (k == "tarr") { let arr: TOf = t; out += "["; tcode_go(out, arr.of) }
+    else if (k == "topt") { let opt: TOf = t; out += "?"; tcode_go(out, opt.of) }
     else if (k == "tarrfix") {
+        let arr: TFix = t;
         out += "F";
-        out = pack_put(out, tostring(t.n));
-        tcode_go(out, t.of)
+        out = pack_put(out, tostring(arr.n));
+        tcode_go(out, arr.of)
     }
     else if (k == "tmap") {
+        let map: TMap = t;
         out += "M";
-        out = tcode_go(out, t.key);
-        tcode_go(out, t.of)
+        out = tcode_go(out, map.key);
+        tcode_go(out, map.of)
     }
     else if (k == "tfunc") {
+        let func: TFunc = t;
         out += ">";
-        out = tcode_list(out, t.args);
-        tcode_go(out, t.ret)
+        out = tcode_list(out, func.args);
+        tcode_go(out, func.ret)
     }
-    else if (k == "tunion") { out += "U"; tcode_list(out, t.ts) }
-    else if (k == "tparams") { out += "T"; tcode_list(out, t.ts) }
-    else if (k == "tpat") { out += "P"; pack_strs(out, t.names) }
+    else if (k == "tunion") { let list: TList = t; out += "U"; tcode_list(out, list.ts) }
+    else if (k == "tparams") { let list: TList = t; out += "T"; tcode_list(out, list.ts) }
+    else if (k == "tpat") { let pat: TPat = t; out += "P"; pack_strs(out, pat.names) }
     else if (k == "tref") {
+        let ref: TRef = t;
         // a recursive alias: spelled out where it is met first, "q" and
         // its unit id inside (tcode_refs: the trefs being spelled out)
-        let tmp: str = t.tmp;
+        let tmp: str = ref.tmp;
         if (name_in(tcode_refs, tmp)) {
             out += "q";
             pack_put(out, tmp)
         } else {
             out += "Q";
-            out = pack_put(out, t.name);
+            out = pack_put(out, ref.name);
             out = pack_put(out, tmp);
             tcode_refs += tmp;
-            out = tcode_go(out, t.to);
+            out = tcode_go(out, ref.to);
             tcode_refs = tcode_refs[0:len(tcode_refs) - 1];
             out
         }
     }
     else if (k == "trec") {
+        let rec: TRec = t;
         out += "R";
-        let fs = t.fields;
+        let fs: [Field] = rec.fields;
         out = pack_put(out, tostring(len(fs)));
         let i = 0;
         while (i < len(fs)) {
@@ -8488,7 +8926,7 @@ def tcode_go(out: [str], t) -> [str] {
     }
 };
 
-def tcode_list(out: [str], ts: [{ k: str }]) -> [str] {
+def tcode_list(out: [str], ts: [Type]) -> [str] {
     out = pack_put(out, tostring(len(ts)));
     let i = 0;
     while (i < len(ts)) {
@@ -8498,64 +8936,64 @@ def tcode_list(out: [str], ts: [{ k: str }]) -> [str] {
     out
 };
 
-def tdecode(s: str) -> { k: str } {
+def tdecode(s: str) -> Type {
     tdecode_go({ s: s, p: 0 })
 };
 
-def tdecode_go(cur: Cursor) -> { k: str } {
+def tdecode_go(cur: Cursor) -> Type {
     let s = cur.s;
     let p = cur.p;
     let c = s[p:p + 1];
     cur.p = p + 1;
-    if (c == "l") { normnode({ k: "tlong" }) }
-    else if (c == "b") { normnode({ k: "tbyte" }) }
-    else if (c == "f") { normnode({ k: "tfloat" }) }
-    else if (c == "o") { normnode({ k: "tbool" }) }
-    else if (c == "s") { normnode({ k: "tstr" }) }
-    else if (c == "v") { normnode({ k: "tvoid" }) }
-    else if (c == "u") { normnode({ k: "tunk" }) }
-    else if (c == "n") { normnode({ k: "tnone" }) }
-    else if (c == "N") { normnode({ k: "tname", name: pack_get(cur) }) }
-    else if (c == "*") { normnode({ k: "tptr", to: tdecode_go(cur) }) }
-    else if (c == "[") { normnode({ k: "tarr", of: tdecode_go(cur) }) }
-    else if (c == "?") { normnode({ k: "topt", of: tdecode_go(cur) }) }
+    if (c == "l") { normtype({ k: "tlong" }) }
+    else if (c == "b") { normtype({ k: "tbyte" }) }
+    else if (c == "f") { normtype({ k: "tfloat" }) }
+    else if (c == "o") { normtype({ k: "tbool" }) }
+    else if (c == "s") { normtype({ k: "tstr" }) }
+    else if (c == "v") { normtype({ k: "tvoid" }) }
+    else if (c == "u") { normtype({ k: "tunk" }) }
+    else if (c == "n") { normtype({ k: "tnone" }) }
+    else if (c == "N") { normtype({ k: "tname", name: pack_get(cur) }) }
+    else if (c == "*") { normtype({ k: "tptr", to: tdecode_go(cur) }) }
+    else if (c == "[") { normtype({ k: "tarr", of: tdecode_go(cur) }) }
+    else if (c == "?") { normtype({ k: "topt", of: tdecode_go(cur) }) }
     else if (c == "F") {
         let n = pack_num(cur);
-        normnode({ k: "tarrfix", of: tdecode_go(cur), n: n })
+        normtype({ k: "tarrfix", of: tdecode_go(cur), n: n })
     }
     else if (c == "M") {
         let kt = tdecode_go(cur);
-        normnode({ k: "tmap", key: kt, of: tdecode_go(cur) })
+        normtype({ k: "tmap", key: kt, of: tdecode_go(cur) })
     }
     else if (c == ">") {
         let args = tdecode_list(cur);
-        normnode({ k: "tfunc", args: args, ret: tdecode_go(cur) })
+        normtype({ k: "tfunc", args: args, ret: tdecode_go(cur) })
     }
-    else if (c == "U") { normnode({ k: "tunion", ts: tdecode_list(cur) }) }
-    else if (c == "T") { normnode({ k: "tparams", ts: tdecode_list(cur) }) }
-    else if (c == "P") { normnode({ k: "tpat", names: pack_get_strs(cur) }) }
+    else if (c == "U") { normtype({ k: "tunion", ts: tdecode_list(cur) }) }
+    else if (c == "T") { normtype({ k: "tparams", ts: tdecode_list(cur) }) }
+    else if (c == "P") { normtype({ k: "tpat", names: pack_get_strs(cur) }) }
     else if (c == "Q") {
         // a tref (tcode): a fresh unit id, `to` read with the "q"s inside
         // it pointing back at it (tdec_encs/tdec_refs)
         let name = pack_get(cur);
         let enc = pack_get(cur);
         tdec_n = tdec_n + 1;
-        let r: RnRef = { k: "tref", name: name, tmp: "~" + tostring(tdec_n), to: { k: "tnone" } };
+        let tref: TRef = { k: "tref", name: name, tmp: "~" + tostring(tdec_n), to: type_node({ k: "tnone" }) };
         tdec_encs += enc;
-        tdec_refs += r;
-        r.to = tdecode_go(cur);
+        tdec_refs += tref;
+        tref.to = tdecode_go(cur);
         tdec_encs = tdec_encs[0:len(tdec_encs) - 1];
         tdec_refs = tdec_refs[0:len(tdec_refs) - 1];
-        normnode(r)
+        normtype(tref)
     }
     else if (c == "q") {
         let enc = pack_get(cur);
         let i = len(tdec_encs) - 1;
         while (i > 0 && tdec_encs[i] != enc) { i = i - 1; };
-        normnode(tdec_refs[i])
+        normtype(tdec_refs[i])
     }
     else {
-        let fields: [NamedTy] = [];
+        let fields: [Field] = [];
         let n = pack_num(cur);
         let i = 0;
         while (i < n) {
@@ -8563,12 +9001,12 @@ def tdecode_go(cur: Cursor) -> { k: str } {
             fields += { name: fname, typ: tdecode_go(cur) };
             i = i + 1;
         };
-        normnode({ k: "trec", fields: fields })
+        normtype({ k: "trec", fields: fields })
     }
 };
 
-def tdecode_list(cur: Cursor) -> [{ k: str }] {
-    let out: [{ k: str }] = [];
+def tdecode_list(cur: Cursor) -> [Type] {
+    let out: [Type] = [];
     let n = pack_num(cur);
     let i = 0;
     while (i < n) {
@@ -8694,7 +9132,7 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         let xn = pack_get(cur);
         let xl = pack_get(cur);
         let tc = pack_get(cur);
-        let xt = { k: "tnone" };
+        let xt: Type = { k: "tnone" };
         if (bound) { xt = tdecode(tc); 0; } else { 0; };
         xs += { name: xn, label: xl, typ: xt };
         j = j + 1;
@@ -8842,7 +9280,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
             while (j < len(ds)) {
                 let d = ds[j];
                 let dv = d.vals;
-                let vals: [{ k: str }] = [];
+                let vals: [Node] = [];
                 let m = 0;
                 while (m < len(dv)) {
                     vals += lit_decode(dv[m]);
@@ -8865,7 +9303,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
 // it (`nr`), compiled against the std units and the packages it imports
 // (`deps` holds them, and maybe more). Always with its `.loc` markers
 // (link_units keeps them for -g only), so one object serves every build.
-def compile_package(ast, nr: Resolved, name: str, base: long, std: [Unit], deps: [Unit]) -> UnitRes {
+def compile_package(ast: Block, nr: Resolved, name: str, base: long, std: [Unit], deps: [Unit]) -> UnitRes {
     compile_unit(ast, nr.imports, nr.origin, true, name, base, unit_externs(std, nr.std, deps, nr.pkgs))
 };
 
@@ -8873,7 +9311,7 @@ def compile_package(ast, nr: Resolved, name: str, base: long, std: [Unit], deps:
 // and the packages `deps` (`ycc build`: every package it links, each
 // after those it imports) and linked with them. `nr` is the program's
 // resolution: the std units it binds itself, the packages it imports.
-def emit_program(ast, nr: Resolved, debug: bool, std: [Unit], deps: [Unit]) -> { ok: bool, asm: str, errors: [Diag], warnings: [Diag], times: [Timing] } {
+def emit_program(ast: Block, nr: Resolved, debug: bool, std: [Unit], deps: [Unit]) -> { ok: bool, asm: str, errors: [Diag], warnings: [Diag], times: [Timing] } {
     let xt = unit_externs(std, nr.std, deps, nr.pkgs);
     let inits: [str] = [];
     let units: [Unit] = [];
@@ -8922,47 +9360,47 @@ export { emit_program, compile_package, std_units, std_unit_names, std_pack, uni
 // formatting), so maps need no runtime assembly of their own. Reads are
 // always optional: a hit boxes the value (some(v)), a miss leaves none.
 
-def n_str(v: str, line: long, col: long) -> {k: str} {
+def n_str(v: str, line: long, col: long) -> Leaf {
     { k: "str", v: v, line: line, col: col }
 };
 
-def n_bool(v: str, line: long, col: long) -> {k: str} {
+def n_bool(v: str, line: long, col: long) -> Leaf {
     { k: "bool", v: v, line: line, col: col }
 };
 
-def n_dot(obj, key: str, line: long, col: long) -> {k: str} {
+def n_dot(obj: Node, key: str, line: long, col: long) -> Dot {
     { k: "dot", obj: obj, key: key, line: line, col: col }
 };
 
-def n_idx(arr, idx, line: long, col: long) -> {k: str} {
+def n_idx(arr: Node, idx: Node, line: long, col: long) -> Index {
     { k: "index", arr: arr, idx: idx, line: line, col: col }
 };
 
-def n_bin(op: str, l, r, line: long, col: long) -> {k: str} {
+def n_bin(op: str, l: Node, r: Node, line: long, col: long) -> Bin {
     { k: "bin", op: op, l: l, r: r, line: line, col: col }
 };
 
-def n_not(e, line: long, col: long) -> {k: str} {
+def n_not(e: Node, line: long, col: long) -> Un {
     { k: "un", op: "!", e: e, line: line, col: col }
 };
 
-def n_if(c, t, e, ln: long, cl: long) -> {k: str} {
+def n_if(c: Node, t: Node, e: Node, ln: long, cl: long) -> If {
     { k: "if", cond: c, then: t, els: e, has_else: true, line: ln, col: cl }
 };
 
-def n_while(c, b, ln: long, cl: long) -> {k: str} {
+def n_while(c: Node, b: Node, ln: long, cl: long) -> While {
     { k: "while", cond: c, body: b, line: ln, col: cl }
 };
 
-def n_decl(name: str, v, ln: long, cl: long) -> {k: str} {
-    { k: "decl", kind: "let", typ: { k: "tnone" }, name: name, v: v, line: ln, col: cl }
+def n_decl(name: str, v: Node, ln: long, cl: long) -> Decl {
+    { k: "decl", kind: "let", typ: type_node({ k: "tnone" }), name: name, v: v, line: ln, col: cl }
 };
 
-def n_assign(name: str, v, ln: long, cl: long) -> {k: str} {
+def n_assign(name: str, v: Node, ln: long, cl: long) -> Assign {
     { k: "assign", name: name, v: v, line: ln, col: cl }
 };
 
-def block_of(sts: [{k: str}], ln: long, cl: long) -> {k: str} {
+def block_of(sts: [Node], ln: long, cl: long) -> Block {
     { k: "block", stmts: sts, line: ln, col: cl }
 };
 
@@ -8975,13 +9413,13 @@ def block_of(sts: [{k: str}], ln: long, cl: long) -> {k: str} {
 // later read shares it, and a write clears it (a reader may still hold
 // the old box -- it is never mutated). Reads allocate at most once per
 // entry and write.
-def gen_maplit(st: EmitSt, node) -> EmitSt {
+def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
-    let mkeys = node.keys;
-    let mvals = node.vals;
+    let mkeys: [str] = node.keys;
+    let mvals: [Node] = node.vals;
     let keys: [str] = [];
-    let vals: [{k: str}] = [];
+    let vals: [Node] = [];
     let mi = 0;
     while (mi < len(mkeys)) {
         let mk: str = mkeys[mi];
@@ -9008,8 +9446,8 @@ def gen_maplit(st: EmitSt, node) -> EmitSt {
         };
         mi = mi + 1;
     };
-    let knodes: [{k: str}] = [];
-    let bnodes: [{k: str}] = [];
+    let knodes: [Node] = [];
+    let bnodes: [Node] = [];
     let ki = 0;
     while (ki < len(keys)) {
         let ks: str = keys[ki];
@@ -9017,27 +9455,28 @@ def gen_maplit(st: EmitSt, node) -> EmitSt {
         bnodes += n_id("none", ln, cl);
         ki = ki + 1;
     };
-    let keysarr = { k: "array", elems: knodes, line: ln, col: cl };
-    let valsarr = { k: "array", elems: vals, line: ln, col: cl };
-    let boxesarr = { k: "array", elems: bnodes, line: ln, col: cl };
+    let keysarr: ArrLit = { k: "array", elems: knodes, line: ln, col: cl };
+    let valsarr: ArrLit = { k: "array", elems: vals, line: ln, col: cl };
+    let boxesarr: ArrLit = { k: "array", elems: bnodes, line: ln, col: cl };
     let rkeys: [str] = [];
     rkeys += "keys";
     rkeys += "vals";
     rkeys += "boxes";
-    let rvals: [{k: str}] = [];
+    let rvals: [Node] = [];
     rvals += keysarr;
     rvals += valsarr;
     rvals += boxesarr;
-    gen(st, { k: "rec", keys: rkeys, vals: rvals, line: ln, col: cl })
+    let rec: RecLit = { k: "rec", keys: rkeys, vals: rvals, line: ln, col: cl };
+    gen(st, rec)
 };
 
 // m[k] read or test (is_map_read): m[k] on a map value.
-def is_map_read(st: EmitSt, e) -> bool {
-    if (e.k == "index") { infer(st, e.arr).k == "tmap" } else { false }
+def is_map_read(st: EmitSt, e: Node) -> bool {
+    if (e.k == "index") { let index: Index = e; infer(st, index.arr).k == "tmap" } else { false }
 };
 
-def is_none_id(e) -> bool {
-    e.k == "id" && e.v == "none"
+def is_none_id(e: Node) -> bool {
+    if (e.k == "id") { let id: Leaf = e; id.v == "none" } else { false }
 };
 
 // The key scan every map access shares: t+"i" stops at the entry whose
@@ -9046,16 +9485,16 @@ def is_none_id(e) -> bool {
 // place, so the header never moves), t+"i" = 0, t+"n" = len(t+"ks") and
 // the loop bound t+"j" = t+"n". A hit pulls the bound in to i rather than
 // testing `i < n && keys[i] != k`, which materializes a bool every step.
-def map_scan(t: str, ln: long, cl: long) -> {k: str} {
-    let i = n_id(t + "i", ln, cl);
-    let key = n_idx(n_id(t + "ks", ln, cl), i, ln, cl);
-    let hit: [{k: str}] = [];
+def map_scan(t: str, ln: long, cl: long) -> While {
+    let i: Node = n_id(t + "i", ln, cl);
+    let key: Node = n_idx(n_id(t + "ks", ln, cl), i, ln, cl);
+    let hit: [Node] = [];
     hit += n_assign(t + "j", i, ln, cl);
     hit += n_num("0", ln, cl);
-    let step: [{k: str}] = [];
+    let step: [Node] = [];
     step += n_assign(t + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
     step += n_num("0", ln, cl);
-    let body: [{k: str}] = [];
+    let body: [Node] = [];
     body += n_if(n_bin("==", key, n_id(t + "k", ln, cl), ln, cl), block_of(hit, ln, cl), block_of(step, ln, cl), ln, cl);
     n_while(n_bin("<", i, n_id(t + "j", ln, cl), ln, cl), block_of(body, ln, cl), ln, cl)
 };
@@ -9065,16 +9504,16 @@ def map_scan(t: str, ln: long, cl: long) -> {k: str} {
 // miss is none. The reads whose option never escapes skip the box: "val"
 // is m[k]! (vals[i]; a miss traps like unwrap(none)), "has" is
 // is_some(m[k]) and m[k] != none, "none" is m[k] == none.
-def gen_map_get(st: EmitSt, node, mode: str) -> EmitSt {
+def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let r = next_uid(st);
     st = r.st;
     let t = "y_t" + tostring(r.uid);
-    let m = n_id(t + "m", ln, cl);
-    let i = n_id(t + "i", ln, cl);
-    let n = n_id(t + "n", ln, cl);
-    let sts: [{k: str}] = [];
+    let m: Node = n_id(t + "m", ln, cl);
+    let i: Node = n_id(t + "i", ln, cl);
+    let n: Node = n_id(t + "n", ln, cl);
+    let sts: [Node] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
     sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
@@ -9089,26 +9528,26 @@ def gen_map_get(st: EmitSt, node, mode: str) -> EmitSt {
         sts += n_bin("==", i, n, ln, cl);
         0
     } else if (mode == "val") {
-        let miss: [{k: str}] = [];
+        let miss: [Node] = [];
         miss += n_call1("unwrap", n_id("none", ln, cl), ln, cl);
-        let hit: [{k: str}] = [];
+        let hit: [Node] = [];
         hit += n_num("0", ln, cl);
         sts += n_if(n_bin("==", i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl);
         sts += n_idx(n_dot(m, "vals", ln, cl), i, ln, cl);
         0
     } else {
-        let b = n_id(t + "b", ln, cl);
-        let fill: [{k: str}] = [];
+        let b: Node = n_id(t + "b", ln, cl);
+        let fill: [Node] = [];
         fill += n_assign(t + "b", n_call1("some", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl);
         fill += { k: "idxassign", arr: n_dot(m, "boxes", ln, cl), idx: i, v: b, line: ln, col: cl };
         fill += n_num("0", ln, cl);
-        let kept: [{k: str}] = [];
+        let kept: [Node] = [];
         kept += n_num("0", ln, cl);
-        let hit: [{k: str}] = [];
+        let hit: [Node] = [];
         hit += n_decl(t + "b", n_idx(n_dot(m, "boxes", ln, cl), i, ln, cl), ln, cl);
         hit += n_if(n_call1("is_some", b, ln, cl), block_of(kept, ln, cl), block_of(fill, ln, cl), ln, cl);
         hit += b;
-        let miss: [{k: str}] = [];
+        let miss: [Node] = [];
         miss += n_id("none", ln, cl);
         sts += n_if(n_bin("<", i, n, ln, cl), block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl);
         0
@@ -9122,18 +9561,18 @@ def gen_map_get(st: EmitSt, node, mode: str) -> EmitSt {
 // elements of an array value whose type unifies with [V], such as []).
 // The value runs before the scan counts the entries, so a value that
 // itself adds keys is seen.
-def gen_map_set(st: EmitSt, node) -> EmitSt {
+def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let r = next_uid(st);
     st = r.st;
     let t = "y_t" + tostring(r.uid);
-    let m = n_id(t + "m", ln, cl);
-    let k = n_id(t + "k", ln, cl);
-    let i = n_id(t + "i", ln, cl);
-    let n = n_id(t + "n", ln, cl);
-    let v = n_id(t + "v", ln, cl);
-    let sts: [{k: str}] = [];
+    let m: Node = n_id(t + "m", ln, cl);
+    let k: Node = n_id(t + "k", ln, cl);
+    let i: Node = n_id(t + "i", ln, cl);
+    let n: Node = n_id(t + "n", ln, cl);
+    let v: Node = n_id(t + "v", ln, cl);
+    let sts: [Node] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
     sts += n_decl(t + "v", node.v, ln, cl);
@@ -9142,11 +9581,11 @@ def gen_map_set(st: EmitSt, node) -> EmitSt {
     sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
     sts += n_decl(t + "j", n, ln, cl);
     sts += map_scan(t, ln, cl);
-    let hit: [{k: str}] = [];
+    let hit: [Node] = [];
     hit += { k: "idxassign", arr: n_dot(m, "vals", ln, cl), idx: i, v: v, line: ln, col: cl };
     hit += { k: "idxassign", arr: n_dot(m, "boxes", ln, cl), idx: i, v: n_id("none", ln, cl), line: ln, col: cl };
     hit += n_num("0", ln, cl);
-    let grow: [{k: str}] = [];
+    let grow: [Node] = [];
     grow += n_call2("push", n_dot(m, "keys", ln, cl), k, ln, cl);
     grow += n_call2("push", n_dot(m, "vals", ln, cl), v, ln, cl);
     grow += n_call2("push", n_dot(m, "boxes", ln, cl), n_id("none", ln, cl), ln, cl);
@@ -9158,41 +9597,44 @@ def gen_map_set(st: EmitSt, node) -> EmitSt {
 
 // One key's repr inside a map: string keys quote (Python-style), the
 // other hashable keys stringify bare.
-def map_key_repr(node, kt: {k: str}, ln: long, cl: long) -> {k: str} {
+def map_key_repr(node: Node, kt: Type, ln: long, cl: long) -> Node {
     if (kt.k == "tstr") {
-        n_bin("+", n_bin("+", n_str("\"", ln, cl), node, ln, cl), n_str("\"", ln, cl), ln, cl)
+        let out: Node = n_bin("+", n_bin("+", n_str("\"", ln, cl), node, ln, cl), n_str("\"", ln, cl), ln, cl);
+        out
     } else {
-        n_call1("tostring", node, ln, cl)
+        let out: Node = n_call1("tostring", node, ln, cl);
+        out
     }
 };
 
 // {"k": v, ...}: a synthetic string-building loop -- the entry count is
 // dynamic, but every format decision (keys, values) is static.
-def gen_map_repr(st: EmitSt, arg, t) -> EmitSt {
+def gen_map_repr(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     let ln = 0;
     let cl = 0;
     let r = next_uid(st);
     st = r.st;
     let g = "y_t" + tostring(r.uid);
-    let m = n_id(g + "m", ln, cl);
-    let i = n_id(g + "i", ln, cl);
-    let n = n_id(g + "n", ln, cl);
-    let s = n_id(g + "s", ln, cl);
-    let sts: [{k: str}] = [];
+    let m: Node = n_id(g + "m", ln, cl);
+    let i: Node = n_id(g + "i", ln, cl);
+    let n: Node = n_id(g + "n", ln, cl);
+    let s: Node = n_id(g + "s", ln, cl);
+    let sts: [Node] = [];
     sts += n_decl(g + "m", arg, ln, cl);
     sts += n_decl(g + "s", n_str("{", ln, cl), ln, cl);
     sts += n_decl(g + "i", n_num("0", ln, cl), ln, cl);
     sts += n_decl(g + "n", n_call1("len", n_dot(m, "keys", ln, cl), ln, cl), ln, cl);
-    let sep: [{k: str}] = [];
+    let sep: [Node] = [];
     sep += n_assign(g + "s", n_bin("+", s, n_str(", ", ln, cl), ln, cl), ln, cl);
     sep += n_num("0", ln, cl);
-    let nosep: [{k: str}] = [];
+    let nosep: [Node] = [];
     nosep += n_num("0", ln, cl);
-    let kpart = map_key_repr(n_idx(n_dot(m, "keys", ln, cl), i, ln, cl), t.key, ln, cl);
-    let vpart = n_call1("tostring", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl);
-    let put = n_assign(g + "s", n_bin("+", n_bin("+", n_bin("+", s, kpart, ln, cl), n_str(": ", ln, cl), ln, cl), vpart, ln, cl), ln, cl);
-    let step = n_assign(g + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
-    let body: [{k: str}] = [];
+    let map: TMap = t;
+    let kpart: Node = map_key_repr(n_idx(n_dot(m, "keys", ln, cl), i, ln, cl), map.key, ln, cl);
+    let vpart: Node = n_call1("tostring", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl);
+    let put: Node = n_assign(g + "s", n_bin("+", n_bin("+", n_bin("+", s, kpart, ln, cl), n_str(": ", ln, cl), ln, cl), vpart, ln, cl), ln, cl);
+    let step: Node = n_assign(g + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
+    let body: [Node] = [];
     body += n_if(n_bin(">", i, n_num("0", ln, cl), ln, cl), block_of(sep, ln, cl), block_of(nosep, ln, cl), ln, cl);
     body += put;
     body += step;
