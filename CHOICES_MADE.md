@@ -329,25 +329,37 @@ known (annotate it)"; "the return type of 'f' is not fully known
 (annotate it)"; "'f' is used before its return type is known (annotate
 it)"; a failed cast stops with y_cast_trap's message.
 
-### 25. Shared fields first (the user's ruling on 5) -- proposed, for review
+### 25. Shared fields first (the user's ruling on 5)
 
 Today a record is laid out by field name, so a field every member of a
 union has can sit at a different offset in each member, and reading it
 through the union dispatches on the tag (the compiler's `node.line` would
 compare up to 31 tags).
 
-- a. The user's model: a union lays out each member with the shared fields
-  first; a member converted to or from the union is copied into the other
-  layout. Sound, but the compiler casts on every dispatch (21), so it would
-  allocate a copy per node per pass (there is no collector), and a write
-  through the cast copy (`fnode.ret = ...`) would be lost.
-- b. A union member keeps the union's layout and a cast yields a view of
-  it ("A in C" as a type of its own): no copy, but a second kind of record
-  type, and a helper taking a member would have to say which union's.
-- c. **The written order is the layout** (and part of the type, as in Go):
-  write the shared fields first and they have one offset in every member;
-  a union of members that do not is still read by tag dispatch. No copies,
-  no new kind of type, and the fields sit where the declaration says.
-  The cost: `{x, y}` and `{y, x}` written as two annotations are two types
-  (a literal still takes the declared type wherever one is declared).
-  Proposed: c, after the no-unknown-types migration lands. Not done yet.
+I proposed making the written field order part of a record type (so a
+programmer could put the shared fields first). **The user rejected it:
+`{a, b}` and `{b, a}` are one type, always.** Record types stay sets of
+fields.
+
+**The user's model, to be implemented** (after the no-unknown-types
+migration, before the bless):
+- A standalone record keeps its layout: fields sorted by name.
+- A value of a union type lays out its member with the union's shared
+  fields first (the fields every member has with one type, sorted by
+  name), then the member's other fields (sorted by name). A shared field
+  is then one load at a fixed offset through the union, whatever the
+  member.
+- A conversion between a union and a member, either way, or between two
+  unions, is a cast. When the layouts differ, the cast copies the record
+  into the other layout (a new record); when they agree it is the same
+  record. Casts from a union are checked against the tag (21).
+- The tag (descriptor) names the member type and its layout, so match and
+  casts tell `Bin` in a `Node` from a standalone `Bin` when their layouts
+  differ.
+- Consequences, accepted with "a cast can do the memory movement": a write
+  through a copy is not seen through the original (the compiler's own
+  code must not write through a cast -- the C copy shares records, so the
+  port gate would catch it); each copying cast allocates (no collector).
+  If the copies show in the profile, the hot dispatchers can read member
+  fields with destructuring patterns (`Bin { op, l, r } => ...`), which
+  read the union value in place.

@@ -29,8 +29,12 @@
   records/unions/inference, 10-errors cast row, NATIVE.md, AGENTS.md
   "Records are exact", PORTING.md, COVERAGE.md for the new messages),
   bless through cycc (`make rebless`), `make test`, bench + profile.
-  Expect a compile-time and size regression: `node.k`/`.line`/`.col`
-  through a 31-member union dispatch on the tag until CHOICES 25.
+  Before the bless, implement CHOICES_MADE.md 25 (the user's model: a
+  union value puts its shared fields first, sorted; union<->member is a
+  cast that copies when layouts differ; tag per type+layout) in both
+  copies, or `node.k`/`.line`/`.col` through the 31-member Node union
+  dispatch on the tag. The user REJECTED making field order part of a
+  record type: `{a, b}` and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
   and test/y/examples/tail.y. Leave them alone.
 - The user wants frequent commits now. Never push. No sed (edit tool).
