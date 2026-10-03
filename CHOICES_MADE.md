@@ -400,3 +400,40 @@ migration, before the bless):
   without a call. Node shares {col, k, line}: about half its members
   (those with a field sorting before `line`) copy on a cast; Type shares
   {k}: TRec, TFunc, TFree and Err copy.
+
+## http prerequisites (task 3)
+
+### 26. Optional record fields
+
+The http client's options record (`http.get(url, { headers: h })`,
+future.y) needs fields a literal may leave out. How?
+
+- a. Any field of an option type may be left out of a literal (none), and
+  a plain T given for it is wrapped. No syntax; but every `T?` field would
+  silently become omissible, and "a plain T does not widen to T?" would
+  have an exception nobody wrote.
+- b. **`name?: T`, the mark optional parameters use** (`b?: T`): the
+  field's type is `T?`; a literal where the record type is declared may
+  leave it out (none) or give a plain T (wrapped, as `some` would), a
+  `T?` or none. Chosen: one mark, one meaning, for parameters and fields;
+  explicit where it matters.
+
+Is the mark part of the type? **No**: `{a?: long}` and `{a: long?}` are
+one type (one layout, one tag; values pass between them freely), and only
+a literal sees the difference, through the declared type it is checked
+against. Making it part of the type would make two records with the same
+fields different types, against "a record type is its set of fields".
+
+Around it:
+- In a union, a literal that leaves optional fields out is the member
+  with exactly its field names, else the only member it fits; two fits
+  are an error (the literal is ambiguous).
+- A field store (`r.f = 5`) still needs `some(5)`: the field's type is
+  `T?`; the wrap is literal sugar, as an optional parameter's body sees a
+  `T?`.
+- `some({...})` where `T?` is declared creates the literal as `T`: an
+  optional parameter of a record type is passed as `some(arg)` (rename),
+  so `get("/", { url: "x" })` needs it.
+- A left-out field stores nothing: y_alloc's memory is never reused and
+  zeroed (the runtime already counts on it for array headers), and none
+  is 0.

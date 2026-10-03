@@ -258,7 +258,8 @@ cc/as/ld involved.
 Now: `long`/`int`, `bool`, `float`, `str`, `byte`, `*T`, `[T; N]`, `[T]`,
 `T?`, `{f: T}` records (exact: a record goes only where its own type,
 its fields in any order, or a union holding it is expected; `{k: str}`
-is the record of one field `k`), `{K => V}` maps,
+is the record of one field `k`; `{f?: T}` an optional field, which a
+literal may leave out), `{K => V}` maps,
 record unions `A | B` (a union value converts to a member type, or a
 union of some members, with a cast checked at run time),
 recursive type aliases,
@@ -295,6 +296,18 @@ All of these are lowered early, so the checker and emitter see little new:
   `some`) or leaves it out (`none`). Passing an option is a type error
   (that is what `b: long?` is for), and so is a required parameter after
   an optional one; defaults may mix with them.
+- **Optional record fields** `{url: str, timeout?: long}`: the field's
+  type is `long?` (parser.y, `Field.opt`). A record literal where the
+  type is declared may leave it out -- it is none, which y_alloc's zeroed
+  memory already is, so nothing is stored -- or give a plain `long`,
+  wrapped (types.y `opt_wraps`, native.y `lit_wraps`, `gen_box_rax`), or
+  a `long?`. `lit_target` takes a literal that leaves optional fields
+  out (`lit_fits`); in a union, the member with exactly its field names,
+  else the only one it fits. The mark is not part of the type (teq,
+  tcanon and the descriptors ignore it); tcode writes the field as
+  `name?`, so it crosses a package. `some({...})` where `T?` is declared
+  -- an optional argument passed is one -- creates the literal as `T`
+  (`typeof_want`, `gen_as`).
 - **`const x = v`** binds like `let` but the checker rejects rebinding it
   (`=`, `op=`, `++`/`--`); the value it names stays mutable in place.
 - **Properties** `a.length` / `s.length` (= `len`) and `a.ptr` (`*T` to

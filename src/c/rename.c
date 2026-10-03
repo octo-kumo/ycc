@@ -171,7 +171,7 @@ Yv *rn_prepass_one(Yv *s, Yv *st) {
         return rn_prepass_decl(s, st);
     } else if (ys_eq_lit(yr_get(s, "k"), "typedef")) {
         /* aliases hoist like defs: every annotation in the block sees them */
-        ya_push(yr_get(st, "tys"), yr(2, "name", yr_get(s, "name"), "typ", yr_get(s, "typ")));
+        ya_push(yr_get(st, "tys"), yr(3, "name", yr_get(s, "name"), "opt", yv_bool(0), "typ", yr_get(s, "typ")));
         return st;
     } else {
         return st;
@@ -535,7 +535,7 @@ Yv *rn_type_fields(Yv *st, Yv *fs, long depth) {
     long i = 0;
     while (i < yv_len(fs)) {
         Yv *f = ya_get(fs, i);
-        out = ya_push(out, yr(2, "name", yr_get(f, "name"), "typ", rn_type_go(st, yr_get(f, "typ"), depth)));
+        out = ya_push(out, yr(3, "name", yr_get(f, "name"), "opt", yr_get(f, "opt"), "typ", rn_type_go(st, yr_get(f, "typ"), depth)));
         i = i + 1;
     }
     return out;

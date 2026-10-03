@@ -77,6 +77,7 @@ Yv *members(Yv *t);
 Yv *union_parts(Yv *t);
 Yv *pat_members(Yv *s, Yv *t);
 Yv *lit_target(Yv *node, Yv *want);
+int opt_wraps(Yv *vt, Yv *ft);
 Yv *tcanon(Yv *t);
 Yv *tsig(Yv *t);
 Yv *inferred_ret(long line, long col);
@@ -316,6 +317,7 @@ Yv *gen_block(Yv *st, Yv *node);
 Yv *gen_block_as(Yv *st, Yv *node, int dropped);
 long mfield_idx(Yv *names, Yv *name);
 Yv *gen_reclit(Yv *st, Yv *node, Yv *want);
+int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft);
 long fnv64(Yv *s);
 Yv *hex16(long h);
 long rec_slot(Yv *fs, Yv *key);
@@ -424,6 +426,8 @@ Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety);
 Yv *gen_len(Yv *st, Yv *node);
 Yv *gen_push(Yv *st, Yv *node);
 Yv *gen_some(Yv *st, Yv *node);
+Yv *gen_box_rax(Yv *st);
+int some_of_lit(Yv *node);
 Yv *gen_is_some(Yv *st, Yv *node);
 Yv *gen_unwrap(Yv *st, Yv *node);
 Yv *gen_trim(Yv *st, Yv *node);
@@ -5222,6 +5226,11 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
         (ys_eq_lit(wk, "trec") || ys_eq_lit(wk, "tunion"))) {
         /* want0 as declared: a recursive alias names the descriptor */
         st = gen_reclit(st, node, want0);
+    } else if (ys_eq_lit(wk, "topt") && some_of_lit(node)) {
+        /* some({...}) where T? is declared: the literal made as T (types.c
+         * typeof_want), then boxed */
+        st = gen_as(st, ya_get(yr_get(node, "args"), 0), yr_get(want, "of"));
+        st = gen_box_rax(st);
     } else {
         st = gen(st, node);
     }
@@ -5234,6 +5243,21 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
     } else {
         return st;
     }
+}
+
+/* node is `some({...})`: a record literal boxed (an optional argument
+ * passed is one, rename.c). */
+int some_of_lit(Yv *node) {
+    if (!ys_eq_lit(yr_get(node, "k"), "call")) {
+        return 0;
+    }
+    Yv *callee = yr_get(node, "callee");
+    Yv *args = yr_get(node, "args");
+    if (!ys_eq_lit(yr_get(callee, "k"), "id") || yv_len(args) != 1) {
+        return 0;
+    }
+    return ys_eq_lit(yr_get(callee, "v"), "some") &&
+           ys_eq_lit(yr_get(ya_get(args, 0), "k"), "rec");
 }
 
 /* Every member of union s is one of t's (t a union): s goes into t as it
@@ -6977,13 +7001,24 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
         }
         ni = ni + 1;
     }
-    long n = yv_len(names);
-    Yv *slots = str_sorted(names);
     Yv *rt = lit_target(node, want);
     if (ys_eq_lit(yr_get(rt, "k"), "tnone")) {
         rt = rec_lit_type(infer(st, node), want);
     }
     Yv *rtu = unfold(rt);
+    /* the declared type's optional fields the literal leaves out have their
+     * slots too: none, which y_alloc's never-reused zeroed memory already is */
+    if (ys_eq_lit(yr_get(rtu, "k"), "trec")) {
+        Yv *tfs = yr_get(rtu, "fields");
+        for (long q = 0; q < yv_len(tfs); q++) {
+            Yv *f = ya_get(tfs, q);
+            if (mfield_idx(names, yr_get(f, "name")) < 0) {
+                names = ya_push(names, yr_get(f, "name"));
+            }
+        }
+    }
+    long n = yv_len(names);
+    Yv *slots = str_sorted(names);
     /* made as a member of a declared union: in the union's layout */
     Yv *wu = unfold(want);
     if (ys_eq_lit(yr_get(wu, "k"), "tunion") && ys_eq_lit(yr_get(rtu, "k"), "trec")) {
@@ -7030,7 +7065,14 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
                 }
             }
         } else {
-            st = gen_as(st, mv, rec_field_type(rtu, mk));
+            Yv *ft = rec_field_type(rtu, mk);
+            if (lit_wraps(st, mv, rtu, mk, ft)) {
+                /* a plain T for an optional field: some(v) */
+                st = gen_as(st, mv, yr_get(ft, "of"));
+                st = gen_box_rax(st);
+            } else {
+                st = gen_as(st, mv, ft);
+            }
             st = emit(st, ys("    pop %rcx"));
             long mi = mfield_idx(slots, mk);
             st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
@@ -7042,6 +7084,34 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
     }
     st = emit(st, ys("    pop %rax"));
     return emit(st, ys("    add $8, %rax"));
+}
+
+/* Value mv given for field mk of rtu, the record type a literal is created
+ * as, is wrapped -- some(v) -- when the field is optional and mv a plain T
+ * (types.c opt_wraps, as typeof_lit decides): its type as the checker
+ * takes it, a record literal the type it is created as there. */
+int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft) {
+    int opt = 0;
+    if (ys_eq_lit(yr_get(rtu, "k"), "trec")) {
+        Yv *tfs = yr_get(rtu, "fields");
+        for (long q = 0; q < yv_len(tfs); q++) {
+            Yv *f = ya_get(tfs, q);
+            if (ys_eq(yr_get(f, "name"), mk) && yv_b(yr_get(f, "opt"))) {
+                opt = 1;
+            }
+        }
+    }
+    if (!opt || !ys_eq_lit(yr_get(ft, "k"), "topt")) {
+        return 0;
+    }
+    Yv *vt = infer(st, mv);
+    if (ys_eq_lit(yr_get(mv, "k"), "rec")) {
+        Yv *lt = lit_target(mv, yr_get(ft, "of"));
+        if (!ys_eq_lit(yr_get(lt, "k"), "tnone")) {
+            vt = lt;
+        }
+    }
+    return opt_wraps(vt, ft);
 }
 
 /* An anonymous `def(...) {...}` used as a value: it has no entry in the
@@ -8632,12 +8702,16 @@ Yv *gen_push(Yv *st, Yv *node) {
 Yv *gen_some(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
     st = gen(st, ya_get(args, 0));
+    return gen_box_rax(st);
+}
+
+/* The value in %rax boxed: some(v), the box in %rax. */
+Yv *gen_box_rax(Yv *st) {
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys("    mov $8, %rdi"));
     st = emit(st, ys("    call y_alloc"));
     st = emit(st, ys("    pop %rcx"));
-    st = emit(st, ys("    mov %rcx, (%rax)"));
-    return st;
+    return emit(st, ys("    mov %rcx, (%rax)"));
 }
 
 Yv *gen_is_some(Yv *st, Yv *node) {
@@ -10934,7 +11008,12 @@ Yv *tcode_go(Yv *out, Yv *t) {
         long i = 0;
         while (i < yv_len(fs)) {
             Yv *f = ya_get(fs, i);
-            out = pack_put(out, yr_get(f, "name"));
+            /* an optional field is `name?` (tdecode_go) */
+            Yv *fname = yr_get(f, "name");
+            if (yv_b(yr_get(f, "opt"))) {
+                fname = ys_cat(fname, ys("?"));
+            }
+            out = pack_put(out, fname);
             out = tcode_go(out, yr_get(f, "typ"));
             i = i + 1;
         }
@@ -11040,8 +11119,13 @@ Yv *tdecode_go(Yv *cur) {
         long i = 0;
         while (i < n) {
             Yv *fname = pack_get(cur);
+            /* `name?`: an optional field (tcode_go) */
+            int fopt = yv_len(fname) > 0 && ys_byte_at(fname, yv_len(fname) - 1) == '?';
+            if (fopt) {
+                fname = ys_slice(fname, 0, yv_len(fname) - 1);
+            }
             Yv *typ = tdecode_go(cur);
-            fields = ya_push(fields, yr(2, "name", fname, "typ", typ));
+            fields = ya_push(fields, yr(3, "name", fname, "opt", yv_bool(fopt), "typ", typ));
             i = i + 1;
         }
         return normnode(yr(2, "k", ys("trec"), "fields", fields));

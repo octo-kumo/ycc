@@ -7,8 +7,8 @@
 # [bin] into DIR/build. Checks: a diamond of path dependencies builds and
 # runs, each package's top level once and dependencies first; names stay
 # qualified (a bin's own `sq` is not a package's); records, closures,
-# optionals, defaults, string globals and recursive types cross the
-# boundary, and a
+# optionals, defaults, string globals, recursive types and optional
+# record fields cross the boundary, and a
 # package's globals are read-only; a rebuild compiles nothing and gives
 # the same bytes; a body change recompiles that package only, an
 # interface change its importers too; a damaged object, or one another
@@ -362,6 +362,49 @@ fi
 runs "recursive types cross a package: one type, one tag" "6 2
 9" "$R/app/build/app"
 agree "recursive types" "$R/app"
+
+# 3c. optional record fields cross a package: an exported function's
+# parameter type keeps them optional (tcode writes `name?`), so the bin's
+# literals leave them out, give them plainly, or pass none
+O="$TMPD/optf"
+mk "$O/http/y.toml" <<'EOF'
+[package]
+name = "http"
+lib = "lib.y"
+EOF
+mk "$O/http/lib.y" <<'EOF'
+type Opts = { url: str, timeout?: long, tag?: str };
+def get(path: str, opts?: Opts) -> str {
+    if (is_some(opts)) {
+        let o = opts!;
+        path + " " + o.url + " " + tostring(o.timeout) + " " + tostring(o.tag)
+    } else { path }
+};
+def show(o: Opts) -> str { o.url + " " + tostring(o.timeout) };
+EOF
+mk "$O/app/y.toml" <<'EOF'
+[package]
+name = "app"
+[bin]
+app = "main.y"
+[dependencies]
+http = { path = "../http" }
+EOF
+mk "$O/app/main.y" <<'EOF'
+import http;
+puts(http.get("a") + "\n");
+puts(http.get("b", { url: "u", timeout: 5 }) + "\n");
+puts(http.show({ url: "v" }) + " | " + http.show({ url: "w", timeout: none, tag: "t" }) + "\n");
+EOF
+if yb "$YCC" "$O/app"; then
+    pass "a package's optional fields build"
+else
+    fail "a package's optional fields build" "$(head -c 300 "$TMPD/out")"
+fi
+runs "optional record fields cross a package" "a
+b u 5 none
+v none | w none" "$O/app/build/app"
+agree "optional fields" "$O/app"
 
 # ── 4. inside a package: std, relative and root imports; argv, exec ─────
 Q="$TMPD/p2"

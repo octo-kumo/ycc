@@ -4315,6 +4315,15 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
         let rec: RecLit = node;
         st = gen_reclit(st, rec, want0);
         0
+    } else if (wk == "topt" && some_of_lit(node)) {
+        // some({...}) where T? is declared: the literal made as T (types.y
+        // typeof_want), then boxed
+        let call: Call = node;
+        let args: [Node] = call.args;
+        let wo: TOf = want;
+        st = gen_as(st, args[0], wo.of);
+        st = gen_box_rax(st);
+        0
     } else {
         st = gen(st, node);
         0
@@ -4326,6 +4335,21 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
         gen_convert(st, infer(st, node), want0, true)
     } else {
         st
+    }
+};
+
+// node is `some({...})`: a record literal boxed (an optional argument
+// passed is one, rename.y).
+def some_of_lit(node: Node) -> bool {
+    if (node.k != "call") { false } else {
+        let call: Call = node;
+        let callee = call.callee;
+        let args: [Node] = call.args;
+        if (callee.k != "id" || len(args) != 1) { false } else {
+            let id: Leaf = callee;
+            let a0 = args[0];
+            id.v == "some" && a0.k == "rec"
+        }
     }
 };
 
@@ -5909,11 +5933,20 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
         };
         ni = ni + 1;
     };
-    let n = len(names);
-    let slots = types.str_sorted(names);
     let rt: Type = types.lit_target(node, want);
     if (rt.k == "tnone") { rt = rec_lit_type(infer(st, node), want); 0; } else { 0; };
     let rtu: Type = types.unfold(rt);
+    // the declared type's optional fields the literal leaves out have their
+    // slots too: none, which y_alloc's never-reused zeroed memory already is
+    if (rtu.k == "trec") {
+        let trec: TRec = rtu;
+        let tfs: [Field] = trec.fields;
+        foreach (f in tfs) {
+            if (mfield_idx(names, f.name) < 0) { names += f.name; };
+        };
+    };
+    let n = len(names);
+    let slots = types.str_sorted(names);
     // made as a member of a declared union: in the union's layout
     let wu: Type = types.unfold(want);
     if (wu.k == "tunion" && rtu.k == "trec") { slots = union_lay(rtu, wu); };
@@ -5955,7 +5988,15 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             } else { 0; };
             0
         } else {
-            st = gen_as(st, mv, rec_field_type(rtu, mk));
+            let ft = rec_field_type(rtu, mk);
+            if (lit_wraps(st, mv, rtu, mk, ft)) {
+                // a plain T for an optional field: some(v)
+                let fo: TOf = ft;
+                st = gen_as(st, mv, fo.of);
+                st = gen_box_rax(st);
+            } else {
+                st = gen_as(st, mv, ft);
+            };
             st = emit(st, "    pop %rcx");
             let mi = mfield_idx(slots, mk);
             st = emit(st, "    mov %rax, " + tostring(8 + mi * 8) + "(%rcx)");
@@ -5966,6 +6007,27 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
     };
     st = emit(st, "    pop %rax");
     emit(st, "    add $8, %rax")
+};
+
+// Value mv given for field mk of rtu, the record type a literal is created
+// as, is wrapped -- some(v) -- when the field is optional and mv a plain T
+// (types.y opt_wraps, as typeof_lit decides): its type as the checker
+// takes it, a record literal the type it is created as there.
+def lit_wraps(st: EmitSt, mv: Node, rtu: Type, mk: str, ft: Type) -> bool {
+    let opt = false;
+    if (rtu.k == "trec") {
+        let trec: TRec = rtu;
+        let tfs: [Field] = trec.fields;
+        foreach (f in tfs) { if (f.name == mk && f.opt) { opt = true; }; };
+    };
+    if (!opt || ft.k != "topt") { return false; };
+    let fo: TOf = ft;
+    let vt = infer(st, mv);
+    if (mv.k == "rec") {
+        let lt = types.lit_target(mv, fo.of);
+        if (lt.k != "tnone") { vt = lt; };
+    };
+    types.opt_wraps(vt, ft)
 };
 
 // An anonymous `def(...) {...}` used as a value: it has no entry in the
@@ -7261,12 +7323,16 @@ def gen_push(st: EmitSt, node: Call) -> EmitSt {
 def gen_some(st: EmitSt, node: Call) -> EmitSt {
     let args: [Node] = node.args;
     st = gen(st, args[0]);
+    gen_box_rax(st)
+};
+
+// The value in %rax boxed: some(v), the box in %rax.
+def gen_box_rax(st: EmitSt) -> EmitSt {
     st = emit(st, "    push %rax");
     st = emit(st, "    mov $8, %rdi");
     st = emit(st, "    call y_alloc");
     st = emit(st, "    pop %rcx");
-    st = emit(st, "    mov %rcx, (%rax)");
-    st
+    emit(st, "    mov %rcx, (%rax)")
 };
 
 def gen_is_some(st: EmitSt, node: Call) -> EmitSt {
@@ -9123,7 +9189,10 @@ def tcode_go(out: [str], t: Type) -> [str] {
         while (i < len(fs)) {
             // NOTE: bound once (see types.y tstr_go).
             let f = fs[i];
-            out = pack_put(out, f.name);
+            // an optional field is `name?` (tdecode_go)
+            let fname: str = f.name;
+            if (f.opt) { fname = fname + "?"; };
+            out = pack_put(out, fname);
             out = tcode_go(out, f.typ);
             i = i + 1;
         };
@@ -9208,7 +9277,10 @@ def tdecode_go(cur: Cursor) -> Type {
         let i = 0;
         while (i < n) {
             let fname = pack_get(cur);
-            fields += { name: fname, typ: tdecode_go(cur) };
+            // `name?`: an optional field (tcode_go)
+            let fopt = len(fname) > 0 && fname[len(fname) - 1] == c'?';
+            if (fopt) { fname = fname[0:len(fname) - 1]; };
+            fields += { name: fname, opt: fopt, typ: tdecode_go(cur) };
             i = i + 1;
         };
         normtype({ k: "trec", fields: fields })

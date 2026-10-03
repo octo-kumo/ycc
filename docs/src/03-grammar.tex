@@ -170,16 +170,18 @@ Function literals may also appear bound or anonymous:
   |~& \ic{*}~\ty{type}                           && \text{(pointer)}\\
   |~& \ic{(}~[\ty{type}~\{,\ty{type}\}]~\ic{)}~\ic{->}~\ty{type}
                                                  && \text{(function)}\\
-  |~& \ic{\{}~[\ty{name}~\ic{:}~\ty{type}
-        ~\{,~\ty{name}~\ic{:}~\ty{type}\}]~\ic{\}}
+  |~& \ic{\{}~[\ty{field}~\{,~\ty{field}\}]~\ic{\}}
                                                  && \text{(record shape)}\\
   |~& \ic{\{}~\ty{type}~\ic{=>}~\ty{type}~\ic{\}}  && \text{(map)}\\
-  |~& \ty{type}~\ic{|}~\ty{type}                 && \text{(union of records)}
+  |~& \ty{type}~\ic{|}~\ty{type}                 && \text{(union of records)}\\
+\ty{field} ::={}& \ty{name}~[\ic{?}]~\ic{:}~\ty{type} && \text{(\ic{?}: optional)}
 \end{align*}
 
 \noindent A record type is structural and its field order free
 (Section~\ref{sec:type-records}); it lists every field of its records
-(\ic{\{ k: str \}} is the record with the one field \ic{k}). A union's
+(\ic{\{ k: str \}} is the record with the one field \ic{k}); a field
+written \ic{name?: T} is optional, of type \ic{T?}, and a literal may
+leave it out (Section~\ref{sec:type-records}). A union's
 members are record types (Section~\ref{sec:type-unions}). \ic{nat} is an integer literal from 0 to $2^{31}-1$ (2147483647),
 decimal or radix (\ic{[0; 0x10]}); a float, a larger or negative number
 or a name there is an error at the size. The type name

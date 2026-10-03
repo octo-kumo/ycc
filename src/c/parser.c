@@ -1058,11 +1058,21 @@ Yv *parse_type_record(Yv *toks, long p) {
                     return parse_type_tail(toks, yv_l(yr_get(mc, "pos")),
                                            yr_get(mc, "node"));
                 }
-                if (!is_punct(toks, pos + 1, ys(":"))) {
-                    return tres(terr_at(toks, pos + 1, ys("':'")), pos + 1);
+                // `name?: T`: an optional field, of type T?
+                int fopt = is_op(toks, pos + 1, ys("?"));
+                long cpos = pos + 1;
+                if (fopt) {
+                    cpos = pos + 2;
                 }
-                Yv *ft = parse_type_node(toks, pos + 2);  // skip name and ':'
-                fields = ya_push(fields, yr(2, "name", fname, "typ", yr_get(ft, "node")));
+                if (!is_punct(toks, cpos, ys(":"))) {
+                    return tres(terr_at(toks, cpos, ys("':'")), cpos);
+                }
+                Yv *ft = parse_type_node(toks, cpos + 1);  // skip name and ':'
+                Yv *fty = yr_get(ft, "node");
+                if (fopt) {
+                    fty = topt_of(fty);
+                }
+                fields = ya_push(fields, yr(3, "name", fname, "opt", yv_bool(fopt), "typ", fty));
                 pos = yv_l(yr_get(ft, "pos"));
                 // fields are separated by `,` or `;` (a trailing one is fine)
                 if (is_punct(toks, pos, ys(",")) || is_punct(toks, pos, ys(";"))) {

@@ -65,6 +65,27 @@ against its field's type, converting as any store does
 likewise. Where a union is declared, the literal is the member with its
 field names.
 
+\begin{sloppypar}
+A field written \ic{name?: T} is \emph{optional}: its type is \ic{T?},
+and such a literal may leave it out (it is then \ic{none}) or give a
+plain \ic{T}, which is wrapped as \ic{some} would --- or a \ic{T?}, or
+\ic{none}. A record type whose fields are all optional takes \ic{\{\}}.
+Where a union is declared, a literal leaving optional fields out is the
+member it fits; when two fit, the one with exactly its field names, and
+otherwise none. The mark is not part of the type:
+\ic{\{ a?: long \}} and \ic{\{ a: long? \}} are one type, and only a
+literal sees the difference. A literal given to an optional parameter
+of such a type is created as it too:
+\end{sloppypar}
+
+\begin{lstlisting}
+type Opts = { url: str, timeout?: long, tag?: str };
+def get(path: str, opts?: Opts) -> str { ... }
+get("/");
+get("/", { url: "x" });                 // timeout, tag: none
+get("/", { url: "x", timeout: 5 });     // timeout: some(5)
+\end{lstlisting}
+
 \subsection{Unions}
 \label{sec:type-unions}
 
@@ -178,7 +199,9 @@ option types --- a plain \ic{str} or \ic{long} can never be empty, so
 \ic{s == none} on a \ic{str} is a type error. On its own \ic{none} has
 the type ``option of anything'' (printed \ic{none}) and adopts the
 option type its context expects. A plain \ty{T} does not widen to
-\ic{T?}; write \ic{some(v)}. Two options are equal when both are
+\ic{T?}; write \ic{some(v)} --- but an optional record field in a literal
+(Section~\ref{sec:type-records}) and an optional parameter
+(Section~\ref{sec:functions}) take a plain \ty{T}. Two options are equal when both are
 \ic{none} or both hold equal payloads (Section~\ref{sec:equality}).
 \ic{*T} is a raw machine pointer; \ic{\&e} yields one
 (Section~\ref{sec:pointers}).
@@ -290,8 +313,9 @@ maps and records are references and an option is a box, so an existing
 \ic{\{x: long\}} is not a \ic{\{x: float\}}: a record's numeric field
 types must match exactly. A record \emph{literal} written where a record
 type is declared is created as that type, so its values convert:
-\ic{let p: \{x: float\} = \{x: 1\};} stores \ic{1.0}
-(Section~\ref{sec:type-records}).
+\ic{let p: \{x: float\} = \{x: 1\};} stores \ic{1.0}, and an optional
+field's plain value is wrapped: \ic{let q: \{x?: float\} = \{x: 1\};}
+stores \ic{some(1.0)} (Section~\ref{sec:type-records}).
 
 \subsection{Operator typing}
 

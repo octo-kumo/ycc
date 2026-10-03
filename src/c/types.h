@@ -27,6 +27,7 @@ Yv *members(Yv *t);           /* a union's members, unfolded */
 Yv *union_parts(Yv *t);       /* a union's members as written */
 Yv *pat_members(Yv *s, Yv *t); /* members with a record pattern's fields */
 Yv *lit_target(Yv *node, Yv *want); /* a record literal's declared type */
+int opt_wraps(Yv *vt, Yv *ft);       /* an optional field's plain value: some(v) */
 Yv *tcanon(Yv *t);            /* a type's canonical form */
 Yv *tsig(Yv *t);              /* its signature: recursive aliases by name */
 Yv *inferred_ret(long line, long col); /* typeof_def's inferred return type */

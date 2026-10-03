@@ -52,7 +52,11 @@ type While = { k: str, cond: Node, body: Node, line: long, col: long };
 type Node = Leaf | Bare | Wrap | Un | Bin | ArrLit | ArrRep | Assign | Block | Call | Decl | Dot | DotAssign | Err | For | Foreach | ForRange | Func | IdxAssign | If | IncDec | Index | RecLit | MatchEnd | Narrow | OpAssign | Slice | SliceAssign | Store | TypeDef | While;
 
 // Type nodes are separate from AST nodes even though both carry `k`.
-type Field = { name: str, typ: Type };
+// A record field; `opt` for an optional one (`name?: T`, typ T?): a
+// literal where its record type is declared may leave it out (none) or
+// give a plain T (types.y lit_target, opt_wraps). Not part of the type:
+// `{a?: long}` and `{a: long?}` are one type.
+type Field = { name: str, opt: bool, typ: Type };
 type TPrim = { k: str };
 type TOf = { k: str, of: Type };
 type TFix = { k: str, n: long, of: Type };
@@ -968,11 +972,17 @@ def parse_type_record(toks: [Tok], p: long) -> PType {
                     let mc = tclose_res(toks, vt.pos, "}", { k: "tmap", key: kt, of: vt.node });
                     return parse_type_tail(toks, mc.pos, mc.node);
                 };
-                if (!is_punct(toks, pos + 1, ":")) {
-                    return tres(terr_at(toks, pos + 1, "':'"), pos + 1);
+                // `name?: T`: an optional field, of type T?
+                let fopt = is_op(toks, pos + 1, "?");
+                let cpos = pos + 1;
+                if (fopt) { cpos = pos + 2; };
+                if (!is_punct(toks, cpos, ":")) {
+                    return tres(terr_at(toks, cpos, "':'"), cpos);
                 };
-                let ft = parse_type_node(toks, pos + 2);  // skip name and ':'
-                fields += { name: fname, typ: ft.node };
+                let ft = parse_type_node(toks, cpos + 1);  // skip name and ':'
+                let fty: Type = ft.node;
+                if (fopt) { fty = topt_of(fty); };
+                fields += { name: fname, opt: fopt, typ: fty };
                 pos = ft.pos;
                 // fields are separated by `,` or `;` (a trailing one is fine)
                 if (is_punct(toks, pos, ",") || is_punct(toks, pos, ";")) { pos = pos + 1; 0; } else { go = false; 0; };

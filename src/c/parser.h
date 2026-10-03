@@ -112,6 +112,7 @@ Yv *block1(Yv *e, long ln, long cl);
 Yv *parse_type_full(Yv *toks, long p);
 Yv *lit_type(Yv *node);
 Yv *lit_type_neg(Yv *node);
+Yv *topt_of(Yv *t);
 Yv *num_lit_type(Yv *s);
 int stmt_diverges(Yv *s);
 int block_diverges(Yv *stmts);

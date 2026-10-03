@@ -118,6 +118,8 @@ static Yv *typeof_block(Yv *st, Yv *node);
 static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want);
 static Yv *typeof_want(Yv *st, Yv *node, Yv *want);
 static int same_names(Yv *t, Yv *keys);
+static int lit_fits(Yv *t, Yv *keys);
+static int field_opt(Yv *t, Yv *key);
 static Yv *typeof_lit(Yv *st, Yv *node, Yv *target);
 static Yv *typeof_expr_go(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
@@ -810,8 +812,14 @@ static Yv *tstr_go(Yv *t) {
             // `fs[i]` would merge shapes across arms (see teq note).
             Yv *f = ya_get(fs, i);
             Yv *fname = yr_get(f, "name");
-            parts = ya_push(parts, ys_cat(ys_cat(fname, ys(": ")),
-                                          tstr_go(yr_get(f, "typ"))));
+            Yv *ft = yr_get(f, "typ");
+            if (yv_b(yr_get(f, "opt")) && ys_eq_lit(yr_get(ft, "k"), "topt")) {
+                parts = ya_push(parts, ys_cat(ys_cat(fname, ys("?: ")),
+                                              tstr_go(yr_get(ft, "of"))));
+            } else {
+                parts = ya_push(parts, ys_cat(ys_cat(fname, ys(": ")),
+                                              tstr_go(ft)));
+            }
             i = i + 1;
         }
         return ys_cat(ys_cat(ys("{ "), ys_join(parts, ys(", "))), ys(" }"));
@@ -1176,7 +1184,7 @@ Yv *field_merge(Yv *fields, Yv *name, Yv *typ) {
             if (seen) {
                 ;
             } else {
-                out = ya_push(out, yr(2, "name", name, "typ", typ));
+                out = ya_push(out, yr(3, "name", name, "opt", yv_bool(0), "typ", typ));
                 seen = 1;
                 ;
             }
@@ -1190,7 +1198,7 @@ Yv *field_merge(Yv *fields, Yv *name, Yv *typ) {
     if (seen) {
         ;
     } else {
-        out = ya_push(out, yr(2, "name", name, "typ", typ));
+        out = ya_push(out, yr(3, "name", name, "opt", yv_bool(0), "typ", typ));
         ;
     }
     return out;
@@ -4730,6 +4738,24 @@ static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want) {
 // with a target (lit_target) is checked against it (typeof_lit); anything
 // else is typeof_expr.
 static Yv *typeof_want(Yv *st, Yv *node, Yv *want) {
+    if (ys_eq_lit(yr_get(node, "k"), "call") && is_some_call(node) &&
+        ys_eq_lit(yr_get(unfold(want), "k"), "topt")) {
+        // some({...}) where T? is declared -- an optional argument passed
+        // is one (rename.c) -- creates the literal as T
+        Yv *args = yr_get(node, "args");
+        Yv *wo = unfold(want);
+        Yv *target = yr(1, "k", ys("tnone"));
+        if (yv_len(args) == 1 && ys_eq_lit(yr_get(ya_get(args, 0), "k"), "rec")) {
+            target = lit_target(ya_get(args, 0), yr_get(wo, "of"));
+        }
+        if (ys_eq_lit(yr_get(target, "k"), "tnone")) {
+            return typeof_expr(st, node);
+        } else {
+            Yv *r = typeof_lit(st, ya_get(args, 0), target);
+            return yr(2, "typ", yr(2, "k", ys("topt"), "of", yr_get(r, "typ")),
+                      "st", yr_get(r, "st"));
+        }
+    }
     if (!ys_eq_lit(yr_get(node, "k"), "rec")) {
         return typeof_expr(st, node);
     } else {
@@ -4743,37 +4769,94 @@ static Yv *typeof_want(Yv *st, Yv *node, Yv *want) {
 }
 
 // The record type a record literal is created as where `want` is declared:
-// want itself when it is a record type with the literal's field names, or
-// the member of a union want with them when exactly one has (as the union
-// writes it, union_parts); tnone otherwise, and for a literal with a
-// spread or no fields.
+// want itself when it is a record type the literal fits (lit_fits: its
+// field names, but for optional fields it leaves out), or the member of a
+// union want it fits -- the one with exactly its field names, else the
+// only one it fits (as the union writes it, union_parts); tnone
+// otherwise, and for a literal with a spread.
 Yv *lit_target(Yv *node, Yv *want) {
     Yv *keys = yr_get(node, "keys");
     Yv *w = unfold(want);
     Yv *wk = yr_get(w, "k");
     Yv *found = yr(1, "k", ys("tnone"));
-    if (yv_len(keys) == 0 || str_in(keys, ys("..."))) {
+    if (str_in(keys, ys("..."))) {
         ;
     } else if (ys_eq_lit(wk, "trec")) {
-        if (same_names(w, keys)) {
+        if (lit_fits(w, keys)) {
             found = want;
         }
     } else if (ys_eq_lit(wk, "tunion")) {
         Yv *ps = union_parts(w);
-        long n = 0;
-        long i = 0;
-        while (i < yv_len(ps)) {
-            if (same_names(unfold(ya_get(ps, i)), keys)) {
-                found = ya_get(ps, i);
-                n = n + 1;
+        Yv *exact = yr(1, "k", ys("tnone"));
+        long nexact = 0;
+        Yv *fit = yr(1, "k", ys("tnone"));
+        long nfit = 0;
+        for (long i = 0; i < yv_len(ps); i++) {
+            Yv *p = ya_get(ps, i);
+            if (lit_fits(unfold(p), keys)) {
+                fit = p;
+                nfit = nfit + 1;
+                if (same_names(unfold(p), keys)) {
+                    exact = p;
+                    nexact = nexact + 1;
+                }
             }
-            i = i + 1;
         }
-        if (n != 1) {
-            found = yr(1, "k", ys("tnone"));
+        if (nexact == 1) {
+            found = exact;
+        } else if (nexact == 0 && nfit == 1) {
+            found = fit;
         }
     }
     return found;
+}
+
+// Record type t takes a literal with the field names keys: each is a
+// field of t, and every field of t but an optional one is among them.
+static int lit_fits(Yv *t, Yv *keys) {
+    if (!ys_eq_lit(yr_get(t, "k"), "trec")) {
+        return 0;
+    }
+    Yv *fs = yr_get(t, "fields");
+    int ok = 1;
+    for (long i = 0; i < yv_len(keys); i++) {
+        if (field_pos(fs, ya_get(keys, i), 0) < 0) {
+            ok = 0;
+        }
+    }
+    for (long i = 0; i < yv_len(fs); i++) {
+        Yv *f = ya_get(fs, i);
+        if (!yv_b(yr_get(f, "opt")) && !str_in(keys, yr_get(f, "name"))) {
+            ok = 0;
+        }
+    }
+    return ok;
+}
+
+// Field `key` of record type t is optional (`key?: T`).
+static int field_opt(Yv *t, Yv *key) {
+    int opt = 0;
+    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+        Yv *fs = yr_get(t, "fields");
+        for (long i = 0; i < yv_len(fs); i++) {
+            Yv *f = ya_get(fs, i);
+            if (ys_eq(yr_get(f, "name"), key) && yv_b(yr_get(f, "opt"))) {
+                opt = 1;
+            }
+        }
+    }
+    return opt;
+}
+
+// A value of type vt given for an optional field of type ft (T?) is
+// wrapped -- some(v) -- when it is a T and not already a T? (or none).
+// native.c gen_reclit decides by it too.
+int opt_wraps(Yv *vt, Yv *ft) {
+    Yv *fu = unfold(ft);
+    if (!ys_eq_lit(yr_get(fu, "k"), "topt")) {
+        return 0;
+    }
+    return !tcompat(vt, fu) && tcompat(vt, yr_get(fu, "of"));
 }
 
 // Record type t has exactly the field names keys (a name written twice
@@ -4801,7 +4884,8 @@ static int same_names(Yv *t, Yv *keys) {
 }
 
 // A record literal checked against the record type target (lit_target):
-// each value against its field's type (typeof_want). Its type is target.
+// each value against its field's type (typeof_want); an optional field's
+// against T when it is a plain T (opt_wraps). Its type is target.
 static Yv *typeof_lit(Yv *st, Yv *node, Yv *target) {
     Yv *tu = unfold(target);
     Yv *keys = yr_get(node, "keys");
@@ -4810,10 +4894,22 @@ static Yv *typeof_lit(Yv *st, Yv *node, Yv *target) {
     while (i < yv_len(keys)) {
         Yv *key = ya_get(keys, i);
         Yv *ft = trec_field_type(tu, key);
-        Yv *r = typeof_want(st, ya_get(vals, i), ft);
-        st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), ft,
-                         ys_cat(ys_cat(ys("record field '"), key), ys("'")),
-                         yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        Yv *what = ys_cat(ys_cat(ys("record field '"), key), ys("'"));
+        if (field_opt(tu, key) && ys_eq_lit(yr_get(ft, "k"), "topt")) {
+            Yv *inner = yr_get(ft, "of");
+            Yv *r = typeof_want(st, ya_get(vals, i), inner);
+            if (opt_wraps(yr_get(r, "typ"), ft)) {
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), inner, what,
+                                 yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            } else {
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), ft, what,
+                                 yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            }
+        } else {
+            Yv *r = typeof_want(st, ya_get(vals, i), ft);
+            st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), ft, what,
+                             yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        }
         i = i + 1;
     }
     return yr(2, "typ", target, "st", st);
@@ -5348,6 +5444,6 @@ static Yv *def_sig(Yv *name, Yv *func) {
     if (ys_eq_lit(yr_get(ret, "k"), "tnone")) {
         ret = t_pend();
     }
-    return yr(2, "name", name,
+    return yr(3, "name", name, "opt", yv_bool(0),
               "typ", yr(3, "k", ys("tfunc"), "args", args, "ret", ret));
 }

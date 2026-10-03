@@ -164,7 +164,7 @@ def rn_prepass_one(s: Node, st: RnSt) -> RnSt {
     } else if (s.k == "typedef") {
         // aliases hoist like defs: every annotation in the block sees them
         let td: TypeDef = s;
-        st.tys += { name: td.name, typ: td.typ };
+        st.tys += { name: td.name, opt: false, typ: td.typ };
         st
     } else {
         st
@@ -486,7 +486,7 @@ def rn_type_fields(st: RnSt, fs: [Field], depth: long) -> [Field] {
     let i = 0;
     while (i < len(fs)) {
         let f = fs[i];
-        out += { name: f.name, typ: rn_type_go(st, f.typ, depth) };
+        out += { name: f.name, opt: f.opt, typ: rn_type_go(st, f.typ, depth) };
         i = i + 1;
     };
     out

@@ -642,7 +642,11 @@ def tstr_go(t: Type) -> str {
             // `fs[i]` would merge shapes across arms (see teq note).
             let f = fs[i];
             let fname: str = f.name;
-            parts += fname + ": " + tstr_go(f.typ);
+            let ft: Type = f.typ;
+            if (f.opt && ft.k == "topt") {
+                let fo: TOf = ft;
+                parts += fname + "?: " + tstr_go(fo.of);
+            } else { parts += fname + ": " + tstr_go(ft); };
             i = i + 1;
         };
         "{ " + join(parts, ", ") + " }"
@@ -939,7 +943,7 @@ def field_merge(fields: [Field], name: str, typ: Type) -> [Field] {
             if (seen) {
                 0
             } else {
-                out += { name: name, typ: typ };
+                out += { name: name, opt: false, typ: typ };
                 seen = true;
                 0
             };
@@ -953,7 +957,7 @@ def field_merge(fields: [Field], name: str, typ: Type) -> [Field] {
     if (seen) {
         0
     } else {
-        out += { name: name, typ: typ };
+        out += { name: name, opt: false, typ: typ };
         0
     };
     out
@@ -3550,40 +3554,95 @@ def typeof_block_want(st: TcSt, node: Block, want: Type) -> TcRes {
 // else is typeof_expr.
 def typeof_want(st: TcSt, node: Node, want: Type) -> TcRes {
     let nk: str = node.k;
-    if (nk != "rec") { typeof_expr(st, node) }
-    else {
+    if (nk == "rec") {
         let target = lit_target(node, want);
         if (target.k == "tnone") { typeof_expr(st, node) } else { typeof_lit(st, node, target) }
-    }
+    } else if (nk == "call" && is_some_call(node) && unfold(want).k == "topt") {
+        // some({...}) where T? is declared -- an optional argument passed
+        // is one (rename.y) -- creates the literal as T
+        let call: Call = node;
+        let args: [Node] = call.args;
+        let wo: TOf = unfold(want);
+        let target: Type = type_node({ k: "tnone" });
+        if (len(args) == 1 && args[0].k == "rec") { target = lit_target(args[0], wo.of); };
+        if (target.k == "tnone") { typeof_expr(st, node) } else {
+            let r = typeof_lit(st, args[0], target);
+            tc_res(type_node({ k: "topt", of: r.typ }), r.st)
+        }
+    } else { typeof_expr(st, node) }
 };
 
 // The record type a record literal is created as where `want` is declared:
-// want itself when it is a record type with the literal's field names, or
-// the member of a union want with them when exactly one has (as the union
-// writes it, union_parts); tnone otherwise, and for a literal with a
-// spread or no fields.
+// want itself when it is a record type the literal fits (lit_fits: its
+// field names, but for optional fields it leaves out), or the member of a
+// union want it fits -- the one with exactly its field names, else the
+// only one it fits (as the union writes it, union_parts); tnone
+// otherwise, and for a literal with a spread.
 def lit_target(node: RecLit, want: Type) -> Type {
     let keys: [str] = node.keys;
     let w = unfold(want);
     let wk: str = w.k;
     let found: Type = type_node({ k: "tnone" });
-    if (len(keys) == 0 || str_in(keys, "...")) {
+    if (str_in(keys, "...")) {
         0
     } else if (wk == "trec") {
-        if (same_names(w, keys)) { found = want; 0 } else { 0 };
+        if (lit_fits(w, keys)) { found = want; 0 } else { 0 };
         0
     } else if (wk == "tunion") {
         let ps = union_parts(w);
-        let n = 0;
-        let i = 0;
-        while (i < len(ps)) {
-            if (same_names(unfold(ps[i]), keys)) { found = ps[i]; n = n + 1; 0 } else { 0 };
-            i = i + 1;
+        let exact: Type = type_node({ k: "tnone" });
+        let nexact = 0;
+        let fit: Type = type_node({ k: "tnone" });
+        let nfit = 0;
+        foreach (p in ps) {
+            if (lit_fits(unfold(p), keys)) {
+                fit = p;
+                nfit = nfit + 1;
+                if (same_names(unfold(p), keys)) { exact = p; nexact = nexact + 1; };
+            };
         };
-        if (n != 1) { found = type_node({ k: "tnone" }); 0 } else { 0 };
+        if (nexact == 1) { found = exact; } else if (nexact == 0 && nfit == 1) { found = fit; };
         0
     } else { 0 };
     found
+};
+
+// Record type t takes a literal with the field names keys: each is a
+// field of t, and every field of t but an optional one is among them.
+def lit_fits(t: Type, keys: [str]) -> bool {
+    let tk: str = t.k;
+    if (tk != "trec") { false }
+    else {
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
+        let ok = true;
+        foreach (key in keys) { if (field_pos(fs, key, 0) < 0) { ok = false; }; };
+        foreach (f in fs) { if (!f.opt && !str_in(keys, f.name)) { ok = false; }; };
+        ok
+    }
+};
+
+// Field `key` of record type t is optional (`key?: T`).
+def field_opt(t: Type, key: str) -> bool {
+    let opt = false;
+    if (t.k == "trec") {
+        let rec: TRec = t;
+        let fs: [Field] = rec.fields;
+        foreach (f in fs) { if (f.name == key && f.opt) { opt = true; }; };
+    };
+    opt
+};
+
+// A value of type vt given for an optional field of type ft (T?) is
+// wrapped -- some(v) -- when it is a T and not already a T? (or none).
+// native.y gen_reclit decides by it too.
+def opt_wraps(vt: Type, ft: Type) -> bool {
+    let fu = unfold(ft);
+    if (fu.k != "topt") { false }
+    else {
+        let fo: TOf = fu;
+        !tcompat(vt, fu) && tcompat(vt, fo.of)
+    }
 };
 
 // Record type t has exactly the field names keys (a name written twice
@@ -3608,7 +3667,8 @@ def same_names(t: Type, keys: [str]) -> bool {
 };
 
 // A record literal checked against the record type target (lit_target):
-// each value against its field's type (typeof_want). Its type is target.
+// each value against its field's type (typeof_want); an optional field's
+// against T when it is a plain T (opt_wraps). Its type is target.
 def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
     let tu = unfold(target);
     let keys: [str] = node.keys;
@@ -3617,8 +3677,19 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
     while (i < len(keys)) {
         let key: str = keys[i];
         let ft = trec_field_type(tu, key);
-        let r = typeof_want(st, vals[i], ft);
-        st = expect_type(r.st, r.typ, ft, "record field '" + key + "'", node.line, node.col);
+        let what = "record field '" + key + "'";
+        if (field_opt(tu, key) && ft.k == "topt") {
+            let fo: TOf = ft;
+            let r = typeof_want(st, vals[i], fo.of);
+            if (opt_wraps(r.typ, ft)) {
+                st = expect_type(r.st, r.typ, fo.of, what, node.line, node.col);
+            } else {
+                st = expect_type(r.st, r.typ, ft, what, node.line, node.col);
+            };
+        } else {
+            let r = typeof_want(st, vals[i], ft);
+            st = expect_type(r.st, r.typ, ft, what, node.line, node.col);
+        };
         i = i + 1;
     };
     tc_res(target, st)
@@ -4031,7 +4102,7 @@ def def_sig(name: str, func: Func) -> Field {
     };
     let ret: Type = func.ret;
     if (ret.k == "tnone") { ret = t_pend(); };
-    { name: name, typ: type_node({ k: "tfunc", args: args, ret: ret }) }
+    { name: name, opt: false, typ: type_node({ k: "tfunc", args: args, ret: ret }) }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
