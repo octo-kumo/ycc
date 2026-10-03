@@ -593,7 +593,9 @@ Yv *tokenize(Yv *src) {
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
             long radix = 0;
             if (c == '0') {
-                long nxt = ys_byte_at(src, i + 1);
+                /* one past the last byte is a peek, not an index: Y reads
+                 * src[i + 1:i + 2] here, and a slice clamps */
+                long nxt = ys_byte_peek(src, i + 1);
                 if (nxt == 'x' || nxt == 'X') { radix = 16; }
                 else if (nxt == 'b' || nxt == 'B') { radix = 2; }
             }
@@ -663,7 +665,9 @@ Yv *tokenize(Yv *src) {
                 long esign = 0;
                 Yv *sc = ys_slice(src, i + 1, i + 2);
                 if (ys_eq_lit(sc, "+") || ys_eq_lit(sc, "-")) { esign = 1; }
-                if (isdigit(ys_byte_at(src, i + 1 + esign))) {
+                /* one past the digits can be the end of the source (`1e`):
+                 * a guarded read, so it is an identifier next, not a trap */
+                if (i + 1 + esign < n && isdigit(ys_byte_at(src, i + 1 + esign))) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
                     int exd = 0;

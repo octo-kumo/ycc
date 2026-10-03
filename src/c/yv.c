@@ -385,6 +385,13 @@ long ys_byte_at(const Yv *s, long i) {
     return (long)(unsigned char)s->u.s.p[i];
 }
 
+long ys_byte_peek(const Yv *s, long i) {
+    if (!s || s->tag != Y_STR || i < 0 || (size_t)i >= s->u.s.n) {
+        return -1;
+    }
+    return (long)(unsigned char)s->u.s.p[i];
+}
+
 Yv *ys_chr(long v) {
     char buf[2];
     buf[0] = (char)(v & 0xFF);

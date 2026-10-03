@@ -110,6 +110,11 @@ int ys_starts_with(const Yv *s, const Yv *p);
 int ys_ends_with(const Yv *s, const Yv *p);
 long ys_ord(const Yv *s);             /* first byte */
 long ys_byte_at(const Yv *s, long i); /* byte i (0..255); traps out of bounds */
+long ys_byte_peek(const Yv *s, long i); /* byte i, or -1 past either end:
+                                           the clamped read s[i:i + 1] gives
+                                           in Y (an empty slice), for the
+                                           places that peek at what may be
+                                           the byte after the last */
 Yv *ys_chr(long v);
 Yv *ys_tostring(const Yv *v);         /* the format the native tostring prints */
 Yv *ys_long(long v);                  /* tostring of a long */

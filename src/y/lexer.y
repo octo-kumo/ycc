@@ -562,7 +562,9 @@ def tokenize(src: str) -> [Tok] {
                 let esign = 0;
                 let sc = src[i + 1:i + 2];
                 if (sc == "+" || sc == "-") { esign = 1; };
-                if (isdigit(src[i + 1 + esign])) {
+                // one past the digits can be the end of the source (`1e`):
+                // a guarded read, so it is an identifier next, not a trap
+                if (i + 1 + esign < n && isdigit(src[i + 1 + esign])) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
                     let exd = false;
