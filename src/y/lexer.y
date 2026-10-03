@@ -89,24 +89,20 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
     while (open) {
         if (i < n) {
             let ch = src[i:i + 1];
-            if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; 0; }
-            else if (ch == q) { open = false; closed = true; 0; }
+            if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; }
+            else if (ch == q) { open = false; closed = true; }
             else {
-                if (ch == "\n") { line = line + 1; col = 1; 0; }
-                else { col = col + 1; 0; };
+                if (ch == "\n") { line = line + 1; col = 1; }
+                else { col = col + 1; };
                 i = i + 1;
-                0
             };
-            0
-        } else { open = false; 0 };
+        } else { open = false; };
     };
     if (closed) {
-        0
     } else {
         // ran off the end with the quote still open
         puts("error: unterminated string literal\n");
         exit(1);
-        0
     };
     let raw = src[start:i];
     i = i + 1;  // skip closing quote
@@ -114,7 +110,6 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
     let buf = raw;
     if (hasesc) {
         buf = unescape(raw, false);
-        0
     };
     { text: buf, end: i, line: line, col: col }
 };
@@ -131,9 +126,9 @@ def unescape(raw: str, braces: bool) -> str {
         let rc = raw[k:k + 1];
         if (rc == "\\") {
             let esc = raw[k + 1:k + 2];
-            if (esc == "n") { chunks += "\n"; k = k + 2; 0; }
-            else if (esc == "t") { chunks += "\t"; k = k + 2; 0; }
-            else if (esc == "r") { chunks += "\r"; k = k + 2; 0; }
+            if (esc == "n") { chunks += "\n"; k = k + 2; }
+            else if (esc == "t") { chunks += "\t"; k = k + 2; }
+            else if (esc == "r") { chunks += "\r"; k = k + 2; }
             else if (esc == "x") {
                 // \xHH -- two hex digits
                 let h1 = hexvalx(raw[k + 2:k + 3]);
@@ -141,24 +136,18 @@ def unescape(raw: str, braces: bool) -> str {
                 if (h1 >= 0 && h2 >= 0) {
                     chunks += chr(h1 * 16 + h2);
                     k = k + 4;
-                    0
                 } else {
                     chunks += esc;
                     k = k + 2;
-                    0
                 };
-                0
             }
-            else { chunks += esc; k = k + 2; 0; };
-            0
+            else { chunks += esc; k = k + 2; };
         } else if (braces && (rc == "{" || rc == "}")) {
             chunks += rc;
             k = k + 2;
-            0
         } else {
             chunks += rc;
             k = k + 1;
-            0
         };
     };
     join(chunks, "")
@@ -188,10 +177,9 @@ def lit_end(src: str, q: long) -> long {
     let open = true;
     while (open && i < n) {
         let c = byte_at(src, i);
-        if (c == c'\\') { i = i + 2; 0; }
-        else if (c == qc) { end = i + 1; open = false; 0; }
-        else { i = i + 1; 0; };
-        0
+        if (c == c'\\') { i = i + 2; }
+        else if (c == qc) { end = i + 1; open = false; }
+        else { i = i + 1; };
     };
     end
 };
@@ -213,37 +201,27 @@ def fstr_expr_end(src: str, lo: long) -> long {
             if (c == c'"' && i > lo && byte_at(src, i - 1) == 102 && (i - 1 == lo || !wordbyte(byte_at(src, i - 2)))) {
                 // a nested f"..."
                 i = fstr_walk(src, i).end;
-                0
             } else {
                 i = lit_end(src, i);
-                0
             };
-            0
         } else if (c == c'(' || c == c'[' || c == c'{') {
             depth = depth + 1;
             i = i + 1;
-            0
         } else if (depth > 0) {
-            if (c == c')' || c == c']' || c == c'}') { depth = depth - 1; 0; } else { 0; };
+            if (c == c')' || c == c']' || c == c'}') { depth = depth - 1; } else { };
             i = i + 1;
-            0
         } else if (c == c'?') {
             tern = tern + 1;
             i = i + 1;
-            0
         } else if (c == c':' && tern > 0) {
             tern = tern - 1;
             i = i + 1;
-            0
         } else if (c == c'}' || c == c':' || c == c',' || c == c';' || c == c')' || c == c']') {
             stop = i;
             go = false;
-            0
         } else {
             i = i + 1;
-            0
         };
-        0
     };
     stop
 };
@@ -256,7 +234,6 @@ def fstr_blank(src: str, lo: long, hi: long) -> bool {
         let c = byte_at(src, i);
         blank = isspace(c);
         i = i + 1;
-        0
     };
     blank
 };
@@ -279,59 +256,48 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
         if (i >= n) {
             err = "unterminated f-string";
             open = false;
-            0
         } else {
             let c = byte_at(src, i);
             if (c == c'\\') {
                 i = i + 2;
-                0
             } else if (c == c'"') {
                 i = i + 1;
                 open = false;
-                0
             } else if ((c == c'{' || c == c'}') && i + 1 < n && byte_at(src, i + 1) == c) {
                 i = i + 2;
-                0
             } else if (c == c'}') {
                 err = "single '}' in an f-string (a literal brace is '}}')";
                 at = i;
                 open = false;
-                0
             } else if (c == c'{') {
                 let lo = i + 1;
                 let hi = fstr_expr_end(src, lo);
                 let hc = 0;
-                if (hi < n) { hc = byte_at(src, hi); 0; } else { 0; };
+                if (hi < n) { hc = byte_at(src, hi); } else { };
                 if (hc != c'}' && hc != c':') {
                     if (hi >= n) {
                         err = "unterminated f-string field";
                         at = i;
-                        0
                     } else {
                         err = "an f-string field is one expression, got '" + src[hi:hi + 1] + "'";
                         at = hi;
-                        0
                     };
                     open = false;
-                    0
                 } else if (fstr_blank(src, lo, hi)) {
                     err = "empty f-string field";
                     at = i;
                     open = false;
-                    0
                 } else if (hc == c'}') {
                     fields += lo;
                     fields += hi;
                     fields += 0 - 1;
                     fields += 0 - 1;
                     i = hi + 1;
-                    0
                 } else {
                     // the spec: up to the closing brace
                     let e = hi + 1;
                     while (e < n && byte_at(src, e) != 125 && byte_at(src, e) != 123 && byte_at(src, e) != 34) {
                         e = e + 1;
-                        0
                     };
                     if (e < n && byte_at(src, e) == 125) {
                         fields += lo;
@@ -339,33 +305,24 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                         fields += hi + 1;
                         fields += e;
                         i = e + 1;
-                        0
                     } else {
                         if (e < n && byte_at(src, e) == 123) {
                             err = "a format spec cannot hold '{'";
                             at = e;
-                            0
                         } else {
                             err = "unterminated f-string field";
                             at = i;
-                            0
                         };
                         open = false;
-                        0
                     };
-                    0
                 };
-                0
             } else {
                 i = i + 1;
-                0
             };
-            0
         };
-        0
     };
     let end = i;
-    if (err != "") { end = lit_end(src, q); 0; } else { 0; };
+    if (err != "") { end = lit_end(src, q); } else { };
     { end: end, err: err, at: at, fields: fields }
 };
 
@@ -375,9 +332,8 @@ def fstr_adv(src: str, a: long, b: long, line: long, col: long) -> { line: long,
     let cl = col;
     let i = a;
     while (i < b) {
-        if (byte_at(src, i) == 10) { ln = ln + 1; cl = 1; 0; } else { cl = cl + 1; 0; };
+        if (byte_at(src, i) == 10) { ln = ln + 1; cl = 1; } else { cl = cl + 1; };
         i = i + 1;
-        0
     };
     { line: ln, col: cl }
 };
@@ -397,10 +353,8 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end:
     if (w.err != "") {
         let ep = fstr_adv(src, q - 1, w.at, line, col);
         toks += mktok("ferr", w.err, ep.line, ep.col);
-        0
     } else if (len(fs) == 0) {
         toks += mktok("str", unescape(src[q + 1:w.end - 1], true), line, col);
-        0
     } else {
         toks += mktok("punct", "(", line, col);
         let from = q + 1;
@@ -416,12 +370,11 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end:
             at = lo - 1;
             bl = bp.line;
             bc = bp.col;
-            if (k > 0) { toks += mktok("op", "+", bl, bc); 0; } else { 0; };
+            if (k > 0) { toks += mktok("op", "+", bl, bc); } else { };
             if (lo - 1 > from) {
                 toks += mktok("str", unescape(src[from:lo - 1], true), bl, bc);
                 toks += mktok("op", "+", bl, bc);
-                0
-            } else { 0; };
+            } else { };
             toks += mktok("id", "#fmt", bl, bc);
             toks += mktok("punct", "(", bl, bc);
             let sub = tokenize(src[lo:hi]);
@@ -430,35 +383,27 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end:
                 let tk = sub[j];
                 if (tk.line == 1) {
                     toks += mktok(tk.t, tk.v, bl, bc + tk.col);
-                    0
                 } else {
                     toks += mktok(tk.t, tk.v, bl + tk.line - 1, tk.col);
-                    0
                 };
                 j = j + 1;
-                0
             };
             toks += mktok("punct", ",", bl, bc);
             if (slo >= 0) {
                 toks += mktok("str", src[slo:fs[k + 3]], bl, bc);
                 from = fs[k + 3] + 1;
-                0
             } else {
                 toks += mktok("str", "", bl, bc);
                 from = hi + 1;
-                0
             };
             toks += mktok("punct", ")", bl, bc);
             k = k + 4;
-            0
         };
         if (w.end - 1 > from) {
             toks += mktok("op", "+", bl, bc);
             toks += mktok("str", unescape(src[from:w.end - 1], true), bl, bc);
-            0
-        } else { 0; };
+        } else { };
         toks += mktok("punct", ")", bl, bc);
-        0
     };
     let e = fstr_adv(src, q - 1, w.end, line, col);
     { end: w.end, line: e.line, col: e.col }
@@ -543,10 +488,9 @@ def tokenize(src: str) -> [Tok] {
     while (i < n) {
         let c = src[i];
         if (isspace(c)) {
-            if (c == c'\n') { line = line + 1; col = 1; 0; }
-            else { col = col + 1; 0; };
+            if (c == c'\n') { line = line + 1; col = 1; }
+            else { col = col + 1; };
             i = i + 1;
-            0
         } else if (isdigit(c)) {
             let start = i;
             let startcol = col;
@@ -571,9 +515,8 @@ def tokenize(src: str) -> [Tok] {
                             if (rc != c'_') { digits = true; };
                             i = i + 1;
                             col = col + 1;
-                        } else { rdone = true; 0; };
-                        0
-                    } else { rdone = true; 0 };
+                        } else { rdone = true; };
+                    } else { rdone = true; };
                 };
                 if (!digits) {
                     // A prefix without a digit (`0x`, `0b_`, `0b2`) is no
@@ -583,7 +526,6 @@ def tokenize(src: str) -> [Tok] {
                     if (radix == 16) { err = "hex literal '" + src[start:i] + "' has no digits"; }
                     else { err = "binary literal '" + src[start:i] + "' has no digits"; };
                 };
-                0
             } else {
             // The first digit is already known from the branch condition.
             // After the first digit of each part (whole, fraction,
@@ -594,10 +536,9 @@ def tokenize(src: str) -> [Tok] {
             while (ind == false) {
                 if (i < n) {
                     let dc = src[i];
-                    if (isdigit(dc) || dc == c'_') { i = i + 1; col = col + 1; 0; }
-                    else { ind = true; 0; };
-                    0
-                } else { ind = true; 0 };
+                    if (isdigit(dc) || dc == c'_') { i = i + 1; col = col + 1; }
+                    else { ind = true; };
+                } else { ind = true; };
             };
             // optional fractional part (but not '..' range).
             if (src[i:i + 1] == "." && src[i + 1:i + 2] != ".") {
@@ -608,12 +549,10 @@ def tokenize(src: str) -> [Tok] {
                 while (frd == false) {
                     if (i < n) {
                         let fc = src[i];
-                        if (isdigit(fc) || (fc == c'_' && i > fs)) { i = i + 1; col = col + 1; 0; }
-                        else { frd = true; 0; };
-                        0
-                    } else { frd = true; 0 };
+                        if (isdigit(fc) || (fc == c'_' && i > fs)) { i = i + 1; col = col + 1; }
+                        else { frd = true; };
+                    } else { frd = true; };
                 };
-                0
             };
             // optional exponent: e / E, an optional sign, then digits. Only
             // consumed when at least one digit follows, so `1e` stays a
@@ -630,10 +569,9 @@ def tokenize(src: str) -> [Tok] {
                     while (exd == false) {
                         if (i < n) {
                             let xc = src[i];
-                            if (isdigit(xc) || xc == c'_') { i = i + 1; col = col + 1; 0; }
-                            else { exd = true; 0; };
-                            0
-                        } else { exd = true; 0 };
+                            if (isdigit(xc) || xc == c'_') { i = i + 1; col = col + 1; }
+                            else { exd = true; };
+                        } else { exd = true; };
                     };
                 };
             };
@@ -645,7 +583,6 @@ def tokenize(src: str) -> [Tok] {
                 if (radix == 0) { txt = strip_seps(txt); };
                 toks += mktok("num", txt, line, startcol);
             };
-            0
         } else if (isalpha(c)) {
             let start = i;
             let startcol = col;
@@ -655,25 +592,24 @@ def tokenize(src: str) -> [Tok] {
             let inw = false;
             while (inw == false) {
                 if (i < n) {
-                    if (isalnum(src[i])) { i = i + 1; col = col + 1; 0; }
-                    else { inw = true; 0; };
-                    0
-                } else { inw = true; 0 };
+                    if (isalnum(src[i])) { i = i + 1; col = col + 1; }
+                    else { inw = true; };
+                } else { inw = true; };
             };
             let word = src[start:i];
             let ty = "id";
-            if (word == "let") { ty = "kw"; 0; }
-            else if (word == "const") { ty = "kw"; 0; }
-            else if (word == "def") { ty = "kw"; 0; }
-            else if (word == "if") { ty = "kw"; 0; }
-            else if (word == "else") { ty = "kw"; 0; }
-            else if (word == "while") { ty = "kw"; 0; }
-            else if (word == "for") { ty = "kw"; 0; }
-            else if (word == "foreach") { ty = "kw"; 0; }
-            else if (word == "in") { ty = "kw"; 0; }
-            else if (word == "return") { ty = "kw"; 0; }
-            else if (word == "true") { ty = "kw"; 0; }
-            else if (word == "false") { ty = "kw"; 0; }
+            if (word == "let") { ty = "kw"; }
+            else if (word == "const") { ty = "kw"; }
+            else if (word == "def") { ty = "kw"; }
+            else if (word == "if") { ty = "kw"; }
+            else if (word == "else") { ty = "kw"; }
+            else if (word == "while") { ty = "kw"; }
+            else if (word == "for") { ty = "kw"; }
+            else if (word == "foreach") { ty = "kw"; }
+            else if (word == "in") { ty = "kw"; }
+            else if (word == "return") { ty = "kw"; }
+            else if (word == "true") { ty = "kw"; }
+            else if (word == "false") { ty = "kw"; }
            ;
             if (word == "b") {
                 // b"..." / b'...' -- a byte-string literal: the same type
@@ -686,19 +622,15 @@ def tokenize(src: str) -> [Tok] {
                     line = bq.line;
                     col = bq.col;
                     toks += mktok("bstr", bq.text, bline, startcol);
-                    0
                 } else if (qch == "'") {
                     let bq2 = lex_quoted(src, i, line, col);
                     i = bq2.end;
                     line = bq2.line;
                     col = bq2.col;
                     toks += mktok("bstr", bq2.text, bline, startcol);
-                    0
                 } else {
                     toks += mktok(ty, word, line, startcol);
-                    0
                 };
-                0
             } else if (word == "c" && src[i:i + 1] == "'") {
                 // c'a' -- a character literal: one byte, typed `byte`.
                 let cline = line;
@@ -707,19 +639,15 @@ def tokenize(src: str) -> [Tok] {
                 line = cq.line;
                 col = cq.col;
                 toks += mktok("char", cq.text, cline, startcol);
-                0
             } else if (word == "f" && src[i:i + 1] == "\"") {
                 // f"..." -- an f-string (lex_fstring)
                 let fq = lex_fstring(src, i, line, startcol, toks);
                 i = fq.end;
                 line = fq.line;
                 col = fq.col;
-                0
             } else {
                 toks += mktok(ty, word, line, startcol);
-                0
             };
-            0
         } else if (c == c'"') {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
@@ -731,7 +659,6 @@ def tokenize(src: str) -> [Tok] {
             line = q.line;
             col = q.col;
             toks += mktok("str", q.text, startline, startcol);
-            0
         } else if (c == c'/') {
             // Slash: comment opener, block comment, or division operator.
             // (The string arm above consumed every slash inside quotes, so a
@@ -746,12 +673,10 @@ def tokenize(src: str) -> [Tok] {
                 let done = false;
                 while (done == false) {
                     if (i < n) {
-                        if (src[i:i + 1] != "\n") { i = i + 1; col = col + 1; 0; }
-                        else { done = true; 0; };
-                        0
-                    } else { done = true; 0 };
+                        if (src[i:i + 1] != "\n") { i = i + 1; col = col + 1; }
+                        else { done = true; };
+                    } else { done = true; };
                 };
-                0
             } else if (src[i + 1:i + 2] == "*") {
                 i = i + 2;
                 col = col + 2;
@@ -764,16 +689,13 @@ def tokenize(src: str) -> [Tok] {
                             col = col + 2;
                             open = false;
                             closed = true;
-                            0
                         } else {
                             let ch = src[i:i + 1];
-                            if (ch == "\n") { line = line + 1; col = 1; 0; }
-                            else { col = col + 1; 0; };
+                            if (ch == "\n") { line = line + 1; col = 1; }
+                            else { col = col + 1; };
                             i = i + 1;
-                            0
                         };
-                        0
-                    } else { open = false; 0 };
+                    } else { open = false; };
                 };
                 if (!closed) {
                     // ran off the end with the comment still open: fatal,
@@ -781,9 +703,7 @@ def tokenize(src: str) -> [Tok] {
                     // was silently swallowed)
                     puts("error: unterminated block comment\n");
                     exit(1);
-                    0
                 };
-                0
             } else {
                 // division operator or `/=` (not a comment opener). The
                 // comment dispatch above owns the `/` branch, so `/=` has
@@ -794,14 +714,11 @@ def tokenize(src: str) -> [Tok] {
                     toks += mktok("op", two, line, col);
                     i = i + 2;
                     col = col + 2;
-                    0
                 } else {
                     toks += mktok("op", slash(), line, col);
                     i = i + 1;
                     col = col + 1;
-                    0
                 };
-                0
             };
         } else {
             // operator / punct / unknown-char dispatch.
@@ -810,17 +727,14 @@ def tokenize(src: str) -> [Tok] {
                 toks += mktok("op", op, line, col);
                 i = i + len(op);
                 col = col + len(op);
-                0
             } else if (issingleop(c)) {
                 toks += mktok("op", src[i:i + 1], line, col);
                 i = i + 1;
                 col = col + 1;
-                0
             } else if (ispunct(c)) {
                 toks += mktok("punct", src[i:i + 1], line, col);
                 i = i + 1;
                 col = col + 1;
-                0
             } else {
                 // A character no token starts with: passed on as an
                 // operator nothing accepts, so the parser reports it
@@ -828,7 +742,6 @@ def tokenize(src: str) -> [Tok] {
                 toks += mktok("op", src[i:i + 1], line, col);
                 i = i + 1;
                 col = col + 1;
-                0
             };
         };
     };

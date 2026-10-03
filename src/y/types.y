@@ -274,9 +274,7 @@ def teq(a: Type, b: Type) -> bool {
                 if (i < len(aa)) {
                     ok = teq(aa[i], bb[i]);
                     i = i + 1;
-                    0
-                } else { ok = false; 0 };
-                0
+                } else { ok = false; };
             };
             teq_list(aa, bb, 0)
         }
@@ -322,7 +320,7 @@ def union_parts_go(out: [Type], t: Type, depth: long) -> long {
     while (i < len(ms)) {
         let m = ms[i];
         let u = unfold(m);
-        if (u.k == K.tunion && depth < 16) { union_parts_go(out, u, depth + 1); 0; } else { out += m; 0; };
+        if (u.k == K.tunion && depth < 16) { union_parts_go(out, u, depth + 1); } else { out += m; };
         i = i + 1;
     };
     0
@@ -349,7 +347,7 @@ def pat_members(s: Type, t: Type) -> [Type] {
     let out: [Type] = [];
     let i = 0;
     while (i < len(ps)) {
-        if (rec_has_names(unfold(ps[i]), names)) { out += ps[i]; 0 } else { 0 };
+        if (rec_has_names(unfold(ps[i]), names)) { out += ps[i]; } else { };
         i = i + 1;
     };
     out
@@ -514,7 +512,7 @@ def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
         while (i < len(ms)) {
             let mout: [str] = [];
             let mf = join(tcanon_go(mout, ms[i], stack), "");
-            if (!str_in(forms, mf)) { forms += mf; 0 } else { 0 };
+            if (!str_in(forms, mf)) { forms += mf; } else { };
             i = i + 1;
         };
         out += "<" + join(str_sorted(forms), "|") + ">";
@@ -526,7 +524,7 @@ def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
         let i = len(stack) - 1;
         while (d < 0 && i >= 0) {
             let si: str = stack[i];
-            if (si == tmp) { d = len(stack) - 1 - i; 0 } else { 0 };
+            if (si == tmp) { d = len(stack) - 1 - i; } else { };
             i = i - 1;
         };
         if (tcanon_named) {
@@ -550,7 +548,7 @@ def str_in(xs: [str], s: str) -> bool {
     let i = 0;
     while (!found && i < len(xs)) {
         let x: str = xs[i];
-        if (x == s) { found = true; 0 } else { 0 };
+        if (x == s) { found = true; } else { };
         i = i + 1;
     };
     found
@@ -584,14 +582,13 @@ def field_pos(fs: [Field], name: str, hint: long) -> long {
     if (hint < len(fs)) {
         let fh = fs[hint];
         let hn: str = fh.name;
-        if (hn == name) { found = hint; 0 } else { 0 };
-        0
-    } else { 0 };
+        if (hn == name) { found = hint; } else { };
+    } else { };
     let i = 0;
     while (found < 0 && i < len(fs)) {
         let f = fs[i];
         let fnm: str = f.name;
-        if (fnm == name) { found = i; 0 } else { 0 };
+        if (fnm == name) { found = i; } else { };
         i = i + 1;
     };
     found
@@ -604,7 +601,7 @@ def teq_members(ua: [Type], ub: [Type], i: long) -> bool {
         let found = false;
         let j = 0;
         while (!found && j < len(ub)) {
-            if (teq(ua[i], ub[j])) { found = true; 0 } else { 0 };
+            if (teq(ua[i], ub[j])) { found = true; } else { };
             j = j + 1;
         };
         if (found) { teq_members(ua, ub, i + 1) } else { false }
@@ -629,8 +626,7 @@ def trec_field_type(rec: Type, key: str) -> Type {
             let f = fs[i];
             if (f.name == key) {
                 found = f.typ;
-                0
-            } else { 0; };
+            } else { };
             i = i + 1;
         };
     };
@@ -736,13 +732,11 @@ def type_names(t: Type) -> [str] {
             out += f.name;
             i = i + 1;
         };
-        0
     } else if (tk == K.tpat) {
         let pat: TPat = t;
         let ns: [str] = pat.names;
         out += ns;
-        0
-    } else { 0 };
+    } else { };
     out
 };
 
@@ -758,10 +752,10 @@ def rec_has_names(r: Type, names: [str]) -> bool {
             let j = 0;
             while (j < len(have)) {
                 let hn: str = have[j];
-                if (hn == nm) { found = true; 0 } else { 0 };
+                if (hn == nm) { found = true; } else { };
                 j = j + 1;
             };
-            if (!found) { ok = false; 0 } else { 0 };
+            if (!found) { ok = false; } else { };
             i = i + 1;
         };
         ok
@@ -786,7 +780,7 @@ def narrow_type(s: Type, t: Type) -> Type {
         let found: [Type] = [];
         let i = 0;
         while (i < len(ms)) {
-            if (rec_has_names(ms[i], names)) { found += ms[i]; 0 } else { 0 };
+            if (rec_has_names(ms[i], names)) { found += ms[i]; } else { };
             i = i + 1;
         };
         if (len(found) == 0) { t_unk() }
@@ -805,7 +799,7 @@ def union_member(u: Type, t: Type) -> Type {
     let found: Type = { k: K.tnone };
     let i = len(ms) - 1;
     while (i >= 0) {
-        if (teq(ms[i], t)) { found = ms[i]; 0 } else { 0 };
+        if (teq(ms[i], t)) { found = ms[i]; } else { };
         i = i - 1;
     };
     found
@@ -823,15 +817,12 @@ def union_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
         if (mt.k == K.tnone) {
             st = fail(st, "member " + tstr(ms[i]) + " of " + tstr(t) + " has no field '" + dkey + "' (match the member first)", line, col);
             ok = false;
-            0
         } else if (i == 0) {
             ft = mt;
-            0
         } else if (!teq(ft, mt)) {
             st = fail(st, "field '" + dkey + "' has a different type in each member of " + tstr(t) + " (match the member first)", line, col);
             ok = false;
-            0
-        } else { 0 };
+        } else { };
         i = i + 1;
     };
     if (ok) { { typ: ft, st: st } } else { { typ: t_unk(), st: st } }
@@ -857,7 +848,7 @@ def union_ok(t: Type) -> bool {
     while (i < len(ms)) {
         let m = ms[i];
         let mk: long = m.k;
-        if (mk != K.trec) { ok = false; 0 } else { 0 };
+        if (mk != K.trec) { ok = false; } else { };
         i = i + 1;
     };
     ok
@@ -873,7 +864,7 @@ def union_accepts(got: Type, want: Type) -> bool {
         let ok = true;
         let i = 0;
         while (i < len(gs)) {
-            if (!union_accepts(gs[i], want)) { ok = false; 0 } else { 0 };
+            if (!union_accepts(gs[i], want)) { ok = false; } else { };
             i = i + 1;
         };
         ok
@@ -882,7 +873,7 @@ def union_accepts(got: Type, want: Type) -> bool {
         let any = false;
         let j = 0;
         while (j < len(ws)) {
-            if (tcompat(got, ws[j])) { any = true; 0 } else { 0 };
+            if (tcompat(got, ws[j])) { any = true; } else { };
             j = j + 1;
         };
         any
@@ -896,17 +887,16 @@ def num_is_float(s: str) -> bool {
     let radix = false;
     if (len(s) > 2) {
         let p = s[0:2];
-        if (p == "0x") { radix = true; 0; } else { 0; };
-        if (p == "0X") { radix = true; 0; } else { 0; };
-        if (p == "0b") { radix = true; 0; } else { 0; };
-        if (p == "0B") { radix = true; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (p == "0x") { radix = true; } else { };
+        if (p == "0X") { radix = true; } else { };
+        if (p == "0b") { radix = true; } else { };
+        if (p == "0B") { radix = true; } else { };
+    } else { };
     if (radix) { false } else {
         let f = false;
-        if (index_of(s, ".") >= 0) { f = true; 0; } else { 0; };
-        if (index_of(s, "e") >= 0) { f = true; 0; } else { 0; };
-        if (index_of(s, "E") >= 0) { f = true; 0; } else { 0; };
+        if (index_of(s, ".") >= 0) { f = true; } else { };
+        if (index_of(s, "e") >= 0) { f = true; } else { };
+        if (index_of(s, "E") >= 0) { f = true; } else { };
         f
     }
 };
@@ -971,24 +961,18 @@ def field_merge(fields: [Field], name: str, typ: Type) -> [Field] {
         let fnm: str = f.name;
         if (fnm == name) {
             if (seen) {
-                0
             } else {
                 out += { name: name, opt: false, typ: typ };
                 seen = true;
-                0
             };
-            0
         } else {
             out += f;
-            0
         };
         i = i + 1;
     };
     if (seen) {
-        0
     } else {
         out += { name: name, opt: false, typ: typ };
-        0
     };
     out
 };
@@ -1264,10 +1248,10 @@ def typeof_arith_arr(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: lon
             let how = arr_plus_kind(lt, rt);
             let ltype: Type = t_unk();
             let rtype: Type = t_unk();
-            if (lk == K.tarr) { let arr: TOf = lt; ltype = arr.of; 0; }
-            else { let arr: TFix = lt; ltype = arr.of; 0; };
-            if (rt.k == K.tarr) { let arr: TOf = rt; rtype = arr.of; 0; }
-            else { let arr: TFix = rt; rtype = arr.of; 0; };
+            if (lk == K.tarr) { let arr: TOf = lt; ltype = arr.of; }
+            else { let arr: TFix = lt; ltype = arr.of; };
+            if (rt.k == K.tarr) { let arr: TOf = rt; rtype = arr.of; }
+            else { let arr: TFix = rt; rtype = arr.of; };
             if (how == "append") {
                 let typ: Type = { k: K.tarr, of: ltype };
                 { typ: typ, st: st }
@@ -1281,16 +1265,16 @@ def typeof_arith_arr(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: lon
             }
         } else {
             let ltype: Type = t_unk();
-            if (lk == K.tarr) { let arr: TOf = lt; ltype = arr.of; 0; }
-            else { let arr: TFix = lt; ltype = arr.of; 0; };
+            if (lk == K.tarr) { let arr: TOf = lt; ltype = arr.of; }
+            else { let arr: TFix = lt; ltype = arr.of; };
             st = expect_type(st, rt, ltype, "'+' element", line, col);
             let typ: Type = { k: K.tarr, of: ltype };
             { typ: typ, st: st }
         }
     } else {
         let rtype: Type = t_unk();
-        if (rt.k == K.tarr) { let arr: TOf = rt; rtype = arr.of; 0; }
-        else { let arr: TFix = rt; rtype = arr.of; 0; };
+        if (rt.k == K.tarr) { let arr: TOf = rt; rtype = arr.of; }
+        else { let arr: TFix = rt; rtype = arr.of; };
         st = expect_type(st, lt, rtype, "'+' element", line, col);
         let typ: Type = { k: K.tarr, of: rtype };
         { typ: typ, st: st }
@@ -1309,10 +1293,10 @@ def typeof_arith_arr(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: lon
 def arr_plus_kind(lt: Type, rt: Type) -> str {
     let ltype: Type = t_unk();
     let rtype: Type = t_unk();
-    if (lt.k == K.tarr) { let arr: TOf = lt; ltype = arr.of; 0; }
-    else { let arr: TFix = lt; ltype = arr.of; 0; };
-    if (rt.k == K.tarr) { let arr: TOf = rt; rtype = arr.of; 0; }
-    else { let arr: TFix = rt; rtype = arr.of; 0; };
+    if (lt.k == K.tarr) { let arr: TOf = lt; ltype = arr.of; }
+    else { let arr: TFix = lt; ltype = arr.of; };
+    if (rt.k == K.tarr) { let arr: TOf = rt; rtype = arr.of; }
+    else { let arr: TFix = rt; rtype = arr.of; };
     if (tcompat(rtype, ltype)) { "cat" }
     else if (tcompat(rt, ltype)) { "append" }
     else if (tcompat(lt, rtype)) { "prepend" }
@@ -1325,8 +1309,8 @@ def arr_plus_kind(lt: Type, rt: Type) -> str {
 def typeof_cons(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     if (rt.k == K.tarr || rt.k == K.tarrfix) {
         let elem: Type = t_unk();
-        if (rt.k == K.tarr) { let arr: TOf = rt; elem = arr.of; 0; }
-        else { let arr: TFix = rt; elem = arr.of; 0; };
+        if (rt.k == K.tarr) { let arr: TOf = rt; elem = arr.of; }
+        else { let arr: TFix = rt; elem = arr.of; };
         st = expect_type(st, lt, elem, "'::' element", line, col);
         let typ: Type = { k: K.tarr, of: elem };
         { typ: typ, st: st }
@@ -1518,8 +1502,8 @@ def arr_lit_adopts_go(got: Type, want: Type) -> bool {
     if (want.k == K.tarr) {
         let warr: TOf = want;
         let ge: Type = t_unk();
-        if (got.k == K.tarr) { let garr: TOf = got; ge = garr.of; 0; }
-        else { let garr: TFix = got; ge = garr.of; 0; };
+        if (got.k == K.tarr) { let garr: TOf = got; ge = garr.of; }
+        else { let garr: TFix = got; ge = garr.of; };
         tcompat(ge, warr.of)
     }
     else if (want.k == K.tarrfix) {
@@ -1668,8 +1652,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                     st = r.st;
                     st = expect_type(st, r.typ, type_node({ k: K.tlong }), "array index", addr.line, addr.col);
                     let elem: Type = t_unk();
-                    if (got.typ.k == K.tarr) { let a: TOf = got.typ; elem = a.of; 0; }
-                    else { let a: TFix = got.typ; elem = a.of; 0; };
+                    if (got.typ.k == K.tarr) { let a: TOf = got.typ; elem = a.of; }
+                    else { let a: TFix = got.typ; elem = a.of; };
                     tc_res(type_node({ k: K.tptr, to: elem }), st)
                 } else {
                     st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays)", addr.line, addr.col);
@@ -1686,8 +1670,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                     st = r.st;
                     st = expect_type(st, r.typ, type_node({ k: K.tlong }), "array index", addr.line, addr.col);
                     let elem: Type = t_unk();
-                    if (br.typ.k == K.tarr) { let a: TOf = br.typ; elem = a.of; 0; }
-                    else { let a: TFix = br.typ; elem = a.of; 0; };
+                    if (br.typ.k == K.tarr) { let a: TOf = br.typ; elem = a.of; }
+                    else { let a: TFix = br.typ; elem = a.of; };
                     tc_res(type_node({ k: K.tptr, to: elem }), st)
                 } else {
                     st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays)", addr.line, addr.col);
@@ -1801,12 +1785,11 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let fe = typeof_expr(st, loop.iter);
         st = fe.st;
         let elt: Type = t_unk();
-        if (fe.typ.k == K.tarr) { let arr: TOf = fe.typ; elt = arr.of; 0; }
-        else if (fe.typ.k == K.tarrfix) { let arr: TFix = fe.typ; elt = arr.of; 0; }
-        else if (fe.typ.k == K.tunk) { 0; }
+        if (fe.typ.k == K.tarr) { let arr: TOf = fe.typ; elt = arr.of; }
+        else if (fe.typ.k == K.tarrfix) { let arr: TFix = fe.typ; elt = arr.of; }
+        else if (fe.typ.k == K.tunk) { }
         else {
             st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), loop.line, loop.col);
-            0
         };
         st = st_bind(st, loop.name, elt, "local");
         let fbb = typeof_block(st, loop.body);
@@ -1866,9 +1849,9 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         // `arr += {...}` / `arr *= {...}`: a record literal is an element
         let tt: Type = t.typ;
         let vw: Type = type_node({ k: K.tnone });
-        if (tt.k == K.tarr) { let arr: TOf = tt; vw = arr.of; 0; }
-        else if (tt.k == K.tarrfix) { let arr: TFix = tt; vw = arr.of; 0; }
-        else { 0; };
+        if (tt.k == K.tarr) { let arr: TOf = tt; vw = arr.of; }
+        else if (tt.k == K.tarrfix) { let arr: TFix = tt; vw = arr.of; }
+        else { };
         let v = typeof_want(st, assign.v, vw);
         let pc = place_check(v.st, assign.tgt, t.typ, assign.op + "=", assign.line, assign.col);
         st = const_check(pc.st, assign.tgt, pc.typ, assign.op + "=", assign.line, assign.col);
@@ -1878,7 +1861,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let p = typeof_expr(st, store.p);
         let pt: Type = p.typ;
         let pw: Type = type_node({ k: K.tnone });
-        if (pt.k == K.tptr) { let ptr: TPtr = pt; pw = ptr.to; 0; } else { 0; };
+        if (pt.k == K.tptr) { let ptr: TPtr = pt; pw = ptr.to; } else { };
         let v = typeof_want(p.st, store.v, pw);
         st = v.st;
         if (p.typ.k == K.tptr) {
@@ -1948,36 +1931,27 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                             fields = field_merge(fields, sf.name, sf.typ);
                             si = si + 1;
                         };
-                        0
                     } else if (r.typ.k == K.tunk || r.typ.k == K.tnone || r.typ.k == K.tname) {
                         // poison quietly (tcompat law)
                         ok = false;
-                        0
                     } else {
                         st = fail(st, "'...' spread needs a record, got " + tstr(r.typ), rec.line, rec.col);
                         ok = false;
-                        0
                     };
-                    0
                 } else if (r.typ.k == K.tnone) {
                     // unannotated value shape (tcompat law): the missing
                     // annotation errors once at its own site; don't cascade
                     // here, but poison the record so uses don't mistype.
                     ok = false;
-                    0
                 } else if (r.typ.k == K.tname) {
                     ok = false;
-                    0
                 } else if (!is_value_type(r.typ)) {
                     st = fail(st, "record field '" + mkey + "' has unsupported type " + tstr(r.typ), rec.line, rec.col);
                     ok = false;
-                    0
-                } else { 0; };
+                } else { };
                 if (mkey == "...") {
-                    0
                 } else {
                     fields = field_merge(fields, mkey, r.typ);
-                    0
                 };
                 i = i + 1;
             };
@@ -2006,13 +1980,10 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (gk == "...") {
                 st = fail(st, "'...' spread is record-only (a map literal takes key: value entries)", map.line, map.col);
                 gok = false;
-                0
             } else if (gi == 0) {
                 gt = gr.typ;
-                0
             } else {
                 st = expect_type(st, gr.typ, gt, "map value", map.line, map.col);
-                0
             };
             gi = gi + 1;
         };
@@ -2073,8 +2044,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 st = r.st;
                 st = expect_type(st, r.typ, type_node({ k: K.tlong }), "array index", index.line, index.col);
                 let elem: Type = t_unk();
-                if (got.typ.k == K.tarr) { let arr: TOf = got.typ; elem = arr.of; 0; }
-                else { let arr: TFix = got.typ; elem = arr.of; 0; };
+                if (got.typ.k == K.tarr) { let arr: TOf = got.typ; elem = arr.of; }
+                else { let arr: TFix = got.typ; elem = arr.of; };
                 tc_res(elem, st)
             } else if (got.typ.k == K.tmap) {
                 // m[k]: the key must match K; a read is ALWAYS optional --
@@ -2112,8 +2083,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 st = ri.st;
                 st = expect_type(st, ri.typ, type_node({ k: K.tlong }), "array index", index.line, index.col);
                 let elem: Type = t_unk();
-                if (br.typ.k == K.tarr) { let arr: TOf = br.typ; elem = arr.of; 0; }
-                else { let arr: TFix = br.typ; elem = arr.of; 0; };
+                if (br.typ.k == K.tarr) { let arr: TOf = br.typ; elem = arr.of; }
+                else { let arr: TFix = br.typ; elem = arr.of; };
                 tc_res(elem, st)
             } else if (br.typ.k == K.tmap) {
                 let map: TMap = br.typ;
@@ -2146,15 +2117,13 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         st = sr.st;
         let slo: Node = slice.lo;
         let shi: Node = slice.hi;
-        if (slo.k == K.void) { 0; } else {
+        if (slo.k == K.void) { } else {
             let rl = typeof_expr(st, slo);
             st = expect_type(rl.st, rl.typ, type_node({ k: K.tlong }), "slice start", slice.line, slice.col);
-            0
         };
-        if (shi.k == K.void) { 0; } else {
+        if (shi.k == K.void) { } else {
             let rh = typeof_expr(st, shi);
             st = expect_type(rh.st, rh.typ, type_node({ k: K.tlong }), "slice end", slice.line, slice.col);
-            0
         };
         if (sr.typ.k == K.tarr) {
             let arr: TOf = sr.typ;
@@ -2238,8 +2207,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 st = ix.st;
                 st = expect_type(st, ix.typ, type_node({ k: K.tlong }), "array index", assign.line, assign.col);
                 let elem: Type = t_unk();
-                if (got.typ.k == K.tarr) { let arr: TOf = got.typ; elem = arr.of; 0; }
-                else { let arr: TFix = got.typ; elem = arr.of; 0; };
+                if (got.typ.k == K.tarr) { let arr: TOf = got.typ; elem = arr.of; }
+                else { let arr: TFix = got.typ; elem = arr.of; };
                 let v = typeof_want(st, assign.v, elem);
                 st = v.st;
                 st = expect_type(st, v.typ, elem, "array element", assign.line, assign.col);
@@ -2271,8 +2240,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 st = ix.st;
                 st = expect_type(st, ix.typ, type_node({ k: K.tlong }), "array index", assign.line, assign.col);
                 let elem: Type = t_unk();
-                if (br.typ.k == K.tarr) { let arr: TOf = br.typ; elem = arr.of; 0; }
-                else { let arr: TFix = br.typ; elem = arr.of; 0; };
+                if (br.typ.k == K.tarr) { let arr: TOf = br.typ; elem = arr.of; }
+                else { let arr: TFix = br.typ; elem = arr.of; };
                 let v = typeof_want(st, assign.v, elem);
                 st = v.st;
                 st = expect_type(st, v.typ, elem, "array element", assign.line, assign.col);
@@ -2341,13 +2310,11 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                     // error (a float/byte/record there leaves the element type
                     // poison, which still unifies quietly downstream).
                     if (elt.k == K.tunk) {
-                        if (r.typ.k == K.tlong) { elt = r.typ; 0; } else { 0; };
-                        if (r.typ.k == K.tbool) { elt = r.typ; 0; } else { 0; };
-                        if (r.typ.k == K.tstr) { elt = r.typ; 0; } else { 0; };
-                        0
+                        if (r.typ.k == K.tlong) { elt = r.typ; } else { };
+                        if (r.typ.k == K.tbool) { elt = r.typ; } else { };
+                        if (r.typ.k == K.tstr) { elt = r.typ; } else { };
                     } else {
                         st = expect_type(st, r.typ, elt, "array element", array.line, array.col);
-                        0
                     };
                     i = i + 1;
                 };
@@ -2385,29 +2352,20 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
     let tu = unfold(t);
     let tk: long = tu.k;
     if (tk == K.tunk) {
-        // an alias that stands for no type (rename.y reported it)
-        0
     } else if (tk != K.trec && tk != K.tpat) {
         st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
-        0
     } else if (sk == K.tunk) {
-        0
     } else if (sk == K.trec || sk == K.tunion) {
         if (tk == K.tpat) {
             let nt = narrow_type(s, t);
             if (nt.k == K.tunk) {
                 st = fail(st, "no record in " + tstr(s) + " has the fields of pattern " + tstr(t), node.line, node.col);
-                0
-            } else { 0 };
-            0
+            } else { };
         } else if (!pattern_fits(s, t)) {
             st = fail(st, "pattern type " + tstr(t) + " can never match " + tstr(s), node.line, node.col);
-            0
-        } else { 0 };
-        0
+        } else { };
     } else {
         st = fail(st, "cannot match a record pattern against " + tstr(s), node.line, node.col);
-        0
     };
     tc_res(type_node({ k: K.tbool }), st)
 };
@@ -2449,27 +2407,22 @@ def typeof_matchend(st: TcSt, node: MatchEnd) -> TcRes {
     let sk: long = s.k;
     let cover: [Type] = node.cover;
     let hint = "";
-    if (node.vals > 0) { hint = "; value patterns match only the values they name and cover no type"; 0; };
+    if (node.vals > 0) { hint = "; value patterns match only the values they name and cover no type"; };
     if (sk == K.tunk) {
-        0
     } else if (sk == K.tunion) {
         let ms = members(s);
         let missing: [str] = [];
         let i = 0;
         while (i < len(ms)) {
-            if (!covered(ms[i], cover)) { missing += tstr(ms[i]); 0 } else { 0 };
+            if (!covered(ms[i], cover)) { missing += tstr(ms[i]); } else { };
             i = i + 1;
         };
         if (len(missing) > 0) {
             st = fail(st, "non-exhaustive match: nothing matches " + join(missing, ", ") + " (add an arm or '_'" + hint + ")", node.line, node.col);
-            0
-        } else { 0 };
-        0
+        } else { };
     } else if (sk == K.trec && covered(s, cover)) {
-        0
     } else {
         st = fail(st, "non-exhaustive match on " + tstr(s) + " (add a '_' arm" + hint + ")", node.line, node.col);
-        0
     };
     tc_res(t_unk(), st)
 };
@@ -2482,9 +2435,8 @@ def covered(m: Type, cover: [Type]) -> bool {
         let c = unfold(cover[i]);
         let ck: long = c.k;
         if (ck == K.trec) {
-            if (teq(m, c)) { any = true; 0 } else { 0 };
-            0
-        } else { 0 };
+            if (teq(m, c)) { any = true; } else { };
+        } else { };
         i = i + 1;
     };
     any
@@ -2496,15 +2448,13 @@ def typeof_sliceassign(st: TcSt, node: SliceAssign) -> TcRes {
     st = ar.st;
     let slo = node.lo;
     let shi = node.hi;
-    if (slo.k == K.void) { 0; } else {
+    if (slo.k == K.void) { } else {
         let rl = typeof_expr(st, slo);
         st = expect_type(rl.st, rl.typ, { k: K.tlong }, "slice start", node.line, node.col);
-        0
     };
-    if (shi.k == K.void) { 0; } else {
+    if (shi.k == K.void) { } else {
         let rh = typeof_expr(st, shi);
         st = expect_type(rh.st, rh.typ, { k: K.tlong }, "slice end", node.line, node.col);
-        0
     };
     let vr = typeof_expr(st, node.v);
     st = vr.st;
@@ -2516,30 +2466,22 @@ def typeof_sliceassign(st: TcSt, node: SliceAssign) -> TcRes {
         if (vkk == K.tarr || vkk == K.tarrfix) {
             let ae: Type = t_unk();
             let ve: Type = t_unk();
-            if (akk == K.tarr) { let arr: TOf = at; ae = arr.of; 0; }
-            else { let arr: TFix = at; ae = arr.of; 0; };
-            if (vkk == K.tarr) { let arr: TOf = vt; ve = arr.of; 0; }
-            else { let arr: TFix = vt; ve = arr.of; 0; };
-            if (teq(ve, ae)) { 0 } else {
+            if (akk == K.tarr) { let arr: TOf = at; ae = arr.of; }
+            else { let arr: TFix = at; ae = arr.of; };
+            if (vkk == K.tarr) { let arr: TOf = vt; ve = arr.of; }
+            else { let arr: TFix = vt; ve = arr.of; };
+            if (teq(ve, ae)) { } else {
                 st = fail(st, "slice assignment: cannot store " + tstr(vt) + " into " + tstr(at), node.line, node.col);
-                0
             };
-            0
         } else if (vkk == K.tunk) {
-            0
         } else {
             st = fail(st, "slice assignment needs an array on the right, got " + tstr(vt), node.line, node.col);
-            0
         };
-        0
     } else if (akk == K.tstr) {
         st = fail(st, "cannot assign to a slice of str (strings are immutable)", node.line, node.col);
-        0
     } else if (akk == K.tunk) {
-        0
     } else {
         st = fail(st, "cannot slice-assign " + tstr(at) + " (only arrays)", node.line, node.col);
-        0
     };
     tc_res(type_node({ k: K.tvoid }), st)
 };
@@ -2565,10 +2507,8 @@ def typeof_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
             if (fn == dkey) {
                 found = true;
                 ftyp = f.typ;
-                0
             };
             j = j + 1;
-            0
         };
         if (found) {
             tc_res(ftyp, st)
@@ -2611,7 +2551,7 @@ def typeof_prop(st: TcSt, t: Type, key: str, line: long, col: long) -> TcRes {
         tc_res(type_node({ k: K.tptr, to: arr.of }), st)
     } else {
         let have = "'.length' and '.ptr'";
-        if (t.k == K.tstr) { have = "'.length'"; 0; };
+        if (t.k == K.tstr) { have = "'.length'"; };
         st = fail(st, tstr(t) + " has no property '" + key + "' (it has " + have + ")", line, col);
         tc_res(t_unk(), st)
     }
@@ -2687,7 +2627,7 @@ def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
     let what = "'str." + m + "'";
     if (sm.fn == "") {
         let hint = "";
-        if (m == "length") { hint = " ('.length' is a property: no parentheses)"; 0; };
+        if (m == "length") { hint = " ('.length' is a property: no parentheses)"; };
         st = fail(st, "str has no method '" + m + "'" + hint, node.line, node.col);
         let i = 0;
         while (i < na) {
@@ -2698,7 +2638,7 @@ def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
         tc_res(t_unk(), st)
     } else if (na < sm.nreq || na > np) {
         let want = tostring(np);
-        if (sm.nreq < np) { want = tostring(sm.nreq) + " or " + tostring(np); 0; };
+        if (sm.nreq < np) { want = tostring(sm.nreq) + " or " + tostring(np); };
         st = fail(st, what + " takes " + want + " args, got " + tostring(na), node.line, node.col);
         let i = 0;
         while (i < na) {
@@ -2715,11 +2655,9 @@ def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
             let ak: long = r.typ.k;
             if (ak == K.tvoid) {
                 st = fail(st, what + " arg " + tostring(i) + ": cannot pass a void value", node.line, node.col);
-                0
             } else if (!sm_accepts(r.typ, ps[i])) {
                 st = fail(st, what + " arg " + tostring(i) + ": expected " + tstr(ps[i]) + ", got " + tstr(r.typ), node.line, node.col);
-                0
-            } else { 0; };
+            } else { };
             i = i + 1;
         };
         tc_res(sm.ret, st)
@@ -2861,8 +2799,8 @@ def opassign_check(st: TcSt, node: OpAssign, tt: Type, vt: Type) -> TcRes {
                     // the element types must match (homogeneity).
                     let target: TOf = tt;
                     let value: Type = t_unk();
-                    if (vt.k == K.tarr) { let arr: TOf = vt; value = arr.of; 0; }
-                    else { let fixed: TFix = vt; value = fixed.of; 0; };
+                    if (vt.k == K.tarr) { let arr: TOf = vt; value = arr.of; }
+                    else { let fixed: TFix = vt; value = fixed.of; };
                     st = expect_type(st, value, target.of, "'+=' appended elements", node.line, node.col);
                     tc_res(tt, st)
                 }
@@ -2916,48 +2854,43 @@ def fmt_spec(spec: str) -> FmtSpec {
         fill = byte_at(spec, 0);
         align = byte_at(spec, 1);
         i = 2;
-        0
     } else if (n >= 1 && fmt_align(byte_at(spec, 0))) {
         align = byte_at(spec, 0);
         i = 1;
-        0
-    } else { 0; };
+    } else { };
     let sign = 0;
     if (i < n && (byte_at(spec, i) == 43 || byte_at(spec, i) == 45 || byte_at(spec, i) == 32)) {
         sign = byte_at(spec, i);
         i = i + 1;
-        0
-    } else { 0; };
+    } else { };
     let alt = false;
-    if (i < n && byte_at(spec, i) == 35) { alt = true; i = i + 1; 0; } else { 0; };
+    if (i < n && byte_at(spec, i) == 35) { alt = true; i = i + 1; } else { };
     let zero = false;
-    if (i < n && byte_at(spec, i) == 48) { zero = true; i = i + 1; 0; } else { 0; };
+    if (i < n && byte_at(spec, i) == 48) { zero = true; i = i + 1; } else { };
     let ws = i;
-    while (i < n && fmt_digit(byte_at(spec, i))) { i = i + 1; 0; };
+    while (i < n && fmt_digit(byte_at(spec, i))) { i = i + 1; };
     let width = 0 - 1;
-    if (i > ws) { width = fmt_number(spec, ws, i); 0; } else { 0; };
+    if (i > ws) { width = fmt_number(spec, ws, i); } else { };
     let grp = 0;
     if (i < n && (byte_at(spec, i) == 44 || byte_at(spec, i) == 95)) {
         grp = byte_at(spec, i);
         i = i + 1;
-        0
-    } else { 0; };
+    } else { };
     let err = "";
     let prec = 0 - 1;
     if (i < n && byte_at(spec, i) == 46) {
         i = i + 1;
         let ps = i;
-        while (i < n && fmt_digit(byte_at(spec, i))) { i = i + 1; 0; };
-        if (i > ps) { prec = fmt_number(spec, ps, i); 0; } else { err = "'.' without a precision"; 0; };
-        0
-    } else { 0; };
+        while (i < n && fmt_digit(byte_at(spec, i))) { i = i + 1; };
+        if (i > ps) { prec = fmt_number(spec, ps, i); } else { err = "'.' without a precision"; };
+    } else { };
     let ty = 0;
-    if (i < n && fmt_type(byte_at(spec, i))) { ty = byte_at(spec, i); i = i + 1; 0; } else { 0; };
-    if (err != "") { 0; }
-    else if (i == n - 1) { err = "unknown type '" + spec[i:n] + "'"; 0; }
-    else if (i < n) { err = "cannot read '" + spec[i:n] + "'"; 0; }
-    else if (width > 99999 || prec > 99999) { err = "width and precision stop at 99999"; 0; }
-    else { 0; };
+    if (i < n && fmt_type(byte_at(spec, i))) { ty = byte_at(spec, i); i = i + 1; } else { };
+    if (err != "") { }
+    else if (i == n - 1) { err = "unknown type '" + spec[i:n] + "'"; }
+    else if (i < n) { err = "cannot read '" + spec[i:n] + "'"; }
+    else if (width > 99999 || prec > 99999) { err = "width and precision stop at 99999"; }
+    else { };
     { err: err, fill: fill, align: align, sign: sign, alt: alt, zero: zero, width: width, grp: grp, prec: prec, ty: ty }
 };
 
@@ -2981,9 +2914,8 @@ def fmt_number(spec: str, a: long, b: long) -> long {
     let v = 0;
     let i = a;
     while (i < b) {
-        if (v < 1000000) { v = v * 10 + byte_at(spec, i) - c'0'; 0; } else { 0; };
+        if (v < 1000000) { v = v * 10 + byte_at(spec, i) - c'0'; } else { };
         i = i + 1;
-        0
     };
     v
 };
@@ -3036,12 +2968,10 @@ def typeof_fmt(st: TcSt, node: Call) -> TcRes {
     let spec: str = specnode.v;
     if (!(t.k == K.tlong || t.k == K.tbyte || t.k == K.tbool || t.k == K.tstr || t.k == K.tfloat || t.k == K.tunk || t.k == K.tarr || t.k == K.tarrfix || t.k == K.trec || t.k == K.tmap || t.k == K.topt || t.k == K.tunion)) {
         st = fail(st, "an f-string field takes long/bool/float/str/array/record/map/option, got " + tstr(t), node.line, node.col);
-        0
     } else if (spec != "") {
         let e = fmt_check(fmt_spec(spec), fmt_kind(t), tstr(t));
-        if (e != "") { st = fail(st, "format spec '" + spec + "': " + e, node.line, node.col); 0; } else { 0; };
-        0
-    } else { 0; };
+        if (e != "") { st = fail(st, "format spec '" + spec + "': " + e, node.line, node.col); } else { };
+    } else { };
     tc_res(type_node({ k: K.tstr }), st)
 };
 
@@ -3068,15 +2998,11 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
             if (crt.typ.k == K.tstr) {
                 smeth = true;
                 cf = { typ: t_unk(), st: crt.st };
-                0
             } else {
                 cf = typeof_field(crt.st, crt.typ, dot.key, dot.line, dot.col);
-                0
             };
-            0
         } else {
             cf = typeof_expr(st, ccal);
-            0
         };
         st = cf.st;
         if (smeth) {
@@ -3405,8 +3331,7 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                 st = r1.st;
                 if (r0.typ.k != K.tarr && r0.typ.k != K.tunk) {
                     st = fail(st, "join needs an array, got " + tstr(r0.typ), node.line, node.col);
-                    0
-                } else { 0; };
+                } else { };
                 st = expect_type(st, r1.typ, { k: K.tstr }, "join delimiter", node.line, node.col);
                 tc_res(type_node({ k: K.tstr }), st)
             }
@@ -3541,14 +3466,11 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                 let fbw: Type = type_node({ k: K.tarr, of: type_node({ k: K.tbyte }) });
                 if (fbt.k == K.tarrfix) {
                     let fixed: TFix = fbt;
-                    if (tcompat(type_node({ k: K.tarr, of: fixed.of }), fbw)) { 0; } else {
+                    if (tcompat(type_node({ k: K.tarr, of: fixed.of }), fbw)) { } else {
                         st = fail(st, "from_bytes argument: expected [byte] or [byte; N], got " + tstr(fbt), node.line, node.col);
-                        0
                     };
-                    0
                 } else {
                     st = expect_type(st, fbt, fbw, "from_bytes argument", node.line, node.col);
-                    0
                 };
                 tc_res(type_node({ k: K.tstr }), st)
             }
@@ -3581,8 +3503,7 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                     st = r.st;
                     if (r.typ.k != K.tlong && r.typ.k != K.tbool && r.typ.k != K.tstr && r.typ.k != K.tptr && r.typ.k != K.tunk) {
                         st = fail(st, "syscall arg " + tostring(i) + " must be long/bool/str/*T, got " + tstr(r.typ), node.line, node.col);
-                        0
-                    } else { 0; };
+                    } else { };
                     i = i + 1;
                 };
                 tc_res(type_node({ k: K.tlong }), st)
@@ -3594,10 +3515,8 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
             if (name == "self") {
                 if (st.self.k == K.tnone || st.self.k == K.tunk) {
                     fterr = "'self' outside of a function";
-                    0
                 } else {
                     ft = st.self;
-                    0
                 };
             } else {
                 let got = lookup(st.bindings, name);
@@ -3605,17 +3524,13 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                     fterr = "undefined function '" + disp(name) + "'";
                     if (name == "substr") {
                         fterr = fterr + " (slice instead: s[start:end])";
-                        0
-                    } else { 0; };
-                    0
+                    } else { };
                 } else if (got.typ.k == K.tfunc) {
                     // Either a hoisted `def` (kind "func") or a local/param
                     // holding a closure value — both are callable.
                     ft = got.typ;
-                    0
                 } else {
                     fterr = "'" + disp(name) + "' is not a function";
-                    0
                 };
             };
             if (fterr != "") {
@@ -3657,10 +3572,8 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                             // void is not a value (an unannotated param
                             // would otherwise accept it quietly)
                             st = fail(st, "'" + disp(name) + "' arg " + tostring(i) + ": cannot pass a void value", node.line, node.col);
-                            0
                         } else {
                             st = expect_arg(st, r.typ, cargs_ft[i], cargs[i], "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
-                            0
                         };
                         i = i + 1;
                     };
@@ -3693,7 +3606,7 @@ def typeof_block_want(st: TcSt, node: Block, want: Type) -> TcRes {
     let i = 0;
     while (i < len(bstmts)) {
         let w: Type = type_node({ k: K.tnone });
-        if (i == len(bstmts) - 1) { w = want; 0; } else { 0; };
+        if (i == len(bstmts) - 1) { w = want; } else { };
         let rr = typeof_want(st, bstmts[i], w);
         st = rr.st;
         last = rr.typ;
@@ -3748,10 +3661,8 @@ def lit_target(node: RecLit, want: Type) -> Type {
     let wk: long = w.k;
     let found: Type = type_node({ k: K.tnone });
     if (str_in(keys, "...")) {
-        0
     } else if (wk == K.trec) {
-        if (lit_fits(w, keys)) { found = want; 0 } else { 0 };
-        0
+        if (lit_fits(w, keys)) { found = want; } else { };
     } else if (wk == K.tunion) {
         let ps = union_parts(w);
         let exact: Type = type_node({ k: K.tnone });
@@ -3766,8 +3677,7 @@ def lit_target(node: RecLit, want: Type) -> Type {
             };
         };
         if (nexact == 1) { found = exact; } else if (nexact == 0 && nfit == 1) { found = fit; };
-        0
-    } else { 0 };
+    } else { };
     found
 };
 
@@ -3822,8 +3732,8 @@ def same_names(t: Type, keys: [str]) -> bool {
         let i = 0;
         while (i < len(keys)) {
             let key: str = keys[i];
-            if (!str_in(distinct, key)) { distinct += key; 0 } else { 0 };
-            if (field_pos(fs, key, 0) < 0) { ok = false; 0 } else { 0 };
+            if (!str_in(distinct, key)) { distinct += key; } else { };
+            if (field_pos(fs, key, 0) < 0) { ok = false; } else { };
             i = i + 1;
         };
         ok && len(distinct) == len(fs)
@@ -3870,14 +3780,13 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
         // Same for the `[v; n]` array literal (binds n frame slots).
         // A const binds as kind "const": const_check refuses to rebind it.
         let bk = "local";
-        if (node.kind == "const") { bk = "const"; 0; };
+        if (node.kind == "const") { bk = "const"; };
         if (node.v.k == K.func) {
             let fr = typeof_def(st, node.name, node.v, node.line, node.col);
             st = fr.st;
             if (node.typ.k != K.tnone) {
                 st = expect_type(st, fr.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
-                0
-            } else { 0; };
+            } else { };
             st = st_bind(st, node.name, fr.typ, "func");
             { typ: fr.typ, st: st }
         } else if (node.v.k == K.arrrep) {
@@ -3890,14 +3799,11 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                 let at = r.typ;
                 if (node.typ.k != K.tnone) {
                     if (arr_lit_adopts(r.typ, node.typ)) {
-                        0
                     } else {
                         st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
-                        0
                     };
                     at = node.typ;
-                    0
-                } else { 0; };
+                } else { };
                 st = st_bind(st, node.name, at, bk);
                 { typ: at, st: st }
             }
@@ -3909,19 +3815,16 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
             if (node.typ.k != K.tnone) {
                 if (!is_value_type(node.typ)) {
                     st = fail(st, "annotation '" + tstr(node.typ) + "' is not a native value type", node.line, node.col);
-                    0
                 } else if (vk == K.array) {
                     // An array LITERAL adopts the annotated element type:
                     // `let b: [byte] = [104, 105]` packs those elements
                     // into one byte each. Only literals — assigning an
                     // existing [long] to a [byte] binding would reinterpret
                     // eight-byte slots as one, so that still errors.
-                    if (arr_lit_adopts(r.typ, node.typ)) { 0; } else {
+                    if (arr_lit_adopts(r.typ, node.typ)) { } else {
                         st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
-                        0;
                     };
                     t = node.typ;
-                    0
                 } else if (vk == K.rec) {
                     let rec: RecLit = node.v;
                     if (len(rec.keys) == 0 && node.typ.k == K.tmap) {
@@ -3929,40 +3832,31 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                         // the map (the emitter lowers it to the {keys, vals,
                         // boxes} shape).
                         t = node.typ;
-                        0
                     } else {
                         st = expect_cast(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                         t = node.typ;
-                        0
                     };
                 } else {
                     st = expect_cast(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                     t = node.typ;
-                    0
                 };
-                0
-            } else { 0; };
+            } else { };
             // NOTE: tnone/tname (unannotated initializer shapes) unify
             // quietly (tcompat law) — the missing annotation errors once at
             // its own site, not again at every enclosing let.
             if (t.k == K.tnone) {
                 t = t_unk();
-                0
             } else if (t.k == K.tname) {
                 t = t_unk();
-                0
             } else if (t.k == K.tvoid) {
                 st = fail(st, "cannot bind a void value to '" + disp(node.name) + "'", node.line, node.col);
                 t = t_unk();
-                0
             } else if (!is_value_type(t)) {
                 st = fail(st, "'" + tstr(t) + "' cannot be bound to a variable", node.line, node.col);
                 t = t_unk();
-                0
             } else if (has_free(t)) {
                 st = fail(st, "the type of '" + disp(node.name) + "' is not fully known (annotate it)", node.line, node.col);
-                0
-            } else { 0; };
+            } else { };
             st = st_bind(st, node.name, t, bk);
             { typ: t, st: st }
         }
@@ -4048,12 +3942,10 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 // No value of unknown type: a parameter says its type.
                 st = fail(st, "parameter '" + disp(fparams[i]) + "' has no type (annotate it)", line, col);
                 pt = t_unk();
-                0
             } else if (!is_value_type(pt) && pt.k != K.tfunc) {
                 st = fail(st, "parameter '" + disp(fparams[i]) + "' has unpassable type " + tstr(pt) + " (a void value has no representation, and a type pattern cannot be passed by value)", line, col);
                 ok = false;
-                0
-            } else { 0; };
+            } else { };
             args += pt;
             i = i + 1;
         };
@@ -4071,8 +3963,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             ret_inferred = true;
             ret = t_pend_self();
             body_ret = type_node({ k: K.tinfer, rets: rets });
-            0
-        } else { 0; };
+        } else { };
         let ft: Type = type_node({ k: K.tfunc, args: args, ret: ret });
         // bind early so recursion via `self`/name works
         st = st_bind(st, name, ft, "func");
@@ -4100,8 +3991,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             let br = b.typ;
             if (br.k == K.tnone) {
                 br = t_unk();
-                0
-            } else { 0; };
+            } else { };
             // A trailing value of unknown type -- typically a self call,
             // whose type is the one being inferred -- leaves the type to the
             // first `return` that knows its own.
@@ -4113,8 +4003,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 if (br.k == K.tunk && rt.k != K.tunk && rt.k != K.tnone) {
                     br = rt;
                     rsrc = "the first 'return'";
-                    0
-                } else { 0; };
+                } else { };
                 ri = ri + 1;
             };
             // Every `return` must conform to it, as to a written type.
@@ -4123,15 +4012,13 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 let rn = rets[ri];
                 if (!tcompat(rn.typ, br)) {
                     st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ")", rn.line, rn.col);
-                    0
-                } else { 0; };
+                } else { };
                 ri = ri + 1;
             };
             let pend: TPend = ret;
             if ((has_free(br) || (pend.used && br.k == K.tunk)) && len(st.errors) == nerr) {
                 st = fail(st, "the return type of '" + disp(name) + "' is not fully known (annotate it)", line, col);
                 br = t_unk();
-                0
             } else if (pend.used && br.k != K.tunk) {
                 // The body calls the def itself, so it was checked with
                 // that call's type unknown: check it again, the call now
@@ -4152,29 +4039,23 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                     let rn2 = rets2[ri2];
                     if (!tcompat(rn2.typ, br)) {
                         st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ")", rn2.line, rn2.col);
-                        0
-                    } else { 0; };
+                    } else { };
                     ri2 = ri2 + 1;
                 };
-                0
-            } else { 0; };
+            } else { };
             ft = type_node({ k: K.tfunc, args: args, ret: br });
             st = st_bind(st, name, ft, "func");
             if (br.k != K.tunk) {
                 set_inferred_ret(func, br);
-                0
-            } else { 0; };
-            0
-        } else { 0; };
+            } else { };
+        } else { };
         if (!(ret_inferred)) {
             // `-> void` discards the body's tail value (no value returns)
             let rtk: long = ret.k;
-            if (rtk == K.tvoid) { 0; } else {
+            if (rtk == K.tvoid) { } else {
                 st = expect_cast(st, b.typ, ret, "'" + disp(name) + "' body", line, col);
-                0
             };
-            0
-        } else { 0; };
+        } else { };
         st = st_fdepth(st, saved_depth);
         st = st_self(st, saved_self);
         st = st_ret(st, saved_ret);
@@ -4213,15 +4094,12 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
             if (decl.kind == "def") {
                 let func: Func = decl.v;
                 defs += def_sig(decl.name, func);
-                0
             } else if (decl.v.k == K.func) {
                 // top-level let f = def... : also hoisted for mutual recursion
                 let func: Func = decl.v;
                 defs += def_sig(decl.name, func);
-                0
-            } else { 0; };
-            0
-        } else { 0; };
+            } else { };
+        } else { };
         i = i + 1;
     };
     // pass 2: check everything in order (depth 0 = top level)
@@ -4240,7 +4118,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
         // a package's global (its cell label, native.y arch_global_label)
         // is read-only to its importers
         let xk = "func";
-        if (xe.label.starts_with("yg_")) { xk = "const"; 0; } else { 0; };
+        if (xe.label.starts_with("yg_")) { xk = "const"; } else { };
         st = st_bind(st, xe.name, xe.typ, xk);
         x = x + 1;
     };

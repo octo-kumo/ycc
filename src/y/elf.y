@@ -79,9 +79,9 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
     out = push_le16(out, 64);
     out = push_le16(out, 56);
     let phnum = 1;
-    if (bss_len > 0) { phnum = 2; 0; } else { 0; };
+    if (bss_len > 0) { phnum = 2; } else { };
     out = push_le16(out, phnum);
-    if (dbg.shnum > 0) { out = push_le16(out, 64); 0; } else { out = push_le16(out, 0); 0; };
+    if (dbg.shnum > 0) { out = push_le16(out, 64); } else { out = push_le16(out, 0); };
     out = push_le16(out, dbg.shnum);
     out = push_le16(out, dbg.shstrndx);
     // PHDR: PT_LOAD, R+E
@@ -106,8 +106,7 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
         out = push_le64(out, dbg.bss_fsz);
         out = push_le64(out, bss_len);
         out = push_le64(out, 4096);
-        0
-    } else { 0; };
+    } else { };
     out = push_bytes(out, code);
     let p = 0;
     while (p < codepad) {
@@ -153,7 +152,6 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         if (bss_len > 0) {
             bss_idx = 3;
             symtab_idx = 4;
-            0;
         };
         let strtab: [byte] = [0];
         let symtab: [byte] = [];
@@ -164,14 +162,12 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
                 symtab = push_sym(symtab, len(strtab), sy, bss_idx, base + code_off, bss_addr, 0);
                 strtab = push_cstr(strtab, sy.name);
                 nlocal = nlocal + 1;
-                0;
             };
         };
         foreach (sy in syms) {
             if (sy.name == "_start") {
                 symtab = push_sym(symtab, len(strtab), sy, bss_idx, base + code_off, bss_addr, 1);
                 strtab = push_cstr(strtab, sy.name);
-                0;
             };
         };
         // section names, each at its offset in .shstrtab
@@ -183,7 +179,6 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         let n_bss = len(shstr);
         if (bss_len > 0) {
             shstr = push_cstr(shstr, ".bss");
-            0;
         };
         let n_sym = len(shstr);
         shstr = push_cstr(shstr, ".symtab");
@@ -195,7 +190,6 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         foreach (ds in dsecs) {
             dnames += len(shstr);
             shstr = push_cstr(shstr, ds.name);
-            0;
         };
         let blob: [byte] = [];
         let bss_foff = 0;
@@ -204,12 +198,11 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         if (bss_len > 0) {
             bss_foff = total;
             let trail = total % 4096;
-            if (trail != 0) { bss_foff = total + 4096 - trail; 0; };
+            if (trail != 0) { bss_foff = total + 4096 - trail; };
             bss_fsz = 8;
-            if (bss_len < 8) { bss_fsz = bss_len; 0; };
+            if (bss_len < 8) { bss_fsz = bss_len; };
             blob = push_zeros(blob, bss_foff + bss_fsz - total);
             symtab_off = bss_foff + bss_fsz;
-            0;
         };
         let strtab_off = symtab_off + len(symtab);
         let shstr_off = strtab_off + len(strtab);
@@ -220,7 +213,6 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         foreach (ds in dsecs) {
             doffs += total + len(blob);
             blob += ds.data;
-            0;
         };
         let pad = (8 - len(blob) % 8) % 8;
         blob = push_zeros(blob, pad);
@@ -231,7 +223,6 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         blob = push_shdr(blob, n_ro, 1, 2, base + ro_off, ro_off, ro_len, 0, 0, 1, 0);
         if (bss_len > 0) {
             blob = push_shdr(blob, n_bss, 8, 3, bss_addr, bss_foff, bss_len, 0, 0, 8, 0);
-            0;
         };
         blob = push_shdr(blob, n_sym, 2, 0, 0, symtab_off, len(symtab), symtab_idx + 1, nlocal, 8, 24);
         blob = push_shdr(blob, n_str, 3, 0, 0, strtab_off, len(strtab), 0, 0, 1, 0);
@@ -256,13 +247,11 @@ def push_sym(out: [byte], name_off: long, sy: ElfSym, bss_idx: long, text_addr: 
         out += 0;
         out = push_le16(out, 1);
         out = push_le64(out, text_addr + sy.off);
-        0;
     } else {
         out += elfenc.byte_of(bind * 16 + 1, 0);
         out += 0;
         out = push_le16(out, bss_idx);
         out = push_le64(out, bss_addr + sy.off);
-        0;
     };
     out = push_le64(out, sy.size);
     out

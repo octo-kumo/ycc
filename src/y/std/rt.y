@@ -128,10 +128,8 @@ def y_str_tonum(s: str) -> long {
         if (byte_at(s, 0) == 45) {
             neg = true;
             i = 1;
-            0
-        } else { 0; };
-        0
-    } else { 0; };
+        } else { };
+    } else { };
     let acc = 0;
     let go = true;
     while (go) {
@@ -141,13 +139,9 @@ def y_str_tonum(s: str) -> long {
                 if (c <= 57) {
                     acc = acc * 10 + (c - 48);
                     i = i + 1;
-                    0
-                } else { go = false; 0; };
-                0
-            } else { go = false; 0; };
-            0
-        } else { go = false; 0; };
-        0
+                } else { go = false; };
+            } else { go = false; };
+        } else { go = false; };
     };
     if (neg) { 0 - acc } else { acc }
 };
@@ -169,22 +163,16 @@ def y_str_lastidx(hay: str, needle: str) -> long {
                         let j = 0;
                         let ok = true;
                         while (j < m) {
-                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };
+                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; } else { };
                             j = j + 1;
-                            0
                         };
-                        if (ok) { found = i; 0; } else { 0; };
-                        0
-                    } else { go = false; 0; };
+                        if (ok) { found = i; } else { };
+                    } else { go = false; };
                     i = i - 1;
-                    0
-                } else { go = false; 0; };
-                0
+                } else { go = false; };
             };
-            0
-        } else { 0; };
-        0
-    } else { 0; };
+        } else { };
+    } else { };
     found
 };
 
@@ -192,12 +180,11 @@ def y_str_lastidx(hay: str, needle: str) -> long {
 def y_range(n: long) -> [long] {
     let out: [long] = [];
     let m = n;
-    if (m < 0) { m = 0; 0; } else { 0; };
+    if (m < 0) { m = 0; } else { };
     let i = 0;
     while (i < m) {
         out += i;
         i = i + 1;
-        0
     };
     out
 };
@@ -226,7 +213,7 @@ def y_wait_pid(pid: long) -> long {
 };
 def y_sleep(ms: long) -> long {
     let m = ms;
-    if (m < 0) { m = 0; 0; } else { 0; };
+    if (m < 0) { m = 0; } else { };
     let ts: [long; 2] = [0; 2];
     ts[0] = m / 1000;
     ts[1] = (m % 1000) * 1000000;
@@ -249,21 +236,18 @@ def y_bytes_repr(b: [byte]) -> str {
     let n = len(b);
     while (i < n) {
         let c = b[i];
-        if (c == 92) { out += bs + bs; 0 }
-        else if (c == 39) { out += bs + chr(39); 0 }
-        else if (c == 10) { out += bs + "n"; 0 }
-        else if (c == 13) { out += bs + "r"; 0 }
-        else if (c == 9) { out += bs + "t"; 0 }
+        if (c == 92) { out += bs + bs; }
+        else if (c == 39) { out += bs + chr(39); }
+        else if (c == 10) { out += bs + "n"; }
+        else if (c == 13) { out += bs + "r"; }
+        else if (c == 9) { out += bs + "t"; }
         else {
             if (c >= 32) {
-                if (c < 127) { out += chr(c); 0 }
-                else { out += y_hex_esc(c); 0 };
-                0
+                if (c < 127) { out += chr(c); }
+                else { out += y_hex_esc(c); };
             } else {
                 out += y_hex_esc(c);
-                0
             };
-            0
         };
         i = i + 1;
     };

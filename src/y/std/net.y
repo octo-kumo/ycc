@@ -129,12 +129,10 @@ def recv_str(fd: long, max: long) -> str? {
     let n = max;
     if (n > 4096) {
         n = 4096;
-        0
-    } else { 0; };
+    } else { };
     if (n < 0) {
         n = 0;
-        0
-    } else { 0; };
+    } else { };
     let k = syscall(0, fd, &buf[0], n);
     if (k <= 0) {
         none
@@ -144,7 +142,6 @@ def recv_str(fd: long, max: long) -> str? {
         while (i < k) {
             out += buf[i];
             i = i + 1;
-            0
         };
         some(from_bytes(out))
     }
@@ -467,16 +464,13 @@ def http_response(status: long, body: str) -> str {
     if (status == 404) {
         code = "404";
         text = "Not Found";
-        0
     } else if (status == 500) {
         code = "500";
         text = "Internal Server Error";
-        0
     } else if (status != 200) {
         code = tostring(status);
         text = "Status";
-        0
-    } else { 0; };
+    } else { };
     "HTTP/1.1 " + code + " " + text + "\r\nContent-Length: " + tostring(len(body))
         + "\r\nConnection: close\r\n\r\n" + body
 };
@@ -494,18 +488,13 @@ def http_read_head(fd: long) -> str {
             out = out + unwrap(chunk);
             if (index_of(out, "\r\n\r\n") >= 0) {
                 done = true;
-                0
-            } else { 0; };
+            } else { };
             if (len(out) > 65536) {
                 done = true;
-                0
-            } else { 0; };
-            0
+            } else { };
         } else {
             done = true;
-            0
         };
-        0
     };
     out
 };
@@ -535,12 +524,9 @@ def listen_tcp(port: long, handler: (long) -> long) -> long {
         if (c >= 0) {
             handler(c);
             close_fd(c);
-            0
         } else {
             go = false;
-            0
         };
-        0
     };
     0
 };
@@ -559,12 +545,9 @@ def listen_http(port: long, handler: (str) -> str) -> long {
         let c = accept_tcp(fd);
         if (c >= 0) {
             http_serve_one(c, handler);
-            0
         } else {
             go = false;
-            0
         };
-        0
     };
     0
 };

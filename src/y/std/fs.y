@@ -38,7 +38,7 @@ def open_flags(how: str) -> long {
 def open_file(path: str, how: str, mode: long = 420) -> long {
     let fl = open_flags(how);
     let m = mode;
-    if (m < 0) { m = 420; 0; } else { 0; };
+    if (m < 0) { m = 420; } else { };
     if (fl < 0) { -1 } else {
         let fd = syscall(257, fs_at_cwd(), path, fl + 524288, m);
         if (fd < 0) { -1 } else { fd }
@@ -52,13 +52,12 @@ def close_file(fd: long) -> bool { syscall(3, fd) == 0 };
 def read_some(fd: long, n: long) -> [byte] {
     let out: [byte] = [];
     let m = n;
-    if (m > 65536) { m = 65536; 0; } else { 0; };
+    if (m > 65536) { m = 65536; } else { };
     if (m > 0) {
         let buf: [byte; 65536] = [0; 65536];
         let k = syscall(0, fd, &buf[0], m);
-        if (k > 0) { out = buf[0:k]; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (k > 0) { out = buf[0:k]; } else { };
+    } else { };
     out
 };
 
@@ -69,7 +68,7 @@ def read_all_bytes(fd: long) -> [byte] {
     let go = true;
     while (go) {
         let k = syscall(0, fd, &chunk[0], 65536);
-        if (k <= 0) { go = false; 0; } else { out += chunk[0:k]; 0; };
+        if (k <= 0) { go = false; } else { out += chunk[0:k]; };
     };
     out
 };
@@ -83,7 +82,7 @@ def write_data(fd: long, b: [byte]) -> bool {
     let ok = true;
     while (ok && off < total) {
         let w = syscall(1, fd, &b[off], total - off);
-        if (w <= 0) { ok = false; 0; } else { off = off + w; 0; };
+        if (w <= 0) { ok = false; } else { off = off + w; };
     };
     ok
 };
@@ -195,10 +194,9 @@ def remove_all(path: str) -> bool {
         let ok = names != none;
         if (ok) {
             foreach (n in names!) {
-                if (!remove_all(path + "/" + n)) { ok = false; 0; } else { 0; };
+                if (!remove_all(path + "/" + n)) { ok = false; } else { };
             };
-            0
-        } else { 0; };
+        } else { };
         ok && remove_dir(path)
     } else { remove_file(path) }
 };
@@ -212,7 +210,7 @@ def make_dirs(path: str, mode: long = 493) -> bool {
     else {
         let cut = path.last_index_of("/");
         let up = true;
-        if (cut > 0) { up = make_dirs(path[0:cut], mode); 0; } else { 0; };
+        if (cut > 0) { up = make_dirs(path[0:cut], mode); } else { };
         up && (make_dir(path, mode) || is_dir(path))
     }
 };
@@ -226,17 +224,16 @@ def list_dir(path: str) -> [str]? {
         let go = true;
         while (go) {
             let k = syscall(217, fd, &buf[0], 32768);
-            if (k <= 0) { go = false; 0; } else {
+            if (k <= 0) { go = false; } else {
                 let off = 0;
                 while (off < k) {
                     let reclen = buf[off + 16] + 256 * buf[off + 17];
                     let e = off + 19;
                     while (buf[e] != 0) { e = e + 1; };
                     let name = from_bytes(buf[off + 19:e]);
-                    if (name != "." && name != "..") { names += name; 0; } else { 0; };
+                    if (name != "." && name != "..") { names += name; } else { };
                     off = off + reclen;
                 };
-                0
             };
         };
         close_file(fd);
@@ -254,8 +251,8 @@ def sort_names(xs: [str]) -> [str] {
         let i = 0;
         let j = 0;
         while (i < len(a) || j < len(b)) {
-            if (j >= len(b) || (i < len(a) && a[i] <= b[j])) { out += a[i]; i = i + 1; 0; }
-            else { out += b[j]; j = j + 1; 0; };
+            if (j >= len(b) || (i < len(a) && a[i] <= b[j])) { out += a[i]; i = i + 1; }
+            else { out += b[j]; j = j + 1; };
         };
         out
     }

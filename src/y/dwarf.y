@@ -20,7 +20,7 @@ import elf from "./elf.y";
 
 def dwarf_sections(files: [str], rows: [long], text_addr: long, text_len: long, comp_dir: str) -> [ElfSec] {
     let root = "?";
-    if (len(files) > 0) { root = files[0]; 0; } else { 0; };
+    if (len(files) > 0) { root = files[0]; } else { };
     let out: [ElfSec] = [];
     out += { name: ".debug_info", data: dw_info(root, comp_dir, text_addr, text_len) };
     out += { name: ".debug_abbrev", data: dw_abbrev() };
@@ -83,29 +83,23 @@ def dw_line(files: [str], rows: [long], text_addr: long, text_len: long) -> [byt
         if (cut < 0) {
             fdir += 0;
             fbase += fname;
-            0;
         } else {
             let d = "/";
-            if (cut > 0) { d = fname[0:cut]; 0; };
+            if (cut > 0) { d = fname[0:cut]; };
             let di = 0;
             for (let i = 0; i < len(dirs); i = i + 1) {
-                if (di == 0 && dirs[i] == d) { di = i + 1; 0; };
-                0;
+                if (di == 0 && dirs[i] == d) { di = i + 1; };
             };
             if (di == 0) {
                 dirs += d;
                 di = len(dirs);
-                0;
             };
             fdir += di;
             fbase += fname[cut + 1:len(fname)];
-            0;
         };
-        0;
     };
     foreach (d in dirs) {
         hdr = dw_cstr(hdr, d);
-        0;
     };
     hdr += 0;
     for (let i = 0; i < len(fbase); i = i + 1) {
@@ -113,7 +107,6 @@ def dw_line(files: [str], rows: [long], text_addr: long, text_len: long) -> [byt
         hdr = dw_uleb(hdr, fdir[i]);
         hdr += 0;
         hdr += 0;
-        0;
     };
     hdr += 0;
     let prog = dw_program(rows, text_addr, text_len);
@@ -146,14 +139,11 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
         if (n > 0 && keep[n - 3] == ro) {
             keep[n - 2] = rf;
             keep[n - 1] = rl;
-            0;
         } else if (n > 0 && keep[n - 2] == rf && keep[n - 1] == rl) {
-            0;
         } else {
             keep += ro;
             keep += rf;
             keep += rl;
-            0;
         };
         i = i + 3;
     };
@@ -177,7 +167,6 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
                 b += 4;
                 b = dw_uleb(b, f);
                 cur_file = f;
-                0;
             };
             let dl = l - cur_line;
             if (dl < -5 || dl > 8) {
@@ -185,7 +174,6 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
                 b += 3;
                 b = dw_sleb(b, dl);
                 dl = 0;
-                0;
             };
             let op = dl + 5 + 14 * (off - addr) + 13;
             if (op > 255) {
@@ -193,7 +181,6 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
                 b += 2;
                 b = dw_uleb(b, off - addr);
                 op = dl + 5 + 13;
-                0;
             };
             b += op;
             addr = off;
@@ -203,13 +190,11 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
         if (text_len > addr) {
             b += 2;
             b = dw_uleb(b, text_len - addr);
-            0;
         };
         // DW_LNE_end_sequence: extended opcode (0), 1 byte, 1
         b += 0;
         b += 1;
         b += 1;
-        0;
     };
     b
 };
@@ -237,10 +222,8 @@ def dw_uleb(out: [byte], v: long) -> [byte] {
         if (x == 0) {
             out += lo;
             more = false;
-            0;
         } else {
             out += lo + 128;
-            0;
         };
     };
     out
@@ -254,16 +237,14 @@ def dw_sleb(out: [byte], v: long) -> [byte] {
     let more = true;
     while (more) {
         let q = x / 128;
-        if (x < 0 && q * 128 != x) { q = q - 1; 0; };
+        if (x < 0 && q * 128 != x) { q = q - 1; };
         let lo = x - q * 128;
         x = q;
         if ((x == 0 && lo < 64) || (x == -1 && lo >= 64)) {
             out += lo;
             more = false;
-            0;
         } else {
             out += lo + 128;
-            0;
         };
     };
     out
@@ -272,7 +253,7 @@ def dw_sleb(out: [byte], v: long) -> [byte] {
 // A string's bytes and its NUL; "?" for an empty one (a lone NUL would
 // end the list it is in).
 def dw_cstr(out: [byte], s: str) -> [byte] {
-    if (len(s) == 0) { out += 63; 0; } else { out += bytes(s); 0; };
+    if (len(s) == 0) { out += 63; } else { out += bytes(s); };
     out += 0;
     out
 };

@@ -181,14 +181,12 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
         if (seen_any(seen, len(pn), px, 1)) {
             want_exec = true;
             want_prelude = true;
-            0
-        } else { 0; };
-        0
-    } else { 0; };
+        } else { };
+    } else { };
     let std: [str] = [];
-    if (want_prelude) { std += "prelude"; 0; } else { 0; };
-    if (want_exec) { std += "exec"; 0; } else { 0; };
-    if (seen_any(seen, px, len(seen), 2)) { std += "str"; 0; } else { 0; };
+    if (want_prelude) { std += "prelude"; } else { };
+    if (want_exec) { std += "exec"; } else { };
+    if (seen_any(seen, px, len(seen), 2)) { std += "str"; } else { };
     // The runtime library (std/rt.y) is linked into EVERY program:
     // generated code calls into it by fixed label (`call y_print_long`),
     // so there is no name to test for. Unused helpers cost nothing in the
@@ -216,7 +214,7 @@ def origin_at(o: Origin, ln: long, bare: bool) -> str {
         tostring(ln)
     } else {
         let k = ln;
-        if (k > n) { k = n; 0; } else { 0; };
+        if (k > n) { k = n; } else { };
         let fid = f[k - 1];
         let at = tostring(l[k - 1] + ln - k);
         if (fid == 0 && bare) { at } else { o.files[fid] + ":" + at }
@@ -283,7 +281,6 @@ def words_seen(code: str, names: [str]) -> [long] {
     while (k <= len(names)) {
         seen += 0;
         k = k + 1;
-        0
     };
     words_scan(code, 0, len(code), names, seen);
     seen
@@ -302,15 +299,12 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
         let c = byte_at(code, i);
         if (blank_byte(c)) {
             i = i + 1;
-            0
         } else if (c == c'/' && i + 1 < n && byte_at(code, i + 1) == c'/') {
             // `//`: up to the newline
             i = i + 2;
             while (i < n && byte_at(code, i) != c'\n') {
                 i = i + 1;
-                0
             };
-            0
         } else if (c == c'/' && i + 1 < n && byte_at(code, i + 1) == c'*') {
             // `/*`: past the first `*/`
             i = i + 2;
@@ -319,35 +313,28 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                 if (byte_at(code, i) == c'*' && i + 1 < n && byte_at(code, i + 1) == c'/') {
                     open = false;
                     i = i + 1;
-                    0
-                } else { 0; };
+                } else { };
                 i = i + 1;
-                0
             };
-            0
         } else {
             if (pend >= 0) {
-                if (c == c'(') { seen[pend] = 2; 0; } else { 0; };
+                if (c == c'(') { seen[pend] = 2; } else { };
                 pend = 0 - 1;
-                0
-            } else { 0; };
+            } else { };
             if (c == c'\"' || c == c'\'') {
                 // a string literal: past its closing quote
                 i = i + 1;
                 let open = true;
                 while (open && i < n) {
                     let d = byte_at(code, i);
-                    if (d == c'\\') { i = i + 2; 0; }
-                    else if (d == c) { open = false; i = i + 1; 0; }
-                    else { i = i + 1; 0; };
-                    0
+                    if (d == c'\\') { i = i + 2; }
+                    else if (d == c) { open = false; i = i + 1; }
+                    else { i = i + 1; };
                 };
-                0
             } else if (word_byte(c)) {
                 let j = i + 1;
                 while (j < n && word_byte(byte_at(code, j))) {
                     j = j + 1;
-                    0
                 };
                 if (j == i + 1 && c == c'f' && j < n && byte_at(code, j) == c'\"') {
                     // f"...": the fields, and whether one has a spec
@@ -356,36 +343,27 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                     let f = 0;
                     while (f < len(fs)) {
                         words_scan(code, fs[f], fs[f + 1], names, seen);
-                        if (fs[f + 3] > fs[f + 2]) { seen[len(names)] = 2; 0; } else { 0; };
+                        if (fs[f + 3] > fs[f + 2]) { seen[len(names)] = 2; } else { };
                         f = f + 4;
-                        0
                     };
                     i = w.end;
-                    0
                 } else {
                     let m = 0;
                     while (m < len(names)) {
                         let nm: str = names[m];
                         if (len(nm) == j - i && word_at(code, i, nm)) {
-                            if (seen[m] == 0) { seen[m] = 1; 0; } else { 0; };
-                            if (prev == c'.') { pend = m; 0; } else { 0; };
-                            0
-                        } else { 0; };
+                            if (seen[m] == 0) { seen[m] = 1; } else { };
+                            if (prev == c'.') { pend = m; } else { };
+                        } else { };
                         m = m + 1;
-                        0
                     };
                     i = j;
-                    0
                 };
-                0
             } else {
                 i = i + 1;
-                0
             };
             prev = c;
-            0
         };
-        0
     };
     0
 };
@@ -406,9 +384,8 @@ def word_at(code: str, i: long, nm: str) -> bool {
     let ok = true;
     let k = 0;
     while (ok && k < len(nm)) {
-        if (byte_at(code, i + k) != byte_at(nm, k)) { ok = false; 0; } else { 0; };
+        if (byte_at(code, i + k) != byte_at(nm, k)) { ok = false; } else { };
         k = k + 1;
-        0
     };
     ok
 };
@@ -418,9 +395,8 @@ def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
     let r = false;
     let i = lo;
     while (i < hi) {
-        if (seen[i] >= level) { r = true; 0; } else { 0; };
+        if (seen[i] >= level) { r = true; } else { };
         i = i + 1;
-        0
     };
     r
 };
@@ -436,13 +412,10 @@ def norm_path(p: str) -> str {
     while (i < len(parts)) {
         let seg = parts[i];
         if (seg == ".") {
-            0
         } else {
             out += seg;
-            0
         };
         i = i + 1;
-        0
     };
     join(out, "/")
 };
@@ -452,7 +425,7 @@ def seen_index(seen: [str], full: str) -> long {
     let at = -1;
     let i = 0;
     while (at < 0 && i < len(seen)) {
-        if (seen[i] == full) { at = i; 0; } else { 0; };
+        if (seen[i] == full) { at = i; } else { };
         i = i + 1;
     };
     at
@@ -465,10 +438,8 @@ def seen_has(seen: [str], full: str) -> bool {
         let e = seen[i];
         if (e == full) {
             found = true;
-            0
         };
         i = i + 1;
-        0
     };
     found
 };
@@ -511,25 +482,19 @@ def std_resolve(name: str, base_dir: str) -> str {
             cands += d + "/std/" + name + ".y";
             cands += d + "/src/y/std/" + name + ".y";
             cands += d + "/../src/y/std/" + name + ".y";
-            0
-        } else { 0; };
-        0
-    } else { 0; };
+        } else { };
+    } else { };
     let found = "";
     let i = 0;
     while (i < len(cands)) {
         if (len(found) == 0) {
             let c: str = cands[i];
             if (fs.read_file(c) == none) {
-                0
             } else {
                 found = norm_path(c);
-                0
             };
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
-        0
     };
     found
 };
@@ -569,70 +534,58 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                     let path_part = trim(rest[from_idx + 6:]);
                     if (path_part[len(path_part) - 1:] == ";") {
                         path_part = path_part[:len(path_part) - 1];
-                        0
                     };
                     path = path_part[1:len(path_part) - 1];
                     // NOTE: normalized (see norm_path): nested base dirs
                     // accumulate "/." segments, so raw joins of the same file
                     // differ per depth and seen-dedup would never hit.
                     full = norm_path(base_dir + "/" + path);
-                    if (path[:1] == "/") { full = norm_path(path); 0; };
-                    0
+                    if (path[:1] == "/") { full = norm_path(path); };
                 } else {
                     // bare `import name;`: an optional std module (net, ui,
                     // ...) or a project-local one — see std_resolve above.
                     name = trim(rest);
                     if (name[len(name) - 1:] == ";") {
                         name = trim(name[:len(name) - 1]);
-                        0
                     };
                     path = name;
                     if (name_in(res_pkgs, name)) {
                         // a dependency (ycc build): a unit of its own,
                         // linked -- strip_ns qualifies its names
                         is_pkg = true;
-                        if (!name_in(res_used, name)) { res_used += name; 0; } else { 0; };
-                        0
+                        if (!name_in(res_used, name)) { res_used += name; } else { };
                     } else {
                         full = std_resolve(name, base_dir);
-                        0
                     };
-                    0
                 };
                 if (is_pkg) {
-                    0
                 } else if (len(name) == 0) {
                     out_lines += line;
                     ofile += fid;
                     oline += i + 1;
-                    0
                 } else if (len(full) == 0) {
                     // Fatal: carrying on only reported the module's names as
                     // undefined further down, after this message scrolled by.
                     puts("error: cannot find module '" + name + "' (import name; looks next to the importer and in std/)\n");
                     exit(1);
-                    0
                 } else {
                     let mod_src = fs.read_file(full);
                     if (mod_src == none) {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
                         exit(1);
-                        0
                     } else if (seen_has(seen, full)) {
                         // NOTE: already spliced (see native_resolve note):
                         // record the namespace name (strip_ns needs it,
                         // unless the file is a module with its own scope)
                         // but do NOT splice the text a second time.
-                        if (smods[seen_index(seen, full)] == "") { imports += name; 0; } else { 0; };
-                        0
+                        if (smods[seen_index(seen, full)] == "") { imports += name; } else { };
                     } else {
                         seen += full;
-                        if (from_idx >= 0) { smods += ""; 0; } else { smods += name; 0; };
+                        if (from_idx >= 0) { smods += ""; } else { smods += name; };
                         let last_slash = last_index_of(full, "/");
                         let mod_dir = base_dir;
                         if (last_slash >= 0) {
                             mod_dir = full[:last_slash];
-                            0
                         };
                         // mod_src is str? (read_file returns none on missing
                         // file); the none case exited above, so unwrap here.
@@ -651,21 +604,16 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         while (m < len(subns)) {
                             imports += subns[m];
                             m = m + 1;
-                            0
                         };
                         // a module imported by name keeps its namespace
                         // (rename.y), one imported by path is flattened
-                        if (from_idx >= 0) { imports += name; 0; } else { 0; };
-                        0
+                        if (from_idx >= 0) { imports += name; } else { };
                     };
-                    0
                 };
-                0
             } else if (is_embed_decl(trimmed)) {
                 out_lines += embed_decl(trimmed, base_dir);
                 ofile += fid;
                 oline += i + 1;
-                0
             } else {
                 // NOTE: no empty if-arms here — keep the `0;` filler.
                 // Export lines are dropped (defs are spliced; uses are
@@ -674,23 +622,17 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                     out_lines += line;
                     ofile += fid;
                     oline += i + 1;
-                    0
                 } else {
                     // `export { a, b,` may run on over several lines: drop
                     // them through the one that closes the list.
                     if (index_of(line, "{") >= 0) {
                         while (index_of(lines[i], "}") < 0 && i + 1 < n) {
                             i = i + 1;
-                            0
                         };
-                        0
                     };
-                    0
                 };
-                0
             };
             i = i + 1;
-            0
         };
         { lines: out_lines, imports: imports, seen: seen, smods: smods, ofile: ofile, oline: oline }
     }
@@ -717,22 +659,19 @@ def embed_decl(trimmed: str, base_dir: str) -> str {
     let path_part = trim(rest[from_idx + 6:]);
     if (path_part[len(path_part) - 1:] == ";") {
         path_part = trim(path_part[:len(path_part) - 1]);
-        0
-    } else { 0; };
+    } else { };
     if (len(path_part) < 2 || path_part[len(path_part) - 1:] != "\"") {
         puts("error: malformed embed (embed NAME from \"path\";): " + trimmed + "\n");
         exit(1);
-        0
-    } else { 0; };
+    } else { };
     let path = path_part[1:len(path_part) - 1];
     let full = norm_path(base_dir + "/" + path);
-    if (path[:1] == "/") { full = norm_path(path); 0; } else { 0; };
+    if (path[:1] == "/") { full = norm_path(path); } else { };
     let data = fs.read_file(full);
     if (data == none) {
         puts("error: cannot embed '" + path + "' (resolved to '" + full + "')\n");
         exit(1);
-        0
-    } else { 0; };
+    } else { };
     "const " + name + " = " + quote_text(unwrap(data)) + ";"
 };
 
@@ -751,28 +690,21 @@ def quote_text(s: str) -> str {
         let esc = "";
         if (c == c'\\') {
             esc = "\\\\";
-            0
         } else if (c == c'\"') {
             esc = "\\\"";
-            0
         } else if (c == c'\n') {
             esc = "\\n";
-            0
         } else if (c == c'\r') {
             esc = "\\r";
-            0
         } else if (c < c' ' && c != c'\t') {
             esc = "\\x" + hex[c / 16:c / 16 + 1] + hex[c % 16:c % 16 + 1];
-            0
-        } else { 0; };
+        } else { };
         if (len(esc) > 0) {
             out += s[run:i];
             out += esc;
             run = i + 1;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
-        0
     };
     out += s[run:];
     out += "\"";
@@ -819,18 +751,13 @@ def skip_sp(b: [byte], i: long, hi: long) -> long {
     while (go) {
         if (p >= hi) {
             go = false;
-            0
         } else {
             if (b[p] == c' ') {
                 p = p + 1;
-                0
             } else {
                 go = false;
-                0
             };
-            0
         };
-        0
     };
     p
 };
@@ -840,25 +767,19 @@ def skip_sp(b: [byte], i: long, hi: long) -> long {
 def tok_end_b(b: [byte], i: long, hi: long) -> long {
     let p = i;
     if (p < hi) {
-        if (b[p] == c'$') { p = p + 1; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (b[p] == c'$') { p = p + 1; } else { };
+    } else { };
     let go = true;
     while (go) {
         if (p >= hi) {
             go = false;
-            0
         } else {
             if (is_id_b(b[p])) {
                 p = p + 1;
-                0
             } else {
                 go = false;
-                0
             };
-            0
         };
-        0
     };
     p
 };
@@ -867,9 +788,8 @@ def tok_end_b(b: [byte], i: long, hi: long) -> long {
 def tok_at_b(text: str, b: [byte], i: long, hi: long) -> str {
     let s = i;
     if (s < hi) {
-        if (b[s] == c'$') { s = s + 1; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (b[s] == c'$') { s = s + 1; } else { };
+    } else { };
     let e = tok_end_b(b, i, hi);
     if (e > s) { text[s:e] } else { "" }
 };
@@ -891,28 +811,21 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
         let op = skip_sp(b, we, hi);
         if (w == "call") {
             out = tok_push(out, tok_at_b(text, b, op, hi));
-            0
         } else if (w == "lea") {
             out = tok_push(out, tok_at_b(text, b, op, hi));
-            0
         } else if (w == "mov") {
             let q = p;
             let go = true;
             while (go) {
                 if (q >= hi) {
                     go = false;
-                    0
                 } else {
                     if (b[q] == c'$') {
                         go = false;
-                        0
                     } else {
                         q = q + 1;
-                        0
                     };
-                    0
                 };
-                0
             };
             if (q < hi) {
                 let t = tok_at_b(text, b, q, hi);
@@ -921,22 +834,15 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                 if (after < hi) {
                     if (b[after] == c'-') {
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
-                        0
-                    } else { 0; };
-                    0
-                } else { 0; };
-                0
-            } else { 0; };
-            0
+                    } else { };
+                } else { };
+            } else { };
         } else {
             if (want_jumps) {
                 if (w[:1] == "j") {
                     out = tok_push(out, tok_at_b(text, b, op, hi));
-                    0
-                } else { 0; };
-                0
-            } else { 0; };
-            0
+                } else { };
+            } else { };
         };
         out
     }
@@ -951,15 +857,12 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
         if (b[i] == c'\n') {
             res = line_refs_b(text, b, ls, i, res, want_jumps);
             ls = i + 1;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
-        0
     };
     if (ls < hi) {
         res = line_refs_b(text, b, ls, hi, res, want_jumps);
-        0
-    } else { 0; };
+    } else { };
     res
 };
 
@@ -978,14 +881,11 @@ def label_at(text: str, b: [byte], lo: long, hi: long) -> str {
         if (e < hi) {
             if (b[e] == c':') {
                 let s = p;
-                if (b[s] == c'$') { s = s + 1; 0; } else { 0; };
+                if (b[s] == c'$') { s = s + 1; } else { };
                 lab = text[s:e];
-                0
-            } else { 0; };
-            0
-        } else { 0; };
-        0
-    } else { 0; };
+            } else { };
+        } else { };
+    } else { };
     lab
 };
 
@@ -1002,8 +902,7 @@ def is_data_line_b(text: str, b: [byte], lo: long, hi: long) -> bool {
     let p = skip_sp(b, lo, hi);
     if (len(lab) > 0) {
         p = skip_sp(b, p + 1 + len(lab), hi);
-        0
-    } else { 0; };
+    } else { };
     if (p >= hi) {
         true
     } else {
@@ -1025,32 +924,25 @@ def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
         while (i < end) {
             if (b[i] == c'\n') {
                 p = i + 1;
-                0
-            } else { 0; };
+            } else { };
             i = i + 1;
-            0
         };
         let s = skip_sp(b, p, end);
         if (s >= end) {
             // blank line: drop it and look at the line before
             if (p > lo) {
                 end = p - 1;
-                0
             } else {
                 go = false;
-                0
             };
-            0
         } else {
             go = false;
             let w = tok_at_b(text, b, s, end);
-            if (w == "ret") { falls = false; 0; }
-            else if (w == "jmp") { falls = false; 0; }
-            else if (w == "syscall") { falls = false; 0; }
-            else { 0; };
-            0
+            if (w == "ret") { falls = false; }
+            else if (w == "jmp") { falls = false; }
+            else if (w == "syscall") { falls = false; }
+            else { };
         };
-        0
     };
     falls
 };
@@ -1078,8 +970,7 @@ def namemap_build(names: [str]) -> [AsmLabel] {
             // First insert wins, as a scan for the first match did.
             let r = asm.labmap_put(m, nm, i, 0);
             m = r.map;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     m
@@ -1123,16 +1014,14 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
     let r = 0;
     while (r < len(roots)) {
         let idx = namemap_get(map, roots[r]);
-        if (idx >= 0) { keep[idx] = true; 0; } else { 0; };
+        if (idx >= 0) { keep[idx] = true; } else { };
         r = r + 1;
-        0
     };
     let scanned: [bool] = [];
     let i = 0;
     while (i < n) {
         scanned += false;
         i = i + 1;
-        0
     };
     let more = true;
     while (more) {
@@ -1145,30 +1034,22 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
                     more = true;
                     if (falls[b]) {
                         if (b + 1 < n) {
-                            if (!(keep[b + 1])) { keep[b + 1] = true; 0; } else { 0; };
-                            0
-                        } else { 0; };
-                        0
-                    } else { 0; };
+                            if (!(keep[b + 1])) { keep[b + 1] = true; } else { };
+                        } else { };
+                    } else { };
                     let rs = refs[b];
                     let j = 0;
                     while (j < len(rs)) {
                         let idx = namemap_get(map, rs[j]);
                         if (idx >= 0) {
-                            if (!(keep[idx])) { keep[idx] = true; 0; } else { 0; };
-                            0
-                        } else { 0; };
+                            if (!(keep[idx])) { keep[idx] = true; } else { };
+                        } else { };
                         j = j + 1;
-                        0
                     };
-                    0
-                } else { 0; };
-                0
-            } else { 0; };
+                } else { };
+            } else { };
             b = b + 1;
-            0
         };
-        0
     };
     keep
 };
@@ -1190,37 +1071,28 @@ def shake_refs(text: str, root_refs: [str]) -> str {
             if (len(lab) > 0) {
                 names += lab;
                 starts += ls;
-                0
             } else {
                 if (len(starts) == 0) {
                     names += "";
                     starts += 0;
-                    0
-                } else { 0; };
-                0
+                } else { };
             };
             ls = i + 1;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
-        0
     };
     if (ls < n) {
         let lab = label_at(text, b, ls, n);
         if (len(lab) > 0) {
             names += lab;
             starts += ls;
-            0
         } else {
             if (len(starts) == 0) {
                 names += "";
                 starts += 0;
-                0
-            } else { 0; };
-            0
+            } else { };
         };
-        0
-    } else { 0; };
+    } else { };
     let nb = len(starts);
     if (nb == 0) {
         text
@@ -1232,36 +1104,28 @@ def shake_refs(text: str, root_refs: [str]) -> str {
         while (k < nb) {
             let lo = starts[k];
             let hi = n;
-            if (k + 1 < nb) { hi = starts[k + 1]; 0; } else { 0; };
+            if (k + 1 < nb) { hi = starts[k + 1]; } else { };
             refs += [refs_range(text, b, lo, hi, [], true)];
             if (block_falls_b(text, b, lo, hi)) {
                 if (is_data_line_b(text, b, lo, hi)) {
                     falls += false;
-                    0
                 } else {
                     falls += true;
-                    0
                 };
-                0
             } else {
                 falls += false;
-                0
             };
             k = k + 1;
-            0
         };
         let keep: [bool] = [];
         k = 0;
         while (k < nb) {
             if (len(names[k]) == 0) {
                 keep += true;
-                0
             } else {
                 keep += false;
-                0
             };
             k = k + 1;
-            0
         };
         keep = shake_keep(names, refs, falls, keep, root_refs);
         // reassemble kept blocks (their byte ranges), in order
@@ -1271,12 +1135,10 @@ def shake_refs(text: str, root_refs: [str]) -> str {
             if (keep[k]) {
                 let lo = starts[k];
                 let hi = n;
-                if (k + 1 < nb) { hi = starts[k + 1]; 0; } else { 0; };
+                if (k + 1 < nb) { hi = starts[k + 1]; } else { };
                 pieces += text[lo:hi];
-                0
-            } else { 0; };
+            } else { };
             k = k + 1;
-            0
         };
         join(pieces, "")
     }
@@ -1465,15 +1327,13 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
         keep += false;
         falls += false;
         i = i + 1;
-        0
     };
     let roots: [str] = [];
     roots += extra_roots;
     let root = namemap_get(namemap_build(labels), "_start");
     if (root >= 0) {
         roots += "_start";
-        0
-    } else { 0; };
+    } else { };
     keep = shake_keep(labels, refs, falls, keep, roots);
     let outrefs: [str] = [];
     i = 0;
@@ -1484,12 +1344,9 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
             while (j < len(rs)) {
                 outrefs += rs[j];
                 j = j + 1;
-                0
             };
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
-        0
     };
     { refs: outrefs, keep: keep }
 };
@@ -1511,9 +1368,8 @@ def is_all_digits(s: str) -> bool {
         let i = 0;
         let ok = true;
         while (i < len(s)) {
-            if (index_of("0123456789", s[i:i + 1]) < 0) { ok = false; 0; } else { 0; };
+            if (index_of("0123456789", s[i:i + 1]) < 0) { ok = false; } else { };
             i = i + 1;
-            0
         };
         ok
     }
@@ -1555,9 +1411,8 @@ def is_ns(name: str, imports: [str]) -> bool {
     let i = 0;
     let found = false;
     while (i < len(imports)) {
-        if (imports[i] == name) { found = true; 0; } else { 0; };
+        if (imports[i] == name) { found = true; } else { };
         i = i + 1;
-        0
     };
     found
 };
@@ -1769,28 +1624,21 @@ def esc_asm(s: str) -> str {
         let esc = "";
         if (o == c'\\') {
             esc = "\\\\";
-            0
         } else if (o == c'\"') {
             esc = "\\\"";
-            0
         } else if (o == c'\n') {
             esc = "\\n";
-            0
         } else if (o == c'\t') {
             esc = "\\t";
-            0
         } else if (o < c' ' || o > c'~') {
             esc = "\\" + tostring(o / 64) + tostring((o / 8) % 8) + tostring(o % 8);
-            0
-        } else { 0; };
+        } else { };
         if (len(esc) > 0) {
             out += s[run:i];
             out += esc;
             run = i + 1;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
-        0
     };
     out += s[run:];
     join(out, "")
@@ -1811,10 +1659,8 @@ def env_find(st: EmitSt, name: str) -> Slot {
         if (e.name == name) {
             found = e;
             i = -1;
-            0
-        } else { 0; };
+        } else { };
         i = i - 1;
-        0
     };
     if (found.kind == "none") {
         let fns = st.fns;
@@ -2029,14 +1875,10 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                             mfields = types.field_merge(mfields, msf.name, msf.typ);
                             msi = msi + 1;
                         };
-                        0
                     } else {
-                        0
                     };
-                    0
                 } else {
                     mfields = types.field_merge(mfields, mk, mf);
-                    0
                 };
                 mi = mi + 1;
             };
@@ -2072,8 +1914,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                 if (dfn == dot.key) {
                     found = true;
                     ftyp = df.typ;
-                    0
-                } else { 0; };
+                } else { };
                 di = di + 1;
             };
             if (found) { ftyp } else { normtype({ k: K.tunk }) }
@@ -2293,10 +2134,8 @@ def uses_scan_node(node: Node, out: { argv: bool }) -> { argv: bool } {
             let id: Leaf = ncallee;
             if (id.v == "argv") {
                 found = { argv: true };
-                0
-            } else { 0; };
-            0
-        } else { 0; };
+            } else { };
+        } else { };
         let o2 = uses_scan_node(ncallee, found);
         uses_scan_block(nargs, o2)
     } else if (k == K.un) {
@@ -2405,52 +2244,41 @@ def collect_from_node(node: Node, out: [FnDef]) -> [FnDef] {
             let func: Func = decl.v;
             out += { name: decl.name, func: func };
             out = collect_from_node(decl.v, out);
-            0
         } else {
             if (decl.v.k == K.func) {
                 let func: Func = decl.v;
                 out += { name: decl.name, func: func };
-                0
-            } else { 0; };
+            } else { };
             out = collect_from_node(decl.v, out);
-            0
         }
     } else if (k == K.func) {
         let func: Func = node;
         let body: Block = func.body;
         out = collect_from_block(body.stmts, out);
-        0
     } else if (k == K.kw_if) {
         let branch: If = node;
         out = collect_from_node(branch.then, out);
         if (branch.has_else) {
             out = collect_from_node(branch.els, out);
-            0
-        } else { 0; };
-        0
+        } else { };
     } else if (k == K.kw_while) {
         let loop: While = node;
         out = collect_from_node(loop.body, out);
-        0
     } else if (k == K.kw_for) {
         let loop: For = node;
         out = collect_from_node(loop.init, out);
         out = collect_from_node(loop.body, out);
         out = collect_from_node(loop.step, out);
-        0
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
         out = collect_from_node(loop.body, out);
-        0
     } else if (k == K.forrange) {
         let loop: ForRange = node;
         out = collect_from_node(loop.body, out);
-        0
     } else if (k == K.block) {
         let block: Block = node;
         out = collect_from_block(block.stmts, out);
-        0
-    } else { 0; };
+    } else { };
     out
 };
 
@@ -2484,7 +2312,7 @@ def name_in(xs: [str], n: str) -> bool {
     // lookup the order does not matter and the tail cannot change it.
     while ((i < len(xs)) && (!found)) {
         let x: str = xs[i];
-        if (x == n) { found = true; 0; } else { 0; };
+        if (x == n) { found = true; } else { };
         i = i + 1;
     };
     found
@@ -2508,151 +2336,120 @@ def fv_walk(node: Node, out: [str], collect: bool) -> [str] {
     let k = node.k;
     if (k == K.id) {
         let id: Leaf = node;
-        if (collect) { out += id.v; 0; } else { 0; };
-        0
+        if (collect) { out += id.v; } else { };
     } else if (k == K.un) {
         let child: NodeE = node;
         out = fv_walk(child.e, out, collect);
-        0
     } else if (k == K.addr) {
         let child: NodeE = node;
         out = fv_walk(child.e, out, collect);
-        0
     } else if (k == K.deref) {
         let child: NodeE = node;
         out = fv_walk(child.e, out, collect);
-        0
     } else if (k == K.ret) {
         let child: NodeE = node;
         out = fv_walk(child.e, out, collect);
-        0
     } else if (k == K.bin) {
         let bin: Bin = node;
         out = fv_walk(bin.l, out, collect);
         out = fv_walk(bin.r, out, collect);
-        0
     } else if (k == K.array) {
         let array: ArrLit = node;
         out = fv_walk_list(array.elems, out, collect);
-        0
     } else if (k == K.rec) {
         let rec: RecLit = node;
         out = fv_walk_list(rec.vals, out, collect);
-        0
     } else if (k == K.map) {
         let map: RecLit = node;
         out = fv_walk_list(map.vals, out, collect);
-        0
     } else if (k == K.arrrep) {
         let rep: ArrRep = node;
         out = fv_walk(rep.v, out, collect);
-        0
     } else if (k == K.call) {
         let call: Call = node;
         out = fv_walk(call.callee, out, collect);
         out = fv_walk_list(call.args, out, collect);
-        0
     } else if (k == K.index) {
         let index: Index = node;
         out = fv_walk(index.arr, out, collect);
         out = fv_walk(index.idx, out, collect);
-        0
     } else if (k == K.slice) {
         let slice: Slice = node;
         out = fv_walk(slice.arr, out, collect);
         out = fv_walk(slice.lo, out, collect);
         out = fv_walk(slice.hi, out, collect);
-        0
     } else if (k == K.idxassign) {
         let assign: IdxAssign = node;
         out = fv_walk(assign.arr, out, collect);
         out = fv_walk(assign.idx, out, collect);
         out = fv_walk(assign.v, out, collect);
-        0
     } else if (k == K.dot) {
         let dot: Dot = node;
         out = fv_walk(dot.obj, out, collect);
-        0
     } else if (k == K.dotassign) {
         let assign: DotAssign = node;
         out = fv_walk(assign.obj, out, collect);
         out = fv_walk(assign.v, out, collect);
-        0
     } else if (k == K.store) {
         let store: Store = node;
         out = fv_walk(store.p, out, collect);
         out = fv_walk(store.v, out, collect);
-        0
     } else if (k == K.assign) {
         let assign: Assign = node;
-        if (collect) { out += assign.name; 0; } else { 0; };
+        if (collect) { out += assign.name; } else { };
         out = fv_walk(assign.v, out, collect);
-        0
     } else if (k == K.incdec) {
         let incdec: IncDec = node;
         out = fv_walk(incdec.tgt, out, collect);
-        0
     } else if (k == K.opassign) {
         let assign: OpAssign = node;
         out = fv_walk(assign.tgt, out, collect);
         out = fv_walk(assign.v, out, collect);
-        0
     } else if (k == K.decl) {
         let decl: Decl = node;
         out = fv_walk(decl.v, out, collect);
-        0
     } else if (k == K.kw_if) {
         let branch: If = node;
         out = fv_walk(branch.cond, out, collect);
         out = fv_walk(branch.then, out, collect);
         if (branch.has_else) {
             out = fv_walk(branch.els, out, collect);
-            0
-        } else { 0; };
-        0
+        } else { };
     } else if (k == K.kw_while) {
         let loop: While = node;
         out = fv_walk(loop.cond, out, collect);
         out = fv_walk(loop.body, out, collect);
-        0
     } else if (k == K.kw_for) {
         let loop: For = node;
         out = fv_walk(loop.init, out, collect);
         out = fv_walk(loop.cond, out, collect);
         out = fv_walk(loop.step, out, collect);
         out = fv_walk(loop.body, out, collect);
-        0
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
         out = fv_walk(loop.iter, out, collect);
         out = fv_walk(loop.body, out, collect);
-        0
     } else if (k == K.forrange) {
         let loop: ForRange = node;
         out = fv_walk(loop.lo, out, collect);
         out = fv_walk(loop.hi, out, collect);
         out = fv_walk(loop.body, out, collect);
-        0
     } else if (k == K.block) {
         let block: Block = node;
         out = fv_walk_list(block.stmts, out, collect);
-        0
     } else if (k == K.func) {
         let func: Func = node;
         out = fv_walk(func.body, out, true);
-        0
     } else if (k == K.sliceassign) {
         let assign: SliceAssign = node;
         out = fv_walk(assign.arr, out, collect);
         out = fv_walk(assign.lo, out, collect);
         out = fv_walk(assign.hi, out, collect);
         out = fv_walk(assign.v, out, collect);
-        0
     } else if (k == K.rectest || k == K.narrow || k == K.matchend) {
         let child: NodeE = node;
         out = fv_walk(child.e, out, collect);
-        0
-    } else { 0; };
+    } else { };
     out
 };
 
@@ -2680,144 +2477,115 @@ def fv_binds(node: Node, out: [str]) -> [str] {
         let decl: Decl = node;
         out += decl.name;
         out = fv_binds(decl.v, out);
-        0
     } else if (k == K.func) {
         let func: Func = node;
         out = fv_bind_params(func.params, out);
         out = fv_binds(func.body, out);
-        0
     } else if (k == K.block) {
         let block: Block = node;
         out = fv_binds_list(block.stmts, out);
-        0
     } else if (k == K.kw_if) {
         let branch: If = node;
         out = fv_binds(branch.cond, out);
         out = fv_binds(branch.then, out);
         if (branch.has_else) {
             out = fv_binds(branch.els, out);
-            0
-        } else { 0; };
-        0
+        } else { };
     } else if (k == K.kw_while) {
         let loop: While = node;
         out = fv_binds(loop.cond, out);
         out = fv_binds(loop.body, out);
-        0
     } else if (k == K.kw_for) {
         let loop: For = node;
         out = fv_binds(loop.init, out);
         out = fv_binds(loop.cond, out);
         out = fv_binds(loop.step, out);
         out = fv_binds(loop.body, out);
-        0
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
         out += loop.name;
         out = fv_binds(loop.iter, out);
         out = fv_binds(loop.body, out);
-        0
     } else if (k == K.forrange) {
         let loop: ForRange = node;
         out += loop.name;
         out = fv_binds(loop.lo, out);
         out = fv_binds(loop.hi, out);
         out = fv_binds(loop.body, out);
-        0
     } else if (k == K.ret) {
         let child: NodeE = node;
         out = fv_binds(child.e, out);
-        0
     } else if (k == K.un) {
         let child: NodeE = node;
         out = fv_binds(child.e, out);
-        0
     } else if (k == K.addr) {
         let child: NodeE = node;
         out = fv_binds(child.e, out);
-        0
     } else if (k == K.deref) {
         let child: NodeE = node;
         out = fv_binds(child.e, out);
-        0
     } else if (k == K.bin) {
         let bin: Bin = node;
         out = fv_binds(bin.l, out);
         out = fv_binds(bin.r, out);
-        0
     } else if (k == K.array) {
         let array: ArrLit = node;
         out = fv_binds_list(array.elems, out);
-        0
     } else if (k == K.rec) {
         let rec: RecLit = node;
         out = fv_binds_list(rec.vals, out);
-        0
     } else if (k == K.map) {
         let map: RecLit = node;
         out = fv_binds_list(map.vals, out);
-        0
     } else if (k == K.arrrep) {
         let rep: ArrRep = node;
         out = fv_binds(rep.v, out);
-        0
     } else if (k == K.call) {
         let call: Call = node;
         out = fv_binds(call.callee, out);
         out = fv_binds_list(call.args, out);
-        0
     } else if (k == K.index) {
         let index: Index = node;
         out = fv_binds(index.arr, out);
         out = fv_binds(index.idx, out);
-        0
     } else if (k == K.slice) {
         let slice: Slice = node;
         out = fv_binds(slice.arr, out);
         out = fv_binds(slice.lo, out);
         out = fv_binds(slice.hi, out);
-        0
     } else if (k == K.idxassign) {
         let assign: IdxAssign = node;
         out = fv_binds(assign.arr, out);
         out = fv_binds(assign.idx, out);
         out = fv_binds(assign.v, out);
-        0
     } else if (k == K.dot) {
         let dot: Dot = node;
         out = fv_binds(dot.obj, out);
-        0
     } else if (k == K.dotassign) {
         let assign: DotAssign = node;
         out = fv_binds(assign.obj, out);
         out = fv_binds(assign.v, out);
-        0
     } else if (k == K.store) {
         let store: Store = node;
         out = fv_binds(store.p, out);
         out = fv_binds(store.v, out);
-        0
     } else if (k == K.assign) {
         let assign: Assign = node;
         out = fv_binds(assign.v, out);
-        0
     } else if (k == K.incdec) {
         let incdec: IncDec = node;
         out = fv_binds(incdec.tgt, out);
-        0
     } else if (k == K.opassign) {
         let assign: OpAssign = node;
         out = fv_binds(assign.tgt, out);
         out = fv_binds(assign.v, out);
-        0
     } else if (k == K.sliceassign) {
         let assign: SliceAssign = node;
         out = fv_binds(assign.arr, out);
         out = fv_binds(assign.lo, out);
         out = fv_binds(assign.hi, out);
         out = fv_binds(assign.v, out);
-        0
-    } else { 0; };
+    } else { };
     out
 };
 
@@ -2844,13 +2612,12 @@ def fn_captures(func: EmitFunc, ex: [AsmLabel], extra: str) -> [str] {
     let i = 0;
     while (i < len(reads)) {
         let n: str = reads[i];
-        if (name_in(bound, n)) { 0; }
-        else if (n == extra || namemap_get(ex, n) >= 0) { 0; }
-        else if (is_intrinsic_name(n)) { 0; }
-        else if (name_in(caps, n)) { 0; }
+        if (name_in(bound, n)) { }
+        else if (n == extra || namemap_get(ex, n) >= 0) { }
+        else if (is_intrinsic_name(n)) { }
+        else if (name_in(caps, n)) { }
         else {
             caps += n;
-            0
         };
         i = i + 1;
     };
@@ -3091,8 +2858,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             let soff = -1;
             if (e.label == st.self_label) {
                 soff = capture_off(st);
-                0
-            } else { 0; };
+            } else { };
             if (soff >= 0) {
                 emit(st, "    mov " + tostring(soff) + "(%rbp), %rax")
             } else {
@@ -3103,13 +2869,11 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             // (see gen_sappend).
             if (e.typ.k == K.tstr) {
                 let oe = env_find(st, node.v + "#o");
-                if (oe.kind == "none") { 0; } else {
+                if (oe.kind == "none") { } else {
                     st = emit(st, "    xor %eax, %eax");
                     st = emit(st, "    mov %rax, " + oe.label + "(%rip)");
-                    0
                 };
-                0
-            } else { 0; };
+            } else { };
             emit(st, "    mov " + e.label + "(%rip), %rax")
         } else if (e.kind == "own") {
             // an appendable string: a read may let its buffer escape, so
@@ -3207,9 +2971,8 @@ def box_names(func: EmitFunc) -> [str] {
     let i = 0;
     while (i < len(reads)) {
         let n: str = reads[i];
-        if (name_in(out, n)) { 0; } else {
+        if (name_in(out, n)) { } else {
             out += n;
-            0
         };
         i = i + 1;
     };
@@ -3227,14 +2990,11 @@ def box_bound(st: EmitSt, name: str) -> EmitSt {
         let e = env[i];
         if (e.kind == "frame") {
             more = false;
-            0
         } else if (e.kind == "boxmark" && e.label == name) {
             want = true;
             more = false;
-            0
-        } else { 0; };
+        } else { };
         i = i - 1;
-        0
     };
     if (want) { box_capture(st, name) } else { st }
 };
@@ -3258,137 +3018,110 @@ def app_walk(node: Node, out: [str], deep: bool) -> [str] {
     let k = node.k;
     // Most common kinds first: a leaf costs one compare, not the chain.
     if (k == K.id || k == K.num || k == K.str) {
-        0
     } else if (k == K.call) {
         let call: Call = node;
         out = app_walk(call.callee, out, deep);
         out = app_walk_list(call.args, out, deep);
-        0
     } else if (k == K.dot) {
         let dot: Dot = node;
         out = app_walk(dot.obj, out, deep);
-        0
     } else if (k == K.bin) {
         let bin: Bin = node;
         out = app_walk(bin.l, out, deep);
         out = app_walk(bin.r, out, deep);
-        0
     } else if (k == K.block) {
         let block: Block = node;
         out = app_walk_list(block.stmts, out, deep);
-        0
     } else if (k == K.arrrep || k == K.decl || k == K.assign) {
         let with_v: NodeV = node;
         out = app_walk(with_v.v, out, deep);
-        0
     } else if (k == K.kw_if) {
         let branch: If = node;
         out = app_walk(branch.cond, out, deep);
         out = app_walk(branch.then, out, deep);
         if (branch.has_else) {
             out = app_walk(branch.els, out, deep);
-            0
-        } else { 0; };
-        0
+        } else { };
     } else if (k == K.opassign) {
         let assign: OpAssign = node;
         let tg = assign.tgt;
         if (assign.op == "+" && tg.k == K.id) {
             let id: Leaf = tg;
             out += id.v;
-            0
-        } else { 0; };
+        } else { };
         out = app_walk(tg, out, deep);
         out = app_walk(assign.v, out, deep);
-        0
     } else if (k == K.index) {
         let index: Index = node;
         out = app_walk(index.arr, out, deep);
         out = app_walk(index.idx, out, deep);
-        0
     } else if (k == K.addr) {
         let addr: Wrap = node;
         let ae = addr.e;
         if (ae.k == K.id) {
             let id: Leaf = ae;
             out += "&" + id.v;
-            0
-        } else { 0; };
+        } else { };
         out = app_walk(ae, out, deep);
-        0
     } else if (k == K.un || k == K.deref || k == K.ret || k == K.rectest || k == K.narrow || k == K.matchend) {
         let child: NodeE = node;
         out = app_walk(child.e, out, deep);
-        0
     } else if (k == K.array) {
         let array: ArrLit = node;
         out = app_walk_list(array.elems, out, deep);
-        0
     } else if (k == K.rec || k == K.map) {
         let rec: RecLit = node;
         out = app_walk_list(rec.vals, out, deep);
-        0
     } else if (k == K.slice) {
         let slice: Slice = node;
         out = app_walk(slice.arr, out, deep);
         out = app_walk(slice.lo, out, deep);
         out = app_walk(slice.hi, out, deep);
-        0
     } else if (k == K.idxassign) {
         let assign: IdxAssign = node;
         out = app_walk(assign.arr, out, deep);
         out = app_walk(assign.idx, out, deep);
         out = app_walk(assign.v, out, deep);
-        0
     } else if (k == K.dotassign) {
         let assign: DotAssign = node;
         out = app_walk(assign.obj, out, deep);
         out = app_walk(assign.v, out, deep);
-        0
     } else if (k == K.store) {
         let store: Store = node;
         out = app_walk(store.p, out, deep);
         out = app_walk(store.v, out, deep);
-        0
     } else if (k == K.incdec) {
         let incdec: IncDec = node;
         out = app_walk(incdec.tgt, out, deep);
-        0
     } else if (k == K.kw_while) {
         let loop: While = node;
         out = app_walk(loop.cond, out, deep);
         out = app_walk(loop.body, out, deep);
-        0
     } else if (k == K.kw_for) {
         let loop: For = node;
         out = app_walk(loop.init, out, deep);
         out = app_walk(loop.cond, out, deep);
         out = app_walk(loop.step, out, deep);
         out = app_walk(loop.body, out, deep);
-        0
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
         out = app_walk(loop.iter, out, deep);
         out = app_walk(loop.body, out, deep);
-        0
     } else if (k == K.forrange) {
         let loop: ForRange = node;
         out = app_walk(loop.lo, out, deep);
         out = app_walk(loop.hi, out, deep);
         out = app_walk(loop.body, out, deep);
-        0
     } else if (k == K.func) {
         let func: Func = node;
-        if (deep) { out = app_walk(func.body, out, deep); 0; } else { 0; };
-        0
+        if (deep) { out = app_walk(func.body, out, deep); } else { };
     } else if (k == K.sliceassign) {
         let assign: SliceAssign = node;
         out = app_walk(assign.arr, out, deep);
         out = app_walk(assign.lo, out, deep);
         out = app_walk(assign.hi, out, deep);
         out = app_walk(assign.v, out, deep);
-        0
-    } else { 0; };
+    } else { };
     out
 };
 
@@ -3410,9 +3143,8 @@ def app_names(node: Node, deep: bool, skip: [str]) -> [str] {
     let i = 0;
     while (i < len(seen)) {
         let n: str = seen[i];
-        if (n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n)) { 0; } else {
+        if (n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n)) { } else {
             out += n;
-            0
         };
         i = i + 1;
     };
@@ -3430,14 +3162,11 @@ def own_wanted(st: EmitSt, name: str) -> bool {
         let e = env[i];
         if (e.kind == "frame") {
             more = false;
-            0
         } else if (e.kind == "appmark" && e.label == name) {
             want = true;
             more = false;
-            0
-        } else { 0; };
+        } else { };
         i = i - 1;
-        0
     };
     want
 };
@@ -3528,7 +3257,7 @@ def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
     let i = 0;
     while (i < len(gl)) {
         let ge = gl[i];
-        if (ge.typ.k == K.tstr) { anystr = true; 0; } else { 0; };
+        if (ge.typ.k == K.tstr) { anystr = true; } else { };
         i = i + 1;
     };
     if (anystr) {
@@ -3540,8 +3269,7 @@ def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
             let g2 = gl[j];
             if (g2.typ.k == K.tstr && name_in(names, g2.name)) {
                 out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: normtype({ k: K.tnone }) };
-                0
-            } else { 0; };
+            } else { };
             j = j + 1;
         };
         out
@@ -3588,10 +3316,8 @@ def gen_slice(st: EmitSt, node: Slice) -> EmitSt {
     st = emit(st, "    push %rax");
     if (lo.k == K.void) {
         st = emit(st, "    xor %eax, %eax");
-        0
     } else {
         st = gen(st, lo);
-        0
     };
     st = emit(st, "    push %rax");
     if (hi.k == K.void) {
@@ -3599,10 +3325,8 @@ def gen_slice(st: EmitSt, node: Slice) -> EmitSt {
         // the array pointer sits one slot below the pushed lo.
         st = emit(st, "    mov 8(%rsp), %rax");
         st = emit(st, "    mov (%rax), %rax");
-        0
     } else {
         st = gen(st, hi);
-        0
     };
     st = emit(st, "    push %rax");
     st = emit(st, "    mov $" + tostring(slesz) + ", %rax");
@@ -3620,19 +3344,15 @@ def gen_str_slice(st: EmitSt, node: Slice) -> EmitSt {
     st = emit(st, "    push %rax");
     if (lo.k == K.void) {
         st = emit(st, "    xor %eax, %eax");
-        0
     } else {
         st = gen(st, lo);
-        0
     };
     st = emit(st, "    push %rax");
     if (hi.k == K.void) {
         st = emit(st, "    mov 8(%rsp), %rax");
         st = emit(st, "    mov (%rax), %rax");
-        0
     } else {
         st = gen(st, hi);
-        0
     };
     st = emit(st, "    push %rax");
     st = emit(st, "    call y_str_slice");
@@ -3649,19 +3369,15 @@ def gen_sliceassign(st: EmitSt, node: SliceAssign) -> EmitSt {
     st = emit(st, "    push %rax");
     if (lo.k == K.void) {
         st = emit(st, "    xor %eax, %eax");
-        0
     } else {
         st = gen(st, lo);
-        0
     };
     st = emit(st, "    push %rax");
     if (hi.k == K.void) {
         st = emit(st, "    mov 8(%rsp), %rax");
         st = emit(st, "    mov (%rax), %rax");
-        0
     } else {
         st = gen(st, hi);
-        0
     };
     st = emit(st, "    push %rax");
     st = gen(st, node.v);
@@ -3699,7 +3415,7 @@ def rectest_members(s: Type, t: Type) -> [Type] {
         let out: [Type] = [];
         let m = types.union_member(s, t);
         let mk: long = m.k;
-        if (mk != K.tnone) { out += m; 0; } else { 0; };
+        if (mk != K.tnone) { out += m; } else { };
         out
     }
 };
@@ -3831,7 +3547,7 @@ def gen_elem_addr(st: EmitSt, node: Index) -> EmitSt {
     let bt = infer(st, earr);
     let eaesz = arr_elem_bytes(bt);
     let eascale = "8";
-    if (eaesz == 1) { eascale = "1"; 0; } else { 0; };
+    if (eaesz == 1) { eascale = "1"; } else { };
     st = gen(st, earr);
     st = emit(st, "    push %rax");
     st = gen(st, node.idx);
@@ -3843,12 +3559,10 @@ def gen_elem_addr(st: EmitSt, node: Index) -> EmitSt {
         let arr: TFix = bt;
         st = emit(st, "    cmp $" + tostring(arr.n) + ", %rcx");
         st = emit(st, "    jge y_oob");
-        0
     } else {
         st = emit(st, "    mov (%rax), %rdx");
         st = emit(st, "    cmp %rdx, %rcx");
         st = emit(st, "    jge y_oob");
-        0
     };
     st = emit(st, "    mov 16(%rax), %rax");
     emit(st, "    lea (%rax,%rcx," + eascale + "), %rax")
@@ -3888,46 +3602,35 @@ def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
     st = emit(st, "    test %rax, %rax");
     if (is_or) {
         st = emit(st, "    jnz " + rT.lbl);
-        0
-    } else { 0; };
+    } else { };
     if (is_or) {
-        0
     } else {
         st = emit(st, "    jz " + rF.lbl);
-        0
     };
     st = gen(st, node.r);
     st = emit(st, "    test %rax, %rax");
     if (is_or) {
         st = emit(st, "    jnz " + rT.lbl);
-        0
-    } else { 0; };
+    } else { };
     if (is_or) {
-        0
     } else {
         st = emit(st, "    jz " + rF.lbl);
-        0
     };
     if (is_or) {
-        0
     } else {
         st = emit(st, "    mov $1, %rax");
         st = emit(st, "    jmp " + rE.lbl);
-        0
     };
     if (is_or) {
         st = emit(st, "    xor %eax, %eax");
         st = emit(st, "    jmp " + rE.lbl);
         st = emit(st, rT.lbl + ":");
         st = emit(st, "    mov $1, %rax");
-        0
-    } else { 0; };
+    } else { };
     if (is_or) {
-        0
     } else {
         st = emit(st, rF.lbl + ":");
         st = emit(st, "    xor %eax, %eax");
-        0
     };
     st = emit(st, rE.lbl + ":")
 };
@@ -3988,8 +3691,7 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = emit(st, "    call y_str_cat");
             st = emit(st, "    add $16, %rsp")
         };
-        0
-    } else { 0; };
+    } else { };
     if (!(lt.k == K.tstr)) {
         if (lt.k == K.tlong) {
             st = gen(st, node.l);
@@ -4028,8 +3730,7 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = emit(st, "    call y_str_cat");
             st = emit(st, "    add $16, %rsp")
         };
-        0
-    } else { 0; };
+    } else { };
     st
 };
 
@@ -4038,17 +3739,15 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
 def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     let op = node.op;
     st = gen(st, node.l);
-    if (lt.k == K.tfloat) { 0; } else {
+    if (lt.k == K.tfloat) { } else {
         st = emit(st, "    cvtsi2sd %rax, %xmm0");
         st = emit(st, "    movq %xmm0, %rax");
-        0
     };
     st = emit(st, "    push %rax");
     st = gen(st, node.r);
-    if (rt.k == K.tfloat) { 0; } else {
+    if (rt.k == K.tfloat) { } else {
         st = emit(st, "    cvtsi2sd %rax, %xmm0");
         st = emit(st, "    movq %xmm0, %rax");
-        0
     };
     st = emit(st, "    movq %rax, %xmm1");
     st = emit(st, "    pop %rax");
@@ -4071,22 +3770,16 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
         st = emit(st, "    ucomisd %xmm1, %xmm0");
         if (op == "<") {
             st = emit(st, "    setb %al");
-            0
         } else if (op == "<=") {
             st = emit(st, "    setbe %al");
-            0
         } else if (op == ">") {
             st = emit(st, "    seta %al");
-            0
         } else if (op == ">=") {
             st = emit(st, "    setae %al");
-            0
         } else if (op == "==") {
             st = emit(st, "    sete %al");
-            0
         } else {
             st = emit(st, "    setne %al");
-            0
         };
         emit(st, "    movzbq %al, %rax")
     }
@@ -4099,16 +3792,12 @@ def gen_str_cmp(st: EmitSt, node: Bin, op: str) -> EmitSt {
     st = emit(st, "    cmp $0, %rax");
     if (op == "<") {
         st = emit(st, "    setl %al");
-        0
     } else if (op == ">") {
         st = emit(st, "    setg %al");
-        0
     } else if (op == "<=") {
         st = emit(st, "    setle %al");
-        0
     } else {
         st = emit(st, "    setge %al");
-        0
     };
     emit(st, "    movzbq %al, %rax")
 };
@@ -4288,36 +3977,29 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         if (lt.k == K.tarr) {
             let larr: TOf = lt;
             elt = larr.of;
-            0
-        } else { 0; };
+        } else { };
         if (elt.k == K.tunk) {
             if (rt.k == K.tarr) {
                 let rarr: TOf = rt;
                 elt = rarr.of;
-                0
-            } else { 0; };
-            0
-        } else { 0; };
+            } else { };
+        } else { };
         if (eq_elem_loop(elt)) {
             st = gen(st, node.l);
             st = emit(st, "    push %rax");
             st = gen(st, node.r);
             st = gen_eq_arr_deep(st, elt);
-            0
         } else {
             st = gen_push_args(st, [node.l, node.r]);
             if (elt.k == K.tstr) {
                 st = emit(st, "    call y_arr_eq_str");
                 st = emit(st, "    add $16, %rsp");
-                0
             } else {
                 st = emit(st, "    mov $" + tostring(elem_bytes(elt)) + ", %rax");
                 st = emit(st, "    push %rax");
                 st = emit(st, "    call y_arr_eq");
                 st = emit(st, "    add $24, %rsp");
-                0
             };
-            0
         };
         if (op == "!=") {
             emit(st, "    xor $1, %rax")
@@ -4331,16 +4013,13 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         if (lt.k == K.topt) {
             let lopt: TOf = lt;
             pt = lopt.of;
-            0
-        } else { 0; };
+        } else { };
         if (pt.k == K.tunk) {
             if (rt.k == K.topt) {
                 let ropt: TOf = rt;
                 pt = ropt.of;
-                0
-            } else { 0; };
-            0
-        } else { 0; };
+            } else { };
+        } else { };
         st = gen(st, node.l);
         st = emit(st, "    push %rax");
         st = gen(st, node.r);
@@ -4444,8 +4123,8 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
 // neither check.
 def gen_shift(st: EmitSt, node: Bin, op: str) -> EmitSt {
     let mn = "shl";
-    if (op == ">>") { mn = "sar"; 0; }
-    else if (op == ">>>") { mn = "shr"; 0; }
+    if (op == ">>") { mn = "sar"; }
+    else if (op == ">>>") { mn = "shr"; }
     let n = shift_imm(node.r);
     st = gen(st, node.l);
     if (n >= 0) {
@@ -4463,10 +4142,8 @@ def gen_shift(st: EmitSt, node: Bin, op: str) -> EmitSt {
         st = emit(st, "    jb " + ok.lbl);
         if (mn == "sar") {
             st = emit(st, "    mov $63, %rcx");
-            0
         } else {
             st = emit(st, "    xor %eax, %eax");
-            0
         };
         st = emit(st, ok.lbl + ":");
         emit(st, "    " + mn + " %cl, %rax")
@@ -4516,10 +4193,8 @@ def gen_push_args_as(st: EmitSt, args: [Node], ptypes: [Type]) -> EmitSt {
     while (i < len(args)) {
         if (i < len(ptypes)) {
             st = gen_as(st, args[i], ptypes[i]);
-            0
         } else {
             st = gen(st, args[i]);
-            0
         };
         st = emit(st, "    push %rax");
         i = i + 1;
@@ -4560,7 +4235,6 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
         // want0 as declared: a recursive alias names the descriptor
         let rec: RecLit = node;
         st = gen_reclit(st, rec, want0);
-        0
     } else if (wk == K.topt && some_of_lit(node)) {
         // some({...}) where T? is declared: the literal made as T (types.y
         // typeof_want), then boxed
@@ -4569,10 +4243,8 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
         let wo: TOf = want;
         st = gen_as(st, args[0], wo.of);
         st = gen_box_rax(st);
-        0
     } else {
         st = gen(st, node);
-        0
     };
     if (wk == K.tfloat || wk == K.tbyte) {
         gen_conv(st, infer(st, node), want)
@@ -4626,10 +4298,8 @@ def cast_members(s: Type, t: Type) -> [Type] {
     let su = types.unfold(s);
     if (types.unfold(t).k == K.tunion) {
         ts = types.union_parts(types.unfold(t));
-        0
     } else {
         ts += t;
-        0
     };
     let i = 0;
     while (i < len(ts)) {
@@ -4674,8 +4344,7 @@ def cur_fn_type(st: EmitSt) -> FuncTy {
             let fty: FuncTy = e.typ;
             ft = fty;
             looking = false;
-            0
-        } else { 0; };
+        } else { };
         i = i - 1;
     };
     ft
@@ -4865,7 +4534,7 @@ def gen_method(st: EmitSt, node: Call) -> EmitSt {
     let sm = types.str_method(mcal.key);
     let margs: [Node] = node.args;
     let args: [Node] = [];
-    if (!sm.last) { args += mobj; 0; };
+    if (!sm.last) { args += mobj; };
     let i = 0;
     while (i < len(margs)) {
         args += margs[i];
@@ -4873,9 +4542,8 @@ def gen_method(st: EmitSt, node: Call) -> EmitSt {
     };
     if (len(margs) < len(sm.params)) {
         args += n_str(sm.dflt, node.line, node.col);
-        0
     };
-    if (sm.last) { args += mobj; 0; };
+    if (sm.last) { args += mobj; };
     let fname = sm.fn;
     if (len(runtime_base(fname)) > 0) {
         st = gen_push_args(st, args);
@@ -4909,10 +4577,8 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
         let arr: ArrTy = t;
         if (arr.of.k == K.tbyte) {
             st = gen_helper1(st, "y_bytes_repr");
-            0
         } else {
             st = gen_arr_tostr_rax(st, arr.of);
-            0
         };
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
@@ -5003,11 +4669,10 @@ def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str]) -> EmitSt {
         let f = fs[i];
         let fname: str = f.name;
         let sep = "";
-        if (i > 0) { sep = ", "; 0; } else { 0; };
+        if (i > 0) { sep = ", "; } else { };
         st = gen_acc_cat_const(st, sep + fname + ": ");
         st = gen_rec_field_str(st, mfield_idx(lay, fname), f.typ);
         i = i + 1;
-        0
     };
     st = gen_acc_cat_const(st, "}");
     st = emit(st, "    mov (%rsp), %rax");
@@ -5068,7 +4733,7 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     let lisarr = lk == K.tarr || lk == K.tarrfix;
     let risarr = rk == K.tarr || rk == K.tarrfix;
     let how = "elem";
-    if (lisarr && risarr) { how = types.arr_plus_kind(lt, rt); 0; };
+    if (lisarr && risarr) { how = types.arr_plus_kind(lt, rt); };
     if (how == "cat") {
         let la: ArrTy = lt;
         let ra: ArrTy = rt;
@@ -5082,35 +4747,27 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     if (larr) {
         esz = arr_elem_bytes(lt);
         ety = store_elem_type(lt, esz);
-        0;
     } else {
         esz = arr_elem_bytes(rt);
         ety = store_elem_type(rt, esz);
-        0;
     };
     let one = { k: K.array, elems: args1(node.r), line: ln, col: cl };
     if (larr) {
-        0
     } else {
         one = { k: K.array, elems: args1(node.l), line: ln, col: cl };
-        0
     };
     if (larr) {
         st = gen(st, node.l);
         st = emit(st, "    push %rax");
         if (how == "cat") {
             st = gen(st, node.r);
-            0
         } else {
             st = gen_array_esz(st, one, esz, ety);
-            0
         };
-        0
     } else {
         st = gen_array_esz(st, one, esz, ety);
         st = emit(st, "    push %rax");
         st = gen(st, node.r);
-        0
     };
     st = emit(st, "    push %rax");
     st = emit(st, "    mov $" + tostring(esz) + ", %rax");
@@ -5192,8 +4849,7 @@ def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
         let at = infer(st, args[i]);
         if (at.k == K.tstr) {
             st = emit(st, "    add $8, " + syscall_reg(i - 1));
-            0
-        } else { 0; };
+        } else { };
         i = i - 1;
     };
     st = emit(st, "    pop %rax");
@@ -5213,8 +4869,7 @@ def capture_off(st: EmitSt) -> long {
         let e = env[i];
         if (e.kind == "capture") {
             res = e.off;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     res
@@ -5250,20 +4905,17 @@ def gen_direct(st: EmitSt, node: Call, name: str) -> EmitSt {
         let soff = -1;
         if (label == st.self_label) {
             soff = capture_off(st);
-            0
-        } else { 0; };
+        } else { };
         if (soff >= 0) {
             st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rax");
             st = emit(st, "    push %rax");
-            0
-        } else { 0; };
+        } else { };
         st = gen_push_args_as(st, node.args, dptypes);
         st = emit(st, "    call " + label);
         let nbytes = len(node.args) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
-            0
-        } else { 0; };
+        } else { };
         if (nbytes == 0) {
             st
         } else {
@@ -5385,13 +5037,11 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     if (elt.k == K.tarr) {
         let arr: TOf = elt;
         eltyp = arr.of;
-        0
-    } else { 0; };
+    } else { };
     if (elt.k == K.tarrfix) {
         let arr: TFix = elt;
         eltyp = arr.of;
-        0
-    } else { 0; };
+    } else { };
     st = gen(st, node.iter);
     st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
     st = emit(st, "    xor %eax, %eax");
@@ -5463,10 +5113,8 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
     while (i < n) {
         if (i < len(tptypes)) {
             st = gen_as(st, targs[i], tptypes[i]);
-            0
         } else {
             st = gen(st, targs[i]);
-            0
         };
         let off = (st.slots + 1) * -8;
         st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
@@ -5523,7 +5171,7 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
         let m = len(tl);
         // a trailing `;` (void) leaves the statement before it in tail
         // position: the block's value is void either way
-        if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; 0 } else { 0 };
+        if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; } else { };
         let ti = 0;
         while (ti < m - 1) {
             st = gen_loc_stmt(st, tl[ti]);
@@ -5534,9 +5182,7 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
             let lastn = tl[m - 1];
             st = gen_loc_stmt(st, lastn);
             st = gen_tail(st, lastn);
-            0
         } else {
-            0
         };
         st
     } else if (k == K.kw_if) {
@@ -5578,16 +5224,14 @@ def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No sc
     } else {
         // A trailing `;` (void) computes nothing: nothing to emit.
         let m = len(stmts);
-        if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; 0 } else { 0 };
+        if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; } else { };
         let i = 0;
         while (i < m) {
             st = gen_loc_stmt(st, stmts[i]);
             if (dropped || i < len(stmts) - 1) {
                 st = gen_stmt(st, stmts[i]);
-                0
             } else {
                 st = gen(st, stmts[i]);
-                0
             };
             i = i + 1;
         };
@@ -5613,7 +5257,7 @@ def loc_dir(ln: long) -> str {
         ".loc 1 " + tostring(ln)
     } else {
         let k = ln;
-        if (k > n) { k = n; 0; } else { 0; };
+        if (k > n) { k = n; } else { };
         ".loc " + tostring(f[k - 1] + 1) + " " + tostring(l[k - 1] + ln - k)
     }
 };
@@ -5666,8 +5310,7 @@ def mfield_idx(names: [str], name: str) -> long {
         let nm: str = names[i];
         if (nm == name) {
             out = i;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     out
@@ -5720,9 +5363,9 @@ def rec_slot(fs: [Field], key: str) -> long {
     while (i < len(fs)) {
         let f = fs[i];
         let fname: str = f.name;
-        if (fname == key) { found = true; 0 }
-        else if (fname < key) { below = below + 1; 0 }
-        else { 0 };
+        if (fname == key) { found = true; }
+        else if (fname < key) { below = below + 1; }
+        else { };
         i = i + 1;
     };
     if (found) { below } else { -1 }
@@ -5744,15 +5387,12 @@ def tyset_add(lbl: str, form: str) -> long {
             ty_forms[i] = form;
             ty_count = ty_count + 1;
             looking = false;
-            0
         } else if (cur == lbl) {
             let had: str = ty_forms[i];
-            if (had == form) { out = 0; 0 } else { out = -1; 0 };
+            if (had == form) { out = 0; } else { out = -1; };
             looking = false;
-            0
         } else {
             i = (i + 1) & mask;
-            0
         };
     };
     out
@@ -5931,7 +5571,6 @@ def ty_desc_as(st: EmitSt, rt: Type, lay: str) -> StLbl {
         te += lbl;
         te += form;
         st.rodata += [te];
-        0
     };
     { st: st, lbl: lbl }
 };
@@ -6155,7 +5794,7 @@ def rec_lit_type(lt: Type, want: Type) -> Type {
         let looking = true;
         let i = 0;
         while (looking && i < len(ms)) {
-            if (same_rec(lt, types.unfold(ms[i]))) { found = ms[i]; looking = false; 0 } else { 0 };
+            if (same_rec(lt, types.unfold(ms[i]))) { found = ms[i]; looking = false; } else { };
             i = i + 1;
         };
         found
@@ -6195,24 +5834,19 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                     let sf = sfs[si];
                     if (mfield_idx(names, sf.name) < 0) {
                         names += sf.name;
-                        0
-                    } else { 0; };
+                    } else { };
                     si = si + 1;
                 };
-                0
-            } else { 0; };
-            0
+            } else { };
         } else {
             if (mfield_idx(names, nk) < 0) {
                 names += nk;
-                0
-            } else { 0; };
-            0
+            } else { };
         };
         ni = ni + 1;
     };
     let rt: Type = types.lit_target(node, want);
-    if (rt.k == K.tnone) { rt = rec_lit_type(infer(st, node), want); 0; } else { 0; };
+    if (rt.k == K.tnone) { rt = rec_lit_type(infer(st, node), want); } else { };
     let rtu: Type = types.unfold(rt);
     // the declared type's optional fields the literal leaves out have their
     // slots too: none, which y_alloc's never-reused zeroed memory already is
@@ -6262,9 +5896,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                     st = emit(st, "    mov %rsi, " + tostring(8 + mi2 * 8) + "(%rcx)");
                     sj = sj + 1;
                 };
-                0
-            } else { 0; };
-            0
+            } else { };
         } else {
             let ft = rec_field_type(rtu, mk);
             if (lit_wraps(st, mv, rtu, mk, ft)) {
@@ -6278,7 +5910,6 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             st = emit(st, "    pop %rcx");
             let mi = mfield_idx(slots, mk);
             st = emit(st, "    mov %rax, " + tostring(8 + mi * 8) + "(%rcx)");
-            0
         };
         st = emit(st, "    push %rcx");
         i = i + 1;
@@ -6573,17 +6204,14 @@ def hexval_ch(c: str) -> long {
     let o = ord(c);
     let v = 0;
     if (o >= c'0') {
-        if (o <= c'9') { v = o - c'0'; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (o <= c'9') { v = o - c'0'; } else { };
+    } else { };
     if (o >= c'a') {
-        if (o <= c'f') { v = o - c'a' + 10; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (o <= c'f') { v = o - c'a' + 10; } else { };
+    } else { };
     if (o >= c'A') {
-        if (o <= c'F') { v = o - c'A' + 10; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (o <= c'F') { v = o - c'A' + 10; } else { };
+    } else { };
     v
 };
 
@@ -6593,17 +6221,16 @@ def lit_is_float(s: str) -> bool {
     let radix = false;
     if (len(s) > 2) {
         let p = s[:2];
-        if (p == "0x") { radix = true; 0; } else { 0; };
-        if (p == "0X") { radix = true; 0; } else { 0; };
-        if (p == "0b") { radix = true; 0; } else { 0; };
-        if (p == "0B") { radix = true; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (p == "0x") { radix = true; } else { };
+        if (p == "0X") { radix = true; } else { };
+        if (p == "0b") { radix = true; } else { };
+        if (p == "0B") { radix = true; } else { };
+    } else { };
     if (radix) { false } else {
         let f = false;
-        if (index_of(s, ".") >= 0) { f = true; 0; } else { 0; };
-        if (index_of(s, "e") >= 0) { f = true; 0; } else { 0; };
-        if (index_of(s, "E") >= 0) { f = true; 0; } else { 0; };
+        if (index_of(s, ".") >= 0) { f = true; } else { };
+        if (index_of(s, "e") >= 0) { f = true; } else { };
+        if (index_of(s, "E") >= 0) { f = true; } else { };
         f
     }
 };
@@ -6612,12 +6239,11 @@ def norm_num(s: str) -> str {
     let radix = 0;
     if (len(s) > 2) {
         let p = s[:2];
-        if (p == "0x") { radix = 16; 0; } else { 0; };
-        if (p == "0X") { radix = 16; 0; } else { 0; };
-        if (p == "0b") { radix = 2; 0; } else { 0; };
-        if (p == "0B") { radix = 2; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (p == "0x") { radix = 16; } else { };
+        if (p == "0X") { radix = 16; } else { };
+        if (p == "0b") { radix = 2; } else { };
+        if (p == "0B") { radix = 2; } else { };
+    } else { };
     if (radix == 0) {
         s
     } else {
@@ -6625,9 +6251,8 @@ def norm_num(s: str) -> str {
         let i = 2;
         while (i < len(s)) {
             let c = s[i:i + 1];
-            if (c == "_") { 0; } else {
+            if (c == "_") { } else {
                 v = v * radix + hexval_ch(c);
-                0
             };
             i = i + 1;
         };
@@ -6646,9 +6271,8 @@ def flit_mant(s: str) -> long {
     let n = flit_ebase(s);
     while (i < n) {
         let c = s[i:i + 1];
-        if (c == ".") { 0; } else {
+        if (c == ".") { } else {
             v = v * 10 + hexval_ch(c);
-            0
         };
         i = i + 1;
     };
@@ -6658,7 +6282,7 @@ def flit_mant(s: str) -> long {
 // Index of the 'e'/'E' that starts the exponent, or len(s) when absent.
 def flit_ebase(s: str) -> long {
     let e = index_of(s, "e");
-    if (e < 0) { e = index_of(s, "E"); 0; } else { 0; };
+    if (e < 0) { e = index_of(s, "E"); } else { };
     if (e < 0) { len(s) } else { e }
 };
 
@@ -6667,21 +6291,20 @@ def flit_exp(s: str) -> long {
     let eb = flit_ebase(s);
     let dot = index_of(s, ".");
     let frac = 0;
-    if (dot >= 0) { frac = eb - dot - 1; 0; } else { 0; };
+    if (dot >= 0) { frac = eb - dot - 1; } else { };
     let ex = 0;
     if (eb < len(s)) {
         let i = eb + 1;
         let neg = false;
         let sc = s[i:i + 1];
-        if (sc == "-") { neg = true; i = i + 1; 0; } else { 0; };
-        if (sc == "+") { i = i + 1; 0; } else { 0; };
+        if (sc == "-") { neg = true; i = i + 1; } else { };
+        if (sc == "+") { i = i + 1; } else { };
         while (i < len(s)) {
             ex = ex * 10 + hexval_ch(s[i:i + 1]);
             i = i + 1;
         };
-        if (neg) { ex = 0 - ex; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (neg) { ex = 0 - ex; } else { };
+    } else { };
     ex - frac
 };
 
@@ -6717,18 +6340,16 @@ def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
 def gen_scale10(st: EmitSt, n: long) -> EmitSt {
     let up = n > 0;
     let left = n;
-    if (!(up)) { left = 0 - n; 0; } else { 0; };
+    if (!(up)) { left = 0 - n; } else { };
     while (left > 0) {
         let chunk = left;
-        if (chunk > 18) { chunk = 18; 0; } else { 0; };
+        if (chunk > 18) { chunk = 18; } else { };
         st = emit(st, "    mov $" + tostring(pow10(chunk)) + ", %rax");
         st = emit(st, "    cvtsi2sd %rax, %xmm1");
         if (up) {
             st = emit(st, "    mulsd %xmm1, %xmm0");
-            0
         } else {
             st = emit(st, "    divsd %xmm1, %xmm0");
-            0
         };
         left = left - chunk;
     };
@@ -6886,7 +6507,7 @@ def block6(a: Node, b: Node, c: Node, d: Node, e: Node, f: Node, ln: long, cl: l
 def gen_incdec(st: EmitSt, node: IncDec) -> EmitSt {
     let op = node.op;
     let binop = "+";
-    if (op == "--") { binop = "-"; 0; } else { 0; };
+    if (op == "--") { binop = "-"; } else { };
     let tgt = node.tgt;
     let ln = node.line;
     let cl = node.col;
@@ -7087,7 +6708,6 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
     let bulk = false;
     if (op == "*") {
         mode = "prepend";
-        0
     } else {
         let vt = infer(st, v);
         if ((vt.k == K.tarr || vt.k == K.tarrfix) && types.arr_plus_kind(tt, vt) == "cat") {
@@ -7095,11 +6715,8 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
             let ta: ArrTy = tt;
             let va: ArrTy = vt;
             bulk = types.teq(ta.of, va.of);
-            0
         } else {
-            0
         };
-        0
     };
     if (mode == "append" && bulk) {
         let all = n_call2("push$all", gen_place_read(tgt, t1, ln, cl), v, ln, cl);
@@ -7118,7 +6735,7 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
         gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
     } else {
         let fname = "push";
-        if (mode == "prepend") { fname = "prepend"; 0; } else { 0; };
+        if (mode == "prepend") { fname = "prepend"; } else { };
         let call = n_call2(fname, gen_place_read(tgt, t1, ln, cl), v, ln, cl);
         gen(st, block3(gen_place_bind(tgt, t1, ln, cl), gen_place_assign(tgt, call, t1, ln, cl), gen_place_read(tgt, t1, ln, cl), ln, cl))
     }
@@ -7153,7 +6770,6 @@ def gen_idxassign(st: EmitSt, node: IdxAssign) -> EmitSt {
         st = emit(st, "    mov %rax, %rdx");
         st = emit(st, elem_store_rdx(iaesz, "%r10", "%rcx"));
         st = emit(st, "    mov %r10, %rdx");
-        0
     } else {
         st = emit(st, "    push %rax");
         st = emit(st, "    mov (%rdx), %rax");
@@ -7164,7 +6780,6 @@ def gen_idxassign(st: EmitSt, node: IdxAssign) -> EmitSt {
         st = emit(st, "    mov %rax, %rdx");
         st = emit(st, elem_store_rdx(iaesz, "%r10", "%rcx"));
         st = emit(st, "    mov %r10, %rdx");
-        0
     };
     st
 };
@@ -7488,11 +7103,10 @@ def rec_field_idx(t: Type, key: str) -> long {
         let rec: TRec = t;
         let fs: [Field] = rec.fields;
         idx = rec_slot(fs, key);
-        0
     } else if (t.k == K.tmap) {
         // a map is lowered to the {keys, vals, boxes} record (see
         // gen_maplit), laid out boxes, keys, vals
-        if (key == "boxes") { idx = 0; 0 } else if (key == "keys") { idx = 1; 0 } else if (key == "vals") { idx = 2; 0 };
+        if (key == "boxes") { idx = 0; } else if (key == "keys") { idx = 1; } else if (key == "vals") { idx = 2; };
     };
     idx
 };
@@ -7504,8 +7118,7 @@ def rec_field_type(t: Type, key: str) -> Type {
     let ft: Type = { k: K.tnone };
     if (t.k == K.tunion) {
         let ms = types.members(t);
-        if (len(ms) > 0) { ft = rec_field_type(ms[0], key); 0; } else { 0; };
-        0
+        if (len(ms) > 0) { ft = rec_field_type(ms[0], key); } else { };
     } else if (t.k == K.trec) {
         let rec: TRec = t;
         let fs: [Field] = rec.fields;
@@ -7514,12 +7127,10 @@ def rec_field_type(t: Type, key: str) -> Type {
             let f = fs[i];
             if (f.name == key) {
                 ft = f.typ;
-                0
-            } else { 0; };
+            } else { };
             i = i + 1;
         };
-        0
-    } else { 0; };
+    } else { };
     ft
 };
 
@@ -7782,9 +7393,8 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
         let kind = types.fmt_kind(t);
         let ty = f.ty;
         if (ty == 0) {
-            if (kind == 1) { ty = 100; 0; } else if (kind == 2) { ty = 102; 0; } else { ty = 115; 0; };
-            0
-        } else { 0; };
+            if (kind == 1) { ty = 100; } else if (kind == 2) { ty = 102; } else { ty = 115; };
+        } else { };
         let code = fmt_code(f, kind, ty);
         if (ty == c's') {
             st = gen_tostring(st, ts);
@@ -7806,18 +7416,16 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
             if (kind == 1) {
                 st = emit(st, "    cvtsi2sd %rax, %xmm0");
                 st = emit(st, "    movq %xmm0, %rax");
-                0
-            } else { 0; };
+            } else { };
             if (ty == c'%') {
                 st = emit(st, "    movq %rax, %xmm0");
                 st = emit(st, "    mov $100, %rax");
                 st = emit(st, "    cvtsi2sd %rax, %xmm1");
                 st = emit(st, "    mulsd %xmm1, %xmm0");
                 st = emit(st, "    movq %xmm0, %rax");
-                0
-            } else { 0; };
+            } else { };
             let prec = f.prec;
-            if (prec < 0) { prec = 6; 0; } else { 0; };
+            if (prec < 0) { prec = 6; } else { };
             st = emit(st, "    push %rax");
             st = fmt_push(st, code);
             st = fmt_push(st, f.width);
@@ -7837,17 +7445,16 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
 def fmt_code(f: FmtSpec, kind: long, ty: long) -> long {
     let fill = f.fill;
     let align = f.align;
-    if (f.zero && fill == 0) { fill = 48; 0; } else { 0; };
-    if (f.zero && align == 0 && kind != 0) { align = 61; 0; } else { 0; };
-    if (fill == 0) { fill = 32; 0; } else { 0; };
+    if (f.zero && fill == 0) { fill = 48; } else { };
+    if (f.zero && align == 0 && kind != 0) { align = 61; } else { };
+    if (fill == 0) { fill = 32; } else { };
     if (align == 0) {
-        if (kind != 0) { align = 62; 0; } else { align = 60; 0; };
-        0
-    } else { 0; };
+        if (kind != 0) { align = 62; } else { align = 60; };
+    } else { };
     let sg = 0;
-    if (f.sign == c'+') { sg = 1; 0; } else if (f.sign == c' ') { sg = 2; 0; } else { 0; };
-    if (f.alt) { sg = sg + 4; 0; } else { 0; };
-    if (f.grp == c',') { sg = sg + 8; 0; } else if (f.grp == c'_') { sg = sg + 16; 0; } else { 0; };
+    if (f.sign == c'+') { sg = 1; } else if (f.sign == c' ') { sg = 2; } else { };
+    if (f.alt) { sg = sg + 4; } else { };
+    if (f.grp == c',') { sg = sg + 8; } else if (f.grp == c'_') { sg = sg + 16; } else { };
     ty + 256 * fill + 65536 * align + 16777216 * sg
 };
 
@@ -7878,8 +7485,8 @@ def gen_join(st: EmitSt, node: Call) -> EmitSt {
     let jargs: [Node] = node.args;
     let at: Type = infer(st, jargs[0]);
     let eltyp: Type = type_node({ k: K.tunk });
-    if (at.k == K.tarr) { let arr: TOf = at; eltyp = arr.of; 0; } else { 0; };
-    if (at.k == K.tarrfix) { let arr: TFix = at; eltyp = arr.of; 0; } else { 0; };
+    if (at.k == K.tarr) { let arr: TOf = at; eltyp = arr.of; } else { };
+    if (at.k == K.tarrfix) { let arr: TFix = at; eltyp = arr.of; } else { };
     let ek = eltyp.k;
     if (ek == K.tlong) {
         gen_join_conv(st, node, "y_long_tostr", 8)
@@ -8117,7 +7724,7 @@ def gen_store(st: EmitSt, node: Store) -> EmitSt {
     let spt = infer(st, node.p);
     let sw = ptr_width(spt);
     let sto: Type = type_node({ k: K.tnone });
-    if (sw == 8 && spt.k == K.tptr) { let ptr: TPtr = spt; sto = ptr.to; 0 } else { 0; };
+    if (sw == 8 && spt.k == K.tptr) { let ptr: TPtr = spt; sto = ptr.to; } else { };
     st = gen(st, node.p);
     st = emit(st, "    push %rax");
     st = gen_as(st, node.v, sto);
@@ -8164,8 +7771,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
     if (selfname != "") {
         let func_node: Func = func;
         f = env_define(f, selfname, "func", 0, label, func_type_in(st, func_node));
-        0
-    } else { 0; };
+    } else { };
     // bind params. Caller pushes args left-to-right, so the LAST arg sits
     // at rbp+16 and param k lives at rbp+16+8*(n-1-k) (arity-dependent).
     let params: [str] = func.params;
@@ -8182,7 +7788,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
     // binds nothing here and never touches the slot, which is what lets one
     // body serve both direct and closure calls. `_start` has no enclosing
     // frame, so it never captures.
-    if (is_main) { 0; } else {
+    if (is_main) { } else {
         let mycaps = fn_captures(func, st.fns.ix, selfname);
         let cloff = 16 + nargs * 8;
         let c = 0;
@@ -8194,20 +7800,17 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
             let ct: Type = type_node({ k: K.tnone });
             if (c < len(captypes)) {
                 ct = captypes[c];
-                0
-            } else { 0; };
+            } else { };
             f = env_define(f, cn, "capture", cloff, tostring(c), ct);
             c = c + 1;
         };
-        0
     };
     // Captured parameters (and the own name) move into their cells
     // before the body; a tail call re-enters above this, so every
     // recycled frame gets fresh cells.
     if (selfname != "") {
         f = box_bound(f, selfname);
-        0
-    } else { 0; };
+    } else { };
     let pbi = 0;
     while (pbi < nargs) {
         let pbn: str = params[pbi];
@@ -8223,8 +7826,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
             let ope = env_find(f, opn);
             f = emit(f, "    mov " + tostring(ope.off) + "(%rbp), %rax");
             f = bind_own(f, opn, opt);
-            0
-        } else { 0; };
+        } else { };
         opi = opi + 1;
     };
     f = gen_tail(f, func.body);
@@ -8233,9 +7835,8 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
     code += label + ":";
     // -g: the prologue is the def's line; `_start` has none (line 0)
     if (dbg_lines) {
-        if (is_main) { code += loc_dir(0); 0; } else { code += loc_dir(func.line); 0; };
-        0
-    } else { 0; };
+        if (is_main) { code += loc_dir(0); } else { code += loc_dir(func.line); };
+    } else { };
     if (is_main) {
         if (want_argv) {
             // _start prologue: at process entry %rsp -> [argc][argv0ptr]....
@@ -8253,16 +7854,13 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
             code += "    push %r15";
             code += "    call y_argv_init";
             code += "    add $16, %rsp";
-            0
-        } else { 0; };
-        0
-    } else { 0; };
+        } else { };
+    } else { };
     code += "    push %rbp";
     code += "    mov %rsp, %rbp";
     if (frame > 0) {
         code += "    sub $" + tostring(frame) + ", %rsp";
-        0
-    } else { 0; };
+    } else { };
     let fout: [str] = f.out;
     let j = 0;
     while (j < len(fout)) {
@@ -8337,8 +7935,7 @@ def func_type_in(st: EmitSt, func: Func) -> FuncTy {
     let r: Type = fn_ret(func);
     if (r.k == K.tnone) {
         r = infer_fn_ret(st, func);
-        0
-    } else { 0; };
+    } else { };
     { k: K.tfunc, args: func.ptypes, ret: r }
 };
 
@@ -8364,8 +7961,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
             fids += origin_file(origin, ln);
             lines += ln;
             cols += s.col;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     let errs: [Diag] = [];
@@ -8376,15 +7972,13 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
         let m = 0;
         while (m < j) {
             if (fids[m] != fids[j]) {
-                if (names[m] == nj) { other = m; 0; } else { 0; };
-                0
-            } else { 0; };
+                if (names[m] == nj) { other = m; } else { };
+            } else { };
             m = m + 1;
         };
         if (other >= 0) {
             errs += { msg: "duplicate definition '" + nj + "': " + origin_at(origin, lines[other], false) + " defines it too (imported files share one namespace; rename one)", line: lines[j], col: cols[j] };
-            0
-        } else { 0; };
+        } else { };
         j = j + 1;
     };
     errs
@@ -8441,11 +8035,10 @@ def global_decls(stmts: [Node]) -> [Node] {
         let s: Node = stmts[i];
         if (s.k == K.decl) {
             let decl: Decl = s;
-            if (decl.kind == "def") { 0; }
-            else if (decl.v.k == K.func) { 0; }
-            else { out += decl; 0; };
-            0
-        } else { 0; };
+            if (decl.kind == "def") { }
+            else if (decl.v.k == K.func) { }
+            else { out += decl; };
+        } else { };
         i = i + 1;
     };
     out
@@ -8472,8 +8065,7 @@ def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
         let t: Type = decl_type(d);
         if (t.k == K.tnone) {
             t = infer(f, decl_value(d));
-            0
-        } else { 0; };
+        } else { };
         let lbl = arch.arch_global_label(gbase + i, gn);
         out += { name: gn, label: lbl, typ: t };
         f = env_define(f, gn, "global", 0, lbl, t);
@@ -8516,10 +8108,10 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
         let reads_var = false;
         while (j < len(cs)) {
             let cn: str = cs[j];
-            if (namemap_get(fnm, cn) >= 0) { 0; } else { reads_var = true; 0; };
+            if (namemap_get(fnm, cn) >= 0) { } else { reads_var = true; };
             j = j + 1;
         };
-        if (reads_var) { out += d.name; 0; } else { 0; };
+        if (reads_var) { out += d.name; } else { };
         i = i + 1;
     };
     let changed = true;
@@ -8528,21 +8120,19 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
         i = 0;
         while (i < len(defs)) {
             let d = defs[i];
-            if (name_in(out, d.name)) { 0; } else {
+            if (name_in(out, d.name)) { } else {
                 let cs = caps[i];
                 let j = 0;
                 let hit = false;
                 while (j < len(cs)) {
                     let cn: str = cs[j];
-                    if (name_in(out, cn)) { hit = true; 0; } else { 0; };
+                    if (name_in(out, cn)) { hit = true; } else { };
                     j = j + 1;
                 };
                 if (hit) {
                     out += d.name;
                     changed = true;
-                    0
-                } else { 0; };
-                0
+                } else { };
             };
             i = i + 1;
         };
@@ -8564,15 +8154,12 @@ def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
         let redo = ret_omitted(d.func);
         if (redo && len(only) > 0) {
             redo = reads_any(d.func, only);
-            0
-        } else { 0; };
+        } else { };
         if (redo) {
             out += { name: fe0.name, label: fe0.label,
               typ: type_node({ k: K.tfunc, args: fn_ptypes(d.func), ret: infer_fn_ret(st, d.func) }) };
-            0
         } else {
             out += fe0;
-            0
         };
         fx = fx + 1;
     };
@@ -8594,7 +8181,7 @@ def reads_any(func: Func, names: [str]) -> bool {
     let found = false;
     while (i < len(reads)) {
         let n: str = reads[i];
-        if (name_in(names, n)) { found = true; 0; } else { 0; };
+        if (name_in(names, n)) { found = true; } else { };
         i = i + 1;
     };
     found
@@ -8722,8 +8309,7 @@ def std_units(names: [str], pack: str) -> [Unit] {
     let out: [Unit] = [];
     if (len(pack) > 0) {
         out = std_unpack(pack, names);
-        0
-    } else { 0; };
+    } else { };
     if (len(out) == 0) {
         let i = 0;
         while (i < len(names)) {
@@ -8733,16 +8319,14 @@ def std_units(names: [str], pack: str) -> [Unit] {
                 let j = 0;
                 while (j < len(out)) {
                     let u = out[j];
-                    if (u.name == "prelude") { ext += u.exports; 0; } else { 0; };
+                    if (u.name == "prelude") { ext += u.exports; } else { };
                     j = j + 1;
                 };
-                0
-            } else { 0; };
+            } else { };
             out += std_compile(nm, ext);
             i = i + 1;
         };
-        0
-    } else { 0; };
+    } else { };
     out
 };
 
@@ -8768,8 +8352,7 @@ def std_compile(name: str, ext: [Sym]) -> Unit {
             k = k + 1;
         };
         exit(1);
-        0
-    } else { 0; };
+    } else { };
     r.unit
 };
 
@@ -8804,23 +8387,19 @@ def unit_exports(stmts: [Node], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
             let found = false;
             while (!found && h < len(hdefs)) {
                 let hd = hdefs[h];
-                if (hd.name == nm) { found = true; 0; } else { h = h + 1; 0; };
+                if (hd.name == nm) { found = true; } else { h = h + 1; };
             };
             if (found) {
                 let xn = export_name(nm);
                 if (len(xn) > 0) {
                     let fe = fns[h];
                     out += { name: xn, label: fe.label, typ: fe.typ };
-                    0
-                } else { 0; };
+                } else { };
                 h = h + 1;
-                0
             } else {
                 h = h0;
-                0
             };
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     out
@@ -8865,8 +8444,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
     if (len(dups) > 0) {
         dups += errors;
         errors = dups;
-        0
-    } else { 0; };
+    } else { };
     let warnings: [Diag] = [];
     if (len(errors) > 0) {
         { ok: false, errors: errors, warnings: warnings, times: times, unit: unit_empty(name) }
@@ -8918,14 +8496,13 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let i = 0;
         while (i < len(defs)) {
             let d = defs[i];
-            if (name_in(capdefs, d.name)) { 0; } else {
+            if (name_in(capdefs, d.name)) { } else {
                 hdefs += d;
                 let rl = next_uid(st);
                 st = rl.st;
                 let label = fn_label_of(rl.uid, d.name);
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 st = env_define(st, d.name, "func", 0, label, func_type(d.func));
-                0
             };
             i = i + 1;
         };
@@ -8965,8 +8542,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             fixedfns += fixed2;
             fixedfns += xfns;
             fixedfns += gl;
-            0
-        } else { 0; };
+        } else { };
         st = { out: st.out, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label, fns: fntab_of(fixedfns),
@@ -8989,8 +8565,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         if (pkg_base(base)) {
             exports = pkg_exports(exports, gl);
             udfl = unit_dfl(ast2.stmts, origin);
-            0
-        } else { 0; };
+        } else { };
         // The top-level statements with hoisted defs skipped (emitted
         // above, calls go direct to their labels). Variable declarations
         // store to their globals (bind_decl). A def needing a record would
@@ -9014,23 +8589,16 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 if (decl.kind == "def") {
                     if (name_in(capdefs, decl.name)) {
                         main_stmts += decl;
-                        0;
-                    } else { 0; };
-                    0
+                    } else { };
                 } else if (decl.v.k == K.func) {
                     if (name_in(capdefs, decl.name)) {
                         main_stmts += decl;
-                        0;
-                    } else { 0; };
-                    0
+                    } else { };
                 } else {
                     main_stmts += decl;
-                    0;
                 };
-                0
             } else {
                 main_stmts += s;
-                0;
             };
             i = i + 1;
         };
@@ -9044,14 +8612,12 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             let main_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
             let start_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: K.tvoid }), body: main_body, line: 0, col: 0 };
             st = emit_one_fn(st, "_start", rm.uid, start_fn, true, want.argv || xt.argv, [], "");
-            0
         } else if (len(main_stmts) > 0) {
             init = arch.arch_fn_label(rm.uid, "init");
             let init_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
             let init_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: K.tvoid }), body: init_body, line: 0, col: 0 };
             st = emit_one_fn(st, init, rm.uid, init_fn, false, false, [], "");
-            0
-        } else { 0; };
+        } else { };
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         let glabels: [str] = [];
@@ -9099,13 +8665,11 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
         let xn = "";
         if (gn[len(gn) - 2:] == "#o") {
             let bn = export_name(gn[:len(gn) - 2]);
-            if (len(bn) > 0) { xn = bn + "#o"; 0; } else { 0; };
-            0
+            if (len(bn) > 0) { xn = bn + "#o"; } else { };
         } else {
             xn = export_name(gn);
-            0
         };
-        if (len(xn) > 0) { all += { name: xn, label: ge.label, typ: ge.typ }; 0; } else { 0; };
+        if (len(xn) > 0) { all += { name: xn, label: ge.label, typ: ge.typ }; } else { };
         i = i + 1;
     };
     let out: [Sym] = [];
@@ -9116,10 +8680,10 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
         let m = j + 1;
         while (!later && m < len(all)) {
             let e2 = all[m];
-            if (e2.name == e.name) { later = true; 0; } else { 0; };
+            if (e2.name == e.name) { later = true; } else { };
             m = m + 1;
         };
-        if (!later) { out += e; 0; } else { 0; };
+        if (!later) { out += e; } else { };
         j = j + 1;
     };
     out
@@ -9140,16 +8704,15 @@ def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
             let j = 0;
             while (j < len(out)) {
                 let d = out[j];
-                if (d.name != nm) { keep += d; 0; } else { 0; };
+                if (d.name != nm) { keep += d; } else { };
                 j = j + 1;
             };
             let decl: Decl = s;
             let func: Func = decl.v;
             let vals = dfl_codes(func);
-            if (len(vals) > 0) { keep += { name: nm, vals: vals }; 0; } else { 0; };
+            if (len(vals) > 0) { keep += { name: nm, vals: vals }; } else { };
             out = keep;
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     out
@@ -9165,7 +8728,7 @@ def dfl_codes(func: Func) -> [str] {
     while (i < len(dv)) {
         let d = dv[i];
         let dk: long = d.k;
-        if (dk != K.void) { any = true; 0; } else { 0; };
+        if (dk != K.void) { any = true; } else { };
         out += lit_code(d);
         i = i + 1;
     };
@@ -9223,11 +8786,9 @@ def link_locs(b: str, off: long) -> str {
             if (dbg_lines) {
                 let sp = index_of(p, " ");
                 out += "\n.loc " + tostring(tonum(p[:sp]) + off) + p[sp:];
-                0
             } else {
                 let nl = index_of(p, "\n");
-                if (nl >= 0) { out += p[nl:]; 0; } else { 0; };
-                0
+                if (nl >= 0) { out += p[nl:]; } else { };
             };
             i = i + 1;
         };
@@ -9245,7 +8806,6 @@ def rodata_pieces(pieces: [str], allrod: [[str]]) -> [str] {
         let pair = allrod[s2];
         if (len(pair) == 3) {
             pieces += pair[0] + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + pair[2] + "\"\n";
-            0
         } else {
             let lbl: str = pair[0];
             let form: str = pair[1];
@@ -9255,9 +8815,7 @@ def rodata_pieces(pieces: [str], allrod: [[str]]) -> [str] {
                 // a descriptor's address is its type's tag: one byte
                 // makes it an address of its own
                 pieces += lbl + ":\n.zero 1\n";
-                0
-            } else { 0; };
-            0
+            } else { };
         };
         s2 = s2 + 1;
     };
@@ -9298,11 +8856,11 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     let ou = len(std);
     while (ou <= nu) {
         let olab: [str] = [];
-        if (ou < nu) { let du = units[ou]; olab = du.labels; 0; } else { olab = prog.labels; 0; };
+        if (ou < nu) { let du = units[ou]; olab = du.labels; } else { olab = prog.labels; };
         let pi = 0;
         while (pi < len(olab)) {
             let pl: str = olab[pi];
-            if (pl[:2] == "y_") { plabels += pl; 0; } else { 0; };
+            if (pl[:2] == "y_") { plabels += pl; } else { };
             pi = pi + 1;
         };
         ou = ou + 1;
@@ -9325,16 +8883,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
             let lb: str = ul[b];
             let drop = false;
             if (j < len(std) && len(plabels) > 0) {
-                if (lb[:2] == "y_") { drop = name_in(plabels, lb); 0; } else { 0; };
-                0
-            } else { 0; };
+                if (lb[:2] == "y_") { drop = name_in(plabels, lb); } else { };
+            } else { };
             if (!drop) {
                 all += ub[b];
                 labels += lb;
                 refs += [ur[b]];
                 fno += f;
-                0
-            } else { 0; };
+            } else { };
             b = b + 1;
         };
         j = j + 1;
@@ -9386,19 +8942,17 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         if (keep[ab]) {
             let kb: str = all[ab];
             let kf = fno[ab];
-            if (kf >= 0) { kb = link_locs(kb, kf); 0; } else { 0; };
+            if (kf >= 0) { kb = link_locs(kb, kf); } else { };
             pieces += kb;
             pieces += "\n";
-            0
-        } else { 0; };
+        } else { };
         ab = ab + 1;
     };
     let body_text = join(pieces, "");
     let asm = arch.arch_header();
     if (dbg_lines) {
         asm = file_dirs(files) + asm;
-        0
-    } else { 0; };
+    } else { };
     asm = asm + arch.arch_text() + ps.text;
     asm = asm + body_text;
     let const_refs: [str] = [];
@@ -9437,8 +8991,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
             gk = gk + 1;
         };
         asm = asm + join(gpieces, "");
-        0
-    } else { 0; };
+    } else { };
     asm
 };
 
@@ -9775,7 +9328,7 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         let xl = pack_get(cur);
         let tc = pack_get(cur);
         let xt: Type = { k: K.tnone };
-        if (bound) { xt = tdecode(tc); 0; } else { 0; };
+        if (bound) { xt = tdecode(tc); } else { };
         xs += { name: xn, label: xl, typ: xt };
         j = j + 1;
     };
@@ -9823,7 +9376,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
             let nm = pack_get(cur);
             let ul = pack_len(cur);
             let at = cur.p;
-            if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); 0; } else { 0; };
+            if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); } else { };
             cur.p = at + ul;
             i = i + 1;
         };
@@ -9833,14 +9386,13 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
             let a = 0;
             while (a < len(got)) {
                 let u = got[a];
-                if (u.name == want) { out += u; 0; } else { 0; };
+                if (u.name == want) { out += u; } else { };
                 a = a + 1;
             };
             k = k + 1;
         };
-        if (len(out) != len(names)) { out = []; 0; } else { 0; };
-        0
-    } else { 0; };
+        if (len(out) != len(names)) { out = []; } else { };
+    } else { };
     out
 };
 
@@ -9872,12 +9424,9 @@ def unit_unobj(text: str, key: str) -> { ok: bool, unit: Unit } {
             if (cur.p + ul == len(text)) {
                 u = unit_read(cur, nm, true);
                 ok = cur.p == len(text);
-                0
-            } else { 0; };
-            0
-        } else { 0; };
-        0
-    } else { 0; };
+            } else { };
+        } else { };
+    } else { };
     { ok: ok, unit: u }
 };
 
@@ -9902,7 +9451,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
     let i = 0;
     while (i < len(std)) {
         let u = std[i];
-        if (std_unit_bound(u.name) && name_in(snames, u.name)) { ext += u.exports; 0; } else { 0; };
+        if (std_unit_bound(u.name) && name_in(snames, u.name)) { ext += u.exports; } else { };
         i = i + 1;
     };
     let dfl: [Dfl] = [];
@@ -9931,8 +9480,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
                 dfl += { name: u.name + "." + d.name, vals: vals };
                 j = j + 1;
             };
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     xt.ext = ext;
@@ -9962,7 +9510,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
     let i = 0;
     while (i < len(units)) {
         let u = units[i];
-        if (len(u.init) > 0) { inits += u.init; 0; } else { 0; };
+        if (len(u.init) > 0) { inits += u.init; } else { };
         i = i + 1;
     };
     xt.inits = inits;
@@ -10073,18 +9621,14 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
             if (kk == mk) {
                 vals[fi] = mv;
                 found = true;
-                0
             } else {
-                0
             };
             fi = fi + 1;
         };
         if (found) {
-            0
         } else {
             keys += mk;
             vals += mv;
-            0
         };
         mi = mi + 1;
     };
@@ -10165,10 +9709,8 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
     sts += map_scan(t, ln, cl);
     if (mode == "has") {
         sts += n_bin("<", i, n, ln, cl);
-        0
     } else if (mode == "none") {
         sts += n_bin("==", i, n, ln, cl);
-        0
     } else if (mode == "val") {
         let miss: [Node] = [];
         miss += n_call1("unwrap", n_id("none", ln, cl), ln, cl);
@@ -10176,7 +9718,6 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
         hit += n_num("0", ln, cl);
         sts += n_if(n_bin("==", i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl);
         sts += n_idx(n_dot(m, "vals", ln, cl), i, ln, cl);
-        0
     } else {
         let b: Node = n_id(t + "b", ln, cl);
         let fill: [Node] = [];
@@ -10192,7 +9733,6 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
         let miss: [Node] = [];
         miss += n_id("none", ln, cl);
         sts += n_if(n_bin("<", i, n, ln, cl), block_of(hit, ln, cl), block_of(miss, ln, cl), ln, cl);
-        0
     };
     gen(st, block_of(sts, ln, cl))
 };

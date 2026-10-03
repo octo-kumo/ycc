@@ -325,7 +325,7 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         let zeros: [byte] = [0, 0, 0, 0];
         let b = concat(prefix, zeros);
         let off = 3;
-        if (r < 0) { off = 2; 0; };
+        if (r < 0) { off = 2; };
         { bytes: with_rex(r, b), fix: [fixup(off, "imm32diff", src.a, src.b)], err: "" }
     } else if (dst.k == K.reg && src.k == K.fs && op_size(dst) == 64) {
         // mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
@@ -399,7 +399,7 @@ def enc_mem_result(r: long, b: [byte], t: MemTail) -> Encoded {
             // fixup offset counts the REX prefix with_rex is about to add;
             // the disp32 placeholder bytes must exist for the patch to land.
                 let off = len(b);
-                if (r >= 0) { off = off + 1; 0; };
+                if (r >= 0) { off = off + 1; };
                 fx += fixup(off, "rip32", t.rip_lbl, "");
                 let zeros: [byte] = [0, 0, 0, 0];
                 bb = concat(b, zeros);
@@ -540,8 +540,8 @@ def enc_shift(mn: str, dst: Operand, cnt: Operand) -> Encoded {
     // shl/shr/sar $imm8 (0-63) or %cl, %r64: C1 /ext ib and D3 /ext, where
     // ext is shl 4, shr 5 (logical), sar 7 (arithmetic)
     let ext = 4;
-    if (mn == "shr") { ext = 5; 0; }
-    else if (mn == "sar") { ext = 7; 0; }
+    if (mn == "shr") { ext = 5; }
+    else if (mn == "sar") { ext = 7; }
     if (dst.k != K.reg) {
         { bytes: [], fix: [], err: mn + " dst" }
     } else if (op_size(dst) != 64) {
@@ -582,9 +582,9 @@ def enc_sse_arith(mn: str, dst: Operand, src: Operand) -> Encoded {
         { bytes: [], fix: [], err: "sse src" }
     } else {
         let op = 88;
-        if (mn == "subsd") { op = 92; 0; } else { 0; };
-        if (mn == "mulsd") { op = 89; 0; } else { 0; };
-        if (mn == "divsd") { op = 94; 0; } else { 0; };
+        if (mn == "subsd") { op = 92; } else { };
+        if (mn == "mulsd") { op = 89; } else { };
+        if (mn == "divsd") { op = 94; } else { };
         let r = rex(false, dst.n, -1, src.n);
         let tail: [byte] = [15, op, modrm(3, dst.n, src.n)];
         if (r < 0) {
@@ -684,11 +684,11 @@ def enc_unary(op: str, o: Operand) -> Encoded {
     } else {
         let ext = 3;
         let opc = 247;
-        if (op == "idiv") { ext = 7; 0; }
-        else if (op == "div") { ext = 6; 0; }
-        else if (op == "not") { ext = 2; 0; }
-        else if (op == "dec") { ext = 1; opc = 255; 0; }
-        else if (op == "inc") { ext = 0; opc = 255; 0; }
+        if (op == "idiv") { ext = 7; }
+        else if (op == "div") { ext = 6; }
+        else if (op == "not") { ext = 2; }
+        else if (op == "dec") { ext = 1; opc = 255; }
+        else if (op == "inc") { ext = 0; opc = 255; }
         let r = rex(true, -1, -1, o.n);
         let b: [byte] = [opc, modrm(3, ext, o.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }

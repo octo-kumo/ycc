@@ -44,28 +44,21 @@ def readline() -> str? {
             if (i < end) {
                 y_rl_pos = i + 1;
                 go = false;
-                0;
             } else {
                 y_rl_pos = end;
-                0;
             };
-            0;
         } else {
             if (len(y_rl_buf) == 0) {
                 let fresh: [byte; 16384] = [0; 16384];
                 y_rl_buf = fresh[0:16384];
-                0;
             };
             let n = syscall(0, 0, &y_rl_buf[0], len(y_rl_buf));
             if (n <= 0) {
                 go = false;
-                0;
             } else {
                 y_rl_pos = 0;
                 y_rl_end = n;
-                0;
             };
-            0;
         };
     };
     if (got) { some(from_bytes(out)) } else { none }
@@ -84,9 +77,7 @@ def y_stdin_sync() -> long {
         if (syscall(8, 0, 0 - unread, 1) >= 0) {
             y_rl_pos = 0;
             y_rl_end = 0;
-            0;
         };
-        0;
     };
     0
 };

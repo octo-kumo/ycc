@@ -686,7 +686,6 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
         if (used) {
             lint_mark(st, id.v, 1);
         };
-        0
     } else {
         lint_node(st, t, true);
     };
@@ -734,9 +733,7 @@ def lint_vars(st: LintSt) -> long {
         };
         let word = lint_word(v.kind);
         if (f & 1 != 0) {
-            0
         } else if (f & 4 != 0 && !(v.scal || (v.fresh && f & 2 == 0))) {
-            0
         } else if (f & 6 != 0) {
             lint_warn(st, word + " '" + v.name + "' is assigned but never read", v.line, v.col)
         } else {
@@ -1237,7 +1234,6 @@ def lint_report(st: LintSt, t: LintTy) -> long {
         if (o.parent >= 0 && lint_rep(occs, o.parent)) {
             o.rep = true;
         } else if (o.decl) {
-            0;
         } else if (alias_of[id] != "") {
             lint_warn(st, "the type " + types.tstr(o.typ) + " is already declared as '" + alias_of[id] + "'; use the alias", o.line, o.col);
             o.rep = true;

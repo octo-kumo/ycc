@@ -141,25 +141,20 @@ def self_pack() -> str {
                     let left = n;
                     while (left > 0) {
                         let want = left;
-                        if (want > 65536) { want = 65536; 0; } else { 0; };
+                        if (want > 65536) { want = 65536; } else { };
                         let got = syscall(0, fd, &buf[0], want);
                         if (got <= 0) {
                             left = -1;
-                            0
                         } else {
                             // (a slice copies byte by byte: only a part chunk pays it)
-                            if (got == 65536) { pieces += from_bytes(buf); 0; } else { pieces += from_bytes(buf[0:got]); 0; };
+                            if (got == 65536) { pieces += from_bytes(buf); } else { pieces += from_bytes(buf[0:got]); };
                             left = left - got;
-                            0
                         };
                     };
-                    if (left == 0) { pack = join(pieces, ""); 0; } else { 0; };
-                    0
-                } else { 0; };
-                0
-            } else { 0; };
-            0
-        } else { 0; };
+                    if (left == 0) { pack = join(pieces, ""); } else { };
+                } else { };
+            } else { };
+        } else { };
         syscall(3, fd);
         pack
     }
@@ -174,13 +169,11 @@ def write_std_pack(path: str) -> long {
     if (len(nd) > 8) {
         puts("error: the std pack is too large (" + nd + " bytes)\n");
         exit(1);
-        0
-    } else { 0; };
+    } else { };
     if (!fs.write_file(path, pack + nd + pack_magic())) {
         puts("error: writing '" + path + "' failed\n");
         exit(1);
-        0
-    } else { 0; };
+    } else { };
     0
 };
 
@@ -252,13 +245,12 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
         let at = nativelib.origin_at(origin, e.line, bare) + ":" + tostring(e.col);
         let dup = false;
         foreach (s in seen) {
-            if (s == at) { dup = true; 0; } else { 0; };
+            if (s == at) { dup = true; } else { };
         };
         if (!dup) {
             seen += at;
             puts(at + ": error: " + e.msg + "\n");
-            0
-        } else { 0; };
+        } else { };
         i = i + 1;
     };
     0
@@ -311,7 +303,7 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
         };
         i = i + 1;
     };
-    if (len(dir) == 0) { dir = "."; 0; } else { 0; };
+    if (len(dir) == 0) { dir = "."; } else { };
     { dir: dir, debug: debug, nowarn: nowarn, wlevel: wlevel, allow_exec: allow_exec, std_src: std_src }
 };
 
@@ -322,8 +314,7 @@ def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Res
     if (src == none) {
         puts("error: cannot read file '" + path + "'\n");
         exit(1);
-        0
-    } else { 0; };
+    } else { };
     nativelib.native_resolve_pk(unwrap(src), pkg.pk_dir_of(path), allow_exec, path, pkgs, roots)
 };
 
@@ -334,7 +325,7 @@ def std_order(names: [str]) -> [str] {
     let i = 0;
     while (i < len(all)) {
         let nm: str = all[i];
-        if (pkg.pk_has(names, nm)) { out += nm; 0; } else { 0; };
+        if (pkg.pk_has(names, nm)) { out += nm; } else { };
         i = i + 1;
     };
     out
@@ -360,7 +351,7 @@ def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, u
     pkg.pk_hash_str(h, name);
     pkg.pk_hash_str(h, tostring(base));
     let ex = "exec";
-    if (!allow_exec) { ex = "no-exec"; 0; } else { 0; };
+    if (!allow_exec) { ex = "no-exec"; } else { };
     pkg.pk_hash_str(h, ex);
     pkg.pk_hash_str(h, nr.src);
     let o = nr.origin;
@@ -373,7 +364,7 @@ def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, u
     let i = 0;
     while (i < len(units)) {
         let u = units[i];
-        if (pkg.pk_has(ps, u.name)) { pkg.pk_hash_str(h, nativelib.unit_iface(u)); 0; } else { 0; };
+        if (pkg.pk_has(ps, u.name)) { pkg.pk_hash_str(h, nativelib.unit_iface(u)); } else { };
         i = i + 1;
     };
     pkg.pk_hash_text(h)
@@ -397,8 +388,7 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
             reach[k] = true;
             let nr = nrs[k];
             want += nr.pkgs;
-            0
-        } else { 0; };
+        } else { };
         k = k - 1;
     };
     reach
@@ -446,8 +436,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
     if (len(bins) == 0 && len(g.lib) == 0) {
         puts("error: " + pkg.pk_join(dir, "y.toml") + " has no [bin] and no lib: nothing to build\n");
         exit(1);
-        0
-    } else { 0; };
+    } else { };
     let bdir = pkg.pk_join(dir, "build");
     let odir = bdir + "/obj";
     pkg.pk_mkdir(bdir);
@@ -463,7 +452,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
     };
     let bdeps: [str] = [];
     bdeps += g.deps;
-    if (len(g.lib) > 0) { bdeps += g.name; 0; } else { 0; };
+    if (len(g.lib) > 0) { bdeps += g.name; } else { };
     let b = 0;
     while (b < len(bins)) {
         let bn = bins[b];
@@ -478,7 +467,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         k = k + 1;
     };
     let pack = "";
-    if (!std_src) { pack = self_pack(); 0; } else { 0; };
+    if (!std_src) { pack = self_pack(); } else { };
     let su = nativelib.std_units(std_order(needs), pack);
     let cid = pkg.pk_self_id();
     let units: [Unit] = [];
@@ -493,9 +482,8 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         let ot = fs.read_file(opath);
         if (ot != none) {
             let uo = nativelib.unit_unobj(unwrap(ot), key);
-            if (uo.ok) { units += uo.unit; hit = true; 0; } else { 0; };
-            0
-        } else { 0; };
+            if (uo.ok) { units += uo.unit; hit = true; } else { };
+        } else { };
         if (!hit) {
             eputs("compiling " + p.name + "\n");
             let ast = parser.parse_program(lexer.tokenize(nr.src));
@@ -503,19 +491,16 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
             if (!r.ok) {
                 print_native_errors(r.errors, nr.origin, false);
                 exit(1);
-                0
-            } else { 0; };
+            } else { };
             if (!nowarn) {
                 print_native_warnings(r.warnings, nr.origin, false);
             };
             if (!fs.write_file(opath, nativelib.unit_obj(r.unit, key))) {
                 puts("error: writing '" + opath + "' failed\n");
                 exit(1);
-                0
-            } else { 0; };
+            } else { };
             units += r.unit;
-            0
-        } else { 0; };
+        } else { };
         k = k + 1;
     };
     b = 0;
@@ -532,8 +517,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
                 linked += units[k];
                 let pn = nrs[k];
                 lneeds += pn.std;
-                0
-            } else { 0; };
+            } else { };
             k = k + 1;
         };
         let lstd = std_order(lneeds);
@@ -541,7 +525,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         k = 0;
         while (k < len(su)) {
             let su1 = su[k];
-            if (pkg.pk_has(lstd, su1.name)) { bstd += su1; 0; } else { 0; };
+            if (pkg.pk_has(lstd, su1.name)) { bstd += su1; } else { };
             k = k + 1;
         };
         let ast = parser.parse_program(lexer.tokenize(nr.src));
@@ -549,8 +533,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         if (!r.ok) {
             print_native_errors(r.errors, nr.origin, false);
             exit(1);
-            0
-        } else { 0; };
+        } else { };
         if (!nowarn) {
             print_native_warnings(r.warnings, nr.origin, false);
         };
@@ -558,14 +541,12 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         if (!ab.ok) {
             puts("error: assemble: " + ab.error + "\n");
             exit(1);
-            0
-        } else { 0; };
+        } else { };
         let outp = bdir + "/" + bn.name;
         if (!fs.write_bytes(outp, ab.bytes, 493)) {
             puts("error: writing '" + outp + "' failed\n");
             exit(1);
-            0
-        } else { 0; };
+        } else { };
         eputs("built " + outp + "\n");
         b = b + 1;
     };

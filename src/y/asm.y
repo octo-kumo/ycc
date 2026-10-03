@@ -114,8 +114,8 @@ def split_ops(s: str) -> [str] {
             if (depth == 0) {
                 out += trim(s[start:i]);
                 start = i + 1;
-            } else { 0; };
-        } else { 0; };
+            } else { };
+        } else { };
         i ++;
     };
     out += trim(s[start:n]);
@@ -393,10 +393,8 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
                 let oct = decode_oct(s, i + 2, n);
                 if (oct.err != "") {
                     err = oct.err;
-                    0
                 } else {
                     out += oct.v;
-                    0
                 };
                 i = oct.k;
             } else {
@@ -424,17 +422,12 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
                 v = v * 8 + d - c'0';
                 kk = kk + 1;
                 nd = nd + 1;
-                0
             } else {
                 kk = n + 1;
-                0
             };
-            0
         } else {
             nd = 3;
-            0
         };
-        0
     };
     if (v > 255) {
         { v: 0, k: kk, err: "octal escape out of range" }
@@ -496,18 +489,15 @@ def labmap_put(m: [AsmLabel], name: str, sec: long, off: long) -> { map: [AsmLab
         if (e.name == "") {
             m[i] = { name: name, sec: sec, off: off };
             done = true;
-            0
         } else if (e.name == name) {
             dup = true;
             done = true;
-            0
         } else {
             i = i + 1;
-            if (i >= cap) { i = 0; 0; } else { 0; };
-            0
+            if (i >= cap) { i = 0; } else { };
         };
         n = n + 1;
-        if (n > cap) { done = true; 0; } else { 0; };
+        if (n > cap) { done = true; } else { };
     };
     { map: m, dup: dup }
 };
@@ -523,19 +513,16 @@ def labmap_get(m: [AsmLabel], name: str) -> { sec: long, off: long } {
         let e = m[i];
         if (e.name == "") {
             done = true;
-            0
         } else if (e.name == name) {
             found_sec = e.sec;
             found_off = e.off;
             done = true;
-            0
         } else {
             i = i + 1;
-            if (i >= cap) { i = 0; 0; } else { 0; };
-            0
+            if (i >= cap) { i = 0; } else { };
         };
         n = n + 1;
-        if (n > cap) { done = true; 0; } else { 0; };
+        if (n > cap) { done = true; } else { };
     };
     { sec: found_sec, off: found_off }
 };
@@ -552,7 +539,7 @@ def labmap_build(labels: [AsmLabel]) -> { map: [AsmLabel], dup: str } {
         let e = labels[i];
         let r = labmap_put(m, e.name, e.sec, e.off);
         m = r.map;
-        if (r.dup) { dup = e.name; 0; } else { 0; };
+        if (r.dup) { dup = e.name; } else { };
         i = i + 1;
     };
     { map: m, dup: dup }
@@ -591,7 +578,6 @@ def asm_assemble(text: str, debug: bool) -> AsmOut {
     while (li < len(lines)) {
         if (err != "") {
             li = len(lines);
-            0
         } else {
             let st = asm_assemble_line(lines, li, sec, offs, items, labels, err);
             sec = st.sec;
@@ -599,10 +585,8 @@ def asm_assemble(text: str, debug: bool) -> AsmOut {
             items = st.items;
             labels = st.labels;
             err = st.err;
-            0
         };
         li = li + 1;
-        0
     };
     let t2 = clock_us();
     let h2 = heap_used();
@@ -795,7 +779,6 @@ def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> AsmCo
     let bb = bytes;
     if (nul) {
         bb += 0;
-        0
     };
     asm_strdata_item(sec, offs, bb)
 };
@@ -814,7 +797,6 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     if (sp >= 0) {
         dir = line[0:sp];
         rest = trim(line[sp + 1:]);
-        0
     };
     if (dir == ".text") {
         { err: "", sec: 0, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
@@ -854,8 +836,7 @@ def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (sp > 0) {
         fs = rest[0:sp];
         ls = trim(rest[sp + 1:]);
-        0
-    } else { 0; };
+    } else { };
     if (!is_num_text(fs) || !is_num_text(ls) || tonum(fs) < 1 || tonum(ls) < 0) {
         { err: "L" + tostring(lno) + ": bad .loc '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else if (sec != 0) {
@@ -874,13 +855,11 @@ def asm_file(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (sp > 0) {
         ns = rest[0:sp];
         q = trim(rest[sp + 1:]);
-        0
-    } else { 0; };
+    } else { };
     let d = decode_str("");
     if (!asm_strdata_bad(q)) {
         d = decode_str(q[1:len(q) - 1]);
-        0
-    } else { 0; };
+    } else { };
     if (!is_num_text(ns) || tonum(ns) < 1 || asm_strdata_bad(q) || !d.ok) {
         { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else {
@@ -974,8 +953,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
                 zb += 0;
                 i = i + 1;
             };
-            0
-        } else { 0; };
+        } else { };
         let item: AsmItem = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [] };
         offs[sec] = offs[sec] + n;
         { err: "", sec: sec, offs: offs, item: item }
@@ -988,17 +966,15 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     let cut = sp;
     // NOTE: nested ifs, not `||` (see is_digit_ch note); `0;` tails.
     if (tab >= 0) {
-        if (sp < 0) { cut = tab; 0; }
-        else if (tab < sp) { cut = tab; 0; }
+        if (sp < 0) { cut = tab; }
+        else if (tab < sp) { cut = tab; }
         ;
-        0
     };
     let mn = line;
     let rest = "";
     if (cut >= 0) {
         mn = line[0:cut];
         rest = trim(line[cut + 1:]);
-        0
     };
     let ops: [Operand] = [];
     if (rest != "") {
@@ -1011,13 +987,10 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
             // is bool-typed; the else-arm is void-typed.
             if (!(r.ok)) {
                 ok = false;
-                0
             } else {
                 ops += r.op;
-                0
             };
             i = i + 1;
-            0
         };
         if (!ok) {
             { err: "L" + tostring(lno) + ": bad operand", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
@@ -1130,7 +1103,6 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
             if (debug) {
                 syms = debug_syms(labels, code_len, bss_len);
                 dsecs = debug_lines(items, code_len, elf.elf_code_off(bss_len));
-                0;
             };
             let eb = elf.elf_build(code, ro, start.off, bss_len, syms, dsecs);
             let lt3 = clock_us();
@@ -1269,9 +1241,7 @@ def debug_syms_sec(out: [ElfSym], labels: [AsmLabel], sec: long, end: long) -> [
         if (lb.sec == sec) {
             if (is_sym_label(lb.name, sec)) {
                 out += { name: sym_name(lb.name), sec: sec, off: lb.off, size: 0 };
-                0;
             };
-            0;
         };
     };
     // labels arrive in definition order, so offsets only grow
@@ -1282,7 +1252,6 @@ def debug_syms_sec(out: [ElfSym], labels: [AsmLabel], sec: long, end: long) -> [
         if (i + 1 < len(out)) {
             let n = out[i + 1];
             nxt = n.off;
-            0;
         };
         e.size = nxt - e.off;
         i = i + 1;
@@ -1306,21 +1275,18 @@ def sym_name(lbl: str) -> str {
     let s = lbl;
     if (s.starts_with("yfn_")) {
         s = after_uid(s, 4);
-        0;
     } else if (s.starts_with("yg_")) {
         s = after_uid(s, 3);
-        0;
     };
     let d = last_index_of(s, "$");
     if (d > 0) {
         let k = d + 1;
         let digits = k < len(s);
         while (k < len(s)) {
-            if (!is_digit_ch(s[k])) { digits = false; 0; };
+            if (!is_digit_ch(s[k])) { digits = false; };
             k = k + 1;
         };
-        if (digits) { s = s[0:d]; 0; };
-        0;
+        if (digits) { s = s[0:d]; };
     };
     s
 };
@@ -1352,12 +1318,10 @@ def debug_lines(items: [AsmItem], code_len: long, code_off: long) -> [ElfSec] {
             rows += it.off;
             rows += fx[0].off;
             rows += fx[1].off;
-            0;
         } else if (k == "file") {
             let fx = it.fix;
             while (len(files) < it.off) { files += "?"; };
             files[it.off - 1] = fx[0].lbl;
-            0;
         };
     };
     if (len(rows) == 0) {
