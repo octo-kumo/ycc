@@ -3,6 +3,15 @@
 ## State
 
 - On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
+  `5786b324` (ce36801: task 6, first batch of optimizations -- FnTab
+  index of the emitter's defs, index_of/split/trim in asm, the prelude
+  shaken by lines (only reachable blocks scanned), bulk `arr += other`
+  and word copies, the checker's and rename's name indexes (parser.y
+  NameIx, lint shares it); against 5c89defc: compiling ycc.y -42.9%
+  instructions (-34% time, -29% heap), hello.y -80.1%, the benchmarks
+  -32..-71%; running lines.y -61.7%, std_struct.y -35.9%, strings.y
+  -30.4%; SCORE 117.68; make test, ASan, fuzz 1500/4249 green; previous
+  `5c89defc` backed up as `ycc.ref.pre-opt1`). Before that
   `5c89defc` (08563ca: threads and processes, task 5 -- spawn/join,
   mutex/lock/try_lock, sem/post/wait, fork/wait_pid, CHOICES_MADE.md 33;
   make test, ASan, fuzz 1500/4247 and a thread-only fuzz 600/4248 green;
@@ -61,8 +70,13 @@
   server); manual 09-builtins "The web" and "Cryptography"; keys(m)
   added for map iteration (blessed 4584cc1d). TASK 3 DONE.
 - TASK 5 DONE (threads and processes; scratch tests in the session
-  files folder, thrtests/). Next: task 6 (profile ycc, optimize; the
-  findings so far are listed under task 6 below).
+  files folder, thrtests/). Task 6 (profile ycc, optimize) in progress:
+  first batch blessed (5786b324); what is left is listed under task 6
+  below. Verify an output-preserving optimization with /tmp-built
+  references: `git archive HEAD src/y | tar -x -C /tmp/B`, build it with
+  refs/ycc.ref, then gen2 with itself plus its pack, and compare -S,
+  exit codes and messages of every corpus program (a cmp loop like
+  `cmp_s.sh` in the session files).
 - The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
@@ -215,6 +229,16 @@
      typeof_call, native.y infer_call/gen_call, is_intrinsic_name):
      every new builtin costs every call;
    - y_str_eq is 2.1G of the self-compile's 10.7G.
+   DONE in the first batch (5786b324): FnTab (env_find, capture scans),
+   asm index_of/split/trim, the prelude shaken by lines, bulk appends and
+   copies, NameIx for types.y lookup and rename's top frame. Left (of
+   the self-compile's 6.2G): y_str_eq ~1.4G (the lexer's one-char
+   compares, enc64's mnemonic/register dispatch, fv_binds/fv_walk name
+   compares); the bodies' reference scans (text_refs over each unit body:
+   refs_range/tok_end_b/is_id_b/line_refs_b/skip_sp ~600M, line_refs_b
+   allocates every line's mnemonic); words_scan 151M; the assembler's
+   text parsing (split_ops, hash_str); self_pack ~1.9M of a hello.y
+   compile (from_bytes per 64 KB chunk).
 
 ## 4. std/fs.y and module scope: what was delivered
 
