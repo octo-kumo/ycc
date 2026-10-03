@@ -142,6 +142,7 @@ Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth);
 long rn_alias_index(Yv *st, Yv *name);
 Yv *rn_tref(Yv *st, long id, Yv *name);
 int rn_reaches(Yv *st, long id, int bare);
+int rn_reaches_any(Yv *st, long id);
 int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare);
 Yv *rn_type_list(Yv *st, Yv *ts, long depth);
 Yv *rn_type_fields(Yv *st, Yv *fs, long depth);

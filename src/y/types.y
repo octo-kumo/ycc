@@ -405,6 +405,18 @@ def tcanon(t: Type) -> str {
     join(out, "")
 };
 
+// A type's signature (native.y ty_desc's key): its canonical form with each
+// recursive alias written as its name in the unit (the tref's tmp) instead
+// of spelled out -- short where a canonical form spells out a whole
+// recursive union. Within one unit, equal signatures are one type.
+let tcanon_named = false;
+def tsig(t: Type) -> str {
+    tcanon_named = true;
+    let s = tcanon(t);
+    tcanon_named = false;
+    s
+};
+
 def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
     let k: str = t.k;
     if (k == "tlong") { out += "l"; out }
@@ -489,7 +501,10 @@ def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
             if (si == tmp) { d = len(stack) - 1 - i; 0 } else { 0 };
             i = i - 1;
         };
-        if (d >= 0) {
+        if (tcanon_named) {
+            out += "@" + tmp;
+            out
+        } else if (d >= 0) {
             out += "^" + tostring(d);
             out
         } else {
@@ -3979,4 +3994,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, typ: type_node({ k: "tfunc", args: args, ret: ret }) }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, tsig, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

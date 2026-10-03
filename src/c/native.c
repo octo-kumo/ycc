@@ -78,6 +78,7 @@ Yv *union_parts(Yv *t);
 Yv *pat_members(Yv *s, Yv *t);
 Yv *lit_target(Yv *node, Yv *want);
 Yv *tcanon(Yv *t);
+Yv *tsig(Yv *t);
 Yv *str_sorted(Yv *xs);
 Yv *rec_names(Yv *fs);
 /* src/y/rename.y */
@@ -118,11 +119,14 @@ static long tdec_n;
 static Yv *ty_seen;
 static Yv *ty_forms;
 static long ty_count;
-/* ty_desc's canonical forms of the recursive aliases a unit has met, by
- * their names in the unit (tmp): a big recursive union's form is long, and
- * a field read through it asks for every member's (tyset_reset clears). */
-static Yv *ty_ref_tmps;
-static Yv *ty_ref_forms;
+/* ty_desc's labels in this unit, by type signature (types.c tsig): a type
+ * named again needs no canonical form spelled out and hashed (a recursive
+ * union's is long, and a read through a union asks for every member's).
+ * 512 buckets of indices into ty_sig_keys/ty_sig_lbls; tyset_reset
+ * empties them. */
+static Yv *ty_sig_keys;
+static Yv *ty_sig_lbls;
+static Yv *ty_sig_bkts;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
@@ -6535,36 +6539,31 @@ void tyset_reset(void) {
     ty_seen = yav(0);
     ty_forms = yav(0);
     ty_count = 0;
-    ty_ref_tmps = yav(0);
-    ty_ref_forms = yav(0);
+    Yv *bkts = yav(0);
+    long i = 0;
+    while (i < 512) {
+        bkts = ya_push(bkts, yav(0));
+        i = i + 1;
+    }
+    ty_sig_keys = yav(0);
+    ty_sig_lbls = yav(0);
+    ty_sig_bkts = bkts;
 }
 
-/* The canonical form of record type rt (types.c tcanon), remembered for a
- * recursive alias (ty_ref_tmps). A record type spelled out that equals a
- * recursive alias (alias_of) takes the alias's form. */
+/* The canonical form of record type rt (types.c tcanon). A record type
+ * spelled out that equals a recursive alias (alias_of) takes the alias's
+ * form. */
 Yv *ty_form(Yv *rt) {
     if (ys_eq_lit(yr_get(rt, "k"), "trec")) {
         Yv *al = alias_of(rt);
         if (ys_eq_lit(yr_get(al, "k"), "tref")) {
-            return ty_form(al);
+            return tcanon(al);
+        } else {
+            return tcanon(rt);
         }
+    } else {
         return tcanon(rt);
     }
-    if (!ys_eq_lit(yr_get(rt, "k"), "tref")) {
-        return tcanon(rt);
-    }
-    Yv *tmp = yr_get(rt, "tmp");
-    long i = 0;
-    while (i < yv_len(ty_ref_tmps)) {
-        if (ys_eq(ya_get(ty_ref_tmps, i), tmp)) {
-            return ya_get(ty_ref_forms, i);
-        }
-        i = i + 1;
-    }
-    Yv *form = tcanon(rt);
-    ty_ref_tmps = ya_push(ty_ref_tmps, tmp);
-    ty_ref_forms = ya_push(ty_ref_forms, form);
-    return form;
 }
 
 /* The recursive alias equal (types.c teq) to record type t, spelled out --
@@ -6651,8 +6650,32 @@ void ty_collision(Yv *lbl, Yv *form) {
  * canonical form, quads) goes into the unit the first time the unit uses
  * it. */
 Yv *ty_desc(Yv *st, Yv *rt) {
+    Yv *sig = tsig(rt);
+    if (!ty_sig_bkts || yv_len(ty_sig_bkts) == 0) {
+        tyset_reset();
+    }
+    long h = fnv64(sig) % 512;
+    if (h < 0) {
+        h = h + 512;
+    }
+    Yv *bkt = ya_get(ty_sig_bkts, h);
+    Yv *known = ys("");
+    long q = 0;
+    while (q < yv_len(bkt)) {
+        long ix = yv_l(ya_get(bkt, q));
+        if (ys_eq_lit(known, "") && ys_eq(ya_get(ty_sig_keys, ix), sig)) {
+            known = ya_get(ty_sig_lbls, ix);
+        }
+        q = q + 1;
+    }
+    if (!ys_eq_lit(known, "")) {
+        return yr(2, "st", st, "lbl", known);
+    }
     Yv *form = ty_form(rt);
     Yv *lbl = ys_cat(ys("ytt_"), hex16(fnv64(form)));
+    ty_sig_keys = ya_push(ty_sig_keys, sig);
+    ty_sig_lbls = ya_push(ty_sig_lbls, lbl);
+    ya_push(bkt, yv_long(yv_len(ty_sig_keys) - 1));
     long added = tyset_add(lbl, form);
     if (added < 0) {
         ty_collision(lbl, form);

@@ -113,7 +113,16 @@ J="$TMP/joined"
 for src in "${progs[@]}"; do
     name="$(basename "$src" .y)"
     [ "$src" = "$TREE/src/y/ycc.y" ] && name=self
-    row compile "$name" "$src" >>"$J" || exit 1
+    if ! row compile "$name" "$src" >>"$J"; then
+        # a program only the base cannot build (the language changed
+        # under it -- the new compiler's own source, say) has no rows;
+        # one the new build cannot build is a failure
+        if "$NEW" -o "$TMP/probe" "$src" </dev/null >/dev/null 2>&1; then
+            echo "bench: $name: no rows, the base cannot build it (the new build can)" >&2
+            continue
+        fi
+        exit 1
+    fi
     "$BASE" -S "$src" </dev/null >"$TMP/b.s" 2>/dev/null
     "$NEW" -S "$src" </dev/null >"$TMP/n.s" 2>/dev/null
     {

@@ -2,39 +2,42 @@
 
 ## State
 
-- On `master`. Committed: 9b69861 (everything blessed up to open records
-  step 1: warnings, records/unions stage 1, std/fs + module scope, the
-  speedups, e145), cb89e46 (cycc: `{k: str}` exact, no `..`; spec
-  fixtures e147/e148/t81), 7eec451 (cycc: no value of unknown type;
-  e149), f1b147f (cycc: union -> member is a checked cast).
-  `refs/ycc.ref` = `02651975` (open records step 1). Backups in the
-  session's files folder: `ycc.ref.pre-open` (`297b2bb3`),
+- On `master`. Everything is committed; the tree is green with ycc2p as
+  the reference. Since the last bless (9b69861): cycc and src/y have no
+  unknown types (cb89e46, 7eec451, f1b147f, de7fc24, 35a3a2d, dcaf4e9:
+  `{k: str}` exact, no `..`, parameters annotated, `[]`/`none` free
+  placeholders, forward calls need `-> T`, sound self-recursion
+  inference, union -> member casts where the type is written; src/y
+  annotated with the Node/Type unions by a gpt-6-luna sub-agent), and the
+  C copy's value model allocates 72% less (79cdce6: self-compile 6.6 GB
+  -> 1.9 GB, 12.3 s -> 5.1 s).
+  `refs/ycc.ref` = `02651975` (open records step 1), backed up as
+  `ycc.ref.pre-nounk`. Older backups in the session's files folder:
+  `ycc.ref.pre-open` (`297b2bb3`),
   `ycc.ref.pre-e145` (`ef862701`), `ycc.ref.pre-enc` (`f697b225`),
   `ycc.ref.pre-shadow` (`392d7a25`), `ycc.ref.pre-fs` (`aaece322`),
   `ycc.ref.pre-records` (`a7ab6a4e`), `ycc.ref.pre-lint` (`a3dcb1a3`).
-- **The tree is red on purpose** (the user: make the backdoors errors
-  immediately, change cycc, then the compiler's source until it does not
-  error): `./cycc src/y/ycc.y` fails until src/y is annotated. A gpt-6-luna
-  sub-agent (as the user asked) is adding the annotations (Node/Type
-  unions, CHOICES_MADE.md 22), committing per file. Its check: `./cycc
-  src/y/ycc.y -o ycc1` with no errors, then `/tmp/mt/cmp_ref.sh $PWD/ycc1`
-  = 0 of 314 programs differ from the reference (byte-identical output),
-  `/tmp/mt/runt.sh $PWD/ycc1` (t71 needs a memory cap; t81 needs the Y
-  port). `make ynew` cannot build the annotated source (CHOICES 23).
-- Then (me): port cb89e46 + 7eec451 + f1b147f to src/y (types.y: no
-  is_open/open_store/single_k, t_free, t_pend/t_pend_self, has_free,
-  ret_pending, call_result, the second pass for self calls, tcompat's
-  union casts; parser.y: no `..`; lint.y; native.y: no is_kshape/koff
-  loads, gen_cast_check/cast_members/union_within), docs (04-types
-  records/unions/inference, 10-errors cast row, NATIVE.md, AGENTS.md
-  "Records are exact", PORTING.md, COVERAGE.md for the new messages),
-  bless through cycc (`make rebless`), `make test`, bench + profile.
-  Before the bless, implement CHOICES_MADE.md 25 (the user's model: a
-  union value puts its shared fields first, sorted; union<->member is a
-  cast that copies when layouts differ; tag per type+layout) in both
-  copies, or `node.k`/`.line`/`.col` through the 31-member Node union
-  dispatch on the tag. The user REJECTED making field order part of a
-  record type: `{a, b}` and `{b, a}` are one type, always.
+- **MEMORY: every process runs under a cap below 4 GB** (the machine went
+  down twice today: a partly annotated parser.y blew teq up, then
+  valgrind of the old reference on the new ycc.y reached 9 GB). The
+  Makefile's SHELL is test/sh/capped.sh; lib.sh, check.sh and the bench
+  scripts cap themselves; run anything by hand as `(ulimit -v 3670016;
+  timeout N cmd)`. ASan: `ASAN_OPTIONS=hard_rss_limit_mb=3500`. Hitting
+  the cap means fix what allocates, never raise it (the user). The old
+  reference cannot compile the new ycc.y (its teq blows up): under the
+  cap it fails cleanly; compile_ir.sh shows "-" for it.
+- Next: bless ycc2p (`check.sh` ran against 02651975; then `make
+  rebless`, `make test`, ASan, fuzz; numbers in the commit), then
+  CHOICES_MADE.md 25 (the user's model: a union value puts its shared
+  fields first; union<->member casts copy when layouts differ) as its own
+  measured step -- today `node.k`/`.line`/`.col` through the 31-member
+  Node dispatch on the tag, and the self binary grew 983 KB -> 1118 KB
+  (739 cast checks, the dispatch chains). Watch: types.y
+  set_inferred_ret writes `func.ret` through a Func cast from a Node --
+  with copying casts that write is lost; TRef's layouts coincide (k
+  sorts first), so the tref patches in rename.y/native.y stay safe.
+  The user REJECTED making field order part of a record type: `{a, b}`
+  and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
   and test/y/examples/tail.y. Leave them alone.
 - The user wants frequent commits now. Never push. No sed (edit tool).

@@ -540,6 +540,18 @@ Yv *tcanon(Yv *t) {
     return ys_join(out, ys(""));
 }
 
+// A type's signature (native.c ty_desc's key): its canonical form with each
+// recursive alias written as its name in the unit (the tref's tmp) instead
+// of spelled out -- short where a canonical form spells out a whole
+// recursive union. Within one unit, equal signatures are one type.
+static int tcanon_named = 0;
+Yv *tsig(Yv *t) {
+    tcanon_named = 1;
+    Yv *s = tcanon(t);
+    tcanon_named = 0;
+    return s;
+}
+
 static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
     Yv *k = yr_get(t, "k");
     if (ys_eq_lit(k, "tlong")) {
@@ -621,7 +633,9 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
             }
             i = i - 1;
         }
-        if (d >= 0) {
+        if (tcanon_named) {
+            return ya_push(out, ys_cat(ys("@"), tmp));
+        } else if (d >= 0) {
             return ya_push(out, ys_cat(ys("^"), ys_long(d)));
         } else {
             Yv *inner = yav(0);

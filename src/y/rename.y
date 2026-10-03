@@ -291,6 +291,13 @@ def rn_is_optarg(d: Node) -> bool { d.k == "optarg" };
 // each program (rename_program_x).
 let rn_tref_ids: [long] = [];
 let rn_tref_nodes: [TRef] = [];
+// rn_reaches(st, id, false) per alias (0: not known yet, 1: no, 2: yes),
+// for the alias table of length rn_reach_n: aliases are only appended, but
+// a new one may shadow a name, so the memo starts over when the table
+// grows, and for each program (rename_program_x). Every alias reference in
+// every annotation asks, and the walk visits every alias it reaches.
+let rn_reach_memo: [long] = [];
+let rn_reach_n = -1;
 
 def rn_type(st: RnSt, t: Type) -> Type {
     if (len(st.tys) == 0) { t } else { rn_type_go(st, t, 0) }
@@ -331,12 +338,28 @@ def rn_type_name(st: RnSt, name: str, t: Type, depth: long) -> Type {
     // spelled out inside itself)
     if (found < 0 || depth > 64) {
         t
-    } else if (rn_reaches(st, found, false)) {
+    } else if (rn_reaches_any(st, found)) {
         rn_tref(st, found, name)
     } else {
         let e: Field = st.tys[found];
         rn_type_go(st, e.typ, depth + 1)
     }
+};
+
+// rn_reaches(st, id, false), remembered (rn_reach_memo).
+def rn_reaches_any(st: RnSt, id: long) -> bool {
+    let n = len(st.tys);
+    if (n != rn_reach_n) {
+        let fresh: [long] = [];
+        let i = 0;
+        while (i < n) { fresh += 0; i = i + 1; };
+        rn_reach_memo = fresh;
+        rn_reach_n = n;
+    };
+    if (rn_reach_memo[id] == 0) {
+        if (rn_reaches(st, id, false)) { rn_reach_memo[id] = 2; } else { rn_reach_memo[id] = 1; };
+    };
+    rn_reach_memo[id] == 2
 };
 
 // The index in st.tys of the alias `name` stands for (the last declared:
@@ -1287,6 +1310,7 @@ def rename_program_x(ast: Block, dfl: [Dfl], ofile: [long], fmods: [str]) -> Blo
     let nonodes: [TRef] = [];
     rn_tref_ids = noids;
     rn_tref_nodes = nonodes;
+    rn_reach_n = -1;
     rn_ofile = ofile;
     rn_fmods = fmods;
     let mods: [str] = [];

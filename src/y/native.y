@@ -82,11 +82,14 @@ let tdec_n = 0;
 let ty_seen: [str] = [];
 let ty_forms: [str] = [];
 let ty_count = 0;
-// ty_desc's canonical forms of the recursive aliases a unit has met, by
-// their names in the unit (tmp): a big recursive union's form is long, and
-// a field read through it asks for every member's (tyset_reset clears).
-let ty_ref_tmps: [str] = [];
-let ty_ref_forms: [str] = [];
+// ty_desc's labels in this unit, by type signature (types.y tsig): a type
+// named again needs no canonical form spelled out and hashed (a recursive
+// union's is long, and a read through a union asks for every member's).
+// 512 buckets of indices into ty_sig_keys/ty_sig_lbls; tyset_reset
+// empties them.
+let ty_sig_keys: [str] = [];
+let ty_sig_lbls: [str] = [];
+let ty_sig_bkts: [[long]] = [];
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -5550,37 +5553,30 @@ def tyset_reset() {
     ty_seen = none;
     ty_forms = nonef;
     ty_count = 0;
-    let nort: [str] = [];
-    let norf: [str] = [];
-    ty_ref_tmps = nort;
-    ty_ref_forms = norf;
+    let nokeys: [str] = [];
+    let nolbls: [str] = [];
+    let bkts: [[long]] = [];
+    let i = 0;
+    while (i < 512) {
+        let b: [long] = [];
+        bkts += b;
+        i = i + 1;
+    };
+    ty_sig_keys = nokeys;
+    ty_sig_lbls = nolbls;
+    ty_sig_bkts = bkts;
 };
 
-// The canonical form of record type rt (types.y tcanon), remembered for a
-// recursive alias (ty_ref_tmps). A record type spelled out that equals a
-// recursive alias (alias_of) takes the alias's form.
+// The canonical form of record type rt (types.y tcanon). A record type
+// spelled out that equals a recursive alias (alias_of) takes the alias's
+// form.
 def ty_form(rt: Type) -> str {
     let rk: str = rt.k;
     if (rk == "trec") {
         let al = alias_of(rt);
-        if (al.k == "tref") { self(al) } else { types.tcanon(rt) }
-    } else if (rk != "tref") {
-        types.tcanon(rt)
+        if (al.k == "tref") { types.tcanon(al) } else { types.tcanon(rt) }
     } else {
-        let ref: TRef = rt;
-        let tmp: str = ref.tmp;
-        let found = -1;
-        let i = 0;
-        while (found < 0 && i < len(ty_ref_tmps)) {
-            if (ty_ref_tmps[i] == tmp) { found = i; };
-            i = i + 1;
-        };
-        if (found >= 0) { ty_ref_forms[found] } else {
-            let form = types.tcanon(rt);
-            ty_ref_tmps += tmp;
-            ty_ref_forms += form;
-            form
-        }
+        types.tcanon(rt)
     }
 };
 
@@ -5658,8 +5654,21 @@ def ty_collision(lbl: str, form: str) {
 // canonical form, quads) goes into the unit the first time the unit uses
 // it.
 def ty_desc(st: EmitSt, rt: Type) -> StLbl {
+    let sig = types.tsig(rt);
+    if (len(ty_sig_bkts) == 0) { tyset_reset(); };
+    let h = fnv64(sig) % 512;
+    if (h < 0) { h = h + 512; };
+    let bkt: [long] = ty_sig_bkts[h];
+    let known = "";
+    foreach (ix in bkt) {
+        if (known == "" && ty_sig_keys[ix] == sig) { known = ty_sig_lbls[ix]; };
+    };
+    if (known != "") { return { st: st, lbl: known }; };
     let form = ty_form(rt);
     let lbl = "ytt_" + hex16(fnv64(form));
+    ty_sig_keys += sig;
+    ty_sig_lbls += lbl;
+    bkt += len(ty_sig_keys) - 1;
     let added = tyset_add(lbl, form);
     if (added < 0) { ty_collision(lbl, form); };
     if (added > 0) {

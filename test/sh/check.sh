@@ -148,6 +148,7 @@ if ! BENCH_PROFILE=0 "$ROOT/bench/compare.sh" "$T/base" "$T/new" "$ROUNDS" >"$LO
     exit 1
 fi
 grep -a '^SCORE' "$LOG/timing.log" | indent
+grep -a 'no rows, the base cannot build it' "$LOG/timing.log" | sed 's/^bench: /  /'
 # Sizes are exact. A time is wall clock on a shared machine: the score
 # holds to about ±2.5, a row of 40 ms or more to under 10%, but a shorter
 # one swings by 20% and more between two runs of the same build (process

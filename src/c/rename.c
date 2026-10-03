@@ -304,6 +304,13 @@ int rn_is_optarg(Yv *d) {
  * each program (rename_program_x). */
 static Yv *rn_tref_ids;
 static Yv *rn_tref_nodes;
+/* rn_reaches(st, id, 0) per alias (0: not known yet, 1: no, 2: yes), for
+ * the alias table of length rn_reach_n: aliases are only appended, but a
+ * new one may shadow a name, so the memo starts over when the table grows,
+ * and for each program (rename_program_x). Every alias reference in every
+ * annotation asks, and the walk visits every alias it reaches. */
+static Yv *rn_reach_memo;
+static long rn_reach_n = -1;
 
 Yv *rn_type(Yv *st, Yv *t) {
     if (yv_len(yr_get(st, "tys")) == 0) {
@@ -360,12 +367,35 @@ Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth) {
        spelled out inside itself) */
     if (found < 0 || depth > 64) {
         return t;
-    } else if (rn_reaches(st, found, 0)) {
+    } else if (rn_reaches_any(st, found)) {
         return rn_tref(st, found, name);
     } else {
         return rn_type_go(st, yr_get(ya_get(yr_get(st, "tys"), found), "typ"),
                           depth + 1);
     }
+}
+
+/* rn_reaches(st, id, 0), remembered (rn_reach_memo). */
+int rn_reaches_any(Yv *st, long id) {
+    long n = yv_len(yr_get(st, "tys"));
+    if (n != rn_reach_n) {
+        Yv *fresh = yav(0);
+        long i = 0;
+        while (i < n) {
+            fresh = ya_push(fresh, yv_long(0));
+            i = i + 1;
+        }
+        rn_reach_memo = fresh;
+        rn_reach_n = n;
+    }
+    if (yv_l(ya_get(rn_reach_memo, id)) == 0) {
+        if (rn_reaches(st, id, 0)) {
+            ya_set(rn_reach_memo, id, yv_long(2));
+        } else {
+            ya_set(rn_reach_memo, id, yv_long(1));
+        }
+    }
+    return yv_l(ya_get(rn_reach_memo, id)) == 2;
 }
 
 /* The index in st.tys of the alias `name` stands for (the last declared:
@@ -1524,6 +1554,7 @@ Yv *rename_program(Yv *ast) {
 Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods) {
     rn_tref_ids = yav(0);
     rn_tref_nodes = yav(0);
+    rn_reach_n = -1;
     rn_ofile = ofile;
     rn_fmods = fmods;
     Yv *mods = yav(0);
