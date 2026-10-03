@@ -3,6 +3,8 @@
 ## State
 
 - On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
+  `bececdd6` (f85871b: `time_us()`, the wall clock, CHOICES_MADE.md 27;
+  previous `860e647a` backed up as `ycc.ref.pre-time`). Before that
   `860e647a` (6400bd8: optional record fields `name?: T`, CHOICES_MADE.md
   26 -- the first http prerequisite; make test, ASan, fuzz 1500/4245
   green; ycc.y compile +0.16% instructions; previous `82d21975` backed up
@@ -45,8 +47,8 @@
   pattern field reads are in place (gen_narrow_field); my "binding is a
   view" refinement was dropped (CHOICES 25 says why).
 - Next: the task queue below (task 3, http prerequisites): optional
-  record fields DONE; next a wall-clock builtin, then DNS, crypto + TLS
-  1.3, the http client, `http.session`.
+  record fields DONE; the wall clock (`time_us()`) DONE; next DNS, then
+  crypto + TLS 1.3, the http client, `http.session`.
 - The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
