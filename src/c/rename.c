@@ -32,6 +32,7 @@
  * builtins (`+`, len, tostring, push -> ys_cat/yv_len/ys_long/ya_push). */
 
 #include "rename.h"
+#include "parser.h"
 
 /* The modules imported by name (rename_program_x): each line's file
  * (native.c's origin map), each file's module ("" for the program's own
@@ -95,6 +96,14 @@ Yv *rn_lookup(Yv *st, Yv *name) {
 }
 
 /* rn_lookup in the frames from the innermost down to frame `lo`. */
+/* The top level's names (frame 1: append-only for a whole run, which
+ * resets this) by an index of each one's newest binding there: a global
+ * named in a function scanned all of them. Made once the frame passes
+ * 256 names (a small one scans faster than it hashes); rn_ixn of them
+ * are in it. */
+static Yv *rn_ix;
+static long rn_ixn;
+
 Yv *rn_lookup_to(Yv *st, Yv *name, long lo) {
     /* Innermost scope first; within a frame, the NEWEST binding wins
      * (a later let shadows an earlier one). */
@@ -103,17 +112,35 @@ Yv *rn_lookup_to(Yv *st, Yv *name, long lo) {
     Yv *found = ys("");
     while (i >= lo) {
         Yv *frame = ya_get(all, i);
-        long j = yv_len(frame) - 1;
-        while (j >= 0) {
-            Yv *e = ya_get(frame, j);
-            if (ys_eq(yr_get(e, "orig"), name)) {
-                found = yr_get(e, "uniq");
-                j = -1;
+        if (i == 1 && yv_len(frame) > 256 && yv_len(name) > 0) {
+            if (rn_ixn == 0) {
+                rn_ix = nameix_new(1024);
+            }
+            while (rn_ixn < yv_len(frame)) {
+                Yv *b = ya_get(frame, rn_ixn);
+                if (yv_len(yr_get(b, "orig")) > 0) {
+                    nameix_put(rn_ix, yr_get(b, "orig"), rn_ixn);
+                }
+                rn_ixn = rn_ixn + 1;
+            }
+            long at = nameix_get(rn_ix, name);
+            if (at >= 0) {
+                found = yr_get(ya_get(frame, at), "uniq");
                 i = -1;
+            }
+        } else {
+            long j = yv_len(frame) - 1;
+            while (j >= 0) {
+                Yv *e = ya_get(frame, j);
+                if (ys_eq(yr_get(e, "orig"), name)) {
+                    found = yr_get(e, "uniq");
+                    j = -1;
+                    i = -1;
+                    ;
+                }
+                j = j - 1;
                 ;
             }
-            j = j - 1;
-            ;
         }
         i = i - 1;
         ;
@@ -1735,6 +1762,7 @@ Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl) {
         i = i + 1;
     }
     Yv *st = yr(4, "scopes", yav(1, yav(0)), "n", yv_long(1), "tys", yav(0), "dfl", d0);
+    rn_ixn = 0;
     Yv *b = rn_top(stmts, st);
     return yr(4, "k", ys("block"), "stmts", yr_get(b, "stmts"), "line",
               yv_long(line), "col", yv_long(col));

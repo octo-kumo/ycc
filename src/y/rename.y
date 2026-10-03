@@ -91,6 +91,14 @@ def rn_lookup(st: RnSt, name: str) -> str {
     }
 };
 
+// The top level's names (frame 1: append-only for a whole run, which
+// resets this) by an index of each one's newest binding there: a global
+// named in a function scanned all of them. Made once the frame passes
+// 256 names (a small one scans faster than it hashes); rn_ixn of them
+// are in it.
+let rn_ix: NameIx = parser.nameix_new(8);
+let rn_ixn = 0;
+
 // rn_lookup in the frames from the innermost down to frame `lo`.
 def rn_lookup_to(st: RnSt, name: str, lo: long) -> str {
     // Innermost scope first; within a frame, the NEWEST binding wins
@@ -100,17 +108,32 @@ def rn_lookup_to(st: RnSt, name: str, lo: long) -> str {
     let found = "";
     while (i >= lo) {
         let frame = all[i];
-        let j = len(frame) - 1;
-        while (j >= 0) {
-            let e = frame[j];
-            if (e.orig == name) {
+        if (i == 1 && len(frame) > 256 && len(name) > 0) {
+            if (rn_ixn == 0) { rn_ix = parser.nameix_new(1024); };
+            while (rn_ixn < len(frame)) {
+                let b = frame[rn_ixn];
+                if (len(b.orig) > 0) { parser.nameix_put(rn_ix, b.orig, rn_ixn); };
+                rn_ixn = rn_ixn + 1;
+            };
+            let at = parser.nameix_get(rn_ix, name);
+            if (at >= 0) {
+                let e = frame[at];
                 found = e.uniq;
-                j = -1;
                 i = -1;
+            };
+        } else {
+            let j = len(frame) - 1;
+            while (j >= 0) {
+                let e = frame[j];
+                if (e.orig == name) {
+                    found = e.uniq;
+                    j = -1;
+                    i = -1;
+                    0
+                };
+                j = j - 1;
                 0
             };
-            j = j - 1;
-            0
         };
         i = i - 1;
         0
@@ -1450,6 +1473,7 @@ def rename_program_go(stmts: [Node], line: long, col: long, dfl: [Dfl]) -> Block
     let d0: [Dfl] = [];
     d0 += dfl;
     let st: RnSt = { scopes: [[]], n: 1, tys: [], dfl: d0 };
+    rn_ixn = 0;
     let b = rn_top(stmts, st);
     { k: "block", stmts: b.stmts, line: line, col: col }
 };
