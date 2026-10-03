@@ -113,7 +113,7 @@ points at its own line and column. The expression ends at the first
 \ic{?}: \ic{\{ok ? a : b\}} works, while a cons has to be parenthesised,
 \ic{\{(x :: xs)\}}. A \ic{?} that is part of a \ic{?.} (Section~
 \ref{sec:opt-propagation}) answers nothing, so the \ic{:} after it is
-the spec's own: \ic{f"\{o?.port:x\}"\} is \ic{o?.port} as \ic{x}. The spec
+the spec's own: \ic{f"\{o?.port:x\}"\}} is \ic{o?.port} as \ic{x}. The spec
 is plain text up to the field's \ic{\}}; it cannot hold another field.
 
 \paragraph{Booleans and none.} \ic{true}, \ic{false}. The empty option
