@@ -543,3 +543,42 @@ ones.
   `res.text()` reads like future.y's sketch; the body is read as it
   arrives, not buffered first. HTTP errors are responses (404 has a
   status); only a missing response sets `err` (status 0).
+
+## Threads and processes (task 5, future.y)
+
+### 33. The design
+
+future.y sketches `spawn { }`, `join t;`, `mutex()` with `lock m { }` and
+`try_lock m { }` (a bool), `sem(0)` with `post s;` / `wait s;`, and
+`fork { }` (only the child runs the block).
+
+- **Real threads** (clone(2), shared memory), not green threads: what
+  the sketch implies (a mutex guards shared data), and the kernel does
+  the scheduling.
+- **The allocator** (a bump pointer, no collector) gets a heap per
+  thread: a thread's control block doubles as its heap state, reached
+  through %fs (TLS set by clone); until the first spawn, y_alloc keeps
+  using the global heap, so a program without threads pays one test.
+  The alternative, a lock around y_alloc, serializes every allocation
+  of every thread.
+- **Every exit becomes exit_group**, so a program's end (or a runtime
+  trap) ends all its threads.
+- **The syntax is contextual**: `spawn {`, `fork {`, `lock E {`,
+  `try_lock E {`, and `join E`, `post E`, `wait E` (an expression right
+  after the word) are the new forms; each is a call of a builtin of the
+  same name on a closure of the block, so `lock(m, f)`, `join(t)` etc.
+  are the same things spelled as calls, and a program's own def or
+  variable named like one still wins. No word becomes reserved.
+- **A thread is a function**: `spawn { e }` has type `() -> T` (T the
+  block's type); calling it waits for the thread and gives its value,
+  `join t` is that call. No new kind of type.
+- **mutex and sem are types** (records the program cannot spell: their
+  one field is named with a `$`), written `mutex` and `sem` in
+  annotations.
+- **The blocks are closures**: `lock m { ... }` runs the block as a
+  function under the lock (its value is the lock's), so a `return` in
+  it leaves the block, not the enclosing function -- the lock is always
+  released.
+- **fork { }** gives the child's pid (the child runs the block and
+  exits 0, or calls exit itself); `wait_pid(pid)` reaps it and gives
+  its exit status.
