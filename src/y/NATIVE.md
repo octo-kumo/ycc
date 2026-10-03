@@ -22,7 +22,7 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
 | `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
 | `src/y/pkg.y` | `ycc build`/`ycc vendor`: the `y.toml` reader (a TOML subset), the dependency graph, git fetching, `y.lock`, vendoring, and the hash behind the package objects' keys (*Packages* below) |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP/HTTP), `struct.y` (pack/unpack helpers) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP, DNS, an HTTP server), `struct.y` (pack/unpack helpers), `crypto.y` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, RSA and ECDSA verification), `x509.y` (certificates, trust anchors, chain and name checks), `tls.y` (a TLS 1.3 client) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -779,6 +779,23 @@ truncated; a malformed answer is no addresses, never a crash), so
 `http_read_head`, `http_serve_one`, `listen_http`), all Y over `syscall`
 (it imports `fs` for the two files). IPv4 only. A `ui` module would land
 the same way.
+
+`src/y/std/crypto.y`, `x509.y` and `tls.y` are a TLS 1.3 client in plain
+Y, each importing the one before it. crypto: SHA-256/384/512, HMAC, HKDF,
+ChaCha20-Poly1305 (RFC 8439), AES-128/256-GCM (T-tables, a bitwise
+GHASH), X25519 (TweetNaCl's limbs), and for signatures Montgomery
+arithmetic on 30-bit limbs: RSA PKCS #1 v1.5 and PSS, ECDSA on P-256 and
+P-384 (Jacobian coordinates, Shamir's trick). x509: DER and PEM, the
+system CA bundle (read once), path building to an anchor (depth 8, every
+issuer a CA in its period with a good signature), one-label wildcards; no
+revocation, name constraints or policies. tls: RFC 8446 with X25519 and
+the three suites, the chain checked by x509, CertificateVerify and
+Finished checked, ALPN, KeyUpdate; no HelloRetryRequest, resumption or
+client certificates. Rough speeds: X25519 5 ms, ChaCha20-Poly1305 13
+MB/s, AES-GCM 7 MB/s, SHA-256 21 MB/s; a chain verifies in 10-80 ms. The
+fixtures `t158_crypto.y` (known answers) and `t159_x509.y` (a chain made
+for it, at fixed times) run offline; test_net.sh runs the client against
+`openssl s_server` when there is one.
 
 ## Embedding files
 

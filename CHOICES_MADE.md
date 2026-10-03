@@ -485,3 +485,22 @@ was a syntax error).
   (the parser reads a dotted name in a type and a type pattern). Chosen:
   the same rule as the module's functions, and the http client's
   response type needs a name its users can write.
+
+### 30. TLS: what the client does and does not
+
+- **TLS 1.3 only.** Every server worth reaching speaks it; 1.2 would
+  double the protocol code (another key schedule, RSA key exchange or
+  ECDHE-RSA, CBC suites).
+- **X25519 only, and no HelloRetryRequest.** Servers take X25519
+  nearly everywhere; P-256 ECDH would need scalar multiplication on top
+  of the verification code, and HRR a second ClientHello. A server that
+  insists says so in the error.
+- **Three suites**, ChaCha20-Poly1305 offered first: in plain Y it runs
+  at about twice AES-GCM's speed (13 vs 7 MB/s).
+- **Verification is on by default** (system anchors, host name),
+  `insecure: true` turns off only the chain check; signatures and
+  Finished always hold. Revocation, name constraints and policies are
+  not checked (no OCSP/CRL fetching): the common client trade-off.
+- **Modules, not builtins**: crypto, x509 and tls are plain Y in std,
+  so nothing in the compiler grew; a program that does not import them
+  pays nothing.

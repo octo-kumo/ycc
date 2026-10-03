@@ -193,7 +193,10 @@ very build was just compared (`make test`, `check`, `rebless` do);
   answer real HTTP/TCP clients and exit cleanly, and one serves 100
   connections under `ulimit -n 32` (no fd leak per connection); the
   resolver (`net.resolve_with`) against a fake DNS server
-  (`dns_srv.y`: CNAME, TCP fallback, NXDOMAIN, a malformed answer).
+  (`dns_srv.y`: CNAME, TCP fallback, NXDOMAIN, a malformed answer), and
+  the TLS 1.3 client (`tls_cli.y`, std/tls.y) against `openssl s_server`
+  with each suite and an RSA and an ECDSA certificate (skipped without
+  openssl).
 - `test_coverage.sh` [coverage] — static, compiles nothing: every
   diagnostic the compiler can print has its message in a test
   expectation, every builtin in the manual is called by a checked test,
@@ -378,7 +381,8 @@ replaces the std one at link time).
   info); `std/` (`rt.y` runtime
   in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string
   methods) — the four embedded into the compiler — and `fs.y` (files,
-  paths, directories: `import fs;`), `io.y`, `net.y`, `struct.y`).
+  paths, directories: `import fs;`), `net.y` (TCP, DNS), `struct.y`,
+  `crypto.y`, `x509.y`, `tls.y` (a TLS 1.3 client)).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
 - `refs/` — backed-up reference binaries for the port gate (see

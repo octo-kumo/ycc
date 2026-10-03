@@ -1,7 +1,8 @@
 #!/bin/bash
 # Exercise the blocking net listeners over loopback.  The first connection
 # is also the readiness probe; the next one makes each handler exit cleanly.
-# Then the resolver against a fake DNS server (test/y/net/dns_srv.y).
+# Then the resolver against a fake DNS server (test/y/net/dns_srv.y), and
+# the TLS 1.3 client against openssl s_server (test/y/net/tls_cli.y).
 set -u
 
 source "$(dirname "$0")/lib.sh"
@@ -386,6 +387,61 @@ compile_server_pair dns_srv && compile_server_pair dns_cli && dns_ok=1
 if [ "$dns_ok" -eq 1 ]; then
     test_dns "$WORK/dns_srv.copy" "C copy"
     test_dns "$WORK/dns_srv.ref" "reference"
+fi
+
+# The TLS 1.3 client (std/tls.y) against `openssl s_server -www` when the
+# machine has openssl: each suite, an RSA and an ECDSA P-384 certificate
+# trusted as the anchor, ALPN, and a host the certificate does not name.
+tls_case() {
+    local suite="$1" cert="$2" key="$3" host="$4" want="$5" extra="${6:-}"
+    local attempt=0 port="" pid polls c got
+    while [ "$attempt" -lt 20 ]; do
+        port="$(random_port)"
+        timeout --kill-after=1 20 openssl s_server -accept "$port" -cert "$cert" -key "$key" \
+            -tls1_3 -ciphersuites "$suite" $extra -www -quiet </dev/null >/dev/null 2>&1 &
+        SERVER_PID=$!
+        PIDS+=("$SERVER_PID")
+        polls=0
+        while [ "$polls" -lt 50 ] && job_running "$SERVER_PID" && ! tcp_fire "$port"; do
+            sleep 0.1
+            polls=$((polls + 1))
+        done
+        job_running "$SERVER_PID" && break
+        stop_server
+        port=""
+        attempt=$((attempt + 1))
+    done
+    if [ -z "$port" ]; then
+        fail "TLS $suite" "openssl s_server did not start"
+        return
+    fi
+    for c in "$WORK/tls_cli.copy" "$WORK/tls_cli.ref"; do
+        got=$(run_bin 30 "$c" "$port" "$cert" "$host" </dev/null 2>&1)
+        if [ "$got" = "$want" ]; then
+            pass "TLS $suite $(basename "$cert") $host: $(basename "$c")"
+        else
+            fail "TLS $suite $(basename "$cert") $host: $(basename "$c")" "got: $got"
+        fi
+    done
+    stop_server
+}
+if command -v openssl >/dev/null 2>&1; then
+    if compile_server_pair tls_cli; then
+        openssl req -x509 -newkey rsa:2048 -keyout "$WORK/rsa_key.pem" -out "$WORK/rsa.pem" -days 2 -nodes \
+            -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" >/dev/null 2>&1
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -keyout "$WORK/ec_key.pem" -out "$WORK/ec.pem" \
+            -days 2 -nodes -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" >/dev/null 2>&1
+        tls_case TLS_AES_128_GCM_SHA256 "$WORK/rsa.pem" "$WORK/rsa_key.pem" localhost \
+            "suite 4865 alpn [http/1.1] HTTP/1.0 200 ok true err []" "-alpn http/1.1"
+        tls_case TLS_AES_256_GCM_SHA384 "$WORK/rsa.pem" "$WORK/rsa_key.pem" localhost \
+            "suite 4866 alpn [] HTTP/1.0 200 ok true err []"
+        tls_case TLS_CHACHA20_POLY1305_SHA256 "$WORK/ec.pem" "$WORK/ec_key.pem" localhost \
+            "suite 4867 alpn [] HTTP/1.0 200 ok true err []"
+        tls_case TLS_AES_256_GCM_SHA384 "$WORK/ec.pem" "$WORK/ec_key.pem" 127.0.0.1 \
+            "ERROR certificate is not valid for 127.0.0.1"
+    fi
+else
+    skip "TLS client" "openssl is not installed"
 fi
 
 if [ "$http_ok" -eq 1 ]; then
