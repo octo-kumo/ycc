@@ -13,6 +13,7 @@
  * instruction lengths are known in pass 1.
  */
 #include "asm.h"
+#include "tags.h"
 #include "dwarf.h"
 
 #include <sys/syscall.h>
@@ -235,7 +236,7 @@ static Yv *parse_operand(Yv *t) {
 static Yv *parse_operand_empty(Yv *t) {
     (void)t; /* t is carried only for the shape dispatch (see parse_operand) */
     return yr(3, "ok", yv_bool(0),
-              "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+              "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                         "a", ys(""), "b", ys(""), "name", ys(""),
                         "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                         "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -259,14 +260,14 @@ static Yv *parse_operand_ind(Yv *t) {
     long n = reg_num(r);
     if (n < 0) {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("unknown register '"), r), ys("'")));
     } else {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("ind"), "n", yv_long(n), "size", yv_long(reg_size(r)), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_ind), "n", yv_long(n), "size", yv_long(reg_size(r)), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -280,14 +281,14 @@ static Yv *parse_operand_fs(Yv *t) {
     Yv *r = parse_num(ys_slice_from(t, 4));
     if (!yv_b(yr_get(r, "ok"))) {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad fs operand '"), t), ys("'")));
     } else {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("fs"), "n", yv_long(0), "size", yv_long(64), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_fs), "n", yv_long(0), "size", yv_long(64), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yr_get(r, "v"), "rip", yv_bool(0), "lbl", ys("")),
@@ -304,14 +305,14 @@ static Yv *parse_operand_reg(Yv *t) {
             return parse_operand_fs(t);
         }
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("unknown register '"), t), ys("'")));
     } else {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("reg"), "n", yv_long(n), "size", yv_long(reg_size(t)), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_reg), "n", yv_long(n), "size", yv_long(reg_size(t)), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -337,7 +338,7 @@ static Yv *parse_operand_memlbl(Yv *t) {
         return parse_mem(t);
     } else {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("lbl"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_lbl), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", t,
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -370,7 +371,7 @@ static Yv *parse_imm_diff(Yv *s, long dash) {
         Yv *a = ys_slice(s, 0, dash + 1);
         Yv *b = ys_slice_from(s, dash + 2);
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("diff"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_diff), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", a, "b", b, "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -386,14 +387,14 @@ static Yv *parse_imm_num(Yv *s) {
     Yv *r = parse_num(s);
     if (yv_b(yr_get(r, "ok"))) {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("imm"), "n", yv_long(0), "size", yv_long(0), "v", yr_get(r, "v"),
+                  "op", yr(13, "k", yv_long(K_imm), "n", yv_long(0), "size", yv_long(0), "v", yr_get(r, "v"),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -429,21 +430,21 @@ static Yv *parse_mem_rip(Yv *t, Yv *head, Yv *parts) {
        NOTE: nested ifs, not `||` (see is_digit_ch note). */
     if (yv_len(parts) != 1) {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad rip-relative '"), t), ys("'")));
     } else if (!ys_eq_lit(ya_get(parts, 0), "%rip")) {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad rip-relative '"), t), ys("'")));
     } else {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(-1), "idx", yv_long(-1), "scale", yv_long(1),
                             "disp", yv_long(0), "rip", yv_bool(1), "lbl", head),
@@ -461,14 +462,14 @@ static Yv *parse_mem_regs(Yv *t, Yv *parts, long disp) {
     /* NOTE: nested ifs, not `||` (see is_digit_ch note). */
     if (yv_len(parts) < 1) {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys_cat(ys_cat(ys("bad memory '"), t), ys("'")));
     } else if (yv_len(parts) > 3) {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -477,7 +478,7 @@ static Yv *parse_mem_regs(Yv *t, Yv *parts, long disp) {
         long bn = reg_num(ya_get(parts, 0));
         if (bn < 0) {
             return yr(3, "ok", yv_bool(0),
-                      "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                      "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                                 "a", ys(""), "b", ys(""), "name", ys(""),
                                 "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                                 "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -491,7 +492,7 @@ static Yv *parse_mem_regs(Yv *t, Yv *parts, long disp) {
 static Yv *mem_rest(Yv *t, Yv *parts, long disp, long bn) {
     if (yv_len(parts) == 1) {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(-1), "scale", yv_long(1),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
@@ -500,14 +501,14 @@ static Yv *mem_rest(Yv *t, Yv *parts, long disp, long bn) {
         long xn = reg_num(ya_get(parts, 1));
         if (xn < 0) {
             return yr(3, "ok", yv_bool(0),
-                      "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                      "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                                 "a", ys(""), "b", ys(""), "name", ys(""),
                                 "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                                 "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
                       "error", ys_cat(ys_cat(ys("bad index register '"), t), ys("'")));
         } else if (xn == 4) {
             return yr(3, "ok", yv_bool(0),
-                      "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                      "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                                 "a", ys(""), "b", ys(""), "name", ys(""),
                                 "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                                 "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -525,7 +526,7 @@ static Yv *mem_scale(Yv *t, Yv *parts, long disp, long bn, long xn) {
         return mem_scaleThree(t, parts, disp, bn, xn);
     } else {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(scale),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
@@ -538,7 +539,7 @@ static Yv *mem_scaleThree(Yv *t, Yv *parts, long disp, long bn, long xn) {
     Yv *r = parse_num(ya_get(parts, 2));
     if (!(yv_b(yr_get(r, "ok")))) {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
@@ -552,35 +553,35 @@ static Yv *mem_scaleVal(Yv *t, long v, long disp, long bn, long xn) {
     /* (split: numeric scale narrows; mem-shape built ONLY here.) */
     if (v == 1) {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(1),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else if (v == 2) {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(2),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else if (v == 4) {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(4),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else if (v == 8) {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", ys("mem"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(bn), "idx", yv_long(xn), "scale", yv_long(8),
                             "disp", yv_long(disp), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     } else {
         return yr(3, "ok", yv_bool(0),
-                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),

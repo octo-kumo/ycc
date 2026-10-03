@@ -15,6 +15,7 @@
 //   ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]   build its programs
 //   ycc vendor [DIR]   copy its git dependencies into DIR/vendor
 
+import tags from "./tags.y";
 import lexer from "./lexer.y";
 import parser from "./parser.y";
 import nasm from "./asm.y";
@@ -530,6 +531,13 @@ def build_project(dir: str, debug: bool, nowarn: bool, allow_exec: bool, std_src
 };
 
 def main(cmdline: [str]) -> long {
+    // tags.y writes its tag numbers out twice (K for the code, KTAGS for
+    // diagnostics); ~4k instructions to prove the two still agree, once.
+    if (!tags.tags_agree()) {
+        puts("ycc: internal error: the tag tables disagree (src/y/tags.y)\n");
+        exit(1);
+        0
+    } else { 0; };
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
         if (cmdline[1] == "build") {

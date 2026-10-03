@@ -19,6 +19,7 @@
  *   ycc vendor [DIR]   copy its git dependencies into vendor/
  */
 #include "ycc.h"
+#include "tags.h"
 
 #include "asm.h"
 #include "lexer.h"
@@ -707,6 +708,13 @@ long build_project(Yv *dir, int debug, int nowarn, int allow_exec,
 }
 
 long y_main(Yv *cmdline) {
+    /* tags.y writes its tag numbers out twice (K for the code, KTAGS for
+     * diagnostics); ~4k instructions to prove the two still agree, once. */
+    if (!tags_agree()) {
+        eputs_(ys("ycc: internal error: the tag tables disagree "
+               "(src/y/tags.y)\n"));
+        exit_(1);
+    }
     if (yv_len(cmdline) > 1 &&
         (ys_eq_lit(ya_get(cmdline, 1), "build") ||
          ys_eq_lit(ya_get(cmdline, 1), "vendor"))) {

@@ -15,6 +15,7 @@
 // compilers must emit byte-identical programs (the `make ycc` gate).
 // Nothing in the LANGUAGE is restricted here.
 
+import tags from "./tags.y";
 import enc from "./enc64.y";
 import elf from "./elf.y";
 import dwarf from "./dwarf.y";
@@ -133,7 +134,7 @@ def parse_operand(t: str) -> OpRes {
 };
 
 def parse_operand_empty(t: str) -> OpRes {
-    { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "empty operand" }
+    { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "empty operand" }
 };
 
 def parse_operand_nonempty(t: str) -> OpRes {
@@ -152,9 +153,9 @@ def parse_operand_ind(t: str) -> OpRes {
     let r = t[1:];
     let n = enc.reg_num(r);
     if (n < 0) {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + r + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + r + "'" }
     } else {
-        { ok: true, op: { k: "ind", n: n, size: enc.reg_size(r), v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.ind, n: n, size: enc.reg_size(r), v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -163,9 +164,9 @@ def parse_operand_ind(t: str) -> OpRes {
 def parse_operand_fs(t: str) -> OpRes {
     let r = parse_num(t[4:]);
     if (!r.ok) {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad fs operand '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad fs operand '" + t + "'" }
     } else {
-        { ok: true, op: { k: "fs", n: 0, size: 64, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: r.v, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.fs, n: 0, size: 64, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: r.v, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -177,10 +178,10 @@ def parse_operand_reg(t: str) -> OpRes {
         if (t[0:4] == "%fs:") {
             parse_operand_fs(t)
         } else {
-            { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + t + "'" }
+            { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + t + "'" }
         }
     } else {
-        { ok: true, op: { k: "reg", n: n, size: enc.reg_size(t), v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.reg, n: n, size: enc.reg_size(t), v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -201,7 +202,7 @@ def parse_operand_memlbl(t: str) -> OpRes {
     if (index_of(t, "(") >= 0) {
         parse_mem(t)
     } else {
-        { ok: true, op: { k: "lbl", n: 0, size: 0, v: 0, a: "", b: "", name: t, base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.lbl, n: 0, size: 0, v: 0, a: "", b: "", name: t, base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -229,7 +230,7 @@ def parse_imm_diff(s: str, dash: long) -> OpRes {
     if (dash >= 0) {
         let a = s[0:dash + 1];
         let b = s[dash + 2:];
-        { ok: true, op: { k: "diff", n: 0, size: 0, v: 0, a: a, b: b, name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.diff, n: 0, size: 0, v: 0, a: a, b: b, name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     } else {
         parse_imm_num(s)
     }
@@ -240,9 +241,9 @@ def parse_imm_num(s: str) -> OpRes {
     // sees plain decimal immediates only.)
     let r = parse_num(s);
     if (r.ok) {
-        { ok: true, op: { k: "imm", n: 0, size: 0, v: r.v, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.imm, n: 0, size: 0, v: r.v, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     } else {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad immediate '" + s + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad immediate '" + s + "'" }
     }
 };
 
@@ -273,11 +274,11 @@ def parse_mem_rip(t: str, head: str, parts: [str]) -> OpRes {
     // label(%rip) — mem-shape built ONLY here.
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     if (len(parts) != 1) {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad rip-relative '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad rip-relative '" + t + "'" }
     } else if (parts[0] != "%rip") {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad rip-relative '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad rip-relative '" + t + "'" }
     } else {
-        { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: -1, idx: -1, scale: 1, disp: 0, rip: true, lbl: head }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: -1, idx: -1, scale: 1, disp: 0, rip: true, lbl: head }, error: "" }
     }
 };
 
@@ -290,13 +291,13 @@ def parse_mem_disp(t: str, head: str, parts: [str]) -> OpRes {
 def parse_mem_regs(t: str, parts: [str], disp: long) -> OpRes {
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     if (len(parts) < 1) {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad memory '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad memory '" + t + "'" }
     } else if (len(parts) > 3) {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad memory '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad memory '" + t + "'" }
     } else {
         let bn = enc.reg_num(parts[0]);
         if (bn < 0) {
-            { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad base register '" + t + "'" }
+            { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad base register '" + t + "'" }
         } else {
             mem_rest(t, parts, disp, bn)
         }
@@ -305,13 +306,13 @@ def parse_mem_regs(t: str, parts: [str], disp: long) -> OpRes {
 
 def mem_rest(t: str, parts: [str], disp: long, bn: long) -> OpRes {
     if (len(parts) == 1) {
-        { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: -1, scale: 1, disp: disp, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: -1, scale: 1, disp: disp, rip: false, lbl: "" }, error: "" }
     } else {
         let xn = enc.reg_num(parts[1]);
         if (xn < 0) {
-            { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad index register '" + t + "'" }
+            { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad index register '" + t + "'" }
         } else if (xn == 4) {
-            { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "rsp cannot be index '" + t + "'" }
+            { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "rsp cannot be index '" + t + "'" }
         } else {
             mem_scale(t, parts, disp, bn, xn)
         }
@@ -324,7 +325,7 @@ def mem_scale(t: str, parts: [str], disp: long, bn: long, xn: long) -> OpRes {
     if (len(parts) == 3) {
         mem_scaleThree(t, parts, disp, bn, xn)
     } else {
-        { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: scale, disp: disp, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: scale, disp: disp, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -332,7 +333,7 @@ def mem_scaleThree(t: str, parts: [str], disp: long, bn: long, xn: long) -> OpRe
     // (split: 3-part gate above narrows; scale-shape built ONLY here.)
     let r = parse_num(parts[2]);
     if (!(r.ok)) {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad scale '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad scale '" + t + "'" }
     } else {
         mem_scaleVal(t, r.v, disp, bn, xn)
     }
@@ -341,15 +342,15 @@ def mem_scaleThree(t: str, parts: [str], disp: long, bn: long, xn: long) -> OpRe
 def mem_scaleVal(t: str, v: long, disp: long, bn: long, xn: long) -> OpRes {
     // (split: numeric scale narrows; mem-shape built ONLY here.)
     if (v == 1) {
-        { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 1, disp: disp, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 1, disp: disp, rip: false, lbl: "" }, error: "" }
     } else if (v == 2) {
-        { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 2, disp: disp, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 2, disp: disp, rip: false, lbl: "" }, error: "" }
     } else if (v == 4) {
-        { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 4, disp: disp, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 4, disp: disp, rip: false, lbl: "" }, error: "" }
     } else if (v == 8) {
-        { ok: true, op: { k: "mem", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 8, disp: disp, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: bn, idx: xn, scale: 8, disp: disp, rip: false, lbl: "" }, error: "" }
     } else {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad scale '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad scale '" + t + "'" }
     }
 };
 

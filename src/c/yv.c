@@ -8,6 +8,7 @@
  * changed here moves the reference semantics `make ycc` compares against.
  */
 #include "yv.h"
+#include "tags.h"
 
 #include <stdarg.h>
 #include <stdio.h>

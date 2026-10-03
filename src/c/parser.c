@@ -9,6 +9,7 @@
 // PORTING.md type map: toks is [Yv] (array of {t,v,line,col} token records),
 // result records are Yv *, long -> long, bool -> int, str -> Yv *.
 #include "parser.h"
+#include "tags.h"
 
 /* imported: lexer.y, for its alias Tok only (a record is a Yv * here);
  * otherwise only yv.h builtins: len -> yv_len, push -> ya_push, slicing
@@ -117,7 +118,7 @@ Yv *tok_desc(Yv *toks, long p) {
 Yv *expect_err(Yv *toks, long p, Yv *what) {
     Yv *msg = ys_cat(ys_cat(ys("expected "), what),
                      ys_cat(ys(", got "), tok_desc(toks, p)));
-    return yr(4, "k", ys("err"), "msg", msg, "line", yv_long(tline(toks, p)),
+    return yr(4, "k", yv_long(K_err), "msg", msg, "line", yv_long(tline(toks, p)),
               "col", yv_long(tcol(toks, p)));
 }
 
@@ -171,7 +172,7 @@ Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one) {
     while (go) {
         // NOTE: bound once — `one(toks, pos)` inline misparses on the C VM.
         // NOTE: `0;` tails — the while body must be void-typed (see note).
-        Yv *r = yr(2, "node", yr(3, "k", ys("void"), "line",
+        Yv *r = yr(2, "node", yr(3, "k", yv_long(K_void), "line",
                                  yv_long(tline(toks, pos)), "col",
                                  yv_long(tcol(toks, pos))),
                    "pos", yv_long(pos));
@@ -204,7 +205,7 @@ Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one) {
             if (is_punct(toks, pos, close)) {
                 ;
             } else {
-                xs = ya_push(xs, yr(4, "k", ys("err"),
+                xs = ya_push(xs, yr(4, "k", yv_long(K_err),
                                           "msg", ys_cat(ys_cat(ys_cat(ys_cat(ys("unexpected "), tok_desc(toks, pos)), ys(" (expected ',' or '")), close), ys("')")),
                                           "line", yv_long(tline(toks, pos)),
                                           "col", yv_long(tcol(toks, pos))));
@@ -275,23 +276,23 @@ Yv *parse_primary(Yv *toks, long p) {
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
     if (ys_eq_lit(t, "num")) {
-        return res(yr(4, "k", ys("num"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+        return res(yr(4, "k", yv_long(K_num), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "str")) {
-        return res(yr(4, "k", ys("str"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+        return res(yr(4, "k", yv_long(K_str), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "bstr")) {
         // b"..." / b'...' -- a [byte] literal
-        return res(yr(4, "k", ys("bstr"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+        return res(yr(4, "k", yv_long(K_bstr), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "char")) {
         // c'a' -- one byte, typed `byte`; v holds its code in decimal
         if (yv_len(v) == 1) {
-            return res(yr(4, "k", ys("char"), "v", ys_long(ys_ord(v)), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+            return res(yr(4, "k", yv_long(K_char), "v", ys_long(ys_ord(v)), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
         } else {
-            return res(yr(4, "k", ys("err"), "msg", ys_cat(ys("character literal must be exactly one byte, got "), ys_long(yv_len(v))), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+            return res(yr(4, "k", yv_long(K_err), "msg", ys_cat(ys("character literal must be exactly one byte, got "), ys_long(yv_len(v))), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
         }
     } else if (ys_eq_lit(t, "ferr")) {
         /* a malformed literal (a broken f-string, `0x` without digits):
          * the lexer's message, where it found the fault */
-        return res(yr(4, "k", ys("err"), "msg", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+        return res(yr(4, "k", yv_long(K_err), "msg", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "id")) {
         if (ys_eq_lit(v, "match")) {
             return parse_match_try(toks, p);
@@ -300,7 +301,7 @@ Yv *parse_primary(Yv *toks, long p) {
              * the block (CHOICES_MADE.md 33) */
             Yv *b = parse_block(toks, p + 1);
             Yv *args = yav(1, block_func(yr_get(b, "node"), ln, cl));
-            return res(yr(5, "k", ys("call"), "callee", yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl)),
+            return res(yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", v, "line", yv_long(ln), "col", yv_long(cl)),
                           "args", args, "line", yv_long(ln), "col", yv_long(cl)),
                        yv_l(yr_get(b, "pos")));
         } else if ((ys_eq_lit(v, "lock") || ys_eq_lit(v, "try_lock")) && ys_eq_lit(tt(toks, p + 1), "id")) {
@@ -308,34 +309,34 @@ Yv *parse_primary(Yv *toks, long p) {
             Yv *m = parse_postfix(toks, p + 1);
             Yv *args = yav(1, yr_get(m, "node"));
             long mpos = yv_l(yr_get(m, "pos"));
-            Yv *callee = yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl));
+            Yv *callee = yr(4, "k", yv_long(K_id), "v", v, "line", yv_long(ln), "col", yv_long(cl));
             if (!is_punct(toks, mpos, ys("{"))) {
                 args = ya_push(args, expect_err(toks, mpos, ys_cat(ys_cat(ys("'{' (the block "), v), ys(" runs)"))));
-                return res(yr(5, "k", ys("call"), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl)), mpos);
+                return res(yr(5, "k", yv_long(K_call), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl)), mpos);
             } else {
                 Yv *b = parse_block(toks, mpos);
                 args = ya_push(args, block_func(yr_get(b, "node"), ln, cl));
-                return res(yr(5, "k", ys("call"), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl)),
+                return res(yr(5, "k", yv_long(K_call), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl)),
                            yv_l(yr_get(b, "pos")));
             }
         } else if ((ys_eq_lit(v, "join") || ys_eq_lit(v, "post") || ys_eq_lit(v, "wait")) && ys_eq_lit(tt(toks, p + 1), "id")) {
             /* `join t`, `post s`, `wait s`: the builtin on the operand */
             Yv *e = parse_postfix(toks, p + 1);
             Yv *args = yav(1, yr_get(e, "node"));
-            return res(yr(5, "k", ys("call"), "callee", yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl)),
+            return res(yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", v, "line", yv_long(ln), "col", yv_long(cl)),
                           "args", args, "line", yv_long(ln), "col", yv_long(cl)),
                        yv_l(yr_get(e, "pos")));
         } else {
-            return res(yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+            return res(yr(4, "k", yv_long(K_id), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
         }
     } else if (is_kw(toks, p, ys("true"))) {
-        return res(yr(4, "k", ys("bool"), "v", ys("true"), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+        return res(yr(4, "k", yv_long(K_bool), "v", ys("true"), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (is_kw(toks, p, ys("false"))) {
-        return res(yr(4, "k", ys("bool"), "v", ys("false"), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+        return res(yr(4, "k", yv_long(K_bool), "v", ys("false"), "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (is_punct(toks, p, ys("("))) {
         if (is_punct(toks, p + 1, ys(")"))) {
             // `()` is the void value (nothing computed)
-            return res(yr(3, "k", ys("void"), "line", yv_long(ln), "col",
+            return res(yr(3, "k", yv_long(K_void), "line", yv_long(ln), "col",
                           yv_long(cl)), p + 2);
         } else {
             Yv *inner = parse_expr(toks, p + 1);
@@ -379,17 +380,17 @@ Yv *parse_primary(Yv *toks, long p) {
 Yv *sync_type(Yv *nm) {
     Yv *fs = yav(0);
     if (ys_eq_lit(nm, "mutex")) {
-        fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+        fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
     } else {
-        fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
-        fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+        fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+        fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
     }
-    return yr(2, "k", ys("trec"), "fields", fs);
+    return yr(2, "k", yv_long(K_trec), "fields", fs);
 }
 
 /* A block as a function of no parameters, its return type inferred. */
 Yv *block_func(Yv *body, long ln, long cl) {
-    return yr(8, "k", ys("func"), "params", yav(0), "ptypes", yav(0), "ret", yr(1, "k", ys("tnone")),
+    return yr(8, "k", yv_long(K_func), "params", yav(0), "ptypes", yav(0), "ret", yr(1, "k", yv_long(K_tnone)),
               "body", body, "defs", yav(0), "line", yv_long(ln), "col", yv_long(cl));
 }
 
@@ -410,10 +411,10 @@ Yv *parse_postfix(Yv *toks, long p) {
             if (is_punct(toks, pos + 1, ys(":"))) {
                 if (is_punct(toks, pos + 2, ys("]"))) {
                     // arr[:] — full slice
-                    node = yr(6, "k", ys("slice"), "arr", node, "lo",
-                              yr(3, "k", ys("void"), "line", yv_long(bln),
+                    node = yr(6, "k", yv_long(K_slice), "arr", node, "lo",
+                              yr(3, "k", yv_long(K_void), "line", yv_long(bln),
                                  "col", yv_long(bcl)),
-                              "hi", yr(3, "k", ys("void"), "line",
+                              "hi", yr(3, "k", yv_long(K_void), "line",
                                        yv_long(bln), "col", yv_long(bcl)),
                               "line", yv_long(bln), "col", yv_long(bcl));
                     pos = pos + 3;  // skip '[', ':', ']'
@@ -422,8 +423,8 @@ Yv *parse_postfix(Yv *toks, long p) {
                     Yv *second = parse_expr(toks, pos + 2);
                     Yv *close = close_res(
                         toks, yv_l(yr_get(second, "pos")), ys("]"),
-                        yr(6, "k", ys("slice"), "arr", node, "lo",
-                           yr(3, "k", ys("void"), "line", yv_long(bln),
+                        yr(6, "k", yv_long(K_slice), "arr", node, "lo",
+                           yr(3, "k", yv_long(K_void), "line", yv_long(bln),
                               "col", yv_long(bcl)),
                            "hi", yr_get(second, "node"),
                            "line", yv_long(bln), "col", yv_long(bcl)));
@@ -435,9 +436,9 @@ Yv *parse_postfix(Yv *toks, long p) {
                 if (is_punct(toks, yv_l(yr_get(first, "pos")), ys(":"))) {
                     if (is_punct(toks, yv_l(yr_get(first, "pos")) + 1, ys("]"))) {
                         // arr[lo:] — no hi
-                        node = yr(6, "k", ys("slice"), "arr", node, "lo",
+                        node = yr(6, "k", yv_long(K_slice), "arr", node, "lo",
                                   yr_get(first, "node"), "hi",
-                                  yr(3, "k", ys("void"), "line",
+                                  yr(3, "k", yv_long(K_void), "line",
                                      yv_long(bln), "col", yv_long(bcl)),
                                   "line", yv_long(bln), "col", yv_long(bcl));
                         pos = yv_l(yr_get(first, "pos")) + 2;  // skip ':' and ']'
@@ -446,7 +447,7 @@ Yv *parse_postfix(Yv *toks, long p) {
                         Yv *second = parse_expr(toks, yv_l(yr_get(first, "pos")) + 1);
                         Yv *close = close_res(
                             toks, yv_l(yr_get(second, "pos")), ys("]"),
-                            yr(6, "k", ys("slice"), "arr", node, "lo",
+                            yr(6, "k", yv_long(K_slice), "arr", node, "lo",
                                yr_get(first, "node"), "hi", yr_get(second, "node"),
                                "line", yv_long(bln), "col", yv_long(bcl)));
                         node = yr_get(close, "node");
@@ -456,14 +457,14 @@ Yv *parse_postfix(Yv *toks, long p) {
                     // arr[i] — index
                     Yv *close = close_res(
                         toks, yv_l(yr_get(first, "pos")), ys("]"),
-                        yr(5, "k", ys("index"), "arr", node, "idx",
+                        yr(5, "k", yv_long(K_index), "arr", node, "idx",
                            yr_get(first, "node"), "line", yv_long(bln),
                            "col", yv_long(bcl)));
                     node = yr_get(close, "node");
                     pos = yv_l(yr_get(close, "pos"));
                 }
             }
-            if (ys_eq_lit(yr_get(node, "k"), "err")) {
+            if (yv_l(yr_get(node, "k")) == K_err) {
                 go = 0;
                 ;
             } else {
@@ -472,7 +473,7 @@ Yv *parse_postfix(Yv *toks, long p) {
         } else if (is_op(toks, pos, ys("."))) {
             if (is_name_tok(toks, pos + 1)) {
                 Yv *name = tv(toks, pos + 1);
-                node = yr(5, "k", ys("dot"), "obj", node, "key", name,
+                node = yr(5, "k", yv_long(K_dot), "obj", node, "key", name,
                           "line", yv_long(tline(toks, pos)),
                           "col", yv_long(tcol(toks, pos)));
                 pos = pos + 2;
@@ -486,17 +487,17 @@ Yv *parse_postfix(Yv *toks, long p) {
             // x! -- postfix unwrap, exactly unwrap(x) (traps on none).
             Yv *ua = yav(0);
             ua = ya_push(ua, node);
-            node = yr(5, "k", ys("call"), "callee", yr(4, "k", ys("id"), "v", ys("unwrap"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))), "args", ua, "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
+            node = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("unwrap"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))), "args", ua, "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
             pos = pos + 1;
         } else if (is_op(toks, pos, ys("++"))) {
             // x++ — postfix: the OLD value is the expression's value, and
             // the target is evaluated once (a[f()]++ calls f once).
-            node = yr(6, "k", ys("incdec"), "op", ys("++"), "pre", yv_bool(0), "tgt", node, "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
+            node = yr(6, "k", yv_long(K_incdec), "op", ys("++"), "pre", yv_bool(0), "tgt", node, "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
             pos = pos + 1;
             go = 0;
             ;
         } else if (is_op(toks, pos, ys("--"))) {
-            node = yr(6, "k", ys("incdec"), "op", ys("--"), "pre", yv_bool(0), "tgt", node, "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
+            node = yr(6, "k", yv_long(K_incdec), "op", ys("--"), "pre", yv_bool(0), "tgt", node, "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
             pos = pos + 1;
             go = 0;
             ;
@@ -519,25 +520,25 @@ Yv *mk_call(Yv *callee, Yv *args, long ln, long cl) {
         Yv *cat = tostring_call(ya_get(args, 0), ln, cl);
         long i = 1;
         while (i < yv_len(args)) {
-            cat = yr(6, "k", ys("bin"), "op", ys("+"), "l", cat, "r", tostring_call(ya_get(args, i), ln, cl), "line", yv_long(ln), "col", yv_long(cl));
+            cat = yr(6, "k", yv_long(K_bin), "op", ys("+"), "l", cat, "r", tostring_call(ya_get(args, i), ln, cl), "line", yv_long(ln), "col", yv_long(cl));
             i = i + 1;
         }
         Yv *one = yav(0);
         one = ya_push(one, cat);
-        return yr(5, "k", ys("call"), "callee", callee, "args", one, "line", yv_long(ln), "col", yv_long(cl));
+        return yr(5, "k", yv_long(K_call), "callee", callee, "args", one, "line", yv_long(ln), "col", yv_long(cl));
     } else {
-        return yr(5, "k", ys("call"), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl));
+        return yr(5, "k", yv_long(K_call), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl));
     }
 }
 
 Yv *tostring_call(Yv *arg, long ln, long cl) {
     Yv *one = yav(0);
     one = ya_push(one, arg);
-    return yr(5, "k", ys("call"), "callee", yr(4, "k", ys("id"), "v", ys("tostring"), "line", yv_long(ln), "col", yv_long(cl)), "args", one, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("tostring"), "line", yv_long(ln), "col", yv_long(cl)), "args", one, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 int is_id_named(Yv *node, Yv *name) {
-    if (ys_eq_lit(yr_get(node, "k"), "id")) {
+    if (yv_l(yr_get(node, "k")) == K_id) {
         return ys_eq(yr_get(node, "v"), name);
     } else {
         return 0;
@@ -580,7 +581,7 @@ Yv *parse_binary(Yv *toks, long p, long min_prec) {
                 ;
             } else { ; }
             Yv *right_r = parse_binary(toks, pos + 1, next_min);
-            left = yr(6, "k", ys("bin"), "op", op, "l", left, "r", yr_get(right_r, "node"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
+            left = yr(6, "k", yv_long(K_bin), "op", op, "l", left, "r", yr_get(right_r, "node"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
             pos = yv_l(yr_get(right_r, "pos"));
             ;
         }
@@ -593,29 +594,29 @@ Yv *parse_unary(Yv *toks, long p) {
     // shapes poison the joint `||` gate.
     if (is_op(toks, p, ys("-"))) {
         Yv *inner = parse_unary(toks, p + 1);
-        return res(yr(5, "k", ys("un"), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+        return res(yr(5, "k", yv_long(K_un), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else if (is_op(toks, p, ys("!"))) {
         Yv *inner = parse_unary(toks, p + 1);
-        return res(yr(5, "k", ys("un"), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+        return res(yr(5, "k", yv_long(K_un), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else if (is_op(toks, p, ys("~"))) {
         // bitwise not: ~x
         Yv *inner = parse_unary(toks, p + 1);
-        return res(yr(5, "k", ys("un"), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+        return res(yr(5, "k", yv_long(K_un), "op", tv(toks, p), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else if (is_op(toks, p, ys("&"))) {
         // address-of: &x
         Yv *inner = parse_unary(toks, p + 1);
-        return res(yr(4, "k", ys("addr"), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+        return res(yr(4, "k", yv_long(K_addr), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else if (is_op(toks, p, ys("*"))) {
         // dereference: *p
         Yv *inner = parse_unary(toks, p + 1);
-        return res(yr(4, "k", ys("deref"), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+        return res(yr(4, "k", yv_long(K_deref), "e", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else if (is_op(toks, p, ys("++"))) {
         // ++x — prefix: the NEW value is the expression's value
         Yv *inner = parse_unary(toks, p + 1);
-        return res(yr(6, "k", ys("incdec"), "op", ys("++"), "pre", yv_bool(1), "tgt", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+        return res(yr(6, "k", yv_long(K_incdec), "op", ys("++"), "pre", yv_bool(1), "tgt", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else if (is_op(toks, p, ys("--"))) {
         Yv *inner = parse_unary(toks, p + 1);
-        return res(yr(6, "k", ys("incdec"), "op", ys("--"), "pre", yv_bool(1), "tgt", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
+        return res(yr(6, "k", yv_long(K_incdec), "op", ys("--"), "pre", yv_bool(1), "tgt", yr_get(inner, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(inner, "pos")));
     } else {
         return parse_postfix(toks, p);
     }
@@ -639,9 +640,9 @@ Yv *parse_ternary(Yv *toks, Yv *cond, long q) {
     long apos = yv_l(yr_get(a, "pos"));
     if (is_punct(toks, apos, ys(":"))) {
         Yv *b = parse_expr(toks, apos + 1);
-        return res(yr(7, "k", ys("if"), "cond", cond, "then", block1(yr_get(a, "node"), ln, cl), "els", block1(yr_get(b, "node"), ln, cl), "has_else", yv_bool(1), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(b, "pos")));
+        return res(yr(7, "k", yv_long(K_kw_if), "cond", cond, "then", block1(yr_get(a, "node"), ln, cl), "els", block1(yr_get(b, "node"), ln, cl), "has_else", yv_bool(1), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(b, "pos")));
     } else {
-        return res(yr(4, "k", ys("err"), "msg", ys_cat(ys_cat(ys("expected ':' in conditional expression, got '"), tv(toks, apos)), ys("'")), "line", yv_long(tline(toks, apos)), "col", yv_long(tcol(toks, apos))), apos);
+        return res(yr(4, "k", yv_long(K_err), "msg", ys_cat(ys_cat(ys("expected ':' in conditional expression, got '"), tv(toks, apos)), ys("'")), "line", yv_long(tline(toks, apos)), "col", yv_long(tcol(toks, apos))), apos);
     }
 }
 
@@ -649,7 +650,7 @@ Yv *parse_ternary(Yv *toks, Yv *cond, long q) {
 Yv *block1(Yv *e, long ln, long cl) {
     Yv *one = yav(0);
     one = ya_push(one, e);
-    return yr(4, "k", ys("block"), "stmts", one, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(4, "k", yv_long(K_block), "stmts", one, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 // ── compound literals ────────────────────────────────────────────────────
@@ -690,7 +691,7 @@ Yv *parse_array(Yv *toks, long p) {
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
     if (is_punct(toks, p + 1, ys("]"))) {
-        return res(yr(4, "k", ys("array"), "elems", yav(0), "line", yv_long(ln), "col", yv_long(cl)), p + 2);
+        return res(yr(4, "k", yv_long(K_array), "elems", yav(0), "line", yv_long(ln), "col", yv_long(cl)), p + 2);
     } else {
         Yv *first = parse_expr(toks, p + 1);
         long pos = yv_l(yr_get(first, "pos"));
@@ -703,7 +704,7 @@ Yv *parse_array(Yv *toks, long p) {
             if (n >= 0) {
                 return close_res(
                     toks, at + 1, ys("]"),
-                    yr(5, "k", ys("arrrep"), "v", yr_get(first, "node"),
+                    yr(5, "k", yv_long(K_arrrep), "v", yr_get(first, "node"),
                        "n", yv_long(n), "line", yv_long(ln), "col", yv_long(cl)));
             } else {
                 Yv *cnt = parse_expr(toks, at);
@@ -741,13 +742,13 @@ Yv *parse_array(Yv *toks, long p) {
             if (is_punct(toks, pos, ys("]"))) {
                 ;
             } else {
-                elems = ya_push(elems, yr(4, "k", ys("err"),
+                elems = ya_push(elems, yr(4, "k", yv_long(K_err),
                                           "msg", ys_cat(ys_cat(ys("unexpected "), tok_desc(toks, pos)), ys(" (expected ',' or ']')")),
                                           "line", yv_long(tline(toks, pos)),
                                           "col", yv_long(tcol(toks, pos))));
                 ;
             }
-            return res(yr(4, "k", ys("array"), "elems", elems, "line", yv_long(ln), "col", yv_long(cl)), skip_close(toks, pos, ys("]")));
+            return res(yr(4, "k", yv_long(K_array), "elems", elems, "line", yv_long(ln), "col", yv_long(cl)), skip_close(toks, pos, ys("]")));
         }
     }
 }
@@ -874,8 +875,8 @@ Yv *parse_map(Yv *toks, long p) {
 
 // `{a: 1}` is a record ({k: "rec"}), `{"a": 1}` a map ({k: "map"}).
 Yv *maplit_node(int is_map, Yv *keys, Yv *vals, long ln, long cl) {
-    if (is_map) { return yr(5, "k", ys("map"), "keys", keys, "vals", vals, "line", yv_long(ln), "col", yv_long(cl)); }
-    else { return yr(5, "k", ys("rec"), "keys", keys, "vals", vals, "line", yv_long(ln), "col", yv_long(cl)); }
+    if (is_map) { return yr(5, "k", yv_long(K_map), "keys", keys, "vals", vals, "line", yv_long(ln), "col", yv_long(cl)); }
+    else { return yr(5, "k", yv_long(K_rec), "keys", keys, "vals", vals, "line", yv_long(ln), "col", yv_long(cl)); }
 }
 
 // ── type parsing ─────────────────────────────────────────────────────────
@@ -901,7 +902,7 @@ Yv *parse_type_node(Yv *toks, long p) {
     if (is_op(toks, p, ys("*"))) {
         // pointer type: *T
         Yv *inner = parse_type_node(toks, p + 1);
-        Yv *pin = yr(2, "k", ys("tptr"), "to", yr_get(inner, "node"));
+        Yv *pin = yr(2, "k", yv_long(K_tptr), "to", yr_get(inner, "node"));
         return parse_type_tail(toks, yv_l(yr_get(inner, "pos")), pin);
     } else if (is_punct(toks, p, ys("["))) {
         // array type: [T] (heap, later) or [T; N] (stack repeat, native now).
@@ -929,7 +930,7 @@ Yv *parse_type_array(Yv *toks, long p) {
         if (n >= 0) {
             Yv *fc = tclose_res(
                 toks, np + 1, ys("]"),
-                yr(3, "k", ys("tarrfix"), "of", yr_get(inner, "node"), "n",
+                yr(3, "k", yv_long(K_tarrfix), "of", yr_get(inner, "node"), "n",
                    yv_long(n)));
             return parse_type_tail(toks, yv_l(yr_get(fc, "pos")),
                                    yr_get(fc, "node"));
@@ -939,7 +940,7 @@ Yv *parse_type_array(Yv *toks, long p) {
     } else {
         Yv *ac = tclose_res(
             toks, yv_l(yr_get(inner, "pos")), ys("]"),
-            yr(2, "k", ys("tarr"), "of", yr_get(inner, "node")));
+            yr(2, "k", yv_long(K_tarr), "of", yr_get(inner, "node")));
         return parse_type_tail(toks, yv_l(yr_get(ac, "pos")),
                                yr_get(ac, "node"));
     }
@@ -950,7 +951,7 @@ Yv *terr_at(Yv *toks, long p, Yv *what) {
         ys_cat(ys_cat(ys("expected "), what),
                ys(" in a type, got ")),
         tok_desc(toks, p));
-    return yr(4, "k", ys("terr"), "msg", msg, "line", yv_long(tline(toks, p)),
+    return yr(4, "k", yv_long(K_terr), "msg", msg, "line", yv_long(tline(toks, p)),
               "col", yv_long(tcol(toks, p)));
 }
 
@@ -965,35 +966,35 @@ Yv *tclose_res(Yv *toks, long p, Yv *closer, Yv *tnode) {
 
 Yv *type_err(Yv *t) {
     Yv *k = yr_get(t, "k");
-    if (ys_eq_lit(k, "terr")) {
-        return yr(4, "k", ys("err"), "msg", yr_get(t, "msg"), "line",
+    if (yv_l(k) == K_terr) {
+        return yr(4, "k", yv_long(K_err), "msg", yr_get(t, "msg"), "line",
                   yr_get(t, "line"), "col", yr_get(t, "col"));
-    } else if (ys_eq_lit(k, "tptr")) {
+    } else if (yv_l(k) == K_tptr) {
         return type_err(yr_get(t, "to"));
-    } else if (ys_eq_lit(k, "tarr")) {
+    } else if (yv_l(k) == K_tarr) {
         return type_err(yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "tarrfix")) {
+    } else if (yv_l(k) == K_tarrfix) {
         return type_err(yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "topt")) {
+    } else if (yv_l(k) == K_topt) {
         return type_err(yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "tmap")) {
+    } else if (yv_l(k) == K_tmap) {
         return type_err_then(type_err(yr_get(t, "key")), yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "trec")) {
+    } else if (yv_l(k) == K_trec) {
         return type_err_fields(yr_get(t, "fields"));
-    } else if (ys_eq_lit(k, "tfunc")) {
+    } else if (yv_l(k) == K_tfunc) {
         return type_err_then(type_err_list(yr_get(t, "args")),
                              yr_get(t, "ret"));
-    } else if (ys_eq_lit(k, "tparams")) {
+    } else if (yv_l(k) == K_tparams) {
         return type_err_list(yr_get(t, "ts"));
-    } else if (ys_eq_lit(k, "tunion")) {
+    } else if (yv_l(k) == K_tunion) {
         return type_err_list(yr_get(t, "ts"));
     } else {
-        return yr(3, "k", ys("void"), "line", yv_long(1), "col", yv_long(1));
+        return yr(3, "k", yv_long(K_void), "line", yv_long(1), "col", yv_long(1));
     }
 }
 
 Yv *type_err_then(Yv *first, Yv *t) {
-    if (ys_eq_lit(yr_get(first, "k"), "err")) {
+    if (yv_l(yr_get(first, "k")) == K_err) {
         return first;
     } else {
         return type_err(t);
@@ -1001,10 +1002,10 @@ Yv *type_err_then(Yv *first, Yv *t) {
 }
 
 Yv *type_err_list(Yv *ts) {
-    Yv *out = yr(3, "k", ys("void"), "line", yv_long(1), "col", yv_long(1));
+    Yv *out = yr(3, "k", yv_long(K_void), "line", yv_long(1), "col", yv_long(1));
     long i = 0;
     while (i < yv_len(ts)) {
-        if (ys_eq_lit(yr_get(out, "k"), "void")) {
+        if (yv_l(yr_get(out, "k")) == K_void) {
             out = type_err(ya_get(ts, i));
             ;
         } else {
@@ -1016,11 +1017,11 @@ Yv *type_err_list(Yv *ts) {
 }
 
 Yv *type_err_fields(Yv *fs) {
-    Yv *out = yr(3, "k", ys("void"), "line", yv_long(1), "col", yv_long(1));
+    Yv *out = yr(3, "k", yv_long(K_void), "line", yv_long(1), "col", yv_long(1));
     long i = 0;
     while (i < yv_len(fs)) {
         Yv *f = ya_get(fs, i);
-        if (ys_eq_lit(yr_get(out, "k"), "void")) {
+        if (yv_l(yr_get(out, "k")) == K_void) {
             out = type_err(yr_get(f, "typ"));
             ;
         } else {
@@ -1072,12 +1073,12 @@ Yv *parse_type_params(Yv *toks, long p) {
 // byte, bool, float). Anything else stays a named type for the checker
 // to reject.
 Yv *map_key_type(Yv *name) {
-    if (ys_eq_lit(name, "str")) { return yr(1, "k", ys("tstr")); }
-    else if (ys_eq_lit(name, "long")) { return yr(1, "k", ys("tlong")); }
-    else if (ys_eq_lit(name, "byte")) { return yr(1, "k", ys("tbyte")); }
-    else if (ys_eq_lit(name, "bool")) { return yr(1, "k", ys("tbool")); }
-    else if (ys_eq_lit(name, "float")) { return yr(1, "k", ys("tfloat")); }
-    else { return yr(2, "k", ys("tname"), "name", name); }
+    if (ys_eq_lit(name, "str")) { return yr(1, "k", yv_long(K_tstr)); }
+    else if (ys_eq_lit(name, "long")) { return yr(1, "k", yv_long(K_tlong)); }
+    else if (ys_eq_lit(name, "byte")) { return yr(1, "k", yv_long(K_tbyte)); }
+    else if (ys_eq_lit(name, "bool")) { return yr(1, "k", yv_long(K_tbool)); }
+    else if (ys_eq_lit(name, "float")) { return yr(1, "k", yv_long(K_tfloat)); }
+    else { return yr(2, "k", yv_long(K_tname), "name", name); }
 }
 
 // { field: T, ... } tail of parse_type_node (fresh names — see note).
@@ -1102,7 +1103,7 @@ Yv *parse_type_record(Yv *toks, long p) {
                     Yv *vt = parse_type_node(toks, pos + 2);
                     Yv *mc = tclose_res(
                         toks, yv_l(yr_get(vt, "pos")), ys("}"),
-                        yr(3, "k", ys("tmap"), "key", kt, "of",
+                        yr(3, "k", yv_long(K_tmap), "key", kt, "of",
                            yr_get(vt, "node")));
                     return parse_type_tail(toks, yv_l(yr_get(mc, "pos")),
                                            yr_get(mc, "node"));
@@ -1139,7 +1140,7 @@ Yv *parse_type_record(Yv *toks, long p) {
         ;
     }
     Yv *rc = tclose_res(toks, pos, ys("}"),
-                        yr(2, "k", ys("trec"), "fields", fields));
+                        yr(2, "k", yv_long(K_trec), "fields", fields));
     return parse_type_tail(toks, yv_l(yr_get(rc, "pos")),
                            yr_get(rc, "node"));
 }
@@ -1151,28 +1152,28 @@ Yv *parse_type_atom2(Yv *toks, long p) {
     if (!ys_eq_lit(tt(toks, p), "id")) {
         return tres(terr_at(toks, p, ys("a type")), p);
     } else if (ys_eq_lit(nm, "long")) {
-        return parse_type_tail(toks, p + 1, yr(1, "k", ys("tlong")));
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tlong)));
     } else if (ys_eq_lit(nm, "int")) {
-        return parse_type_tail(toks, p + 1, yr(1, "k", ys("tlong")));
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tlong)));
     } else if (ys_eq_lit(nm, "byte")) {
-        return parse_type_tail(toks, p + 1, yr(1, "k", ys("tbyte")));
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tbyte)));
     } else if (ys_eq_lit(nm, "bool")) {
-        return parse_type_tail(toks, p + 1, yr(1, "k", ys("tbool")));
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tbool)));
     } else if (ys_eq_lit(nm, "str")) {
-        return parse_type_tail(toks, p + 1, yr(1, "k", ys("tstr")));
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tstr)));
     } else if (ys_eq_lit(nm, "float")) {
-        return parse_type_tail(toks, p + 1, yr(1, "k", ys("tfloat")));
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tfloat)));
     } else if (ys_eq_lit(nm, "void")) {
-        return parse_type_tail(toks, p + 1, yr(1, "k", ys("tvoid")));
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tvoid)));
     } else if (ys_eq_lit(nm, "mutex") || ys_eq_lit(nm, "sem")) {
         return parse_type_tail(toks, p + 1, sync_type(nm));
     } else if (is_op(toks, p + 1, ys(".")) && ys_eq_lit(tt(toks, p + 2), "id")) {
         // `m.T`: alias T of the module imported as m
         return parse_type_tail(toks, p + 3,
-                               yr(2, "k", ys("tname"), "name",
+                               yr(2, "k", yv_long(K_tname), "name",
                                   ys_cat(ys_cat(nm, ys(".")), tv(toks, p + 2))));
     } else {
-        return parse_type_tail(toks, p + 1, yr(2, "k", ys("tname"), "name", nm));
+        return parse_type_tail(toks, p + 1, yr(2, "k", yv_long(K_tname), "name", nm));
     }
 }
 
@@ -1188,7 +1189,7 @@ Yv *parse_type_tail(Yv *toks, long apos, Yv *anode) {
     if (is_op(toks, apos, ys("?"))) {
         // NOTE: `?` then re-check `->`: T? -> U must keep parsing the arrow
         // (right-assoc). The `?` shape feeds parse_type_arrow as its anode.
-        return parse_type_arrow(toks, apos + 1, yr(2, "k", ys("topt"), "of", anode));
+        return parse_type_arrow(toks, apos + 1, yr(2, "k", yv_long(K_topt), "of", anode));
     } else {
         return parse_type_arrow(toks, apos, anode);
     }
@@ -1236,7 +1237,7 @@ Yv *parse_type_plain(Yv *toks, long apos, Yv *anode) {
     // NO `anode.k`/`anode.ts` reads at all, so nothing merges here.
     if (is_op(toks, apos, ys("->"))) {
         Yv *rhs = parse_type_node(toks, apos + 1);
-        return tres(yr(3, "k", ys("tfunc"), "args", yav(1, anode), "ret", yr_get(rhs, "node")), yv_l(yr_get(rhs, "pos")));
+        return tres(yr(3, "k", yv_long(K_tfunc), "args", yav(1, anode), "ret", yr_get(rhs, "node")), yv_l(yr_get(rhs, "pos")));
     } else {
         return tres(anode, apos);
     }
@@ -1250,11 +1251,11 @@ Yv *parse_type_tparams(Yv *toks, long apos, Yv *tlist) {
     Yv *ts0 = tlist;
     if (is_op(toks, apos, ys("->"))) {
         Yv *rhs = parse_type_node(toks, apos + 1);
-        return tres(yr(3, "k", ys("tfunc"), "args", ts0, "ret", yr_get(rhs, "node")), yv_l(yr_get(rhs, "pos")));
+        return tres(yr(3, "k", yv_long(K_tfunc), "args", ts0, "ret", yr_get(rhs, "node")), yv_l(yr_get(rhs, "pos")));
     } else if (yv_len(ts0) == 1) {
         return tres(ya_get(ts0, 0), apos);
     } else {
-        return tres(yr(2, "k", ys("tparams"), "ts", ts0), apos);
+        return tres(yr(2, "k", yv_long(K_tparams), "ts", ts0), apos);
     }
 }
 
@@ -1298,7 +1299,7 @@ Yv *parse_type_full(Yv *toks, long p) {
             ts = ya_push(ts, yr_get(r, "node"));
             pos = yv_l(yr_get(r, "pos"));
         }
-        return tres(yr(2, "k", ys("tunion"), "ts", ts), pos);
+        return tres(yr(2, "k", yv_long(K_tunion), "ts", ts), pos);
     } else {
         return first;
     }
@@ -1308,33 +1309,33 @@ Yv *parse_type_full(Yv *toks, long p) {
 // (`tnone` when the value is not a literal).
 Yv *lit_type(Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "num")) {
+    if (yv_l(k) == K_num) {
         return num_lit_type(yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "str")) {
-        return yr(1, "k", ys("tstr"));
-    } else if (ys_eq_lit(k, "bool")) {
-        return yr(1, "k", ys("tbool"));
-    } else if (ys_eq_lit(k, "char")) {
-        return yr(1, "k", ys("tbyte"));
-    } else if (ys_eq_lit(k, "un")) {
+    } else if (yv_l(k) == K_str) {
+        return yr(1, "k", yv_long(K_tstr));
+    } else if (yv_l(k) == K_bool) {
+        return yr(1, "k", yv_long(K_tbool));
+    } else if (yv_l(k) == K_char) {
+        return yr(1, "k", yv_long(K_tbyte));
+    } else if (yv_l(k) == K_un) {
         return lit_type_neg(node);
     } else {
-        return yr(1, "k", ys("tnone"));
+        return yr(1, "k", yv_long(K_tnone));
     }
 }
 
 Yv *lit_type_neg(Yv *node) {
     Yv *e = yr_get(node, "e");
-    if (ys_eq_lit(yr_get(node, "op"), "-") && ys_eq_lit(yr_get(e, "k"), "num")) {
+    if (ys_eq_lit(yr_get(node, "op"), "-") && yv_l(yr_get(e, "k")) == K_num) {
         return num_lit_type(yr_get(e, "v"));
     } else {
-        return yr(1, "k", ys("tnone"));
+        return yr(1, "k", yv_long(K_tnone));
     }
 }
 
 /* T? -- the type an optional parameter `name?: T` has in the body. */
 Yv *topt_of(Yv *t) {
-    return yr(2, "k", ys("topt"), "of", t);
+    return yr(2, "k", yv_long(K_topt), "of", t);
 }
 
 // float when the literal has a fraction or an exponent (radix literals
@@ -1342,11 +1343,11 @@ Yv *topt_of(Yv *t) {
 Yv *num_lit_type(Yv *s) {
     Yv *p = ys_slice(s, 0, 2);
     if (ys_eq_lit(p, "0x") || ys_eq_lit(p, "0X") || ys_eq_lit(p, "0b") || ys_eq_lit(p, "0B")) {
-        return yr(1, "k", ys("tlong"));
+        return yr(1, "k", yv_long(K_tlong));
     } else if (ys_index_of(s, ys(".")) >= 0 || ys_index_of(s, ys("e")) >= 0 || ys_index_of(s, ys("E")) >= 0) {
-        return yr(1, "k", ys("tfloat"));
+        return yr(1, "k", yv_long(K_tfloat));
     } else {
-        return yr(1, "k", ys("tlong"));
+        return yr(1, "k", yv_long(K_tlong));
     }
 }
 
@@ -1417,7 +1418,7 @@ Yv *parse_func(Yv *toks, long p) {
                     if (!is_punct(toks, pos, ys(":"))) {
                         derrs = ya_push(
                             derrs,
-                            yr(4, "k", ys("err"), "msg",
+                            yr(4, "k", yv_long(K_err), "msg",
                                ys_cat(
                                    ys_cat(ys_cat(
                                               ys("optional parameter '"), nm),
@@ -1427,15 +1428,15 @@ Yv *parse_func(Yv *toks, long p) {
                                "col", yv_long(tcol(toks, pos))));
                     }
                 }
-                Yv *pt = yr(1, "k", ys("tnone"));
+                Yv *pt = yr(1, "k", yv_long(K_tnone));
                 if (is_punct(toks, pos, ys(":"))) {
                     Yv *tr = parse_type_full(toks, pos + 1);
                     pt = yr_get(tr, "node");
                     pos = yv_l(yr_get(tr, "pos"));
                     Yv *pte = type_err(pt);
-                    if (ys_eq_lit(yr_get(pte, "k"), "err")) {
+                    if (yv_l(yr_get(pte, "k")) == K_err) {
                         derrs = ya_push(derrs, pte);
-                        pt = yr(1, "k", ys("tnone"));
+                        pt = yr(1, "k", yv_long(K_tnone));
                         hbad = 1;
                         ;
                     } else {
@@ -1445,7 +1446,7 @@ Yv *parse_func(Yv *toks, long p) {
                 } else {
                     ;
                 }
-                Yv *dv = yr(3, "k", ys("void"), "line",
+                Yv *dv = yr(3, "k", yv_long(K_void), "line",
                             yv_long(tline(toks, pos)), "col",
                             yv_long(tcol(toks, pos)));
                 if (is_op(toks, pos, ys("="))) {
@@ -1454,10 +1455,10 @@ Yv *parse_func(Yv *toks, long p) {
                     Yv *dr = parse_unary(toks, pos + 1);
                     pos = yv_l(yr_get(dr, "pos"));
                     Yv *dt = lit_type(yr_get(dr, "node"));
-                    if (ys_eq_lit(yr_get(dt, "k"), "tnone")) {
+                    if (yv_l(yr_get(dt, "k")) == K_tnone) {
                         derrs = ya_push(
                             derrs,
-                            yr(4, "k", ys("err"), "msg",
+                            yr(4, "k", yv_long(K_err), "msg",
                                ys_cat(ys_cat(
                                           ys("default value of parameter '"),
                                           nm),
@@ -1467,7 +1468,7 @@ Yv *parse_func(Yv *toks, long p) {
                         ;
                     } else {
                         dv = yr_get(dr, "node");
-                        if (ys_eq_lit(yr_get(pt, "k"), "tnone")) {
+                        if (yv_l(yr_get(pt, "k")) == K_tnone) {
                             pt = dt;
                             ;
                         } else {
@@ -1478,7 +1479,7 @@ Yv *parse_func(Yv *toks, long p) {
                     if (isopt) {
                         derrs = ya_push(
                             derrs,
-                            yr(4, "k", ys("err"), "msg",
+                            yr(4, "k", yv_long(K_err), "msg",
                                ys_cat(ys_cat(
                                           ys("optional parameter '"), nm),
                                       ys("' cannot have a default (it is none when left out)")),
@@ -1490,18 +1491,18 @@ Yv *parse_func(Yv *toks, long p) {
                     ;
                 }
                 if (isopt) {
-                    if (!ys_eq_lit(yr_get(pt, "k"), "tnone")) {
+                    if (yv_l(yr_get(pt, "k")) != K_tnone) {
                         pt = topt_of(pt);
                     }
-                    dv = yr(3, "k", ys("optarg"), "line",
+                    dv = yr(3, "k", yv_long(K_optarg), "line",
                             yv_long(tline(toks, pos)), "col",
                             yv_long(tcol(toks, pos)));
                     optname = nm;
                 } else if (!ys_eq_lit(optname, "") &&
-                           ys_eq_lit(yr_get(dv, "k"), "void")) {
+                           yv_l(yr_get(dv, "k")) == K_void) {
                     derrs = ya_push(
                         derrs,
-                        yr(4, "k", ys("err"), "msg",
+                        yr(4, "k", yv_long(K_err), "msg",
                            ys_cat(ys_cat(
                                       ys_cat(
                                           ys("required parameter '"), nm),
@@ -1540,15 +1541,15 @@ Yv *parse_func(Yv *toks, long p) {
     }
     // optional return type '-> type'
     // The optional return annotation updates the local type and position.
-    Yv *ret = yr(1, "k", ys("tnone"));
+    Yv *ret = yr(1, "k", yv_long(K_tnone));
     if (is_op(toks, pos, ys("->"))) {
         Yv *rr = parse_type_full(toks, pos + 1);
         ret = yr_get(rr, "node");
         pos = yv_l(yr_get(rr, "pos"));
         Yv *rte = type_err(ret);
-        if (ys_eq_lit(yr_get(rte, "k"), "err")) {
+        if (yv_l(yr_get(rte, "k")) == K_err) {
             derrs = ya_push(derrs, rte);
-            ret = yr(1, "k", ys("tnone"));
+            ret = yr(1, "k", yv_long(K_tnone));
             ;
         } else {
             ;
@@ -1564,13 +1565,13 @@ Yv *parse_func(Yv *toks, long p) {
         Yv *nst = yav(0);
         for (long di = 0; di < yv_len(derrs); di++) nst = ya_push(nst, ya_get(derrs, di));
         for (long bi = 0; bi < yv_len(bst); bi++) nst = ya_push(nst, ya_get(bst, bi));
-        bnode = yr(4, "k", ys("block"), "stmts", nst, "line", yr_get(bnode, "line"), "col", yr_get(bnode, "col"));
+        bnode = yr(4, "k", yv_long(K_block), "stmts", nst, "line", yr_get(bnode, "line"), "col", yr_get(bnode, "col"));
     }
-    Yv *func = yr(8, "k", ys("func"), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs);
+    Yv *func = yr(8, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs);
     if (ys_eq_lit(fname, "")) {
         return res(func, yv_l(yr_get(body, "pos")));
     } else {
-        return res(yr(7, "k", ys("decl"), "kind", ys("def"), "name", fname, "typ", yr(1, "k", ys("tnone")), "v", func, "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
+        return res(yr(7, "k", yv_long(K_decl), "kind", ys("def"), "name", fname, "typ", yr(1, "k", yv_long(K_tnone)), "v", func, "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
     }
 }
 
@@ -1584,7 +1585,7 @@ Yv *parse_block(Yv *toks, long p) {
         // parsed by whatever comes next.
         Yv *one = yav(0);
         one = ya_push(one, expect_err(toks, p, ys("'{'")));
-        return res(yr(4, "k", ys("block"), "stmts", one, "line",
+        return res(yr(4, "k", yv_long(K_block), "stmts", one, "line",
                       yv_long(ln), "col", yv_long(cl)), p);
     }
     long pos = p + 1;  // skip '{'
@@ -1606,7 +1607,7 @@ Yv *parse_block(Yv *toks, long p) {
         } else if (ys_eq_lit(tt(toks, pos), "eof")) {
             stmts = ya_push(
                 stmts,
-                yr(4, "k", ys("err"), "msg",
+                yr(4, "k", yv_long(K_err), "msg",
                    ys("unclosed '{' (no matching '}' before end of input)"),
                    "line", yv_long(ln), "col", yv_long(cl)));
             go = 0;
@@ -1621,11 +1622,11 @@ Yv *parse_block(Yv *toks, long p) {
         }
     }
     if (last_semi && !stmt_diverges(ya_get(stmts, yv_len(stmts) - 1))) {
-        stmts = ya_push(stmts, yr(3, "k", ys("void"), "line",
+        stmts = ya_push(stmts, yr(3, "k", yv_long(K_void), "line",
                                   yv_long(tline(toks, pos)), "col",
                                   yv_long(tcol(toks, pos))));
     }
-    return res(yr(4, "k", ys("block"), "stmts", stmts, "line", yv_long(ln), "col", yv_long(cl)), skip_close(toks, pos, ys("}")));
+    return res(yr(4, "k", yv_long(K_block), "stmts", stmts, "line", yv_long(ln), "col", yv_long(cl)), skip_close(toks, pos, ys("}")));
 }
 
 long stmt_end(Yv *toks, long start, long pos, Yv *sn, Yv *stmts) {
@@ -1637,7 +1638,7 @@ long stmt_end(Yv *toks, long start, long pos, Yv *sn, Yv *stmts) {
     } else if (pos > start && is_punct(toks, pos - 1, ys("}"))) {
         return pos;
     } else {
-        if (!ys_eq_lit(yr_get(sn, "k"), "err")) {
+        if (yv_l(yr_get(sn, "k")) != K_err) {
             stmts = ya_push(stmts, expect_err(toks, pos, ys("';'")));
             ;
         } else {
@@ -1651,11 +1652,11 @@ long stmt_end(Yv *toks, long start, long pos, Yv *sn, Yv *stmts) {
 // if/else (or block) whose every path ends in one.
 int stmt_diverges(Yv *s) {
     Yv *k = yr_get(s, "k");
-    if (ys_eq_lit(k, "ret")) {
+    if (yv_l(k) == K_ret) {
         return 1;
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         return block_diverges(yr_get(s, "stmts"));
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         return if_diverges(s);
     } else {
         return 0;
@@ -1683,7 +1684,7 @@ int if_diverges(Yv *s) {
 Yv *parse_stmt(Yv *toks, long p) {
     if (is_punct(toks, p, ys(";"))) {
         // An empty statement; the caller steps over the `;`.
-        return res(yr(3, "k", ys("void"), "line", yv_long(tline(toks, p)),
+        return res(yr(3, "k", yv_long(K_void), "line", yv_long(tline(toks, p)),
                               "col", yv_long(tcol(toks, p))), p);
     } else if (is_kw(toks, p, ys("let"))) {
         return parse_decl(toks, p);
@@ -1695,8 +1696,8 @@ Yv *parse_stmt(Yv *toks, long p) {
         if (is_punct(toks, p + 1, ys(";")) ||
             is_punct(toks, p + 1, ys("}")) ||
             ys_eq_lit(tt(toks, p + 1), "eof")) {
-            return res(yr(4, "k", ys("ret"), "e",
-                          yr(3, "k", ys("void"), "line",
+            return res(yr(4, "k", yv_long(K_ret), "e",
+                          yr(3, "k", yv_long(K_void), "line",
                              yv_long(tline(toks, p)), "col",
                              yv_long(tcol(toks, p))),
                           "line", yv_long(tline(toks, p)), "col",
@@ -1704,7 +1705,7 @@ Yv *parse_stmt(Yv *toks, long p) {
                        p + 1);
         } else {
             Yv *e = parse_expr(toks, p + 1);
-            return res(yr(4, "k", ys("ret"), "e", yr_get(e, "node"), "line",
+            return res(yr(4, "k", yv_long(K_ret), "e", yr_get(e, "node"), "line",
                           yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))),
                        yv_l(yr_get(e, "pos")));
         }
@@ -1735,10 +1736,10 @@ int is_typedef_start(Yv *toks, long p) {
 Yv *parse_typedef(Yv *toks, long p) {
     Yv *r = parse_type_full(toks, p + 3);
     Yv *te = type_err(yr_get(r, "node"));
-    if (ys_eq_lit(yr_get(te, "k"), "err")) {
+    if (yv_l(yr_get(te, "k")) == K_err) {
         return res(te, sync_stmt(toks, yv_l(yr_get(r, "pos"))));
     } else {
-        return res(yr(5, "k", ys("typedef"), "name", tv(toks, p + 1),
+        return res(yr(5, "k", yv_long(K_typedef), "name", tv(toks, p + 1),
                       "typ", yr_get(r, "node"), "line", yv_long(tline(toks, p)),
                       "col", yv_long(tcol(toks, p))),
                    yv_l(yr_get(r, "pos")));
@@ -1781,7 +1782,7 @@ Yv *parse_stmt_opassign(Yv *toks, long p, Yv *tgt, long epos) {
     // Every compound op is `X=`, so the binary op is all but its last
     // character (`>>>=` is `>>>`).
     Yv *binop = ys_slice(op, 0, yv_len(op) - 1);
-    return res(yr(6, "k", ys("opassign"), "op", binop, "tgt", tgt, "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, epos)), "col", yv_long(tcol(toks, epos))), yv_l(yr_get(rhs, "pos")));
+    return res(yr(6, "k", yv_long(K_opassign), "op", binop, "tgt", tgt, "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, epos)), "col", yv_long(tcol(toks, epos))), yv_l(yr_get(rhs, "pos")));
 }
 
 // Assignment dispatch: one def per target shape (see parse_stmt note).
@@ -1790,7 +1791,7 @@ Yv *parse_stmt_assign(Yv *toks, long p, Yv *tgt, long epos) {
     // NOTE: dispatch WITHOUT reading tgt.k twice in one body (see
     // parse_type_arrow note): index/dot go to dedicated callees; deref and
     // plain-id stay inline (disjoint fields e vs v — but read each once).
-    if (ys_eq_lit(yr_get(tgt, "k"), "index")) {
+    if (yv_l(yr_get(tgt, "k")) == K_index) {
         return parse_stmt_idxassign(toks, p, tgt, epos);
     } else {
         return parse_stmt_rest(toks, p, tgt, epos);
@@ -1812,13 +1813,13 @@ Yv *parse_stmt_idxassign_go(Yv *toks, long p, Yv *itgt, long epos) {
     // resolve. tcompat's structural trec rule accepts the richer call-site
     // literal at the call (superset accepts subset).
     Yv *rhs = parse_expr(toks, epos + 1);
-    return res(yr(6, "k", ys("idxassign"), "arr", yr_get(itgt, "arr"), "idx", yr_get(itgt, "idx"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
+    return res(yr(6, "k", yv_long(K_idxassign), "arr", yr_get(itgt, "arr"), "idx", yr_get(itgt, "idx"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
 }
 
 
 
 Yv *parse_stmt_rest(Yv *toks, long p, Yv *tgt, long epos) {
-    if (ys_eq_lit(yr_get(tgt, "k"), "dot")) {
+    if (yv_l(yr_get(tgt, "k")) == K_dot) {
         return parse_stmt_dotassign(toks, p, tgt, epos);
     } else {
         return parse_stmt_simple(toks, p, tgt, epos);
@@ -1833,7 +1834,7 @@ Yv *parse_stmt_dotassign(Yv *toks, long p, Yv *tgt, long epos) {
 Yv *parse_stmt_dotassign_go(Yv *toks, long p, Yv *dtgt, long epos) {
     // NOTE: full-shape param (see idxassign_go note).
     Yv *rhs = parse_expr(toks, epos + 1);
-    return res(yr(6, "k", ys("dotassign"), "obj", yr_get(dtgt, "obj"), "key", yr_get(dtgt, "key"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
+    return res(yr(6, "k", yv_long(K_dotassign), "obj", yr_get(dtgt, "obj"), "key", yr_get(dtgt, "key"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
 }
 
 
@@ -1841,7 +1842,7 @@ Yv *parse_stmt_dotassign_go(Yv *toks, long p, Yv *dtgt, long epos) {
 Yv *parse_stmt_simple(Yv *toks, long p, Yv *tgt, long epos) {
     // deref (*p = v) vs plain id (x = v): separate callees per shape, fields
     // passed as VALUES (see parse_stmt_idxassign note).
-    if (ys_eq_lit(yr_get(tgt, "k"), "deref")) {
+    if (yv_l(yr_get(tgt, "k")) == K_deref) {
         return parse_stmt_store(toks, p, tgt, epos);
     } else {
         return parse_stmt_simple2(toks, p, tgt, epos);
@@ -1849,7 +1850,7 @@ Yv *parse_stmt_simple(Yv *toks, long p, Yv *tgt, long epos) {
 }
 
 Yv *parse_stmt_simple2(Yv *toks, long p, Yv *tgt, long epos) {
-    if (ys_eq_lit(yr_get(tgt, "k"), "slice")) {
+    if (yv_l(yr_get(tgt, "k")) == K_slice) {
         return parse_stmt_sliceassign(toks, p, tgt, epos);
     } else {
         return parse_stmt_plainassign(toks, p, tgt, epos);
@@ -1860,27 +1861,27 @@ Yv *parse_stmt_simple2(Yv *toks, long p, Yv *tgt, long epos) {
 // lengths must agree; checked at run time).
 Yv *parse_stmt_sliceassign(Yv *toks, long p, Yv *ltgt, long epos) {
     Yv *rhs = parse_expr(toks, epos + 1);
-    return res(yr(7, "k", ys("sliceassign"), "arr", yr_get(ltgt, "arr"), "lo", yr_get(ltgt, "lo"), "hi", yr_get(ltgt, "hi"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
+    return res(yr(7, "k", yv_long(K_sliceassign), "arr", yr_get(ltgt, "arr"), "lo", yr_get(ltgt, "lo"), "hi", yr_get(ltgt, "hi"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
 }
 
 Yv *parse_stmt_store(Yv *toks, long p, Yv *stgt, long epos) {
     // NOTE: full-shape param (see idxassign_go note).
     Yv *rhs = parse_expr(toks, epos + 1);
-    return res(yr(5, "k", ys("store"), "p", yr_get(stgt, "e"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
+    return res(yr(5, "k", yv_long(K_store), "p", yr_get(stgt, "e"), "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(rhs, "pos")));
 }
 
 Yv *parse_stmt_plainassign(Yv *toks, long p, Yv *atgt, long epos) {
     // NOTE: full-shape param (see idxassign_go note).
     Yv *rhs = parse_expr(toks, epos + 1);
-    if (ys_eq_lit(yr_get(atgt, "k"), "id")) {
-        return res(yr(5, "k", ys("assign"), "name", yr_get(atgt, "v"),
+    if (yv_l(yr_get(atgt, "k")) == K_id) {
+        return res(yr(5, "k", yv_long(K_assign), "name", yr_get(atgt, "v"),
                       "v", yr_get(rhs, "node"), "line", yv_long(tline(toks, p)),
                       "col", yv_long(tcol(toks, p))),
                    yv_l(yr_get(rhs, "pos")));
-    } else if (ys_eq_lit(yr_get(atgt, "k"), "err")) {
+    } else if (yv_l(yr_get(atgt, "k")) == K_err) {
         return res(atgt, yv_l(yr_get(rhs, "pos")));
     } else {
-        return res(yr(4, "k", ys("err"),
+        return res(yr(4, "k", yv_long(K_err),
                       "msg", ys("cannot assign to this expression"),
                       "line", yv_long(tline(toks, p)),
                       "col", yv_long(tcol(toks, p))),
@@ -1901,15 +1902,15 @@ Yv *parse_decl(Yv *toks, long p) {
     long pos = p + 2;
     // optional ': type' (kept as a type node for the static checker)
     // The optional annotation updates the local type and position.
-    Yv *typ = yr(1, "k", ys("tnone"));
+    Yv *typ = yr(1, "k", yv_long(K_tnone));
     if (is_punct(toks, pos, ys(":"))) {
         Yv *tr = parse_type_full(toks, pos + 1);
         typ = yr_get(tr, "node");
         pos = yv_l(yr_get(tr, "pos"));
         Yv *te = type_err(typ);
-        if (ys_eq_lit(yr_get(te, "k"), "err")) {
-            return res(yr(7, "k", ys("decl"), "kind", kind, "name", name,
-                          "typ", yr(1, "k", ys("tnone")), "v", te,
+        if (yv_l(yr_get(te, "k")) == K_err) {
+            return res(yr(7, "k", yv_long(K_decl), "kind", kind, "name", name,
+                          "typ", yr(1, "k", yv_long(K_tnone)), "v", te,
                           "line", yv_long(ln), "col", yv_long(cl)),
                        sync_stmt(toks, pos));
         }
@@ -1919,13 +1920,13 @@ Yv *parse_decl(Yv *toks, long p) {
     }
     if (!is_op(toks, pos, ys("="))) {
         Yv *err = expect_err(toks, pos, ys("'='"));
-        return res(yr(7, "k", ys("decl"), "kind", kind, "name", name,
-                      "typ", yr(1, "k", ys("tnone")), "v", err,
+        return res(yr(7, "k", yv_long(K_decl), "kind", kind, "name", name,
+                      "typ", yr(1, "k", yv_long(K_tnone)), "v", err,
                       "line", yv_long(ln), "col", yv_long(cl)),
                    sync_stmt(toks, pos));
     }
     Yv *e = parse_expr(toks, pos + 1);
-    return res(yr(7, "k", ys("decl"), "kind", kind, "name", name, "typ", typ, "v", yr_get(e, "node"), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(e, "pos")));
+    return res(yr(7, "k", yv_long(K_decl), "kind", kind, "name", name, "typ", typ, "v", yr_get(e, "node"), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(e, "pos")));
 }
 
 long sync_stmt(Yv *toks, long p) {
@@ -1979,7 +1980,7 @@ Yv *parse_if(Yv *toks, long p) {
     Yv *cond = parse_expr(toks, p + 1);
     Yv *then_b = parse_block(toks, yv_l(yr_get(cond, "pos")));
     long pos = yv_l(yr_get(then_b, "pos"));
-    Yv *else_b = yr(3, "k", ys("void"), "line", yv_long(ln), "col",
+    Yv *else_b = yr(3, "k", yv_long(K_void), "line", yv_long(ln), "col",
                     yv_long(cl));
     int has_else = 0;
     // The optional else branch updates the AST bookkeeping.
@@ -2000,13 +2001,13 @@ Yv *parse_if(Yv *toks, long p) {
     } else {
         ;
     }
-    return res(yr(7, "k", ys("if"), "cond", yr_get(cond, "node"), "then", yr_get(then_b, "node"), "els", else_b, "has_else", yv_bool(has_else), "line", yv_long(ln), "col", yv_long(cl)), pos);
+    return res(yr(7, "k", yv_long(K_kw_if), "cond", yr_get(cond, "node"), "then", yr_get(then_b, "node"), "els", else_b, "has_else", yv_bool(has_else), "line", yv_long(ln), "col", yv_long(cl)), pos);
 }
 
 Yv *parse_while(Yv *toks, long p) {
     Yv *cond = parse_expr(toks, p + 1);
     Yv *body = parse_block(toks, yv_l(yr_get(cond, "pos")));
-    return res(yr(5, "k", ys("while"), "cond", yr_get(cond, "node"), "body", yr_get(body, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(body, "pos")));
+    return res(yr(5, "k", yv_long(K_kw_while), "cond", yr_get(cond, "node"), "body", yr_get(body, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(body, "pos")));
 }
 
 Yv *parse_foreach(Yv *toks, long p) {
@@ -2032,7 +2033,7 @@ Yv *parse_foreach(Yv *toks, long p) {
                    sync_stmt(toks, p + 1));
     }
     Yv *body = parse_block(toks, yv_l(yr_get(it, "pos")) + 1);  // skip ')'
-    return res(yr(6, "k", ys("foreach"), "name", name, "iter", yr_get(it, "node"), "body", yr_get(body, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(body, "pos")));
+    return res(yr(6, "k", yv_long(K_kw_foreach), "name", name, "iter", yr_get(it, "node"), "body", yr_get(body, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(body, "pos")));
 }
 
 Yv *parse_for_or_range(Yv *toks, long p) {
@@ -2054,7 +2055,7 @@ Yv *parse_for_or_range(Yv *toks, long p) {
         }
         Yv *hi = parse_expr(toks, yv_l(yr_get(lo, "pos")) + 1);
         Yv *body = parse_block(toks, yv_l(yr_get(hi, "pos")));
-        return res(yr(7, "k", ys("forrange"), "name", name, "lo", yr_get(lo, "node"), "hi", yr_get(hi, "node"), "body", yr_get(body, "node"), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
+        return res(yr(7, "k", yv_long(K_forrange), "name", name, "lo", yr_get(lo, "node"), "hi", yr_get(hi, "node"), "body", yr_get(body, "node"), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
     } else {
         // C-style for
         // The init and step clauses are optional; only present clauses
@@ -2066,7 +2067,7 @@ Yv *parse_for_or_range(Yv *toks, long p) {
                        sync_stmt(toks, p + 1));
         }
         long pos = p + 2;  // skip 'for' '('
-        Yv *init = yr(3, "k", ys("void"), "line",
+        Yv *init = yr(3, "k", yv_long(K_void), "line",
                       yv_long(tline(toks, pos)), "col",
                       yv_long(tcol(toks, pos)));
         if (!is_punct(toks, pos, ys(";"))) {
@@ -2082,7 +2083,7 @@ Yv *parse_for_or_range(Yv *toks, long p) {
             return res(err, sync_stmt(toks, p + 1));
         }
         pos = pos + 1;  // ';'
-        Yv *cond = yr(4, "k", ys("bool"), "v", ys("true"), "line",
+        Yv *cond = yr(4, "k", yv_long(K_bool), "v", ys("true"), "line",
                       yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
         if (!is_punct(toks, pos, ys(";"))) {
             Yv *cr = parse_expr(toks, pos);
@@ -2097,7 +2098,7 @@ Yv *parse_for_or_range(Yv *toks, long p) {
             return res(err, sync_stmt(toks, p + 1));
         }
         pos = pos + 1;  // ';'
-        Yv *step = yr(3, "k", ys("void"), "line",
+        Yv *step = yr(3, "k", yv_long(K_void), "line",
                       yv_long(tline(toks, pos)), "col",
                       yv_long(tcol(toks, pos)));
         if (!is_punct(toks, pos, ys(")"))) {
@@ -2114,7 +2115,7 @@ Yv *parse_for_or_range(Yv *toks, long p) {
         }
         pos = pos + 1;  // ')'
         Yv *body = parse_block(toks, pos);
-        return res(yr(7, "k", ys("for"), "init", init, "cond", cond,
+        return res(yr(7, "k", yv_long(K_kw_for), "init", init, "cond", cond,
                       "step", step, "body", yr_get(body, "node"), "line",
                       yv_long(ln), "col", yv_long(cl)),
                    yv_l(yr_get(body, "pos")));
@@ -2122,7 +2123,7 @@ Yv *parse_for_or_range(Yv *toks, long p) {
 }
 
 Yv *clause_err(Yv *toks, long pos, Yv *clause, Yv *sep) {
-    if (ys_eq_lit(yr_get(clause, "k"), "err")) {
+    if (yv_l(yr_get(clause, "k")) == K_err) {
         return clause;
     } else {
         return expect_err(toks, pos, sep);
@@ -2138,7 +2139,7 @@ Yv *parse_match_try(Yv *toks, long p) {
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
     Yv *nt = tt(toks, p + 1);
-    Yv *plain = yr(4, "k", ys("id"), "v", ys("match"), "line", yv_long(ln), "col", yv_long(cl));
+    Yv *plain = yr(4, "k", yv_long(K_id), "v", ys("match"), "line", yv_long(ln), "col", yv_long(cl));
     if (ys_eq_lit(nt, "op") || ys_eq_lit(nt, "eof")) {
         return res(plain, p + 1);
     } else if (ys_eq_lit(nt, "punct") && !is_punct(toks, p + 1, ys("(")) && !is_punct(toks, p + 1, ys("[")) && !is_punct(toks, p + 1, ys("{"))) {
@@ -2159,7 +2160,7 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
     Yv *thens = yav(0);
     Yv *covers = yav(0);
     long nvals = 0;
-    Yv *fallback = yr(3, "k", ys("void"), "line", yv_long(ln), "col",
+    Yv *fallback = yr(3, "k", yv_long(K_void), "line", yv_long(ln), "col",
                       yv_long(cl));
     int has_wild = 0;
     long pos = bpos + 1;
@@ -2170,19 +2171,19 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
         } else if (ys_eq_lit(tt(toks, pos), "eof")) {
             tests = ya_push(
                 tests,
-                yr(4, "k", ys("err"), "msg",
+                yr(4, "k", yv_long(K_err), "msg",
                    ys("unclosed match (no '}' before end of input)"),
                    "line", yv_long(ln), "col", yv_long(cl)));
             thens = ya_push(
                 thens,
-                block1(yr(3, "k", ys("void"), "line", yv_long(ln), "col",
+                block1(yr(3, "k", yv_long(K_void), "line", yv_long(ln), "col",
                          yv_long(cl)),
                        ln, cl));
             go = 0;
         } else {
             Yv *pr = parse_pattern(toks, pos, tmp);
             pos = yv_l(yr_get(pr, "pos"));
-            Yv *body = yr(3, "k", ys("void"), "line",
+            Yv *body = yr(3, "k", yv_long(K_void), "line",
                           yv_long(tline(toks, pos)), "col",
                           yv_long(tcol(toks, pos)));
             if (is_op(toks, pos, ys("=>"))) {
@@ -2190,7 +2191,7 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
                 pos = yv_l(yr_get(br, "pos"));
                 body = yr_get(br, "node");
             } else {
-                body = yr(4, "k", ys("err"), "msg", ys_cat(ys_cat(ys("expected '=>' after a match pattern, got '"), tv(toks, pos)), ys("'")), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
+                body = yr(4, "k", yv_long(K_err), "msg", ys_cat(ys_cat(ys("expected '=>' after a match pattern, got '"), tv(toks, pos)), ys("'")), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
                 go = 0;
             }
             if (has_wild) {
@@ -2204,9 +2205,9 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
                 Yv *ts = yav(0);
                 for (long bi = 0; bi < yv_len(pb); bi++) ts = ya_push(ts, ya_get(pb, bi));
                 ts = ya_push(ts, body);
-                thens = ya_push(thens, yr(4, "k", ys("block"), "stmts", ts, "line", yv_long(ln), "col", yv_long(cl)));
+                thens = ya_push(thens, yr(4, "k", yv_long(K_block), "stmts", ts, "line", yv_long(ln), "col", yv_long(cl)));
                 Yv *pc = yr_get(pr, "cover");
-                if (!ys_eq_lit(yr_get(pc, "k"), "tnone")) {
+                if (yv_l(yr_get(pc, "k")) != K_tnone) {
                     covers = ya_push(covers, pc);
                 } else {
                     nvals = nvals + 1;
@@ -2218,10 +2219,10 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
                 } else if (is_punct(toks, pos, ys("}"))) {
                     ;
                 } else {
-                    tests = ya_push(tests, yr(4, "k", ys("err"), "msg", ys_cat(ys_cat(ys("expected ',' or '}' after a match arm, got '"), tv(toks, pos)), ys("'")), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
+                    tests = ya_push(tests, yr(4, "k", yv_long(K_err), "msg", ys_cat(ys_cat(ys("expected ',' or '}' after a match arm, got '"), tv(toks, pos)), ys("'")), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
                     thens = ya_push(
                         thens,
-                        block1(yr(3, "k", ys("void"), "line", yv_long(ln),
+                        block1(yr(3, "k", yv_long(K_void), "line", yv_long(ln),
                                  "col", yv_long(cl)),
                                ln, cl));
                     go = 0;
@@ -2229,30 +2230,30 @@ Yv *parse_match(Yv *toks, Yv *subj, long bpos, long ln, long cl) {
             }
         }
     }
-    Yv *chain = block1(yr(6, "k", ys("matchend"), "e", yr(4, "k", ys("id"), "v", tmp, "line", yv_long(ln), "col", yv_long(cl)), "cover", covers, "vals", yv_long(nvals), "line", yv_long(ln), "col", yv_long(cl)), ln, cl);
+    Yv *chain = block1(yr(6, "k", yv_long(K_matchend), "e", yr(4, "k", yv_long(K_id), "v", tmp, "line", yv_long(ln), "col", yv_long(cl)), "cover", covers, "vals", yv_long(nvals), "line", yv_long(ln), "col", yv_long(cl)), ln, cl);
     if (has_wild) {
         chain = block1(fallback, ln, cl);
     }
     long i = yv_len(tests) - 1;
     while (i >= 0) {
-        chain = yr(7, "k", ys("if"), "cond", ya_get(tests, i), "then", ya_get(thens, i), "els", chain, "has_else", yv_bool(1), "line", yv_long(ln), "col", yv_long(cl));
+        chain = yr(7, "k", yv_long(K_kw_if), "cond", ya_get(tests, i), "then", ya_get(thens, i), "els", chain, "has_else", yv_bool(1), "line", yv_long(ln), "col", yv_long(cl));
         i = i - 1;
     }
     Yv *stmts = yav(0);
-    stmts = ya_push(stmts, yr(7, "k", ys("decl"), "kind", ys("let"), "name", tmp, "typ", yr(1, "k", ys("tnone")), "v", subj, "line", yv_long(ln), "col", yv_long(cl)));
+    stmts = ya_push(stmts, yr(7, "k", yv_long(K_decl), "kind", ys("let"), "name", tmp, "typ", yr(1, "k", yv_long(K_tnone)), "v", subj, "line", yv_long(ln), "col", yv_long(cl)));
     stmts = ya_push(stmts, chain);
     long endp = pos;
     if (is_punct(toks, pos, ys("}"))) {
         endp = pos + 1;
     }
-    return res(yr(4, "k", ys("block"), "stmts", stmts, "line", yv_long(ln), "col", yv_long(cl)), endp);
+    return res(yr(4, "k", yv_long(K_block), "stmts", stmts, "line", yv_long(ln), "col", yv_long(cl)), endp);
 }
 
 // An arm is any expression; `{}` there is the empty block (void), not an
 // empty record.
 Yv *parse_arm_body(Yv *toks, long p) {
     if (is_punct(toks, p, ys("{")) && is_punct(toks, p + 1, ys("}"))) {
-        return res(yr(4, "k", ys("block"), "stmts", yav(0), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), p + 2);
+        return res(yr(4, "k", yv_long(K_block), "stmts", yav(0), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), p + 2);
     } else {
         return parse_expr(toks, p);
     }
@@ -2263,11 +2264,11 @@ Yv *pat_res(Yv *test, Yv *binds, Yv *cover, int wild, long pos) {
 }
 
 Yv *let_node(Yv *name, Yv *v, long ln, long cl) {
-    return yr(7, "k", ys("decl"), "kind", ys("let"), "name", name, "typ", yr(1, "k", ys("tnone")), "v", v, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(7, "k", yv_long(K_decl), "kind", ys("let"), "name", name, "typ", yr(1, "k", yv_long(K_tnone)), "v", v, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 static Yv *subj_id(Yv *tmp, long ln, long cl) {
-    return yr(4, "k", ys("id"), "v", tmp, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(4, "k", yv_long(K_id), "v", tmp, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *parse_pattern(Yv *toks, long p, Yv *tmp) {
@@ -2278,9 +2279,9 @@ Yv *parse_pattern(Yv *toks, long p, Yv *tmp) {
     Yv *subj = subj_id(tmp, ln, cl);
     Yv *nob = yav(0);
     if (ys_eq_lit(t, "id") && ys_eq_lit(v, "_")) {
-        return pat_res(yr(3, "k", ys("void"), "line", yv_long(ln), "col",
+        return pat_res(yr(3, "k", yv_long(K_void), "line", yv_long(ln), "col",
                           yv_long(cl)),
-                       nob, yr(1, "k", ys("tnone")), 1, p + 1);
+                       nob, yr(1, "k", yv_long(K_tnone)), 1, p + 1);
     } else if (ys_eq_lit(t, "id") && !ys_eq_lit(v, "none")) {
         return parse_type_pattern(toks, p, tmp);
     } else if (is_punct(toks, p, ys("{"))) {
@@ -2291,12 +2292,12 @@ Yv *parse_pattern(Yv *toks, long p, Yv *tmp) {
         return parse_value_pattern(toks, yr_get(rp, "node"), yv_l(yr_get(rp, "pos")), tmp, ln, cl);
     } else {
         Yv *ru = parse_unary(toks, p);
-        return pat_res(yr(6, "k", ys("bin"), "op", ys("=="), "l", subj, "r", yr_get(ru, "node"), "line", yv_long(ln), "col", yv_long(cl)), nob, yr(1, "k", ys("tnone")), 0, yv_l(yr_get(ru, "pos")));
+        return pat_res(yr(6, "k", yv_long(K_bin), "op", ys("=="), "l", subj, "r", yr_get(ru, "node"), "line", yv_long(ln), "col", yv_long(cl)), nob, yr(1, "k", yv_long(K_tnone)), 0, yv_l(yr_get(ru, "pos")));
     }
 }
 
 static Yv *narrow_node(Yv *subj, Yv *ty, long ln, long cl) {
-    return yr(5, "k", ys("narrow"), "e", subj, "typ", ty, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(5, "k", yv_long(K_narrow), "e", subj, "typ", ty, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 // T / T x / T {f, g: y}: T names a record type (an alias).
@@ -2309,7 +2310,7 @@ Yv *parse_type_pattern(Yv *toks, long p, Yv *tmp) {
         tname = ys_cat(ys_cat(tname, ys(".")), tv(toks, pos + 1));
         pos = pos + 2;
     }
-    Yv *ty = yr(2, "k", ys("tname"), "name", tname);
+    Yv *ty = yr(2, "k", yv_long(K_tname), "name", tname);
     Yv *subj = subj_id(tmp, ln, cl);
     Yv *binds = yav(0);
     if (is_punct(toks, pos, ys("{"))) {
@@ -2323,7 +2324,7 @@ Yv *parse_type_pattern(Yv *toks, long p, Yv *tmp) {
                 bname = tv(toks, pos + 1);
                 pos = pos + 2;
             }
-            Yv *fread = yr(5, "k", ys("dot"), "obj", narrow_node(subj, ty, ln, cl), "key", fname, "line", yv_long(ln), "col", yv_long(cl));
+            Yv *fread = yr(5, "k", yv_long(K_dot), "obj", narrow_node(subj, ty, ln, cl), "key", fname, "line", yv_long(ln), "col", yv_long(cl));
             binds = ya_push(binds, let_node(bname, fread, ln, cl));
             if (is_punct(toks, pos, ys(","))) {
                 pos = pos + 1;
@@ -2335,13 +2336,13 @@ Yv *parse_type_pattern(Yv *toks, long p, Yv *tmp) {
         if (is_punct(toks, pos, ys("}"))) {
             pos = pos + 1;
         } else {
-            binds = ya_push(binds, yr(4, "k", ys("err"), "msg", ys_cat(ys_cat(ys("expected '}' to close the field list, got '"), tv(toks, pos)), ys("'")), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
+            binds = ya_push(binds, yr(4, "k", yv_long(K_err), "msg", ys_cat(ys_cat(ys("expected '}' to close the field list, got '"), tv(toks, pos)), ys("'")), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
         }
     } else if (ys_eq_lit(tt(toks, pos), "id")) {
         binds = ya_push(binds, let_node(tv(toks, pos), narrow_node(subj, ty, ln, cl), ln, cl));
         pos = pos + 1;
     }
-    return pat_res(yr(5, "k", ys("rectest"), "e", subj, "typ", ty, "line", yv_long(ln), "col", yv_long(cl)), binds, ty, 0, pos);
+    return pat_res(yr(5, "k", yv_long(K_rectest), "e", subj, "typ", ty, "line", yv_long(ln), "col", yv_long(cl)), binds, ty, 0, pos);
 }
 
 // A parsed value pattern: a record literal matches by its fields, any
@@ -2350,19 +2351,19 @@ Yv *parse_value_pattern(Yv *toks, Yv *node, long pos, Yv *tmp, long ln, long cl)
     Yv *subj = subj_id(tmp, ln, cl);
     Yv *binds = yav(0);
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "rec")) {
+    if (yv_l(k) == K_rec) {
         Yv *keys = yr_get(node, "keys");
         Yv *vals = yr_get(node, "vals");
-        Yv *ty = yr(2, "k", ys("tpat"), "names", keys);
-        Yv *test = yr(5, "k", ys("rectest"), "e", subj, "typ", ty, "line", yv_long(ln), "col", yv_long(cl));
+        Yv *ty = yr(2, "k", yv_long(K_tpat), "names", keys);
+        Yv *test = yr(5, "k", yv_long(K_rectest), "e", subj, "typ", ty, "line", yv_long(ln), "col", yv_long(cl));
         long i = 0;
         while (i < yv_len(keys)) {
             Yv *key = ya_get(keys, i);
             if (ys_eq_lit(key, "...")) {
-                test = yr(4, "k", ys("err"), "msg", ys("'...' is not allowed in a match pattern"), "line", yv_long(ln), "col", yv_long(cl));
+                test = yr(4, "k", yv_long(K_err), "msg", ys("'...' is not allowed in a match pattern"), "line", yv_long(ln), "col", yv_long(cl));
             } else {
-                Yv *fread = yr(5, "k", ys("dot"), "obj", narrow_node(subj, ty, ln, cl), "key", key, "line", yv_long(ln), "col", yv_long(cl));
-                test = yr(6, "k", ys("bin"), "op", ys("&&"), "l", test, "r", yr(6, "k", ys("bin"), "op", ys("=="), "l", fread, "r", ya_get(vals, i), "line", yv_long(ln), "col", yv_long(cl)), "line", yv_long(ln), "col", yv_long(cl));
+                Yv *fread = yr(5, "k", yv_long(K_dot), "obj", narrow_node(subj, ty, ln, cl), "key", key, "line", yv_long(ln), "col", yv_long(cl));
+                test = yr(6, "k", yv_long(K_bin), "op", ys("&&"), "l", test, "r", yr(6, "k", yv_long(K_bin), "op", ys("=="), "l", fread, "r", ya_get(vals, i), "line", yv_long(ln), "col", yv_long(cl)), "line", yv_long(ln), "col", yv_long(cl));
             }
             i = i + 1;
         }
@@ -2371,14 +2372,14 @@ Yv *parse_value_pattern(Yv *toks, Yv *node, long pos, Yv *tmp, long ln, long cl)
             binds = ya_push(binds, let_node(tv(toks, pos), narrow_node(subj, ty, ln, cl), ln, cl));
             np = pos + 1;
         }
-        return pat_res(test, binds, yr(1, "k", ys("tnone")), 0, np);
+        return pat_res(test, binds, yr(1, "k", yv_long(K_tnone)), 0, np);
     } else {
         long np = pos;
         if (ys_eq_lit(tt(toks, pos), "id")) {
             binds = ya_push(binds, let_node(tv(toks, pos), subj, ln, cl));
             np = pos + 1;
         }
-        return pat_res(yr(6, "k", ys("bin"), "op", ys("=="), "l", subj, "r", node, "line", yv_long(ln), "col", yv_long(cl)), binds, yr(1, "k", ys("tnone")), 0, np);
+        return pat_res(yr(6, "k", yv_long(K_bin), "op", ys("=="), "l", subj, "r", node, "line", yv_long(ln), "col", yv_long(cl)), binds, yr(1, "k", yv_long(K_tnone)), 0, np);
     }
 }
 
@@ -2403,7 +2404,7 @@ Yv *parse_program(Yv *toks) {
         }
         ;
     }
-    return yr(4, "k", ys("block"), "stmts", stmts, "line", yv_long(1), "col", yv_long(1));
+    return yr(4, "k", yv_long(K_block), "stmts", stmts, "line", yv_long(1), "col", yv_long(1));
 }
 
 // export { parse_program, parse_type_full, nameix_new, nameix_put,

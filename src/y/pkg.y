@@ -26,10 +26,11 @@
 // and the run ends.
 
 // For its alias Cursor.
+import tags from "./tags.y";
 import lexer from "./lexer.y";
 import fs;
 
-type PkEnt = { tab: str, n: long, key: str, line: long, k: str, s: str, keys: [str], items: [str] };
+type PkEnt = { tab: str, n: long, key: str, line: long, k: long, s: str, keys: [str], items: [str] };
 type PkDep = { name: str, path: str, git: str, rev: str };
 type PkBin = { name: str, path: str };
 type PkMan = { file: str, name: str, lib: str, roots: [str], bins: [PkBin], deps: [PkDep] };
@@ -369,7 +370,7 @@ def pk_toml(text: str, path: str) -> [PkEnt] {
         let ln = i + 1;
         let at = path + ":" + tostring(ln) + ": ";
         let line = trim(pk_uncomment(lines[i]));
-        let e = { tab: tab, n: n, key: "", line: ln, k: "h", s: "", keys: pk_nostrs(), items: pk_nostrs() };
+        let e = { tab: tab, n: n, key: "", line: ln, k: K.h, s: "", keys: pk_nostrs(), items: pk_nostrs() };
         if (len(line) == 0) {
             0
         } else if (line[:1] == "[") {
@@ -409,17 +410,17 @@ def pk_toml(text: str, path: str) -> [PkEnt] {
             e.key = key;
             let c = pk_peek(cur);
             if (c == "[") {
-                e.k = "a";
+                e.k = K.a;
                 e.items = pk_array(cur, at);
                 0
             } else if (c == "{") {
-                e.k = "t";
+                e.k = K.t;
                 let t = pk_itable(cur, at);
                 e.keys = t.keys;
                 e.items = t.vals;
                 0
             } else if (c == "\"" || c == "'") {
-                e.k = "s";
+                e.k = K.s;
                 e.s = pk_qstr(cur, at);
                 0
             } else {
@@ -445,7 +446,7 @@ def pk_tq(s: str) -> str {
 };
 
 def pk_want_str(e: PkEnt, at: str) -> str {
-    if (e.k != "s") { pk_die(at + "'" + e.key + "' must be a string"); 0; } else { 0; };
+    if (e.k != K.s) { pk_die(at + "'" + e.key + "' must be a string"); 0; } else { 0; };
     e.s
 };
 
@@ -466,7 +467,7 @@ def pk_manifest(dir: str) -> PkMan {
         if (e.n >= 0) {
             pk_die(at + "[[" + tab + "]] has no place in a manifest");
             0
-        } else if (e.k == "h") {
+        } else if (e.k == K.h) {
             if (tab != "package" && tab != "bin" && tab != "dependencies") {
                 pk_die(at + "unknown table [" + tab + "]");
                 0
@@ -508,7 +509,7 @@ def pk_man_package(m: PkMan, e: PkEnt, at: str) -> long {
         m.lib = pk_want_str(e, at);
         0
     } else if (key == "src") {
-        if (e.k != "a") { pk_die(at + "'src' must be an array of strings"); 0; } else { 0; };
+        if (e.k != K.a) { pk_die(at + "'src' must be an array of strings"); 0; } else { 0; };
         m.roots = e.items;
         0
     } else if (key == "version" || key == "description" || key == "license" || key == "authors") {
@@ -546,7 +547,7 @@ def pk_man_dep(e: PkEnt, at: str) -> PkDep {
         };
         i = i + 1;
     };
-    if (e.k != "t" || (len(d.path) == 0 && len(d.git) == 0)) {
+    if (e.k != K.t || (len(d.path) == 0 && len(d.git) == 0)) {
         pk_die(at + "dependency '" + nm + "' must be { path = \"...\" } or { git = \"...\", rev = \"...\" }");
         0
     } else if (len(d.path) > 0 && len(d.git) > 0) {
@@ -793,7 +794,7 @@ def pk_lock_read(dir: str) -> [PkLock] {
                 };
                 let lk = out[e.n];
                 let key = e.key;
-                if (e.k != "s") {
+                if (e.k != K.s) {
                     0
                 } else if (key == "name") {
                     lk.name = e.s;

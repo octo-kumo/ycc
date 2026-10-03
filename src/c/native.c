@@ -24,6 +24,7 @@
 #include "lint.h"
 #include "asm.h"
 #include "yv.h"
+#include "tags.h"
 
 /* `pow10` is a native.y def (integer powers of ten) and glibc claims the
  * name as a builtin; the 1:1 name wins, so silence the clash. */
@@ -2356,170 +2357,170 @@ Yv *strip_ns(Yv *node, Yv *imports) {
         pkg_ns = yav(0);
     }
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "dot")) {
+    if (yv_l(k) == K_dot) {
         Yv *dobj = yr_get(node, "obj");
         Yv *obj = strip_ns(dobj, imports);
         Yv *okey = yr_get(node, "key");
         Yv *oline = yr_get(node, "line");
         Yv *ocol = yr_get(node, "col");
-        if (ys_eq_lit(yr_get(obj, "k"), "id")) {
+        if (yv_l(yr_get(obj, "k")) == K_id) {
             Yv *ov = yr_get(obj, "v");
             if (is_ns(ov, imports)) {
-                return normnode(yr(4, "k", ys("id"), "v", okey, "line", oline,
+                return normnode(yr(4, "k", yv_long(K_id), "v", okey, "line", oline,
                                    "col", ocol));
             } else if (is_ns(ov, pkg_ns)) {
                 Yv *qname = ys_cat(ys_cat(ov, ys(".")), okey);
-                return normnode(yr(4, "k", ys("id"), "v", qname, "line",
+                return normnode(yr(4, "k", yv_long(K_id), "v", qname, "line",
                                   oline, "col", ocol));
             } else {
-                return normnode(yr(5, "k", ys("dot"), "obj", obj, "key", okey,
+                return normnode(yr(5, "k", yv_long(K_dot), "obj", obj, "key", okey,
                                    "line", oline, "col", ocol));
             }
         } else {
-            return normnode(yr(5, "k", ys("dot"), "obj", obj, "key", okey,
+            return normnode(yr(5, "k", yv_long(K_dot), "obj", obj, "key", okey,
                                "line", oline, "col", ocol));
         }
-    } else if (ys_eq_lit(k, "un")) {
-        return normnode(yr(5, "k", ys("un"), "op", yr_get(node, "op"), "e",
+    } else if (yv_l(k) == K_un) {
+        return normnode(yr(5, "k", yv_long(K_un), "op", yr_get(node, "op"), "e",
                            strip_ns(yr_get(node, "e"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "addr") || ys_eq_lit(k, "deref")) {
+    } else if (yv_l(k) == K_addr || yv_l(k) == K_deref) {
         return normnode(yr(4, "k", k, "e", strip_ns(yr_get(node, "e"), imports),
                            "line", yr_get(node, "line"), "col",
                            yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         return normnode(
-            yr(6, "k", ys("bin"), "op", yr_get(node, "op"), "l",
+            yr(6, "k", yv_long(K_bin), "op", yr_get(node, "op"), "l",
                strip_ns(yr_get(node, "l"), imports), "r",
                strip_ns(yr_get(node, "r"), imports), "line",
                yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "call")) {
-        return normnode(yr(5, "k", ys("call"), "callee",
+    } else if (yv_l(k) == K_call) {
+        return normnode(yr(5, "k", yv_long(K_call), "callee",
                            strip_ns(yr_get(node, "callee"), imports), "args",
                            strip_list(yr_get(node, "args"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "if")) {
-        return normnode(yr(7, "k", ys("if"), "cond",
+    } else if (yv_l(k) == K_kw_if) {
+        return normnode(yr(7, "k", yv_long(K_kw_if), "cond",
                            strip_ns(yr_get(node, "cond"), imports), "then",
                            strip_ns(yr_get(node, "then"), imports), "els",
                            strip_ns(yr_get(node, "els"), imports), "has_else",
                            yr_get(node, "has_else"), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "while")) {
-        return normnode(yr(5, "k", ys("while"), "cond",
+    } else if (yv_l(k) == K_kw_while) {
+        return normnode(yr(5, "k", yv_long(K_kw_while), "cond",
                            strip_ns(yr_get(node, "cond"), imports), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "block")) {
-        return normnode(yr(4, "k", ys("block"), "stmts",
+    } else if (yv_l(k) == K_block) {
+        return normnode(yr(4, "k", yv_long(K_block), "stmts",
                            strip_list(yr_get(node, "stmts"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return strip_decl(node, imports);
-    } else if (ys_eq_lit(k, "func")) {
-        return normnode(yr(8, "k", ys("func"), "params", yr_get(node, "params"),
+    } else if (yv_l(k) == K_func) {
+        return normnode(yr(8, "k", yv_long(K_func), "params", yr_get(node, "params"),
                            "ptypes", yr_get(node, "ptypes"), "ret",
                            yr_get(node, "ret"), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col"),
                            "defs", yr_get(node, "defs")));
-    } else if (ys_eq_lit(k, "assign")) {
-        return normnode(yr(5, "k", ys("assign"), "name", yr_get(node, "name"),
+    } else if (yv_l(k) == K_assign) {
+        return normnode(yr(5, "k", yv_long(K_assign), "name", yr_get(node, "name"),
                            "v", strip_ns(yr_get(node, "v"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "incdec")) {
-        return normnode(yr(6, "k", ys("incdec"), "op", yr_get(node, "op"), "pre",
+    } else if (yv_l(k) == K_incdec) {
+        return normnode(yr(6, "k", yv_long(K_incdec), "op", yr_get(node, "op"), "pre",
                            yr_get(node, "pre"), "tgt",
                            strip_ns(yr_get(node, "tgt"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "opassign")) {
-        return normnode(yr(6, "k", ys("opassign"), "op", yr_get(node, "op"),
+    } else if (yv_l(k) == K_opassign) {
+        return normnode(yr(6, "k", yv_long(K_opassign), "op", yr_get(node, "op"),
                            "tgt", strip_ns(yr_get(node, "tgt"), imports), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "store")) {
-        return normnode(yr(5, "k", ys("store"), "p",
+    } else if (yv_l(k) == K_store) {
+        return normnode(yr(5, "k", yv_long(K_store), "p",
                            strip_ns(yr_get(node, "p"), imports), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "ret")) {
-        return normnode(yr(4, "k", ys("ret"), "e",
+    } else if (yv_l(k) == K_ret) {
+        return normnode(yr(4, "k", yv_long(K_ret), "e",
                            strip_ns(yr_get(node, "e"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "array")) {
-        return normnode(yr(4, "k", ys("array"), "elems",
+    } else if (yv_l(k) == K_array) {
+        return normnode(yr(4, "k", yv_long(K_array), "elems",
                            strip_list(yr_get(node, "elems"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "arrrep")) {
-        return normnode(yr(5, "k", ys("arrrep"), "v",
+    } else if (yv_l(k) == K_arrrep) {
+        return normnode(yr(5, "k", yv_long(K_arrrep), "v",
                            strip_ns(yr_get(node, "v"), imports), "n",
                            yr_get(node, "n"), "line", yr_get(node, "line"),
                            "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "rec")) {
-        return normnode(yr(5, "k", ys("rec"), "keys", yr_get(node, "keys"),
+    } else if (yv_l(k) == K_rec) {
+        return normnode(yr(5, "k", yv_long(K_rec), "keys", yr_get(node, "keys"),
                            "vals", strip_list(yr_get(node, "vals"), imports),
                            "line", yr_get(node, "line"), "col",
                            yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "map")) {
-        return normnode(yr(5, "k", ys("map"), "keys", yr_get(node, "keys"),
+    } else if (yv_l(k) == K_map) {
+        return normnode(yr(5, "k", yv_long(K_map), "keys", yr_get(node, "keys"),
                            "vals", strip_list(yr_get(node, "vals"), imports),
                            "line", yr_get(node, "line"), "col",
                            yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         return normnode(
-            yr(5, "k", ys("index"), "arr", strip_ns(yr_get(node, "arr"), imports),
+            yr(5, "k", yv_long(K_index), "arr", strip_ns(yr_get(node, "arr"), imports),
                "idx", strip_ns(yr_get(node, "idx"), imports), "line",
                yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "slice")) {
-        return normnode(yr(6, "k", ys("slice"), "arr",
+    } else if (yv_l(k) == K_slice) {
+        return normnode(yr(6, "k", yv_long(K_slice), "arr",
                            strip_ns(yr_get(node, "arr"), imports), "lo",
                            strip_ns(yr_get(node, "lo"), imports), "hi",
                            strip_ns(yr_get(node, "hi"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "idxassign")) {
-        return normnode(yr(6, "k", ys("idxassign"), "arr",
+    } else if (yv_l(k) == K_idxassign) {
+        return normnode(yr(6, "k", yv_long(K_idxassign), "arr",
                            strip_ns(yr_get(node, "arr"), imports), "idx",
                            strip_ns(yr_get(node, "idx"), imports), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         Yv *dao = yr_get(node, "obj");
-        if (ys_eq_lit(yr_get(dao, "k"), "id") &&
+        if (yv_l(yr_get(dao, "k")) == K_id &&
             is_ns(yr_get(dao, "v"), pkg_ns)) {
             Yv *qname = ys_cat(ys_cat(yr_get(dao, "v"), ys(".")),
                                yr_get(node, "key"));
-            return normnode(yr(5, "k", ys("assign"), "name", qname, "v",
+            return normnode(yr(5, "k", yv_long(K_assign), "name", qname, "v",
                                strip_ns(yr_get(node, "v"), imports), "line",
                                yr_get(node, "line"), "col",
                                yr_get(node, "col")));
         } else {
             return normnode(
-                yr(6, "k", ys("dotassign"), "obj", strip_ns(dao, imports),
+                yr(6, "k", yv_long(K_dotassign), "obj", strip_ns(dao, imports),
                    "key", yr_get(node, "key"), "v",
                    strip_ns(yr_get(node, "v"), imports), "line",
                    yr_get(node, "line"), "col", yr_get(node, "col")));
         }
-    } else if (ys_eq_lit(k, "foreach")) {
-        return normnode(yr(6, "k", ys("foreach"), "name", yr_get(node, "name"),
+    } else if (yv_l(k) == K_kw_foreach) {
+        return normnode(yr(6, "k", yv_long(K_kw_foreach), "name", yr_get(node, "name"),
                            "iter", strip_ns(yr_get(node, "iter"), imports),
                            "body", strip_ns(yr_get(node, "body"), imports),
                            "line", yr_get(node, "line"), "col",
                            yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "forrange")) {
-        return normnode(yr(7, "k", ys("forrange"), "name", yr_get(node, "name"),
+    } else if (yv_l(k) == K_forrange) {
+        return normnode(yr(7, "k", yv_long(K_forrange), "name", yr_get(node, "name"),
                            "lo", strip_ns(yr_get(node, "lo"), imports), "hi",
                            strip_ns(yr_get(node, "hi"), imports), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "for")) {
-        return normnode(yr(7, "k", ys("for"), "init",
+    } else if (yv_l(k) == K_kw_for) {
+        return normnode(yr(7, "k", yv_long(K_kw_for), "init",
                            strip_ns(yr_get(node, "init"), imports), "cond",
                            strip_ns(yr_get(node, "cond"), imports), "step",
                            strip_ns(yr_get(node, "step"), imports), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "sliceassign")) {
-        return normnode(yr(7, "k", ys("sliceassign"), "arr",
+    } else if (yv_l(k) == K_sliceassign) {
+        return normnode(yr(7, "k", yv_long(K_sliceassign), "arr",
                            strip_ns(yr_get(node, "arr"), imports), "lo",
                            strip_ns(yr_get(node, "lo"), imports), "hi",
                            strip_ns(yr_get(node, "hi"), imports), "v",
@@ -2532,12 +2533,12 @@ Yv *strip_ns(Yv *node, Yv *imports) {
 
 Yv *strip_decl(Yv *node, Yv *imports) {
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
-        return normnode(yr(6, "k", ys("decl"), "kind", ys("def"), "name",
+        return normnode(yr(6, "k", yv_long(K_decl), "kind", ys("def"), "name",
                            yr_get(node, "name"), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
     } else {
-        return normnode(yr(7, "k", ys("decl"), "kind", yr_get(node, "kind"),
+        return normnode(yr(7, "k", yv_long(K_decl), "kind", yr_get(node, "kind"),
                            "name", yr_get(node, "name"), "typ",
                            yr_get(node, "typ"), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
@@ -2648,7 +2649,7 @@ Yv *env_find(Yv *st, Yv *name) {
     Yv *env = yr_get(st, "env");
     long i = yv_len(env) - 1;
     Yv *found = yr(5, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
-                   "label", ys(""), "typ", yr(1, "k", ys("tnone")));
+                   "label", ys(""), "typ", yr(1, "k", yv_long(K_tnone)));
     while (i >= 0) {
         Yv *e = ya_get(env, i);
         if (ys_eq(yr_get(e, "name"), name)) {
@@ -2694,7 +2695,7 @@ Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ) {
  * (types.y unfold): the emitter looks into it. */
 Yv *infer(Yv *st, Yv *node) {
     Yv *t = infer_go(st, node);
-    if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+    if (yv_l(yr_get(t, "k")) == K_tref) {
         return unfold(t);
     } else {
         return t;
@@ -2703,21 +2704,21 @@ Yv *infer(Yv *st, Yv *node) {
 
 Yv *infer_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "num")) {
+    if (yv_l(k) == K_num) {
         if (lit_is_float(yr_get(node, "v"))) {
-            return yr(1, "k", ys("tfloat"));
+            return yr(1, "k", yv_long(K_tfloat));
         } else {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         }
-    } else if (ys_eq_lit(k, "str")) {
-        return yr(1, "k", ys("tstr"));
-    } else if (ys_eq_lit(k, "bstr")) {
-        return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte")));
-    } else if (ys_eq_lit(k, "bool")) {
-        return yr(1, "k", ys("tbool"));
-    } else if (ys_eq_lit(k, "void")) {
-        return yr(1, "k", ys("tvoid"));
-    } else if (ys_eq_lit(k, "id")) {
+    } else if (yv_l(k) == K_str) {
+        return yr(1, "k", yv_long(K_tstr));
+    } else if (yv_l(k) == K_bstr) {
+        return yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tbyte)));
+    } else if (yv_l(k) == K_bool) {
+        return yr(1, "k", yv_long(K_tbool));
+    } else if (yv_l(k) == K_void) {
+        return yr(1, "k", yv_long(K_tvoid));
+    } else if (yv_l(k) == K_id) {
         if (ys_eq_lit(yr_get(node, "v"), "self")) {
             return cur_fn_type(st);
         } else {
@@ -2725,151 +2726,151 @@ Yv *infer_go(Yv *st, Yv *node) {
             if (ys_eq_lit(yr_get(e, "kind"), "none")) {
                 if (ys_eq_lit(yr_get(node, "v"), "none")) {
                     return normnode(
-                        yr(2, "k", ys("topt"), "of", yr(1, "k", ys("tunk"))));
+                        yr(2, "k", yv_long(K_topt), "of", yr(1, "k", yv_long(K_tunk))));
                 } else {
-                    return yr(1, "k", ys("tunk"));
+                    return yr(1, "k", yv_long(K_tunk));
                 }
             } else {
                 return yr_get(e, "typ");
             }
         }
-    } else if (ys_eq_lit(k, "un")) {
+    } else if (yv_l(k) == K_un) {
         if (ys_eq_lit(yr_get(node, "op"), "-")) {
             /* Negating a byte is long arithmetic (types.y): -b leaves 0..255. */
             Yv *ut = infer(st, yr_get(node, "e"));
-            if (ys_eq_lit(yr_get(ut, "k"), "tbyte")) {
-                return yr(1, "k", ys("tlong"));
+            if (yv_l(yr_get(ut, "k")) == K_tbyte) {
+                return yr(1, "k", yv_long(K_tlong));
             } else {
                 return ut;
             }
         } else if (ys_eq_lit(yr_get(node, "op"), "~")) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else {
-            return yr(1, "k", ys("tbool"));
+            return yr(1, "k", yv_long(K_tbool));
         }
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         Yv *op = yr_get(node, "op");
         if (ys_eq_lit(op, "+") || ys_eq_lit(op, "-") || ys_eq_lit(op, "*") ||
             ys_eq_lit(op, "/") || ys_eq_lit(op, "%") || ys_eq_lit(op, "::")) {
             Yv *bl = infer(st, yr_get(node, "l"));
             Yv *br = infer(st, yr_get(node, "r"));
             if (ys_eq_lit(op, "+") &&
-                (ys_eq_lit(yr_get(bl, "k"), "tarr") ||
-                 ys_eq_lit(yr_get(bl, "k"), "tarrfix"))) {
+                (yv_l(yr_get(bl, "k")) == K_tarr ||
+                 yv_l(yr_get(bl, "k")) == K_tarrfix)) {
                 /* array `+` builds a NEW heap array (types.y
                  * typeof_arith_arr) -- the element type survives, except
                  * that `[T] + [[T]]` prepends the left one as an element. */
-                if ((ys_eq_lit(yr_get(br, "k"), "tarr") ||
-                     ys_eq_lit(yr_get(br, "k"), "tarrfix")) &&
+                if ((yv_l(yr_get(br, "k")) == K_tarr ||
+                     yv_l(yr_get(br, "k")) == K_tarrfix) &&
                     ys_eq_lit(arr_plus_kind(bl, br), "prepend")) {
-                    return yr(2, "k", ys("tarr"), "of", yr_get(br, "of"));
+                    return yr(2, "k", yv_long(K_tarr), "of", yr_get(br, "of"));
                 } else {
-                    return yr(2, "k", ys("tarr"), "of", yr_get(bl, "of"));
+                    return yr(2, "k", yv_long(K_tarr), "of", yr_get(bl, "of"));
                 }
             } else if (ys_eq_lit(op, "+") &&
-                (ys_eq_lit(yr_get(br, "k"), "tarr") ||
-                 ys_eq_lit(yr_get(br, "k"), "tarrfix"))) {
-                return yr(2, "k", ys("tarr"), "of", yr_get(br, "of"));
+                (yv_l(yr_get(br, "k")) == K_tarr ||
+                 yv_l(yr_get(br, "k")) == K_tarrfix)) {
+                return yr(2, "k", yv_long(K_tarr), "of", yr_get(br, "of"));
             } else if (ys_eq_lit(op, "::")) {
                 /* cons: one element prepended to the right's array */
-                return yr(2, "k", ys("tarr"), "of", yr_get(br, "of"));
+                return yr(2, "k", yv_long(K_tarr), "of", yr_get(br, "of"));
             } else if (ys_eq_lit(op, "+") &&
-                (ys_eq_lit(yr_get(bl, "k"), "tstr") ||
-                 ys_eq_lit(yr_get(br, "k"), "tstr"))) {
-                return yr(1, "k", ys("tstr"));
-            } else if (ys_eq_lit(yr_get(bl, "k"), "tfloat")) {
-                return yr(1, "k", ys("tfloat"));
-            } else if (ys_eq_lit(yr_get(br, "k"), "tfloat")) {
-                return yr(1, "k", ys("tfloat"));
+                (yv_l(yr_get(bl, "k")) == K_tstr ||
+                 yv_l(yr_get(br, "k")) == K_tstr)) {
+                return yr(1, "k", yv_long(K_tstr));
+            } else if (yv_l(yr_get(bl, "k")) == K_tfloat) {
+                return yr(1, "k", yv_long(K_tfloat));
+            } else if (yv_l(yr_get(br, "k")) == K_tfloat) {
+                return yr(1, "k", yv_long(K_tfloat));
             } else {
-                return yr(1, "k", ys("tlong"));
+                return yr(1, "k", yv_long(K_tlong));
             }
         } else if (is_bits_op(op)) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else {
-            return yr(1, "k", ys("tbool"));
+            return yr(1, "k", yv_long(K_tbool));
         }
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         return normnode(func_type_in(st, node));
-    } else if (ys_eq_lit(k, "addr")) {
+    } else if (yv_l(k) == K_addr) {
         return normnode(
-            yr(2, "k", ys("tptr"), "to", infer(st, yr_get(node, "e"))));
-    } else if (ys_eq_lit(k, "arrrep")) {
-        return normnode(yr(3, "k", ys("tarrfix"), "of",
+            yr(2, "k", yv_long(K_tptr), "to", infer(st, yr_get(node, "e"))));
+    } else if (yv_l(k) == K_arrrep) {
+        return normnode(yr(3, "k", yv_long(K_tarrfix), "of",
                            infer(st, yr_get(node, "v")), "n",
                            yr_get(node, "n")));
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         Yv *elems = yr_get(node, "elems");
         if (yv_len(elems) == 0) {
             return normnode(
-                yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tunk"))));
+                yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tunk))));
         } else {
-            return normnode(yr(2, "k", ys("tarr"), "of",
+            return normnode(yr(2, "k", yv_long(K_tarr), "of",
                                infer(st, ya_get(elems, 0))));
         }
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         /* checker guarantees an array base (any expression); the element
          * type is the base type's `of`. */
         Yv *iarr = yr_get(node, "arr");
         Yv *bt = infer(st, iarr);
-        if (ys_eq_lit(yr_get(bt, "k"), "tarrfix") ||
-            ys_eq_lit(yr_get(bt, "k"), "tarr")) {
+        if (yv_l(yr_get(bt, "k")) == K_tarrfix ||
+            yv_l(yr_get(bt, "k")) == K_tarr) {
             return yr_get(bt, "of");
-        } else if (ys_eq_lit(yr_get(bt, "k"), "tmap")) {
+        } else if (yv_l(yr_get(bt, "k")) == K_tmap) {
             /* m[k] is always optional: V? for any V */
-            return normnode(yr(2, "k", ys("topt"), "of", yr_get(bt, "of")));
-        } else if (ys_eq_lit(yr_get(bt, "k"), "tstr")) {
-            return yr(1, "k", ys("tbyte"));
+            return normnode(yr(2, "k", yv_long(K_topt), "of", yr_get(bt, "of")));
+        } else if (yv_l(yr_get(bt, "k")) == K_tstr) {
+            return yr(1, "k", yv_long(K_tbyte));
         } else {
-            return yr(1, "k", ys("tunk"));
+            return yr(1, "k", yv_long(K_tunk));
         }
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         /* arr[lo:hi] keeps the element type but is always a heap [T]. */
         Yv *ts = infer(st, yr_get(node, "arr"));
-        if (ys_eq_lit(yr_get(ts, "k"), "tarr")) {
-            return yr(2, "k", ys("tarr"), "of", yr_get(ts, "of"));
-        } else if (ys_eq_lit(yr_get(ts, "k"), "tarrfix")) {
-            return yr(2, "k", ys("tarr"), "of", yr_get(ts, "of"));
-        } else if (ys_eq_lit(yr_get(ts, "k"), "tstr")) {
-            return yr(1, "k", ys("tstr"));
+        if (yv_l(yr_get(ts, "k")) == K_tarr) {
+            return yr(2, "k", yv_long(K_tarr), "of", yr_get(ts, "of"));
+        } else if (yv_l(yr_get(ts, "k")) == K_tarrfix) {
+            return yr(2, "k", yv_long(K_tarr), "of", yr_get(ts, "of"));
+        } else if (yv_l(yr_get(ts, "k")) == K_tstr) {
+            return yr(1, "k", yv_long(K_tstr));
         } else {
-            return yr(1, "k", ys("tunk"));
+            return yr(1, "k", yv_long(K_tunk));
         }
-    } else if (ys_eq_lit(k, "char")) {
-        return yr(1, "k", ys("tbyte"));
-    } else if (ys_eq_lit(k, "rectest")) {
-        return yr(1, "k", ys("tbool"));
-    } else if (ys_eq_lit(k, "narrow")) {
+    } else if (yv_l(k) == K_char) {
+        return yr(1, "k", yv_long(K_tbyte));
+    } else if (yv_l(k) == K_rectest) {
+        return yr(1, "k", yv_long(K_tbool));
+    } else if (yv_l(k) == K_narrow) {
         return narrow_type(infer(st, yr_get(node, "e")), yr_get(node, "typ"));
-    } else if (ys_eq_lit(k, "sliceassign")) {
-        return yr(1, "k", ys("tvoid"));
-    } else if (ys_eq_lit(k, "deref")) {
+    } else if (yv_l(k) == K_sliceassign) {
+        return yr(1, "k", yv_long(K_tvoid));
+    } else if (yv_l(k) == K_deref) {
         Yv *t = infer(st, yr_get(node, "e"));
-        if (ys_eq_lit(yr_get(t, "k"), "tptr")) {
+        if (yv_l(yr_get(t, "k")) == K_tptr) {
             return yr_get(t, "to");
         } else {
-            return yr(1, "k", ys("tunk"));
+            return yr(1, "k", yv_long(K_tunk));
         }
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         return infer_call(st, node);
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         return infer(st, yr_get(node, "then"));
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         return infer_block(st, node);
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return infer_decl(st, node);
-    } else if (ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_assign) {
         return infer(st, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         return infer(st, yr_get(node, "tgt"));
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         return infer(st, yr_get(node, "tgt"));
-    } else if (ys_eq_lit(k, "rec")) {
+    } else if (yv_l(k) == K_rec) {
         /* record literal: field types from the values (checker validated). */
         Yv *melems = yr_get(node, "vals");
         Yv *mkeys = yr_get(node, "keys");
         if (yv_len(melems) == 0) {
-            return normnode(yr(2, "k", ys("trec"), "fields", yav(0)));
+            return normnode(yr(2, "k", yv_long(K_trec), "fields", yav(0)));
         } else {
             /* `...` spread entries merge the source's fields (static
              * union: first appearance keeps the position, later wins the
@@ -2881,7 +2882,7 @@ Yv *infer_go(Yv *st, Yv *node) {
                 /* mk is read twice: the `...` test, then the merge. */
                 Yv *mk = ya_get(mkeys, mi);
                 if (ys_eq_lit(mk, "...")) {
-                    if (ys_eq_lit(yr_get(mf, "k"), "trec")) {
+                    if (yv_l(yr_get(mf, "k")) == K_trec) {
                         Yv *msfs = yr_get(mf, "fields");
                         long msi = 0;
                         while (msi < yv_len(msfs)) {
@@ -2901,24 +2902,24 @@ Yv *infer_go(Yv *st, Yv *node) {
                 }
                 mi = mi + 1;
             }
-            return normnode(yr(2, "k", ys("trec"), "fields", mfields));
+            return normnode(yr(2, "k", yv_long(K_trec), "fields", mfields));
         }
-    } else if (ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_map) {
         /* map literal: {keys, vals, boxes} record at runtime; the static
          * type is tmap (quoted keys are strings; the values share one type). */
         Yv *glvals = yr_get(node, "vals");
         if (yv_len(glvals) == 0) {
-            return normnode(yr(3, "k", ys("tmap"), "key", yr(1, "k", ys("tstr")), "of", yr(1, "k", ys("tunk"))));
+            return normnode(yr(3, "k", yv_long(K_tmap), "key", yr(1, "k", yv_long(K_tstr)), "of", yr(1, "k", yv_long(K_tunk))));
         } else {
-            return normnode(yr(3, "k", ys("tmap"), "key", yr(1, "k", ys("tstr")), "of", infer(st, ya_get(glvals, 0))));
+            return normnode(yr(3, "k", yv_long(K_tmap), "key", yr(1, "k", yv_long(K_tstr)), "of", infer(st, ya_get(glvals, 0))));
         }
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         /* field read: static index into the trec (checker validated). */
         Yv *dobj = yr_get(node, "obj");
         Yv *dt = infer(st, dobj);
-        if (ys_eq_lit(yr_get(dt, "k"), "trec")) {
+        if (yv_l(yr_get(dt, "k")) == K_trec) {
             int found = 0;
-            Yv *ftyp = yr(1, "k", ys("tunk"));
+            Yv *ftyp = yr(1, "k", yv_long(K_tunk));
             Yv *dfs = yr_get(dt, "fields");
             long di = 0;
             while (di < yv_len(dfs)) {
@@ -2939,112 +2940,112 @@ Yv *infer_go(Yv *st, Yv *node) {
             if (found) {
                 return ftyp;
             } else {
-                return yr(1, "k", ys("tunk"));
+                return yr(1, "k", yv_long(K_tunk));
             }
-        } else if (ys_eq_lit(yr_get(dt, "k"), "tunion")) {
+        } else if (yv_l(yr_get(dt, "k")) == K_tunion) {
             /* types.y union_field: the type the field has in every member */
             Yv *uft = rec_field_type(dt, yr_get(node, "key"));
-            if (ys_eq_lit(yr_get(uft, "k"), "tnone")) {
-                return yr(1, "k", ys("tunk"));
+            if (yv_l(yr_get(uft, "k")) == K_tnone) {
+                return yr(1, "k", yv_long(K_tunk));
             } else {
                 return uft;
             }
-        } else if (ys_eq_lit(yr_get(dt, "k"), "tmap")) {
+        } else if (yv_l(yr_get(dt, "k")) == K_tmap) {
             /* the map lowering reads its {keys, vals, boxes} shape directly */
-            if (ys_eq_lit(yr_get(node, "key"), "keys")) { return normnode(yr(2, "k", ys("tarr"), "of", yr_get(dt, "key"))); }
-            else if (ys_eq_lit(yr_get(node, "key"), "vals")) { return normnode(yr(2, "k", ys("tarr"), "of", yr_get(dt, "of"))); }
-            else if (ys_eq_lit(yr_get(node, "key"), "boxes")) { return normnode(yr(2, "k", ys("tarr"), "of", normnode(yr(2, "k", ys("topt"), "of", yr_get(dt, "of"))))); }
-            else { return yr(1, "k", ys("tunk")); }
-        } else if (ys_eq_lit(yr_get(dt, "k"), "tarr") ||
-                   ys_eq_lit(yr_get(dt, "k"), "tarrfix") ||
-                   ys_eq_lit(yr_get(dt, "k"), "tstr")) {
+            if (ys_eq_lit(yr_get(node, "key"), "keys")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", yr_get(dt, "key"))); }
+            else if (ys_eq_lit(yr_get(node, "key"), "vals")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", yr_get(dt, "of"))); }
+            else if (ys_eq_lit(yr_get(node, "key"), "boxes")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", normnode(yr(2, "k", yv_long(K_topt), "of", yr_get(dt, "of"))))); }
+            else { return yr(1, "k", yv_long(K_tunk)); }
+        } else if (yv_l(yr_get(dt, "k")) == K_tarr ||
+                   yv_l(yr_get(dt, "k")) == K_tarrfix ||
+                   yv_l(yr_get(dt, "k")) == K_tstr) {
             /* built-in properties (types.y typeof_prop; gen_prop) */
             if (ys_eq_lit(yr_get(node, "key"), "length")) {
-                return yr(1, "k", ys("tlong"));
+                return yr(1, "k", yv_long(K_tlong));
             } else {
                 return normnode(
-                    yr(2, "k", ys("tptr"), "to", yr_get(dt, "of")));
+                    yr(2, "k", yv_long(K_tptr), "to", yr_get(dt, "of")));
             }
         } else {
-            return yr(1, "k", ys("tunk"));
+            return yr(1, "k", yv_long(K_tunk));
         }
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         return infer(st, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "while")) {
-        return yr(1, "k", ys("tvoid"));
-    } else if (ys_eq_lit(k, "ret")) {
+    } else if (yv_l(k) == K_kw_while) {
+        return yr(1, "k", yv_long(K_tvoid));
+    } else if (yv_l(k) == K_ret) {
         return infer(st, yr_get(node, "e"));
     } else {
-        return yr(1, "k", ys("tunk"));
+        return yr(1, "k", yv_long(K_tunk));
     }
 }
 
 Yv *infer_call(Yv *st, Yv *node) {
-    if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "k"), "id")) {
+    if (yv_l(yr_get(yr_get(node, "callee"), "k")) != K_id) {
         /* Calling an expression (immediately-invoked literal, fs[0](x), ...)
          * or `s.m(...)` with s a str: a string method (types.str_method). */
         Yv *ical = yr_get(node, "callee");
-        if (ys_eq_lit(yr_get(ical, "k"), "dot") &&
-            ys_eq_lit(yr_get(infer(st, yr_get(ical, "obj")), "k"), "tstr")) {
+        if (yv_l(yr_get(ical, "k")) == K_dot &&
+            yv_l(yr_get(infer(st, yr_get(ical, "obj")), "k")) == K_tstr) {
             Yv *ism = str_method(yr_get(ical, "key"));
             return yr_get(ism, "ret");
         } else {
             Yv *cft = infer(st, ical);
-            if (ys_eq_lit(yr_get(cft, "k"), "tfunc")) {
+            if (yv_l(yr_get(cft, "k")) == K_tfunc) {
                 return yr_get(cft, "ret");
             } else {
-                return yr(1, "k", ys("tunk"));
+                return yr(1, "k", yv_long(K_tunk));
             }
         }
     } else {
         Yv *name = yr_get(yr_get(node, "callee"), "v");
         if (ys_eq_lit(name, "print")) {
-            return yr(1, "k", ys("tvoid"));
+            return yr(1, "k", yv_long(K_tvoid));
         } else if (ys_eq_lit(name, "syscall")) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "len")) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "is_some")) {
-            return yr(1, "k", ys("tbool"));
+            return yr(1, "k", yv_long(K_tbool));
         } else if (ys_eq_lit(name, "unwrap")) {
             /* unwrap(x): payload type when x is statically an option. */
             Yv *uargs = yr_get(node, "args");
             if (yv_len(uargs) != 1) {
-                return yr(1, "k", ys("tunk"));
+                return yr(1, "k", yv_long(K_tunk));
             } else {
                 Yv *ut = infer(st, ya_get(uargs, 0));
-                if (ys_eq_lit(yr_get(ut, "k"), "topt")) {
+                if (yv_l(yr_get(ut, "k")) == K_topt) {
                     return yr_get(ut, "of");
                 } else {
-                    return yr(1, "k", ys("tunk"));
+                    return yr(1, "k", yv_long(K_tunk));
                 }
             }
         } else if (ys_eq_lit(name, "some")) {
             /* some(x): option of x's type. */
             Yv *sargs = yr_get(node, "args");
             if (yv_len(sargs) != 1) {
-                return yr(2, "k", ys("topt"), "of", yr(1, "k", ys("tunk")));
+                return yr(2, "k", yv_long(K_topt), "of", yr(1, "k", yv_long(K_tunk)));
             } else {
-                return yr(2, "k", ys("topt"), "of",
+                return yr(2, "k", yv_long(K_topt), "of",
                           infer(st, ya_get(sargs, 0)));
             }
         } else if ((ys_eq_lit(name, "join") && yv_len(yr_get(node, "args")) == 1) || ys_eq_lit(name, "lock")) {
             /* join t: t's value; lock m { b }: b's */
             Yv *ja = yr_get(node, "args");
             Yv *ft = infer(st, ya_get(ja, yv_len(ja) - 1));
-            if (ys_eq_lit(yr_get(ft, "k"), "tfunc")) {
+            if (yv_l(yr_get(ft, "k")) == K_tfunc) {
                 return yr_get(ft, "ret");
             } else {
-                return yr(1, "k", ys("tunk"));
+                return yr(1, "k", yv_long(K_tunk));
             }
         } else if (ys_eq_lit(name, "spawn")) {
             return infer(st, ya_get(yr_get(node, "args"), 0));
         } else if (ys_eq_lit(name, "fork") || ys_eq_lit(name, "wait_pid")) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "try_lock")) {
-            return yr(1, "k", ys("tbool"));
+            return yr(1, "k", yv_long(K_tbool));
         } else if (ys_eq_lit(name, "post") || ys_eq_lit(name, "wait")) {
-            return yr(1, "k", ys("tvoid"));
+            return yr(1, "k", yv_long(K_tvoid));
         } else if (ys_eq_lit(name, "mutex")) {
             return t_mutex();
         } else if (ys_eq_lit(name, "sem")) {
@@ -3053,32 +3054,32 @@ Yv *infer_call(Yv *st, Yv *node) {
                    ys_eq_lit(name, "chr") || ys_eq_lit(name, "join") ||
                    ys_eq_lit(name, "tostring") || ys_eq_lit(name, "typeof") ||
                    ys_eq_lit(name, "#fmt")) {
-            return yr(1, "k", ys("tstr"));
+            return yr(1, "k", yv_long(K_tstr));
         } else if (ys_eq_lit(name, "bytes")) {
-            return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte")));
+            return yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tbyte)));
         } else if (ys_eq_lit(name, "from_bytes")) {
-            return yr(1, "k", ys("tstr"));
+            return yr(1, "k", yv_long(K_tstr));
         } else if (ys_eq_lit(name, "ptr_addr")) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "tonum") || ys_eq_lit(name, "ord") ||
                    ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "time_us") || ys_eq_lit(name, "heap_used")) {
-            return yr(1, "k", ys("tlong"));
+            return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "keys")) {
             Yv *kt = infer(st, ya_get(yr_get(node, "args"), 0));
-            if (ys_eq_lit(yr_get(kt, "k"), "tmap")) {
-                return yr(2, "k", ys("tarr"), "of", yr_get(kt, "key"));
+            if (yv_l(yr_get(kt, "k")) == K_tmap) {
+                return yr(2, "k", yv_long(K_tarr), "of", yr_get(kt, "key"));
             } else {
-                return yr(1, "k", ys("tunk"));
+                return yr(1, "k", yv_long(K_tunk));
             }
         } else if (ys_eq_lit(name, "sleep")) {
-            return yr(1, "k", ys("tvoid"));
+            return yr(1, "k", yv_long(K_tvoid));
         } else if (ys_eq_lit(name, "split") || ys_eq_lit(name, "argv")) {
-            return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tstr")));
+            return yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tstr)));
         } else if (ys_eq_lit(name, "range")) {
-            return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tlong")));
+            return yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tlong)));
         } else if (ys_eq_lit(name, "push") || ys_eq_lit(name, "prepend") ||
                    ys_eq_lit(name, "push$all")) {
             /* both yield the array they take (the header never moves, and
@@ -3086,27 +3087,27 @@ Yv *infer_call(Yv *st, Yv *node) {
             Yv *gargs = yr_get(node, "args");
             return infer(st, ya_get(gargs, 0));
         } else if (ys_eq_lit(name, "puts") || ys_eq_lit(name, "exit")) {
-            return yr(1, "k", ys("tvoid"));
+            return yr(1, "k", yv_long(K_tvoid));
         } else if (ys_eq_lit(name, "eputs")) {
-            return yr(1, "k", ys("tvoid"));
+            return yr(1, "k", yv_long(K_tvoid));
         } else if (ys_eq_lit(name, "self")) {
             /* The function's return type; one the checker could not infer
              * stays unknown here. */
             Yv *sft = cur_fn_type(st);
             Yv *sret = yr_get(sft, "ret");
-            if (ys_eq_lit(yr_get(sret, "k"), "tnone")) {
-                return yr(1, "k", ys("tunk"));
+            if (yv_l(yr_get(sret, "k")) == K_tnone) {
+                return yr(1, "k", yv_long(K_tunk));
             } else {
                 return sret;
             }
         } else {
             Yv *e = env_find(st, name);
             if (ys_eq_lit(yr_get(e, "kind"), "none")) {
-                return yr(1, "k", ys("tunk"));
-            } else if (ys_eq_lit(yr_get(yr_get(e, "typ"), "k"), "tfunc")) {
+                return yr(1, "k", yv_long(K_tunk));
+            } else if (yv_l(yr_get(yr_get(e, "typ"), "k")) == K_tfunc) {
                 return yr_get(yr_get(e, "typ"), "ret");
             } else {
-                return yr(1, "k", ys("tunk"));
+                return yr(1, "k", yv_long(K_tunk));
             }
         }
     }
@@ -3115,7 +3116,7 @@ Yv *infer_call(Yv *st, Yv *node) {
 Yv *infer_block(Yv *st, Yv *node) {
     Yv *stmts = yr_get(node, "stmts");
     if (yv_len(stmts) == 0) {
-        return yr(1, "k", ys("tvoid"));
+        return yr(1, "k", yv_long(K_tvoid));
     } else {
         return infer(st, ya_get(stmts, yv_len(stmts) - 1));
     }
@@ -3123,12 +3124,12 @@ Yv *infer_block(Yv *st, Yv *node) {
 
 Yv *infer_decl(Yv *st, Yv *node) {
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
-        return yr(3, "k", ys("tfunc"), "args", yav(0), "ret",
-                  yr(1, "k", ys("tvoid")));
+        return yr(3, "k", yv_long(K_tfunc), "args", yav(0), "ret",
+                  yr(1, "k", yv_long(K_tvoid)));
     } else {
         /* an annotated `let` takes the declared type; otherwise infer the
          * initializer's */
-        if (ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tnone")) {
+        if (yv_l(yr_get(yr_get(node, "typ"), "k")) == K_tnone) {
             return infer(st, yr_get(node, "v"));
         } else {
             return yr_get(node, "typ");
@@ -3153,13 +3154,13 @@ Yv *uses_scan_block(Yv *stmts, Yv *out) {
 
 Yv *uses_scan_node(Yv *node, Yv *out) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "call")) {
+    if (yv_l(k) == K_call) {
         /* scan callee + args (argv() could nest inside an argument).
          * ncallee is read three times: the argv test, the id test, the walk. */
         Yv *ncallee = yr_get(node, "callee");
         Yv *nargs = yr_get(node, "args");
         Yv *found = out;
-        if (ys_eq_lit(yr_get(ncallee, "k"), "id")) {
+        if (yv_l(yr_get(ncallee, "k")) == K_id) {
             if (ys_eq_lit(yr_get(ncallee, "v"), "argv")) {
                 found = yr(1, "argv", yv_bool(1));
                 ;
@@ -3172,72 +3173,72 @@ Yv *uses_scan_node(Yv *node, Yv *out) {
         }
         Yv *o2 = uses_scan_node(ncallee, found);
         return uses_scan_block(nargs, o2);
-    } else if (ys_eq_lit(k, "un")) {
+    } else if (yv_l(k) == K_un) {
         return uses_scan_node(yr_get(node, "e"), out);
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         return uses_scan_node(yr_get(node, "r"),
                               uses_scan_node(yr_get(node, "l"), out));
-    } else if (ys_eq_lit(k, "addr") || ys_eq_lit(k, "deref")) {
+    } else if (yv_l(k) == K_addr || yv_l(k) == K_deref) {
         return uses_scan_node(yr_get(node, "e"), out);
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         return uses_scan_node(yr_get(node, "els"),
                               uses_scan_node(yr_get(node, "then"),
                                              uses_scan_node(
                                                  yr_get(node, "cond"), out)));
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         return uses_scan_node(yr_get(node, "body"),
                               uses_scan_node(yr_get(node, "cond"), out));
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         return uses_scan_block(yr_get(node, "stmts"), out);
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return uses_scan_node(yr_get(node, "v"), out);
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         return uses_scan_node(yr_get(node, "body"), out);
-    } else if (ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_assign) {
         return uses_scan_node(yr_get(node, "v"), out);
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         return uses_scan_node(yr_get(node, "tgt"), out);
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         return uses_scan_node(yr_get(node, "v"),
                               uses_scan_node(yr_get(node, "tgt"), out));
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         return uses_scan_node(yr_get(node, "v"),
                               uses_scan_node(yr_get(node, "p"), out));
-    } else if (ys_eq_lit(k, "ret")) {
+    } else if (yv_l(k) == K_ret) {
         return uses_scan_node(yr_get(node, "e"), out);
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         return uses_scan_block(yr_get(node, "elems"), out);
-    } else if (ys_eq_lit(k, "arrrep")) {
+    } else if (yv_l(k) == K_arrrep) {
         return uses_scan_node(yr_get(node, "v"), out);
-    } else if (ys_eq_lit(k, "rec")) {
+    } else if (yv_l(k) == K_rec) {
         return uses_scan_block(yr_get(node, "vals"), out);
-    } else if (ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_map) {
         return uses_scan_block(yr_get(node, "vals"), out);
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         return uses_scan_node(yr_get(node, "idx"),
                               uses_scan_node(yr_get(node, "arr"), out));
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         return uses_scan_node(yr_get(node, "hi"),
                               uses_scan_node(yr_get(node, "lo"),
                                              uses_scan_node(
                                                  yr_get(node, "arr"), out)));
-    } else if (ys_eq_lit(k, "idxassign")) {
+    } else if (yv_l(k) == K_idxassign) {
         return uses_scan_node(yr_get(node, "v"),
                               uses_scan_node(yr_get(node, "idx"),
                                              uses_scan_node(
                                                  yr_get(node, "arr"), out)));
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         return uses_scan_node(yr_get(node, "v"),
                               uses_scan_node(yr_get(node, "obj"), out));
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         return uses_scan_node(yr_get(node, "body"),
                               uses_scan_node(yr_get(node, "iter"), out));
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         return uses_scan_node(yr_get(node, "body"),
                               uses_scan_node(yr_get(node, "hi"),
                                              uses_scan_node(
                                                  yr_get(node, "lo"), out)));
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         return uses_scan_node(yr_get(node, "body"),
                               uses_scan_node(yr_get(node, "step"),
                                              uses_scan_node(
@@ -3245,12 +3246,12 @@ Yv *uses_scan_node(Yv *node, Yv *out) {
                                                  uses_scan_node(
                                                      yr_get(node, "init"),
                                                      out))));
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         return uses_scan_node(yr_get(node, "v"),
                               uses_scan_node(yr_get(node, "hi"),
                                              uses_scan_node(yr_get(node, "lo"),
                                                             uses_scan_node(yr_get(node, "arr"), out))));
-    } else if (ys_eq_lit(k, "rectest") || ys_eq_lit(k, "narrow") || ys_eq_lit(k, "matchend")) {
+    } else if (yv_l(k) == K_rectest || yv_l(k) == K_narrow || yv_l(k) == K_matchend) {
         return uses_scan_node(yr_get(node, "e"), out);
     } else {
         return out;
@@ -3273,14 +3274,14 @@ Yv *collect_from_block(Yv *stmts, Yv *out) {
 
 Yv *collect_from_node(Yv *node, Yv *out) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "decl")) {
+    if (yv_l(k) == K_decl) {
         if (ys_eq_lit(yr_get(node, "kind"), "def")) {
             out = ya_push(out, yr(2, "name", yr_get(node, "name"), "func",
                                   yr_get(node, "v")));
             out = collect_from_node(yr_get(node, "v"), out);
             ;
         } else {
-            if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "func")) {
+            if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_func) {
                 out = ya_push(out, yr(2, "name", yr_get(node, "name"), "func",
                                       yr_get(node, "v")));
                 ;
@@ -3290,10 +3291,10 @@ Yv *collect_from_node(Yv *node, Yv *out) {
             out = collect_from_node(yr_get(node, "v"), out);
             ;
         }
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         out = collect_from_block(yr_get(yr_get(node, "body"), "stmts"), out);
         ;
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         out = collect_from_node(yr_get(node, "then"), out);
         if (yv_b(yr_get(node, "has_else"))) {
             out = collect_from_node(yr_get(node, "els"), out);
@@ -3302,21 +3303,21 @@ Yv *collect_from_node(Yv *node, Yv *out) {
             ;
         }
         ;
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         out = collect_from_node(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         out = collect_from_node(yr_get(node, "init"), out);
         out = collect_from_node(yr_get(node, "body"), out);
         out = collect_from_node(yr_get(node, "step"), out);
         ;
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         out = collect_from_node(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         out = collect_from_node(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         out = collect_from_block(yr_get(node, "stmts"), out);
         ;
     } else {
@@ -3387,81 +3388,81 @@ int is_intrinsic_name(Yv *n) {
  * only the reads inside nested functions count (see box_names). */
 Yv *fv_walk(Yv *node, Yv *out, int collect) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "id")) {
+    if (yv_l(k) == K_id) {
         if (collect) { out = ya_push(out, yr_get(node, "v")); ; } else { ; };
         ;
-    } else if (ys_eq_lit(k, "un")) {
+    } else if (yv_l(k) == K_un) {
         out = fv_walk(yr_get(node, "e"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "addr")) {
+    } else if (yv_l(k) == K_addr) {
         out = fv_walk(yr_get(node, "e"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "deref")) {
+    } else if (yv_l(k) == K_deref) {
         out = fv_walk(yr_get(node, "e"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "ret")) {
+    } else if (yv_l(k) == K_ret) {
         out = fv_walk(yr_get(node, "e"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         out = fv_walk(yr_get(node, "l"), out, collect);
         out = fv_walk(yr_get(node, "r"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         out = fv_walk_list(yr_get(node, "elems"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "rec")) {
+    } else if (yv_l(k) == K_rec) {
         out = fv_walk_list(yr_get(node, "vals"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_map) {
         out = fv_walk_list(yr_get(node, "vals"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "arrrep")) {
+    } else if (yv_l(k) == K_arrrep) {
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         out = fv_walk(yr_get(node, "callee"), out, collect);
         out = fv_walk_list(yr_get(node, "args"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         out = fv_walk(yr_get(node, "arr"), out, collect);
         out = fv_walk(yr_get(node, "idx"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         out = fv_walk(yr_get(node, "arr"), out, collect);
         out = fv_walk(yr_get(node, "lo"), out, collect);
         out = fv_walk(yr_get(node, "hi"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "idxassign")) {
+    } else if (yv_l(k) == K_idxassign) {
         out = fv_walk(yr_get(node, "arr"), out, collect);
         out = fv_walk(yr_get(node, "idx"), out, collect);
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         out = fv_walk(yr_get(node, "obj"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         out = fv_walk(yr_get(node, "obj"), out, collect);
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         out = fv_walk(yr_get(node, "p"), out, collect);
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_assign) {
         if (collect) { out = ya_push(out, yr_get(node, "name")); ; } else { ; };
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         out = fv_walk(yr_get(node, "tgt"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         out = fv_walk(yr_get(node, "tgt"), out, collect);
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         out = fv_walk(yr_get(node, "cond"), out, collect);
         out = fv_walk(yr_get(node, "then"), out, collect);
         if (yv_b(yr_get(node, "has_else"))) {
@@ -3471,37 +3472,37 @@ Yv *fv_walk(Yv *node, Yv *out, int collect) {
             ;
         }
         ;
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         out = fv_walk(yr_get(node, "cond"), out, collect);
         out = fv_walk(yr_get(node, "body"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         out = fv_walk(yr_get(node, "init"), out, collect);
         out = fv_walk(yr_get(node, "cond"), out, collect);
         out = fv_walk(yr_get(node, "step"), out, collect);
         out = fv_walk(yr_get(node, "body"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         out = fv_walk(yr_get(node, "iter"), out, collect);
         out = fv_walk(yr_get(node, "body"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         out = fv_walk(yr_get(node, "lo"), out, collect);
         out = fv_walk(yr_get(node, "hi"), out, collect);
         out = fv_walk(yr_get(node, "body"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         out = fv_walk_list(yr_get(node, "stmts"), out, collect);
         ;
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         out = fv_walk(yr_get(node, "body"), out, 1);
         ;
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         out = fv_walk(yr_get(node, "arr"), out, collect);
         out = fv_walk(yr_get(node, "lo"), out, collect);
         out = fv_walk(yr_get(node, "hi"), out, collect);
         out = fv_walk(yr_get(node, "v"), out, collect);
-    } else if (ys_eq_lit(k, "rectest") || ys_eq_lit(k, "narrow") || ys_eq_lit(k, "matchend")) {
+    } else if (yv_l(k) == K_rectest || yv_l(k) == K_narrow || yv_l(k) == K_matchend) {
         out = fv_walk(yr_get(node, "e"), out, collect);
     } else {
         ;
@@ -3524,18 +3525,18 @@ Yv *fv_ids(Yv *node, Yv *out) {
 
 Yv *fv_binds(Yv *node, Yv *out) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "decl")) {
+    if (yv_l(k) == K_decl) {
         out = ya_push(out, yr_get(node, "name"));
         out = fv_binds(yr_get(node, "v"), out);
         ;
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         out = fv_bind_params(yr_get(node, "params"), out);
         out = fv_binds(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         out = fv_binds_list(yr_get(node, "stmts"), out);
         ;
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         out = fv_binds(yr_get(node, "cond"), out);
         out = fv_binds(yr_get(node, "then"), out);
         if (yv_b(yr_get(node, "has_else"))) {
@@ -3545,95 +3546,95 @@ Yv *fv_binds(Yv *node, Yv *out) {
             ;
         }
         ;
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         out = fv_binds(yr_get(node, "cond"), out);
         out = fv_binds(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         out = fv_binds(yr_get(node, "init"), out);
         out = fv_binds(yr_get(node, "cond"), out);
         out = fv_binds(yr_get(node, "step"), out);
         out = fv_binds(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         out = ya_push(out, yr_get(node, "name"));
         out = fv_binds(yr_get(node, "iter"), out);
         out = fv_binds(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         out = ya_push(out, yr_get(node, "name"));
         out = fv_binds(yr_get(node, "lo"), out);
         out = fv_binds(yr_get(node, "hi"), out);
         out = fv_binds(yr_get(node, "body"), out);
         ;
-    } else if (ys_eq_lit(k, "ret")) {
+    } else if (yv_l(k) == K_ret) {
         out = fv_binds(yr_get(node, "e"), out);
         ;
-    } else if (ys_eq_lit(k, "un")) {
+    } else if (yv_l(k) == K_un) {
         out = fv_binds(yr_get(node, "e"), out);
         ;
-    } else if (ys_eq_lit(k, "addr")) {
+    } else if (yv_l(k) == K_addr) {
         out = fv_binds(yr_get(node, "e"), out);
         ;
-    } else if (ys_eq_lit(k, "deref")) {
+    } else if (yv_l(k) == K_deref) {
         out = fv_binds(yr_get(node, "e"), out);
         ;
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         out = fv_binds(yr_get(node, "l"), out);
         out = fv_binds(yr_get(node, "r"), out);
         ;
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         out = fv_binds_list(yr_get(node, "elems"), out);
         ;
-    } else if (ys_eq_lit(k, "rec")) {
+    } else if (yv_l(k) == K_rec) {
         out = fv_binds_list(yr_get(node, "vals"), out);
         ;
-    } else if (ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_map) {
         out = fv_binds_list(yr_get(node, "vals"), out);
         ;
-    } else if (ys_eq_lit(k, "arrrep")) {
+    } else if (yv_l(k) == K_arrrep) {
         out = fv_binds(yr_get(node, "v"), out);
         ;
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         out = fv_binds(yr_get(node, "callee"), out);
         out = fv_binds_list(yr_get(node, "args"), out);
         ;
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         out = fv_binds(yr_get(node, "arr"), out);
         out = fv_binds(yr_get(node, "idx"), out);
         ;
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         out = fv_binds(yr_get(node, "arr"), out);
         out = fv_binds(yr_get(node, "lo"), out);
         out = fv_binds(yr_get(node, "hi"), out);
         ;
-    } else if (ys_eq_lit(k, "idxassign")) {
+    } else if (yv_l(k) == K_idxassign) {
         out = fv_binds(yr_get(node, "arr"), out);
         out = fv_binds(yr_get(node, "idx"), out);
         out = fv_binds(yr_get(node, "v"), out);
         ;
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         out = fv_binds(yr_get(node, "obj"), out);
         ;
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         out = fv_binds(yr_get(node, "obj"), out);
         out = fv_binds(yr_get(node, "v"), out);
         ;
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         out = fv_binds(yr_get(node, "p"), out);
         out = fv_binds(yr_get(node, "v"), out);
         ;
-    } else if (ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_assign) {
         out = fv_binds(yr_get(node, "v"), out);
         ;
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         out = fv_binds(yr_get(node, "tgt"), out);
         ;
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         out = fv_binds(yr_get(node, "tgt"), out);
         out = fv_binds(yr_get(node, "v"), out);
         ;
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         out = fv_binds(yr_get(node, "arr"), out);
         out = fv_binds(yr_get(node, "lo"), out);
         out = fv_binds(yr_get(node, "hi"), out);
@@ -3724,29 +3725,29 @@ Yv *fns_kind(Yv *label) {
 
 Yv *gen(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "num")) {
+    if (yv_l(k) == K_num) {
         return gen_lit(st, node);
-    } else if (ys_eq_lit(k, "bool")) {
+    } else if (yv_l(k) == K_bool) {
         if (ys_eq_lit(yr_get(node, "v"), "true")) {
             return emit(st, ys("    mov $1, %rax"));
         } else {
             return emit(st, ys("    xor %eax, %eax"));
         }
-    } else if (ys_eq_lit(k, "str")) {
+    } else if (yv_l(k) == K_str) {
         return gen_str_const(st, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "bstr")) {
+    } else if (yv_l(k) == K_bstr) {
         return gen_bstr(st, node);
-    } else if (ys_eq_lit(k, "void")) {
+    } else if (yv_l(k) == K_void) {
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(k, "id")) {
+    } else if (yv_l(k) == K_id) {
         return gen_id(st, node);
-    } else if (ys_eq_lit(k, "un")) {
+    } else if (yv_l(k) == K_un) {
         return gen_un(st, node);
-    } else if (ys_eq_lit(k, "addr")) {
+    } else if (yv_l(k) == K_addr) {
         return gen_addr(st, node);
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         return gen_array(st, node);
-    } else if (ys_eq_lit(k, "deref")) {
+    } else if (yv_l(k) == K_deref) {
         long dw = ptr_width(infer(st, yr_get(node, "e")));
         st = gen(st, yr_get(node, "e"));
         if (dw == 1) {
@@ -3754,86 +3755,86 @@ Yv *gen(Yv *st, Yv *node) {
         } else {
             return emit(st, ys("    mov (%rax), %rax"));
         }
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         return gen_bin(st, node);
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         return gen_call(st, node);
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         return gen_if(st, node);
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         return gen_while(st, node);
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         return gen_for(st, node);
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         return gen_forrange(st, node);
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         return gen_foreach(st, node);
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         return gen_block(st, node);
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return gen_decl(st, node);
-    } else if (ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_assign) {
         return gen_assign(st, node);
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         return gen_incdec(st, node);
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         return gen_opassign(st, node);
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         /* maps scan their keys; strings read a byte; arrays index directly */
         Yv *kbt = infer(st, yr_get(node, "arr"));
-        if (ys_eq_lit(yr_get(kbt, "k"), "tmap")) {
+        if (yv_l(yr_get(kbt, "k")) == K_tmap) {
             return gen_map_get(st, node, ys("opt"));
-        } else if (ys_eq_lit(yr_get(kbt, "k"), "tstr")) {
+        } else if (yv_l(yr_get(kbt, "k")) == K_tstr) {
             return gen_byte_at(st, n_call2(ys("byte_at"), yr_get(node, "arr"), yr_get(node, "idx"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))));
         } else {
             return gen_index(st, node);
         }
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         Yv *sbt = infer(st, yr_get(node, "arr"));
-        if (ys_eq_lit(yr_get(sbt, "k"), "tstr")) { return gen_str_slice(st, node); } else { return gen_slice(st, node); }
-    } else if (ys_eq_lit(k, "char")) {
-        return gen_lit(st, yr(4, "k", ys("num"), "v", yr_get(node, "v"), "line", yr_get(node, "line"), "col", yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "rectest")) {
+        if (yv_l(yr_get(sbt, "k")) == K_tstr) { return gen_str_slice(st, node); } else { return gen_slice(st, node); }
+    } else if (yv_l(k) == K_char) {
+        return gen_lit(st, yr(4, "k", yv_long(K_num), "v", yr_get(node, "v"), "line", yr_get(node, "line"), "col", yr_get(node, "col")));
+    } else if (yv_l(k) == K_rectest) {
         return gen_rectest(st, node);
-    } else if (ys_eq_lit(k, "narrow")) {
+    } else if (yv_l(k) == K_narrow) {
         /* the value, converted into the narrowed type's layout (a match
          * arm's binding: rectest checked its tag) */
         Yv *src = infer(st, yr_get(node, "e"));
         st = gen(st, yr_get(node, "e"));
         return gen_convert(st, src, narrow_type(src, yr_get(node, "typ")), 0);
-    } else if (ys_eq_lit(k, "matchend")) {
+    } else if (yv_l(k) == K_matchend) {
         /* unreachable when the checker accepted the match */
         st = emit(st, ys("    call y_match_fail"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         return gen_sliceassign(st, node);
-    } else if (ys_eq_lit(k, "idxassign")) {
+    } else if (yv_l(k) == K_idxassign) {
         Yv *kbt = infer(st, yr_get(node, "arr"));
-        if (ys_eq_lit(yr_get(kbt, "k"), "tmap")) { return gen_map_set(st, node); } else { return gen_idxassign(st, node); }
-    } else if (ys_eq_lit(k, "dotassign")) {
+        if (yv_l(yr_get(kbt, "k")) == K_tmap) { return gen_map_set(st, node); } else { return gen_idxassign(st, node); }
+    } else if (yv_l(k) == K_dotassign) {
         return gen_dotassign(st, node);
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         return gen_dot(st, node);
-    } else if (ys_eq_lit(k, "rec")) {
+    } else if (yv_l(k) == K_rec) {
         /* record literal anywhere (let/call-arg): heap address in %rax. */
-        return gen_reclit(st, node, yr(1, "k", ys("tnone")));
-    } else if (ys_eq_lit(k, "map")) {
+        return gen_reclit(st, node, yr(1, "k", yv_long(K_tnone)));
+    } else if (yv_l(k) == K_map) {
         /* map literal: the {keys, vals, boxes} record, heap address in %rax. */
         return gen_maplit(st, node);
-    } else if (ys_eq_lit(k, "arrrep")) {
+    } else if (yv_l(k) == K_arrrep) {
         /* [v; n] anywhere (let/assign/call-arg): heap address in %rax. */
         return gen_arrrep(st, node);
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         /* Anonymous function literal in expression position. */
         return gen_func_literal(st, node);
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         return gen_store(st, node);
-    } else if (ys_eq_lit(k, "ret")) {
+    } else if (yv_l(k) == K_ret) {
         st = gen_as(st, yr_get(node, "e"), cur_fn_ret(st));
         return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
     } else {
         /* Unreachable: the checker rejects everything else. */
-        return emit(st, ys_cat(ys_cat(ys("    # INTERNAL: unhandled "), k),
+        return emit(st, ys_cat(ys_cat(ys("    # INTERNAL: unhandled "), ktag(yv_l(k))),
                               ys(" (checker drift)")));
     }
 }
@@ -3849,15 +3850,15 @@ Yv *gen_bstr(Yv *st, Yv *node) {
     long bi = 0;
     long bn = yv_len(bv);
     while (bi < bn) {
-        Yv *bnum = yr(4, "k", ys("num"), "v",
+        Yv *bnum = yr(4, "k", yv_long(K_num), "v",
                        ys_long(ys_ord(ys_slice(bv, bi, bi + 1))),
                        "line", yr_get(node, "line"), "col", yr_get(node, "col"));
         elems = ya_push(elems, bnum);
         bi = bi + 1;
     }
-    Yv *barr = yr(4, "k", ys("array"), "elems", elems, "line", yr_get(node, "line"),
+    Yv *barr = yr(4, "k", yv_long(K_array), "elems", elems, "line", yr_get(node, "line"),
                   "col", yr_get(node, "col"));
-    return gen_array_esz(st, barr, 1L, yr(1, "k", ys("tnone")));
+    return gen_array_esz(st, barr, 1L, yr(1, "k", yv_long(K_tnone)));
 }
 
 Yv *gen_str_const(Yv *st, Yv *s) {
@@ -3915,7 +3916,7 @@ Yv *gen_id(Yv *st, Yv *node) {
         } else if (ys_eq_lit(yr_get(e, "kind"), "global")) {
             /* An appendable global gives up its buffer on every read
              * (see gen_sappend). */
-            if (ys_eq_lit(yr_get(yr_get(e, "typ"), "k"), "tstr")) {
+            if (yv_l(yr_get(yr_get(e, "typ"), "k")) == K_tstr) {
                 Yv *oe = env_find(st, ys_cat(yr_get(node, "v"), ys("#o")));
                 if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
                     ;
@@ -4020,7 +4021,7 @@ Yv *box_capture(Yv *st, Yv *name) {
         ys_eq_lit(yr_get(e, "kind"), "capture")) {
         return st;
     } else {
-        st = gen_id(st, yr(4, "k", ys("id"), "v", name, "line", yv_long(0),
+        st = gen_id(st, yr(4, "k", yv_long(K_id), "v", name, "line", yv_long(0),
                            "col", yv_long(0)));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    mov $8, %rdi"));
@@ -4110,27 +4111,27 @@ Yv *box_bound(Yv *st, Yv *name) {
 Yv *app_walk(Yv *node, Yv *out, int deep) {
     Yv *k = yr_get(node, "k");
     /* Most common kinds first: a leaf costs one compare, not the chain. */
-    if (ys_eq_lit(k, "id") || ys_eq_lit(k, "num") || ys_eq_lit(k, "str")) {
+    if (yv_l(k) == K_id || yv_l(k) == K_num || yv_l(k) == K_str) {
         ;
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         out = app_walk(yr_get(node, "callee"), out, deep);
         out = app_walk_list(yr_get(node, "args"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         out = app_walk(yr_get(node, "obj"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         out = app_walk(yr_get(node, "l"), out, deep);
         out = app_walk(yr_get(node, "r"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         out = app_walk_list(yr_get(node, "stmts"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "arrrep") || ys_eq_lit(k, "decl") ||
-               ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_arrrep || yv_l(k) == K_decl ||
+               yv_l(k) == K_assign) {
         out = app_walk(yr_get(node, "v"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         out = app_walk(yr_get(node, "cond"), out, deep);
         out = app_walk(yr_get(node, "then"), out, deep);
         if (yv_b(yr_get(node, "has_else"))) {
@@ -4140,10 +4141,10 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
             ;
         }
         ;
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         Yv *tg = yr_get(node, "tgt");
         if (ys_eq_lit(yr_get(node, "op"), "+") &&
-            ys_eq_lit(yr_get(tg, "k"), "id")) {
+            yv_l(yr_get(tg, "k")) == K_id) {
             out = ya_push(out, yr_get(tg, "v"));
             ;
         } else {
@@ -4152,13 +4153,13 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
         out = app_walk(tg, out, deep);
         out = app_walk(yr_get(node, "v"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         out = app_walk(yr_get(node, "arr"), out, deep);
         out = app_walk(yr_get(node, "idx"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "addr")) {
+    } else if (yv_l(k) == K_addr) {
         Yv *ae = yr_get(node, "e");
-        if (ys_eq_lit(yr_get(ae, "k"), "id")) {
+        if (yv_l(yr_get(ae, "k")) == K_id) {
             out = ya_push(out, ys_cat(ys("&"), yr_get(ae, "v")));
             ;
         } else {
@@ -4166,58 +4167,58 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
         }
         out = app_walk(ae, out, deep);
         ;
-    } else if (ys_eq_lit(k, "un") || ys_eq_lit(k, "deref") ||
-               ys_eq_lit(k, "ret") || ys_eq_lit(k, "rectest") ||
-               ys_eq_lit(k, "narrow") || ys_eq_lit(k, "matchend")) {
+    } else if (yv_l(k) == K_un || yv_l(k) == K_deref ||
+               yv_l(k) == K_ret || yv_l(k) == K_rectest ||
+               yv_l(k) == K_narrow || yv_l(k) == K_matchend) {
         out = app_walk(yr_get(node, "e"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         out = app_walk_list(yr_get(node, "elems"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "rec") || ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_rec || yv_l(k) == K_map) {
         out = app_walk_list(yr_get(node, "vals"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         out = app_walk(yr_get(node, "arr"), out, deep);
         out = app_walk(yr_get(node, "lo"), out, deep);
         out = app_walk(yr_get(node, "hi"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "idxassign")) {
+    } else if (yv_l(k) == K_idxassign) {
         out = app_walk(yr_get(node, "arr"), out, deep);
         out = app_walk(yr_get(node, "idx"), out, deep);
         out = app_walk(yr_get(node, "v"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         out = app_walk(yr_get(node, "obj"), out, deep);
         out = app_walk(yr_get(node, "v"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         out = app_walk(yr_get(node, "p"), out, deep);
         out = app_walk(yr_get(node, "v"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         out = app_walk(yr_get(node, "tgt"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         out = app_walk(yr_get(node, "cond"), out, deep);
         out = app_walk(yr_get(node, "body"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         out = app_walk(yr_get(node, "init"), out, deep);
         out = app_walk(yr_get(node, "cond"), out, deep);
         out = app_walk(yr_get(node, "step"), out, deep);
         out = app_walk(yr_get(node, "body"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         out = app_walk(yr_get(node, "iter"), out, deep);
         out = app_walk(yr_get(node, "body"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         out = app_walk(yr_get(node, "lo"), out, deep);
         out = app_walk(yr_get(node, "hi"), out, deep);
         out = app_walk(yr_get(node, "body"), out, deep);
         ;
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         if (deep) {
             out = app_walk(yr_get(node, "body"), out, deep);
             ;
@@ -4225,7 +4226,7 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
             ;
         }
         ;
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         out = app_walk(yr_get(node, "arr"), out, deep);
         out = app_walk(yr_get(node, "lo"), out, deep);
         out = app_walk(yr_get(node, "hi"), out, deep);
@@ -4314,9 +4315,9 @@ Yv *bind_own(Yv *st, Yv *name, Yv *t) {
  * (an "own" local, or a global with a companion cell) goes through
  * gen_sappend (the checker made x a str); anything else is plain gen. */
 Yv *gen_stmt(Yv *st, Yv *node) {
-    if (ys_eq_lit(yr_get(node, "k"), "opassign") &&
+    if (yv_l(yr_get(node, "k")) == K_opassign &&
         ys_eq_lit(yr_get(node, "op"), "+") &&
-        ys_eq_lit(yr_get(yr_get(node, "tgt"), "k"), "id")) {
+        yv_l(yr_get(yr_get(node, "tgt"), "k")) == K_id) {
         Yv *tgt = yr_get(node, "tgt");
         Yv *e = env_find(st, yr_get(tgt, "v"));
         if (ys_eq_lit(yr_get(e, "kind"), "own")) {
@@ -4325,7 +4326,7 @@ Yv *gen_stmt(Yv *st, Yv *node) {
                 st, yr_get(node, "v"), ys_cat(ys_long(off), ys("(%rbp)")),
                 ys_cat(ys_long(off - 8), ys("(%rbp)")));
         } else if (ys_eq_lit(yr_get(e, "kind"), "global") &&
-                   ys_eq_lit(yr_get(yr_get(e, "typ"), "k"), "tstr")) {
+                   yv_l(yr_get(yr_get(e, "typ"), "k")) == K_tstr) {
             Yv *oe = env_find(st, ys_cat(yr_get(tgt, "v"), ys("#o")));
             if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
                 return gen(st, node);
@@ -4369,7 +4370,7 @@ Yv *gen_sappend(Yv *st, Yv *v, Yv *var, Yv *cell) {
 /* A loop body: its value is dropped, so a block body's last statement is
  * a statement too (gen_stmt). */
 Yv *gen_discard(Yv *st, Yv *node) {
-    if (ys_eq_lit(yr_get(node, "k"), "block")) {
+    if (yv_l(yr_get(node, "k")) == K_block) {
         return gen_block_as(st, node, 1);
     }
     return gen_stmt(st, node);
@@ -4384,7 +4385,7 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
     long i = 0;
     while (i < yv_len(gl)) {
         Yv *ge = ya_get(gl, i);
-        if (ys_eq_lit(yr_get(yr_get(ge, "typ"), "k"), "tstr")) {
+        if (yv_l(yr_get(yr_get(ge, "typ"), "k")) == K_tstr) {
             anystr = 1;
             ;
         } else {
@@ -4393,7 +4394,7 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
         i = i + 1;
     }
     if (anystr) {
-        Yv *block = yr(4, "k", ys("block"), "stmts", stmts, "line",
+        Yv *block = yr(4, "k", yv_long(K_block), "stmts", stmts, "line",
                        yv_long(1), "col", yv_long(1));
         Yv *names = app_names(block, 1, yav(0));
         Yv *out = yav(0);
@@ -4405,13 +4406,13 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
         j = 0;
         while (j < yv_len(gl)) {
             Yv *g2 = ya_get(gl, j);
-            if (ys_eq_lit(yr_get(yr_get(g2, "typ"), "k"), "tstr") &&
+            if (yv_l(yr_get(yr_get(g2, "typ"), "k")) == K_tstr &&
                 name_in(names, yr_get(g2, "name"))) {
                 Yv *oname = ys_cat(yr_get(g2, "name"), ys("#o"));
                 Yv *olabel =
                     ys_cat(ys("ygo_"), ys_slice_from(yr_get(g2, "label"), 3));
                 out = ya_push(out, yr(3, "name", oname, "label", olabel,
-                                      "typ", yr(1, "k", ys("tnone"))));
+                                      "typ", yr(1, "k", yv_long(K_tnone))));
                 ;
             } else {
                 ;
@@ -4462,7 +4463,7 @@ Yv *gen_slice(Yv *st, Yv *node) {
     long slesz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
     st = gen(st, yr_get(node, "arr"));
     st = emit(st, ys("    push %rax"));
-    if (ys_eq_lit(yr_get(lo, "k"), "void")) {
+    if (yv_l(yr_get(lo, "k")) == K_void) {
         st = emit(st, ys("    xor %eax, %eax"));
         ;
     } else {
@@ -4470,7 +4471,7 @@ Yv *gen_slice(Yv *st, Yv *node) {
         ;
     }
     st = emit(st, ys("    push %rax"));
-    if (ys_eq_lit(yr_get(hi, "k"), "void")) {
+    if (yv_l(yr_get(hi, "k")) == K_void) {
         /* default: the array's length (the header keeps it in slot 0);
          * the array pointer sits one slot below the pushed lo. */
         st = emit(st, ys("    mov 8(%rsp), %rax"));
@@ -4494,13 +4495,13 @@ Yv *gen_str_slice(Yv *st, Yv *node) {
     Yv *hi = yr_get(node, "hi");
     st = gen(st, yr_get(node, "arr"));
     st = emit(st, ys("    push %rax"));
-    if (ys_eq_lit(yr_get(lo, "k"), "void")) {
+    if (yv_l(yr_get(lo, "k")) == K_void) {
         st = emit(st, ys("    xor %eax, %eax"));
     } else {
         st = gen(st, lo);
     }
     st = emit(st, ys("    push %rax"));
-    if (ys_eq_lit(yr_get(hi, "k"), "void")) {
+    if (yv_l(yr_get(hi, "k")) == K_void) {
         st = emit(st, ys("    mov 8(%rsp), %rax"));
         st = emit(st, ys("    mov (%rax), %rax"));
     } else {
@@ -4519,13 +4520,13 @@ Yv *gen_sliceassign(Yv *st, Yv *node) {
     long esz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
     st = gen(st, yr_get(node, "arr"));
     st = emit(st, ys("    push %rax"));
-    if (ys_eq_lit(yr_get(lo, "k"), "void")) {
+    if (yv_l(yr_get(lo, "k")) == K_void) {
         st = emit(st, ys("    xor %eax, %eax"));
     } else {
         st = gen(st, lo);
     }
     st = emit(st, ys("    push %rax"));
-    if (ys_eq_lit(yr_get(hi, "k"), "void")) {
+    if (yv_l(yr_get(hi, "k")) == K_void) {
         st = emit(st, ys("    mov 8(%rsp), %rax"));
         st = emit(st, ys("    mov (%rax), %rax"));
     } else {
@@ -4548,7 +4549,7 @@ Yv *gen_rectest(Yv *st, Yv *node) {
     Yv *s = infer(st, yr_get(node, "e"));
     Yv *sk = yr_get(s, "k");
     st = gen(st, yr_get(node, "e"));
-    if (ys_eq_lit(sk, "tunion")) {
+    if (yv_l(sk) == K_tunion) {
         return gen_tag_in(st, rectest_members(s, yr_get(node, "typ")), s);
     } else {
         // a record: the checker took the pattern as its own type
@@ -4561,13 +4562,13 @@ Yv *gen_rectest(Yv *st, Yv *node) {
 // a record pattern.
 Yv *rectest_members(Yv *s, Yv *t) {
     Yv *tk = yr_get(t, "k");
-    if (ys_eq_lit(tk, "tpat")) {
+    if (yv_l(tk) == K_tpat) {
         return pat_members(s, t);
     } else {
         Yv *out = yav(0);
         Yv *m = union_member(s, t);
         Yv *mk = yr_get(m, "k");
-        if (!ys_eq_lit(mk, "tnone")) {
+        if (yv_l(mk) != K_tnone) {
             out = ya_push(out, m);
         }
         return out;
@@ -4656,7 +4657,7 @@ Yv *gen_un(Yv *st, Yv *node) {
     Yv *ut = infer(st, yr_get(node, "e"));
     st = gen(st, yr_get(node, "e"));
     if (ys_eq_lit(yr_get(node, "op"), "-")) {
-        if (ys_eq_lit(yr_get(ut, "k"), "tfloat")) {
+        if (yv_l(yr_get(ut, "k")) == K_tfloat) {
             /* flip the sign bit: -0.0 is a negative zero, -nan a nan */
             st = emit(st, ys("    mov $1, %rcx"));
             st = emit(st, ys("    shl $63, %rcx"));
@@ -4673,7 +4674,7 @@ Yv *gen_un(Yv *st, Yv *node) {
 
 Yv *gen_addr(Yv *st, Yv *node) {
     /* Checker guarantees plain ids, or id-rooted index into an array. */
-    if (ys_eq_lit(yr_get(yr_get(node, "e"), "k"), "index")) {
+    if (yv_l(yr_get(yr_get(node, "e"), "k")) == K_index) {
         return gen_elem_addr(st, yr_get(node, "e"));
     } else {
         Yv *e = env_find(st, yr_get(yr_get(node, "e"), "v"));
@@ -4725,7 +4726,7 @@ Yv *gen_elem_addr(Yv *st, Yv *node) {
     st = emit(st, ys("    pop %rax"));
     st = emit(st, ys("    test %rcx, %rcx"));
     st = emit(st, ys("    js y_oob"));
-    if (ys_eq_lit(yr_get(bt, "k"), "tarrfix")) {
+    if (yv_l(yr_get(bt, "k")) == K_tarrfix) {
         st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
                                     ys_long(yv_l(yr_get(bt, "n")))),
                              ys(", %rcx")));
@@ -4834,19 +4835,19 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
 Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     /* NOTE: y_long_tostr / y_bool_tostr take ONE STACK ARG (push; call;
      * add $8) — gen_tostring's pattern. y_str_cat takes two stack args. */
-    if (ys_eq_lit(yr_get(lt, "k"), "tarr") ||
-        ys_eq_lit(yr_get(lt, "k"), "tarrfix") ||
-        ys_eq_lit(yr_get(rt, "k"), "tarr") ||
-        ys_eq_lit(yr_get(rt, "k"), "tarrfix")) {
+    if (yv_l(yr_get(lt, "k")) == K_tarr ||
+        yv_l(yr_get(lt, "k")) == K_tarrfix ||
+        yv_l(yr_get(rt, "k")) == K_tarr ||
+        yv_l(yr_get(rt, "k")) == K_tarrfix) {
         return gen_cat_arr(st, node, lt, rt);
     }
-    if (ys_eq_lit(yr_get(lt, "k"), "tstr")) {
-        if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
+    if (yv_l(yr_get(lt, "k")) == K_tstr) {
+        if (yv_l(yr_get(rt, "k")) == K_tstr) {
             st = gen_push_args(st, yav(2, yr_get(node, "l"),
                                       yr_get(node, "r")));
             st = emit(st, ys("    call y_str_cat"));
             st = emit(st, ys("    add $16, %rsp"));
-        } else if (ys_eq_lit(yr_get(rt, "k"), "tlong")) {
+        } else if (yv_l(yr_get(rt, "k")) == K_tlong) {
             st = gen(st, yr_get(node, "l"));
             st = emit(st, ys("    push %rax"));
             st = gen(st, yr_get(node, "r"));
@@ -4856,7 +4857,7 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_str_cat"));
             st = emit(st, ys("    add $16, %rsp"));
-        } else if (ys_eq_lit(yr_get(rt, "k"), "tbool")) {
+        } else if (yv_l(yr_get(rt, "k")) == K_tbool) {
             st = gen(st, yr_get(node, "l"));
             st = emit(st, ys("    push %rax"));
             st = gen(st, yr_get(node, "r"));
@@ -4866,7 +4867,7 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_str_cat"));
             st = emit(st, ys("    add $16, %rsp"));
-        } else if (ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
+        } else if (yv_l(yr_get(rt, "k")) == K_tfloat) {
             st = gen(st, yr_get(node, "l"));
             st = emit(st, ys("    push %rax"));
             st = gen(st, yr_get(node, "r"));
@@ -4891,8 +4892,8 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     } else {
         ;
     }
-    if (!ys_eq_lit(yr_get(lt, "k"), "tstr")) {
-        if (ys_eq_lit(yr_get(lt, "k"), "tlong")) {
+    if (yv_l(yr_get(lt, "k")) != K_tstr) {
+        if (yv_l(yr_get(lt, "k")) == K_tlong) {
             st = gen(st, yr_get(node, "l"));
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_long_tostr"));
@@ -4902,7 +4903,7 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_str_cat"));
             st = emit(st, ys("    add $16, %rsp"));
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tbool")) {
+        } else if (yv_l(yr_get(lt, "k")) == K_tbool) {
             st = gen(st, yr_get(node, "l"));
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_bool_tostr"));
@@ -4912,7 +4913,7 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_str_cat"));
             st = emit(st, ys("    add $16, %rsp"));
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tfloat")) {
+        } else if (yv_l(yr_get(lt, "k")) == K_tfloat) {
             st = gen(st, yr_get(node, "l"));
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_float_tostr"));
@@ -4942,7 +4943,7 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
 Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     Yv *op = yr_get(node, "op");
     st = gen(st, yr_get(node, "l"));
-    if (ys_eq_lit(yr_get(lt, "k"), "tfloat")) {
+    if (yv_l(yr_get(lt, "k")) == K_tfloat) {
         ;
     } else {
         st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
@@ -4951,7 +4952,7 @@ Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     }
     st = emit(st, ys("    push %rax"));
     st = gen(st, yr_get(node, "r"));
-    if (ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
+    if (yv_l(yr_get(rt, "k")) == K_tfloat) {
         ;
     } else {
         st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
@@ -5028,20 +5029,20 @@ Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op) {
  * y_arr_eq_str cores; the others loop here: options and arrays look
  * inside, and floats compare as numbers (0.0 == -0.0). */
 int eq_elem_loop(Yv *t) {
-    return ys_eq_lit(yr_get(t, "k"), "topt") ||
-           ys_eq_lit(yr_get(t, "k"), "tarr") ||
-           ys_eq_lit(yr_get(t, "k"), "tfloat");
+    return yv_l(yr_get(t, "k")) == K_topt ||
+           yv_l(yr_get(t, "k")) == K_tarr ||
+           yv_l(yr_get(t, "k")) == K_tfloat;
 }
 
 /* The left operand pushed, the right one in %rax: pops the left and leaves
  * left == right (0 or 1) in %rax, compared as type t. */
 Yv *gen_eq_vals(Yv *st, Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "topt")) {
+    if (yv_l(yr_get(t, "k")) == K_topt) {
         return gen_eq_opt(st, yr_get(t, "of"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarr) {
         if (eq_elem_loop(yr_get(t, "of"))) {
             return gen_eq_arr_deep(st, yr_get(t, "of"));
-        } else if (ys_eq_lit(yr_get(yr_get(t, "of"), "k"), "tstr")) {
+        } else if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tstr) {
             st = emit(st, ys("    push %rax"));
             st = emit(st, ys("    call y_arr_eq_str"));
             return emit(st, ys("    add $16, %rsp"));
@@ -5054,11 +5055,11 @@ Yv *gen_eq_vals(Yv *st, Yv *t) {
             st = emit(st, ys("    call y_arr_eq"));
             return emit(st, ys("    add $24, %rsp"));
         }
-    } else if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_str_eq"));
         return emit(st, ys("    add $16, %rsp"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         /* as gen_float_bin's == */
         st = emit(st, ys("    movq %rax, %xmm1"));
         st = emit(st, ys("    pop %rax"));
@@ -5164,14 +5165,14 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
     Yv *lt = infer(st, yr_get(node, "l"));
     Yv *rt = infer(st, yr_get(node, "r"));
     if (ys_eq_lit(op, "+") &&
-        (ys_eq_lit(yr_get(lt, "k"), "tstr") ||
-         ys_eq_lit(yr_get(rt, "k"), "tstr"))) {
+        (yv_l(yr_get(lt, "k")) == K_tstr ||
+         yv_l(yr_get(rt, "k")) == K_tstr)) {
         return gen_cat(st, node, lt, rt);
     } else if (ys_eq_lit(op, "+") &&
-               (ys_eq_lit(yr_get(lt, "k"), "tarr") ||
-                ys_eq_lit(yr_get(rt, "k"), "tarr") ||
-                ys_eq_lit(yr_get(lt, "k"), "tarrfix") ||
-                ys_eq_lit(yr_get(rt, "k"), "tarrfix"))) {
+               (yv_l(yr_get(lt, "k")) == K_tarr ||
+                yv_l(yr_get(rt, "k")) == K_tarr ||
+                yv_l(yr_get(lt, "k")) == K_tarrfix ||
+                yv_l(yr_get(rt, "k")) == K_tarrfix)) {
         /* array `+` is the copy-concat form (gen_cat splits off the array
          * case first), not numeric add on the header pointers. */
         return gen_cat(st, node, lt, rt);
@@ -5180,12 +5181,12 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
     } else if (ys_eq_lit(op, "<<") || ys_eq_lit(op, ">>") ||
                ys_eq_lit(op, ">>>")) {
         return gen_shift(st, node, op);
-    } else if (ys_eq_lit(yr_get(lt, "k"), "tfloat") ||
-               ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(lt, "k")) == K_tfloat ||
+               yv_l(yr_get(rt, "k")) == K_tfloat) {
         return gen_float_bin(st, node, lt, rt);
     } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) &&
-               (ys_eq_lit(yr_get(lt, "k"), "tstr") ||
-                ys_eq_lit(yr_get(rt, "k"), "tstr"))) {
+               (yv_l(yr_get(lt, "k")) == K_tstr ||
+                yv_l(yr_get(rt, "k")) == K_tstr)) {
         st = gen_push_args(st, yav(2, yr_get(node, "l"), yr_get(node, "r")));
         st = emit(st, ys("    call y_str_eq"));
         st = emit(st, ys("    add $16, %rsp"));
@@ -5196,27 +5197,27 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         }
     } else if ((ys_eq_lit(op, "<") || ys_eq_lit(op, ">") ||
                 ys_eq_lit(op, "<=") || ys_eq_lit(op, ">=")) &&
-               ys_eq_lit(yr_get(lt, "k"), "tstr")) {
+               yv_l(yr_get(lt, "k")) == K_tstr) {
         /* Lexicographic ordering: y_str_cmp returns the SIGN, so the normal
          * signed setcc forms work on its result against 0. */
         return gen_str_cmp(st, node, op);
     } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) &&
-               (ys_eq_lit(yr_get(lt, "k"), "tarr") ||
-                ys_eq_lit(yr_get(rt, "k"), "tarr"))) {
+               (yv_l(yr_get(lt, "k")) == K_tarr ||
+                yv_l(yr_get(rt, "k")) == K_tarr)) {
         /* Arrays compare STRUCTURALLY (length then elements), matching
          * yv.c's yv_eq for Y_ARR — `arr == []` is an emptiness test, not a
          * pointer comparison. String elements compare by value, and
          * elements that are arrays, options or floats by their own ==
          * (gen_eq_vals). */
-        Yv *elt = yr(1, "k", ys("tunk"));
-        if (ys_eq_lit(yr_get(lt, "k"), "tarr")) {
+        Yv *elt = yr(1, "k", yv_long(K_tunk));
+        if (yv_l(yr_get(lt, "k")) == K_tarr) {
             elt = yr_get(lt, "of");
             ;
         } else {
             ;
         }
-        if (ys_eq_lit(yr_get(elt, "k"), "tunk")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "tarr")) {
+        if (yv_l(yr_get(elt, "k")) == K_tunk) {
+            if (yv_l(yr_get(rt, "k")) == K_tarr) {
                 elt = yr_get(rt, "of");
                 ;
             } else {
@@ -5234,7 +5235,7 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
             ;
         } else {
             st = gen_push_args(st, yav(2, yr_get(node, "l"), yr_get(node, "r")));
-            if (ys_eq_lit(yr_get(elt, "k"), "tstr")) {
+            if (yv_l(yr_get(elt, "k")) == K_tstr) {
                 st = emit(st, ys("    call y_arr_eq_str"));
                 st = emit(st, ys("    add $16, %rsp"));
                 ;
@@ -5255,21 +5256,21 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
             return st;
         }
     } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) &&
-               (ys_eq_lit(yr_get(lt, "k"), "topt") ||
-                ys_eq_lit(yr_get(rt, "k"), "topt")) &&
+               (yv_l(yr_get(lt, "k")) == K_topt ||
+                yv_l(yr_get(rt, "k")) == K_topt) &&
                !is_none_id(yr_get(node, "l")) &&
                !is_none_id(yr_get(node, "r"))) {
         /* Two options compare their payloads (gen_eq_opt); `x == none`
          * stays the one-word test below. */
-        Yv *pt = yr(1, "k", ys("tunk"));
-        if (ys_eq_lit(yr_get(lt, "k"), "topt")) {
+        Yv *pt = yr(1, "k", yv_long(K_tunk));
+        if (yv_l(yr_get(lt, "k")) == K_topt) {
             pt = yr_get(lt, "of");
             ;
         } else {
             ;
         }
-        if (ys_eq_lit(yr_get(pt, "k"), "tunk")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "topt")) {
+        if (yv_l(yr_get(pt, "k")) == K_tunk) {
+            if (yv_l(yr_get(rt, "k")) == K_topt) {
                 pt = yr_get(rt, "of");
                 ;
             } else {
@@ -5423,7 +5424,7 @@ Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
 /* The count of a shift when it is a literal from 0 to 63 (gen_shift), else
  * -1. A radix literal may wrap negative (0xFFFF_FFFF_FFFF_FFFF is -1). */
 long shift_imm(Yv *r) {
-    if (ys_eq_lit(yr_get(r, "k"), "num")) {
+    if (yv_l(yr_get(r, "k")) == K_num) {
         if (lit_is_float(yr_get(r, "v"))) {
             return -1;
         } else {
@@ -5497,11 +5498,11 @@ Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes) {
 Yv *gen_conv(Yv *st, Yv *got, Yv *want) {
     Yv *gk = yr_get(got, "k");
     Yv *wk = yr_get(want, "k");
-    if (ys_eq_lit(wk, "tfloat") &&
-        (ys_eq_lit(gk, "tlong") || ys_eq_lit(gk, "tbyte"))) {
+    if (yv_l(wk) == K_tfloat &&
+        (yv_l(gk) == K_tlong || yv_l(gk) == K_tbyte)) {
         st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
         return emit(st, ys("    movq %xmm0, %rax"));
-    } else if (ys_eq_lit(wk, "tbyte") && ys_eq_lit(gk, "tlong")) {
+    } else if (yv_l(wk) == K_tbyte && yv_l(gk) == K_tlong) {
         return emit(st, ys("    movzbq %al, %rax"));
     } else {
         return st;
@@ -5518,11 +5519,11 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
     Yv *want = unfold(want0);
     Yv *nk = yr_get(node, "k");
     Yv *wk = yr_get(want, "k");
-    if (ys_eq_lit(nk, "rec") &&
-        (ys_eq_lit(wk, "trec") || ys_eq_lit(wk, "tunion"))) {
+    if (yv_l(nk) == K_rec &&
+        (yv_l(wk) == K_trec || yv_l(wk) == K_tunion)) {
         /* want0 as declared: a recursive alias names the descriptor */
         st = gen_reclit(st, node, want0);
-    } else if (ys_eq_lit(wk, "topt") && some_of_lit(node)) {
+    } else if (yv_l(wk) == K_topt && some_of_lit(node)) {
         /* some({...}) where T? is declared: the literal made as T (types.c
          * typeof_want), then boxed */
         st = gen_as(st, ya_get(yr_get(node, "args"), 0), yr_get(want, "of"));
@@ -5530,10 +5531,10 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
     } else {
         st = gen(st, node);
     }
-    if (ys_eq_lit(wk, "tfloat") || ys_eq_lit(wk, "tbyte")) {
+    if (yv_l(wk) == K_tfloat || yv_l(wk) == K_tbyte) {
         return gen_conv(st, infer(st, node), want);
-    } else if ((ys_eq_lit(wk, "trec") || ys_eq_lit(wk, "tunion")) &&
-               !ys_eq_lit(nk, "rec")) {
+    } else if ((yv_l(wk) == K_trec || yv_l(wk) == K_tunion) &&
+               yv_l(nk) != K_rec) {
         /* a record literal is made in the declared layout (gen_reclit) */
         return gen_convert(st, infer(st, node), want0, 1);
     } else {
@@ -5544,23 +5545,23 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
 /* node is `some({...})`: a record literal boxed (an optional argument
  * passed is one, rename.c). */
 int some_of_lit(Yv *node) {
-    if (!ys_eq_lit(yr_get(node, "k"), "call")) {
+    if (yv_l(yr_get(node, "k")) != K_call) {
         return 0;
     }
     Yv *callee = yr_get(node, "callee");
     Yv *args = yr_get(node, "args");
-    if (!ys_eq_lit(yr_get(callee, "k"), "id") || yv_len(args) != 1) {
+    if (yv_l(yr_get(callee, "k")) != K_id || yv_len(args) != 1) {
         return 0;
     }
     return ys_eq_lit(yr_get(callee, "v"), "some") &&
-           ys_eq_lit(yr_get(ya_get(args, 0), "k"), "rec");
+           yv_l(yr_get(ya_get(args, 0), "k")) == K_rec;
 }
 
 /* Every member of union s is one of t's (t a union): s goes into t as it
  * is, with no check. */
 int union_within(Yv *s, Yv *t) {
     Yv *u = unfold(t);
-    if (!ys_eq_lit(yr_get(u, "k"), "tunion")) {
+    if (yv_l(yr_get(u, "k")) != K_tunion) {
         return 0;
     }
     if (teq(unfold(s), u)) {
@@ -5569,7 +5570,7 @@ int union_within(Yv *s, Yv *t) {
     Yv *ss = union_parts(unfold(s));
     long i = 0;
     while (i < yv_len(ss)) {
-        if (ys_eq_lit(yr_get(union_member(u, ya_get(ss, i)), "k"), "tnone")) {
+        if (yv_l(yr_get(union_member(u, ya_get(ss, i)), "k")) == K_tnone) {
             return 0;
         }
         i = i + 1;
@@ -5584,7 +5585,7 @@ Yv *cast_members(Yv *s, Yv *t) {
     Yv *out = yav(0);
     Yv *ts = yav(0);
     Yv *su = unfold(s);
-    if (ys_eq_lit(yr_get(unfold(t), "k"), "tunion")) {
+    if (yv_l(yr_get(unfold(t), "k")) == K_tunion) {
         ts = union_parts(unfold(t));
     } else {
         ts = ya_push(ts, t);
@@ -5592,7 +5593,7 @@ Yv *cast_members(Yv *s, Yv *t) {
     long i = 0;
     while (i < yv_len(ts)) {
         Yv *m = union_member(su, ya_get(ts, i));
-        if (!ys_eq_lit(yr_get(m, "k"), "tnone")) {
+        if (yv_l(yr_get(m, "k")) != K_tnone) {
             out = ya_push(out, m);
         }
         i = i + 1;
@@ -5627,8 +5628,8 @@ Yv *gen_cast_check(Yv *st, Yv *ts, Yv *u) {
 Yv *cur_fn_type(Yv *st) {
     Yv *env = yr_get(st, "env");
     long i = yv_len(env) - 1;
-    Yv *ft = yr(3, "k", ys("tfunc"), "args", yav(0),
-                "ret", yr(1, "k", ys("tunk")));
+    Yv *ft = yr(3, "k", yv_long(K_tfunc), "args", yav(0),
+                "ret", yr(1, "k", yv_long(K_tunk)));
     int looking = 1;
     while (looking && i >= 0) {
         Yv *e = ya_get(env, i);
@@ -5651,7 +5652,7 @@ Yv *cur_fn_ret(Yv *st) {
 /* Parameter types of a function type (none for anything else). */
 Yv *fn_args_of(Yv *t) {
     Yv *none = yav(0);
-    if (ys_eq_lit(yr_get(t, "k"), "tfunc")) {
+    if (yv_l(yr_get(t, "k")) == K_tfunc) {
         return yr_get(t, "args");
     } else {
         return none;
@@ -5661,12 +5662,12 @@ Yv *fn_args_of(Yv *t) {
 /* Element type of an array type (tnone for anything else). */
 Yv *arr_elem_type(Yv *t) {
     Yv *k = yr_get(t, "k");
-    if (ys_eq_lit(k, "tarr")) {
+    if (yv_l(k) == K_tarr) {
         return yr_get(t, "of");
-    } else if (ys_eq_lit(k, "tarrfix")) {
+    } else if (yv_l(k) == K_tarrfix) {
         return yr_get(t, "of");
     } else {
-        return yr(1, "k", ys("tnone"));
+        return yr(1, "k", yv_long(K_tnone));
     }
 }
 
@@ -5674,7 +5675,7 @@ Yv *arr_elem_type(Yv *t) {
  * whose movb store truncates by itself. */
 Yv *store_elem_type(Yv *t, long esz) {
     if (esz == 1) {
-        return yr(1, "k", ys("tnone"));
+        return yr(1, "k", yv_long(K_tnone));
     } else {
         return arr_elem_type(t);
     }
@@ -5692,9 +5693,9 @@ Yv *gen_helper1(Yv *st, Yv *label) {
 
 Yv *gen_call(Yv *st, Yv *node) {
     Yv *callee = yr_get(node, "callee");
-    if (!ys_eq_lit(yr_get(callee, "k"), "id")) {
-        if (ys_eq_lit(yr_get(callee, "k"), "dot") &&
-            ys_eq_lit(yr_get(infer(st, yr_get(callee, "obj")), "k"), "tstr")) {
+    if (yv_l(yr_get(callee, "k")) != K_id) {
+        if (yv_l(yr_get(callee, "k")) == K_dot &&
+            yv_l(yr_get(infer(st, yr_get(callee, "obj")), "k")) == K_tstr) {
             return gen_method(st, node);
         } else {
             /* Calling the result of an expression (e.g. `fs[0](x)`): it is
@@ -5746,7 +5747,7 @@ Yv *gen_call(Yv *st, Yv *node) {
         } else if (ys_eq_lit(name, "join") && yv_len(yr_get(node, "args")) == 1) {
             /* join t: t is a thread's function; calling it waits */
             Yv *ja = yr_get(node, "args");
-            Yv *jc = yr(5, "k", ys("call"), "callee", ya_get(ja, 0), "args", yav(0),
+            Yv *jc = yr(5, "k", yv_long(K_call), "callee", ya_get(ja, 0), "args", yav(0),
                         "line", yr_get(node, "line"), "col", yr_get(node, "col"));
             return gen_indirect(st, jc, ya_get(ja, 0));
         } else if (ys_eq_lit(name, "spawn") || ys_eq_lit(name, "fork")) {
@@ -5778,10 +5779,10 @@ Yv *gen_call(Yv *st, Yv *node) {
             /* a copy of the map's keys array (gen_maplit's {keys, vals, boxes}) */
             Yv *ln = yr_get(node, "line");
             Yv *cl = yr_get(node, "col");
-            Yv *whole = yr(6, "k", ys("slice"),
+            Yv *whole = yr(6, "k", yv_long(K_slice),
                            "arr", n_dot(ya_get(yr_get(node, "args"), 0), ys("keys"), yv_l(ln), yv_l(cl)),
-                           "lo", yr(3, "k", ys("void"), "line", ln, "col", cl),
-                           "hi", yr(3, "k", ys("void"), "line", ln, "col", cl),
+                           "lo", yr(3, "k", yv_long(K_void), "line", ln, "col", cl),
+                           "hi", yr(3, "k", yv_long(K_void), "line", ln, "col", cl),
                            "line", ln, "col", cl);
             return gen_slice(st, whole);
         } else if (ys_eq_lit(name, "sleep")) {
@@ -5854,8 +5855,8 @@ Yv *gen_method(Yv *st, Yv *node) {
                             ys(", %rsp")));
     } else {
         return gen_call(
-            st, yr(5, "k", ys("call"), "callee",
-                   yr(4, "k", ys("id"), "v", fname,
+            st, yr(5, "k", yv_long(K_call), "callee",
+                   yr(4, "k", yv_long(K_id), "v", fname,
                       "line", yr_get(node, "line"),
                       "col", yr_get(node, "col")),
                    "args", args, "line", yr_get(node, "line"),
@@ -5867,12 +5868,12 @@ Yv *gen_print(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
     Yv *pa0 = ya_get(args, 0);
     Yv *t = infer(st, pa0);
-    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) == K_trec) {
         /* Records are formatted field by field from their static shape. */
         st = gen_rec_str(st, pa0, t);
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfunc")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
         /* A function value has no printable contents; show its signature
          * (`<function (params)->(ret)>`, types.y tdisp_fnval). */
         st = gen(st, pa0);
@@ -5880,11 +5881,11 @@ Yv *gen_print(Yv *st, Yv *node) {
             st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(t)), ys(">")));
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarr") ||
-               ys_eq_lit(yr_get(t, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarr ||
+               yv_l(yr_get(t, "k")) == K_tarrfix) {
         /* Arrays print like tostring: "[e0, e1, ...]". */
         st = gen(st, pa0);
-        if (ys_eq_lit(yr_get(yr_get(t, "of"), "k"), "tbyte")) {
+        if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] prints Python-style: b'...' with escapes */
             st = gen_helper1(st, ys("y_bytes_repr"));
             ;
@@ -5894,17 +5895,17 @@ Yv *gen_print(Yv *st, Yv *node) {
         }
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "topt")) {
+    } else if (yv_l(yr_get(t, "k")) == K_topt) {
         st = gen(st, pa0);
         st = gen_opt_str_rax(st, t);
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         /* Maps format entry by entry: {"k": v, ...} (quoted keys). */
         st = gen_map_repr(st, pa0, t);
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         st = gen(st, pa0);
         st = gen_union_str_rax(st, t);
         st = gen_helper1(st, ys("y_print_hstr"));
@@ -5916,13 +5917,13 @@ Yv *gen_print(Yv *st, Yv *node) {
 
 Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t) {
     st = gen(st, arg);
-    if (ys_eq_lit(yr_get(t, "k"), "tbool")) {
+    if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_helper1(st, ys("y_print_bool"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         st = gen_helper1(st, ys("y_print_float"));
         return emit(st, ys("    xor %eax, %eax"));
     } else {
@@ -6001,7 +6002,7 @@ Yv *gen_cons(Yv *st, Yv *node) {
     Yv *cl = yr_get(node, "col");
     Yv *crt = infer(st, yr_get(node, "r"));
     long cesz = arr_elem_bytes(crt);
-    Yv *one = yr(4, "k", ys("array"), "elems", args1(yr_get(node, "l")), "line",
+    Yv *one = yr(4, "k", yv_long(K_array), "elems", args1(yr_get(node, "l")), "line",
                  ln, "col", cl);
     st = gen_array_esz(st, one, cesz, store_elem_type(crt, cesz));
     st = emit(st, ys("    push %rax"));
@@ -6025,24 +6026,24 @@ Yv *gen_cat_conv(Yv *st, Yv *node, Yv *lt) {
     st = yr_get(r, "st");
     Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
     Yv *noelems = yav(0);
-    Yv *da = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("l")),
+    Yv *da = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("l")),
                 "v", yr_get(node, "l"), "line", ln, "col", cl);
-    Yv *db = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("r")),
+    Yv *db = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("r")),
                 "v", yr_get(node, "r"), "line", ln, "col", cl);
-    Yv *dc = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
+    Yv *dc = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                yr(2, "k", yv_long(K_tarr), "of", yr_get(lt, "of")),
                 "name", ys_cat(t1, ys("c")),
-                "v", yr(4, "k", ys("array"), "elems", noelems,
+                "v", yr(4, "k", yv_long(K_array), "elems", noelems,
                         "line", ln, "col", cl),
                 "line", ln, "col", cl);
-    Yv *pa = yr(6, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
+    Yv *pa = yr(6, "k", yv_long(K_opassign), "tgt", n_id(ys_cat(t1, ys("c")),
                                                        yv_l(ln), yv_l(cl)),
                 "op", ys("+"), "v", n_id(ys_cat(t1, ys("l")),
                                          yv_l(ln), yv_l(cl)),
                 "line", ln, "col", cl);
-    Yv *pb = yr(6, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
+    Yv *pb = yr(6, "k", yv_long(K_opassign), "tgt", n_id(ys_cat(t1, ys("c")),
                                                        yv_l(ln), yv_l(cl)),
                 "op", ys("+"), "v", n_id(ys_cat(t1, ys("r")),
                                          yv_l(ln), yv_l(cl)),
@@ -6062,8 +6063,8 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     Yv *cl = yr_get(node, "col");
     Yv *lk = yr_get(lt, "k");
     Yv *rk = yr_get(rt, "k");
-    int lisarr = ys_eq_lit(lk, "tarr") || ys_eq_lit(lk, "tarrfix");
-    int risarr = ys_eq_lit(rk, "tarr") || ys_eq_lit(rk, "tarrfix");
+    int lisarr = yv_l(lk) == K_tarr || yv_l(lk) == K_tarrfix;
+    int risarr = yv_l(rk) == K_tarr || yv_l(rk) == K_tarrfix;
     Yv *how = ys("elem");
     if (lisarr && risarr) {
         how = arr_plus_kind(lt, rt);
@@ -6074,7 +6075,7 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     }
     int larr = lisarr && !ys_eq_lit(how, "prepend");
     long esz = 8;
-    Yv *ety = yr(1, "k", ys("tnone"));
+    Yv *ety = yr(1, "k", yv_long(K_tnone));
     if (larr) {
         esz = arr_elem_bytes(lt);
         ety = store_elem_type(lt, esz);
@@ -6082,12 +6083,12 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
         esz = arr_elem_bytes(rt);
         ety = store_elem_type(rt, esz);
     }
-    Yv *one = yr(4, "k", ys("array"), "elems", args1(yr_get(node, "r")), "line",
+    Yv *one = yr(4, "k", yv_long(K_array), "elems", args1(yr_get(node, "r")), "line",
                  ln, "col", cl);
     if (larr) {
         ;
     } else {
-        one = yr(4, "k", ys("array"), "elems", args1(yr_get(node, "l")), "line",
+        one = yr(4, "k", yv_long(K_array), "elems", args1(yr_get(node, "l")), "line",
                  ln, "col", cl);
         ;
     }
@@ -6132,31 +6133,31 @@ Yv *gen_slot_load(Yv *st, long idx, Yv *dst) {
 /* acc = acc + <field in slot idx, rendered by its static type>. */
 Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft) {
     Yv *fk = yr_get(ft, "k");
-    if (ys_eq_lit(fk, "tstr")) {
+    if (yv_l(fk) == K_tstr) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
         st = gen_slot_load(st, idx, ys("%rdx"));
-    } else if (ys_eq_lit(fk, "tlong")) {
+    } else if (yv_l(fk) == K_tlong) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
         st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_long_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
         st = emit(st, ys("    mov %rax, %rdx"));
-    } else if (ys_eq_lit(fk, "tbool")) {
+    } else if (yv_l(fk) == K_tbool) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
         st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_bool_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
         st = emit(st, ys("    mov %rax, %rdx"));
-    } else if (ys_eq_lit(fk, "tfloat")) {
+    } else if (yv_l(fk) == K_tfloat) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
         st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_float_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
         st = emit(st, ys("    mov %rax, %rdx"));
-    } else if (ys_eq_lit(fk, "tfunc")) {
+    } else if (yv_l(fk) == K_tfunc) {
         st = gen_str_const(
             st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(ft)), ys(">")));
         st = emit(st, ys("    mov %rax, %rdx"));
@@ -6185,7 +6186,7 @@ Yv *gen_syscall(Yv *st, Yv *node) {
         st = emit(st, ys_cat(ys("    pop "), syscall_reg(i - 1)));
         /* a str flows in as its header; the kernel wants the data bytes. */
         Yv *at = infer(st, ya_get(args, i));
-        if (ys_eq_lit(yr_get(at, "k"), "tstr")) {
+        if (yv_l(yr_get(at, "k")) == K_tstr) {
             st = emit(st, ys_cat(ys("    add $8, "), syscall_reg(i - 1)));
             ;
         } else {
@@ -6359,7 +6360,7 @@ Yv *gen_forrange(Yv *st, Yv *node) {
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(voff)),
                          ys("(%rbp)")));
     st = env_define(st, yr_get(node, "name"), ys("local"), voff, ys(""),
-                    yr(1, "k", ys("tlong")));
+                    yr(1, "k", yv_long(K_tlong)));
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
@@ -6399,14 +6400,14 @@ Yv *gen_foreach(Yv *st, Yv *node) {
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
             "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
     Yv *elt = infer(st, yr_get(node, "iter"));
-    Yv *eltyp = yr(1, "k", ys("tunk"));
-    if (ys_eq_lit(yr_get(elt, "k"), "tarr")) {
+    Yv *eltyp = yr(1, "k", yv_long(K_tunk));
+    if (yv_l(yr_get(elt, "k")) == K_tarr) {
         eltyp = yr_get(elt, "of");
         ;
     } else {
         ;
     }
-    if (ys_eq_lit(yr_get(elt, "k"), "tarrfix")) {
+    if (yv_l(yr_get(elt, "k")) == K_tarrfix) {
         eltyp = yr_get(elt, "of");
         ;
     } else {
@@ -6463,9 +6464,9 @@ Yv *gen_foreach(Yv *st, Yv *node) {
 int is_self_call(Yv *st, Yv *node) {
     /* `self(...)`, or a call naming the function being emitted (after
      * rename every def has a unique name, so the label decides). */
-    if (!ys_eq_lit(yr_get(node, "k"), "call")) { return 0; }
+    if (yv_l(yr_get(node, "k")) != K_call) { return 0; }
     Yv *cal = yr_get(node, "callee");
-    if (!ys_eq_lit(yr_get(cal, "k"), "id")) { return 0; }
+    if (yv_l(yr_get(cal, "k")) != K_id) { return 0; }
     Yv *cv = yr_get(cal, "v");
     if (ys_eq_lit(cv, "self")) { return 1; }
     Yv *ee = env_find(st, cv);
@@ -6518,17 +6519,17 @@ Yv *gen_tail_call(Yv *st, Yv *node) {
 
 Yv *gen_tail(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "ret")) {
+    if (yv_l(k) == K_ret) {
         Yv *e = yr_get(node, "e");
         if (is_self_call(st, e)) {
             return gen_tail_call(st, e);
         }
         st = gen_as(st, e, cur_fn_ret(st));
         return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         if (is_self_call(st, node)) { return gen_tail_call(st, node); }
         return gen_as(st, node, cur_fn_ret(st));
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         Yv *tl = yr_get(node, "stmts");
         long m = yv_len(tl);
         /* a trailing `;` (void) leaves the statement before it in tail
@@ -6551,7 +6552,7 @@ Yv *gen_tail(Yv *st, Yv *node) {
             ;
         }
         return st;
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         st = gen(st, yr_get(node, "cond"));
         st = emit(st, ys("    test %rax, %rax"));
         Yv *rl1 = next_loc(st);
@@ -6609,7 +6610,7 @@ Yv *gen_block_as(Yv *st, Yv *node, int dropped) {
 }
 
 int is_void_node(Yv *n) {
-    return ys_eq_lit(yr_get(n, "k"), "void");
+    return yv_l(yr_get(n, "k")) == K_void;
 }
 
 /* ── -g: line markers (see dbg_lines) ────────────────────────────────── */
@@ -6652,7 +6653,7 @@ Yv *gen_loc_stmt(Yv *st, Yv *node) {
 Yv *gen_loc_elif(Yv *st, Yv *els) {
     if (dbg_lines) {
         Yv *k = yr_get(els, "k");
-        if (ys_eq_lit(k, "if")) {
+        if (yv_l(k) == K_kw_if) {
             return emit(st, loc_dir(yv_l(yr_get(els, "line"))));
         } else {
             return st;
@@ -6852,9 +6853,9 @@ void ty_sig_init(void) {
  * spelled out that equals a recursive alias (alias_of) takes the alias's
  * form. */
 Yv *ty_form(Yv *rt) {
-    if (ys_eq_lit(yr_get(rt, "k"), "trec")) {
+    if (yv_l(yr_get(rt, "k")) == K_trec) {
         Yv *al = alias_of(rt);
-        if (ys_eq_lit(yr_get(al, "k"), "tref")) {
+        if (yv_l(yr_get(al, "k")) == K_tref) {
             return tcanon(al);
         } else {
             return tcanon(rt);
@@ -6878,7 +6879,7 @@ Yv *alias_of(Yv *t) {
     while (i < yv_len(todo)) {
         Yv *x = ya_get(todo, i);
         Yv *k = yr_get(x, "k");
-        if (ys_eq_lit(k, "tref")) {
+        if (yv_l(k) == K_tref) {
             Yv *tmp = yr_get(x, "tmp");
             long j = 0;
             int met = 0;
@@ -6891,28 +6892,28 @@ Yv *alias_of(Yv *t) {
             if (!met) {
                 seen = ya_push(seen, tmp);
                 Yv *u = unfold(x);
-                if (ys_eq_lit(yr_get(u, "k"), "trec") &&
+                if (yv_l(yr_get(u, "k")) == K_trec &&
                     ys_eq(ys_join(rec_names(yr_get(u, "fields")), ys(",")), names) &&
                     teq(t, x)) {
                     return x;
                 }
                 todo = ya_push(todo, u);
             }
-        } else if (ys_eq_lit(k, "trec")) {
+        } else if (yv_l(k) == K_trec) {
             Yv *fs = yr_get(x, "fields");
             long j = 0;
             while (j < yv_len(fs)) {
                 todo = ya_push(todo, yr_get(ya_get(fs, j), "typ"));
                 j = j + 1;
             }
-        } else if (ys_eq_lit(k, "tunion")) {
+        } else if (yv_l(k) == K_tunion) {
             Yv *ms = yr_get(x, "ts");
             long j = 0;
             while (j < yv_len(ms)) {
                 todo = ya_push(todo, ya_get(ms, j));
                 j = j + 1;
             }
-        } else if (ys_eq_lit(k, "tfunc")) {
+        } else if (yv_l(k) == K_tfunc) {
             Yv *as = yr_get(x, "args");
             long j = 0;
             while (j < yv_len(as)) {
@@ -6920,18 +6921,18 @@ Yv *alias_of(Yv *t) {
                 j = j + 1;
             }
             todo = ya_push(todo, yr_get(x, "ret"));
-        } else if (ys_eq_lit(k, "tmap")) {
+        } else if (yv_l(k) == K_tmap) {
             todo = ya_push(todo, yr_get(x, "key"));
             todo = ya_push(todo, yr_get(x, "of"));
-        } else if (ys_eq_lit(k, "tptr")) {
+        } else if (yv_l(k) == K_tptr) {
             todo = ya_push(todo, yr_get(x, "to"));
-        } else if (ys_eq_lit(k, "tarr") || ys_eq_lit(k, "tarrfix") ||
-                   ys_eq_lit(k, "topt")) {
+        } else if (yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
+                   yv_l(k) == K_topt) {
             todo = ya_push(todo, yr_get(x, "of"));
         }
         i = i + 1;
     }
-    return yr(1, "k", ys("tnone"));
+    return yr(1, "k", yv_long(K_tnone));
 }
 
 /* Two types with one descriptor label: stop (a 64-bit hash collision;
@@ -7027,7 +7028,7 @@ Yv *union_shared(Yv *u) {
             long q = 0;
             while (q < yv_len(ms)) {
                 Yv *ft = rec_field_type(ya_get(ms, q), yr_get(f, "name"));
-                if (ok && (ys_eq_lit(yr_get(ft, "k"), "tnone") ||
+                if (ok && (yv_l(yr_get(ft, "k")) == K_tnone ||
                            !teq(ft, yr_get(f, "typ")))) {
                     ok = 0;
                 }
@@ -7077,7 +7078,7 @@ Yv *union_lay(Yv *m, Yv *u) {
 /* The slots of a record of type t (unfolded) held where type `inu` is
  * declared: in a union, union_lay; else its own sorted fields. */
 Yv *lay_of(Yv *t, Yv *inu) {
-    if (ys_eq_lit(yr_get(inu, "k"), "tunion")) {
+    if (yv_l(yr_get(inu, "k")) == K_tunion) {
         return union_lay(t, inu);
     } else {
         return rec_names(yr_get(t, "fields"));
@@ -7139,9 +7140,9 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
     Yv *w = unfold(want0);
     Yv *sk = yr_get(s, "k");
     Yv *wk = yr_get(w, "k");
-    if (ys_eq_lit(sk, "trec") && ys_eq_lit(wk, "tunion")) {
+    if (yv_l(sk) == K_trec && yv_l(wk) == K_tunion) {
         Yv *m = union_member(w, s);
-        if (ys_eq_lit(yr_get(m, "k"), "tnone")) {
+        if (yv_l(yr_get(m, "k")) == K_tnone) {
             return st;
         } else {
             Yv *from = lay_of(s, src0);
@@ -7154,12 +7155,12 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
                 return gen_copy_rec(st, from, to, yr_get(dr, "lbl"));
             }
         }
-    } else if (ys_eq_lit(sk, "tunion") &&
-               (ys_eq_lit(wk, "trec") || ys_eq_lit(wk, "tunion"))) {
+    } else if (yv_l(sk) == K_tunion &&
+               (yv_l(wk) == K_trec || yv_l(wk) == K_tunion)) {
         int within = union_within(s, want0);
         /* one union into another sharing the same fields: every member
          * keeps its layout and tag */
-        if (within && ys_eq_lit(wk, "tunion") &&
+        if (within && yv_l(wk) == K_tunion &&
             same_lay(union_shared(s), union_shared(w))) {
             return st;
         }
@@ -7180,9 +7181,9 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
             Yv *mu = unfold(m);
             Yv *from = union_lay(mu, s);
             Yv *tw = m;
-            if (ys_eq_lit(wk, "tunion")) {
+            if (yv_l(wk) == K_tunion) {
                 Yv *mw = union_member(w, m);
-                if (!ys_eq_lit(yr_get(mw, "k"), "tnone")) {
+                if (yv_l(yr_get(mw, "k")) != K_tnone) {
                     tw = mw;
                 }
             }
@@ -7243,8 +7244,8 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
 /* lt (a record literal's type) is the record type t: the same field names
  * and equal types. */
 int same_rec(Yv *lt, Yv *t) {
-    if (!ys_eq_lit(yr_get(t, "k"), "trec") ||
-        !ys_eq_lit(yr_get(lt, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) != K_trec ||
+        yv_l(yr_get(lt, "k")) != K_trec) {
         return 0;
     } else {
         Yv *lfs = yr_get(lt, "fields");
@@ -7263,13 +7264,13 @@ int same_rec(Yv *lt, Yv *t) {
 Yv *rec_lit_type(Yv *lt, Yv *want) {
     Yv *w = unfold(want);
     Yv *wk = yr_get(w, "k");
-    if (ys_eq_lit(wk, "trec")) {
+    if (yv_l(wk) == K_trec) {
         if (same_rec(lt, w)) {
             return want;
         } else {
             return lt;
         }
-    } else if (ys_eq_lit(wk, "tunion")) {
+    } else if (yv_l(wk) == K_tunion) {
         Yv *ms = union_parts(w);
         Yv *found = lt;
         int looking = 1;
@@ -7312,7 +7313,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
         Yv *nk = ya_get(mkeys, ni);
         if (ys_eq_lit(nk, "...")) {
             Yv *srec = infer(st, ya_get(mvals, ni));
-            if (ys_eq_lit(yr_get(srec, "k"), "trec")) {
+            if (yv_l(yr_get(srec, "k")) == K_trec) {
                 Yv *sfs = yr_get(srec, "fields");
                 long si = 0;
                 while (si < yv_len(sfs)) {
@@ -7331,13 +7332,13 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
         ni = ni + 1;
     }
     Yv *rt = lit_target(node, want);
-    if (ys_eq_lit(yr_get(rt, "k"), "tnone")) {
+    if (yv_l(yr_get(rt, "k")) == K_tnone) {
         rt = rec_lit_type(infer(st, node), want);
     }
     Yv *rtu = unfold(rt);
     /* the declared type's optional fields the literal leaves out have their
      * slots too: none, which y_alloc's never-reused zeroed memory already is */
-    if (ys_eq_lit(yr_get(rtu, "k"), "trec")) {
+    if (yv_l(yr_get(rtu, "k")) == K_trec) {
         Yv *tfs = yr_get(rtu, "fields");
         for (long q = 0; q < yv_len(tfs); q++) {
             Yv *f = ya_get(tfs, q);
@@ -7350,7 +7351,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
     Yv *slots = str_sorted(names);
     /* made as a member of a declared union: in the union's layout */
     Yv *wu = unfold(want);
-    if (ys_eq_lit(yr_get(wu, "k"), "tunion") && ys_eq_lit(yr_get(rtu, "k"), "trec")) {
+    if (yv_l(yr_get(wu, "k")) == K_tunion && yv_l(yr_get(rtu, "k")) == K_trec) {
         slots = union_lay(rtu, wu);
     }
     Yv *dr = ty_desc_in(st, rt, wu);
@@ -7376,7 +7377,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
             st = emit(st, ys("    pop %rcx"));
             st = emit(st, ys("    mov %rax, %rdx"));
             Yv *srec2 = infer(st, mv);
-            if (ys_eq_lit(yr_get(srec2, "k"), "trec")) {
+            if (yv_l(yr_get(srec2, "k")) == K_trec) {
                 Yv *sfs2 = yr_get(srec2, "fields");
                 long sj = 0;
                 while (sj < yv_len(sfs2)) {
@@ -7421,7 +7422,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
  * takes it, a record literal the type it is created as there. */
 int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft) {
     int opt = 0;
-    if (ys_eq_lit(yr_get(rtu, "k"), "trec")) {
+    if (yv_l(yr_get(rtu, "k")) == K_trec) {
         Yv *tfs = yr_get(rtu, "fields");
         for (long q = 0; q < yv_len(tfs); q++) {
             Yv *f = ya_get(tfs, q);
@@ -7430,13 +7431,13 @@ int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft) {
             }
         }
     }
-    if (!opt || !ys_eq_lit(yr_get(ft, "k"), "topt")) {
+    if (!opt || yv_l(yr_get(ft, "k")) != K_topt) {
         return 0;
     }
     Yv *vt = infer(st, mv);
-    if (ys_eq_lit(yr_get(mv, "k"), "rec")) {
+    if (yv_l(yr_get(mv, "k")) == K_rec) {
         Yv *lt = lit_target(mv, yr_get(ft, "of"));
-        if (!ys_eq_lit(yr_get(lt, "k"), "tnone")) {
+        if (yv_l(yr_get(lt, "k")) != K_tnone) {
             vt = lt;
         }
     }
@@ -7530,7 +7531,7 @@ Yv *gen_decl(Yv *st, Yv *node) {
                                        yr_get(node, "v"), dcaps);
         }
     } else {
-        if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "func")) {
+        if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_func) {
             /* let-bound function. Capture-free ones stay pure labels (the
              * env already binds them, calls go direct). One that captures
              * becomes a closure record built HERE, where the captured
@@ -7546,42 +7547,42 @@ Yv *gen_decl(Yv *st, Yv *node) {
                 return gen_closure_binding(st, yr_get(node, "name"),
                                            yr_get(node, "v"), caps);
             }
-        } else if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "arrrep")) {
+        } else if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_arrrep) {
             /* heap array: [v; n] allocates a header {len, cap, data}.
              * Reference value like every other array: the binding holds
              * the header address. */
             Yv *t = yr_get(node, "typ");
-            if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+            if (yv_l(yr_get(t, "k")) == K_tnone) {
                 t = infer(st, yr_get(node, "v"));
             }
             long rsz = arr_elem_bytes(t);
             st = gen_arrrep_esz(st, yr_get(node, "v"), rsz,
                                 store_elem_type(t, rsz));
             return bind_decl(st, yr_get(node, "name"), t);
-        } else if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "array")) {
+        } else if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_array) {
             /* Heap array literal. The DECLARED element type decides the
              * element width: `let b: [byte] = [104, 105]` packs, and the
              * literal's own elements only ever infer as long. */
             Yv *t = yr_get(node, "typ");
-            if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+            if (yv_l(yr_get(t, "k")) == K_tnone) {
                 t = infer(st, yr_get(node, "v"));
             }
             long asz = arr_elem_bytes(t);
             st = gen_array_esz(st, yr_get(node, "v"), asz,
                                store_elem_type(t, asz));
             return bind_decl(st, yr_get(node, "name"), t);
-        } else if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "rec")) {
+        } else if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_rec) {
             /* record literal: heap address (first-class value, plain
              * slot). An empty literal under a map annotation is the map
              * itself (the {keys, vals, boxes} shape the map ops expect). */
-            if (ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tmap") && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0) {
+            if (yv_l(yr_get(yr_get(node, "typ"), "k")) == K_tmap && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0) {
                 st = gen_maplit(st, yr_get(node, "v"));
             } else {
                 /* created as the declared type (gen_as, gen_reclit) */
                 st = gen_as(st, yr_get(node, "v"), yr_get(node, "typ"));
             }
             Yv *t = yr_get(node, "typ");
-            if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+            if (yv_l(yr_get(t, "k")) == K_tnone) {
                 t = infer(st, yr_get(node, "v"));
             }
             return bind_decl(st, yr_get(node, "name"), t);
@@ -7595,7 +7596,7 @@ Yv *gen_decl(Yv *st, Yv *node) {
              * model aliases too (yv.c). */
             /* bind with annotation or inferred type */
             Yv *t = yr_get(node, "typ");
-            if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+            if (yv_l(yr_get(t, "k")) == K_tnone) {
                 t = infer(st, yr_get(node, "v"));
             }
             return bind_decl(st, yr_get(node, "name"), t);
@@ -7612,7 +7613,7 @@ Yv *bind_decl(Yv *st, Yv *name, Yv *t) {
                                    yr_get(ge, "label")),
                             ys("(%rip)")));
         return env_define(st, name, ys("global"), 0, yr_get(ge, "label"), t);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tstr") && own_wanted(st, name)) {
+    } else if (yv_l(yr_get(t, "k")) == K_tstr && own_wanted(st, name)) {
         return bind_own(st, name, t);
     } else {
         long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
@@ -7707,7 +7708,7 @@ Yv *gen_fill_heap(Yv *st, long n, long esz) {
 Yv *gen_arrrep(Yv *st, Yv *node) {
     return gen_arrrep_esz(st, node,
                           elem_bytes(infer(st, yr_get(node, "v"))),
-                          yr(1, "k", ys("tnone")));
+                          yr(1, "k", yv_long(K_tnone)));
 }
 
 /* Same, with the element width supplied by the declaration (`let b:
@@ -8057,7 +8058,7 @@ Yv *gen_index(Yv *st, Yv *node) {
     st = emit(st, ys("    pop %rax"));
     st = emit(st, ys("    test %rcx, %rcx"));
     st = emit(st, ys("    js y_oob"));
-    if (ys_eq_lit(yr_get(bt, "k"), "tarrfix")) {
+    if (yv_l(yr_get(bt, "k")) == K_tarrfix) {
         st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
                                     ys_long(yv_l(yr_get(bt, "n")))),
                              ys(", %rcx")));
@@ -8087,7 +8088,7 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
     st = emit(st, ys("    push %rax"));
     st = gen_as(st, yr_get(node, "v"), rec_field_type(dt, dkey));
     st = emit(st, ys("    pop %rdx"));
-    if (ys_eq_lit(yr_get(dt, "k"), "tunion")) {
+    if (yv_l(yr_get(dt, "k")) == K_tunion) {
         return gen_union_slot(st, dt, dkey, 1);
     } else {
         return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * idx)),
@@ -8114,20 +8115,20 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
  * that is byte: binding it masks it (gen_as), so the value the expression
  * yields is the one stored. Any other type is left to inference. */
 Yv *place_value_type(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tbyte")) {
+    if (yv_l(yr_get(t, "k")) == K_tbyte) {
         return t;
     } else {
-        return yr(1, "k", ys("tnone"));
+        return yr(1, "k", yv_long(K_tnone));
     }
 }
 
 Yv *n_num(Yv *v, long line, long col) {
-    return yr(4, "k", ys("num"), "v", v, "line", yv_long(line), "col",
+    return yr(4, "k", yv_long(K_num), "v", v, "line", yv_long(line), "col",
               yv_long(col));
 }
 
 Yv *n_id(Yv *v, long line, long col) {
-    return yr(4, "k", ys("id"), "v", v, "line", yv_long(line), "col",
+    return yr(4, "k", yv_long(K_id), "v", v, "line", yv_long(line), "col",
               yv_long(col));
 }
 
@@ -8145,12 +8146,12 @@ Yv *args2(Yv *a, Yv *b) {
 }
 
 Yv *n_call1(Yv *name, Yv *a0, long line, long col) {
-    return yr(5, "k", ys("call"), "callee", n_id(name, line, col), "args",
+    return yr(5, "k", yv_long(K_call), "callee", n_id(name, line, col), "args",
               args1(a0), "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *n_call2(Yv *name, Yv *a0, Yv *a1, long line, long col) {
-    return yr(5, "k", ys("call"), "callee", n_id(name, line, col), "args",
+    return yr(5, "k", yv_long(K_call), "callee", n_id(name, line, col), "args",
               args2(a0, a1), "line", yv_long(line), "col", yv_long(col));
 }
 
@@ -8158,7 +8159,7 @@ Yv *block2(Yv *a, Yv *b, long ln, long cl) {
     Yv *st = yav(0);
     st = ya_push(st, a);
     st = ya_push(st, b);
-    return yr(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+    return yr(4, "k", yv_long(K_block), "stmts", st, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
@@ -8167,7 +8168,7 @@ Yv *block3(Yv *a, Yv *b, Yv *c, long ln, long cl) {
     st = ya_push(st, a);
     st = ya_push(st, b);
     st = ya_push(st, c);
-    return yr(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+    return yr(4, "k", yv_long(K_block), "stmts", st, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
@@ -8177,7 +8178,7 @@ Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl) {
     st = ya_push(st, b);
     st = ya_push(st, c);
     st = ya_push(st, d);
-    return yr(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+    return yr(4, "k", yv_long(K_block), "stmts", st, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
@@ -8188,7 +8189,7 @@ Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl) {
     st = ya_push(st, c);
     st = ya_push(st, d);
     st = ya_push(st, e);
-    return yr(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+    return yr(4, "k", yv_long(K_block), "stmts", st, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
@@ -8200,7 +8201,7 @@ Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl) {
     st = ya_push(st, d);
     st = ya_push(st, e);
     st = ya_push(st, f);
-    return yr(4, "k", ys("block"), "stmts", st, "line", yv_long(ln), "col",
+    return yr(4, "k", yv_long(K_block), "stmts", st, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
@@ -8227,9 +8228,9 @@ Yv *gen_incdec(Yv *st, Yv *node) {
     Yv *place = gen_place_read(tgt, t1, ln, cl);
     if (yv_b(yr_get(node, "pre"))) {
         /* ++x -> { bind; let v = x + 1; x = v; v } */
-        Yv *nv = yr(6, "k", ys("bin"), "op", binop, "l", place, "r", one,
+        Yv *nv = yr(6, "k", yv_long(K_bin), "op", binop, "l", place, "r", one,
                     "line", yv_long(ln), "col", yv_long(cl));
-        Yv *d2 = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
+        Yv *d2 = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                     place_value_type(infer(st, tgt)), "name",
                     ys_cat(t1, ys("v")), "v", nv, "line", yv_long(ln),
                     "col", yv_long(cl));
@@ -8239,10 +8240,10 @@ Yv *gen_incdec(Yv *st, Yv *node) {
                               n_id(ys_cat(t1, ys("v")), ln, cl), ln, cl));
     } else {
         /* x++ -> { bind; let v = x; x = v + 1; v } */
-        Yv *d2 = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                    yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v",
+        Yv *d2 = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                    yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("v")), "v",
                     place, "line", yv_long(ln), "col", yv_long(cl));
-        Yv *nv = yr(6, "k", ys("bin"), "op", binop, "l",
+        Yv *nv = yr(6, "k", yv_long(K_bin), "op", binop, "l",
                     n_id(ys_cat(t1, ys("v")), ln, cl), "r", one, "line",
                     yv_long(ln), "col", yv_long(cl));
         Yv *asg = gen_place_assign(tgt, nv, t1, ln, cl);
@@ -8253,8 +8254,8 @@ Yv *gen_incdec(Yv *st, Yv *node) {
 
 Yv *gen_opassign(Yv *st, Yv *node) {
     Yv *t = infer(st, yr_get(node, "tgt"));
-    if (ys_eq_lit(yr_get(t, "k"), "tarr") ||
-        ys_eq_lit(yr_get(t, "k"), "tarrfix")) {
+    if (yv_l(yr_get(t, "k")) == K_tarr ||
+        yv_l(yr_get(t, "k")) == K_tarrfix) {
         return gen_opassign_arr(st, node);
     } else {
         return gen_opassign_arith(st, node);
@@ -8273,9 +8274,9 @@ Yv *gen_opassign_arith(Yv *st, Yv *node) {
     Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
     Yv *bind = gen_place_bind(tgt, t1, ln, cl);
     Yv *rd = gen_place_read(tgt, t1, ln, cl);
-    Yv *bin = yr(6, "k", ys("bin"), "op", op, "l", rd, "r", yr_get(node, "v"),
+    Yv *bin = yr(6, "k", yv_long(K_bin), "op", op, "l", rd, "r", yr_get(node, "v"),
                  "line", yv_long(ln), "col", yv_long(cl));
-    Yv *d2 = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
+    Yv *d2 = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                 place_value_type(infer(st, tgt)), "name", ys_cat(t1, ys("v")),
                 "v", bin, "line", yv_long(ln), "col", yv_long(cl));
     Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1, ln,
@@ -8300,7 +8301,7 @@ Yv *place_read_id(Yv *tgt, Yv *t1, long ln, long cl) {
  * once. */
 Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl) {
     Yv *ba = yr_get(tgt, "arr");
-    if (ys_eq_lit(yr_get(ba, "k"), "id")) {
+    if (yv_l(yr_get(ba, "k")) == K_id) {
         return n_id(yr_get(ba, "v"), ln, cl);
     } else {
         return n_id(ys_cat(t1, ys("a")), ln, cl);
@@ -8308,19 +8309,19 @@ Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl) {
 }
 
 Yv *place_read_idx(Yv *tgt, Yv *t1, long ln, long cl) {
-    return yr(5, "k", ys("index"), "arr", place_arr(tgt, t1, ln, cl), "idx",
+    return yr(5, "k", yv_long(K_index), "arr", place_arr(tgt, t1, ln, cl), "idx",
               n_id(t1, ln, cl), "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *place_read_dot(Yv *tgt, Yv *t1, long ln, long cl) {
-    return yr(5, "k", ys("dot"), "obj", n_id(t1, ln, cl), "key",
+    return yr(5, "k", yv_long(K_dot), "obj", n_id(t1, ln, cl), "key",
               yr_get(tgt, "key"), "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl) {
-    if (ys_eq_lit(yr_get(tgt, "k"), "id")) {
+    if (yv_l(yr_get(tgt, "k")) == K_id) {
         return place_read_id(tgt, t1, ln, cl);
-    } else if (ys_eq_lit(yr_get(tgt, "k"), "index")) {
+    } else if (yv_l(yr_get(tgt, "k")) == K_index) {
         return place_read_idx(tgt, t1, ln, cl);
     } else {
         return place_read_dot(tgt, t1, ln, cl);
@@ -8329,26 +8330,26 @@ Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl) {
 
 Yv *place_asg_id(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
     (void)t1; /* unused in native.y's def too */
-    return yr(5, "k", ys("assign"), "name", yr_get(tgt, "v"), "v", valnode,
+    return yr(5, "k", yv_long(K_assign), "name", yr_get(tgt, "v"), "v", valnode,
               "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
-    return yr(6, "k", ys("idxassign"), "arr", place_arr(tgt, t1, ln, cl), "idx",
+    return yr(6, "k", yv_long(K_idxassign), "arr", place_arr(tgt, t1, ln, cl), "idx",
               n_id(t1, ln, cl), "v", valnode, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
 Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
-    return yr(6, "k", ys("dotassign"), "obj", n_id(t1, ln, cl), "key",
+    return yr(6, "k", yv_long(K_dotassign), "obj", n_id(t1, ln, cl), "key",
               yr_get(tgt, "key"), "v", valnode, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
 Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
-    if (ys_eq_lit(yr_get(tgt, "k"), "id")) {
+    if (yv_l(yr_get(tgt, "k")) == K_id) {
         return place_asg_id(tgt, valnode, t1, ln, cl);
-    } else if (ys_eq_lit(yr_get(tgt, "k"), "index")) {
+    } else if (yv_l(yr_get(tgt, "k")) == K_index) {
         return place_asg_idx(tgt, valnode, t1, ln, cl);
     } else {
         return place_asg_dot(tgt, valnode, t1, ln, cl);
@@ -8358,24 +8359,24 @@ Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
 Yv *place_bind_id(Yv *tgt, Yv *t1, long ln, long cl) {
     (void)tgt; /* unused in native.y's def too */
     (void)t1;
-    return yr(4, "k", ys("block"), "stmts", yav(0), "line", yv_long(ln), "col",
+    return yr(4, "k", yv_long(K_block), "stmts", yav(0), "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
 Yv *place_bind_idx_id(Yv *tgt, Yv *t1, long ln, long cl) {
-    return yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-              yr(1, "k", ys("tnone")), "name", t1, "v", yr_get(tgt, "idx"),
+    return yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+              yr(1, "k", yv_long(K_tnone)), "name", t1, "v", yr_get(tgt, "idx"),
               "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl) {
     /* nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
      * `t1 + "a"` as well, so the place evaluates it exactly once. */
-    Yv *tba = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                 yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("a")), "v",
+    Yv *tba = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                 yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("a")), "v",
                  yr_get(tgt, "arr"), "line", yv_long(ln), "col", yv_long(cl));
-    Yv *tib = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                 yr(1, "k", ys("tnone")), "name", t1, "v",
+    Yv *tib = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                 yr(1, "k", yv_long(K_tnone)), "name", t1, "v",
                  yr_get(tgt, "idx"), "line", yv_long(ln), "col",
                  yv_long(cl));
     return block2(tba, tib, ln, cl);
@@ -8383,7 +8384,7 @@ Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl) {
 
 Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl) {
     Yv *ba = yr_get(tgt, "arr");
-    if (ys_eq_lit(yr_get(ba, "k"), "id")) {
+    if (yv_l(yr_get(ba, "k")) == K_id) {
         return place_bind_idx_id(tgt, t1, ln, cl);
     } else {
         return place_bind_idx_nest(tgt, t1, ln, cl);
@@ -8391,17 +8392,17 @@ Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl) {
 }
 
 Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl) {
-    return yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-              yr(1, "k", ys("tnone")), "name", t1, "v", yr_get(tgt, "obj"),
+    return yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+              yr(1, "k", yv_long(K_tnone)), "name", t1, "v", yr_get(tgt, "obj"),
               "line", yv_long(ln), "col", yv_long(cl));
 }
 
 /* The synthetic `let` that runs the target's index/base exactly once (a
  * no-op statement for id targets). */
 Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl) {
-    if (ys_eq_lit(yr_get(tgt, "k"), "id")) {
+    if (yv_l(yr_get(tgt, "k")) == K_id) {
         return place_bind_id(tgt, t1, ln, cl);
-    } else if (ys_eq_lit(yr_get(tgt, "k"), "index")) {
+    } else if (yv_l(yr_get(tgt, "k")) == K_index) {
         return place_bind_idx(tgt, t1, ln, cl);
     } else {
         return place_bind_dot(tgt, t1, ln, cl);
@@ -8432,8 +8433,8 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
         ;
     } else {
         Yv *vt = infer(st, v);
-        if ((ys_eq_lit(yr_get(vt, "k"), "tarr") ||
-             ys_eq_lit(yr_get(vt, "k"), "tarrfix")) &&
+        if ((yv_l(yr_get(vt, "k")) == K_tarr ||
+             yv_l(yr_get(vt, "k")) == K_tarrfix) &&
             ys_eq_lit(arr_plus_kind(tt, vt), "cat")) {
             mode = ys("append");
             bulk = teq(yr_get(tt, "of"), yr_get(vt, "of"));
@@ -8450,19 +8451,19 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
         /* { let tv = v; let ti = 0; let tn = len(tv);
          *   while (ti < tn) { place = push(place, tv[ti]); ti = ti + 1 }
          *   place } */
-        Yv *tv = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                    yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("v")), "v",
+        Yv *tv = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                    yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("v")), "v",
                     v, "line", yv_long(ln), "col", yv_long(cl));
-        Yv *ti = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                    yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("i")), "v",
+        Yv *ti = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                    yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("i")), "v",
                     n_num(ys("0"), ln, cl), "line", yv_long(ln), "col",
                     yv_long(cl));
-        Yv *tn = yr(7, "k", ys("decl"), "kind", ys("let"), "typ",
-                    yr(1, "k", ys("tnone")), "name", ys_cat(t1, ys("n")), "v",
+        Yv *tn = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                    yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("n")), "v",
                     n_call1(ys("len"), n_id(ys_cat(t1, ys("v")), ln, cl), ln,
                             cl),
                     "line", yv_long(ln), "col", yv_long(cl));
-        Yv *elem = yr(5, "k", ys("index"), "arr",
+        Yv *elem = yr(5, "k", yv_long(K_index), "arr",
                       n_id(ys_cat(t1, ys("v")), ln, cl), "idx",
                       n_id(ys_cat(t1, ys("i")), ln, cl), "line", yv_long(ln),
                       "col", yv_long(cl));
@@ -8471,14 +8472,14 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
             n_call2(ys("push"), gen_place_read(tgt, t1, ln, cl), elem, ln, cl),
             t1, ln, cl);
         Yv *step = yr(
-            5, "k", ys("assign"), "name", ys_cat(t1, ys("i")), "v",
-            yr(6, "k", ys("bin"), "op", ys("+"), "l",
+            5, "k", yv_long(K_assign), "name", ys_cat(t1, ys("i")), "v",
+            yr(6, "k", yv_long(K_bin), "op", ys("+"), "l",
                n_id(ys_cat(t1, ys("i")), ln, cl), "r", n_num(ys("1"), ln, cl),
                "line", yv_long(ln), "col", yv_long(cl)),
             "line", yv_long(ln), "col", yv_long(cl));
         Yv *loop = yr(
-            5, "k", ys("while"), "cond",
-            yr(6, "k", ys("bin"), "op", ys("<"), "l",
+            5, "k", yv_long(K_kw_while), "cond",
+            yr(6, "k", yv_long(K_bin), "op", ys("<"), "l",
                n_id(ys_cat(t1, ys("i")), ln, cl), "r",
                n_id(ys_cat(t1, ys("n")), ln, cl), "line", yv_long(ln), "col",
                yv_long(cl)),
@@ -8523,7 +8524,7 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
     st = emit(st, ys("    pop %rdx"));
     st = emit(st, ys("    test %rcx, %rcx"));
     st = emit(st, ys("    js y_oob"));
-    if (ys_eq_lit(yr_get(bt, "k"), "tarrfix")) {
+    if (yv_l(yr_get(bt, "k")) == K_tarrfix) {
         st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
                                     ys_long(yv_l(yr_get(bt, "n")))),
                              ys(", %rcx")));
@@ -8556,33 +8557,33 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
 Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
     t = unfold(t);
     Yv *tk = yr_get(t, "k");
-    if (ys_eq_lit(tk, "tstr")) {
+    if (yv_l(tk) == K_tstr) {
         return st;
-    } else if (ys_eq_lit(tk, "tbool")) {
+    } else if (yv_l(tk) == K_tbool) {
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_bool_tostr"));
         return emit(st, ys("    add $8, %rsp"));
-    } else if (ys_eq_lit(tk, "tfloat")) {
+    } else if (yv_l(tk) == K_tfloat) {
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_float_tostr"));
         return emit(st, ys("    add $8, %rsp"));
-    } else if (ys_eq_lit(tk, "tarr")) {
-        if (ys_eq_lit(yr_get(yr_get(t, "of"), "k"), "tbyte")) {
+    } else if (yv_l(tk) == K_tarr) {
+        if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
         return gen_arr_tostr_rax(st, yr_get(t, "of"));
-    } else if (ys_eq_lit(tk, "tarrfix")) {
-        if (ys_eq_lit(yr_get(yr_get(t, "of"), "k"), "tbyte")) {
+    } else if (yv_l(tk) == K_tarrfix) {
+        if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
         return gen_arr_tostr_rax(st, yr_get(t, "of"));
-    } else if (ys_eq_lit(tk, "topt")) {
+    } else if (yv_l(tk) == K_topt) {
         return gen_opt_str_rax(st, t);
-    } else if (ys_eq_lit(tk, "trec")) {
+    } else if (yv_l(tk) == K_trec) {
         return gen_rec_str_rax(st, t, lay_of(t, t));
-    } else if (ys_eq_lit(tk, "tunion")) {
+    } else if (yv_l(tk) == K_tunion) {
         return gen_union_str_rax(st, t);
     } else {
         st = emit(st, ys("    push %rax"));
@@ -8676,7 +8677,7 @@ Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s) {
  * stays 8 bytes (one machine word per value). */
 
 long elem_bytes(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tbyte")) {
+    if (yv_l(yr_get(t, "k")) == K_tbyte) {
         return 1;
     } else {
         return 8;
@@ -8684,9 +8685,9 @@ long elem_bytes(Yv *t) {
 }
 
 long arr_elem_bytes(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tarr")) {
+    if (yv_l(yr_get(t, "k")) == K_tarr) {
         return elem_bytes(yr_get(t, "of"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
         return elem_bytes(yr_get(t, "of"));
     } else {
         return 8;
@@ -8697,7 +8698,7 @@ long arr_elem_bytes(Yv *t) {
  * a packed [byte] block (or at a byte local), so `*p` and `*p = v` move one
  * byte; every other pointee is a full 8-byte slot. */
 long ptr_width(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tptr")) {
+    if (yv_l(yr_get(t, "k")) == K_tptr) {
         return elem_bytes(yr_get(t, "to"));
     } else {
         return 8;
@@ -8785,19 +8786,19 @@ Yv *gen_dot(Yv *st, Yv *node) {
     /* dobj is read twice (infer, then gen). */
     Yv *dobj = yr_get(node, "obj");
     Yv *dkey = yr_get(node, "key");
-    if (ys_eq_lit(yr_get(dobj, "k"), "narrow")) {
+    if (yv_l(yr_get(dobj, "k")) == K_narrow) {
         Yv *s = infer(st, yr_get(dobj, "e"));
-        if (ys_eq_lit(yr_get(s, "k"), "tunion")) {
+        if (yv_l(yr_get(s, "k")) == K_tunion) {
             return gen_narrow_field(st, dobj, s, dkey);
         }
     }
     Yv *t = infer(st, dobj);
     Yv *tk = yr_get(t, "k");
-    if (ys_eq_lit(tk, "tarr") || ys_eq_lit(tk, "tarrfix") ||
-        ys_eq_lit(tk, "tstr")) {
+    if (yv_l(tk) == K_tarr || yv_l(tk) == K_tarrfix ||
+        yv_l(tk) == K_tstr) {
         return gen_prop(st, dobj, dkey, yv_l(yr_get(node, "line")),
                         yv_l(yr_get(node, "col")));
-    } else if (ys_eq_lit(tk, "tunion")) {
+    } else if (yv_l(tk) == K_tunion) {
         st = gen(st, dobj);
         return gen_union_slot(st, t, dkey, 0);
     } else {
@@ -8915,11 +8916,11 @@ Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
  * checker rejects such a read). */
 long rec_field_idx(Yv *t, Yv *key) {
     long idx = -1;
-    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         idx = rec_slot(fs, key);
         ;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         /* a map is lowered to the {keys, vals, boxes} record (see
          * gen_maplit), laid out boxes, keys, vals */
         if (ys_eq_lit(key, "boxes")) { idx = 0; ; } else if (ys_eq_lit(key, "keys")) { idx = 1; ; } else if (ys_eq_lit(key, "vals")) { idx = 2; ; } else { ; }
@@ -8929,14 +8930,14 @@ long rec_field_idx(Yv *t, Yv *key) {
 
 /* Static type of field `key` in trec type t (tnone when there is none). */
 Yv *rec_field_type(Yv *t, Yv *key) {
-    Yv *ft = yr(1, "k", ys("tnone"));
-    if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+    Yv *ft = yr(1, "k", yv_long(K_tnone));
+    if (yv_l(yr_get(t, "k")) == K_tunion) {
         Yv *ms = members(t);
         if (yv_len(ms) > 0) {
             ft = rec_field_type(ya_get(ms, 0), key);
         }
         ;
-    } else if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    } else if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         long i = 0;
         while (i < yv_len(fs)) {
@@ -9008,10 +9009,10 @@ Yv *gen_len(Yv *st, Yv *node) {
      * plain id (no `.v` reads here); infer gives the static type. */
     Yv *args = yr_get(node, "args");
     Yv *at = infer(st, ya_get(args, 0));
-    if (ys_eq_lit(yr_get(at, "k"), "tmap")) {
+    if (yv_l(yr_get(at, "k")) == K_tmap) {
         /* len(m) = len(m.keys): the entry count */
         return gen(st, n_call1(ys("len"), n_dot(ya_get(args, 0), ys("keys"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))));
-    } else if (ys_eq_lit(yr_get(at, "k"), "tstr")) {
+    } else if (yv_l(yr_get(at, "k")) == K_tstr) {
         st = gen(st, ya_get(args, 0));
         return emit(st, ys("    mov (%rax), %rax"));
     } else {
@@ -9027,7 +9028,7 @@ Yv *gen_push(Yv *st, Yv *node) {
     Yv *pat = infer(st, ya_get(pargs, 0));
     long pesz = arr_elem_bytes(pat);
     st = gen_push_args_as(st, yr_get(node, "args"),
-                          args2(yr(1, "k", ys("tnone")),
+                          args2(yr(1, "k", yv_long(K_tnone)),
                                 store_elem_type(pat, pesz)));
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
     st = emit(st, ys("    push %rax"));
@@ -9109,7 +9110,7 @@ Yv *gen_prepend(Yv *st, Yv *node) {
     Yv *pat = infer(st, ya_get(pargs, 0));
     long pesz = arr_elem_bytes(pat);
     st = gen_push_args_as(st, yr_get(node, "args"),
-                          args2(yr(1, "k", ys("tnone")),
+                          args2(yr(1, "k", yv_long(K_tnone)),
                                 store_elem_type(pat, pesz)));
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
     st = emit(st, ys("    push %rax"));
@@ -9161,40 +9162,40 @@ Yv *gen_tostring(Yv *st, Yv *node) {
     Yv *targs = yr_get(node, "args");
     Yv *a0 = ya_get(targs, 0);
     Yv *t = infer(st, a0);
-    if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    if (yv_l(yr_get(t, "k")) == K_tstr) {
         return gen(st, a0);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tbool")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_push_args(st, yr_get(node, "args"));
         st = emit(st, ys("    call y_bool_tostr"));
         return emit(st, ys("    add $8, %rsp"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         st = gen_push_args(st, yr_get(node, "args"));
         st = emit(st, ys("    call y_float_tostr"));
         return emit(st, ys("    add $8, %rsp"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarr) {
         st = gen(st, a0);
-        if (ys_eq_lit(yr_get(yr_get(t, "of"), "k"), "tbyte")) {
+        if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
         return gen_arr_tostr_rax(st, yr_get(t, "of"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
         st = gen(st, a0);
-        if (ys_eq_lit(yr_get(yr_get(t, "of"), "k"), "tbyte")) {
+        if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
         return gen_arr_tostr_rax(st, yr_get(t, "of"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "topt")) {
+    } else if (yv_l(yr_get(t, "k")) == K_topt) {
         st = gen(st, a0);
         return gen_opt_str_rax(st, t);
-    } else if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    } else if (yv_l(yr_get(t, "k")) == K_trec) {
         st = gen(st, a0);
         return gen_rec_str_rax(st, t, lay_of(t, t));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         st = gen(st, a0);
         return gen_union_str_rax(st, t);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         return gen_map_repr(st, a0, t);
     } else {
         st = gen_push_args(st, yr_get(node, "args"));
@@ -9343,27 +9344,27 @@ Yv *gen_index_of(Yv *st, Yv *node, int last) {
 Yv *gen_join(Yv *st, Yv *node) {
     Yv *jargs = yr_get(node, "args");
     Yv *at = infer(st, ya_get(jargs, 0));
-    Yv *eltyp = yr(1, "k", ys("tunk"));
-    if (ys_eq_lit(yr_get(at, "k"), "tarr")) {
+    Yv *eltyp = yr(1, "k", yv_long(K_tunk));
+    if (yv_l(yr_get(at, "k")) == K_tarr) {
         eltyp = yr_get(at, "of");
         ;
     } else {
         ;
     }
-    if (ys_eq_lit(yr_get(at, "k"), "tarrfix")) {
+    if (yv_l(yr_get(at, "k")) == K_tarrfix) {
         eltyp = yr_get(at, "of");
         ;
     } else {
         ;
     }
     Yv *ek = yr_get(eltyp, "k");
-    if (ys_eq_lit(ek, "tlong")) {
+    if (yv_l(ek) == K_tlong) {
         return gen_join_conv(st, node, ys("y_long_tostr"), 8);
-    } else if (ys_eq_lit(ek, "tbyte")) {
+    } else if (yv_l(ek) == K_tbyte) {
         return gen_join_conv(st, node, ys("y_long_tostr"), 1);
-    } else if (ys_eq_lit(ek, "tbool")) {
+    } else if (yv_l(ek) == K_tbool) {
         return gen_join_conv(st, node, ys("y_bool_tostr"), 8);
-    } else if (ys_eq_lit(ek, "tfloat")) {
+    } else if (yv_l(ek) == K_tfloat) {
         return gen_join_conv(st, node, ys("y_float_tostr"), 8);
     } else {
         st = gen_push_args(st, yr_get(node, "args"));
@@ -9454,10 +9455,10 @@ Yv *gen_puts(Yv *st, Yv *node) {
     Yv *pa = ya_get(pargs, 0);
     st = gen(st, pa);
     Yv *t = infer(st, pa);
-    if (ys_eq_lit(yr_get(t, "k"), "tbool")) {
+    if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_helper1(st, ys("y_put_bool"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = gen_helper1(st, ys("y_put_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
     } else {
@@ -9473,10 +9474,10 @@ Yv *gen_eputs(Yv *st, Yv *node) {
     Yv *pa = ya_get(pargs, 0);
     st = gen(st, pa);
     Yv *t = infer(st, pa);
-    if (ys_eq_lit(yr_get(t, "k"), "tbool")) {
+    if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_helper1(st, ys("y_eput_bool"));
         return emit(st, ys("    xor %eax, %eax"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = gen_helper1(st, ys("y_eput_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
     } else {
@@ -9509,7 +9510,7 @@ Yv *gen_sync_new(Yv *st, Yv *node) {
     if (ys_eq_lit(yr_get(callee, "v"), "mutex")) {
         keys = ya_push(keys, ys("$m"));
         vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
-        Yv *rec = yr(5, "k", ys("rec"), "keys", keys, "vals", vals, "line", ln, "col", cl);
+        Yv *rec = yr(5, "k", yv_long(K_rec), "keys", keys, "vals", vals, "line", ln, "col", cl);
         return gen_reclit(st, rec, t_mutex());
     } else {
         Yv *sargs = yr_get(node, "args");
@@ -9517,7 +9518,7 @@ Yv *gen_sync_new(Yv *st, Yv *node) {
         vals = ya_push(vals, ya_get(sargs, 0));
         keys = ya_push(keys, ys("$w"));
         vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
-        Yv *rec = yr(5, "k", ys("rec"), "keys", keys, "vals", vals, "line", ln, "col", cl);
+        Yv *rec = yr(5, "k", yv_long(K_rec), "keys", keys, "vals", vals, "line", ln, "col", cl);
         return gen_reclit(st, rec, t_sem());
     }
 }
@@ -9606,8 +9607,8 @@ Yv *gen_argv(Yv *st, Yv *node) {
 Yv *gen_store(Yv *st, Yv *node) {
     Yv *spt = infer(st, yr_get(node, "p"));
     long sw = ptr_width(spt);
-    Yv *sto = yr(1, "k", ys("tnone"));
-    if (sw == 8 && ys_eq_lit(yr_get(spt, "k"), "tptr")) {
+    Yv *sto = yr(1, "k", yv_long(K_tnone));
+    if (sw == 8 && yv_l(yr_get(spt, "k")) == K_tptr) {
         sto = yr_get(spt, "to");
         ;
     } else {
@@ -9639,16 +9640,16 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
                "end_label", arch_loc_label(fuid, 0), "fns", yr_get(st, "fns"),
                "bodies", yr_get(st, "bodies"));
     /* The names nested functions capture (see box_names / box_bound). */
-    f = env_define(f, ys(""), ys("frame"), 0, ys(""), yr(1, "k", ys("tnone")));
+    f = env_define(f, ys(""), ys("frame"), 0, ys(""), yr(1, "k", yv_long(K_tnone)));
     /* This function's type, for conversions at returns and self calls. */
     f = env_define(f, ys(""), ys("fnty"), 0, ys(""),
-                   yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"),
+                   yr(3, "k", yv_long(K_tfunc), "args", yr_get(func, "ptypes"),
                        "ret", fn_ret(func)));
     Yv *bnames = box_names(func);
     long bi = 0;
     while (bi < yv_len(bnames)) {
         Yv *bnm = ya_get(bnames, bi);
-        f = env_define(f, ys(""), ys("boxmark"), 0, bnm, yr(1, "k", ys("tnone")));
+        f = env_define(f, ys(""), ys("boxmark"), 0, bnm, yr(1, "k", yv_long(K_tnone)));
         bi = bi + 1;
     }
     /* The names this body appends to (see own_wanted), the same way. */
@@ -9657,7 +9658,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     while (ai < yv_len(anames)) {
         Yv *anm = ya_get(anames, ai);
         f = env_define(f, ys(""), ys("appmark"), 0, anm,
-                       yr(1, "k", ys("tnone")));
+                       yr(1, "k", yv_long(K_tnone)));
         ai = ai + 1;
     }
     /* A capturing named function is not in that table (see
@@ -9698,7 +9699,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
             /* Capture types come from the creation site (the enclosing env
              * knows them); without one the emitter would pick long for a
              * captured string in print/puts and in `+`. */
-            Yv *ct = yr(1, "k", ys("tnone"));
+            Yv *ct = yr(1, "k", yv_long(K_tnone));
             if (c < yv_len(captypes)) {
                 ct = ya_get(captypes, c);
                 ;
@@ -9730,7 +9731,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     while (opi < nargs) {
         Yv *opn = ya_get(params, opi);
         Yv *opt = ya_get(ptypes, opi);
-        if (ys_eq_lit(yr_get(opt, "k"), "tstr") && own_wanted(f, opn)) {
+        if (yv_l(yr_get(opt, "k")) == K_tstr && own_wanted(f, opn)) {
             Yv *ope = env_find(f, opn);
             f = emit(f, ys_cat(ys_cat(ys("    mov "),
                                       ys_long(yv_l(yr_get(ope, "off")))),
@@ -9854,7 +9855,7 @@ Yv *infer_fn_ret(Yv *st, Yv *func) {
  * (types.c inferred_ret); tnone when neither. */
 Yv *fn_ret(Yv *func) {
     Yv *r = yr_get(func, "ret");
-    if (ys_eq_lit(yr_get(r, "k"), "tnone")) {
+    if (yv_l(yr_get(r, "k")) == K_tnone) {
         return inferred_ret(yv_l(yr_get(func, "line")), yv_l(yr_get(func, "col")));
     } else {
         return r;
@@ -9862,7 +9863,7 @@ Yv *fn_ret(Yv *func) {
 }
 
 Yv *func_type(Yv *func) {
-    return yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"), "ret",
+    return yr(3, "k", yv_long(K_tfunc), "args", yr_get(func, "ptypes"), "ret",
               fn_ret(func));
 }
 
@@ -9871,13 +9872,13 @@ Yv *func_type(Yv *func) {
  * stringifies, which print arm runs, ...). */
 Yv *func_type_in(Yv *st, Yv *func) {
     Yv *r = fn_ret(func);
-    if (ys_eq_lit(yr_get(r, "k"), "tnone")) {
+    if (yv_l(yr_get(r, "k")) == K_tnone) {
         r = infer_fn_ret(st, func);
         ;
     } else {
         ;
     }
-    return yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"), "ret", r);
+    return yr(3, "k", yv_long(K_tfunc), "args", yr_get(func, "ptypes"), "ret", r);
 }
 
 /* Files share one namespace. A later top-level def replaces an earlier one
@@ -9967,7 +9968,7 @@ Yv *top_name_in(Yv *s, Yv *origin) {
  * bound to a function literal; both hoist -- or "" (rename.c
  * rn_decl_name). */
 Yv *top_def_name(Yv *s) {
-    if (ys_eq_lit(yr_get(s, "k"), "decl")) {
+    if (yv_l(yr_get(s, "k")) == K_decl) {
         return top_def_name_go(s);
     } else {
         return ys("");
@@ -9979,7 +9980,7 @@ Yv *top_def_name_go(Yv *s) {
      * note). */
     if (ys_eq_lit(yr_get(s, "kind"), "def")) {
         return yr_get(s, "name");
-    } else if (ys_eq_lit(yr_get(yr_get(s, "v"), "k"), "func")) {
+    } else if (yv_l(yr_get(yr_get(s, "v"), "k")) == K_func) {
         return yr_get(s, "name");
     } else {
         return ys("");
@@ -9999,10 +10000,10 @@ Yv *global_decls(Yv *stmts) {
     long i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
-        if (ys_eq_lit(yr_get(s, "k"), "decl")) {
+        if (yv_l(yr_get(s, "k")) == K_decl) {
             if (ys_eq_lit(yr_get(s, "kind"), "def")) {
                 ;
-            } else if (ys_eq_lit(yr_get(yr_get(s, "v"), "k"), "func")) {
+            } else if (yv_l(yr_get(yr_get(s, "v"), "k")) == K_func) {
                 ;
             } else {
                 out = ya_push(out, s);
@@ -10038,7 +10039,7 @@ Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
         Yv *d = ya_get(gdecls, i);
         Yv *gn = decl_name(d);
         Yv *t = decl_type(d);
-        if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+        if (yv_l(yr_get(t, "k")) == K_tnone) {
             t = infer(f, decl_value(d));
             ;
         } else {
@@ -10162,7 +10163,7 @@ Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only) {
                 out,
                 yr(3, "name", yr_get(fe0, "name"), "label",
                    yr_get(fe0, "label"), "typ",
-                   yr(3, "k", ys("tfunc"),
+                   yr(3, "k", yv_long(K_tfunc),
                       "args", fn_ptypes(yr_get(d, "func")),
                       "ret", infer_fn_ret(st, yr_get(d, "func")))));
             ;
@@ -10176,7 +10177,7 @@ Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only) {
 }
 
 int ret_omitted(Yv *func) {
-    return ys_eq_lit(yr_get(fn_ret(func), "k"), "tnone");
+    return yv_l(yr_get(fn_ret(func), "k")) == K_tnone;
 }
 
 Yv *fn_ptypes(Yv *func) {
@@ -10514,8 +10515,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         long ii = 0;
         while (ii < yv_len(inits)) {
             Yv *il = ya_get(inits, ii);
-            Yv *ityp = yr(3, "k", ys("tfunc"), "args", yav(0),
-                          "ret", yr(1, "k", ys("tvoid")));
+            Yv *ityp = yr(3, "k", yv_long(K_tfunc), "args", yav(0),
+                          "ret", yr(1, "k", yv_long(K_tvoid)));
             xfns = ya_push(xfns, yr(3, "name", il, "label", il, "typ", ityp));
             ii = ii + 1;
         }
@@ -10697,11 +10698,11 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         long ci = 0;
         while (ci < yv_len(inits)) {
             Yv *cl = ya_get(inits, ci);
-            Yv *callee = yr(4, "k", ys("id"), "v", cl, "line", yv_long(0),
+            Yv *callee = yr(4, "k", yv_long(K_id), "v", cl, "line", yv_long(0),
                             "col", yv_long(0));
             main_stmts = ya_push(
                 main_stmts,
-                yr(5, "k", ys("call"), "callee", callee, "args", noargs,
+                yr(5, "k", yv_long(K_call), "callee", callee, "args", noargs,
                    "line", yv_long(0), "col", yv_long(0)));
             ci = ci + 1;
         }
@@ -10709,7 +10710,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         i = 0; /* the Y source re-lets `i` here; same value, same scope */
         while (i < yv_len(pstmts)) {
             Yv *s = ya_get(pstmts, i);
-            if (ys_eq_lit(yr_get(s, "k"), "decl")) {
+            if (yv_l(yr_get(s, "k")) == K_decl) {
                 if (ys_eq_lit(yr_get(s, "kind"), "def")) {
                     if (name_in(capdefs, yr_get(s, "name"))) {
                         main_stmts = ya_push(main_stmts, s);
@@ -10718,7 +10719,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                         ;
                     }
                     ;
-                } else if (ys_eq_lit(yr_get(yr_get(s, "v"), "k"), "func")) {
+                } else if (yv_l(yr_get(yr_get(s, "v"), "k")) == K_func) {
                     if (name_in(capdefs, yr_get(s, "name"))) {
                         main_stmts = ya_push(main_stmts, s);
                         ;
@@ -10748,8 +10749,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
             st = emit_one_fn(
                 st, ys("_start"), yv_l(yr_get(rm, "uid")),
                 yr(6, "params", yav(0), "ptypes", yav(0), "ret",
-                   yr(1, "k", ys("tvoid")), "body",
-                   yr(4, "k", ys("block"), "stmts", main_stmts, "line",
+                   yr(1, "k", yv_long(K_tvoid)), "body",
+                   yr(4, "k", yv_long(K_block), "stmts", main_stmts, "line",
                       yv_long(0), "col", yv_long(0)),
                    "line", yv_long(0), "col", yv_long(0)),
                 1, yv_b(yr_get(want, "argv")) || yv_b(yr_get(xt, "argv")),
@@ -10760,8 +10761,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
             st = emit_one_fn(
                 st, init, yv_l(yr_get(rm, "uid")),
                 yr(6, "params", yav(0), "ptypes", yav(0), "ret",
-                   yr(1, "k", ys("tvoid")), "body",
-                   yr(4, "k", ys("block"), "stmts", main_stmts, "line",
+                   yr(1, "k", yv_long(K_tvoid)), "body",
+                   yr(4, "k", yv_long(K_block), "stmts", main_stmts, "line",
                       yv_long(0), "col", yv_long(0)), "line",
                    yv_long(0), "col", yv_long(0)),
                 0, 0, yav(0), ys(""));
@@ -10918,7 +10919,7 @@ Yv *dfl_codes(Yv *func) {
     long i = 0;
     while (i < yv_len(dv)) {
         Yv *d = ya_get(dv, i);
-        if (!ys_eq_lit(yr_get(d, "k"), "void")) {
+        if (yv_l(yr_get(d, "k")) != K_void) {
             any = 1;
             ;
         } else {
@@ -10936,17 +10937,17 @@ Yv *dfl_codes(Yv *func) {
 
 Yv *lit_code(Yv *d) {
     Yv *k = yr_get(d, "k");
-    if (ys_eq_lit(k, "void")) {
+    if (yv_l(k) == K_void) {
         return ys("v");
-    } else if (ys_eq_lit(k, "optarg")) {
+    } else if (yv_l(k) == K_optarg) {
         return ys("o");
-    } else if (ys_eq_lit(k, "num")) {
+    } else if (yv_l(k) == K_num) {
         return ys_cat(ys("n"), lit_text(d));
-    } else if (ys_eq_lit(k, "str")) {
+    } else if (yv_l(k) == K_str) {
         return ys_cat(ys("s"), lit_text(d));
-    } else if (ys_eq_lit(k, "bool")) {
+    } else if (yv_l(k) == K_bool) {
         return ys_cat(ys("b"), lit_text(d));
-    } else if (ys_eq_lit(k, "char")) {
+    } else if (yv_l(k) == K_char) {
         return ys_cat(ys("c"), lit_text(d));
     } else {
         return ys_cat(ys("-"), lit_neg_text(d));
@@ -10965,27 +10966,27 @@ Yv *lit_decode(Yv *c) {
     Yv *t = ys_slice(c, 0, 1);
     Yv *v = ys_slice_from(c, 1);
     if (ys_eq_lit(t, "v")) {
-        return normnode(yr(3, "k", ys("void"), "line", yv_long(0), "col",
+        return normnode(yr(3, "k", yv_long(K_void), "line", yv_long(0), "col",
                            yv_long(0)));
     } else if (ys_eq_lit(t, "o")) {
-        return normnode(yr(3, "k", ys("optarg"), "line", yv_long(0), "col",
+        return normnode(yr(3, "k", yv_long(K_optarg), "line", yv_long(0), "col",
                            yv_long(0)));
     } else if (ys_eq_lit(t, "n")) {
-        return normnode(yr(4, "k", ys("num"), "v", v, "line", yv_long(0),
+        return normnode(yr(4, "k", yv_long(K_num), "v", v, "line", yv_long(0),
                            "col", yv_long(0)));
     } else if (ys_eq_lit(t, "s")) {
-        return normnode(yr(4, "k", ys("str"), "v", v, "line", yv_long(0),
+        return normnode(yr(4, "k", yv_long(K_str), "v", v, "line", yv_long(0),
                            "col", yv_long(0)));
     } else if (ys_eq_lit(t, "b")) {
-        return normnode(yr(4, "k", ys("bool"), "v", v, "line", yv_long(0),
+        return normnode(yr(4, "k", yv_long(K_bool), "v", v, "line", yv_long(0),
                            "col", yv_long(0)));
     } else if (ys_eq_lit(t, "c")) {
-        return normnode(yr(4, "k", ys("char"), "v", v, "line", yv_long(0),
+        return normnode(yr(4, "k", yv_long(K_char), "v", v, "line", yv_long(0),
                            "col", yv_long(0)));
     } else {
-        Yv *num = yr(4, "k", ys("num"), "v", v, "line", yv_long(0), "col",
+        Yv *num = yr(4, "k", yv_long(K_num), "v", v, "line", yv_long(0), "col",
                      yv_long(0));
-        return normnode(yr(5, "k", ys("un"), "op", ys("-"), "e", num, "line",
+        return normnode(yr(5, "k", yv_long(K_un), "op", ys("-"), "e", num, "line",
                            yv_long(0), "col", yv_long(0)));
     }
 }
@@ -11345,56 +11346,56 @@ Yv *tcode(Yv *t) {
 
 Yv *tcode_go(Yv *out, Yv *t) {
     Yv *k = yr_get(t, "k");
-    if (ys_eq_lit(k, "tlong")) {
+    if (yv_l(k) == K_tlong) {
         return ya_push(out, ys("l"));
-    } else if (ys_eq_lit(k, "tbyte")) {
+    } else if (yv_l(k) == K_tbyte) {
         return ya_push(out, ys("b"));
-    } else if (ys_eq_lit(k, "tfloat")) {
+    } else if (yv_l(k) == K_tfloat) {
         return ya_push(out, ys("f"));
-    } else if (ys_eq_lit(k, "tbool")) {
+    } else if (yv_l(k) == K_tbool) {
         return ya_push(out, ys("o"));
-    } else if (ys_eq_lit(k, "tstr")) {
+    } else if (yv_l(k) == K_tstr) {
         return ya_push(out, ys("s"));
-    } else if (ys_eq_lit(k, "tvoid")) {
+    } else if (yv_l(k) == K_tvoid) {
         return ya_push(out, ys("v"));
-    } else if (ys_eq_lit(k, "tunk")) {
+    } else if (yv_l(k) == K_tunk) {
         return ya_push(out, ys("u"));
-    } else if (ys_eq_lit(k, "tnone")) {
+    } else if (yv_l(k) == K_tnone) {
         return ya_push(out, ys("n"));
-    } else if (ys_eq_lit(k, "tname")) {
+    } else if (yv_l(k) == K_tname) {
         out = ya_push(out, ys("N"));
         return pack_put(out, yr_get(t, "name"));
-    } else if (ys_eq_lit(k, "tptr")) {
+    } else if (yv_l(k) == K_tptr) {
         out = ya_push(out, ys("*"));
         return tcode_go(out, yr_get(t, "to"));
-    } else if (ys_eq_lit(k, "tarr")) {
+    } else if (yv_l(k) == K_tarr) {
         out = ya_push(out, ys("["));
         return tcode_go(out, yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "topt")) {
+    } else if (yv_l(k) == K_topt) {
         out = ya_push(out, ys("?"));
         return tcode_go(out, yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "tarrfix")) {
+    } else if (yv_l(k) == K_tarrfix) {
         out = ya_push(out, ys("F"));
         out = pack_put(out, ys_long(yv_l(yr_get(t, "n"))));
         return tcode_go(out, yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "tmap")) {
+    } else if (yv_l(k) == K_tmap) {
         out = ya_push(out, ys("M"));
         out = tcode_go(out, yr_get(t, "key"));
         return tcode_go(out, yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "tfunc")) {
+    } else if (yv_l(k) == K_tfunc) {
         out = ya_push(out, ys(">"));
         out = tcode_list(out, yr_get(t, "args"));
         return tcode_go(out, yr_get(t, "ret"));
-    } else if (ys_eq_lit(k, "tunion")) {
+    } else if (yv_l(k) == K_tunion) {
         out = ya_push(out, ys("U"));
         return tcode_list(out, yr_get(t, "ts"));
-    } else if (ys_eq_lit(k, "tparams")) {
+    } else if (yv_l(k) == K_tparams) {
         out = ya_push(out, ys("T"));
         return tcode_list(out, yr_get(t, "ts"));
-    } else if (ys_eq_lit(k, "tpat")) {
+    } else if (yv_l(k) == K_tpat) {
         out = ya_push(out, ys("P"));
         return pack_strs(out, yr_get(t, "names"));
-    } else if (ys_eq_lit(k, "tref")) {
+    } else if (yv_l(k) == K_tref) {
         /* a recursive alias: spelled out where it is met first, "q" and
            its unit id inside (tcode_refs: the trefs being spelled out) */
         Yv *tmp = yr_get(t, "tmp");
@@ -11410,7 +11411,7 @@ Yv *tcode_go(Yv *out, Yv *t) {
             tcode_refs = ya_slice(tcode_refs, 0, yv_len(tcode_refs) - 1);
             return out;
         }
-    } else if (ys_eq_lit(k, "trec")) {
+    } else if (yv_l(k) == K_trec) {
         out = ya_push(out, ys("R"));
         Yv *fs = yr_get(t, "fields");
         out = pack_put(out, ys_long(yv_len(fs)));
@@ -11429,7 +11430,7 @@ Yv *tcode_go(Yv *out, Yv *t) {
         return out;
     } else {
         puts_(ys_cat(ys_cat(ys("ycc: internal error: no code for type kind "),
-                            k),
+                            ktag(yv_l(k))),
                      ys("\n")));
         exit_(1);
         return out;
@@ -11460,55 +11461,55 @@ Yv *tdecode_go(Yv *cur) {
     Yv *c = ys_slice(s, p, p + 1);
     yr_set(cur, "p", yv_long(p + 1));
     if (ys_eq_lit(c, "l")) {
-        return normnode(yr(1, "k", ys("tlong")));
+        return normnode(yr(1, "k", yv_long(K_tlong)));
     } else if (ys_eq_lit(c, "b")) {
-        return normnode(yr(1, "k", ys("tbyte")));
+        return normnode(yr(1, "k", yv_long(K_tbyte)));
     } else if (ys_eq_lit(c, "f")) {
-        return normnode(yr(1, "k", ys("tfloat")));
+        return normnode(yr(1, "k", yv_long(K_tfloat)));
     } else if (ys_eq_lit(c, "o")) {
-        return normnode(yr(1, "k", ys("tbool")));
+        return normnode(yr(1, "k", yv_long(K_tbool)));
     } else if (ys_eq_lit(c, "s")) {
-        return normnode(yr(1, "k", ys("tstr")));
+        return normnode(yr(1, "k", yv_long(K_tstr)));
     } else if (ys_eq_lit(c, "v")) {
-        return normnode(yr(1, "k", ys("tvoid")));
+        return normnode(yr(1, "k", yv_long(K_tvoid)));
     } else if (ys_eq_lit(c, "u")) {
-        return normnode(yr(1, "k", ys("tunk")));
+        return normnode(yr(1, "k", yv_long(K_tunk)));
     } else if (ys_eq_lit(c, "n")) {
-        return normnode(yr(1, "k", ys("tnone")));
+        return normnode(yr(1, "k", yv_long(K_tnone)));
     } else if (ys_eq_lit(c, "N")) {
-        return normnode(yr(2, "k", ys("tname"), "name", pack_get(cur)));
+        return normnode(yr(2, "k", yv_long(K_tname), "name", pack_get(cur)));
     } else if (ys_eq_lit(c, "*")) {
-        return normnode(yr(2, "k", ys("tptr"), "to", tdecode_go(cur)));
+        return normnode(yr(2, "k", yv_long(K_tptr), "to", tdecode_go(cur)));
     } else if (ys_eq_lit(c, "[")) {
-        return normnode(yr(2, "k", ys("tarr"), "of", tdecode_go(cur)));
+        return normnode(yr(2, "k", yv_long(K_tarr), "of", tdecode_go(cur)));
     } else if (ys_eq_lit(c, "?")) {
-        return normnode(yr(2, "k", ys("topt"), "of", tdecode_go(cur)));
+        return normnode(yr(2, "k", yv_long(K_topt), "of", tdecode_go(cur)));
     } else if (ys_eq_lit(c, "F")) {
         long n = pack_num(cur);
-        return normnode(yr(3, "k", ys("tarrfix"), "of", tdecode_go(cur), "n",
+        return normnode(yr(3, "k", yv_long(K_tarrfix), "of", tdecode_go(cur), "n",
                           yv_long(n)));
     } else if (ys_eq_lit(c, "M")) {
         Yv *kt = tdecode_go(cur);
-        return normnode(yr(3, "k", ys("tmap"), "key", kt, "of",
+        return normnode(yr(3, "k", yv_long(K_tmap), "key", kt, "of",
                           tdecode_go(cur)));
     } else if (ys_eq_lit(c, ">")) {
         Yv *args = tdecode_list(cur);
-        return normnode(yr(3, "k", ys("tfunc"), "args", args, "ret",
+        return normnode(yr(3, "k", yv_long(K_tfunc), "args", args, "ret",
                           tdecode_go(cur)));
     } else if (ys_eq_lit(c, "U")) {
-        return normnode(yr(2, "k", ys("tunion"), "ts", tdecode_list(cur)));
+        return normnode(yr(2, "k", yv_long(K_tunion), "ts", tdecode_list(cur)));
     } else if (ys_eq_lit(c, "T")) {
-        return normnode(yr(2, "k", ys("tparams"), "ts", tdecode_list(cur)));
+        return normnode(yr(2, "k", yv_long(K_tparams), "ts", tdecode_list(cur)));
     } else if (ys_eq_lit(c, "P")) {
-        return normnode(yr(2, "k", ys("tpat"), "names", pack_get_strs(cur)));
+        return normnode(yr(2, "k", yv_long(K_tpat), "names", pack_get_strs(cur)));
     } else if (ys_eq_lit(c, "Q")) {
         /* a tref (tcode): a fresh unit id, `to` read with the "q"s inside
            it pointing back at it (tdec_encs/tdec_refs) */
         Yv *name = pack_get(cur);
         Yv *enc = pack_get(cur);
         tdec_n = tdec_n + 1;
-        Yv *r = yr(4, "k", ys("tref"), "name", name, "tmp",
-                   ys_cat(ys("~"), ys_long(tdec_n)), "to", yr(1, "k", ys("tnone")));
+        Yv *r = yr(4, "k", yv_long(K_tref), "name", name, "tmp",
+                   ys_cat(ys("~"), ys_long(tdec_n)), "to", yr(1, "k", yv_long(K_tnone)));
         tdec_encs = ya_push(tdec_encs, enc);
         tdec_refs = ya_push(tdec_refs, r);
         yr_set(r, "to", tdecode_go(cur));
@@ -11537,7 +11538,7 @@ Yv *tdecode_go(Yv *cur) {
             fields = ya_push(fields, yr(3, "name", fname, "opt", yv_bool(fopt), "typ", typ));
             i = i + 1;
         }
-        return normnode(yr(2, "k", ys("trec"), "fields", fields));
+        return normnode(yr(2, "k", yv_long(K_trec), "fields", fields));
     }
 }
 
@@ -11667,7 +11668,7 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         Yv *xn = pack_get(cur);
         Yv *xl = pack_get(cur);
         Yv *tc = pack_get(cur);
-        Yv *xt = yr(1, "k", ys("tnone"));
+        Yv *xt = yr(1, "k", yv_long(K_tnone));
         if (bound) {
             xt = tdecode(tc);
             ;
@@ -11946,47 +11947,47 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps) {
  * always optional: a hit boxes the value (some(v)), a miss leaves none. */
 
 Yv *n_str(Yv *v, long line, long col) {
-    return yr(4, "k", ys("str"), "v", v, "line", yv_long(line), "col", yv_long(col));
+    return yr(4, "k", yv_long(K_str), "v", v, "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *n_bool(Yv *v, long line, long col) {
-    return yr(4, "k", ys("bool"), "v", v, "line", yv_long(line), "col", yv_long(col));
+    return yr(4, "k", yv_long(K_bool), "v", v, "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *n_dot(Yv *obj, Yv *key, long line, long col) {
-    return yr(5, "k", ys("dot"), "obj", obj, "key", key, "line", yv_long(line), "col", yv_long(col));
+    return yr(5, "k", yv_long(K_dot), "obj", obj, "key", key, "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *n_idx(Yv *arr, Yv *idx, long line, long col) {
-    return yr(5, "k", ys("index"), "arr", arr, "idx", idx, "line", yv_long(line), "col", yv_long(col));
+    return yr(5, "k", yv_long(K_index), "arr", arr, "idx", idx, "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *n_bin(Yv *op, Yv *l, Yv *r, long line, long col) {
-    return yr(6, "k", ys("bin"), "op", op, "l", l, "r", r, "line", yv_long(line), "col", yv_long(col));
+    return yr(6, "k", yv_long(K_bin), "op", op, "l", l, "r", r, "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *n_not(Yv *e, long line, long col) {
-    return yr(5, "k", ys("un"), "op", ys("!"), "e", e, "line", yv_long(line), "col", yv_long(col));
+    return yr(5, "k", yv_long(K_un), "op", ys("!"), "e", e, "line", yv_long(line), "col", yv_long(col));
 }
 
 Yv *n_if(Yv *c, Yv *t, Yv *e, long ln, long cl) {
-    return yr(7, "k", ys("if"), "cond", c, "then", t, "els", e, "has_else", yv_bool(1), "line", yv_long(ln), "col", yv_long(cl));
+    return yr(7, "k", yv_long(K_kw_if), "cond", c, "then", t, "els", e, "has_else", yv_bool(1), "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *n_while(Yv *c, Yv *b, long ln, long cl) {
-    return yr(5, "k", ys("while"), "cond", c, "body", b, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(5, "k", yv_long(K_kw_while), "cond", c, "body", b, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *n_decl(Yv *name, Yv *v, long ln, long cl) {
-    return yr(7, "k", ys("decl"), "kind", ys("let"), "typ", yr(1, "k", ys("tnone")), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ", yr(1, "k", yv_long(K_tnone)), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *n_assign(Yv *name, Yv *v, long ln, long cl) {
-    return yr(5, "k", ys("assign"), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(5, "k", yv_long(K_assign), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *block_of(Yv *sts, long ln, long cl) {
-    return yr(4, "k", ys("block"), "stmts", sts, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(4, "k", yv_long(K_block), "stmts", sts, "line", yv_long(ln), "col", yv_long(cl));
 }
 
 /* {"a": 1, "a": 2}: duplicate keys collapse at emit time -- the last
@@ -12040,9 +12041,9 @@ Yv *gen_maplit(Yv *st, Yv *node) {
         bnodes = ya_push(bnodes, n_id(ys("none"), ln, cl));
         ki = ki + 1;
     }
-    Yv *keysarr = yr(4, "k", ys("array"), "elems", knodes, "line", yv_long(ln), "col", yv_long(cl));
-    Yv *valsarr = yr(4, "k", ys("array"), "elems", vals, "line", yv_long(ln), "col", yv_long(cl));
-    Yv *boxesarr = yr(4, "k", ys("array"), "elems", bnodes, "line", yv_long(ln), "col", yv_long(cl));
+    Yv *keysarr = yr(4, "k", yv_long(K_array), "elems", knodes, "line", yv_long(ln), "col", yv_long(cl));
+    Yv *valsarr = yr(4, "k", yv_long(K_array), "elems", vals, "line", yv_long(ln), "col", yv_long(cl));
+    Yv *boxesarr = yr(4, "k", yv_long(K_array), "elems", bnodes, "line", yv_long(ln), "col", yv_long(cl));
     Yv *rkeys = yav(0);
     rkeys = ya_push(rkeys, ys("keys"));
     rkeys = ya_push(rkeys, ys("vals"));
@@ -12051,16 +12052,16 @@ Yv *gen_maplit(Yv *st, Yv *node) {
     rvals = ya_push(rvals, keysarr);
     rvals = ya_push(rvals, valsarr);
     rvals = ya_push(rvals, boxesarr);
-    return gen(st, yr(5, "k", ys("rec"), "keys", rkeys, "vals", rvals, "line", yv_long(ln), "col", yv_long(cl)));
+    return gen(st, yr(5, "k", yv_long(K_rec), "keys", rkeys, "vals", rvals, "line", yv_long(ln), "col", yv_long(cl)));
 }
 
 /* m[k] read or test (is_map_read): m[k] on a map value. */
 int is_map_read(Yv *st, Yv *e) {
-    if (ys_eq_lit(yr_get(e, "k"), "index")) { return ys_eq_lit(yr_get(infer(st, yr_get(e, "arr")), "k"), "tmap"); } else { return 0; }
+    if (yv_l(yr_get(e, "k")) == K_index) { return yv_l(yr_get(infer(st, yr_get(e, "arr")), "k")) == K_tmap; } else { return 0; }
 }
 
 int is_none_id(Yv *e) {
-    return ys_eq_lit(yr_get(e, "k"), "id") && ys_eq_lit(yr_get(e, "v"), "none");
+    return yv_l(yr_get(e, "k")) == K_id && ys_eq_lit(yr_get(e, "v"), "none");
 }
 
 /* The key scan every map access shares: t+"i" stops at the entry whose
@@ -12123,7 +12124,7 @@ Yv *gen_map_get(Yv *st, Yv *node, Yv *mode) {
         Yv *b = n_id(ys_cat(t, ys("b")), ln, cl);
         Yv *fill = yav(0);
         fill = ya_push(fill, n_assign(ys_cat(t, ys("b")), n_call1(ys("some"), n_idx(n_dot(m, ys("vals"), ln, cl), i, ln, cl), ln, cl), ln, cl));
-        fill = ya_push(fill, yr(6, "k", ys("idxassign"), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", b, "line", yv_long(ln), "col", yv_long(cl)));
+        fill = ya_push(fill, yr(6, "k", yv_long(K_idxassign), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", b, "line", yv_long(ln), "col", yv_long(cl)));
         fill = ya_push(fill, n_num(ys("0"), ln, cl));
         Yv *kept = yav(0);
         kept = ya_push(kept, n_num(ys("0"), ln, cl));
@@ -12166,8 +12167,8 @@ Yv *gen_map_set(Yv *st, Yv *node) {
     sts = ya_push(sts, n_decl(ys_cat(t, ys("j")), n, ln, cl));
     sts = ya_push(sts, map_scan(t, ln, cl));
     Yv *hit = yav(0);
-    hit = ya_push(hit, yr(6, "k", ys("idxassign"), "arr", n_dot(m, ys("vals"), ln, cl), "idx", i, "v", v, "line", yv_long(ln), "col", yv_long(cl)));
-    hit = ya_push(hit, yr(6, "k", ys("idxassign"), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", n_id(ys("none"), ln, cl), "line", yv_long(ln), "col", yv_long(cl)));
+    hit = ya_push(hit, yr(6, "k", yv_long(K_idxassign), "arr", n_dot(m, ys("vals"), ln, cl), "idx", i, "v", v, "line", yv_long(ln), "col", yv_long(cl)));
+    hit = ya_push(hit, yr(6, "k", yv_long(K_idxassign), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", n_id(ys("none"), ln, cl), "line", yv_long(ln), "col", yv_long(cl)));
     hit = ya_push(hit, n_num(ys("0"), ln, cl));
     Yv *grow = yav(0);
     grow = ya_push(grow, n_call2(ys("push"), n_dot(m, ys("keys"), ln, cl), k, ln, cl));
@@ -12182,7 +12183,7 @@ Yv *gen_map_set(Yv *st, Yv *node) {
 /* One key's repr inside a map: string keys quote (Python-style), the
  * other hashable keys stringify bare. */
 Yv *map_key_repr(Yv *node, Yv *kt, long ln, long cl) {
-    if (ys_eq_lit(yr_get(kt, "k"), "tstr")) {
+    if (yv_l(yr_get(kt, "k")) == K_tstr) {
         return n_bin(ys("+"), n_bin(ys("+"), n_str(ys("\""), ln, cl), node, ln, cl), n_str(ys("\""), ln, cl), ln, cl);
     } else {
         return n_call1(ys("tostring"), node, ln, cl);

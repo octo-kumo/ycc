@@ -26,9 +26,9 @@
 #
 # Sites (by source file):
 #   lexer.y   puts("error: ...") and `err = "..."` (f-string errors)
-#   parser.y  { k: "err"/"terr", msg: ... } nodes; expect_err(.., WHAT)
+#   parser.y  { k: K.err/K.terr, msg: ... } nodes; expect_err(.., WHAT)
 #             (prints "expected WHAT, got ...")
-#   rename.y  { k: "err", msg: ... }
+#   rename.y  { k: K.err, msg: ... }
 #   types.y   fail(st, MSG, ..); expect_type(.., WHAT, ..) and
 #             expect_arg(.., WHAT, ..) (print "WHAT: expected T, got U");
 #             `err = "..."` (format specs) and `fterr = "..."` (call
@@ -162,12 +162,12 @@ index($0, "runtime error: ") {
 }
 f == "lexer.y" && /puts\("error: / { site(tmpl($0, index($0, "puts(") + 5)); next }
 f == "lexer.y" && /err = "/ { site(tmpl($0, index($0, "err = ") + 6)); next }
-f == "parser.y" && /k: "t?err", msg: / { site(tmpl($0, index($0, "msg: ") + 5)); next }
+f == "parser.y" && /k: K\.t?err, msg: / { site(tmpl($0, index($0, "msg: ") + 5)); next }
 f == "parser.y" && /expect_err\(toks, [a-z_]+, "/ && !/^def / {
     site("expected " tmpl($0, callarg($0, "expect_err", 3)) ", got")
     next
 }
-f == "rename.y" && /k: "err", msg: / { site(tmpl($0, index($0, "msg: ") + 5)); next }
+f == "rename.y" && /k: K\.err, msg: / { site(tmpl($0, index($0, "msg: ") + 5)); next }
 f == "types.y" && /fail\(st, / && !/^def / { site(tmpl($0, index($0, "fail(st, ") + 9)); next }
 f == "types.y" && /expect_type\(/ && !/^def / {
     site(tmpl($0, callarg($0, "expect_type", 4)) ": expected " HOLE ", got")

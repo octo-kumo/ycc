@@ -20,6 +20,7 @@
  * Parameters, loop variables, top-level bindings and any name starting
  * with `_` are exempt from the unused-binding rules. */
 #include "lint.h"
+#include "tags.h"
 
 #include <stdarg.h>
 
@@ -167,7 +168,7 @@ static long lint_num(Yv *name) {
     while (go && i >= 0) {
         long c = ys_byte_at(name, i);
         if (c >= 48 && c <= 57) {
-            v = v + (c - 48) * m;
+            v = v + (c - '0') * m;
             m = m * 10;
             i = i - 1;
         } else {
@@ -245,16 +246,16 @@ static long lint_warn_at(LintSt st, Yv *msg, Yv *node) {
  * a call's at its `(`. */
 static long lint_warn_start(LintSt st, Yv *msg, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "call")) {
+    if (yv_l(k) == K_call) {
         return lint_warn_start(st, msg, yr_get(node, "callee"));
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         return lint_warn_start(st, msg, yr_get(node, "l"));
-    } else if (ys_eq_lit(k, "index") || ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_index || yv_l(k) == K_slice) {
         return lint_warn_start(st, msg, yr_get(node, "arr"));
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         return lint_warn_start(st, msg, yr_get(node, "obj"));
-    } else if (ys_eq_lit(k, "opassign") ||
-               (ys_eq_lit(k, "incdec") && !yv_b(yr_get(node, "pre")))) {
+    } else if (yv_l(k) == K_opassign ||
+               (yv_l(k) == K_incdec && !yv_b(yr_get(node, "pre")))) {
         return lint_warn_start(st, msg, yr_get(node, "tgt"));
     } else {
         return lint_warn_at(st, msg, node);
@@ -263,7 +264,7 @@ static long lint_warn_start(LintSt st, Yv *msg, Yv *node) {
 
 /* A top-level binding is a global: not checked for use. */
 static long lint_stmt(LintSt st, Yv *s, int used, int top) {
-    if (top && ys_eq_lit(yr_get(s, "k"), "decl")) {
+    if (top && yv_l(yr_get(s, "k")) == K_decl) {
         return lint_node(st, yr_get(s, "v"), 1);
     } else {
         return lint_node(st, s, used);
@@ -273,9 +274,9 @@ static long lint_stmt(LintSt st, Yv *s, int used, int top) {
 /* Not the parser's trailing void, and not a def. */
 static int lint_code(Yv *s) {
     Yv *k = yr_get(s, "k");
-    if (ys_eq_lit(k, "void")) {
+    if (yv_l(k) == K_void) {
         return 0;
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return !ys_eq_lit(yr_get(s, "kind"), "def");
     } else {
         return 1;
@@ -286,11 +287,11 @@ static int lint_code(Yv *s) {
  * holding one, an `if` whose two arms both do. */
 static int lint_diverges(Yv *s) {
     Yv *k = yr_get(s, "k");
-    if (ys_eq_lit(k, "ret")) {
+    if (yv_l(k) == K_ret) {
         return 1;
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         return lint_any_diverges(yr_get(s, "stmts"));
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         return yv_b(yr_get(s, "has_else")) &&
                lint_diverges(yr_get(s, "then")) &&
                lint_diverges(yr_get(s, "els"));
@@ -313,68 +314,68 @@ static int lint_any_diverges(Yv *stmts) {
  * come first. */
 static long lint_node(LintSt st, Yv *node, int used) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "id")) {
+    if (yv_l(k) == K_id) {
         return lint_id(st, node, used);
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         (void)lint_node(st, yr_get(node, "callee"), 1);
         return lint_list(st, yr_get(node, "args"));
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         return lint_node(st, yr_get(node, "obj"), 1);
-    } else if (ys_eq_lit(k, "str") || ys_eq_lit(k, "num")) {
+    } else if (yv_l(k) == K_str || yv_l(k) == K_num) {
         return 0;
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         return lint_bin(st, node, used);
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return lint_decl(st, node);
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         return lint_stmts(st, yr_get(node, "stmts"), used, 0);
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         return lint_if(st, node, used);
-    } else if (ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_assign) {
         return lint_assign(st, node);
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         return lint_two(st, yr_get(node, "arr"), yr_get(node, "idx"));
-    } else if (ys_eq_lit(k, "rec")) {
+    } else if (yv_l(k) == K_rec) {
         return lint_lit(st, node, ys("field"), ys("record"));
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         return lint_list(st, yr_get(node, "elems"));
-    } else if (ys_eq_lit(k, "ret") || ys_eq_lit(k, "un") ||
-               ys_eq_lit(k, "addr") || ys_eq_lit(k, "deref") ||
-               ys_eq_lit(k, "rectest") || ys_eq_lit(k, "narrow") ||
-               ys_eq_lit(k, "matchend")) {
+    } else if (yv_l(k) == K_ret || yv_l(k) == K_un ||
+               yv_l(k) == K_addr || yv_l(k) == K_deref ||
+               yv_l(k) == K_rectest || yv_l(k) == K_narrow ||
+               yv_l(k) == K_matchend) {
         return lint_one(st, node, used);
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         return lint_opassign(st, node, used);
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         (void)lint_node(st, yr_get(node, "cond"), 1);
         return lint_node(st, yr_get(node, "body"), 0);
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         return lint_func(st, node);
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         return lint_incdec(st, node, used);
-    } else if (ys_eq_lit(k, "idxassign")) {
+    } else if (yv_l(k) == K_idxassign) {
         (void)lint_two(st, yr_get(node, "arr"), yr_get(node, "idx"));
         return lint_node(st, yr_get(node, "v"), 1);
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         return lint_two(st, yr_get(node, "obj"), yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         (void)lint_two(st, yr_get(node, "arr"), yr_get(node, "lo"));
         return lint_node(st, yr_get(node, "hi"), 1);
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         return lint_for(st, node);
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         (void)lint_node(st, yr_get(node, "iter"), 1);
         return lint_node(st, yr_get(node, "body"), 0);
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         (void)lint_two(st, yr_get(node, "lo"), yr_get(node, "hi"));
         return lint_node(st, yr_get(node, "body"), 0);
-    } else if (ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_map) {
         return lint_lit(st, node, ys("key"), ys("map"));
-    } else if (ys_eq_lit(k, "arrrep")) {
+    } else if (yv_l(k) == K_arrrep) {
         return lint_node(st, yr_get(node, "v"), 1);
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         return lint_two(st, yr_get(node, "p"), yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         (void)lint_two(st, yr_get(node, "arr"), yr_get(node, "lo"));
         return lint_two(st, yr_get(node, "hi"), yr_get(node, "v"));
     } else {
@@ -385,7 +386,7 @@ static long lint_node(LintSt st, Yv *node, int used) {
 /* The kinds with one operand, `e`; a unary operator's dropped result is
  * a mistake. */
 static long lint_one(LintSt st, Yv *node, int used) {
-    if (ys_eq_lit(yr_get(node, "k"), "un")) {
+    if (yv_l(yr_get(node, "k")) == K_un) {
         return lint_un(st, node, used);
     } else {
         return lint_node(st, yr_get(node, "e"), 1);
@@ -421,7 +422,7 @@ static long lint_id(LintSt st, Yv *node, int used) {
 static long lint_un(LintSt st, Yv *node, int used) {
     Yv *e = yr_get(node, "e");
     (void)lint_node(st, e, 1);
-    if (!used && !ys_eq_lit(yr_get(e, "k"), "num")) {
+    if (!used && yv_l(yr_get(e, "k")) != K_num) {
         (void)lint_warn_at(st,
                            lint_cat(3, ys("the result of '"),
                                     yr_get(node, "op"),
@@ -469,7 +470,7 @@ static long lint_bin(LintSt st, Yv *node, int used) {
 /* The names are compared as strings: `==` on two unannotated values
  * compares their words. */
 static int lint_same_id(Yv *l, Yv *r) {
-    if (ys_eq_lit(yr_get(l, "k"), "id") && ys_eq_lit(yr_get(r, "k"), "id")) {
+    if (yv_l(yr_get(l, "k")) == K_id && yv_l(yr_get(r, "k")) == K_id) {
         Yv *lv = yr_get(l, "v");
         Yv *rv = yr_get(r, "v");
         return ys_eq(lv, rv);
@@ -481,17 +482,17 @@ static int lint_same_id(Yv *l, Yv *r) {
 /* Whether evaluating a node can do more than compute its value. */
 static int lint_effect(Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "call") || ys_eq_lit(k, "assign") ||
-        ys_eq_lit(k, "opassign") || ys_eq_lit(k, "incdec") ||
-        ys_eq_lit(k, "idxassign") || ys_eq_lit(k, "dotassign") ||
-        ys_eq_lit(k, "sliceassign") || ys_eq_lit(k, "store")) {
+    if (yv_l(k) == K_call || yv_l(k) == K_assign ||
+        yv_l(k) == K_opassign || yv_l(k) == K_incdec ||
+        yv_l(k) == K_idxassign || yv_l(k) == K_dotassign ||
+        yv_l(k) == K_sliceassign || yv_l(k) == K_store) {
         return 1;
-    } else if (ys_eq_lit(k, "block") || ys_eq_lit(k, "if") ||
-               ys_eq_lit(k, "while") || ys_eq_lit(k, "for") ||
-               ys_eq_lit(k, "foreach") || ys_eq_lit(k, "forrange") ||
-               ys_eq_lit(k, "ret")) {
+    } else if (yv_l(k) == K_block || yv_l(k) == K_kw_if ||
+               yv_l(k) == K_kw_while || yv_l(k) == K_kw_for ||
+               yv_l(k) == K_kw_foreach || yv_l(k) == K_forrange ||
+               yv_l(k) == K_ret) {
         return 1;
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         return lint_effect_logic(node);
     } else {
         return 0;
@@ -507,7 +508,7 @@ static int lint_effect_logic(Yv *node) {
 /* A literal integer zero (`0`, `0x0`, `0b0_0`). Not `0.0`: a float
  * division by zero is an infinity or a nan, not a trap. */
 static int lint_zero(Yv *node) {
-    if (ys_eq_lit(yr_get(node, "k"), "num")) {
+    if (yv_l(yr_get(node, "k")) == K_num) {
         return lint_zero_text(yr_get(node, "v"));
     } else {
         return 0;
@@ -528,7 +529,7 @@ static int lint_zero_text(Yv *s) {
     long i = 0;
     while (ok && i < yv_len(digits)) {
         long c = ys_byte_at(digits, i);
-        ok = c == 48 || c == 95;
+        ok = c == '0' || c == '_';
         i = i + 1;
     }
     return ok;
@@ -571,19 +572,19 @@ static long lint_decl(LintSt st, Yv *node) {
 static int lint_scal(Yv *typ, Yv *v) {
     Yv *tk = yr_get(typ, "k");
     Yv *vk = yr_get(v, "k");
-    if (ys_eq_lit(tk, "tlong") || ys_eq_lit(tk, "tfloat") ||
-        ys_eq_lit(tk, "tbyte") || ys_eq_lit(tk, "tstr") ||
-        ys_eq_lit(tk, "tbool")) {
+    if (yv_l(tk) == K_tlong || yv_l(tk) == K_tfloat ||
+        yv_l(tk) == K_tbyte || yv_l(tk) == K_tstr ||
+        yv_l(tk) == K_tbool) {
         return 1;
     } else {
-        return ys_eq_lit(vk, "num") || ys_eq_lit(vk, "str") ||
-               ys_eq_lit(vk, "char") || ys_eq_lit(vk, "bool");
+        return yv_l(vk) == K_num || yv_l(vk) == K_str ||
+               yv_l(vk) == K_char || yv_l(vk) == K_bool;
     }
 }
 
 static int lint_fresh(Yv *v) {
     Yv *vk = yr_get(v, "k");
-    return ys_eq_lit(vk, "array") || ys_eq_lit(vk, "arrrep");
+    return yv_l(vk) == K_array || yv_l(vk) == K_arrrep;
 }
 
 static long lint_assign(LintSt st, Yv *node) {
@@ -591,7 +592,7 @@ static long lint_assign(LintSt st, Yv *node) {
     Yv *v = yr_get(node, "v");
     (void)lint_mark(st, name, 2);
     (void)lint_node(st, v, 1);
-    if (ys_eq_lit(yr_get(v, "k"), "id") && ys_eq(yr_get(v, "v"), name)) {
+    if (yv_l(yr_get(v, "k")) == K_id && ys_eq(yr_get(v, "v"), name)) {
         (void)lint_warn_at(st,
                            lint_cat(3, ys("'"), lint_disp(name),
                                     ys("' is assigned to itself")),
@@ -602,7 +603,7 @@ static long lint_assign(LintSt st, Yv *node) {
 
 static long lint_incdec(LintSt st, Yv *node, int used) {
     Yv *t = yr_get(node, "tgt");
-    if (ys_eq_lit(yr_get(t, "k"), "id")) {
+    if (yv_l(yr_get(t, "k")) == K_id) {
         (void)lint_mark(st, yr_get(t, "v"), 2);
         if (used) {
             (void)lint_mark(st, yr_get(t, "v"), 1);
@@ -618,7 +619,7 @@ static long lint_opassign(LintSt st, Yv *node, int used) {
     Yv *op = yr_get(node, "op");
     Yv *v = yr_get(node, "v");
     (void)lint_node(st, v, 1);
-    if (ys_eq_lit(yr_get(t, "k"), "id")) {
+    if (yv_l(yr_get(t, "k")) == K_id) {
         if (ys_eq_lit(op, "+") || ys_eq_lit(op, "*")) {
             (void)lint_mark(st, yr_get(t, "v"), 4);
         } else {
@@ -798,78 +799,78 @@ static long lint_tw_list(LintTy t, Yv *nodes) {
 
 static long lint_tw(LintTy t, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "id") || ys_eq_lit(k, "str") || ys_eq_lit(k, "num")) {
+    if (yv_l(k) == K_id || yv_l(k) == K_str || yv_l(k) == K_num) {
         return 0;
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         (void)lint_tw(t, yr_get(node, "callee"));
         return lint_tw_list(t, yr_get(node, "args"));
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         return lint_tw(t, yr_get(node, "obj"));
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         (void)lint_tw(t, yr_get(node, "l"));
         return lint_tw(t, yr_get(node, "r"));
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return lint_tw_decl(t, node);
-    } else if (ys_eq_lit(k, "block")) {
+    } else if (yv_l(k) == K_block) {
         return lint_tw_list(t, yr_get(node, "stmts"));
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         (void)lint_tw(t, yr_get(node, "cond"));
         (void)lint_tw(t, yr_get(node, "then"));
         return lint_tw(t, yr_get(node, "els"));
-    } else if (ys_eq_lit(k, "assign") || ys_eq_lit(k, "arrrep")) {
+    } else if (yv_l(k) == K_assign || yv_l(k) == K_arrrep) {
         return lint_tw(t, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         (void)lint_tw(t, yr_get(node, "arr"));
         return lint_tw(t, yr_get(node, "idx"));
-    } else if (ys_eq_lit(k, "rec") || ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_rec || yv_l(k) == K_map) {
         return lint_tw_list(t, yr_get(node, "vals"));
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         return lint_tw_list(t, yr_get(node, "elems"));
-    } else if (ys_eq_lit(k, "ret") || ys_eq_lit(k, "un") ||
-               ys_eq_lit(k, "addr") || ys_eq_lit(k, "deref") ||
-               ys_eq_lit(k, "rectest") || ys_eq_lit(k, "narrow") ||
-               ys_eq_lit(k, "matchend")) {
+    } else if (yv_l(k) == K_ret || yv_l(k) == K_un ||
+               yv_l(k) == K_addr || yv_l(k) == K_deref ||
+               yv_l(k) == K_rectest || yv_l(k) == K_narrow ||
+               yv_l(k) == K_matchend) {
         return lint_tw_one(t, node);
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         return lint_tw_func(t, node);
-    } else if (ys_eq_lit(k, "typedef")) {
+    } else if (yv_l(k) == K_typedef) {
         return lint_root(t, yr_get(node, "typ"), yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")), yr_get(node, "name"));
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         (void)lint_tw(t, yr_get(node, "tgt"));
         return lint_tw(t, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         (void)lint_tw(t, yr_get(node, "cond"));
         return lint_tw(t, yr_get(node, "body"));
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         return lint_tw(t, yr_get(node, "tgt"));
-    } else if (ys_eq_lit(k, "idxassign")) {
+    } else if (yv_l(k) == K_idxassign) {
         (void)lint_tw(t, yr_get(node, "arr"));
         (void)lint_tw(t, yr_get(node, "idx"));
         return lint_tw(t, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         (void)lint_tw(t, yr_get(node, "obj"));
         return lint_tw(t, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         (void)lint_tw(t, yr_get(node, "arr"));
         (void)lint_tw(t, yr_get(node, "lo"));
         return lint_tw(t, yr_get(node, "hi"));
-    } else if (ys_eq_lit(k, "for")) {
+    } else if (yv_l(k) == K_kw_for) {
         (void)lint_tw(t, yr_get(node, "init"));
         (void)lint_tw(t, yr_get(node, "cond"));
         (void)lint_tw(t, yr_get(node, "step"));
         return lint_tw(t, yr_get(node, "body"));
-    } else if (ys_eq_lit(k, "foreach")) {
+    } else if (yv_l(k) == K_kw_foreach) {
         (void)lint_tw(t, yr_get(node, "iter"));
         return lint_tw(t, yr_get(node, "body"));
-    } else if (ys_eq_lit(k, "forrange")) {
+    } else if (yv_l(k) == K_forrange) {
         (void)lint_tw(t, yr_get(node, "lo"));
         (void)lint_tw(t, yr_get(node, "hi"));
         return lint_tw(t, yr_get(node, "body"));
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         (void)lint_tw(t, yr_get(node, "p"));
         return lint_tw(t, yr_get(node, "v"));
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         (void)lint_tw(t, yr_get(node, "arr"));
         (void)lint_tw(t, yr_get(node, "lo"));
         (void)lint_tw(t, yr_get(node, "hi"));
@@ -905,7 +906,7 @@ static long lint_tw_func(LintTy t, Yv *node) {
 }
 
 static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias) {
-    if (!ys_eq_lit(yr_get(typ, "k"), "tnone")) {
+    if (yv_l(yr_get(typ, "k")) != K_tnone) {
         /* a module's alias is its own: `m.T` (rename.c rn_prepass_one) */
         Yv *m = lint_mod_of(line);
         Yv *name = alias;
@@ -936,12 +937,12 @@ static Yv *lint_mod_of(long ln) {
 /* An occurrence: a record of two or more fields, or a union. */
 static int lint_cand(Yv *ty) {
     Yv *k = yr_get(ty, "k");
-    if (ys_eq_lit(k, "trec")) {
+    if (yv_l(k) == K_trec) {
         Yv *fs = yr_get(ty, "fields");
         /* mutex and sem are records too, but named ones (parser.c sync_type) */
         return yv_len(fs) >= 2 && !ys_starts_with(yr_get(ya_get(fs, 0), "name"), ys("$"));
     } else {
-        return ys_eq_lit(k, "tunion");
+        return yv_l(k) == K_tunion;
     }
 }
 
@@ -949,36 +950,36 @@ static int lint_cand(Yv *ty) {
  * one it is in, or -1). */
 static Yv *lint_tk(LintTy t, Yv *ty, int rec, long parent) {
     Yv *k = yr_get(ty, "k");
-    if (ys_eq_lit(k, "tname")) {
+    if (yv_l(k) == K_tname) {
         return lint_tk_name(t, yr_get(ty, "name"));
-    } else if (ys_eq_lit(k, "tptr")) {
+    } else if (yv_l(k) == K_tptr) {
         return ys_cat(ys("*"), lint_tk(t, yr_get(ty, "to"), rec, parent));
-    } else if (ys_eq_lit(k, "tarr")) {
+    } else if (yv_l(k) == K_tarr) {
         return lint_cat(3, ys("["), lint_tk(t, yr_get(ty, "of"), rec, parent),
                         ys("]"));
-    } else if (ys_eq_lit(k, "tarrfix")) {
+    } else if (yv_l(k) == K_tarrfix) {
         return lint_cat(5, ys("["), lint_tk(t, yr_get(ty, "of"), rec, parent),
                         ys(";"), ys_tostring(yr_get(ty, "n")), ys("]"));
-    } else if (ys_eq_lit(k, "topt")) {
+    } else if (yv_l(k) == K_topt) {
         return ys_cat(lint_tk(t, yr_get(ty, "of"), rec, parent), ys("?"));
-    } else if (ys_eq_lit(k, "tmap")) {
+    } else if (yv_l(k) == K_tmap) {
         Yv *kk = lint_tk(t, yr_get(ty, "key"), rec, parent);
         return lint_cat(5, ys("{"), kk, ys("=>"),
                         lint_tk(t, yr_get(ty, "of"), rec, parent), ys("}"));
-    } else if (ys_eq_lit(k, "tfunc")) {
+    } else if (yv_l(k) == K_tfunc) {
         Yv *ak = lint_tk_list(t, yr_get(ty, "args"), rec, parent);
         return lint_cat(4, ys("("), ak, ys(")->"),
                         lint_tk(t, yr_get(ty, "ret"), rec, parent));
-    } else if (ys_eq_lit(k, "tparams")) {
+    } else if (yv_l(k) == K_tparams) {
         return lint_cat(3, ys("("),
                         lint_tk_list(t, yr_get(ty, "ts"), rec, parent),
                         ys(")"));
-    } else if (ys_eq_lit(k, "trec")) {
+    } else if (yv_l(k) == K_trec) {
         return lint_tk_rec(t, ty, rec, parent);
-    } else if (ys_eq_lit(k, "tunion")) {
+    } else if (yv_l(k) == K_tunion) {
         return lint_tk_union(t, ty, rec, parent);
     } else {
-        return k;
+        return ktag(yv_l(k));
     }
 }
 
@@ -1085,7 +1086,7 @@ static long lint_tk_members(LintTy t, Yv *u, int rec, long me, Yv *parts) {
 /* The alias a union member names when it is a union (and not one being
  * expanded), or -1. */
 static long lint_union_alias(LintTy t, Yv *m) {
-    if (ys_eq_lit(yr_get(m, "k"), "tname")) {
+    if (yv_l(yr_get(m, "k")) == K_tname) {
         long ai = nameix_get(yr_get(t, "amap"), yr_get(m, "name"));
         if (ai < 0) {
             return -1;
@@ -1102,7 +1103,7 @@ static long lint_union_alias(LintTy t, Yv *m) {
 }
 
 static int lint_is_union(Yv *ty) {
-    return ys_eq_lit(yr_get(ty, "k"), "tunion");
+    return yv_l(yr_get(ty, "k")) == K_tunion;
 }
 
 static long lint_occ(LintTy t, Yv *ty, long parent) {

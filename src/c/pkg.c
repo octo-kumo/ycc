@@ -1,5 +1,6 @@
 /* pkg.c — packages, the 1:1 port of src/y/pkg.y (see PORTING.md). */
 #include "pkg.h"
+#include "tags.h"
 
 #include <fcntl.h>
 #include <stdarg.h>
@@ -461,7 +462,7 @@ static Yv *pk_toml(Yv *text, Yv *path) {
             ys(": "));
         Yv *line = ys_trim(pk_uncomment(ya_get(lines, i)));
         Yv *e = yr(8, "tab", tab, "n", yv_long(n), "key", ys(""),
-                   "line", yv_long(ln), "k", ys("h"), "s", ys(""),
+                   "line", yv_long(ln), "k", yv_long(K_h), "s", ys(""),
                    "keys", pk_nostrs(), "items", pk_nostrs());
         if (yv_len(line) == 0) {
             ;
@@ -549,17 +550,17 @@ static Yv *pk_toml(Yv *text, Yv *path) {
             (void)yr_set(e, "key", key);
             Yv *c = pk_peek(cur);
             if (ys_eq_lit(c, "[")) {
-                (void)yr_set(e, "k", ys("a"));
+                (void)yr_set(e, "k", yv_long(K_a));
                 (void)yr_set(e, "items", pk_array(cur, at));
                 ;
             } else if (ys_eq_lit(c, "{")) {
-                (void)yr_set(e, "k", ys("t"));
+                (void)yr_set(e, "k", yv_long(K_t));
                 Yv *t = pk_itable(cur, at);
                 (void)yr_set(e, "keys", yr_get(t, "keys"));
                 (void)yr_set(e, "items", yr_get(t, "vals"));
                 ;
             } else if (ys_eq_lit(c, "\"") || ys_eq_lit(c, "'")) {
-                (void)yr_set(e, "k", ys("s"));
+                (void)yr_set(e, "k", yv_long(K_s));
                 (void)yr_set(e, "s", pk_qstr(cur, at));
                 ;
             } else {
@@ -592,7 +593,7 @@ static Yv *pk_tq(Yv *s) {
 }
 
 static Yv *pk_want_str(Yv *e, Yv *at) {
-    if (!ys_eq_lit(yr_get(e, "k"), "s")) {
+    if (yv_l(yr_get(e, "k")) != K_s) {
         (void)pk_die(pk_cat(4, at, ys("'"), yr_get(e, "key"),
                             ys("' must be a string")));
         ;
@@ -629,7 +630,7 @@ static PkMan pk_manifest(Yv *dir) {
             (void)pk_die(pk_cat(4, at, ys("[["), tab,
                                 ys("]] has no place in a manifest")));
             ;
-        } else if (ys_eq_lit(yr_get(e, "k"), "h")) {
+        } else if (yv_l(yr_get(e, "k")) == K_h) {
             if (!ys_eq_lit(tab, "package") && !ys_eq_lit(tab, "bin") &&
                 !ys_eq_lit(tab, "dependencies")) {
                 (void)pk_die(pk_cat(4, at, ys("unknown table ["), tab,
@@ -698,7 +699,7 @@ static long pk_man_package(PkMan m, PkEnt e, Yv *at) {
         (void)yr_set(m, "lib", pk_want_str(e, at));
         ;
     } else if (ys_eq_lit(key, "src")) {
-        if (!ys_eq_lit(yr_get(e, "k"), "a")) {
+        if (yv_l(yr_get(e, "k")) != K_a) {
             (void)pk_die(pk_cat(2, at, ys("'src' must be an array of strings")));
             ;
         } else {
@@ -756,7 +757,7 @@ static PkDep pk_man_dep(PkEnt e, Yv *at) {
         }
         i = i + 1;
     }
-    if (!ys_eq_lit(yr_get(e, "k"), "t") ||
+    if (yv_l(yr_get(e, "k")) != K_t ||
         (yv_len(yr_get(d, "path")) == 0 && yv_len(yr_get(d, "git")) == 0)) {
         (void)pk_die(pk_cat(
             4, at, ys("dependency '"), nm,
@@ -1170,7 +1171,7 @@ static Yv *pk_lock_read(Yv *dir) {
                 }
                 Yv *lk = ya_get(out, n);
                 Yv *key = yr_get(e, "key");
-                if (!ys_eq_lit(yr_get(e, "k"), "s")) {
+                if (yv_l(yr_get(e, "k")) != K_s) {
                     ;
                 } else if (ys_eq_lit(key, "name")) {
                     (void)yr_set(lk, "name", yr_get(e, "s"));

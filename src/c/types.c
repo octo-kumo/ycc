@@ -34,6 +34,7 @@
  * return position are `return`. */
 #include "types.h"
 #include "yv.h"
+#include "tags.h"
 
 /* parser.c's name index (NameIx, lookup below) */
 Yv *nameix_new(long cap);
@@ -89,10 +90,10 @@ Yv *arr_plus_kind(Yv *lt, Yv *rt);
  * (unlike `elem + a`, an array-typed element is never spliced). The right
  * operand must be an array; the left must be its element type. */
 static Yv *typeof_cons(Yv *st, Yv *lt, Yv *rt, long line, long col) {
-    if (ys_eq_lit(yr_get(rt, "k"), "tarr") ||
-        ys_eq_lit(yr_get(rt, "k"), "tarrfix")) {
+    if (yv_l(yr_get(rt, "k")) == K_tarr ||
+        yv_l(yr_get(rt, "k")) == K_tarrfix) {
         st = expect_type(st, lt, yr_get(rt, "of"), ys("'::' element"), line, col);
-        return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(rt, "of")),
+        return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr_get(rt, "of")),
                   "st", st);
     } else {
         st = fail(st,
@@ -175,7 +176,7 @@ static Yv *err_at(Yv *msg, long line, long col) {
 // recursive alias, rename.y: see "recursive types" below).
 
 static Yv *t_unk(void) {
-    return yr(1, "k", ys("tunk"));
+    return yr(1, "k", yv_long(K_tunk));
 }
 
 /* The types of a mutex and a semaphore (CHOICES_MADE.md 33): records no
@@ -184,15 +185,15 @@ static Yv *t_unk(void) {
  * semaphore's count is guarded by its own lock word. */
 Yv *t_mutex(void) {
     Yv *fs = yav(0);
-    fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
-    return yr(2, "k", ys("trec"), "fields", fs);
+    fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+    return yr(2, "k", yv_long(K_trec), "fields", fs);
 }
 
 Yv *t_sem(void) {
     Yv *fs = yav(0);
-    fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
-    fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
-    return yr(2, "k", ys("trec"), "fields", fs);
+    fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+    fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+    return yr(2, "k", yv_long(K_trec), "fields", fs);
 }
 
 /* The parameter types of a function type. */
@@ -213,13 +214,13 @@ static Yv *tc_res(Yv *typ, Yv *st) {
 // type with one inside needs an annotation (has_free) -- error poison
 // (plain tunk) stays quiet.
 static Yv *t_free(void) {
-    return yr(2, "k", ys("tunk"), "free", yv_bool(1));
+    return yr(2, "k", yv_long(K_tunk), "free", yv_bool(1));
 }
 
 // A def's return type before it is known: a call to it then (a forward
 // call) needs the return type annotated.
 static Yv *t_pend(void) {
-    return yr(3, "k", ys("tpend"), "self", yv_bool(0), "used", yv_bool(0));
+    return yr(3, "k", yv_long(K_tpend), "self", yv_bool(0), "used", yv_bool(0));
 }
 
 // The return type of a def while its body is checked to infer it: a call
@@ -227,21 +228,21 @@ static Yv *t_pend(void) {
 // (call_result), and typeof_def checks the body again with the type the
 // rest of the body gave.
 static Yv *t_pend_self(void) {
-    return yr(3, "k", ys("tpend"), "self", yv_bool(1), "used", yv_bool(0));
+    return yr(3, "k", yv_long(K_tpend), "self", yv_bool(1), "used", yv_bool(0));
 }
 
 static int has_free(Yv *t) {
     Yv *k = yr_get(t, "k");
-    if (ys_eq_lit(k, "tunk")) {
+    if (yv_l(k) == K_tunk) {
         return yr_has(t, "free");
-    } else if (ys_eq_lit(k, "tarr") || ys_eq_lit(k, "tarrfix") ||
-               ys_eq_lit(k, "topt")) {
+    } else if (yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
+               yv_l(k) == K_topt) {
         return has_free(yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "tptr")) {
+    } else if (yv_l(k) == K_tptr) {
         return has_free(yr_get(t, "to"));
-    } else if (ys_eq_lit(k, "tmap")) {
+    } else if (yv_l(k) == K_tmap) {
         return has_free(yr_get(t, "key")) || has_free(yr_get(t, "of"));
-    } else if (ys_eq_lit(k, "trec")) {
+    } else if (yv_l(k) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         long i = 0;
         while (i < yv_len(fs)) {
@@ -251,7 +252,7 @@ static int has_free(Yv *t) {
             i = i + 1;
         }
         return 0;
-    } else if (ys_eq_lit(k, "tunion")) {
+    } else if (yv_l(k) == K_tunion) {
         Yv *ts = yr_get(t, "ts");
         long i = 0;
         while (i < yv_len(ts)) {
@@ -261,7 +262,7 @@ static int has_free(Yv *t) {
             i = i + 1;
         }
         return 0;
-    } else if (ys_eq_lit(k, "tfunc")) {
+    } else if (yv_l(k) == K_tfunc) {
         Yv *as = yr_get(t, "args");
         long i = 0;
         while (i < yv_len(as)) {
@@ -279,16 +280,16 @@ static int has_free(Yv *t) {
 // A function type whose return type is not known yet (t_pend), and not
 // the def being inferred (t_pend_self) calling itself.
 static int ret_pending(Yv *t) {
-    return ys_eq_lit(yr_get(t, "k"), "tfunc") &&
-           ys_eq_lit(yr_get(yr_get(t, "ret"), "k"), "tpend") &&
+    return yv_l(yr_get(t, "k")) == K_tfunc &&
+           yv_l(yr_get(yr_get(t, "ret"), "k")) == K_tpend &&
            !yv_b(yr_get(yr_get(t, "ret"), "self"));
 }
 
 // A function type whose return type is not known yet, the def being
 // inferred included: its name (or `self`) used as a value.
 static int ret_unknown(Yv *t) {
-    return ys_eq_lit(yr_get(t, "k"), "tfunc") &&
-           ys_eq_lit(yr_get(yr_get(t, "ret"), "k"), "tpend");
+    return yv_l(yr_get(t, "k")) == K_tfunc &&
+           yv_l(yr_get(yr_get(t, "ret"), "k")) == K_tpend;
 }
 
 // The type of a call to ft: its return type; a def calling itself while
@@ -296,7 +297,7 @@ static int ret_unknown(Yv *t) {
 // again (typeof_def).
 static Yv *call_result(Yv *ft) {
     Yv *r = yr_get(ft, "ret");
-    if (ys_eq_lit(yr_get(r, "k"), "tpend")) {
+    if (yv_l(yr_get(r, "k")) == K_tpend) {
         yr_set(r, "used", yv_bool(1));
         return t_unk();
     } else {
@@ -309,7 +310,7 @@ static Yv *call_result(Yv *ft) {
 // arms only agree through such holes (see teq note), and a concrete
 // {k, key, of} shape here would disagree with the rec arm's {k, fields}.
 static Yv *map_type_of(Yv *v) {
-    return yr(3, "k", ys("tmap"), "key", yr(1, "k", ys("tstr")), "of", v);
+    return yr(3, "k", yv_long(K_tmap), "key", yr(1, "k", yv_long(K_tstr)), "of", v);
 }
 
 // NOTE: no `||` (see lexer.y isalnum note): the C VM evaluates both sides
@@ -330,44 +331,44 @@ int teq(Yv *a, Yv *b) {
     }
     Yv *ak = yr_get(a, "k");
     Yv *bk = yr_get(b, "k");
-    if (ys_eq_lit(ak, "tunk")) {
+    if (yv_l(ak) == K_tunk) {
         return 1;
-    } else if (ys_eq_lit(bk, "tunk")) {
+    } else if (yv_l(bk) == K_tunk) {
         return 1;
-    } else if (!ys_eq(ak, bk)) {
-        if (ys_eq_lit(ak, "tref") || ys_eq_lit(bk, "tref")) {
+    } else if (yv_l(ak) != yv_l(bk)) {
+        if (yv_l(ak) == K_tref || yv_l(bk) == K_tref) {
             return teq_ref(a, b);
         } else {
             return 0;
         }
-    } else if (ys_eq_lit(ak, "tnone")) {
+    } else if (yv_l(ak) == K_tnone) {
         return 1;
-    } else if (ys_eq_lit(bk, "tnone")) {
+    } else if (yv_l(bk) == K_tnone) {
         return 1;
-    } else if (ys_eq_lit(ak, "tname")) {
+    } else if (yv_l(ak) == K_tname) {
         return 1;
-    } else if (ys_eq_lit(bk, "tname")) {
+    } else if (yv_l(bk) == K_tname) {
         return 1;
-    } else if (ys_eq_lit(ak, "tparams")) {
+    } else if (yv_l(ak) == K_tparams) {
         return 1;
-    } else if (ys_eq_lit(bk, "tparams")) {
+    } else if (yv_l(bk) == K_tparams) {
         return 1;
-    } else if (ys_eq_lit(ak, "tptr")) {
+    } else if (yv_l(ak) == K_tptr) {
         return teq(yr_get(a, "to"), yr_get(b, "to"));
-    } else if (ys_eq_lit(ak, "tarr")) {
+    } else if (yv_l(ak) == K_tarr) {
         return teq(yr_get(a, "of"), yr_get(b, "of"));
-    } else if (ys_eq_lit(ak, "tarrfix")) {
+    } else if (yv_l(ak) == K_tarrfix) {
         if (yv_l(yr_get(a, "n")) == yv_l(yr_get(b, "n"))) {
             return teq(yr_get(a, "of"), yr_get(b, "of"));
         } else {
             return 0;
         }
-    } else if (ys_eq_lit(ak, "tmap")) {
+    } else if (yv_l(ak) == K_tmap) {
         // map types: same key type, equal value types.
         if (teq(yr_get(a, "key"), yr_get(b, "key"))) { return teq(yr_get(a, "of"), yr_get(b, "of")); } else { return 0; }
-    } else if (ys_eq_lit(yr_get(a, "k"), "topt")) {
+    } else if (yv_l(yr_get(a, "k")) == K_topt) {
         return teq(yr_get(a, "of"), yr_get(b, "of"));
-    } else if (ys_eq_lit(yr_get(a, "k"), "trec")) {
+    } else if (yv_l(yr_get(a, "k")) == K_trec) {
         // record types: the same set of fields with pairwise-equal types;
         // the order they are written in is not part of the type (a record
         // is laid out by field name, NATIVE.md "Records"). tunk fields
@@ -382,7 +383,7 @@ int teq(Yv *a, Yv *b) {
         } else {
             return teq_fields(af, bf, 0);
         }
-    } else if (ys_eq_lit(ak, "tfunc")) {
+    } else if (yv_l(ak) == K_tfunc) {
         if (yv_len(yr_get(a, "args")) != yv_len(yr_get(b, "args"))) {
             return 0;
         } else {
@@ -403,7 +404,7 @@ int teq(Yv *a, Yv *b) {
             }
             return teq_list(aa, bb, 0);
         }
-    } else if (ys_eq_lit(ak, "tunion")) {
+    } else if (yv_l(ak) == K_tunion) {
         // unions: the same members, in any order
         Yv *ua = union_parts(a);
         Yv *ub = union_parts(b);
@@ -414,7 +415,7 @@ int teq(Yv *a, Yv *b) {
         } else {
             return 0;
         }
-    } else if (ys_eq_lit(ak, "tref")) {
+    } else if (yv_l(ak) == K_tref) {
         return teq_ref(a, b);
     } else {
         return 1;
@@ -430,7 +431,7 @@ int teq(Yv *a, Yv *b) {
 
 // t, or the type a tref stands for.
 Yv *unfold(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+    if (yv_l(yr_get(t, "k")) == K_tref) {
         return yr_get(t, "to");
     } else {
         return t;
@@ -452,7 +453,7 @@ static void union_parts_go(Yv *out, Yv *t, long depth) {
     while (i < yv_len(ms)) {
         Yv *m = ya_get(ms, i);
         Yv *u = unfold(m);
-        if (ys_eq_lit(yr_get(u, "k"), "tunion") && depth < 16) {
+        if (yv_l(yr_get(u, "k")) == K_tunion && depth < 16) {
             union_parts_go(out, u, depth + 1);
         } else {
             ya_push(out, m);
@@ -501,9 +502,9 @@ static int ref_shapes_differ(Yv *a, Yv *b) {
     Yv *ub = unfold(b);
     Yv *uak = yr_get(ua, "k");
     Yv *ubk = yr_get(ub, "k");
-    if (!ys_eq(uak, ubk)) {
+    if (yv_l(uak) != yv_l(ubk)) {
         return 1;
-    } else if (ys_eq_lit(uak, "trec")) {
+    } else if (yv_l(uak) == K_trec) {
         return !same_names(ua, rec_names(yr_get(ub, "fields")));
     } else {
         return 0;
@@ -511,7 +512,7 @@ static int ref_shapes_differ(Yv *a, Yv *b) {
 }
 
 static int teq_ref(Yv *a, Yv *b) {
-    if (ys_eq_lit(yr_get(a, "k"), "tref") && ys_eq_lit(yr_get(b, "k"), "tref")) {
+    if (yv_l(yr_get(a, "k")) == K_tref && yv_l(yr_get(b, "k")) == K_tref) {
         if (ref_shapes_differ(a, b)) {
             return 0;
         } else {
@@ -583,36 +584,36 @@ Yv *tsig(Yv *t) {
 
 static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
     Yv *k = yr_get(t, "k");
-    if (ys_eq_lit(k, "tlong")) {
+    if (yv_l(k) == K_tlong) {
         return ya_push(out, ys("l"));
-    } else if (ys_eq_lit(k, "tbyte")) {
+    } else if (yv_l(k) == K_tbyte) {
         return ya_push(out, ys("b"));
-    } else if (ys_eq_lit(k, "tfloat")) {
+    } else if (yv_l(k) == K_tfloat) {
         return ya_push(out, ys("f"));
-    } else if (ys_eq_lit(k, "tbool")) {
+    } else if (yv_l(k) == K_tbool) {
         return ya_push(out, ys("o"));
-    } else if (ys_eq_lit(k, "tstr")) {
+    } else if (yv_l(k) == K_tstr) {
         return ya_push(out, ys("s"));
-    } else if (ys_eq_lit(k, "tvoid")) {
+    } else if (yv_l(k) == K_tvoid) {
         return ya_push(out, ys("v"));
-    } else if (ys_eq_lit(k, "tptr")) {
+    } else if (yv_l(k) == K_tptr) {
         out = ya_push(out, ys("*"));
         return tcanon_go(out, yr_get(t, "to"), stack);
-    } else if (ys_eq_lit(k, "tarr")) {
+    } else if (yv_l(k) == K_tarr) {
         out = ya_push(out, ys("["));
         return tcanon_go(out, yr_get(t, "of"), stack);
-    } else if (ys_eq_lit(k, "tarrfix")) {
+    } else if (yv_l(k) == K_tarrfix) {
         out = ya_push(out, ys_cat(ys_cat(ys("F"), ys_long(yv_l(yr_get(t, "n")))),
                                   ys(";")));
         return tcanon_go(out, yr_get(t, "of"), stack);
-    } else if (ys_eq_lit(k, "topt")) {
+    } else if (yv_l(k) == K_topt) {
         out = ya_push(out, ys("?"));
         return tcanon_go(out, yr_get(t, "of"), stack);
-    } else if (ys_eq_lit(k, "tmap")) {
+    } else if (yv_l(k) == K_tmap) {
         out = ya_push(out, ys("M"));
         out = tcanon_go(out, yr_get(t, "key"), stack);
         return tcanon_go(out, yr_get(t, "of"), stack);
-    } else if (ys_eq_lit(k, "tfunc")) {
+    } else if (yv_l(k) == K_tfunc) {
         Yv *args = yr_get(t, "args");
         out = ya_push(out, ys("("));
         long i = 0;
@@ -623,7 +624,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
         }
         out = ya_push(out, ys(")"));
         return tcanon_go(out, yr_get(t, "ret"), stack);
-    } else if (ys_eq_lit(k, "trec")) {
+    } else if (yv_l(k) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         Yv *names = rec_names(fs);
         out = ya_push(out, ys("{"));
@@ -638,7 +639,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
         }
         out = ya_push(out, ys("}"));
         return out;
-    } else if (ys_eq_lit(k, "tunion")) {
+    } else if (yv_l(k) == K_tunion) {
         Yv *ms = union_parts(t);
         Yv *forms = yav(0);
         long i = 0;
@@ -652,7 +653,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
         out = ya_push(out, ys_cat(ys_cat(ys("<"), ys_join(str_sorted(forms), ys("|"))),
                                   ys(">")));
         return out;
-    } else if (ys_eq_lit(k, "tref")) {
+    } else if (yv_l(k) == K_tref) {
         Yv *tmp = yr_get(t, "tmp");
         long d = -1;
         long i = yv_len(stack) - 1;
@@ -772,8 +773,8 @@ static int teq_list(Yv *aa, Yv *bb, long i) {
 // Field type by name in a trec; tnone marker when missing (dotassign uses
 // it — the caller reports the error once at the assignment site).
 static Yv *trec_field_type(Yv *rec, Yv *key) {
-    Yv *found = yr(1, "k", ys("tnone"));
-    if (ys_eq_lit(yr_get(rec, "k"), "trec")) {
+    Yv *found = yr(1, "k", yv_long(K_tnone));
+    if (yv_l(yr_get(rec, "k")) == K_trec) {
         Yv *fs = yr_get(rec, "fields");
         long i = 0;
         while (i < yv_len(fs)) {
@@ -791,50 +792,50 @@ static Yv *trec_field_type(Yv *rec, Yv *key) {
 }
 
 static Yv *tstr_go(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tlong")) {
+    if (yv_l(yr_get(t, "k")) == K_tlong) {
         return ys("long");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tbyte")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tbyte) {
         return ys("byte");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         return ys("float");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tbool")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tbool) {
         return ys("bool");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         return ys("str");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tvoid")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tvoid) {
         return ys("void");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunk")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunk) {
         return ys("<error>");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tnone) {
         return ys("<missing annotation>");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tname")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tname) {
         return yr_get(t, "name");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tref) {
         return yr_get(t, "name");
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         return tstr_union(yr_get(t, "ts"), ys(" | "));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tpat")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tpat) {
         return ys_cat(ys_cat(ys("{ "), ys_join(yr_get(t, "names"), ys(", "))), ys(" }"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tptr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tptr) {
         return ys_cat(ys("*"), tstr_go(yr_get(t, "to")));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarr) {
         return ys_cat(ys_cat(ys("["), tstr_go(yr_get(t, "of"))), ys("]"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
         return ys_cat(ys_cat(ys_cat(ys_cat(ys("["), tstr_go(yr_get(t, "of"))),
                                     ys("; ")),
                           ys_tostring(yr_get(t, "n"))),
                     ys("]"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "topt")) {
+    } else if (yv_l(yr_get(t, "k")) == K_topt) {
         // `none` alone is the option of nothing-known-yet
         Yv *tof = yr_get(t, "of");
-        if (ys_eq_lit(yr_get(tof, "k"), "tunk")) { return ys("none"); } else { return ys_cat(tstr_go(tof), ys("?")); }
-    } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
+        if (yv_l(yr_get(tof, "k")) == K_tunk) { return ys("none"); } else { return ys_cat(tstr_go(tof), ys("?")); }
+    } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         return ys_cat(ys_cat(ys_cat(ys_cat(ys("{"), tstr_go(yr_get(t, "key"))), ys(" => ")), tstr_go(yr_get(t, "of"))), ys("}"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "trec") && teq(t, t_mutex())) {
+    } else if (yv_l(yr_get(t, "k")) == K_trec && teq(t, t_mutex())) {
         return ys("mutex");
-    } else if (ys_eq_lit(yr_get(t, "k"), "trec") && teq(t, t_sem())) {
+    } else if (yv_l(yr_get(t, "k")) == K_trec && teq(t, t_sem())) {
         return ys("sem");
-    } else if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    } else if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *parts = yav(0);
         Yv *fs = yr_get(t, "fields");
         long i = 0;
@@ -844,7 +845,7 @@ static Yv *tstr_go(Yv *t) {
             Yv *f = ya_get(fs, i);
             Yv *fname = yr_get(f, "name");
             Yv *ft = yr_get(f, "typ");
-            if (yv_b(yr_get(f, "opt")) && ys_eq_lit(yr_get(ft, "k"), "topt")) {
+            if (yv_b(yr_get(f, "opt")) && yv_l(yr_get(ft, "k")) == K_topt) {
                 parts = ya_push(parts, ys_cat(ys_cat(fname, ys("?: ")),
                                               tstr_go(yr_get(ft, "of"))));
             } else {
@@ -854,7 +855,7 @@ static Yv *tstr_go(Yv *t) {
             i = i + 1;
         }
         return ys_cat(ys_cat(ys("{ "), ys_join(parts, ys(", "))), ys(" }"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfunc")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
         Yv *parts = yav(0);
         Yv *ta = yr_get(t, "args");
         long i = 0;
@@ -866,7 +867,7 @@ static Yv *tstr_go(Yv *t) {
                              ys(") -> ")),
                       tstr_go(yr_get(t, "ret")));
     } else {
-        return ys_cat(ys_cat(ys("<"), yr_get(t, "k")), ys(">"));
+        return ys_cat(ys_cat(ys("<"), ktag(yv_l(yr_get(t, "k")))), ys(">"));
     }
 }
 
@@ -905,14 +906,14 @@ static Yv *tdisp_union(Yv *ts) {
 Yv *type_names(Yv *t) {
     Yv *out = yav(0);
     Yv *tk = yr_get(t, "k");
-    if (ys_eq_lit(tk, "trec")) {
+    if (yv_l(tk) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         long i = 0;
         while (i < yv_len(fs)) {
             out = ya_push(out, yr_get(ya_get(fs, i), "name"));
             i = i + 1;
         }
-    } else if (ys_eq_lit(tk, "tpat")) {
+    } else if (yv_l(tk) == K_tpat) {
         Yv *ns = yr_get(t, "names");
         for (long j = 0; j < yv_len(ns); j++) out = ya_push(out, ya_get(ns, j));
     }
@@ -920,7 +921,7 @@ Yv *type_names(Yv *t) {
 }
 
 static int rec_has_names(Yv *r, Yv *names) {
-    if (!ys_eq_lit(yr_get(r, "k"), "trec")) {
+    if (yv_l(yr_get(r, "k")) != K_trec) {
         return 0;
     } else {
         Yv *have = type_names(r);
@@ -952,15 +953,15 @@ static int rec_has_names(Yv *r, Yv *names) {
 Yv *narrow_type(Yv *s, Yv *t) {
     Yv *tk = yr_get(t, "k");
     Yv *sk = yr_get(s, "k");
-    if (!ys_eq_lit(tk, "tpat")) {
+    if (yv_l(tk) != K_tpat) {
         return t;
-    } else if (ys_eq_lit(sk, "trec")) {
+    } else if (yv_l(sk) == K_trec) {
         if (rec_has_names(s, yr_get(t, "names"))) {
             return s;
         } else {
             return t_unk();
         }
-    } else if (ys_eq_lit(sk, "tunion")) {
+    } else if (yv_l(sk) == K_tunion) {
         Yv *ms = members(s);
         Yv *names = yr_get(t, "names");
         Yv *found = yav(0);
@@ -976,7 +977,7 @@ Yv *narrow_type(Yv *s, Yv *t) {
         } else if (yv_len(found) == 1) {
             return ya_get(found, 0);
         } else {
-            return yr(2, "k", ys("tunion"), "ts", found);
+            return yr(2, "k", yv_long(K_tunion), "ts", found);
         }
     } else {
         return t_unk();
@@ -987,7 +988,7 @@ Yv *narrow_type(Yv *s, Yv *t) {
 // union_parts); tnone when there is none.
 Yv *union_member(Yv *u, Yv *t) {
     Yv *ms = union_parts(u);
-    Yv *found = yr(1, "k", ys("tnone"));
+    Yv *found = yr(1, "k", yv_long(K_tnone));
     long i = yv_len(ms) - 1;
     while (i >= 0) {
         if (teq(ya_get(ms, i), t)) {
@@ -1007,7 +1008,7 @@ static Yv *union_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
     long i = 0;
     while (i < yv_len(ms) && ok) {
         Yv *mt = trec_field_type(ya_get(ms, i), dkey);
-        if (ys_eq_lit(yr_get(mt, "k"), "tnone")) {
+        if (yv_l(yr_get(mt, "k")) == K_tnone) {
             st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("member "), tstr(ya_get(ms, i))),
                                                         ys(" of ")),
                                                  tstr(t)),
@@ -1056,7 +1057,7 @@ static int union_ok(Yv *t) {
     int ok = 1;
     long i = 0;
     while (i < yv_len(ms)) {
-        if (!ys_eq_lit(yr_get(ya_get(ms, i), "k"), "trec")) {
+        if (yv_l(yr_get(ya_get(ms, i), "k")) != K_trec) {
             ok = 0;
         }
         i = i + 1;
@@ -1068,7 +1069,7 @@ static int union_ok(Yv *t) {
 // member: membership is exact, `{a: 1, b: 2}` is no `{a: long}`), and so
 // does a union whose every member does.
 static int union_accepts(Yv *got, Yv *want) {
-    if (ys_eq_lit(yr_get(got, "k"), "tunion")) {
+    if (yv_l(yr_get(got, "k")) == K_tunion) {
         Yv *gs = members(got);
         int ok = 1;
         long i = 0;
@@ -1159,7 +1160,7 @@ static int num_is_float(Yv *s) {
 // (and the tests that match on them) use the roomier spacing. The two copies
 // must agree on every type they both render.
 Yv *tdisp(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *parts = yav(0);
         Yv *fs = yr_get(t, "fields");
         long i = 0;
@@ -1170,7 +1171,7 @@ Yv *tdisp(Yv *t) {
             i = i + 1;
         }
         return ys_cat(ys_cat(ys("{"), ys_join(parts, ys(", "))), ys("}"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfunc")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
         Yv *parts = yav(0);
         Yv *ta = yr_get(t, "args");
         long i = 0;
@@ -1181,20 +1182,20 @@ Yv *tdisp(Yv *t) {
         return ys_cat(ys_cat(ys_cat(ys("("), ys_join(parts, ys(", "))),
                              ys(")->")),
                       tdisp(yr_get(t, "ret")));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarr) {
         return ys_cat(ys_cat(ys("["), tdisp(yr_get(t, "of"))), ys("]"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
         return ys_cat(ys_cat(ys_cat(ys_cat(ys("["), tdisp(yr_get(t, "of"))),
                                     ys("; ")),
                           ys_tostring(yr_get(t, "n"))),
                     ys("]"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tptr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tptr) {
         return ys_cat(ys("*"), tdisp(yr_get(t, "to")));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         return tdisp_union(yr_get(t, "ts"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "topt")) {
+    } else if (yv_l(yr_get(t, "k")) == K_topt) {
         Yv *tof = yr_get(t, "of");
-        if (ys_eq_lit(yr_get(tof, "k"), "tunk")) { return ys("none"); } else { return ys_cat(tdisp(tof), ys("?")); }
+        if (yv_l(yr_get(tof, "k")) == K_tunk) { return ys("none"); } else { return ys_cat(tdisp(tof), ys("?")); }
     } else {
         return tstr_go(t);
     }
@@ -1236,52 +1237,52 @@ Yv *field_merge(Yv *fields, Yv *name, Yv *typ) {
 }
 
 static int is_value_type(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tlong")) {
+    if (yv_l(yr_get(t, "k")) == K_tlong) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tbyte")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tbyte) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tbool")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tbool) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tptr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tptr) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunk")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunk) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tnone) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tname")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tname) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tparams")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tparams) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfunc")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarr) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "topt")) {
+    } else if (yv_l(yr_get(t, "k")) == K_topt) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         return is_hash_key(yr_get(t, "key"));
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         return union_ok(t);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tref) {
         return 1;
     } else {
-        return ys_eq_lit(yr_get(t, "k"), "trec");
+        return yv_l(yr_get(t, "k")) == K_trec;
     }
 }
 
 // Map keys must be hashable scalars: str, long, byte, bool, float.
 static int is_hash_key(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tstr")) { return 1; }
-    else if (ys_eq_lit(yr_get(t, "k"), "tlong")) { return 1; }
-    else if (ys_eq_lit(yr_get(t, "k"), "tbyte")) { return 1; }
-    else if (ys_eq_lit(yr_get(t, "k"), "tbool")) { return 1; }
-    else { return ys_eq_lit(yr_get(t, "k"), "tfloat"); }
+    if (yv_l(yr_get(t, "k")) == K_tstr) { return 1; }
+    else if (yv_l(yr_get(t, "k")) == K_tlong) { return 1; }
+    else if (yv_l(yr_get(t, "k")) == K_tbyte) { return 1; }
+    else if (yv_l(yr_get(t, "k")) == K_tbool) { return 1; }
+    else { return yv_l(yr_get(t, "k")) == K_tfloat; }
 }
 
 // A function VALUE prints as `<function (params)->(ret)>` — note the extra
@@ -1356,7 +1357,7 @@ static Yv *lookup(Yv *bindings, Yv *name) {
         return yr(3, "typ", yr_get(e, "typ"), "kind", yr_get(e, "kind"),
                   "fdepth", yv_long(yv_l(yr_get(e, "fdepth"))));
     } else {
-        return yr(3, "typ", yr(1, "k", ys("tnone")), "kind", ys(""), "fdepth",
+        return yr(3, "typ", yr(1, "k", yv_long(K_tnone)), "kind", ys(""), "fdepth",
                   yv_long(0));
     }
 }
@@ -1460,7 +1461,7 @@ static int cast_ok(Yv *got, Yv *want) {
     Yv *g = unfold(got);
     if (tcompat(got, want)) {
         return 1;
-    } else if (ys_eq_lit(yr_get(g, "k"), "tunion")) {
+    } else if (yv_l(yr_get(g, "k")) == K_tunion) {
         return union_accepts(unfold(want), g);
     } else {
         return 0;
@@ -1486,8 +1487,8 @@ static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what,
                       long line, long col) {
     if (cast_ok(got, want)) {
         return st;
-    } else if (ys_eq_lit(yr_get(got, "k"), "topt") &&
-               ys_eq_lit(yr_get(want, "k"), "topt") && is_some_call(arg)) {
+    } else if (yv_l(yr_get(got, "k")) == K_topt &&
+               yv_l(yr_get(want, "k")) == K_topt && is_some_call(arg)) {
         return fail(st,
                     ys_cat(ys_cat(ys_cat(ys_cat(what, ys(": expected ")),
                                         tstr(yr_get(want, "of"))),
@@ -1504,9 +1505,9 @@ static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what,
 }
 
 static int is_some_call(Yv *n) {
-    if (ys_eq_lit(yr_get(n, "k"), "call")) {
+    if (yv_l(yr_get(n, "k")) == K_call) {
         Yv *c = yr_get(n, "callee");
-        return ys_eq_lit(yr_get(c, "k"), "id") &&
+        return yv_l(yr_get(c, "k")) == K_id &&
                ys_eq_lit(yr_get(c, "v"), "some");
     } else {
         return 0;
@@ -1527,55 +1528,55 @@ static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
         // arr + arr concatenates into a NEW array, arr + elem appends one
         // (same type only), elem + arr prepends one. In-place forms are
         // `+=` / `*=`.
-        if (ys_eq_lit(yr_get(lt, "k"), "tarr") ||
-            ys_eq_lit(yr_get(lt, "k"), "tarrfix")) {
+        if (yv_l(yr_get(lt, "k")) == K_tarr ||
+            yv_l(yr_get(lt, "k")) == K_tarrfix) {
             return typeof_arith_arr(st, op, lt, rt, line, col);
-        } else if (ys_eq_lit(yr_get(rt, "k"), "tarr") ||
-                   ys_eq_lit(yr_get(rt, "k"), "tarrfix")) {
+        } else if (yv_l(yr_get(rt, "k")) == K_tarr ||
+                   yv_l(yr_get(rt, "k")) == K_tarrfix) {
             return typeof_arith_arr(st, op, lt, rt, line, col);
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tstr")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-            } else if (ys_eq_lit(yr_get(rt, "k"), "tunk")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-            } else if (ys_eq_lit(yr_get(rt, "k"), "tlong")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-            } else if (ys_eq_lit(yr_get(rt, "k"), "tbyte")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-            } else if (ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-            } else if (ys_eq_lit(yr_get(rt, "k"), "tbool")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+        } else if (yv_l(yr_get(lt, "k")) == K_tstr) {
+            if (yv_l(yr_get(rt, "k")) == K_tstr) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+            } else if (yv_l(yr_get(rt, "k")) == K_tunk) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+            } else if (yv_l(yr_get(rt, "k")) == K_tlong) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+            } else if (yv_l(yr_get(rt, "k")) == K_tbyte) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+            } else if (yv_l(yr_get(rt, "k")) == K_tfloat) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+            } else if (yv_l(yr_get(rt, "k")) == K_tbool) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tunk")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+        } else if (yv_l(yr_get(lt, "k")) == K_tunk) {
+            if (yv_l(yr_get(rt, "k")) == K_tstr) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tlong")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+        } else if (yv_l(yr_get(lt, "k")) == K_tlong) {
+            if (yv_l(yr_get(rt, "k")) == K_tstr) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tbyte")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+        } else if (yv_l(yr_get(lt, "k")) == K_tbyte) {
+            if (yv_l(yr_get(rt, "k")) == K_tstr) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tfloat")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+        } else if (yv_l(yr_get(lt, "k")) == K_tfloat) {
+            if (yv_l(yr_get(rt, "k")) == K_tstr) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
-        } else if (ys_eq_lit(yr_get(lt, "k"), "tbool")) {
-            if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+        } else if (yv_l(yr_get(lt, "k")) == K_tbool) {
+            if (yv_l(yr_get(rt, "k")) == K_tstr) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
@@ -1598,34 +1599,34 @@ static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col)
                              ys("' is not defined on arrays (only '+' copies, '+='/'*=' mutate)")),
                   line, col);
         return yr(2, "typ", t_unk(), "st", st);
-    } else if (ys_eq_lit(lk, "tarr") || ys_eq_lit(lk, "tarrfix")) {
-        if (ys_eq_lit(yr_get(rt, "k"), "tarr") ||
-            ys_eq_lit(yr_get(rt, "k"), "tarrfix")) {
+    } else if (yv_l(lk) == K_tarr || yv_l(lk) == K_tarrfix) {
+        if (yv_l(yr_get(rt, "k")) == K_tarr ||
+            yv_l(yr_get(rt, "k")) == K_tarrfix) {
             Yv *how = arr_plus_kind(lt, rt);
             if (ys_eq_lit(how, "append")) {
                 return yr(2, "typ",
-                          yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
+                          yr(2, "k", yv_long(K_tarr), "of", yr_get(lt, "of")),
                           "st", st);
             } else if (ys_eq_lit(how, "prepend")) {
                 return yr(2, "typ",
-                          yr(2, "k", ys("tarr"), "of", yr_get(rt, "of")),
+                          yr(2, "k", yv_long(K_tarr), "of", yr_get(rt, "of")),
                           "st", st);
             } else {
                 st = expect_type(st, yr_get(rt, "of"), yr_get(lt, "of"),
                                  ys("'+' concatenated elements"), line, col);
                 return yr(2, "typ",
-                          yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
+                          yr(2, "k", yv_long(K_tarr), "of", yr_get(lt, "of")),
                           "st", st);
             }
         } else {
             st = expect_type(st, rt, yr_get(lt, "of"), ys("'+' element"), line,
                              col);
-            return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(lt, "of")),
+            return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr_get(lt, "of")),
                       "st", st);
         }
     } else {
         st = expect_type(st, lt, yr_get(rt, "of"), ys("'+' element"), line, col);
-        return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(rt, "of")), "st",
+        return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr_get(rt, "of")), "st",
                   st);
     }
 }
@@ -1655,23 +1656,23 @@ static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, long line,
                              long col) {
     // Numeric arithmetic. If either side is a float the result is a float
     // and the other side widens (long -> float, the only coercion).
-    if (ys_eq_lit(yr_get(lt, "k"), "tfloat") ||
-        ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
-        st = expect_type(st, lt, yr(1, "k", ys("tfloat")),
+    if (yv_l(yr_get(lt, "k")) == K_tfloat ||
+        yv_l(yr_get(rt, "k")) == K_tfloat) {
+        st = expect_type(st, lt, yr(1, "k", yv_long(K_tfloat)),
                          ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
                          col);
-        st = expect_type(st, rt, yr(1, "k", ys("tfloat")),
+        st = expect_type(st, rt, yr(1, "k", yv_long(K_tfloat)),
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
-        return yr(2, "typ", yr(1, "k", ys("tfloat")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
     } else {
-        st = expect_type(st, lt, yr(1, "k", ys("tlong")),
+        st = expect_type(st, lt, yr(1, "k", yv_long(K_tlong)),
                          ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
                          col);
-        st = expect_type(st, rt, yr(1, "k", ys("tlong")),
+        st = expect_type(st, rt, yr(1, "k", yv_long(K_tlong)),
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
-        return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
     }
 }
 
@@ -1685,40 +1686,40 @@ int is_bits_op(Yv *op) {
 // the result is a long. No float, no bool (`&&` and `||` are the logical
 // forms).
 static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
-    st = expect_type(st, lt, yr(1, "k", ys("tlong")),
+    st = expect_type(st, lt, yr(1, "k", yv_long(K_tlong)),
                      ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
                      col);
-    st = expect_type(st, rt, yr(1, "k", ys("tlong")),
+    st = expect_type(st, rt, yr(1, "k", yv_long(K_tlong)),
                      ys_cat(ys_cat(ys("'"), op), ys("' right operand")), line,
                      col);
-    return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
 }
 
 static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
-    if (ys_eq_lit(yr_get(lt, "k"), "tstr")) {
+    if (yv_l(yr_get(lt, "k")) == K_tstr) {
         // str < str is lexicographic ordering (byte by byte), matching the
         // y_str_cmp helper native.y emits.
-        st = expect_type(st, rt, yr(1, "k", ys("tstr")),
+        st = expect_type(st, rt, yr(1, "k", yv_long(K_tstr)),
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
-        return tc_res(type_node(yr(1, "k", ys("tbool"))), st);
-    } else if (ys_eq_lit(yr_get(lt, "k"), "tfloat") ||
-               ys_eq_lit(yr_get(rt, "k"), "tfloat")) {
-        st = expect_type(st, lt, yr(1, "k", ys("tfloat")),
+        return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
+    } else if (yv_l(yr_get(lt, "k")) == K_tfloat ||
+               yv_l(yr_get(rt, "k")) == K_tfloat) {
+        st = expect_type(st, lt, yr(1, "k", yv_long(K_tfloat)),
                          ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
                          col);
-        st = expect_type(st, rt, yr(1, "k", ys("tfloat")),
+        st = expect_type(st, rt, yr(1, "k", yv_long(K_tfloat)),
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
     } else {
-        st = expect_type(st, lt, yr(1, "k", ys("tlong")),
+        st = expect_type(st, lt, yr(1, "k", yv_long(K_tlong)),
                          ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
                          col);
-        st = expect_type(st, rt, yr(1, "k", ys("tlong")),
+        st = expect_type(st, rt, yr(1, "k", yv_long(K_tlong)),
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
     }
 }
 
@@ -1726,11 +1727,11 @@ static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
 // across widths, which is what the compiled code does (native.y gen_bin_rest
 // emits a plain word compare).
 static int is_num_kind(Yv *t) {
-    if (ys_eq_lit(yr_get(t, "k"), "tlong")) {
+    if (yv_l(yr_get(t, "k")) == K_tlong) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tbyte")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tbyte) {
         return 1;
-    } else if (ys_eq_lit(yr_get(t, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         return 1;
     } else {
         return 0;
@@ -1749,16 +1750,16 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
     // str compares by content. `x == none` is the option's is-none check.
     // Nested ifs throughout (house style — one kind per arm).
     if (teq(lt, rt)) {
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
     } else if (num_eq_ok(lt, rt)) {
         // Numeric kinds compare across widths: a byte IS a small long, so
         // `c == 10` needs no cast (and long/float already coerce in `<`).
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
-    } else if (ys_eq_lit(yr_get(lt, "k"), "tstr")) {
-        if (ys_eq_lit(yr_get(rt, "k"), "tstr")) {
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
-        } else if (ys_eq_lit(yr_get(rt, "k"), "tunk")) {
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
+    } else if (yv_l(yr_get(lt, "k")) == K_tstr) {
+        if (yv_l(yr_get(rt, "k")) == K_tstr) {
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
+        } else if (yv_l(yr_get(rt, "k")) == K_tunk) {
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         } else {
             st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), op),
                                                        ys("' compares ")),
@@ -1766,17 +1767,17 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
                                         ys(" with ")),
                                  tstr(rt)),
                       line, col);
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         }
-    } else if (ys_eq_lit(yr_get(lt, "k"), "tunk")) {
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
-    } else if (ys_eq_lit(yr_get(lt, "k"), "topt")) {
+    } else if (yv_l(yr_get(lt, "k")) == K_tunk) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
+    } else if (yv_l(yr_get(lt, "k")) == K_topt) {
         // options: the is-none check (`x == none`) plus same-option
         // comparison. Anything else is a type error (t10 parity).
-        if (ys_eq_lit(yr_get(rt, "k"), "tunk")) {
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+        if (yv_l(yr_get(rt, "k")) == K_tunk) {
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         } else if (teq(lt, rt)) {
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         } else {
             st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), op),
                                                        ys("' compares ")),
@@ -1784,11 +1785,11 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
                                         ys(" with ")),
                                  tstr(rt)),
                       line, col);
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         }
-    } else if (ys_eq_lit(yr_get(rt, "k"), "topt")) {
-        if (ys_eq_lit(yr_get(lt, "k"), "tunk")) {
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+    } else if (yv_l(yr_get(rt, "k")) == K_topt) {
+        if (yv_l(yr_get(lt, "k")) == K_tunk) {
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         } else {
             st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), op),
                                                        ys("' compares ")),
@@ -1796,7 +1797,7 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
                                         ys(" with ")),
                                  tstr(rt)),
                       line, col);
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         }
     } else {
         st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), op),
@@ -1805,7 +1806,7 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
                                     ys(" with ")),
                              tstr(rt)),
                   line, col);
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
     }
 }
 
@@ -1816,7 +1817,7 @@ static Yv *typeof_logic(Yv *st, Yv *op __attribute__((unused)),
                         long col __attribute__((unused))) {
     // Truthiness: any 8-byte value decides (nonzero = true), like the C
     // runtime. The result is always a bool; operands keep their own types.
-    return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+    return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
 }
 
 // Compatibility (stricter than equality): a `str` value IS a NUL-terminated
@@ -1837,64 +1838,64 @@ static int tcompat(Yv *got, Yv *want) {
     want = unfold(want);
     if (teq(got, want)) {
         return 1;
-    } else if (ys_eq_lit(yr_get(got, "k"), "tnone")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tnone) {
         return 1;
-    } else if (ys_eq_lit(yr_get(want, "k"), "tnone")) {
+    } else if (yv_l(yr_get(want, "k")) == K_tnone) {
         return 1;
-    } else if (ys_eq_lit(yr_get(got, "k"), "tname")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tname) {
         return 1;
-    } else if (ys_eq_lit(yr_get(want, "k"), "tname")) {
+    } else if (yv_l(yr_get(want, "k")) == K_tname) {
         return 1;
-    } else if (ys_eq_lit(yr_get(got, "k"), "tparams")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tparams) {
         return 1;
-    } else if (ys_eq_lit(yr_get(want, "k"), "tparams")) {
+    } else if (yv_l(yr_get(want, "k")) == K_tparams) {
         return 1;
-    } else if (ys_eq_lit(yr_get(want, "k"), "tunion")) {
+    } else if (yv_l(yr_get(want, "k")) == K_tunion) {
         return union_accepts(got, want);
-    } else if (ys_eq_lit(yr_get(got, "k"), "tunion")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tunion) {
         // a union is none of its members until a match says which, or a
         // cast where the member type is written (expect_cast)
         return 0;
-    } else if (ys_eq_lit(yr_get(want, "k"), "topt")) {
+    } else if (yv_l(yr_get(want, "k")) == K_topt) {
         // `none` (the option of tunk) widens to any T? through teq; a
         // plain T does NOT -- use some(v), which is the explicit box
         // (options are 0-or-box, so some(0) differs from none).
         // Option-to-option unifies payloads.
-        if (ys_eq_lit(yr_get(got, "k"), "topt")) {
+        if (yv_l(yr_get(got, "k")) == K_topt) {
             return teq(yr_get(got, "of"), yr_get(want, "of"));
         } else {
             return 0;
         }
-    } else if (ys_eq_lit(yr_get(got, "k"), "trec")) {
+    } else if (yv_l(yr_get(got, "k")) == K_trec) {
         return 0;
-    } else if (ys_eq_lit(yr_get(want, "k"), "trec")) {
+    } else if (yv_l(yr_get(want, "k")) == K_trec) {
         return 0;
-    } else if (ys_eq_lit(yr_get(got, "k"), "tstr")) {
-        if (ys_eq_lit(yr_get(want, "k"), "tptr")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tstr) {
+        if (yv_l(yr_get(want, "k")) == K_tptr) {
             return 1;
         } else {
             return 0;
         }
-    } else if (ys_eq_lit(yr_get(got, "k"), "tlong")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tlong) {
         // long widens to float (the only numeric coercion: `2.0 * i` and
         // `x + 1` with a float x both work).
         // long also narrows to byte: there is no cast syntax, so an
         // annotated position is the only place the intent can be stated
         // (`let b: byte = 65`, `bs += n`, a byte-typed parameter).
         // The value is masked to 8 bits where it is stored.
-        if (ys_eq_lit(yr_get(want, "k"), "tfloat")) {
+        if (yv_l(yr_get(want, "k")) == K_tfloat) {
             return 1;
-        } else if (ys_eq_lit(yr_get(want, "k"), "tbyte")) {
+        } else if (yv_l(yr_get(want, "k")) == K_tbyte) {
             return 1;
         } else {
             return 0;
         }
-    } else if (ys_eq_lit(yr_get(got, "k"), "tbyte")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tbyte) {
         // byte widens to long (and on to float) — it is an 8-bit unsigned
         // integer, so every value is representable.
-        if (ys_eq_lit(yr_get(want, "k"), "tlong")) {
+        if (yv_l(yr_get(want, "k")) == K_tlong) {
             return 1;
-        } else if (ys_eq_lit(yr_get(want, "k"), "tfloat")) {
+        } else if (yv_l(yr_get(want, "k")) == K_tfloat) {
             return 1;
         } else {
             return 0;
@@ -1909,9 +1910,9 @@ static int tcompat(Yv *got, Yv *want) {
 // layouts differ (packed vs one word each), so reinterpreting an existing
 // array would be a type pun.
 static int arr_lit_adopts(Yv *got, Yv *want) {
-    if (ys_eq_lit(yr_get(got, "k"), "tarr")) {
+    if (yv_l(yr_get(got, "k")) == K_tarr) {
         return arr_lit_adopts_go(got, want);
-    } else if (ys_eq_lit(yr_get(got, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(got, "k")) == K_tarrfix) {
         return arr_lit_adopts_go(got, want);
     } else {
         return 0;
@@ -1919,10 +1920,10 @@ static int arr_lit_adopts(Yv *got, Yv *want) {
 }
 
 static int arr_lit_adopts_go(Yv *got, Yv *want) {
-    if (ys_eq_lit(yr_get(want, "k"), "tarr")) {
+    if (yv_l(yr_get(want, "k")) == K_tarr) {
         return tcompat(yr_get(got, "of"), yr_get(want, "of"));
-    } else if (ys_eq_lit(yr_get(want, "k"), "tarrfix")) {
-        if (ys_eq_lit(yr_get(got, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(want, "k")) == K_tarrfix) {
+        if (yv_l(yr_get(got, "k")) == K_tarrfix) {
             if (yv_l(yr_get(got, "n")) == yv_l(yr_get(want, "n"))) {
                 return tcompat(yr_get(got, "of"), yr_get(want, "of"));
             } else {
@@ -1941,7 +1942,7 @@ static int arr_lit_adopts_go(Yv *got, Yv *want) {
 static Yv *typeof_expr(Yv *st, Yv *node) {
     Yv *r = typeof_expr_go(st, node);
     Yv *t = yr_get(r, "typ");
-    if (ys_eq_lit(yr_get(t, "k"), "tref")) {
+    if (yv_l(yr_get(t, "k")) == K_tref) {
         return yr(2, "typ", unfold(t), "st", yr_get(r, "st"));
     } else {
         return r;
@@ -1950,34 +1951,34 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
 
 static Yv *typeof_expr_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (ys_eq_lit(k, "num")) {
+    if (yv_l(k) == K_num) {
         if (num_is_float(yr_get(node, "v"))) {
-            return yr(2, "typ", yr(1, "k", ys("tfloat")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
         } else {
-            return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
         }
-    } else if (ys_eq_lit(k, "str")) {
-        return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-    } else if (ys_eq_lit(k, "bstr")) {
+    } else if (yv_l(k) == K_str) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+    } else if (yv_l(k) == K_bstr) {
         // b"..." is a [byte] literal (packed bytes, like a Python bytes)
-        return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte"))), "st", st);
-    } else if (ys_eq_lit(k, "err")) {
+        return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tbyte))), "st", st);
+    } else if (yv_l(k) == K_err) {
         // Planted by the parser where the token stream stopped making
         // sense (parser.y has no error channel of its own).
         st = fail(st, yr_get(node, "msg"), yv_l(yr_get(node, "line")),
                   yv_l(yr_get(node, "col")));
         return yr(2, "typ", t_unk(), "st", st);
-    } else if (ys_eq_lit(k, "bool")) {
-        return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
-    } else if (ys_eq_lit(k, "void")) {
+    } else if (yv_l(k) == K_bool) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
+    } else if (yv_l(k) == K_void) {
         // An absent expression (bare `return;`, a missing else, an empty
         // for-clause): it computes nothing. The empty option is `none`
         // (an id, see below), never this node.
-        return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
-    } else if (ys_eq_lit(k, "id")) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
+    } else if (yv_l(k) == K_id) {
         if (ys_eq_lit(yr_get(node, "v"), "self")) {
             // resolved by the enclosing def pre-pass (stored as _self in st)
-            if (ys_eq_lit(yr_get(yr_get(st, "self"), "k"), "tnone")) {
+            if (yv_l(yr_get(yr_get(st, "self"), "k")) == K_tnone) {
                 st = fail(st, ys("'self' outside of a function"),
                           yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
@@ -1993,7 +1994,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             if (ys_eq_lit(yr_get(got, "kind"), "")) {
                 if (ys_eq_lit(yr_get(node, "v"), "none")) {
                     // the empty option (type from context via unification)
-                    return yr(2, "typ", yr(2, "k", ys("topt"), "of", t_free()),
+                    return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", t_free()),
                               "st", st);
                 } else {
                     st = fail(st,
@@ -2018,34 +2019,34 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 return yr(2, "typ", yr_get(got, "typ"), "st", st);
             }
         }
-    } else if (ys_eq_lit(k, "un")) {
+    } else if (yv_l(k) == K_un) {
         Yv *r = typeof_expr(st, yr_get(node, "e"));
         st = yr_get(r, "st");
         if (ys_eq_lit(yr_get(node, "op"), "-")) {
-            if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tfloat")) {
-                return yr(2, "typ", yr(1, "k", ys("tfloat")), "st", st);
+            if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
             } else {
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("unary '-'"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(yr_get(node, "op"), "~")) {
-            st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+            st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                              ys("unary '~'"), yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));
-            return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
         } else {
-            st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tbool")),
+            st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tbool)),
                              ys("unary '!'"), yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));
-            return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
         }
-    } else if (ys_eq_lit(k, "addr")) {
+    } else if (yv_l(k) == K_addr) {
         // &x (plain local/param) or &a[i] (element address, either array).
         // NOTE: nested ifs, not a `&&` guard (house style — one failure
         // message per shape, and `&&` would be short-circuit anyway).
-        if (ys_eq_lit(yr_get(yr_get(node, "e"), "k"), "id")) {
+        if (yv_l(yr_get(yr_get(node, "e"), "k")) == K_id) {
             if (!ys_eq_lit(yr_get(yr_get(node, "e"), "v"), "self")) {
                 Yv *got = lookup(yr_get(st, "bindings"),
                                  yr_get(yr_get(node, "e"), "v"));
@@ -2066,9 +2067,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarr") ||
-                           ys_eq_lit(yr_get(yr_get(got, "typ"), "k"),
-                                     "tarrfix")) {
+                } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr ||
+                           yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix) {
                     /* One rule for BOTH array kinds: &a is not a data address.
                        A slot holds the {len,cap,data} header (fixed arrays are
                        heap blocks too), so `io.read(fd, &buf, n)` let the
@@ -2088,7 +2088,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                        yv_l(yr_get(node, "line")),
                                        yv_l(yr_get(node, "col")));
                     return yr(2, "typ",
-                              yr(2, "k", ys("tptr"), "to", yr_get(got, "typ")),
+                              yr(2, "k", yv_long(K_tptr), "to", yr_get(got, "typ")),
                               "st", st);
                 }
             } else {
@@ -2098,10 +2098,10 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
             }
-        } else if (ys_eq_lit(yr_get(yr_get(node, "e"), "k"), "index")) {
+        } else if (yv_l(yr_get(yr_get(node, "e"), "k")) == K_index) {
             Yv *ix = yr_get(yr_get(node, "e"), "idx");
             Yv *arr = yr_get(yr_get(node, "e"), "arr");
-            if (ys_eq_lit(yr_get(arr, "k"), "id")) {
+            if (yv_l(yr_get(arr, "k")) == K_id) {
                 Yv *got = lookup(yr_get(st, "bindings"), yr_get(arr, "v"));
                 if (ys_eq_lit(yr_get(got, "kind"), "")) {
                     st = fail(st,
@@ -2111,18 +2111,18 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarrfix") ||
-                           ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarr")) {
+                } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix ||
+                           yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr) {
                     st = check_visible(st, got, yr_get(arr, "v"),
                                        yv_l(yr_get(node, "line")),
                                        yv_l(yr_get(node, "col")));
                     Yv *r = typeof_expr(st, ix);
                     st = yr_get(r, "st");
-                    st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                    st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                      ys("array index"), yv_l(yr_get(node, "line")),
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ",
-                              yr(2, "k", ys("tptr"), "to",
+                              yr(2, "k", yv_long(K_tptr), "to",
                                  yr_get(yr_get(got, "typ"), "of")),
                               "st", st);
                 } else {
@@ -2140,15 +2140,15 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 Yv *barr = arr;
                 Yv *br = typeof_expr(st, barr);
                 st = yr_get(br, "st");
-                if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tarrfix") ||
-                    ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tarr")) {
+                if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarrfix ||
+                    yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarr) {
                     Yv *r = typeof_expr(st, ix);
                     st = yr_get(r, "st");
-                    st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                    st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                      ys("array index"), yv_l(yr_get(node, "line")),
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ",
-                              yr(2, "k", ys("tptr"), "to",
+                              yr(2, "k", yv_long(K_tptr), "to",
                                  yr_get(yr_get(br, "typ"), "of")),
                               "st", st);
                 } else {
@@ -2167,12 +2167,12 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(k, "deref")) {
+    } else if (yv_l(k) == K_deref) {
         Yv *r = typeof_expr(st, yr_get(node, "e"));
         st = yr_get(r, "st");
-        if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tptr")) {
+        if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tptr) {
             return yr(2, "typ", yr_get(yr_get(r, "typ"), "to"), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
+        } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
             return yr(2, "typ", t_unk(), "st", st);
         } else {
             st = fail(st,
@@ -2182,7 +2182,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(k, "bin")) {
+    } else if (yv_l(k) == K_bin) {
         Yv *l = typeof_expr(st, yr_get(node, "l"));
         Yv *r = typeof_expr(yr_get(l, "st"), yr_get(node, "r"));
         st = yr_get(r, "st");
@@ -2277,11 +2277,11 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(k, "call")) {
+    } else if (yv_l(k) == K_call) {
         return typeof_call(st, node);
-    } else if (ys_eq_lit(k, "if")) {
+    } else if (yv_l(k) == K_kw_if) {
         Yv *c = typeof_expr(st, yr_get(node, "cond"));
-        st = expect_type(yr_get(c, "st"), yr_get(c, "typ"), yr(1, "k", ys("tbool")),
+        st = expect_type(yr_get(c, "st"), yr_get(c, "typ"), yr(1, "k", yv_long(K_tbool)),
                          ys("'if' condition"), yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
         // NOTE: typeof_expr, not typeof_block — `els` may be a nested `if`
@@ -2296,52 +2296,52 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 // type is the one being inferred -- takes the other's.
                 Yv *tt = yr_get(t, "typ");
                 Yv *et = yr_get(e, "typ");
-                if (ys_eq_lit(yr_get(tt, "k"), "tunk") && !ys_eq_lit(yr_get(et, "k"), "tnone")) { return yr(2, "typ", et, "st", st); } else { return yr(2, "typ", tt, "st", st); }
+                if (yv_l(yr_get(tt, "k")) == K_tunk && yv_l(yr_get(et, "k")) != K_tnone) { return yr(2, "typ", et, "st", st); } else { return yr(2, "typ", tt, "st", st); }
             } else {
                 // VOID law: arms that disagree on a type (a value arm vs a
                 // statement arm, or two different values) make the whole
                 // `if` a statement -- void, not usable as a value. Using it
                 // as one errors at that use (binding, argument, print...).
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             }
         } else {
             // VOID law: an `if` without `else` is a STATEMENT — its value is
             // nothing, whatever the then-branch computes. No forced else
             // branch, no forced `0;` tail in user programs.
-            return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
         }
-    } else if (ys_eq_lit(k, "while")) {
+    } else if (yv_l(k) == K_kw_while) {
         Yv *c = typeof_expr(st, yr_get(node, "cond"));
-        st = expect_type(yr_get(c, "st"), yr_get(c, "typ"), yr(1, "k", ys("tbool")),
+        st = expect_type(yr_get(c, "st"), yr_get(c, "typ"), yr(1, "k", yv_long(K_tbool)),
                          ys("'while' condition"), yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
         Yv *b = typeof_block(st, yr_get(node, "body"));
-        return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", yr_get(b, "st"));
-    } else if (ys_eq_lit(k, "for")) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(b, "st"));
+    } else if (yv_l(k) == K_kw_for) {
         // for (init; cond; step) body — init/step are statements, and the
         // loop variable stays visible afterwards (same scope rule as `let`).
         Yv *fi = typeof_expr(st, yr_get(node, "init"));
         st = yr_get(fi, "st");
         Yv *fc = typeof_expr(st, yr_get(node, "cond"));
         st = expect_type(yr_get(fc, "st"), yr_get(fc, "typ"),
-                         yr(1, "k", ys("tbool")), ys("'for' condition"),
+                         yr(1, "k", yv_long(K_tbool)), ys("'for' condition"),
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         Yv *fb = typeof_block(st, yr_get(node, "body"));
         st = yr_get(fb, "st");
         Yv *fs = typeof_expr(st, yr_get(node, "step"));
-        return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", yr_get(fs, "st"));
-    } else if (ys_eq_lit(k, "foreach")) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(fs, "st"));
+    } else if (yv_l(k) == K_kw_foreach) {
         // foreach (x in arr) body — x takes the array's element type.
         Yv *fe = typeof_expr(st, yr_get(node, "iter"));
         st = yr_get(fe, "st");
         Yv *elt = t_unk();
-        if (ys_eq_lit(yr_get(yr_get(fe, "typ"), "k"), "tarr")) {
+        if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tarr) {
             elt = yr_get(yr_get(fe, "typ"), "of");
             ;
-        } else if (ys_eq_lit(yr_get(yr_get(fe, "typ"), "k"), "tarrfix")) {
+        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tarrfix) {
             elt = yr_get(yr_get(fe, "typ"), "of");
             ;
-        } else if (ys_eq_lit(yr_get(yr_get(fe, "typ"), "k"), "tunk")) {
+        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tunk) {
             ;
         } else {
             st = fail(st,
@@ -2352,26 +2352,26 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         }
         st = st_bind(st, yr_get(node, "name"), elt, ys("local"));
         Yv *fbb = typeof_block(st, yr_get(node, "body"));
-        return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", yr_get(fbb, "st"));
-    } else if (ys_eq_lit(k, "forrange")) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(fbb, "st"));
+    } else if (yv_l(k) == K_forrange) {
         // for x in lo..hi { body } — x is a long.
         Yv *rl = typeof_expr(st, yr_get(node, "lo"));
         st = expect_type(yr_get(rl, "st"), yr_get(rl, "typ"),
-                         yr(1, "k", ys("tlong")), ys("'for' range start"),
+                         yr(1, "k", yv_long(K_tlong)), ys("'for' range start"),
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         Yv *rh = typeof_expr(st, yr_get(node, "hi"));
         st = expect_type(yr_get(rh, "st"), yr_get(rh, "typ"),
-                         yr(1, "k", ys("tlong")), ys("'for' range end"),
+                         yr(1, "k", yv_long(K_tlong)), ys("'for' range end"),
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-        st = st_bind(st, yr_get(node, "name"), yr(1, "k", ys("tlong")),
+        st = st_bind(st, yr_get(node, "name"), yr(1, "k", yv_long(K_tlong)),
                      ys("local"));
         Yv *rb = typeof_block(st, yr_get(node, "body"));
-        return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", yr_get(rb, "st"));
-    } else if (ys_eq_lit(k, "block")) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(rb, "st"));
+    } else if (yv_l(k) == K_block) {
         return typeof_block(st, node);
-    } else if (ys_eq_lit(k, "decl")) {
+    } else if (yv_l(k) == K_decl) {
         return typeof_decl(st, node);
-    } else if (ys_eq_lit(k, "assign")) {
+    } else if (yv_l(k) == K_assign) {
         Yv *got = lookup(yr_get(st, "bindings"), yr_get(node, "name"));
         Yv *r = typeof_want(st, yr_get(node, "v"), yr_get(got, "typ"));
         st = yr_get(r, "st");
@@ -2397,7 +2397,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                              ys("'")),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", yr_get(got, "typ"), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarrfix")) {
+        } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix) {
             st = check_visible(st, got, yr_get(node, "name"),
                                yv_l(yr_get(node, "line")),
                                yv_l(yr_get(node, "col")));
@@ -2420,7 +2420,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                              yv_l(yr_get(node, "col")));
             return yr(2, "typ", yr_get(got, "typ"), "st", st);
         }
-    } else if (ys_eq_lit(k, "incdec")) {
+    } else if (yv_l(k) == K_incdec) {
         // ++x / x++: numbers only — `s++` on a string would silently
         // concatenate, so it is a type error instead.
         Yv *t = typeof_expr(st, yr_get(node, "tgt"));
@@ -2433,14 +2433,14 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                          yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
         return incdec_check(st, node, yr_get(pc, "typ"));
-    } else if (ys_eq_lit(k, "opassign")) {
+    } else if (yv_l(k) == K_opassign) {
         // `x op= e`: the rules live in opassign_check.
         Yv *t = typeof_expr(st, yr_get(node, "tgt"));
         st = yr_get(t, "st");
         // `arr += {...}` / `arr *= {...}`: a record literal is an element
         Yv *tt = yr_get(t, "typ");
-        Yv *vw = yr(1, "k", ys("tnone"));
-        if (ys_eq_lit(yr_get(tt, "k"), "tarr") || ys_eq_lit(yr_get(tt, "k"), "tarrfix")) {
+        Yv *vw = yr(1, "k", yv_long(K_tnone));
+        if (yv_l(yr_get(tt, "k")) == K_tarr || yv_l(yr_get(tt, "k")) == K_tarrfix) {
             vw = yr_get(tt, "of");
         }
         Yv *v = typeof_want(st, yr_get(node, "v"), vw);
@@ -2455,24 +2455,24 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                          yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
         return opassign_check(st, node, yr_get(pc, "typ"), yr_get(v, "typ"));
-    } else if (ys_eq_lit(k, "store")) {
+    } else if (yv_l(k) == K_store) {
         Yv *p = typeof_expr(st, yr_get(node, "p"));
         Yv *pt = yr_get(p, "typ");
-        Yv *pw = yr(1, "k", ys("tnone"));
-        if (ys_eq_lit(yr_get(pt, "k"), "tptr")) {
+        Yv *pw = yr(1, "k", yv_long(K_tnone));
+        if (yv_l(yr_get(pt, "k")) == K_tptr) {
             pw = yr_get(pt, "to");
         }
         Yv *v = typeof_want(yr_get(p, "st"), yr_get(node, "v"), pw);
         st = yr_get(v, "st");
-        if (ys_eq_lit(yr_get(yr_get(p, "typ"), "k"), "tptr")) {
+        if (yv_l(yr_get(yr_get(p, "typ"), "k")) == K_tptr) {
             st = expect_type(st, yr_get(v, "typ"),
                              yr_get(yr_get(p, "typ"), "to"),
                              ys("store through pointer"),
                              yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));
             return yr(2, "typ", yr_get(yr_get(p, "typ"), "to"), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(p, "typ"), "k"), "tunk") ||
-                   ys_eq_lit(yr_get(yr_get(v, "typ"), "k"), "tunk")) {
+        } else if (yv_l(yr_get(yr_get(p, "typ"), "k")) == K_tunk ||
+                   yv_l(yr_get(yr_get(v, "typ"), "k")) == K_tunk) {
             return yr(2, "typ", t_unk(), "st", st);
         } else {
             st = fail(st,
@@ -2481,15 +2481,15 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(k, "ret")) {
-        if (ys_eq_lit(yr_get(yr_get(st, "ret"), "k"), "tnone")) {
+    } else if (yv_l(k) == K_ret) {
+        if (yv_l(yr_get(yr_get(st, "ret"), "k")) == K_tnone) {
             st = fail(st, ys("'return' outside of a function"),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         } else {
             Yv *r = typeof_want(st, yr_get(node, "e"), yr_get(st, "ret"));
             Yv *rk = yr_get(yr_get(st, "ret"), "k");
-            if (ys_eq_lit(rk, "tinfer")) {
+            if (yv_l(rk) == K_tinfer) {
                 // The def's return type is still being inferred: note the
                 // value's type, which typeof_def checks once the body's
                 // trailing type is known. A bare `return;` returns nothing,
@@ -2502,10 +2502,10 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                  yr_get(st, "ret"), ys("'return'"),
                                  yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                if (ys_eq_lit(rk, "tunk")) { return yr(2, "typ", yr_get(r, "typ"), "st", st); } else { return yr(2, "typ", yr_get(st, "ret"), "st", st); }
+                if (yv_l(rk) == K_tunk) { return yr(2, "typ", yr_get(r, "typ"), "st", st); } else { return yr(2, "typ", yr_get(st, "ret"), "st", st); }
             }
         }
-    } else if (ys_eq_lit(k, "rec")) {
+    } else if (yv_l(k) == K_rec) {
         // Record literal { k: v, ... }: every value checked, the type is a
         // trec with field names in order.
         Yv *mkeys = yr_get(node, "keys");
@@ -2514,7 +2514,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             // The empty literal `{}` is an empty record ({} prints as {}).
             // Under a map annotation it IS the map instead -- that adoption
             // happens in typeof_decl (and the emitter lowers it there).
-            return yr(2, "typ", yr(2, "k", ys("trec"), "fields", yav(0)), "st", st);
+            return yr(2, "typ", yr(2, "k", yv_long(K_trec), "fields", yav(0)), "st", st);
         } else {
             Yv *fields = yav(0);
             long i = 0;
@@ -2531,7 +2531,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                     // Static spread `...obj`: the union of the two shapes
                     // (field_merge: later wins the value, first appearance
                     // keeps the position). No dynamic shape is involved.
-                    if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "trec")) {
+                    if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_trec) {
                         Yv *sfs = yr_get(yr_get(r, "typ"), "fields");
                         long si = 0;
                         while (si < yv_len(sfs)) {
@@ -2541,9 +2541,9 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                             si = si + 1;
                         }
                         ;
-                    } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk") ||
-                               ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tnone") ||
-                               ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tname")) {
+                    } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk ||
+                               yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tnone ||
+                               yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tname) {
                         // poison quietly (tcompat law)
                         ok = 0;
                         ;
@@ -2557,13 +2557,13 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                         ;
                     }
                     ;
-                } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tnone")) {
+                } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tnone) {
                     // unannotated value shape (tcompat law): the missing
                     // annotation errors once at its own site; don't cascade
                     // here, but poison the record so uses don't mistype.
                     ok = 0;
                     ;
-                } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tname")) {
+                } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tname) {
                     ok = 0;
                     ;
                 } else if (!is_value_type(yr_get(r, "typ"))) {
@@ -2587,13 +2587,13 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 i = i + 1;
             }
             if (ok) {
-                return yr(2, "typ", yr(2, "k", ys("trec"), "fields", fields),
+                return yr(2, "typ", yr(2, "k", yv_long(K_trec), "fields", fields),
                           "st", st);
             } else {
                 return yr(2, "typ", t_unk(), "st", st);
             }
         }
-    } else if (ys_eq_lit(k, "map")) {
+    } else if (yv_l(k) == K_map) {
         // Map literal { "k": v, ... }: quoted keys (so the key type is
         // str), homogeneous values -- the first entry's type wins and
         // later entries must match. Duplicate keys collapse at emit time
@@ -2626,7 +2626,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         } else {
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         // The object type is bound once: the checker env is flow-insensitive,
         // so re-reading node.obj after a rebind could resolve against the
         // wrong shape.
@@ -2636,14 +2636,14 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         return typeof_field(yr_get(r, "st"), yr_get(r, "typ"), dkey,
                             yv_l(yr_get(node, "line")),
                             yv_l(yr_get(node, "col")));
-    } else if (ys_eq_lit(k, "func")) {
+    } else if (yv_l(k) == K_func) {
         // Anonymous function literal in expression position. Check the body
         // like a named def would be, and give the expression its tfunc type;
         // the emitter closure-converts it with a generated label.
         Yv *ra = typeof_def(st, ys(""), node, yv_l(yr_get(node, "line")),
                             yv_l(yr_get(node, "col")));
         return yr(2, "typ", yr_get(ra, "typ"), "st", yr_get(ra, "st"));
-    } else if (ys_eq_lit(k, "arrrep")) {
+    } else if (yv_l(k) == K_arrrep) {
         // [v; n]: n stack slots filled with v (the native array form)
         Yv *r = typeof_expr(st, yr_get(node, "v"));
         st = yr_get(r, "st");
@@ -2657,11 +2657,11 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         } else {
             // n is a literal from 0 to 2^31 - 1 (parser.c size_lit)
             return yr(2, "typ",
-                      yr(3, "k", ys("tarrfix"), "of", yr_get(r, "typ"), "n",
+                      yr(3, "k", yv_long(K_tarrfix), "of", yr_get(r, "typ"), "n",
                          yr_get(node, "n")),
                       "st", st);
         }
-    } else if (ys_eq_lit(k, "index")) {
+    } else if (yv_l(k) == K_index) {
         // A plain-variable base (the `id` arm) and an arbitrary expression
         // base (the else arm: `grid[0][1]`, `rec.v[i]`, `f()[i]`) both work.
         // Plain locals, params, AND function params of array type alike: the
@@ -2669,7 +2669,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         // checked at runtime. Fixed [T; N] and heap [T] alike. Params of
         // tunk (missing annotation) error elsewhere — here they poison
         // quietly to avoid cascades.
-        if (ys_eq_lit(yr_get(yr_get(node, "arr"), "k"), "id")) {
+        if (yv_l(yr_get(yr_get(node, "arr"), "k")) == K_id) {
             Yv *got = lookup(yr_get(st, "bindings"),
                              yr_get(yr_get(node, "arr"), "v"));
             if (ys_eq_lit(yr_get(got, "kind"), "")) {
@@ -2680,18 +2680,18 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarrfix") ||
-                       ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarr")) {
+            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix ||
+                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr) {
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
                                    yv_l(yr_get(node, "line")),
                                    yv_l(yr_get(node, "col")));
                 Yv *r = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr_get(yr_get(got, "typ"), "of"), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tmap")) {
+            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tmap) {
                 // m[k]: the key must match K; a read is ALWAYS optional --
                 // V? for any V (none when the key is missing).
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
@@ -2702,21 +2702,21 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(r, "typ"), yr_get(yr_get(got, "typ"), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("topt"), "of", yr_get(yr_get(got, "typ"), "of")), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tstr")) {
+                return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", yr_get(yr_get(got, "typ"), "of")), "st", st);
+            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tstr) {
                 // s[i]: the byte at i (trapped when out of bounds)
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
                                    yv_l(yr_get(node, "line")),
                                    yv_l(yr_get(node, "col")));
                 Yv *r = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("string index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tbyte")), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tunk") ||
-                       ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tnone") ||
-                       ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tname")) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tbyte)), "st", st);
+            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tunk ||
+                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tnone ||
+                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tname) {
                 Yv *r = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(r, "st");
                 return yr(2, "typ", t_unk(), "st", st);
@@ -2736,31 +2736,31 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             Yv *barr = yr_get(node, "arr");
             Yv *br = typeof_expr(st, barr);
             st = yr_get(br, "st");
-            if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tarrfix") ||
-                ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tarr")) {
+            if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarrfix ||
+                yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarr) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
-                st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr_get(yr_get(br, "typ"), "of"), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tmap")) {
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tmap) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
                 st = expect_type(st, yr_get(ri, "typ"), yr_get(yr_get(br, "typ"), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("topt"), "of", yr_get(yr_get(br, "typ"), "of")), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tstr")) {
+                return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", yr_get(yr_get(br, "typ"), "of")), "st", st);
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tstr) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
-                st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("string index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tbyte")), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tunk") ||
-                       ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tnone") ||
-                       ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tname")) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tbyte)), "st", st);
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tunk ||
+                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tnone ||
+                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
@@ -2776,7 +2776,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 return yr(2, "typ", t_unk(), "st", st);
             }
         }
-    } else if (ys_eq_lit(k, "slice")) {
+    } else if (yv_l(k) == K_slice) {
         // arr[lo:hi] -> a new array of the same element type. Missing
         // bounds default to 0 / len; the result is always a heap [T],
         // even when slicing a fixed [T; N].
@@ -2784,40 +2784,40 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         st = yr_get(sr, "st");
         Yv *slo = yr_get(node, "lo");
         Yv *shi = yr_get(node, "hi");
-        if (ys_eq_lit(yr_get(slo, "k"), "void")) {
+        if (yv_l(yr_get(slo, "k")) == K_void) {
             ;
         } else {
             Yv *rl = typeof_expr(st, slo);
             st = expect_type(yr_get(rl, "st"), yr_get(rl, "typ"),
-                             yr(1, "k", ys("tlong")), ys("slice start"),
+                             yr(1, "k", yv_long(K_tlong)), ys("slice start"),
                              yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));
             ;
         }
-        if (ys_eq_lit(yr_get(shi, "k"), "void")) {
+        if (yv_l(yr_get(shi, "k")) == K_void) {
             ;
         } else {
             Yv *rh = typeof_expr(st, shi);
             st = expect_type(yr_get(rh, "st"), yr_get(rh, "typ"),
-                             yr(1, "k", ys("tlong")), ys("slice end"),
+                             yr(1, "k", yv_long(K_tlong)), ys("slice end"),
                              yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));
             ;
         }
-        if (ys_eq_lit(yr_get(yr_get(sr, "typ"), "k"), "tarr")) {
+        if (yv_l(yr_get(yr_get(sr, "typ"), "k")) == K_tarr) {
             return yr(2, "typ",
-                      yr(2, "k", ys("tarr"), "of",
+                      yr(2, "k", yv_long(K_tarr), "of",
                          yr_get(yr_get(sr, "typ"), "of")),
                       "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(sr, "typ"), "k"), "tarrfix")) {
+        } else if (yv_l(yr_get(yr_get(sr, "typ"), "k")) == K_tarrfix) {
             return yr(2, "typ",
-                      yr(2, "k", ys("tarr"), "of",
+                      yr(2, "k", yv_long(K_tarr), "of",
                          yr_get(yr_get(sr, "typ"), "of")),
                       "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(sr, "typ"), "k"), "tstr")) {
+        } else if (yv_l(yr_get(yr_get(sr, "typ"), "k")) == K_tstr) {
             // s[lo:hi] -> the substring (bounds clamped, like an array slice)
-            return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(sr, "typ"), "k"), "tunk")) {
+            return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+        } else if (yv_l(yr_get(yr_get(sr, "typ"), "k")) == K_tunk) {
             return yr(2, "typ", t_unk(), "st", st);
         } else {
             st = fail(st,
@@ -2826,12 +2826,12 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(k, "dotassign")) {
+    } else if (yv_l(k) == K_dotassign) {
         // s.f = v — in-place record field write. The object may be a plain
         // variable (`id` arm) or any record-valued expression (`a[0].f`,
         // `x.y.f` — else arm); the field must exist in its static shape
         // (checked at the record literal / annotation site).
-        if (ys_eq_lit(yr_get(yr_get(node, "obj"), "k"), "id")) {
+        if (yv_l(yr_get(yr_get(node, "obj"), "k")) == K_id) {
             Yv *got = lookup(yr_get(st, "bindings"),
                              yr_get(yr_get(node, "obj"), "v"));
             if (ys_eq_lit(yr_get(got, "kind"), "")) {
@@ -2842,10 +2842,10 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (ys_eq_lit(yr_get(unfold(yr_get(got, "typ")), "k"), "trec")) {
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_trec) {
                 Yv *ft = trec_field_type(unfold(yr_get(got, "typ")),
                                          yr_get(node, "key"));
-                if (ys_eq_lit(yr_get(ft, "k"), "tnone")) {
+                if (yv_l(yr_get(ft, "k")) == K_tnone) {
                     st = fail(st,
                               ys_cat(ys_cat(ys("record has no field '"),
                                             yr_get(node, "key")),
@@ -2864,7 +2864,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ", ft, "st", st);
                 }
-            } else if (ys_eq_lit(yr_get(unfold(yr_get(got, "typ")), "k"), "tunion")) {
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tunion) {
                 return dotassign_union(st, unfold(yr_get(got, "typ")), node);
             } else {
                 st = fail(st,
@@ -2881,9 +2881,9 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             Yv *dobj2 = yr_get(node, "obj");
             Yv *obr = typeof_expr(st, dobj2);
             st = yr_get(obr, "st");
-            if (ys_eq_lit(yr_get(yr_get(obr, "typ"), "k"), "trec")) {
+            if (yv_l(yr_get(yr_get(obr, "typ"), "k")) == K_trec) {
                 Yv *ft = trec_field_type(yr_get(obr, "typ"), yr_get(node, "key"));
-                if (ys_eq_lit(yr_get(ft, "k"), "tnone")) {
+                if (yv_l(yr_get(ft, "k")) == K_tnone) {
                     st = fail(st,
                               ys_cat(ys_cat(ys("record has no field '"),
                                             yr_get(node, "key")),
@@ -2902,7 +2902,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ", ft, "st", st);
                 }
-            } else if (ys_eq_lit(yr_get(yr_get(obr, "typ"), "k"), "tunion")) {
+            } else if (yv_l(yr_get(yr_get(obr, "typ"), "k")) == K_tunion) {
                 return dotassign_union(st, yr_get(obr, "typ"), node);
             } else {
                 st = fail(st,
@@ -2914,8 +2914,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 return yr(2, "typ", t_unk(), "st", st);
             }
         }
-    } else if (ys_eq_lit(k, "idxassign")) {
-        if (ys_eq_lit(yr_get(yr_get(node, "arr"), "k"), "id")) {
+    } else if (yv_l(k) == K_idxassign) {
+        if (yv_l(yr_get(yr_get(node, "arr"), "k")) == K_id) {
             Yv *got = lookup(yr_get(st, "bindings"),
                              yr_get(yr_get(node, "arr"), "v"));
             if (ys_eq_lit(yr_get(got, "kind"), "")) {
@@ -2926,14 +2926,14 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarrfix") ||
-                       ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tarr")) {
+            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix ||
+                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr) {
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
                                    yv_l(yr_get(node, "line")),
                                    yv_l(yr_get(node, "col")));
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ix, "st");
-                st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(got, "typ"), "of"));
@@ -2943,7 +2943,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                  ys("array element"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr_get(yr_get(got, "typ"), "of"), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tmap")) {
+            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tmap) {
                 // m[k] = v: the key matches K and the value V (the store is
                 // in place -- every alias of the map sees it).
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
@@ -2976,11 +2976,11 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             Yv *barr = yr_get(node, "arr");
             Yv *br = typeof_expr(st, barr);
             st = yr_get(br, "st");
-            if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tarrfix") ||
-                ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tarr")) {
+            if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarrfix ||
+                yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarr) {
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ix, "st");
-                st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(br, "typ"), "of"));
@@ -2990,7 +2990,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                  ys("array element"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr_get(yr_get(br, "typ"), "of"), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tmap")) {
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tmap) {
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ix, "st");
                 st = expect_type(st, yr_get(ix, "typ"), yr_get(yr_get(br, "typ"), "key"),
@@ -3003,9 +3003,9 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                  ys("map value"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr_get(yr_get(br, "typ"), "of"), "st", st);
-            } else if (ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tunk") ||
-                       ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tnone") ||
-                       ys_eq_lit(yr_get(yr_get(br, "typ"), "k"), "tname")) {
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tunk ||
+                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tnone ||
+                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
@@ -3023,7 +3023,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 return yr(2, "typ", t_unk(), "st", st);
             }
         }
-    } else if (ys_eq_lit(k, "array")) {
+    } else if (yv_l(k) == K_array) {
         // Heap dynamic array literal [v, ...]. Element type = first element;
         // [] needs an annotation ([T]) since there is nothing to infer from.
         // NOTE: tnone/tname element shapes (from unannotated subexpressions)
@@ -3031,25 +3031,25 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         // its own site, not again at every enclosing literal (tcompat law).
         Yv *elems = yr_get(node, "elems");
         if (yv_len(elems) == 0) {
-            return yr(2, "typ", yr(2, "k", ys("tarr"), "of", t_free()), "st", st);
+            return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", t_free()), "st", st);
         } else {
             Yv *e0 = ya_get(elems, 0);
             Yv *r0 = typeof_expr(st, e0);
             st = yr_get(r0, "st");
-            if (ys_eq_lit(yr_get(yr_get(r0, "typ"), "k"), "tnone")) {
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", t_unk()), "st",
+            if (yv_l(yr_get(yr_get(r0, "typ"), "k")) == K_tnone) {
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", t_unk()), "st",
                           st);
-            } else if (ys_eq_lit(yr_get(yr_get(r0, "typ"), "k"), "tname")) {
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", t_unk()), "st",
+            } else if (yv_l(yr_get(yr_get(r0, "typ"), "k")) == K_tname) {
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", t_unk()), "st",
                           st);
-            } else if (ys_eq_lit(yr_get(yr_get(r0, "typ"), "k"), "tarr")) {
+            } else if (yv_l(yr_get(yr_get(r0, "typ"), "k")) == K_tarr) {
                 // nested array literal [[..], ..]: the inner literal's type
                 // IS known, so keep it as the element type ([[1], [2]] :
                 // [[long]]) -- that is what lets the checker enforce
                 // homogeneity through `+=` / `*=` / `+`. A poisoned inner
                 // (tunk inside) still unifies quietly through teq, so the
                 // report-once law holds.
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(r0, "typ")),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr_get(r0, "typ")),
                           "st", st);
             } else if (!is_value_type(yr_get(r0, "typ"))) {
                 st = fail(st,
@@ -3071,20 +3071,20 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                     // long/bool/str element so [f(x), 1] reports only f's own
                     // error (a float/byte/record there leaves the element type
                     // poison, which still unifies quietly downstream).
-                    if (ys_eq_lit(yr_get(elt, "k"), "tunk")) {
-                        if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tlong")) {
+                    if (yv_l(yr_get(elt, "k")) == K_tunk) {
+                        if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tlong) {
                             elt = yr_get(r, "typ");
                             ;
                         } else {
                             ;
                         }
-                        if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbool")) {
+                        if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool) {
                             elt = yr_get(r, "typ");
                             ;
                         } else {
                             ;
                         }
-                        if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr")) {
+                        if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr) {
                             elt = yr_get(r, "typ");
                             ;
                         } else {
@@ -3100,22 +3100,22 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                     }
                     i = i + 1;
                 }
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", elt), "st", st);
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", elt), "st", st);
             }
         }
-    } else if (ys_eq_lit(k, "char")) {
-        return yr(2, "typ", yr(1, "k", ys("tbyte")), "st", st);
-    } else if (ys_eq_lit(k, "rectest")) {
+    } else if (yv_l(k) == K_char) {
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbyte)), "st", st);
+    } else if (yv_l(k) == K_rectest) {
         return typeof_rectest(st, node);
-    } else if (ys_eq_lit(k, "narrow")) {
+    } else if (yv_l(k) == K_narrow) {
         return typeof_narrow(st, node);
-    } else if (ys_eq_lit(k, "matchend")) {
+    } else if (yv_l(k) == K_matchend) {
         return typeof_matchend(st, node);
-    } else if (ys_eq_lit(k, "sliceassign")) {
+    } else if (yv_l(k) == K_sliceassign) {
         return typeof_sliceassign(st, node);
     } else {
         st = fail(st,
-                  ys_cat(ys_cat(ys("'"), k),
+                  ys_cat(ys_cat(ys("'"), ktag(yv_l(k))),
                          ys("' is not a supported expression form")),
                   yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         return yr(2, "typ", t_unk(), "st", st);
@@ -3135,17 +3135,17 @@ static Yv *typeof_rectest(Yv *st, Yv *node) {
     Yv *sk = yr_get(s, "k");
     Yv *tu = unfold(t);
     Yv *tk = yr_get(tu, "k");
-    if (ys_eq_lit(tk, "tunk")) {
+    if (yv_l(tk) == K_tunk) {
         // an alias that stands for no type (rename.y reported it)
         ;
-    } else if (!ys_eq_lit(tk, "trec") && !ys_eq_lit(tk, "tpat")) {
+    } else if (yv_l(tk) != K_trec && yv_l(tk) != K_tpat) {
         st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record type")), NLINE, NCOL);
-    } else if (ys_eq_lit(sk, "tunk")) {
+    } else if (yv_l(sk) == K_tunk) {
         ;
-    } else if (ys_eq_lit(sk, "trec") || ys_eq_lit(sk, "tunion")) {
-        if (ys_eq_lit(tk, "tpat")) {
+    } else if (yv_l(sk) == K_trec || yv_l(sk) == K_tunion) {
+        if (yv_l(tk) == K_tpat) {
             Yv *nt = narrow_type(s, t);
-            if (ys_eq_lit(yr_get(nt, "k"), "tunk")) {
+            if (yv_l(yr_get(nt, "k")) == K_tunk) {
                 st = fail(st, ys_cat(ys_cat(ys_cat(ys("no record in "), tstr(s)), ys(" has the fields of pattern ")), tstr(t)), NLINE, NCOL);
             }
         } else if (!pattern_fits(s, t)) {
@@ -3154,15 +3154,15 @@ static Yv *typeof_rectest(Yv *st, Yv *node) {
     } else {
         st = fail(st, ys_cat(ys("cannot match a record pattern against "), tstr(s)), NLINE, NCOL);
     }
-    return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+    return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
 }
 
 // The record type t is the subject s (a record) or one of its members (a
 // union): membership is exact.
 static int pattern_fits(Yv *s, Yv *t) {
-    if (ys_eq_lit(yr_get(s, "k"), "tunion")) {
+    if (yv_l(yr_get(s, "k")) == K_tunion) {
         Yv *m = union_member(s, t);
-        return !ys_eq_lit(yr_get(m, "k"), "tnone");
+        return yv_l(yr_get(m, "k")) != K_tnone;
     } else {
         return teq(s, t);
     }
@@ -3174,7 +3174,7 @@ static Yv *typeof_narrow(Yv *st, Yv *node) {
     Yv *t = yr_get(node, "typ");
     Yv *tu = unfold(t);
     Yv *tk = yr_get(tu, "k");
-    if (ys_eq_lit(tk, "trec") || ys_eq_lit(tk, "tpat")) {
+    if (yv_l(tk) == K_trec || yv_l(tk) == K_tpat) {
         return yr(2, "typ", narrow_type(yr_get(r, "typ"), t), "st", yr_get(r, "st"));
     } else {
         return yr(2, "typ", t_unk(), "st", yr_get(r, "st"));
@@ -3194,9 +3194,9 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
     if (yv_l(yr_get(node, "vals")) > 0) {
         hint = ys("; value patterns match only the values they name and cover no type");
     }
-    if (ys_eq_lit(sk, "tunk")) {
+    if (yv_l(sk) == K_tunk) {
         ;
-    } else if (ys_eq_lit(sk, "tunion")) {
+    } else if (yv_l(sk) == K_tunion) {
         Yv *ms = members(s);
         Yv *missing = yav(0);
         long i = 0;
@@ -3213,7 +3213,7 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
                                    ys_cat(hint, ys(")"))),
                       NLINE, NCOL);
         }
-    } else if (ys_eq_lit(sk, "trec") && covered(s, cover)) {
+    } else if (yv_l(sk) == K_trec && covered(s, cover)) {
         ;
     } else {
         st = fail(st, ys_cat(ys_cat(ys_cat(ys("non-exhaustive match on "),
@@ -3231,7 +3231,7 @@ static int covered(Yv *m, Yv *cover) {
     long i = 0;
     while (i < yv_len(cover)) {
         Yv *c = unfold(ya_get(cover, i));
-        if (ys_eq_lit(yr_get(c, "k"), "trec")) {
+        if (yv_l(yr_get(c, "k")) == K_trec) {
             if (teq(m, c)) {
                 any = 1;
             }
@@ -3247,13 +3247,13 @@ static Yv *typeof_sliceassign(Yv *st, Yv *node) {
     st = yr_get(ar, "st");
     Yv *slo = yr_get(node, "lo");
     Yv *shi = yr_get(node, "hi");
-    if (!ys_eq_lit(yr_get(slo, "k"), "void")) {
+    if (yv_l(yr_get(slo, "k")) != K_void) {
         Yv *rl = typeof_expr(st, slo);
-        st = expect_type(yr_get(rl, "st"), yr_get(rl, "typ"), yr(1, "k", ys("tlong")), ys("slice start"), NLINE, NCOL);
+        st = expect_type(yr_get(rl, "st"), yr_get(rl, "typ"), yr(1, "k", yv_long(K_tlong)), ys("slice start"), NLINE, NCOL);
     }
-    if (!ys_eq_lit(yr_get(shi, "k"), "void")) {
+    if (yv_l(yr_get(shi, "k")) != K_void) {
         Yv *rh = typeof_expr(st, shi);
-        st = expect_type(yr_get(rh, "st"), yr_get(rh, "typ"), yr(1, "k", ys("tlong")), ys("slice end"), NLINE, NCOL);
+        st = expect_type(yr_get(rh, "st"), yr_get(rh, "typ"), yr(1, "k", yv_long(K_tlong)), ys("slice end"), NLINE, NCOL);
     }
     Yv *vr = typeof_expr(st, yr_get(node, "v"));
     st = yr_get(vr, "st");
@@ -3261,24 +3261,24 @@ static Yv *typeof_sliceassign(Yv *st, Yv *node) {
     Yv *vt = yr_get(vr, "typ");
     Yv *akk = yr_get(at, "k");
     Yv *vkk = yr_get(vt, "k");
-    if (ys_eq_lit(akk, "tarr") || ys_eq_lit(akk, "tarrfix")) {
-        if (ys_eq_lit(vkk, "tarr") || ys_eq_lit(vkk, "tarrfix")) {
+    if (yv_l(akk) == K_tarr || yv_l(akk) == K_tarrfix) {
+        if (yv_l(vkk) == K_tarr || yv_l(vkk) == K_tarrfix) {
             if (!teq(yr_get(vt, "of"), yr_get(at, "of"))) {
                 st = fail(st, ys_cat(ys_cat(ys_cat(ys("slice assignment: cannot store "), tstr(vt)), ys(" into ")), tstr(at)), NLINE, NCOL);
             }
-        } else if (ys_eq_lit(vkk, "tunk")) {
+        } else if (yv_l(vkk) == K_tunk) {
             ;
         } else {
             st = fail(st, ys_cat(ys("slice assignment needs an array on the right, got "), tstr(vt)), NLINE, NCOL);
         }
-    } else if (ys_eq_lit(akk, "tstr")) {
+    } else if (yv_l(akk) == K_tstr) {
         st = fail(st, ys("cannot assign to a slice of str (strings are immutable)"), NLINE, NCOL);
-    } else if (ys_eq_lit(akk, "tunk")) {
+    } else if (yv_l(akk) == K_tunk) {
         ;
     } else {
         st = fail(st, ys_cat(ys_cat(ys("cannot slice-assign "), tstr(at)), ys(" (only arrays)")), NLINE, NCOL);
     }
-    return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+    return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
 }
 
 #undef NLINE
@@ -3291,7 +3291,7 @@ static Yv *typeof_sliceassign(Yv *st, Yv *node) {
  * out to be a str (a string method) or a record (a field holding a
  * function). */
 static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
-    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) == K_trec) {
         int found = 0;
         Yv *ftyp = t_unk();
         Yv *fs = yr_get(t, "fields");
@@ -3320,20 +3320,20 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
                       line, col);
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunion")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         return union_field(st, t, dkey, line, col);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tunk")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tunk) {
         return yr(2, "typ", t_unk(), "st", st);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tnone) {
         // bare-hole params (see typeof_def note): unify quietly.
         return yr(2, "typ", t_unk(), "st", st);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tname")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tname) {
         return yr(2, "typ", t_unk(), "st", st);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tparams")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tparams) {
         return yr(2, "typ", t_unk(), "st", st);
-    } else if (ys_eq_lit(yr_get(t, "k"), "tarr") ||
-               ys_eq_lit(yr_get(t, "k"), "tarrfix") ||
-               ys_eq_lit(yr_get(t, "k"), "tstr")) {
+    } else if (yv_l(yr_get(t, "k")) == K_tarr ||
+               yv_l(yr_get(t, "k")) == K_tarrfix ||
+               yv_l(yr_get(t, "k")) == K_tstr) {
         return typeof_prop(st, t, dkey, line, col);
     } else {
         st = fail(st,
@@ -3354,14 +3354,14 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
  * the pointer would fault. */
 static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col) {
     if (ys_eq_lit(key, "length")) {
-        return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
     } else if (ys_eq_lit(key, "ptr") &&
-               !ys_eq_lit(yr_get(t, "k"), "tstr")) {
+               yv_l(yr_get(t, "k")) != K_tstr) {
         return yr(2, "typ",
-                  yr(2, "k", ys("tptr"), "to", yr_get(t, "of")), "st", st);
+                  yr(2, "k", yv_long(K_tptr), "to", yr_get(t, "of")), "st", st);
     } else {
         Yv *have = ys("'.length' and '.ptr'");
-        if (ys_eq_lit(yr_get(t, "k"), "tstr")) {
+        if (yv_l(yr_get(t, "k")) == K_tstr) {
             have = ys("'.length'");
         }
         st = fail(st,
@@ -3390,9 +3390,9 @@ static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col) {
  * A helper's method names must be in native.y str_names: that is what
  * splices std/str.y into a program that calls one. */
 Yv *str_method(Yv *m) {
-    Yv *s = sm_t(ys("tstr"));
-    Yv *l = sm_t(ys("tlong"));
-    Yv *b = sm_t(ys("tbool"));
+    Yv *s = sm_t(yv_long(K_tstr));
+    Yv *l = sm_t(yv_long(K_tlong));
+    Yv *b = sm_t(yv_long(K_tbool));
     Yv *no = yav(0);
     if (ys_eq_lit(m, "split")) {
         return sm_mk(ys("split"), yav(1, s), 1, sm_arr(s), ys(""), 0);
@@ -3434,7 +3434,7 @@ Yv *str_method(Yv *m) {
         return sm_mk(ys("y_str_lines"), no, 0, sm_arr(s), ys(""), 0);
     } else if (ys_eq_lit(m, "bytes")) {
         return sm_mk(ys("bytes"), no, 0,
-                     sm_arr(sm_t(ys("tbyte"))), ys(""), 0);
+                     sm_arr(sm_t(yv_long(K_tbyte))), ys(""), 0);
     } else if (ys_eq_lit(m, "tonum")) {
         return sm_mk(ys("tonum"), no, 0, l, ys(""), 0);
     } else if (ys_eq_lit(m, "ord")) {
@@ -3457,13 +3457,13 @@ static Yv *sm_t(Yv *k) {
 }
 
 static Yv *sm_arr(Yv *of) {
-    return yr(2, "k", ys("tarr"), "of", of);
+    return yr(2, "k", yv_long(K_tarr), "of", of);
 }
 
 // join's array: any element type (sm_accepts; prints as `T`, so an error
 // reads "expected [T]").
 static Yv *sm_any(void) {
-    return yr(2, "k", ys("tname"), "name", ys("T"));
+    return yr(2, "k", yv_long(K_tname), "name", ys("T"));
 }
 
 /* `node` is `s.m(args)` with s a str (typed already, by typeof_call). */
@@ -3518,7 +3518,7 @@ static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
             Yv *r = typeof_expr(st, ya_get(margs, i));
             st = yr_get(r, "st");
             Yv *ak = yr_get(yr_get(r, "typ"), "k");
-            if (ys_eq_lit(ak, "tvoid")) {
+            if (yv_l(ak) == K_tvoid) {
                 st = fail(st,
                           ys_cat(ys_cat(ys_cat(what, ys(" arg ")), ys_long(i)),
                                  ys(": cannot pass a void value")),
@@ -3550,10 +3550,10 @@ static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
 // tcompat, except that join's [T] takes an array of any element type (as
 // the join builtin does: a [T], or poison).
 static int sm_accepts(Yv *got, Yv *want) {
-    if (ys_eq_lit(yr_get(want, "k"), "tarr") &&
-        ys_eq_lit(yr_get(yr_get(want, "of"), "k"), "tname")) {
-        return ys_eq_lit(yr_get(got, "k"), "tarr") ||
-               ys_eq_lit(yr_get(got, "k"), "tunk");
+    if (yv_l(yr_get(want, "k")) == K_tarr &&
+        yv_l(yr_get(yr_get(want, "of"), "k")) == K_tname) {
+        return yv_l(yr_get(got, "k")) == K_tarr ||
+               yv_l(yr_get(got, "k")) == K_tunk;
     } else {
         return tcompat(got, want);
     }
@@ -3565,12 +3565,12 @@ static int sm_accepts(Yv *got, Yv *want) {
  * field writes (`a[i] = v`, `r.f = v`) still mutate the shared value. Plain
  * `=` is refused in the `assign` arm itself; this covers the other two. */
 static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
-    if (ys_eq_lit(yr_get(tgt, "k"), "id")) {
+    if (yv_l(yr_get(tgt, "k")) == K_id) {
         Yv *got = lookup(yr_get(st, "bindings"), yr_get(tgt, "v"));
-        int inplace = ys_eq_lit(yr_get(tt, "k"), "tarr") ||
-                      ys_eq_lit(yr_get(tt, "k"), "tarrfix") ||
-                      ys_eq_lit(yr_get(tt, "k"), "tunk") ||
-                      ys_eq_lit(yr_get(tt, "k"), "tnone");
+        int inplace = yv_l(yr_get(tt, "k")) == K_tarr ||
+                      yv_l(yr_get(tt, "k")) == K_tarrfix ||
+                      yv_l(yr_get(tt, "k")) == K_tunk ||
+                      yv_l(yr_get(tt, "k")) == K_tnone;
         if (ys_eq_lit(yr_get(got, "kind"), "const") && !inplace) {
             return fail(st,
                         ys_cat(ys_cat(ys_cat(ys_cat(
@@ -3598,20 +3598,20 @@ static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
 static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
     Yv *k = yr_get(tgt, "k");
     int ok = 1;
-    if (ys_eq_lit(k, "index")) {
-        if (ys_eq_lit(yr_get(tt, "k"), "tbyte") &&
-            ys_eq_lit(yr_get(base_type(st, yr_get(tgt, "arr")), "k"), "tstr")) {
+    if (yv_l(k) == K_index) {
+        if (yv_l(yr_get(tt, "k")) == K_tbyte &&
+            yv_l(yr_get(base_type(st, yr_get(tgt, "arr")), "k")) == K_tstr) {
             st = fail(st, ys("cannot index str (only arrays and maps)"), line, col);
             ok = 0;
         }
-    } else if (ys_eq_lit(k, "dot")) {
+    } else if (yv_l(k) == K_dot) {
         Yv *key = yr_get(tgt, "key");
-        if (!ys_eq_lit(yr_get(tt, "k"), "tunk") &&
+        if (yv_l(yr_get(tt, "k")) != K_tunk &&
             (ys_eq_lit(key, "length") || ys_eq_lit(key, "ptr"))) {
             Yv *bt = base_type(st, yr_get(tgt, "obj"));
-            if (ys_eq_lit(yr_get(bt, "k"), "tarr") ||
-                ys_eq_lit(yr_get(bt, "k"), "tarrfix") ||
-                ys_eq_lit(yr_get(bt, "k"), "tstr")) {
+            if (yv_l(yr_get(bt, "k")) == K_tarr ||
+                yv_l(yr_get(bt, "k")) == K_tarrfix ||
+                yv_l(yr_get(bt, "k")) == K_tstr) {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot field-assign "), tstr(bt)),
                                  ys(" (only records)")),
@@ -3619,7 +3619,7 @@ static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
                 ok = 0;
             }
         }
-    } else if (!ys_eq_lit(k, "id") && !ys_eq_lit(k, "err")) {
+    } else if (yv_l(k) != K_id && yv_l(k) != K_err) {
         st = fail(st,
                   ys_cat(ys_cat(ys("cannot assign to this expression ('"), op),
                          ys("')")),
@@ -3633,7 +3633,7 @@ static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
  * whole target was typed already, its errors reported: a base other than
  * a name is typed again on a scratch error list. */
 static Yv *base_type(Yv *st, Yv *e) {
-    if (ys_eq_lit(yr_get(e, "k"), "id")) {
+    if (yv_l(yr_get(e, "k")) == K_id) {
         return yr_get(lookup(yr_get(st, "bindings"), yr_get(e, "v")), "typ");
     } else {
         Yv *none = yav(0);
@@ -3644,12 +3644,12 @@ static Yv *base_type(Yv *st, Yv *e) {
 // ++/-- target rule: numbers (long/byte/float) only.
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
     Yv *op = yr_get(node, "op");
-    if (ys_eq_lit(yr_get(tt, "k"), "tlong") ||
-        ys_eq_lit(yr_get(tt, "k"), "tbyte") ||
-        ys_eq_lit(yr_get(tt, "k"), "tfloat")) {
+    if (yv_l(yr_get(tt, "k")) == K_tlong ||
+        yv_l(yr_get(tt, "k")) == K_tbyte ||
+        yv_l(yr_get(tt, "k")) == K_tfloat) {
         return yr(2, "typ", tt, "st", st);
-    } else if (ys_eq_lit(yr_get(tt, "k"), "tunk") ||
-               ys_eq_lit(yr_get(tt, "k"), "tnone")) {
+    } else if (yv_l(yr_get(tt, "k")) == K_tunk ||
+               yv_l(yr_get(tt, "k")) == K_tnone) {
         return yr(2, "typ", t_unk(), "st", st);
     } else {
         st = fail(st,
@@ -3675,15 +3675,15 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
     Yv *op = yr_get(node, "op");
     if (is_bits_op(op)) {
-        if (ys_eq_lit(yr_get(tt, "k"), "tlong") ||
-            ys_eq_lit(yr_get(tt, "k"), "tbyte")) {
-            st = expect_type(st, vt, yr(1, "k", ys("tlong")),
+        if (yv_l(yr_get(tt, "k")) == K_tlong ||
+            yv_l(yr_get(tt, "k")) == K_tbyte) {
+            st = expect_type(st, vt, yr(1, "k", yv_long(K_tlong)),
                              ys_cat(ys_cat(ys("'"), op), ys("=' value")),
                              yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));
             return yr(2, "typ", tt, "st", st);
-        } else if (ys_eq_lit(yr_get(tt, "k"), "tunk") ||
-                   ys_eq_lit(yr_get(tt, "k"), "tnone")) {
+        } else if (yv_l(yr_get(tt, "k")) == K_tunk ||
+                   yv_l(yr_get(tt, "k")) == K_tnone) {
             return yr(2, "typ", t_unk(), "st", st);
         } else {
             st = fail(st,
@@ -3693,7 +3693,7 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
-    } else if (ys_eq_lit(yr_get(tt, "k"), "tarrfix")) {
+    } else if (yv_l(yr_get(tt, "k")) == K_tarrfix) {
         /* A fixed array's length is part of its type: growth is a type
          * error (the old push-on-fixed rejection, now on the operators). */
         st = fail(st,
@@ -3704,7 +3704,7 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                          ys("=' (its length is part of its type; use [T] instead)")),
                   yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         return yr(2, "typ", tt, "st", st);
-    } else if (ys_eq_lit(yr_get(tt, "k"), "tarr")) {
+    } else if (yv_l(yr_get(tt, "k")) == K_tarr) {
         if (ys_eq_lit(op, "*")) {
             // `*= ` prepends ONE item — its type must be the element type.
             st = expect_type(st, vt, yr_get(tt, "of"), ys("'*=' element"),
@@ -3712,8 +3712,8 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                              yv_l(yr_get(node, "col")));
             return yr(2, "typ", tt, "st", st);
         } else if (ys_eq_lit(op, "+")) {
-            if (ys_eq_lit(yr_get(vt, "k"), "tarr") ||
-                ys_eq_lit(yr_get(vt, "k"), "tarrfix")) {
+            if (yv_l(yr_get(vt, "k")) == K_tarr ||
+                yv_l(yr_get(vt, "k")) == K_tarrfix) {
                 if (ys_eq_lit(arr_plus_kind(tt, vt), "append")) {
                     // `[[T]] += [T]` pushes the array as ONE element (the
                     // same rule as `+`, see arr_plus_kind).
@@ -3727,8 +3727,8 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ", tt, "st", st);
                 }
-            } else if (ys_eq_lit(yr_get(vt, "k"), "tunk") ||
-                       ys_eq_lit(yr_get(vt, "k"), "tnone")) {
+            } else if (yv_l(yr_get(vt, "k")) == K_tunk ||
+                       yv_l(yr_get(vt, "k")) == K_tnone) {
                 return yr(2, "typ", tt, "st", st);
             } else {
                 st = expect_type(st, vt, yr_get(tt, "of"), ys("'+=' element"),
@@ -3744,9 +3744,9 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", tt, "st", st);
         }
-    } else if (ys_eq_lit(yr_get(tt, "k"), "tstr")) {
+    } else if (yv_l(yr_get(tt, "k")) == K_tstr) {
         if (ys_eq_lit(op, "+")) {
-            st = expect_type(st, vt, yr(1, "k", ys("tstr")), ys("'+=' string"),
+            st = expect_type(st, vt, yr(1, "k", yv_long(K_tstr)), ys("'+=' string"),
                              yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));
             return yr(2, "typ", tt, "st", st);
@@ -3758,15 +3758,15 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", tt, "st", st);
         }
-    } else if (ys_eq_lit(yr_get(tt, "k"), "tlong") ||
-               ys_eq_lit(yr_get(tt, "k"), "tbyte") ||
-               ys_eq_lit(yr_get(tt, "k"), "tfloat")) {
+    } else if (yv_l(yr_get(tt, "k")) == K_tlong ||
+               yv_l(yr_get(tt, "k")) == K_tbyte ||
+               yv_l(yr_get(tt, "k")) == K_tfloat) {
         st = expect_type(st, vt, tt, ys_cat(ys_cat(ys("'"), op), ys("=' value")),
                          yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
         return yr(2, "typ", tt, "st", st);
-    } else if (ys_eq_lit(yr_get(tt, "k"), "tunk") ||
-               ys_eq_lit(yr_get(tt, "k"), "tnone")) {
+    } else if (yv_l(yr_get(tt, "k")) == K_tunk ||
+               yv_l(yr_get(tt, "k")) == K_tnone) {
         return yr(2, "typ", t_unk(), "st", st);
     } else {
         st = fail(st,
@@ -3811,7 +3811,7 @@ Yv *fmt_spec(Yv *spec) {
     int alt = 0;
     if (i < n && ys_byte_at(spec, i) == 35) { alt = 1; i = i + 1; ; } else { ; }
     int zero = 0;
-    if (i < n && ys_byte_at(spec, i) == 48) { zero = 1; i = i + 1; ; } else { ; }
+    if (i < n && ys_byte_at(spec, i) == '0') { zero = 1; i = i + 1; ; } else { ; }
     long ws = i;
     while (i < n && fmt_digit(ys_byte_at(spec, i))) {
         i = i + 1;
@@ -3892,7 +3892,7 @@ static long fmt_number(Yv *spec, long a, long b) {
     long v = 0;
     long i = a;
     while (i < b) {
-        if (v < 1000000) { v = v * 10 + ys_byte_at(spec, i) - 48; ; } else { ; }
+        if (v < 1000000) { v = v * 10 + ys_byte_at(spec, i) - '0'; ; } else { ; }
         i = i + 1;
         ;
     }
@@ -3903,9 +3903,9 @@ static long fmt_number(Yv *spec, long a, long b) {
  * 0 anything else -- its tostring text, like a str. */
 long fmt_kind(Yv *t) {
     Yv *k = yr_get(t, "k");
-    if (ys_eq_lit(k, "tlong") || ys_eq_lit(k, "tbyte")) {
+    if (yv_l(k) == K_tlong || yv_l(k) == K_tbyte) {
         return 1;
-    } else if (ys_eq_lit(k, "tfloat")) {
+    } else if (yv_l(k) == K_tfloat) {
         return 2;
     } else {
         return 0;
@@ -3974,12 +3974,12 @@ static Yv *typeof_fmt(Yv *st, Yv *node) {
     Yv *t = yr_get(r, "typ");
     Yv *spec = yr_get(ya_get(fargs, 1), "v");
     Yv *k = yr_get(t, "k");
-    if (!(ys_eq_lit(k, "tlong") || ys_eq_lit(k, "tbyte") ||
-          ys_eq_lit(k, "tbool") || ys_eq_lit(k, "tstr") ||
-          ys_eq_lit(k, "tfloat") || ys_eq_lit(k, "tunk") ||
-          ys_eq_lit(k, "tarr") || ys_eq_lit(k, "tarrfix") ||
-          ys_eq_lit(k, "trec") || ys_eq_lit(k, "tmap") ||
-          ys_eq_lit(k, "topt") || ys_eq_lit(k, "tunion"))) {
+    if (!(yv_l(k) == K_tlong || yv_l(k) == K_tbyte ||
+          yv_l(k) == K_tbool || yv_l(k) == K_tstr ||
+          yv_l(k) == K_tfloat || yv_l(k) == K_tunk ||
+          yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
+          yv_l(k) == K_trec || yv_l(k) == K_tmap ||
+          yv_l(k) == K_topt || yv_l(k) == K_tunion)) {
         st = fail(st,
                   ys_cat(ys("an f-string field takes long/bool/float/str/array/record/map/option, got "),
                         tstr(t)),
@@ -4001,7 +4001,7 @@ static Yv *typeof_fmt(Yv *st, Yv *node) {
     } else {
         ;
     }
-    return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+    return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
 }
 
 static Yv *typeof_call(Yv *st, Yv *node) {
@@ -4010,16 +4010,16 @@ static Yv *typeof_call(Yv *st, Yv *node) {
     // expression (the `if` arm — an immediately-invoked literal, an element
     // of an array of functions, ...).
     Yv *cargs = yr_get(node, "args");
-    if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "k"), "id")) {
+    if (yv_l(yr_get(yr_get(node, "callee"), "k")) != K_id) {
         // Calling an expression: legal when it yields a function value,
         // or a string method. Type a dot receiver once, then resolve it as
         // a method or as a field of a record.
         Yv *ccal = yr_get(node, "callee");
         Yv *cf = yr(2, "typ", t_unk(), "st", st);
         int smeth = 0;
-        if (ys_eq_lit(yr_get(ccal, "k"), "dot")) {
+        if (yv_l(yr_get(ccal, "k")) == K_dot) {
             Yv *crt = typeof_expr(st, yr_get(ccal, "obj"));
-            if (ys_eq_lit(yr_get(yr_get(crt, "typ"), "k"), "tstr")) {
+            if (yv_l(yr_get(yr_get(crt, "typ"), "k")) == K_tstr) {
                 smeth = 1;
                 cf = yr(2, "typ", t_unk(), "st", yr_get(crt, "st"));
                 ;
@@ -4038,7 +4038,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
         st = yr_get(cf, "st");
         if (smeth) {
             return typeof_method(st, node, yr_get(ccal, "key"));
-        } else if (ys_eq_lit(yr_get(yr_get(cf, "typ"), "k"), "tfunc")) {
+        } else if (yv_l(yr_get(yr_get(cf, "typ"), "k")) == K_tfunc) {
             Yv *cft = yr_get(cf, "typ");
             Yv *cfargs = yr_get(cft, "args");
             if (yv_len(cargs) != yv_len(cfargs)) {
@@ -4085,31 +4085,31 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("print takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tlong") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbyte") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbool") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tfloat") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "trec") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tmap") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tfunc") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarrfix") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "topt") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunion")) {
-                    return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tlong ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbyte ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_trec ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tmap ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfunc ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarrfix ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_topt ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunion) {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
                 } else {
                     st = fail(st,
                               ys_cat(ys("print supports long/bool/float/str/array/record/map/option, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "keys")) {
@@ -4123,9 +4123,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
                 Yv *mt = unfold(yr_get(r, "typ"));
-                if (ys_eq_lit(yr_get(mt, "k"), "tmap")) {
-                    return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(mt, "key")), "st", st);
-                } else if (ys_eq_lit(yr_get(mt, "k"), "tunk")) {
+                if (yv_l(yr_get(mt, "k")) == K_tmap) {
+                    return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr_get(mt, "key")), "st", st);
+                } else if (yv_l(yr_get(mt, "k")) == K_tunk) {
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
                     st = fail(st, ys_cat(ys("keys needs a map, got "), tstr(yr_get(r, "typ"))),
@@ -4139,28 +4139,28 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("len takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarrfix") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tmap")) {
-                    return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk") ||
-                           ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tnone") ||
-                           ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tname")) {
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarrfix ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tmap) {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+                } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk ||
+                           yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tnone ||
+                           yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tname) {
                     // poison/unannotated shape (tcompat law): root cause
                     // errors once at its own site; len() unifies quietly.
-                    return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
                 } else {
                     st = fail(st,
                               ys_cat(ys("len supports arrays, strings and maps, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "some")) {
@@ -4183,7 +4183,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
                     return yr(2, "typ",
-                              yr(2, "k", ys("topt"), "of", yr_get(r, "typ")),
+                              yr(2, "k", yv_long(K_topt), "of", yr_get(r, "typ")),
                               "st", st);
                 }
             }
@@ -4192,20 +4192,20 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("is_some takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "topt") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
-                    return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_topt ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
                 } else {
                     st = fail(st,
                               ys_cat(ys("is_some needs an option, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st);
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "unwrap")) {
@@ -4217,16 +4217,16 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "topt")) {
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_topt) {
                     return yr(2, "typ", yr_get(yr_get(r, "typ"), "of"), "st",
                               st);
-                } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
+                } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tnone")) {
+                } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tnone) {
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tname")) {
+                } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tname) {
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tparams")) {
+                } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tparams) {
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
                     st = fail(st,
@@ -4246,10 +4246,10 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("trim string"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             }
         } else if (ys_eq_lit(name, "ord")) {
             // ord(s) -> long (first byte, -1 if empty)
@@ -4261,10 +4261,10 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("ord string"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "byte_at")) {
             // byte_at(s, i) -> long (byte i of s, trapped out of bounds)
@@ -4276,15 +4276,15 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r0 = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r0, "st");
-                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("byte_at string"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 Yv *r2 = typeof_expr(st, ya_get(cargs, 1));
                 st = yr_get(r2, "st");
-                st = expect_type(st, yr_get(r2, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(r2, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("byte_at index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "chr")) {
             if (yv_len(cargs) != 1) {
@@ -4295,10 +4295,10 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("chr code"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             }
         } else if (ys_eq_lit(name, "tonum")) {
             if (yv_len(cargs) != 1) {
@@ -4309,10 +4309,10 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("tonum string"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "tostring")) {
             if (yv_len(cargs) != 1) {
@@ -4323,19 +4323,19 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tlong") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbyte") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbool") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tfloat") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tarrfix") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "trec") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tmap") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "topt") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunion")) {
-                    return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tlong ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbyte ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarrfix ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_trec ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tmap ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_topt ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunion) {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
                 } else {
                     st = fail(st,
                               ys_cat(ys("tostring supports long/bool/float/str/array/record/map/option, got "),
@@ -4354,7 +4354,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             }
         } else if (ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
@@ -4369,24 +4369,24 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = yr_get(r0, "st");
                 Yv *r1 = typeof_expr(st, ya_get(cargs, 1));
                 st = yr_get(r1, "st");
-                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys_cat(name, ys(" string")),
                                  yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys_cat(name, ys(" sub")),
                                  yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "join") && yv_len(cargs) == 1) {
             // join t: wait for thread t (spawn's function) and take its value
             Yv *r = typeof_expr(st, ya_get(cargs, 0));
             st = yr_get(r, "st");
             Yv *ft = unfold(yr_get(r, "typ"));
-            if (ys_eq_lit(yr_get(ft, "k"), "tfunc") && yv_len(fn_args(ft)) == 0) {
+            if (yv_l(yr_get(ft, "k")) == K_tfunc && yv_len(fn_args(ft)) == 0) {
                 return yr(2, "typ", yr_get(ft, "ret"), "st", st);
-            } else if (ys_eq_lit(yr_get(ft, "k"), "tunk")) {
+            } else if (yv_l(yr_get(ft, "k")) == K_tunk) {
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
                 st = fail(st, ys_cat(ys("join takes a thread (a spawn's value), got "), tstr(yr_get(r, "typ"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
@@ -4401,9 +4401,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
                 Yv *ft = unfold(yr_get(r, "typ"));
-                if (ys_eq_lit(yr_get(ft, "k"), "tfunc") && yv_len(fn_args(ft)) == 0) {
-                    if (ys_eq_lit(name, "spawn")) { return yr(2, "typ", ft, "st", st); } else { return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st); }
-                } else if (ys_eq_lit(yr_get(ft, "k"), "tunk")) {
+                if (yv_l(yr_get(ft, "k")) == K_tfunc && yv_len(fn_args(ft)) == 0) {
+                    if (ys_eq_lit(name, "spawn")) { return yr(2, "typ", ft, "st", st); } else { return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st); }
+                } else if (yv_l(yr_get(ft, "k")) == K_tunk) {
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
                     st = fail(st, ys_cat(ys_cat(name, ys(" takes a block (a function of no parameters), got ")), tstr(yr_get(r, "typ"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
@@ -4414,11 +4414,11 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             // wait_pid(pid) -> long: the exit status of a forked child
             if (yv_len(cargs) != 1) {
                 st = fail(st, ys("wait_pid takes exactly 1 argument (a pid)"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
-                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), yr(1, "k", ys("tlong")), ys("wait_pid's pid"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)), ys("wait_pid's pid"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "mutex")) {
             if (yv_len(cargs) != 0) {
@@ -4431,7 +4431,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("sem takes exactly 1 argument (its count)"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
-                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), yr(1, "k", ys("tlong")), ys("sem's count"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)), ys("sem's count"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             }
             return yr(2, "typ", t_sem(), "st", st);
         } else if (ys_eq_lit(name, "lock") || ys_eq_lit(name, "try_lock")) {
@@ -4445,9 +4445,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 Yv *r = typeof_expr(st, ya_get(cargs, 1));
                 st = yr_get(r, "st");
                 Yv *ft = unfold(yr_get(r, "typ"));
-                if (ys_eq_lit(yr_get(ft, "k"), "tfunc") && yv_len(fn_args(ft)) == 0) {
-                    if (ys_eq_lit(name, "lock")) { return yr(2, "typ", yr_get(ft, "ret"), "st", st); } else { return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st); }
-                } else if (ys_eq_lit(yr_get(ft, "k"), "tunk")) {
+                if (yv_l(yr_get(ft, "k")) == K_tfunc && yv_len(fn_args(ft)) == 0) {
+                    if (ys_eq_lit(name, "lock")) { return yr(2, "typ", yr_get(ft, "ret"), "st", st); } else { return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st); }
+                } else if (yv_l(yr_get(ft, "k")) == K_tunk) {
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
                     st = fail(st, ys_cat(ys_cat(name, ys(" takes a block (a function of no parameters), got ")), tstr(yr_get(r, "typ"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
@@ -4462,7 +4462,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), t_sem(), ys_cat(name, ys("'s semaphore")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             }
-            return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+            return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
         } else if (ys_eq_lit(name, "join")) {
             // join(arr, delim) -> str (elements via tostring, like C)
             if (yv_len(cargs) != 2) {
@@ -4476,8 +4476,8 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = yr_get(r0, "st");
                 Yv *r1 = typeof_expr(st, ya_get(cargs, 1));
                 st = yr_get(r1, "st");
-                if (!ys_eq_lit(yr_get(yr_get(r0, "typ"), "k"), "tarr") &&
-                    !ys_eq_lit(yr_get(yr_get(r0, "typ"), "k"), "tunk")) {
+                if (yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tarr &&
+                    yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tunk) {
                     st = fail(st,
                               ys_cat(ys("join needs an array, got "),
                                      tstr(yr_get(r0, "typ"))),
@@ -4487,10 +4487,10 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 } else {
                     ;
                 }
-                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("join delimiter"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             }
         } else if (ys_eq_lit(name, "split")) {
             // split(s, delim) -> [str]
@@ -4505,13 +4505,13 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = yr_get(r0, "st");
                 Yv *r1 = typeof_expr(st, ya_get(cargs, 1));
                 st = yr_get(r1, "st");
-                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("split string"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("split delimiter"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tstr"))),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tstr))),
                           "st", st);
             }
         } else if (ys_eq_lit(name, "range")) {
@@ -4520,15 +4520,15 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("range takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tlong"))),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tlong))),
                           "st", st);
             } else {
                 Yv *rr = typeof_expr(st, ya_get(cargs, 0));
                 st = expect_type(yr_get(rr, "st"), yr_get(rr, "typ"),
-                                 yr(1, "k", ys("tlong")), ys("range count"),
+                                 yr(1, "k", yv_long(K_tlong)), ys("range count"),
                                  yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tlong"))),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tlong))),
                           "st", st);
             }
         } else if (ys_eq_lit(name, "eputs")) {
@@ -4538,23 +4538,23 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("eputs takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tlong") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbool") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tfloat") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
-                    return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tlong ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
                 } else {
                     st = fail(st,
                               ys_cat(ys("eputs supports long/bool/str, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "clock_us")) {
@@ -4563,9 +4563,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("clock_us takes no arguments"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "time_us")) {
             // time_us() -> long: wall-clock microseconds since the Unix epoch.
@@ -4573,9 +4573,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("time_us takes no arguments"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "heap_used")) {
             // heap_used() -> long: arena bytes handed out so far.
@@ -4583,9 +4583,9 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("heap_used takes no arguments"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "sleep")) {
             // sleep(ms): suspend the caller for ms milliseconds.
@@ -4594,37 +4594,37 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                           ys("sleep takes exactly 1 argument (milliseconds)"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("sleep duration"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             }
         } else if (ys_eq_lit(name, "puts")) {
             if (yv_len(cargs) != 1) {
                 st = fail(st, ys("puts takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tlong") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbool") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tfloat") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
-                    return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tlong ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
                 } else {
                     st = fail(st,
                               ys_cat(ys("puts supports long/bool/str, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "exit")) {
@@ -4632,24 +4632,24 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("exit takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tlong")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("exit code"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
             }
         } else if (ys_eq_lit(name, "argv")) {
             if (yv_len(cargs) != 0) {
                 st = fail(st, ys("argv takes no arguments"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tstr"))),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tstr))),
                           "st", st);
             } else {
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tstr"))),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tstr))),
                           "st", st);
             }
         } else if (ys_eq_lit(name, "bytes")) {
@@ -4658,15 +4658,15 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 st = fail(st, ys("bytes takes exactly 1 argument (string)"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte"))),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tbyte))),
                           "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", ys("tstr")),
+                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("bytes argument"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte"))),
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tbyte))),
                           "st", st);
             }
         } else if (ys_eq_lit(name, "from_bytes")) {
@@ -4678,14 +4678,14 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                           ys("from_bytes takes exactly 1 argument (byte array)"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
                 Yv *fbt = yr_get(r, "typ");
-                Yv *fbw = yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tbyte")));
-                if (ys_eq_lit(yr_get(fbt, "k"), "tarrfix")) {
-                    if (tcompat(yr(2, "k", ys("tarr"), "of", yr_get(fbt, "of")), fbw)) {
+                Yv *fbw = yr(2, "k", yv_long(K_tarr), "of", yr(1, "k", yv_long(K_tbyte)));
+                if (yv_l(yr_get(fbt, "k")) == K_tarrfix) {
+                    if (tcompat(yr(2, "k", yv_long(K_tarr), "of", yr_get(fbt, "of")), fbw)) {
                         ;
                     } else {
                         st = fail(st,
@@ -4700,7 +4700,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "line")),
                                      yv_l(yr_get(node, "col")));
                 }
-                return yr(2, "typ", yr(1, "k", ys("tstr")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             }
         } else if (ys_eq_lit(name, "ptr_addr")) {
             // ptr_addr(p) -> long: a pointer's numeric value. Pointers ARE
@@ -4712,21 +4712,21 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                           ys("ptr_addr takes exactly 1 argument (pointer)"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tptr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr") ||
-                    ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
-                    return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tptr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
                 } else {
                     st = fail(st,
                               ys_cat(ys("ptr_addr needs a pointer, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
-                    return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "syscall")) {
@@ -4736,17 +4736,17 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                           ys("syscall needs 1-7 arguments (number + up to 6 args)"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
                 long i = 0;
                 while (i < yv_len(yr_get(node, "args"))) {
                     Yv *r = typeof_expr(st, ya_get(cargs, i));
                     st = yr_get(r, "st");
-                    if (!ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tlong") &&
-                        !ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tbool") &&
-                        !ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tstr") &&
-                        !ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tptr") &&
-                        !ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
+                    if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong &&
+                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tbool &&
+                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr &&
+                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tptr &&
+                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tunk) {
                         st = fail(st,
                                   ys_cat(ys_cat(ys_cat(ys("syscall arg "),
                                                      ys_long(i)),
@@ -4760,15 +4760,15 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     }
                     i = i + 1;
                 }
-                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else {
             // resolve the callee to a function type: `self`, then scope
             Yv *fterr = ys("");
             Yv *ft = t_unk();
             if (ys_eq_lit(name, "self")) {
-                if (ys_eq_lit(yr_get(yr_get(st, "self"), "k"), "tnone") ||
-                    ys_eq_lit(yr_get(yr_get(st, "self"), "k"), "tunk")) {
+                if (yv_l(yr_get(yr_get(st, "self"), "k")) == K_tnone ||
+                    yv_l(yr_get(yr_get(st, "self"), "k")) == K_tunk) {
                     fterr = ys("'self' outside of a function");
                     ;
                 } else {
@@ -4785,7 +4785,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                         ;
                     } else { ; }
                     ;
-                } else if (ys_eq_lit(yr_get(yr_get(got, "typ"), "k"), "tfunc")) {
+                } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tfunc) {
                     // Either a hoisted `def` (kind "func") or a local/param
                     // holding a closure value — both are callable.
                     ft = yr_get(got, "typ");
@@ -4813,7 +4813,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     i = i + 1;
                 }
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (!ys_eq_lit(yr_get(ft, "k"), "tfunc")) {
+            } else if (yv_l(yr_get(ft, "k")) != K_tfunc) {
                 // poisoned binding (tunk) from an earlier error — don't
                 // cascade new errors, but still check the arguments for
                 // their own errors.
@@ -4843,7 +4843,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                         Yv *r = typeof_want(st, ya_get(cargs, i), ya_get(cargs_ft, i));
                         st = yr_get(r, "st");
                         Yv *ak = yr_get(yr_get(r, "typ"), "k");
-                        if (ys_eq_lit(ak, "tvoid")) {
+                        if (yv_l(ak) == K_tvoid) {
                             // void is not a value (an unannotated param
                             // would otherwise accept it quietly)
                             st = fail(st, ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), disp(name)), ys("' arg ")), ys_long(i)), ys(": cannot pass a void value")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
@@ -4870,7 +4870,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
 
 static Yv *typeof_block(Yv *st, Yv *node) {
     // No scope push: names are unique post-rename, blocks share the frame.
-    Yv *last = yr(1, "k", ys("tvoid"));
+    Yv *last = yr(1, "k", yv_long(K_tvoid));
     Yv *bstmts = yr_get(node, "stmts");
     long i = 0;
     while (i < yv_len(bstmts)) {
@@ -4885,11 +4885,11 @@ static Yv *typeof_block(Yv *st, Yv *node) {
 // typeof_block with the block's value going where `want` is declared (a
 // def's body, typeof_def): its last statement through typeof_want.
 static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want) {
-    Yv *last = yr(1, "k", ys("tvoid"));
+    Yv *last = yr(1, "k", yv_long(K_tvoid));
     Yv *bstmts = yr_get(node, "stmts");
     long i = 0;
     while (i < yv_len(bstmts)) {
-        Yv *w = yr(1, "k", ys("tnone"));
+        Yv *w = yr(1, "k", yv_long(K_tnone));
         if (i == yv_len(bstmts) - 1) {
             w = want;
         }
@@ -4916,29 +4916,29 @@ static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want) {
 // with a target (lit_target) is checked against it (typeof_lit); anything
 // else is typeof_expr.
 static Yv *typeof_want(Yv *st, Yv *node, Yv *want) {
-    if (ys_eq_lit(yr_get(node, "k"), "call") && is_some_call(node) &&
-        ys_eq_lit(yr_get(unfold(want), "k"), "topt")) {
+    if (yv_l(yr_get(node, "k")) == K_call && is_some_call(node) &&
+        yv_l(yr_get(unfold(want), "k")) == K_topt) {
         // some({...}) where T? is declared -- an optional argument passed
         // is one (rename.c) -- creates the literal as T
         Yv *args = yr_get(node, "args");
         Yv *wo = unfold(want);
-        Yv *target = yr(1, "k", ys("tnone"));
-        if (yv_len(args) == 1 && ys_eq_lit(yr_get(ya_get(args, 0), "k"), "rec")) {
+        Yv *target = yr(1, "k", yv_long(K_tnone));
+        if (yv_len(args) == 1 && yv_l(yr_get(ya_get(args, 0), "k")) == K_rec) {
             target = lit_target(ya_get(args, 0), yr_get(wo, "of"));
         }
-        if (ys_eq_lit(yr_get(target, "k"), "tnone")) {
+        if (yv_l(yr_get(target, "k")) == K_tnone) {
             return typeof_expr(st, node);
         } else {
             Yv *r = typeof_lit(st, ya_get(args, 0), target);
-            return yr(2, "typ", yr(2, "k", ys("topt"), "of", yr_get(r, "typ")),
+            return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", yr_get(r, "typ")),
                       "st", yr_get(r, "st"));
         }
     }
-    if (!ys_eq_lit(yr_get(node, "k"), "rec")) {
+    if (yv_l(yr_get(node, "k")) != K_rec) {
         return typeof_expr(st, node);
     } else {
         Yv *target = lit_target(node, want);
-        if (ys_eq_lit(yr_get(target, "k"), "tnone")) {
+        if (yv_l(yr_get(target, "k")) == K_tnone) {
             return typeof_expr(st, node);
         } else {
             return typeof_lit(st, node, target);
@@ -4956,18 +4956,18 @@ Yv *lit_target(Yv *node, Yv *want) {
     Yv *keys = yr_get(node, "keys");
     Yv *w = unfold(want);
     Yv *wk = yr_get(w, "k");
-    Yv *found = yr(1, "k", ys("tnone"));
+    Yv *found = yr(1, "k", yv_long(K_tnone));
     if (str_in(keys, ys("..."))) {
         ;
-    } else if (ys_eq_lit(wk, "trec")) {
+    } else if (yv_l(wk) == K_trec) {
         if (lit_fits(w, keys)) {
             found = want;
         }
-    } else if (ys_eq_lit(wk, "tunion")) {
+    } else if (yv_l(wk) == K_tunion) {
         Yv *ps = union_parts(w);
-        Yv *exact = yr(1, "k", ys("tnone"));
+        Yv *exact = yr(1, "k", yv_long(K_tnone));
         long nexact = 0;
-        Yv *fit = yr(1, "k", ys("tnone"));
+        Yv *fit = yr(1, "k", yv_long(K_tnone));
         long nfit = 0;
         for (long i = 0; i < yv_len(ps); i++) {
             Yv *p = ya_get(ps, i);
@@ -4992,7 +4992,7 @@ Yv *lit_target(Yv *node, Yv *want) {
 // Record type t takes a literal with the field names keys: each is a
 // field of t, and every field of t but an optional one is among them.
 static int lit_fits(Yv *t, Yv *keys) {
-    if (!ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) != K_trec) {
         return 0;
     }
     Yv *fs = yr_get(t, "fields");
@@ -5014,7 +5014,7 @@ static int lit_fits(Yv *t, Yv *keys) {
 // Field `key` of record type t is optional (`key?: T`).
 static int field_opt(Yv *t, Yv *key) {
     int opt = 0;
-    if (ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         for (long i = 0; i < yv_len(fs); i++) {
             Yv *f = ya_get(fs, i);
@@ -5031,7 +5031,7 @@ static int field_opt(Yv *t, Yv *key) {
 // native.c gen_reclit decides by it too.
 int opt_wraps(Yv *vt, Yv *ft) {
     Yv *fu = unfold(ft);
-    if (!ys_eq_lit(yr_get(fu, "k"), "topt")) {
+    if (yv_l(yr_get(fu, "k")) != K_topt) {
         return 0;
     }
     return !tcompat(vt, fu) && tcompat(vt, yr_get(fu, "of"));
@@ -5040,7 +5040,7 @@ int opt_wraps(Yv *vt, Yv *ft) {
 // Record type t has exactly the field names keys (a name written twice
 // counts once).
 static int same_names(Yv *t, Yv *keys) {
-    if (!ys_eq_lit(yr_get(t, "k"), "trec")) {
+    if (yv_l(yr_get(t, "k")) != K_trec) {
         return 0;
     } else {
         Yv *fs = yr_get(t, "fields");
@@ -5073,7 +5073,7 @@ static Yv *typeof_lit(Yv *st, Yv *node, Yv *target) {
         Yv *key = ya_get(keys, i);
         Yv *ft = trec_field_type(tu, key);
         Yv *what = ys_cat(ys_cat(ys("record field '"), key), ys("'"));
-        if (field_opt(tu, key) && ys_eq_lit(yr_get(ft, "k"), "topt")) {
+        if (field_opt(tu, key) && yv_l(yr_get(ft, "k")) == K_topt) {
             Yv *inner = yr_get(ft, "of");
             Yv *r = typeof_want(st, ya_get(vals, i), inner);
             if (opt_wraps(yr_get(r, "typ"), ft)) {
@@ -5108,12 +5108,12 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
         if (ys_eq_lit(yr_get(node, "kind"), "const")) {
             bk = ys("const");
         }
-        if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "func")) {
+        if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_func) {
             Yv *fr = typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
                                 yv_l(yr_get(node, "line")),
                                 yv_l(yr_get(node, "col")));
             st = yr_get(fr, "st");
-            if (!ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tnone")) {
+            if (yv_l(yr_get(yr_get(node, "typ"), "k")) != K_tnone) {
                 st = expect_type(st, yr_get(fr, "typ"), yr_get(node, "typ"),
                                  ys_cat(ys_cat(ys("let '"),
                                                disp(yr_get(node, "name"))),
@@ -5127,15 +5127,15 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             st = st_bind(st, yr_get(node, "name"), yr_get(fr, "typ"),
                          ys("func"));
             return yr(2, "typ", yr_get(fr, "typ"), "st", st);
-        } else if (ys_eq_lit(yr_get(yr_get(node, "v"), "k"), "arrrep")) {
+        } else if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_arrrep) {
             Yv *r = typeof_expr(st, yr_get(node, "v"));
             st = yr_get(r, "st");
-            if (ys_eq_lit(yr_get(yr_get(r, "typ"), "k"), "tunk")) {
+            if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
                 st = st_bind(st, yr_get(node, "name"), t_unk(), bk);
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
                 Yv *at = yr_get(r, "typ");
-                if (!ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tnone")) {
+                if (yv_l(yr_get(yr_get(node, "typ"), "k")) != K_tnone) {
                     if (arr_lit_adopts(yr_get(r, "typ"), yr_get(node, "typ"))) {
                         ;
                     } else {
@@ -5161,7 +5161,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             st = yr_get(r, "st");
             Yv *t = yr_get(r, "typ");
             Yv *vk = yr_get(yr_get(node, "v"), "k");
-            if (!ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tnone")) {
+            if (yv_l(yr_get(yr_get(node, "typ"), "k")) != K_tnone) {
                 if (!is_value_type(yr_get(node, "typ"))) {
                     st = fail(st,
                               ys_cat(ys_cat(ys("annotation '"),
@@ -5170,7 +5170,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     ;
-                } else if (ys_eq_lit(vk, "array")) {
+                } else if (yv_l(vk) == K_array) {
                     // An array LITERAL adopts the annotated element type:
                     // `let b: [byte] = [104, 105]` packs those elements
                     // into one byte each. Only literals — assigning an
@@ -5190,7 +5190,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                     }
                     t = yr_get(node, "typ");
                     ;
-                } else if (ys_eq_lit(vk, "rec") && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0 && ys_eq_lit(yr_get(yr_get(node, "typ"), "k"), "tmap")) {
+                } else if (yv_l(vk) == K_rec && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0 && yv_l(yr_get(yr_get(node, "typ"), "k")) == K_tmap) {
                     // The empty literal `{}` under a map annotation IS the
                     // map (the emitter lowers it to the {keys, vals, boxes}
                     // shape).
@@ -5213,13 +5213,13 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             // NOTE: tnone/tname (unannotated initializer shapes) unify
             // quietly (tcompat law) — the missing annotation errors once at
             // its own site, not again at every enclosing let.
-            if (ys_eq_lit(yr_get(t, "k"), "tnone")) {
+            if (yv_l(yr_get(t, "k")) == K_tnone) {
                 t = t_unk();
                 ;
-            } else if (ys_eq_lit(yr_get(t, "k"), "tname")) {
+            } else if (yv_l(yr_get(t, "k")) == K_tname) {
                 t = t_unk();
                 ;
-            } else if (ys_eq_lit(yr_get(t, "k"), "tvoid")) {
+            } else if (yv_l(yr_get(t, "k")) == K_tvoid) {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot bind a void value to '"),
                                         disp(yr_get(node, "name"))),
@@ -5300,7 +5300,7 @@ static long set_inferred_ret(Yv *func, Yv *ret) {
 
 // The return type inferred for the def at (line, col); tnone for none.
 Yv *inferred_ret(long line, long col) {
-    Yv *found = yr(1, "k", ys("tnone"));
+    Yv *found = yr(1, "k", yv_long(K_tnone));
     if (inf_bkts && yv_len(inf_bkts) > 0) {
         long key = line * 65536 + col;
         Yv *bkt = ya_get(inf_bkts, key % 1024);
@@ -5334,7 +5334,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         int ok = 1;
         while (i < yv_len(fparams)) {
             Yv *pt = ya_get(fptypes, i);
-            if (ys_eq_lit(yr_get(pt, "k"), "tnone")) {
+            if (yv_l(yr_get(pt, "k")) == K_tnone) {
                 // No value of unknown type: a parameter says its type.
                 st = fail(st,
                           ys_cat(ys_cat(ys("parameter '"),
@@ -5344,7 +5344,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                 pt = t_unk();
                 ;
             } else if (!is_value_type(pt) &&
-                       !ys_eq_lit(yr_get(pt, "k"), "tfunc")) {
+                       yv_l(yr_get(pt, "k")) != K_tfunc) {
                 st = fail(st,
                           ys_cat(ys_cat(ys_cat(ys_cat(ys("parameter '"),
                                                       disp(ya_get(fparams, i))),
@@ -5367,18 +5367,18 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         // (ret_note) in `rets`.
         Yv *rets = yav(0);
         Yv *body_ret = ret;
-        if (ys_eq_lit(yr_get(ret, "k"), "tnone")) {
+        if (yv_l(yr_get(ret, "k")) == K_tnone) {
             // The return type comes from the body's tail value once the
             // body has been checked; a call before then (the def calling
             // itself) needs it annotated (t_pend).
             ret_inferred = 1;
             ret = t_pend_self();
-            body_ret = yr(2, "k", ys("tinfer"), "rets", rets);
+            body_ret = yr(2, "k", yv_long(K_tinfer), "rets", rets);
             ;
         } else {
             ;
         }
-        Yv *ft = yr(3, "k", ys("tfunc"), "args", args, "ret", ret);
+        Yv *ft = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", ret);
         // bind early so recursion via `self`/name works
         st = st_bind(st, name, ft, ys("func"));
         // check the body one level deeper. Outer locals/params stay in the
@@ -5402,7 +5402,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             // INFERENCE: the def's return type is the body's tail value.
             // Unannotated sub-shapes (tnone) stay poison; tunk stays tunk.
             Yv *br = yr_get(b, "typ");
-            if (ys_eq_lit(yr_get(br, "k"), "tnone")) {
+            if (yv_l(yr_get(br, "k")) == K_tnone) {
                 br = t_unk();
                 ;
             } else {
@@ -5416,7 +5416,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             while (ri < yv_len(rets)) {
                 Yv *rn = ya_get(rets, ri);
                 Yv *rt = yr_get(rn, "typ");
-                if (ys_eq_lit(yr_get(br, "k"), "tunk") && !ys_eq_lit(yr_get(rt, "k"), "tunk") && !ys_eq_lit(yr_get(rt, "k"), "tnone")) {
+                if (yv_l(yr_get(br, "k")) == K_tunk && yv_l(yr_get(rt, "k")) != K_tunk && yv_l(yr_get(rt, "k")) != K_tnone) {
                     br = rt;
                     rsrc = ys("the first 'return'");
                     ;
@@ -5446,7 +5446,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             }
             int used = yv_b(yr_get(ret, "used"));
             if ((has_free(br) || (used &&
-                                  ys_eq_lit(yr_get(br, "k"), "tunk"))) &&
+                                  yv_l(yr_get(br, "k")) == K_tunk)) &&
                 yv_len(yr_get(st, "errors")) == nerr) {
                 st = fail(st,
                           ys_cat(ys_cat(ys("the return type of '"), disp(name)),
@@ -5454,17 +5454,17 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                           line, col);
                 br = t_unk();
                 ;
-            } else if (used && !ys_eq_lit(yr_get(br, "k"), "tunk")) {
+            } else if (used && yv_l(yr_get(br, "k")) != K_tunk) {
                 // The body calls the def itself, so it was checked with
                 // that call's type unknown: check it again, the call now
                 // typed br, its `return`s and tail as before (the first
                 // pass's errors go; this one reports them).
                 st = st_errors(st, ya_slice(yr_get(st, "errors"), 0, nerr));
-                Yv *ft2 = yr(3, "k", ys("tfunc"), "args", args, "ret", br);
+                Yv *ft2 = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", br);
                 st = st_bind(st, name, ft2, ys("func"));
                 st = st_self(st, ft2);
                 Yv *rets2 = yav(0);
-                st = st_ret(st, yr(2, "k", ys("tinfer"), "rets", rets2));
+                st = st_ret(st, yr(2, "k", yv_long(K_tinfer), "rets", rets2));
                 Yv *b2 = typeof_block_want(st, yr_get(func, "body"), br);
                 st = yr_get(b2, "st");
                 st = expect_type(st, yr_get(b2, "typ"), br,
@@ -5492,9 +5492,9 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             } else {
                 ;
             }
-            ft = yr(3, "k", ys("tfunc"), "args", args, "ret", br);
+            ft = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", br);
             st = st_bind(st, name, ft, ys("func"));
-            if (!ys_eq_lit(yr_get(br, "k"), "tunk")) {
+            if (yv_l(yr_get(br, "k")) != K_tunk) {
                 set_inferred_ret(func, br);
                 ;
             } else {
@@ -5507,7 +5507,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
         if (!(ret_inferred)) {
             // `-> void` discards the body's tail value (no value returns)
             Yv *rtk = yr_get(ret, "k");
-            if (ys_eq_lit(rtk, "tvoid")) { ; } else {
+            if (yv_l(rtk) == K_tvoid) { ; } else {
                 st = expect_cast(st, yr_get(b, "typ"), ret,
                                  ys_cat(ys_cat(ys("'"), disp(name)), ys("' body")),
                                  line, col);
@@ -5551,11 +5551,11 @@ Yv *check_program(Yv *ast, Yv *ext) {
         // NOTE: nested ifs, not `&&` (house style — the `s.v.k` read is
         // only reached once `s` is known to be a decl; `&&` would
         // short-circuit to the same place).
-        if (ys_eq_lit(yr_get(s, "k"), "decl")) {
+        if (yv_l(yr_get(s, "k")) == K_decl) {
             if (ys_eq_lit(yr_get(s, "kind"), "def")) {
                 defs = ya_push(defs, def_sig(yr_get(s, "name"), yr_get(s, "v")));
                 ;
-            } else if (ys_eq_lit(yr_get(yr_get(s, "v"), "k"), "func")) {
+            } else if (yv_l(yr_get(yr_get(s, "v"), "k")) == K_func) {
                 // top-level let f = def... : also hoisted for mutual recursion
                 defs = ya_push(defs, def_sig(yr_get(s, "name"), yr_get(s, "v")));
                 ;
@@ -5570,14 +5570,14 @@ Yv *check_program(Yv *ast, Yv *ext) {
     }
     // pass 2: check everything in order (depth 0 = top level)
     Yv *st = yr(5, "bindings", yav(0), "errors", yav(0), "ret",
-                yr(1, "k", ys("tnone")), "self", yr(1, "k", ys("tnone")),
+                yr(1, "k", yv_long(K_tnone)), "self", yr(1, "k", yv_long(K_tnone)),
                 "fdepth", yv_long(0));
     // top-level defs are visible at top level
     st = st_bind(st, ys("print"),
-                 yr(3, "k", ys("tfunc"), "args", yav(1, yr(1, "k", ys("tlong"))),
-                    "ret", yr(1, "k", ys("tvoid"))),
+                 yr(3, "k", yv_long(K_tfunc), "args", yav(1, yr(1, "k", yv_long(K_tlong))),
+                    "ret", yr(1, "k", yv_long(K_tvoid))),
                  ys("intrinsic"));
-    st = st_bind(st, ys("syscall"), yr(1, "k", ys("tlong")), ys("intrinsic"));
+    st = st_bind(st, ys("syscall"), yr(1, "k", yv_long(K_tlong)), ys("intrinsic"));
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
@@ -5613,16 +5613,16 @@ static Yv *def_sig(Yv *name, Yv *func) {
     long i = 0;
     while (i < yv_len(yr_get(func, "params"))) {
         Yv *pt = ya_get(fpt, i);
-        if (ys_eq_lit(yr_get(pt, "k"), "tnone")) {
+        if (yv_l(yr_get(pt, "k")) == K_tnone) {
             pt = t_unk();
         }
         args = ya_push(args, pt);
         i = i + 1;
     }
     Yv *ret = yr_get(func, "ret");
-    if (ys_eq_lit(yr_get(ret, "k"), "tnone")) {
+    if (yv_l(yr_get(ret, "k")) == K_tnone) {
         ret = t_pend();
     }
     return yr(3, "name", name, "opt", yv_bool(0),
-              "typ", yr(3, "k", ys("tfunc"), "args", args, "ret", ret));
+              "typ", yr(3, "k", yv_long(K_tfunc), "args", args, "ret", ret));
 }

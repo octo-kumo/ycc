@@ -183,4 +183,5 @@ so the list cannot rot.
 | `src/y/types.y` | `is not a supported expression form` | Every expression node the parser builds has an arm in `typeof_expr`; `optarg` (optional-parameter metadata) is replaced with `none`/`some(...)` by `rn_fill_defaults` before checking. |
 | `src/y/ycc.y` | `"error: assemble: "` | The assembler only reads the emitter's output, so a bad line is a compiler bug, not something a program can cause. |
 | `src/y/ycc.y` | `the std pack is too large` | The trailer gives the pack's length in 8 digits; the std units come to about 190 KB, so no build gets near 100 MB. |
+| `src/y/ycc.y` | `the tag tables disagree` | `tags.tags_agree` checks `K` against `KTAGS` in `src/y/tags.y`, the one place the compiler writes a tag's number twice. It can only fail if that file is edited wrongly, which no test program can reach. |
 | `src/y/pkg.y` | `cannot read the compiler's own binary` | `/proc/self/exe` is the running compiler itself (`self_pack` reads it too); a test cannot take it away from a running process. |

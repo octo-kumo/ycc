@@ -1,12 +1,12 @@
 // enc64.y — x86-64 instruction encoding for the native backend's subset.
 // Operands use the assembler's parsed forms (asm.y parse_operand):
-//   {k:"reg", n, size}      n = 0-15, size = 64/32/8 (128 = an xmm)
-//   {k:"imm", v}            signed long
-//   {k:"mem", base, idx, scale, disp, rip, lbl}  rip: bool (lbl valid),
+//   {k:K.reg, n, size}      n = 0-15, size = 64/32/8 (128 = an xmm)
+//   {k:K.imm, v}            signed long
+//   {k:K.mem, base, idx, scale, disp, rip, lbl}  rip: bool (lbl valid),
 //     base/idx: reg numbers (-1 = none), scale 1/2/4/8, disp long
-//   {k:"lbl", name}         code label (jumps/calls)
-//   {k:"ind", n, size}      call *%reg — an indirect target (closure code)
-//   {k:"diff", a, b}        a-b as imm32 (rodata lengths)
+//   {k:K.lbl, name}         code label (jumps/calls)
+//   {k:K.ind, n, size}      call *%reg — an indirect target (closure code)
+//   {k:K.diff, a, b}        a-b as imm32 (rodata lengths)
 // Every enc_* returns {bytes: [byte] (values 0-255), fix: [...], err: str};
 // le16/le32/le64/byte_of return the [byte] buffer itself.
 // Only the forms our backend emits exist here — anything else is a loud
@@ -17,14 +17,15 @@
 
 // An operand, any of the forms above: every one carries every field (the
 // ones its form does not use are 0 / "" / false), so a read is a load.
-type Operand = { k: str, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str };
+import tags from "./tags.y";
+type Operand = { k: long, n: long, size: long, v: long, a: str, b: str, name: str, base: long, idx: long, scale: long, disp: long, rip: bool, lbl: str };
 
 // A register operand (see above).
-type Reg = { k: str, n: long, size: long };
+type Reg = { k: long, n: long, size: long };
 
-def r64(n: long) -> Reg { { k: "reg", n: n, size: 64 } };
-def r32(n: long) -> Reg { { k: "reg", n: n, size: 32 } };
-def r8(n: long) -> Reg { { k: "reg", n: n, size: 8 } };
+def r64(n: long) -> Reg { { k: K.reg, n: n, size: 64 } };
+def r32(n: long) -> Reg { { k: K.reg, n: n, size: 32 } };
+def r8(n: long) -> Reg { { k: K.reg, n: n, size: 8 } };
 
 // Register number by AT&T name. Supports the registers our backend uses.
 def reg_num(name: str) -> long {
@@ -70,7 +71,7 @@ def reg_size(name: str) -> long {
 
 // Safe size read: a non-register yields 0, whatever its `.size` holds.
 def op_size(o: Operand) -> long {
-    if (o.k == "reg") { o.size } else { 0 }
+    if (o.k == K.reg) { o.size } else { 0 }
 };
 def rex(w: bool, r: long, x: long, b: long) -> long {
     let v = 64;
@@ -265,7 +266,7 @@ def with_rex(r: long, bytes: [byte]) -> [byte] {
 };
 
 def enc_push(o: Operand) -> Encoded {
-    if (o.k != "reg") {
+    if (o.k != K.reg) {
         { bytes: [], fix: [], err: "push needs r64" }
     } else if (op_size(o) != 64) {
         { bytes: [], fix: [], err: "push needs r64" }
@@ -277,7 +278,7 @@ def enc_push(o: Operand) -> Encoded {
 };
 
 def enc_pop(o: Operand) -> Encoded {
-    if (o.k != "reg") {
+    if (o.k != K.reg) {
         { bytes: [], fix: [], err: "pop needs r64" }
     } else if (op_size(o) != 64) {
         { bytes: [], fix: [], err: "pop needs r64" }
@@ -289,7 +290,7 @@ def enc_pop(o: Operand) -> Encoded {
 };
 
 def enc_mov(dst: Operand, src: Operand) -> Encoded {
-    if (dst.k == "reg" && src.k == "reg") {
+    if (dst.k == K.reg && src.k == K.reg) {
         if (op_size(dst) == 64 && op_size(src) == 64) {
             let r = rex(true, src.n, -1, dst.n);
             let b: [byte] = [137, modrm(3, src.n, dst.n)];
@@ -297,7 +298,7 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         } else {
             { bytes: [], fix: [], err: "mov reg,reg size mix" }
         }
-    } else if (dst.k == "reg" && src.k == "imm") {
+    } else if (dst.k == K.reg && src.k == K.imm) {
         if (op_size(dst) == 64) {
             if (src.v >= -2147483648 && src.v <= 2147483647) {
                 let r = rex(true, -1, -1, dst.n);
@@ -318,7 +319,7 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         } else {
             { bytes: [], fix: [], err: "mov imm size" }
         }
-    } else if (dst.k == "reg" && op_size(dst) == 64 && src.k == "diff") {
+    } else if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.diff) {
         let r = rex(true, -1, -1, dst.n);
         let prefix: [byte] = [199, modrm(3, 0, dst.n)];
         let zeros: [byte] = [0, 0, 0, 0];
@@ -326,12 +327,12 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         let off = 3;
         if (r < 0) { off = 2; 0; };
         { bytes: with_rex(r, b), fix: [fixup(off, "imm32diff", src.a, src.b)], err: "" }
-    } else if (dst.k == "reg" && src.k == "fs" && op_size(dst) == 64) {
+    } else if (dst.k == K.reg && src.k == K.fs && op_size(dst) == 64) {
         // mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
         // base and no index (an absolute disp32)
         let b: [byte] = [100, rex(true, dst.n, -1, -1), 139, modrm(0, dst.n, 4), 37];
         { bytes: concat(b, le32(src.disp)), fix: [], err: "" }
-    } else if (dst.k == "reg" && src.k == "mem") {
+    } else if (dst.k == K.reg && src.k == K.mem) {
         if (op_size(dst) == 64) {
             let t = mem_tail(src, dst.n);
             let r = rex_rm(true, dst.n, src);
@@ -341,14 +342,14 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         } else {
             { bytes: [], fix: [], err: "mov r,mem size" }
         }
-    } else if (dst.k == "mem" && src.k == "imm") {
+    } else if (dst.k == K.mem && src.k == K.imm) {
         // mov $imm32, mem (length/cap stores)
         let t = mem_tail(dst, 0);
         let r = rex_rm(true, 0, dst);
         let prefix: [byte] = [199, t.modrm];
         let b = concat(concat(prefix, t.extra), le32(src.v));
         enc_mem_result(r, b, t)
-    } else if (dst.k == "mem" && src.k == "reg") {
+    } else if (dst.k == K.mem && src.k == K.reg) {
         if (op_size(src) == 64) {
             let t = mem_tail(dst, src.n);
             let r = rex_rm(true, src.n, dst);
@@ -373,11 +374,11 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
 def enc_xchg(a: Operand, b: Operand) -> Encoded {
     let reg = a;
     let mem = b;
-    if (a.k == "mem") {
+    if (a.k == K.mem) {
         reg = b;
         mem = a;
     };
-    if (reg.k != "reg" || mem.k != "mem" || op_size(reg) != 64) {
+    if (reg.k != K.reg || mem.k != K.mem || op_size(reg) != 64) {
         { bytes: [], fix: [], err: "xchg form" }
     } else {
         let t = mem_tail(mem, reg.n);
@@ -410,9 +411,9 @@ def enc_mem_result(r: long, b: [byte], t: MemTail) -> Encoded {
 
 def enc_movb(dst: Operand, src: Operand) -> Encoded {
     // movb $imm8, mem
-    if (dst.k != "mem") {
+    if (dst.k != K.mem) {
         { bytes: [], fix: [], err: "movb form" }
-    } else if (src.k != "imm") {
+    } else if (src.k != K.imm) {
         { bytes: [], fix: [], err: "movb form" }
     } else {
         enc_movb_imm(dst, src)
@@ -436,11 +437,11 @@ def enc_movb_imm(dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_movzbq(dst: Operand, src: Operand) -> Encoded {
-    if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 8) {
+    if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.reg && op_size(src) == 8) {
         let r = rex(true, dst.n, -1, src.n);
         let b: [byte] = [15, 182, modrm(3, dst.n, src.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
-    } else if (dst.k == "reg" && op_size(dst) == 64 && src.k == "mem") {
+    } else if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.mem) {
         // movzbq mem8 -> r64 (single-byte loads for string data)
         let t = mem_tail(src, dst.n);
         let r = rex_rm(true, dst.n, src);
@@ -453,7 +454,7 @@ def enc_movzbq(dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_lea(dst: Operand, src: Operand) -> Encoded {
-    if (dst.k == "reg" && op_size(dst) == 64 && src.k == "mem") {
+    if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.mem) {
         let t = mem_tail(src, dst.n);
         let r = rex_rm(true, dst.n, src);
         let prefix: [byte] = [141, t.modrm];
@@ -466,7 +467,7 @@ def enc_lea(dst: Operand, src: Operand) -> Encoded {
 
 def enc_arith(op: str, dst: Operand, src: Operand) -> Encoded {
     // op: add/sub/xor/and/or/cmp/test; r64,r64 only here
-    if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 64) {
+    if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.reg && op_size(src) == 64) {
         let base = 1;
         if (op == "sub") { base = 41; }
         else if (op == "xor") { base = 49; }
@@ -483,7 +484,7 @@ def enc_arith(op: str, dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_xor32(dst: Operand, src: Operand) -> Encoded {
-    if (dst.k == "reg" && op_size(dst) == 32 && src.k == "reg" && op_size(src) == 32) {
+    if (dst.k == K.reg && op_size(dst) == 32 && src.k == K.reg && op_size(src) == 32) {
         let r = rex(false, src.n, -1, dst.n);
         let b: [byte] = [49, modrm(3, src.n, dst.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
@@ -494,7 +495,7 @@ def enc_xor32(dst: Operand, src: Operand) -> Encoded {
 
 def enc_alu_imm(op: str, dst: Operand, v: long) -> Encoded {
     // add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32
-    if (dst.k != "reg") {
+    if (dst.k != K.reg) {
         { bytes: [], fix: [], err: "alu-imm dst" }
     } else if (op_size(dst) != 64) {
         if (op_size(dst) != 32) {
@@ -541,11 +542,11 @@ def enc_shift(mn: str, dst: Operand, cnt: Operand) -> Encoded {
     let ext = 4;
     if (mn == "shr") { ext = 5; 0; }
     else if (mn == "sar") { ext = 7; 0; }
-    if (dst.k != "reg") {
+    if (dst.k != K.reg) {
         { bytes: [], fix: [], err: mn + " dst" }
     } else if (op_size(dst) != 64) {
         { bytes: [], fix: [], err: mn + " dst" }
-    } else if (cnt.k == "reg") {
+    } else if (cnt.k == K.reg) {
         if (cnt.n == 1 && op_size(cnt) == 8) {
             let r = rex(true, -1, -1, dst.n);
             let b: [byte] = [211, modrm(3, ext, dst.n)];
@@ -553,7 +554,7 @@ def enc_shift(mn: str, dst: Operand, cnt: Operand) -> Encoded {
         } else {
             { bytes: [], fix: [], err: mn + " count register is %cl" }
         }
-    } else if (cnt.k == "imm") {
+    } else if (cnt.k == K.imm) {
         if (cnt.v < 0 || cnt.v > 63) {
             { bytes: [], fix: [], err: mn + " count range" }
         } else {
@@ -575,9 +576,9 @@ def enc_shift(mn: str, dst: Operand, cnt: Operand) -> Encoded {
 
 def enc_sse_arith(mn: str, dst: Operand, src: Operand) -> Encoded {
     // F2 0F <op> /r  — addsd 58, subsd 5C, mulsd 59, divsd 5E
-    if (dst.k != "reg") {
+    if (dst.k != K.reg) {
         { bytes: [], fix: [], err: "sse dst" }
-    } else if (src.k != "reg") {
+    } else if (src.k != K.reg) {
         { bytes: [], fix: [], err: "sse src" }
     } else {
         let op = 88;
@@ -598,9 +599,9 @@ def enc_sse_arith(mn: str, dst: Operand, src: Operand) -> Encoded {
 
 def enc_ucomisd(dst: Operand, src: Operand) -> Encoded {
     // 66 0F 2E /r
-    if (dst.k != "reg") {
+    if (dst.k != K.reg) {
         { bytes: [], fix: [], err: "ucomisd dst" }
-    } else if (src.k != "reg") {
+    } else if (src.k != K.reg) {
         { bytes: [], fix: [], err: "ucomisd src" }
     } else {
         let r = rex(false, dst.n, -1, src.n);
@@ -617,9 +618,9 @@ def enc_ucomisd(dst: Operand, src: Operand) -> Encoded {
 
 def enc_cvtsi2sd(dst: Operand, src: Operand) -> Encoded {
     // F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
-    if (dst.k != "reg") {
+    if (dst.k != K.reg) {
         { bytes: [], fix: [], err: "cvtsi2sd dst" }
-    } else if (src.k != "reg") {
+    } else if (src.k != K.reg) {
         { bytes: [], fix: [], err: "cvtsi2sd src" }
     } else {
         let r = rex(true, dst.n, -1, src.n);
@@ -631,9 +632,9 @@ def enc_cvtsi2sd(dst: Operand, src: Operand) -> Encoded {
 
 def enc_cvttsd2si(dst: Operand, src: Operand) -> Encoded {
     // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating)
-    if (dst.k != "reg") {
+    if (dst.k != K.reg) {
         { bytes: [], fix: [], err: "cvttsd2si dst" }
-    } else if (src.k != "reg") {
+    } else if (src.k != K.reg) {
         { bytes: [], fix: [], err: "cvttsd2si src" }
     } else {
         let r = rex(true, dst.n, -1, src.n);
@@ -646,9 +647,9 @@ def enc_cvttsd2si(dst: Operand, src: Operand) -> Encoded {
 def enc_movq(dst: Operand, src: Operand) -> Encoded {
     // 66 REX.W 0F 6E /r  — movq %gpr, %xmm   (gpr -> xmm)
     // 66 REX.W 0F 7E /r  — movq %xmm, %gpr   (xmm -> gpr)
-    if (dst.k != "reg") {
+    if (dst.k != K.reg) {
         { bytes: [], fix: [], err: "movq dst" }
-    } else if (src.k != "reg") {
+    } else if (src.k != K.reg) {
         { bytes: [], fix: [], err: "movq src" }
     } else if (op_size(dst) == 128) {
         // into an xmm: the xmm is the reg field, the gpr the rm field
@@ -666,7 +667,7 @@ def enc_movq(dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_imul(dst: Operand, src: Operand) -> Encoded {
-    if (dst.k == "reg" && op_size(dst) == 64 && src.k == "reg" && op_size(src) == 64) {
+    if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.reg && op_size(src) == 64) {
         let r = rex(true, dst.n, -1, src.n);
         let b: [byte] = [15, 175, modrm(3, dst.n, src.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
@@ -676,7 +677,7 @@ def enc_imul(dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_unary(op: str, o: Operand) -> Encoded {
-    if (o.k != "reg") {
+    if (o.k != K.reg) {
         { bytes: [], fix: [], err: "unary form" }
     } else if (op_size(o) != 64) {
         { bytes: [], fix: [], err: "unary form" }
@@ -695,7 +696,7 @@ def enc_unary(op: str, o: Operand) -> Encoded {
 };
 
 def enc_jmp(o: Operand) -> Encoded {
-    if (o.k != "lbl") {
+    if (o.k != K.lbl) {
         { bytes: [], fix: [], err: "jmp target" }
     } else {
         let bytes: [byte] = [233, 0, 0, 0, 0];
@@ -704,12 +705,12 @@ def enc_jmp(o: Operand) -> Encoded {
 };
 
 def enc_call(o: Operand) -> Encoded {
-    if (o.k == "ind") {
+    if (o.k == K.ind) {
         // call *%reg — FF /2, used for closure code pointers.
         let r = rex(false, 0, -1, o.n);
         let b: [byte] = [255, modrm(3, 2, o.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
-    } else if (o.k != "lbl") {
+    } else if (o.k != K.lbl) {
         { bytes: [], fix: [], err: "call target" }
     } else {
         let bytes: [byte] = [232, 0, 0, 0, 0];
@@ -718,7 +719,7 @@ def enc_call(o: Operand) -> Encoded {
 };
 
 def enc_jcc(code: long, o: Operand) -> Encoded {
-    if (o.k != "lbl") {
+    if (o.k != K.lbl) {
         { bytes: [], fix: [], err: "jcc target" }
     } else {
         let bytes: [byte] = [15, code, 0, 0, 0, 0];
@@ -727,7 +728,7 @@ def enc_jcc(code: long, o: Operand) -> Encoded {
 };
 
 def enc_setcc(code: long, o: Operand) -> Encoded {
-    if (o.k != "reg" || op_size(o) != 8) {
+    if (o.k != K.reg || op_size(o) != 8) {
         { bytes: [], fix: [], err: "setcc form" }
     } else {
         let r = rex(false, -1, -1, o.n);
@@ -737,7 +738,7 @@ def enc_setcc(code: long, o: Operand) -> Encoded {
 };
 
 def enc_cmpb(v: long, m: Operand) -> Encoded {
-    if (m.k != "mem") {
+    if (m.k != K.mem) {
         { bytes: [], fix: [], err: "cmpb form" }
     } else {
         let t = mem_tail(m, 7);
@@ -751,7 +752,7 @@ def enc_cmpb(v: long, m: Operand) -> Encoded {
 
 def enc_movb_reg(dst: Operand, src: Operand) -> Encoded {
     // movb %r8 -> mem8 (single-byte stores for string data)
-    if (dst.k == "mem" && src.k == "reg" && op_size(src) == 8) {
+    if (dst.k == K.mem && src.k == K.reg && op_size(src) == 8) {
         let t = mem_tail(dst, src.n);
         let r = rex_rm(false, src.n, dst);
         let prefix: [byte] = [136, t.modrm];
@@ -786,7 +787,7 @@ def enc_insn(mn: str, ops: [Operand]) -> Encoded {
         let e = need2(mn, ops);
         if (e != "") {
             { bytes: [], fix: [], err: e }
-        } else if (ops[0].k == "imm") {
+        } else if (ops[0].k == K.imm) {
             enc_movb(ops[1], ops[0])
         } else {
             enc_movb_reg(ops[1], ops[0])
@@ -807,13 +808,13 @@ def enc_insn(mn: str, ops: [Operand]) -> Encoded {
         } else {
             let dst = ops[1];
             let src = ops[0];
-            if (src.k == "imm") {
+            if (src.k == K.imm) {
                 if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or") {
                     enc_alu_imm(mn, dst, src.v)
                 } else {
                     { bytes: [], fix: [], err: mn + " imm form" }
                 }
-            } else if (dst.k == "reg" && src.k == "reg" && mn == "xor" && op_size(dst) == 32 && op_size(src) == 32) {
+            } else if (dst.k == K.reg && src.k == K.reg && mn == "xor" && op_size(dst) == 32 && op_size(src) == 32) {
                 enc_xor32(dst, src)
             } else {
                 enc_arith(mn, dst, src)
@@ -911,7 +912,7 @@ def enc_insn(mn: str, ops: [Operand]) -> Encoded {
         let e = need2(mn, ops);
         if (e != "") {
             { bytes: [], fix: [], err: e }
-        } else if (ops[0].k != "imm") {
+        } else if (ops[0].k != K.imm) {
             { bytes: [], fix: [], err: "cmpb needs imm" }
         } else {
             enc_cmpb(ops[0].v, ops[1])
