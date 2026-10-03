@@ -370,8 +370,33 @@ migration, before the bless):
   5.0 }` changes `s`, as a reader expects. A cast through an annotation
   (`let r: Rect = s;`, a parameter typed `Rect`) is the conversion that may
   copy.
+  **Dropped when implementing.** The binding's static type is the member
+  (`Rect`), whose layout is the standalone one; keeping the union's layout
+  on it would need a layout-carrying type (a "Rect held in Shape") handled
+  at every place the emitter reads, stores, converts, prints or passes a
+  record -- and an `if` whose arms are a view and a plain `Rect`, or a
+  def returning the view with an inferred return type, would mix layouts
+  under one static type. Options: (a) the binding is a cast, as every
+  other assignment from the union to a member (the user's model taken
+  literally: "an assignment from one to other is a cast"); (b) the view
+  type above; (c) a view only for `r.f` reads and writes, a copy at every
+  other use (`r == r` would be false). Chosen: (a) -- least code, one
+  rule for every assignment, no new type. A destructuring pattern
+  (`Rect { w, h } => ...`, a record pattern `{f: v}`) reads the fields in
+  place (native.y gen_narrow_field), so reading member fields in a hot
+  match never copies. Consequence: a field only some members have cannot
+  be written in place through the union; the manual (04-types, Unions)
+  shows cast, write, store back.
 - In src/y, three writes go to a union member after a conversion:
   types.y set_inferred_ret (`fnode.ret = ret`, a Func in Node) and the two
   tref patches (rename.y rn_tref, native.y tdecode: `r.to = ...`, a TRef
-  in Type). They become writes through a `match` binding on the union
-  value, so they never depend on whether a cast copied.
+  in Type). Done: set_inferred_ret became a table (types.inferred_ret,
+  dc1c1b3); a TRef's layout in Type is its own (k sorts first), so the
+  tref patches write the record the union holds.
+- **Implemented** (e70fcdb): native.y "union layouts" (union_shared,
+  union_lay, ty_desc_in, gen_convert, gen_copy_rec, gen_narrow_field) and
+  the C twin; the copy is inline (a tag dispatch, a word move per slot),
+  not the y_rec_conv slot-map routine first planned -- the same work
+  without a call. Node shares {col, k, line}: about half its members
+  (those with a field sorting before `line`) copy on a cast; Type shares
+  {k}: TRec, TFunc, TFree and Err copy.

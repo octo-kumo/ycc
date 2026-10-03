@@ -3960,7 +3960,9 @@ def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.e
 // `ext`: the externs -- top-level defs of the units this one links
 // against (native.y compile_unit), visible by name like the unit's own.
 def check_program(ast: Block, ext: [Sym]) -> [Diag] {
-    inf_reset();
+    // the inferred-return table is made when first written (inf_reset)
+    let nobkts: [[long]] = [];
+    inf_bkts = nobkts;
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
     let pstmts: [Node] = ast.stmts;

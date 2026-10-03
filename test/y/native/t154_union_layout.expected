@@ -23,6 +23,6 @@ mul 20
 {a: <Expr>, b: <Expr>, id: 5, scale: 10, tag: mul}
 {a: <Expr>, b: <Expr>, id: 3, tag: add}
 {a: <Expr>, b: <Expr>, id: 3, tag: add}
-42
+42 -1
 neg 4
 3 50

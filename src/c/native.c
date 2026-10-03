@@ -124,8 +124,8 @@ static long ty_count;
 /* ty_desc's labels in this unit, by type signature (types.c tsig): a type
  * named again needs no canonical form spelled out and hashed (a recursive
  * union's is long, and a read through a union asks for every member's).
- * 512 buckets of indices into ty_sig_keys/ty_sig_lbls; tyset_reset
- * empties them. */
+ * 512 buckets of indices into ty_sig_keys/ty_sig_lbls, made when first
+ * used (ty_sig_init); tyset_reset empties them. */
 static Yv *ty_sig_keys;
 static Yv *ty_sig_lbls;
 static Yv *ty_sig_bkts;
@@ -322,6 +322,7 @@ long rec_slot(Yv *fs, Yv *key);
 long tyset_add(Yv *lbl, Yv *form);
 void tyset_grow(void);
 void tyset_reset(void);
+void ty_sig_init(void);
 void ty_collision(Yv *lbl, Yv *form);
 Yv *ty_desc(Yv *st, Yv *rt);
 Yv *ty_form(Yv *rt);
@@ -6476,6 +6477,13 @@ void tyset_reset(void) {
     ty_seen = yav(0);
     ty_forms = yav(0);
     ty_count = 0;
+    /* the signature cache's buckets are made when first used (ty_sig_init) */
+    ty_sig_bkts = yav(0);
+    ush_nodes = yav(0);
+    ush_vals = yav(0);
+}
+
+void ty_sig_init(void) {
     Yv *bkts = yav(0);
     long i = 0;
     while (i < 512) {
@@ -6485,8 +6493,6 @@ void tyset_reset(void) {
     ty_sig_keys = yav(0);
     ty_sig_lbls = yav(0);
     ty_sig_bkts = bkts;
-    ush_nodes = yav(0);
-    ush_vals = yav(0);
 }
 
 /* The canonical form of record type rt (types.c tcanon). A record type
@@ -6598,7 +6604,7 @@ Yv *ty_desc(Yv *st, Yv *rt) {
 Yv *ty_desc_as(Yv *st, Yv *rt, Yv *lay) {
     Yv *sig = ys_cat(tsig(rt), lay);
     if (!ty_sig_bkts || yv_len(ty_sig_bkts) == 0) {
-        tyset_reset();
+        ty_sig_init();
     }
     long h = fnv64(sig) % 512;
     if (h < 0) {

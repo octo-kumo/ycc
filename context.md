@@ -31,26 +31,16 @@
   the cap means fix what allocates, never raise it (the user). The old
   reference cannot compile the new ycc.y (its teq blows up): under the
   cap it fails cleanly; compile_ir.sh shows "-" for it.
-- Next: CHOICES_MADE.md 25 (the user's model) -- the design, in native.y
-  and native.c only (the checker does not change):
-  shared(u) = the fields every member of union u has with one type,
-  sorted; a member m held in u is laid out lay(m,u) = shared(u) ++ the
-  rest of m's fields sorted (a standalone record: all sorted), so a
-  shared field is one load at its index in shared(u). Tag: m's own
-  descriptor when lay(m,u) is m's standalone order, else one named by
-  form(m) + "@" + the layout (ty_desc keyed tsig(m) + "@" + layout).
-  Record literals created into a union use lay(m,u). Conversions (gen_as,
-  and `narrow` for match bindings): member -> union, union -> member
-  (tag-checked), union -> union; where the layouts differ, a runtime
-  routine y_rec_conv copies by a slot map in rodata (map: n, the target
-  tag, the source slot of each target slot). Union printing and match
-  compare layout tags and read layout slots. A union with no shared field
-  keeps today's layouts and tags. Pack/unit versions bump. Expect copies
-  at casts of about half the Node members (fields sorting before `line`)
-  and of TRec/TFunc/TFree/Err in Type; measure.
-  (Done first, dc1c1b3: inferred return types live in a table, not in the
-  def node, so no write goes through a cast.)
-  The user REJECTED making field order part of a record type: `{a, b}`
+- CHOICES_MADE.md 25 (the user's model) is IMPLEMENTED and committed
+  (e70fcdb), NOT blessed yet: a member held in a union is laid out with
+  the union's shared fields first; casts (gen_as, match bindings) copy
+  where the layouts differ (gen_convert); pattern field reads are in
+  place (gen_narrow_field); my "binding is a view" refinement was dropped
+  (CHOICES 25 says why). 376 programs: 15 compile differently (unions),
+  none behave differently; make ynew, every suite with ynew green.
+  Next: measure (check.sh), bless (back up refs as ycc.ref.pre-layout),
+  make test, ASan, fuzz.
+- The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
   and test/y/examples/tail.y. Leave them alone.

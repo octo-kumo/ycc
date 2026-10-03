@@ -85,8 +85,9 @@ print(s);
 print(bins[0]);
 
 // a shared field written through the union, read back through the union
-e.id = 42;
-print(e.id);
+let fresh: Expr = { e: one, id: 7, tag: "neg" };
+fresh.id = 42;
+print(fresh.id, " ", eval(fresh));
 
 // record patterns read in place
 match xs[2] {

@@ -85,8 +85,8 @@ let ty_count = 0;
 // ty_desc's labels in this unit, by type signature (types.y tsig): a type
 // named again needs no canonical form spelled out and hashed (a recursive
 // union's is long, and a read through a union asks for every member's).
-// 512 buckets of indices into ty_sig_keys/ty_sig_lbls; tyset_reset
-// empties them.
+// 512 buckets of indices into ty_sig_keys/ty_sig_lbls, made when first
+// used (ty_sig_init); tyset_reset empties them.
 let ty_sig_keys: [str] = [];
 let ty_sig_lbls: [str] = [];
 let ty_sig_bkts: [[long]] = [];
@@ -5487,6 +5487,16 @@ def tyset_reset() {
     ty_seen = none;
     ty_forms = nonef;
     ty_count = 0;
+    // the signature cache's buckets are made when first used (ty_sig_init)
+    let nobkts: [[long]] = [];
+    ty_sig_bkts = nobkts;
+    let nonodes: [Type] = [];
+    let novals: [[str]] = [];
+    ush_nodes = nonodes;
+    ush_vals = novals;
+};
+
+def ty_sig_init() {
     let nokeys: [str] = [];
     let nolbls: [str] = [];
     let bkts: [[long]] = [];
@@ -5499,10 +5509,6 @@ def tyset_reset() {
     ty_sig_keys = nokeys;
     ty_sig_lbls = nolbls;
     ty_sig_bkts = bkts;
-    let nonodes: [Type] = [];
-    let novals: [[str]] = [];
-    ush_nodes = nonodes;
-    ush_vals = novals;
 };
 
 // The canonical form of record type rt (types.y tcanon). A record type
@@ -5600,7 +5606,7 @@ def ty_desc(st: EmitSt, rt: Type) -> StLbl {
 // union, union_lay).
 def ty_desc_as(st: EmitSt, rt: Type, lay: str) -> StLbl {
     let sig = types.tsig(rt) + lay;
-    if (len(ty_sig_bkts) == 0) { tyset_reset(); };
+    if (len(ty_sig_bkts) == 0) { ty_sig_init(); };
     let h = fnv64(sig) % 512;
     if (h < 0) { h = h + 512; };
     let bkt: [long] = ty_sig_bkts[h];

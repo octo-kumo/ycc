@@ -5265,7 +5265,8 @@ static Yv *st_fdepth(Yv *st, long d) {
 // ── entry point ──────────────────────────────────────────────────────────
 
 Yv *check_program(Yv *ast, Yv *ext) {
-    inf_reset();
+    // the inferred-return table is made when first written (inf_reset)
+    inf_bkts = yav(0);
     // pass 1: collect top-level def signatures (allows mutual recursion).
     Yv *defs = yav(0);
     Yv *pstmts = yr_get(ast, "stmts");
