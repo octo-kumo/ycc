@@ -152,75 +152,9 @@ def y_str_tonum(s: str) -> long {
     if (neg) { 0 - acc } else { acc }
 };
 
-// trim(s): drop spaces/tabs/newlines/CR from both ends.
-def y_str_trim(s: str) -> str {
-    let n = len(s);
-    let i = 0;
-    let go = true;
-    while (go) {
-        if (i < n) {
-            let c = byte_at(s, i);
-            if (c == 32 || c == 9 || c == 10 || c == 13) { i = i + 1; 0; } else { go = false; 0; };
-            0
-        } else { go = false; 0; };
-        0
-    };
-    let j = n;
-    go = true;
-    while (go) {
-        if (j > i) {
-            let c = byte_at(s, j - 1);
-            if (c == 32 || c == 9 || c == 10 || c == 13) { j = j - 1; 0; } else { go = false; 0; };
-            0
-        } else { go = false; 0; };
-        0
-    };
-    s[i:j]
-};
-
-// index_of / last_index_of: first (last) match of needle in hay,
-// -1 when absent. An empty needle never matches.
-def y_str_index(hay: str, needle: str) -> long {
-    let n = len(hay);
-    let m = len(needle);
-    let found = 0 - 1;
-    if (m > 0) {
-        if (n >= m) {
-            // The leading byte decides most positions on its own: every
-            // needle ycc searches for is ONE character (asm.y looks for
-            // " ", "(", ":", "\t", "-"), so entering the inner loop at all
-            // was the bulk of the work -- index_of was ~1100 instructions
-            // per call, 10% of everything ycc executes.
-            let b0 = byte_at(needle, 0);
-            let i = 0;
-            let go = true;
-            while (go) {
-                if (i <= n - m) {
-                    if (found < 0) {
-                        if (byte_at(hay, i) == b0) {
-                            let j = 1;
-                            let ok = true;
-                            while (j < m) {
-                                if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; 0; } else { 0; };
-                                j = j + 1;
-                                0
-                            };
-                            if (ok) { found = i; 0; } else { 0; };
-                            0
-                        } else { 0; };
-                        0
-                    } else { go = false; 0; };
-                    i = i + 1;
-                    0
-                } else { go = false; 0; };
-                0
-            };
-            0
-        } else { 0; };
-        0
-    } else { 0; };
-    found
-};
+// last_index_of: the last match of needle in hay, -1 when absent; an
+// empty needle never matches. (index_of, split and trim are assembly:
+// arch_x64.y y_str_index, y_str_split, y_str_trim.)
 def y_str_lastidx(hay: str, needle: str) -> long {
     let n = len(hay);
     let m = len(needle);
@@ -252,66 +186,6 @@ def y_str_lastidx(hay: str, needle: str) -> long {
         0
     } else { 0; };
     found
-};
-
-// split(s, sep): cut at every non-overlapping match of sep. A
-// trailing empty piece is dropped ("a," -> ["a"]); an empty sep
-// yields no pieces at all.
-def y_str_split(s: str, sep: str) -> [str] {
-    let out: [str] = [];
-    let sb = bytes(s);
-    let pb = bytes(sep);
-    let n = len(sb);
-    let m = len(pb);
-    if (m == 0) {
-        out
-    } else {
-        let start = 0;
-        let i = 0;
-        let go = true;
-        // Leading byte first, as in y_str_index: every separator ycc splits
-        // on is one character ("\n" for the assembler's 4 MB of asm text and
-        // for the import reader's source, "/" for norm_path), so the inner
-        // loop almost never runs.
-        let b0 = pb[0];
-        while (go) {
-            if (i < n) {
-                let hit = false;
-                if (i + m <= n) {
-                    let ok = true;
-                    if (sb[i] != b0) {
-                        ok = false;
-                        0
-                    } else {
-                        let j = 1;
-                        while (j < m) {
-                            if (sb[i + j] != pb[j]) { ok = false; 0; } else { 0; };
-                            j = j + 1;
-                            0
-                        };
-                    };
-                    hit = ok;
-                    0
-                } else { 0; };
-                if (hit) {
-                    out += s[start:i];
-                    start = i + m;
-                    i = i + m;
-                    0
-                } else {
-                    i = i + 1;
-                    0
-                };
-                0
-            } else { go = false; 0; };
-            0
-        };
-        if (start < n) {
-            out += s[start:];
-            0
-        } else { 0; };
-        out
-    }
 };
 
 // range(n) = [0 .. n), empty for n <= 0.
