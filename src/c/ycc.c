@@ -112,7 +112,8 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("  -W N         warning level N; 0 (the default) is the usual\n"));
             puts_(ys("               set, 1 adds the optional checks for a value\n"));
             puts_(ys("               computed and dropped -- a call result nobody\n"));
-            puts_(ys("               reads, a bare a[i] or x.f as a statement\n"));
+            puts_(ys("               reads, a bare a[i] or x.f as a statement,\n"));
+            puts_(ys("               an else branch that does nothing\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
             puts_(ys("  --std-src    compile the std units (the runtime and std library)\n"));
             puts_(ys("               from source instead of using the precompiled ones\n"));

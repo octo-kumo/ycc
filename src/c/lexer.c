@@ -509,7 +509,11 @@ long hexvalx(Yv *c) {
 // there): the longest one, or "". Maximal munch, like C: `x+++y` is
 // `x ++ + y` and `a>>>=b` is `a >>>= b`. There is no `=+` operator;
 // `x =+ y` is `x = +y`. Only the shifts are longer than two chars, so only
-// `<` and `>` look further ahead.
+// `<` and `>` look further ahead. `?.` (option propagation, parser.y
+// parse_postfix) is the one operator that shadows another: `a?.b` never
+// lexes as the ternary `a ? .b`, and `c ?.5 : 1` -- a conditional whose arm
+// starts with a fraction, which no program wants -- is a syntax error, as
+// in C.
 Yv *multicharop(Yv *src, long i, Yv *c) {
     if (ys_eq_lit(c, "<") || ys_eq_lit(c, ">")) {
         Yv *four = ys_slice(src, i, i + 4);
@@ -532,6 +536,7 @@ Yv *twocharop(Yv *src, long i) {
         ys_eq_lit(two, "::") || ys_eq_lit(two, "..") ||
         ys_eq_lit(two, "->") || ys_eq_lit(two, "=>") ||
         ys_eq_lit(two, "++") || ys_eq_lit(two, "--") ||
+        ys_eq_lit(two, "?.") ||
         ys_eq_lit(two, "+=") || ys_eq_lit(two, "-=") ||
         ys_eq_lit(two, "*=") || ys_eq_lit(two, "/=") ||
         ys_eq_lit(two, "%=") || ys_eq_lit(two, "&=") ||

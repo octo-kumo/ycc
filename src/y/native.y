@@ -1990,6 +1990,18 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: K.tlong })
         } else if (name == "is_some") {
             normtype({ k: K.tbool })
+        } else if (name == "opt$test") {
+            normtype({ k: K.tbool })
+        } else if (name == "opt$val") {
+            // the payload in an option: what some() would give, and what the
+            // `?.` chain's own value is (types.y opt$val)
+            let vargs: [Node] = node.args;
+            if (len(vargs) != 1) { normtype({ k: K.tunk }) } else {
+                let vt = infer(st, vargs[0]);
+                if (vt.k == K.tvoid || vt.k == K.tunk) { vt }
+                else if (vt.k == K.topt) { vt }
+                else { normtype({ k: K.topt, of: vt }) }
+            }
         } else if (name == "unwrap") {
             // unwrap(x): payload type when x is statically an option.
             let uargs: [Node] = node.args;
@@ -2088,6 +2100,23 @@ def infer_block(st: EmitSt, node: Block) -> Type {
     if (len(stmts) == 0) {
         normtype({ k: K.tvoid })
     } else {
+        // A parser temporary -- a match's `$m`, a `?.`'s `$p` -- is read
+        // inside the very expression that binds it, and infer runs before
+        // gen binds it, so bind it here or the whole expression infers as
+        // unknown (print would then read the option as a raw number). Only
+        // these: every other binding is in scope after its own statement,
+        // which gen has run by the time anything asks for its type.
+        let i = 0;
+        while (i < len(stmts)) {
+            let s = stmts[i];
+            if (s.k == K.decl) {
+                let d: Decl = s;
+                if (d.kind == "let" && d.name[0:1] == "$" && env_find(st, d.name).kind == "none") {
+                    st.env += { name: d.name, kind: "temp", off: 0, label: "", typ: infer(st, d.v) };
+                };
+            };
+            i = i + 1;
+        };
         infer(st, stmts[len(stmts) - 1])
     }
 };
@@ -2321,6 +2350,7 @@ def name_in(xs: [str], n: str) -> bool {
 // Builtins are resolved by name at the call site, never captured.
 def is_intrinsic_name(n: str) -> bool {
     name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
+             "opt$test", "opt$val",
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
@@ -4428,6 +4458,11 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             gen_some(st, node)
         } else if (name == "is_some") {
             gen_is_some(st, node)
+        } else if (name == "opt$test") {
+            // `x is there` -- the test of a `?.` chain (parser.y)
+            gen_is_some(st, node)
+        } else if (name == "opt$val") {
+            gen_opt_val(st, node)
         } else if (name == "unwrap") {
             gen_unwrap(st, node)
         } else if (name == "trim") {
@@ -7226,6 +7261,19 @@ def gen_push_all(st: EmitSt, node: Call) -> EmitSt {
 };
 
 // some(v): box v in 8 heap bytes; the box address (nonzero) is the value.
+// The payload of a `?.` chain, back in an option box (parser.y). A payload
+// that is already an option IS its box, so nothing to do; a void chain has
+// nothing to hand back. Otherwise some(v).
+def gen_opt_val(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
+    let at = infer(st, args[0]);
+    if (at.k == K.topt || at.k == K.tvoid) {
+        gen(st, args[0])
+    } else {
+        gen_some(st, node)
+    }
+};
+
 def gen_some(st: EmitSt, node: Call) -> EmitSt {
     let args: [Node] = node.args;
     st = gen(st, args[0]);

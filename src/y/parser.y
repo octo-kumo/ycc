@@ -84,6 +84,9 @@ type Parsed = { node: Node, pos: long };
 type ParsedList = { node: [Node], pos: long };
 type PType = { node: Type, pos: long };
 type PatRes = { test: Node, binds: [Node], cover: Type, wild: bool, pos: long };
+// One `?.` waiting for its chain to close (parse_postfix): the temp its
+// receiver is bound to, that receiver, and the operator's position.
+type PropCtx = { tmp: str, recv: Node, line: long, col: long };
 
 // ── token helpers ────────────────────────────────────────────────────────
 
@@ -390,6 +393,10 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
     let node = base.node;
     let pos = base.pos;
     let go = true;
+    // The `?.`s open in this chain, innermost last: each binds its receiver
+    // to a temp and wraps the rest of the chain in `if temp is some`. A chain
+    // may hold several (`a?.b?.c`), so they stack and unwind LIFO.
+    let props: [PropCtx] = [];
     while (go) {
         if (is_punct(toks, pos, "(")) {
             let a = parse_args(toks, pos + 1);
@@ -450,6 +457,33 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             ua += node;
             node = { k: K.call, callee: { k: K.id, v: "unwrap", line: tline(toks, pos), col: tcol(toks, pos) }, args: ua, line: tline(toks, pos), col: tcol(toks, pos) };
             pos = pos + 1;
+        } else if (is_op(toks, pos, "?.") && (is_name_tok(toks, pos + 1) || is_punct(toks, pos + 1, "["))) {
+            // `x?.y`, `x?.[i]` -- option propagation (PropCtx above). Bind x
+            // once, then read the rest of the chain off the bound copy: the
+            // chain below is ordinary, unwrapped code that only runs where x
+            // is there, so EVERY link after the `?.` propagates x's none --
+            // `a?.b.c` as much as `a?.b` -- and a subscript is an ordinary
+            // index under it. The wrapping `if` waits for the chain to end.
+            let pln = tline(toks, pos);
+            let pcl = tcol(toks, pos);
+            let tmp = "$p" + tostring(pln) + "_" + tostring(pcl);
+            let ua: [Node] = [];
+            props += { tmp: tmp, recv: node, line: pln, col: pcl };
+            ua += { k: K.id, v: tmp, line: pln, col: pcl };
+            node = { k: K.call, callee: { k: K.id, v: "unwrap", line: pln, col: pcl }, args: ua, line: pln, col: pcl };
+            if (is_name_tok(toks, pos + 1)) {
+                // The name belongs to the `?.`, not to the loop's own `.`
+                // branch: `x?.y` is one operator, like `x[y]`.
+                node = { k: K.dot, obj: node, key: tv(toks, pos + 1), line: pln, col: pcl };
+                pos = pos + 2;
+            } else {
+                pos = pos + 1;  // the loop's `[` branch takes the subscript
+            };
+        } else if (is_op(toks, pos, "?.")) {
+            // A `?.` with neither a field name nor `[` after it.
+            node = expect_err(toks, pos + 1, "a field name or '[' after '?.'");
+            pos = pos + 1;
+            go = false;
         } else if (is_op(toks, pos, "++")) {
             // x++ — postfix: the OLD value is the expression's value, and
             // the target is evaluated once (a[f()]++ calls f once).
@@ -462,6 +496,32 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             go = false;
         } else {
             go = false;
+        };
+    };
+    // Close the `?.`s the chain opened, innermost first:
+    //   { let $p = <recv>;
+    //     if opt$test($p) { opt$val(<chain>) } else { none } }
+    // The two `opt$` names are intrinsics only the parser emits -- a `$` is
+    // not an identifier character, so no program can write one, and the
+    // diagnostic can name `?.` instead. The chain is rooted at `unwrap($p)`,
+    // so it only runs where $p is there; `opt$val` puts its result back in
+    // an option box, which is what makes the whole `if` one. A broken chain
+    // is left alone: the error it carries is the one to report.
+    if (len(props) > 0 && node.k != K.err) {
+        let pi = len(props) - 1;
+        while (pi >= 0) {
+            let pc: PropCtx = props[pi];
+            let cargs: [Node] = [];
+            cargs += { k: K.id, v: pc.tmp, line: pc.line, col: pc.col };
+            let test: Node = { k: K.call, callee: { k: K.id, v: "opt$test", line: pc.line, col: pc.col }, args: cargs, line: pc.line, col: pc.col };
+            let vargs: [Node] = [];
+            vargs += node;
+            let val: Node = { k: K.call, callee: { k: K.id, v: "opt$val", line: pc.line, col: pc.col }, args: vargs, line: pc.line, col: pc.col };
+            let stmts: [Node] = [];
+            stmts += let_node(pc.tmp, pc.recv, pc.line, pc.col);
+            stmts += { k: K.kw_if, cond: test, then: block1(val, pc.line, pc.col), els: block1({ k: K.id, v: "none", line: pc.line, col: pc.col }, pc.line, pc.col), has_else: true, line: pc.line, col: pc.col };
+            node = { k: K.block, stmts: stmts, line: pc.line, col: pc.col };
+            pi = pi - 1;
         };
     };
     res(node, pos)

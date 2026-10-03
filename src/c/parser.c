@@ -399,6 +399,10 @@ Yv *parse_postfix(Yv *toks, long p) {
     Yv *node = yr_get(base, "node");
     long pos = yv_l(yr_get(base, "pos"));
     int go = 1;
+    // The `?.`s open in this chain, innermost last: each binds its receiver
+    // to a temp and wraps the rest of the chain in `if temp is some`. A chain
+    // may hold several (`a?.b?.c`), so they stack and unwind LIFO.
+    Yv *props = yav(0);
     while (go) {
         if (is_punct(toks, pos, ys("("))) {
             Yv *a = parse_args(toks, pos + 1);
@@ -489,6 +493,34 @@ Yv *parse_postfix(Yv *toks, long p) {
             ua = ya_push(ua, node);
             node = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("unwrap"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))), "args", ua, "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
             pos = pos + 1;
+        } else if (is_op(toks, pos, ys("?.")) && (is_name_tok(toks, pos + 1) || is_punct(toks, pos + 1, ys("[")))) {
+            // `x?.y`, `x?.[i]` -- option propagation (see the `props` note).
+            // Bind x once, then read the rest of the chain off the bound copy:
+            // the chain below is ordinary, unwrapped code that only runs where
+            // x is there, so EVERY link after the `?.` propagates x's none --
+            // `a?.b.c` as much as `a?.b` -- and a subscript is an ordinary
+            // index under it. The wrapping `if` waits for the chain to end.
+            long pln = tline(toks, pos);
+            long pcl = tcol(toks, pos);
+            Yv *tmp = ys_cat(ys_cat(ys_cat(ys("$p"), ys_long(pln)), ys("_")), ys_long(pcl));
+            Yv *ua = yav(0);
+            props = ya_push(props, yr(4, "tmp", tmp, "recv", node, "line", yv_long(pln), "col", yv_long(pcl)));
+            ua = ya_push(ua, yr(4, "k", yv_long(K_id), "v", tmp, "line", yv_long(pln), "col", yv_long(pcl)));
+            node = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("unwrap"), "line", yv_long(pln), "col", yv_long(pcl)), "args", ua, "line", yv_long(pln), "col", yv_long(pcl));
+            if (is_name_tok(toks, pos + 1)) {
+                // The name belongs to the `?.`, not to the loop's own `.`
+                // branch: `x?.y` is one operator, like `x[y]`.
+                node = yr(5, "k", yv_long(K_dot), "obj", node, "key", tv(toks, pos + 1), "line", yv_long(pln), "col", yv_long(pcl));
+                pos = pos + 2;
+            } else {
+                pos = pos + 1;  // the loop's `[` branch takes the subscript
+            }
+        } else if (is_op(toks, pos, ys("?."))) {
+            // A `?.` with neither a field name nor `[` after it.
+            node = expect_err(toks, pos + 1,
+                              ys("a field name or '[' after '?.'"));
+            pos = pos + 1;
+            go = 0;
         } else if (is_op(toks, pos, ys("++"))) {
             // x++ — postfix: the OLD value is the expression's value, and
             // the target is evaluated once (a[f()]++ calls f once).
@@ -504,6 +536,32 @@ Yv *parse_postfix(Yv *toks, long p) {
         } else {
             go = 0;
             ;
+        }
+    }
+    // Close the `?.`s the chain opened, innermost first:
+    //   { let $p = <recv>;
+    //     if opt$test($p) { opt$val(<chain>) } else { none } }
+    // The two `opt$` names are intrinsics only the parser emits -- a `$` is
+    // not an identifier character, so no program can write one, and the
+    // diagnostic can name `?.` instead. The chain is rooted at `unwrap($p)`,
+    // so it only runs where $p is there; `opt$val` puts its result back in
+    // an option box, which is what makes the whole `if` one. A broken chain
+    // is left alone: the error it carries is the one to report.
+    if (yv_len(props) > 0 && yv_l(yr_get(node, "k")) != K_err) {
+        long pi = yv_len(props) - 1;
+        while (pi >= 0) {
+            Yv *pc = ya_get(props, pi);
+            long pln = yv_l(yr_get(pc, "line"));
+            long pcl = yv_l(yr_get(pc, "col"));
+            Yv *pcl_id = yr(4, "k", yv_long(K_id), "v", yr_get(pc, "tmp"), "line", yv_long(pln), "col", yv_long(pcl));
+            Yv *cargs = ya_push(yav(0), pcl_id);
+            Yv *test = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("opt$test"), "line", yv_long(pln), "col", yv_long(pcl)), "args", cargs, "line", yv_long(pln), "col", yv_long(pcl));
+            Yv *val = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("opt$val"), "line", yv_long(pln), "col", yv_long(pcl)), "args", ya_push(yav(0), node), "line", yv_long(pln), "col", yv_long(pcl));
+            Yv *stmts = yav(0);
+            stmts = ya_push(stmts, let_node(yr_get(pc, "tmp"), yr_get(pc, "recv"), pln, pcl));
+            stmts = ya_push(stmts, yr(7, "k", yv_long(K_kw_if), "cond", test, "then", block1(val, pln, pcl), "els", block1(yr(4, "k", yv_long(K_id), "v", ys("none"), "line", yv_long(pln), "col", yv_long(pcl)), pln, pcl), "has_else", yv_bool(1), "line", yv_long(pln), "col", yv_long(pcl)));
+            node = yr(4, "k", yv_long(K_block), "stmts", stmts, "line", yv_long(pln), "col", yv_long(pcl));
+            pi = pi - 1;
         }
     }
     return res(node, pos);

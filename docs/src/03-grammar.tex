@@ -245,6 +245,7 @@ C.
 \ty{postfix} ::={}& \ty{primary}
    ~\{~\ic{(}~[\ty{args}]~\ic{)} \mid \ic{[}~\ty{expr}~\ic{]}
    \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name}
+   \mid \ic{?.}~\ty{name} \mid \ic{?.}~\ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]}
    \mid \ic{!} \mid \ic{++} \mid \ic{--}~\} \\
 \ty{unary} ::={}& [\ic{!} \mid \ic{-} \mid \ic{\textasciitilde{}} \mid \ic{*} \mid \ic{\&}
    \mid \ic{++} \mid \ic{--}]~\ty{postfix}
@@ -254,6 +255,14 @@ C.
 \ic{unwrap(e)} (Section~\ref{sec:builtin-option}) and, like every
 postfix form, binds tighter than the prefix operators --- \ic{!x!} is
 \ic{!(x!)}. The two-character token \ic{!=} is always inequality.
+
+\noindent Postfix \ic{e?.name} and \ic{e?.[i]} are \emph{option
+propagation} (Section~\ref{sec:type-options}): \ic{e} is read once, and
+the rest of the chain runs only when it is there, giving \ic{none} when
+it is not. \ic{?.} is one token, so \ic{x?.y} reads the field \ic{y} and
+\ic{x ? .y} is not a conditional at all --- maximal munch, as in C,
+where \ic{c ?.5 : 1} (a conditional whose arm starts with a fraction) is
+a syntax error.
 In a record literal a bare name is shorthand for the field of that
 name: \ic{\{x, y\}} is \ic{\{x: x, y: y\}} (but \ic{\{ x \}} alone is a
 block whose value is \ic{x}).

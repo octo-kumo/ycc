@@ -438,6 +438,7 @@ Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety);
 Yv *gen_len(Yv *st, Yv *node);
 Yv *gen_push(Yv *st, Yv *node);
 Yv *gen_push_all(Yv *st, Yv *node);
+Yv *gen_opt_val(Yv *st, Yv *node);
 Yv *gen_some(Yv *st, Yv *node);
 Yv *gen_box_rax(Yv *st);
 int some_of_lit(Yv *node);
@@ -3007,6 +3008,23 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "is_some")) {
             return yr(1, "k", yv_long(K_tbool));
+        } else if (ys_eq_lit(name, "opt$test")) {
+            return yr(1, "k", yv_long(K_tbool));
+        } else if (ys_eq_lit(name, "opt$val")) {
+            /* the payload in an option: what some() would give, and what the
+               `?.` chain's own value is (types.y opt$val) */
+            Yv *vargs = yr_get(node, "args");
+            if (yv_len(vargs) != 1) {
+                return yr(1, "k", yv_long(K_tunk));
+            } else {
+                Yv *vt = infer(st, ya_get(vargs, 0));
+                long vk = yv_l(yr_get(vt, "k"));
+                if (vk == K_tvoid || vk == K_tunk || vk == K_topt) {
+                    return vt;
+                } else {
+                    return yr(2, "k", yv_long(K_topt), "of", vt);
+                }
+            }
         } else if (ys_eq_lit(name, "unwrap")) {
             /* unwrap(x): payload type when x is statically an option. */
             Yv *uargs = yr_get(node, "args");
@@ -3118,6 +3136,27 @@ Yv *infer_block(Yv *st, Yv *node) {
     if (yv_len(stmts) == 0) {
         return yr(1, "k", yv_long(K_tvoid));
     } else {
+        /* A parser temporary -- a match's `$m`, a `?.`'s `$p` -- is read
+           inside the very expression that binds it, and infer runs before
+           gen binds it, so bind it here or the whole expression infers as
+           unknown (print would then read the option as a raw number). Only
+           these: every other binding is in scope after its own statement,
+           which gen has run by the time anything asks for its type. */
+        long i = 0;
+        while (i < yv_len(stmts)) {
+            Yv *sn = ya_get(stmts, i);
+            if (yv_l(yr_get(sn, "k")) == K_decl) {
+                Yv *dname = yr_get(sn, "name");
+                Yv *ge = env_find(st, dname);
+                if (ys_eq_lit(yr_get(sn, "kind"), "let") &&
+                    ys_eq_lit(ys_slice(dname, 0, 1), "$") &&
+                    ys_eq_lit(yr_get(ge, "kind"), "none")) {
+                    st = env_define(st, dname, ys("temp"), 0, ys(""),
+                                    infer(st, yr_get(sn, "v")));
+                }
+            }
+            i = i + 1;
+        }
         return infer(st, ya_get(stmts, yv_len(stmts) - 1));
     }
 }
@@ -3370,8 +3409,8 @@ int name_in(Yv *xs, Yv *n) {
 /* Builtins are resolved by name at the call site, never captured. */
 int is_intrinsic_name(Yv *n) {
     return name_in(
-        yav(44, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
-            ys("is_some"), ys("unwrap"), ys("trim"), ys("ord"),
+        yav(46, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+            ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
             ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
@@ -5720,6 +5759,11 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_some(st, node);
         } else if (ys_eq_lit(name, "is_some")) {
             return gen_is_some(st, node);
+        } else if (ys_eq_lit(name, "opt$test")) {
+            /* `x is there` -- the test of a `?.` chain (parser.y) */
+            return gen_is_some(st, node);
+        } else if (ys_eq_lit(name, "opt$val")) {
+            return gen_opt_val(st, node);
         } else if (ys_eq_lit(name, "unwrap")) {
             return gen_unwrap(st, node);
         } else if (ys_eq_lit(name, "trim")) {
@@ -9051,6 +9095,19 @@ Yv *gen_push_all(Yv *st, Yv *node) {
     return emit(st, ys("    add $24, %rsp"));
 }
 
+/* The payload of a `?.` chain, back in an option box (parser.y). A payload
+   that is already an option IS its box, so nothing to do; a void chain has
+   nothing to hand back. Otherwise some(v). */
+Yv *gen_opt_val(Yv *st, Yv *node) {
+    Yv *args = yr_get(node, "args");
+    Yv *at = infer(st, ya_get(args, 0));
+    long ak = yv_l(yr_get(at, "k"));
+    if (ak == K_topt || ak == K_tvoid) {
+        return gen(st, ya_get(args, 0));
+    } else {
+        return gen_some(st, node);
+    }
+}
 Yv *gen_some(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
     st = gen(st, ya_get(args, 0));

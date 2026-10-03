@@ -3120,6 +3120,41 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                     tc_res(type_node({ k: K.tbool }), st)
                 }
             }
+        } else if (name == "opt$test") {
+            // The test `?.` lowers to (parser.y parse_postfix): `x is
+            // there`. Only the parser emits the name -- `$` is not an
+            // identifier character -- so the diagnostic names the operator
+            // the program wrote, and there is no arity to check.
+            let tr = typeof_expr(st, cargs[0]);
+            st = tr.st;
+            if (tr.typ.k == K.topt || tr.typ.k == K.tunk || tr.typ.k == K.tname) {
+                tc_res(type_node({ k: K.tbool }), st)
+            } else {
+                st = fail(st, "'?.' needs an option, got " + tstr(tr.typ), node.line, node.col);
+                tc_res(type_node({ k: K.tbool }), st)
+            }
+        } else if (name == "opt$val") {
+            // The value side of a `?.` chain (parser.y parse_postfix):
+            // `some` for a payload that needs a box, except that a chain
+            // ending in a void call stays void -- `obj?.cleanup();` runs the
+            // method when the object is there and hands nothing back.
+            let vr = typeof_expr(st, cargs[0]);
+            st = vr.st;
+            if (vr.typ.k == K.tvoid || vr.typ.k == K.tunk) {
+                tc_res(vr.typ, st)
+            } else if (vr.typ.k == K.topt) {
+                // A payload that is an option IS its box, so the chain ends
+                // in one option, not two: `a?.b` (b: T?) is `T?`, and none
+                // means "a was none, or b was". Flat is what lets the next
+                // link carry its own `?.` -- and what the emitter's
+                // gen_opt_val assumes to skip the box.
+                tc_res(vr.typ, st)
+            } else if (!is_value_type(vr.typ)) {
+                st = fail(st, "cannot put " + tstr(vr.typ) + " after '?.'", node.line, node.col);
+                tc_res(t_unk(), st)
+            } else {
+                tc_res(type_node({ k: K.topt, of: vr.typ }), st)
+            }
         } else if (name == "unwrap") {
             if (len(cargs) != 1) {
                 st = fail(st, "unwrap takes exactly 1 argument", node.line, node.col);

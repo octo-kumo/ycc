@@ -620,7 +620,20 @@ def lint_if(st: LintSt, node: If, used: bool) -> long {
     lint_node(st, node.cond, true);
     let arms = used && node.has_else;
     lint_node(st, node.then, arms);
-    lint_node(st, node.els, arms)
+    lint_node(st, node.els, arms);
+    if (st.wlevel >= 1 && node.has_else && lint_empty_arm(node.els)) {
+        lint_warn_at(st, "the 'else' branch is empty", node)
+    } else { 0 }
+};
+
+// An arm holding nothing at all: an empty block. Only an `else` is worth a
+// word -- `else { }` is what the void redesign made unnecessary, and the
+// branch can go. A block with even a `;` in it was written on purpose.
+def lint_empty_arm(n: Node) -> bool {
+    if (n.k == K.block) {
+        let block: Block = n;
+        len(block.stmts) == 0
+    } else { false }
 };
 
 def lint_for(st: LintSt, node: For) -> long {

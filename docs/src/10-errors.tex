@@ -78,7 +78,7 @@ value on purpose.
 \paragraph{Optional checks: \ic{-W N}}
 \label{sec:wlevel}
 
-Two more checks are off by default, because in ordinary code they are a
+Three checks are off by default, because in ordinary code they are a
 habit rather than a mistake: a getter call or a bare \ic{a[i]} as a
 statement reads fine. Raise the warning level to turn them on -- \ic{ycc
 -W 1} (a project: \ic{ycc build -W 1}), which adds
@@ -91,7 +91,11 @@ statement reads fine. Raise the warning level to turn them on -- \ic{ycc
   another unit are all taken to return nothing and draw nothing;
 \item \ic{the value computed here is not used}: a read or a literal used
   as a statement -- \ic{x.f}, \ic{a[i]}, \ic{a[1:2]}, \ic{\&x},
-  \ic{*p}, a record, array or map literal, \ic{[x; n]}, \ic{x is B}.
+  \ic{*p}, a record, array or map literal, \ic{[x; n]}, \ic{x is B};
+\item \ic{the 'else' branch is empty}: an \ic{if} whose \ic{else} does
+  nothing. The void redesign (Section~\ref{sec:void}) made the branch
+  unnecessary, so it can go; an \ic{else} that runs anything, and an
+  \ic{if} with no \ic{else}, draw nothing.
 \end{itemize}
 \end{sloppypar}
 

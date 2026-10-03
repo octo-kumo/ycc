@@ -4208,6 +4208,55 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
                 }
             }
+        } else if (ys_eq_lit(name, "opt$test")) {
+            /* The test `?.` lowers to (parser.y parse_postfix): `x is
+               there`. Only the parser emits the name -- `$` is not an
+               identifier character -- so the diagnostic names the operator
+               the program wrote, and there is no arity to check. */
+            Yv *tr = typeof_expr(st, ya_get(cargs, 0));
+            st = yr_get(tr, "st");
+            if (yv_l(yr_get(yr_get(tr, "typ"), "k")) == K_topt ||
+                yv_l(yr_get(yr_get(tr, "typ"), "k")) == K_tunk ||
+                yv_l(yr_get(yr_get(tr, "typ"), "k")) == K_tname) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
+            } else {
+                st = fail(st,
+                          ys_cat(ys("'?.' needs an option, got "),
+                                 tstr(yr_get(tr, "typ"))),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
+            }
+        } else if (ys_eq_lit(name, "opt$val")) {
+            /* The value side of a `?.` chain (parser.y parse_postfix):
+               `some` for a payload that needs a box, except that a chain
+               ending in a void call stays void -- `obj?.cleanup();` runs the
+               method when the object is there and hands nothing back. */
+            Yv *vr = typeof_expr(st, ya_get(cargs, 0));
+            st = yr_get(vr, "st");
+            if (yv_l(yr_get(yr_get(vr, "typ"), "k")) == K_tvoid ||
+                yv_l(yr_get(yr_get(vr, "typ"), "k")) == K_tunk) {
+                return yr(2, "typ", yr_get(vr, "typ"), "st", st);
+            } else if (yv_l(yr_get(yr_get(vr, "typ"), "k")) == K_topt) {
+                /* A payload that is an option IS its box, so the chain ends
+                   in one option, not two: `a?.b` (b: T?) is `T?`, and none
+                   means "a was none, or b was". Flat is what lets the next
+                   link carry its own `?.` -- and what the emitter's
+                   gen_opt_val assumes to skip the box. */
+                return yr(2, "typ", yr_get(vr, "typ"), "st", st);
+            } else if (!is_value_type(yr_get(vr, "typ"))) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("cannot put "),
+                                        tstr(yr_get(vr, "typ"))),
+                                 ys(" after '?.'")),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                return yr(2, "typ",
+                          yr(2, "k", yv_long(K_topt), "of", yr_get(vr, "typ")),
+                          "st", st);
+            }
         } else if (ys_eq_lit(name, "unwrap")) {
             if (yv_len(cargs) != 1) {
                 st = fail(st, ys("unwrap takes exactly 1 argument"),

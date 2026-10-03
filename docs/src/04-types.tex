@@ -192,8 +192,9 @@ it (Section~\ref{sec:maps}).
 \label{sec:type-options}
 
 \ic{T?} is ``a \ty{T} or nothing''. Its empty case is \ic{none};
-\ic{some}/\ic{unwrap}/\ic{is\_some} and the postfix unwrap \ic{x!}
-(Section~\ref{sec:builtin-option}) manipulate it. There is no
+\ic{some}/\ic{unwrap}/\ic{is\_some}, the postfix unwrap \ic{x!}
+(Section~\ref{sec:builtin-option}) and the propagation operator \ic{?.}
+(below) manipulate it. There is no
 \ic{null}: \ic{none} is the only empty value, and it exists only at
 option types --- a plain \ic{str} or \ic{long} can never be empty, so
 \ic{s == none} on a \ic{str} is a type error. On its own \ic{none} has
@@ -203,6 +204,39 @@ option type its context expects. A plain \ty{T} does not widen to
 (Section~\ref{sec:type-records}) and an optional parameter
 (Section~\ref{sec:functions}) take a plain \ty{T}. Two options are equal when both are
 \ic{none} or both hold equal payloads (Section~\ref{sec:equality}).
+
+\subsubsection{Option propagation}
+\label{sec:opt-propagation}
+
+\ic{e?.f} reads the field \ic{f} of \ic{e} when \ic{e} is there, and is
+\ic{none} when it is not --- no unwrap, no trap, and no \ic{!}:
+\begin{quote}\tt
+let a: str? = some("yo hi");
+let parts = a?.split(" ");   \ic{// [str]? --- the method, or none}
+let part1 = parts?.[0];      \ic{// the first byte of the string, or none}
+\end{quote}
+The receiver is read \emph{once}, whatever it is, and \emph{every} link
+after the \ic{?.} propagates: \ic{obj?.inner.inneragain.inneragainn} is
+\ic{none} whenever \ic{obj} is, not just the first field. So a method
+call, a \ic{.length}, a slice or an index may all follow it:
+\ic{here()?.name.length}. A \ic{?.} partway down a chain that already
+propagates works the same way, so \ic{obj?.a.b?.c} is \ic{none} when
+\ic{obj} is \ic{none} or when \ic{b} is.
+
+The type is the option of the field's --- of the subscript's, or of the
+method's return --- and it is \emph{flat}: a field that is itself an
+option needs no second wrapper, so \ic{a?.b} with \ic{b: T?} is \ic{T?},
+and \ic{none} then means \emph{either} \ic{a} or \ic{b} was \ic{none}.
+That is what lets the next link carry its own \ic{?.}. An optional field
+reached through a \ic{?.} is an option like any other, and may be
+unwrapped as one: \ic{a?.b!.tag}.
+
+A chain ending in a \ic{void} call stays \ic{void}: \ic{obj?.cleanup();}
+runs the method when the object is there, and there is nothing to hand
+back. Applying \ic{?.} to a type that is not an option is a type error
+(Section~\ref{sec:errors}) --- \ic{5?.f} does not compile --- and so is
+a \ic{?.} with neither a name nor \ic{[} after it.
+
 \ic{*T} is a raw machine pointer; \ic{\&e} yields one
 (Section~\ref{sec:pointers}).
 

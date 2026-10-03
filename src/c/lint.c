@@ -71,6 +71,7 @@ static int lint_effect_logic(Yv *node);
 static int lint_zero(Yv *node);
 static int lint_zero_text(Yv *s);
 static long lint_if(LintSt st, Yv *node, int used);
+static int lint_empty_arm(Yv *n);
 static long lint_for(LintSt st, Yv *node);
 static long lint_func(LintSt st, Yv *node);
 static long lint_decl(LintSt st, Yv *node);
@@ -700,7 +701,24 @@ static long lint_if(LintSt st, Yv *node, int used) {
     (void)lint_node(st, yr_get(node, "cond"), 1);
     int arms = used && yv_b(yr_get(node, "has_else"));
     (void)lint_node(st, yr_get(node, "then"), arms);
-    return lint_node(st, yr_get(node, "els"), arms);
+    (void)lint_node(st, yr_get(node, "els"), arms);
+    if (yv_l(yr_get(st, "wlevel")) >= 1 && yv_b(yr_get(node, "has_else")) &&
+        lint_empty_arm(yr_get(node, "els"))) {
+        return lint_warn_at(st, ys("the 'else' branch is empty"), node);
+    } else {
+        return 0;
+    }
+}
+
+/* An arm holding nothing at all: an empty block. Only an `else` is worth a
+   word -- `else { }` is what the void redesign made unnecessary, and the
+   branch can go. A block with even a `;` in it was written on purpose. */
+static int lint_empty_arm(Yv *n) {
+    if (yv_l(yr_get(n, "k")) == K_block) {
+        return yv_len(yr_get(n, "stmts")) == 0;
+    } else {
+        return 0;
+    }
 }
 
 static long lint_for(LintSt st, Yv *node) {

@@ -88,7 +88,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  -W N         warning level N; 0 (the default) is the usual\n");
             puts("               set, 1 adds the optional checks for a value\n");
             puts("               computed and dropped -- a call result nobody\n");
-            puts("               reads, a bare a[i] or x.f as a statement\n");
+            puts("               reads, a bare a[i] or x.f as a statement,\n");
+            puts("               an else branch that does nothing\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
             puts("  --std-src    compile the std units (the runtime and std library)\n");
             puts("               from source instead of using the precompiled ones\n");
