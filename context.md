@@ -3,6 +3,10 @@
 ## State
 
 - On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
+  `5c89defc` (08563ca: threads and processes, task 5 -- spawn/join,
+  mutex/lock/try_lock, sem/post/wait, fork/wait_pid, CHOICES_MADE.md 33;
+  make test, ASan, fuzz 1500/4247 and a thread-only fuzz 600/4248 green;
+  previous `4584cc1d` backed up as `ycc.ref.pre-threads`). Before that
   `4584cc1d` (e539182: keys(m); previous `b0ad1da3` backed up as
   `ycc.ref.pre-keys`). Before that `b0ad1da3` (5d1a8ea: a module's type aliases are its own, `m.T`,
   CHOICES_MADE.md 29; previous `bececdd6` backed up as
@@ -56,9 +60,9 @@
   test_net.sh checks (DNS, TLS vs openssl s_server, http/https vs a Y
   server); manual 09-builtins "The web" and "Cryptography"; keys(m)
   added for map iteration (blessed 4584cc1d). TASK 3 DONE.
-- Next: task 5 (future.y: multithreading, multiprocessing; the http
-  client is done), then task 6 (profile ycc, optimize: y_arr_slice bulk
-  copy -- every compile decodes the std pack through it).
+- TASK 5 DONE (threads and processes; scratch tests in the session
+  files folder, thrtests/). Next: task 6 (profile ycc, optimize; the
+  findings so far are listed under task 6 below).
 - The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
@@ -189,12 +193,28 @@
    12-15).
 5. (user's note) After everything else: read future.y, decide how best
    to implement multithreading and multiprocessing, and the http client;
-   implement them.
+   implement them. DONE: the http client (task 3) and threads/processes
+   (CHOICES_MADE.md 33, blessed 5c89defc).
 6. (user's note) Profile ycc after adding all the features and optimize.
    Found so far: `y_arr_slice` (arch prelude) copies element by element,
    ~17 instructions a byte; a `rep movsb` path for [byte] would speed up
    every slice and fs.read_file (192M instructions of the self-compile,
-   against 162M for the old byte-by-byte builtin).
+   against 162M for the old byte-by-byte builtin). Profiled 2026-10-03
+   (callgrind on `-g` builds with their std pack: `ynew -g src/y/ycc.y
+   -o X0 && X0 --std-pack X.pack && cat X0 X.pack > X`):
+   - the prelude shaker is ~11M of the 16M instructions of a hello.y
+     compile (shake_refs, refs_range, block_falls_b, tok_end_b, is_id_b,
+     skip_sp, line_refs_b: ~400 instructions per byte of prelude text,
+     on every compile, whatever it keeps); prune_bodies scans the
+     prelude again for its references (text_refs, 4M);
+   - the assembler costs ~18K instructions per asm line (13 more lines
+     of y_alloc cost every allocating program ~250K);
+   - std-pack decoding (self_pack, y_arr_slice): 2.3M of hello.y, ~60K
+     per rt.y def;
+   - builtins are dispatched by linear chains of name compares (types.y
+     typeof_call, native.y infer_call/gen_call, is_intrinsic_name):
+     every new builtin costs every call;
+   - y_str_eq is 2.1G of the self-compile's 10.7G.
 
 ## 4. std/fs.y and module scope: what was delivered
 
