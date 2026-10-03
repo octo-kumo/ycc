@@ -569,4 +569,4 @@ def listen_http(port: long, handler: (str) -> str) -> long {
     0
 };
 
-export { socket_tcp, bind_tcp, listen_fd, accept_tcp, connect_tcp, local_port, send_str, recv_str, close_fd, addr_set, resolve, resolve_with, http_response, http_read_head, http_serve_one, listen_tcp, listen_http };
+export { socket_tcp, bind_tcp, listen_fd, accept_tcp, connect_tcp, local_port, send_str, recv_str, close_fd, addr_set, resolve, resolve_with, is_quad, set_timeouts, http_response, http_read_head, http_serve_one, listen_tcp, listen_http };
