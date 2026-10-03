@@ -90,6 +90,9 @@ let ty_count = 0;
 let ty_sig_keys: [str] = [];
 let ty_sig_lbls: [str] = [];
 let ty_sig_bkts: [[long]] = [];
+// union_shared's answers in this unit, by the union's node.
+let ush_nodes: [Type] = [];
+let ush_vals: [[str]] = [];
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -2731,9 +2734,12 @@ def gen(st: EmitSt, node: Node) -> EmitSt {
         let test: Narrow = node;
         gen_rectest(st, test)
     } else if (k == "narrow") {
-        // the value itself; only its static type changes
+        // the value, converted into the narrowed type's layout (a match
+        // arm's binding: rectest checked its tag)
         let narrow: Narrow = node;
-        gen(st, narrow.e)
+        let src = infer(st, narrow.e);
+        st = gen(st, narrow.e);
+        gen_convert(st, src, types.narrow_type(src, narrow.typ), false)
     } else if (k == "matchend") {
         // unreachable when the checker accepted the match
         st = emit(st, "    call y_match_fail");
@@ -3429,7 +3435,7 @@ def gen_rectest(st: EmitSt, node: Narrow) -> EmitSt {
     let sk: str = s.k;
     st = gen(st, node.e);
     if (sk == "tunion") {
-        gen_tag_in(st, rectest_members(s, node.typ))
+        gen_tag_in(st, rectest_members(s, node.typ), s)
     } else {
         // a record: the checker took the pattern as its own type
         emit(st, "    mov $1, %rax")
@@ -3453,8 +3459,8 @@ def rectest_members(s: Type, t: Type) -> [Type] {
 };
 
 // Record in %rax -> 1 when its descriptor is that of one of the record
-// types ts, else 0.
-def gen_tag_in(st: EmitSt, ts: [Type]) -> EmitSt {
+// types ts held where `inu` is declared (a union: its layout), else 0.
+def gen_tag_in(st: EmitSt, ts: [Type], inu: Type) -> EmitSt {
     let rno = next_loc(st);
     st = rno.st;
     let rdone = next_loc(st);
@@ -3466,7 +3472,7 @@ def gen_tag_in(st: EmitSt, ts: [Type]) -> EmitSt {
     st = yes.st;
     let i = 0;
     while (i < len(ts)) {
-        let dr = ty_desc(st, ts[i]);
+        let dr = ty_desc_in(st, ts[i], inu);
         st = dr.st;
         st = emit(st, "    lea " + dr.lbl + "(%rip), %rdx");
         st = emit(st, "    cmp %rdx, %rcx");
@@ -3496,11 +3502,12 @@ def gen_union_str_rax(st: EmitSt, t: Type) -> EmitSt {
         let one: [Type] = [];
         one += mt;
         st = emit(st, "    mov (%rsp), %rax");
-        st = gen_tag_in(st, one);
+        st = gen_tag_in(st, one, t);
         st = emit(st, "    test %rax, %rax");
         st = emit(st, "    jz " + rnext.lbl);
         st = emit(st, "    pop %rax");
-        st = gen_rec_str_rax(st, types.unfold(mt));
+        let mu = types.unfold(mt);
+        st = gen_rec_str_rax(st, mu, union_lay(mu, t));
         st = emit(st, "    jmp " + rdone.lbl);
         st = emit(st, rnext.lbl + ":");
         m = m + 1;
@@ -4314,8 +4321,9 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
     };
     if (wk == "tfloat" || wk == "tbyte") {
         gen_conv(st, infer(st, node), want)
-    } else if ((wk == "trec" || wk == "tunion") && types.unfold(infer(st, node)).k == "tunion" && !union_within(infer(st, node), want0)) {
-        gen_cast_check(st, cast_members(infer(st, node), want0))
+    } else if ((wk == "trec" || wk == "tunion") && nk != "rec") {
+        // a record literal is made in the declared layout (gen_reclit)
+        gen_convert(st, infer(st, node), want0, true)
     } else {
         st
     }
@@ -4362,15 +4370,15 @@ def cast_members(s: Type, t: Type) -> [Type] {
     out
 };
 
-// gen_as's check of a cast from a union: the record in %rax (kept) is one
-// of the member types ts, or the program stops (y_cast_trap).
-def gen_cast_check(st: EmitSt, ts: [Type]) -> EmitSt {
+// gen_convert's check of a cast from union u: the record in %rax (kept)
+// is one of its members ts, or the program stops (y_cast_trap).
+def gen_cast_check(st: EmitSt, ts: [Type], u: Type) -> EmitSt {
     let ok = next_loc(st);
     st = ok.st;
     st = emit(st, "    mov -8(%rax), %rcx");
     let i = 0;
     while (i < len(ts)) {
-        let dr = ty_desc(st, ts[i]);
+        let dr = ty_desc_in(st, ts[i], u);
         st = dr.st;
         st = emit(st, "    lea " + dr.lbl + "(%rip), %rdx");
         st = emit(st, "    cmp %rdx, %rcx");
@@ -4675,14 +4683,14 @@ def gen_opt_str_rax(st: EmitSt, t: Type) -> EmitSt {
 
 def gen_rec_str(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     st = gen(st, arg);
-    gen_rec_str_rax(st, t)
+    gen_rec_str_rax(st, t, lay_of(t, t))
 };
 
 // The record's address sits in %rax; leave "{a: 1, b: ...}" in %rax.
 // Values are formatted from the static shape (the walk is unrolled at
 // compile time). Stack layout while building: [record][accumulator], the
 // record pushed first (8(%rsp)), the accumulator on top (0(%rsp)).
-def gen_rec_str_rax(st: EmitSt, t: Type) -> EmitSt {
+def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str]) -> EmitSt {
     st = emit(st, "    push %rax");
     st = gen_str_const(st, "{");
     st = emit(st, "    push %rax");
@@ -4695,7 +4703,7 @@ def gen_rec_str_rax(st: EmitSt, t: Type) -> EmitSt {
         let sep = "";
         if (i > 0) { sep = ", "; 0; } else { 0; };
         st = gen_acc_cat_const(st, sep + fname + ": ");
-        st = gen_rec_field_str(st, rec_slot(fs, fname), f.typ);
+        st = gen_rec_field_str(st, mfield_idx(lay, fname), f.typ);
         i = i + 1;
         0
     };
@@ -5365,15 +5373,16 @@ def mfield_idx(names: [str], name: str) -> long {
 
 // ── records at run time ────────────────────────────────────────────────
 // A record is laid out by field name: its fields sorted, the one in slot
-// i at record+8i, whatever order a literal or a type writes them in. The
-// word at record-8 points to the descriptor of its type, `ytt_<hash>`:
+// i at record+8i, whatever order a literal or a type writes them in --
+// but one held in a union value has the union's shared fields first
+// ("union layouts" below). The word at record-8 points to the descriptor of its type, `ytt_<hash>`:
 // one per structural type, named by a 64-bit FNV-1a hash of the type's
 // canonical form (tcanon). Each unit emits the descriptors its code uses
 // (ty_desc), and the link keeps one per label (link_units). The canonical
 // form travels with the descriptor, so two types with one hash are an
 // error, never a merge. A descriptor is one byte: its address is the tag
-// that `match`, a union's printer, a field read through a union and a
-// cast compare.
+// that `match`, a union's printer, a pattern's field read and a cast
+// compare.
 
 // FNV-1a over the bytes of s, 64-bit (the multiply wraps).
 def fnv64(s: str) -> long {
@@ -5490,6 +5499,10 @@ def tyset_reset() {
     ty_sig_keys = nokeys;
     ty_sig_lbls = nolbls;
     ty_sig_bkts = bkts;
+    let nonodes: [Type] = [];
+    let novals: [[str]] = [];
+    ush_nodes = nonodes;
+    ush_vals = novals;
 };
 
 // The canonical form of record type rt (types.y tcanon). A record type
@@ -5579,7 +5592,14 @@ def ty_collision(lbl: str, form: str) {
 // canonical form, quads) goes into the unit the first time the unit uses
 // it.
 def ty_desc(st: EmitSt, rt: Type) -> StLbl {
-    let sig = types.tsig(rt);
+    ty_desc_as(st, rt, "")
+};
+
+// ty_desc of record type rt laid out as `lay` says ("" for its own
+// order; else "@" and the field names in their slots: a member held in a
+// union, union_lay).
+def ty_desc_as(st: EmitSt, rt: Type, lay: str) -> StLbl {
+    let sig = types.tsig(rt) + lay;
     if (len(ty_sig_bkts) == 0) { tyset_reset(); };
     let h = fnv64(sig) % 512;
     if (h < 0) { h = h + 512; };
@@ -5589,7 +5609,7 @@ def ty_desc(st: EmitSt, rt: Type) -> StLbl {
         if (known == "" && ty_sig_keys[ix] == sig) { known = ty_sig_lbls[ix]; };
     };
     if (known != "") { return { st: st, lbl: known }; };
-    let form = ty_form(rt);
+    let form = ty_form(rt) + lay;
     let lbl = "ytt_" + hex16(fnv64(form));
     ty_sig_keys += sig;
     ty_sig_lbls += lbl;
@@ -5606,6 +5626,196 @@ def ty_desc(st: EmitSt, rt: Type) -> StLbl {
         0
     };
     { st: st, lbl: lbl }
+};
+
+// ── union layouts (CHOICES_MADE.md 25) ─────────────────────────────────
+// A record held in a union value is laid out with the union's shared
+// fields first -- the fields every member has, with one type, sorted --
+// then its other fields, sorted; a standalone record has all its fields
+// sorted. A shared field is then one load at one offset, whatever the
+// member. A value going from one layout to the other is a conversion
+// (gen_convert): the record is copied into the other layout where the
+// two differ, and its tag names its type in that layout (ty_desc_in).
+
+// The shared fields of union u (unfolded), sorted. Remembered by the
+// union's node (ush_nodes, emptied for each unit): a recursive alias
+// unfolds to one union node, and every read of a shared field asks.
+def union_shared(u: Type) -> [str] {
+    let found = -1;
+    let i = 0;
+    while (found < 0 && i < len(ush_nodes)) {
+        if (ush_nodes[i] == u) { found = i; };
+        i = i + 1;
+    };
+    if (found >= 0) { return ush_vals[found]; };
+    let ms = types.members(u);
+    let out: [str] = [];
+    if (len(ms) > 0) {
+        let m0: TRec = ms[0];
+        let fs: [Field] = m0.fields;
+        foreach (f in fs) {
+            let ok = true;
+            foreach (m in ms) {
+                let ft = rec_field_type(m, f.name);
+                if (ok && (ft.k == "tnone" || !types.teq(ft, f.typ))) { ok = false; };
+            };
+            if (ok) { out += f.name; };
+        };
+    };
+    let sorted = types.str_sorted(out);
+    ush_nodes += u;
+    ush_vals += [sorted];
+    sorted
+};
+
+// The slots of member m (unfolded) held in union u (unfolded): the
+// field names in slot order.
+def union_lay(m: Type, u: Type) -> [str] {
+    let sh = union_shared(u);
+    let rec: TRec = m;
+    let fs: [Field] = rec.fields;
+    let rest: [str] = [];
+    foreach (f in fs) {
+        if (mfield_idx(sh, f.name) < 0) { rest += f.name; };
+    };
+    let out: [str] = [];
+    out += sh;
+    out += types.str_sorted(rest);
+    out
+};
+
+// The slots of a record of type t (unfolded) held where type `in` is
+// declared: in a union, union_lay; else its own sorted fields.
+def lay_of(t: Type, inu: Type) -> [str] {
+    if (inu.k == "tunion") { union_lay(t, inu) } else {
+        let rec: TRec = t;
+        types.rec_names(rec.fields)
+    }
+};
+
+def same_lay(a: [str], b: [str]) -> bool {
+    let same = len(a) == len(b);
+    let i = 0;
+    while (same && i < len(a)) {
+        if (a[i] != b[i]) { same = false; };
+        i = i + 1;
+    };
+    same
+};
+
+// The tag of member m (as written in the union, maybe a tref) held where
+// `inu` is declared: its own descriptor where its layout there is its own
+// order, else the descriptor of m in that layout.
+def ty_desc_in(st: EmitSt, m: Type, inu: Type) -> StLbl {
+    let mu = types.unfold(m);
+    let lay = lay_of(mu, inu);
+    let rec: TRec = mu;
+    if (same_lay(lay, types.rec_names(rec.fields))) { ty_desc(st, m) }
+    else { ty_desc_as(st, m, "@" + join(lay, ",")) }
+};
+
+// The record in %rax (slots `from`) copied into slots `to`, tagged
+// `tag`: a new record in %rax.
+def gen_copy_rec(st: EmitSt, from: [str], to: [str], tag: str) -> EmitSt {
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov $" + tostring(8 * len(to) + 16) + ", %rdi");
+    st = emit(st, "    call y_alloc");
+    st = emit(st, "    lea " + tag + "(%rip), %rcx");
+    st = emit(st, "    mov %rcx, 0(%rax)");
+    st = emit(st, "    pop %rsi");
+    let i = 0;
+    while (i < len(to)) {
+        let s = mfield_idx(from, to[i]);
+        st = emit(st, "    mov " + tostring(8 * s) + "(%rsi), %rcx");
+        st = emit(st, "    mov %rcx, " + tostring(8 + 8 * i) + "(%rax)");
+        i = i + 1;
+    };
+    emit(st, "    add $8, %rax")
+};
+
+// The value in %rax, of static type src0, going where want0 is declared:
+// a member into a union, a union into one of its members (`check`: its
+// tag is checked first), or a union into another. Each member whose
+// layout differs on the two sides is copied (gen_copy_rec); a cast to
+// members the value does not hold stops the program (y_cast_trap).
+def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
+    let s = types.unfold(src0);
+    let w = types.unfold(want0);
+    let sk: str = s.k;
+    let wk: str = w.k;
+    if (sk == "trec" && wk == "tunion") {
+        let m = types.union_member(w, s);
+        if (m.k == "tnone") { st } else {
+            let from = lay_of(s, src0);
+            let to = union_lay(types.unfold(m), w);
+            if (same_lay(from, to)) { st } else {
+                let dr = ty_desc_in(st, m, w);
+                st = dr.st;
+                gen_copy_rec(st, from, to, dr.lbl)
+            }
+        }
+    } else if (sk == "tunion" && (wk == "trec" || wk == "tunion")) {
+        let within = union_within(s, want0);
+        // one union into another sharing the same fields: every member
+        // keeps its layout and tag
+        if (within && wk == "tunion" && same_lay(union_shared(s), union_shared(w))) { return st; };
+        let ms: [Type] = [];
+        if (within) { ms = types.union_parts(s); } else { ms = cast_members(s, want0); };
+        // per member: its slots and tag here, its slots and tag there
+        let froms: [[str]] = [];
+        let tos: [[str]] = [];
+        let tws: [Type] = [];
+        let moves = false;
+        foreach (m in ms) {
+            let mu = types.unfold(m);
+            let from = union_lay(mu, s);
+            let tw: Type = m;
+            if (wk == "tunion") {
+                let mw = types.union_member(w, m);
+                if (mw.k != "tnone") { tw = mw; };
+            };
+            let to = lay_of(mu, w);
+            froms += [from];
+            tos += [to];
+            tws += tw;
+            if (!same_lay(from, to)) { moves = true; };
+        };
+        if (!moves) {
+            if (within || !check) { st } else { gen_cast_check(st, ms, s) }
+        } else {
+            let done = next_loc(st);
+            st = done.st;
+            st = emit(st, "    mov -8(%rax), %rcx");
+            let lbls: [str] = [];
+            let i = 0;
+            while (i < len(ms)) {
+                let l = next_loc(st);
+                st = l.st;
+                lbls += l.lbl;
+                let dr = ty_desc_in(st, ms[i], s);
+                st = dr.st;
+                st = emit(st, "    lea " + dr.lbl + "(%rip), %rdx");
+                st = emit(st, "    cmp %rdx, %rcx");
+                st = emit(st, "    je " + l.lbl);
+                i = i + 1;
+            };
+            st = emit(st, "    jmp y_cast_trap");
+            i = 0;
+            while (i < len(ms)) {
+                st = emit(st, lbls[i] + ":");
+                let from: [str] = froms[i];
+                let to: [str] = tos[i];
+                if (!same_lay(from, to)) {
+                    let dr = ty_desc_in(st, tws[i], w);
+                    st = dr.st;
+                    st = gen_copy_rec(st, from, to, dr.lbl);
+                };
+                st = emit(st, "    jmp " + done.lbl);
+                i = i + 1;
+            };
+            emit(st, done.lbl + ":")
+        }
+    } else { st }
 };
 
 // lt (a record literal's type) is the record type t: the same field names
@@ -5646,7 +5856,8 @@ def rec_lit_type(lt: Type, want: Type) -> Type {
 
 // Record literal { k: v, ... }: heap-allocate the descriptor word and the
 // fields, store the descriptor, then evaluate the values in the order they
-// are written, each into its field's slot (see "records at run time"). The
+// are written, each into its field's slot (see "records at run time"; a
+// member of a declared union in the union's layout). The
 // VALUE is the record address (8 bytes, first-class: locals, params,
 // returns all just copy it). `want` is the type declared where the record
 // goes (gen_as; tnone for none): a literal of that record type, or of a
@@ -5697,7 +5908,10 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
     let rt: Type = types.lit_target(node, want);
     if (rt.k == "tnone") { rt = rec_lit_type(infer(st, node), want); 0; } else { 0; };
     let rtu: Type = types.unfold(rt);
-    let dr = ty_desc(st, rt);
+    // made as a member of a declared union: in the union's layout
+    let wu: Type = types.unfold(want);
+    if (wu.k == "tunion" && rtu.k == "trec") { slots = union_lay(rtu, wu); };
+    let dr = ty_desc_in(st, rt, wu);
     st = dr.st;
     st = emit(st, "    mov $" + tostring(8 * n + 16) + ", %rdi");
     st = emit(st, "    call y_alloc");
@@ -6641,7 +6855,7 @@ def gen_val_tostr_rax(st: EmitSt, t: Type) -> EmitSt {
     } else if (tk == "topt") {
         gen_opt_str_rax(st, t)
     } else if (tk == "trec") {
-        gen_rec_str_rax(st, t)
+        gen_rec_str_rax(st, t, lay_of(t, t))
     } else if (tk == "tunion") {
         gen_union_str_rax(st, t)
     } else {
@@ -6803,6 +7017,11 @@ def gen_dot(st: EmitSt, node: Dot) -> EmitSt {
     // dobj is read twice (infer, then gen).
     let dobj = node.obj;
     let dkey = node.key;
+    if (dobj.k == "narrow") {
+        let nar: Narrow = dobj;
+        let s = infer(st, nar.e);
+        if (s.k == "tunion") { return gen_narrow_field(st, nar, s, dkey); };
+    };
     let t = infer(st, dobj);
     let tk = t.k;
     if (tk == "tarr" || tk == "tarrfix" || tk == "tstr") {
@@ -6817,30 +7036,39 @@ def gen_dot(st: EmitSt, node: Dot) -> EmitSt {
 
 // Field `dkey` of a union value (types.y union_field: every member has
 // it, with one type): read into %rax from the record in %rax, or (store)
-// %rax written to the record in %rdx. One move when the field has one
-// slot in every member; else a compare of the record's descriptor per
-// member, a move per slot.
+// %rax written to the record in %rdx. A field every member shares sits at
+// one slot in every member held in the union (union_lay): one move.
 def gen_union_slot(st: EmitSt, t: Type, dkey: str, store: bool) -> EmitSt {
-    let ms: [Type] = types.union_parts(t);
+    gen_slot_move(st, mfield_idx(union_shared(types.unfold(t)), dkey), store)
+};
+
+// A match pattern's field read (`T {f}`, `{f: v}`; parser.y: a dot on a
+// narrow of the subject, a union s): field `dkey` read in place, at its
+// slot in s's layout of each member the arm's test accepts -- the narrowed
+// record (a copy where the layouts differ, gen_convert) is never made. One
+// move when the field has one slot in every such member; else a compare
+// of the descriptor per member, a move per slot.
+def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
+    let ms = rectest_members(s, nar.typ);
     let slots: [long] = [];
     let ds: [long] = [];
-    let i = 0;
-    while (i < len(ms)) {
-        let sl = rec_field_idx(types.unfold(ms[i]), dkey);
+    foreach (m in ms) {
+        let sl = mfield_idx(union_lay(types.unfold(m), s), dkey);
         slots += sl;
         let seen = false;
-        foreach (d in ds) { if (d == sl) { seen = true; 0; } else { 0; }; };
-        if (!seen) { ds += sl; 0; } else { 0; };
-        i = i + 1;
+        foreach (d in ds) { if (d == sl) { seen = true; }; };
+        if (!seen) { ds += sl; };
     };
-    let rec = "%rax";
-    if (store) { rec = "%rdx"; 0; } else { 0; };
-    if (len(ds) == 1) {
-        gen_slot_move(st, ds[0], store)
+    st = gen(st, nar.e);
+    if (len(ds) == 0) {
+        // no member matches: the arm never runs
+        emit(st, "    xor %eax, %eax")
+    } else if (len(ds) == 1) {
+        gen_slot_move(st, ds[0], false)
     } else {
         let done = next_loc(st);
         st = done.st;
-        st = emit(st, "    mov -8(" + rec + "), %rcx");
+        st = emit(st, "    mov -8(%rax), %rcx");
         let lbls: [str] = [];
         let d = 0;
         while (d < len(ds) - 1) {
@@ -6850,23 +7078,22 @@ def gen_union_slot(st: EmitSt, t: Type, dkey: str, store: bool) -> EmitSt {
             let j = 0;
             while (j < len(ms)) {
                 if (slots[j] == ds[d]) {
-                    let dr = ty_desc(st, ms[j]);
+                    let dr = ty_desc_in(st, ms[j], s);
                     st = dr.st;
                     st = emit(st, "    lea " + dr.lbl + "(%rip), %rsi");
                     st = emit(st, "    cmp %rsi, %rcx");
                     st = emit(st, "    je " + l.lbl);
-                    0
-                } else { 0; };
+                };
                 j = j + 1;
             };
             d = d + 1;
         };
-        st = gen_slot_move(st, ds[len(ds) - 1], store);
+        st = gen_slot_move(st, ds[len(ds) - 1], false);
         st = emit(st, "    jmp " + done.lbl);
         let e = 0;
         while (e < len(lbls)) {
             st = emit(st, lbls[e] + ":");
-            st = gen_slot_move(st, ds[e], store);
+            st = gen_slot_move(st, ds[e], false);
             st = emit(st, "    jmp " + done.lbl);
             e = e + 1;
         };
@@ -7154,7 +7381,7 @@ def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
         gen_opt_str_rax(st, t)
     } else if (t.k == "trec") {
         st = gen(st, a0);
-        gen_rec_str_rax(st, t)
+        gen_rec_str_rax(st, t, lay_of(t, t))
     } else if (t.k == "tunion") {
         st = gen(st, a0);
         gen_union_str_rax(st, t)
@@ -8798,7 +9025,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 4\n"
+    "ycc-std-pack 5\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -9183,7 +9410,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
 // fields, after a version line and the key it was compiled under (ycc.y
 // build_key) -- an object of another key, or a cut-off one, is no hit.
 def obj_version() -> str {
-    "ycc-unit 3\n"
+    "ycc-unit 4\n"
 };
 
 def unit_obj(u: Unit, key: str) -> str {

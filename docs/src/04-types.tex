@@ -112,6 +112,25 @@ def radius(s: Shape) -> float {
 }
 \end{lstlisting}
 
+\begin{sloppypar}
+A union value keeps the fields its members share at one place, whatever
+member it holds, so reading one is a single load: each member is laid
+out for the union it is held in. Going between a union and a member,
+either way, or between two unions, is therefore a cast that may copy the
+record: a write through the cast value is not seen through the union,
+nor the other way round, and whether a cast copies depends on the field
+names, so a program should not count on either. A \ic{match} arm's
+binding (\ic{Circle c}) is such a cast; a destructuring pattern
+(\ic{Rect \{ w, h \}}) reads the fields in place. To change a field only
+some members have, cast, write and store the record back:
+\end{sloppypar}
+
+\begin{lstlisting}
+let r: Rect = s;
+r.w = 4.0;
+s = r;
+\end{lstlisting}
+
 \subsection{Type aliases}
 \label{sec:type-aliases}
 

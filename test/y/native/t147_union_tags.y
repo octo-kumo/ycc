@@ -1,8 +1,8 @@
 // A union value is exactly one of its members: its record's descriptor
 // says which, so a match compares that, printing shows that member, and
 // a field every member has (with one type) reads and writes straight
-// through the union -- one move when it sits in the same slot in every
-// member, a branch on the member when it does not.
+// through the union -- one move, as a union value holds its member with
+// those fields first.
 type A = { name: str, x: long };
 type B = { name: str, y: long, z: long };
 type C = { id: long, name: str };
@@ -21,7 +21,8 @@ foreach (u in us) {
     print(u);
 };
 
-// name is slot 0 in A and B, slot 1 in C
+// name sorts first in A and B, second in C; held in V, it is first in all
+// three
 let vs: [V] = [];
 vs += { name: "a", x: 1 };
 vs += { y: 2, name: "b", z: 3 };

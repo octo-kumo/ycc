@@ -315,7 +315,13 @@ replaces the std one at link time).
   field every member has (`k`, and `line`/`col` on AST nodes) reads
   straight through, any other after a cast to the member
   (`let c: Call = node;`, or a parameter typed `Call`), which the program
-  checks against the value's tag.
+  checks against the value's tag. A member held in a union is laid out
+  with the union's shared fields first, so a cast **copies** the record
+  where that differs from the member's own layout: never write through a
+  cast value expecting the union value to change (or the other way
+  round) — the C copy shares records, so the port gate catches it. A
+  `match` binding (`Call c =>`) is such a cast; a destructuring pattern
+  (`TFree { free: fr } =>`) reads in place.
 - `--no-exec` strips the `exec()` builtin (no shell access).
 - **No warnings**: `src/y` and `src/y/std` compile without one
   (`test_fixpoint.sh` checks). A record or union type used in more than
@@ -392,7 +398,8 @@ data, front}` (elements in a separate block) with capacity doubling
 (0→8→×2) at the back for `+=` and room reserved in front for `*=`, so
 both are amortized O(1); `s += t` on a `str` variable appends in place
 into a buffer only that variable owns, also amortized O(1);
-closures as `[code, caps...]` records; records laid out by field name,
+closures as `[code, caps...]` records; records laid out by field name
+(a member held in a union: the union's shared fields first),
 a pointer to their type's descriptor before the fields; `&x`, `*p`,
 `a[i]`, `a[lo:hi]`, `T?`, `x!`, `void`, `float`, `byte` types;
 `for`/`for..in`/`foreach`/`while`; block expressions; `type` aliases

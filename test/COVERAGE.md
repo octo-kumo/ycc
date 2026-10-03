@@ -78,9 +78,10 @@ reason.
 | 04-types | Records | There is no open record type: `..` in a record type is a syntax error | `native/e148_open_record_syntax.y` |
 | 04-types | Records | A record literal where a record type is declared is created as that type: its values convert, nested literals likewise | `native/t145_record_layout.y`, `native/t149_recursive_aliases.y` |
 | 04-types | Unions | Exact membership; a match compares the member a value holds; a union prints as its member | `native/t50_unions_match.y`, `native/t147_union_tags.y`, `native/e30_match_nonexhaustive.y`, `native/e141_union_fields.y` |
-| 04-types | Unions | A field every member has, with one type, is read and written through the union (in one slot or several); others are errors | `native/t147_union_tags.y`, `native/e141_union_fields.y` |
+| 04-types | Unions | A field every member has, with one type, is read and written through the union (one slot: shared fields first); others are errors | `native/t147_union_tags.y`, `native/t154_union_layout.y`, `native/e141_union_fields.y` |
 | 04-types | Unions | Type patterns name a member exactly; record patterns match the members with their fields | `native/t147_union_tags.y`, `native/e141_union_fields.y`, `native/e87_match_patterns.y` |
 | 04-types | Unions | A union value converts to a member type, or a union of some members, with a cast the program checks | `native/t153_union_cast.y` |
+| 04-types | Unions | Members are laid out for the union they are held in; a cast between a union and a member, or two unions, copies where the layouts differ, wherever the value goes; a binding is such a cast, destructuring reads in place | `native/t154_union_layout.y` |
 | 04-types | Type aliases | Aliases name types; two of one structure are one type; recursive aliases through a record field or a function type, across packages too | `native/t50_unions_match.y`, `native/t149_recursive_aliases.y`, `sh/test_pkg.sh` |
 | 04-types | Type aliases | A cycle outside every record field and function type is an error at its declaration | `native/e142_alias_cycle.y`, `native/e87_match_patterns.y` |
 | 04-types | Maps | Homogeneous map values, optional reads and hashable key types | `native/t46_maps.y`, `native/t76_map_key_types.y`, `native/t135_map_read_boxes.y`, `native/e25_map_value_type.y`, `native/e26_map_key_type.y` |

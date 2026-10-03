@@ -79,7 +79,7 @@ def t_pend_self() -> Type {
 def has_free(t: Type) -> bool {
     let k: str = t.k;
     if (k == "tunk") {
-        match t { TFree f => f.free, _ => false }
+        match t { TFree { free: fr } => fr, _ => false }
     } else if (k == "tarr" || k == "topt") {
         let o: TOf = t;
         self(o.of)

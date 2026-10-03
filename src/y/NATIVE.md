@@ -88,11 +88,21 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   references back to itself `^N`). A unit emits the descriptors its code
   uses and the link keeps one per label (two forms under one label stop
   the link). A descriptor is one byte: its address is the type's tag. A
-  union value is the member
-  record itself: `match` compares its descriptor with the members'. A
+  union value is a member record laid out for the union (native.y "union
+  layouts", CHOICES_MADE.md 25): the union's shared fields -- those every
+  member has, with one type -- first, sorted, then the member's others,
+  sorted, so a shared field is one load at one offset whatever the
+  member. Where that is not the member's own (sorted) layout, the
+  record's descriptor is the member's *in that layout* (its form plus
+  `@` and the slot order, `ty_desc_in`), so `match` and casts, which
+  compare descriptors, tell a `Bin` held in a `Node` from a standalone
+  `Bin`. A value crossing layouts -- a member into a union, a union into
+  a member or into another union -- is converted (`gen_convert`): copied
+  into the other layout where the two differ, a new record, after a
+  union cast checked the tag. A
   record literal is created as the type declared where it goes (`gen_as`
-  passes it to `gen_reclit`), so its descriptor names that type, not the
-  literal's own.
+  passes it to `gen_reclit`), in that place's layout, so its descriptor
+  names that type, not the literal's own.
 - **Owned strings: `s += t` appends in place.** A `str` variable that is a
   `+=` target, whose address is never taken (`&s`) and that no closure
   captures (those are boxed) gets a companion word `c`: locals and params
@@ -306,16 +316,20 @@ All of these are lowered early, so the checker and emitter see little new:
   its field names (`lit_target`), is created as it, each value checked
   and converted against its field, nested literals likewise.
 - **Unions** `A | B` hold records whose type is exactly a member. A record
-  goes into a union when it is a member; a union goes nowhere but another
-  union holding all its members until a `match` narrows it. A field
-  every member has with one type is read and written through the union
-  (`union_field`; one move when it has one slot in every member, else a
-  branch on the descriptor, native.y `gen_union_slot`). Unions print as
-  the member they hold.
+  goes into a union when it is a member; a union goes into another union
+  holding all its members, or -- through a cast checked at run time,
+  where the type is written (an annotated `let`, a parameter, a declared
+  return) -- into one member or a union of some. A field every member has
+  with one type is read and written through the union in one move
+  (`union_field`, native.y `gen_union_slot`: such fields come first in
+  every member held in the union). Unions print as the member they hold.
 - **`match e { pat => arm, ... }`** is lowered by the parser to
   `{ let $m = e; if (test) { binds; arm } else if ... }` over three node
   kinds: `rectest` (the value's descriptor is T's, or that of a member
-  with a record pattern's fields), `narrow` (the value typed as T) and
+  with a record pattern's fields), `narrow` (the value typed as T: a
+  binding `T x` is a cast, copied into T's layout where it differs; a
+  pattern's field reads, `T {f}` and `{f: v}`, read the union value in
+  place, `gen_narrow_field`) and
   `matchend` (the fall-through). Patterns: `_`, `T x`, `T {f, g: y}`, `T`,
   record patterns `{f: v} x` / `({f: v}) x` (fields equal to values) and
   literals (`1`, `"s"`, `c'a'`, `true`, `none`, `-2`, `(expr)`). Arms follow
@@ -543,7 +557,7 @@ and writes them to FILE, and the build appends that file to the `ycc`
 that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
-straight from it. The pack is text: a version line (`ycc-std-pack 4`),
+straight from it. The pack is text: a version line (`ycc-std-pack 5`),
 then each unit's name and fields as netstrings — its bodies, each
 body's label and the labels it references (so linking never rescans std
 code), rodata, globals, init label, and its exports with their types in
@@ -594,7 +608,7 @@ cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
   in defaults and optional parameters as it does for a local def.
 - **Objects**: `compile_package` compiles with line markers, like a std
   unit, so one object serves plain and `-g` builds. `unit_obj` writes it
-  to `build/obj/NAME.yo` — `ycc-unit 3`, its key, its name, then the
+  to `build/obj/NAME.yo` — `ycc-unit 4`, its key, its name, then the
   unit's fields as in the std pack — and `unit_unobj` takes it back only
   under the same key and at its exact length. The key (`build_key`, a
   two-lane hash, `pk_hash_*`) covers the compiler binary itself
@@ -883,6 +897,11 @@ them starts compiling again, so the list can only shrink.
   declared, or annotate the binding. Two spellings of one recursive type
   unrolled differently (`{x: {x: A?}?}` against `A = {x: A?}`) are told
   apart the same way.
+- A cast between a union and a member, or between two unions, copies the
+  record where their layouts differ (`gen_convert`): a write through the
+  copy is not seen through the original, and every copy allocates. A
+  `match` arm's binding (`T x`) is such a cast; a destructuring pattern
+  (`T {f, g}`) reads the fields in place and copies nothing.
 - `y_alloc` rounds every request up by 8–15 bytes, and when a request
   under 256 KB does not fit in the current 4 MB chunk the chunk's tail is
   abandoned (at most 256 KB, ~6%, per chunk).
