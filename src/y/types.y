@@ -3302,6 +3302,14 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
             } else {
                 tc_res(type_node({ k: "tlong" }), st)
             }
+        } else if (name == "time_us") {
+            // time_us() -> long: wall-clock microseconds since the Unix epoch.
+            if (len(cargs) != 0) {
+                st = fail(st, "time_us takes no arguments", node.line, node.col);
+                tc_res(type_node({ k: "tlong" }), st)
+            } else {
+                tc_res(type_node({ k: "tlong" }), st)
+            }
         } else if (name == "heap_used") {
             // heap_used() -> long: arena bytes handed out so far.
             if (len(cargs) != 0) {

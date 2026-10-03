@@ -437,3 +437,18 @@ Around it:
 - A left-out field stores nothing: y_alloc's memory is never reused and
   zeroed (the runtime already counts on it for array headers), and none
   is 0.
+
+### 27. The wall clock
+
+TLS checks a certificate's validity period and HTTP dates need the time
+of day; `clock_us()` is CLOCK_MONOTONIC, good for intervals only.
+
+- a. **A builtin `time_us()`**: CLOCK_REALTIME microseconds since the
+  Unix epoch, the twin of `clock_us()` (same unit, same type, rt.y
+  `y_time_us` beside `y_clock_us`). Chosen: the task asked for a builtin,
+  and the pair reads as one family.
+- b. A std module (`import time; time.now()`): no compiler change, but
+  a second spelling for the same kind of thing `clock_us` already is.
+
+Calendar arithmetic (UTC dates from it, and back) lives with what needs
+it, in std, not in the compiler.

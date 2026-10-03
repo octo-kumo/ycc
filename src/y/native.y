@@ -1980,7 +1980,7 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: "tlong" })
         } else if (name == "tonum" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
             normtype({ k: "tlong" })
-        } else if (name == "clock_us" || name == "heap_used") {
+        } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
             normtype({ k: "tlong" })
         } else if (name == "sleep") {
             normtype({ k: "tvoid" })
@@ -2254,7 +2254,7 @@ def is_intrinsic_name(n: str) -> bool {
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
-             "sleep", "heap_used", "exit", "argv", "range", "typeof", "bytes",
+             "time_us", "sleep", "heap_used", "exit", "argv", "range", "typeof", "bytes",
              "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
 };
 
@@ -4545,6 +4545,8 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             gen_eputs(st, node)
         } else if (name == "clock_us") {
             gen_clock_us(st, node)
+        } else if (name == "time_us") {
+            emit(st, "    call y_time_us")
         } else if (name == "sleep") {
             gen_sleep(st, node)
         } else if (name == "heap_used") {

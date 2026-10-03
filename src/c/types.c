@@ -4399,6 +4399,16 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             } else {
                 return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
             }
+        } else if (ys_eq_lit(name, "time_us")) {
+            // time_us() -> long: wall-clock microseconds since the Unix epoch.
+            if (yv_len(cargs) != 0) {
+                st = fail(st, ys("time_us takes no arguments"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+            } else {
+                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+            }
         } else if (ys_eq_lit(name, "heap_used")) {
             // heap_used() -> long: arena bytes handed out so far.
             if (yv_len(cargs) != 0) {

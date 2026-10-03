@@ -174,7 +174,11 @@ fill is one byte, and widths count bytes.
   same source runs on every compiler.
 \item[\ic{argv()}] \ic{[str]} of the program's arguments.
 \item[\ic{exit(code)}] Terminate with an exit code.
-\item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}.
+\item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}: for
+  intervals.
+\item[\ic{time\_us()}] Wall-clock microseconds since the Unix epoch
+  (UTC) as \ic{long}: the time of day, which jumps when the clock is
+  set.
 \item[\ic{heap\_used()}] Bytes allocated so far.
 \item[\ic{sleep(ms)}] Suspend the process (\ic{void}).
 \item[\ic{syscall(...)}] Raw Linux syscall wrapper; the first argument

@@ -329,11 +329,17 @@ def y_range(n: long) -> [long] {
 };
 
 // Time: clock_gettime / nanosleep, straight through the syscall
-// intrinsic. clock_us is CLOCK_MONOTONIC microseconds. (heap_used
+// intrinsic. clock_us is CLOCK_MONOTONIC microseconds, time_us
+// CLOCK_REALTIME's: the wall clock, since the Unix epoch. (heap_used
 // reads the allocator's own counter: y_heap_used in arch_x64.y.)
 def y_clock_us() -> long {
     let ts: [long; 2] = [0; 2];
     syscall(228, 1, &ts[0]);
+    ts[0] * 1000000 + ts[1] / 1000
+};
+def y_time_us() -> long {
+    let ts: [long; 2] = [0; 2];
+    syscall(228, 0, &ts[0]);
     ts[0] * 1000000 + ts[1] / 1000
 };
 def y_sleep(ms: long) -> long {

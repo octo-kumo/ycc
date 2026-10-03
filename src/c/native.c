@@ -2798,7 +2798,7 @@ Yv *infer_call(Yv *st, Yv *node) {
                    ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
             return yr(1, "k", ys("tlong"));
-        } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "heap_used")) {
+        } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "time_us") || ys_eq_lit(name, "heap_used")) {
             return yr(1, "k", ys("tlong"));
         } else if (ys_eq_lit(name, "sleep")) {
             return yr(1, "k", ys("tvoid"));
@@ -3078,11 +3078,11 @@ int name_in(Yv *xs, Yv *n) {
 /* Builtins are resolved by name at the call site, never captured. */
 int is_intrinsic_name(Yv *n) {
     return name_in(
-        yav(36, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+        yav(34, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
             ys("is_some"), ys("unwrap"), ys("trim"), ys("ord"),
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
-            ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("sleep"),
+            ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
             ys("heap_used"), ys("exit"), ys("argv"), ys("range"), ys("typeof"),
             ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
             ys("none"), ys("#fmt")),
@@ -5455,6 +5455,8 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_eputs(st, node);
         } else if (ys_eq_lit(name, "clock_us")) {
             return gen_clock_us(st, node);
+        } else if (ys_eq_lit(name, "time_us")) {
+            return emit(st, ys("    call y_time_us"));
         } else if (ys_eq_lit(name, "sleep")) {
             return gen_sleep(st, node);
         } else if (ys_eq_lit(name, "heap_used")) {
@@ -5708,12 +5710,12 @@ Yv *gen_cat_conv(Yv *st, Yv *node, Yv *lt) {
                 "v", yr(4, "k", ys("array"), "elems", noelems,
                         "line", ln, "col", cl),
                 "line", ln, "col", cl);
-    Yv *pa = yr(7, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
+    Yv *pa = yr(6, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
                                                        yv_l(ln), yv_l(cl)),
                 "op", ys("+"), "v", n_id(ys_cat(t1, ys("l")),
                                          yv_l(ln), yv_l(cl)),
                 "line", ln, "col", cl);
-    Yv *pb = yr(7, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
+    Yv *pb = yr(6, "k", ys("opassign"), "tgt", n_id(ys_cat(t1, ys("c")),
                                                        yv_l(ln), yv_l(cl)),
                 "op", ys("+"), "v", n_id(ys_cat(t1, ys("r")),
                                          yv_l(ln), yv_l(cl)),
