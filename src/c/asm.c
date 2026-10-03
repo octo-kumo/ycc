@@ -42,6 +42,7 @@ static Yv *parse_operand_empty(Yv *t);
 static Yv *parse_operand_nonempty(Yv *t);
 static Yv *parse_operand_ind(Yv *t);
 static Yv *parse_operand_reg(Yv *t);
+static Yv *parse_operand_fs(Yv *t);
 static Yv *parse_operand_noreg(Yv *t);
 static Yv *parse_operand_imm(Yv *t);
 static Yv *parse_operand_memlbl(Yv *t);
@@ -248,6 +249,8 @@ static Yv *parse_operand_nonempty(Yv *t) {
     /* `*%reg` — register-indirect call/jump target (closure code pointers). */
     if (ys_eq_lit(ys_slice(t, 0, 1), "*")) {
         return parse_operand_ind(t);
+    } else if (ys_eq_lit(ys_slice(t, 0, 4), "%fs:")) {
+        return parse_operand_fs(t);
     } else if (ys_eq_lit(ys_slice(t, 0, 1), "%")) {
         return parse_operand_reg(t);
     } else {
@@ -272,6 +275,27 @@ static Yv *parse_operand_ind(Yv *t) {
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
+                  "error", ys(""));
+    }
+}
+
+/* `%fs:N`: the thread-local word at N (the TLS block's self pointer is
+ * at 0; arch_x64.c y_alloc). */
+static Yv *parse_operand_fs(Yv *t) {
+    Yv *r = parse_num(ys_slice_from(t, 4));
+    if (!yv_b(yr_get(r, "ok"))) {
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                            "a", ys(""), "b", ys(""), "name", ys(""),
+                            "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
+                            "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
+                  "error", ys_cat(ys_cat(ys("bad fs operand '"), t), ys("'")));
+    } else {
+        return yr(3, "ok", yv_bool(1),
+                  "op", yr(13, "k", ys("fs"), "n", yv_long(0), "size", yv_long(64), "v", yv_long(0),
+                            "a", ys(""), "b", ys(""), "name", ys(""),
+                            "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
+                            "disp", yr_get(r, "v"), "rip", yv_bool(0), "lbl", ys("")),
                   "error", ys(""));
     }
 }
@@ -894,7 +918,8 @@ static Yv *asm_maybe_labline(Yv *line, long lno, long sec, Yv *offs, Yv *items, 
        plain instruction. NOTE: misnomer fixed: the else-arm assembles an
        INSTRUCTION (asm_insnline), not a directive. */
     long ci = ys_index_of(line, ys(":"));
-    if (ci > 0) {
+    /* a `%` before it: an operand's `%fs:N`, not a label */
+    if (ci > 0 && ys_index_of(ys_slice(line, 0, ci), ys("%")) < 0) {
         return asm_labline(line, lno, sec, offs, items, labels, err, ci);
     } else {
         return asm_insnline(line, lno, sec, offs, items, labels, err);

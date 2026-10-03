@@ -1970,6 +1970,27 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             } else {
                 normtype({ k: "topt", of: infer(st, sargs[0]) })
             }
+        } else if ((name == "join" && len(node.args) == 1) || name == "lock") {
+            // join t: t's value; lock m { b }: b's
+            let ja: [Node] = node.args;
+            let ft = infer(st, ja[len(ja) - 1]);
+            if (ft.k == "tfunc") {
+                let func: TFunc = ft;
+                func.ret
+            } else { normtype({ k: "tunk" }) }
+        } else if (name == "spawn") {
+            let sa: [Node] = node.args;
+            infer(st, sa[0])
+        } else if (name == "fork" || name == "wait_pid") {
+            normtype({ k: "tlong" })
+        } else if (name == "try_lock") {
+            normtype({ k: "tbool" })
+        } else if (name == "post" || name == "wait") {
+            normtype({ k: "tvoid" })
+        } else if (name == "mutex") {
+            types.t_mutex()
+        } else if (name == "sem") {
+            types.t_sem()
         } else if (name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof" || name == "#fmt") {
             normtype({ k: "tstr" })
         } else if (name == "bytes") {
@@ -2261,7 +2282,8 @@ def is_intrinsic_name(n: str) -> bool {
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
-             "time_us", "sleep", "heap_used", "keys", "exit", "argv", "range", "typeof", "bytes",
+             "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
+             "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
              "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
 };
 
@@ -4542,6 +4564,27 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             gen_index_of(st, node, false)
         } else if (name == "last_index_of") {
             gen_index_of(st, node, true)
+        } else if (name == "join" && len(node.args) == 1) {
+            // join t: t is a thread's function; calling it waits
+            let ja: [Node] = node.args;
+            let jc: Call = { k: "call", callee: ja[0], args: [], line: node.line, col: node.col };
+            gen_indirect(st, jc, ja[0])
+        } else if (name == "spawn" || name == "fork") {
+            let sa: [Node] = node.args;
+            st = gen(st, sa[0]);
+            emit(st, "    call y_" + name)
+        } else if (name == "wait_pid") {
+            let wa: [Node] = node.args;
+            st = gen(st, wa[0]);
+            gen_helper1(st, "y_wait_pid")
+        } else if (name == "post" || name == "wait") {
+            let pa: [Node] = node.args;
+            st = gen(st, pa[0]);
+            emit(st, "    call y_sem_" + name)
+        } else if (name == "mutex" || name == "sem") {
+            gen_sync_new(st, node)
+        } else if (name == "lock" || name == "try_lock") {
+            gen_lock(st, node, name == "try_lock")
         } else if (name == "join") {
             gen_join(st, node)
         } else if (name == "split") {
@@ -7728,6 +7771,78 @@ def gen_heap_used(st: EmitSt, node: Call) -> EmitSt {
     emit(st, "    call y_heap_used")
 };
 
+// mutex() / sem(n): a record of the type (types.y t_mutex, t_sem), its
+// lock word 0 -- the runtime's view of it (arch_x64.y y_mutex_lock,
+// y_sem_wait).
+def gen_sync_new(st: EmitSt, node: Call) -> EmitSt {
+    let ln = node.line;
+    let cl = node.col;
+    let callee: Leaf = node.callee;
+    let keys: [str] = [];
+    let vals: [Node] = [];
+    if (callee.v == "mutex") {
+        keys += "$m";
+        vals += n_num("0", ln, cl);
+        let rec: RecLit = { k: "rec", keys: keys, vals: vals, line: ln, col: cl };
+        gen_reclit(st, rec, types.t_mutex())
+    } else {
+        let sargs: [Node] = node.args;
+        keys += "$n";
+        vals += sargs[0];
+        keys += "$w";
+        vals += n_num("0", ln, cl);
+        let rec: RecLit = { k: "rec", keys: keys, vals: vals, line: ln, col: cl };
+        gen_reclit(st, rec, types.t_sem())
+    }
+};
+
+// lock m { b }: b's closure run while m is held, its value kept; try_lock
+// runs it only when m is free, and is whether it did.
+def gen_lock(st: EmitSt, node: Call, attempt: bool) -> EmitSt {
+    let largs: [Node] = node.args;
+    st = gen(st, largs[0]);
+    st = emit(st, "    push %rax");
+    st = gen(st, largs[1]);
+    st = emit(st, "    push %rax");
+    if (!attempt) {
+        st = emit(st, "    mov 8(%rsp), %rax");
+        st = emit(st, "    call y_mutex_lock");
+        st = gen_call_top(st);
+        st = emit(st, "    push %rax");
+        st = emit(st, "    mov 16(%rsp), %rax");
+        st = emit(st, "    call y_mutex_unlock");
+        st = emit(st, "    pop %rax");
+        emit(st, "    add $16, %rsp")
+    } else {
+        let skip = next_loc(st);
+        st = skip.st;
+        let done = next_loc(st);
+        st = done.st;
+        st = emit(st, "    mov 8(%rsp), %rax");
+        st = emit(st, "    call y_mutex_trylock");
+        st = emit(st, "    test %rax, %rax");
+        st = emit(st, "    je " + skip.lbl);
+        st = gen_call_top(st);
+        st = emit(st, "    mov 8(%rsp), %rax");
+        st = emit(st, "    call y_mutex_unlock");
+        st = emit(st, "    mov $1, %rax");
+        st = emit(st, "    jmp " + done.lbl);
+        st = emit(st, skip.lbl + ":");
+        st = emit(st, "    xor %eax, %eax");
+        st = emit(st, done.lbl + ":");
+        emit(st, "    add $16, %rsp")
+    }
+};
+
+// Call the closure on top of the stack with no arguments (it stays there).
+def gen_call_top(st: EmitSt) -> EmitSt {
+    st = emit(st, "    mov 0(%rsp), %rax");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    mov 0(%rax), %rax");
+    st = emit(st, "    call *%rax");
+    emit(st, "    add $8, %rsp")
+};
+
 def gen_sleep(st: EmitSt, node: Call) -> EmitSt {
     // sleep(ms): suspend the caller for ms milliseconds (nanosleep, EINTR
     // cannot happen in single-threaded code, so one syscall is enough).
@@ -7744,7 +7859,7 @@ def gen_exit(st: EmitSt, node: Call) -> EmitSt {
     let ea = eargs[0];
     st = gen(st, ea);
     st = emit(st, "    mov %rax, %rdi");
-    st = emit(st, "    mov $60, %rax");
+    st = emit(st, "    mov $231, %rax");
     st = emit(st, "    syscall");
     // exit() terminates the process; the epilogue (ret / exit(0)) is
     // unreachable. Emit a jump to the function end so the backend never
@@ -7929,7 +8044,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
     };
     code += f.end_label + ":";
     if (is_main) {
-        code += "    mov $60, %rax";
+        code += "    mov $231, %rax";
         code += "    xor %edi, %edi";
         code += "    syscall";
     } else {

@@ -944,7 +944,8 @@ static int lint_cand(Yv *ty) {
     Yv *k = yr_get(ty, "k");
     if (ys_eq_lit(k, "trec")) {
         Yv *fs = yr_get(ty, "fields");
-        return yv_len(fs) >= 2;
+        /* mutex and sem are records too, but named ones (parser.c sync_type) */
+        return yv_len(fs) >= 2 && !ys_starts_with(yr_get(ya_get(fs, 0), "name"), ys("$"));
     } else {
         return ys_eq_lit(k, "tunion");
     }

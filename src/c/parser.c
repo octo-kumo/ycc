@@ -295,6 +295,36 @@ Yv *parse_primary(Yv *toks, long p) {
     } else if (ys_eq_lit(t, "id")) {
         if (ys_eq_lit(v, "match")) {
             return parse_match_try(toks, p);
+        } else if ((ys_eq_lit(v, "spawn") || ys_eq_lit(v, "fork")) && is_punct(toks, p + 1, ys("{"))) {
+            /* `spawn { ... }`, `fork { ... }`: the builtin on a function of
+             * the block (CHOICES_MADE.md 33) */
+            Yv *b = parse_block(toks, p + 1);
+            Yv *args = yav(1, block_func(yr_get(b, "node"), ln, cl));
+            return res(yr(5, "k", ys("call"), "callee", yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl)),
+                          "args", args, "line", yv_long(ln), "col", yv_long(cl)),
+                       yv_l(yr_get(b, "pos")));
+        } else if ((ys_eq_lit(v, "lock") || ys_eq_lit(v, "try_lock")) && ys_eq_lit(tt(toks, p + 1), "id")) {
+            /* `lock m { ... }`: the mutex, then the block */
+            Yv *m = parse_postfix(toks, p + 1);
+            Yv *args = yav(1, yr_get(m, "node"));
+            long mpos = yv_l(yr_get(m, "pos"));
+            Yv *callee = yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl));
+            if (!is_punct(toks, mpos, ys("{"))) {
+                args = ya_push(args, expect_err(toks, mpos, ys_cat(ys_cat(ys("'{' (the block "), v), ys(" runs)"))));
+                return res(yr(5, "k", ys("call"), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl)), mpos);
+            } else {
+                Yv *b = parse_block(toks, mpos);
+                args = ya_push(args, block_func(yr_get(b, "node"), ln, cl));
+                return res(yr(5, "k", ys("call"), "callee", callee, "args", args, "line", yv_long(ln), "col", yv_long(cl)),
+                           yv_l(yr_get(b, "pos")));
+            }
+        } else if ((ys_eq_lit(v, "join") || ys_eq_lit(v, "post") || ys_eq_lit(v, "wait")) && ys_eq_lit(tt(toks, p + 1), "id")) {
+            /* `join t`, `post s`, `wait s`: the builtin on the operand */
+            Yv *e = parse_postfix(toks, p + 1);
+            Yv *args = yav(1, yr_get(e, "node"));
+            return res(yr(5, "k", ys("call"), "callee", yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl)),
+                          "args", args, "line", yv_long(ln), "col", yv_long(cl)),
+                       yv_l(yr_get(e, "pos")));
         } else {
             return res(yr(4, "k", ys("id"), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
         }
@@ -343,6 +373,25 @@ Yv *parse_primary(Yv *toks, long p) {
 }
 
 // ── postfix: call, index, slice, dot ─────────────────────────────────────
+
+/* The types `mutex` and `sem` (types.c t_mutex, t_sem): records whose
+ * fields no program can name. */
+Yv *sync_type(Yv *nm) {
+    Yv *fs = yav(0);
+    if (ys_eq_lit(nm, "mutex")) {
+        fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+    } else {
+        fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+        fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+    }
+    return yr(2, "k", ys("trec"), "fields", fs);
+}
+
+/* A block as a function of no parameters, its return type inferred. */
+Yv *block_func(Yv *body, long ln, long cl) {
+    return yr(8, "k", ys("func"), "params", yav(0), "ptypes", yav(0), "ret", yr(1, "k", ys("tnone")),
+              "body", body, "defs", yav(0), "line", yv_long(ln), "col", yv_long(cl));
+}
 
 Yv *parse_postfix(Yv *toks, long p) {
     Yv *base = parse_primary(toks, p);
@@ -1115,6 +1164,8 @@ Yv *parse_type_atom2(Yv *toks, long p) {
         return parse_type_tail(toks, p + 1, yr(1, "k", ys("tfloat")));
     } else if (ys_eq_lit(nm, "void")) {
         return parse_type_tail(toks, p + 1, yr(1, "k", ys("tvoid")));
+    } else if (ys_eq_lit(nm, "mutex") || ys_eq_lit(nm, "sem")) {
+        return parse_type_tail(toks, p + 1, sync_type(nm));
     } else if (is_op(toks, p + 1, ys(".")) && ys_eq_lit(tt(toks, p + 2), "id")) {
         // `m.T`: alias T of the module imported as m
         return parse_type_tail(toks, p + 3,

@@ -326,6 +326,11 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         let off = 3;
         if (r < 0) { off = 2; 0; };
         { bytes: with_rex(r, b), fix: [fixup(off, "imm32diff", src.a, src.b)], err: "" }
+    } else if (dst.k == "reg" && src.k == "fs" && op_size(dst) == 64) {
+        // mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
+        // base and no index (an absolute disp32)
+        let b: [byte] = [100, rex(true, dst.n, -1, -1), 139, modrm(0, dst.n, 4), 37];
+        { bytes: concat(b, le32(src.disp)), fix: [], err: "" }
     } else if (dst.k == "reg" && src.k == "mem") {
         if (op_size(dst) == 64) {
             let t = mem_tail(src, dst.n);
@@ -363,6 +368,25 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         { bytes: [], fix: [], err: "mov form" }
     }
 };
+// xchg r64, mem (either order): REX.W 87 /r, locked by the processor
+// (the threads' mutexes).
+def enc_xchg(a: Operand, b: Operand) -> Encoded {
+    let reg = a;
+    let mem = b;
+    if (a.k == "mem") {
+        reg = b;
+        mem = a;
+    };
+    if (reg.k != "reg" || mem.k != "mem" || op_size(reg) != 64) {
+        { bytes: [], fix: [], err: "xchg form" }
+    } else {
+        let t = mem_tail(mem, reg.n);
+        let r = rex_rm(true, reg.n, mem);
+        let prefix: [byte] = [135, t.modrm];
+        enc_mem_result(r, concat(prefix, t.extra), t)
+    }
+};
+
 def enc_mem_result(r: long, b: [byte], t: MemTail) -> Encoded {
     if (t.modrm < 0) {
         { bytes: [], fix: [], err: "bad memory form" }
@@ -773,6 +797,9 @@ def enc_insn(mn: str, ops: [Operand]) -> Encoded {
     } else if (mn == "lea") {
         let e = need2(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_lea(ops[1], ops[0]) }
+    } else if (mn == "xchg") {
+        let e = need2(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_xchg(ops[0], ops[1]) }
     } else if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or" || mn == "test") {
         let e = need2(mn, ops);
         if (e != "") {

@@ -49,6 +49,33 @@ def err_at(msg: str, line: long, col: long) -> Diag {
 
 def t_unk() -> Type { { k: "tunk" } };
 
+// The types of a mutex and a semaphore (CHOICES_MADE.md 33): records no
+// program can spell (a `$` in each field's name), written `mutex` and
+// `sem` (parser.y parse_type_atom2). A mutex's word is 1 while held; a
+// semaphore's count is guarded by its own lock word.
+def t_mutex() -> Type {
+    let fs: [Field] = [];
+    fs += { name: "$m", opt: false, typ: { k: "tlong" } };
+    let t: TRec = { k: "trec", fields: fs };
+    let r: Type = t;
+    r
+};
+
+def t_sem() -> Type {
+    let fs: [Field] = [];
+    fs += { name: "$n", opt: false, typ: { k: "tlong" } };
+    fs += { name: "$w", opt: false, typ: { k: "tlong" } };
+    let t: TRec = { k: "trec", fields: fs };
+    let r: Type = t;
+    r
+};
+
+// The parameter types of a function type.
+def fn_args(t: Type) -> [Type] {
+    let func: TFunc = t;
+    func.args
+};
+
 def type_node(t: Type) -> Type { t };
 
 // `[]` or `none` where no type is declared: the element or payload is not
@@ -632,6 +659,8 @@ def tstr_go(t: Type) -> str {
         if (tof.k == "tunk") { "none" } else { tstr_go(tof) + "?" }
     }
     else if (t.k == "tmap") { let map: TMap = t; "{" + tstr_go(map.key) + " => " + tstr_go(map.of) + "}" }
+    else if (t.k == "trec" && teq(t, t_mutex())) { "mutex" }
+    else if (t.k == "trec" && teq(t, t_sem())) { "sem" }
     else if (t.k == "trec") {
         let parts: [str] = [];
         let rec: TRec = t;
@@ -3256,6 +3285,92 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                 st = expect_type(st, r1.typ, { k: "tstr" }, name + " sub", node.line, node.col);
                 tc_res(type_node({ k: "tlong" }), st)
             }
+        } else if (name == "join" && len(cargs) == 1) {
+            // join t: wait for thread t (spawn's function) and take its value
+            let r = typeof_expr(st, cargs[0]);
+            st = r.st;
+            let ft = unfold(r.typ);
+            if (ft.k == "tfunc" && len(fn_args(ft)) == 0) {
+                let func: TFunc = ft;
+                tc_res(func.ret, st)
+            } else if (ft.k == "tunk") {
+                tc_res(t_unk(), st)
+            } else {
+                st = fail(st, "join takes a thread (a spawn's value), got " + tstr(r.typ), node.line, node.col);
+                tc_res(t_unk(), st)
+            }
+        } else if (name == "spawn" || name == "fork") {
+            // spawn { b } / fork { b }: b as a function of no parameters
+            if (len(cargs) != 1) {
+                st = fail(st, name + " takes a block", node.line, node.col);
+                tc_res(t_unk(), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                let ft = unfold(r.typ);
+                if (ft.k == "tfunc" && len(fn_args(ft)) == 0) {
+                    if (name == "spawn") { tc_res(ft, st) } else { tc_res(type_node({ k: "tlong" }), st) }
+                } else if (ft.k == "tunk") {
+                    tc_res(t_unk(), st)
+                } else {
+                    st = fail(st, name + " takes a block (a function of no parameters), got " + tstr(r.typ), node.line, node.col);
+                    tc_res(t_unk(), st)
+                }
+            }
+        } else if (name == "wait_pid") {
+            // wait_pid(pid) -> long: the exit status of a forked child
+            if (len(cargs) != 1) {
+                st = fail(st, "wait_pid takes exactly 1 argument (a pid)", node.line, node.col);
+                tc_res(type_node({ k: "tlong" }), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = expect_type(r.st, r.typ, type_node({ k: "tlong" }), "wait_pid's pid", node.line, node.col);
+                tc_res(type_node({ k: "tlong" }), st)
+            }
+        } else if (name == "mutex") {
+            if (len(cargs) != 0) {
+                st = fail(st, "mutex takes no arguments", node.line, node.col);
+            };
+            tc_res(t_mutex(), st)
+        } else if (name == "sem") {
+            // sem(n): a semaphore counting n
+            if (len(cargs) != 1) {
+                st = fail(st, "sem takes exactly 1 argument (its count)", node.line, node.col);
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = expect_type(r.st, r.typ, type_node({ k: "tlong" }), "sem's count", node.line, node.col);
+            };
+            tc_res(t_sem(), st)
+        } else if (name == "lock" || name == "try_lock") {
+            // lock m { b } -> b's value; try_lock m { b } -> whether b ran
+            if (len(cargs) != 2) {
+                st = fail(st, name + " takes a mutex and a block", node.line, node.col);
+                tc_res(t_unk(), st)
+            } else {
+                let rm = typeof_expr(st, cargs[0]);
+                st = expect_type(rm.st, rm.typ, t_mutex(), name + "'s mutex", node.line, node.col);
+                let r = typeof_expr(st, cargs[1]);
+                st = r.st;
+                let ft = unfold(r.typ);
+                if (ft.k == "tfunc" && len(fn_args(ft)) == 0) {
+                    let func: TFunc = ft;
+                    if (name == "lock") { tc_res(func.ret, st) } else { tc_res(type_node({ k: "tbool" }), st) }
+                } else if (ft.k == "tunk") {
+                    tc_res(t_unk(), st)
+                } else {
+                    st = fail(st, name + " takes a block (a function of no parameters), got " + tstr(r.typ), node.line, node.col);
+                    tc_res(t_unk(), st)
+                }
+            }
+        } else if (name == "post" || name == "wait") {
+            // post s / wait s: a semaphore up, or down (waiting while 0)
+            if (len(cargs) != 1) {
+                st = fail(st, name + " takes exactly 1 argument (a sem)", node.line, node.col);
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = expect_type(r.st, r.typ, t_sem(), name + "'s semaphore", node.line, node.col);
+            };
+            tc_res(type_node({ k: "tvoid" }), st)
         } else if (name == "join") {
             // join(arr, delim) -> str (elements via tostring, like C)
             if (len(cargs) != 2) {
@@ -4132,4 +4247,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: "tfunc", args: args, ret: ret }) }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

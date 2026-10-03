@@ -839,7 +839,8 @@ def lint_cand(ty: Type) -> bool {
     if (k == "trec") {
         let rec: TRec = ty;
         let fs: [Field] = rec.fields;
-        len(fs) >= 2
+        // mutex and sem are records too, but named ones (parser.y sync_type)
+        len(fs) >= 2 && !fs[0].name.starts_with("$")
     } else {
         k == "tunion"
     }

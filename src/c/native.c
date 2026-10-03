@@ -78,6 +78,8 @@ Yv *union_parts(Yv *t);
 Yv *pat_members(Yv *s, Yv *t);
 Yv *lit_target(Yv *node, Yv *want);
 int opt_wraps(Yv *vt, Yv *ft);
+Yv *t_mutex(void);
+Yv *t_sem(void);
 Yv *tcanon(Yv *t);
 Yv *tsig(Yv *t);
 Yv *inferred_ret(long line, long col);
@@ -448,6 +450,9 @@ Yv *gen_eputs(Yv *st, Yv *node);
 Yv *gen_clock_us(Yv *st, Yv *node);
 Yv *gen_heap_used(Yv *st, Yv *node);
 Yv *gen_sleep(Yv *st, Yv *node);
+Yv *gen_sync_new(Yv *st, Yv *node);
+Yv *gen_lock(Yv *st, Yv *node, int attempt);
+Yv *gen_call_top(Yv *st);
 Yv *gen_exit(Yv *st, Yv *node);
 Yv *gen_argv(Yv *st, Yv *node);
 Yv *gen_store(Yv *st, Yv *node);
@@ -2783,6 +2788,27 @@ Yv *infer_call(Yv *st, Yv *node) {
                 return yr(2, "k", ys("topt"), "of",
                           infer(st, ya_get(sargs, 0)));
             }
+        } else if ((ys_eq_lit(name, "join") && yv_len(yr_get(node, "args")) == 1) || ys_eq_lit(name, "lock")) {
+            /* join t: t's value; lock m { b }: b's */
+            Yv *ja = yr_get(node, "args");
+            Yv *ft = infer(st, ya_get(ja, yv_len(ja) - 1));
+            if (ys_eq_lit(yr_get(ft, "k"), "tfunc")) {
+                return yr_get(ft, "ret");
+            } else {
+                return yr(1, "k", ys("tunk"));
+            }
+        } else if (ys_eq_lit(name, "spawn")) {
+            return infer(st, ya_get(yr_get(node, "args"), 0));
+        } else if (ys_eq_lit(name, "fork") || ys_eq_lit(name, "wait_pid")) {
+            return yr(1, "k", ys("tlong"));
+        } else if (ys_eq_lit(name, "try_lock")) {
+            return yr(1, "k", ys("tbool"));
+        } else if (ys_eq_lit(name, "post") || ys_eq_lit(name, "wait")) {
+            return yr(1, "k", ys("tvoid"));
+        } else if (ys_eq_lit(name, "mutex")) {
+            return t_mutex();
+        } else if (ys_eq_lit(name, "sem")) {
+            return t_sem();
         } else if (ys_eq_lit(name, "trim") ||
                    ys_eq_lit(name, "chr") || ys_eq_lit(name, "join") ||
                    ys_eq_lit(name, "tostring") || ys_eq_lit(name, "typeof") ||
@@ -3085,12 +3111,14 @@ int name_in(Yv *xs, Yv *n) {
 /* Builtins are resolved by name at the call site, never captured. */
 int is_intrinsic_name(Yv *n) {
     return name_in(
-        yav(35, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+        yav(44, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
             ys("is_some"), ys("unwrap"), ys("trim"), ys("ord"),
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
             ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
-            ys("heap_used"), ys("keys"), ys("exit"), ys("argv"), ys("range"), ys("typeof"),
+            ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
+            ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
+            ys("exit"), ys("argv"), ys("range"), ys("typeof"),
             ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
             ys("none"), ys("#fmt")),
         n);
@@ -5452,6 +5480,25 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_index_of(st, node, 0);
         } else if (ys_eq_lit(name, "last_index_of")) {
             return gen_index_of(st, node, 1);
+        } else if (ys_eq_lit(name, "join") && yv_len(yr_get(node, "args")) == 1) {
+            /* join t: t is a thread's function; calling it waits */
+            Yv *ja = yr_get(node, "args");
+            Yv *jc = yr(5, "k", ys("call"), "callee", ya_get(ja, 0), "args", yav(0),
+                        "line", yr_get(node, "line"), "col", yr_get(node, "col"));
+            return gen_indirect(st, jc, ya_get(ja, 0));
+        } else if (ys_eq_lit(name, "spawn") || ys_eq_lit(name, "fork")) {
+            st = gen(st, ya_get(yr_get(node, "args"), 0));
+            return emit(st, ys_cat(ys("    call y_"), name));
+        } else if (ys_eq_lit(name, "wait_pid")) {
+            st = gen(st, ya_get(yr_get(node, "args"), 0));
+            return gen_helper1(st, ys("y_wait_pid"));
+        } else if (ys_eq_lit(name, "post") || ys_eq_lit(name, "wait")) {
+            st = gen(st, ya_get(yr_get(node, "args"), 0));
+            return emit(st, ys_cat(ys("    call y_sem_"), name));
+        } else if (ys_eq_lit(name, "mutex") || ys_eq_lit(name, "sem")) {
+            return gen_sync_new(st, node);
+        } else if (ys_eq_lit(name, "lock") || ys_eq_lit(name, "try_lock")) {
+            return gen_lock(st, node, ys_eq_lit(name, "try_lock"));
         } else if (ys_eq_lit(name, "join")) {
             return gen_join(st, node);
         } else if (ys_eq_lit(name, "split")) {
@@ -9165,6 +9212,78 @@ Yv *gen_heap_used(Yv *st, Yv *node) {
     return emit(st, ys("    call y_heap_used"));
 }
 
+/* mutex() / sem(n): a record of the type (types.c t_mutex, t_sem), its
+ * lock word 0 -- the runtime's view of it (arch_x64.c y_mutex_lock,
+ * y_sem_wait). */
+Yv *gen_sync_new(Yv *st, Yv *node) {
+    Yv *ln = yr_get(node, "line");
+    Yv *cl = yr_get(node, "col");
+    Yv *callee = yr_get(node, "callee");
+    Yv *keys = yav(0);
+    Yv *vals = yav(0);
+    if (ys_eq_lit(yr_get(callee, "v"), "mutex")) {
+        keys = ya_push(keys, ys("$m"));
+        vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
+        Yv *rec = yr(5, "k", ys("rec"), "keys", keys, "vals", vals, "line", ln, "col", cl);
+        return gen_reclit(st, rec, t_mutex());
+    } else {
+        Yv *sargs = yr_get(node, "args");
+        keys = ya_push(keys, ys("$n"));
+        vals = ya_push(vals, ya_get(sargs, 0));
+        keys = ya_push(keys, ys("$w"));
+        vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
+        Yv *rec = yr(5, "k", ys("rec"), "keys", keys, "vals", vals, "line", ln, "col", cl);
+        return gen_reclit(st, rec, t_sem());
+    }
+}
+
+/* lock m { b }: b's closure run while m is held, its value kept; try_lock
+ * runs it only when m is free, and is whether it did. */
+Yv *gen_lock(Yv *st, Yv *node, int attempt) {
+    Yv *largs = yr_get(node, "args");
+    st = gen(st, ya_get(largs, 0));
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, ya_get(largs, 1));
+    st = emit(st, ys("    push %rax"));
+    if (!attempt) {
+        st = emit(st, ys("    mov 8(%rsp), %rax"));
+        st = emit(st, ys("    call y_mutex_lock"));
+        st = gen_call_top(st);
+        st = emit(st, ys("    push %rax"));
+        st = emit(st, ys("    mov 16(%rsp), %rax"));
+        st = emit(st, ys("    call y_mutex_unlock"));
+        st = emit(st, ys("    pop %rax"));
+        return emit(st, ys("    add $16, %rsp"));
+    } else {
+        Yv *skip = next_loc(st);
+        st = yr_get(skip, "st");
+        Yv *done = next_loc(st);
+        st = yr_get(done, "st");
+        st = emit(st, ys("    mov 8(%rsp), %rax"));
+        st = emit(st, ys("    call y_mutex_trylock"));
+        st = emit(st, ys("    test %rax, %rax"));
+        st = emit(st, ys_cat(ys("    je "), yr_get(skip, "lbl")));
+        st = gen_call_top(st);
+        st = emit(st, ys("    mov 8(%rsp), %rax"));
+        st = emit(st, ys("    call y_mutex_unlock"));
+        st = emit(st, ys("    mov $1, %rax"));
+        st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+        st = emit(st, ys_cat(yr_get(skip, "lbl"), ys(":")));
+        st = emit(st, ys("    xor %eax, %eax"));
+        st = emit(st, ys_cat(yr_get(done, "lbl"), ys(":")));
+        return emit(st, ys("    add $16, %rsp"));
+    }
+}
+
+/* Call the closure on top of the stack with no arguments (it stays there). */
+Yv *gen_call_top(Yv *st) {
+    st = emit(st, ys("    mov 0(%rsp), %rax"));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    mov 0(%rax), %rax"));
+    st = emit(st, ys("    call *%rax"));
+    return emit(st, ys("    add $8, %rsp"));
+}
+
 Yv *gen_sleep(Yv *st, Yv *node) {
     /* sleep(ms): suspend the caller for ms milliseconds (nanosleep, EINTR
      * cannot happen in single-threaded code, so one syscall is enough). */
@@ -9180,7 +9299,7 @@ Yv *gen_exit(Yv *st, Yv *node) {
     Yv *ea = ya_get(eargs, 0);
     st = gen(st, ea);
     st = emit(st, ys("    mov %rax, %rdi"));
-    st = emit(st, ys("    mov $60, %rax"));
+    st = emit(st, ys("    mov $231, %rax"));
     st = emit(st, ys("    syscall"));
     /* exit() terminates the process; the epilogue (ret / exit(0)) is
      * unreachable. Emit a jump to the function end so the backend never
@@ -9411,7 +9530,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     }
     code = ya_push(code, ys_cat(yr_get(f, "end_label"), ys(":")));
     if (is_main) {
-        code = ya_push(code, ys("    mov $60, %rax"));
+        code = ya_push(code, ys("    mov $231, %rax"));
         code = ya_push(code, ys("    xor %edi, %edi"));
         code = ya_push(code, ys("    syscall"));
     } else {

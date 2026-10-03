@@ -173,6 +173,28 @@ static Yv *t_unk(void) {
     return yr(1, "k", ys("tunk"));
 }
 
+/* The types of a mutex and a semaphore (CHOICES_MADE.md 33): records no
+ * program can spell (a `$` in each field's name), written `mutex` and
+ * `sem` (parser.c parse_type_atom2). A mutex's word is 1 while held; a
+ * semaphore's count is guarded by its own lock word. */
+Yv *t_mutex(void) {
+    Yv *fs = yav(0);
+    fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+    return yr(2, "k", ys("trec"), "fields", fs);
+}
+
+Yv *t_sem(void) {
+    Yv *fs = yav(0);
+    fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+    fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", ys("tlong"))));
+    return yr(2, "k", ys("trec"), "fields", fs);
+}
+
+/* The parameter types of a function type. */
+static Yv *fn_args(Yv *t) {
+    return yr_get(t, "args");
+}
+
 static Yv *type_node(Yv *t) {
     return t;
 }
@@ -803,6 +825,10 @@ static Yv *tstr_go(Yv *t) {
         if (ys_eq_lit(yr_get(tof, "k"), "tunk")) { return ys("none"); } else { return ys_cat(tstr_go(tof), ys("?")); }
     } else if (ys_eq_lit(yr_get(t, "k"), "tmap")) {
         return ys_cat(ys_cat(ys_cat(ys_cat(ys("{"), tstr_go(yr_get(t, "key"))), ys(" => ")), tstr_go(yr_get(t, "of"))), ys("}"));
+    } else if (ys_eq_lit(yr_get(t, "k"), "trec") && teq(t, t_mutex())) {
+        return ys("mutex");
+    } else if (ys_eq_lit(yr_get(t, "k"), "trec") && teq(t, t_sem())) {
+        return ys("sem");
     } else if (ys_eq_lit(yr_get(t, "k"), "trec")) {
         Yv *parts = yav(0);
         Yv *fs = yr_get(t, "fields");
@@ -4317,6 +4343,90 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
             }
+        } else if (ys_eq_lit(name, "join") && yv_len(cargs) == 1) {
+            // join t: wait for thread t (spawn's function) and take its value
+            Yv *r = typeof_expr(st, ya_get(cargs, 0));
+            st = yr_get(r, "st");
+            Yv *ft = unfold(yr_get(r, "typ"));
+            if (ys_eq_lit(yr_get(ft, "k"), "tfunc") && yv_len(fn_args(ft)) == 0) {
+                return yr(2, "typ", yr_get(ft, "ret"), "st", st);
+            } else if (ys_eq_lit(yr_get(ft, "k"), "tunk")) {
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                st = fail(st, ys_cat(ys("join takes a thread (a spawn's value), got "), tstr(yr_get(r, "typ"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            }
+        } else if (ys_eq_lit(name, "spawn") || ys_eq_lit(name, "fork")) {
+            // spawn { b } / fork { b }: b as a function of no parameters
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys_cat(name, ys(" takes a block")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r, "st");
+                Yv *ft = unfold(yr_get(r, "typ"));
+                if (ys_eq_lit(yr_get(ft, "k"), "tfunc") && yv_len(fn_args(ft)) == 0) {
+                    if (ys_eq_lit(name, "spawn")) { return yr(2, "typ", ft, "st", st); } else { return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st); }
+                } else if (ys_eq_lit(yr_get(ft, "k"), "tunk")) {
+                    return yr(2, "typ", t_unk(), "st", st);
+                } else {
+                    st = fail(st, ys_cat(ys_cat(name, ys(" takes a block (a function of no parameters), got ")), tstr(yr_get(r, "typ"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
+                }
+            }
+        } else if (ys_eq_lit(name, "wait_pid")) {
+            // wait_pid(pid) -> long: the exit status of a forked child
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys("wait_pid takes exactly 1 argument (a pid)"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), yr(1, "k", ys("tlong")), ys("wait_pid's pid"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", ys("tlong")), "st", st);
+            }
+        } else if (ys_eq_lit(name, "mutex")) {
+            if (yv_len(cargs) != 0) {
+                st = fail(st, ys("mutex takes no arguments"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            }
+            return yr(2, "typ", t_mutex(), "st", st);
+        } else if (ys_eq_lit(name, "sem")) {
+            // sem(n): a semaphore counting n
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys("sem takes exactly 1 argument (its count)"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), yr(1, "k", ys("tlong")), ys("sem's count"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            }
+            return yr(2, "typ", t_sem(), "st", st);
+        } else if (ys_eq_lit(name, "lock") || ys_eq_lit(name, "try_lock")) {
+            // lock m { b } -> b's value; try_lock m { b } -> whether b ran
+            if (yv_len(cargs) != 2) {
+                st = fail(st, ys_cat(name, ys(" takes a mutex and a block")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                Yv *rm = typeof_expr(st, ya_get(cargs, 0));
+                st = expect_type(yr_get(rm, "st"), yr_get(rm, "typ"), t_mutex(), ys_cat(name, ys("'s mutex")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                Yv *r = typeof_expr(st, ya_get(cargs, 1));
+                st = yr_get(r, "st");
+                Yv *ft = unfold(yr_get(r, "typ"));
+                if (ys_eq_lit(yr_get(ft, "k"), "tfunc") && yv_len(fn_args(ft)) == 0) {
+                    if (ys_eq_lit(name, "lock")) { return yr(2, "typ", yr_get(ft, "ret"), "st", st); } else { return yr(2, "typ", yr(1, "k", ys("tbool")), "st", st); }
+                } else if (ys_eq_lit(yr_get(ft, "k"), "tunk")) {
+                    return yr(2, "typ", t_unk(), "st", st);
+                } else {
+                    st = fail(st, ys_cat(ys_cat(name, ys(" takes a block (a function of no parameters), got ")), tstr(yr_get(r, "typ"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
+                }
+            }
+        } else if (ys_eq_lit(name, "post") || ys_eq_lit(name, "wait")) {
+            // post s / wait s: a semaphore up, or down (waiting while 0)
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys_cat(name, ys(" takes exactly 1 argument (a sem)")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = expect_type(yr_get(r, "st"), yr_get(r, "typ"), t_sem(), ys_cat(name, ys("'s semaphore")), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            }
+            return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
         } else if (ys_eq_lit(name, "join")) {
             // join(arr, delim) -> str (elements via tostring, like C)
             if (yv_len(cargs) != 2) {

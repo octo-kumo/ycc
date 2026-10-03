@@ -296,6 +296,32 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
     } else if (t == "id") {
         if (v == "match") {
             parse_match_try(toks, p)
+        } else if ((v == "spawn" || v == "fork") && is_punct(toks, p + 1, "{")) {
+            // `spawn { ... }`, `fork { ... }`: the builtin on a function of
+            // the block (CHOICES_MADE.md 33)
+            let b = parse_block(toks, p + 1);
+            let args: [Node] = [];
+            args += block_func(b.node, ln, cl);
+            res({ k: "call", callee: { k: "id", v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, b.pos)
+        } else if ((v == "lock" || v == "try_lock") && tt(toks, p + 1) == "id") {
+            // `lock m { ... }`: the mutex, then the block
+            let m = parse_postfix(toks, p + 1);
+            let args: [Node] = [];
+            args += m.node;
+            if (!is_punct(toks, m.pos, "{")) {
+                args += expect_err(toks, m.pos, "'{' (the block " + v + " runs)");
+                res({ k: "call", callee: { k: "id", v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, m.pos)
+            } else {
+                let b = parse_block(toks, m.pos);
+                args += block_func(b.node, ln, cl);
+                res({ k: "call", callee: { k: "id", v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, b.pos)
+            }
+        } else if ((v == "join" || v == "post" || v == "wait") && tt(toks, p + 1) == "id") {
+            // `join t`, `post s`, `wait s`: the builtin on the operand
+            let e = parse_postfix(toks, p + 1);
+            let args: [Node] = [];
+            args += e.node;
+            res({ k: "call", callee: { k: "id", v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, e.pos)
         } else {
             res({ k: "id", v: v, line: ln, col: cl }, p + 1)
         }
@@ -336,6 +362,28 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
             res(ce, p + 1)
         }
     }
+};
+
+// The types `mutex` and `sem` (types.y t_mutex, t_sem): records whose
+// fields no program can name.
+def sync_type(nm: str) -> Type {
+    let fs: [Field] = [];
+    if (nm == "mutex") {
+        fs += { name: "$m", opt: false, typ: { k: "tlong" } };
+    } else {
+        fs += { name: "$n", opt: false, typ: { k: "tlong" } };
+        fs += { name: "$w", opt: false, typ: { k: "tlong" } };
+    };
+    let t: TRec = { k: "trec", fields: fs };
+    let r: Type = t;
+    r
+};
+
+// A block as a function of no parameters, its return type inferred.
+def block_func(body: Node, ln: long, cl: long) -> Node {
+    let f: Func = { k: "func", params: [], ptypes: [], ret: { k: "tnone" }, body: body, defs: [], line: ln, col: cl };
+    let node: Node = f;
+    node
 };
 
 // ── postfix: call, index, slice, dot ─────────────────────────────────────
@@ -1007,6 +1055,7 @@ def parse_type_atom2(toks: [Tok], p: long) -> PType {
     else if (nm == "str") { parse_type_tail(toks, p + 1, { k: "tstr" }) }
     else if (nm == "float") { parse_type_tail(toks, p + 1, { k: "tfloat" }) }
     else if (nm == "void") { parse_type_tail(toks, p + 1, { k: "tvoid" }) }
+    else if (nm == "mutex" || nm == "sem") { parse_type_tail(toks, p + 1, sync_type(nm)) }
     else if (is_op(toks, p + 1, ".") && tt(toks, p + 2) == "id") {
         // `m.T`: alias T of the module imported as m
         parse_type_tail(toks, p + 3, { k: "tname", name: nm + "." + tv(toks, p + 2) })

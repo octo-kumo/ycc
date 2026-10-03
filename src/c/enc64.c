@@ -30,6 +30,7 @@ static Yv *mem_tail(Yv *m, long reg);
 static long rex_rm(int w, long reg, Yv *m);
 static Yv *with_rex(long r, Yv *bytes);
 static Yv *enc_mem_result(long r, Yv *b, Yv *t);
+static Yv *enc_xchg(Yv *a, Yv *b);
 static Yv *enc_push(Yv *o);
 static Yv *enc_pop(Yv *o);
 static Yv *enc_mov(Yv *dst, Yv *src);
@@ -399,6 +400,12 @@ static Yv *enc_mov(Yv *dst, Yv *src) {
         if (r < 0) { off = 2; ; }
         return yr(3, "bytes", with_rex(r, b),
                   "fix", yav(1, fixup(off, ys("imm32diff"), yr_get(src, "a"), yr_get(src, "b"))), "err", ys(""));
+    } else if (ys_eq_lit(yr_get(dst, "k"), "reg") && ys_eq_lit(yr_get(src, "k"), "fs") && op_size(dst) == 64) {
+        /* mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
+         * base and no index (an absolute disp32) */
+        Yv *b = yav(5, yv_long(100), yv_long(rex(1, yv_l(yr_get(dst, "n")), -1, -1)), yv_long(139),
+                    yv_long(modrm(0, yv_l(yr_get(dst, "n")), 4)), yv_long(37));
+        return yr(3, "bytes", concat(b, le32(yv_l(yr_get(src, "disp")))), "fix", yav(0), "err", ys(""));
     } else if (ys_eq_lit(yr_get(dst, "k"), "reg") && ys_eq_lit(yr_get(src, "k"), "mem")) {
         if (op_size(dst) == 64) {
             Yv *t = mem_tail(src, yv_l(yr_get(dst, "n")));
@@ -434,6 +441,25 @@ static Yv *enc_mov(Yv *dst, Yv *src) {
         }
     } else {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("mov form"));
+    }
+}
+
+/* xchg r64, mem (either order): REX.W 87 /r, locked by the processor
+ * (the threads' mutexes). */
+static Yv *enc_xchg(Yv *a, Yv *b) {
+    Yv *reg = a;
+    Yv *mem = b;
+    if (ys_eq_lit(yr_get(a, "k"), "mem")) {
+        reg = b;
+        mem = a;
+    }
+    if (!ys_eq_lit(yr_get(reg, "k"), "reg") || !ys_eq_lit(yr_get(mem, "k"), "mem") || op_size(reg) != 64) {
+        return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("xchg form"));
+    } else {
+        Yv *t = mem_tail(mem, yv_l(yr_get(reg, "n")));
+        long r = rex_rm(1, yv_l(yr_get(reg, "n")), mem);
+        Yv *prefix = yav(2, yv_long(135), yr_get(t, "modrm"));
+        return enc_mem_result(r, concat(prefix, yr_get(t, "extra")), t);
     }
 }
 
@@ -860,6 +886,9 @@ Yv *enc_insn(Yv *mn, Yv *ops) {
     } else if (ys_eq_lit(mn, "lea")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) { return yr(3, "bytes", yav(0), "fix", yav(0), "err", e); } else { return enc_lea(ya_get(ops, 1), ya_get(ops, 0)); }
+    } else if (ys_eq_lit(mn, "xchg")) {
+        Yv *e = need2(mn, ops);
+        if (!ys_eq_lit(e, "")) { return yr(3, "bytes", yav(0), "fix", yav(0), "err", e); } else { return enc_xchg(ya_get(ops, 0), ya_get(ops, 1)); }
     } else if (ys_eq_lit(mn, "add") || ys_eq_lit(mn, "sub") || ys_eq_lit(mn, "cmp") || ys_eq_lit(mn, "xor") || ys_eq_lit(mn, "and") || ys_eq_lit(mn, "or") || ys_eq_lit(mn, "test")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) {

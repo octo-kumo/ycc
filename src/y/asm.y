@@ -137,6 +137,8 @@ def parse_operand_nonempty(t: str) -> OpRes {
     // `*%reg` — register-indirect call/jump target (closure code pointers).
     if (t[0:1] == "*") {
         parse_operand_ind(t)
+    } else if (t[0:4] == "%fs:") {
+        parse_operand_fs(t)
     } else if (t[0:1] == "%") {
         parse_operand_reg(t)
     } else {
@@ -152,6 +154,17 @@ def parse_operand_ind(t: str) -> OpRes {
         { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + r + "'" }
     } else {
         { ok: true, op: { k: "ind", n: n, size: enc.reg_size(r), v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
+    }
+};
+
+// `%fs:N`: the thread-local word at N (the TLS block's self pointer is
+// at 0; arch_x64.y y_alloc).
+def parse_operand_fs(t: str) -> OpRes {
+    let r = parse_num(t[4:]);
+    if (!r.ok) {
+        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad fs operand '" + t + "'" }
+    } else {
+        { ok: true, op: { k: "fs", n: 0, size: 64, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: r.v, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -660,7 +673,8 @@ def asm_maybe_labline(line: str, lno: long, sec: long, offs: [long], items: [Asm
     // plain instruction. NOTE: misnomer fixed: the else-arm assembles an
     // INSTRUCTION (asm_insnline), not a directive.
     let ci = index_of(line, ":");
-    if (ci > 0) {
+    // a `%` before it: an operand's `%fs:N`, not a label
+    if (ci > 0 && index_of(line[0:ci], "%") < 0) {
         asm_labline(line, lno, sec, offs, items, labels, err, ci)
     } else {
         asm_insnline(line, lno, sec, offs, items, labels, err)

@@ -342,6 +342,14 @@ def y_time_us() -> long {
     syscall(228, 0, &ts[0]);
     ts[0] * 1000000 + ts[1] / 1000
 };
+// wait_pid(pid): wait4 for a child (fork) -> its exit code, 128 + the
+// signal that ended it, or -1 when there is no such child.
+def y_wait_pid(pid: long) -> long {
+    let status: [long; 1] = [0; 1];
+    let r = syscall(61, pid, &status[0], 0, 0);
+    let s = status[0] & 65535;
+    if (r < 0) { -1 } else if ((s & 127) == 0) { (s >> 8) & 255 } else { 128 + (s & 127) }
+};
 def y_sleep(ms: long) -> long {
     let m = ms;
     if (m < 0) { m = 0; 0; } else { 0; };
