@@ -107,57 +107,57 @@ Yv *arch_prelude_lines(void) {
     // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
     Yv *lines = yav(0);
+    // Frameless: the two arguments are read off the stack (%rsp still holds
+    // the return address, so arg1 is at 8(%rsp)) and only the caller-saved
+    // registers are touched. ycc compares two strings 71 million times
+    // compiling itself and each comparison is a handful of bytes, so the old
+    // push %rbp/%rbx/%r13 ... pop sequence -- ten instructions, a third of
+    // the call -- was pure overhead.
     lines = ya_push(lines, ys("y_str_eq:"));
-    lines = ya_push(lines, ys("    push %rbp"));
-    lines = ya_push(lines, ys("    mov %rsp, %rbp"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    push %r13"));
-    lines = ya_push(lines, ys("    mov 24(%rbp), %rbx"));
-    lines = ya_push(lines, ys("    mov 16(%rbp), %r13"));
-    lines = ya_push(lines, ys("    test %rbx, %rbx"));
-    lines = ya_push(lines, ys("    jnz yse_aok"));
-    lines = ya_push(lines, ys("    test %r13, %r13"));
-    lines = ya_push(lines, ys("    jnz yse_no"));
-    lines = ya_push(lines, ys("    mov $1, %rax"));
-    lines = ya_push(lines, ys("    jmp yse_done"));
-    lines = ya_push(lines, ys("yse_aok:"));
-    lines = ya_push(lines, ys("    test %r13, %r13"));
+    lines = ya_push(lines, ys("    mov 8(%rsp), %rax"));
+    lines = ya_push(lines, ys("    mov 16(%rsp), %rcx"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    jz yse_bn"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
     lines = ya_push(lines, ys("    jz yse_no"));
-    lines = ya_push(lines, ys("    mov (%rbx), %rcx"));
-    lines = ya_push(lines, ys("    mov (%r13), %rdx"));
-    lines = ya_push(lines, ys("    cmp %rdx, %rcx"));
+    lines = ya_push(lines, ys("    mov (%rax), %r8"));
+    lines = ya_push(lines, ys("    mov (%rcx), %r9"));
+    lines = ya_push(lines, ys("    cmp %r9, %r8"));
     lines = ya_push(lines, ys("    jnz yse_no"));
-    lines = ya_push(lines, ys("    mov %rbx, %rbx"));
-    lines = ya_push(lines, ys("    add $8, %rbx"));
-    lines = ya_push(lines, ys("    mov %r13, %r13"));
-    lines = ya_push(lines, ys("    add $8, %r13"));
-    lines = ya_push(lines, ys("    xor %r8d, %r8d"));
+    lines = ya_push(lines, ys("    add $8, %rax"));
+    lines = ya_push(lines, ys("    add $8, %rcx"));
+    lines = ya_push(lines, ys("    xor %r10d, %r10d"));
     lines = ya_push(lines, ys("yse_loop:"));
-    lines = ya_push(lines, ys("    mov %rcx, %rax"));
-    lines = ya_push(lines, ys("    sub %r8, %rax"));
-    lines = ya_push(lines, ys("    sub $8, %rax"));
+    lines = ya_push(lines, ys("    mov %r8, %rdx"));
+    lines = ya_push(lines, ys("    sub %r10, %rdx"));
+    lines = ya_push(lines, ys("    sub $8, %rdx"));
     lines = ya_push(lines, ys("    jb yse_tail"));
-    lines = ya_push(lines, ys("    mov (%rbx,%r8,1), %rax"));
-    lines = ya_push(lines, ys("    mov (%r13,%r8,1), %rdx"));
-    lines = ya_push(lines, ys("    cmp %rdx, %rax"));
+    lines = ya_push(lines, ys("    mov (%rax,%r10,1), %rdx"));
+    lines = ya_push(lines, ys("    mov (%rcx,%r10,1), %r11"));
+    lines = ya_push(lines, ys("    cmp %r11, %rdx"));
     lines = ya_push(lines, ys("    jnz yse_no"));
-    lines = ya_push(lines, ys("    add $8, %r8"));
+    lines = ya_push(lines, ys("    add $8, %r10"));
     lines = ya_push(lines, ys("    jmp yse_loop"));
     lines = ya_push(lines, ys("yse_tail:"));
-    lines = ya_push(lines, ys("    mov %rcx, %r8"));
-    lines = ya_push(lines, ys("    sub $8, %r8"));
-    lines = ya_push(lines, ys("    mov (%rbx,%r8,1), %rax"));
-    lines = ya_push(lines, ys("    mov (%r13,%r8,1), %rdx"));
-    lines = ya_push(lines, ys("    cmp %rdx, %rax"));
+    lines = ya_push(lines, ys("    mov %r8, %r10"));
+    lines = ya_push(lines, ys("    sub $8, %r10"));
+    lines = ya_push(lines, ys("    mov (%rax,%r10,1), %rdx"));
+    lines = ya_push(lines, ys("    mov (%rcx,%r10,1), %r11"));
+    lines = ya_push(lines, ys("    cmp %r11, %rdx"));
     lines = ya_push(lines, ys("    jnz yse_no"));
     lines = ya_push(lines, ys("    mov $1, %rax"));
-    lines = ya_push(lines, ys("    jmp yse_done"));
+    lines = ya_push(lines, ys("    ret"));
     lines = ya_push(lines, ys("yse_no:"));
     lines = ya_push(lines, ys("    xor %eax, %eax"));
-    lines = ya_push(lines, ys("yse_done:"));
-    lines = ya_push(lines, ys("    pop %r13"));
-    lines = ya_push(lines, ys("    pop %rbx"));
-    lines = ya_push(lines, ys("    pop %rbp"));
+    lines = ya_push(lines, ys("    ret"));
+    // arg1 was none: equal only if arg2 is too
+    lines = ya_push(lines, ys("yse_bn:"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    jz yse_yes"));
+    lines = ya_push(lines, ys("    xor %eax, %eax"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("yse_yes:"));
+    lines = ya_push(lines, ys("    mov $1, %rax"));
     lines = ya_push(lines, ys("    ret"));
     // y_str_cmp(a, b) -> -1 / 0 / 1, lexicographic unsigned-byte
     // order. Only the SIGN is meaningful to callers (types.y typeof_cmp,
