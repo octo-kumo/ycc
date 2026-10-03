@@ -744,6 +744,8 @@ def parse_map(toks: [Tok], p: long) -> Parsed {
                     if (is_punct(toks, pos + 1, ":")) {
                         pos = pos + 2;
                     } else if (kt == "id" && (is_punct(toks, pos + 1, ",") || is_punct(toks, pos + 1, "}"))) {
+                        // `{x, y}` is `{x: x, y: y}`: the name is parsed
+                        // again below, as the value.
                     } else {
                         keys += key;
                         vals += expect_err(toks, pos + 1, "':' after the key");

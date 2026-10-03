@@ -2352,6 +2352,7 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
     let tu = unfold(t);
     let tk: long = tu.k;
     if (tk == K.tunk) {
+        // an alias that stands for no type (rename.y reported it)
     } else if (tk != K.trec && tk != K.tpat) {
         st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
     } else if (sk == K.tunk) {
