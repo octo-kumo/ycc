@@ -2922,8 +2922,13 @@ def fmt_number(spec: str, a: long, b: long) -> long {
 };
 
 // How a value formats under a spec: 1 an integer (long, byte), 2 a float,
-// 0 anything else -- its tostring text, like a str.
-def fmt_kind(t: { k: long }) -> long {
+// 0 anything else -- its tostring text, like a str. NOTE: the parameter is
+// the whole Type, not a `{ k: long }` view of it: a record parameter is
+// exact, so passing a union-typed `t` would ask the emitter to cast it to
+// the one member with a `k` field, and the cast checks at run time -- which
+// trapped on every type whose member is not that one (`f"{a:x}"` for an
+// array, a record or an option crashed the compiler).
+def fmt_kind(t: Type) -> long {
     if (t.k == K.tlong || t.k == K.tbyte) { 1 } else if (t.k == K.tfloat) { 2 } else { 0 }
 };
 
