@@ -2212,8 +2212,8 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: "tarr", of: normtype({ k: "tstr" }) })
         } else if (name == "range") {
             normtype({ k: "tarr", of: normtype({ k: "tlong" }) })
-        } else if (name == "push" || name == "prepend") {
-            // both yield the array they take (the header never moves, and
+        } else if (name == "push" || name == "prepend" || name == "push$all") {
+            // all yield the array they take (the header never moves, and
             // the type is the array's either way)
             let gargs: [Node] = node.args;
             infer(st, gargs[0])
@@ -4752,6 +4752,8 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             gen_range(st, node)
         } else if (name == "push") {
             gen_push(st, node)
+        } else if (name == "push$all") {
+            gen_push_all(st, node)
         } else if (name == "some") {
             gen_some(st, node)
         } else if (name == "is_some") {
@@ -7066,10 +7068,11 @@ def gen_place_bind(tgt: Node, t1: str, ln: long, cl: long) -> Node {
 def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
     // In-place array forms. `*=` prepends one element. `+=` pushes one
     // element — or, when the VALUE is an array of the same element type
-    // (types.arr_plus_kind "cat"), appends its elements one by one (its
-    // length is captured first, so `a += a` is safe); `[[T]] += [T]`
-    // pushes the [T] whole. The checker enforces matching element types
-    // (types.y opassign_check).
+    // (types.arr_plus_kind "cat"), appends its elements: in bulk when the
+    // element types are one (y_arr_extend), else one by one, each
+    // converted (its length is captured first, so `a += a` is safe);
+    // `[[T]] += [T]` pushes the [T] whole. The checker enforces matching
+    // element types (types.y opassign_check).
     let tgt = node.tgt;
     let op = node.op;
     let v = node.v;
@@ -7080,6 +7083,7 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
     let t1 = "y_t" + tostring(r.uid);
     let tt = infer(st, tgt);
     let mode = "push";
+    let bulk = false;
     if (op == "*") {
         mode = "prepend";
         0
@@ -7087,13 +7091,19 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
         let vt = infer(st, v);
         if ((vt.k == "tarr" || vt.k == "tarrfix") && types.arr_plus_kind(tt, vt) == "cat") {
             mode = "append";
+            let ta: ArrTy = tt;
+            let va: ArrTy = vt;
+            bulk = types.teq(ta.of, va.of);
             0
         } else {
             0
         };
         0
     };
-    if (mode == "append") {
+    if (mode == "append" && bulk) {
+        let all = n_call2("push$all", gen_place_read(tgt, t1, ln, cl), v, ln, cl);
+        gen(st, block3(gen_place_bind(tgt, t1, ln, cl), gen_place_assign(tgt, all, t1, ln, cl), gen_place_read(tgt, t1, ln, cl), ln, cl))
+    } else if (mode == "append") {
         // { let tv = v; let ti = 0; let tn = len(tv);
         //   while (ti < tn) { place += tv[ti]; ti = ti + 1 }
         //   place }
@@ -7588,6 +7598,19 @@ def gen_push(st: EmitSt, node: Call) -> EmitSt {
     st = emit(st, "    call y_arr_push");
     let nbytes = len(node.args) * 8 + 8;
     emit(st, "    add $" + tostring(nbytes) + ", %rsp")
+};
+
+// `arr += other` with one element type (gen_opassign_arr makes the call,
+// a name no program can write): y_arr_extend appends other's elements in
+// bulk.
+def gen_push_all(st: EmitSt, node: Call) -> EmitSt {
+    let pargs: [Node] = node.args;
+    let pesz = arr_elem_bytes(infer(st, pargs[0]));
+    st = gen_push_args_as(st, node.args, []);
+    st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    call y_arr_extend");
+    emit(st, "    add $24, %rsp")
 };
 
 // some(v): box v in 8 heap bytes; the box address (nonzero) is the value.

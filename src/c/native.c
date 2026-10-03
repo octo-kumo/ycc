@@ -436,6 +436,7 @@ Yv *gen_array(Yv *st, Yv *node);
 Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety);
 Yv *gen_len(Yv *st, Yv *node);
 Yv *gen_push(Yv *st, Yv *node);
+Yv *gen_push_all(Yv *st, Yv *node);
 Yv *gen_some(Yv *st, Yv *node);
 Yv *gen_box_rax(Yv *st);
 int some_of_lit(Yv *node);
@@ -3078,7 +3079,8 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tstr")));
         } else if (ys_eq_lit(name, "range")) {
             return yr(2, "k", ys("tarr"), "of", yr(1, "k", ys("tlong")));
-        } else if (ys_eq_lit(name, "push") || ys_eq_lit(name, "prepend")) {
+        } else if (ys_eq_lit(name, "push") || ys_eq_lit(name, "prepend") ||
+                   ys_eq_lit(name, "push$all")) {
             /* both yield the array they take (the header never moves, and
              * the type is the array's either way) */
             Yv *gargs = yr_get(node, "args");
@@ -5711,6 +5713,8 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_range(st, node);
         } else if (ys_eq_lit(name, "push")) {
             return gen_push(st, node);
+        } else if (ys_eq_lit(name, "push$all")) {
+            return gen_push_all(st, node);
         } else if (ys_eq_lit(name, "some")) {
             return gen_some(st, node);
         } else if (ys_eq_lit(name, "is_some")) {
@@ -8407,10 +8411,11 @@ Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl) {
 Yv *gen_opassign_arr(Yv *st, Yv *node) {
     /* In-place array forms. `*=` prepends one element. `+=` pushes one
      * element — or, when the VALUE is an array of the same element type
-     * (types.arr_plus_kind "cat"), appends its elements one by one (its
-     * length is captured first, so `a += a` is safe); `[[T]] += [T]`
-     * pushes the [T] whole. The checker enforces matching element types
-     * (types.y opassign_check). */
+     * (types.arr_plus_kind "cat"), appends its elements: in bulk when the
+     * element types are one (y_arr_extend), else one by one, each
+     * converted (its length is captured first, so `a += a` is safe);
+     * `[[T]] += [T]` pushes the [T] whole. The checker enforces matching
+     * element types (types.y opassign_check). */
     Yv *tgt = yr_get(node, "tgt");
     Yv *op = yr_get(node, "op");
     Yv *v = yr_get(node, "v");
@@ -8421,6 +8426,7 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
     Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
     Yv *tt = infer(st, tgt);
     Yv *mode = ys("push");
+    int bulk = 0;
     if (ys_eq_lit(op, "*")) {
         mode = ys("prepend");
         ;
@@ -8430,9 +8436,17 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
              ys_eq_lit(yr_get(vt, "k"), "tarrfix")) &&
             ys_eq_lit(arr_plus_kind(tt, vt), "cat")) {
             mode = ys("append");
+            bulk = teq(yr_get(tt, "of"), yr_get(vt, "of"));
         }
     }
-    if (ys_eq_lit(mode, "append")) {
+    if (ys_eq_lit(mode, "append") && bulk) {
+        Yv *all = n_call2(ys("push$all"), gen_place_read(tgt, t1, ln, cl), v,
+                          ln, cl);
+        return gen(st,
+                   block3(gen_place_bind(tgt, t1, ln, cl),
+                          gen_place_assign(tgt, all, t1, ln, cl),
+                          gen_place_read(tgt, t1, ln, cl), ln, cl));
+    } else if (ys_eq_lit(mode, "append")) {
         /* { let tv = v; let ti = 0; let tn = len(tv);
          *   while (ti < tn) { place = push(place, tv[ti]); ti = ti + 1 }
          *   place } */
@@ -9021,6 +9035,19 @@ Yv *gen_push(Yv *st, Yv *node) {
     long nbytes = yv_len(yr_get(node, "args")) * 8 + 8;
     return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(nbytes)),
                            ys(", %rsp")));
+}
+
+/* `arr += other` with one element type (gen_opassign_arr makes the call,
+ * a name no program can write): y_arr_extend appends other's elements in
+ * bulk. */
+Yv *gen_push_all(Yv *st, Yv *node) {
+    Yv *pargs = yr_get(node, "args");
+    long pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
+    st = gen_push_args_as(st, yr_get(node, "args"), yav(0));
+    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    call y_arr_extend"));
+    return emit(st, ys("    add $24, %rsp"));
 }
 
 Yv *gen_some(Yv *st, Yv *node) {
