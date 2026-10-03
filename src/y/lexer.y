@@ -208,7 +208,7 @@ def fstr_expr_end(src: str, lo: long) -> long {
             depth = depth + 1;
             i = i + 1;
         } else if (depth > 0) {
-            if (c == c')' || c == c']' || c == c'}') { depth = depth - 1; } else { };
+            if (c == c')' || c == c']' || c == c'}') { depth = depth - 1; }
             i = i + 1;
         } else if (c == c'?') {
             tern = tern + 1;
@@ -273,7 +273,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                 let lo = i + 1;
                 let hi = fstr_expr_end(src, lo);
                 let hc = 0;
-                if (hi < n) { hc = byte_at(src, hi); } else { };
+                if (hi < n) { hc = byte_at(src, hi); }
                 if (hc != c'}' && hc != c':') {
                     if (hi >= n) {
                         err = "unterminated f-string field";
@@ -322,7 +322,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
         };
     };
     let end = i;
-    if (err != "") { end = lit_end(src, q); } else { };
+    if (err != "") { end = lit_end(src, q); }
     { end: end, err: err, at: at, fields: fields }
 };
 
@@ -370,11 +370,11 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end:
             at = lo - 1;
             bl = bp.line;
             bc = bp.col;
-            if (k > 0) { toks += mktok("op", "+", bl, bc); } else { };
+            if (k > 0) { toks += mktok("op", "+", bl, bc); }
             if (lo - 1 > from) {
                 toks += mktok("str", unescape(src[from:lo - 1], true), bl, bc);
                 toks += mktok("op", "+", bl, bc);
-            } else { };
+            }
             toks += mktok("id", "#fmt", bl, bc);
             toks += mktok("punct", "(", bl, bc);
             let sub = tokenize(src[lo:hi]);
@@ -402,7 +402,7 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end:
         if (w.end - 1 > from) {
             toks += mktok("op", "+", bl, bc);
             toks += mktok("str", unescape(src[from:w.end - 1], true), bl, bc);
-        } else { };
+        }
         toks += mktok("punct", ")", bl, bc);
     };
     let e = fstr_adv(src, q - 1, w.end, line, col);

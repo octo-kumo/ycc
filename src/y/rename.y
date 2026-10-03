@@ -86,8 +86,8 @@ def rn_lookup(st: RnSt, name: str) -> str {
         // a module's code: its locals (frames 2 up: 0 is empty, 1 holds
         // the top level), then its own top-level names, then the rest
         let u = rn_lookup_to(st, name, 2);
-        if (u == "") { u = rn_lookup_to(st, rn_mod + "." + name, 1); } else { };
-        if (u == "") { u = rn_lookup_to(st, name, 0); } else { };
+        if (u == "") { u = rn_lookup_to(st, rn_mod + "." + name, 1); }
+        if (u == "") { u = rn_lookup_to(st, name, 0); }
         u
     }
 };
@@ -449,7 +449,7 @@ def rn_tref(st: RnSt, id: long, name: str) -> Type {
     let at = -1;
     let i = 0;
     while (at < 0 && i < len(rn_tref_ids)) {
-        if (rn_tref_ids[i] == id) { at = i; } else { };
+        if (rn_tref_ids[i] == id) { at = i; }
         i = i + 1;
     };
     if (at >= 0) {
@@ -482,7 +482,7 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
         let name: TName = t;
         let j = rn_alias_index(st, name.name);
         let walked = false;
-        foreach (s in seen) { if (s == j) { walked = true; } else { }; };
+        foreach (s in seen) { if (s == j) { walked = true; }};
         if (j < 0 || walked) { false }
         else if (j == id) { true }
         else {
@@ -505,9 +505,9 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
         let hit = false;
         if (!bare) {
             foreach (f in fs) {
-                if (!hit && rn_reaches_go(st, f.typ, id, seen, bare)) { hit = true; } else { };
+                if (!hit && rn_reaches_go(st, f.typ, id, seen, bare)) { hit = true; }
             };
-        } else { };
+        }
         hit
     }
     else if (k == K.tfunc) {
@@ -516,10 +516,10 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
         if (!bare) {
             let args: [Type] = func.args;
             foreach (a in args) {
-                if (!hit && rn_reaches_go(st, a, id, seen, bare)) { hit = true; } else { };
+                if (!hit && rn_reaches_go(st, a, id, seen, bare)) { hit = true; }
             };
-            if (!hit) { hit = rn_reaches_go(st, func.ret, id, seen, bare); } else { };
-        } else { };
+            if (!hit) { hit = rn_reaches_go(st, func.ret, id, seen, bare); }
+        }
         hit
     }
     else if (k == K.tparams || k == K.tunion) {
@@ -527,7 +527,7 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
         let ts: [Type] = list.ts;
         let hit = false;
         foreach (m in ts) {
-            if (!hit && rn_reaches_go(st, m, id, seen, bare)) { hit = true; } else { };
+            if (!hit && rn_reaches_go(st, m, id, seen, bare)) { hit = true; }
         };
         hit
     }
@@ -586,7 +586,7 @@ def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
             if (len(rn_mods) > 0) { rn_mod = rn_stmt_mod(s); };
             let te = rn_typedef_err(td, st);
             rn_mod = mod0;
-            if (te.k == K.err) { out += te; } else { };
+            if (te.k == K.err) { out += te; }
         } else { out += s; };
         i = i + 1;
     };
@@ -647,7 +647,7 @@ def rn_unknown_then(first: str, st: RnSt, t: Type) -> str {
 def rn_unknown_list(st: RnSt, ts: [Type]) -> str {
     let out = "";
     foreach (t in ts) {
-        if (out == "") { out = rn_unknown_type(st, t); } else { };
+        if (out == "") { out = rn_unknown_type(st, t); }
     };
     out
 };
@@ -655,7 +655,7 @@ def rn_unknown_list(st: RnSt, ts: [Type]) -> str {
 def rn_unknown_fields(st: RnSt, fs: [Field]) -> str {
     let out = "";
     foreach (f in fs) {
-        if (out == "") { out = rn_unknown_type(st, f.typ); } else { };
+        if (out == "") { out = rn_unknown_type(st, f.typ); }
     };
     out
 };
@@ -671,7 +671,7 @@ def rn_shadow_dups(stmts: [Node]) -> [Node] {
     foreach (s in stmts) {
         let nm = rn_decl_name(s);
         names += nm;
-        if (nm != "") { ndefs = ndefs + 1; } else { };
+        if (nm != "") { ndefs = ndefs + 1; }
     };
     if (ndefs < 2) {
         stmts
@@ -1097,7 +1097,7 @@ def rn_qualified(st: RnSt, obj: Node, key: str) -> str {
 def rn_in(xs: [str], x: str) -> bool {
     let found = false;
     foreach (e in xs) {
-        if (e == x) { found = true; } else { };
+        if (e == x) { found = true; }
     };
     found
 };
@@ -1277,7 +1277,7 @@ def rn_decl_val_finish(node: Decl, v: Node, uniq: str, st: RnSt) -> RnRes {
         es += rn_unknown_err(un, node.line, node.col);
         es += v;
         v2 = { k: K.block, stmts: es, line: node.line, col: node.col };
-    } else { };
+    }
     { st: st, node: { k: K.decl, kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v2, line: node.line, col: node.col } }
 };
 
@@ -1340,9 +1340,9 @@ def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol:
     // NOTE: NO record reads here — all values are params already. `fbody`
     // rides along for signature parity with the C twin and is never read.
     let un = rn_unknown_list(st, fptypes);
-    if (un == "") { un = rn_unknown_type(st, fret); } else { };
+    if (un == "") { un = rn_unknown_type(st, fret); }
     let body: [Node] = [];
-    if (un != "") { body += rn_unknown_err(un, fline, fcol); } else { };
+    if (un != "") { body += rn_unknown_err(un, fline, fcol); }
     body += stmts;
     { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [] } }
 };
@@ -1371,7 +1371,7 @@ def rename_program_x(ast: Block, dfl: [Dfl], ofile: [long], fmods: [str]) -> Blo
     rn_fmods = fmods;
     let mods: [str] = [];
     foreach (m in fmods) {
-        if (m != "" && !rn_in(mods, m)) { mods += m; } else { };
+        if (m != "" && !rn_in(mods, m)) { mods += m; }
     };
     rn_mods = mods;
     rn_mod = "";
@@ -1437,7 +1437,7 @@ def rn_top(stmts: [Node], st: RnSt) -> RnStmts {
     let kept = rn_drop_typedefs(q, st);
     let out: [Node] = [];
     foreach (s in kept) {
-        if (len(rn_mods) > 0) { rn_mod = rn_stmt_mod(s); } else { };
+        if (len(rn_mods) > 0) { rn_mod = rn_stmt_mod(s); }
         let r = rn_node(s, st);
         st = r.st;
         out += r.node;

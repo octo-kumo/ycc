@@ -582,9 +582,9 @@ def enc_sse_arith(mn: str, dst: Operand, src: Operand) -> Encoded {
         { bytes: [], fix: [], err: "sse src" }
     } else {
         let op = 88;
-        if (mn == "subsd") { op = 92; } else { };
-        if (mn == "mulsd") { op = 89; } else { };
-        if (mn == "divsd") { op = 94; } else { };
+        if (mn == "subsd") { op = 92; }
+        if (mn == "mulsd") { op = 89; }
+        if (mn == "divsd") { op = 94; }
         let r = rex(false, dst.n, -1, src.n);
         let tail: [byte] = [15, op, modrm(3, dst.n, src.n)];
         if (r < 0) {

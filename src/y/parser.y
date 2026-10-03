@@ -97,7 +97,7 @@ def tclamp(toks: [Tok], p: long) -> long {
     // token (tokenize always appends one) so both copies agree.
     let n = len(toks);
     let q = p;
-    if (q >= n) { q = n - 1; } else { };
+    if (q >= n) { q = n - 1; }
     q
 };
 
@@ -209,7 +209,7 @@ def sep_by(toks: [Tok], p: long, close: str, one: str) -> ParsedList {
     let xs: [Node] = [];
     let pos = p;
     let go = true;
-    if (is_punct(toks, pos, close)) { go = false; } else { };
+    if (is_punct(toks, pos, close)) { go = false; }
     while (go) {
         // NOTE: `0;` tails — the while body must be void-typed (see note).
         let r: Parsed = { node: { k: K.void, line: tline(toks, pos), col: tcol(toks, pos) }, pos: pos };
@@ -225,7 +225,7 @@ def sep_by(toks: [Tok], p: long, close: str, one: str) -> ParsedList {
         pos = rpos;
         if (is_punct(toks, pos, ",")) {
             pos = pos + 1;
-            if (is_punct(toks, pos, close)) { go = false; } else { };
+            if (is_punct(toks, pos, close)) { go = false; }
         } else {
             // Neither a separator nor the closer: the token stream is
             // malformed. parser.y has no error channel, so plant a node the
@@ -440,7 +440,7 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
                 };
             };
             // A broken subscript ends the chain: what follows is unparsed.
-            if (node.k == K.err) { go = false; } else { };
+            if (node.k == K.err) { go = false; }
         } else if (is_op(toks, pos, ".")) {
             if (is_name_tok(toks, pos + 1)) {
                 let name = tv(toks, pos + 1);
@@ -588,7 +588,7 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
             let next_min = prec + 1;
             if (op == "::") {
                 next_min = prec;
-            } else { };
+            }
             let right_r = parse_binary(toks, pos + 1, next_min);
             left = { k: K.bin, op: op, l: left, r: right_r.node, line: tline(toks, pos), col: tcol(toks, pos) };
             pos = right_r.pos;
@@ -974,7 +974,7 @@ def type_err_list(ts: [Type]) -> Node {
     let out: Node = { k: K.void, line: 1, col: 1 };
     let i = 0;
     while (i < len(ts)) {
-        if (out.k == K.void) { out = type_err(ts[i]); } else { };
+        if (out.k == K.void) { out = type_err(ts[i]); }
         i = i + 1;
     };
     out
@@ -985,7 +985,7 @@ def type_err_fields(fs: [Field]) -> Node {
     let i = 0;
     while (i < len(fs)) {
         let f = fs[i];
-        if (out.k == K.void) { out = type_err(f.typ); } else { };
+        if (out.k == K.void) { out = type_err(f.typ); }
         i = i + 1;
     };
     out
@@ -1262,7 +1262,7 @@ def parse_func(toks: [Tok], p: long) -> Parsed {
     if (is_punct(toks, pos, "(")) {
         pos = pos + 1;
     } else {
-        if (!hbad) { derrs += expect_err(toks, pos, "'('"); } else { };
+        if (!hbad) { derrs += expect_err(toks, pos, "'('"); }
         hbad = true;
     };
     let names: [str] = [];
@@ -1301,7 +1301,7 @@ def parse_func(toks: [Tok], p: long) -> Parsed {
                         derrs += pte;
                         pt = { k: K.tnone };
                         hbad = true;
-                    } else { };
+                    }
                 };
                 let dv: Node = { k: K.void, line: tline(toks, pos), col: tcol(toks, pos) };
                 if (is_op(toks, pos, "=")) {
@@ -1340,7 +1340,7 @@ def parse_func(toks: [Tok], p: long) -> Parsed {
     if (is_punct(toks, pos, ")")) {
         pos = pos + 1;
     } else {
-        if (!hbad) { derrs += expect_err(toks, pos, "',' or ')'"); } else { };
+        if (!hbad) { derrs += expect_err(toks, pos, "',' or ')'"); }
     };
     // optional return type '-> type'
     // The optional return annotation updates the local type and position.
@@ -1353,7 +1353,7 @@ def parse_func(toks: [Tok], p: long) -> Parsed {
         if (rte.k == K.err) {
             derrs += rte;
             ret = { k: K.tnone };
-        } else { };
+        }
     };
     let body = parse_block(toks, pos);
     let bnode: Block = body.node;
@@ -1408,7 +1408,7 @@ def parse_block(toks: [Tok], p: long) -> Parsed {
     };
     if (last_semi && !stmt_diverges(stmts[len(stmts) - 1])) {
         stmts += { k: K.void, line: tline(toks, pos), col: tcol(toks, pos) };
-    } else { };
+    }
     res({ k: K.block, stmts: stmts, line: ln, col: cl }, skip_close(toks, pos, "}"))
 };
 
@@ -1428,7 +1428,7 @@ def stmt_end(toks: [Tok], start: long, pos: long, sn: Node, stmts: [Node]) -> lo
     } else if (pos > start && is_punct(toks, pos - 1, "}")) {
         pos
     } else {
-        if (sn.k != K.err) { stmts += expect_err(toks, pos, "';'"); } else { };
+        if (sn.k != K.err) { stmts += expect_err(toks, pos, "';'"); }
         skip_close(toks, sync_stmt(toks, pos), ";")
     }
 };
@@ -1678,8 +1678,8 @@ def sync_stmt(toks: [Tok], p: long) -> long {
                 if (v == "(" || v == "[" || v == "{") {
                     depth = depth + 1;
                 } else if (v == ")" || v == "]" || v == "}") {
-                    if (depth > 0) { depth = depth - 1; } else { };
-                } else { };
+                    if (depth > 0) { depth = depth - 1; }
+                }
                 pos = pos + 1;
             }
         } else {

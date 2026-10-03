@@ -21,9 +21,9 @@ def fs_at_cwd() -> long { -100 };
 def open_flags(how: str) -> long {
     let plus = how.ends_with("+");
     let base = how;
-    if (plus) { base = how[0:len(how) - 1]; 0; } else { 0; };
+    if (plus) { base = how[0:len(how) - 1]; 0; }
     let rw = 1;
-    if (plus) { rw = 2; 0; } else { 0; };
+    if (plus) { rw = 2; 0; }
     if (base == "r") { if (plus) { 2 } else { 0 } }
     else if (base == "w") { rw + 64 + 512 }
     else if (base == "a") { rw + 64 + 1024 }
@@ -38,7 +38,7 @@ def open_flags(how: str) -> long {
 def open_file(path: str, how: str, mode: long = 420) -> long {
     let fl = open_flags(how);
     let m = mode;
-    if (m < 0) { m = 420; } else { };
+    if (m < 0) { m = 420; }
     if (fl < 0) { -1 } else {
         let fd = syscall(257, fs_at_cwd(), path, fl + 524288, m);
         if (fd < 0) { -1 } else { fd }
@@ -52,12 +52,12 @@ def close_file(fd: long) -> bool { syscall(3, fd) == 0 };
 def read_some(fd: long, n: long) -> [byte] {
     let out: [byte] = [];
     let m = n;
-    if (m > 65536) { m = 65536; } else { };
+    if (m > 65536) { m = 65536; }
     if (m > 0) {
         let buf: [byte; 65536] = [0; 65536];
         let k = syscall(0, fd, &buf[0], m);
-        if (k > 0) { out = buf[0:k]; } else { };
-    } else { };
+        if (k > 0) { out = buf[0:k]; }
+    }
     out
 };
 
@@ -194,9 +194,9 @@ def remove_all(path: str) -> bool {
         let ok = names != none;
         if (ok) {
             foreach (n in names!) {
-                if (!remove_all(path + "/" + n)) { ok = false; } else { };
+                if (!remove_all(path + "/" + n)) { ok = false; }
             };
-        } else { };
+        }
         ok && remove_dir(path)
     } else { remove_file(path) }
 };
@@ -210,7 +210,7 @@ def make_dirs(path: str, mode: long = 493) -> bool {
     else {
         let cut = path.last_index_of("/");
         let up = true;
-        if (cut > 0) { up = make_dirs(path[0:cut], mode); } else { };
+        if (cut > 0) { up = make_dirs(path[0:cut], mode); }
         up && (make_dir(path, mode) || is_dir(path))
     }
 };
@@ -231,7 +231,7 @@ def list_dir(path: str) -> [str]? {
                     let e = off + 19;
                     while (buf[e] != 0) { e = e + 1; };
                     let name = from_bytes(buf[off + 19:e]);
-                    if (name != "." && name != "..") { names += name; } else { };
+                    if (name != "." && name != "..") { names += name; }
                     off = off + reclen;
                 };
             };

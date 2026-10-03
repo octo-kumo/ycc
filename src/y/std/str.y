@@ -231,14 +231,14 @@ def y_fmt_i(v: long, code: long, width: long) -> str {
         y_fmt_pad(e, chr(v), code, width)
     } else {
         let base = 10;
-        if (ty == 120 || ty == 88) { base = 16; } else if (ty == 111) { base = 8; } else if (ty == 98) { base = 2; } else { };
+        if (ty == 120 || ty == 88) { base = 16; } else if (ty == 111) { base = 8; } else if (ty == 98) { base = 2; }
         let pre = y_fmt_sign(v < 0, code, e);
         let g = 3;
         if (base != 10) {
             // `#`: 0x 0X 0o 0b
-            if (code / 16777216 / 4 % 2 == 1) { pre = pre + chr(48) + chr(ty); } else { };
+            if (code / 16777216 / 4 % 2 == 1) { pre = pre + chr(48) + chr(ty); }
             g = 4;
-        } else { };
+        }
         y_fmt_num(pre, y_fmt_digits(v, base, ty == 88), e, code, width, g)
     }
 };
@@ -248,9 +248,9 @@ def y_fmt_i(v: long, code: long, width: long) -> str {
 // none on the other).
 def y_fmt_digits(v: long, base: long, up: bool) -> str {
     let q = v;
-    if (q > 0) { q = 0 - q; } else { };
+    if (q > 0) { q = 0 - q; }
     let a = 87;
-    if (up) { a = 55; } else { };
+    if (up) { a = 55; }
     let out: [str] = [];
     let go = true;
     while (go) {
@@ -272,7 +272,7 @@ def y_fmt_num(pre: str, d: str, rest: str, code: long, width: long, g: long) -> 
         y_fmt_pad(pre, d + rest, code, width)
     } else {
         let sep = chr(44);
-        if (gr == 2) { sep = chr(95); } else { };
+        if (gr == 2) { sep = chr(95); }
         let ds = d;
         let out = y_fmt_group(ds, sep, g);
         if (code / 256 % 65536 == 15664) {
@@ -281,7 +281,7 @@ def y_fmt_num(pre: str, d: str, rest: str, code: long, width: long, g: long) -> 
                 ds = chr(48) + ds;
                 out = y_fmt_group(ds, sep, g);
             };
-        } else { };
+        }
         y_fmt_pad(pre, out + rest, code, width)
     }
 };
@@ -294,7 +294,7 @@ def y_fmt_group(d: str, sep: str, g: long) -> str {
     } else {
         let parts: [str] = [];
         let i = n % g;
-        if (i > 0) { parts += d[0:i]; } else { };
+        if (i > 0) { parts += d[0:i]; }
         while (i < n) {
             parts += d[i:i + g];
             i = i + g;
@@ -313,15 +313,15 @@ def y_fmt_f(bits: long, code: long, width: long, prec: long) -> str {
     let alt = code / 16777216 / 4 % 2 == 1;
     let e = chr(48)[0:0];
     let pct = e;
-    if (ty == 37) { pct = chr(37); } else { };
+    if (ty == 37) { pct = chr(37); }
     let neg = bits < 0;
     let b = bits;
-    if (neg) { b = bits + 9223372036854775807 + 1; } else { };
+    if (neg) { b = bits + 9223372036854775807 + 1; }
     let ex = b / 4503599627370496;
     let m = b % 4503599627370496;
     if (ex == 2047) {
         // inf and nan: no digits to group or zero-fill, and a nan no `-`
-        if (m != 0) { neg = false; } else { };
+        if (m != 0) { neg = false; }
         y_fmt_pad(y_fmt_sign(neg, code, e), y_fmt_word(m == 0, ty == 70 || ty == 69) + pct, code, width)
     } else {
         if (ex == 0) { ex = 1; } else { m = m + 4503599627370496; };
@@ -338,7 +338,7 @@ def y_fmt_f(bits: long, code: long, width: long, prec: long) -> str {
 // inf or nan, in capitals for F and E.
 def y_fmt_word(inf: bool, up: bool) -> str {
     let d = 0;
-    if (up) { d = 32; } else { };
+    if (up) { d = 32; }
     if (inf) { chr(105 - d) + chr(110 - d) + chr(102 - d) } else { chr(110 - d) + chr(97 - d) + chr(110 - d) }
 };
 
@@ -440,7 +440,7 @@ def y_fmt_round(d: str, keep: long) -> str {
             let j = keep + 1;
             while (j < n && byte_at(d, j) == 48) { j = j + 1; };
             up = j < n || byte_at(d, keep - 1) % 2 == 1;
-        } else { };
+        }
         if (up) {
             let b = bytes(d[0:keep]);
             let i = keep - 1;
@@ -463,11 +463,11 @@ def y_fmt_round(d: str, keep: long) -> str {
 // f and %: prec digits after the point (pct is the `%` or nothing).
 def y_fmt_fixed(sign: str, d: str, f: long, code: long, width: long, prec: long, alt: bool, pct: str) -> str {
     let dd = d;
-    if (len(dd) <= f) { dd = y_str_repeat(chr(48), f + 1 - len(dd)) + dd; } else { };
+    if (len(dd) <= f) { dd = y_str_repeat(chr(48), f + 1 - len(dd)) + dd; }
     let r = y_fmt_round(dd, len(dd) - f + prec);
     let ip = len(r) - prec;
     let rest = pct;
-    if (prec > 0 || alt) { rest = chr(46) + r[ip:len(r)] + pct; } else { };
+    if (prec > 0 || alt) { rest = chr(46) + r[ip:len(r)] + pct; }
     y_fmt_num(sign, r[0:ip], rest, code, width, 3)
 };
 
@@ -479,14 +479,14 @@ def y_fmt_sci(sign: str, d: str, f: long, code: long, width: long, prec: long, a
     if (len(d) > 1 || byte_at(d, 0) != 48) {
         x = len(d) - f - 1;
         r = y_fmt_round(d, prec + 1);
-        if (len(r) > prec + 1) { r = r[0:prec + 1]; x = x + 1; } else { };
-    } else { };
+        if (len(r) > prec + 1) { r = r[0:prec + 1]; x = x + 1; }
+    }
     let ex = chr(101);
-    if (up) { ex = chr(69); } else { };
+    if (up) { ex = chr(69); }
     if (x < 0) { ex = ex + chr(45); x = 0 - x; } else { ex = ex + chr(43); };
-    if (x < 10) { ex = ex + chr(48); } else { };
+    if (x < 10) { ex = ex + chr(48); }
     ex = ex + tostring(x);
     let rest = ex;
-    if (prec > 0 || alt) { rest = chr(46) + r[1:len(r)] + ex; } else { };
+    if (prec > 0 || alt) { rest = chr(46) + r[1:len(r)] + ex; }
     y_fmt_num(sign, r[0:1], rest, code, width, 3)
 };

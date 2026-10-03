@@ -118,8 +118,6 @@ static Yv *pk_clean(Yv *path) {
             } else if (!abs) {
                 out = ya_push(out, s);
                 ;
-            } else {
-                ;
             }
             ;
         } else {
@@ -182,8 +180,6 @@ long pk_mkdir(Yv *path) {
     if (!pk_is_dir(path)) {
         (void)pk_die(pk_cat(3, ys("cannot create directory '"), path,
                             ys("'")));
-    } else {
-        ;
     }
     return 0;
 }
@@ -228,8 +224,6 @@ static int pk_is_ident(Yv *s) {
         long c = ys_byte_at(s, 0);
         ok = c < 48 || c > 57;
         ;
-    } else {
-        ;
     }
     return ok;
 }
@@ -256,8 +250,6 @@ static Yv *pk_uncomment(Yv *line) {
             } else if (ys_eq(c, q)) {
                 q = ys("");
                 ;
-            } else {
-                ;
             }
             ;
         } else if (ys_eq_lit(c, "\"") || ys_eq_lit(c, "'")) {
@@ -265,8 +257,6 @@ static Yv *pk_uncomment(Yv *line) {
             ;
         } else if (ys_eq_lit(c, "#")) {
             end = i;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -282,8 +272,6 @@ static Yv *pk_qstr(Cursor cur, Yv *at) {
     Yv *out = yav(0);
     if (!ys_eq_lit(q, "\"") && !ys_eq_lit(q, "'")) {
         (void)pk_die(ys_cat(at, ys("expected a string")));
-        ;
-    } else {
         ;
     }
     p = p + 1;
@@ -371,8 +359,6 @@ static Yv *pk_bare(Cursor cur, Yv *at) {
     if (yv_len(key) == 0) {
         (void)pk_die(ys_cat(at, ys("expected a key")));
         ;
-    } else {
-        ;
     }
     (void)yr_set(cur, "p", yv_long(p));
     return key;
@@ -388,8 +374,6 @@ static Yv *pk_itable(Cursor cur, Yv *at) {
         (void)yr_set(cur, "p", yv_long(yv_l(yr_get(cur, "p")) + 1));
         go = 0;
         ;
-    } else {
-        ;
     }
     while (go) {
         Yv *key = pk_bare(cur, at);
@@ -398,14 +382,10 @@ static Yv *pk_itable(Cursor cur, Yv *at) {
             (void)pk_die(pk_cat(4, at, ys("expected '=' after '"), key,
                                 ys("'")));
             ;
-        } else {
-            ;
         }
         (void)yr_set(cur, "p", yv_long(yv_l(yr_get(cur, "p")) + 1));
         if (pk_has(keys, key)) {
             (void)pk_die(pk_cat(4, at, ys("duplicate key '"), key, ys("'")));
-            ;
-        } else {
             ;
         }
         keys = ya_push(keys, key);
@@ -436,8 +416,6 @@ static long pk_count(Yv *xs, Yv *s) {
         Yv *x = ya_get(xs, i);
         if (ys_eq(x, s)) {
             n = n + 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -471,14 +449,10 @@ static Yv *pk_toml(Yv *text, Yv *path) {
             if (ys_eq_lit(ys_slice(line, 0, 2), "[[")) {
                 w = 2;
                 ;
-            } else {
-                ;
             }
             Yv *close = ys("]");
             if (w == 2) {
                 close = ys("]]");
-                ;
-            } else {
                 ;
             }
             if (yv_len(line) < 2 * w ||
@@ -486,15 +460,11 @@ static Yv *pk_toml(Yv *text, Yv *path) {
                 (void)pk_die(pk_cat(4, at, ys("expected '"), close,
                                     ys("' after the table name")));
                 ;
-            } else {
-                ;
             }
             tab = ys_trim(ys_slice(line, w, yv_len(line) - w));
             if (!pk_is_key(tab)) {
                 (void)pk_die(pk_cat(4, at, ys("bad table name '"), tab,
                                     ys("'")));
-                ;
-            } else {
                 ;
             }
             if (w == 2) {
@@ -505,8 +475,6 @@ static Yv *pk_toml(Yv *text, Yv *path) {
                 if (pk_has(tabs, tab)) {
                     (void)pk_die(pk_cat(4, at, ys("table ["), tab,
                                         ys("] appears twice")));
-                    ;
-                } else {
                     ;
                 }
                 tabs = ya_push(tabs, tab);
@@ -522,14 +490,10 @@ static Yv *pk_toml(Yv *text, Yv *path) {
             if (eq < 0) {
                 (void)pk_die(ys_cat(at, ys("expected 'key = value'")));
                 ;
-            } else {
-                ;
             }
             Yv *key = ys_trim(ys_slice(line, 0, eq));
             if (!pk_is_key(key)) {
                 (void)pk_die(pk_cat(4, at, ys("bad key '"), key, ys("'")));
-                ;
-            } else {
                 ;
             }
             Yv *id = ys_cat(
@@ -539,8 +503,6 @@ static Yv *pk_toml(Yv *text, Yv *path) {
             if (pk_has(seen, id)) {
                 (void)pk_die(ys_cat(
                     ys_cat(ys_cat(at, ys("duplicate key '")), key), ys("'")));
-                ;
-            } else {
                 ;
             }
             seen = ya_push(seen, id);
@@ -572,8 +534,6 @@ static Yv *pk_toml(Yv *text, Yv *path) {
             if (yv_l(yr_get(cur, "p")) < yv_len(yr_get(cur, "s"))) {
                 (void)pk_die(ys_cat(at, ys("unexpected text after the value")));
                 ;
-            } else {
-                ;
             }
             out = ya_push(out, e);
             ;
@@ -597,8 +557,6 @@ static Yv *pk_want_str(Yv *e, Yv *at) {
         (void)pk_die(pk_cat(4, at, ys("'"), yr_get(e, "key"),
                             ys("' must be a string")));
         ;
-    } else {
-        ;
     }
     return yr_get(e, "s");
 }
@@ -609,8 +567,6 @@ static PkMan pk_manifest(Yv *dir) {
     Yv *txt = read_file(file);
     if (yv_is_none(txt)) {
         (void)pk_die(pk_cat(3, ys("cannot read '"), file, ys("'")));
-        ;
-    } else {
         ;
     }
     Yv *ents = pk_toml(yv_unwrap(txt), file);
@@ -636,8 +592,6 @@ static PkMan pk_manifest(Yv *dir) {
                 (void)pk_die(pk_cat(4, at, ys("unknown table ["), tab,
                                     ys("]")));
                 ;
-            } else {
-                ;
             }
             ;
         } else if (ys_eq_lit(tab, "package")) {
@@ -649,8 +603,6 @@ static PkMan pk_manifest(Yv *dir) {
                 (void)pk_die(pk_cat(6, at, ys("'"), bn,
                                     ys("' cannot name a bin: build/"), bn,
                                     ys(" is ycc's own")));
-                ;
-            } else {
                 ;
             }
             Yv *bin = yr(2, "name", bn, "path", pk_want_str(e, at));
@@ -669,8 +621,6 @@ static PkMan pk_manifest(Yv *dir) {
     if (yv_len(yr_get(m, "name")) == 0) {
         (void)pk_die(pk_cat(2, file, ys(": [package] has no name")));
         ;
-    } else {
-        ;
     }
     return m;
 }
@@ -683,14 +633,10 @@ static long pk_man_package(PkMan m, PkEnt e, Yv *at) {
             (void)pk_die(pk_cat(4, at, ys("package name '"), nm,
                                 ys("' is not an identifier")));
             ;
-        } else {
-            ;
         }
         if (pk_is_kw(nm)) {
             (void)pk_die(pk_cat(4, at, ys("package name '"), nm,
                                 ys("' is a keyword")));
-            ;
-        } else {
             ;
         }
         (void)yr_set(m, "name", nm);
@@ -701,8 +647,6 @@ static long pk_man_package(PkMan m, PkEnt e, Yv *at) {
     } else if (ys_eq_lit(key, "src")) {
         if (yv_l(yr_get(e, "k")) != K_a) {
             (void)pk_die(pk_cat(2, at, ys("'src' must be an array of strings")));
-            ;
-        } else {
             ;
         }
         (void)yr_set(m, "roots", yr_get(e, "items"));
@@ -724,14 +668,10 @@ static PkDep pk_man_dep(PkEnt e, Yv *at) {
         (void)pk_die(pk_cat(4, at, ys("dependency name '"), nm,
                             ys("' is not an identifier")));
         ;
-    } else {
-        ;
     }
     if (pk_is_kw(nm)) {
         (void)pk_die(pk_cat(4, at, ys("dependency name '"), nm,
                             ys("' is a keyword")));
-        ;
-    } else {
         ;
     }
     Yv *d = yr(4, "name", nm, "path", ys(""), "git", ys(""), "rev", ys(""));
@@ -772,8 +712,6 @@ static PkDep pk_man_dep(PkEnt e, Yv *at) {
                yv_len(yr_get(d, "git")) == 0) {
         (void)pk_die(pk_cat(4, at, ys("dependency '"), nm,
                             ys("' has a rev but no git")));
-        ;
-    } else {
         ;
     }
     return d;
@@ -847,8 +785,6 @@ Yv *pk_load(Yv *dir) {
                          ys(""), "rev", ys(""), "commit", ys(""));
         (void)ya_push(yr_get(st, "nodes"), node);
         ;
-    } else {
-        ;
     }
     (void)pk_lock_write(dir, yr_get(st, "nodes"));
     Yv *bins = yav(0);
@@ -893,8 +829,6 @@ static long pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0) {
                 ;
             }
             ;
-        } else {
-            ;
         }
         ;
     } else {
@@ -931,8 +865,6 @@ static long pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0) {
                 5, ys("package '"), yr_get(m, "name"), ys("' ("),
                 pk_src(d, fdir), ys(") has no lib to import")));
             ;
-        } else {
-            ;
         }
         (void)ya_push(yr_get(st, "stack"), yr_get(d, "name"));
         Yv *mds = yr_get(m, "deps");
@@ -953,8 +885,6 @@ static long pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0) {
                          "rev", yr_get(d, "rev"), "commit",
                          yr_get(at, "commit"));
         (void)ya_push(yr_get(st, "nodes"), node);
-        ;
-    } else {
         ;
     }
     return 0;
@@ -1009,8 +939,6 @@ static Yv *pk_read_environ(void) {
             chunks = ya_push(chunks, ys_n(buf, (size_t)got));
         } else if (got < 0) {
             failed = 1;
-        } else {
-            ;
         }
     } while (got > 0);
     (void)syscall(SYS_close, fd);
@@ -1046,12 +974,8 @@ static Yv *pk_env(void) {
                         ys("; "));
                     out = ya_push(out, entry);
                     ;
-                } else {
-                    ;
                 }
                 start = i + 1;
-                ;
-            } else {
                 ;
             }
             i = i + 1;
@@ -1097,8 +1021,6 @@ static PkGit pk_fetch(PkDep d, Yv *base, Yv *pin) {
     if (yv_len(want) == 0) {
         want = yr_get(d, "rev");
         ;
-    } else {
-        ;
     }
     Yv *cmd = pk_cat(
         11, pk_env(), ys("mkdir -p "), pk_q(base), ys(" && rm -rf "),
@@ -1109,8 +1031,6 @@ static PkGit pk_fetch(PkDep d, Yv *base, Yv *pin) {
             3, cmd, ys(" && git -c advice.detachedHead=false checkout --quiet "),
             pk_q(want));
         ;
-    } else {
-        ;
     }
     cmd = pk_cat(2, cmd, ys(" && git rev-parse HEAD > .git/ycc-commit"));
     eputs_(pk_cat(5, ys("fetching "), yr_get(d, "name"), ys(" ("),
@@ -1119,15 +1039,11 @@ static PkGit pk_fetch(PkDep d, Yv *base, Yv *pin) {
         (void)pk_die(pk_cat(5, ys("fetching '"), yr_get(d, "name"),
                             ys("' from "), yr_get(d, "git"), ys(" failed")));
         ;
-    } else {
-        ;
     }
     Yv *ct = read_file(pk_cat(2, tmp, ys("/.git/ycc-commit")));
     Yv *commit = ys("");
     if (!yv_is_none(ct)) {
         commit = ys_trim(yv_unwrap(ct));
-        ;
-    } else {
         ;
     }
     Yv *dest = pk_cat(5, base, ys("/"), yr_get(d, "name"), ys("-"), commit);
@@ -1136,15 +1052,11 @@ static PkGit pk_fetch(PkDep d, Yv *base, Yv *pin) {
         mv = pk_cat(5, ys("rm -rf "), pk_q(dest), ys(" && mv "), pk_q(tmp),
                     pk_cat(2, ys(" "), pk_q(dest)));
         ;
-    } else {
-        ;
     }
     if (yv_len(commit) == 0 ||
         pk_exec(pk_cat(2, pk_env(), mv)) != 0) {
         (void)pk_die(pk_cat(5, ys("fetching '"), yr_get(d, "name"),
                             ys("' from "), yr_get(d, "git"), ys(" failed")));
-        ;
-    } else {
         ;
     }
     return yr(2, "dir", dest, "commit", commit);
@@ -1185,17 +1097,11 @@ static Yv *pk_lock_read(Yv *dir) {
                 } else if (ys_eq_lit(key, "commit")) {
                     (void)yr_set(lk, "commit", yr_get(e, "s"));
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             i = i + 1;
         }
-        ;
-    } else {
         ;
     }
     return out;
@@ -1211,8 +1117,6 @@ static Yv *pk_lock_find(Yv *locks, PkDep d) {
             ys_eq(yr_get(lk, "git"), yr_get(d, "git")) &&
             ys_eq(yr_get(lk, "rev"), yr_get(d, "rev"))) {
             out = yr_get(lk, "commit");
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1241,8 +1145,6 @@ static long pk_lock_write(Yv *dir, Yv *nodes) {
             out = ya_push(out, entry);
             any = 1;
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
@@ -1254,17 +1156,11 @@ static long pk_lock_write(Yv *dir, Yv *nodes) {
         if (!yv_is_none(old)) {
             same = ys_eq(yv_unwrap(old), text);
             ;
-        } else {
-            ;
         }
         if (!same && !write_file(file, text)) {
             (void)pk_die(pk_cat(3, ys("writing '"), file, ys("' failed")));
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     return 0;
@@ -1293,26 +1189,18 @@ long pk_vendor(Yv *dir) {
                     (void)pk_die(pk_cat(3, ys("vendoring '"),
                                         yr_get(p, "name"), ys("' failed")));
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             eputs_(pk_cat(5, ys("vendored "), yr_get(p, "name"), ys(" ("),
                           vd, ys(")\n")));
             n = n + 1;
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
     if (n == 0) {
         eputs_(ys("nothing to vendor: no git dependencies\n"));
-        ;
-    } else {
         ;
     }
     return 0;
@@ -1369,8 +1257,6 @@ Yv *pk_self_id(void) {
     if (yv_is_none(t)) {
         (void)pk_die(
             ys("cannot read the compiler's own binary (/proc/self/exe)"));
-        ;
-    } else {
         ;
     }
     Yv *h = pk_hash_new();

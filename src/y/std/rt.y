@@ -128,8 +128,8 @@ def y_str_tonum(s: str) -> long {
         if (byte_at(s, 0) == 45) {
             neg = true;
             i = 1;
-        } else { };
-    } else { };
+        }
+    }
     let acc = 0;
     let go = true;
     while (go) {
@@ -163,16 +163,16 @@ def y_str_lastidx(hay: str, needle: str) -> long {
                         let j = 0;
                         let ok = true;
                         while (j < m) {
-                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; } else { };
+                            if (byte_at(hay, i + j) != byte_at(needle, j)) { ok = false; }
                             j = j + 1;
                         };
-                        if (ok) { found = i; } else { };
+                        if (ok) { found = i; }
                     } else { go = false; };
                     i = i - 1;
                 } else { go = false; };
             };
-        } else { };
-    } else { };
+        }
+    }
     found
 };
 
@@ -180,7 +180,7 @@ def y_str_lastidx(hay: str, needle: str) -> long {
 def y_range(n: long) -> [long] {
     let out: [long] = [];
     let m = n;
-    if (m < 0) { m = 0; } else { };
+    if (m < 0) { m = 0; }
     let i = 0;
     while (i < m) {
         out += i;
@@ -213,7 +213,7 @@ def y_wait_pid(pid: long) -> long {
 };
 def y_sleep(ms: long) -> long {
     let m = ms;
-    if (m < 0) { m = 0; } else { };
+    if (m < 0) { m = 0; }
     let ts: [long; 2] = [0; 2];
     ts[0] = m / 1000;
     ts[1] = (m % 1000) * 1000000;

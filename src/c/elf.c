@@ -57,11 +57,11 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
     long codetrail = codesz % 4096;
     long codepad = 0;
     // NOTE: `0;` tails (see parser.y parse_binary note).
-    if (codetrail != 0) { codepad = 4096 - codetrail; ; } else { ; }
+    if (codetrail != 0) { codepad = 4096 - codetrail; ; }
     long rosz = yv_len(rodata) + 8;
     long rotrail = rosz % 4096;
     long ropad = 0;
-    if (rotrail != 0) { ropad = 4096 - rotrail; ; } else { ; }
+    if (rotrail != 0) { ropad = 4096 - rotrail; ; }
     long total = code_off + codesz + codepad + rosz + ropad;
     long entry = base + code_off + entry_off;
     Yv *dbg = elf_debug(code_off, codesz, codepad, yv_len(rodata), total,
@@ -83,7 +83,7 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
     out = push_le16(out, 64);
     out = push_le16(out, 56);
     long phnum = 1;
-    if (bss_len > 0) { phnum = 2; ; } else { ; };
+    if (bss_len > 0) { phnum = 2; ; }
     out = push_le16(out, phnum);
     if (yv_l(yr_get(dbg, "shnum")) > 0) {
         out = push_le16(out, 64);
@@ -114,8 +114,6 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
         out = push_le64(out, yv_l(yr_get(dbg, "bss_fsz")));
         out = push_le64(out, bss_len);
         out = push_le64(out, 4096);
-        ;
-    } else {
         ;
     }
     out = push_bytes(out, code);

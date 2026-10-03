@@ -53,7 +53,7 @@ def addr_set(a: [byte; 16], host: str, port: long) -> long {
         a[6] = tonum(d[2]);
         a[7] = tonum(d[3]);
         0
-    } else { 0; };
+    }
     0
 };
 
@@ -129,10 +129,10 @@ def recv_str(fd: long, max: long) -> str? {
     let n = max;
     if (n > 4096) {
         n = 4096;
-    } else { };
+    }
     if (n < 0) {
         n = 0;
-    } else { };
+    }
     let k = syscall(0, fd, &buf[0], n);
     if (k <= 0) {
         none
@@ -470,7 +470,7 @@ def http_response(status: long, body: str) -> str {
     } else if (status != 200) {
         code = tostring(status);
         text = "Status";
-    } else { };
+    }
     "HTTP/1.1 " + code + " " + text + "\r\nContent-Length: " + tostring(len(body))
         + "\r\nConnection: close\r\n\r\n" + body
 };
@@ -488,10 +488,10 @@ def http_read_head(fd: long) -> str {
             out = out + unwrap(chunk);
             if (index_of(out, "\r\n\r\n") >= 0) {
                 done = true;
-            } else { };
+            }
             if (len(out) > 65536) {
                 done = true;
-            } else { };
+            }
         } else {
             done = true;
         };

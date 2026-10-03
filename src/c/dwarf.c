@@ -34,7 +34,7 @@ Yv *dwarf_sections(Yv *files, Yv *rows, long text_addr, long text_len,
     if (yv_len(files) > 0) {
         root = ya_get(files, 0);
         ;
-    } else { ; };
+    }
     Yv *out = yav(0);
     out = ya_push(out, yr(2, "name", ys(".debug_info"),
                           "data", dw_info(root, comp_dir, text_addr, text_len)));
@@ -119,21 +119,21 @@ static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len) {
             if (cut > 0) {
                 d = ys_slice(fname, 0, cut);
                 ;
-            } else { ; };
+            }
             long di = 0;
             long i = 0;
             while (i < yv_len(dirs)) {
                 if (di == 0 && ys_eq(ya_get(dirs, i), d)) {
                     di = i + 1;
                     ;
-                } else { ; };
+                }
                 i = i + 1;
             }
             if (di == 0) {
                 dirs = ya_push(dirs, d);
                 di = yv_len(dirs);
                 ;
-            } else { ; };
+            }
             fdir = ya_push(fdir, yv_long(di));
             fbase = ya_push(fbase, ys_slice(fname, cut + 1, yv_len(fname)));
             ;
@@ -226,7 +226,7 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
                 b = dw_uleb(b, f);
                 cur_file = f;
                 ;
-            } else { ; };
+            }
             long dl = l - cur_line;
             if (dl < -5 || dl > 8) {
                 /* DW_LNS_advance_line */
@@ -234,7 +234,7 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
                 b = dw_sleb(b, dl);
                 dl = 0;
                 ;
-            } else { ; };
+            }
             long op = dl + 5 + 14 * (off - addr) + 13;
             if (op > 255) {
                 /* DW_LNS_advance_pc */
@@ -242,7 +242,7 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
                 b = dw_uleb(b, off - addr);
                 op = dl + 5 + 13;
                 ;
-            } else { ; };
+            }
             b = ya_push(b, yv_long(op));
             addr = off;
             cur_line = l;
@@ -252,13 +252,13 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
             b = ya_push(b, yv_long(2));
             b = dw_uleb(b, text_len - addr);
             ;
-        } else { ; };
+        }
         /* DW_LNE_end_sequence: extended opcode (0), 1 byte, 1 */
         b = ya_push(b, yv_long(0));
         b = ya_push(b, yv_long(1));
         b = ya_push(b, yv_long(1));
         ;
-    } else { ; };
+    }
     return b;
 }
 
@@ -305,7 +305,7 @@ static Yv *dw_sleb(Yv *out, long v) {
         if (x < 0 && q * 128 != x) {
             q = q - 1;
             ;
-        } else { ; };
+        }
         long lo = x - q * 128;
         x = q;
         if ((x == 0 && lo < 64) || (x == -1 && lo >= 64)) {

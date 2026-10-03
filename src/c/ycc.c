@@ -179,8 +179,6 @@ Yv *self_pack(void) {
                     if (want > 65536) {
                         want = 65536;
                         ;
-                    } else {
-                        ;
                     }
                     ssize_t got = read(fd, buf, (size_t)want);
                     if (got <= 0) {
@@ -195,19 +193,11 @@ Yv *self_pack(void) {
                 if (left == 0) {
                     pack = ys_join(pieces, ys(""));
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     close(fd);
@@ -228,15 +218,11 @@ long write_std_pack(Yv *path) {
                       ys(" bytes)\n")));
         exit_(1);
         return 0;
-    } else {
-        ;
     }
     if (!write_file(path, ys_cat(ys_cat(pack, nd), pack_magic()))) {
         puts_(ys_cat(ys_cat(ys("error: writing '"), path), ys("' failed\n")));
         exit_(1);
         return 0;
-    } else {
-        ;
     }
     return 0;
 }
@@ -325,8 +311,6 @@ long print_native_errors(Yv *errors, Yv *origin, int bare) {
             if (ys_eq(ya_get(seen, j), at)) {
                 dup = 1;
                 ;
-            } else {
-                ;
             }
             j = j + 1;
         }
@@ -336,8 +320,6 @@ long print_native_errors(Yv *errors, Yv *origin, int bare) {
                 ys_cat(ys_cat(at, ys(": error: ")),
                        yr_get(e, "msg")),
                 ys("\n")));
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -381,7 +363,7 @@ static long wlevel_arg(Yv *argv, long i, long n) {
         while (ok && d < yv_len(a)) {
             long c = ys_byte_at(a, d);
             ok = c >= '0' && c <= '9';
-            if (ok) { v = v * 10 + (c - '0'); } else { ; }
+            if (ok) { v = v * 10 + (c - '0'); }
             d = d + 1;
         }
         if (!ok) {
@@ -434,8 +416,6 @@ Yv *build_args(Yv *cmdline) {
     if (yv_len(dir) == 0) {
         dir = ys(".");
         ;
-    } else {
-        ;
     }
     return yr(6, "dir", dir, "debug", yv_bool(debug), "nowarn",
               yv_bool(nowarn), "wlevel", yv_long(wlevel), "allow_exec",
@@ -449,8 +429,6 @@ Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
         puts_(ys_cat(ys_cat(ys("error: cannot read file '"), path), ys("'\n")));
         exit_(1);
         return 0;
-    } else {
-        ;
     }
     return native_resolve_pk(yv_unwrap(src), pk_dir_of(path), allow_exec,
                              path, pkgs, roots);
@@ -464,8 +442,6 @@ Yv *std_order(Yv *names) {
         Yv *nm = ya_get(all, i);
         if (pk_has(names, nm)) {
             out = ya_push(out, nm);
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -493,8 +469,6 @@ Yv *build_key(Yv *cid, Yv *name, long base, int allow_exec, Yv *nr,
     if (!allow_exec) {
         ex = ys("no-exec");
         ;
-    } else {
-        ;
     }
     pk_hash_str(h, ex);
     pk_hash_str(h, yr_get(nr, "src"));
@@ -510,8 +484,6 @@ Yv *build_key(Yv *cid, Yv *name, long base, int allow_exec, Yv *nr,
         Yv *u = ya_get(units, i);
         if (pk_has(pkgs, yr_get(u, "name"))) {
             pk_hash_str(h, unit_iface(u));
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -545,8 +517,6 @@ Yv *build_reach(Yv *direct, Yv *pkgs, Yv *nrs) {
                 j = j + 1;
             }
             ;
-        } else {
-            ;
         }
         k = k - 1;
     }
@@ -563,8 +533,6 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                      ys(" has no [bin] and no lib: nothing to build\n")));
         exit_(1);
         return 0;
-    } else {
-        ;
     }
     Yv *bdir = pk_join(dir, ys("build"));
     Yv *odir = ys_cat(bdir, ys("/obj"));
@@ -588,8 +556,6 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
     }
     if (yv_len(yr_get(g, "lib")) > 0) {
         bdeps = ya_push(bdeps, yr_get(g, "name"));
-        ;
-    } else {
         ;
     }
     i = 0;
@@ -616,8 +582,6 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
     if (!std_src) {
         pack = self_pack();
         ;
-    } else {
-        ;
     }
     Yv *su = std_units(std_order(needs), pack);
     Yv *cid = pk_self_id();
@@ -638,11 +602,7 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                 units = ya_push(units, yr_get(uo, "unit"));
                 hit = 1;
                 ;
-            } else {
-                ;
             }
-            ;
-        } else {
             ;
         }
         if (!hit) {
@@ -654,8 +614,6 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                 print_native_errors(yr_get(r, "errors"), yr_get(nr, "origin"), 0);
                 exit_(1);
                 return 0;
-            } else {
-                ;
             }
             if (!nowarn) {
                 print_native_warnings(yr_get(r, "warnings"),
@@ -665,12 +623,8 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                 puts_(ys_cat(ys_cat(ys("error: writing '"), opath), ys("' failed\n")));
                 exit_(1);
                 return 0;
-            } else {
-                ;
             }
             units = ya_push(units, yr_get(r, "unit"));
-            ;
-        } else {
             ;
         }
         k = k + 1;
@@ -701,8 +655,6 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                     j = j + 1;
                 }
                 ;
-            } else {
-                ;
             }
             k = k + 1;
         }
@@ -714,8 +666,6 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
             if (pk_has(lstd, yr_get(su1, "name"))) {
                 bstd = ya_push(bstd, su1);
                 ;
-            } else {
-                ;
             }
             k = k + 1;
         }
@@ -725,8 +675,6 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
             print_native_errors(yr_get(r, "errors"), yr_get(nr, "origin"), 0);
             exit_(1);
             return 0;
-        } else {
-            ;
         }
         if (!nowarn) {
             print_native_warnings(yr_get(r, "warnings"), yr_get(nr, "origin"),
@@ -738,16 +686,12 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                          ys("\n")));
             exit_(1);
             return 0;
-        } else {
-            ;
         }
         Yv *outp = ys_cat(ys_cat(bdir, ys("/")), yr_get(bn, "name"));
         if (!write_bytes(outp, yr_get(ab, "bytes"), 493)) {
             puts_(ys_cat(ys_cat(ys("error: writing '"), outp), ys("' failed\n")));
             exit_(1);
             return 0;
-        } else {
-            ;
         }
         eputs_(ys_cat(ys_cat(ys("built "), outp), ys("\n")));
         i = i + 1;
@@ -780,8 +724,6 @@ long y_main(Yv *cmdline) {
         }
         exit_(0);
         return 0;
-    } else {
-        ;
     }
     Yv *args = parse_cli_args(cmdline);
     /* NOTE: vestigial alias (see print_phase_rows) — `args.out` works. */
@@ -821,8 +763,6 @@ long y_main(Yv *cmdline) {
             if (last_slash >= 0) {
                 base_dir = ys_slice(file, 0, last_slash);
                 ;
-            } else {
-                ;
             }
 
             /* splice imports, tokenize, parse, compile to assembly */
@@ -857,8 +797,6 @@ long y_main(Yv *cmdline) {
             Yv *pack = ys("");
             if (!yv_b(yr_get(pargs, "std_src"))) {
                 pack = self_pack();
-                ;
-            } else {
                 ;
             }
             Yv *su = std_units(nrstd, pack);
@@ -916,16 +854,12 @@ long y_main(Yv *cmdline) {
                     print_counter(ys("tokens"), yv_len(toks));
                     print_counter(ys("asm_bytes"), yv_len(rasm));
                     ;
-                } else {
-                    ;
                 }
                 if (!(wrote)) {
                     puts_(ys_cat(ys("error: writing '"),
                                  ys_cat(out, ys("' failed\n"))));
                     exit_(1);
                     return 1;
-                } else {
-                    ;
                 }
                 return 0;
             } else {
@@ -960,8 +894,6 @@ long y_main(Yv *cmdline) {
                     if (yv_len(out_path) == 0) {
                         out_path = ys("a.out");
                         ;
-                    } else {
-                        ;
                     }
                     Yv *abbytes = yr_get(ab, "bytes");
                     /* 493 = 0755 executable (chmod applied by write_bytes). */
@@ -982,8 +914,6 @@ long y_main(Yv *cmdline) {
                         print_counter(ys("tokens"), yv_len(toks));
                         print_counter(ys("asm_bytes"), yv_len(rasm2));
                         print_counter(ys("out_bytes"), yv_len(abbytes));
-                        ;
-                    } else {
                         ;
                     }
                     if (!ok) {

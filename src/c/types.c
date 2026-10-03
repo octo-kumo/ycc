@@ -782,8 +782,6 @@ static Yv *trec_field_type(Yv *rec, Yv *key) {
             if (ys_eq(yr_get(f, "name"), key)) {
                 found = yr_get(f, "typ");
                 ;
-            } else {
-                ;
             }
             i = i + 1;
         }
@@ -1104,29 +1102,19 @@ static int num_is_float(Yv *s) {
         if (ys_eq_lit(p, "0x")) {
             radix = 1;
             ;
-        } else {
-            ;
         }
         if (ys_eq_lit(p, "0X")) {
             radix = 1;
-            ;
-        } else {
             ;
         }
         if (ys_eq_lit(p, "0b")) {
             radix = 1;
             ;
-        } else {
-            ;
         }
         if (ys_eq_lit(p, "0B")) {
             radix = 1;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     if (radix) {
@@ -1136,19 +1124,13 @@ static int num_is_float(Yv *s) {
         if (ys_index_of(s, ys(".")) >= 0) {
             f = 1;
             ;
-        } else {
-            ;
         }
         if (ys_index_of(s, ys("e")) >= 0) {
             f = 1;
             ;
-        } else {
-            ;
         }
         if (ys_index_of(s, ys("E")) >= 0) {
             f = 1;
-            ;
-        } else {
             ;
         }
         return f;
@@ -2575,8 +2557,6 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "col")));
                     ok = 0;
                     ;
-                } else {
-                    ;
                 }
                 if (ys_eq_lit(mkey, "...")) {
                     ;
@@ -3075,19 +3055,13 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                         if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tlong) {
                             elt = yr_get(r, "typ");
                             ;
-                        } else {
-                            ;
                         }
                         if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool) {
                             elt = yr_get(r, "typ");
                             ;
-                        } else {
-                            ;
                         }
                         if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr) {
                             elt = yr_get(r, "typ");
-                            ;
-                        } else {
                             ;
                         }
                         ;
@@ -3304,8 +3278,6 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
             if (ys_eq(fn, dkey)) {
                 found = 1;
                 ftyp = yr_get(f, "typ");
-                ;
-            } else {
                 ;
             }
             j = j + 1;
@@ -3537,8 +3509,6 @@ static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
                                         tstr(yr_get(r, "typ")))),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                ;
-            } else {
                 ;
             }
             i = i + 1;
@@ -3795,8 +3765,6 @@ Yv *fmt_spec(Yv *spec) {
         align = ys_byte_at(spec, 0);
         i = 1;
         ;
-    } else {
-        ;
     }
     long sign = 0;
     if (i < n && (ys_byte_at(spec, i) == 43 ||
@@ -3805,26 +3773,22 @@ Yv *fmt_spec(Yv *spec) {
         sign = ys_byte_at(spec, i);
         i = i + 1;
         ;
-    } else {
-        ;
     }
     int alt = 0;
-    if (i < n && ys_byte_at(spec, i) == 35) { alt = 1; i = i + 1; ; } else { ; }
+    if (i < n && ys_byte_at(spec, i) == 35) { alt = 1; i = i + 1; ; }
     int zero = 0;
-    if (i < n && ys_byte_at(spec, i) == '0') { zero = 1; i = i + 1; ; } else { ; }
+    if (i < n && ys_byte_at(spec, i) == '0') { zero = 1; i = i + 1; ; }
     long ws = i;
     while (i < n && fmt_digit(ys_byte_at(spec, i))) {
         i = i + 1;
         ;
     }
     long width = 0 - 1;
-    if (i > ws) { width = fmt_number(spec, ws, i); ; } else { ; }
+    if (i > ws) { width = fmt_number(spec, ws, i); ; }
     long grp = 0;
     if (i < n && (ys_byte_at(spec, i) == 44 || ys_byte_at(spec, i) == 95)) {
         grp = ys_byte_at(spec, i);
         i = i + 1;
-        ;
-    } else {
         ;
     }
     Yv *err = ys("");
@@ -3839,15 +3803,11 @@ Yv *fmt_spec(Yv *spec) {
         if (i > ps) { prec = fmt_number(spec, ps, i); ; }
         else { err = ys("'.' without a precision"); ; }
         ;
-    } else {
-        ;
     }
     long ty = 0;
     if (i < n && fmt_type(ys_byte_at(spec, i))) {
         ty = ys_byte_at(spec, i);
         i = i + 1;
-        ;
-    } else {
         ;
     }
     if (!ys_eq_lit(err, "")) {
@@ -3861,8 +3821,6 @@ Yv *fmt_spec(Yv *spec) {
         ;
     } else if (width > 99999 || prec > 99999) {
         err = ys("width and precision stop at 99999");
-        ;
-    } else {
         ;
     }
     return yr(10, "err", err, "fill", yv_long(fill), "align", yv_long(align),
@@ -3892,7 +3850,7 @@ static long fmt_number(Yv *spec, long a, long b) {
     long v = 0;
     long i = a;
     while (i < b) {
-        if (v < 1000000) { v = v * 10 + ys_byte_at(spec, i) - '0'; ; } else { ; }
+        if (v < 1000000) { v = v * 10 + ys_byte_at(spec, i) - '0'; ; }
         i = i + 1;
         ;
     }
@@ -3994,11 +3952,7 @@ static Yv *typeof_fmt(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")),
                       yv_l(yr_get(node, "col")));
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
@@ -4533,8 +4487,6 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     ;
-                } else {
-                    ;
                 }
                 st = expect_type(st, yr_get(r1, "typ"), yr(1, "k", yv_long(K_tstr)),
                                  ys("join delimiter"), yv_l(yr_get(node, "line")),
@@ -4804,8 +4756,6 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                                   yv_l(yr_get(node, "line")),
                                   yv_l(yr_get(node, "col")));
                         ;
-                    } else {
-                        ;
                     }
                     i = i + 1;
                 }
@@ -4832,7 +4782,7 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     if (ys_eq_lit(name, "substr")) {
                         fterr = ys_cat(fterr, ys(" (slice instead: s[start:end])"));
                         ;
-                    } else { ; }
+                    }
                     ;
                 } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tfunc) {
                     // Either a hoisted `def` (kind "func") or a local/param
@@ -5170,8 +5120,6 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                                  yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 ;
-            } else {
-                ;
             }
             st = st_bind(st, yr_get(node, "name"), yr_get(fr, "typ"),
                          ys("func"));
@@ -5198,8 +5146,6 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                         ;
                     }
                     at = yr_get(node, "typ");
-                    ;
-                } else {
                     ;
                 }
                 st = st_bind(st, yr_get(node, "name"), at, bk);
@@ -5256,8 +5202,6 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                     ;
                 }
                 ;
-            } else {
-                ;
             }
             // NOTE: tnone/tname (unannotated initializer shapes) unify
             // quietly (tcompat law) — the missing annotation errors once at
@@ -5292,8 +5236,6 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                                  ys("' is not fully known (annotate it)")),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                ;
-            } else {
                 ;
             }
             st = st_bind(st, yr_get(node, "name"), t, bk);
@@ -5403,8 +5345,6 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                           line, col);
                 ok = 0;
                 ;
-            } else {
-                ;
             }
             args = ya_push(args, pt);
             i = i + 1;
@@ -5423,8 +5363,6 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             ret_inferred = 1;
             ret = t_pend_self();
             body_ret = yr(2, "k", yv_long(K_tinfer), "rets", rets);
-            ;
-        } else {
             ;
         }
         Yv *ft = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", ret);
@@ -5454,8 +5392,6 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             if (yv_l(yr_get(br, "k")) == K_tnone) {
                 br = t_unk();
                 ;
-            } else {
-                ;
             }
             // A trailing value of unknown type -- typically a self call,
             // whose type is the one being inferred -- leaves the type to the
@@ -5468,8 +5404,6 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                 if (yv_l(yr_get(br, "k")) == K_tunk && yv_l(yr_get(rt, "k")) != K_tunk && yv_l(yr_get(rt, "k")) != K_tnone) {
                     br = rt;
                     rsrc = ys("the first 'return'");
-                    ;
-                } else {
                     ;
                 }
                 ri = ri + 1;
@@ -5487,8 +5421,6 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                                             rsrc),
                                      ys(")")),
                               yv_l(yr_get(rn, "line")), yv_l(yr_get(rn, "col")));
-                    ;
-                } else {
                     ;
                 }
                 ri = ri + 1;
@@ -5532,13 +5464,9 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                                          ys(")")),
                                   yv_l(yr_get(rn2, "line")), yv_l(yr_get(rn2, "col")));
                         ;
-                    } else {
-                        ;
                     }
                     ri2 = ri2 + 1;
                 }
-                ;
-            } else {
                 ;
             }
             ft = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", br);
@@ -5546,11 +5474,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             if (yv_l(yr_get(br, "k")) != K_tunk) {
                 set_inferred_ret(func, br);
                 ;
-            } else {
-                ;
             }
-            ;
-        } else {
             ;
         }
         if (!(ret_inferred)) {
@@ -5562,8 +5486,6 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
                                  line, col);
                 ;
             }
-            ;
-        } else {
             ;
         }
         st = st_fdepth(st, saved_depth);
@@ -5608,11 +5530,7 @@ Yv *check_program(Yv *ast, Yv *ext) {
                 // top-level let f = def... : also hoisted for mutual recursion
                 defs = ya_push(defs, def_sig(yr_get(s, "name"), yr_get(s, "v")));
                 ;
-            } else {
-                ;
             }
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -5637,8 +5555,6 @@ Yv *check_program(Yv *ast, Yv *ext) {
         Yv *kind = ys("func");
         if (ys_starts_with(yr_get(xe, "label"), ys("yg_"))) {
             kind = ys("const");
-            ;
-        } else {
             ;
         }
         st = st_bind(st, yr_get(xe, "name"), yr_get(xe, "typ"), kind);

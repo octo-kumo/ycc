@@ -653,30 +653,20 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
             want_exec = 1;
             want_prelude = 1;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     Yv *std = yav(0);
     if (want_prelude) {
         std = ya_push(std, ys("prelude"));
         ;
-    } else {
-        ;
     }
     if (want_exec) {
         std = ya_push(std, ys("exec"));
         ;
-    } else {
-        ;
     }
     if (seen_any(seen, px, yv_len(seen), 2)) {
         std = ya_push(std, ys("str"));
-        ;
-    } else {
         ;
     }
     /* The runtime library (std/rt.y) is linked into EVERY program:
@@ -713,8 +703,6 @@ Yv *origin_at(Yv *o, long ln, int bare) {
         long k = ln;
         if (k > n) {
             k = n;
-            ;
-        } else {
             ;
         }
         long fid = yv_l(ya_get(f, k - 1));
@@ -850,8 +838,6 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                     open = 0;
                     i = i + 1;
                     ;
-                } else {
-                    ;
                 }
                 i = i + 1;
                 ;
@@ -862,12 +848,8 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                 if (c == 40) {
                     ya_set(seen, pend, yv_long(2));
                     ;
-                } else {
-                    ;
                 }
                 pend = 0 - 1;
-                ;
-            } else {
                 ;
             }
             if (c == 34 || c == 39) {
@@ -923,17 +905,11 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                             if (yv_l(ya_get(seen, m)) == 0) {
                                 ya_set(seen, m, yv_long(1));
                                 ;
-                            } else {
-                                ;
                             }
                             if (prev == 46) {
                                 pend = m;
                                 ;
-                            } else {
-                                ;
                             }
-                            ;
-                        } else {
                             ;
                         }
                         m = m + 1;
@@ -975,8 +951,6 @@ int word_at(Yv *code, long i, Yv *nm) {
         if (ys_byte_at(code, i + k) != ys_byte_at(nm, k)) {
             ok = 0;
             ;
-        } else {
-            ;
         }
         k = k + 1;
         ;
@@ -991,8 +965,6 @@ int seen_any(Yv *seen, long lo, long hi, long level) {
     while (i < hi) {
         if (yv_l(ya_get(seen, i)) >= level) {
             r = 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1042,8 +1014,6 @@ int seen_has(Yv *seen, Yv *full) {
         Yv *e = ya_get(seen, i);
         if (ys_eq(e, full)) {
             found = 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1101,11 +1071,7 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
                                                  name),
                                         ys(".y")));
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     Yv *found = ys("");
@@ -1119,8 +1085,6 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
                 found = norm_path(c);
                 ;
             }
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1167,8 +1131,6 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                                   ";")) {
                         path_part = ys_slice(path_part, 0, yv_len(path_part) - 1);
                         ;
-                    } else {
-                        ;
                     }
                     path = ys_slice(path_part, 1, yv_len(path_part) - 1);
                     /* NOTE: normalized (see norm_path): nested base dirs
@@ -1177,8 +1139,6 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                     full = norm_path(ys_cat(ys_cat(base_dir, ys("/")), path));
                     if (ys_eq_lit(ys_slice(path, 0, 1), "/")) {
                         full = norm_path(path);
-                        ;
-                    } else {
                         ;
                     }
                     ;
@@ -1189,16 +1149,12 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                     if (ys_eq_lit(ys_slice_from(name, yv_len(name) - 1), ";")) {
                         name = ys_trim(ys_slice(name, 0, yv_len(name) - 1));
                         ;
-                    } else {
-                        ;
                     }
                     path = name;
                     if (name_in(res_pkgs, name)) {
                         is_pkg = 1;
                         if (!name_in(res_used, name)) {
                             res_used = ya_push(res_used, name);
-                            ;
-                        } else {
                             ;
                         }
                         ;
@@ -1252,8 +1208,6 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         Yv *mod_dir = base_dir;
                         if (last_slash >= 0) {
                             mod_dir = ys_slice(full, 0, last_slash);
-                            ;
-                        } else {
                             ;
                         }
                         /* mod_src is str? (read_file returns none on missing
@@ -1325,8 +1279,6 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                             ;
                         }
                         ;
-                    } else {
-                        ;
                     }
                 }
                 ;
@@ -1360,8 +1312,6 @@ Yv *embed_decl(Yv *trimmed, Yv *base_dir) {
     if (ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1), ";")) {
         path_part = ys_trim(ys_slice(path_part, 0, yv_len(path_part) - 1));
         ;
-    } else {
-        ;
     }
     if (yv_len(path_part) < 2 ||
         !ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1), "\"")) {
@@ -1370,15 +1320,11 @@ Yv *embed_decl(Yv *trimmed, Yv *base_dir) {
                      ys("\n")));
         exit_(1);
         ;
-    } else {
-        ;
     }
     Yv *path = ys_slice(path_part, 1, yv_len(path_part) - 1);
     Yv *full = norm_path(ys_cat(ys_cat(base_dir, ys("/")), path));
     if (ys_eq_lit(ys_slice(path, 0, 1), "/")) {
         full = norm_path(path);
-        ;
-    } else {
         ;
     }
     Yv *data = read_file(full);
@@ -1388,8 +1334,6 @@ Yv *embed_decl(Yv *trimmed, Yv *base_dir) {
                             full),
                      ys("')\n")));
         exit_(1);
-        ;
-    } else {
         ;
     }
     return ys_cat(ys_cat(ys_cat(ys_cat(ys("const "), name), ys(" = ")),
@@ -1426,15 +1370,11 @@ Yv *quote_text(Yv *s) {
             esc = ys_cat(ys_cat(ys("\\x"), ys_slice(hex, c / 16, c / 16 + 1)),
                          ys_slice(hex, c % 16, c % 16 + 1));
             ;
-        } else {
-            ;
         }
         if (yv_len(esc) > 0) {
             out = ya_push(out, ys_slice(s, run, i));
             out = ya_push(out, esc);
             run = i + 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1489,11 +1429,7 @@ long tok_end_b(Yv *b, long i, long hi) {
         if (yv_l(ya_get(b, p)) == 36) {
             p = p + 1;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     int go = 1;
@@ -1522,11 +1458,7 @@ Yv *tok_at_b(Yv *text, Yv *b, long i, long hi) {
         if (yv_l(ya_get(b, s)) == 36) {
             s = s + 1;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     long e = tok_end_b(b, i, hi);
@@ -1588,15 +1520,9 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
                     if (yv_l(ya_get(b, after)) == 45) {
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
                         ;
-                    } else {
-                        ;
                     }
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             ;
@@ -1605,11 +1531,7 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
                 if (ys_eq_lit(ys_slice(w, 0, 1), "j")) {
                     out = tok_push(out, tok_at_b(text, b, op, hi));
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             ;
@@ -1628,15 +1550,11 @@ Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
             res = line_refs_b(text, b, ls, i, res, want_jumps);
             ls = i + 1;
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
     if (ls < hi) {
         res = line_refs_b(text, b, ls, hi, res, want_jumps);
-        ;
-    } else {
         ;
     }
     return res;
@@ -1660,20 +1578,12 @@ Yv *label_at(Yv *text, Yv *b, long lo, long hi) {
                 if (yv_l(ya_get(b, s)) == 36) {
                     s = s + 1;
                     ;
-                } else {
-                    ;
                 }
                 lab = ys_slice(text, s, e);
                 ;
-            } else {
-                ;
             }
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     return lab;
@@ -1692,8 +1602,6 @@ int is_data_line_b(Yv *text, Yv *b, long lo, long hi) {
     long p = skip_sp(b, lo, hi);
     if (yv_len(lab) > 0) {
         p = skip_sp(b, p + 1 + yv_len(lab), hi);
-        ;
-    } else {
         ;
     }
     if (p >= hi) {
@@ -1717,8 +1625,6 @@ int block_falls_b(Yv *text, Yv *b, long lo, long hi) {
         while (i < end) {
             if (yv_l(ya_get(b, i)) == 10) {
                 p = i + 1;
-                ;
-            } else {
                 ;
             }
             i = i + 1;
@@ -1745,8 +1651,6 @@ int block_falls_b(Yv *text, Yv *b, long lo, long hi) {
                 ;
             } else if (ys_eq_lit(w, "syscall")) {
                 falls = 0;
-                ;
-            } else {
                 ;
             }
             ;
@@ -1778,8 +1682,6 @@ Yv *namemap_build(Yv *names) {
             /* First insert wins, as a scan for the first match did. */
             Yv *r = labmap_put(m, nm, i, 0);
             m = yr_get(r, "map");
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1826,8 +1728,6 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
         if (idx >= 0) {
             ya_set(keep, idx, yv_bool(1));
             ;
-        } else {
-            ;
         }
         r = r + 1;
     }
@@ -1851,15 +1751,9 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
                             if (!(yv_b(ya_get(keep, b + 1)))) {
                                 ya_set(keep, b + 1, yv_bool(1));
                                 ;
-                            } else {
-                                ;
                             }
                             ;
-                        } else {
-                            ;
                         }
-                        ;
-                    } else {
                         ;
                     }
                     Yv *rs = ya_get(refs, b);
@@ -1870,21 +1764,13 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
                             if (!(yv_b(ya_get(keep, idx)))) {
                                 ya_set(keep, idx, yv_bool(1));
                                 ;
-                            } else {
-                                ;
                             }
-                            ;
-                        } else {
                             ;
                         }
                         j = j + 1;
                     }
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             b = b + 1;
@@ -1916,14 +1802,10 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
                     names = ya_push(names, ys(""));
                     starts = ya_push(starts, yv_long(0));
                     ;
-                } else {
-                    ;
                 }
                 ;
             }
             ls = i + 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1939,13 +1821,9 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
                 names = ya_push(names, ys(""));
                 starts = ya_push(starts, yv_long(0));
                 ;
-            } else {
-                ;
             }
             ;
         }
-        ;
-    } else {
         ;
     }
     long nb = yv_len(starts);
@@ -1961,8 +1839,6 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
             long hi = n;
             if (k + 1 < nb) {
                 hi = yv_l(ya_get(starts, k + 1));
-                ;
-            } else {
                 ;
             }
             refs = ya_push(refs, refs_range(text, b, lo, hi, yav(0), 1));
@@ -2004,12 +1880,8 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
                 if (k + 1 < nb) {
                     hi = yv_l(ya_get(starts, k + 1));
                     ;
-                } else {
-                    ;
                 }
                 pieces = ya_push(pieces, ys_slice(text, lo, hi));
-                ;
-            } else {
                 ;
             }
             k = k + 1;
@@ -2243,8 +2115,6 @@ Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots) {
     if (root >= 0) {
         roots = ya_push(roots, ys("_start"));
         ;
-    } else {
-        ;
     }
     keep = shake_keep(labels, refs, falls, keep, roots);
     Yv *outrefs = yav(0);
@@ -2257,8 +2127,6 @@ Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots) {
                 outrefs = ya_push(outrefs, ya_get(rs, j));
                 j = j + 1;
             }
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -2275,8 +2143,6 @@ int is_all_digits(Yv *s) {
         while (i < yv_len(s)) {
             if (ys_index_of(ys("0123456789"), ys_slice(s, i, i + 1)) < 0) {
                 ok = 0;
-                ;
-            } else {
                 ;
             }
             i = i + 1;
@@ -2323,8 +2189,6 @@ int is_ns(Yv *name, Yv *imports) {
     while (i < yv_len(imports)) {
         if (ys_eq(ya_get(imports, i), name)) {
             found = 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -2623,15 +2487,11 @@ Yv *esc_asm(Yv *s) {
                                 ys_long((o / 8) % 8)),
                          ys_long(o % 8));
             ;
-        } else {
-            ;
         }
         if (yv_len(esc) > 0) {
             out = ya_push(out, ys_slice(s, run, i));
             out = ya_push(out, esc);
             run = i + 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -2656,8 +2516,6 @@ Yv *env_find(Yv *st, Yv *name) {
         if (ys_eq(yr_get(e, "name"), name)) {
             found = e;
             i = -1;
-            ;
-        } else {
             ;
         }
         i = i - 1;
@@ -2893,8 +2751,6 @@ Yv *infer_go(Yv *st, Yv *node) {
                             msi = msi + 1;
                         }
                         ;
-                    } else {
-                        ;
                     }
                     ;
                 } else {
@@ -2932,8 +2788,6 @@ Yv *infer_go(Yv *st, Yv *node) {
                 if (ys_eq(dfn, yr_get(node, "key"))) {
                     found = 1;
                     ftyp = yr_get(df, "typ");
-                    ;
-                } else {
                     ;
                 }
                 di = di + 1;
@@ -3203,11 +3057,7 @@ Yv *uses_scan_node(Yv *node, Yv *out) {
             if (ys_eq_lit(yr_get(ncallee, "v"), "argv")) {
                 found = yr(1, "argv", yv_bool(1));
                 ;
-            } else {
-                ;
             }
-            ;
-        } else {
             ;
         }
         Yv *o2 = uses_scan_node(ncallee, found);
@@ -3324,8 +3174,6 @@ Yv *collect_from_node(Yv *node, Yv *out) {
                 out = ya_push(out, yr(2, "name", yr_get(node, "name"), "func",
                                       yr_get(node, "v")));
                 ;
-            } else {
-                ;
             }
             out = collect_from_node(yr_get(node, "v"), out);
             ;
@@ -3337,8 +3185,6 @@ Yv *collect_from_node(Yv *node, Yv *out) {
         out = collect_from_node(yr_get(node, "then"), out);
         if (yv_b(yr_get(node, "has_else"))) {
             out = collect_from_node(yr_get(node, "els"), out);
-            ;
-        } else {
             ;
         }
         ;
@@ -3358,8 +3204,6 @@ Yv *collect_from_node(Yv *node, Yv *out) {
         ;
     } else if (yv_l(k) == K_block) {
         out = collect_from_block(yr_get(node, "stmts"), out);
-        ;
-    } else {
         ;
     }
     return out;
@@ -3398,8 +3242,6 @@ int name_in(Yv *xs, Yv *n) {
         if (ys_eq(x, n)) {
             found = 1;
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
@@ -3428,7 +3270,7 @@ int is_intrinsic_name(Yv *n) {
 Yv *fv_walk(Yv *node, Yv *out, int collect) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_id) {
-        if (collect) { out = ya_push(out, yr_get(node, "v")); ; } else { ; };
+        if (collect) { out = ya_push(out, yr_get(node, "v")); ; }
         ;
     } else if (yv_l(k) == K_un) {
         out = fv_walk(yr_get(node, "e"), out, collect);
@@ -3488,7 +3330,7 @@ Yv *fv_walk(Yv *node, Yv *out, int collect) {
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
     } else if (yv_l(k) == K_assign) {
-        if (collect) { out = ya_push(out, yr_get(node, "name")); ; } else { ; };
+        if (collect) { out = ya_push(out, yr_get(node, "name")); ; }
         out = fv_walk(yr_get(node, "v"), out, collect);
         ;
     } else if (yv_l(k) == K_incdec) {
@@ -3506,8 +3348,6 @@ Yv *fv_walk(Yv *node, Yv *out, int collect) {
         out = fv_walk(yr_get(node, "then"), out, collect);
         if (yv_b(yr_get(node, "has_else"))) {
             out = fv_walk(yr_get(node, "els"), out, collect);
-            ;
-        } else {
             ;
         }
         ;
@@ -3543,8 +3383,6 @@ Yv *fv_walk(Yv *node, Yv *out, int collect) {
         out = fv_walk(yr_get(node, "v"), out, collect);
     } else if (yv_l(k) == K_rectest || yv_l(k) == K_narrow || yv_l(k) == K_matchend) {
         out = fv_walk(yr_get(node, "e"), out, collect);
-    } else {
-        ;
     }
     return out;
 }
@@ -3580,8 +3418,6 @@ Yv *fv_binds(Yv *node, Yv *out) {
         out = fv_binds(yr_get(node, "then"), out);
         if (yv_b(yr_get(node, "has_else"))) {
             out = fv_binds(yr_get(node, "els"), out);
-            ;
-        } else {
             ;
         }
         ;
@@ -3678,8 +3514,6 @@ Yv *fv_binds(Yv *node, Yv *out) {
         out = fv_binds(yr_get(node, "lo"), out);
         out = fv_binds(yr_get(node, "hi"), out);
         out = fv_binds(yr_get(node, "v"), out);
-    } else {
-        ;
     }
     return out;
 }
@@ -3943,8 +3777,6 @@ Yv *gen_id(Yv *st, Yv *node) {
             if (ys_eq(yr_get(e, "label"), yr_get(st, "self_label"))) {
                 soff = capture_off(st);
                 ;
-            } else {
-                ;
             }
             if (soff >= 0) {
                 return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
@@ -3966,8 +3798,6 @@ Yv *gen_id(Yv *st, Yv *node) {
                                              yr_get(oe, "label")),
                                       ys("(%rip)")));
                 }
-            } else {
-                ;
             }
             return emit(st, ys_cat(ys_cat(ys("    mov "), yr_get(e, "label")),
                                    ys("(%rip), %rax")));
@@ -4120,8 +3950,6 @@ Yv *box_bound(Yv *st, Yv *name) {
             want = 1;
             more = 0;
             ;
-        } else {
-            ;
         }
         i = i - 1;
     }
@@ -4176,8 +4004,6 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
         if (yv_b(yr_get(node, "has_else"))) {
             out = app_walk(yr_get(node, "els"), out, deep);
             ;
-        } else {
-            ;
         }
         ;
     } else if (yv_l(k) == K_opassign) {
@@ -4185,8 +4011,6 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
         if (ys_eq_lit(yr_get(node, "op"), "+") &&
             yv_l(yr_get(tg, "k")) == K_id) {
             out = ya_push(out, yr_get(tg, "v"));
-            ;
-        } else {
             ;
         }
         out = app_walk(tg, out, deep);
@@ -4200,8 +4024,6 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
         Yv *ae = yr_get(node, "e");
         if (yv_l(yr_get(ae, "k")) == K_id) {
             out = ya_push(out, ys_cat(ys("&"), yr_get(ae, "v")));
-            ;
-        } else {
             ;
         }
         out = app_walk(ae, out, deep);
@@ -4261,8 +4083,6 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
         if (deep) {
             out = app_walk(yr_get(node, "body"), out, deep);
             ;
-        } else {
-            ;
         }
         ;
     } else if (yv_l(k) == K_sliceassign) {
@@ -4270,8 +4090,6 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
         out = app_walk(yr_get(node, "lo"), out, deep);
         out = app_walk(yr_get(node, "hi"), out, deep);
         out = app_walk(yr_get(node, "v"), out, deep);
-        ;
-    } else {
         ;
     }
     return out;
@@ -4323,8 +4141,6 @@ int own_wanted(Yv *st, Yv *name) {
                    ys_eq(yr_get(e, "label"), name)) {
             want = 1;
             more = 0;
-            ;
-        } else {
             ;
         }
         i = i - 1;
@@ -4427,8 +4243,6 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
         if (yv_l(yr_get(yr_get(ge, "typ"), "k")) == K_tstr) {
             anystr = 1;
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
@@ -4452,8 +4266,6 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
                     ys_cat(ys("ygo_"), ys_slice_from(yr_get(g2, "label"), 3));
                 out = ya_push(out, yr(3, "name", oname, "label", olabel,
                                       "typ", yr(1, "k", yv_long(K_tnone))));
-                ;
-            } else {
                 ;
             }
             j = j + 1;
@@ -4755,8 +4567,6 @@ Yv *gen_elem_addr(Yv *st, Yv *node) {
     if (eaesz == 1) {
         eascale = ys("1");
         ;
-    } else {
-        ;
     }
     st = gen(st, earr);
     st = emit(st, ys("    push %rax"));
@@ -4817,8 +4627,6 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
     if (is_or) {
         st = emit(st, ys_cat(ys("    jnz "), yr_get(rT, "lbl")));
         ;
-    } else {
-        ;
     }
     if (is_or) {
         ;
@@ -4830,8 +4638,6 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
     st = emit(st, ys("    test %rax, %rax"));
     if (is_or) {
         st = emit(st, ys_cat(ys("    jnz "), yr_get(rT, "lbl")));
-        ;
-    } else {
         ;
     }
     if (is_or) {
@@ -4852,8 +4658,6 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
         st = emit(st, ys_cat(ys("    jmp "), yr_get(rE, "lbl")));
         st = emit(st, ys_cat(yr_get(rT, "lbl"), ys(":")));
         st = emit(st, ys("    mov $1, %rax"));
-        ;
-    } else {
         ;
     }
     if (is_or) {
@@ -4928,8 +4732,6 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit(st, ys("    add $16, %rsp"));
         }
         ;
-    } else {
-        ;
     }
     if (yv_l(yr_get(lt, "k")) != K_tstr) {
         if (yv_l(yr_get(lt, "k")) == K_tlong) {
@@ -4970,8 +4772,6 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit(st, ys("    call y_str_cat"));
             st = emit(st, ys("    add $16, %rsp"));
         }
-        ;
-    } else {
         ;
     }
     return st;
@@ -5252,18 +5052,12 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         if (yv_l(yr_get(lt, "k")) == K_tarr) {
             elt = yr_get(lt, "of");
             ;
-        } else {
-            ;
         }
         if (yv_l(yr_get(elt, "k")) == K_tunk) {
             if (yv_l(yr_get(rt, "k")) == K_tarr) {
                 elt = yr_get(rt, "of");
                 ;
-            } else {
-                ;
             }
-            ;
-        } else {
             ;
         }
         if (eq_elem_loop(elt)) {
@@ -5305,18 +5099,12 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         if (yv_l(yr_get(lt, "k")) == K_topt) {
             pt = yr_get(lt, "of");
             ;
-        } else {
-            ;
         }
         if (yv_l(yr_get(pt, "k")) == K_tunk) {
             if (yv_l(yr_get(rt, "k")) == K_topt) {
                 pt = yr_get(rt, "of");
                 ;
-            } else {
-                ;
             }
-            ;
-        } else {
             ;
         }
         st = gen(st, yr_get(node, "l"));
@@ -5676,8 +5464,6 @@ Yv *cur_fn_type(Yv *st) {
             ft = yr_get(e, "typ");
             looking = 0;
             ;
-        } else {
-            ;
         }
         i = i - 1;
     }
@@ -6026,8 +5812,6 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay) {
         if (i > 0) {
             sep = ys(", ");
             ;
-        } else {
-            ;
         }
         Yv *fname = yr_get(f, "name");
         st = gen_acc_cat_const(st, ys_cat(ys_cat(sep, fname), ys(": ")));
@@ -6233,8 +6017,6 @@ Yv *gen_syscall(Yv *st, Yv *node) {
         if (yv_l(yr_get(at, "k")) == K_tstr) {
             st = emit(st, ys_cat(ys("    add $8, "), syscall_reg(i - 1)));
             ;
-        } else {
-            ;
         }
         i = i - 1;
     }
@@ -6255,8 +6037,6 @@ long capture_off(Yv *st) {
         Yv *e = ya_get(env, i);
         if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
             res = yv_l(yr_get(e, "off"));
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -6295,15 +6075,11 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
         if (ys_eq(label, yr_get(st, "self_label"))) {
             soff = capture_off(st);
             ;
-        } else {
-            ;
         }
         if (soff >= 0) {
             st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
                                  ys("(%rbp), %rax")));
             st = emit(st, ys("    push %rax"));
-            ;
-        } else {
             ;
         }
         st = gen_push_args_as(st, yr_get(node, "args"), dptypes);
@@ -6311,8 +6087,6 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
         long nbytes = yv_len(yr_get(node, "args")) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
-            ;
-        } else {
             ;
         }
         if (nbytes == 0) {
@@ -6448,13 +6222,9 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     if (yv_l(yr_get(elt, "k")) == K_tarr) {
         eltyp = yr_get(elt, "of");
         ;
-    } else {
-        ;
     }
     if (yv_l(yr_get(elt, "k")) == K_tarrfix) {
         eltyp = yr_get(elt, "of");
-        ;
-    } else {
         ;
     }
     st = gen(st, yr_get(node, "iter"));
@@ -6592,8 +6362,6 @@ Yv *gen_tail(Yv *st, Yv *node) {
             st = gen_loc_stmt(st, lastn);
             st = gen_tail(st, lastn);
             ;
-        } else {
-            ;
         }
         return st;
     } else if (yv_l(k) == K_kw_if) {
@@ -6670,7 +6438,7 @@ Yv *loc_dir(long ln) {
         return ys_cat(ys(".loc 1 "), ys_long(ln));
     } else {
         long k = ln;
-        if (k > n) { k = n; ; } else { ; };
+        if (k > n) { k = n; ; }
         long fid = yv_l(ya_get(f, k - 1));
         long line = yv_l(ya_get(l, k - 1)) + ln - k;
         return ys_cat(ys_cat(ys(".loc "), ys_long(fid + 1)),
@@ -6742,8 +6510,6 @@ long mfield_idx(Yv *names, Yv *name) {
         Yv *nm = ya_get(names, i);
         if (ys_eq(nm, name)) {
             out = i;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -7788,33 +7554,21 @@ long hexval_ch(Yv *c) {
         if (o <= 57) {
             v = o - 48;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     if (o >= 97) {
         if (o <= 102) {
             v = o - 87;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     if (o >= 65) {
         if (o <= 70) {
             v = o - 55;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     return v;
@@ -7829,29 +7583,19 @@ int lit_is_float(Yv *s) {
         if (ys_eq_lit(p, "0x")) {
             radix = 1;
             ;
-        } else {
-            ;
         }
         if (ys_eq_lit(p, "0X")) {
             radix = 1;
-            ;
-        } else {
             ;
         }
         if (ys_eq_lit(p, "0b")) {
             radix = 1;
             ;
-        } else {
-            ;
         }
         if (ys_eq_lit(p, "0B")) {
             radix = 1;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     if (radix) {
@@ -7861,19 +7605,13 @@ int lit_is_float(Yv *s) {
         if (ys_index_of(s, ys(".")) >= 0) {
             f = 1;
             ;
-        } else {
-            ;
         }
         if (ys_index_of(s, ys("e")) >= 0) {
             f = 1;
             ;
-        } else {
-            ;
         }
         if (ys_index_of(s, ys("E")) >= 0) {
             f = 1;
-            ;
-        } else {
             ;
         }
         return f;
@@ -7887,29 +7625,19 @@ Yv *norm_num(Yv *s) {
         if (ys_eq_lit(p, "0x")) {
             radix = 16;
             ;
-        } else {
-            ;
         }
         if (ys_eq_lit(p, "0X")) {
             radix = 16;
-            ;
-        } else {
             ;
         }
         if (ys_eq_lit(p, "0b")) {
             radix = 2;
             ;
-        } else {
-            ;
         }
         if (ys_eq_lit(p, "0B")) {
             radix = 2;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     if (radix == 0) {
@@ -7963,8 +7691,6 @@ long flit_ebase(Yv *s) {
     if (e < 0) {
         e = ys_index_of(s, ys("E"));
         ;
-    } else {
-        ;
     }
     if (e < 0) {
         return yv_len(s);
@@ -7982,8 +7708,6 @@ long flit_exp(Yv *s) {
     if (dot >= 0) {
         frac = eb - dot - 1;
         ;
-    } else {
-        ;
     }
     long ex = 0;
     if (eb < yv_len(s)) {
@@ -7994,13 +7718,9 @@ long flit_exp(Yv *s) {
             neg = 1;
             i = i + 1;
             ;
-        } else {
-            ;
         }
         if (ys_eq_lit(sc, "+")) {
             i = i + 1;
-            ;
-        } else {
             ;
         }
         while (i < yv_len(s)) {
@@ -8010,11 +7730,7 @@ long flit_exp(Yv *s) {
         if (neg) {
             ex = 0 - ex;
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     return ex - frac;
@@ -8060,15 +7776,11 @@ Yv *gen_scale10(Yv *st, long n) {
     if (!(up)) {
         left = 0 - n;
         ;
-    } else {
-        ;
     }
     while (left > 0) {
         long chunk = left;
         if (chunk > 18) {
             chunk = 18;
-            ;
-        } else {
             ;
         }
         st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pow10(chunk))),
@@ -8254,8 +7966,6 @@ Yv *gen_incdec(Yv *st, Yv *node) {
     Yv *binop = ys("+");
     if (ys_eq_lit(op, "--")) {
         binop = ys("-");
-        ;
-    } else {
         ;
     }
     Yv *tgt = yr_get(node, "tgt");
@@ -8535,8 +8245,6 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
         Yv *fname = ys("push");
         if (ys_eq_lit(mode, "prepend")) {
             fname = ys("prepend");
-            ;
-        } else {
             ;
         }
         Yv *call = n_call2(fname, gen_place_read(tgt, t1, ln, cl), v, ln, cl);
@@ -8967,7 +8675,7 @@ long rec_field_idx(Yv *t, Yv *key) {
     } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         /* a map is lowered to the {keys, vals, boxes} record (see
          * gen_maplit), laid out boxes, keys, vals */
-        if (ys_eq_lit(key, "boxes")) { idx = 0; ; } else if (ys_eq_lit(key, "keys")) { idx = 1; ; } else if (ys_eq_lit(key, "vals")) { idx = 2; ; } else { ; }
+        if (ys_eq_lit(key, "boxes")) { idx = 0; ; } else if (ys_eq_lit(key, "keys")) { idx = 1; ; } else if (ys_eq_lit(key, "vals")) { idx = 2; ; }
     }
     return idx;
 }
@@ -8989,13 +8697,9 @@ Yv *rec_field_type(Yv *t, Yv *key) {
             if (ys_eq(yr_get(f, "name"), key)) {
                 ft = yr_get(f, "typ");
                 ;
-            } else {
-                ;
             }
             i = i + 1;
         }
-        ;
-    } else {
         ;
     }
     return ft;
@@ -9287,8 +8991,6 @@ Yv *gen_fmt(Yv *st, Yv *node) {
             else if (kind == 2) { ty = 102; ; }
             else { ty = 115; ; }
             ;
-        } else {
-            ;
         }
         long code = fmt_code(f, kind, ty);
         if (ty == 115) {
@@ -9313,8 +9015,6 @@ Yv *gen_fmt(Yv *st, Yv *node) {
                 st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
                 st = emit(st, ys("    movq %xmm0, %rax"));
                 ;
-            } else {
-                ;
             }
             if (ty == 37) {
                 st = emit(st, ys("    movq %rax, %xmm0"));
@@ -9323,11 +9023,9 @@ Yv *gen_fmt(Yv *st, Yv *node) {
                 st = emit(st, ys("    mulsd %xmm1, %xmm0"));
                 st = emit(st, ys("    movq %xmm0, %rax"));
                 ;
-            } else {
-                ;
             }
             long prec = yv_l(yr_get(f, "prec"));
-            if (prec < 0) { prec = 6; ; } else { ; }
+            if (prec < 0) { prec = 6; ; }
             st = emit(st, ys("    push %rax"));
             st = fmt_push(st, code);
             st = fmt_push(st, yv_l(yr_get(f, "width")));
@@ -9347,30 +9045,26 @@ Yv *gen_fmt(Yv *st, Yv *node) {
 long fmt_code(Yv *f, long kind, long ty) {
     long fill = yv_l(yr_get(f, "fill"));
     long align = yv_l(yr_get(f, "align"));
-    if (yv_b(yr_get(f, "zero")) && fill == 0) { fill = 48; ; } else { ; }
+    if (yv_b(yr_get(f, "zero")) && fill == 0) { fill = 48; ; }
     if (yv_b(yr_get(f, "zero")) && align == 0 && kind != 0) {
         align = 61;
         ;
-    } else {
-        ;
     }
-    if (fill == 0) { fill = 32; ; } else { ; }
+    if (fill == 0) { fill = 32; ; }
     if (align == 0) {
         if (kind != 0) { align = 62; ; } else { align = 60; ; }
-        ;
-    } else {
         ;
     }
     long sg = 0;
     long sign = yv_l(yr_get(f, "sign"));
     if (sign == 43) { sg = 1; ; }
     else if (sign == 32) { sg = 2; ; }
-    else { ; }
-    if (yv_b(yr_get(f, "alt"))) { sg = sg + 4; ; } else { ; }
+
+    if (yv_b(yr_get(f, "alt"))) { sg = sg + 4; ; }
     long grp = yv_l(yr_get(f, "grp"));
     if (grp == 44) { sg = sg + 8; ; }
     else if (grp == 95) { sg = sg + 16; ; }
-    else { ; }
+
     return ty + 256 * fill + 65536 * align + 16777216 * sg;
 }
 
@@ -9405,13 +9099,9 @@ Yv *gen_join(Yv *st, Yv *node) {
     if (yv_l(yr_get(at, "k")) == K_tarr) {
         eltyp = yr_get(at, "of");
         ;
-    } else {
-        ;
     }
     if (yv_l(yr_get(at, "k")) == K_tarrfix) {
         eltyp = yr_get(at, "of");
-        ;
-    } else {
         ;
     }
     Yv *ek = yr_get(eltyp, "k");
@@ -9668,8 +9358,6 @@ Yv *gen_store(Yv *st, Yv *node) {
     if (sw == 8 && yv_l(yr_get(spt, "k")) == K_tptr) {
         sto = yr_get(spt, "to");
         ;
-    } else {
-        ;
     }
     st = gen(st, yr_get(node, "p"));
     st = emit(st, ys("    push %rax"));
@@ -9725,8 +9413,6 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         f = env_define(f, selfname, ys("func"), 0, label,
                        func_type_in(st, func));
         ;
-    } else {
-        ;
     }
     /* bind params. Caller pushes args left-to-right, so the LAST arg sits
      * at rbp+16 and param k lives at rbp+16+8*(n-1-k) (arity-dependent). */
@@ -9760,8 +9446,6 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
             if (c < yv_len(captypes)) {
                 ct = ya_get(captypes, c);
                 ;
-            } else {
-                ;
             }
             f = env_define(f, cn, ys("capture"), cloff, ys_long(c), ct);
             c = c + 1;
@@ -9773,8 +9457,6 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
      * recycled frame gets fresh cells. */
     if (!ys_eq_lit(selfname, "")) {
         f = box_bound(f, selfname);
-        ;
-    } else {
         ;
     }
     long pbi = 0;
@@ -9795,8 +9477,6 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
                                ys("(%rbp), %rax")));
             f = bind_own(f, opn, opt);
             ;
-        } else {
-            ;
         }
         opi = opi + 1;
     }
@@ -9814,7 +9494,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
             ;
         }
         ;
-    } else { ; };
+    }
     if (is_main) {
         if (want_argv) {
             /* _start prologue: at process entry %rsp -> [argc][argv0ptr]....
@@ -9834,11 +9514,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
             code = ya_push(code, ys("    call y_argv_init"));
             code = ya_push(code, ys("    add $16, %rsp"));
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     code = ya_push(code, ys("    push %rbp"));
@@ -9846,8 +9522,6 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     if (frame > 0) {
         code = ya_push(code, ys_cat(ys_cat(ys("    sub $"), ys_long(frame)),
                                     ys(", %rsp")));
-        ;
-    } else {
         ;
     }
     Yv *fout = yr_get(f, "out");
@@ -9932,8 +9606,6 @@ Yv *func_type_in(Yv *st, Yv *func) {
     if (yv_l(yr_get(r, "k")) == K_tnone) {
         r = infer_fn_ret(st, func);
         ;
-    } else {
-        ;
     }
     return yr(3, "k", yv_long(K_tfunc), "args", yr_get(func, "ptypes"), "ret", r);
 }
@@ -9961,8 +9633,6 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
             lines = ya_push(lines, yv_long(ln));
             cols = ya_push(cols, yr_get(s, "col"));
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
@@ -9977,11 +9647,7 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
                 if (ys_eq(ya_get(names, m), nj)) {
                     other = m;
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             m = m + 1;
@@ -9994,8 +9660,6 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
                                  "namespace; rename one)"));
             errs = ya_push(errs, yr(3, "msg", msg, "line", ya_get(lines, j),
                                     "col", ya_get(cols, j)));
-            ;
-        } else {
             ;
         }
         j = j + 1;
@@ -10067,8 +9731,6 @@ Yv *global_decls(Yv *stmts) {
                 ;
             }
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
@@ -10098,8 +9760,6 @@ Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
         Yv *t = decl_type(d);
         if (yv_l(yr_get(t, "k")) == K_tnone) {
             t = infer(f, decl_value(d));
-            ;
-        } else {
             ;
         }
         Yv *lbl = arch_global_label(gbase + i, gn);
@@ -10155,8 +9815,6 @@ Yv *capturing_defs(Yv *defs, Yv *gnames) {
         if (reads_var) {
             out = ya_push(out, yr_get(d, "name"));
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
@@ -10177,16 +9835,12 @@ Yv *capturing_defs(Yv *defs, Yv *gnames) {
                     if (name_in(out, cn)) {
                         hit = 1;
                         ;
-                    } else {
-                        ;
                     }
                     j = j + 1;
                 }
                 if (hit) {
                     out = ya_push(out, yr_get(d, "name"));
                     changed = 1;
-                    ;
-                } else {
                     ;
                 }
                 ;
@@ -10211,8 +9865,6 @@ Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only) {
         int redo = ret_omitted(yr_get(d, "func"));
         if (redo && yv_len(only) > 0) {
             redo = reads_any(yr_get(d, "func"), only);
-            ;
-        } else {
             ;
         }
         if (redo) {
@@ -10249,8 +9901,6 @@ int reads_any(Yv *func, Yv *names) {
         Yv *n = ya_get(reads, i);
         if (name_in(names, n)) {
             found = 1;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -10347,8 +9997,6 @@ Yv *std_units(Yv *names, Yv *pack) {
     if (yv_len(pack) > 0) {
         out = std_unpack(pack, names);
         ;
-    } else {
-        ;
     }
     if (yv_len(out) == 0) {
         long i = 0;
@@ -10367,20 +10015,14 @@ Yv *std_units(Yv *names, Yv *pack) {
                             k = k + 1;
                         }
                         ;
-                    } else {
-                        ;
                     }
                     j = j + 1;
                 }
-                ;
-            } else {
                 ;
             }
             out = ya_push(out, std_compile(nm, ext));
             i = i + 1;
         }
-        ;
-    } else {
         ;
     }
     return out;
@@ -10418,8 +10060,6 @@ Yv *std_compile(Yv *name, Yv *ext) {
             k = k + 1;
         }
         exit_(1);
-        ;
-    } else {
         ;
     }
     return yr_get(r, "unit");
@@ -10472,8 +10112,6 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
                         out, yr(3, "name", xn, "label", yr_get(fe, "label"),
                                 "typ", yr_get(fe, "typ")));
                     ;
-                } else {
-                    ;
                 }
                 h = h + 1;
                 ;
@@ -10481,8 +10119,6 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
                 h = h0;
                 ;
             }
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -10537,8 +10173,6 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             di = di + 1;
         }
         errors = dups;
-        ;
-    } else {
         ;
     }
     Yv *warnings = yav(0);
@@ -10710,8 +10344,6 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                 fi = fi + 1;
             }
             ;
-        } else {
-            ;
         }
         st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
@@ -10743,8 +10375,6 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             exports = pkg_exports(exports, gl);
             udfl = unit_dfl(yr_get(ast2, "stmts"), origin);
             ;
-        } else {
-            ;
         }
         /* The top-level statements with hoisted defs skipped (emitted
          * above, calls go direct to their labels). Variable declarations
@@ -10773,15 +10403,11 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                     if (name_in(capdefs, yr_get(s, "name"))) {
                         main_stmts = ya_push(main_stmts, s);
                         ;
-                    } else {
-                        ;
                     }
                     ;
                 } else if (yv_l(yr_get(yr_get(s, "v"), "k")) == K_func) {
                     if (name_in(capdefs, yr_get(s, "name"))) {
                         main_stmts = ya_push(main_stmts, s);
-                        ;
-                    } else {
                         ;
                     }
                     ;
@@ -10824,8 +10450,6 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                       yv_long(0), "col", yv_long(0)), "line",
                    yv_long(0), "col", yv_long(0)),
                 0, 0, yav(0), ys(""));
-            ;
-        } else {
             ;
         }
         pr = phase_end(times, ys("emit_start"), pt, ph);
@@ -10886,8 +10510,6 @@ Yv *pkg_exports(Yv *xs, Yv *gl) {
             if (yv_len(bn) > 0) {
                 xn = ys_cat(bn, ys("#o"));
                 ;
-            } else {
-                ;
             }
             ;
         } else {
@@ -10898,8 +10520,6 @@ Yv *pkg_exports(Yv *xs, Yv *gl) {
             all = ya_push(
                 all, yr(3, "name", xn, "label", yr_get(ge, "label"), "typ",
                        yr_get(ge, "typ")));
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -10915,15 +10535,11 @@ Yv *pkg_exports(Yv *xs, Yv *gl) {
             if (ys_eq(yr_get(e2, "name"), yr_get(e, "name"))) {
                 later = 1;
                 ;
-            } else {
-                ;
             }
             m = m + 1;
         }
         if (!later) {
             out = ya_push(out, e);
-            ;
-        } else {
             ;
         }
         j = j + 1;
@@ -10948,8 +10564,6 @@ Yv *unit_dfl(Yv *stmts, Yv *origin) {
                 if (!ys_eq(yr_get(d, "name"), nm)) {
                     keep = ya_push(keep, d);
                     ;
-                } else {
-                    ;
                 }
                 j = j + 1;
             }
@@ -10957,12 +10571,8 @@ Yv *unit_dfl(Yv *stmts, Yv *origin) {
             if (yv_len(vals) > 0) {
                 keep = ya_push(keep, yr(2, "name", nm, "vals", vals));
                 ;
-            } else {
-                ;
             }
             out = keep;
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -10979,8 +10589,6 @@ Yv *dfl_codes(Yv *func) {
         Yv *d = ya_get(dv, i);
         if (yv_l(yr_get(d, "k")) != K_void) {
             any = 1;
-            ;
-        } else {
             ;
         }
         out = ya_push(out, lit_code(d));
@@ -11074,8 +10682,6 @@ Yv *link_locs(Yv *body, long off) {
                 long nl = ys_index_of(p, ys("\n"));
                 if (nl >= 0) {
                     out = ya_push(out, ys_slice_from(p, nl));
-                    ;
-                } else {
                     ;
                 }
             }
@@ -11183,8 +10789,6 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
             if (ys_eq_lit(ys_slice(pl, 0, 2), "y_")) {
                 plabels = ya_push(plabels, pl);
                 ;
-            } else {
-                ;
             }
             pi = pi + 1;
         }
@@ -11209,11 +10813,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
                 if (ys_eq_lit(ys_slice(lb, 0, 2), "y_")) {
                     drop = name_in(plabels, lb);
                     ;
-                } else {
-                    ;
                 }
-                ;
-            } else {
                 ;
             }
             if (!drop) {
@@ -11221,8 +10821,6 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
                 labels = ya_push(labels, lb);
                 refs = ya_push(refs, ya_get(ur, b));
                 fno = ya_push(fno, yv_long(f));
-                ;
-            } else {
                 ;
             }
             b = b + 1;
@@ -11280,13 +10878,9 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
             if (kf >= 0) {
                 kb = link_locs(kb, kf);
                 ;
-            } else {
-                ;
             }
             pieces = ya_push(pieces, kb);
             pieces = ya_push(pieces, ys("\n"));
-            ;
-        } else {
             ;
         }
         ab = ab + 1;
@@ -11295,8 +10889,6 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *asm_ = arch_header();
     if (dbg_lines) {
         asm_ = ys_cat(file_dirs(files), asm_);
-        ;
-    } else {
         ;
     }
     asm_ = ys_cat(ys_cat(asm_, arch_text()), yr_get(ps, "text"));
@@ -11349,8 +10941,6 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
             gk = gk + 1;
         }
         asm_ = ys_cat(asm_, ys_join(gpieces, ys("")));
-        ;
-    } else {
         ;
     }
     return asm_;
@@ -11730,8 +11320,6 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         if (bound) {
             xt = tdecode(tc);
             ;
-        } else {
-            ;
         }
         xs = ya_push(xs, yr(3, "name", xn, "label", xl, "typ", xt));
         j = j + 1;
@@ -11785,8 +11373,6 @@ Yv *std_unpack(Yv *pack, Yv *names) {
                 got = ya_push(got,
                               unit_read(cur, nm, std_unit_bound(nm)));
                 ;
-            } else {
-                ;
             }
             yr_set(cur, "p", yv_long(at + ul));
             i = i + 1;
@@ -11800,8 +11386,6 @@ Yv *std_unpack(Yv *pack, Yv *names) {
                 if (ys_eq(yr_get(u, "name"), want)) {
                     out = ya_push(out, u);
                     ;
-                } else {
-                    ;
                 }
                 a = a + 1;
             }
@@ -11810,11 +11394,7 @@ Yv *std_unpack(Yv *pack, Yv *names) {
         if (yv_len(out) != yv_len(names)) {
             out = yav(0);
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     return out;
@@ -11843,15 +11423,9 @@ Yv *unit_unobj(Yv *text, Yv *key) {
                 unit = unit_read(cur, name, 1);
                 ok = yv_l(yr_get(cur, "p")) == yv_len(text);
                 ;
-            } else {
-                ;
             }
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     return yr(2, "ok", yv_bool(ok), "unit", unit);
@@ -11877,8 +11451,6 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
                 ext = ya_push(ext, ya_get(exports, j));
                 j = j + 1;
             }
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -11916,8 +11488,6 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
                 dfl = ya_push(dfl, yr(2, "name", qname, "vals", vals));
                 j = j + 1;
             }
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -11959,8 +11529,6 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
         Yv *init = yr_get(u, "init");
         if (yv_len(init) > 0) {
             inits = ya_push(inits, init);
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -12075,8 +11643,6 @@ Yv *gen_maplit(Yv *st, Yv *node) {
             if (ys_eq(kk, mk)) {
                 ya_set(vals, fi, mv);
                 found = 1;
-                ;
-            } else {
                 ;
             }
             fi = fi + 1;

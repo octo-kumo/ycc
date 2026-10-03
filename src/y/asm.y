@@ -114,8 +114,8 @@ def split_ops(s: str) -> [str] {
             if (depth == 0) {
                 out += trim(s[start:i]);
                 start = i + 1;
-            } else { };
-        } else { };
+            }
+        }
         i ++;
     };
     out += trim(s[start:n]);
@@ -494,10 +494,10 @@ def labmap_put(m: [AsmLabel], name: str, sec: long, off: long) -> { map: [AsmLab
             done = true;
         } else {
             i = i + 1;
-            if (i >= cap) { i = 0; } else { };
+            if (i >= cap) { i = 0; }
         };
         n = n + 1;
-        if (n > cap) { done = true; } else { };
+        if (n > cap) { done = true; }
     };
     { map: m, dup: dup }
 };
@@ -519,10 +519,10 @@ def labmap_get(m: [AsmLabel], name: str) -> { sec: long, off: long } {
             done = true;
         } else {
             i = i + 1;
-            if (i >= cap) { i = 0; } else { };
+            if (i >= cap) { i = 0; }
         };
         n = n + 1;
-        if (n > cap) { done = true; } else { };
+        if (n > cap) { done = true; }
     };
     { sec: found_sec, off: found_off }
 };
@@ -539,7 +539,7 @@ def labmap_build(labels: [AsmLabel]) -> { map: [AsmLabel], dup: str } {
         let e = labels[i];
         let r = labmap_put(m, e.name, e.sec, e.off);
         m = r.map;
-        if (r.dup) { dup = e.name; } else { };
+        if (r.dup) { dup = e.name; }
         i = i + 1;
     };
     { map: m, dup: dup }
@@ -836,7 +836,7 @@ def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (sp > 0) {
         fs = rest[0:sp];
         ls = trim(rest[sp + 1:]);
-    } else { };
+    }
     if (!is_num_text(fs) || !is_num_text(ls) || tonum(fs) < 1 || tonum(ls) < 0) {
         { err: "L" + tostring(lno) + ": bad .loc '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else if (sec != 0) {
@@ -855,11 +855,11 @@ def asm_file(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (sp > 0) {
         ns = rest[0:sp];
         q = trim(rest[sp + 1:]);
-    } else { };
+    }
     let d = decode_str("");
     if (!asm_strdata_bad(q)) {
         d = decode_str(q[1:len(q) - 1]);
-    } else { };
+    }
     if (!is_num_text(ns) || tonum(ns) < 1 || asm_strdata_bad(q) || !d.ok) {
         { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else {
@@ -953,7 +953,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
                 zb += 0;
                 i = i + 1;
             };
-        } else { };
+        }
         let item: AsmItem = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [] };
         offs[sec] = offs[sec] + n;
         { err: "", sec: sec, offs: offs, item: item }

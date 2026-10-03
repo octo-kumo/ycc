@@ -147,7 +147,7 @@ static Yv *parse_num(Yv *s) {
         neg = 1;
         i = 1;
         ;
-    } else { ; };
+    }
     if (i >= yv_len(s)) {
         return yr(2, "ok", yv_bool(0), "v", yv_long(0));
     } else {
@@ -177,7 +177,7 @@ static Yv *parse_num_go(Yv *s, long i, int neg) {
         i = i + 1;
         ;
     };
-    if (neg) { v = (long)(0 - (unsigned long)v); ; } else { ; };
+    if (neg) { v = (long)(0 - (unsigned long)v); ; }
     return yr(2, "ok", yv_bool(ok), "v", yv_long(v));
 }
 
@@ -201,20 +201,16 @@ static Yv *split_ops(Yv *s) {
     /* NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails. */
     while (i < n) {
         long b = ys_byte_at(s, i);
-        if (b == 40) { depth = depth + 1; ; } else { ; };  /* '(' */
-        if (b == 41) { depth = depth - 1; ; } else { ; };  /* ')' */
+        if (b == 40) { depth = depth + 1; ; }
+        if (b == 41) { depth = depth - 1; ; }
         if (b == 44) {  /* ',' */
             if (depth == 0) {
                 out = ya_push(out, ys_trim(ys_slice(s, start, i)));
                 start = i + 1;
                 ;
-            } else {
-                ;
-            };
+            }
             ;
-        } else {
-            ;
-        };
+        }
         i = i + 1;
         ;
     };
@@ -730,11 +726,11 @@ Yv *labmap_put(Yv *m, Yv *name, long sec, long off) {
             ;
         } else {
             i = i + 1;
-            if (i >= cap) { i = 0; ; } else { ; };
+            if (i >= cap) { i = 0; ; }
             ;
         };
         n = n + 1;
-        if (n > cap) { done = 1; ; } else { ; };
+        if (n > cap) { done = 1; ; }
     };
     return yr(2, "map", m, "dup", yv_bool(dup));
 }
@@ -758,11 +754,11 @@ Yv *labmap_get(Yv *m, Yv *name) {
             ;
         } else {
             i = i + 1;
-            if (i >= cap) { i = 0; ; } else { ; };
+            if (i >= cap) { i = 0; ; }
             ;
         };
         n = n + 1;
-        if (n > cap) { done = 1; ; } else { ; };
+        if (n > cap) { done = 1; ; }
     };
     return yr(2, "sec", yv_long(found_sec), "off", yv_long(found_off));
 }
@@ -779,7 +775,7 @@ static Yv *labmap_build(Yv *labels) {
         Yv *e = ya_get(labels, i);
         Yv *r = labmap_put(m, yr_get(e, "name"), yv_l(yr_get(e, "sec")), yv_l(yr_get(e, "off")));
         m = yr_get(r, "map");
-        if (yv_b(yr_get(r, "dup"))) { dup = yr_get(e, "name"); ; } else { ; };
+        if (yv_b(yr_get(r, "dup"))) { dup = yr_get(e, "name"); ; }
         i = i + 1;
     }
     return yr(2, "map", m, "dup", dup);
@@ -1038,7 +1034,7 @@ static Yv *asm_strdata_emit(long sec, Yv *offs, Yv *bytes, int nul) {
     if (nul) {
         bb = ya_push(bb, yv_long(0));
         ;
-    } else { ; };
+    }
     return asm_strdata_item(sec, offs, bb);
 }
 
@@ -1058,7 +1054,7 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
         dir = ys_slice(line, 0, sp);
         rest = ys_trim(ys_slice_from(line, sp + 1));
         ;
-    } else { ; };
+    }
     if (ys_eq_lit(dir, ".text")) {
         return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
@@ -1106,7 +1102,7 @@ static Yv *asm_loc(long lno, long sec, Yv *offs, Yv *rest) {
         fs = ys_slice(rest, 0, sp);
         ls = ys_trim(ys_slice_from(rest, sp + 1));
         ;
-    } else { ; };
+    }
     if (!is_num_text(fs) || !is_num_text(ls) ||
         ys_tonum(fs) < 1 || ys_tonum(ls) < 0) {
         return yr(4,
@@ -1147,12 +1143,12 @@ static Yv *asm_file(long lno, long sec, Yv *offs, Yv *rest) {
         ns = ys_slice(rest, 0, sp);
         q = ys_trim(ys_slice_from(rest, sp + 1));
         ;
-    } else { ; };
+    }
     Yv *d = decode_str(ys(""));
     if (!asm_strdata_bad(q)) {
         d = decode_str(ys_slice(q, 1, yv_len(q) - 1));
         ;
-    } else { ; };
+    }
     if (!is_num_text(ns) || ys_tonum(ns) < 1 || asm_strdata_bad(q) ||
         !yv_b(yr_get(d, "ok"))) {
         return yr(4,
@@ -1308,16 +1304,16 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
     if (tab >= 0) {
         if (sp < 0) { cut = tab; ; }
         else if (tab < sp) { cut = tab; ; }
-        else { ; };
+
         ;
-    } else { ; };
+    }
     Yv *mn = line;
     Yv *rest = ys("");
     if (cut >= 0) {
         mn = ys_slice(line, 0, cut);
         rest = ys_trim(ys_slice_from(line, cut + 1));
         ;
-    } else { ; };
+    }
     Yv *ops = yav(0);
     if (!ys_eq_lit(rest, "")) {
         Yv *texts = split_ops(rest);
@@ -1395,7 +1391,7 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
             ;
         } else if (sec == 2) {
             bss_len = bss_len + yv_l(yr_get(it, "len"));
-            if (yv_len(yr_get(it, "bytes")) > 0) { bss_data = 1; ; } else { ; };
+            if (yv_len(yr_get(it, "bytes")) > 0) { bss_data = 1; ; }
             ;
         }
         i = i + 1;
@@ -1441,7 +1437,7 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
         /* pad code to a page so rodata lands page-aligned (mirrors elf.y) */
         long pad = 0;
         long trail = code_len % 4096;
-        if (trail != 0) { pad = 4096 - trail; ; } else { ; };
+        if (trail != 0) { pad = 4096 - trail; ; }
         Yv *code = yav(0);
         Yv *ro = yav(0);
         Yv *err = ys("");
@@ -1476,7 +1472,7 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
                     ;
                 };
                 ;
-            } else { ; };
+            }
             i = i + 1;
             ;
             };
@@ -1539,12 +1535,12 @@ static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, 
         if (ys_eq_lit(yr_get(fx, "kind"), "rel32")) {
             Yv *rr = patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
             bytes = yr_get(rr, "bytes");
-            if (!ys_eq_lit(yr_get(rr, "err"), "")) { err = yr_get(rr, "err"); ; } else { ; };
+            if (!ys_eq_lit(yr_get(rr, "err"), "")) { err = yr_get(rr, "err"); ; }
             ;
         } else {
             Yv *rk = patch_item_kind2(lmap, code_len, pad, fx, bytes, base, it, at);
             bytes = yr_get(rk, "bytes");
-            if (!ys_eq_lit(yr_get(rk, "err"), "")) { err = yr_get(rk, "err"); ; } else { ; };
+            if (!ys_eq_lit(yr_get(rk, "err"), "")) { err = yr_get(rk, "err"); ; }
             ;
         };
         f = f + 1;
@@ -1745,7 +1741,7 @@ static Yv *debug_lines(Yv *items, long code_len, long code_off) {
             }
             ya_set(files, file_no - 1, yr_get(ya_get(fx, 0), "lbl"));
             ;
-        } else { ; };
+        }
         i = i + 1;
     }
     if (yv_len(rows) == 0) {

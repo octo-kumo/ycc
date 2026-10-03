@@ -20,7 +20,7 @@ import elf from "./elf.y";
 
 def dwarf_sections(files: [str], rows: [long], text_addr: long, text_len: long, comp_dir: str) -> [ElfSec] {
     let root = "?";
-    if (len(files) > 0) { root = files[0]; } else { };
+    if (len(files) > 0) { root = files[0]; }
     let out: [ElfSec] = [];
     out += { name: ".debug_info", data: dw_info(root, comp_dir, text_addr, text_len) };
     out += { name: ".debug_abbrev", data: dw_abbrev() };

@@ -119,7 +119,7 @@ Yv *lex_quoted(Yv *src, long i, long line, long col) {
     if (hasesc) {
         buf = unescape(raw, 0);
         ;
-    } else { ; }
+    }
     return yr(4, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col));
 }
 
@@ -229,7 +229,7 @@ static long fstr_expr_end(Yv *src, long lo) {
             i = i + 1;
             ;
         } else if (depth > 0) {
-            if (c == 41 || c == 93 || c == 125) { depth = depth - 1; ; } else { ; };
+            if (c == 41 || c == 93 || c == 125) { depth = depth - 1; ; }
             i = i + 1;
             ;
         } else if (c == 63) {
@@ -306,7 +306,7 @@ Yv *fstr_walk(Yv *src, long q) {
                 long lo = i + 1;
                 long hi = fstr_expr_end(src, lo);
                 long hc = 0;
-                if (hi < n) { hc = ys_byte_at(src, hi); ; } else { ; };
+                if (hi < n) { hc = ys_byte_at(src, hi); ; }
                 if (hc != 125 && hc != 58) {
                     if (hi >= n) {
                         err = ys("unterminated f-string field");
@@ -375,7 +375,7 @@ Yv *fstr_walk(Yv *src, long q) {
         ;
     };
     long end = i;
-    if (!ys_eq_lit(err, "")) { end = lit_end(src, q); ; } else { ; };
+    if (!ys_eq_lit(err, "")) { end = lit_end(src, q); ; }
     return yr(4, "end", yv_long(end), "err", err, "at", yv_long(at), "fields", fields);
 }
 
@@ -431,14 +431,14 @@ static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
             at = lo - 1;
             bl = yv_l(yr_get(bp, "line"));
             bc = yv_l(yr_get(bp, "col"));
-            if (k > 0) { toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc)); ; } else { ; };
+            if (k > 0) { toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc)); ; }
             if (lo - 1 > from) {
                 toks = ya_push(toks, mktok(ys("str"),
                                            unescape(ys_slice(src, from, lo - 1), 1),
                                            bl, bc));
                 toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc));
                 ;
-            } else { ; };
+            }
             toks = ya_push(toks, mktok(ys("id"), ys("#fmt"), bl, bc));
             toks = ya_push(toks, mktok(ys("punct"), ys("("), bl, bc));
             Yv *sub = tokenize(ys_slice(src, lo, hi));
@@ -484,7 +484,7 @@ static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
                                        unescape(ys_slice(src, from, end - 1), 1),
                                        bl, bc));
             ;
-        } else { ; };
+        }
         toks = ya_push(toks, mktok(ys("punct"), ys(")"), bl, bc));
         ;
     };
@@ -724,7 +724,7 @@ Yv *tokenize(Yv *src) {
             else if (ys_eq_lit(word, "return")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "true")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "false")) { ty = ys("kw"); ; }
-            else { ; }
+
             if (ys_eq_lit(word, "b")) {
                 // b"..." / b'...' -- a byte-string literal: the same type
                 // as [byte], spelled like a Python bytes literal.
@@ -835,7 +835,7 @@ Yv *tokenize(Yv *src) {
                     puts_(ys("error: unterminated block comment\n"));
                     exit_(1);
                     ;
-                } else { ; }
+                }
                 ;
             } else {
                 // division operator or `/=` (not a comment opener). The

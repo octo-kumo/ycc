@@ -27,8 +27,6 @@ long tclamp(Yv *toks, long p) {
     if (q >= n) {
         q = n - 1;
         ;
-    } else {
-        ;
     }
     return q;
 }
@@ -166,8 +164,6 @@ Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one) {
     if (is_punct(toks, pos, close)) {
         go = 0;
         ;
-    } else {
-        ;
     }
     while (go) {
         // NOTE: bound once — `one(toks, pos)` inline misparses on the C VM.
@@ -178,8 +174,6 @@ Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one) {
                    "pos", yv_long(pos));
         if (ys_eq_lit(one, "expr")) {
             r = parse_expr(toks, pos);
-            ;
-        } else {
             ;
         }
         // NOTE: each bound once — `x.y` on a call result misparses on the
@@ -192,8 +186,6 @@ Yv *sep_by(Yv *toks, long p, Yv *close, Yv *one) {
             pos = pos + 1;
             if (is_punct(toks, pos, close)) {
                 go = 0;
-                ;
-            } else {
                 ;
             }
             ;
@@ -471,8 +463,6 @@ Yv *parse_postfix(Yv *toks, long p) {
             if (yv_l(yr_get(node, "k")) == K_err) {
                 go = 0;
                 ;
-            } else {
-                ;
             }
         } else if (is_op(toks, pos, ys("."))) {
             if (is_name_tok(toks, pos + 1)) {
@@ -616,8 +606,6 @@ Yv *parse_binary(Yv *toks, long p, long min_prec) {
         if (ys_eq_lit(tt(toks, pos), "op")) {
             prec = op_prec(op);
             ;
-        } else {
-            ;
         }
         // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
         // with bools and the checker rejects the joint gate (tcompat law:
@@ -637,7 +625,7 @@ Yv *parse_binary(Yv *toks, long p, long min_prec) {
             if (ys_eq_lit(op, "::")) {
                 next_min = prec;
                 ;
-            } else { ; }
+            }
             Yv *right_r = parse_binary(toks, pos + 1, next_min);
             left = yr(6, "k", yv_long(K_bin), "op", op, "l", left, "r", yr_get(right_r, "node"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos)));
             pos = yv_l(yr_get(right_r, "pos"));
@@ -1066,8 +1054,6 @@ Yv *type_err_list(Yv *ts) {
         if (yv_l(yr_get(out, "k")) == K_void) {
             out = type_err(ya_get(ts, i));
             ;
-        } else {
-            ;
         }
         i = i + 1;
     }
@@ -1081,8 +1067,6 @@ Yv *type_err_fields(Yv *fs) {
         Yv *f = ya_get(fs, i);
         if (yv_l(yr_get(out, "k")) == K_void) {
             out = type_err(yr_get(f, "typ"));
-            ;
-        } else {
             ;
         }
         i = i + 1;
@@ -1116,8 +1100,6 @@ Yv *parse_type_params(Yv *toks, long p) {
                 ;
             }
         }
-        ;
-    } else {
         ;
     }
     if (is_punct(toks, pos, ys(")"))) {
@@ -1193,8 +1175,6 @@ Yv *parse_type_record(Yv *toks, long p) {
                 ;
             }
         }
-        ;
-    } else {
         ;
     }
     Yv *rc = tclose_res(toks, pos, ys("}"),
@@ -1335,8 +1315,6 @@ long parse_type(Yv *toks, long p) {
     long pos = parse_type_atom(toks, p);
     if (is_op(toks, pos, ys("->"))) {
         pos = parse_type(toks, pos + 1);
-    } else {
-        ;
     }
     return pos;
 }
@@ -1442,8 +1420,6 @@ Yv *parse_func(Yv *toks, long p) {
         if (!hbad) {
             derrs = ya_push(derrs, expect_err(toks, pos, ys("'('")));
             ;
-        } else {
-            ;
         }
         hbad = 1;
         ;
@@ -1497,11 +1473,7 @@ Yv *parse_func(Yv *toks, long p) {
                         pt = yr(1, "k", yv_long(K_tnone));
                         hbad = 1;
                         ;
-                    } else {
-                        ;
                     }
-                    ;
-                } else {
                     ;
                 }
                 Yv *dv = yr(3, "k", yv_long(K_void), "line",
@@ -1529,8 +1501,6 @@ Yv *parse_func(Yv *toks, long p) {
                         if (yv_l(yr_get(pt, "k")) == K_tnone) {
                             pt = dt;
                             ;
-                        } else {
-                            ;
                         }
                         ;
                     }
@@ -1544,8 +1514,6 @@ Yv *parse_func(Yv *toks, long p) {
                                "line", yv_long(tline(toks, pos)),
                                "col", yv_long(tcol(toks, pos))));
                     }
-                    ;
-                } else {
                     ;
                 }
                 if (isopt) {
@@ -1592,8 +1560,6 @@ Yv *parse_func(Yv *toks, long p) {
             derrs = ya_push(derrs,
                             expect_err(toks, pos, ys("',' or ')'")));
             ;
-        } else {
-            ;
         }
         ;
     }
@@ -1609,11 +1575,7 @@ Yv *parse_func(Yv *toks, long p) {
             derrs = ya_push(derrs, rte);
             ret = yr(1, "k", yv_long(K_tnone));
             ;
-        } else {
-            ;
         }
-        ;
-    } else {
         ;
     }
     Yv *body = parse_block(toks, pos);
@@ -1698,8 +1660,6 @@ long stmt_end(Yv *toks, long start, long pos, Yv *sn, Yv *stmts) {
     } else {
         if (yv_l(yr_get(sn, "k")) != K_err) {
             stmts = ya_push(stmts, expect_err(toks, pos, ys("';'")));
-            ;
-        } else {
             ;
         }
         return skip_close(toks, sync_stmt(toks, pos), ys(";"));
@@ -1973,8 +1933,6 @@ Yv *parse_decl(Yv *toks, long p) {
                        sync_stmt(toks, pos));
         }
         ;
-    } else {
-        ;
     }
     if (!is_op(toks, pos, ys("="))) {
         Yv *err = expect_err(toks, pos, ys("'='"));
@@ -2012,11 +1970,7 @@ long sync_stmt(Yv *toks, long p) {
                     if (depth > 0) {
                         depth = depth - 1;
                         ;
-                    } else {
-                        ;
                     }
-                    ;
-                } else {
                     ;
                 }
                 pos = pos + 1;
@@ -2055,8 +2009,6 @@ Yv *parse_if(Yv *toks, long p) {
             ;
         }
         has_else = 1;
-        ;
-    } else {
         ;
     }
     return res(yr(7, "k", yv_long(K_kw_if), "cond", yr_get(cond, "node"), "then", yr_get(then_b, "node"), "els", else_b, "has_else", yv_bool(has_else), "line", yv_long(ln), "col", yv_long(cl)), pos);
@@ -2133,8 +2085,6 @@ Yv *parse_for_or_range(Yv *toks, long p) {
             init = yr_get(ir, "node");
             pos = yv_l(yr_get(ir, "pos"));
             ;
-        } else {
-            ;
         }
         if (!is_punct(toks, pos, ys(";"))) {
             Yv *err = clause_err(toks, pos, init, ys("';'"));
@@ -2147,8 +2097,6 @@ Yv *parse_for_or_range(Yv *toks, long p) {
             Yv *cr = parse_expr(toks, pos);
             cond = yr_get(cr, "node");
             pos = yv_l(yr_get(cr, "pos"));
-            ;
-        } else {
             ;
         }
         if (!is_punct(toks, pos, ys(";"))) {
@@ -2163,8 +2111,6 @@ Yv *parse_for_or_range(Yv *toks, long p) {
             Yv *sr = parse_stmt(toks, pos);
             step = yr_get(sr, "node");
             pos = yv_l(yr_get(sr, "pos"));
-            ;
-        } else {
             ;
         }
         if (!is_punct(toks, pos, ys(")"))) {
@@ -2456,8 +2402,6 @@ Yv *parse_program(Yv *toks) {
         // NOTE: `0;` tail — the while body must be void-typed (see note).
         if (pos == before) {
             pos = pos + 1;
-            ;
-        } else {
             ;
         }
         ;

@@ -79,7 +79,7 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
     out = push_le16(out, 64);
     out = push_le16(out, 56);
     let phnum = 1;
-    if (bss_len > 0) { phnum = 2; } else { };
+    if (bss_len > 0) { phnum = 2; }
     out = push_le16(out, phnum);
     if (dbg.shnum > 0) { out = push_le16(out, 64); } else { out = push_le16(out, 0); };
     out = push_le16(out, dbg.shnum);
@@ -106,7 +106,7 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
         out = push_le64(out, dbg.bss_fsz);
         out = push_le64(out, bss_len);
         out = push_le64(out, 4096);
-    } else { };
+    }
     out = push_bytes(out, code);
     let p = 0;
     while (p < codepad) {

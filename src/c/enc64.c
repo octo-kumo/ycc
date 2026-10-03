@@ -660,9 +660,9 @@ static Yv *enc_sse_arith(Yv *mn, Yv *dst, Yv *src) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("sse src"));
     } else {
         long op = 88;
-        if (ys_eq_lit(mn, "subsd")) { op = 92; ; } else { ; };
-        if (ys_eq_lit(mn, "mulsd")) { op = 89; ; } else { ; };
-        if (ys_eq_lit(mn, "divsd")) { op = 94; ; } else { ; };
+        if (ys_eq_lit(mn, "subsd")) { op = 92; ; }
+        if (ys_eq_lit(mn, "mulsd")) { op = 89; ; }
+        if (ys_eq_lit(mn, "divsd")) { op = 94; ; }
         long r = rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n")));
         Yv *tail = yav(3, yv_long(15), yv_long(op), yv_long(modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))));
         if (r < 0) {

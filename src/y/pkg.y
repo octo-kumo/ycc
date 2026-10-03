@@ -84,7 +84,7 @@ def pk_clean(path: str) -> str {
                 out = out[:n - 1];
             } else if (!abs) {
                 out += s;
-            } else { };
+            }
         } else {
             out += s;
         };
@@ -117,7 +117,7 @@ def pk_is_file(path: str) -> bool {
 
 def pk_mkdir(path: str) -> long {
     syscall(83, path, 493);
-    if (!pk_is_dir(path)) { pk_die("cannot create directory '" + path + "'"); } else { };
+    if (!pk_is_dir(path)) { pk_die("cannot create directory '" + path + "'"); }
     0
 };
 
@@ -167,7 +167,7 @@ def pk_is_ident(s: str) -> bool {
     if (ok) {
         let c = byte_at(s, 0);
         ok = c < c'0' || c > c'9';
-    } else { };
+    }
     ok
 };
 
@@ -190,12 +190,12 @@ def pk_uncomment(line: str) -> str {
                 i = i + 1;
             } else if (c == q) {
                 q = "";
-            } else { };
+            }
         } else if (c == "\"" || c == "'") {
             q = c;
         } else if (c == "#") {
             end = i;
-        } else { };
+        }
         i = i + 1;
     };
     line[:end]
@@ -209,7 +209,7 @@ def pk_qstr(cur: Cursor, at: str) -> str {
     let out: [str] = [];
     if (q != "\"" && q != "'") {
         pk_die(at + "expected a string");
-    } else { };
+    }
     p = p + 1;
     let go = true;
     while (go) {
@@ -277,7 +277,7 @@ def pk_bare(cur: Cursor, at: str) -> str {
         p = p + 1;
     };
     let key = s[cur.p:p];
-    if (len(key) == 0) { pk_die(at + "expected a key"); } else { };
+    if (len(key) == 0) { pk_die(at + "expected a key"); }
     cur.p = p;
     key
 };
@@ -291,13 +291,13 @@ def pk_itable(cur: Cursor, at: str) -> { keys: [str], vals: [str] } {
     if (pk_peek(cur) == "}") {
         cur.p = cur.p + 1;
         go = false;
-    } else { };
+    }
     while (go) {
         let key = pk_bare(cur, at);
         pk_skip(cur);
-        if (pk_peek(cur) != "=") { pk_die(at + "expected '=' after '" + key + "'"); } else { };
+        if (pk_peek(cur) != "=") { pk_die(at + "expected '=' after '" + key + "'"); }
         cur.p = cur.p + 1;
-        if (pk_has(keys, key)) { pk_die(at + "duplicate key '" + key + "'"); } else { };
+        if (pk_has(keys, key)) { pk_die(at + "duplicate key '" + key + "'"); }
         keys += key;
         vals += pk_qstr(cur, at);
         pk_skip(cur);
@@ -320,7 +320,7 @@ def pk_count(xs: [str], s: str) -> long {
     let i = 0;
     while (i < len(xs)) {
         let x: str = xs[i];
-        if (x == s) { n = n + 1; } else { };
+        if (x == s) { n = n + 1; }
         i = i + 1;
     };
     n
@@ -344,19 +344,19 @@ def pk_toml(text: str, path: str) -> [PkEnt] {
         if (len(line) == 0) {
         } else if (line[:1] == "[") {
             let w = 1;
-            if (line[:2] == "[[") { w = 2; } else { };
+            if (line[:2] == "[[") { w = 2; }
             let close = "]";
-            if (w == 2) { close = "]]"; } else { };
+            if (w == 2) { close = "]]"; }
             if (len(line) < 2 * w || line[len(line) - w:] != close) {
                 pk_die(at + "expected '" + close + "' after the table name");
-            } else { };
+            }
             tab = trim(line[w:len(line) - w]);
-            if (!pk_is_key(tab)) { pk_die(at + "bad table name '" + tab + "'"); } else { };
+            if (!pk_is_key(tab)) { pk_die(at + "bad table name '" + tab + "'"); }
             if (w == 2) {
                 n = pk_count(arrs, tab);
                 arrs += tab;
             } else {
-                if (pk_has(tabs, tab)) { pk_die(at + "table [" + tab + "] appears twice"); } else { };
+                if (pk_has(tabs, tab)) { pk_die(at + "table [" + tab + "] appears twice"); }
                 tabs += tab;
                 n = -1;
             };
@@ -365,11 +365,11 @@ def pk_toml(text: str, path: str) -> [PkEnt] {
             out += e;
         } else {
             let eq = index_of(line, "=");
-            if (eq < 0) { pk_die(at + "expected 'key = value'"); } else { };
+            if (eq < 0) { pk_die(at + "expected 'key = value'"); }
             let key = trim(line[:eq]);
-            if (!pk_is_key(key)) { pk_die(at + "bad key '" + key + "'"); } else { };
+            if (!pk_is_key(key)) { pk_die(at + "bad key '" + key + "'"); }
             let id = tab + "\n" + tostring(n) + "\n" + key;
-            if (pk_has(seen, id)) { pk_die(at + "duplicate key '" + key + "'"); } else { };
+            if (pk_has(seen, id)) { pk_die(at + "duplicate key '" + key + "'"); }
             seen += id;
             let cur = { s: trim(line[eq + 1:]), p: 0 };
             e.key = key;
@@ -389,7 +389,7 @@ def pk_toml(text: str, path: str) -> [PkEnt] {
                 pk_die(at + "expected a string, an array or an inline table after '='");
             };
             pk_skip(cur);
-            if (cur.p < len(cur.s)) { pk_die(at + "unexpected text after the value"); } else { };
+            if (cur.p < len(cur.s)) { pk_die(at + "unexpected text after the value"); }
             out += e;
         };
         i = i + 1;
@@ -406,7 +406,7 @@ def pk_tq(s: str) -> str {
 };
 
 def pk_want_str(e: PkEnt, at: str) -> str {
-    if (e.k != K.s) { pk_die(at + "'" + e.key + "' must be a string"); } else { };
+    if (e.k != K.s) { pk_die(at + "'" + e.key + "' must be a string"); }
     e.s
 };
 
@@ -414,7 +414,7 @@ def pk_want_str(e: PkEnt, at: str) -> str {
 def pk_manifest(dir: str) -> PkMan {
     let file = pk_join(dir, "y.toml");
     let txt = fs.read_file(file);
-    if (txt == none) { pk_die("cannot read '" + file + "'"); } else { };
+    if (txt == none) { pk_die("cannot read '" + file + "'"); }
     let ents = pk_toml(unwrap(txt), file);
     let bins: [PkBin] = [];
     let deps: [PkDep] = [];
@@ -429,14 +429,14 @@ def pk_manifest(dir: str) -> PkMan {
         } else if (e.k == K.h) {
             if (tab != "package" && tab != "bin" && tab != "dependencies") {
                 pk_die(at + "unknown table [" + tab + "]");
-            } else { };
+            }
         } else if (tab == "package") {
             pk_man_package(m, e, at);
         } else if (tab == "bin") {
             let bn = e.key;
             if (bn == "obj" || bn == "git") {
                 pk_die(at + "'" + bn + "' cannot name a bin: build/" + bn + " is ycc's own");
-            } else { };
+            }
             m.bins += { name: bn, path: pk_want_str(e, at) };
         } else if (tab == "dependencies") {
             m.deps += pk_man_dep(e, at);
@@ -445,7 +445,7 @@ def pk_manifest(dir: str) -> PkMan {
         };
         i = i + 1;
     };
-    if (len(m.name) == 0) { pk_die(file + ": [package] has no name"); } else { };
+    if (len(m.name) == 0) { pk_die(file + ": [package] has no name"); }
     m
 };
 
@@ -453,13 +453,13 @@ def pk_man_package(m: PkMan, e: PkEnt, at: str) -> long {
     let key = e.key;
     if (key == "name") {
         let nm = pk_want_str(e, at);
-        if (!pk_is_ident(nm)) { pk_die(at + "package name '" + nm + "' is not an identifier"); } else { };
-        if (pk_is_kw(nm)) { pk_die(at + "package name '" + nm + "' is a keyword"); } else { };
+        if (!pk_is_ident(nm)) { pk_die(at + "package name '" + nm + "' is not an identifier"); }
+        if (pk_is_kw(nm)) { pk_die(at + "package name '" + nm + "' is a keyword"); }
         m.name = nm;
     } else if (key == "lib") {
         m.lib = pk_want_str(e, at);
     } else if (key == "src") {
-        if (e.k != K.a) { pk_die(at + "'src' must be an array of strings"); } else { };
+        if (e.k != K.a) { pk_die(at + "'src' must be an array of strings"); }
         m.roots = e.items;
     } else if (key == "version" || key == "description" || key == "license" || key == "authors") {
     } else {
@@ -470,8 +470,8 @@ def pk_man_package(m: PkMan, e: PkEnt, at: str) -> long {
 
 def pk_man_dep(e: PkEnt, at: str) -> PkDep {
     let nm = e.key;
-    if (!pk_is_ident(nm)) { pk_die(at + "dependency name '" + nm + "' is not an identifier"); } else { };
-    if (pk_is_kw(nm)) { pk_die(at + "dependency name '" + nm + "' is a keyword"); } else { };
+    if (!pk_is_ident(nm)) { pk_die(at + "dependency name '" + nm + "' is not an identifier"); }
+    if (pk_is_kw(nm)) { pk_die(at + "dependency name '" + nm + "' is a keyword"); }
     let d = { name: nm, path: "", git: "", rev: "" };
     let ks = e.keys;
     let vs = e.items;
@@ -496,7 +496,7 @@ def pk_man_dep(e: PkEnt, at: str) -> PkDep {
         pk_die(at + "dependency '" + nm + "' has both a path and a git");
     } else if (len(d.rev) > 0 && len(d.git) == 0) {
         pk_die(at + "dependency '" + nm + "' has a rev but no git");
-    } else { };
+    }
     d
 };
 
@@ -560,7 +560,7 @@ def pk_load(dir: str) -> PkGraph {
     if (len(m.lib) > 0) {
         lib = pk_join(dir, m.lib);
         st.nodes += { name: m.name, dir: dir, lib: lib, roots: roots, deps: pk_dep_names(ds), git: "", rev: "", commit: "" };
-    } else { };
+    }
     pk_lock_write(dir, st.nodes);
     let bins: [PkBin] = [];
     let mb = m.bins;
@@ -593,7 +593,7 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
             } else {
                 pk_die("package '" + d.name + "' comes from two places: " + e.src + " (for " + e.by + ") and " + src + " (for " + by + ")");
             };
-        } else { };
+        }
     } else {
         st.decls += { name: d.name, src: src, by: by, dep: d, fdir: fdir };
     };
@@ -611,7 +611,7 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
             pk_die("dependency '" + d.name + "' (" + pk_src(d, fdir) + ") is package '" + m.name + "'");
         } else if (len(m.lib) == 0) {
             pk_die("package '" + m.name + "' (" + pk_src(d, fdir) + ") has no lib to import");
-        } else { };
+        }
         st.stack += d.name;
         let mds = m.deps;
         let i = 0;
@@ -623,7 +623,7 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
         st.stack = stk[:len(stk) - 1];
         st.done += d.name;
         st.nodes += { name: m.name, dir: at.dir, lib: pk_join(at.dir, m.lib), roots: pk_roots(at.dir, m.roots), deps: pk_dep_names(mds), git: d.git, rev: d.rev, commit: at.commit };
-    } else { };
+    }
     0
 };
 
@@ -675,9 +675,9 @@ def pk_env() -> str {
                 let eq = index_of(kv, "=");
                 if (eq > 0 && pk_is_ident(kv[:eq])) {
                     out += "export " + kv[:eq] + "=" + pk_q(kv[eq + 1:]) + "; ";
-                } else { };
+                }
                 start = i + 1;
-            } else { };
+            }
             i = i + 1;
         };
         join(out, "")
@@ -687,19 +687,19 @@ def pk_env() -> str {
 def pk_fetch(d: PkDep, base: str, pin: str) -> PkGit {
     let tmp = base + "/" + d.name + ".tmp";
     let want = pin;
-    if (len(want) == 0) { want = d.rev; } else { };
+    if (len(want) == 0) { want = d.rev; }
     let cmd = pk_env() + "mkdir -p " + pk_q(base) + " && rm -rf " + pk_q(tmp) + " && git clone --quiet " + pk_q(d.git) + " " + pk_q(tmp) + " && cd " + pk_q(tmp);
-    if (len(want) > 0) { cmd = cmd + " && git -c advice.detachedHead=false checkout --quiet " + pk_q(want); } else { };
+    if (len(want) > 0) { cmd = cmd + " && git -c advice.detachedHead=false checkout --quiet " + pk_q(want); }
     cmd = cmd + " && git rev-parse HEAD > .git/ycc-commit";
     eputs("fetching " + d.name + " (" + d.git + ")\n");
-    if (exec(cmd) != 0) { pk_die("fetching '" + d.name + "' from " + d.git + " failed"); } else { };
+    if (exec(cmd) != 0) { pk_die("fetching '" + d.name + "' from " + d.git + " failed"); }
     let ct = fs.read_file(tmp + "/.git/ycc-commit");
     let commit = "";
-    if (ct != none) { commit = trim(unwrap(ct)); } else { };
+    if (ct != none) { commit = trim(unwrap(ct)); }
     let dest = base + "/" + d.name + "-" + commit;
     let mv = "rm -rf " + pk_q(tmp);
-    if (!pk_is_file(dest + "/y.toml")) { mv = "rm -rf " + pk_q(dest) + " && mv " + pk_q(tmp) + " " + pk_q(dest); } else { };
-    if (len(commit) == 0 || exec(pk_env() + mv) != 0) { pk_die("fetching '" + d.name + "' from " + d.git + " failed"); } else { };
+    if (!pk_is_file(dest + "/y.toml")) { mv = "rm -rf " + pk_q(dest) + " && mv " + pk_q(tmp) + " " + pk_q(dest); }
+    if (len(commit) == 0 || exec(pk_env() + mv) != 0) { pk_die("fetching '" + d.name + "' from " + d.git + " failed"); }
     { dir: dest, commit: commit }
 };
 
@@ -729,11 +729,11 @@ def pk_lock_read(dir: str) -> [PkLock] {
                     lk.rev = e.s;
                 } else if (key == "commit") {
                     lk.commit = e.s;
-                } else { };
-            } else { };
+                }
+            }
             i = i + 1;
         };
-    } else { };
+    }
     out
 };
 
@@ -744,7 +744,7 @@ def pk_lock_find(locks: [PkLock], d: PkDep) -> str {
     let i = 0;
     while (i < len(locks)) {
         let lk = locks[i];
-        if (lk.name == d.name && lk.git == d.git && lk.rev == d.rev) { out = lk.commit; } else { };
+        if (lk.name == d.name && lk.git == d.git && lk.rev == d.rev) { out = lk.commit; }
         i = i + 1;
     };
     out
@@ -763,7 +763,7 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> long {
         if (len(p.git) > 0 && len(p.commit) > 0) {
             out += "\n[[package]]\nname = " + pk_tq(p.name) + "\ngit = " + pk_tq(p.git) + "\nrev = " + pk_tq(p.rev) + "\ncommit = " + pk_tq(p.commit) + "\n";
             any = true;
-        } else { };
+        }
         i = i + 1;
     };
     if (any) {
@@ -771,9 +771,9 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> long {
         let file = pk_join(dir, "y.lock");
         let old = fs.read_file(file);
         let same = false;
-        if (old != none) { same = unwrap(old) == text; } else { };
-        if (!same && !fs.write_file(file, text)) { pk_die("writing '" + file + "' failed"); } else { };
-    } else { };
+        if (old != none) { same = unwrap(old) == text; }
+        if (!same && !fs.write_file(file, text)) { pk_die("writing '" + file + "' failed"); }
+    }
     0
 };
 
@@ -790,14 +790,14 @@ def pk_vendor(dir: str) -> long {
             let vd = pk_join(dir, "vendor/" + p.name);
             if (p.dir != vd) {
                 let cmd = pk_env() + "mkdir -p " + pk_q(pk_join(dir, "vendor")) + " && rm -rf " + pk_q(vd) + " && cp -R " + pk_q(p.dir) + " " + pk_q(vd) + " && rm -rf " + pk_q(vd + "/.git");
-                if (exec(cmd) != 0) { pk_die("vendoring '" + p.name + "' failed"); } else { };
-            } else { };
+                if (exec(cmd) != 0) { pk_die("vendoring '" + p.name + "' failed"); }
+            }
             eputs("vendored " + p.name + " (" + vd + ")\n");
             n = n + 1;
-        } else { };
+        }
         i = i + 1;
     };
-    if (n == 0) { eputs("nothing to vendor: no git dependencies\n"); } else { };
+    if (n == 0) { eputs("nothing to vendor: no git dependencies\n"); }
     0
 };
 
@@ -842,7 +842,7 @@ def pk_hash_text(h: PkHash) -> str {
 // wrote is no hit.
 def pk_self_id() -> str {
     let t = fs.read_file("/proc/self/exe");
-    if (t == none) { pk_die("cannot read the compiler's own binary (/proc/self/exe)"); } else { };
+    if (t == none) { pk_die("cannot read the compiler's own binary (/proc/self/exe)"); }
     let h = pk_hash_new();
     pk_hash_str(h, unwrap(t));
     pk_hash_text(h)
