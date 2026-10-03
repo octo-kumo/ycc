@@ -93,10 +93,12 @@ Yv *arch_exit(void) {
     return ys("    mov $231, %rax\n    xor %edi, %edi\n    syscall\n");
 }
 
-Yv *arch_prelude(void) {
+// The prelude as its lines: labels alone at column 0, everything else
+// indented (native.c prelude_blocks relies on it).
+Yv *arch_prelude_lines(void) {
     // Runtime PRIMITIVES — everything with a specific behaviour lives in
     // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there: native.y's shake pass prunes this text
+    // not use, here and there: native.y's shake_prelude prunes these lines
     // block by block, prune_bodies does the same for rt.y's functions).
     // What stays here is what only raw machine state can do: the bump
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
@@ -1596,13 +1598,13 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
-    return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
+    return lines;
 }
 
 // The thread runtime (CHOICES_MADE.md 33), linked only when a program's
-// code calls into it (native.y uses_threads): every compile shakes the
-// prelude text it is given, line by line, whatever it keeps.
-Yv *arch_prelude_threads(void) {
+// code calls into it (native.y uses_threads): every compile looks at
+// each line of the prelude it is given.
+Yv *arch_prelude_threads_lines(void) {
     Yv *lines = yav(0);
     /* The first spawn moves the main thread's heap state (cur, end, used) */
     /* into a block of its own, points %fs at it and empties the global */
@@ -1880,7 +1882,7 @@ Yv *arch_prelude_threads(void) {
     lines = ya_push(lines, ys("    mov $231, %rax"));
     lines = ya_push(lines, ys("    xor %edi, %edi"));
     lines = ya_push(lines, ys("    syscall"));
-    return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
+    return lines;
 }
 
 Yv *arch_consts(void) {

@@ -84,10 +84,12 @@ def arch_exit() -> str {
     "    mov \$231, %rax\n    xor %edi, %edi\n    syscall\n"
 };
 
-def arch_prelude() -> str {
+// The prelude as its lines: labels alone at column 0, everything else
+// indented (native.y prelude_blocks relies on it).
+def arch_prelude_lines() -> [str] {
     // Runtime PRIMITIVES — everything with a specific behaviour lives in
     // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there: native.y's shake pass prunes this text
+    // not use, here and there: native.y's shake_prelude prunes these lines
     // block by block, prune_bodies does the same for rt.y's functions).
     // What stays here is what only raw machine state can do: the bump
     // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
@@ -95,7 +97,7 @@ def arch_prelude() -> str {
     // string/array cores
     // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
-    join([
+    [
         "y_str_eq:",
         "    push %rbp",
         "    mov %rsp, %rbp",
@@ -1585,14 +1587,14 @@ def arch_prelude() -> str {
         "    pop %rbx",
         "    pop %rbp",
         "    ret",
-    ], "\n") + "\n"
+    ]
 };
 
 // The thread runtime (CHOICES_MADE.md 33), linked only when a program's
-// code calls into it (native.y uses_threads): every compile shakes the
-// prelude text it is given, line by line, whatever it keeps.
-def arch_prelude_threads() -> str {
-    join([
+// code calls into it (native.y uses_threads): every compile looks at
+// each line of the prelude it is given.
+def arch_prelude_threads_lines() -> [str] {
+    [
         // The first spawn moves the main thread's heap state (cur, end, used)
         // into a block of its own, points %fs at it and empties the global
         // block: from then on y_alloc_slow sends every thread to its own block.
@@ -1869,7 +1871,7 @@ def arch_prelude_threads() -> str {
         "    mov $231, %rax",
         "    xor %edi, %edi",
         "    syscall",
-    ], "\n") + "\n"
+    ]
 };
 
 def arch_consts() -> str {
@@ -1898,4 +1900,4 @@ def arch_consts() -> str {
     ], "\n") + "\n"
 };
 
-export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude, arch_prelude_threads, arch_consts, arch_frame, arch_exit };
+export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_consts, arch_frame, arch_exit };

@@ -54,8 +54,8 @@ Yv *arch_bss(void);
 Yv *arch_global_cell(Yv *label);
 Yv *arch_heap_cells(void);
 long arch_frame(long slots);
-Yv *arch_prelude(void);
-Yv *arch_prelude_threads(void);
+Yv *arch_prelude_lines(void);
+Yv *arch_prelude_threads_lines(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *tdisp(Yv *t);
@@ -185,7 +185,13 @@ long namemap_get(Yv *m, Yv *name);
 Yv *fntab_of(Yv *syms);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
-Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots);
+Yv *prelude_blocks(Yv *lines);
+Yv *lines_refs(Yv *lines, long lo, long hi);
+int lines_fall(Yv *lines, long lo, long hi);
+Yv *shake_prelude(Yv *pb, Yv *roots);
+Yv *prelude_with(Yv *core, int threads);
+Yv *unkept_refs(Yv *refs, Yv *bmap, Yv *keep);
+Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots);
 int is_all_digits(Yv *s);
 Yv *runtime_base(Yv *name);
 Yv *fn_label_of(long uid, Yv *name);
@@ -2009,14 +2015,212 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
     }
 }
 
+/* ── the arch prelude, shaken by lines ──────────────────────────────────
+ * The prelude is ~1.7k lines of which a program keeps a few dozen, and
+ * shaking it as text scanned all of it on every compile: two thirds of a
+ * small program's compile. It comes as its lines (arch_prelude_lines):
+ * labels alone at column 0, everything else indented, so its blocks are
+ * found by each line's first byte, and only the blocks a program reaches
+ * are scanned for references. Blocks and rules are shake_refs'.
+ * PBlocks = { lines, starts, names, ix }; PShake = { text, refs }. */
+Yv *prelude_blocks(Yv *lines) {
+    Yv *starts = yav(0);
+    Yv *names = yav(0);
+    long i = 0;
+    while (i < yv_len(lines)) {
+        Yv *l = ya_get(lines, i);
+        Yv *lab = ys("");
+        if (yv_len(l) > 0 && ys_byte_at(l, 0) != 32) {
+            Yv *lb = bytes_of(l);
+            lab = label_at(l, lb, 0, yv_len(lb));
+        }
+        if (yv_len(lab) > 0) {
+            names = ya_push(names, lab);
+            starts = ya_push(starts, yv_long(i));
+        } else if (yv_len(starts) == 0) {
+            names = ya_push(names, ys(""));
+            starts = ya_push(starts, yv_long(0));
+        }
+        i = i + 1;
+    }
+    return yr(4, "lines", lines, "starts", starts, "names", names, "ix",
+              namemap_build(names));
+}
+
+/* Every reference the lines [lo, hi) make. */
+Yv *lines_refs(Yv *lines, long lo, long hi) {
+    Yv *out = yav(0);
+    long i = lo;
+    while (i < hi) {
+        Yv *l = ya_get(lines, i);
+        Yv *lb = bytes_of(l);
+        out = line_refs_b(l, lb, 0, yv_len(lb), out, 1);
+        i = i + 1;
+    }
+    return out;
+}
+
+/* Does the block of lines [lo, hi) run into the next one? block_falls_b
+ * and is_data_line_b on its lines. */
+int lines_fall(Yv *lines, long lo, long hi) {
+    int falls = 1;
+    long i = hi - 1;
+    int go = 1;
+    while (go && i >= lo) {
+        Yv *l = ya_get(lines, i);
+        Yv *lb = bytes_of(l);
+        long s = skip_sp(lb, 0, yv_len(lb));
+        if (s < yv_len(lb)) {
+            go = 0;
+            Yv *w = tok_at_b(l, lb, s, yv_len(lb));
+            if (ys_eq_lit(w, "ret") || ys_eq_lit(w, "jmp") || ys_eq_lit(w, "syscall")) {
+                falls = 0;
+            }
+        }
+        i = i - 1;
+    }
+    if (falls) {
+        Yv *l0 = ya_get(lines, lo);
+        Yv *b0 = bytes_of(l0);
+        Yv *lab = label_at(l0, b0, 0, yv_len(b0));
+        long p = skip_sp(b0, 0, yv_len(b0));
+        if (yv_len(lab) > 0) {
+            p = skip_sp(b0, p + 1 + yv_len(lab), yv_len(b0));
+        }
+        if (p < yv_len(b0)) {
+            if (yv_l(ya_get(b0, p)) == 46) {
+                falls = 0;
+            }
+        }
+    }
+    return falls;
+}
+
+/* Keep the blocks `roots` (the kept bodies' references) or a kept block
+ * reaches, as shake_keep does, scanning only those. */
+Yv *shake_prelude(Yv *pb, Yv *roots) {
+    Yv *lines = yr_get(pb, "lines");
+    Yv *starts = yr_get(pb, "starts");
+    Yv *names = yr_get(pb, "names");
+    long nb = yv_len(starts);
+    Yv *keep = yav(0);
+    Yv *scanned = yav(0);
+    Yv *brefs = yav(0);
+    long k = 0;
+    while (k < nb) {
+        Yv *nm = ya_get(names, k);
+        keep = ya_push(keep, yv_bool(yv_len(nm) == 0));
+        scanned = ya_push(scanned, yv_bool(0));
+        brefs = ya_push(brefs, yav(0));
+        k = k + 1;
+    }
+    long r = 0;
+    while (r < yv_len(roots)) {
+        long idx = namemap_get(yr_get(pb, "ix"), ya_get(roots, r));
+        if (idx >= 0) {
+            ya_set(keep, idx, yv_bool(1));
+        }
+        r = r + 1;
+    }
+    int more = 1;
+    while (more) {
+        more = 0;
+        long b = 0;
+        while (b < nb) {
+            if (yv_b(ya_get(keep, b)) && !yv_b(ya_get(scanned, b))) {
+                ya_set(scanned, b, yv_bool(1));
+                more = 1;
+                long lo = yv_l(ya_get(starts, b));
+                long hi = yv_len(lines);
+                if (b + 1 < nb) {
+                    hi = yv_l(ya_get(starts, b + 1));
+                }
+                Yv *rs = lines_refs(lines, lo, hi);
+                ya_set(brefs, b, rs);
+                if (b + 1 < nb && lines_fall(lines, lo, hi)) {
+                    ya_set(keep, b + 1, yv_bool(1));
+                }
+                long j = 0;
+                while (j < yv_len(rs)) {
+                    long idx = namemap_get(yr_get(pb, "ix"), ya_get(rs, j));
+                    if (idx >= 0) {
+                        ya_set(keep, idx, yv_bool(1));
+                    }
+                    j = j + 1;
+                }
+            }
+            b = b + 1;
+        }
+    }
+    Yv *pieces = yav(0);
+    Yv *out = yav(0);
+    k = 0;
+    while (k < nb) {
+        if (yv_b(ya_get(keep, k))) {
+            long lo = yv_l(ya_get(starts, k));
+            long hi = yv_len(lines);
+            if (k + 1 < nb) {
+                hi = yv_l(ya_get(starts, k + 1));
+            }
+            long i = lo;
+            while (i < hi) {
+                pieces = ya_push(pieces, ya_get(lines, i));
+                pieces = ya_push(pieces, ys("\n"));
+                i = i + 1;
+            }
+            Yv *bk = ya_get(brefs, k);
+            long j = 0;
+            while (j < yv_len(bk)) {
+                out = ya_push(out, ya_get(bk, j));
+                j = j + 1;
+            }
+        }
+        k = k + 1;
+    }
+    return yr(2, "text", ys_join(pieces, ys("")), "refs", out);
+}
+
+/* The prelude's lines, the thread runtime's after them when it is used. */
+Yv *prelude_with(Yv *core, int threads) {
+    if (threads) {
+        Yv *out = ya_slice(core, 0, yv_len(core));
+        Yv *t = arch_prelude_threads_lines();
+        long i = 0;
+        while (i < yv_len(t)) {
+            out = ya_push(out, ya_get(t, i));
+            i = i + 1;
+        }
+        return out;
+    } else {
+        return core;
+    }
+}
+
+/* The references (a kept prelude's) that name a body not kept. */
+Yv *unkept_refs(Yv *refs, Yv *bmap, Yv *keep) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(refs)) {
+        long idx = namemap_get(bmap, ya_get(refs, i));
+        if (idx >= 0) {
+            if (!yv_b(ya_get(keep, idx))) {
+                out = ya_push(out, ya_get(refs, i));
+            }
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
 /* Drop function bodies nothing reaches: dead stdlib code the program never
  * calls. A body is given by its label and the labels it references
  * (body_meta). Bodies are referenced by label from other bodies AND from
  * the arch prelude (a prelude block may call a Y-side helper), so
- * `asm_roots` is the prelude text. Returns, per body, whether it was kept,
+ * `extra_roots` are the kept prelude's references to bodies (link_units).
+ * Returns, per body, whether it was kept,
  * plus everything the kept ones reference — the roots for shaking the
  * arch prelude itself. */
-Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots) {
+Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots) {
     long nb = yv_len(labels);
     Yv *keep = yav(0);
     Yv *falls = yav(0);
@@ -2026,7 +2230,12 @@ Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots) {
         falls = ya_push(falls, yv_bool(0));
         i = i + 1;
     }
-    Yv *roots = text_refs(asm_roots, 1);
+    Yv *roots = yav(0);
+    long ri = 0;
+    while (ri < yv_len(extra_roots)) {
+        roots = ya_push(roots, ya_get(extra_roots, ri));
+        ri = ri + 1;
+    }
     long root = namemap_get(namemap_build(labels), ys("_start"));
     if (root >= 0) {
         roots = ya_push(roots, ys("_start"));
@@ -3120,9 +3329,9 @@ Yv *collect_from_node(Yv *node, Yv *out) {
  * made every binding unique), so the creation site and the body emitter
  * derive the same ordered list independently. */
 
-/* Whether kept code calls into the thread runtime: only then is
- * arch_prelude_threads linked, since shaking costs every compile in
- * proportion to the prelude text it scans. */
+/* Whether kept code calls into the thread runtime: only then are
+ * arch_prelude_threads_lines linked (every compile looks at each line of
+ * the prelude it is given). */
 int uses_threads(Yv *refs) {
     long i = 0;
     int found = 0;
@@ -10948,10 +11157,34 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     /* Body-level tree shaking comes first: its output is also the root
      * set for shaking the arch prelude, and the kept prelude's references
      * shake the rodata constants. */
-    Yv *core_prelude = arch_prelude();
-    Yv *shaken = prune_bodies(labels, refs, core_prelude);
+    Yv *extra = yav(0);
+    Yv *shaken = prune_bodies(labels, refs, extra);
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
+    Yv *core_lines = arch_prelude_lines();
+    int thr = uses_threads(body_refs);
+    Yv *pb = prelude_blocks(prelude_with(core_lines, thr));
+    Yv *ps = shake_prelude(pb, body_refs);
+    /* A kept prelude block may call a Y helper (none does today): the
+     * helper is kept too, and everything shaken again from there. */
+    Yv *bmap = namemap_build(labels);
+    Yv *more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
+    while (yv_len(more) > 0) {
+        long mi = 0;
+        while (mi < yv_len(more)) {
+            extra = ya_push(extra, ya_get(more, mi));
+            mi = mi + 1;
+        }
+        shaken = prune_bodies(labels, refs, extra);
+        keep = yr_get(shaken, "keep");
+        body_refs = yr_get(shaken, "refs");
+        if (!thr && uses_threads(body_refs)) {
+            thr = 1;
+            pb = prelude_blocks(prelude_with(core_lines, thr));
+        }
+        ps = shake_prelude(pb, body_refs);
+        more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
+    }
     Yv *pieces = yav(0);
     long ab = 0;
     while (ab < yv_len(all)) {
@@ -10980,14 +11213,14 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     } else {
         ;
     }
-    Yv *prelude_src = core_prelude;
-    if (uses_threads(body_refs)) {
-        prelude_src = ys_cat(prelude_src, arch_prelude_threads());
-    }
-    Yv *prelude_text = shake_refs(prelude_src, body_refs);
-    asm_ = ys_cat(ys_cat(asm_, arch_text()), prelude_text);
+    asm_ = ys_cat(ys_cat(asm_, arch_text()), yr_get(ps, "text"));
     asm_ = ys_cat(asm_, body_text);
-    Yv *const_refs = text_refs(prelude_text, 1);
+    Yv *const_refs = yav(0);
+    long cr = 0;
+    while (cr < yv_len(yr_get(ps, "refs"))) {
+        const_refs = ya_push(const_refs, ya_get(yr_get(ps, "refs"), cr));
+        cr = cr + 1;
+    }
     long ci = 0;
     while (ci < yv_len(body_refs)) {
         const_refs = ya_push(const_refs, ya_get(body_refs, ci));

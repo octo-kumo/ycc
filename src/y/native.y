@@ -1281,14 +1281,181 @@ def shake_refs(text: str, root_refs: [str]) -> str {
     }
 };
 
+// ── the arch prelude, shaken by lines ────────────────────────────────────
+// The prelude is ~1.7k lines of which a program keeps a few dozen, and
+// shaking it as text scanned all of it on every compile: two thirds of a
+// small program's compile. It comes as its lines (arch_prelude_lines):
+// labels alone at column 0, everything else indented, so its blocks are
+// found by each line's first byte, and only the blocks a program reaches
+// are scanned for references. Blocks and rules are shake_refs'.
+type PBlocks = { lines: [str], starts: [long], names: [str], ix: [AsmLabel] };
+// The kept text, and every reference the kept blocks make.
+type PShake = { text: str, refs: [str] };
+
+def prelude_blocks(lines: [str]) -> PBlocks {
+    let starts: [long] = [];
+    let names: [str] = [];
+    let i = 0;
+    while (i < len(lines)) {
+        let l: str = lines[i];
+        let lab = "";
+        if (len(l) > 0 && byte_at(l, 0) != 32) {
+            let lb = bytes(l);
+            lab = label_at(l, lb, 0, len(lb));
+        };
+        if (len(lab) > 0) {
+            names += lab;
+            starts += i;
+        } else if (len(starts) == 0) {
+            names += "";
+            starts += 0;
+        };
+        i = i + 1;
+    };
+    { lines: lines, starts: starts, names: names, ix: namemap_build(names) }
+};
+
+// Every reference the lines [lo, hi) make.
+def lines_refs(lines: [str], lo: long, hi: long) -> [str] {
+    let out: [str] = [];
+    let i = lo;
+    while (i < hi) {
+        let l: str = lines[i];
+        let lb = bytes(l);
+        out = line_refs_b(l, lb, 0, len(lb), out, true);
+        i = i + 1;
+    };
+    out
+};
+
+// Does the block of lines [lo, hi) run into the next one? block_falls_b
+// and is_data_line_b on its lines.
+def lines_fall(lines: [str], lo: long, hi: long) -> bool {
+    let falls = true;
+    let i = hi - 1;
+    let go = true;
+    while (go && i >= lo) {
+        let l: str = lines[i];
+        let lb = bytes(l);
+        let s = skip_sp(lb, 0, len(lb));
+        if (s < len(lb)) {
+            go = false;
+            let w = tok_at_b(l, lb, s, len(lb));
+            if (w == "ret" || w == "jmp" || w == "syscall") { falls = false; };
+        };
+        i = i - 1;
+    };
+    if (falls) {
+        let l0: str = lines[lo];
+        let b0 = bytes(l0);
+        let lab = label_at(l0, b0, 0, len(b0));
+        let p = skip_sp(b0, 0, len(b0));
+        if (len(lab) > 0) { p = skip_sp(b0, p + 1 + len(lab), len(b0)); };
+        if (p < len(b0)) {
+            if (b0[p] == 46) { falls = false; };
+        };
+    };
+    falls
+};
+
+// Keep the blocks `roots` (the kept bodies' references) or a kept block
+// reaches, as shake_keep does, scanning only those.
+def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
+    let lines = pb.lines;
+    let starts = pb.starts;
+    let names = pb.names;
+    let nb = len(starts);
+    let keep: [bool] = [];
+    let scanned: [bool] = [];
+    let brefs: [[str]] = [];
+    let k = 0;
+    while (k < nb) {
+        let nm: str = names[k];
+        keep += len(nm) == 0;
+        scanned += false;
+        let none: [str] = [];
+        brefs += [none];
+        k = k + 1;
+    };
+    let r = 0;
+    while (r < len(roots)) {
+        let idx = namemap_get(pb.ix, roots[r]);
+        if (idx >= 0) { keep[idx] = true; };
+        r = r + 1;
+    };
+    let more = true;
+    while (more) {
+        more = false;
+        let b = 0;
+        while (b < nb) {
+            if (keep[b] && !(scanned[b])) {
+                scanned[b] = true;
+                more = true;
+                let lo = starts[b];
+                let hi = len(lines);
+                if (b + 1 < nb) { hi = starts[b + 1]; };
+                let rs = lines_refs(lines, lo, hi);
+                brefs[b] = rs;
+                if (b + 1 < nb && lines_fall(lines, lo, hi)) { keep[b + 1] = true; };
+                let j = 0;
+                while (j < len(rs)) {
+                    let idx = namemap_get(pb.ix, rs[j]);
+                    if (idx >= 0) { keep[idx] = true; };
+                    j = j + 1;
+                };
+            };
+            b = b + 1;
+        };
+    };
+    let pieces: [str] = [];
+    let out: [str] = [];
+    k = 0;
+    while (k < nb) {
+        if (keep[k]) {
+            let lo = starts[k];
+            let hi = len(lines);
+            if (k + 1 < nb) { hi = starts[k + 1]; };
+            let i = lo;
+            while (i < hi) {
+                pieces += lines[i];
+                pieces += "\n";
+                i = i + 1;
+            };
+            out += brefs[k];
+        };
+        k = k + 1;
+    };
+    { text: join(pieces, ""), refs: out }
+};
+
+// The prelude's lines, the thread runtime's after them when it is used.
+def prelude_with(core: [str], threads: bool) -> [str] {
+    if (threads) { core + arch.arch_prelude_threads_lines() } else { core }
+};
+
+// The references (a kept prelude's) that name a body not kept.
+def unkept_refs(refs: [str], bmap: [AsmLabel], keep: [bool]) -> [str] {
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(refs)) {
+        let idx = namemap_get(bmap, refs[i]);
+        if (idx >= 0) {
+            if (!(keep[idx])) { out += refs[i]; };
+        };
+        i = i + 1;
+    };
+    out
+};
+
 // Drop function bodies nothing reaches: dead stdlib code the program never
 // calls. A body is given by its label and the labels it references
 // (body_meta). Bodies are referenced by label from other bodies AND from
 // the arch prelude (a prelude block may call a Y-side helper), so
-// `asm_roots` is the prelude text. Returns, per body, whether it was kept,
+// `extra_roots` are the kept prelude's references to bodies (link_units).
+// Returns, per body, whether it was kept,
 // plus everything the kept ones reference — the roots for shaking the
 // arch prelude itself.
-def prune_bodies(labels: [str], refs: [[str]], asm_roots: str) -> { refs: [str], keep: [bool] } {
+def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [str], keep: [bool] } {
     let nb = len(labels);
     let keep: [bool] = [];
     let falls: [bool] = [];
@@ -1299,7 +1466,8 @@ def prune_bodies(labels: [str], refs: [[str]], asm_roots: str) -> { refs: [str],
         i = i + 1;
         0
     };
-    let roots = text_refs(asm_roots, true);
+    let roots: [str] = [];
+    roots += extra_roots;
     let root = namemap_get(namemap_build(labels), "_start");
     if (root >= 0) {
         roots += "_start";
@@ -2291,9 +2459,9 @@ def collect_from_node(node: Node, out: [FnDef]) -> [FnDef] {
 // made every binding unique), so the creation site and the body emitter
 // derive the same ordered list independently.
 
-// Whether kept code calls into the thread runtime: only then is
-// arch_prelude_threads linked, since shaking costs every compile in
-// proportion to the prelude text it scans.
+// Whether kept code calls into the thread runtime: only then are
+// arch_prelude_threads_lines linked (every compile looks at each line of
+// the prelude it is given).
 def uses_threads(refs: [str]) -> bool {
     let i = 0;
     let found = false;
@@ -9161,10 +9329,30 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     // Body-level tree shaking comes first: its output is also the root
     // set for shaking the arch prelude, and the kept prelude's references
     // shake the rodata constants.
-    let core_prelude = arch.arch_prelude();
-    let shaken = prune_bodies(labels, refs, core_prelude);
+    let extra: [str] = [];
+    let shaken = prune_bodies(labels, refs, extra);
     let keep = shaken.keep;
     let body_refs = shaken.refs;
+    let core_lines = arch.arch_prelude_lines();
+    let thr = uses_threads(body_refs);
+    let pb = prelude_blocks(prelude_with(core_lines, thr));
+    let ps = shake_prelude(pb, body_refs);
+    // A kept prelude block may call a Y helper (none does today): the
+    // helper is kept too, and everything shaken again from there.
+    let bmap = namemap_build(labels);
+    let more = unkept_refs(ps.refs, bmap, keep);
+    while (len(more) > 0) {
+        extra += more;
+        shaken = prune_bodies(labels, refs, extra);
+        keep = shaken.keep;
+        body_refs = shaken.refs;
+        if (!thr && uses_threads(body_refs)) {
+            thr = true;
+            pb = prelude_blocks(prelude_with(core_lines, thr));
+        };
+        ps = shake_prelude(pb, body_refs);
+        more = unkept_refs(ps.refs, bmap, keep);
+    };
     // Piece-list + single join: `asm = asm + piece` per iteration is
     // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
     // the arena never frees), which OOMs on self-compilation.
@@ -9187,12 +9375,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         asm = file_dirs(files) + asm;
         0
     } else { 0; };
-    let prelude_src = core_prelude;
-    if (uses_threads(body_refs)) { prelude_src = prelude_src + arch.arch_prelude_threads(); };
-    let prelude_text = shake_refs(prelude_src, body_refs);
-    asm = asm + arch.arch_text() + prelude_text;
+    asm = asm + arch.arch_text() + ps.text;
     asm = asm + body_text;
-    let const_refs = text_refs(prelude_text, true);
+    let const_refs: [str] = [];
+    const_refs += ps.refs;
     let ci = 0;
     while (ci < len(body_refs)) {
         const_refs += [body_refs[ci]];

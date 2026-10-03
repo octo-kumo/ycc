@@ -452,13 +452,14 @@ The rule is that `arch_x64.y` provides small, general **primitives** and the
 runtime provides **behaviour**. What stays in assembly is only what needs raw
 machine state: the `y_alloc` bump allocator, the trap stubs (div/0, OOB,
 unwrap-of-none, OOM, a failed union cast), the
-byte-moving string cores (`y_str_eq/cmp/cat/join/slice`), `str`↔`[byte]`
+byte-moving string cores (`y_str_eq/cmp/cat/join/slice`, and the scans
+behind `index_of`, `split` and `trim`: `y_str_index/split/trim`), `str`↔`[byte]`
 conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
 `y_arr_eq` — one implementation each, parameterized by element width,
 because Y has no generics), long and float formatting, and argv
 materialization. Everything else —
-the whole print/put/eput family, `trim`/`ord`/`chr`/
-`tonum`/`index_of`/`split`, `range`, time, files — is Y. (`join` went
+the whole print/put/eput family, `ord`/`chr`/`tonum`/
+`last_index_of`, `range`, time, files — is Y. (`join` went
 back to assembly: in Y it pushed one byte at a time through a `[byte]`
 accumulator, and the compiler joins megabytes of asm text per
 self-compile — one sizing pass and one allocation instead took 9.9% off
@@ -722,18 +723,27 @@ checks that the C copy builds the same bytes.
 Nothing reaches the binary that the program does not reach itself:
 
 - **bodies** — `prune_bodies` drops every function nothing calls, rooted at
-  `_start` plus whatever the arch prelude references from Y (so a helper
-  the prelude calls by label survives). It works across units: the std
+  `_start` plus whatever the kept arch prelude references from Y (so a
+  helper the prelude calls by label survives: `link_units` shakes the
+  prelude with the kept bodies' references and, when a kept block names a
+  body not kept, shakes both again; no prelude block calls Y today). It works across units: the std
   units' bodies and the program's are shaken together, from each body's
   label and the labels it references (computed once per unit). An unused
   stdlib function costs nothing — not even its parse, with the std pack.
-- **arch blocks** — `shake_refs` splits the arch prelude and the rodata
-  constants into labelled blocks and keeps exactly the ones referenced from
-  the surviving code or from another kept block (`call`, `lea`, a jump, or a
-  computed immediate like `$ystr_end-ystr`, which names both), plus any
-  block the previous kept block falls through into. Labels never merge
-  blocks, so an internal loop label travels with its own references and dead
-  code is dropped even mid-function.
+- **arch blocks** — the arch prelude and the rodata constants are split
+  into labelled blocks, of which exactly the ones referenced from the
+  surviving code or from another kept block are kept (`call`, `lea`, a
+  jump, or a computed immediate like `$ystr_end-ystr`, which names both),
+  plus any block the previous kept block falls through into. Labels never
+  merge blocks, so an internal loop label travels with its own references
+  and dead code is dropped even mid-function. The prelude comes as its
+  lines (`arch_prelude_lines`: labels alone at column 0, everything else
+  indented), so `prelude_blocks` finds its ~190 blocks by each line's
+  first byte and `shake_prelude` scans only the blocks a program reaches
+  for their references; the constants (a few lines) go through
+  `shake_refs`, which scans text. Scanning the whole ~1.7k-line prelude on
+  every compile was two thirds of a hello world's compile: shaking it by
+  lines took that compile from 16.9M instructions to 4.9M.
 
 Measured cost, and what was paid back: the move cost compile time and
 string-heavy output when it landed (17-25% slower compiles, up to 2x on
@@ -764,7 +774,9 @@ self-compile slowed less than its source grew (562 KB vs 427 KB spliced,
 8% slower per KB). That trade — binary size and readable runtime for
 compile time and string-heavy speed — is deliberate; the next lever was
 the remaining hot primitives (`y_long_tostr`, now asm again — see above;
-`y_str_index` is still Y).
+`y_str_index`, `y_str_split` and `y_str_trim` are asm again too: in Y
+they scanned ~40 instructions a byte, a seventh of a self-compile spent in
+the assembler's searches of its own lines).
 
 A hello world is 8 KB (8312 bytes, the page-aligned ELF) and under 100
 asm lines: `_start`, `y_print_hstr` and `y_put_hstr` — not even the
