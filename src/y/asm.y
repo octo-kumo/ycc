@@ -449,14 +449,22 @@ def hash_str(s: str) -> long {
     // byte_at, not ord(s[i:i + 1]): the slice allocated a throwaway string
     // per character, and the tree shaker hashes ~191k names per compile
     // through this (native.y namemap_build/namemap_get).
+    //
+    // No `% 1000000007` per byte. That is a 64-bit idiv -- twenty-odd
+    // instructions -- and with it a lookup in either table cost 509
+    // instructions a call, 2.6% of everything ycc executes. Both users
+    // take the result modulo a table size, so any well-spread 32-bit
+    // value is as good as a prime: masking to 32 bits keeps `h * 31` from
+    // overflowing (it cannot exceed 2^37), and the final shift-xor spreads
+    // the high bits down into the low ones the modulo keeps.
     let h = 0;
     let i = 0;
     let n = len(s);
     while (i < n) {
-        h = (h * 31 + byte_at(s, i)) % 1000000007;
+        h = (h * 31 + byte_at(s, i)) & 4294967295;
         i = i + 1;
     };
-    h
+    h ^ (h >> 13)
 };
 
 def labmap_new(cap: long) -> [AsmLabel] {
