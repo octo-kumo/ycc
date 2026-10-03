@@ -137,8 +137,6 @@ def parse_operand_nonempty(t: str) -> OpRes {
     // `*%reg` — register-indirect call/jump target (closure code pointers).
     if (t[0:1] == "*") {
         parse_operand_ind(t)
-    } else if (t[0:4] == "%fs:") {
-        parse_operand_fs(t)
     } else if (t[0:1] == "%") {
         parse_operand_reg(t)
     } else {
@@ -157,8 +155,8 @@ def parse_operand_ind(t: str) -> OpRes {
     }
 };
 
-// `%fs:N`: the thread-local word at N (the TLS block's self pointer is
-// at 0; arch_x64.y y_alloc).
+// `%fs:N`: the thread-local word at N (a thread's heap block, its word 3
+// its own address; arch_x64.y). Tried only once no register matches.
 def parse_operand_fs(t: str) -> OpRes {
     let r = parse_num(t[4:]);
     if (!r.ok) {
@@ -169,10 +167,15 @@ def parse_operand_fs(t: str) -> OpRes {
 };
 
 def parse_operand_reg(t: str) -> OpRes {
-    // (split: %-gate above narrows; this body sees registers only.)
+    // (split: %-gate above narrows; this body sees registers, and
+    // `%fs:N`, which no register name matches.)
     let n = enc.reg_num(t);
     if (n < 0) {
-        { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + t + "'" }
+        if (t[0:4] == "%fs:") {
+            parse_operand_fs(t)
+        } else {
+            { ok: false, op: { k: "bad", n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + t + "'" }
+        }
     } else {
         { ok: true, op: { k: "reg", n: n, size: enc.reg_size(t), v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     }

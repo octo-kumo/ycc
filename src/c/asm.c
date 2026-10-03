@@ -249,8 +249,6 @@ static Yv *parse_operand_nonempty(Yv *t) {
     /* `*%reg` — register-indirect call/jump target (closure code pointers). */
     if (ys_eq_lit(ys_slice(t, 0, 1), "*")) {
         return parse_operand_ind(t);
-    } else if (ys_eq_lit(ys_slice(t, 0, 4), "%fs:")) {
-        return parse_operand_fs(t);
     } else if (ys_eq_lit(ys_slice(t, 0, 1), "%")) {
         return parse_operand_reg(t);
     } else {
@@ -279,8 +277,8 @@ static Yv *parse_operand_ind(Yv *t) {
     }
 }
 
-/* `%fs:N`: the thread-local word at N (the TLS block's self pointer is
- * at 0; arch_x64.c y_alloc). */
+/* `%fs:N`: the thread-local word at N (a thread's heap block, its word 3
+ * its own address; arch_x64.c). Tried only once no register matches. */
 static Yv *parse_operand_fs(Yv *t) {
     Yv *r = parse_num(ys_slice_from(t, 4));
     if (!yv_b(yr_get(r, "ok"))) {
@@ -301,9 +299,13 @@ static Yv *parse_operand_fs(Yv *t) {
 }
 
 static Yv *parse_operand_reg(Yv *t) {
-    /* (split: %-gate above narrows; this body sees registers only.) */
+    /* (split: %-gate above narrows; this body sees registers, and
+     * `%fs:N`, which no register name matches.) */
     long n = reg_num(t);
     if (n < 0) {
+        if (ys_eq_lit(ys_slice(t, 0, 4), "%fs:")) {
+            return parse_operand_fs(t);
+        }
         return yr(3, "ok", yv_bool(0),
                   "op", yr(13, "k", ys("bad"), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),

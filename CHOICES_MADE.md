@@ -558,9 +558,9 @@ future.y sketches `spawn { }`, `join t;`, `mutex()` with `lock m { }` and
 - **The allocator** (a bump pointer, no collector) gets a heap per
   thread: a thread's control block doubles as its heap state, reached
   through %fs (TLS set by clone); until the first spawn, y_alloc keeps
-  using the global heap, so a program without threads pays one test.
-  The alternative, a lock around y_alloc, serializes every allocation
-  of every thread.
+  using the global heap, so a program without threads pays nothing
+  (see below). The alternative, a lock around y_alloc, serializes every
+  allocation of every thread.
 - **Every exit becomes exit_group**, so a program's end (or a runtime
   trap) ends all its threads.
 - **The syntax is contextual**: `spawn {`, `fork {`, `lock E {`,
@@ -607,3 +607,17 @@ Implemented in 4642f78 and 1a9dc3c. Decided on the way:
 - **Thread stacks get a guard page and are unmapped at the end**: a
   runaway recursion on a thread otherwise wrote into whatever mapping
   lay below its stack, and a finished thread's 8 MiB stayed mapped.
+- **The allocator's thread test is off its fast path.** The first cut
+  tested a flag on every allocation (three instructions: closures.y ran
+  +5.5% instructions, the compiler +0.6%). Now the first spawn moves the
+  main thread's heap state to a block of its own and empties the global
+  one, so the bump on it fails in every thread and the slow path sends
+  it to its thread's block: a program without threads runs exactly the
+  instructions it ran before threads existed, a threaded one takes a
+  detour of ~14 instructions per allocation. The other way, %fs set at
+  every program's start, would cost no detour but a syscall in every
+  program and an %fs-relative load on every allocation.
+- **The thread runtime is a prelude of its own** (arch_prelude_threads),
+  linked only when kept code calls an entry point: the prelude shaker
+  scans all the text it is given on every compile, and the thread code
+  made a hello-world compile 15.7% more instructions; now +1%.

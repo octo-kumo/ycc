@@ -2263,6 +2263,23 @@ def collect_from_node(node: Node, out: [FnDef]) -> [FnDef] {
 // made every binding unique), so the creation site and the body emitter
 // derive the same ordered list independently.
 
+// Whether kept code calls into the thread runtime: only then is
+// arch_prelude_threads linked, since shaking costs every compile in
+// proportion to the prelude text it scans.
+def uses_threads(refs: [str]) -> bool {
+    let i = 0;
+    let found = false;
+    while ((i < len(refs)) && (!found)) {
+        let r: str = refs[i];
+        let n = len(r);
+        // the entry points (an unlock comes with a lock or a try), by
+        // length first: the self-compile has ~50K references
+        found = (n == 6 && r == "y_fork") || (n == 7 && r == "y_spawn") || (n == 10 && (r == "y_sem_wait" || r == "y_sem_post")) || (n == 12 && r == "y_mutex_lock") || (n == 15 && r == "y_mutex_trylock");
+        i = i + 1;
+    };
+    found
+};
+
 def name_in(xs: [str], n: str) -> bool {
     let i = 0;
     let found = false;
@@ -9145,7 +9162,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     // Body-level tree shaking comes first: its output is also the root
     // set for shaking the arch prelude, and the kept prelude's references
     // shake the rodata constants.
-    let shaken = prune_bodies(labels, refs, arch.arch_prelude());
+    let core_prelude = arch.arch_prelude();
+    let shaken = prune_bodies(labels, refs, core_prelude);
     let keep = shaken.keep;
     let body_refs = shaken.refs;
     // Piece-list + single join: `asm = asm + piece` per iteration is
@@ -9170,7 +9188,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         asm = file_dirs(files) + asm;
         0
     } else { 0; };
-    let prelude_text = shake_refs(arch.arch_prelude(), body_refs);
+    let prelude_src = core_prelude;
+    if (uses_threads(body_refs)) { prelude_src = prelude_src + arch.arch_prelude_threads(); };
+    let prelude_text = shake_refs(prelude_src, body_refs);
     asm = asm + arch.arch_text() + prelude_text;
     asm = asm + body_text;
     let const_refs = text_refs(prelude_text, true);

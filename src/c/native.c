@@ -55,6 +55,7 @@ Yv *arch_global_cell(Yv *label);
 Yv *arch_heap_cells(void);
 long arch_frame(long slots);
 Yv *arch_prelude(void);
+Yv *arch_prelude_threads(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *tdisp(Yv *t);
@@ -210,6 +211,7 @@ Yv *uses_scan_block(Yv *stmts, Yv *out);
 Yv *uses_scan_node(Yv *node, Yv *out);
 Yv *collect_from_block(Yv *stmts, Yv *out);
 Yv *collect_from_node(Yv *node, Yv *out);
+int uses_threads(Yv *refs);
 int name_in(Yv *xs, Yv *n);
 int is_intrinsic_name(Yv *n);
 Yv *fv_walk(Yv *node, Yv *out, int collect);
@@ -3089,6 +3091,23 @@ Yv *collect_from_node(Yv *node, Yv *out) {
  * The capture list is computed purely syntactically (rename.y has already
  * made every binding unique), so the creation site and the body emitter
  * derive the same ordered list independently. */
+
+/* Whether kept code calls into the thread runtime: only then is
+ * arch_prelude_threads linked, since shaking costs every compile in
+ * proportion to the prelude text it scans. */
+int uses_threads(Yv *refs) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(refs) && !found) {
+        Yv *r = ya_get(refs, i);
+        long n = yv_len(r);
+        /* the entry points (an unlock comes with a lock or a try), by
+         * length first: the self-compile has ~50K references */
+        found = (n == 6 && ys_eq_lit(r, "y_fork")) || (n == 7 && ys_eq_lit(r, "y_spawn")) || (n == 10 && (ys_eq_lit(r, "y_sem_wait") || ys_eq_lit(r, "y_sem_post"))) || (n == 12 && ys_eq_lit(r, "y_mutex_lock")) || (n == 15 && ys_eq_lit(r, "y_mutex_trylock"));
+        i = i + 1;
+    }
+    return found;
+}
 
 int name_in(Yv *xs, Yv *n) {
     long i = 0;
@@ -10942,7 +10961,8 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     /* Body-level tree shaking comes first: its output is also the root
      * set for shaking the arch prelude, and the kept prelude's references
      * shake the rodata constants. */
-    Yv *shaken = prune_bodies(labels, refs, arch_prelude());
+    Yv *core_prelude = arch_prelude();
+    Yv *shaken = prune_bodies(labels, refs, core_prelude);
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
     Yv *pieces = yav(0);
@@ -10973,7 +10993,11 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     } else {
         ;
     }
-    Yv *prelude_text = shake_refs(arch_prelude(), body_refs);
+    Yv *prelude_src = core_prelude;
+    if (uses_threads(body_refs)) {
+        prelude_src = ys_cat(prelude_src, arch_prelude_threads());
+    }
+    Yv *prelude_text = shake_refs(prelude_src, body_refs);
     asm_ = ys_cat(ys_cat(asm_, arch_text()), prelude_text);
     asm_ = ys_cat(asm_, body_text);
     Yv *const_refs = text_refs(prelude_text, 1);

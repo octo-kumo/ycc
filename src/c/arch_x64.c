@@ -64,14 +64,13 @@ Yv *arch_global_cell(Yv *label) {
     return ys_cat(label, ys(":\n.zero 8\n"));
 }
 
-// The allocator's state, six .bss words: a pointer to itself (the main
-// thread's TLS block, set by the first spawn), the bump pointer, the end
-// of the current chunk, the bytes handed out so far (heap_used), whether
-// a thread was ever spawned -- from then on every thread's y_alloc works
-// in the block %fs points to (a spawned thread's control block,
-// y_spawn) -- and the spare list: the unused chunk tails this thread's
-// joins took back from finished threads, which its next spawns give
-// their threads. A program that never allocates shakes it out with
+// The allocator's state, four .bss words: the bump pointer, the end of
+// the current chunk, the bytes handed out so far (heap_used) and whether
+// a thread was ever spawned. The first spawn moves the first three into
+// the main thread's own block and empties these, so that the bump fails
+// on them in every thread and y_alloc_slow sends it to its own block
+// (arch_prelude_threads): a program without threads pays nothing for
+// them. A program that never allocates shakes the cells out with
 // y_alloc.
 //   y_alloc(n) hands out (n + 15) & -8 bytes: the 8 spare bytes let the
 //   word-at-a-time string loops over-read past a NUL safely. The fast
@@ -81,7 +80,7 @@ Yv *arch_global_cell(Yv *label) {
 //   like the brk memory this replaced -- and unlike brk it has no 8 MB
 //   cap under valgrind.
 Yv *arch_heap_cells(void) {
-    return ys("y_heap:\n.zero 48\n");
+    return ys("y_heap:\n.zero 32\n");
 }
 
 long arch_frame(long slots) {
@@ -426,24 +425,32 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    lea 15(%rdi), %rax"));
     lines = ya_push(lines, ys("    and $-8, %rax"));
     lines = ya_push(lines, ys("    lea y_heap(%rip), %rcx"));
-    lines = ya_push(lines, ys("    mov 32(%rcx), %rdx"));
-    lines = ya_push(lines, ys("    test %rdx, %rdx"));
-    lines = ya_push(lines, ys("    je y_alloc_go"));
-    lines = ya_push(lines, ys("    mov %fs:0, %rcx"));
     lines = ya_push(lines, ys("y_alloc_go:"));
-    lines = ya_push(lines, ys("    mov 24(%rcx), %rdi"));
-    lines = ya_push(lines, ys("    add %rax, %rdi"));
-    lines = ya_push(lines, ys("    mov %rdi, 24(%rcx)"));
-    lines = ya_push(lines, ys("    mov 8(%rcx), %rdx"));
+    lines = ya_push(lines, ys("    mov (%rcx), %rdx"));
     lines = ya_push(lines, ys("    mov %rdx, %rdi"));
     lines = ya_push(lines, ys("    add %rax, %rdi"));
-    lines = ya_push(lines, ys("    mov 16(%rcx), %r11"));
+    lines = ya_push(lines, ys("    mov 8(%rcx), %r11"));
     lines = ya_push(lines, ys("    cmp %r11, %rdi"));
     lines = ya_push(lines, ys("    jg y_alloc_slow"));
-    lines = ya_push(lines, ys("    mov %rdi, 8(%rcx)"));
+    lines = ya_push(lines, ys("    mov %rdi, (%rcx)"));
+    lines = ya_push(lines, ys("    mov 16(%rcx), %rdi"));
+    lines = ya_push(lines, ys("    add %rax, %rdi"));
+    lines = ya_push(lines, ys("    mov %rdi, 16(%rcx)"));
     lines = ya_push(lines, ys("    mov %rdx, %rax"));
     lines = ya_push(lines, ys("    ret"));
+    /* Once a thread was spawned (y_heap's flag) the global block is empty, */
+    /* so every thread's bump on it fails and lands here, then retries in */
+    /* the thread's own block (%fs:24 points to it; arch_prelude_threads). */
     lines = ya_push(lines, ys("y_alloc_slow:"));
+    lines = ya_push(lines, ys("    lea y_heap(%rip), %rdx"));
+    lines = ya_push(lines, ys("    cmp %rdx, %rcx"));
+    lines = ya_push(lines, ys("    jne y_alloc_more"));
+    lines = ya_push(lines, ys("    mov 24(%rdx), %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    je y_alloc_more"));
+    lines = ya_push(lines, ys("    mov %fs:24, %rcx"));
+    lines = ya_push(lines, ys("    jmp y_alloc_go"));
+    lines = ya_push(lines, ys("y_alloc_more:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
     lines = ya_push(lines, ys("    push %rbx"));
@@ -453,20 +460,18 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    push %r10"));
     lines = ya_push(lines, ys("    push %r12"));
     lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("    mov %rcx, %r12"));
     lines = ya_push(lines, ys("    mov $262144, %rsi"));
     lines = ya_push(lines, ys("    cmp %rsi, %rbx"));
     lines = ya_push(lines, ys("    jge y_alloc_big"));
     lines = ya_push(lines, ys("    mov $4194304, %rsi"));
     lines = ya_push(lines, ys("    call y_alloc_map"));
-    lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    call y_heap_block"));
-    lines = ya_push(lines, ys("    pop %rax"));
     lines = ya_push(lines, ys("    mov %rax, %rdx"));
     lines = ya_push(lines, ys("    add %rbx, %rdx"));
-    lines = ya_push(lines, ys("    mov %rdx, 8(%rcx)"));
+    lines = ya_push(lines, ys("    mov %rdx, 0(%r12)"));
     lines = ya_push(lines, ys("    mov $4194304, %rdx"));
     lines = ya_push(lines, ys("    add %rax, %rdx"));
-    lines = ya_push(lines, ys("    mov %rdx, 16(%rcx)"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%r12)"));
     lines = ya_push(lines, ys("    jmp y_alloc_out"));
     lines = ya_push(lines, ys("y_alloc_big:"));
     lines = ya_push(lines, ys("    mov %rbx, %rsi"));
@@ -474,6 +479,9 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    and $-4096, %rsi"));
     lines = ya_push(lines, ys("    call y_alloc_map"));
     lines = ya_push(lines, ys("y_alloc_out:"));
+    lines = ya_push(lines, ys("    mov 16(%r12), %rdx"));
+    lines = ya_push(lines, ys("    add %rbx, %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 16(%r12)"));
     lines = ya_push(lines, ys("    pop %r12"));
     lines = ya_push(lines, ys("    pop %r10"));
     lines = ya_push(lines, ys("    pop %r9"));
@@ -494,284 +502,14 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    js y_alloc_fail"));
     lines = ya_push(lines, ys("    ret"));
     lines = ya_push(lines, ys("y_heap_used:"));
-    lines = ya_push(lines, ys("    call y_heap_block"));
-    lines = ya_push(lines, ys("    mov 24(%rcx), %rax"));
-    lines = ya_push(lines, ys("    ret"));
-    /* The calling thread's heap block in %rcx (clobbers %rdx): the */
-    /* global one, or once a thread was spawned the one %fs points to. */
-    lines = ya_push(lines, ys("y_heap_block:"));
     lines = ya_push(lines, ys("    lea y_heap(%rip), %rcx"));
-    lines = ya_push(lines, ys("    mov 32(%rcx), %rdx"));
+    lines = ya_push(lines, ys("    mov 24(%rcx), %rdx"));
     lines = ya_push(lines, ys("    test %rdx, %rdx"));
-    lines = ya_push(lines, ys("    je y_heap_block_go"));
-    lines = ya_push(lines, ys("    mov %fs:0, %rcx"));
-    lines = ya_push(lines, ys("y_heap_block_go:"));
+    lines = ya_push(lines, ys("    je y_heap_used_go"));
+    lines = ya_push(lines, ys("    mov %fs:24, %rcx"));
+    lines = ya_push(lines, ys("y_heap_used_go:"));
+    lines = ya_push(lines, ys("    mov 16(%rcx), %rax"));
     lines = ya_push(lines, ys("    ret"));
-    /* ── threads (CHOICES_MADE.md 33) ── */
-    /* The first spawn: the main thread's TLS is the global heap block */
-    /* (its word 0 points to itself), then y_alloc reads %fs. */
-    lines = ya_push(lines, ys("y_threads_on:"));
-    lines = ya_push(lines, ys("    lea y_heap(%rip), %rcx"));
-    lines = ya_push(lines, ys("    mov 32(%rcx), %rdx"));
-    lines = ya_push(lines, ys("    test %rdx, %rdx"));
-    lines = ya_push(lines, ys("    jne y_threads_on_done"));
-    lines = ya_push(lines, ys("    mov %rcx, 0(%rcx)"));
-    lines = ya_push(lines, ys("    push %rcx"));
-    lines = ya_push(lines, ys("    mov $158, %rax"));
-    lines = ya_push(lines, ys("    mov $4098, %rdi"));
-    lines = ya_push(lines, ys("    mov %rcx, %rsi"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    pop %rcx"));
-    lines = ya_push(lines, ys("    mov $1, %rdx"));
-    lines = ya_push(lines, ys("    mov %rdx, 32(%rcx)"));
-    lines = ya_push(lines, ys("y_threads_on_done:"));
-    lines = ya_push(lines, ys("    ret"));
-    /* spawn: %rax the block's closure -> %rax its handle, a closure */
-    /* [y_join_code, tcb]. The thread control block is its heap block */
-    /* [self, cur, end, used, stack, spare] then [tid, value, closure]; */
-    /* the thread runs on an 8 MiB stack of its own (the mapping at */
-    /* `stack`, a guard page below it), with %fs at the block. Its */
-    /* heap starts in the spawning thread's first spare chunk tail, if */
-    /* it has one: `spare` lists the tails its joins took back, each */
-    /* tail's first two words [end, next]. */
-    lines = ya_push(lines, ys("y_spawn:"));
-    lines = ya_push(lines, ys("    push %rbp"));
-    lines = ya_push(lines, ys("    mov %rsp, %rbp"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    push %r12"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("    call y_threads_on"));
-    lines = ya_push(lines, ys("    mov $72, %rdi"));
-    lines = ya_push(lines, ys("    call y_alloc"));
-    lines = ya_push(lines, ys("    mov %rax, %r12"));
-    lines = ya_push(lines, ys("    mov %r12, 0(%r12)"));
-    lines = ya_push(lines, ys("    mov %rbx, 64(%r12)"));
-    lines = ya_push(lines, ys("    mov %fs:0, %rcx"));
-    lines = ya_push(lines, ys("    mov 40(%rcx), %rax"));
-    lines = ya_push(lines, ys("    test %rax, %rax"));
-    lines = ya_push(lines, ys("    je y_spawn_stack"));
-    lines = ya_push(lines, ys("    mov 8(%rax), %rdx"));
-    lines = ya_push(lines, ys("    mov %rdx, 40(%rcx)"));
-    lines = ya_push(lines, ys("    mov 0(%rax), %rdx"));
-    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
-    lines = ya_push(lines, ys("    mov %rcx, 0(%rax)"));
-    lines = ya_push(lines, ys("    mov %rcx, 8(%rax)"));
-    lines = ya_push(lines, ys("    mov %rax, 8(%r12)"));
-    lines = ya_push(lines, ys("    mov %rdx, 16(%r12)"));
-    lines = ya_push(lines, ys("y_spawn_stack:"));
-    lines = ya_push(lines, ys("    mov $9, %rax"));
-    lines = ya_push(lines, ys("    xor %edi, %edi"));
-    lines = ya_push(lines, ys("    mov $8392704, %rsi"));
-    lines = ya_push(lines, ys("    mov $3, %rdx"));
-    lines = ya_push(lines, ys("    mov $131106, %r10"));
-    lines = ya_push(lines, ys("    mov $-1, %r8"));
-    lines = ya_push(lines, ys("    xor %r9d, %r9d"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    test %rax, %rax"));
-    lines = ya_push(lines, ys("    js y_alloc_fail"));
-    lines = ya_push(lines, ys("    mov %rax, 32(%r12)"));
-    lines = ya_push(lines, ys("    mov %rax, %rdi"));
-    lines = ya_push(lines, ys("    mov $4096, %rsi"));
-    lines = ya_push(lines, ys("    xor %edx, %edx"));
-    lines = ya_push(lines, ys("    mov $10, %rax"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    mov 32(%r12), %rsi"));
-    lines = ya_push(lines, ys("    add $8392688, %rsi"));
-    lines = ya_push(lines, ys("    mov %r12, 0(%rsi)"));
-    lines = ya_push(lines, ys("    mov $56, %rax"));
-    lines = ya_push(lines, ys("    mov $4001536, %rdi"));
-    lines = ya_push(lines, ys("    lea 48(%r12), %rdx"));
-    lines = ya_push(lines, ys("    lea 48(%r12), %r10"));
-    lines = ya_push(lines, ys("    mov %r12, %r8"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    test %rax, %rax"));
-    lines = ya_push(lines, ys("    je y_thread_start"));
-    lines = ya_push(lines, ys("    js y_alloc_fail"));
-    lines = ya_push(lines, ys("    mov $16, %rdi"));
-    lines = ya_push(lines, ys("    call y_alloc"));
-    lines = ya_push(lines, ys("    lea y_join_code(%rip), %rcx"));
-    lines = ya_push(lines, ys("    mov %rcx, 0(%rax)"));
-    lines = ya_push(lines, ys("    mov %r12, 8(%rax)"));
-    lines = ya_push(lines, ys("    pop %r12"));
-    lines = ya_push(lines, ys("    pop %rbx"));
-    lines = ya_push(lines, ys("    pop %rbp"));
-    lines = ya_push(lines, ys("    ret"));
-    /* the new thread: its stack's top holds the tcb; it calls the */
-    /* closure, keeps the value, unmaps its stack (nothing after the */
-    /* munmap touches it) and ends (exit, not exit_group: the kernel */
-    /* then clears tid, in the tcb, and wakes a join) */
-    lines = ya_push(lines, ys("y_thread_start:"));
-    lines = ya_push(lines, ys("    mov %rsp, %rax"));
-    lines = ya_push(lines, ys("    mov 0(%rax), %r12"));
-    lines = ya_push(lines, ys("    xor %ebp, %ebp"));
-    lines = ya_push(lines, ys("    mov 64(%r12), %rax"));
-    lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    mov 0(%rax), %rax"));
-    lines = ya_push(lines, ys("    call *%rax"));
-    lines = ya_push(lines, ys("    mov %rax, 56(%r12)"));
-    lines = ya_push(lines, ys("    mov 32(%r12), %rdi"));
-    lines = ya_push(lines, ys("    mov $8392704, %rsi"));
-    lines = ya_push(lines, ys("    mov $11, %rax"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    mov $60, %rax"));
-    lines = ya_push(lines, ys("    xor %edi, %edi"));
-    lines = ya_push(lines, ys("    syscall"));
-    /* join: the handle called as a closure -> the thread's value, once */
-    /* its tid is 0. The first join takes the unused tail of the */
-    /* thread's chunk (a page or more; xchg takes it once) onto the */
-    /* joining thread's spare list, for its next spawn. */
-    lines = ya_push(lines, ys("y_join_code:"));
-    lines = ya_push(lines, ys("    mov %rsp, %rax"));
-    lines = ya_push(lines, ys("    mov 8(%rax), %rax"));
-    lines = ya_push(lines, ys("    mov 8(%rax), %rcx"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    mov %rcx, %rbx"));
-    lines = ya_push(lines, ys("y_join_wait:"));
-    lines = ya_push(lines, ys("    mov 48(%rbx), %rdx"));
-    lines = ya_push(lines, ys("    test %rdx, %rdx"));
-    lines = ya_push(lines, ys("    je y_join_done"));
-    lines = ya_push(lines, ys("    mov $202, %rax"));
-    lines = ya_push(lines, ys("    lea 48(%rbx), %rdi"));
-    lines = ya_push(lines, ys("    xor %esi, %esi"));
-    lines = ya_push(lines, ys("    xor %r10d, %r10d"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    jmp y_join_wait"));
-    lines = ya_push(lines, ys("y_join_done:"));
-    lines = ya_push(lines, ys("    xor %eax, %eax"));
-    lines = ya_push(lines, ys("    xchg %rax, 16(%rbx)"));
-    lines = ya_push(lines, ys("    mov 8(%rbx), %rdi"));
-    lines = ya_push(lines, ys("    mov %rax, %rsi"));
-    lines = ya_push(lines, ys("    sub %rdi, %rsi"));
-    lines = ya_push(lines, ys("    cmp $4096, %rsi"));
-    lines = ya_push(lines, ys("    jl y_join_value"));
-    lines = ya_push(lines, ys("    mov %fs:0, %rcx"));
-    lines = ya_push(lines, ys("    mov %rax, 0(%rdi)"));
-    lines = ya_push(lines, ys("    mov 40(%rcx), %rdx"));
-    lines = ya_push(lines, ys("    mov %rdx, 8(%rdi)"));
-    lines = ya_push(lines, ys("    mov %rdi, 40(%rcx)"));
-    lines = ya_push(lines, ys("y_join_value:"));
-    lines = ya_push(lines, ys("    mov 56(%rbx), %rax"));
-    lines = ya_push(lines, ys("    pop %rbx"));
-    lines = ya_push(lines, ys("    ret"));
-    /* a mutex (%rax): its word 0 is 0 when free, 1 when held, 2 when */
-    /* held and a thread may be waiting for it (Drepper, "Futexes Are */
-    /* Tricky", with xchg alone): a waiter marks it 2 before it sleeps, */
-    /* and only an unlock that finds 2 makes a syscall (the wake) */
-    lines = ya_push(lines, ys("y_mutex_lock:"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("    mov $1, %rcx"));
-    lines = ya_push(lines, ys("    xchg %rcx, 0(%rbx)"));
-    lines = ya_push(lines, ys("    test %rcx, %rcx"));
-    lines = ya_push(lines, ys("    je y_mutex_got"));
-    lines = ya_push(lines, ys("y_mutex_wait:"));
-    lines = ya_push(lines, ys("    mov $2, %rcx"));
-    lines = ya_push(lines, ys("    xchg %rcx, 0(%rbx)"));
-    lines = ya_push(lines, ys("    test %rcx, %rcx"));
-    lines = ya_push(lines, ys("    je y_mutex_got"));
-    lines = ya_push(lines, ys("    mov $202, %rax"));
-    lines = ya_push(lines, ys("    mov %rbx, %rdi"));
-    lines = ya_push(lines, ys("    mov $128, %rsi"));
-    lines = ya_push(lines, ys("    mov $2, %rdx"));
-    lines = ya_push(lines, ys("    xor %r10d, %r10d"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    jmp y_mutex_wait"));
-    lines = ya_push(lines, ys("y_mutex_got:"));
-    lines = ya_push(lines, ys("    pop %rbx"));
-    lines = ya_push(lines, ys("    ret"));
-    lines = ya_push(lines, ys("y_mutex_unlock:"));
-    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
-    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
-    lines = ya_push(lines, ys("    cmp $2, %rcx"));
-    lines = ya_push(lines, ys("    jne y_mutex_free"));
-    lines = ya_push(lines, ys("    mov %rax, %rdi"));
-    lines = ya_push(lines, ys("    mov $202, %rax"));
-    lines = ya_push(lines, ys("    mov $129, %rsi"));
-    lines = ya_push(lines, ys("    mov $1, %rdx"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("y_mutex_free:"));
-    lines = ya_push(lines, ys("    ret"));
-    /* 1 in %rax when the mutex (%rax) was free and is now held. Taking */
-    /* it with xchg 1 may erase a 2 (a waiter's mark), which then goes */
-    /* back -- and if the mutex was released meanwhile, that takes it. */
-    lines = ya_push(lines, ys("y_mutex_trylock:"));
-    lines = ya_push(lines, ys("    mov $1, %rcx"));
-    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
-    lines = ya_push(lines, ys("    test %rcx, %rcx"));
-    lines = ya_push(lines, ys("    je y_mutex_took"));
-    lines = ya_push(lines, ys("    cmp $2, %rcx"));
-    lines = ya_push(lines, ys("    jne y_mutex_busy"));
-    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
-    lines = ya_push(lines, ys("    test %rcx, %rcx"));
-    lines = ya_push(lines, ys("    je y_mutex_took"));
-    lines = ya_push(lines, ys("y_mutex_busy:"));
-    lines = ya_push(lines, ys("    xor %eax, %eax"));
-    lines = ya_push(lines, ys("    ret"));
-    lines = ya_push(lines, ys("y_mutex_took:"));
-    lines = ya_push(lines, ys("    mov $1, %rax"));
-    lines = ya_push(lines, ys("    ret"));
-    /* a semaphore (%rax): its count at 0, guarded by the mutex at 8; a */
-    /* wait sleeps on the count while it is 0 */
-    lines = ya_push(lines, ys("y_sem_wait:"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("y_sem_again:"));
-    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
-    lines = ya_push(lines, ys("    call y_mutex_lock"));
-    lines = ya_push(lines, ys("    mov 0(%rbx), %rcx"));
-    lines = ya_push(lines, ys("    test %rcx, %rcx"));
-    lines = ya_push(lines, ys("    je y_sem_sleep"));
-    lines = ya_push(lines, ys("    sub $1, %rcx"));
-    lines = ya_push(lines, ys("    mov %rcx, 0(%rbx)"));
-    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
-    lines = ya_push(lines, ys("    call y_mutex_unlock"));
-    lines = ya_push(lines, ys("    pop %rbx"));
-    lines = ya_push(lines, ys("    ret"));
-    lines = ya_push(lines, ys("y_sem_sleep:"));
-    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
-    lines = ya_push(lines, ys("    call y_mutex_unlock"));
-    lines = ya_push(lines, ys("    mov $202, %rax"));
-    lines = ya_push(lines, ys("    mov %rbx, %rdi"));
-    lines = ya_push(lines, ys("    mov $128, %rsi"));
-    lines = ya_push(lines, ys("    xor %edx, %edx"));
-    lines = ya_push(lines, ys("    xor %r10d, %r10d"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    jmp y_sem_again"));
-    lines = ya_push(lines, ys("y_sem_post:"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
-    lines = ya_push(lines, ys("    call y_mutex_lock"));
-    lines = ya_push(lines, ys("    mov 0(%rbx), %rcx"));
-    lines = ya_push(lines, ys("    add $1, %rcx"));
-    lines = ya_push(lines, ys("    mov %rcx, 0(%rbx)"));
-    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
-    lines = ya_push(lines, ys("    call y_mutex_unlock"));
-    lines = ya_push(lines, ys("    mov $202, %rax"));
-    lines = ya_push(lines, ys("    mov %rbx, %rdi"));
-    lines = ya_push(lines, ys("    mov $129, %rsi"));
-    lines = ya_push(lines, ys("    mov $1, %rdx"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    pop %rbx"));
-    lines = ya_push(lines, ys("    ret"));
-    /* fork: %rax the block's closure; the child runs it and ends (0), */
-    /* the parent gets the pid (or -errno) */
-    lines = ya_push(lines, ys("y_fork:"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("    mov $57, %rax"));
-    lines = ya_push(lines, ys("    syscall"));
-    lines = ya_push(lines, ys("    test %rax, %rax"));
-    lines = ya_push(lines, ys("    je y_fork_child"));
-    lines = ya_push(lines, ys("    pop %rbx"));
-    lines = ya_push(lines, ys("    ret"));
-    lines = ya_push(lines, ys("y_fork_child:"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    mov 0(%rbx), %rax"));
-    lines = ya_push(lines, ys("    call *%rax"));
-    lines = ya_push(lines, ys("    mov $231, %rax"));
-    lines = ya_push(lines, ys("    xor %edi, %edi"));
-    lines = ya_push(lines, ys("    syscall"));
     lines = ya_push(lines, ys("y_alloc_fail:"));
     lines = ya_push(lines, ys("    mov $1, %rax"));
     lines = ya_push(lines, ys("    mov $1, %rdi"));
@@ -1662,6 +1400,290 @@ Yv *arch_prelude(void) {
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
+    return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
+}
+
+// The thread runtime (CHOICES_MADE.md 33), linked only when a program's
+// code calls into it (native.y uses_threads): every compile shakes the
+// prelude text it is given, line by line, whatever it keeps.
+Yv *arch_prelude_threads(void) {
+    Yv *lines = yav(0);
+    /* The first spawn moves the main thread's heap state (cur, end, used) */
+    /* into a block of its own, points %fs at it and empties the global */
+    /* block: from then on y_alloc_slow sends every thread to its own block. */
+    /* A thread's block is [cur, end, used, self, ...]: %fs:24 is its address. */
+    lines = ya_push(lines, ys("y_threads_on:"));
+    lines = ya_push(lines, ys("    lea y_heap(%rip), %rcx"));
+    lines = ya_push(lines, ys("    mov 24(%rcx), %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    jne y_threads_on_done"));
+    lines = ya_push(lines, ys("    mov $48, %rdi"));
+    lines = ya_push(lines, ys("    call y_alloc"));
+    lines = ya_push(lines, ys("    lea y_heap(%rip), %rcx"));
+    lines = ya_push(lines, ys("    mov (%rcx), %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 0(%rax)"));
+    lines = ya_push(lines, ys("    mov 8(%rcx), %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%rax)"));
+    lines = ya_push(lines, ys("    mov 16(%rcx), %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 16(%rax)"));
+    lines = ya_push(lines, ys("    mov %rax, 24(%rax)"));
+    lines = ya_push(lines, ys("    xor %edx, %edx"));
+    lines = ya_push(lines, ys("    mov %rdx, (%rcx)"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%rcx)"));
+    lines = ya_push(lines, ys("    mov $1, %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 24(%rcx)"));
+    lines = ya_push(lines, ys("    mov %rax, %rsi"));
+    lines = ya_push(lines, ys("    mov $158, %rax"));
+    lines = ya_push(lines, ys("    mov $4098, %rdi"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("y_threads_on_done:"));
+    lines = ya_push(lines, ys("    ret"));
+    /* spawn: %rax the block's closure -> %rax its handle, a closure */
+    /* [y_join_code, tcb]. The thread control block is its heap block */
+    /* [cur, end, used, self, stack, spare] then [tid, value, closure]; */
+    /* the thread runs on an 8 MiB stack of its own (the mapping at */
+    /* `stack`, a guard page below it), with %fs at the block. Its */
+    /* heap starts in the spawning thread's first spare chunk tail, if */
+    /* it has one: `spare` lists the tails its joins took back, each */
+    /* tail's first two words [end, next]. */
+    lines = ya_push(lines, ys("y_spawn:"));
+    lines = ya_push(lines, ys("    push %rbp"));
+    lines = ya_push(lines, ys("    mov %rsp, %rbp"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    push %r12"));
+    lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("    call y_threads_on"));
+    lines = ya_push(lines, ys("    mov $72, %rdi"));
+    lines = ya_push(lines, ys("    call y_alloc"));
+    lines = ya_push(lines, ys("    mov %rax, %r12"));
+    lines = ya_push(lines, ys("    mov %r12, 24(%r12)"));
+    lines = ya_push(lines, ys("    mov %rbx, 64(%r12)"));
+    lines = ya_push(lines, ys("    mov %fs:24, %rcx"));
+    lines = ya_push(lines, ys("    mov 40(%rcx), %rax"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    je y_spawn_stack"));
+    lines = ya_push(lines, ys("    mov 8(%rax), %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 40(%rcx)"));
+    lines = ya_push(lines, ys("    mov 0(%rax), %rdx"));
+    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
+    lines = ya_push(lines, ys("    mov %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    mov %rcx, 8(%rax)"));
+    lines = ya_push(lines, ys("    mov %rax, 0(%r12)"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%r12)"));
+    lines = ya_push(lines, ys("y_spawn_stack:"));
+    lines = ya_push(lines, ys("    mov $9, %rax"));
+    lines = ya_push(lines, ys("    xor %edi, %edi"));
+    lines = ya_push(lines, ys("    mov $8392704, %rsi"));
+    lines = ya_push(lines, ys("    mov $3, %rdx"));
+    lines = ya_push(lines, ys("    mov $131106, %r10"));
+    lines = ya_push(lines, ys("    mov $-1, %r8"));
+    lines = ya_push(lines, ys("    xor %r9d, %r9d"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    js y_alloc_fail"));
+    lines = ya_push(lines, ys("    mov %rax, 32(%r12)"));
+    lines = ya_push(lines, ys("    mov %rax, %rdi"));
+    lines = ya_push(lines, ys("    mov $4096, %rsi"));
+    lines = ya_push(lines, ys("    xor %edx, %edx"));
+    lines = ya_push(lines, ys("    mov $10, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov 32(%r12), %rsi"));
+    lines = ya_push(lines, ys("    add $8392688, %rsi"));
+    lines = ya_push(lines, ys("    mov %r12, 0(%rsi)"));
+    lines = ya_push(lines, ys("    mov $56, %rax"));
+    lines = ya_push(lines, ys("    mov $4001536, %rdi"));
+    lines = ya_push(lines, ys("    lea 48(%r12), %rdx"));
+    lines = ya_push(lines, ys("    lea 48(%r12), %r10"));
+    lines = ya_push(lines, ys("    mov %r12, %r8"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    je y_thread_start"));
+    lines = ya_push(lines, ys("    js y_alloc_fail"));
+    lines = ya_push(lines, ys("    mov $16, %rdi"));
+    lines = ya_push(lines, ys("    call y_alloc"));
+    lines = ya_push(lines, ys("    lea y_join_code(%rip), %rcx"));
+    lines = ya_push(lines, ys("    mov %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    mov %r12, 8(%rax)"));
+    lines = ya_push(lines, ys("    pop %r12"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    pop %rbp"));
+    lines = ya_push(lines, ys("    ret"));
+    /* the new thread: its stack's top holds the tcb; it calls the */
+    /* closure, keeps the value, unmaps its stack (nothing after the */
+    /* munmap touches it) and ends (exit, not exit_group: the kernel */
+    /* then clears tid, in the tcb, and wakes a join) */
+    lines = ya_push(lines, ys("y_thread_start:"));
+    lines = ya_push(lines, ys("    mov %rsp, %rax"));
+    lines = ya_push(lines, ys("    mov 0(%rax), %r12"));
+    lines = ya_push(lines, ys("    xor %ebp, %ebp"));
+    lines = ya_push(lines, ys("    mov 64(%r12), %rax"));
+    lines = ya_push(lines, ys("    push %rax"));
+    lines = ya_push(lines, ys("    mov 0(%rax), %rax"));
+    lines = ya_push(lines, ys("    call *%rax"));
+    lines = ya_push(lines, ys("    mov %rax, 56(%r12)"));
+    lines = ya_push(lines, ys("    mov 32(%r12), %rdi"));
+    lines = ya_push(lines, ys("    mov $8392704, %rsi"));
+    lines = ya_push(lines, ys("    mov $11, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov $60, %rax"));
+    lines = ya_push(lines, ys("    xor %edi, %edi"));
+    lines = ya_push(lines, ys("    syscall"));
+    /* join: the handle called as a closure -> the thread's value, once */
+    /* its tid is 0. The first join takes the unused tail of the */
+    /* thread's chunk (a page or more; xchg takes it once) onto the */
+    /* joining thread's spare list, for its next spawn. */
+    lines = ya_push(lines, ys("y_join_code:"));
+    lines = ya_push(lines, ys("    mov %rsp, %rax"));
+    lines = ya_push(lines, ys("    mov 8(%rax), %rax"));
+    lines = ya_push(lines, ys("    mov 8(%rax), %rcx"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    mov %rcx, %rbx"));
+    lines = ya_push(lines, ys("y_join_wait:"));
+    lines = ya_push(lines, ys("    mov 48(%rbx), %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    je y_join_done"));
+    lines = ya_push(lines, ys("    mov $202, %rax"));
+    lines = ya_push(lines, ys("    lea 48(%rbx), %rdi"));
+    lines = ya_push(lines, ys("    xor %esi, %esi"));
+    lines = ya_push(lines, ys("    xor %r10d, %r10d"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    jmp y_join_wait"));
+    lines = ya_push(lines, ys("y_join_done:"));
+    lines = ya_push(lines, ys("    xor %eax, %eax"));
+    lines = ya_push(lines, ys("    xchg %rax, 8(%rbx)"));
+    lines = ya_push(lines, ys("    mov 0(%rbx), %rdi"));
+    lines = ya_push(lines, ys("    mov %rax, %rsi"));
+    lines = ya_push(lines, ys("    sub %rdi, %rsi"));
+    lines = ya_push(lines, ys("    cmp $4096, %rsi"));
+    lines = ya_push(lines, ys("    jl y_join_value"));
+    lines = ya_push(lines, ys("    mov %fs:24, %rcx"));
+    lines = ya_push(lines, ys("    mov %rax, 0(%rdi)"));
+    lines = ya_push(lines, ys("    mov 40(%rcx), %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%rdi)"));
+    lines = ya_push(lines, ys("    mov %rdi, 40(%rcx)"));
+    lines = ya_push(lines, ys("y_join_value:"));
+    lines = ya_push(lines, ys("    mov 56(%rbx), %rax"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    ret"));
+    /* a mutex (%rax): its word 0 is 0 when free, 1 when held, 2 when */
+    /* held and a thread may be waiting for it (Drepper, "Futexes Are */
+    /* Tricky", with xchg alone): a waiter marks it 2 before it sleeps, */
+    /* and only an unlock that finds 2 makes a syscall (the wake) */
+    lines = ya_push(lines, ys("y_mutex_lock:"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("    mov $1, %rcx"));
+    lines = ya_push(lines, ys("    xchg %rcx, 0(%rbx)"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    je y_mutex_got"));
+    lines = ya_push(lines, ys("y_mutex_wait:"));
+    lines = ya_push(lines, ys("    mov $2, %rcx"));
+    lines = ya_push(lines, ys("    xchg %rcx, 0(%rbx)"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    je y_mutex_got"));
+    lines = ya_push(lines, ys("    mov $202, %rax"));
+    lines = ya_push(lines, ys("    mov %rbx, %rdi"));
+    lines = ya_push(lines, ys("    mov $128, %rsi"));
+    lines = ya_push(lines, ys("    mov $2, %rdx"));
+    lines = ya_push(lines, ys("    xor %r10d, %r10d"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    jmp y_mutex_wait"));
+    lines = ya_push(lines, ys("y_mutex_got:"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_mutex_unlock:"));
+    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
+    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    cmp $2, %rcx"));
+    lines = ya_push(lines, ys("    jne y_mutex_free"));
+    lines = ya_push(lines, ys("    mov %rax, %rdi"));
+    lines = ya_push(lines, ys("    mov $202, %rax"));
+    lines = ya_push(lines, ys("    mov $129, %rsi"));
+    lines = ya_push(lines, ys("    mov $1, %rdx"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("y_mutex_free:"));
+    lines = ya_push(lines, ys("    ret"));
+    /* 1 in %rax when the mutex (%rax) was free and is now held. Taking */
+    /* it with xchg 1 may erase a 2 (a waiter's mark), which then goes */
+    /* back -- and if the mutex was released meanwhile, that takes it. */
+    lines = ya_push(lines, ys("y_mutex_trylock:"));
+    lines = ya_push(lines, ys("    mov $1, %rcx"));
+    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    je y_mutex_took"));
+    lines = ya_push(lines, ys("    cmp $2, %rcx"));
+    lines = ya_push(lines, ys("    jne y_mutex_busy"));
+    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    je y_mutex_took"));
+    lines = ya_push(lines, ys("y_mutex_busy:"));
+    lines = ya_push(lines, ys("    xor %eax, %eax"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_mutex_took:"));
+    lines = ya_push(lines, ys("    mov $1, %rax"));
+    lines = ya_push(lines, ys("    ret"));
+    /* a semaphore (%rax): its count at 0, guarded by the mutex at 8; a */
+    /* wait sleeps on the count while it is 0 */
+    lines = ya_push(lines, ys("y_sem_wait:"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("y_sem_again:"));
+    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
+    lines = ya_push(lines, ys("    call y_mutex_lock"));
+    lines = ya_push(lines, ys("    mov 0(%rbx), %rcx"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    je y_sem_sleep"));
+    lines = ya_push(lines, ys("    sub $1, %rcx"));
+    lines = ya_push(lines, ys("    mov %rcx, 0(%rbx)"));
+    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
+    lines = ya_push(lines, ys("    call y_mutex_unlock"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_sem_sleep:"));
+    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
+    lines = ya_push(lines, ys("    call y_mutex_unlock"));
+    lines = ya_push(lines, ys("    mov $202, %rax"));
+    lines = ya_push(lines, ys("    mov %rbx, %rdi"));
+    lines = ya_push(lines, ys("    mov $128, %rsi"));
+    lines = ya_push(lines, ys("    xor %edx, %edx"));
+    lines = ya_push(lines, ys("    xor %r10d, %r10d"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    jmp y_sem_again"));
+    lines = ya_push(lines, ys("y_sem_post:"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
+    lines = ya_push(lines, ys("    call y_mutex_lock"));
+    lines = ya_push(lines, ys("    mov 0(%rbx), %rcx"));
+    lines = ya_push(lines, ys("    add $1, %rcx"));
+    lines = ya_push(lines, ys("    mov %rcx, 0(%rbx)"));
+    lines = ya_push(lines, ys("    lea 8(%rbx), %rax"));
+    lines = ya_push(lines, ys("    call y_mutex_unlock"));
+    lines = ya_push(lines, ys("    mov $202, %rax"));
+    lines = ya_push(lines, ys("    mov %rbx, %rdi"));
+    lines = ya_push(lines, ys("    mov $129, %rsi"));
+    lines = ya_push(lines, ys("    mov $1, %rdx"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    ret"));
+    /* fork: %rax the block's closure; the child runs it and ends (0), */
+    /* the parent gets the pid (or -errno) */
+    lines = ya_push(lines, ys("y_fork:"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("    mov $57, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    je y_fork_child"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_fork_child:"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    mov 0(%rbx), %rax"));
+    lines = ya_push(lines, ys("    call *%rax"));
+    lines = ya_push(lines, ys("    mov $231, %rax"));
+    lines = ya_push(lines, ys("    xor %edi, %edi"));
+    lines = ya_push(lines, ys("    syscall"));
     return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
 }
 

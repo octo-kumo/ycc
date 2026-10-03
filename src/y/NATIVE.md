@@ -128,9 +128,9 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   semantics here; it made every helper that returned an accumulator O(n), so
   the assembler was O(n²) and self-compilation OOMed past 7.5 GB.)
 - Heap (bump allocator over 4 MB anonymous `mmap` chunks; its state — the
-  bump pointer, the chunk end and the bytes handed out so far, with a
-  self pointer, a flag and a spare list for threads (*Threads and
-  processes* below) — lives in six `.bss` words, `y_heap`, which a
+  bump pointer, the chunk end, the bytes handed out so far and a flag
+  set by the first spawn (*Threads and processes* below) — lives in four
+  `.bss` words, `y_heap`, which a
   program that never allocates shakes out): dynamic arrays `[v, ...]` as
   `{len, cap, data, front}` headers
   (element block allocated separately), option boxes. A request of 256 KB
@@ -539,25 +539,36 @@ turns `spawn { e }` into `spawn(def () { e })` and `lock m { e }` into
 reserved), so the checker and the emitter see ordinary calls. `mutex`
 and `sem` are record types no program can spell (`{$m: long}`,
 `{$n: long, $w: long}`, parser.y `sync_type`). The runtime is assembly
-in `arch_x64.y`, because it needs raw machine state:
+in `arch_x64.y`, because it needs raw machine state, in a prelude of its
+own (`arch_prelude_threads`) that `link_units` adds only when the kept
+code calls one of its entry points (`uses_threads`): every compile pays
+for shaking the prelude text it is given, line by line, so a program
+without threads does not scan this one.
 
 - **A thread is a `clone(2)`** sharing memory, files and signal handlers
   (`CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|
   CHILD_CLEARTID`), on an 8 MiB stack of its own: an `mmap` with a
   `PROT_NONE` guard page below it, so a runaway recursion faults as it
   does on the main thread. Its control block (72 bytes of the spawner's
-  heap) is `[self, cur, end, used, stack, spare, tid, value, closure]`,
-  its first words a heap block like `y_heap`. A spawn's value is the
+  heap) is `[cur, end, used, self, stack, spare, tid, value, closure]`,
+  its first words a heap block like `y_heap`'s. A spawn's value is the
   closure `[y_join_code, tcb]`, so `join t` is `t()`: it futex-waits
   until the kernel clears `tid` (CHILD_CLEARTID) and returns `value`. The
   thread calls the closure, stores the value, unmaps its own stack
   (nothing after the `munmap` touches it) and ends with `exit` (60).
 - **Each thread allocates from a heap of its own**, so `y_alloc` stays a
-  bump without a lock. Until the first spawn it uses the global
-  `y_heap` (one load and a test more than before threads); `y_threads_on`
-  then points `%fs` at `y_heap` (`arch_prctl(ARCH_SET_FS)`) and sets a
-  flag, and from then on every thread's `y_alloc` finds its block at
-  `%fs:0`. Nothing is freed, so a thread's values outlive it. The unused
+  bump without a lock, and a program without threads pays nothing for
+  them: `y_alloc`'s fast path is the bump on the global `y_heap`, as it
+  always was. The first spawn (`y_threads_on`) moves the main thread's
+  heap state into a block of its own, points `%fs` at it
+  (`arch_prctl(ARCH_SET_FS)`; word 3 of every thread's block is its
+  address, so `%fs:24` finds it), empties `y_heap` and sets its flag:
+  from then on the bump on `y_heap` fails in every thread, and
+  `y_alloc_slow` sends it to its own block. A threaded program's
+  allocation thus takes that detour (about 14 instructions more), and
+  `y_heap`'s words are only read, never written, so the threads do not
+  fight over its cache line. Nothing is freed, so a thread's values
+  outlive it. The unused
   tail of a dead thread's chunk is not lost either: the first join takes
   it (an `xchg` on its `end`, so two joins cannot both take it) onto the
   joining thread's `spare` list, and that thread's next spawn starts its
