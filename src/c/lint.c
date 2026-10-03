@@ -24,12 +24,12 @@
 #include <stdarg.h>
 
 #include "types.h"
+#include "parser.h"
 
 /* types.y's alias (lint.y imports types.y) */
 typedef Yv *Diag;
 typedef Yv *LintVar;
 typedef Yv *LintSt;
-typedef Yv *LintMap;
 typedef Yv *LintRoot;
 typedef Yv *LintOcc;
 typedef Yv *LintTy;
@@ -96,12 +96,6 @@ static long lint_occ_key(LintTy t, long i, Yv *key);
 static Yv *lint_sort_uniq(Yv *xs);
 static long lint_report(LintSt st, LintTy t);
 static int lint_rep(Yv *occs, long i);
-static LintMap lint_map_new(void);
-static LintMap lint_map_alloc(long cap);
-static long lint_hash(Yv *s);
-static long lint_map_slot(LintMap m, Yv *key);
-static long lint_map_get(LintMap m, Yv *key);
-static long lint_map_put(LintMap m, Yv *key, long v);
 static Yv *lint_sorted(Yv *ws);
 static Yv *lint_msort(Yv *ws);
 static int lint_before(Diag a, Diag b);
@@ -737,7 +731,7 @@ static long lint_types(LintSt st, Yv *stmts) {
     Yv *occs = yav(0);
     Yv *amods = yav(0);
     LintTy t = yr(10, "roots", roots, "atyps", atyps, "amods", amods,
-                  "amap", lint_map_new(), "amemo", amemo, "abusy", abusy,
+                  "amap", nameix_new(64), "amemo", amemo, "abusy", abusy,
                   "occs", occs, "line", yv_long(0), "col", yv_long(0),
                   "mod", ys(""));
     (void)lint_tw_list(t, stmts);
@@ -748,7 +742,7 @@ static long lint_types(LintSt st, Yv *stmts) {
         LintRoot r = ya_get(rs, i);
         Yv *alias = yr_get(r, "alias");
         if (!ys_eq_lit(alias, "")) {
-            if (lint_map_get(yr_get(t, "amap"), alias) >= 0) {
+            if (nameix_get(yr_get(t, "amap"), alias) >= 0) {
                 (void)lint_warn(
                     st,
                     lint_cat(3, ys("type '"), alias,
@@ -756,7 +750,7 @@ static long lint_types(LintSt st, Yv *stmts) {
                                 "declaration counts")),
                     yv_l(yr_get(r, "line")), yv_l(yr_get(r, "col")));
             }
-            (void)lint_map_put(yr_get(t, "amap"), alias,
+            nameix_put(yr_get(t, "amap"), alias,
                                yv_len(yr_get(t, "atyps")));
             (void)ya_push(yr_get(t, "atyps"), yr_get(r, "typ"));
             (void)ya_push(yr_get(t, "amods"), yr_get(r, "mod"));
@@ -782,7 +776,7 @@ static long lint_types(LintSt st, Yv *stmts) {
                 lint_cand(yr_get(r, "typ"))) {
                 LintOcc o = ya_get(yr_get(t, "occs"), first);
                 (void)yr_set(o, "decl", yv_bool(1));
-                if (lint_map_get(yr_get(t, "amap"), alias) == tdi) {
+                if (nameix_get(yr_get(t, "amap"), alias) == tdi) {
                     (void)yr_set(o, "alias", alias);
                 }
             }
@@ -1006,10 +1000,10 @@ static Yv *lint_tk_name(LintTy t, Yv *name) {
     long ai = -1;
     Yv *tm = yr_get(t, "mod");
     if (!ys_eq_lit(tm, "") && ys_index_of(name, ys(".")) < 0) {
-        ai = lint_map_get(yr_get(t, "amap"), ys_cat(ys_cat(tm, ys(".")), name));
+        ai = nameix_get(yr_get(t, "amap"), ys_cat(ys_cat(tm, ys(".")), name));
     }
     if (ai < 0) {
-        ai = lint_map_get(yr_get(t, "amap"), name);
+        ai = nameix_get(yr_get(t, "amap"), name);
     }
     if (ai < 0) {
         return ys_cat(ys("@"), name);
@@ -1092,7 +1086,7 @@ static long lint_tk_members(LintTy t, Yv *u, int rec, long me, Yv *parts) {
  * expanded), or -1. */
 static long lint_union_alias(LintTy t, Yv *m) {
     if (ys_eq_lit(yr_get(m, "k"), "tname")) {
-        long ai = lint_map_get(yr_get(t, "amap"), yr_get(m, "name"));
+        long ai = nameix_get(yr_get(t, "amap"), yr_get(m, "name"));
         if (ai < 0) {
             return -1;
         } else if (yv_b(ya_get(yr_get(t, "abusy"), ai))) {
@@ -1160,7 +1154,7 @@ static Yv *lint_sort_uniq(Yv *xs) {
  * goes outer before inner. */
 static long lint_report(LintSt st, LintTy t) {
     Yv *occs = yr_get(t, "occs");
-    LintMap ids = lint_map_new();
+    Yv *ids = nameix_new(64);
     Yv *counts = yav(0);
     Yv *alias_of = yav(0);
     Yv *told = yav(0);
@@ -1168,10 +1162,10 @@ static long lint_report(LintSt st, LintTy t) {
     long q = 0;
     while (q < yv_len(occs)) {
         LintOcc o = ya_get(occs, q);
-        long id = lint_map_get(ids, yr_get(o, "key"));
+        long id = nameix_get(ids, yr_get(o, "key"));
         if (id < 0) {
             id = yv_len(counts);
-            (void)lint_map_put(ids, yr_get(o, "key"), id);
+            nameix_put(ids, yr_get(o, "key"), id);
             counts = ya_push(counts, yv_long(0));
             alias_of = ya_push(alias_of, ys(""));
             told = ya_push(told, yv_bool(0));
@@ -1252,95 +1246,6 @@ static long lint_report(LintSt st, LintTy t) {
 static int lint_rep(Yv *occs, long i) {
     LintOcc o = ya_get(occs, i);
     return yv_b(yr_get(o, "rep"));
-}
-
-/* ── maps: str -> long, open addressing ──────────────────────────────── */
-
-static LintMap lint_map_new(void) {
-    return lint_map_alloc(64);
-}
-
-static LintMap lint_map_alloc(long cap) {
-    Yv *keys = yav(0);
-    Yv *vals = yav(0);
-    long i = 0;
-    while (i < cap) {
-        keys = ya_push(keys, ys(""));
-        vals = ya_push(vals, yv_long(0));
-        i = i + 1;
-    }
-    return yr(3, "keys", keys, "vals", vals, "n", yv_long(0));
-}
-
-static long lint_hash(Yv *s) {
-    long h = 0;
-    long i = 0;
-    long n = yv_len(s);
-    while (i < n) {
-        h = (h * 31 + ys_byte_at(s, i)) % 1000000007;
-        i = i + 1;
-    }
-    return h;
-}
-
-/* The slot holding `key`, or the empty one it would go in ("" marks an
- * empty slot: no key is ""). */
-static long lint_map_slot(LintMap m, Yv *key) {
-    Yv *keys = yr_get(m, "keys");
-    long cap = yv_len(keys);
-    long i = lint_hash(key) % cap;
-    int go = 1;
-    while (go) {
-        Yv *e = ya_get(keys, i);
-        if (ys_eq_lit(e, "") || ys_eq(e, key)) {
-            go = 0;
-        } else {
-            i = i + 1;
-            if (i == cap) {
-                i = 0;
-            }
-        }
-    }
-    return i;
-}
-
-static long lint_map_get(LintMap m, Yv *key) {
-    long i = lint_map_slot(m, key);
-    Yv *keys = yr_get(m, "keys");
-    if (ys_eq_lit(ya_get(keys, i), "")) {
-        return -1;
-    } else {
-        Yv *vals = yr_get(m, "vals");
-        return yv_l(ya_get(vals, i));
-    }
-}
-
-/* Set `key` to `v`; the table stays at most half full. */
-static long lint_map_put(LintMap m, Yv *key, long v) {
-    if (2 * (yv_l(yr_get(m, "n")) + 1) > yv_len(yr_get(m, "keys"))) {
-        LintMap big = lint_map_alloc(2 * yv_len(yr_get(m, "keys")));
-        Yv *oks = yr_get(m, "keys");
-        Yv *ovs = yr_get(m, "vals");
-        long j = 0;
-        while (j < yv_len(oks)) {
-            if (!ys_eq_lit(ya_get(oks, j), "")) {
-                (void)lint_map_put(big, ya_get(oks, j),
-                                   yv_l(ya_get(ovs, j)));
-            }
-            j = j + 1;
-        }
-        (void)yr_set(m, "keys", yr_get(big, "keys"));
-        (void)yr_set(m, "vals", yr_get(big, "vals"));
-    }
-    long i = lint_map_slot(m, key);
-    Yv *keys = yr_get(m, "keys");
-    if (ys_eq_lit(ya_get(keys, i), "")) {
-        ya_set(keys, i, key);
-        (void)yr_set(m, "n", yv_long(yv_l(yr_get(m, "n")) + 1));
-    }
-    Yv *vals = yr_get(m, "vals");
-    ya_set(vals, i, yv_long(v));
-    return 0;
 }
 
 /* ── output ──────────────────────────────────────────────────────────── */

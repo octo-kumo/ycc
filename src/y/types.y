@@ -1056,40 +1056,61 @@ def tc_res(typ: Type, st: TcSt) -> TcRes {
     { typ: typ, st: st }
 };
 
+// The bindings by name (lookup): the index of each name's last binding in
+// the program's bindings list -- flat, append-only, one per check_program
+// run (which resets this), ~7k entries in the compiler. Made once the
+// list passes 256 entries (st_bind; a small unit scans faster than it
+// hashes): tc_ixn bindings are in it, all of them from then on.
+let tc_ix: NameIx = parser.nameix_new(8);
+let tc_ixn = 0;
+
 def lookup(bindings: [Binding], name: str) -> Lookup {
-    // Scanned from the END, and stopped at the first hit: `bindings` is the
-    // flat program-wide list (check_program), so a forward scan paid for
-    // all ~7k entries on every identifier reference even though 82% of the
-    // names resolve to a binding added moments ago. `bindings` is appended
-    // in definition order, so the newest match IS the one a forward scan
-    // would have ended on -- the two agree exactly, and rename.y already
-    // uses this idiom (rn_lookup).
+    // The newest binding of the name: the last few bindings first (a
+    // local is almost always among them), then the index: scanning back
+    // through the whole list cost every reference to a global thousands
+    // of compares. "" is not indexed: it is scanned for.
     let i = len(bindings) - 1;
-    // NOTE: NO shared `found` hole rebound across arms (see parser.y
-    // parse_type_node note): the env keeps ONE shape per name, so a hole
-    // rebound to e.typ then read as e.kind would resolve `kind` against the
-    // TYPE shape. found* snapshots are bound once in their own arms.
-    let found_typ: Type = { k: "tnone" };
-    let found_kind = "";
-    let found_fd = 0;
-    while (i >= 0) {
+    let stop = i - 8;
+    if (tc_ixn == 0) { stop = -1; };
+    let at = -1;
+    while (i >= 0 && i > stop) {
         let e = bindings[i];
-        if (e.name == name) {
-            found_typ = e.typ;
-            found_kind = e.kind;
-            found_fd = e.fdepth;
-            i = -1;
-            0
-        };
+        if (e.name == name) { at = i; i = -1; };
         i = i - 1;
-        0
     };
-    { typ: found_typ, kind: found_kind, fdepth: found_fd }
+    if (at < 0 && i >= 0) {
+        if (len(name) > 0) {
+            at = parser.nameix_get(tc_ix, name);
+        } else {
+            while (i >= 0) {
+                let e = bindings[i];
+                if (e.name == name) { at = i; i = -1; };
+                i = i - 1;
+            };
+        };
+    };
+    // NOTE: NO shared `found` hole rebound across arms (see parser.y
+    // parse_type_node note): the env keeps ONE shape per name.
+    if (at >= 0) {
+        let e = bindings[at];
+        { typ: e.typ, kind: e.kind, fdepth: e.fdepth }
+    } else {
+        let none: Type = { k: "tnone" };
+        { typ: none, kind: "", fdepth: 0 }
+    }
 };
 
 def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
     st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth };
     let bindings = st.bindings;
+    if (len(bindings) > 256) {
+        if (tc_ixn == 0) { tc_ix = parser.nameix_new(1024); };
+        while (tc_ixn < len(bindings)) {
+            let b = bindings[tc_ixn];
+            if (len(b.name) > 0) { parser.nameix_put(tc_ix, b.name, tc_ixn); };
+            tc_ixn = tc_ixn + 1;
+        };
+    };
     { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth }
 };
 
@@ -4176,6 +4197,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // the inferred-return table is made when first written (inf_reset)
     let nobkts: [[long]] = [];
     inf_bkts = nobkts;
+    tc_ixn = 0;
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
     let pstmts: [Node] = ast.stmts;

@@ -20,13 +20,13 @@
 // compiles this file (lint.c, PORTING.md).
 
 import types from "./types.y";
+import parser from "./parser.y";
 
 type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool };
 type LintSt = { warns: [Diag], vars: [LintVar], flags: [long] };
-type LintMap = { keys: [str], vals: [long], n: long };
 type LintRoot = { typ: Type, line: long, col: long, alias: str, mod: str };
 type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
-type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: LintMap, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
+type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: NameIx, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
 
 // Which lines are a module's (rename.y rename_program_x): line i + 1 is in
 // file lint_ofile[i], module lint_fmods of it ("" for none).
@@ -626,15 +626,15 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
     let abusy: [bool] = [];
     let occs: [LintOcc] = [];
     let amods: [str] = [];
-    let t = { roots: roots, atyps: atyps, amods: amods, amap: lint_map_new(), amemo: amemo, abusy: abusy, occs: occs, line: 0, col: 0, mod: "" };
+    let t = { roots: roots, atyps: atyps, amods: amods, amap: parser.nameix_new(64), amemo: amemo, abusy: abusy, occs: occs, line: 0, col: 0, mod: "" };
     lint_tw_list(t, stmts);
     // The aliases: a name declared again is the last declaration's.
     foreach (r in t.roots) {
         if (r.alias != "") {
-            if (lint_map_get(t.amap, r.alias) >= 0) {
+            if (parser.nameix_get(t.amap, r.alias) >= 0) {
                 lint_warn(st, "type '" + r.alias + "' is declared more than once; the last declaration counts", r.line, r.col);
             };
-            lint_map_put(t.amap, r.alias, len(t.atyps));
+            parser.nameix_put(t.amap, r.alias, len(t.atyps));
             t.atyps += r.typ;
             t.amods += r.mod;
             t.amemo += "";
@@ -654,7 +654,7 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
             if (len(t.occs) > first && lint_cand(r.typ)) {
                 let o = t.occs[first];
                 o.decl = true;
-                if (lint_map_get(t.amap, r.alias) == tdi) {
+                if (parser.nameix_get(t.amap, r.alias) == tdi) {
                     o.alias = r.alias;
                 };
             };
@@ -901,8 +901,8 @@ def lint_tk_list(t: LintTy, ts: [Type], rec: bool, parent: long) -> str {
 def lint_tk_name(t: LintTy, name: str) -> str {
     // in a module's code a bare name is the module's own alias first
     let ai = -1;
-    if (t.mod != "" && index_of(name, ".") < 0) { ai = lint_map_get(t.amap, t.mod + "." + name); };
-    if (ai < 0) { ai = lint_map_get(t.amap, name); };
+    if (t.mod != "" && index_of(name, ".") < 0) { ai = parser.nameix_get(t.amap, t.mod + "." + name); };
+    if (ai < 0) { ai = parser.nameix_get(t.amap, name); };
     if (ai < 0) {
         "@" + name
     } else if (t.abusy[ai]) {
@@ -982,7 +982,7 @@ def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> l
 def lint_union_alias(t: LintTy, m: Type) -> long {
     if (m.k == "tname") {
         let name: TName = m;
-        let ai = lint_map_get(t.amap, name.name);
+        let ai = parser.nameix_get(t.amap, name.name);
         if (ai < 0) {
             -1
         } else if (t.abusy[ai]) {
@@ -1045,16 +1045,16 @@ def lint_sort_uniq(xs: [str]) -> [str] {
 // goes outer before inner.
 def lint_report(st: LintSt, t: LintTy) -> long {
     let occs = t.occs;
-    let ids = lint_map_new();
+    let ids = parser.nameix_new(64);
     let counts: [long] = [];
     let alias_of: [str] = [];
     let told: [bool] = [];
     let occ_id: [long] = [];
     foreach (o in occs) {
-        let id = lint_map_get(ids, o.key);
+        let id = parser.nameix_get(ids, o.key);
         if (id < 0) {
             id = len(counts);
-            lint_map_put(ids, o.key, id);
+            parser.nameix_put(ids, o.key, id);
             counts += 0;
             alias_of += "";
             told += false;
@@ -1112,94 +1112,6 @@ def lint_report(st: LintSt, t: LintTy) -> long {
 def lint_rep(occs: [LintOcc], i: long) -> bool {
     let o = occs[i];
     o.rep
-};
-
-// ── maps: str -> long, open addressing ──────────────────────────────────
-
-def lint_map_new() -> LintMap {
-    lint_map_alloc(64)
-};
-
-def lint_map_alloc(cap: long) -> LintMap {
-    let keys: [str] = [];
-    let vals: [long] = [];
-    let i = 0;
-    while (i < cap) {
-        keys += "";
-        vals += 0;
-        i = i + 1;
-    };
-    { keys: keys, vals: vals, n: 0 }
-};
-
-def lint_hash(s: str) -> long {
-    let h = 0;
-    let i = 0;
-    let n = len(s);
-    while (i < n) {
-        h = (h * 31 + byte_at(s, i)) % 1000000007;
-        i = i + 1;
-    };
-    h
-};
-
-// The slot holding `key`, or the empty one it would go in ("" marks an
-// empty slot: no key is "").
-def lint_map_slot(m: LintMap, key: str) -> long {
-    let keys = m.keys;
-    let cap = len(keys);
-    let i = lint_hash(key) % cap;
-    let go = true;
-    while (go) {
-        let e = keys[i];
-        if (e == "" || e == key) {
-            go = false;
-        } else {
-            i = i + 1;
-            if (i == cap) {
-                i = 0;
-            };
-        };
-    };
-    i
-};
-
-def lint_map_get(m: LintMap, key: str) -> long {
-    let i = lint_map_slot(m, key);
-    let keys = m.keys;
-    if (keys[i] == "") {
-        -1
-    } else {
-        let vals = m.vals;
-        vals[i]
-    }
-};
-
-// Set `key` to `v`; the table stays at most half full.
-def lint_map_put(m: LintMap, key: str, v: long) -> long {
-    if (2 * (m.n + 1) > len(m.keys)) {
-        let big = lint_map_alloc(2 * len(m.keys));
-        let oks = m.keys;
-        let ovs = m.vals;
-        let j = 0;
-        while (j < len(oks)) {
-            if (oks[j] != "") {
-                lint_map_put(big, oks[j], ovs[j]);
-            };
-            j = j + 1;
-        };
-        m.keys = big.keys;
-        m.vals = big.vals;
-    };
-    let i = lint_map_slot(m, key);
-    let keys = m.keys;
-    if (keys[i] == "") {
-        keys[i] = key;
-        m.n = m.n + 1;
-    };
-    let vals = m.vals;
-    vals[i] = v;
-    0
 };
 
 // ── output ──────────────────────────────────────────────────────────────

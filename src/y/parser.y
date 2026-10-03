@@ -2096,4 +2096,76 @@ def parse_program(toks: [Tok]) -> Block {
     { k: "block", stmts: stmts, line: 1, col: 1 }
 };
 
-export { parse_program, parse_type_full };
+export { parse_program, parse_type_full, nameix_new, nameix_put, nameix_get };
+
+// ── a name index (types.y lookup, lint.y) ─────────────────────────────────
+// str -> long, the last put of a name wins: open addressing over a power
+// of two, doubled at half full ("" is no key: it marks a free slot).
+type NameIx = { keys: [str], vals: [long], n: long };
+
+def nameix_new(cap: long) -> NameIx {
+    let keys: [str] = [];
+    let vals: [long] = [];
+    let i = 0;
+    while (i < cap) {
+        keys += "";
+        vals += 0;
+        i = i + 1;
+    };
+    { keys: keys, vals: vals, n: 0 }
+};
+
+// The slot of k in keys: where it is, or the free one it would take.
+def nameix_slot(keys: [str], k: str) -> long {
+    let mask = len(keys) - 1;
+    let h = 0;
+    let i = 0;
+    while (i < len(k)) {
+        h = (h * 31 + byte_at(k, i)) & 1073741823;
+        i = i + 1;
+    };
+    let s = (h ^ (h >> 15)) & mask;
+    let go = true;
+    while (go) {
+        let e: str = keys[s];
+        if (e == "" || e == k) { go = false; } else { s = (s + 1) & mask; };
+    };
+    s
+};
+
+def nameix_put(m: NameIx, k: str, v: long) -> void {
+    if ((m.n + 1) * 2 > len(m.keys)) {
+        let ok = m.keys;
+        let ov = m.vals;
+        let big = nameix_new(len(ok) * 2);
+        let bk = big.keys;
+        let bv = big.vals;
+        let i = 0;
+        while (i < len(ok)) {
+            let e: str = ok[i];
+            if (e != "") {
+                let s = nameix_slot(bk, e);
+                bk[s] = e;
+                bv[s] = ov[i];
+            };
+            i = i + 1;
+        };
+        m.keys = bk;
+        m.vals = bv;
+    };
+    let keys = m.keys;
+    let vals = m.vals;
+    let s = nameix_slot(keys, k);
+    let e: str = keys[s];
+    if (e == "") { m.n = m.n + 1; };
+    keys[s] = k;
+    vals[s] = v;
+};
+
+// The value put last for k, or -1.
+def nameix_get(m: NameIx, k: str) -> long {
+    let keys = m.keys;
+    let s = nameix_slot(keys, k);
+    let e: str = keys[s];
+    if (e == "") { -1 } else { let vals = m.vals; vals[s] }
+};

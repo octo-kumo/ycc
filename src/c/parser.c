@@ -2406,4 +2406,86 @@ Yv *parse_program(Yv *toks) {
     return yr(4, "k", ys("block"), "stmts", stmts, "line", yv_long(1), "col", yv_long(1));
 }
 
-// export { parse_program, parse_type_full };  (exported via parser.h)
+// export { parse_program, parse_type_full, nameix_new, nameix_put,
+//          nameix_get };  (exported via parser.h)
+
+// ── a name index (types.y lookup, lint.y) ─────────────────────────────────
+// str -> long, the last put of a name wins: open addressing over a power
+// of two, doubled at half full ("" is no key: it marks a free slot).
+// NameIx = { keys: [str], vals: [long], n: long }.
+Yv *nameix_new(long cap) {
+    Yv *keys = yav(0);
+    Yv *vals = yav(0);
+    long i = 0;
+    while (i < cap) {
+        keys = ya_push(keys, ys(""));
+        vals = ya_push(vals, yv_long(0));
+        i = i + 1;
+    }
+    return yr(3, "keys", keys, "vals", vals, "n", yv_long(0));
+}
+
+// The slot of k in keys: where it is, or the free one it would take.
+static long nameix_slot(Yv *keys, Yv *k) {
+    long mask = yv_len(keys) - 1;
+    long h = 0;
+    long i = 0;
+    while (i < yv_len(k)) {
+        h = (h * 31 + ys_byte_at(k, i)) & 1073741823;
+        i = i + 1;
+    }
+    long s = (h ^ (h >> 15)) & mask;
+    int go = 1;
+    while (go) {
+        Yv *e = ya_get(keys, s);
+        if (ys_eq_lit(e, "") || ys_eq(e, k)) {
+            go = 0;
+        } else {
+            s = (s + 1) & mask;
+        }
+    }
+    return s;
+}
+
+void nameix_put(Yv *m, Yv *k, long v) {
+    if ((yv_l(yr_get(m, "n")) + 1) * 2 > yv_len(yr_get(m, "keys"))) {
+        Yv *ok = yr_get(m, "keys");
+        Yv *ov = yr_get(m, "vals");
+        Yv *big = nameix_new(yv_len(ok) * 2);
+        Yv *bk = yr_get(big, "keys");
+        Yv *bv = yr_get(big, "vals");
+        long i = 0;
+        while (i < yv_len(ok)) {
+            Yv *e = ya_get(ok, i);
+            if (!ys_eq_lit(e, "")) {
+                long s = nameix_slot(bk, e);
+                ya_set(bk, s, e);
+                ya_set(bv, s, ya_get(ov, i));
+            }
+            i = i + 1;
+        }
+        yr_set(m, "keys", bk);
+        yr_set(m, "vals", bv);
+    }
+    Yv *keys = yr_get(m, "keys");
+    Yv *vals = yr_get(m, "vals");
+    long s = nameix_slot(keys, k);
+    Yv *e = ya_get(keys, s);
+    if (ys_eq_lit(e, "")) {
+        yr_set(m, "n", yv_long(yv_l(yr_get(m, "n")) + 1));
+    }
+    ya_set(keys, s, k);
+    ya_set(vals, s, yv_long(v));
+}
+
+// The value put last for k, or -1.
+long nameix_get(Yv *m, Yv *k) {
+    Yv *keys = yr_get(m, "keys");
+    long s = nameix_slot(keys, k);
+    Yv *e = ya_get(keys, s);
+    if (ys_eq_lit(e, "")) {
+        return -1;
+    } else {
+        return yv_l(ya_get(yr_get(m, "vals"), s));
+    }
+}

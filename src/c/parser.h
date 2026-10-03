@@ -132,4 +132,9 @@ Yv *parse_pattern(Yv *toks, long p, Yv *tmp);
 Yv *parse_type_pattern(Yv *toks, long p, Yv *tmp);
 Yv *parse_value_pattern(Yv *toks, Yv *node, long pos, Yv *tmp, long ln, long cl);
 
+/* a name index (types.c lookup): NameIx = { keys, vals, n } */
+Yv *nameix_new(long cap);
+void nameix_put(Yv *m, Yv *k, long v);
+long nameix_get(Yv *m, Yv *k);
+
 #endif /* PARSER_H */
