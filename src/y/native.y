@@ -2099,18 +2099,19 @@ def infer_block(st: EmitSt, node: Block) -> Type {
     if (len(stmts) == 0) {
         normtype({ k: K.tvoid })
     } else {
-        // A parser temporary -- a match's `$m`, a `?.`'s `$p` -- is read
-        // inside the very expression that binds it, and infer runs before
-        // gen binds it, so bind it here or the whole expression infers as
-        // unknown (print would then read the option as a raw number). Only
-        // these: every other binding is in scope after its own statement,
-        // which gen has run by the time anything asks for its type.
+        // A binding made inside a block is read inside the very expression
+        // that makes it -- `{ let a = "x"; a }`, a match arm's pattern
+        // bindings -- and infer runs before gen binds it, so bind the
+        // block's own `let`s here or the block's value infers as unknown
+        // (print then reads a str option as a raw number, and a match arm's
+        // `v.f` as one). Only these: every other name is in scope after its
+        // own statement, which gen has run by the time anything asks.
         let i = 0;
         while (i < len(stmts)) {
             let s = stmts[i];
             if (s.k == K.decl) {
                 let d: Decl = s;
-                if (d.kind == "let" && d.name[0:1] == "$" && env_find(st, d.name).kind == "none") {
+                if (d.kind == "let" && env_find(st, d.name).kind == "none") {
                     st.env += { name: d.name, kind: "temp", off: 0, label: "", typ: infer(st, d.v) };
                 };
             };

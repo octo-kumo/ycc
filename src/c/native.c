@@ -2990,12 +2990,13 @@ Yv *infer_block(Yv *st, Yv *node) {
     if (yv_len(stmts) == 0) {
         return yr(1, "k", yv_long(K_tvoid));
     } else {
-        /* A parser temporary -- a match's `$m`, a `?.`'s `$p` -- is read
-           inside the very expression that binds it, and infer runs before
-           gen binds it, so bind it here or the whole expression infers as
-           unknown (print would then read the option as a raw number). Only
-           these: every other binding is in scope after its own statement,
-           which gen has run by the time anything asks for its type. */
+        /* A binding made inside a block is read inside the very expression
+           that makes it -- `{ let a = "x"; a }`, a match arm's pattern
+           bindings -- and infer runs before gen binds it, so bind the
+           block's own `let`s here or the block's value infers as unknown
+           (print then reads a str option as a raw number, and a match arm's
+           `v.f` as one). Only these: every other name is in scope after its
+           own statement, which gen has run by the time anything asks. */
         long i = 0;
         while (i < yv_len(stmts)) {
             Yv *sn = ya_get(stmts, i);
@@ -3003,7 +3004,6 @@ Yv *infer_block(Yv *st, Yv *node) {
                 Yv *dname = yr_get(sn, "name");
                 Yv *ge = env_find(st, dname);
                 if (ys_eq_lit(yr_get(sn, "kind"), "let") &&
-                    ys_eq_lit(ys_slice(dname, 0, 1), "$") &&
                     ys_eq_lit(yr_get(ge, "kind"), "none")) {
                     st = env_define(st, dname, ys("temp"), 0, ys(""),
                                     infer(st, yr_get(sn, "v")));
