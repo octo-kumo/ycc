@@ -468,3 +468,20 @@ it, in std, not in the compiler.
 - Failure is `[]` -- no address -- for every cause (NXDOMAIN, timeout, a
   malformed packet), never a trap: the answer is untrusted input.
   `connect_tcp` turns it into -2 (ENOENT).
+
+### 29. A module's type aliases
+
+Found while writing std/crypto.y: a module imported by name kept its
+defs and lets to itself, but its `type` aliases joined the program's
+one table, and the last declaration of a name won -- a program's own
+`type Pt` after `import crypto;` retyped crypto's points and broke its
+code. And a program could not name a module's type at all (`crypto.Hash`
+was a syntax error).
+
+- a. Leave them unscoped and give std's aliases unlikely names. Fragile:
+  every module's names are every program's problem.
+- b. **Scope them as defs are**: a module's alias is `m.T`; inside the
+  module a bare name is its own alias first; the program writes `m.T`
+  (the parser reads a dotted name in a type and a type pattern). Chosen:
+  the same rule as the module's functions, and the http client's
+  response type needs a name its users can write.

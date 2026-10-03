@@ -8533,7 +8533,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
         // The warnings (lint.y): the program's unit's and a package's,
         // never a std unit's.
         if (len(name) == 0 || pkg_base(base)) {
-            warnings = lint.lint_unit(ast, ast3);
+            warnings = lint.lint_unit(ast, ast3, origin.file, origin.mods);
             pr = phase_end(times, "lint", pt, ph);
             times = pr.times; pt = pr.t; ph = pr.h;
         };

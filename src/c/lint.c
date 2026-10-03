@@ -81,6 +81,7 @@ static long lint_tw_one(LintTy t, Yv *node);
 static long lint_tw_decl(LintTy t, Yv *node);
 static long lint_tw_func(LintTy t, Yv *node);
 static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias);
+static Yv *lint_mod_of(long ln);
 static int lint_cand(Yv *ty);
 static Yv *lint_tk(LintTy t, Yv *ty, int rec, long parent);
 static Yv *lint_tk_list(LintTy t, Yv *ts, int rec, long parent);
@@ -121,9 +122,17 @@ static Yv *lint_cat(size_t n, ...) {
     return out;
 }
 
+/* Which lines are a module's (rename.c rename_program_x): line i + 1 is
+ * in file lint_ofile[i], module lint_fmods of it ("" for none). */
+static Yv *lint_ofile;
+static Yv *lint_fmods;
+
 /* The warnings for one unit: `ast` as parsed, `ast3` renamed (and
- * checked), sorted by position. */
-Yv *lint_unit(Yv *ast, Yv *ast3) {
+ * checked), sorted by position; ofile and fmods say which lines are a
+ * module's. */
+Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods) {
+    lint_ofile = ofile;
+    lint_fmods = fmods;
     Yv *warns = yav(0);
     Yv *vars = yav(0);
     Yv *flags = yav(0);
@@ -726,9 +735,11 @@ static long lint_types(LintSt st, Yv *stmts) {
     Yv *amemo = yav(0);
     Yv *abusy = yav(0);
     Yv *occs = yav(0);
-    LintTy t = yr(8, "roots", roots, "atyps", atyps, "amap", lint_map_new(),
-                  "amemo", amemo, "abusy", abusy, "occs", occs, "line",
-                  yv_long(0), "col", yv_long(0));
+    Yv *amods = yav(0);
+    LintTy t = yr(10, "roots", roots, "atyps", atyps, "amods", amods,
+                  "amap", lint_map_new(), "amemo", amemo, "abusy", abusy,
+                  "occs", occs, "line", yv_long(0), "col", yv_long(0),
+                  "mod", ys(""));
     (void)lint_tw_list(t, stmts);
     /* The aliases: a name declared again is the last declaration's. */
     Yv *rs = yr_get(t, "roots");
@@ -748,6 +759,7 @@ static long lint_types(LintSt st, Yv *stmts) {
             (void)lint_map_put(yr_get(t, "amap"), alias,
                                yv_len(yr_get(t, "atyps")));
             (void)ya_push(yr_get(t, "atyps"), yr_get(r, "typ"));
+            (void)ya_push(yr_get(t, "amods"), yr_get(r, "mod"));
             (void)ya_push(yr_get(t, "amemo"), ys(""));
             (void)ya_push(yr_get(t, "abusy"), yv_bool(0));
         }
@@ -761,6 +773,7 @@ static long lint_types(LintSt st, Yv *stmts) {
         LintRoot r = ya_get(rs, i);
         (void)yr_set(t, "line", yv_long(yv_l(yr_get(r, "line"))));
         (void)yr_set(t, "col", yv_long(yv_l(yr_get(r, "col"))));
+        (void)yr_set(t, "mod", yr_get(r, "mod"));
         long first = yv_len(yr_get(t, "occs"));
         (void)lint_tk(t, yr_get(r, "typ"), 1, -1);
         Yv *alias = yr_get(r, "alias");
@@ -899,11 +912,31 @@ static long lint_tw_func(LintTy t, Yv *node) {
 
 static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias) {
     if (!ys_eq_lit(yr_get(typ, "k"), "tnone")) {
+        /* a module's alias is its own: `m.T` (rename.c rn_prepass_one) */
+        Yv *m = lint_mod_of(line);
+        Yv *name = alias;
+        if (!ys_eq_lit(m, "") && !ys_eq_lit(alias, "")) {
+            name = ys_cat(ys_cat(m, ys(".")), alias);
+        }
         (void)ya_push(yr_get(t, "roots"),
-                      yr(4, "typ", typ, "line", yv_long(line), "col",
-                         yv_long(col), "alias", alias));
+                      yr(5, "typ", typ, "line", yv_long(line), "col",
+                         yv_long(col), "alias", name, "mod", m));
     }
     return 0;
+}
+
+/* The module line ln is in ("" for none). */
+static Yv *lint_mod_of(long ln) {
+    if (lint_ofile != NULL && ln >= 1 && ln <= yv_len(lint_ofile)) {
+        long f = yv_l(ya_get(lint_ofile, ln - 1));
+        if (f < yv_len(lint_fmods)) {
+            return ya_get(lint_fmods, f);
+        } else {
+            return ys("");
+        }
+    } else {
+        return ys("");
+    }
 }
 
 /* An occurrence: a record of two or more fields, or a union. */
@@ -968,7 +1001,15 @@ static Yv *lint_tk_list(LintTy t, Yv *ts, int rec, long parent) {
  * declaration's); one met again inside itself stays `@Name`, as does a
  * name no alias declares. */
 static Yv *lint_tk_name(LintTy t, Yv *name) {
-    long ai = lint_map_get(yr_get(t, "amap"), name);
+    /* in a module's code a bare name is the module's own alias first */
+    long ai = -1;
+    Yv *tm = yr_get(t, "mod");
+    if (!ys_eq_lit(tm, "") && ys_index_of(name, ys(".")) < 0) {
+        ai = lint_map_get(yr_get(t, "amap"), ys_cat(ys_cat(tm, ys(".")), name));
+    }
+    if (ai < 0) {
+        ai = lint_map_get(yr_get(t, "amap"), name);
+    }
     if (ai < 0) {
         return ys_cat(ys("@"), name);
     } else if (yv_b(ya_get(yr_get(t, "abusy"), ai))) {
@@ -977,7 +1018,11 @@ static Yv *lint_tk_name(LintTy t, Yv *name) {
         return ya_get(yr_get(t, "amemo"), ai);
     } else {
         ya_set(yr_get(t, "abusy"), ai, yv_bool(1));
+        /* an alias's type reads in its own module */
+        Yv *mod0 = yr_get(t, "mod");
+        (void)yr_set(t, "mod", ya_get(yr_get(t, "amods"), ai));
         Yv *key = lint_tk(t, ya_get(yr_get(t, "atyps"), ai), 0, -1);
+        (void)yr_set(t, "mod", mod0);
         ya_set(yr_get(t, "abusy"), ai, yv_bool(0));
         ya_set(yr_get(t, "amemo"), ai, key);
         return key;

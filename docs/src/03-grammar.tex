@@ -33,8 +33,10 @@ cannot collide with the program's names: a program may define its own
 \ic{exists}, or \ic{let cwd = fs.cwd();}. Inside the module its own
 names are bare, and they come before the program's. A binding named
 like the module hides it where it is in scope: after
-\ic{let fs = \{st: 1\};}, \ic{fs.st} is that record's field. (The type
-aliases a module declares are not scoped: they join the program's.)
+\ic{let fs = \{st: 1\};}, \ic{fs.st} is that record's field. Its type
+aliases are its own the same way: the program names them \ic{m.T}
+(\ic{let p: geo.Pt = geo.origin();}, a pattern \ic{geo.Pt p => ...}) and
+may declare a \ic{Pt} of its own, which the module's code never sees.
 
 The files imported by path share one namespace with the program:
 \ic{util.f} is rewritten to plain \ic{f}, and the alias only says which

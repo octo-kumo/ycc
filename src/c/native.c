@@ -10107,7 +10107,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         /* The warnings (lint.c): the program's unit's and a package's,
          * never a std unit's. */
         if (yv_len(name) == 0 || pkg_base(base)) {
-            warnings = lint_unit(ast, ast3);
+            warnings = lint_unit(ast, ast3, yr_get(origin, "file"), yr_get(origin, "mods"));
             pr = phase_end(times, ys("lint"), pt, ph);
             times = yr_get(pr, "times");
             pt = yv_l(yr_get(pr, "t"));

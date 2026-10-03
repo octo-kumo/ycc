@@ -5,6 +5,6 @@
 #include "yv.h"
 
 /* [{ msg, line, col }]: the warnings for one unit, sorted by position. */
-Yv *lint_unit(Yv *ast, Yv *ast3);
+Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods);
 
 #endif /* LINT_H */

@@ -43,6 +43,8 @@ type RnStmts = { st: RnSt, stmts: [Node] };
 let rn_ofile: [long] = [];
 let rn_fmods: [str] = [];
 let rn_mods: [str] = [];
+// The aliases modules declare at their top level, as `m.T` (rn_top).
+let rn_mod_types: [str] = [];
 let rn_mod = "";
 
 def rn_fresh(st: RnSt, orig: str) -> { st: RnSt, name: str } {
@@ -162,9 +164,17 @@ def rn_prepass_one(s: Node, st: RnSt) -> RnSt {
         let decl: Decl = s;
         rn_prepass_decl(decl, st)
     } else if (s.k == "typedef") {
-        // aliases hoist like defs: every annotation in the block sees them
+        // aliases hoist like defs: every annotation in the block sees them.
+        // A module's are its own: `m.T`, the names of its aliases in T
+        // qualified the same way (rn_qual_type).
         let td: TypeDef = s;
-        st.tys += { name: td.name, opt: false, typ: td.typ };
+        let m = "";
+        if (len(rn_mods) > 0) { m = rn_stmt_mod(s); };
+        if (m == "") {
+            st.tys += { name: td.name, opt: false, typ: td.typ };
+        } else {
+            st.tys += { name: m + "." + td.name, opt: false, typ: rn_qual_type(td.typ, m) };
+        };
         st
     } else {
         st
@@ -299,6 +309,40 @@ let rn_tref_nodes: [TRef] = [];
 let rn_reach_memo: [long] = [];
 let rn_reach_n = -1;
 
+// t with each name of an alias module m declares at its top level
+// written `m.T` (a module's alias is registered under that name).
+def rn_qual_type(t: Type, m: str) -> Type {
+    let k: str = t.k;
+    if (k == "tname") {
+        let name: TName = t;
+        let q = m + "." + name.name;
+        if (rn_in(rn_mod_types, q)) { let out: TName = { k: "tname", name: q }; let result: Type = out; result } else { t }
+    }
+    else if (k == "tptr") { let ptr: TPtr = t; let out: TPtr = { k: "tptr", to: rn_qual_type(ptr.to, m) }; let result: Type = out; result }
+    else if (k == "tarr") { let arr: TOf = t; let out: TOf = { k: "tarr", of: rn_qual_type(arr.of, m) }; let result: Type = out; result }
+    else if (k == "tarrfix") { let arr: TFix = t; let out: TFix = { k: "tarrfix", of: rn_qual_type(arr.of, m), n: arr.n }; let result: Type = out; result }
+    else if (k == "topt") { let opt: TOf = t; let out: TOf = { k: "topt", of: rn_qual_type(opt.of, m) }; let result: Type = out; result }
+    else if (k == "tmap") { let map: TMap = t; let out: TMap = { k: "tmap", key: rn_qual_type(map.key, m), of: rn_qual_type(map.of, m) }; let result: Type = out; result }
+    else if (k == "trec") {
+        let rec: TRec = t;
+        let fs: [Field] = [];
+        foreach (f in rec.fields) { fs += { name: f.name, opt: f.opt, typ: rn_qual_type(f.typ, m) }; };
+        let out: TRec = { k: "trec", fields: fs };
+        let result: Type = out;
+        result
+    }
+    else if (k == "tfunc") { let func: TFunc = t; let out: TFunc = { k: "tfunc", args: rn_qual_list(func.args, m), ret: rn_qual_type(func.ret, m) }; let result: Type = out; result }
+    else if (k == "tparams") { let list: TList = t; let out: TList = { k: "tparams", ts: rn_qual_list(list.ts, m) }; let result: Type = out; result }
+    else if (k == "tunion") { let list: TList = t; let out: TList = { k: "tunion", ts: rn_qual_list(list.ts, m) }; let result: Type = out; result }
+    else { t }
+};
+
+def rn_qual_list(ts: [Type], m: str) -> [Type] {
+    let out: [Type] = [];
+    foreach (t in ts) { out += rn_qual_type(t, m); };
+    out
+};
+
 def rn_type(st: RnSt, t: Type) -> Type {
     if (len(st.tys) == 0) { t } else { rn_type_go(st, t, 0) }
 };
@@ -363,8 +407,17 @@ def rn_reaches_any(st: RnSt, id: long) -> bool {
 };
 
 // The index in st.tys of the alias `name` stands for (the last declared:
-// -1 for none).
+// -1 for none). In a module's code (rn_mod) a bare name is the module's
+// own alias first.
 def rn_alias_index(st: RnSt, name: str) -> long {
+    if (rn_mod != "" && index_of(name, ".") < 0) {
+        let own = rn_alias_index_go(st, rn_mod + "." + name);
+        if (own >= 0) { return own; };
+    };
+    rn_alias_index_go(st, name)
+};
+
+def rn_alias_index_go(st: RnSt, name: str) -> long {
     let tys = st.tys;
     let i = len(tys) - 1;
     let found = -1;
@@ -521,7 +574,10 @@ def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
         if (sk == "typedef") {
             // Dropped -- unless its type names something undefined.
             let td: TypeDef = s;
+            let mod0 = rn_mod;
+            if (len(rn_mods) > 0) { rn_mod = rn_stmt_mod(s); };
             let te = rn_typedef_err(td, st);
+            rn_mod = mod0;
             if (te.k == "err") { out += te; 0; } else { 0; };
             0
         } else { out += s; 0 };
@@ -559,7 +615,7 @@ def rn_unknown_err(name: str, line: long, col: long) -> Node {
 // The first unknown name in annotation t ("" when every name resolves).
 def rn_unknown_type(st: RnSt, t: Type) -> str {
     let k: str = t.k;
-    if (k == "tname") { let name: TName = t; rn_alias_known(st.tys, name.name) }
+    if (k == "tname") { let name: TName = t; rn_alias_known(st, name.name) }
     else if (k == "tptr") { let ptr: TPtr = t; rn_unknown_type(st, ptr.to) }
     else if (k == "tarr") { let arr: TOf = t; rn_unknown_type(st, arr.of) }
     else if (k == "tarrfix") { let arr: TFix = t; rn_unknown_type(st, arr.of) }
@@ -573,12 +629,8 @@ def rn_unknown_type(st: RnSt, t: Type) -> str {
 };
 
 // "" when `name` is an alias in scope, else the name itself.
-def rn_alias_known(tys: [Field], name: str) -> str {
-    let found = false;
-    foreach (e in tys) {
-        if (e.name == name) { found = true; 0; } else { 0; };
-    };
-    if (found) { "" } else { name }
+def rn_alias_known(st: RnSt, name: str) -> str {
+    if (rn_alias_index(st, name) >= 0) { "" } else { name }
 };
 
 def rn_unknown_then(first: str, st: RnSt, t: Type) -> str {
@@ -1319,6 +1371,8 @@ def rename_program_x(ast: Block, dfl: [Dfl], ofile: [long], fmods: [str]) -> Blo
     };
     rn_mods = mods;
     rn_mod = "";
+    let nomt: [str] = [];
+    rn_mod_types = nomt;
     rename_program_go(ast.stmts, ast.line, ast.col, dfl)
 };
 
@@ -1363,6 +1417,18 @@ def rn_top(stmts: [Node], st: RnSt) -> RnStmts {
         0
     } else { q = stmts; 0; };
     q = rn_shadow_dups(q);
+    // the aliases each module declares at its top level, as `m.T`
+    let mt: [str] = [];
+    if (len(rn_mods) > 0) {
+        foreach (s in q) {
+            if (s.k == "typedef") {
+                let m = rn_stmt_mod(s);
+                let td: TypeDef = s;
+                if (m != "") { mt += m + "." + td.name; };
+            };
+        };
+    };
+    rn_mod_types = mt;
     st = rn_push(st);
     st = rn_prepass(q, st);
     let kept = rn_drop_typedefs(q, st);

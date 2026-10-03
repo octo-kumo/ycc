@@ -1007,6 +1007,10 @@ def parse_type_atom2(toks: [Tok], p: long) -> PType {
     else if (nm == "str") { parse_type_tail(toks, p + 1, { k: "tstr" }) }
     else if (nm == "float") { parse_type_tail(toks, p + 1, { k: "tfloat" }) }
     else if (nm == "void") { parse_type_tail(toks, p + 1, { k: "tvoid" }) }
+    else if (is_op(toks, p + 1, ".") && tt(toks, p + 2) == "id") {
+        // `m.T`: alias T of the module imported as m
+        parse_type_tail(toks, p + 3, { k: "tname", name: nm + "." + tv(toks, p + 2) })
+    }
     else { parse_type_tail(toks, p + 1, { k: "tname", name: nm }) }
 };
 
@@ -1935,14 +1939,20 @@ def parse_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     }
 };
 
-// T / T x / T {f, g: y}: T names a record type (an alias).
+// T / T x / T {f, g: y}: T names a record type (an alias; `m.T` one of
+// module m's).
 def parse_type_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
-    let ty = { k: "tname", name: tv(toks, p) };
+    let tname = tv(toks, p);
+    let pos = p + 1;
+    if (is_op(toks, pos, ".") && tt(toks, pos + 1) == "id") {
+        tname = tname + "." + tv(toks, pos + 1);
+        pos = pos + 2;
+    };
+    let ty = { k: "tname", name: tname };
     let subj = { k: "id", v: tmp, line: ln, col: cl };
     let binds: [Node] = [];
-    let pos = p + 1;
     if (is_punct(toks, pos, "{")) {
         pos = pos + 1;
         let go = !is_punct(toks, pos, "}");

@@ -41,6 +41,8 @@ static Yv *rn_ofile;
 static Yv *rn_fmods;
 static Yv *rn_mods;
 static Yv *rn_mod;
+/* The aliases modules declare at their top level, as `m.T` (rn_top). */
+static Yv *rn_mod_types;
 
 /* state (rename.y's RnSt) = { scopes: [[{ orig: str, uniq: str }]],
  *           n: long, tys: [{ name, typ }], dfl: [{ name, vals }] } */
@@ -170,8 +172,20 @@ Yv *rn_prepass_one(Yv *s, Yv *st) {
     if (ys_eq_lit(yr_get(s, "k"), "decl")) {
         return rn_prepass_decl(s, st);
     } else if (ys_eq_lit(yr_get(s, "k"), "typedef")) {
-        /* aliases hoist like defs: every annotation in the block sees them */
-        ya_push(yr_get(st, "tys"), yr(3, "name", yr_get(s, "name"), "opt", yv_bool(0), "typ", yr_get(s, "typ")));
+        /* aliases hoist like defs: every annotation in the block sees them.
+         * A module's are its own: `m.T`, the names of its aliases in T
+         * qualified the same way (rn_qual_type). */
+        Yv *m = ys("");
+        if (yv_len(rn_mods) > 0) {
+            m = rn_stmt_mod(s);
+        }
+        if (ys_eq_lit(m, "")) {
+            ya_push(yr_get(st, "tys"), yr(3, "name", yr_get(s, "name"), "opt", yv_bool(0), "typ", yr_get(s, "typ")));
+        } else {
+            ya_push(yr_get(st, "tys"),
+                    yr(3, "name", ys_cat(ys_cat(m, ys(".")), yr_get(s, "name")), "opt", yv_bool(0),
+                       "typ", rn_qual_type(yr_get(s, "typ"), m)));
+        }
         return st;
     } else {
         return st;
@@ -312,6 +326,57 @@ static Yv *rn_tref_nodes;
 static Yv *rn_reach_memo;
 static long rn_reach_n = -1;
 
+/* t with each name of an alias module m declares at its top level
+ * written `m.T` (a module's alias is registered under that name). */
+Yv *rn_qual_type(Yv *t, Yv *m) {
+    Yv *k = yr_get(t, "k");
+    if (ys_eq_lit(k, "tname")) {
+        Yv *q = ys_cat(ys_cat(m, ys(".")), yr_get(t, "name"));
+        if (rn_in(rn_mod_types, q)) {
+            return yr(2, "k", ys("tname"), "name", q);
+        } else {
+            return t;
+        }
+    } else if (ys_eq_lit(k, "tptr")) {
+        return yr(2, "k", ys("tptr"), "to", rn_qual_type(yr_get(t, "to"), m));
+    } else if (ys_eq_lit(k, "tarr")) {
+        return yr(2, "k", ys("tarr"), "of", rn_qual_type(yr_get(t, "of"), m));
+    } else if (ys_eq_lit(k, "tarrfix")) {
+        return yr(3, "k", ys("tarrfix"), "of", rn_qual_type(yr_get(t, "of"), m), "n", yr_get(t, "n"));
+    } else if (ys_eq_lit(k, "topt")) {
+        return yr(2, "k", ys("topt"), "of", rn_qual_type(yr_get(t, "of"), m));
+    } else if (ys_eq_lit(k, "tmap")) {
+        return yr(3, "k", ys("tmap"), "key", rn_qual_type(yr_get(t, "key"), m),
+                  "of", rn_qual_type(yr_get(t, "of"), m));
+    } else if (ys_eq_lit(k, "trec")) {
+        Yv *fs = yr_get(t, "fields");
+        Yv *out = yav(0);
+        for (long i = 0; i < yv_len(fs); i++) {
+            Yv *f = ya_get(fs, i);
+            out = ya_push(out, yr(3, "name", yr_get(f, "name"), "opt", yr_get(f, "opt"),
+                                  "typ", rn_qual_type(yr_get(f, "typ"), m)));
+        }
+        return yr(2, "k", ys("trec"), "fields", out);
+    } else if (ys_eq_lit(k, "tfunc")) {
+        return yr(3, "k", ys("tfunc"), "args", rn_qual_list(yr_get(t, "args"), m),
+                  "ret", rn_qual_type(yr_get(t, "ret"), m));
+    } else if (ys_eq_lit(k, "tparams")) {
+        return yr(2, "k", ys("tparams"), "ts", rn_qual_list(yr_get(t, "ts"), m));
+    } else if (ys_eq_lit(k, "tunion")) {
+        return yr(2, "k", ys("tunion"), "ts", rn_qual_list(yr_get(t, "ts"), m));
+    } else {
+        return t;
+    }
+}
+
+Yv *rn_qual_list(Yv *ts, Yv *m) {
+    Yv *out = yav(0);
+    for (long i = 0; i < yv_len(ts); i++) {
+        out = ya_push(out, rn_qual_type(ya_get(ts, i), m));
+    }
+    return out;
+}
+
 Yv *rn_type(Yv *st, Yv *t) {
     if (yv_len(yr_get(st, "tys")) == 0) {
         return t;
@@ -401,6 +466,16 @@ int rn_reaches_any(Yv *st, long id) {
 /* The index in st.tys of the alias `name` stands for (the last declared:
  * -1 for none). */
 long rn_alias_index(Yv *st, Yv *name) {
+    if (rn_mod != NULL && !ys_eq_lit(rn_mod, "") && ys_index_of(name, ys(".")) < 0) {
+        long own = rn_alias_index_go(st, ys_cat(ys_cat(rn_mod, ys(".")), name));
+        if (own >= 0) {
+            return own;
+        }
+    }
+    return rn_alias_index_go(st, name);
+}
+
+long rn_alias_index_go(Yv *st, Yv *name) {
     Yv *tys = yr_get(st, "tys");
     long i = yv_len(tys) - 1;
     long found = -1;
@@ -585,7 +660,7 @@ Yv *rn_unknown_err(Yv *name, long line, long col) {
 Yv *rn_unknown_type(Yv *st, Yv *t) {
     Yv *k = yr_get(t, "k");
     if (ys_eq_lit(k, "tname")) {
-        return rn_alias_known(yr_get(st, "tys"), yr_get(t, "name"));
+        return rn_alias_known(st, yr_get(t, "name"));
     } else if (ys_eq_lit(k, "tptr")) {
         return rn_unknown_type(st, yr_get(t, "to"));
     } else if (ys_eq_lit(k, "tarr")) {
@@ -611,20 +686,8 @@ Yv *rn_unknown_type(Yv *st, Yv *t) {
     }
 }
 
-Yv *rn_alias_known(Yv *tys, Yv *name) {
-    int found = 0;
-    long i = 0;
-    while (i < yv_len(tys)) {
-        Yv *e = ya_get(tys, i);
-        if (ys_eq(yr_get(e, "name"), name)) {
-            found = 1;
-            ;
-        } else {
-            ;
-        }
-        i = i + 1;
-    }
-    if (found) {
+Yv *rn_alias_known(Yv *st, Yv *name) {
+    if (rn_alias_index(st, name) >= 0) {
         return ys("");
     } else {
         return name;
@@ -676,7 +739,12 @@ Yv *rn_drop_typedefs(Yv *stmts, Yv *st) {
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         if (ys_eq_lit(yr_get(s, "k"), "typedef")) {
+            Yv *mod0 = rn_mod;
+            if (yv_len(rn_mods) > 0) {
+                rn_mod = rn_stmt_mod(s);
+            }
             Yv *te = rn_typedef_err(s, st);
+            rn_mod = mod0;
             if (ys_eq_lit(yr_get(te, "k"), "err")) {
                 out = ya_push(out, te);
                 ;
@@ -1568,6 +1636,7 @@ Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods) {
     }
     rn_mods = mods;
     rn_mod = ys("");
+    rn_mod_types = yav(0);
     return rename_program_go(yr_get(ast, "stmts"), yv_l(yr_get(ast, "line")),
                              yv_l(yr_get(ast, "col")), dfl);
 }
@@ -1622,6 +1691,20 @@ Yv *rn_top(Yv *stmts, Yv *st) {
         q = stmts;
     }
     q = rn_shadow_dups(q);
+    /* the aliases each module declares at its top level, as `m.T` */
+    Yv *mt = yav(0);
+    if (yv_len(rn_mods) > 0) {
+        for (long j = 0; j < yv_len(q); j++) {
+            Yv *s = ya_get(q, j);
+            if (ys_eq_lit(yr_get(s, "k"), "typedef")) {
+                Yv *m = rn_stmt_mod(s);
+                if (!ys_eq_lit(m, "")) {
+                    mt = ya_push(mt, ys_cat(ys_cat(m, ys(".")), yr_get(s, "name")));
+                }
+            }
+        }
+    }
+    rn_mod_types = mt;
     st = rn_push(st);
     st = rn_prepass(q, st);
     Yv *kept = rn_drop_typedefs(q, st);

@@ -744,7 +744,13 @@ when `fs` is a module and no binding named `fs` is in scope, it is the
 name `fs.x`; a local `fs` keeps its field. find_dup qualifies the same
 way, so only files imported by path, which share the program's
 namespace (strip_ns rewrites `util.f` to `f`), can collide. A module's
-type aliases are not scoped. The labels keep the `.`
+type aliases are scoped the same way: `rn_prepass_one` registers one as
+`m.T`, the names of the module's other top-level aliases in its type
+qualified too (`rn_qual_type`, from the list `rn_top` makes), and
+`rn_alias_index` tries `rn_mod + "." + name` before the bare name; the
+parser reads `m.T` in a type and in a type pattern. lint.y keys aliases
+the same way (`lint_unit` gets the origin map), so a program's alias
+named like a module's is no redeclaration. The labels keep the `.`
 (`yfn_12_fs.exists$3`; `is_id_b` reads it as part of a symbol), so `-g`
 names the function `fs.exists`. A package's exports leave out the modules
 it imports (`export_name`). Modules are compile-time input only: the

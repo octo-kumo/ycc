@@ -24,13 +24,21 @@ import types from "./types.y";
 type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool };
 type LintSt = { warns: [Diag], vars: [LintVar], flags: [long] };
 type LintMap = { keys: [str], vals: [long], n: long };
-type LintRoot = { typ: Type, line: long, col: long, alias: str };
+type LintRoot = { typ: Type, line: long, col: long, alias: str, mod: str };
 type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
-type LintTy = { roots: [LintRoot], atyps: [Type], amap: LintMap, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long };
+type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: LintMap, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
+
+// Which lines are a module's (rename.y rename_program_x): line i + 1 is in
+// file lint_ofile[i], module lint_fmods of it ("" for none).
+let lint_ofile: [long] = [];
+let lint_fmods: [str] = [];
 
 // The warnings for one unit: `ast` as parsed, `ast3` renamed (and
-// checked), sorted by position.
-def lint_unit(ast: Block, ast3: Block) -> [Diag] {
+// checked), sorted by position; ofile and fmods say which lines are a
+// module's.
+def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str]) -> [Diag] {
+    lint_ofile = ofile;
+    lint_fmods = fmods;
     let warns: [Diag] = [];
     let vars: [LintVar] = [];
     let flags: [long] = [];
@@ -617,7 +625,8 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
     let amemo: [str] = [];
     let abusy: [bool] = [];
     let occs: [LintOcc] = [];
-    let t = { roots: roots, atyps: atyps, amap: lint_map_new(), amemo: amemo, abusy: abusy, occs: occs, line: 0, col: 0 };
+    let amods: [str] = [];
+    let t = { roots: roots, atyps: atyps, amods: amods, amap: lint_map_new(), amemo: amemo, abusy: abusy, occs: occs, line: 0, col: 0, mod: "" };
     lint_tw_list(t, stmts);
     // The aliases: a name declared again is the last declaration's.
     foreach (r in t.roots) {
@@ -627,6 +636,7 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
             };
             lint_map_put(t.amap, r.alias, len(t.atyps));
             t.atyps += r.typ;
+            t.amods += r.mod;
             t.amemo += "";
             t.abusy += false;
         };
@@ -637,6 +647,7 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
     foreach (r in t.roots) {
         t.line = r.line;
         t.col = r.col;
+        t.mod = r.mod;
         let first = len(t.occs);
         lint_tk(t, r.typ, true, -1);
         if (r.alias != "") {
@@ -805,9 +816,21 @@ def lint_tw_func(t: LintTy, node: Func) -> long {
 
 def lint_root(t: LintTy, typ: Type, line: long, col: long, alias: str) -> long {
     if (typ.k != "tnone") {
-        t.roots += { typ: typ, line: line, col: col, alias: alias };
+        // a module's alias is its own: `m.T` (rename.y rn_prepass_one)
+        let m = lint_mod_of(line);
+        let name = alias;
+        if (m != "" && alias != "") { name = m + "." + alias; };
+        t.roots += { typ: typ, line: line, col: col, alias: name, mod: m };
     };
     0
+};
+
+// The module line ln is in ("" for none).
+def lint_mod_of(ln: long) -> str {
+    if (ln >= 1 && ln <= len(lint_ofile)) {
+        let f = lint_ofile[ln - 1];
+        if (f < len(lint_fmods)) { lint_fmods[f] } else { "" }
+    } else { "" }
 };
 
 // An occurrence: a record of two or more fields, or a union.
@@ -875,7 +898,10 @@ def lint_tk_list(t: LintTy, ts: [Type], rec: bool, parent: long) -> str {
 // declaration's); one met again inside itself stays `@Name`, as does a
 // name no alias declares.
 def lint_tk_name(t: LintTy, name: str) -> str {
-    let ai = lint_map_get(t.amap, name);
+    // in a module's code a bare name is the module's own alias first
+    let ai = -1;
+    if (t.mod != "" && index_of(name, ".") < 0) { ai = lint_map_get(t.amap, t.mod + "." + name); };
+    if (ai < 0) { ai = lint_map_get(t.amap, name); };
     if (ai < 0) {
         "@" + name
     } else if (t.abusy[ai]) {
@@ -884,7 +910,11 @@ def lint_tk_name(t: LintTy, name: str) -> str {
         t.amemo[ai]
     } else {
         t.abusy[ai] = true;
+        // an alias's type reads in its own module
+        let mod0 = t.mod;
+        t.mod = t.amods[ai];
         let key = lint_tk(t, t.atyps[ai], false, -1);
+        t.mod = mod0;
         t.abusy[ai] = false;
         t.amemo[ai] = key;
         key

@@ -1115,6 +1115,11 @@ Yv *parse_type_atom2(Yv *toks, long p) {
         return parse_type_tail(toks, p + 1, yr(1, "k", ys("tfloat")));
     } else if (ys_eq_lit(nm, "void")) {
         return parse_type_tail(toks, p + 1, yr(1, "k", ys("tvoid")));
+    } else if (is_op(toks, p + 1, ys(".")) && ys_eq_lit(tt(toks, p + 2), "id")) {
+        // `m.T`: alias T of the module imported as m
+        return parse_type_tail(toks, p + 3,
+                               yr(2, "k", ys("tname"), "name",
+                                  ys_cat(ys_cat(nm, ys(".")), tv(toks, p + 2))));
     } else {
         return parse_type_tail(toks, p + 1, yr(2, "k", ys("tname"), "name", nm));
     }
@@ -2247,10 +2252,15 @@ static Yv *narrow_node(Yv *subj, Yv *ty, long ln, long cl) {
 Yv *parse_type_pattern(Yv *toks, long p, Yv *tmp) {
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
-    Yv *ty = yr(2, "k", ys("tname"), "name", tv(toks, p));
+    Yv *tname = tv(toks, p);
+    long pos = p + 1;
+    if (is_op(toks, pos, ys(".")) && ys_eq_lit(tt(toks, pos + 1), "id")) {
+        tname = ys_cat(ys_cat(tname, ys(".")), tv(toks, pos + 1));
+        pos = pos + 2;
+    }
+    Yv *ty = yr(2, "k", ys("tname"), "name", tname);
     Yv *subj = subj_id(tmp, ln, cl);
     Yv *binds = yav(0);
-    long pos = p + 1;
     if (is_punct(toks, pos, ys("{"))) {
         pos = pos + 1;
         int go = !is_punct(toks, pos, ys("}"));
