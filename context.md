@@ -2,17 +2,19 @@
 
 ## State
 
-- On `master`. Everything is committed; the tree is green with ycc2p as
-  the reference. Since the last bless (9b69861): cycc and src/y have no
-  unknown types (cb89e46, 7eec451, f1b147f, de7fc24, 35a3a2d, dcaf4e9:
-  `{k: str}` exact, no `..`, parameters annotated, `[]`/`none` free
-  placeholders, forward calls need `-> T`, sound self-recursion
-  inference, union -> member casts where the type is written; src/y
-  annotated with the Node/Type unions by a gpt-6-luna sub-agent), and the
-  C copy's value model allocates 72% less (79cdce6: self-compile 6.6 GB
-  -> 1.9 GB, 12.3 s -> 5.1 s).
-  `refs/ycc.ref` = `02651975` (open records step 1), backed up as
-  `ycc.ref.pre-nounk`. Older backups in the session's files folder:
+- On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
+  `c5dc23f0` (no unknown types; f3a5a9a). make test, ASan (native audit
+  examples pkg, RSS-capped) and fuzz (1500, seed 4242) green. Since the
+  previous bless (02651975, backed up as `ycc.ref.pre-nounk`): cycc and
+  src/y have no unknown types (cb89e46, 7eec451, f1b147f, de7fc24,
+  35a3a2d, dcaf4e9: `{k: str}` exact, no `..`, parameters annotated,
+  `[]`/`none` free placeholders, forward calls need `-> T`, sound
+  self-recursion inference, union -> member casts where the type is
+  written; src/y annotated with the Node/Type unions by a gpt-6-luna
+  sub-agent); the C copy's value model allocates 72% less (79cdce6:
+  self-compile 6.6 GB -> 1.9 GB, 12.3 s -> 5.1 s); rename and ty_desc
+  hotspots fixed (f3a5a9a).
+  Older backups in the session's files folder:
   `ycc.ref.pre-open` (`297b2bb3`),
   `ycc.ref.pre-e145` (`ef862701`), `ycc.ref.pre-enc` (`f697b225`),
   `ycc.ref.pre-shadow` (`392d7a25`), `ycc.ref.pre-fs` (`aaece322`),
@@ -26,16 +28,18 @@
   the cap means fix what allocates, never raise it (the user). The old
   reference cannot compile the new ycc.y (its teq blows up): under the
   cap it fails cleanly; compile_ir.sh shows "-" for it.
-- Next: bless ycc2p (`check.sh` ran against 02651975; then `make
-  rebless`, `make test`, ASan, fuzz; numbers in the commit), then
-  CHOICES_MADE.md 25 (the user's model: a union value puts its shared
-  fields first; union<->member casts copy when layouts differ) as its own
-  measured step -- today `node.k`/`.line`/`.col` through the 31-member
-  Node dispatch on the tag, and the self binary grew 983 KB -> 1118 KB
-  (739 cast checks, the dispatch chains). Watch: types.y
-  set_inferred_ret writes `func.ret` through a Func cast from a Node --
-  with copying casts that write is lost; TRef's layouts coincide (k
-  sorts first), so the tref patches in rename.y/native.y stay safe.
+- Next: CHOICES_MADE.md 25 (the user's model: a union value puts its
+  shared fields first; union<->member casts copy when layouts differ) as
+  its own measured step -- today `node.k`/`.line`/`.col` through the
+  31-member Node dispatch on the tag, and the self binary grew 983 KB ->
+  1122 KB (cast checks, the dispatch chains); the self-compile is 11.15G
+  instructions (the previous reference on its own smaller source: 9.42G).
+  Watch: types.y set_inferred_ret writes `func.ret` through a Func cast
+  from a Node -- with copying casts that write is lost; TRef's layouts
+  coincide (k sorts first), so the tref patches in rename.y/native.y stay
+  safe. Then remove the dead unknown-type machinery (y_dot_lookup,
+  y_rec_has, y_rec_cast, gen_union_cast, layout_unknown, descriptor field
+  tables/koff/shape31; pack/unit versions bump).
   The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
