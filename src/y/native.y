@@ -1090,6 +1090,29 @@ def namemap_get(m: [AsmLabel], name: str) -> long {
     r.sec
 };
 
+// The defs a unit's bodies see (EmitSt.fns: the hoisted defs, then the
+// externs, then the globals) with an index by name. No env holds them:
+// env_find and the capture scans look a name up here, where every
+// function's env used to be pre-loaded with all of them (~1.6k entries
+// in the compiler) and scanned. Of entries sharing a name the last wins,
+// as the backward env scan had it, so the index is filled from the end
+// (labmap keeps the first).
+type FnTab = { syms: [Sym], ix: [AsmLabel] };
+
+def fntab_of(syms: [Sym]) -> FnTab {
+    let m = asm.labmap_new(len(syms) * 2 + 16);
+    let i = len(syms) - 1;
+    while (i >= 0) {
+        let e = syms[i];
+        if (len(e.name) > 0) {
+            let r = asm.labmap_put(m, e.name, i, 0);
+            m = r.map;
+        };
+        i = i - 1;
+    };
+    { syms: syms, ix: m }
+};
+
 // Mark every names[i] some entry of `roots` points at, then close over kept
 // blocks: their own references and (for code that runs into the next block)
 // their successor. `falls[i]` says block i falls through to block i+1.
@@ -1525,13 +1548,13 @@ type NodeE = Wrap | Un | Narrow | MatchEnd;
 type NodeV = ArrRep | Assign | Decl;
 type EmitMain = { params: [str], ptypes: [Type], ret: Type, body: Node, line: long, col: long };
 type EmitFunc = Func | EmitMain;
-type EmitSt = { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: str, end_label: str, fns: [Sym], bodies: [str] };
+type EmitSt = { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: str, end_label: str, fns: FnTab, bodies: [str] };
 // The state after making a label (next_loc, ty_desc), and the label.
 type StLbl = { st: EmitSt, lbl: str };
 
 def st_new() -> EmitSt {
     { out: [], rodata: [], uid: 1, fuid: 0, loc: 1, env: [],
-      slots: 0, self_label: "", end_label: "", fns: [], bodies: [] }
+      slots: 0, self_label: "", end_label: "", fns: fntab_of([]), bodies: [] }
 };
 
 def emit(st: EmitSt, line: str) -> EmitSt {
@@ -1609,12 +1632,8 @@ def esc_asm(s: str) -> str {
 def env_find(st: EmitSt, name: str) -> Slot {
     // Miss marker: kind "none". Real entries have name/kind/off/label/typ
     // but NO k field — never test e.k.
-    // Scanned from the END and stopped at the first hit, like types.y lookup:
-    // `env` holds every def of the unit plus this function's own locals, so
-    // it is ~1.6k entries, and a name almost always belongs to one of the
-    // last few. A forward scan overwrote `found` on every match, so the
-    // entry it settled on was the LAST one -- the one this scan reaches
-    // first. Same answer, 85% fewer string compares.
+    // The function's own entries first, from the END (the last binding of
+    // a name wins), then the unit's defs (st.fns, by its index).
     let env = st.env;
     let i = len(env) - 1;
     let found: Slot = { name: "", kind: "none", off: 0, label: "", typ: normtype({ k: "tnone" }) };
@@ -1627,6 +1646,15 @@ def env_find(st: EmitSt, name: str) -> Slot {
         } else { 0; };
         i = i - 1;
         0
+    };
+    if (found.kind == "none") {
+        let fns = st.fns;
+        let j = namemap_get(fns.ix, name);
+        if (j >= 0) {
+            let syms = fns.syms;
+            let fe = syms[j];
+            found = { name: fe.name, kind: fns_kind(fe.label), off: 0, label: fe.label, typ: fe.typ };
+        };
     };
     found
 };
@@ -2637,7 +2665,10 @@ def fv_binds_list(nodes: [Node], out: [str]) -> [str] {
 // not bind, minus the hoisted top-level function names and the intrinsics.
 // NOTE: reads only `params` and `body`, never `func.k` — `_start` is a
 // synthesized record without a `k` field.
-def fn_captures(func: EmitFunc, fnnames: [str]) -> [str] {
+// The names a function body reads that it does not bind and that are
+// neither in `ex` (a namemap: the unit's defs, st.fns.ix) nor `extra`
+// (its own name, or "") nor an intrinsic: what it captures.
+def fn_captures(func: EmitFunc, ex: [AsmLabel], extra: str) -> [str] {
     let bound = fv_bind_params(func.params, fv_binds(func.body, []));
     let reads = fv_ids(func.body, []);
     let caps: [str] = [];
@@ -2645,7 +2676,7 @@ def fn_captures(func: EmitFunc, fnnames: [str]) -> [str] {
     while (i < len(reads)) {
         let n: str = reads[i];
         if (name_in(bound, n)) { 0; }
-        else if (name_in(fnnames, n)) { 0; }
+        else if (n == extra || namemap_get(ex, n) >= 0) { 0; }
         else if (is_intrinsic_name(n)) { 0; }
         else if (name_in(caps, n)) { 0; }
         else {
@@ -6110,7 +6141,7 @@ def lit_wraps(st: EmitSt, mv: Node, rtu: Type, mk: str, ft: Type) -> bool {
 // hoisted table, so give it a fresh label, emit the body here (where the
 // capture types are known) and hand back the closure record.
 def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
-    let caps = fn_captures(node, fn_names_of(st.fns));
+    let caps = fn_captures(node, st.fns.ix, "");
     let captypes: [Type] = [];
     let ci = 0;
     while (ci < len(caps)) {
@@ -6177,10 +6208,8 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
         // literal; a capture-free one stays hoisted (emitted by
         // emit_program, env pre-bound, calls go direct). Its own name is
         // no capture: the body reaches itself through its own record.
-        let dex = fn_names_of(st.fns);
-        dex += node.name;
         let func: Func = node.v;
-        let dcaps = fn_captures(func, dex);
+        let dcaps = fn_captures(func, st.fns.ix, node.name);
         if (len(dcaps) == 0) {
             st
         } else {
@@ -6192,10 +6221,8 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
             // env already binds them, calls go direct). One that captures
             // becomes a closure record built HERE, where the captured
             // values are live, and the binding holds that record.
-            let lex = fn_names_of(st.fns);
-            lex += node.name;
             let func: Func = node.v;
-            let caps = fn_captures(func, lex);
+            let caps = fn_captures(func, st.fns.ix, node.name);
             if (len(caps) == 0) {
                 st
             } else {
@@ -7912,19 +7939,12 @@ def gen_store(st: EmitSt, node: Store) -> EmitSt {
 
 def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: bool, want_argv: bool, captypes: [Type], selfname: str) -> EmitSt {
     // fresh per-function state; uid/rodata/fns flow through and back.
-    // The scope is pre-loaded with every known def (like the checker's
-    // fresh_func_scope): bodies see all hoisted functions and globals.
+    // Bodies see every hoisted function and global through st.fns
+    // (env_find), like the checker's fresh_func_scope.
     let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0,
       self_label: label, end_label: arch.arch_loc_label(fuid, 0),
       fns: st.fns, bodies: st.bodies };
-    let fnsall = st.fns;
-    let g = 0;
-    while (g < len(fnsall)) {
-        let fe = fnsall[g];
-        f = env_define(f, fe.name, fns_kind(fe.label), 0, fe.label, fe.typ);
-        g = g + 1;
-    };
     // The names nested functions capture (see box_names / box_bound).
     f = env_define(f, "", "frame", 0, "", type_node({ k: "tnone" }));
     // This function's type, for the conversions at its returns and its
@@ -7971,9 +7991,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
     // body serve both direct and closure calls. `_start` has no enclosing
     // frame, so it never captures.
     if (is_main) { 0; } else {
-        let excl = fn_names_of(st.fns);
-        if (selfname != "") { excl += selfname; 0; } else { 0; };
-        let mycaps = fn_captures(func, excl);
+        let mycaps = fn_captures(func, st.fns.ix, selfname);
         let cloff = 16 + nargs * 8;
         let c = 0;
         while (c < len(mycaps)) {
@@ -8095,13 +8113,6 @@ def infer_fn_ret(st: EmitSt, func: Func) -> Type {
     let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: 0, loc: 1, env: [], slots: 0,
       self_label: "", end_label: "", fns: st.fns, bodies: st.bodies };
-    let fnsall = st.fns;
-    let g = 0;
-    while (g < len(fnsall)) {
-        let fe = fnsall[g];
-        f = env_define(f, fe.name, fns_kind(fe.label), 0, fe.label, fe.typ);
-        g = g + 1;
-    };
     let params: [str] = func.params;
     let ptypes: [Type] = func.ptypes;
     let n = len(params);
@@ -8261,13 +8272,6 @@ def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
     let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
       fuid: 0, loc: 1, env: [], slots: 0,
       self_label: "", end_label: "", fns: st.fns, bodies: st.bodies };
-    let fnsall = st.fns;
-    let g = 0;
-    while (g < len(fnsall)) {
-        let fe = fnsall[g];
-        f = env_define(f, fe.name, fns_kind(fe.label), 0, fe.label, fe.typ);
-        g = g + 1;
-    };
     let out: [Sym] = [];
     let i = 0;
     while (i < len(gdecls)) {
@@ -8309,19 +8313,18 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
     };
     let caps: [[str]] = [];
     let out: [str] = [];
+    let exm = namemap_build(gnames);
+    let fnm = namemap_build(fnames);
     i = 0;
     while (i < len(defs)) {
         let d = defs[i];
-        let excl: [str] = [];
-        excl += gnames;
-        excl += d.name;
-        let cs = fn_captures(d.func, excl);
+        let cs = fn_captures(d.func, exm, d.name);
         caps += [cs];
         let j = 0;
         let reads_var = false;
         while (j < len(cs)) {
             let cn: str = cs[j];
-            if (name_in(fnames, cn)) { 0; } else { reads_var = true; 0; };
+            if (namemap_get(fnm, cn) >= 0) { 0; } else { reads_var = true; 0; };
             j = j + 1;
         };
         if (reads_var) { out += d.name; 0; } else { 0; };
@@ -8361,7 +8364,7 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
 // their st.fns entry.
 def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
     let out: [Sym] = [];
-    let ftab = st.fns;
+    let ftab = st.fns.syms;
     let fx = 0;
     while (fx < len(hdefs)) {
         let d = hdefs[fx];
@@ -8719,6 +8722,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
           bodies: st.bodies };
         let r = next_uid(st);
         st = r.st;
+        let hsyms: [Sym] = [];
         let i = 0;
         while (i < len(defs)) {
             let d = defs[i];
@@ -8727,12 +8731,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
                 let rl = next_uid(st);
                 st = rl.st;
                 let label = fn_label_of(rl.uid, d.name);
-                st.fns += { name: d.name, label: label, typ: func_type(d.func) };
-                let fns = st.fns;
-                st = { out: st.out, rodata: st.rodata, uid: st.uid,
-                  fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-                  self_label: st.self_label, end_label: st.end_label, fns: fns,
-                  bodies: st.bodies };
+                hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 st = env_define(st, d.name, "func", 0, label, func_type(d.func));
                 0
             };
@@ -8742,11 +8741,11 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
         // emission loop read those by position), the globals after both
         // (see fns_kind).
         let fns0: [Sym] = [];
-        fns0 += st.fns;
+        fns0 += hsyms;
         fns0 += xfns;
         st = { out: st.out, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-          self_label: st.self_label, end_label: st.end_label, fns: fns0,
+          self_label: st.self_label, end_label: st.end_label, fns: fntab_of(fns0),
           bodies: st.bodies };
         // Fill in the return type of every unannotated def, so call sites
         // know what a call yields; then type the globals with those, and
@@ -8757,7 +8756,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
         fns1 += xfns;
         st = { out: st.out, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-          self_label: st.self_label, end_label: st.end_label, fns: fns1,
+          self_label: st.self_label, end_label: st.end_label, fns: fntab_of(fns1),
           bodies: st.bodies };
         let gl = app_cells(global_entries(st, gdecls, base), ast3.stmts);
         let fixedfns: [Sym] = [];
@@ -8767,7 +8766,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
         if (len(gl) > 0) {
             st = { out: st.out, rodata: st.rodata, uid: st.uid,
               fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-              self_label: st.self_label, end_label: st.end_label, fns: fixedfns,
+              self_label: st.self_label, end_label: st.end_label, fns: fntab_of(fixedfns),
               bodies: st.bodies };
             let fixed2 = fix_fn_types(st, hdefs, gnames);
             fixedfns = [];
@@ -8778,13 +8777,13 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
         } else { 0; };
         st = { out: st.out, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-          self_label: st.self_label, end_label: st.end_label, fns: fixedfns,
+          self_label: st.self_label, end_label: st.end_label, fns: fntab_of(fixedfns),
           bodies: st.bodies };
         // emit each hoisted body
         i = 0;
         while (i < len(hdefs)) {
             let d = hdefs[i];
-            let fns = st.fns;
+            let fns = st.fns.syms;
             let f = fns[i];
             let rf = next_uid(st);
             st = rf.st;
@@ -8793,7 +8792,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
         };
         pr = phase_end(times, "emit_fns", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
-        let exports = unit_exports(ast3.stmts, hdefs, st.fns);
+        let exports = unit_exports(ast3.stmts, hdefs, st.fns.syms);
         let udfl: [DflCode] = [];
         if (pkg_base(base)) {
             exports = pkg_exports(exports, gl);

@@ -182,6 +182,7 @@ int is_data_line_b(Yv *text, Yv *b, long lo, long hi);
 int block_falls_b(Yv *text, Yv *b, long lo, long hi);
 Yv *namemap_build(Yv *names);
 long namemap_get(Yv *m, Yv *name);
+Yv *fntab_of(Yv *syms);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
 Yv *prune_bodies(Yv *labels, Yv *refs, Yv *asm_roots);
@@ -219,7 +220,7 @@ Yv *fv_walk_list(Yv *nodes, Yv *out, int collect);
 Yv *fv_ids(Yv *node, Yv *out);
 Yv *fv_binds(Yv *node, Yv *out);
 Yv *fv_binds_list(Yv *nodes, Yv *out);
-Yv *fn_captures(Yv *func, Yv *fnnames);
+Yv *fn_captures(Yv *func, Yv *ex, Yv *extra);
 Yv *fv_bind_params(Yv *ps, Yv *out);
 Yv *fn_names_of(Yv *fns);
 Yv *fns_kind(Yv *label);
@@ -1783,6 +1784,27 @@ long namemap_get(Yv *m, Yv *name) {
     return yv_l(yr_get(r, "sec"));
 }
 
+/* The defs a unit's bodies see (EmitSt.fns: the hoisted defs, then the
+ * externs, then the globals) with an index by name. No env holds them:
+ * env_find and the capture scans look a name up here, where every
+ * function's env used to be pre-loaded with all of them (~1.6k entries
+ * in the compiler) and scanned. Of entries sharing a name the last wins,
+ * as the backward env scan had it, so the index is filled from the end
+ * (labmap keeps the first). */
+Yv *fntab_of(Yv *syms) {
+    Yv *m = labmap_new(yv_len(syms) * 2 + 16);
+    long i = yv_len(syms) - 1;
+    while (i >= 0) {
+        Yv *e = ya_get(syms, i);
+        if (yv_len(yr_get(e, "name")) > 0) {
+            Yv *r = labmap_put(m, yr_get(e, "name"), i, 0);
+            m = yr_get(r, "map");
+        }
+        i = i - 1;
+    }
+    return yr(2, "syms", syms, "ix", m);
+}
+
 /* Mark every names[i] some entry of `roots` points at, then close over kept
  * blocks: their own references and (for code that runs into the next block)
  * their successor. `falls[i]` says block i falls through to block i+1. */
@@ -2323,7 +2345,7 @@ Yv *st_new(void) {
     return yr(11, "out", yav(0), "rodata", yav(0), "uid", yv_long(1), "fuid",
               yv_long(0), "loc", yv_long(1), "env", yav(0), "slots",
               yv_long(0), "self_label", ys(""), "end_label", ys(""), "fns",
-              yav(0), "bodies", yav(0));
+              fntab_of(yav(0)), "bodies", yav(0));
 }
 
 Yv *emit(Yv *st, Yv *line) {
@@ -2411,12 +2433,8 @@ Yv *esc_asm(Yv *s) {
 Yv *env_find(Yv *st, Yv *name) {
     /* Miss marker: kind "none". Real entries have name/kind/off/label/typ
      * but NO k field — never test e.k. */
-    /* Scanned from the END and stopped at the first hit, like types.y lookup:
-     * `env` holds every def of the unit plus this function's own locals, so
-     * it is ~1.6k entries, and a name almost always belongs to one of the
-     * last few. A forward scan overwrote `found` on every match, so the
-     * entry it settled on was the LAST one -- the one this scan reaches
-     * first. Same answer, 85% fewer string compares. */
+    /* The function's own entries first, from the END (the last binding of
+     * a name wins), then the unit's defs (st.fns, by its index). */
     Yv *env = yr_get(st, "env");
     long i = yv_len(env) - 1;
     Yv *found = yr(5, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
@@ -2431,6 +2449,16 @@ Yv *env_find(Yv *st, Yv *name) {
             ;
         }
         i = i - 1;
+    }
+    if (ys_eq_lit(yr_get(found, "kind"), "none")) {
+        Yv *fns = yr_get(st, "fns");
+        long j = namemap_get(yr_get(fns, "ix"), name);
+        if (j >= 0) {
+            Yv *fe = ya_get(yr_get(fns, "syms"), j);
+            found = yr(5, "name", yr_get(fe, "name"), "kind",
+                       fns_kind(yr_get(fe, "label")), "off", yv_long(0),
+                       "label", yr_get(fe, "label"), "typ", yr_get(fe, "typ"));
+        }
     }
     return found;
 }
@@ -3418,7 +3446,10 @@ Yv *fv_binds_list(Yv *nodes, Yv *out) {
  * not bind, minus the hoisted top-level function names and the intrinsics.
  * NOTE: reads only `params` and `body`, never `func.k` — `_start` is a
  * synthesized record without a `k` field. */
-Yv *fn_captures(Yv *func, Yv *fnnames) {
+/* The names a function body reads that it does not bind and that are
+ * neither in `ex` (a namemap: the unit's defs, st.fns.ix) nor `extra`
+ * (its own name, or "") nor an intrinsic: what it captures. */
+Yv *fn_captures(Yv *func, Yv *ex, Yv *extra) {
     Yv *bound =
         fv_bind_params(yr_get(func, "params"), fv_binds(yr_get(func, "body"),
                                                        yav(0)));
@@ -3429,7 +3460,7 @@ Yv *fn_captures(Yv *func, Yv *fnnames) {
         Yv *n = ya_get(reads, i);
         if (name_in(bound, n)) {
             ;
-        } else if (name_in(fnnames, n)) {
+        } else if (ys_eq(n, extra) || namemap_get(ex, n) >= 0) {
             ;
         } else if (is_intrinsic_name(n)) {
             ;
@@ -7203,7 +7234,7 @@ int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft) {
  * hoisted table, so give it a fresh label, emit the body here (where the
  * capture types are known) and hand back the closure record. */
 Yv *gen_func_literal(Yv *st, Yv *node) {
-    Yv *caps = fn_captures(node, fn_names_of(yr_get(st, "fns")));
+    Yv *caps = fn_captures(node, yr_get(yr_get(st, "fns"), "ix"), ys(""));
     Yv *captypes = yav(0);
     long ci = 0;
     while (ci < yv_len(caps)) {
@@ -7277,9 +7308,8 @@ Yv *gen_decl(Yv *st, Yv *node) {
          * literal; a capture-free one stays hoisted (emitted by
          * emit_program, env pre-bound, calls go direct). Its own name is
          * no capture: the body reaches itself through its own record. */
-        Yv *dex = fn_names_of(yr_get(st, "fns"));
-        dex = ya_push(dex, yr_get(node, "name"));
-        Yv *dcaps = fn_captures(yr_get(node, "v"), dex);
+        Yv *dcaps = fn_captures(yr_get(node, "v"), yr_get(yr_get(st, "fns"), "ix"),
+                                yr_get(node, "name"));
         if (yv_len(dcaps) == 0) {
             return st;
         } else {
@@ -7294,9 +7324,9 @@ Yv *gen_decl(Yv *st, Yv *node) {
              * values are live, and the binding holds that record. Its own
              * name is no capture: the body reaches itself through its own
              * record. */
-            Yv *lex = fn_names_of(yr_get(st, "fns"));
-            lex = ya_push(lex, yr_get(node, "name"));
-            Yv *caps = fn_captures(yr_get(node, "v"), lex);
+            Yv *caps = fn_captures(yr_get(node, "v"),
+                                   yr_get(yr_get(st, "fns"), "ix"),
+                                   yr_get(node, "name"));
             if (yv_len(caps) == 0) {
                 return st;
             } else {
@@ -9365,21 +9395,13 @@ Yv *gen_store(Yv *st, Yv *node) {
 Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
                 int want_argv, Yv *captypes, Yv *selfname) {
     /* fresh per-function state; uid/rodata/fns flow through and back.
-     * The scope is pre-loaded with every known def (like the checker's
-     * fresh_func_scope): bodies see all hoisted functions and globals. */
+     * Bodies see every hoisted function and global through st.fns
+     * (env_find), like the checker's fresh_func_scope. */
     Yv *f = yr(11, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(fuid), "loc", yv_long(1),
                "env", yav(0), "slots", yv_long(0), "self_label", label,
                "end_label", arch_loc_label(fuid, 0), "fns", yr_get(st, "fns"),
                "bodies", yr_get(st, "bodies"));
-    Yv *fnsall = yr_get(st, "fns");
-    long g = 0;
-    while (g < yv_len(fnsall)) {
-        Yv *fe = ya_get(fnsall, g);
-        f = env_define(f, yr_get(fe, "name"), fns_kind(yr_get(fe, "label")), 0,
-                       yr_get(fe, "label"), yr_get(fe, "typ"));
-        g = g + 1;
-    }
     /* The names nested functions capture (see box_names / box_bound). */
     f = env_define(f, ys(""), ys("frame"), 0, ys(""), yr(1, "k", ys("tnone")));
     /* This function's type, for conversions at returns and self calls. */
@@ -9432,14 +9454,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     if (is_main) {
         ;
     } else {
-        Yv *excl = fn_names_of(yr_get(st, "fns"));
-        if (!ys_eq_lit(selfname, "")) {
-            excl = ya_push(excl, selfname);
-            ;
-        } else {
-            ;
-        }
-        Yv *mycaps = fn_captures(func, excl);
+        Yv *mycaps = fn_captures(func, yr_get(yr_get(st, "fns"), "ix"), selfname);
         long cloff = 16 + nargs * 8;
         long c = 0;
         while (c < yv_len(mycaps)) {
@@ -9587,14 +9602,6 @@ Yv *infer_fn_ret(Yv *st, Yv *func) {
                "env", yav(0), "slots", yv_long(0), "self_label", ys(""),
                "end_label", ys(""), "fns", yr_get(st, "fns"), "bodies",
                yr_get(st, "bodies"));
-    Yv *fnsall = yr_get(st, "fns");
-    long g = 0;
-    while (g < yv_len(fnsall)) {
-        Yv *fe = ya_get(fnsall, g);
-        f = env_define(f, yr_get(fe, "name"), fns_kind(yr_get(fe, "label")), 0,
-                       yr_get(fe, "label"), yr_get(fe, "typ"));
-        g = g + 1;
-    }
     Yv *params = yr_get(func, "params");
     Yv *ptypes = yr_get(func, "ptypes");
     long n = yv_len(params);
@@ -9789,15 +9796,6 @@ Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
                "env", yav(0), "slots", yv_long(0), "self_label", ys(""),
                "end_label", ys(""), "fns", yr_get(st, "fns"), "bodies",
                yr_get(st, "bodies"));
-    Yv *fnsall = yr_get(st, "fns");
-    long g = 0;
-    while (g < yv_len(fnsall)) {
-        Yv *fe = ya_get(fnsall, g);
-        f = env_define(f, yr_get(fe, "name"),
-                       fns_kind(yr_get(fe, "label")), 0,
-                       yr_get(fe, "label"), yr_get(fe, "typ"));
-        g = g + 1;
-    }
     Yv *out = yav(0);
     long i = 0;
     while (i < yv_len(gdecls)) {
@@ -9841,23 +9839,18 @@ Yv *capturing_defs(Yv *defs, Yv *gnames) {
     }
     Yv *caps = yav(0);
     Yv *out = yav(0);
+    Yv *exm = namemap_build(gnames);
+    Yv *fnm = namemap_build(fnames);
     i = 0;
     while (i < yv_len(defs)) {
         Yv *d = ya_get(defs, i);
-        Yv *excl = yav(0);
-        long g = 0;
-        while (g < yv_len(gnames)) {
-            excl = ya_push(excl, ya_get(gnames, g));
-            g = g + 1;
-        }
-        excl = ya_push(excl, yr_get(d, "name"));
-        Yv *cs = fn_captures(yr_get(d, "func"), excl);
+        Yv *cs = fn_captures(yr_get(d, "func"), exm, yr_get(d, "name"));
         caps = ya_push(caps, cs);
         long j = 0;
         int reads_var = 0;
         while (j < yv_len(cs)) {
             Yv *cn = ya_get(cs, j);
-            if (name_in(fnames, cn)) {
+            if (namemap_get(fnm, cn) >= 0) {
                 ;
             } else {
                 reads_var = 1;
@@ -9916,7 +9909,7 @@ Yv *capturing_defs(Yv *defs, Yv *gnames) {
  * their st.fns entry. */
 Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only) {
     Yv *out = yav(0);
-    Yv *ftab = yr_get(st, "fns");
+    Yv *ftab = yr_get(yr_get(st, "fns"), "syms");
     long fx = 0;
     while (fx < yv_len(hdefs)) {
         Yv *d = ya_get(hdefs, fx);
@@ -10318,6 +10311,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                 "bodies", yr_get(st, "bodies"));
         Yv *r = next_uid(st);
         st = yr_get(r, "st");
+        Yv *hsyms = yav(0);
         long i = 0;
         while (i < yv_len(defs)) {
             Yv *d = ya_get(defs, i);
@@ -10329,17 +10323,10 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                 st = yr_get(rl, "st");
                 Yv *label = fn_label_of(yv_l(yr_get(rl, "uid")),
                                         yr_get(d, "name"));
-                Yv *fns = ya_push(
-                    yr_get(st, "fns"),
+                hsyms = ya_push(
+                    hsyms,
                     yr(3, "name", yr_get(d, "name"), "label", label,
                        "typ", func_type(yr_get(d, "func"))));
-                st = yr(11, "out", yr_get(st, "out"), "rodata",
-                        yr_get(st, "rodata"), "uid", yr_get(st, "uid"),
-                        "fuid", yr_get(st, "fuid"), "loc", yr_get(st, "loc"),
-                        "env", yr_get(st, "env"), "slots", yr_get(st, "slots"),
-                        "self_label", yr_get(st, "self_label"), "end_label",
-                        yr_get(st, "end_label"), "fns", fns, "bodies",
-                        yr_get(st, "bodies"));
                 st = env_define(st, yr_get(d, "name"), ys("func"), 0, label,
                                 func_type(yr_get(d, "func")));
                 ;
@@ -10351,8 +10338,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
          * (see fns_kind). */
         Yv *fns0 = yav(0);
         long f0i = 0;
-        while (f0i < yv_len(yr_get(st, "fns"))) {
-            fns0 = ya_push(fns0, ya_get(yr_get(st, "fns"), f0i));
+        while (f0i < yv_len(hsyms)) {
+            fns0 = ya_push(fns0, ya_get(hsyms, f0i));
             f0i = f0i + 1;
         }
         f0i = 0;
@@ -10364,7 +10351,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns", fns0,
+                "end_label", yr_get(st, "end_label"), "fns", fntab_of(fns0),
                 "bodies", yr_get(st, "bodies"));
         Yv *fixed1 = fix_fn_types(st, hdefs, yav(0));
         Yv *fns1 = yav(0);
@@ -10382,7 +10369,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns", fns1,
+                "end_label", yr_get(st, "end_label"), "fns", fntab_of(fns1),
                 "bodies", yr_get(st, "bodies"));
         Yv *gl = app_cells(global_entries(st, gdecls, base),
                            yr_get(ast3, "stmts"));
@@ -10408,7 +10395,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                     yr_get(st, "fuid"), "loc", yr_get(st, "loc"), "env",
                     yr_get(st, "env"), "slots", yr_get(st, "slots"),
                     "self_label", yr_get(st, "self_label"), "end_label",
-                    yr_get(st, "end_label"), "fns", fixedfns, "bodies",
+                    yr_get(st, "end_label"), "fns", fntab_of(fixedfns), "bodies",
                     yr_get(st, "bodies"));
             Yv *fixed2 = fix_fn_types(st, hdefs, gnames);
             fixedfns = yav(0);
@@ -10435,13 +10422,13 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns", fixedfns,
+                "end_label", yr_get(st, "end_label"), "fns", fntab_of(fixedfns),
                 "bodies", yr_get(st, "bodies"));
         /* emit each hoisted body */
         i = 0;
         while (i < yv_len(hdefs)) {
             Yv *d = ya_get(hdefs, i);
-            Yv *fns = yr_get(st, "fns");
+            Yv *fns = yr_get(yr_get(st, "fns"), "syms");
             Yv *f = ya_get(fns, i);
             Yv *rf = next_uid(st);
             st = yr_get(rf, "st");
@@ -10455,7 +10442,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         pt = yv_l(yr_get(pr, "t"));
         ph = yv_l(yr_get(pr, "h"));
         Yv *exports = unit_exports(yr_get(ast3, "stmts"), hdefs,
-                                   yr_get(st, "fns"));
+                                   yr_get(yr_get(st, "fns"), "syms"));
         Yv *udfl = yav(0);
         if (pkg_base(base)) {
             exports = pkg_exports(exports, gl);
