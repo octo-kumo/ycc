@@ -89,3 +89,44 @@ foreach (t in ds) { join t; };
 print(acct.balance);
 let quiet = spawn { print("void thread"); };
 join quiet;
+
+// A finished thread's unused heap goes to the thread that joins it, for
+// its next spawn: a thousand threads in a row, then eight threads each
+// spawning a hundred at once, stay far below the memory cap (a chunk of
+// 4 MB each would not).
+let chars = 0;
+for n in 0..1000 {
+    let t = spawn { let s = "t" + tostring(n); len(s) };
+    chars = chars + join t;
+};
+print(chars);
+let outer: [() -> long] = [];
+for w in 0..8 {
+    outer += spawn {
+        let mine = 0;
+        for k in 0..100 {
+            let t = spawn { let a: [long] = []; a += k * w; a += 1; len(a) };
+            mine = mine + join t;
+        };
+        mine
+    };
+};
+let all = 0;
+foreach (t in outer) { all = all + join t; };
+print(all);
+
+// The forms are calls: join(t), lock(m, f), post(s) and wait(s) spell the
+// same things, and the words stay names: a def or a variable of the
+// program called like one wins.
+let ct = spawn { 41 };
+let cm = mutex();
+let cs = sem(0);
+post(cs);
+wait(cs);
+print(join(ct) + lock(cm, def () -> long { 1 }));
+def shadowed() -> str {
+    def wait(x: long) -> long { x * 2 }
+    let lock = 3;
+    tostring(wait lock) + " " + tostring(lock + 1)
+}
+print(shadowed());

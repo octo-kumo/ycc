@@ -55,12 +55,14 @@ def arch_global_cell(label: str) -> str {
     label + ":\n.zero 8\n"
 };
 
-// The allocator's state, five .bss words: a pointer to itself (the main
+// The allocator's state, six .bss words: a pointer to itself (the main
 // thread's TLS block, set by the first spawn), the bump pointer, the end
-// of the current chunk, the bytes handed out so far (heap_used), and
-// whether a thread was ever spawned -- from then on every thread's
-// y_alloc works in the block %fs points to (a spawned thread's control
-// block, y_spawn). A program that never allocates shakes it out with
+// of the current chunk, the bytes handed out so far (heap_used), whether
+// a thread was ever spawned -- from then on every thread's y_alloc works
+// in the block %fs points to (a spawned thread's control block,
+// y_spawn) -- and the spare list: the unused chunk tails this thread's
+// joins took back from finished threads, which its next spawns give
+// their threads. A program that never allocates shakes it out with
 // y_alloc.
 //   y_alloc(n) hands out (n + 15) & -8 bytes: the 8 spare bytes let the
 //   word-at-a-time string loops over-read past a NUL safely. The fast
@@ -70,7 +72,7 @@ def arch_global_cell(label: str) -> str {
 //   like the brk memory this replaced -- and unlike brk it has no 8 MB
 //   cap under valgrind.
 def arch_heap_cells() -> str {
-    "y_heap:\n.zero 40\n"
+    "y_heap:\n.zero 48\n"
 };
 
 def arch_frame(slots: long) -> long {
@@ -517,8 +519,12 @@ def arch_prelude() -> str {
         "    ret",
         // spawn: %rax the block's closure -> %rax its handle, a closure
         // [y_join_code, tcb]. The thread control block is its heap block
-        // [self, cur, end, used, -] then [tid, value, closure]; the
-        // thread runs on an 8 MiB stack of its own, with %fs at the block.
+        // [self, cur, end, used, stack, spare] then [tid, value, closure];
+        // the thread runs on an 8 MiB stack of its own (the mapping at
+        // `stack`, a guard page below it), with %fs at the block. Its
+        // heap starts in the spawning thread's first spare chunk tail, if
+        // it has one: `spare` lists the tails its joins took back, each
+        // tail's first two words [end, next].
         "y_spawn:",
         "    push %rbp",
         "    mov %rsp, %rbp",
@@ -526,14 +532,27 @@ def arch_prelude() -> str {
         "    push %r12",
         "    mov %rax, %rbx",
         "    call y_threads_on",
-        "    mov $64, %rdi",
+        "    mov $72, %rdi",
         "    call y_alloc",
         "    mov %rax, %r12",
         "    mov %r12, 0(%r12)",
-        "    mov %rbx, 56(%r12)",
+        "    mov %rbx, 64(%r12)",
+        "    mov %fs:0, %rcx",
+        "    mov 40(%rcx), %rax",
+        "    test %rax, %rax",
+        "    je y_spawn_stack",
+        "    mov 8(%rax), %rdx",
+        "    mov %rdx, 40(%rcx)",
+        "    mov 0(%rax), %rdx",
+        "    xor %ecx, %ecx",
+        "    mov %rcx, 0(%rax)",
+        "    mov %rcx, 8(%rax)",
+        "    mov %rax, 8(%r12)",
+        "    mov %rdx, 16(%r12)",
+        "y_spawn_stack:",
         "    mov $9, %rax",
         "    xor %edi, %edi",
-        "    mov $8388608, %rsi",
+        "    mov $8392704, %rsi",
         "    mov $3, %rdx",
         "    mov $131106, %r10",
         "    mov $-1, %r8",
@@ -541,13 +560,19 @@ def arch_prelude() -> str {
         "    syscall",
         "    test %rax, %rax",
         "    js y_alloc_fail",
-        "    mov %rax, %rsi",
-        "    add $8388592, %rsi",
+        "    mov %rax, 32(%r12)",
+        "    mov %rax, %rdi",
+        "    mov $4096, %rsi",
+        "    xor %edx, %edx",
+        "    mov $10, %rax",
+        "    syscall",
+        "    mov 32(%r12), %rsi",
+        "    add $8392688, %rsi",
         "    mov %r12, 0(%rsi)",
         "    mov $56, %rax",
         "    mov $4001536, %rdi",
-        "    lea 40(%r12), %rdx",
-        "    lea 40(%r12), %r10",
+        "    lea 48(%r12), %rdx",
+        "    lea 48(%r12), %r10",
         "    mov %r12, %r8",
         "    syscall",
         "    test %rax, %rax",
@@ -563,22 +588,29 @@ def arch_prelude() -> str {
         "    pop %rbp",
         "    ret",
         // the new thread: its stack's top holds the tcb; it calls the
-        // closure, keeps the value, and ends (exit, not exit_group: the
-        // kernel then clears tid and wakes a join)
+        // closure, keeps the value, unmaps its stack (nothing after the
+        // munmap touches it) and ends (exit, not exit_group: the kernel
+        // then clears tid, in the tcb, and wakes a join)
         "y_thread_start:",
         "    mov %rsp, %rax",
         "    mov 0(%rax), %r12",
         "    xor %ebp, %ebp",
-        "    mov 56(%r12), %rax",
+        "    mov 64(%r12), %rax",
         "    push %rax",
         "    mov 0(%rax), %rax",
         "    call *%rax",
-        "    mov %rax, 48(%r12)",
+        "    mov %rax, 56(%r12)",
+        "    mov 32(%r12), %rdi",
+        "    mov $8392704, %rsi",
+        "    mov $11, %rax",
+        "    syscall",
         "    mov $60, %rax",
         "    xor %edi, %edi",
         "    syscall",
         // join: the handle called as a closure -> the thread's value, once
-        // its tid is 0
+        // its tid is 0. The first join takes the unused tail of the
+        // thread's chunk (a page or more; xchg takes it once) onto the
+        // joining thread's spare list, for its next spawn.
         "y_join_code:",
         "    mov %rsp, %rax",
         "    mov 8(%rax), %rax",
@@ -586,57 +618,88 @@ def arch_prelude() -> str {
         "    push %rbx",
         "    mov %rcx, %rbx",
         "y_join_wait:",
-        "    mov 40(%rbx), %rdx",
+        "    mov 48(%rbx), %rdx",
         "    test %rdx, %rdx",
         "    je y_join_done",
         "    mov $202, %rax",
-        "    lea 40(%rbx), %rdi",
+        "    lea 48(%rbx), %rdi",
         "    xor %esi, %esi",
         "    xor %r10d, %r10d",
         "    syscall",
         "    jmp y_join_wait",
         "y_join_done:",
-        "    mov 48(%rbx), %rax",
+        "    xor %eax, %eax",
+        "    xchg %rax, 16(%rbx)",
+        "    mov 8(%rbx), %rdi",
+        "    mov %rax, %rsi",
+        "    sub %rdi, %rsi",
+        "    cmp $4096, %rsi",
+        "    jl y_join_value",
+        "    mov %fs:0, %rcx",
+        "    mov %rax, 0(%rdi)",
+        "    mov 40(%rcx), %rdx",
+        "    mov %rdx, 8(%rdi)",
+        "    mov %rdi, 40(%rcx)",
+        "y_join_value:",
+        "    mov 56(%rbx), %rax",
         "    pop %rbx",
         "    ret",
-        // a mutex (%rax): its word 0 is 1 while held; xchg takes it, a
-        // futex waits for it
+        // a mutex (%rax): its word 0 is 0 when free, 1 when held, 2 when
+        // held and a thread may be waiting for it (Drepper, "Futexes Are
+        // Tricky", with xchg alone): a waiter marks it 2 before it sleeps,
+        // and only an unlock that finds 2 makes a syscall (the wake)
         "y_mutex_lock:",
         "    push %rbx",
         "    mov %rax, %rbx",
-        "y_mutex_try:",
         "    mov $1, %rcx",
+        "    xchg %rcx, 0(%rbx)",
+        "    test %rcx, %rcx",
+        "    je y_mutex_got",
+        "y_mutex_wait:",
+        "    mov $2, %rcx",
         "    xchg %rcx, 0(%rbx)",
         "    test %rcx, %rcx",
         "    je y_mutex_got",
         "    mov $202, %rax",
         "    mov %rbx, %rdi",
         "    mov $128, %rsi",
-        "    mov $1, %rdx",
+        "    mov $2, %rdx",
         "    xor %r10d, %r10d",
         "    syscall",
-        "    jmp y_mutex_try",
+        "    jmp y_mutex_wait",
         "y_mutex_got:",
         "    pop %rbx",
         "    ret",
         "y_mutex_unlock:",
-        "    push %rbx",
-        "    mov %rax, %rbx",
         "    xor %ecx, %ecx",
-        "    xchg %rcx, 0(%rbx)",
+        "    xchg %rcx, 0(%rax)",
+        "    cmp $2, %rcx",
+        "    jne y_mutex_free",
+        "    mov %rax, %rdi",
         "    mov $202, %rax",
-        "    mov %rbx, %rdi",
         "    mov $129, %rsi",
         "    mov $1, %rdx",
         "    syscall",
-        "    pop %rbx",
+        "y_mutex_free:",
         "    ret",
-        // 1 in %rax when the mutex (%rax) was free and is now held
+        // 1 in %rax when the mutex (%rax) was free and is now held. Taking
+        // it with xchg 1 may erase a 2 (a waiter's mark), which then goes
+        // back -- and if the mutex was released meanwhile, that takes it.
         "y_mutex_trylock:",
         "    mov $1, %rcx",
         "    xchg %rcx, 0(%rax)",
-        "    xor $1, %rcx",
-        "    mov %rcx, %rax",
+        "    test %rcx, %rcx",
+        "    je y_mutex_took",
+        "    cmp $2, %rcx",
+        "    jne y_mutex_busy",
+        "    xchg %rcx, 0(%rax)",
+        "    test %rcx, %rcx",
+        "    je y_mutex_took",
+        "y_mutex_busy:",
+        "    xor %eax, %eax",
+        "    ret",
+        "y_mutex_took:",
+        "    mov $1, %rax",
         "    ret",
         // a semaphore (%rax): its count at 0, guarded by the mutex at 8; a
         // wait sleeps on the count while it is 0
