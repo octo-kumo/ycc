@@ -411,6 +411,9 @@ a pointer to their type's descriptor before the fields; `&x`, `*p`,
 `for`/`for..in`/`foreach`/`while`; block expressions; `type` aliases
 (recursive through a record field or a function type), record unions and
 `match`;
+threads (`spawn { }`, `join`, `mutex`/`lock`, `sem`/`post`/`wait`) as
+`clone(2)`s, each allocating from a heap of its own through `%fs`, and
+processes (`fork { }`, `wait_pid`); every exit is `exit_group`;
 `def` params are annotated (or have a literal default; there is no
 unknown type), return types are inferred. `ycc` is
 native-only: `ycc [-o OUT] [-S] [-t] [-g] [-w] [--no-exec] [--std-src] FILE`,

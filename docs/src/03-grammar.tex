@@ -166,6 +166,7 @@ Function literals may also appear bound or anonymous:
 \begin{align*}
 \ty{type} ::={}& \ic{long} \mid \ic{byte} \mid \ic{bool} \mid \ic{float}
               \mid \ic{str} \mid \ic{void} \\
+  |~& \ic{mutex} \mid \ic{sem}                   && \text{(Section~\ref{sec:builtin-threads})}\\
   |~& \ic{[}~\ty{type}~\ic{]}                    && \text{(heap array)}\\
   |~& \ic{[}~\ty{type}~\ic{;}~\ty{nat}~\ic{]}   && \text{(fixed array)}\\
   |~& \ty{type}~\ic{?}                           && \text{(option)}\\
@@ -233,7 +234,11 @@ C.
   |~& \ic{f}~\ty{string}                && \text{(format string)} \\
   |~& \ic{\{}~[\ty{name}~\ic{:}~\ty{expr}~\{,\ldots\}]~\ic{\}}
        \quad \ic{\{}~[\ty{string}~\ic{:}~\ty{expr}~\{,\ldots\}]~\ic{\}} \\
-  |~& \ic{def}~\ic{(}~\ty{params}~\ic{)}~[\ic{->}~\ty{type}]~\ty{block}
+  |~& \ic{def}~\ic{(}~\ty{params}~\ic{)}~[\ic{->}~\ty{type}]~\ty{block} \\
+  |~& (\ic{spawn} \mid \ic{fork})~\ty{block}
+       && \text{(threads, processes)} \\
+  |~& (\ic{lock} \mid \ic{try\_lock})~\ty{postfix}~\ty{block} \\
+  |~& (\ic{join} \mid \ic{post} \mid \ic{wait})~\ty{postfix}
 \end{align*}
 
 \begin{align*}
@@ -252,6 +257,16 @@ postfix form, binds tighter than the prefix operators --- \ic{!x!} is
 In a record literal a bare name is shorthand for the field of that
 name: \ic{\{x, y\}} is \ic{\{x: x, y: y\}} (but \ic{\{ x \}} alone is a
 block whose value is \ic{x}).
+
+\begin{sloppypar}
+The forms of threads and processes (Section~\ref{sec:builtin-threads})
+are contextual: \ic{spawn} and \ic{fork} start one only before a
+\ic{\{}, the other words only before a name, which begins their
+\ty{postfix} operand (\ic{join ts[0]}, \ic{lock acct.guard}
+\ic{\{ \ldots\ \}}); anywhere else each is an ordinary name. A form is a
+call of the builtin of the same name, the block passed as a function of
+no parameters: \ic{lock m \{ e \}} is \ic{lock(m,} \ic{def () \{ e \})}.
+\end{sloppypar}
 
 \subsection*{Operator precedence}
 

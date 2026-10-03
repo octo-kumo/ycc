@@ -182,7 +182,8 @@ fill is one byte, and widths count bytes.
 \item[\ic{time\_us()}] Wall-clock microseconds since the Unix epoch
   (UTC) as \ic{long}: the time of day, which jumps when the clock is
   set.
-\item[\ic{heap\_used()}] Bytes allocated so far.
+\item[\ic{heap\_used()}] Bytes allocated so far (by the thread that
+  asks: each has a heap of its own).
 \item[\ic{sleep(ms)}] Suspend the process (\ic{void}).
 \item[\ic{syscall(...)}] Raw Linux syscall wrapper; the first argument
   is the syscall number.
@@ -192,6 +193,66 @@ fill is one byte, and widths count bytes.
 \end{description}
 
 \noindent Files are the standard module \ic{fs} (below), not builtins.
+
+\subsection{Threads and processes}
+\label{sec:builtin-threads}
+
+A program can run threads: the kernel's own, sharing the program's
+memory, each with a stack of 8\,MB and a heap of its own to allocate
+from. The forms are a word followed by a block or by an operand
+(Section~\ref{sec:expr-grammar}); each calls the builtin of the same name
+on the operand and on a function of no parameters made of the block, so
+\ic{spawn \{ e \}} is \ic{spawn(def () \{ e \})} and \ic{lock m \{ e \}}
+is \ic{lock(m, def () \{ e \})}:
+
+\begin{lstlisting}
+let m = mutex();
+let total = 0;
+let ts: [() -> long] = [];
+for i in 1..5 {
+    ts += spawn { let n = i * 1000; lock m { total += n; }; n };
+};
+foreach (t in ts) { join t; };
+print(total);                                    // 10000
+print(ts[3]());                                  // 4000
+let pid = fork { print("child"); exit(3); };
+print(wait_pid(pid));                            // 3
+\end{lstlisting}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{spawn \{ e \}}] Start a thread running the block. The value
+  is the thread: a function \ic{() -> T}, \ty{T} the block's type, that
+  waits for the thread to end and gives the block's value, as often as
+  it is called.
+\item[\ic{join t}] The same as \ic{t()}.
+\item[\ic{mutex()}] A new mutex, unlocked; its type is \ic{mutex}.
+\item[\ic{lock m \{ e \}}] Wait for \ty{m}, run the block, release
+  \ty{m}; the value is the block's. The block is a function: a
+  \ic{return} in it leaves the block, and \ty{m} is released either way.
+\item[\ic{try\_lock m \{ e \}}] Run the block under \ty{m} when \ty{m}
+  is free, and give \ic{true}; give \ic{false} when it is not.
+\item[\ic{sem(n)}] A counting semaphore holding \ty{n}; its type is
+  \ic{sem}.
+\item[\ic{post s}] Add one to \ty{s}, waking a thread that waits for it.
+\item[\ic{wait s}] Wait until \ty{s} is above zero, then take one.
+\item[\ic{fork \{ e \}}] Start a child process, a copy of this one, that
+  runs the block and exits with 0 (or with its own \ic{exit}). The value
+  is the child's pid (negative when there is none).
+\item[\ic{wait\_pid(pid)}] Wait for that child to end: its exit code,
+  128 plus the signal that ended it, or $-1$ when \ty{pid} is not a
+  child.
+\end{description}
+
+\noindent \ic{mutex} and \ic{sem} are types: a field, a parameter or an
+array holds them like any value, and every copy names the same lock.
+Threads share every global and every captured variable, and arrays,
+maps and owned strings lock nothing: threads that change one value must
+hold a mutex while they do. \ic{readline()} serves one thread at a time.
+When the program ends --- its last statement, \ic{exit} or a trap in any
+thread --- its threads end with it; \ic{join} the ones whose work must
+finish. The words are not reserved: \ic{lock}, \ic{join} and the others
+mean these forms only where one is written, and a def or a variable of
+the program named like one wins.
 
 \subsection{Files (the fs module)}
 \label{sec:builtin-fs}

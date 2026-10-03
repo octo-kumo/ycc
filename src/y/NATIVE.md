@@ -128,9 +128,11 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   semantics here; it made every helper that returned an accumulator O(n), so
   the assembler was O(n²) and self-compilation OOMed past 7.5 GB.)
 - Heap (bump allocator over 4 MB anonymous `mmap` chunks; its state — the
-  bump pointer, the chunk end and the bytes handed out so far — lives in
-  three `.bss` words, `y_heap`, which a program that never allocates shakes
-  out): dynamic arrays `[v, ...]` as `{len, cap, data, front}` headers
+  bump pointer, the chunk end and the bytes handed out so far, with a
+  self pointer, a flag and a spare list for threads (*Threads and
+  processes* below) — lives in six `.bss` words, `y_heap`, which a
+  program that never allocates shakes out): dynamic arrays `[v, ...]` as
+  `{len, cap, data, front}` headers
   (element block allocated separately), option boxes. A request of 256 KB
   or more gets a mapping of its own.
   Nothing is ever freed (arena); no GC to write until something needs it.
@@ -526,6 +528,62 @@ runtime helper by defining the same name: its body replaces the std
 unit's at link time, for every caller, the std units' own calls included
 (`link_units` drops the std body of every `y_` label the program
 defines); anything else starting with `y_` is on its own.
+
+## Threads and processes
+
+`spawn { }`, `join`, `mutex()` with `lock`/`try_lock`, `sem(n)` with
+`post`/`wait`, `fork { }` and `wait_pid` (CHOICES_MADE.md 33; the
+manual's *Threads and processes*) are builtins on closures: the parser
+turns `spawn { e }` into `spawn(def () { e })` and `lock m { e }` into
+`lock(m, def () { e })` (`parse_primary`, contextual: no word is
+reserved), so the checker and the emitter see ordinary calls. `mutex`
+and `sem` are record types no program can spell (`{$m: long}`,
+`{$n: long, $w: long}`, parser.y `sync_type`). The runtime is assembly
+in `arch_x64.y`, because it needs raw machine state:
+
+- **A thread is a `clone(2)`** sharing memory, files and signal handlers
+  (`CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|
+  CHILD_CLEARTID`), on an 8 MiB stack of its own: an `mmap` with a
+  `PROT_NONE` guard page below it, so a runaway recursion faults as it
+  does on the main thread. Its control block (72 bytes of the spawner's
+  heap) is `[self, cur, end, used, stack, spare, tid, value, closure]`,
+  its first words a heap block like `y_heap`. A spawn's value is the
+  closure `[y_join_code, tcb]`, so `join t` is `t()`: it futex-waits
+  until the kernel clears `tid` (CHILD_CLEARTID) and returns `value`. The
+  thread calls the closure, stores the value, unmaps its own stack
+  (nothing after the `munmap` touches it) and ends with `exit` (60).
+- **Each thread allocates from a heap of its own**, so `y_alloc` stays a
+  bump without a lock. Until the first spawn it uses the global
+  `y_heap` (one load and a test more than before threads); `y_threads_on`
+  then points `%fs` at `y_heap` (`arch_prctl(ARCH_SET_FS)`) and sets a
+  flag, and from then on every thread's `y_alloc` finds its block at
+  `%fs:0`. Nothing is freed, so a thread's values outlive it. The unused
+  tail of a dead thread's chunk is not lost either: the first join takes
+  it (an `xchg` on its `end`, so two joins cannot both take it) onto the
+  joining thread's `spare` list, and that thread's next spawn starts its
+  new thread there. A thousand threads spawned and joined in a row share
+  one 4 MB chunk instead of mapping a thousand (t160 checks it under the
+  memory cap); a thread nobody joins keeps its tail.
+- **Every process exit is `exit_group`** (231): a program's end, `exit`
+  and every trap end all its threads. Only a thread's own end is `exit`,
+  and `exec`'s child, a lone process anyway.
+- **A mutex** is one word: 0 free, 1 held, 2 held with a thread perhaps
+  waiting (Drepper's "Futexes Are Tricky", with `xchg` alone, the one
+  atomic the assembler has). A waiter marks it 2 before it sleeps
+  (`FUTEX_WAIT_PRIVATE`), and only an unlock that finds 2 makes a
+  syscall: an uncontended `lock m { }` costs two `xchg`s and the block's
+  call (24 ns, against 158 ns when every unlock woke). `try_lock` takes
+  it with `xchg 1`; when that erased a 2 it puts the 2 back, which takes
+  the mutex if it was released in between. **A semaphore** is its count
+  and a mutex guarding it; `wait` sleeps on the count while it is 0, and
+  every `post` wakes one sleeper.
+- **`fork { }`** is `fork(2)`: the child (a copy holding only the forking
+  thread) calls the closure and ends with `exit_group(0)`; the parent gets
+  the pid, or `-errno`. `wait_pid` (rt.y) is `wait4`: the exit code, 128
+  plus the signal, or -1.
+
+`readline()`'s stdin buffer (prelude.y) is the one piece of runtime state
+shared without a lock: one thread at a time may read stdin.
 
 ## Compilation units and the std pack
 
@@ -932,6 +990,11 @@ them starts compiling again, so the list can only shrink.
   recursion is constant-space (see above).
 - Arena heap: nothing is freed (no leaks that matter for short-lived
   binaries; long-running programs want the planned GC).
+- Threads lock nothing for the program: an array, a map or an owned
+  string two threads change at once needs a mutex around it, and
+  `readline()` serves one thread at a time. A thread nobody joins keeps
+  the unused tail of its heap chunk (address space only: untouched pages
+  cost no memory).
 - A record built where no type is declared gets the descriptor of its
   own type: `let r = {a: none};` is an `{a: none}`, not the `{a: long?}`
   it is later stored as, so a `match` on a union holding it finds no
