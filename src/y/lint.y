@@ -120,27 +120,33 @@ def lint_rets_node(st: LintSt, node: Node) -> long {
     }
 };
 
-// Whether the call `callee` (an id naming a def, or `self`) hands back a
-// value. A name no def answers for -- a builtin, a package's qualified
-// name, a name from another unit -- is taken to be void: the linter has
-// no way to know, and a wrong warning is worse than a missing one.
-def lint_returns(st: LintSt, callee: Node) -> bool {
+// The binding a call goes to, resolved: an id naming a def, or `self`,
+// which is the def it is written in ("" when the callee is neither).
+def lint_binding(st: LintSt, callee: Node) -> str {
     if (callee.k != K.id) {
-        false
+        ""
     } else {
         let leaf: Leaf = callee;
-        let nm = if (leaf.v == "self") { st.self } else { leaf.v };
-        if (nm == "") {
+        if (leaf.v == "self") { st.self } else { leaf.v }
+    }
+};
+
+// Whether the call hands a value back. A name no def answers for -- a
+// builtin, a package's qualified name, a name from another unit -- is
+// taken to be void: the linter has no way to know, and a wrong warning is
+// worse than a missing one.
+def lint_returns(st: LintSt, callee: Node) -> bool {
+    let nm = lint_binding(st, callee);
+    if (nm == "") {
+        false
+    } else {
+        let i = parser.nameix_get(st.ridx, nm);
+        if (i < 0) {
             false
         } else {
-            let i = parser.nameix_get(st.ridx, nm);
-            if (i < 0) {
-                false
-            } else {
-                let ret = st.rets[i].ret;
-                let rk: long = ret.k;
-                !(rk == K.tvoid || rk == K.tunk || rk == K.tnone)
-            }
+            let ret = st.rets[i].ret;
+            let rk: long = ret.k;
+            !(rk == K.tvoid || rk == K.tunk || rk == K.tnone)
         }
     }
 };
@@ -151,6 +157,15 @@ def lint_self(st: LintSt, name: str) -> str {
     let was = st.self;
     st.self = name;
     was
+};
+
+// A def's value, walked with `self` bound to its name: a call to `self` is
+// a call to the def it is written in, so it is named for it.
+def lint_def_body(st: LintSt, name: str, v: Node) -> long {
+    let was = lint_self(st, name);
+    lint_node(st, v, true);
+    st.self = was;
+    0
 };
 
 def lint_warn(st: LintSt, msg: str, line: long, col: long) -> long {
@@ -275,7 +290,13 @@ def lint_warn_start(st: LintSt, msg: str, node: Node) -> long {
 def lint_stmt(st: LintSt, s: Node, used: bool, top: bool) -> long {
     if (top && s.k == K.decl) {
         let decl: Decl = s;
-        lint_node(st, decl.v, true)
+        // a top-level binding is a global: its value is walked, not its
+        // use, but a def's body still reaches itself through `self`
+        if (decl.kind == "def") {
+            lint_def_body(st, decl.name, decl.v)
+        } else {
+            lint_node(st, decl.v, true)
+        }
     } else {
         lint_node(st, s, used)
     }
@@ -452,8 +473,9 @@ def lint_one(st: LintSt, node: Node, used: bool) -> long {
 // back. The message names the function the way the source spells it.
 def lint_unused_call(st: LintSt, node: Node, used: bool, call: Call) -> long {
     if (st.wlevel >= 1 && !used && lint_returns(st, call.callee)) {
-        let leaf: Leaf = call.callee;
-        lint_warn_at(st, "the value of '" + lint_disp(leaf.v) + "()' is not used", node);
+        // named for the def it calls: a recursive `self` is `f()`
+        let nm = lint_binding(st, call.callee);
+        lint_warn_at(st, "the value of '" + lint_disp(nm) + "()' is not used", node);
     };
     0
 };
@@ -617,11 +639,7 @@ def lint_decl(st: LintSt, node: Decl) -> long {
     let v = node.v;
     if (node.kind == "def") {
         lint_note(st, node.name, "def", node.line, node.col, false, false);
-        // the body reaches itself through `self`
-        let was = lint_self(st, node.name);
-        lint_node(st, v, true);
-        st.self = was;
-        0
+        lint_def_body(st, node.name, v)
     } else {
         lint_note(st, node.name, node.kind, node.line, node.col, lint_scal(node.typ, v), lint_fresh(v));
         lint_node(st, v, true)
