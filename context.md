@@ -3,9 +3,12 @@
 ## State
 
 - On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
-  `c5dc23f0` (no unknown types; f3a5a9a). make test, ASan (native audit
-  examples pkg, RSS-capped) and fuzz (1500, seed 4242) green. Since the
-  previous bless (02651975, backed up as `ycc.ref.pre-nounk`): cycc and
+  `58cfffb5` (4659fbf: the unknown-type runtime removed, descriptors one
+  byte, ycc-std-pack 4 / ycc-unit 3; previous `c5dc23f0` backed up as
+  `ycc.ref.pre-desc`). make test, ASan (native audit examples pkg,
+  RSS-capped) and fuzz (1500, seeds 4242/4243) green. Before that,
+  `c5dc23f0` (no unknown types; f3a5a9a). Since 02651975 (backed up as
+  `ycc.ref.pre-nounk`): cycc and
   src/y have no unknown types (cb89e46, 7eec451, f1b147f, de7fc24,
   35a3a2d, dcaf4e9: `{k: str}` exact, no `..`, parameters annotated,
   `[]`/`none` free placeholders, forward calls need `-> T`, sound
@@ -37,9 +40,7 @@
   Watch: types.y set_inferred_ret writes `func.ret` through a Func cast
   from a Node -- with copying casts that write is lost; TRef's layouts
   coincide (k sorts first), so the tref patches in rename.y/native.y stay
-  safe. Then remove the dead unknown-type machinery (y_dot_lookup,
-  y_rec_has, y_rec_cast, gen_union_cast, layout_unknown, descriptor field
-  tables/koff/shape31; pack/unit versions bump).
+  safe. (The dead unknown-type machinery is gone: 4659fbf.)
   The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
