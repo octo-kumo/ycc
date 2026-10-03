@@ -994,4 +994,514 @@ def x25519_base(k: [byte]) -> [byte] {
     x25519(k, u)
 };
 
-export { hex, unhex, random_bytes, bytes_eq, be_bytes, le_bytes, sha256, sha384, sha512, hash_sha256, hash_sha384, hmac, hkdf_extract, hkdf_expand, chacha20, poly1305, chacha_seal, chacha_open, aes_key, aes_encrypt, gcm_seal, gcm_open, x25519, x25519_base };
+// ── big naturals and Montgomery arithmetic ───────────────────────────────
+// A natural number is [long] limbs of 30 bits, least significant first; the
+// operations below keep a fixed limb count k (the modulus's).
+
+let BN_MASK = 0x3fffffff;
+
+// Limbs enough for nbytes bytes.
+def bn_limbs(nbytes: long) -> long { (8 * nbytes + 29) / 30 };
+
+def bn_zero(k: long) -> [long] {
+    let o: [long] = [];
+    let i = 0;
+    while (i < k) {
+        o += 0;
+        i = i + 1;
+    };
+    o
+};
+
+// The big-endian bytes b as k limbs (bits past k limbs are dropped).
+def bn_from_bytes(b: [byte], k: long) -> [long] {
+    let o = bn_zero(k);
+    let bit = 0;
+    let i = len(b) - 1;
+    while (i >= 0) {
+        let limb = bit / 30;
+        let sh = bit % 30;
+        if (limb < k) { o[limb] = o[limb] | ((b[i] << sh) & BN_MASK); };
+        if (sh > 22 && limb + 1 < k) { o[limb + 1] = o[limb + 1] | (b[i] >> (30 - sh)); };
+        bit = bit + 8;
+        i = i - 1;
+    };
+    o
+};
+
+// a as n big-endian bytes.
+def bn_to_bytes(a: [long], n: long) -> [byte] {
+    let out: [byte] = [];
+    let i = n - 1;
+    while (i >= 0) {
+        let bit = 8 * i;
+        let limb = bit / 30;
+        let sh = bit % 30;
+        let v = 0;
+        if (limb < len(a)) { v = a[limb] >> sh; };
+        if (sh > 22 && limb + 1 < len(a)) { v = v | (a[limb + 1] << (30 - sh)); };
+        out += v & 255;
+        i = i - 1;
+    };
+    out
+};
+
+// -1, 0 or 1 as a < b, a == b, a > b (equal limb counts).
+def bn_cmp(a: [long], b: [long]) -> long {
+    let i = len(a) - 1;
+    while (i >= 0) {
+        if (a[i] < b[i]) { return -1; };
+        if (a[i] > b[i]) { return 1; };
+        i = i - 1;
+    };
+    0
+};
+
+def bn_is_zero(a: [long]) -> bool {
+    let z = true;
+    foreach (x in a) {
+        if (x != 0) { z = false; };
+    };
+    z
+};
+
+// a - b (a >= b).
+def bn_sub(a: [long], b: [long]) -> [long] {
+    let o = bn_zero(len(a));
+    let borrow = 0;
+    let i = 0;
+    while (i < len(a)) {
+        let x = a[i] - b[i] - borrow;
+        borrow = 0;
+        if (x < 0) {
+            x = x + (1 << 30);
+            borrow = 1;
+        };
+        o[i] = x;
+        i = i + 1;
+    };
+    o
+};
+
+// a + b, and whether it carried out of the top limb.
+def bn_add_c(a: [long], b: [long], o: [long]) -> long {
+    let carry = 0;
+    let i = 0;
+    while (i < len(a)) {
+        let x = a[i] + b[i] + carry;
+        o[i] = x & BN_MASK;
+        carry = x >> 30;
+        i = i + 1;
+    };
+    carry
+};
+
+// The bit length of a.
+def bn_bits(a: [long]) -> long {
+    let i = len(a) - 1;
+    while (i >= 0 && a[i] == 0) { i = i - 1; };
+    if (i < 0) { return 0; };
+    let n = 30 * i;
+    let v = a[i];
+    while (v > 0) {
+        n = n + 1;
+        v = v >> 1;
+    };
+    n
+};
+
+// x = 2x mod n in place (x below n).
+def bn_dbl_mod(x: [long], n: [long]) {
+    let k = len(x);
+    let carry = 0;
+    let i = 0;
+    while (i < k) {
+        let v = x[i] * 2 + carry;
+        x[i] = v & BN_MASK;
+        carry = v >> 30;
+        i = i + 1;
+    };
+    if (carry != 0 || bn_cmp(x, n) >= 0) {
+        // x - n, the borrow out of the top limb dropped: the wrap
+        let borrow = 0;
+        i = 0;
+        while (i < k) {
+            let v = x[i] - n[i] - borrow;
+            borrow = 0;
+            if (v < 0) {
+                v = v + (1 << 30);
+                borrow = 1;
+            };
+            x[i] = v;
+            i = i + 1;
+        };
+    };
+};
+
+// A Montgomery modulus (odd): R = 2^(30k); n0 = -n^-1 mod 2^30; r2 =
+// R^2 mod n; one = R mod n, the Montgomery form of 1.
+type Mont = { n: [long], k: long, n0: long, r2: [long], one: [long] };
+
+def mont_new(nb: [byte]) -> Mont {
+    let k = bn_limbs(len(nb));
+    let n = bn_from_bytes(nb, k);
+    // n0: Newton's iteration for n[0]^-1 mod 2^30, negated
+    let inv = 1;
+    let i = 0;
+    while (i < 5) {
+        inv = (inv * (2 - n[0] * inv)) & BN_MASK;
+        i = i + 1;
+    };
+    let n0 = ((1 << 30) - inv) & BN_MASK;
+    // R^2 mod n: 1 doubled 2 * 30k times, n taken away when it reaches n
+    let x = bn_zero(k);
+    x[0] = 1;
+    let one: [long] = [];
+    let steps = 60 * k;
+    i = 0;
+    while (i < steps) {
+        bn_dbl_mod(x, n);
+        i = i + 1;
+        if (i == 30 * k) { one = x[0:k]; };
+    };
+    { n: n, k: k, n0: n0, r2: x, one: one }
+};
+
+// a * b / R mod n (CIOS), a and b below n.
+def mont_mul(m: Mont, a: [long], b: [long]) -> [long] {
+    let k = m.k;
+    let n = m.n;
+    let t: [long] = [];
+    let i = 0;
+    while (i < k + 2) {
+        t += 0;
+        i = i + 1;
+    };
+    i = 0;
+    while (i < k) {
+        let ai = a[i];
+        let c = 0;
+        let j = 0;
+        while (j < k) {
+            let x = t[j] + ai * b[j] + c;
+            t[j] = x & BN_MASK;
+            c = x >> 30;
+            j = j + 1;
+        };
+        let x = t[k] + c;
+        t[k] = x & BN_MASK;
+        t[k + 1] = x >> 30;
+        let mm = (t[0] * m.n0) & BN_MASK;
+        x = t[0] + mm * n[0];
+        c = x >> 30;
+        j = 1;
+        while (j < k) {
+            x = t[j] + mm * n[j] + c;
+            t[j - 1] = x & BN_MASK;
+            c = x >> 30;
+            j = j + 1;
+        };
+        x = t[k] + c;
+        t[k - 1] = x & BN_MASK;
+        c = x >> 30;
+        t[k] = t[k + 1] + c;
+        t[k + 1] = 0;
+        i = i + 1;
+    };
+    let o = t[0:k];
+    if (t[k] != 0 || bn_cmp(o, n) >= 0) { o = bn_sub(o, n); };
+    o
+};
+
+def mont_in(m: Mont, a: [long]) -> [long] { mont_mul(m, a, m.r2) };
+
+def mont_out(m: Mont, a: [long]) -> [long] {
+    let one = bn_zero(m.k);
+    one[0] = 1;
+    mont_mul(m, a, one)
+};
+
+// a^e mod n, a and the result in Montgomery form; e big-endian bytes.
+def mont_pow(m: Mont, a: [long], e: [byte]) -> [long] {
+    let x = m.one;
+    foreach (eb in e) {
+        let bit = 7;
+        while (bit >= 0) {
+            x = mont_mul(m, x, x);
+            if (((eb >> bit) & 1) == 1) { x = mont_mul(m, x, a); };
+            bit = bit - 1;
+        };
+    };
+    x
+};
+
+def mod_add(m: Mont, a: [long], b: [long]) -> [long] {
+    let o = bn_zero(m.k);
+    let carry = bn_add_c(a, b, o);
+    if (carry != 0 || bn_cmp(o, m.n) >= 0) { o = bn_sub(o, m.n); };
+    o
+};
+
+def mod_sub(m: Mont, a: [long], b: [long]) -> [long] {
+    if (bn_cmp(a, b) >= 0) { bn_sub(a, b) } else {
+        let o = bn_zero(m.k);
+        bn_add_c(a, m.n, o);
+        bn_sub(o, b)
+    }
+};
+
+// n - 2 as big-endian bytes (for an inverse by Fermat).
+def minus2_bytes(m: Mont, nbytes: long) -> [byte] {
+    let two = bn_zero(m.k);
+    two[0] = 2;
+    bn_to_bytes(bn_sub(m.n, two), nbytes)
+};
+
+// ── RSA signatures (RFC 8017): PKCS #1 v1.5 and PSS ─────────────────────
+
+// sig^e mod n as len(n) bytes; [] for a signature of another length or
+// not below n. n and e big-endian, n with no leading zero byte.
+def rsa_public(nb: [byte], eb: [byte], sig: [byte]) -> [byte] {
+    let none_b: [byte] = [];
+    if (len(sig) != len(nb) || len(nb) == 0 || (nb[len(nb) - 1] & 1) == 0) { return none_b; };
+    let m = mont_new(nb);
+    let s = bn_from_bytes(sig, m.k);
+    if (bn_cmp(s, m.n) >= 0) { return none_b; };
+    bn_to_bytes(mont_out(m, mont_pow(m, mont_in(m, s), eb)), len(nb))
+};
+
+// The DigestInfo prefix (RFC 8017 9.2) of a hash named by its length.
+def digest_info(hlen: long) -> [byte] {
+    if (hlen == 32) { unhex("3031300d060960864801650304020105000420") }
+    else if (hlen == 48) { unhex("3041300d060960864801650304020205000430") }
+    else { unhex("3051300d060960864801650304020305000440") }
+};
+
+// sig is n's PKCS #1 v1.5 signature of a message with this digest
+// (SHA-256, -384 or -512, told apart by its length).
+def rsa_verify_pkcs1(nb: [byte], eb: [byte], digest: [byte], sig: [byte]) -> bool {
+    let em = rsa_public(strip0(nb), eb, sig);
+    let t: [byte] = [];
+    t += digest_info(len(digest));
+    t += digest;
+    let k = len(em);
+    if (k < len(t) + 11) { return false; };
+    let want: [byte] = [0, 1];
+    while (len(want) < k - len(t) - 1) { want += 255; };
+    want += 0;
+    want += t;
+    bytes_eq(em, want)
+};
+
+// MGF1 (RFC 8017 B.2.1) over hash h: n bytes from seed.
+def mgf1(h: Hash, seed: [byte], n: long) -> [byte] {
+    let out: [byte] = [];
+    let c = 0;
+    while (len(out) < n) {
+        let m: [byte] = [];
+        m += seed;
+        m += be_bytes(c, 4);
+        out += h.f(m);
+        c = c + 1;
+    };
+    out[0:n]
+};
+
+// sig is n's RSASSA-PSS signature (MGF1 and salt length from hash h) of
+// a message with digest mhash.
+def rsa_verify_pss(nb: [byte], eb: [byte], h: Hash, mhash: [byte], sig: [byte]) -> bool {
+    let n = strip0(nb);
+    let em0 = rsa_public(n, eb, sig);
+    if (len(em0) == 0) { return false; };
+    let k = bn_limbs(len(n));
+    let embits = bn_bits(bn_from_bytes(n, k)) - 1;
+    let emlen = (embits + 7) / 8;
+    let em = em0;
+    if (emlen < len(em0)) {
+        if (em0[0] != 0) { return false; };
+        em = em0[1:len(em0)];
+    };
+    let hl = h.size;
+    let sl = h.size;
+    if (emlen < hl + sl + 2 || em[emlen - 1] != 0xbc) { return false; };
+    let masked = em[0:emlen - hl - 1];
+    let hh = em[emlen - hl - 1:emlen - 1];
+    let top = 8 * emlen - embits;
+    let topmask = 255 >> top;
+    if ((masked[0] & ~topmask) != 0) { return false; };
+    let mask = mgf1(h, hh, emlen - hl - 1);
+    let db: [byte] = [];
+    let i = 0;
+    while (i < len(masked)) {
+        db += masked[i] ^ mask[i];
+        i = i + 1;
+    };
+    db[0] = db[0] & topmask;
+    let ps = emlen - hl - sl - 2;
+    i = 0;
+    while (i < ps) {
+        if (db[i] != 0) { return false; };
+        i = i + 1;
+    };
+    if (db[ps] != 1) { return false; };
+    let mp: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
+    mp += mhash;
+    mp += db[len(db) - sl:len(db)];
+    bytes_eq(h.f(mp), hh)
+};
+
+// b without its leading zero bytes (DER integers carry one for the sign).
+def strip0(b: [byte]) -> [byte] {
+    let i = 0;
+    while (i < len(b) - 1 && b[i] == 0) { i = i + 1; };
+    b[i:len(b)]
+};
+
+// ── ECDSA (FIPS 186-4) over P-256 and P-384 ─────────────────────────────
+// Points in Jacobian coordinates (X/Z^2, Y/Z^3), each a field element in
+// Montgomery form; Z = 0 is the point at infinity. a = -3 on both curves.
+
+type Curve = { p: Mont, n: Mont, b: [long], gx: [long], gy: [long], size: long };
+type Pt = { x: [long], y: [long], z: [long] };
+
+def curve(p: str, n: str, b: str, gx: str, gy: str) -> Curve {
+    let pm = mont_new(unhex(p));
+    let nm = mont_new(unhex(n));
+    let k = pm.k;
+    {
+        p: pm, n: nm, size: len(p) / 2,
+        b: mont_in(pm, bn_from_bytes(unhex(b), k)),
+        gx: mont_in(pm, bn_from_bytes(unhex(gx), k)),
+        gy: mont_in(pm, bn_from_bytes(unhex(gy), k))
+    }
+};
+
+def p256() -> Curve {
+    curve("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff",
+          "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551",
+          "5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b",
+          "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+          "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
+};
+
+def p384() -> Curve {
+    curve("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff",
+          "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973",
+          "b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef",
+          "aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7",
+          "3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f")
+};
+
+def pt_double(c: Curve, a: Pt) -> Pt {
+    let f = c.p;
+    if (bn_is_zero(a.z)) { return a; };
+    let delta = mont_mul(f, a.z, a.z);
+    let gamma = mont_mul(f, a.y, a.y);
+    let beta = mont_mul(f, a.x, gamma);
+    let t = mont_mul(f, mod_sub(f, a.x, delta), mod_add(f, a.x, delta));
+    let alpha = mod_add(f, mod_add(f, t, t), t);
+    let beta4 = mod_add(f, beta, beta);
+    beta4 = mod_add(f, beta4, beta4);
+    let x3 = mod_sub(f, mont_mul(f, alpha, alpha), mod_add(f, beta4, beta4));
+    let yz = mod_add(f, a.y, a.z);
+    let z3 = mod_sub(f, mod_sub(f, mont_mul(f, yz, yz), gamma), delta);
+    let g2 = mont_mul(f, gamma, gamma);
+    let g8 = mod_add(f, g2, g2);
+    g8 = mod_add(f, g8, g8);
+    g8 = mod_add(f, g8, g8);
+    let y3 = mod_sub(f, mont_mul(f, alpha, mod_sub(f, beta4, x3)), g8);
+    { x: x3, y: y3, z: z3 }
+};
+
+def pt_add(c: Curve, a: Pt, b: Pt) -> Pt {
+    let f = c.p;
+    if (bn_is_zero(a.z)) { return b; };
+    if (bn_is_zero(b.z)) { return a; };
+    let z1z1 = mont_mul(f, a.z, a.z);
+    let z2z2 = mont_mul(f, b.z, b.z);
+    let u1 = mont_mul(f, a.x, z2z2);
+    let u2 = mont_mul(f, b.x, z1z1);
+    let s1 = mont_mul(f, a.y, mont_mul(f, b.z, z2z2));
+    let s2 = mont_mul(f, b.y, mont_mul(f, a.z, z1z1));
+    let h = mod_sub(f, u2, u1);
+    let r = mod_sub(f, s2, s1);
+    if (bn_is_zero(h)) {
+        if (bn_is_zero(r)) { return pt_double(c, a); };
+        return { x: f.one, y: f.one, z: bn_zero(f.k) };
+    };
+    r = mod_add(f, r, r);
+    let h2 = mod_add(f, h, h);
+    let i = mont_mul(f, h2, h2);
+    let j = mont_mul(f, h, i);
+    let v = mont_mul(f, u1, i);
+    let x3 = mod_sub(f, mod_sub(f, mont_mul(f, r, r), j), mod_add(f, v, v));
+    let s1j = mont_mul(f, s1, j);
+    let y3 = mod_sub(f, mont_mul(f, r, mod_sub(f, v, x3)), mod_add(f, s1j, s1j));
+    let zz = mod_add(f, a.z, b.z);
+    let z3 = mont_mul(f, mod_sub(f, mod_sub(f, mont_mul(f, zz, zz), z1z1), z2z2), h);
+    { x: x3, y: y3, z: z3 }
+};
+
+// The bit of a big-endian byte string, counted from the most significant.
+def bit_at(b: [byte], i: long) -> long { (b[i / 8] >> (7 - i % 8)) & 1 };
+
+// x lies on the curve with some y: y^2 = x^3 - 3x + b (Montgomery form).
+def on_curve(c: Curve, x: [long], y: [long]) -> bool {
+    let f = c.p;
+    let x3 = mont_mul(f, mont_mul(f, x, x), x);
+    let three_x = mod_add(f, mod_add(f, x, x), x);
+    let rhs = mod_add(f, mod_sub(f, x3, three_x), c.b);
+    bn_cmp(mont_mul(f, y, y), rhs) == 0
+};
+
+// The ECDSA signature (r, s, big-endian) of digest by the public key
+// (qx, qy) on curve c holds.
+def ecdsa_verify(c: Curve, qx: [byte], qy: [byte], digest: [byte], rb: [byte], sb: [byte]) -> bool {
+    let nm = c.n;
+    let f = c.p;
+    let r0 = strip0(rb);
+    let s0 = strip0(sb);
+    if (len(r0) > c.size || len(s0) > c.size || len(qx) != c.size || len(qy) != c.size) { return false; };
+    let r = bn_from_bytes(r0, nm.k);
+    let s = bn_from_bytes(s0, nm.k);
+    if (bn_is_zero(r) || bn_is_zero(s) || bn_cmp(r, nm.n) >= 0 || bn_cmp(s, nm.n) >= 0) { return false; };
+    let pxn = bn_from_bytes(qx, f.k);
+    let pyn = bn_from_bytes(qy, f.k);
+    if (bn_cmp(pxn, f.n) >= 0 || bn_cmp(pyn, f.n) >= 0) { return false; };
+    let qxm = mont_in(f, pxn);
+    let qym = mont_in(f, pyn);
+    if (!on_curve(c, qxm, qym)) { return false; };
+    // z: the digest's leftmost bits as many as n has, reduced mod n
+    let d = digest;
+    if (len(d) > c.size) { d = d[0:c.size]; };
+    let z = bn_from_bytes(d, nm.k);
+    if (bn_cmp(z, nm.n) >= 0) { z = bn_sub(z, nm.n); };
+    let w = mont_pow(nm, mont_in(nm, s), minus2_bytes(nm, c.size));
+    let u1 = mont_out(nm, mont_mul(nm, mont_in(nm, z), w));
+    let u2 = mont_out(nm, mont_mul(nm, mont_in(nm, r), w));
+    let u1b = bn_to_bytes(u1, c.size);
+    let u2b = bn_to_bytes(u2, c.size);
+    let g: Pt = { x: c.gx, y: c.gy, z: f.one };
+    let q: Pt = { x: qxm, y: qym, z: f.one };
+    let gq = pt_add(c, g, q);
+    let acc: Pt = { x: f.one, y: f.one, z: bn_zero(f.k) };
+    let i = 0;
+    while (i < 8 * c.size) {
+        acc = pt_double(c, acc);
+        let b1 = bit_at(u1b, i);
+        let b2 = bit_at(u2b, i);
+        if (b1 == 1 && b2 == 1) { acc = pt_add(c, acc, gq); }
+        else if (b1 == 1) { acc = pt_add(c, acc, g); }
+        else if (b2 == 1) { acc = pt_add(c, acc, q); };
+        i = i + 1;
+    };
+    if (bn_is_zero(acc.z)) { return false; };
+    // x = X / Z^2, then mod n
+    let zinv = mont_pow(f, acc.z, minus2_bytes(f, c.size));
+    let x = mont_out(f, mont_mul(f, acc.x, mont_mul(f, zinv, zinv)));
+    let xn = bn_from_bytes(bn_to_bytes(x, c.size), nm.k);
+    if (bn_cmp(xn, nm.n) >= 0) { xn = bn_sub(xn, nm.n); };
+    bn_cmp(xn, r) == 0
+};
+
+export { hex, unhex, random_bytes, bytes_eq, be_bytes, le_bytes, sha256, sha384, sha512, hash_sha256, hash_sha384, hmac, hkdf_extract, hkdf_expand, chacha20, poly1305, chacha_seal, chacha_open, aes_key, aes_encrypt, gcm_seal, gcm_open, x25519, x25519_base, rsa_verify_pkcs1, rsa_verify_pss, p256, p384, ecdsa_verify };
