@@ -17,6 +17,9 @@ NEW="$(readlink -f "$2")"
 [ -x "$BASE" ] || { echo "bench: $BASE is not an executable" >&2; exit 2; }
 [ -x "$NEW" ] || { echo "bench: $NEW is not an executable" >&2; exit 2; }
 command -v valgrind >/dev/null || { echo "bench: valgrind not found" >&2; exit 2; }
+# every run (valgrind and the compiler under it) below 4 GB of address
+# space: past 4 GB this machine goes down (test/sh/capped.sh)
+ulimit -S -v "${YMEM_CAP_KB:-3670016}" || exit 2
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="${YJOBS:-$(nproc)}"
 TMP="$(mktemp -d /tmp/ybench-ir.XXXXXX)"
@@ -29,12 +32,17 @@ BASE="$TMP/ycc_b"
 NEW="$TMP/ycc_n"
 cd "$ROOT" || exit 2   # where imports of std modules resolve (src/y/std/)
 
-# ir <ycc> <file> <key>: <key>.ir = instructions <ycc> executes on <file>
+# ir <ycc> <file> <key>: <key>.ir = instructions <ycc> executes on <file>,
+# or nothing when the compile fails (the report shows "-"): a compiler
+# that runs out of its memory cap, or past the timeout, has no count
 ir() {
-    valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null \
-        "$1" -o "$TMP/$3.bin" "$2" </dev/null 2>&1 \
-        | awk '/I +refs:/ { gsub(/,/, "", $NF); print $NF }' >"$TMP/$3.ir"
-    rm -f "$TMP/$3.bin"
+    if timeout 900 valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null \
+        "$1" -o "$TMP/$3.bin" "$2" </dev/null >"$TMP/$3.log" 2>&1; then
+        awk '/I +refs:/ { gsub(/,/, "", $NF); print $NF }' "$TMP/$3.log" >"$TMP/$3.ir"
+    else
+        : >"$TMP/$3.ir"
+    fi
+    rm -f "$TMP/$3.bin" "$TMP/$3.log"
 }
 
 PROGS=("$ROOT/src/y/ycc.y" "$ROOT"/bench/y/*.y)

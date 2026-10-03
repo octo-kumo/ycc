@@ -32,13 +32,17 @@ esac
 # process). Past it the allocator fails and the compiler or program exits 1
 # with "out of memory", so a memory regression is a FAILED test rather than a
 # machine pushed into swap or the OOM killer: the self-compile once peaked at
-# 32 GB, `make test` ran it twice, and every run "passed". The heaviest
-# legitimate input is cycc compiling src/y/ycc.y (~4.1 GB RSS; ./ycc needs
-# ~0.8 GB for the same file). Sanitized builds reserve terabytes of virtual
-# address space up front, so the cap is off for them.
-YMEM_KB="${YMEM_KB:-6291456}"
+# 32 GB, `make test` ran it twice, and every run "passed". The cap stays
+# below 4 GB, past which this machine goes down. The heaviest legitimate
+# input is cycc compiling src/y/ycc.y (~1.9 GB RSS; ./ycc needs ~1.1 GB for
+# the same file). Sanitized builds reserve terabytes of virtual address
+# space up front, so for them the cap is ASan's own RSS limit instead.
+YMEM_KB="${YMEM_KB:-3670016}"
 case "$CYCC$YREF" in
-    *asan* | *msan* | *ubsan*) YMEM_KB=unlimited ;;
+    *asan* | *msan* | *ubsan*)
+        YMEM_KB=unlimited
+        export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}hard_rss_limit_mb=3500"
+        ;;
 esac
 ulimit -v "$YMEM_KB"
 
@@ -47,7 +51,7 @@ ulimit -v "$YMEM_KB"
 # native t71 (a 16 GB array, the largest `[0; n]` there is) must see its
 # allocation fail, not page until the timeout. run_bin <timeout> <bin>
 # [args...] runs a compiled program.
-YPROG_MEM_KB="${YPROG_MEM_KB:-6291456}"
+YPROG_MEM_KB="${YPROG_MEM_KB:-3670016}"
 run_bin() {
     local to=$1
     shift

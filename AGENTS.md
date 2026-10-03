@@ -31,10 +31,20 @@ same semantics.
   contain string literals (see NATIVE.md, "Runtime library").
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
-  Do NOT put a `ulimit -v` on sanitized runs — ASan reserves terabytes
-  of *virtual* address space. The programs a sanitized compiler emits
-  still run capped (`run_bin` in `test/sh/lib.sh`, `YPROG_MEM_KB`), so a
-  test that must see an allocation fail still does.
+  A sanitized compiler cannot run under `ulimit -v` (ASan reserves
+  terabytes of *virtual* address space): its cap is ASan's own,
+  `ASAN_OPTIONS=hard_rss_limit_mb=3500` (lib.sh and `make test-asan` set
+  it). The programs a sanitized compiler emits still run under `ulimit
+  -v` (`run_bin` in `test/sh/lib.sh`, `YPROG_MEM_KB`), so a test that
+  must see an allocation fail still does.
+- **Every process runs under a memory cap below 4 GB** — this machine
+  goes down past 4 GB, and it has, twice. The Makefile's recipes run in
+  `test/sh/capped.sh` (`ulimit -S -v 3670016`, 3.5 GiB); lib.sh, check.sh
+  and the bench scripts set the same cap themselves; anything run by hand
+  gets `(ulimit -v 3670016; timeout ... cmd)` — valgrind, gdb and perf
+  included (they run the program inside the cap). A run that hits the cap
+  is a bug to fix (find what allocates; `cycc` never frees, so all it
+  ever allocates counts), never a reason to raise the cap.
 - When changing `src/y/*.y`: the C copy (`src/c/`) must get the same
   change (it is a 1:1 copy — see PORTING.md), then `make ycc` must stay
   byte-identical, and `make test` green. The Makefile has a target for

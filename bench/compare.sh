@@ -30,6 +30,9 @@ NEW="$(readlink -f "$2")"
 RUNS="${3:-5}"
 [ -x "$BASE" ] || { echo "bench: $BASE is not an executable" >&2; exit 2; }
 [ -x "$NEW" ] || { echo "bench: $NEW is not an executable" >&2; exit 2; }
+# every compile and run below 4 GB of address space: past 4 GB this
+# machine goes down (test/sh/capped.sh)
+ulimit -S -v "${YMEM_CAP_KB:-3670016}" || exit 2
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d /tmp/ybench-cmp.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT

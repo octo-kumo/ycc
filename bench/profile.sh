@@ -22,6 +22,9 @@ if ! command -v valgrind >/dev/null 2>&1 || ! command -v callgrind_annotate >/de
     echo "per-function profile: skipped (needs valgrind and callgrind_annotate)"
     exit 0
 fi
+# every run (valgrind and the program under it) below 4 GB of address
+# space: past 4 GB this machine goes down (test/sh/capped.sh)
+ulimit -S -v "${YMEM_CAP_KB:-3670016}" || exit 2
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="${YJOBS:-$(nproc)}"
 TMP="$(mktemp -d /tmp/ybench-prof.XXXXXX)"
@@ -51,8 +54,8 @@ ir_table() {
 prof() {
     : >"$TMP/$3.ir"
     mkdir "$TMP/$3.d"
-    "$1" -g -o "$TMP/$3.d/bin" "$2" </dev/null >/dev/null 2>&1 || return
-    (cd "$TMP/$3.d" && valgrind --tool=callgrind --show-below-main=yes --callgrind-out-file=cg.out \
+    timeout 300 "$1" -g -o "$TMP/$3.d/bin" "$2" </dev/null >/dev/null 2>&1 || return
+    (cd "$TMP/$3.d" && timeout 900 valgrind --tool=callgrind --show-below-main=yes --callgrind-out-file=cg.out \
         ./bin </dev/null >/dev/null 2>&1)
     ir_table "$TMP/$3.d/cg.out" >"$TMP/$3.ir"
     rm -rf "$TMP/$3.d"

@@ -5,6 +5,10 @@ CYC_SRCS=$(wildcard src/c/*.c)
 CY_HDRS=$(wildcard src/c/*.h)
 CYCC=cycc
 
+# Every recipe line runs under an address-space cap below 4 GB (this machine
+# goes down past 4 GB): test/sh/capped.sh sets it and runs /bin/sh.
+SHELL := $(CURDIR)/test/sh/capped.sh
+
 # The Y compiler sources: what the compiler compiles (and mirrors in C).
 YCC_SRCS=src/y/ycc.y src/y/pkg.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/dwarf.y src/y/lint.y src/y/std/fs.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/exec.y src/y/std/rt.y src/y/std/str.y
 
@@ -28,11 +32,15 @@ cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS)
 # ycc must be byte-identical to the backed-up reference binary — that is the
 # C copy validated against the real ycc, its pack included — and its own
 # self-compile (with that pack) must rebuild it (fixpoint).
-# Both compiles run under a virtual-memory cap (ulimit -v, in KB), so a memory
-# regression fails the build ("out of memory") instead of swapping the
-# machine: cycc needs ~4.1 GB for ycc.y, ycc itself ~0.8 GB.
-CYCC_MEM_KB=6291456
+# Every process a target starts runs under a memory cap below 4 GB (this
+# machine goes down past that): ulimit -v (in KB) on the compilers, and on
+# ASan builds, which reserve terabytes of address space, ASan's own RSS
+# limit. A memory regression then fails the build ("out of memory") instead
+# of taking the machine: cycc needs ~1.9 GB for ycc.y, ycc itself ~1.1 GB.
+MEM_KB=3670016
+CYCC_MEM_KB=$(MEM_KB)
 YCC_MEM_KB=2097152
+ASAN_RSS_MB=3500
 # $(call PACK,BIN,OUT): OUT = BIN with its std pack attached.
 PACK = ./$(1) --std-pack $(2).pack && cat $(1) $(2).pack > $(2) && chmod 755 $(2) && rm -f $(2).pack
 ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS)
@@ -63,7 +71,7 @@ asan: cycc-asan
 # skip themselves unless it is built; SUITES_ASAN is normally a subset, since a
 # sanitized self-compile wants orders of magnitude more memory than a plain one.
 test-asan: cycc-asan
-	CYCC=$(CURDIR)/cycc-asan YCC=$(CURDIR)/cycc-asan ASAN_OPTIONS=detect_leaks=0 \
+	CYCC=$(CURDIR)/cycc-asan YCC=$(CURDIR)/cycc-asan ASAN_OPTIONS=detect_leaks=0:hard_rss_limit_mb=$(ASAN_RSS_MB) \
 	    ./test/sh/run_all.sh $(SUITES_ASAN)
 
 # Full suite (see test/sh/). Suites compare the C copy's output against

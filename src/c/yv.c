@@ -18,13 +18,45 @@
 
 static long g_heap_used = 0;
 
+static void yoom(void) {
+    fprintf(stderr, "out of memory\n");
+    exit(1);
+}
+
+/* Nothing the C copy allocates is ever freed (a compile is one short run),
+ * so allocations come from big blocks, 8-byte aligned, with no per-object
+ * header: malloc's 16-byte header and 16-byte rounding were a third of a
+ * self-compile's memory. Under ASan every object is malloc'd on its own,
+ * so the sanitizer still sees each one's bounds. */
+#if defined(__SANITIZE_ADDRESS__)
+#define YV_POOL 0
+#else
+#define YV_POOL 1
+#define YV_BLOCK ((size_t)32 << 20)
+#define YV_BIG ((size_t)256 << 10)
+static char *g_pool = NULL;
+static size_t g_pool_left = 0;
+#endif
+
 static void *yalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) {
-        fprintf(stderr, "out of memory\n");
-        exit(1);
-    }
     g_heap_used += (long)n;
+#if YV_POOL
+    size_t r = (n + 7) & ~(size_t)7;
+    if (r == 0) r = 8;
+    if (r <= YV_BIG) {
+        if (r > g_pool_left) {
+            g_pool = malloc(YV_BLOCK);
+            if (!g_pool) yoom();
+            g_pool_left = YV_BLOCK;
+        }
+        void *p = g_pool;
+        g_pool += r;
+        g_pool_left -= r;
+        return p;
+    }
+#endif
+    void *p = malloc(n ? n : 1);
+    if (!p) yoom();
     return p;
 }
 
@@ -60,19 +92,33 @@ static Yv *yarr_new(void) {
 
 /* ── constructors ────────────────────────────────────────────────────── */
 
+/* none, the booleans and small numbers are immutable, so every use shares
+ * one value (nothing writes into a value after its constructor). */
+static Yv g_none = { .tag = Y_NONE, .u = { .l = 0 } };
+static Yv g_true = { .tag = Y_BOOL, .u = { .b = 1 } };
+static Yv g_false = { .tag = Y_BOOL, .u = { .b = 0 } };
+#define YV_LONG_LO (-256L)
+#define YV_LONG_HI 65536L
+static Yv *g_longs[YV_LONG_HI - YV_LONG_LO];
+
 Yv *yv_none(void) {
-    Yv *v = ynew(Y_NONE);
-    v->u.l = 0;
-    return v;
+    return &g_none;
 }
 
 Yv *yv_bool(int b) {
-    Yv *v = ynew(Y_BOOL);
-    v->u.b = b ? 1 : 0;
-    return v;
+    return b ? &g_true : &g_false;
 }
 
 Yv *yv_long(long l) {
+    if (l >= YV_LONG_LO && l < YV_LONG_HI) {
+        Yv **slot = &g_longs[l - YV_LONG_LO];
+        if (!*slot) {
+            Yv *v = ynew(Y_LONG);
+            v->u.l = l;
+            *slot = v;
+        }
+        return *slot;
+    }
     Yv *v = ynew(Y_LONG);
     v->u.l = l;
     return v;
@@ -94,6 +140,14 @@ Yv *ys_cstr(const char *s) {
 Yv *ys_n(const char *p, size_t n) {
     Yv *v = ynew(Y_STR);
     v->u.s.p = ystrndup(p, n);
+    v->u.s.n = n;
+    return v;
+}
+
+/* A str around buf (n bytes, NUL-terminated), which it takes as is. */
+static Yv *ys_own(char *buf, size_t n) {
+    Yv *v = ynew(Y_STR);
+    v->u.s.p = buf;
     v->u.s.n = n;
     return v;
 }
@@ -219,24 +273,27 @@ Yv *ys_trim(const Yv *x) {
 
 Yv *ys_join(const Yv *arr, const Yv *sep) {
     if (!arr || arr->tag != Y_ARR || !sep || sep->tag != Y_STR) { return ys(""); }
+    /* a str element is used as it is; anything else is rendered once */
+    size_t n = arr->u.a.len;
+    Yv **parts = n ? yalloc(sizeof(Yv *) * n) : NULL;
     size_t total = 1;
-    for (size_t i = 0; i < arr->u.a.len; i++) {
-        Yv *e = ys_tostring(arr->u.a.items[i]);
-        total += e->u.s.n + sep->u.s.n;
+    for (size_t i = 0; i < n; i++) {
+        Yv *e = arr->u.a.items[i];
+        parts[i] = (e && e->tag == Y_STR) ? e : ys_tostring(e);
+        total += parts[i]->u.s.n + sep->u.s.n;
     }
     char *buf = yalloc(total + 1);
     size_t pos = 0;
-    for (size_t i = 0; i < arr->u.a.len; i++) {
+    for (size_t i = 0; i < n; i++) {
         if (i > 0) {
             memcpy(buf + pos, sep->u.s.p, sep->u.s.n);
             pos += sep->u.s.n;
         }
-        Yv *e = ys_tostring(arr->u.a.items[i]);
-        memcpy(buf + pos, e->u.s.p, e->u.s.n);
-        pos += e->u.s.n;
+        memcpy(buf + pos, parts[i]->u.s.p, parts[i]->u.s.n);
+        pos += parts[i]->u.s.n;
     }
     buf[pos] = '\0';
-    return ys_n(buf, pos);
+    return ys_own(buf, pos);
 }
 
 /* first index of sub at or after `from` in s[0..n), or (size_t)-1.
@@ -391,54 +448,56 @@ Yv *ys_tostring(const Yv *v) {
         snprintf(buf, cap, "%f", v->u.f);
         return ys_cstr(buf);
     }
-    case Y_STR: return ys_n(v->u.s.p, v->u.s.n);
+    case Y_STR: return (Yv *)v; /* immutable: the value itself */
     case Y_ARR: {
         /* "[e0, e1, ...]" — the format the native tostring prints */
+        size_t n = v->u.a.len;
+        Yv **parts = n ? yalloc(sizeof(Yv *) * n) : NULL;
         size_t total = 2;
-        for (size_t i = 0; i < v->u.a.len; i++) {
-            Yv *e = ys_tostring(v->u.a.items[i]);
-            total += e->u.s.n + 2;
+        for (size_t i = 0; i < n; i++) {
+            parts[i] = ys_tostring(v->u.a.items[i]);
+            total += parts[i]->u.s.n + 2;
         }
         char *b = yalloc(total + 1);
         size_t pos = 0;
         b[pos++] = '[';
-        for (size_t i = 0; i < v->u.a.len; i++) {
+        for (size_t i = 0; i < n; i++) {
             if (i > 0) { b[pos++] = ','; b[pos++] = ' '; }
-            Yv *e = ys_tostring(v->u.a.items[i]);
-            size_t el = e->u.s.n;
-            memcpy(b + pos, e->u.s.p, el);
+            size_t el = parts[i]->u.s.n;
+            memcpy(b + pos, parts[i]->u.s.p, el);
             pos += el;
         }
         b[pos++] = ']';
         b[pos] = '\0';
-        return ys_n(b, pos);
+        return ys_own(b, pos);
     }
     case Y_REC: {
+        size_t n = v->u.r.len;
+        Yv **parts = n ? yalloc(sizeof(Yv *) * n) : NULL;
+        char **keys = n ? yalloc(sizeof(char *) * n) : NULL;
         size_t total = 3;
-        for (size_t i = 0; i < v->u.r.len; i++) {
-            char *k = escape_str(v->u.r.keys[i]);
-            Yv *e = ys_tostring(v->u.r.vals[i]);
-            total += strlen(k) + e->u.s.n + 4;
+        for (size_t i = 0; i < n; i++) {
+            keys[i] = escape_str(v->u.r.keys[i]);
+            parts[i] = ys_tostring(v->u.r.vals[i]);
+            total += strlen(keys[i]) + parts[i]->u.s.n + 4;
         }
         char *b = yalloc(total + 1);
         size_t pos = 0;
         b[pos++] = '{';
-        for (size_t i = 0; i < v->u.r.len; i++) {
+        for (size_t i = 0; i < n; i++) {
             if (i > 0) { b[pos++] = ','; b[pos++] = ' '; }
-            char *k = escape_str(v->u.r.keys[i]);
-            size_t kl = strlen(k);
-            memcpy(b + pos, k, kl);
+            size_t kl = strlen(keys[i]);
+            memcpy(b + pos, keys[i], kl);
             pos += kl;
             b[pos++] = ':';
             b[pos++] = ' ';
-            Yv *e = ys_tostring(v->u.r.vals[i]);
-            size_t el = e->u.s.n;
-            memcpy(b + pos, e->u.s.p, el);
+            size_t el = parts[i]->u.s.n;
+            memcpy(b + pos, parts[i]->u.s.p, el);
             pos += el;
         }
         b[pos++] = '}';
         b[pos] = '\0';
-        return ys_n(b, pos);
+        return ys_own(b, pos);
     }
     }
     return ys("none");
@@ -546,7 +605,15 @@ Yv *yr_new(void) {
 }
 
 Yv *yr(size_t n, ...) {
-    Yv *v = yr_new();
+    /* the header and n key/value slots in one block, exactly sized (a
+     * record rarely gains a field after it is made; ym_grow if it does) */
+    char *blk = yalloc(sizeof(Yv) + n * (sizeof(char *) + sizeof(Yv *)));
+    Yv *v = (Yv *)blk;
+    v->tag = Y_REC;
+    v->u.r.keys = n ? (char **)(blk + sizeof(Yv)) : NULL;
+    v->u.r.vals = n ? (Yv **)(blk + sizeof(Yv) + n * sizeof(char *)) : NULL;
+    v->u.r.len = 0;
+    v->u.r.cap = n;
     va_list ap;
     va_start(ap, n);
     for (size_t i = 0; i < n; i++) {
@@ -567,6 +634,8 @@ Yv *yr_get(const Yv *m, const char *key) {
     return yv_none();
 }
 
+/* Keys are kept, not copied: every key is a string literal (PORTING.md:
+ * records are built with literal field names), and nothing is freed. */
 Yv *yr_set(Yv *m, const char *key, Yv *v) {
     if (!m || m->tag != Y_REC) return m;
     for (size_t i = 0; i < m->u.r.len; i++) {
@@ -576,7 +645,7 @@ Yv *yr_set(Yv *m, const char *key, Yv *v) {
         }
     }
     ym_grow(m, m->u.r.len + 1);
-    m->u.r.keys[m->u.r.len] = ystrdup(key);
+    m->u.r.keys[m->u.r.len] = (char *)key;
     m->u.r.vals[m->u.r.len] = v;
     m->u.r.len++;
     return m;
