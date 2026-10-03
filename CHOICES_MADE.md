@@ -582,3 +582,28 @@ future.y sketches `spawn { }`, `join t;`, `mutex()` with `lock m { }` and
 - **fork { }** gives the child's pid (the child runs the block and
   exits 0, or calls exit itself); `wait_pid(pid)` reaps it and gives
   its exit status.
+
+Implemented in 4642f78 and 1a9dc3c. Decided on the way:
+
+- **A thread's heap tail goes to its joiner.** A thread's heap is a 4 MB
+  chunk nothing frees, so a thousand short threads mapped 4 GB and ran
+  out under the memory cap. Options: (a) one global spare slot the dying
+  thread fills -- simple, but with several spawners at once the tails
+  displace one another and leak (eight spawners still ran out); (b) the
+  child's first heap carved from the parent's (64 KB each) -- bounded per
+  thread, never reused, and a worker that allocates more maps 4 MB chunks
+  again, so a parallel loop still leaks a chunk per worker per round;
+  (c) unmapping the tail at the thread's end -- one mapping left behind
+  per thread, against the kernel's 65530; (d) **the first join takes the
+  tail onto the joining thread's own list, its next spawn reuses it** --
+  no lock and no shared slot (each list is its thread's), memory bounded
+  by peak concurrency for every spawn/join pattern. Chose (d); a thread
+  nobody joins keeps its tail.
+- **The mutex is the three-state futex lock** (0 free, 1 held, 2 maybe
+  waited for): the two-state one woke on every unlock, a syscall per
+  `lock` block (158 ns against 24). The assembler has `xchg` but no
+  `cmpxchg`, so the lock is the xchg-only variant, and `try_lock` puts
+  back a 2 it erased (taking the mutex if it was released meanwhile).
+- **Thread stacks get a guard page and are unmapped at the end**: a
+  runaway recursion on a thread otherwise wrote into whatever mapping
+  lay below its stack, and a finished thread's 8 MiB stayed mapped.
