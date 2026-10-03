@@ -220,6 +220,7 @@ def read_record(c: Conn) -> Rec {
 // The text of an alert record's description.
 def alert_text(body: [byte]) -> str {
     if (len(body) < 2) { "a malformed alert" }
+    else if (body[1] == 0) { "the server closed the connection during the handshake (does it speak TLS 1.3?)" }
     else if (body[1] == 40) { "the server ended the handshake (handshake_failure)" }
     else if (body[1] == 42 || body[1] == 43 || body[1] == 44 || body[1] == 45 || body[1] == 46) { "the server rejected a certificate" }
     else if (body[1] == 70) { "the server does not speak TLS 1.3 (protocol_version)" }

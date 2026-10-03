@@ -77,7 +77,7 @@ if [ -s "$GEN2" ] && [ ! -s /tmp/yfp_err ]; then
 else
     check "ycc's own source compiles without a warning" bad "$(head -c 300 /tmp/yfp_err)"
 fi
-printf 'import fs;\nimport net;\nimport struct;\nimport crypto;\nimport x509;\nimport tls;\nputs("ok\\n");\n' > /tmp/yfp_std.y
+printf 'import fs;\nimport net;\nimport struct;\nimport crypto;\nimport x509;\nimport tls;\nimport http;\nputs("ok\\n");\n' > /tmp/yfp_std.y
 std_bad=""
 for f in /tmp/yfp_std.y "$ROOT"/src/y/std/*.y; do
     if ! timeout 120 "$YCC_BIN" -o /tmp/yfp_std_bin "$f" </dev/null >/tmp/yfp_std_err 2>&1 \
@@ -86,9 +86,9 @@ for f in /tmp/yfp_std.y "$ROOT"/src/y/std/*.y; do
     fi
 done
 if [ -z "$std_bad" ]; then
-    check "std's files compile without a warning (and import fs, net, struct, crypto, x509, tls)" ok
+    check "std's files compile without a warning (and import fs, net, struct, crypto, x509, tls, http)" ok
 else
-    check "std's files compile without a warning (and import fs, net, struct, crypto, x509, tls)" bad "$std_bad"
+    check "std's files compile without a warning (and import fs, net, struct, crypto, x509, tls, http)" bad "$std_bad"
 fi
 
 # The fixpoint itself: same bytes. ./ycc carries its std pack (the

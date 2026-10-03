@@ -425,6 +425,58 @@ tls_case() {
     done
     stop_server
 }
+# The http client (std/http.y) against test/y/net/http_srv.y: one-shot
+# requests (Content-Length, chunked, a redirect, POST, a header, HEAD, a
+# 404) and a session (cookies, a default header, one kept connection,
+# Connection: close).
+HTTP_EXPECTED="200 OK 11 hello world
+200 chunked b'ab' cdefgh 0
+200 true hello world
+200 POST posted body
+custom value
+200 11 []
+404 no /nothing
+cookies: anon
+cookies: sid=abc123; theme=dark
+header: from session
+same connection: true
+put: PUT put body
+bye then a new one: true
+quit: quit"
+
+test_http_client() {
+    local c="$1" attempt=0 port="" log polls got
+    while [ "$attempt" -lt 20 ]; do
+        port="$(random_port)"
+        start_server "$WORK/http_srv.copy" "$port" 0
+        log="$WORK/http_srv.copy-$port.log"
+        polls=0
+        while [ "$polls" -lt 50 ] && job_running "$SERVER_PID" && ! grep -q ready "$log" 2>/dev/null; do
+            sleep 0.1
+            polls=$((polls + 1))
+        done
+        grep -q ready "$log" 2>/dev/null && break
+        stop_server
+        port=""
+        attempt=$((attempt + 1))
+    done
+    if [ -z "$port" ]; then
+        fail "http client" "the test server did not start"
+        return
+    fi
+    got=$(run_bin 30 "$c" "$port" </dev/null 2>&1)
+    if [ "$got" = "$HTTP_EXPECTED" ]; then
+        pass "http client: $(basename "$c")"
+    else
+        fail "http client: $(basename "$c")" "got: $got"
+    fi
+    stop_server
+}
+if compile_server_pair http_srv && compile_server_pair http_cli; then
+    test_http_client "$WORK/http_cli.copy"
+    test_http_client "$WORK/http_cli.ref"
+fi
+
 if command -v openssl >/dev/null 2>&1; then
     if compile_server_pair tls_cli; then
         openssl req -x509 -newkey rsa:2048 -keyout "$WORK/rsa_key.pem" -out "$WORK/rsa.pem" -days 2 -nodes \
@@ -439,6 +491,31 @@ if command -v openssl >/dev/null 2>&1; then
             "suite 4867 alpn [] HTTP/1.0 200 ok true err []"
         tls_case TLS_AES_256_GCM_SHA384 "$WORK/ec.pem" "$WORK/ec_key.pem" 127.0.0.1 \
             "ERROR certificate is not valid for 127.0.0.1"
+        # https: the http client against `openssl s_server -WWW`
+        if [ -x "$WORK/http_cli.copy" ]; then
+            echo "hello over tls" > "$WORK/hello.txt"
+            local_port="$(random_port)"
+            (cd "$WORK" && exec timeout --kill-after=1 20 openssl s_server -accept "$local_port" \
+                -cert "$WORK/ec.pem" -key "$WORK/ec_key.pem" -WWW -quiet </dev/null >/dev/null 2>&1) &
+            SERVER_PID=$!
+            PIDS+=("$SERVER_PID")
+            polls=0
+            while [ "$polls" -lt 50 ] && ! tcp_fire "$local_port"; do
+                sleep 0.1
+                polls=$((polls + 1))
+            done
+            for c in "$WORK/http_cli.copy" "$WORK/http_cli.ref"; do
+                got=$(run_bin 30 "$c" "$local_port" "$WORK/ec.pem" </dev/null 2>&1)
+                want="200 hello over tls []
+0 [certificate is not valid for 127.0.0.1]"
+                if [ "$got" = "$want" ]; then
+                    pass "https client: $(basename "$c")"
+                else
+                    fail "https client: $(basename "$c")" "got: $got"
+                fi
+            done
+            stop_server
+        fi
     fi
 else
     skip "TLS client" "openssl is not installed"
