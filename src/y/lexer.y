@@ -11,36 +11,39 @@ type Tok = { t: str, v: str, line: long, col: long };
 type Cursor = { s: str, p: long };
 
 // NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
-def isdigit(c: str) -> bool {
-    c >= "0" && c <= "9"
+def isdigit(c: byte) -> bool {
+    c >= c'0' && c <= c'9'
 };
 
-def isupper(c: str) -> bool {
-    c >= "A" && c <= "Z"
+// An upper-case letter.
+def isupper(c: byte) -> bool {
+    c >= c'A' && c <= c'Z'
 };
 
-def islower(c: str) -> bool {
-    c >= "a" && c <= "z"
+// A lower-case letter.
+def islower(c: byte) -> bool {
+    c >= c'a' && c <= c'z'
 };
 
-def isalpha(c: str) -> bool {
+def isalpha(c: byte) -> bool {
     // word chars: letters AND underscore (chr(95)) AND digits — Y words
     // like "t0"/"r64" contain digits, which is why the scan after the first
     // character is isalnum (letters + digits + "_"). The C twin's isalpha
     // /isalnum are the same two tests (src/c/lexer.c), so both lexers split
     // identifiers identically.
-    islower(c) || isupper(c) || c == "_" || isdigit(c)
+    islower(c) || isupper(c) || c == c'_' || isdigit(c)
 };
 
-def isalnum(c: str) -> bool {
+def isalnum(c: byte) -> bool {
     isdigit(c) || isalpha(c)
 };
 
 // Digit of a radix literal (0x.. / 0b..), including `_` separators.
-def is_radix_ch(c: str, radix: long) -> bool {
-    if (c == "_") { true }
-    else if (radix == 2) { c == "0" || c == "1" }
-    else { isdigit(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F") }
+// Digit of a radix literal (0x.. / 0b..), including `_` separators.
+def is_radix_ch(c: byte, radix: long) -> bool {
+    if ( c == c'_') { true }
+    else if (radix == 2) { c == c'0' || c == c'1' }
+    else { isdigit(c) || (c >= c'a' && c <= c'f') || (c >= c'A' && c <= c'F') }
 };
 
 // A decimal literal's text without its `_` digit separators: its num token
@@ -51,8 +54,9 @@ def strip_seps(s: str) -> str {
     if (index_of(s, "_") < 0) { s } else { join(split(s, "_"), "") }
 };
 
-def isspace(c: str) -> bool {
-    c == " " || c == "\t" || c == "\n" || c == "\r"
+// A space, tab, newline or carriage return.
+def isspace(c: byte) -> bool {
+    c == c' ' || c == c'\t' || c == c'\n' || c == c'\r'
 };
 
 // NOTE: these predicates keep the flat C spellings isdigit/isupper/islower/
@@ -64,9 +68,10 @@ def isspace(c: str) -> bool {
 // twin's, so a name like is_radix_ch lexes as one identifier in both.
 
 // is c one of the single-char punctuation symbols?
-def ispunct(c: str) -> bool {
-    c == "(" || c == ")" || c == "{" || c == "}" || c == "[" ||
-    c == "]" || c == "," || c == ";" || c == ":"
+// One of the nine punctuation characters Y uses.
+def ispunct(c: byte) -> bool {
+    c == c'(' || c == c')' || c == c'{' || c == c'}' || c == c'[' ||
+    c == c']' || c == c',' || c == c';' || c == c':'
 };
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
@@ -170,7 +175,7 @@ def unescape(raw: str, braces: bool) -> str {
 
 // A byte of an identifier-shaped word (isalnum, on a byte).
 def wordbyte(c: long) -> bool {
-    (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95
+    isalpha(c)
 };
 
 // Just past the literal whose opening quote is src[q] (a backslash escapes
@@ -183,7 +188,7 @@ def lit_end(src: str, q: long) -> long {
     let open = true;
     while (open && i < n) {
         let c = byte_at(src, i);
-        if (c == 92) { i = i + 2; 0; }
+        if (c == c'\\') { i = i + 2; 0; }
         else if (c == qc) { end = i + 1; open = false; 0; }
         else { i = i + 1; 0; };
         0
@@ -204,8 +209,8 @@ def fstr_expr_end(src: str, lo: long) -> long {
     let go = true;
     while (go && i < n) {
         let c = byte_at(src, i);
-        if (c == 34 || c == 39) {
-            if (c == 34 && i > lo && byte_at(src, i - 1) == 102 && (i - 1 == lo || !wordbyte(byte_at(src, i - 2)))) {
+        if (c == c'"' || c == c'\'') {
+            if (c == c'"' && i > lo && byte_at(src, i - 1) == 102 && (i - 1 == lo || !wordbyte(byte_at(src, i - 2)))) {
                 // a nested f"..."
                 i = fstr_walk(src, i).end;
                 0
@@ -214,23 +219,23 @@ def fstr_expr_end(src: str, lo: long) -> long {
                 0
             };
             0
-        } else if (c == 40 || c == 91 || c == 123) {
+        } else if (c == c'(' || c == c'[' || c == c'{') {
             depth = depth + 1;
             i = i + 1;
             0
         } else if (depth > 0) {
-            if (c == 41 || c == 93 || c == 125) { depth = depth - 1; 0; } else { 0; };
+            if (c == c')' || c == c']' || c == c'}') { depth = depth - 1; 0; } else { 0; };
             i = i + 1;
             0
-        } else if (c == 63) {
+        } else if (c == c'?') {
             tern = tern + 1;
             i = i + 1;
             0
-        } else if (c == 58 && tern > 0) {
+        } else if (c == c':' && tern > 0) {
             tern = tern - 1;
             i = i + 1;
             0
-        } else if (c == 125 || c == 58 || c == 44 || c == 59 || c == 41 || c == 93) {
+        } else if (c == c'}' || c == c':' || c == c',' || c == c';' || c == c')' || c == c']') {
             stop = i;
             go = false;
             0
@@ -249,7 +254,7 @@ def fstr_blank(src: str, lo: long, hi: long) -> bool {
     let blank = true;
     while (blank && i < hi) {
         let c = byte_at(src, i);
-        blank = c == 32 || c == 9 || c == 10 || c == 13;
+        blank = isspace(c);
         i = i + 1;
         0
     };
@@ -277,27 +282,27 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
             0
         } else {
             let c = byte_at(src, i);
-            if (c == 92) {
+            if (c == c'\\') {
                 i = i + 2;
                 0
-            } else if (c == 34) {
+            } else if (c == c'"') {
                 i = i + 1;
                 open = false;
                 0
-            } else if ((c == 123 || c == 125) && i + 1 < n && byte_at(src, i + 1) == c) {
+            } else if ((c == c'{' || c == c'}') && i + 1 < n && byte_at(src, i + 1) == c) {
                 i = i + 2;
                 0
-            } else if (c == 125) {
+            } else if (c == c'}') {
                 err = "single '}' in an f-string (a literal brace is '}}')";
                 at = i;
                 open = false;
                 0
-            } else if (c == 123) {
+            } else if (c == c'{') {
                 let lo = i + 1;
                 let hi = fstr_expr_end(src, lo);
                 let hc = 0;
                 if (hi < n) { hc = byte_at(src, hi); 0; } else { 0; };
-                if (hc != 125 && hc != 58) {
+                if (hc != c'}' && hc != c':') {
                     if (hi >= n) {
                         err = "unterminated f-string field";
                         at = i;
@@ -314,7 +319,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                     at = i;
                     open = false;
                     0
-                } else if (hc == 125) {
+                } else if (hc == c'}') {
                     fields += lo;
                     fields += hi;
                     fields += 0 - 1;
@@ -466,9 +471,9 @@ def mktok(t: str, v: str, line: long, col: long) -> Tok {
 // Value of a single hex digit char (0-15), or -1 if not a hex digit.
 def hexvalx(c: str) -> long {
     let o = ord(c);
-    if (o >= 48 && o <= 57) { o - 48 }
-    else if (o >= 65 && o <= 70) { o - 65 + 10 }
-    else if (o >= 97 && o <= 102) { o - 97 + 10 }
+    if (o >= c'0' && o <= c'9') { o - c'0' }
+    else if (o >= c'A' && o <= c'F') { o - c'A' + 10 }
+    else if (o >= c'a' && o <= c'f') { o - c'a' + 10 }
     else { -1 }
 };
 
@@ -501,10 +506,11 @@ def twocharop(src: str, i: long) -> str {
     else { "" }
 };
 
-def issingleop(c: str) -> bool {
-    c == "+" || c == "-" || c == "*" || c == slash() || c == "%" ||
-    c == "<" || c == ">" || c == "=" || c == "." || c == "!" ||
-    c == "&" || c == "?" || c == "|" || c == "^" || c == "~"
+// A one-character operator.
+def issingleop(c: byte) -> bool {
+    c == c'+' || c == c'-' || c == c'*' || c == c'/' || c == c'%' ||
+    c == c'<' || c == c'>' || c == c'=' || c == c'.' || c == c'!' ||
+    c == c'&' || c == c'?' || c == c'|' || c == c'^' || c == c'~'
 };
 
 // The slash character, in one place: this file's own source contains no bare
@@ -513,18 +519,19 @@ def issingleop(c: str) -> bool {
 // place a slash in the source being lexed is ever interpreted.
 def slash() -> str { "/" };
 
-def isdigitch(c: str) -> bool {
+
+def isdigitch(c: byte) -> bool {
     // single-char predicate on a 1-char string (native-safe: no ord()).
-    if (c == "0") { true }
-    else if (c == "1") { true }
-    else if (c == "2") { true }
-    else if (c == "3") { true }
-    else if (c == "4") { true }
-    else if (c == "5") { true }
-    else if (c == "6") { true }
-    else if (c == "7") { true }
-    else if (c == "8") { true }
-    else { c == "9" }
+    if ( c == c'0') { true }
+    else if ( c == c'1') { true }
+    else if ( c == c'2') { true }
+    else if ( c == c'3') { true }
+    else if ( c == c'4') { true }
+    else if ( c == c'5') { true }
+    else if ( c == c'6') { true }
+    else if ( c == c'7') { true }
+    else if ( c == c'8') { true }
+    else { c == c'9' }
 };
 
 def tokenize(src: str) -> [Tok] {
@@ -534,9 +541,9 @@ def tokenize(src: str) -> [Tok] {
     let line = 1;
     let col = 1;
     while (i < n) {
-        let c = src[i:i + 1];
+        let c = src[i];
         if (isspace(c)) {
-            if (c == "\n") { line = line + 1; col = 1; 0; }
+            if (c == c'\n') { line = line + 1; col = 1; 0; }
             else { col = col + 1; 0; };
             i = i + 1;
             0
@@ -545,7 +552,7 @@ def tokenize(src: str) -> [Tok] {
             let startcol = col;
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
             let radix = 0;
-            if (c == "0") {
+            if (c == c'0') {
                 let nxt = src[i + 1:i + 2];
                 if (nxt == "x" || nxt == "X") { radix = 16; }
                 else if (nxt == "b" || nxt == "B") { radix = 2; };
@@ -559,9 +566,9 @@ def tokenize(src: str) -> [Tok] {
                 let rdone = false;
                 while (rdone == false) {
                     if (i < n) {
-                        let rc = src[i:i + 1];
+                        let rc = src[i];
                         if (is_radix_ch(rc, radix)) {
-                            if (rc != "_") { digits = true; };
+                            if (rc != c'_') { digits = true; };
                             i = i + 1;
                             col = col + 1;
                         } else { rdone = true; 0; };
@@ -572,7 +579,7 @@ def tokenize(src: str) -> [Tok] {
                     // A prefix without a digit (`0x`, `0b_`, `0b2`) is no
                     // number: the word characters after it are taken into
                     // the bad literal, reported once, where it starts.
-                    while (i < n && isalnum(src[i:i + 1])) { i = i + 1; col = col + 1; };
+                    while (i < n && isalnum(src[i])) { i = i + 1; col = col + 1; };
                     if (radix == 16) { err = "hex literal '" + src[start:i] + "' has no digits"; }
                     else { err = "binary literal '" + src[start:i] + "' has no digits"; };
                 };
@@ -586,8 +593,8 @@ def tokenize(src: str) -> [Tok] {
             let ind = false;
             while (ind == false) {
                 if (i < n) {
-                    let dc = src[i:i + 1];
-                    if (isdigit(dc) || dc == "_") { i = i + 1; col = col + 1; 0; }
+                    let dc = src[i];
+                    if (isdigit(dc) || dc == c'_') { i = i + 1; col = col + 1; 0; }
                     else { ind = true; 0; };
                     0
                 } else { ind = true; 0 };
@@ -600,8 +607,8 @@ def tokenize(src: str) -> [Tok] {
                 let frd = false;
                 while (frd == false) {
                     if (i < n) {
-                        let fc = src[i:i + 1];
-                        if (isdigit(fc) || (fc == "_" && i > fs)) { i = i + 1; col = col + 1; 0; }
+                        let fc = src[i];
+                        if (isdigit(fc) || (fc == c'_' && i > fs)) { i = i + 1; col = col + 1; 0; }
                         else { frd = true; 0; };
                         0
                     } else { frd = true; 0 };
@@ -616,14 +623,14 @@ def tokenize(src: str) -> [Tok] {
                 let esign = 0;
                 let sc = src[i + 1:i + 2];
                 if (sc == "+" || sc == "-") { esign = 1; };
-                if (isdigit(src[i + 1 + esign:i + 2 + esign])) {
+                if (isdigit(src[i + 1 + esign])) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
                     let exd = false;
                     while (exd == false) {
                         if (i < n) {
-                            let xc = src[i:i + 1];
-                            if (isdigit(xc) || xc == "_") { i = i + 1; col = col + 1; 0; }
+                            let xc = src[i];
+                            if (isdigit(xc) || xc == c'_') { i = i + 1; col = col + 1; 0; }
                             else { exd = true; 0; };
                             0
                         } else { exd = true; 0 };
@@ -648,7 +655,7 @@ def tokenize(src: str) -> [Tok] {
             let inw = false;
             while (inw == false) {
                 if (i < n) {
-                    if (isalnum(src[i:i + 1])) { i = i + 1; col = col + 1; 0; }
+                    if (isalnum(src[i])) { i = i + 1; col = col + 1; 0; }
                     else { inw = true; 0; };
                     0
                 } else { inw = true; 0 };
@@ -713,7 +720,7 @@ def tokenize(src: str) -> [Tok] {
                 0
             };
             0
-        } else if (c == "\"") {
+        } else if (c == c'"') {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.
@@ -725,7 +732,7 @@ def tokenize(src: str) -> [Tok] {
             col = q.col;
             toks += mktok("str", q.text, startline, startcol);
             0
-        } else if (c == slash()) {
+        } else if (c == c'/') {
             // Slash: comment opener, block comment, or division operator.
             // (The string arm above consumed every slash inside quotes, so a
             // slash reaching here is real code.) Look ahead one char:
@@ -798,19 +805,19 @@ def tokenize(src: str) -> [Tok] {
             };
         } else {
             // operator / punct / unknown-char dispatch.
-            let op = multicharop(src, i, c);
+            let op = multicharop(src, i, src[i:i + 1]);
             if (op != "") {
                 toks += mktok("op", op, line, col);
                 i = i + len(op);
                 col = col + len(op);
                 0
             } else if (issingleop(c)) {
-                toks += mktok("op", c, line, col);
+                toks += mktok("op", src[i:i + 1], line, col);
                 i = i + 1;
                 col = col + 1;
                 0
             } else if (ispunct(c)) {
-                toks += mktok("punct", c, line, col);
+                toks += mktok("punct", src[i:i + 1], line, col);
                 i = i + 1;
                 col = col + 1;
                 0
@@ -818,7 +825,7 @@ def tokenize(src: str) -> [Tok] {
                 // A character no token starts with: passed on as an
                 // operator nothing accepts, so the parser reports it
                 // (skipping it compiled `5 @ 3` as `5 3`).
-                toks += mktok("op", c, line, col);
+                toks += mktok("op", src[i:i + 1], line, col);
                 i = i + 1;
                 col = col + 1;
                 0

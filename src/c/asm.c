@@ -30,9 +30,9 @@ extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
                      Yv *syms, Yv *dsecs); /* elf.c: elf.elf_build */
 
 /* ── module-local defs (forward) ─────────────────────────────────────── */
-static int is_digit_ch(Yv *c);
-static int is_oct_ch(Yv *c);
-static int is_alpha_ch(Yv *c);
+static int is_digit_ch(long c);
+static int is_oct_ch(long c);
+static int is_alpha_ch(long c);
 static Yv *parse_num(Yv *s);
 static Yv *parse_num_go(Yv *s, long i, int neg);
 static int is_num_text(Yv *s);
@@ -117,27 +117,24 @@ static Yv *debug_lines(Yv *items, long code_len, long code_off);
 static Yv *asm_cwd(void);
 static Yv *concat_bytes(Yv *a, Yv *b);
 
-static int is_digit_ch(Yv *c) {
-    /* 1:1 of asm.y's `c >= "0" && c <= "9"`. Str ordering is lexicographic
-       by unsigned byte on both sides — asm.y reaches it through native.y's
-       gen_str_cmp and the y_str_cmp stub, the C twin through yv.c's ys_cmp
-       (memcmp on the common prefix, then length) — so a range test is
-       ys_cmp(...) >= 0 / <= 0, the same translation lexer.c uses for
-       isdigit/isupper/islower. */
-    return ys_cmp(c, ys("0")) >= 0 && ys_cmp(c, ys("9")) <= 0;
+static int is_digit_ch(long c) {
+    /* 1:1 of asm.y's `c >= c'0' && c <= c'9'`. The character is a byte, so
+       this is an integer range test; the string form it replaces compared a
+       1-char slice with ys_cmp. */
+    return c >= '0' && c <= '9';
 }
 
-static int is_oct_ch(Yv *c) {
-    /* 1:1 of asm.y's `c >= "0" && c <= "7"` (same ys_cmp range test). */
-    return ys_cmp(c, ys("0")) >= 0 && ys_cmp(c, ys("7")) <= 0;
+static int is_oct_ch(long c) {
+    /* 1:1 of asm.y's `c >= c'0' && c <= c'7'` (same integer range test). */
+    return c >= '0' && c <= '7';
 }
 
-static int is_alpha_ch(Yv *c) {
-    /* 1:1 of asm.y's `c == "_" || (c >= "A" && c <= "Z") ||
-       (c >= "a" && c <= "z")`. */
-    return ys_eq_lit(c, "_") ||
-           (ys_cmp(c, ys("A")) >= 0 && ys_cmp(c, ys("Z")) <= 0) ||
-           (ys_cmp(c, ys("a")) >= 0 && ys_cmp(c, ys("z")) <= 0);
+static int is_alpha_ch(long c) {
+    /* 1:1 of asm.y's `c == c'_' || (c >= c'A' && c <= c'Z') ||
+       (c >= c'a' && c <= c'z')`. */
+    return c == '_' ||
+           (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z');
 }
 
 /* parse a decimal integer (optional leading -). Returns {ok, v}. */
@@ -168,9 +165,9 @@ static Yv *parse_num_go(Yv *s, long i, int neg) {
     long v = 0;
     int ok = 1;
     while (i < yv_len(s)) {
-        Yv *c = ys_slice(s, i, i + 1);
+        long c = ys_byte_at(s, i);
         if (is_digit_ch(c)) {
-            v = (long)((unsigned long)v * 10 + (unsigned long)ys_ord(c) - 48);
+            v = (long)((unsigned long)v * 10 + (unsigned long)c - '0');
             ;
         } else {
             ok = 0;
@@ -360,7 +357,7 @@ static Yv *parse_imm(Yv *s) {
 
 static Yv *parse_imm_alpha(Yv *s, long dash) {
     /* (split: len>0 narrows; this body checks the alpha gate only.) */
-    if (is_alpha_ch(ys_slice(s, 0, 1))) {
+    if (is_alpha_ch(ys_byte_at(s, 0))) {
         return parse_imm_diff(s, dash);
     } else {
         return parse_imm_num(s);
@@ -599,26 +596,30 @@ static Yv *decode_str(Yv *s) {
     long n = yv_len(s);
     Yv *err = ys("");
     while (i < n) {
-        Yv *c = ys_slice(s, i, i + 1);
-        if (!ys_eq_lit(c, "\\")) {
-            out = ya_push(out, yv_long(ys_ord(c)));
+        long c = ys_byte_at(s, i);
+        if (c != '\\') {
+            out = ya_push(out, yv_long(c));
             i = i + 1;
+        } else if (i + 1 >= n) {
+            /* a backslash as the last byte: no escape follows it */
+            err = ys("bad escape '\\'");
+            i = n;
         } else {
-            Yv *e = ys_slice(s, i + 1, i + 2);
-            if (ys_eq_lit(e, "n")) {
-                out = ya_push(out, yv_long(10));
+            long e = ys_byte_at(s, i + 1);
+            if (e == 'n') {
+                out = ya_push(out, yv_long('\n'));
                 i = i + 2;
-            } else if (ys_eq_lit(e, "t")) {
-                out = ya_push(out, yv_long(9));
+            } else if (e == 't') {
+                out = ya_push(out, yv_long('\t'));
                 i = i + 2;
-            } else if (ys_eq_lit(e, "r")) {
-                out = ya_push(out, yv_long(13));
+            } else if (e == 'r') {
+                out = ya_push(out, yv_long('\r'));
                 i = i + 2;
-            } else if (ys_eq_lit(e, "\\")) {
-                out = ya_push(out, yv_long(92));
+            } else if (e == '\\') {
+                out = ya_push(out, yv_long('\\'));
                 i = i + 2;
-            } else if (ys_eq_lit(e, "\"")) {
-                out = ya_push(out, yv_long(34));
+            } else if (e == '"') {
+                out = ya_push(out, yv_long('"'));
                 i = i + 2;
             } else if (is_oct_ch(e)) {
                 /* NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`
@@ -633,7 +634,8 @@ static Yv *decode_str(Yv *s) {
                 };
                 i = yv_l(yr_get(oct, "k"));
             } else {
-                err = ys_cat(ys_cat(ys("bad escape '\\"), e), ys("'"));
+                err = ys_cat(ys_cat(ys("bad escape '\\"),
+                                     ys_slice(s, i + 1, i + 2)), ys("'"));
                 i = n;
             };
         }
@@ -646,15 +648,15 @@ static Yv *decode_oct(Yv *s, long k, long n) {
        Returns {v, k (pos after digits), err}. Split from decode_str: the
        `{ok,bytes,error}` shape is built ONLY in decode_str.
        NOTE: `0;` tails (see parser.y parse_binary note). */
-    Yv *e = ys_slice(s, k - 1, k);
-    long v = ys_ord(e) - 48;
+    long e = ys_byte_at(s, k - 1);
+    long v = e - '0';
     long kk = k;
     long nd = 1;
     while (nd < 3) {
         if (kk < n) {
-            Yv *d = ys_slice(s, kk, kk + 1);
+            long d = ys_byte_at(s, kk);
             if (is_oct_ch(d)) {
-                v = v * 8 + ys_ord(d) - 48;
+                v = v * 8 + d - '0';
                 kk = kk + 1;
                 nd = nd + 1;
                 ;
@@ -1690,7 +1692,7 @@ static Yv *sym_name(Yv *lbl) {
         long k = d + 1;
         int digits = k < yv_len(s);
         while (k < yv_len(s)) {
-            if (!is_digit_ch(ys_slice(s, k, k + 1))) {
+            if (!is_digit_ch(ys_byte_at(s, k))) {
                 digits = 0;
             }
             k = k + 1;
@@ -1706,7 +1708,7 @@ static Yv *sym_name(Yv *lbl) {
  * does not match. */
 static Yv *after_uid(Yv *s, long k) {
     long i = k;
-    while (i < yv_len(s) && is_digit_ch(ys_slice(s, i, i + 1))) {
+    while (i < yv_len(s) && is_digit_ch(ys_byte_at(s, i))) {
         i = i + 1;
     }
     if (i > k && i < yv_len(s) && ys_eq_lit(ys_slice(s, i, i + 1), "_")) {

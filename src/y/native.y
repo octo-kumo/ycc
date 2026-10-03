@@ -302,20 +302,20 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
         if (blank_byte(c)) {
             i = i + 1;
             0
-        } else if (c == 47 && i + 1 < n && byte_at(code, i + 1) == 47) {
+        } else if (c == c'/' && i + 1 < n && byte_at(code, i + 1) == c'/') {
             // `//`: up to the newline
             i = i + 2;
-            while (i < n && byte_at(code, i) != 10) {
+            while (i < n && byte_at(code, i) != c'\n') {
                 i = i + 1;
                 0
             };
             0
-        } else if (c == 47 && i + 1 < n && byte_at(code, i + 1) == 42) {
+        } else if (c == c'/' && i + 1 < n && byte_at(code, i + 1) == c'*') {
             // `/*`: past the first `*/`
             i = i + 2;
             let open = true;
             while (open && i < n) {
-                if (byte_at(code, i) == 42 && i + 1 < n && byte_at(code, i + 1) == 47) {
+                if (byte_at(code, i) == c'*' && i + 1 < n && byte_at(code, i + 1) == c'/') {
                     open = false;
                     i = i + 1;
                     0
@@ -326,17 +326,17 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
             0
         } else {
             if (pend >= 0) {
-                if (c == 40) { seen[pend] = 2; 0; } else { 0; };
+                if (c == c'(') { seen[pend] = 2; 0; } else { 0; };
                 pend = 0 - 1;
                 0
             } else { 0; };
-            if (c == 34 || c == 39) {
+            if (c == c'\"' || c == c'\'') {
                 // a string literal: past its closing quote
                 i = i + 1;
                 let open = true;
                 while (open && i < n) {
                     let d = byte_at(code, i);
-                    if (d == 92) { i = i + 2; 0; }
+                    if (d == c'\\') { i = i + 2; 0; }
                     else if (d == c) { open = false; i = i + 1; 0; }
                     else { i = i + 1; 0; };
                     0
@@ -348,7 +348,7 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                     j = j + 1;
                     0
                 };
-                if (j == i + 1 && c == 102 && j < n && byte_at(code, j) == 34) {
+                if (j == i + 1 && c == c'f' && j < n && byte_at(code, j) == c'\"') {
                     // f"...": the fields, and whether one has a spec
                     let w = lexer.fstr_walk(code, j);
                     let fs = w.fields;
@@ -367,7 +367,7 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                         let nm: str = names[m];
                         if (len(nm) == j - i && word_at(code, i, nm)) {
                             if (seen[m] == 0) { seen[m] = 1; 0; } else { 0; };
-                            if (prev == 46) { pend = m; 0; } else { 0; };
+                            if (prev == c'.') { pend = m; 0; } else { 0; };
                             0
                         } else { 0; };
                         m = m + 1;
@@ -392,12 +392,12 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
 // A byte of an identifier-shaped word (the lexer's isalnum: letters,
 // digits, `_`).
 def word_byte(c: long) -> bool {
-    (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95
+    isalpha(c)
 };
 
 // A blank as the lexer skips it (its isspace: space, tab, LF, CR).
 def blank_byte(c: long) -> bool {
-    c == 32 || c == 9 || c == 10 || c == 13
+    isspace(c)
 };
 
 // Whether code[i:i + len(nm)] is nm (the caller checked the length).
@@ -748,19 +748,19 @@ def quote_text(s: str) -> str {
     while (i < n) {
         let c: long = b[i];
         let esc = "";
-        if (c == 92) {
+        if (c == c'\\') {
             esc = "\\\\";
             0
-        } else if (c == 34) {
+        } else if (c == c'\"') {
             esc = "\\\"";
             0
-        } else if (c == 10) {
+        } else if (c == c'\n') {
             esc = "\\n";
             0
-        } else if (c == 13) {
+        } else if (c == c'\r') {
             esc = "\\r";
             0
-        } else if (c < 32 && c != 9) {
+        } else if (c < c' ' && c != c'\t') {
             esc = "\\x" + hex[c / 16:c / 16 + 1] + hex[c % 16:c % 16 + 1];
             0
         } else { 0; };
@@ -804,10 +804,10 @@ def quote_text(s: str) -> str {
 def is_id_b(c: long) -> bool {
     // letters, digits, `_`, `$` and `.` (a module's names are qualified:
     // `yfn_12_fs.exists$3`); most bytes are lowercase, decided first
-    if (c >= 97) { c <= 122 }
-    else if (c >= 65) { c <= 90 || c == 95 }
-    else if (c >= 48) { c <= 57 }
-    else { c == 36 || c == 46 }
+    if (c >= c'a') { c <= c'z' }
+    else if (c >= c'A') { c <= c'Z' || c == c'_' }
+    else if (c >= c'0') { c <= c'9' }
+    else { c == c'$' || c == c'.' }
 };
 
 // First non-blank offset in [i, hi); blank means space (the asm dialect
@@ -820,7 +820,7 @@ def skip_sp(b: [byte], i: long, hi: long) -> long {
             go = false;
             0
         } else {
-            if (b[p] == 32) {
+            if (b[p] == c' ') {
                 p = p + 1;
                 0
             } else {
@@ -839,7 +839,7 @@ def skip_sp(b: [byte], i: long, hi: long) -> long {
 def tok_end_b(b: [byte], i: long, hi: long) -> long {
     let p = i;
     if (p < hi) {
-        if (b[p] == 36) { p = p + 1; 0; } else { 0; };
+        if (b[p] == c'$') { p = p + 1; 0; } else { 0; };
         0
     } else { 0; };
     let go = true;
@@ -866,7 +866,7 @@ def tok_end_b(b: [byte], i: long, hi: long) -> long {
 def tok_at_b(text: str, b: [byte], i: long, hi: long) -> str {
     let s = i;
     if (s < hi) {
-        if (b[s] == 36) { s = s + 1; 0; } else { 0; };
+        if (b[s] == c'$') { s = s + 1; 0; } else { 0; };
         0
     } else { 0; };
     let e = tok_end_b(b, i, hi);
@@ -902,7 +902,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                     go = false;
                     0
                 } else {
-                    if (b[q] == 36) {
+                    if (b[q] == c'$') {
                         go = false;
                         0
                     } else {
@@ -918,7 +918,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                 out = tok_push(out, t);
                 let after = tok_end_b(b, q, hi);
                 if (after < hi) {
-                    if (b[after] == 45) {
+                    if (b[after] == c'-') {
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
                         0
                     } else { 0; };
@@ -947,7 +947,7 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
     let i = lo;
     let res = out;
     while (i < hi) {
-        if (b[i] == 10) {
+        if (b[i] == c'\n') {
             res = line_refs_b(text, b, ls, i, res, want_jumps);
             ls = i + 1;
             0
@@ -975,9 +975,9 @@ def label_at(text: str, b: [byte], lo: long, hi: long) -> str {
     let lab = "";
     if (e > p) {
         if (e < hi) {
-            if (b[e] == 58) {
+            if (b[e] == c':') {
                 let s = p;
-                if (b[s] == 36) { s = s + 1; 0; } else { 0; };
+                if (b[s] == c'$') { s = s + 1; 0; } else { 0; };
                 lab = text[s:e];
                 0
             } else { 0; };
@@ -1006,7 +1006,7 @@ def is_data_line_b(text: str, b: [byte], lo: long, hi: long) -> bool {
     if (p >= hi) {
         true
     } else {
-        b[p] == 46
+        b[p] == c'.'
     }
 };
 
@@ -1022,7 +1022,7 @@ def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
         let p = lo;
         let i = lo;
         while (i < end) {
-            if (b[i] == 10) {
+            if (b[i] == c'\n') {
                 p = i + 1;
                 0
             } else { 0; };
@@ -1184,7 +1184,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
     let i = 0;
     let ls = 0;
     while (i < n) {
-        if (b[i] == 10) {
+        if (b[i] == c'\n') {
             let lab = label_at(text, b, ls, i);
             if (len(lab) > 0) {
                 names += lab;
@@ -1352,7 +1352,7 @@ def lines_fall(lines: [str], lo: long, hi: long) -> bool {
         let p = skip_sp(b0, 0, len(b0));
         if (len(lab) > 0) { p = skip_sp(b0, p + 1 + len(lab), len(b0)); };
         if (p < len(b0)) {
-            if (b0[p] == 46) { falls = false; };
+            if (b0[p] == c'.') { falls = false; }
         };
     };
     falls
@@ -1766,19 +1766,19 @@ def esc_asm(s: str) -> str {
     while (i < n) {
         let o: long = b[i];
         let esc = "";
-        if (o == 92) {
+        if (o == c'\\') {
             esc = "\\\\";
             0
-        } else if (o == 34) {
+        } else if (o == c'\"') {
             esc = "\\\"";
             0
-        } else if (o == 10) {
+        } else if (o == c'\n') {
             esc = "\\n";
             0
-        } else if (o == 9) {
+        } else if (o == c'\t') {
             esc = "\\t";
             0
-        } else if (o < 32 || o > 126) {
+        } else if (o < c' ' || o > c'~') {
             esc = "\\" + tostring(o / 64) + tostring((o / 8) % 8) + tostring(o % 8);
             0
         } else { 0; };
@@ -6571,16 +6571,16 @@ def gen_arrrep_esz(st: EmitSt, node: ArrRep, esz: long, ety: Type) -> EmitSt {
 def hexval_ch(c: str) -> long {
     let o = ord(c);
     let v = 0;
-    if (o >= 48) {
-        if (o <= 57) { v = o - 48; 0; } else { 0; };
+    if (o >= c'0') {
+        if (o <= c'9') { v = o - c'0'; 0; } else { 0; };
         0
     } else { 0; };
-    if (o >= 97) {
-        if (o <= 102) { v = o - 87; 0; } else { 0; };
+    if (o >= c'a') {
+        if (o <= c'f') { v = o - c'a' + 10; 0; } else { 0; };
         0
     } else { 0; };
-    if (o >= 65) {
-        if (o <= 70) { v = o - 55; 0; } else { 0; };
+    if (o >= c'A') {
+        if (o <= c'F') { v = o - c'A' + 10; 0; } else { 0; };
         0
     } else { 0; };
     v
@@ -7785,7 +7785,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
             0
         } else { 0; };
         let code = fmt_code(f, kind, ty);
-        if (ty == 115) {
+        if (ty == c's') {
             st = gen_tostring(st, ts);
             st = emit(st, "    push %rax");
             st = fmt_push(st, code);
@@ -7793,7 +7793,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
             st = fmt_push(st, f.prec);
             st = emit(st, "    call y_fmt_s");
             emit(st, "    add $32, %rsp")
-        } else if (ty == 100 || ty == 120 || ty == 88 || ty == 111 || ty == 98 || ty == 99) {
+        } else if (ty == c'd' || ty == c'x' || ty == c'X' || ty == c'o' || ty == c'b' || ty == c'c') {
             st = gen(st, a0);
             st = emit(st, "    push %rax");
             st = fmt_push(st, code);
@@ -7807,7 +7807,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
                 st = emit(st, "    movq %xmm0, %rax");
                 0
             } else { 0; };
-            if (ty == 37) {
+            if (ty == c'%') {
                 st = emit(st, "    movq %rax, %xmm0");
                 st = emit(st, "    mov $100, %rax");
                 st = emit(st, "    cvtsi2sd %rax, %xmm1");
@@ -7844,9 +7844,9 @@ def fmt_code(f: FmtSpec, kind: long, ty: long) -> long {
         0
     } else { 0; };
     let sg = 0;
-    if (f.sign == 43) { sg = 1; 0; } else if (f.sign == 32) { sg = 2; 0; } else { 0; };
+    if (f.sign == c'+') { sg = 1; 0; } else if (f.sign == c' ') { sg = 2; 0; } else { 0; };
     if (f.alt) { sg = sg + 4; 0; } else { 0; };
-    if (f.grp == 44) { sg = sg + 8; 0; } else if (f.grp == 95) { sg = sg + 16; 0; } else { 0; };
+    if (f.grp == c',') { sg = sg + 8; 0; } else if (f.grp == c'_') { sg = sg + 16; 0; } else { 0; };
     ty + 256 * fill + 65536 * align + 16777216 * sg
 };
 
@@ -9730,8 +9730,8 @@ def pack_len(cur: Cursor) -> long {
     let p = cur.p;
     let n = 0;
     let c = byte_at(s, p);
-    while (c != 58 && p < len(s)) {
-        n = n * 10 + c - 48;
+    while (c != c':' && p < len(s)) {
+        n = n * 10 + c - c'0';
         p = p + 1;
         c = byte_at(s, p);
     };

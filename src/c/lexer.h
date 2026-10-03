@@ -23,15 +23,15 @@
 #define isspace y_lex_isspace
 #define ispunct y_lex_ispunct
 
-int isdigit(Yv *c);                  /* (c: str) -> bool */
-int isupper(Yv *c);                  /* (c: str) -> bool */
-int islower(Yv *c);                  /* (c: str) -> bool */
-int isalpha(Yv *c);                  /* (c: str) -> bool */
-int isalnum(Yv *c);                  /* (c: str) -> bool */
-int is_radix_ch(Yv *c, long radix);  /* (c: str, radix: long) -> bool */
+int isdigit(long c);                 /* (c: byte) -> bool */
+int isupper(long c);                 /* (c: byte) -> bool */
+int islower(long c);                 /* (c: byte) -> bool */
+int isalpha(long c);                 /* (c: byte) -> bool */
+int isalnum(long c);                 /* (c: byte) -> bool */
+int is_radix_ch(long c, long radix); /* (c: byte, radix: long) -> bool */
 Yv *strip_seps(Yv *s);               /* (s: str) -> str */
-int isspace(Yv *c);                  /* (c: str) -> bool */
-int ispunct(Yv *c);                  /* (c: str) -> bool */
+int isspace(long c);                 /* (c: byte) -> bool */
+int ispunct(long c);                 /* (c: byte) -> bool */
 Yv *lex_quoted(Yv *src, long i, long line, long col);
                                      /* -> { text: str, end: long, line: long, col: long } */
 Yv *mktok(Yv *t, Yv *v, long line, long col);
@@ -40,9 +40,10 @@ long hexvalx(Yv *c);                 /* (c: str) -> long */
 Yv *multicharop(Yv *src, long i, Yv *c);
                                      /* (src: str, i: long, c: str) -> str */
 Yv *twocharop(Yv *src, long i);      /* (src: str, i: long) -> str */
-int issingleop(Yv *c);               /* (c: str) -> bool */
+int issingleop(long c);              /* (c: byte) -> bool */
 Yv *slash(void);                     /* () -> str */
-int isdigitch(Yv *c);                /* (c: str) -> bool */
+long slashb(void);                   /* () -> byte */
+int isdigitch(long c);               /* (c: byte) -> bool */
 Yv *tokenize(Yv *src);               /* (src: str) -> [{ t: str, v: str, line: long, col: long }] */
 Yv *fstr_walk(Yv *src, long q);      /* (src: str, q: long) -> { end: long, err: str, at: long, fields: [long] } */
 

@@ -626,10 +626,10 @@ def size_lit(s: str) -> long {
         // the digit's value: `.`, `e` (and a hex digit in a decimal) are
         // past the radix
         let d = 99;
-        if (o >= 48 && o <= 57) { d = o - 48; }
-        else if (o >= 97 && o <= 102) { d = o - 87; }
-        else if (o >= 65 && o <= 70) { d = o - 55; };
-        if (o == 95) {
+        if (o >= c'0' && o <= c'9') { d = o - c'0'; }
+        else if (o >= c'a' && o <= c'f') { d = o - c'a' + 10; }
+        else if (o >= c'A' && o <= c'F') { d = o - c'A' + 10; };
+        if (o == c'_') {
             // a radix literal keeps its `_` separators
         } else if (d >= radix || v > (2147483647 - d) / radix) {
             v = -1;

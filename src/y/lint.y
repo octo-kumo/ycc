@@ -72,8 +72,8 @@ def lint_num(name: str) -> long {
     let go = true;
     while (go && i >= 0) {
         let c = byte_at(name, i);
-        if (c >= 48 && c <= 57) {
-            v = v + (c - 48) * m;
+        if (c >= c'0' && c <= c'9') {
+            v = v + (c - c'0') * m;
             m = m * 10;
             i = i - 1;
         } else {
@@ -448,7 +448,7 @@ def lint_zero_text(s: str) -> bool {
     let i = 0;
     while (ok && i < len(digits)) {
         let c = byte_at(digits, i);
-        ok = c == 48 || c == 95;
+        ok = c == c'0' || c == c'_';
         i = i + 1;
     };
     ok

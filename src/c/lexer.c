@@ -9,41 +9,40 @@
 
 #include "lexer.h"
 
-int isdigit(Yv *c) {
-    // Range compares on the 1-char string, not ord(c): ord goes through
-    // bytes(), which allocates a copy of the string per character, and the
-    // lexer classifies every character of the source. Comparisons land in
-    // y_str_eq/y_str_cmp — byte primitives, no allocation.
-    return ys_cmp(c, ys("0")) >= 0 && ys_cmp(c, ys("9")) <= 0;
+int isdigit(long c) {
+    // On the byte itself, the way the Y copy reads it: `c` is the byte at
+    // the source position, not a 1-char slice of it. The old form compared
+    // the slice with ys_cmp/ys_eq_lit, so classifying every character of the
+    // source paid a slice allocation and a string comparison each time.
+    return c >= '0' && c <= '9';
 }
 
-int isupper(Yv *c) {
-    return ys_cmp(c, ys("A")) >= 0 && ys_cmp(c, ys("Z")) <= 0;
+int isupper(long c) {
+    return c >= 'A' && c <= 'Z';
 }
 
-int islower(Yv *c) {
-    return ys_cmp(c, ys("a")) >= 0 && ys_cmp(c, ys("z")) <= 0;
+int islower(long c) {
+    return c >= 'a' && c <= 'z';
 }
 
-int isalpha(Yv *c) {
+int isalpha(long c) {
     // word chars: letters AND underscore (chr(95)) AND digits (Y words like
     // "t0"/"r64" contain digits; the C backend's take_alpha accepts them too
     // via is_alpha... precisely: parser.c is_alpha includes is_digit, so
     // "t0" lexes as one id there as well — parity).
-    return islower(c) || isupper(c) || ys_eq_lit(c, "_") || isdigit(c);
+    return islower(c) || isupper(c) || c == '_' || isdigit(c);
 }
 
-int isalnum(Yv *c) {
+int isalnum(long c) {
     return isdigit(c) || isalpha(c);
 }
 
 // Digit of a radix literal (0x.. / 0b..), including `_` separators.
-int is_radix_ch(Yv *c, long radix) {
-    if (ys_eq_lit(c, "_")) { return 1; }
-    else if (radix == 2) { return ys_eq_lit(c, "0") || ys_eq_lit(c, "1"); }
+int is_radix_ch(long c, long radix) {
+    if (c == '_') { return 1; }
+    else if (radix == 2) { return c == '0' || c == '1'; }
     else { return isdigit(c) ||
-        (ys_cmp(c, ys("a")) >= 0 && ys_cmp(c, ys("f")) <= 0) ||
-        (ys_cmp(c, ys("A")) >= 0 && ys_cmp(c, ys("F")) <= 0); }
+        (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 }
 
 // A decimal literal's text without its `_` digit separators: its num token
@@ -55,9 +54,8 @@ Yv *strip_seps(Yv *s) {
     else { return ys_join(ys_split(s, ys("_")), ys("")); }
 }
 
-int isspace(Yv *c) {
-    return ys_eq_lit(c, " ") || ys_eq_lit(c, "\t") ||
-           ys_eq_lit(c, "\n") || ys_eq_lit(c, "\r");
+int isspace(long c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
 // NOTE: isdigit/isalpha/isalnum-style names MUST avoid underscores AND the
@@ -70,12 +68,12 @@ int isspace(Yv *c) {
 // names in ycc/*.y therefore use the flat isalpha/isdigit/isalnum style.
 
 // is c one of the single-char punctuation symbols?
-int ispunct(Yv *c) {
-    return ys_eq_lit(c, "(") || ys_eq_lit(c, ")") ||
-           ys_eq_lit(c, "{") || ys_eq_lit(c, "}") ||
-           ys_eq_lit(c, "[") || ys_eq_lit(c, "]") ||
-           ys_eq_lit(c, ",") || ys_eq_lit(c, ";") ||
-           ys_eq_lit(c, ":");
+int ispunct(long c) {
+    return c == '(' || c == ')' ||
+           c == '{' || c == '}' ||
+           c == '[' || c == ']' ||
+           c == ',' || c == ';' ||
+           c == ':';
 }
 
 static Yv *unescape(Yv *raw, int braces);
@@ -542,36 +540,38 @@ Yv *twocharop(Yv *src, long i) {
     else { return ys(""); }
 }
 
-int issingleop(Yv *c) {
-    return ys_eq_lit(c, "+") || ys_eq_lit(c, "-") ||
-           ys_eq_lit(c, "*") || ys_eq(c, slash()) ||
-           ys_eq_lit(c, "%") || ys_eq_lit(c, "<") ||
-           ys_eq_lit(c, ">") || ys_eq_lit(c, "=") ||
-           ys_eq_lit(c, ".") || ys_eq_lit(c, "!") ||
-           ys_eq_lit(c, "&") || ys_eq_lit(c, "?") || ys_eq_lit(c, "|") ||
-           ys_eq_lit(c, "^") || ys_eq_lit(c, "~");
+int issingleop(long c) {
+    return c == '+' || c == '-' ||
+           c == '*' || c == slashb() ||
+           c == '%' || c == '<' ||
+           c == '>' || c == '=' ||
+           c == '.' || c == '!' ||
+           c == '&' || c == '?' || c == '|' ||
+           c == '^' || c == '~';
 }
 
-// The slash character, built without a literal: Y string literals cannot
-// spell it... precisely: they CAN (c == slash-char works in comparisons),
-// but a bare slash char inside a comment or adjacent to code confuses the
-// dispatch reasoning above, so every slash reference goes through this one
-// helper (chr(47)). Single source of truth, zero literal slashes outside
-// strings in this file.
+// The slash character, built without a literal: a bare slash char inside a
+// comment or adjacent to code confuses the dispatch reasoning above, so every
+// slash reference goes through these helpers (chr(47)). Single source of
+// truth, zero literal slashes outside strings in this file. The Y copy has
+// slash() for the string uses and spells the byte as c'/' in the predicates.
 Yv *slash(void) { return ys("/"); }
 
-int isdigitch(Yv *c) {
-    // single-char predicate on a 1-char string (native-safe: no ord()).
-    if (ys_eq_lit(c, "0")) { return 1; }
-    else if (ys_eq_lit(c, "1")) { return 1; }
-    else if (ys_eq_lit(c, "2")) { return 1; }
-    else if (ys_eq_lit(c, "3")) { return 1; }
-    else if (ys_eq_lit(c, "4")) { return 1; }
-    else if (ys_eq_lit(c, "5")) { return 1; }
-    else if (ys_eq_lit(c, "6")) { return 1; }
-    else if (ys_eq_lit(c, "7")) { return 1; }
-    else if (ys_eq_lit(c, "8")) { return 1; }
-    else { return ys_eq_lit(c, "9"); }
+long slashb(void) { return '/'; }
+
+int isdigitch(long c) {
+    // The same test as isdigit, spelled out; unused since isdigit took a
+    // byte too, but kept so this file stays 1:1 with src/y/lexer.y.
+    if (c == '0') { return 1; }
+    else if (c == '1') { return 1; }
+    else if (c == '2') { return 1; }
+    else if (c == '3') { return 1; }
+    else if (c == '4') { return 1; }
+    else if (c == '5') { return 1; }
+    else if (c == '6') { return 1; }
+    else if (c == '7') { return 1; }
+    else if (c == '8') { return 1; }
+    else { return c == '9'; }
 }
 
 Yv *tokenize(Yv *src) {
@@ -581,9 +581,9 @@ Yv *tokenize(Yv *src) {
     long line = 1;
     long col = 1;
     while (i < n) {
-        Yv *c = ys_slice(src, i, i + 1);
+        long c = ys_byte_at(src, i);
         if (isspace(c)) {
-            if (ys_eq_lit(c, "\n")) { line = line + 1; col = 1; ; }
+            if (c == '\n') { line = line + 1; col = 1; ; }
             else { col = col + 1; ; }
             i = i + 1;
             ;
@@ -592,10 +592,10 @@ Yv *tokenize(Yv *src) {
             long startcol = col;
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
             long radix = 0;
-            if (ys_eq_lit(c, "0")) {
-                Yv *nxt = ys_slice(src, i + 1, i + 2);
-                if (ys_eq_lit(nxt, "x") || ys_eq_lit(nxt, "X")) { radix = 16; }
-                else if (ys_eq_lit(nxt, "b") || ys_eq_lit(nxt, "B")) { radix = 2; }
+            if (c == '0') {
+                long nxt = ys_byte_at(src, i + 1);
+                if (nxt == 'x' || nxt == 'X') { radix = 16; }
+                else if (nxt == 'b' || nxt == 'B') { radix = 2; }
             }
             // the message of a malformed literal (an ferr token), or ""
             Yv *err = ys("");
@@ -606,9 +606,9 @@ Yv *tokenize(Yv *src) {
                 int rdone = 0;
                 while (rdone == 0) {
                     if (i < n) {
-                        Yv *rc = ys_slice(src, i, i + 1);
+                        long rc = ys_byte_at(src, i);
                         if (is_radix_ch(rc, radix)) {
-                            if (!ys_eq_lit(rc, "_")) { digits = 1; }
+                            if (rc != '_') { digits = 1; }
                             i = i + 1;
                             col = col + 1;
                         } else { rdone = 1; ; };
@@ -619,7 +619,7 @@ Yv *tokenize(Yv *src) {
                     // A prefix without a digit (`0x`, `0b_`, `0b2`) is no
                     // number: the word characters after it are taken into
                     // the bad literal, reported once, where it starts.
-                    while (i < n && isalnum(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; }
+                    while (i < n && isalnum(ys_byte_at(src, i))) { i = i + 1; col = col + 1; }
                     if (radix == 16) { err = ys_cat(ys_cat(ys("hex literal '"), ys_slice(src, start, i)), ys("' has no digits")); }
                     else { err = ys_cat(ys_cat(ys("binary literal '"), ys_slice(src, start, i)), ys("' has no digits")); }
                 }
@@ -633,8 +633,8 @@ Yv *tokenize(Yv *src) {
             int ind = 0;
             while (ind == 0) {
                 if (i < n) {
-                    Yv *dc = ys_slice(src, i, i + 1);
-                    if (isdigit(dc) || ys_eq_lit(dc, "_")) { i = i + 1; col = col + 1; ; }
+                    long dc = ys_byte_at(src, i);
+                    if (isdigit(dc) || dc == '_') { i = i + 1; col = col + 1; ; }
                     else { ind = 1; ; };
                     ;
                 } else { ind = 1; ; }
@@ -648,8 +648,8 @@ Yv *tokenize(Yv *src) {
                 int frd = 0;
                 while (frd == 0) {
                     if (i < n) {
-                        Yv *fc = ys_slice(src, i, i + 1);
-                        if (isdigit(fc) || (ys_eq_lit(fc, "_") && i > fs)) { i = i + 1; col = col + 1; ; }
+                        long fc = ys_byte_at(src, i);
+                        if (isdigit(fc) || (fc == '_' && i > fs)) { i = i + 1; col = col + 1; ; }
                         else { frd = 1; ; };
                         ;
                     } else { frd = 1; ; }
@@ -663,14 +663,14 @@ Yv *tokenize(Yv *src) {
                 long esign = 0;
                 Yv *sc = ys_slice(src, i + 1, i + 2);
                 if (ys_eq_lit(sc, "+") || ys_eq_lit(sc, "-")) { esign = 1; }
-                if (isdigit(ys_slice(src, i + 1 + esign, i + 2 + esign))) {
+                if (isdigit(ys_byte_at(src, i + 1 + esign))) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
                     int exd = 0;
                     while (exd == 0) {
                         if (i < n) {
-                            Yv *xc = ys_slice(src, i, i + 1);
-                            if (isdigit(xc) || ys_eq_lit(xc, "_")) { i = i + 1; col = col + 1; ; }
+                            long xc = ys_byte_at(src, i);
+                            if (isdigit(xc) || xc == '_') { i = i + 1; col = col + 1; ; }
                             else { exd = 1; ; };
                             ;
                         } else { exd = 1; ; }
@@ -696,7 +696,7 @@ Yv *tokenize(Yv *src) {
             int inw = 0;
             while (inw == 0) {
                 if (i < n) {
-                    if (isalnum(ys_slice(src, i, i + 1))) { i = i + 1; col = col + 1; ; }
+                    if (isalnum(ys_byte_at(src, i))) { i = i + 1; col = col + 1; ; }
                     else { inw = 1; ; };
                     ;
                 } else { inw = 1; ; }
@@ -762,7 +762,7 @@ Yv *tokenize(Yv *src) {
                 ;
             }
             ;
-        } else if (ys_eq_lit(c, "\"")) {
+        } else if (c == '"') {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.
@@ -774,7 +774,7 @@ Yv *tokenize(Yv *src) {
             col = yv_l(yr_get(q, "col"));
             toks = ya_push(toks, mktok(ys("str"), yr_get(q, "text"), startline, startcol));
             ;
-        } else if (ys_eq(c, slash())) {
+        } else if (c == slashb()) {
             // Slash: comment opener, block comment, or division operator.
             // (The string arm above consumed every slash inside quotes, so a
             // slash reaching here is real code.) Look ahead one char:
@@ -852,26 +852,26 @@ Yv *tokenize(Yv *src) {
             // multicharop(src, i, c) inline inside a call misparses on the C
             // backend (it reads `f(g(x), ...)` args with dot/index shapes
             // as field access; see native.y strip_ns note).
-            Yv *op = multicharop(src, i, c);
+            Yv *op = multicharop(src, i, ys_slice(src, i, i + 1));
             if (!ys_eq_lit(op, "")) {
                 toks = ya_push(toks, mktok(ys("op"), op, line, col));
                 i = i + yv_len(op);
                 col = col + yv_len(op);
                 ;
             } else if (issingleop(c)) {
-                toks = ya_push(toks, mktok(ys("op"), c, line, col));
+                toks = ya_push(toks, mktok(ys("op"), ys_slice(src, i, i + 1), line, col));
                 i = i + 1;
                 col = col + 1;
                 ;
             } else if (ispunct(c)) {
-                toks = ya_push(toks, mktok(ys("punct"), c, line, col));
+                toks = ya_push(toks, mktok(ys("punct"), ys_slice(src, i, i + 1), line, col));
                 i = i + 1;
                 col = col + 1;
                 ;
             } else {
                 // A character no token starts with: passed on as an
                 // operator nothing accepts, so the parser reports it.
-                toks = ya_push(toks, mktok(ys("op"), c, line, col));
+                toks = ya_push(toks, mktok(ys("op"), ys_slice(src, i, i + 1), line, col));
                 i = i + 1;
                 col = col + 1;
                 ;

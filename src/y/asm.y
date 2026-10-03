@@ -44,16 +44,19 @@ type AsmBytes = { bytes: [byte], err: str };
 // NOTE: str `<`/`<=`/`>`/`>=` order lexicographically by UNSIGNED byte
 // (types.y typeof_cmp -> native.y gen_str_cmp -> the y_str_cmp stub), so
 // the one-character range tests below are exact.
-def is_digit_ch(c: str) -> bool {
-    c >= "0" && c <= "9"
+// A decimal digit.
+def is_digit_ch(c: byte) -> bool {
+    c >= c'0' && c <= c'9'
 };
 
-def is_oct_ch(c: str) -> bool {
-    c >= "0" && c <= "7"
+// An octal digit.
+def is_oct_ch(c: byte) -> bool {
+    c >= c'0' && c <= c'7'
 };
 
-def is_alpha_ch(c: str) -> bool {
-    c == "_" || (c >= "A" && c <= "Z") || (c >= "a" && c <= "z")
+// A letter or `_`.
+def is_alpha_ch(c: byte) -> bool {
+    c == c'_' || (c >= c'A' && c <= c'Z') || (c >= c'a' && c <= c'z')
 };
 
 // parse a decimal integer (optional leading -). Returns {ok, v}.
@@ -75,9 +78,9 @@ def parse_num_go(s: str, i: long, neg: bool) -> AsmNum {
     let v = 0;
     let ok = true;
     while (i < len(s)) {
-        let c = s[i:i + 1];
+        let c = s[i];
         if (is_digit_ch(c)) {
-            v = v * 10 + ord(c) - 48;
+            v = v * 10 + c - c'0';
         } else {
             ok = false;
         };
@@ -104,9 +107,9 @@ def split_ops(s: str) -> [str] {
     let n = len(s);
     while (i < n) {
         let b = byte_at(s, i);
-        if (b == 40) { depth++ };        // '('
-        if (b == 41) { depth-- };        // ')'
-        if (b == 44) {                   // ','
+        if (b == c'(') { depth++ };
+        if (b == c')') { depth-- };
+        if (b == c',') {
             if (depth == 0) {
                 out += trim(s[start:i]);
                 start = i + 1;
@@ -214,7 +217,7 @@ def parse_imm(s: str) -> OpRes {
 
 def parse_imm_alpha(s: str, dash: long) -> OpRes {
     // (split: len>0 narrows; this body checks the alpha gate only.)
-    if (is_alpha_ch(s[0:1])) {
+    if (is_alpha_ch(s[0])) {
         parse_imm_diff(s, dash)
     } else {
         parse_imm_num(s)
@@ -358,26 +361,30 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
     let n = len(s);
     let err = "";
     while (i < n) {
-        let c = s[i:i + 1];
-        if (c != "\\") {
-            out += ord(c);
+        let c = s[i];
+        if (c != c'\\') {                // '\\'
+            out += c;
             i = i + 1;
+        } else if (i + 1 >= n) {
+            // a backslash as the last byte: no escape follows it
+            err = "bad escape '\\'";
+            i = n;
         } else {
-            let e = s[i + 1:i + 2];
-            if (e == "n") {
-                out += 10;
+            let e = s[i + 1];
+            if (e == c'n') {            // 'n', the letter of \n
+                out += c'\n';
                 i = i + 2;
-            } else if (e == "t") {
-                out += 9;
+            } else if (e == c't') {      // 't', the letter of \t
+                out += c'\t';
                 i = i + 2;
-            } else if (e == "r") {
-                out += 13;
+            } else if (e == c'r') {      // 'r', the letter of \r
+                out += c'\r';
                 i = i + 2;
-            } else if (e == "\\") {
-                out += 92;
+            } else if (e == c'\\') {      // '\\'
+                out += c'\\';
                 i = i + 2;
-            } else if (e == "\"") {
-                out += 34;
+            } else if (e == c'"') {      // '"'
+                out += c'"';
                 i = i + 2;
             } else if (is_oct_ch(e)) {
                 // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`
@@ -392,7 +399,7 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
                 };
                 i = oct.k;
             } else {
-                err = "bad escape '\\" + e + "'";
+                err = "bad escape '\\" + s[i + 1:i + 2] + "'";
                 i = n;
             };
         };
@@ -405,15 +412,15 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
     // Returns {v, k (pos after digits), err}. Split from decode_str: the
     // `{ok,bytes,error}` shape is built ONLY in decode_str.
     // NOTE: `0;` tails (see parser.y parse_binary note).
-    let e = s[k - 1:k];
-    let v = ord(e) - 48;
+    let e = s[k - 1];
+    let v = e - c'0';
     let kk = k;
     let nd = 1;
     while (nd < 3) {
         if (kk < n) {
-            let d = s[kk:kk + 1];
+            let d = s[kk];
             if (is_oct_ch(d)) {
-                v = v * 8 + ord(d) - 48;
+                v = v * 8 + d - c'0';
                 kk = kk + 1;
                 nd = nd + 1;
                 0
@@ -1308,7 +1315,7 @@ def sym_name(lbl: str) -> str {
         let k = d + 1;
         let digits = k < len(s);
         while (k < len(s)) {
-            if (!is_digit_ch(s[k:k + 1])) { digits = false; 0; };
+            if (!is_digit_ch(s[k])) { digits = false; 0; };
             k = k + 1;
         };
         if (digits) { s = s[0:d]; 0; };
@@ -1321,7 +1328,7 @@ def sym_name(lbl: str) -> str {
 // does not match.
 def after_uid(s: str, k: long) -> str {
     let i = k;
-    while (i < len(s) && is_digit_ch(s[i:i + 1])) { i = i + 1; };
+    while (i < len(s) && is_digit_ch(s[i])) { i = i + 1; };
     if (i > k && i < len(s) && s[i:i + 1] == "_") {
         s[i + 1:]
     } else {
