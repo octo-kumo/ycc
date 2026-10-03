@@ -494,7 +494,16 @@ Yv *parse_postfix(Yv *toks, long p) {
             long pcl = tcol(toks, pos);
             Yv *tmp = ys_cat(ys_cat(ys_cat(ys("$p"), ys_long(pln)), ys("_")), ys_long(pcl));
             Yv *ua = yav(0);
-            props = ya_push(props, yr(4, "tmp", tmp, "recv", node, "line", yv_long(pln), "col", yv_long(pcl)));
+            /* An earlier `?.` in this chain already made everything above it
+               an option, so THIS link's receiver is that option and not the
+               bare sub-chain: `a?.[0]?.w` reads `w` off the element, and
+               `a?.b?.c` off the field whatever the field's own type is. */
+            Yv *recv = node;
+            if (yv_len(props) > 0) {
+                Yv *ra = ya_push(yav(0), node);
+                recv = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("opt$val"), "line", yv_long(pln), "col", yv_long(pcl)), "args", ra, "line", yv_long(pln), "col", yv_long(pcl));
+            }
+            props = ya_push(props, yr(4, "tmp", tmp, "recv", recv, "line", yv_long(pln), "col", yv_long(pcl)));
             ua = ya_push(ua, yr(4, "k", yv_long(K_id), "v", tmp, "line", yv_long(pln), "col", yv_long(pcl)));
             node = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("unwrap"), "line", yv_long(pln), "col", yv_long(pcl)), "args", ua, "line", yv_long(pln), "col", yv_long(pcl));
             if (is_name_tok(toks, pos + 1)) {

@@ -220,8 +220,10 @@ after the \ic{?.} propagates: \ic{obj?.inner.inneragain.inneragainn} is
 \ic{none} whenever \ic{obj} is, not just the first field. So a method
 call, a \ic{.length}, a slice or an index may all follow it:
 \ic{here()?.name.length}. A \ic{?.} partway down a chain that already
-propagates works the same way, so \ic{obj?.a.b?.c} is \ic{none} when
-\ic{obj} is \ic{none} or when \ic{b} is.
+propagates works the same way: the earlier \ic{?.} has made the whole
+chain an option, so the next one reads through it whatever the links
+between hold --- \ic{obj?.a.b?.c} is \ic{none} when \ic{obj} is or when
+\ic{b} is, and \ic{a?.xs?.[0]?.f} reaches through two subscripts.
 
 The type is the option of the field's --- of the subscript's, or of the
 method's return --- and it is \emph{flat}: a field that is itself an

@@ -468,7 +468,17 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             let pcl = tcol(toks, pos);
             let tmp = "$p" + tostring(pln) + "_" + tostring(pcl);
             let ua: [Node] = [];
-            props += { tmp: tmp, recv: node, line: pln, col: pcl };
+            // An earlier `?.` in this chain already made everything above it
+            // an option, so THIS link's receiver is that option and not the
+            // bare sub-chain: `a?.[0]?.w` reads `w` off the element, and
+            // `a?.b?.c` off the field whatever the field's own type is.
+            let recv = node;
+            if (len(props) > 0) {
+                let ra: [Node] = [];
+                ra += node;
+                recv = { k: K.call, callee: { k: K.id, v: "opt$val", line: pln, col: pcl }, args: ra, line: pln, col: pcl };
+            };
+            props += { tmp: tmp, recv: recv, line: pln, col: pcl };
             ua += { k: K.id, v: tmp, line: pln, col: pcl };
             node = { k: K.call, callee: { k: K.id, v: "unwrap", line: pln, col: pcl }, args: ua, line: pln, col: pcl };
             if (is_name_tok(toks, pos + 1)) {
