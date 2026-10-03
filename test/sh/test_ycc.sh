@@ -140,6 +140,10 @@ expect_cli_error() {
 }
 
 expect_cli_error "unknown flag" "ycc: unknown flag '--bad' (see ycc -h)" --bad
+expect_cli_error "-W without a level" "ycc: -W needs a warning level (0, or 1)" \
+    -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y" -W
+expect_cli_error "-W with a bad level" "ycc: -W needs a warning level (0, or 1), got 'x'" \
+    -W x -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "no input file" "error: no input file (see ycc -h)"
 expect_cli_error "multiple input files" "error: ycc compiles one program; use imports to combine files" \
     "$ROOT/test/y/native/t01_arith.y" "$ROOT/test/y/native/t02_recursion.y"

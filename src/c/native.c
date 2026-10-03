@@ -6,7 +6,7 @@
  *   let nr = native_resolve_x(src, dir, 0, allow_exec, path);
  *   let su = std_units(nr.std, pack);  // the std units it links
  *   // (pack: ycc's std pack, or "" to compile them from source)
- *   let r = emit_program(ast, nr, debug, su, []);
+ *   let r = emit_program(ast, nr, debug, wlevel, su, []);
  *   // { ok, asm, errors }. debug is `-g`, which adds `.file`/`.loc`
  *   // line markers -- see dbg_lines.
  *   // compile_package builds one separately linked package unit.
@@ -506,8 +506,8 @@ Yv *lit_code(Yv *d);
 Yv *lit_text(Yv *d);
 Yv *lit_neg_text(Yv *d);
 Yv *lit_decode(Yv *c);
-Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
-                 long base, Yv *xt);
+Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
+                 Yv *name, long base, Yv *xt);
 Yv *link_locs(Yv *body, long file);
 Yv *rodata_pieces(Yv *pieces, Yv *allrod);
 Yv *link_units(Yv *std, Yv *deps, Yv *prog);
@@ -534,9 +534,9 @@ Yv *unit_obj(Yv *unit, Yv *key);
 Yv *unit_unobj(Yv *text, Yv *key);
 Yv *unit_iface(Yv *unit);
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs);
-Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, Yv *std,
-                    Yv *deps);
-Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps);
+Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, long wlevel,
+                    Yv *std, Yv *deps);
+Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps);
 
 /* ── native import resolution ───────────────────────────────────────────
  * An import is a COMPILE-TIME text splice, and both compilers splice the
@@ -10343,7 +10343,7 @@ Yv *std_compile(Yv *name, Yv *ext) {
                     "file", nolines, "line", nolines, "mods", yav(1, ys("")));
     Yv *xt = externs_none();
     yr_set(xt, "ext", ext);
-    Yv *r = compile_unit(ast, noimports, origin, 1, name,
+    Yv *r = compile_unit(ast, noimports, origin, 1, 0, name,
                          std_unit_base(name), xt);
     if (!yv_b(yr_get(r, "ok"))) {
         Yv *errs = yr_get(r, "errors");
@@ -10438,8 +10438,8 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
  * other units have an init function. `xt` holds externs, defaults,
  * imported package namespaces, init labels and the argv-use flag. */
 
-Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
-                 long base, Yv *xt) {
+Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
+                 Yv *name, long base, Yv *xt) {
     tyset_reset();
     dbg_lines = debug;
     dbg_file = yr_get(origin, "file");
@@ -10492,7 +10492,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
         /* The warnings (lint.c): the program's unit's and a package's,
          * never a std unit's. */
         if (yv_len(name) == 0 || pkg_base(base)) {
-            warnings = lint_unit(ast, ast3, yr_get(origin, "file"), yr_get(origin, "mods"));
+            warnings = lint_unit(ast, ast3, yr_get(origin, "file"),
+                                yr_get(origin, "mods"), wlevel);
             pr = phase_end(times, ys("lint"), pt, ph);
             times = yr_get(pr, "times");
             pt = yv_l(yr_get(pr, "t"));
@@ -11870,18 +11871,18 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     return xt;
 }
 
-Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, Yv *std,
-                    Yv *deps) {
+Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, long wlevel,
+                    Yv *std, Yv *deps) {
     Yv *xt = unit_externs(std, yr_get(nr, "std"), deps, yr_get(nr, "pkgs"));
     return compile_unit(ast, yr_get(nr, "imports"), yr_get(nr, "origin"), 1,
-                        name, base, xt);
+                        wlevel, name, base, xt);
 }
 
 /* ── entry points ──────────────────────────────────────────────────────
  *
  * The program's unit, compiled against the std units `std` and package
  * units `deps`, then linked with them. */
-Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps) {
+Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
     Yv *xt = unit_externs(std, yr_get(nr, "std"), deps, yr_get(nr, "pkgs"));
     Yv *units = yav(0);
     long i = 0;
@@ -11922,7 +11923,7 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, Yv *std, Yv *deps) {
     }
     yr_set(xt, "argv", yv_bool(wargv));
     Yv *r = compile_unit(ast, yr_get(nr, "imports"), yr_get(nr, "origin"),
-                         debug, ys(""), 0, xt);
+                         debug, wlevel, ys(""), 0, xt);
     Yv *times = yr_get(r, "times");
     if (yv_b(yr_get(r, "ok"))) {
         long pt = clock_us();

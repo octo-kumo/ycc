@@ -35,6 +35,8 @@
 
 /* ── argument parsing ────────────────────────────────────────────────── */
 
+static long wlevel_arg(Yv *argv, long i, long n);
+
 Yv *parse_cli_args(Yv *argv) {
     Yv *out = ys("");
     Yv *files = yav(0);
@@ -43,6 +45,7 @@ Yv *parse_cli_args(Yv *argv) {
     int allow_exec = 1;
     int debug = 0;
     int nowarn = 0;
+    long wlevel = 0;
     int std_src = 0;
     Yv *std_pack_path = ys("");
     long i = 1; /* skip argv[0] */
@@ -74,6 +77,10 @@ Yv *parse_cli_args(Yv *argv) {
         } else if (ys_eq_lit(a, "-w")) {
             nowarn = 1;
             ;
+        } else if (ys_eq_lit(a, "-W")) {
+            wlevel = wlevel_arg(argv, i, n);
+            i = i + 1;
+            ;
         } else if (ys_eq_lit(a, "--std-src")) {
             std_src = 1;
             ;
@@ -88,8 +95,8 @@ Yv *parse_cli_args(Yv *argv) {
                 ;
             }
         } else if (ys_eq_lit(a, "--help") || ys_eq_lit(a, "-h")) {
-            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [--no-exec] [-h] FILE\n"));
-            puts_(ys("       ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]\n"));
+            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n"));
+            puts_(ys("       ycc build [-g] [-w] [-W N] [--no-exec] [--std-src] [DIR]\n"));
             puts_(ys("       ycc vendor [DIR]\n"));
             puts_(ys("  (no flags)   compile FILE to a native executable (default: "
                      "a.out)\n"));
@@ -102,6 +109,10 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("               lines; the loaded code and data are unchanged\n"));
             puts_(ys("  -w           do not print warnings (they go to stderr and\n"));
             puts_(ys("               never change the output)\n"));
+            puts_(ys("  -W N         warning level N; 0 (the default) is the usual\n"));
+            puts_(ys("               set, 1 adds the optional checks for a value\n"));
+            puts_(ys("               computed and dropped -- a call result nobody\n"));
+            puts_(ys("               reads, a bare a[i] or x.f as a statement\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
             puts_(ys("  --std-src    compile the std units (the runtime and std library)\n"));
             puts_(ys("               from source instead of using the precompiled ones\n"));
@@ -126,10 +137,11 @@ Yv *parse_cli_args(Yv *argv) {
         }
         i = i + 1;
     }
-    return yr(9, "out", out, "files", files, "asm_only", yv_bool(asm_only),
+    return yr(10, "out", out, "files", files, "asm_only", yv_bool(asm_only),
               "timing", yv_bool(timing), "allow_exec", yv_bool(allow_exec),
-              "debug", yv_bool(debug), "nowarn", yv_bool(nowarn),
-              "std_src", yv_bool(std_src), "std_pack", std_pack_path);
+              "debug", yv_bool(debug), "nowarn", yv_bool(nowarn), "wlevel",
+              yv_long(wlevel), "std_src", yv_bool(std_src), "std_pack",
+              std_pack_path);
 }
 
 /* ── the std pack ───────────────────────────────────────────────────────
@@ -353,10 +365,40 @@ long print_native_warnings(Yv *warnings, Yv *origin, int bare) {
     return 0;
 }
 
+/* The decimal level after `-W`, or the flag's own complaint. `i` points at
+ * "-W". Levels past 1 are the same as 1: the optional checks are a set. */
+static long wlevel_arg(Yv *argv, long i, long n) {
+    if (i + 1 >= n) {
+        puts_(ys("ycc: -W needs a warning level (0, or 1)\n"));
+        exit_(1);
+        return 0;
+    } else {
+        Yv *a = ya_get(argv, i + 1);
+        int ok = yv_len(a) > 0 && !ys_eq_lit(ys_slice(a, 0, 1), "-");
+        long v = 0;
+        long d = 0;
+        while (ok && d < yv_len(a)) {
+            long c = ys_byte_at(a, d);
+            ok = c >= '0' && c <= '9';
+            if (ok) { v = v * 10 + (c - '0'); } else { ; }
+            d = d + 1;
+        }
+        if (!ok) {
+            puts_(ys_cat(ys_cat(ys_cat(ys("ycc: -W needs a warning level (0, or 1), got '"),
+                                   a), ys("'")), ys("\n")));
+            exit_(1);
+            return 0;
+        } else {
+            return v > 1 ? 1 : v;
+        }
+    }
+}
+
 Yv *build_args(Yv *cmdline) {
     Yv *dir = ys("");
     int debug = 0;
     int nowarn = 0;
+    long wlevel = 0;
     int allow_exec = 1;
     int std_src = 0;
     long i = 2;
@@ -366,6 +408,9 @@ Yv *build_args(Yv *cmdline) {
             debug = 1;
         } else if (ys_eq_lit(a, "-w")) {
             nowarn = 1;
+        } else if (ys_eq_lit(a, "-W")) {
+            wlevel = wlevel_arg(cmdline, i, yv_len(cmdline));
+            i = i + 1;
         } else if (ys_eq_lit(a, "--no-exec")) {
             allow_exec = 0;
         } else if (ys_eq_lit(a, "--std-src")) {
@@ -391,8 +436,9 @@ Yv *build_args(Yv *cmdline) {
     } else {
         ;
     }
-    return yr(5, "dir", dir, "debug", yv_bool(debug), "nowarn",
-              yv_bool(nowarn), "allow_exec", yv_bool(allow_exec), "std_src",
+    return yr(6, "dir", dir, "debug", yv_bool(debug), "nowarn",
+              yv_bool(nowarn), "wlevel", yv_long(wlevel), "allow_exec",
+              yv_bool(allow_exec), "std_src",
               yv_bool(std_src));
 }
 
@@ -506,8 +552,8 @@ Yv *build_reach(Yv *direct, Yv *pkgs, Yv *nrs) {
     return reach;
 }
 
-long build_project(Yv *dir, int debug, int nowarn, int allow_exec,
-                   int std_src) {
+long build_project(Yv *dir, int debug, int nowarn, long wlevel,
+                   int allow_exec, int std_src) {
     Yv *g = pk_load(dir);
     Yv *bins = yr_get(g, "bins");
     Yv *pkgs = yr_get(g, "pkgs");
@@ -601,7 +647,8 @@ long build_project(Yv *dir, int debug, int nowarn, int allow_exec,
         if (!hit) {
             eputs_(ys_cat(ys_cat(ys("compiling "), yr_get(p, "name")), ys("\n")));
             Yv *ast = parse_program(tokenize(yr_get(nr, "src")));
-            Yv *r = compile_package(ast, nr, yr_get(p, "name"), base, su, units);
+            Yv *r = compile_package(ast, nr, yr_get(p, "name"), base, wlevel,
+                                   su, units);
             if (!yv_b(yr_get(r, "ok"))) {
                 print_native_errors(yr_get(r, "errors"), yr_get(nr, "origin"), 0);
                 exit_(1);
@@ -672,7 +719,7 @@ long build_project(Yv *dir, int debug, int nowarn, int allow_exec,
             k = k + 1;
         }
         Yv *ast = parse_program(tokenize(yr_get(nr, "src")));
-        Yv *r = emit_program(ast, nr, debug, bstd, linked);
+        Yv *r = emit_program(ast, nr, debug, wlevel, bstd, linked);
         if (!yv_b(yr_get(r, "ok"))) {
             print_native_errors(yr_get(r, "errors"), yr_get(nr, "origin"), 0);
             exit_(1);
@@ -722,6 +769,7 @@ long y_main(Yv *cmdline) {
         if (ys_eq_lit(ya_get(cmdline, 1), "build")) {
             build_project(yr_get(ba, "dir"), yv_b(yr_get(ba, "debug")),
                           yv_b(yr_get(ba, "nowarn")),
+                          yv_l(yr_get(ba, "wlevel")),
                           yv_b(yr_get(ba, "allow_exec")),
                           yv_b(yr_get(ba, "std_src")));
             ;
@@ -817,8 +865,8 @@ long y_main(Yv *cmdline) {
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));
             h0 = yv_l(yr_get(ph, "h"));
-            Yv *r = emit_program(ast, nr, yv_b(yr_get(pargs, "debug")), su,
-                                 yav(0));
+            Yv *r = emit_program(ast, nr, yv_b(yr_get(pargs, "debug")),
+                                 yv_l(yr_get(pargs, "wlevel")), su, yav(0));
             /* emit_program reports its own sub-phases (strip_ns, rename,
              * typecheck, lint, emit_fns, emit_start, asm_text); splice them
              * in. */

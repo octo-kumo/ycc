@@ -50,6 +50,12 @@ static long lint_stmt(LintSt st, Yv *s, int used, int top);
 static int lint_code(Yv *s);
 static int lint_diverges(Yv *s);
 static int lint_any_diverges(Yv *stmts);
+static long lint_rets(LintSt st, Yv *stmts);
+static long lint_rets_node(LintSt st, Yv *node);
+static int lint_returns(LintSt st, Yv *callee);
+static Yv *lint_self(LintSt st, Yv *name);
+static long lint_unused_call(LintSt st, Yv *node, int used, Yv *call);
+static long lint_unused_expr(LintSt st, Yv *node, int used);
 static long lint_node(LintSt st, Yv *node, int used);
 static long lint_one(LintSt st, Yv *node, int used);
 static long lint_list(LintSt st, Yv *nodes);
@@ -125,13 +131,19 @@ static Yv *lint_fmods;
 /* The warnings for one unit: `ast` as parsed, `ast3` renamed (and
  * checked), sorted by position; ofile and fmods say which lines are a
  * module's. */
-Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods) {
+Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel) {
     lint_ofile = ofile;
     lint_fmods = fmods;
     Yv *warns = yav(0);
     Yv *vars = yav(0);
     Yv *flags = yav(0);
-    LintSt st = yr(3, "warns", warns, "vars", vars, "flags", flags);
+    Yv *rets = yav(0);
+    LintSt st = yr(7, "warns", warns, "vars", vars, "flags", flags, "rets",
+                   rets, "ridx", nameix_new(64), "self", ys(""), "wlevel",
+                   yv_long(wlevel));
+    if (wlevel >= 1) {
+        (void)lint_rets(st, yr_get(ast3, "stmts"));
+    }
     (void)lint_stmts(st, yr_get(ast3, "stmts"), 0, 1);
     (void)lint_vars(st);
     (void)lint_types(st, yr_get(ast, "stmts"));
@@ -318,9 +330,11 @@ static long lint_node(LintSt st, Yv *node, int used) {
         return lint_id(st, node, used);
     } else if (yv_l(k) == K_call) {
         (void)lint_node(st, yr_get(node, "callee"), 1);
-        return lint_list(st, yr_get(node, "args"));
+        (void)lint_list(st, yr_get(node, "args"));
+        return lint_unused_call(st, node, used, node);
     } else if (yv_l(k) == K_dot) {
-        return lint_node(st, yr_get(node, "obj"), 1);
+        (void)lint_node(st, yr_get(node, "obj"), 1);
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_str || yv_l(k) == K_num) {
         return 0;
     } else if (yv_l(k) == K_bin) {
@@ -334,11 +348,14 @@ static long lint_node(LintSt st, Yv *node, int used) {
     } else if (yv_l(k) == K_assign) {
         return lint_assign(st, node);
     } else if (yv_l(k) == K_index) {
-        return lint_two(st, yr_get(node, "arr"), yr_get(node, "idx"));
+        (void)lint_two(st, yr_get(node, "arr"), yr_get(node, "idx"));
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_rec) {
-        return lint_lit(st, node, ys("field"), ys("record"));
+        (void)lint_lit(st, node, ys("field"), ys("record"));
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_array) {
-        return lint_list(st, yr_get(node, "elems"));
+        (void)lint_list(st, yr_get(node, "elems"));
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_ret || yv_l(k) == K_un ||
                yv_l(k) == K_addr || yv_l(k) == K_deref ||
                yv_l(k) == K_rectest || yv_l(k) == K_narrow ||
@@ -350,7 +367,8 @@ static long lint_node(LintSt st, Yv *node, int used) {
         (void)lint_node(st, yr_get(node, "cond"), 1);
         return lint_node(st, yr_get(node, "body"), 0);
     } else if (yv_l(k) == K_func) {
-        return lint_func(st, node);
+        (void)lint_func(st, node);
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_incdec) {
         return lint_incdec(st, node, used);
     } else if (yv_l(k) == K_idxassign) {
@@ -360,7 +378,8 @@ static long lint_node(LintSt st, Yv *node, int used) {
         return lint_two(st, yr_get(node, "obj"), yr_get(node, "v"));
     } else if (yv_l(k) == K_slice) {
         (void)lint_two(st, yr_get(node, "arr"), yr_get(node, "lo"));
-        return lint_node(st, yr_get(node, "hi"), 1);
+        (void)lint_node(st, yr_get(node, "hi"), 1);
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_kw_for) {
         return lint_for(st, node);
     } else if (yv_l(k) == K_kw_foreach) {
@@ -370,9 +389,11 @@ static long lint_node(LintSt st, Yv *node, int used) {
         (void)lint_two(st, yr_get(node, "lo"), yr_get(node, "hi"));
         return lint_node(st, yr_get(node, "body"), 0);
     } else if (yv_l(k) == K_map) {
-        return lint_lit(st, node, ys("key"), ys("map"));
+        (void)lint_lit(st, node, ys("key"), ys("map"));
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_arrrep) {
-        return lint_node(st, yr_get(node, "v"), 1);
+        (void)lint_node(st, yr_get(node, "v"), 1);
+        return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_store) {
         return lint_two(st, yr_get(node, "p"), yr_get(node, "v"));
     } else if (yv_l(k) == K_sliceassign) {
@@ -383,13 +404,129 @@ static long lint_node(LintSt st, Yv *node, int used) {
     }
 }
 
+/* ── what each def returns (level 1 only) ───────────────────────────────── */
+
+/* Every `def` in the tree, by its renamed name. */
+static long lint_rets(LintSt st, Yv *stmts) {
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        (void)lint_rets_node(st, ya_get(stmts, i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+static long lint_rets_node(LintSt st, Yv *node) {
+    Yv *k = yr_get(node, "k");
+    if (yv_l(k) == K_decl) {
+        Yv *v = yr_get(node, "v");
+        if (ys_eq_lit(yr_get(node, "kind"), "def") &&
+            yv_l(yr_get(v, "k")) == K_func) {
+            Yv *name = yr_get(node, "name");
+            long n = lint_num(name);
+            if (n > 0 && nameix_get(yr_get(st, "ridx"), name) < 0) {
+                (void)nameix_put(yr_get(st, "ridx"), name,
+                                 yv_len(yr_get(st, "rets")));
+                (void)ya_push(yr_get(st, "rets"),
+                              yr(4, "name", name, "ret", yr_get(v, "ret"),
+                                 "line", yr_get(node, "line"), "col",
+                                 yr_get(node, "col")));
+            }
+            return lint_rets(st, yr_get(v, "defs"));
+        } else {
+            return lint_rets_node(st, v);
+        }
+    } else if (yv_l(k) == K_kw_if) {
+        (void)lint_rets_node(st, yr_get(node, "then"));
+        return lint_rets_node(st, yr_get(node, "els"));
+    } else if (yv_l(k) == K_block) {
+        return lint_rets(st, yr_get(node, "stmts"));
+    } else if (yv_l(k) == K_kw_while) {
+        return lint_rets_node(st, yr_get(node, "body"));
+    } else if (yv_l(k) == K_kw_for) {
+        return lint_rets_node(st, yr_get(node, "body"));
+    } else if (yv_l(k) == K_kw_foreach) {
+        return lint_rets_node(st, yr_get(node, "body"));
+    } else if (yv_l(k) == K_forrange) {
+        return lint_rets_node(st, yr_get(node, "body"));
+    } else {
+        return 0;
+    }
+}
+
+/* Whether the call `callee` (an id naming a def, or `self`) hands back a
+ * value. A name no def answers for -- a builtin, a package's qualified
+ * name, a name from another unit -- is taken to be void: the linter has
+ * no way to know, and a wrong warning is worse than a missing one. */
+static int lint_returns(LintSt st, Yv *callee) {
+    if (yv_l(yr_get(callee, "k")) != K_id) {
+        return 0;
+    } else {
+        Yv *nm = yr_get(callee, "v");
+        if (ys_eq_lit(nm, "self")) {
+            nm = yr_get(st, "self");
+        }
+        if (ys_eq_lit(nm, "")) {
+            return 0;
+        } else {
+            long i = nameix_get(yr_get(st, "ridx"), nm);
+            if (i < 0) {
+                return 0;
+            } else {
+                Yv *ret = yr_get(ya_get(yr_get(st, "rets"), i), "ret");
+                long rk = yv_l(yr_get(ret, "k"));
+                return !(rk == K_tvoid || rk == K_tunk || rk == K_tnone);
+            }
+        }
+    }
+}
+
+/* A def's name while its body is walked, so `self` resolves; the one
+ * before, restored after. */
+static Yv *lint_self(LintSt st, Yv *name) {
+    Yv *was = yr_get(st, "self");
+    (void)yr_set(st, "self", name);
+    return was;
+}
+
+/* Level 1: a call whose result nobody reads, when the callee hands one
+ * back. The message names the function the way the source spells it. */
+static long lint_unused_call(LintSt st, Yv *node, int used, Yv *call) {
+    if (yv_l(yr_get(st, "wlevel")) >= 1 && !used &&
+        lint_returns(st, yr_get(call, "callee"))) {
+        Yv *leaf = yr_get(call, "callee");
+        (void)lint_warn_at(
+            st,
+            lint_cat(4, ys("the value of '"), lint_disp(yr_get(leaf, "v")),
+                     ys("()'"), ys(" is not used")),
+            node);
+    }
+    return 0;
+}
+
+/* Level 1: a read or a literal used as a statement -- `x.f`, `a[i]`,
+ * `a[1:2]`, `&x`, `*p`, a record/array/map literal, `a is B`. Nothing
+ * else can be meant by it, and the statement is easy to miss. The
+ * position says which expression it is. */
+static long lint_unused_expr(LintSt st, Yv *node, int used) {
+    if (yv_l(yr_get(st, "wlevel")) >= 1 && !used) {
+        (void)lint_warn_at(st, ys("the value computed here is not used"),
+                           node);
+    }
+    return 0;
+}
+
 /* The kinds with one operand, `e`; a unary operator's dropped result is
  * a mistake. */
 static long lint_one(LintSt st, Yv *node, int used) {
-    if (yv_l(yr_get(node, "k")) == K_un) {
+    Yv *k = yr_get(node, "k");
+    if (yv_l(k) == K_un) {
         return lint_un(st, node, used);
-    } else {
+    } else if (yv_l(k) == K_ret) {
         return lint_node(st, yr_get(node, "e"), 1);
+    } else {
+        (void)lint_node(st, yr_get(node, "e"), 1);
+        return lint_unused_expr(st, node, used);
     }
 }
 
@@ -560,13 +697,18 @@ static long lint_decl(LintSt st, Yv *node) {
     long line = yv_l(yr_get(node, "line"));
     long col = yv_l(yr_get(node, "col"));
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
+        /* the body reaches itself through `self` */
+        Yv *was = lint_self(st, yr_get(node, "name"));
         (void)lint_note(st, yr_get(node, "name"), ys("def"), line, col, 0, 0);
+        (void)lint_node(st, v, 1);
+        (void)yr_set(st, "self", was);
+        return 0;
     } else {
         (void)lint_note(st, yr_get(node, "name"), yr_get(node, "kind"), line,
                         col, lint_scal(yr_get(node, "typ"), v),
                         lint_fresh(v));
+        return lint_node(st, v, 1);
     }
-    return lint_node(st, v, 1);
 }
 
 static int lint_scal(Yv *typ, Yv *v) {

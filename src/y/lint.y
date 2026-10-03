@@ -15,6 +15,14 @@
 //   an alias already names it; two aliases naming one type; one alias
 //   declared twice.
 //
+// `wlevel` is the warning level the driver was given (`ycc -W N`, 0 by
+// default). Level 1 turns on the two optional checks that a dropped value
+// can only be a mistake: a call whose result nobody reads, and the read
+// forms (`x.f`, `a[i]`, `&x`, `*p`, a literal) used as a statement. They
+// are off by default because a getter call or a bare `a[i]` is a habit,
+// not a mistake, and turning them on for every build would drown the
+// warnings that are. Nothing extra runs at level 0.
+//
 // Parameters, loop variables, top-level bindings and any name starting
 // with `_` are exempt from the unused-binding rules. The C copy in src/c
 // compiles this file (lint.c, PORTING.md).
@@ -24,7 +32,8 @@ import types from "./types.y";
 import parser from "./parser.y";
 
 type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool };
-type LintSt = { warns: [Diag], vars: [LintVar], flags: [long] };
+type LintRet = { name: str, ret: Type, line: long, col: long };
+type LintSt = { warns: [Diag], vars: [LintVar], flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long };
 type LintRoot = { typ: Type, line: long, col: long, alias: str, mod: str };
 type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
 type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: NameIx, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
@@ -37,17 +46,111 @@ let lint_fmods: [str] = [];
 // The warnings for one unit: `ast` as parsed, `ast3` renamed (and
 // checked), sorted by position; ofile and fmods say which lines are a
 // module's.
-def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str]) -> [Diag] {
+def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long) -> [Diag] {
     lint_ofile = ofile;
     lint_fmods = fmods;
     let warns: [Diag] = [];
     let vars: [LintVar] = [];
     let flags: [long] = [];
-    let st = { warns: warns, vars: vars, flags: flags };
+    let rets: [LintRet] = [];
+    let st = { warns: warns, vars: vars, flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel };
+    if (wlevel >= 1) {
+        lint_rets(st, ast3.stmts)
+    };
     lint_stmts(st, ast3.stmts, false, true);
     lint_vars(st);
     lint_types(st, ast.stmts);
     lint_sorted(st.warns)
+};
+
+// ── what each def returns (level 1 only) ──────────────────────────────────
+//
+// The renamed tree carries a def's written return type, so the checks can
+// tell a call that hands back a value from one that hands back nothing.
+// Collected before the walk, so a forward call knows too. `self` is a
+// walk-time name: a def body calls itself through `self`, and the tree
+// does not say which def that is.
+
+// Every `def` in the tree, by its renamed name.
+def lint_rets(st: LintSt, stmts: [Node]) -> long {
+    let i = 0;
+    while (i < len(stmts)) {
+        lint_rets_node(st, stmts[i]);
+        i = i + 1;
+    };
+    0
+};
+
+def lint_rets_node(st: LintSt, node: Node) -> long {
+    let k: long = node.k;
+    if (k == K.decl) {
+        let decl: Decl = node;
+        if (decl.kind == "def" && decl.v.k == K.func) {
+            let func: Func = decl.v;
+            let n = lint_num(decl.name);
+            if (n > 0 && parser.nameix_get(st.ridx, decl.name) < 0) {
+                parser.nameix_put(st.ridx, decl.name, len(st.rets));
+                st.rets += { name: decl.name, ret: func.ret, line: node.line, col: node.col };
+            };
+            lint_rets(st, func.defs)
+        } else {
+            lint_rets_node(st, decl.v)
+        }
+    } else if (k == K.kw_if) {
+        let branch: If = node;
+        lint_rets_node(st, branch.then);
+        lint_rets_node(st, branch.els)
+    } else if (k == K.block) {
+        let block: Block = node;
+        lint_rets(st, block.stmts)
+    } else if (k == K.kw_while) {
+        let loop: While = node;
+        lint_rets_node(st, loop.body)
+    } else if (k == K.kw_for) {
+        let loop: For = node;
+        lint_rets_node(st, loop.body)
+    } else if (k == K.kw_foreach) {
+        let loop: Foreach = node;
+        lint_rets_node(st, loop.body)
+    } else if (k == K.forrange) {
+        let loop: ForRange = node;
+        lint_rets_node(st, loop.body)
+    } else {
+        0
+    }
+};
+
+// Whether the call `callee` (an id naming a def, or `self`) hands back a
+// value. A name no def answers for -- a builtin, a package's qualified
+// name, a name from another unit -- is taken to be void: the linter has
+// no way to know, and a wrong warning is worse than a missing one.
+def lint_returns(st: LintSt, callee: Node) -> bool {
+    if (callee.k != K.id) {
+        false
+    } else {
+        let leaf: Leaf = callee;
+        let nm = if (leaf.v == "self") { st.self } else { leaf.v };
+        if (nm == "") {
+            false
+        } else {
+            let i = parser.nameix_get(st.ridx, nm);
+            if (i < 0) {
+                false
+            } else {
+                let ret = st.rets[i].ret;
+                let rk: long = ret.k;
+                !(rk == K.tvoid || rk == K.tunk || rk == K.tnone)
+            }
+        }
+    }
+};
+
+// A def's name while its body is walked, so `self` resolves; the one
+// before, restored after.
+def lint_self(st: LintSt, name: str) -> str {
+    let was = st.self;
+    st.self = name;
+    was
 };
 
 def lint_warn(st: LintSt, msg: str, line: long, col: long) -> long {
@@ -228,10 +331,12 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
     } else if (k == K.call) {
         let call: Call = node;
         lint_node(st, call.callee, true);
-        lint_list(st, call.args)
+        lint_list(st, call.args);
+        lint_unused_call(st, node, used, call)
     } else if (k == K.dot) {
         let dot: Dot = node;
-        lint_node(st, dot.obj, true)
+        lint_node(st, dot.obj, true);
+        lint_unused_expr(st, node, used)
     } else if (k == K.str || k == K.num) {
         0
     } else if (k == K.bin) {
@@ -251,13 +356,16 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
         lint_assign(st, assign)
     } else if (k == K.index) {
         let index: Index = node;
-        lint_two(st, index.arr, index.idx)
+        lint_two(st, index.arr, index.idx);
+        lint_unused_expr(st, node, used)
     } else if (k == K.rec) {
         let rec: RecLit = node;
-        lint_lit(st, rec, "field", "record")
+        lint_lit(st, rec, "field", "record");
+        lint_unused_expr(st, node, used)
     } else if (k == K.array) {
         let array: ArrLit = node;
-        lint_list(st, array.elems)
+        lint_list(st, array.elems);
+        lint_unused_expr(st, node, used)
     } else if (k == K.ret || k == K.un || k == K.addr || k == K.deref || k == K.rectest || k == K.narrow || k == K.matchend) {
         lint_one(st, node, used)
     } else if (k == K.opassign) {
@@ -269,7 +377,8 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
         lint_node(st, loop.body, false)
     } else if (k == K.func) {
         let func: Func = node;
-        lint_func(st, func)
+        lint_func(st, func);
+        lint_unused_expr(st, node, used)
     } else if (k == K.incdec) {
         let incdec: IncDec = node;
         lint_incdec(st, incdec, used)
@@ -283,7 +392,8 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
     } else if (k == K.slice) {
         let slice: Slice = node;
         lint_two(st, slice.arr, slice.lo);
-        lint_node(st, slice.hi, true)
+        lint_node(st, slice.hi, true);
+        lint_unused_expr(st, node, used)
     } else if (k == K.kw_for) {
         let loop: For = node;
         lint_for(st, loop)
@@ -297,10 +407,12 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
         lint_node(st, loop.body, false)
     } else if (k == K.map) {
         let map: RecLit = node;
-        lint_lit(st, map, "key", "map")
+        lint_lit(st, map, "key", "map");
+        lint_unused_expr(st, node, used)
     } else if (k == K.arrrep) {
         let rep: ArrRep = node;
-        lint_node(st, rep.v, true)
+        lint_node(st, rep.v, true);
+        lint_unused_expr(st, node, used)
     } else if (k == K.store) {
         let store: Store = node;
         lint_two(st, store.p, store.v)
@@ -321,14 +433,40 @@ def lint_one(st: LintSt, node: Node, used: bool) -> long {
         lint_un(st, un, used)
     } else if (node.k == K.rectest || node.k == K.narrow) {
         let narrow: Narrow = node;
-        lint_node(st, narrow.e, true)
+        lint_node(st, narrow.e, true);
+        lint_unused_expr(st, node, used)
     } else if (node.k == K.matchend) {
         let matchend: MatchEnd = node;
         lint_node(st, matchend.e, true)
-    } else {
+    } else if (node.k == K.ret) {
         let wrap: Wrap = node;
         lint_node(st, wrap.e, true)
+    } else {
+        let wrap: Wrap = node;
+        lint_node(st, wrap.e, true);
+        lint_unused_expr(st, node, used)
     }
+};
+
+// Level 1: a call whose result nobody reads, when the callee hands one
+// back. The message names the function the way the source spells it.
+def lint_unused_call(st: LintSt, node: Node, used: bool, call: Call) -> long {
+    if (st.wlevel >= 1 && !used && lint_returns(st, call.callee)) {
+        let leaf: Leaf = call.callee;
+        lint_warn_at(st, "the value of '" + lint_disp(leaf.v) + "()' is not used", node);
+    };
+    0
+};
+
+// Level 1: a read or a literal used as a statement -- `x.f`, `a[i]`,
+// `a[1:2]`, `&x`, `*p`, a record/array/map literal, `a is B`. Nothing
+// else can be meant by it, and the statement is easy to miss. The
+// position says which expression it is.
+def lint_unused_expr(st: LintSt, node: Node, used: bool) -> long {
+    if (st.wlevel >= 1 && !used) {
+        lint_warn_at(st, "the value computed here is not used", node);
+    };
+    0
 };
 
 def lint_list(st: LintSt, nodes: [Node]) -> long {
@@ -479,10 +617,15 @@ def lint_decl(st: LintSt, node: Decl) -> long {
     let v = node.v;
     if (node.kind == "def") {
         lint_note(st, node.name, "def", node.line, node.col, false, false);
+        // the body reaches itself through `self`
+        let was = lint_self(st, node.name);
+        lint_node(st, v, true);
+        st.self = was;
+        0
     } else {
         lint_note(st, node.name, node.kind, node.line, node.col, lint_scal(node.typ, v), lint_fresh(v));
-    };
-    lint_node(st, v, true)
+        lint_node(st, v, true)
+    }
 };
 
 def lint_scal(typ: Type, v: Node) -> bool {

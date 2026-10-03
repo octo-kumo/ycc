@@ -7,6 +7,8 @@
 #   warnings (lint.y) must be exactly the file's `// expect-warning: MSG`
 #   markers: each draws a warning quoting MSG on the marker's own line (a
 #   line drawing two carries two markers), and an unmarked warning fails.
+#   A `// flags: ...` line adds compiler flags to that one fixture, for a
+#   warning only a raised level turns on (`-W 1`).
 # e*.y: ycc must FAIL, and its output must contain the text of EVERY
 #   `// expect-error: ...` line in the file. One file can mark several:
 #   the parser and the checker report all their errors, so a themed file
@@ -71,8 +73,12 @@ run_native() {
     # the one fixed path a fixture writes; only t10 may touch it, so a
     # shard running beside this one never removes it mid-check
     [ "$base" = "t10_filewrite" ] && rm -f /tmp/ynative_test.txt
-    local err
-    err=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$bin" "$prog" </dev/null 2>&1)
+    # `// flags: ...` adds compiler flags, for a fixture that tests a
+    # warning the default level does not turn on (the -W ones).
+    local flags
+    flags=$(sed -n 's|^// flags: ||p' "$prog" | head -1)
+    # shellcheck disable=SC2086 # a flag list, deliberately word-split
+    err=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" $flags -o "$bin" "$prog" </dev/null 2>&1)
     if [ $? -ne 0 ]; then
         fail "$base" "compile failed: $(echo "$err" | head -c 200 | tr '\n' '|')"
         rm -f "$bin"

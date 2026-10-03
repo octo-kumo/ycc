@@ -151,7 +151,9 @@ reason.
 | 10-errors | Errors and diagnostics | Errors chapter heading | none: compile-time, runtime and exit behavior are detailed below |
 | 10-errors | Compile time | Fatal rejection with source-positioned diagnostics | `native/e02_undef.y`, `native/e21_hetero_append.y`, `native/e39_missing_semicolon.y`, `native/e41_import_missing.y` |
 | 10-errors | Compile time | A closer that closes nothing in a block is reported where it stands and the parse goes on | `native/e137_parse_stray_closer.y` |
-| 10-errors | Warnings | Every warning message, at its position; what draws none (a dropped call, `ok && f()`, `x != x`, a float zero, `_` names, parameters, loop variables, top-level bindings) | `native/t144_warnings.y` |
+| 10-errors | Warnings | Every warning message, at its position; what draws none at the default level (a dropped call, `ok && f()`, `x != x`, a float zero, `_` names, parameters, loop variables, top-level bindings) | `native/t144_warnings.y` |
+| 10-errors | Warnings | The optional level-1 checks `-W 1` turns on: a call result nobody reads (a void function, an unannotated one, `self` and a builtin draw nothing), and a bare read or literal used as a statement | `native/t84_unused_call.y`, `native/t85_unused_value.y` |
+| 10-errors | Warnings | `-W` takes a level: none, or one that is not a number, is a driver error | `sh/test_ycc.sh` |
 | 10-errors | Warnings | Warnings in fixtures that test other features | `native/t09_divzero.y`, `native/t29_blocks_iife.y`, `native/t43_spread_cons.y`, `native/t46_maps.y`, `native/t50_unions_match.y`, `native/t54_capture_cells.y`, `native/t101_heap_growth.y` |
 | 10-errors | Warnings | stderr, an import's file named, the build goes on; `-w` drops them and the binary keeps its bytes; `-S` keeps them out of the listing; both compilers print the same | `sh/test_ycc.sh`, `sh/test_port.sh` |
 | 10-errors | Warnings | `ycc build`: a package warns when it compiles, a bin on every build; `-w` | `sh/test_pkg.sh` |

@@ -5,7 +5,7 @@
 //   let nr = native.native_resolve_x(src, dir, 0, allow_exec, path);
 //   let su = native.std_units(nr.std, pack);  // the std units it links
 //   // (pack: ycc's std pack, or "" to compile them from source)
-//   let r = native.emit_program(ast, nr, debug, su, []);
+//   let r = native.emit_program(ast, nr, debug, wlevel, su, []);
 //   // { ok, asm, errors }. debug is `-g`, which adds `.file`/`.loc`
 //   // line markers -- see dbg_lines. The last argument holds the
 //   // package units the program links (`ycc build`: native_resolve_pk,
@@ -8758,7 +8758,7 @@ def std_compile(name: str, ext: [Sym]) -> Unit {
     let nolines: [long] = [];
     let xt = externs_none();
     xt.ext = ext;
-    let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: [""] }, true, name, std_unit_base(name), xt);
+    let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: [""] }, true, 0, name, std_unit_base(name), xt);
     if (!r.ok) {
         let errs = r.errors;
         let k = 0;
@@ -8835,7 +8835,7 @@ type UnitRes = { ok: bool, errors: [Diag], warnings: [Diag], times: [Timing], un
 // preceded by calls to `xt.inits` (the linked units' init labels); any
 // other unit's are its init function. `xt.ext` holds the externs, bound
 // by name in the checker and the emitter (see Externs).
-def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: str, base: long, xt: Externs) -> UnitRes {
+def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel: long, name: str, base: long, xt: Externs) -> UnitRes {
     tyset_reset();
     dbg_lines = debug;
     dbg_file = origin.file;
@@ -8874,7 +8874,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
         // The warnings (lint.y): the program's unit's and a package's,
         // never a std unit's.
         if (len(name) == 0 || pkg_base(base)) {
-            warnings = lint.lint_unit(ast, ast3, origin.file, origin.mods);
+            warnings = lint.lint_unit(ast, ast3, origin.file, origin.mods, wlevel);
             pr = phase_end(times, "lint", pt, ph);
             times = pr.times; pt = pr.t; ph = pr.h;
         };
@@ -9945,15 +9945,15 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
 // it (`nr`), compiled against the std units and the packages it imports
 // (`deps` holds them, and maybe more). Always with its `.loc` markers
 // (link_units keeps them for -g only), so one object serves every build.
-def compile_package(ast: Block, nr: Resolved, name: str, base: long, std: [Unit], deps: [Unit]) -> UnitRes {
-    compile_unit(ast, nr.imports, nr.origin, true, name, base, unit_externs(std, nr.std, deps, nr.pkgs))
+def compile_package(ast: Block, nr: Resolved, name: str, base: long, wlevel: long, std: [Unit], deps: [Unit]) -> UnitRes {
+    compile_unit(ast, nr.imports, nr.origin, true, wlevel, name, base, unit_externs(std, nr.std, deps, nr.pkgs))
 };
 
 // The program's unit, compiled against the std units `std` (std_units)
 // and the packages `deps` (`ycc build`: every package it links, each
 // after those it imports) and linked with them. `nr` is the program's
 // resolution: the std units it binds itself, the packages it imports.
-def emit_program(ast: Block, nr: Resolved, debug: bool, std: [Unit], deps: [Unit]) -> { ok: bool, asm: str, errors: [Diag], warnings: [Diag], times: [Timing] } {
+def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit], deps: [Unit]) -> { ok: bool, asm: str, errors: [Diag], warnings: [Diag], times: [Timing] } {
     let xt = unit_externs(std, nr.std, deps, nr.pkgs);
     let inits: [str] = [];
     let units: [Unit] = [];
@@ -9980,7 +9980,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, std: [Unit], deps: [Unit
         i = i + 1;
     };
     xt.argv = wargv;
-    let r = compile_unit(ast, nr.imports, nr.origin, debug, "", 0, xt);
+    let r = compile_unit(ast, nr.imports, nr.origin, debug, wlevel, "", 0, xt);
     let times = r.times;
     if (r.ok) {
         let pt = clock_us();

@@ -75,6 +75,30 @@ std units never warn; a package warns when it compiles. What draws one:
 starting with \ic{\_} are never unused: \ic{let \_x = f();} keeps a
 value on purpose.
 
+\paragraph{Optional checks: \ic{-W N}}
+\label{sec:wlevel}
+
+Two more checks are off by default, because in ordinary code they are a
+habit rather than a mistake: a getter call or a bare \ic{a[i]} as a
+statement reads fine. Raise the warning level to turn them on -- \ic{ycc
+-W 1} (a project: \ic{ycc build -W 1}), which adds
+
+\begin{sloppypar}
+\begin{itemize}[nosep]
+\item \ic{the value of 'f()' is not used}: a call to a function that
+  hands a value back, whose result nobody reads. A function that returns
+  \ic{void}, one with no written return type, a builtin, and a name from
+  another unit are all taken to return nothing and draw nothing;
+\item \ic{the value computed here is not used}: a read or a literal used
+  as a statement -- \ic{x.f}, \ic{a[i]}, \ic{a[1:2]}, \ic{\&x},
+  \ic{*p}, a record, array or map literal, \ic{[x; n]}, \ic{x is B}.
+\end{itemize}
+\end{sloppypar}
+
+\noindent Level \ic{0} (the default) is the set above. \ic{-W} with no
+level, or one that is not a number, is an error. The level changes which
+warnings are printed and nothing else: the binary is the same either way.
+
 \subsection{Run time}
 
 The compiled program traps --- writes a one-line message to stdout and

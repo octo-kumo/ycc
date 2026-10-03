@@ -25,7 +25,7 @@ import fs;
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, std_src: bool, std_pack: str } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str } {
     let out = "";
     let files: [str] = [];
     let asm_only = false;
@@ -33,6 +33,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
     let allow_exec = true;
     let debug = false;
     let nowarn = false;
+    let wlevel = 0;
     let std_src = false;
     let std_pack = "";
     let i = 1;  // skip argv[0]
@@ -57,6 +58,9 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             debug = true;
         } else if (a == "-w") {
             nowarn = true;
+        } else if (a == "-W") {
+            wlevel = wlevel_arg(argv, i, n);
+            i = i + 1;
         } else if (a == "--std-src") {
             std_src = true;
         } else if (a == "--std-pack") {
@@ -68,8 +72,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
                 exit(1);
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [--no-exec] [-h] FILE\n");
-            puts("       ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n");
+            puts("       ycc build [-g] [-w] [-W N] [--no-exec] [--std-src] [DIR]\n");
             puts("       ycc vendor [DIR]\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
@@ -81,6 +85,10 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               lines; the loaded code and data are unchanged\n");
             puts("  -w           do not print warnings (they go to stderr and\n");
             puts("               never change the output)\n");
+            puts("  -W N         warning level N; 0 (the default) is the usual\n");
+            puts("               set, 1 adds the optional checks for a value\n");
+            puts("               computed and dropped -- a call result nobody\n");
+            puts("               reads, a bare a[i] or x.f as a statement\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
             puts("  --std-src    compile the std units (the runtime and std library)\n");
             puts("               from source instead of using the precompiled ones\n");
@@ -101,7 +109,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, std_src: std_src, std_pack: std_pack }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack }
 };
 
 // ── the std pack ─────────────────────────────────────────────────────────
@@ -271,10 +279,11 @@ def print_native_warnings(warnings: [Diag], origin: Origin, bare: bool) -> long 
 
 // ── ycc build / ycc vendor (see pkg.y) ───────────────────────────────────
 
-def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, allow_exec: bool, std_src: bool } {
+def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool } {
     let dir = "";
     let debug = false;
     let nowarn = false;
+    let wlevel = 0;
     let allow_exec = true;
     let std_src = false;
     let i = 2;  // skip the program and the command
@@ -284,6 +293,9 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, allow_exec: 
             debug = true;
         } else if (a == "-w") {
             nowarn = true;
+        } else if (a == "-W") {
+            wlevel = wlevel_arg(cl, i, len(cl));
+            i = i + 1;
         } else if (a == "--no-exec") {
             allow_exec = false;
         } else if (a == "--std-src") {
@@ -300,7 +312,7 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, allow_exec: 
         i = i + 1;
     };
     if (len(dir) == 0) { dir = "."; 0; } else { 0; };
-    { dir: dir, debug: debug, nowarn: nowarn, allow_exec: allow_exec, std_src: std_src }
+    { dir: dir, debug: debug, nowarn: nowarn, wlevel: wlevel, allow_exec: allow_exec, std_src: std_src }
 };
 
 // One unit's text, resolved: its bare imports may name the packages
@@ -392,12 +404,42 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
     reach
 };
 
+// The decimal level after `-W`, or the flag's own complaint. `i` points at
+// "-W". Levels past 1 are the same as 1: the optional checks are a set.
+def wlevel_arg(argv: [str], i: long, n: long) -> long {
+    if (i + 1 >= n) {
+        puts("ycc: -W needs a warning level (0, or 1)\n");
+        exit(1);
+        0
+    } else {
+        let a = argv[i + 1];
+        let ok = len(a) > 0 && a[0:1] != "-";
+        let v = 0;
+        let d = 0;
+        while (ok && d < len(a)) {
+            let c = byte_at(a, d);
+            ok = c >= c'0' && c <= c'9';
+            if (ok) { v = v * 10 + (c - c'0'); 0; } else { 0; };
+            d = d + 1;
+        };
+        if (!ok) {
+            puts("ycc: -W needs a warning level (0, or 1), got '" + a + "'\n");
+            exit(1);
+            0
+        } else if (v > 1) {
+            1
+        } else {
+            v
+        }
+    }
+};
+
 // `ycc build`: every package the project depends on (and its own lib),
 // each from its object in DIR/build/obj when that is current, else
 // compiled and its object written; then each [bin], linked with the
 // packages it reaches, to DIR/build/NAME. A unit's warnings show when it
 // is compiled (unless `nowarn`), not when its object is reused.
-def build_project(dir: str, debug: bool, nowarn: bool, allow_exec: bool, std_src: bool) -> long {
+def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> long {
     let g = pkg.pk_load(dir);
     let bins = g.bins;
     let pkgs = g.pkgs;
@@ -457,7 +499,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, allow_exec: bool, std_src
         if (!hit) {
             eputs("compiling " + p.name + "\n");
             let ast = parser.parse_program(lexer.tokenize(nr.src));
-            let r = nativelib.compile_package(ast, nr, p.name, base, su, units);
+            let r = nativelib.compile_package(ast, nr, p.name, base, wlevel, su, units);
             if (!r.ok) {
                 print_native_errors(r.errors, nr.origin, false);
                 exit(1);
@@ -503,7 +545,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, allow_exec: bool, std_src
             k = k + 1;
         };
         let ast = parser.parse_program(lexer.tokenize(nr.src));
-        let r = nativelib.emit_program(ast, nr, debug, bstd, linked);
+        let r = nativelib.emit_program(ast, nr, debug, wlevel, bstd, linked);
         if (!r.ok) {
             print_native_errors(r.errors, nr.origin, false);
             exit(1);
@@ -541,7 +583,7 @@ def main(cmdline: [str]) -> long {
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
         if (cmdline[1] == "build") {
-            build_project(ba.dir, ba.debug, ba.nowarn, ba.allow_exec, ba.std_src);
+            build_project(ba.dir, ba.debug, ba.nowarn, ba.wlevel, ba.allow_exec, ba.std_src);
             0
         } else {
             pkg.pk_vendor(ba.dir);
@@ -614,7 +656,7 @@ def main(cmdline: [str]) -> long {
             let su = nativelib.std_units(nrstd, pack);
             ph = nativelib.phase_end(dt, "std", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
-            let r = nativelib.emit_program(ast, nr, pargs.debug, su, []);
+            let r = nativelib.emit_program(ast, nr, pargs.debug, pargs.wlevel, su, []);
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;
