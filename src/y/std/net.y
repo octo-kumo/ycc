@@ -12,6 +12,9 @@
 //     net.listen_http(8080, hello);      // blocks, serving forever
 //     // net.listen_tcp(22, handler);    // same, raw connections
 //
+// Host names resolve through /etc/hosts and DNS (resolve, resolve_with:
+// UDP, then TCP for a truncated answer), so connect_tcp takes a name.
+//
 // Everything here is ordinary Y over the `syscall` intrinsic: the socket
 // API is just syscalls 41 (socket) 42 (connect) 43 (accept) 49 (bind)
 // 50 (listen) 51 (getsockname) plus read/write/close. A sockaddr_in is a
@@ -23,6 +26,8 @@
 // calls net.close_fd(...), and these names never meet the program's. The
 // socket verbs carry a suffix that says what they do (`socket_tcp`,
 // `listen_fd`, `accept_tcp`); `send_str`/`recv_str`/`close_fd` take an fd.
+
+import fs;
 
 // socket(AF_INET=2, SOCK_STREAM=1, 0) -> fd, or a negative errno.
 def socket_tcp() -> long {
@@ -69,10 +74,22 @@ def accept_tcp(fd: long) -> long {
     syscall(43, fd, 0, 0)
 };
 
-// connect_tcp(host, port) -> a connected fd, or a negative errno. A failed
-// connect closes the socket before returning the errno: the caller only ever
-// gets a usable fd or an error, never an fd it would have to know to close.
+// connect_tcp(host, port) -> a connected fd, or a negative errno. A host
+// name is resolved first (resolve): each of its addresses is tried in
+// turn, and a name with none gives -2 (ENOENT). A failed connect closes the
+// socket before returning the errno: the caller only ever gets a usable fd
+// or an error, never an fd it would have to know to close.
 def connect_tcp(host: str, port: long) -> long {
+    let addrs = resolve(host);
+    let r = -2;
+    foreach (a in addrs) {
+        if (r < 0) { r = connect_addr(a, port); };
+    };
+    r
+};
+
+// connect_tcp to one dotted-quad address.
+def connect_addr(host: str, port: long) -> long {
     let fd = socket_tcp();
     if (fd < 0) {
         fd
@@ -135,6 +152,312 @@ def recv_str(fd: long, max: long) -> str? {
 
 def close_fd(fd: long) -> long {
     syscall(3, fd)
+};
+
+// ── names: /etc/hosts, then DNS (RFC 1035) ─────────────────────────────
+
+// The last query's ID (resolve_with): each one moves it on.
+let dns_id = 0;
+
+// resolve(name) -> the IPv4 addresses of a host, dotted quads; [] when it
+// has none. A dotted quad is itself. Otherwise /etc/hosts, then an A query
+// to each nameserver of /etc/resolv.conf in turn (127.0.0.1 when it names
+// none) until one answers with addresses: resolve_with. A name without a
+// dot is tried under each `search` domain first, then alone.
+def resolve(name: str) -> [str] {
+    let out: [str] = [];
+    if (is_quad(name)) {
+        out += name;
+        return out;
+    };
+    out = hosts_lookup(name);
+    let conf = resolv_conf();
+    let names: [str] = [];
+    if (index_of(name, ".") < 0) {
+        foreach (d in conf.search) { names += name + "." + d; };
+    };
+    names += name;
+    foreach (n in names) {
+        foreach (ns in conf.servers) {
+            if (len(out) == 0) { out = resolve_with(n, ns, 53); };
+        };
+    };
+    out
+};
+
+// resolve_with(name, server, port) -> the addresses one DNS server gives
+// for name (its A records, CNAMEs followed by the server): a query over
+// UDP, asked twice with 2 s to answer, then over TCP when the answer came
+// back truncated. [] for no answer, an error (NXDOMAIN included) or a
+// malformed packet -- which never stops the program.
+def resolve_with(name: str, server: str, port: long) -> [str] {
+    let out: [str] = [];
+    dns_id = (dns_id + (time_us() & 65535) + 1) & 65535;
+    let q = dns_query(name, dns_id);
+    if (len(q) > 0) {
+        let r = dns_udp(q, server, port);
+        if (len(r) > 3 && (r[2] & 2) != 0) { r = dns_tcp(q, server, port); };
+        out = dns_answers(r, q);
+    };
+    out
+};
+
+// /etc/resolv.conf: its nameservers (IPv4; 127.0.0.1 when it names none)
+// and its search domains (`search`, or the older `domain`).
+def resolv_conf() -> { servers: [str], search: [str] } {
+    let servers: [str] = [];
+    let search: [str] = [];
+    let text = fs.read_file("/etc/resolv.conf");
+    if (text != none) {
+        foreach (line in text!.lines()) {
+            let f = words(line);
+            if (len(f) >= 2 && f[0] == "nameserver" && is_quad(f[1])) { servers += f[1]; };
+            if (len(f) >= 2 && (f[0] == "search" || f[0] == "domain")) { search = f[1:len(f)]; };
+        };
+    };
+    if (len(servers) == 0) { servers += "127.0.0.1"; };
+    { servers: servers, search: search }
+};
+
+// The addresses /etc/hosts gives name (IPv4 lines; names compare without
+// regard to case, `#` starts a comment).
+def hosts_lookup(name: str) -> [str] {
+    let out: [str] = [];
+    let want = name.lower();
+    let text = fs.read_file("/etc/hosts");
+    if (text != none) {
+        foreach (line in text!.lines()) {
+            let hash = index_of(line, "#");
+            let body = line;
+            if (hash >= 0) { body = line[0:hash]; };
+            let f = words(body);
+            if (len(f) >= 2 && is_quad(f[0])) {
+                let i = 1;
+                while (i < len(f)) {
+                    if (f[i].lower() == want && !has_str(out, f[0])) { out += f[0]; };
+                    i = i + 1;
+                };
+            };
+        };
+    };
+    out
+};
+
+// s is among xs.
+def has_str(xs: [str], s: str) -> bool {
+    let found = false;
+    foreach (x in xs) {
+        if (x == s) { found = true; };
+    };
+    found
+};
+
+// The words of s: its runs of characters other than spaces and tabs.
+def words(s: str) -> [str] {
+    let out: [str] = [];
+    let start = -1;
+    let i = 0;
+    while (i <= len(s)) {
+        let blank = i == len(s) || s[i] == c' ' || s[i] == c'\t' || s[i] == c'\r';
+        if (blank && start >= 0) {
+            out += s[start:i];
+            start = -1;
+        } else if (!blank && start < 0) {
+            start = i;
+        };
+        i = i + 1;
+    };
+    out
+};
+
+// s is a dotted quad: four numbers 0..255.
+def is_quad(s: str) -> bool {
+    let d = split(s, ".");
+    let ok = len(d) == 4;
+    foreach (p in d) {
+        if (len(p) == 0 || len(p) > 3) { ok = false; };
+        let i = 0;
+        while (ok && i < len(p)) {
+            if (p[i] < c'0' || p[i] > c'9') { ok = false; };
+            i = i + 1;
+        };
+        if (ok && tonum(p) > 255) { ok = false; };
+    };
+    ok
+};
+
+// A query for the A records of name (recursion desired), id its ID; []
+// for a name no query can carry (a label over 63 bytes, over 253 in all).
+def dns_query(name: str, id: long) -> [byte] {
+    let q: [byte] = [];
+    q += (id >> 8) & 255;
+    q += id & 255;
+    q += 1;
+    q += 0;
+    q += 0;
+    q += 1;
+    let i = 0;
+    while (i < 6) {
+        q += 0;
+        i = i + 1;
+    };
+    let ok = len(name) > 0 && len(name) <= 253;
+    foreach (label in split(name, ".")) {
+        if (len(label) > 63) { ok = false; };
+        if (len(label) > 0) {
+            q += len(label);
+            q += bytes(label);
+        };
+    };
+    q += 0;
+    q += 0;
+    q += 1;
+    q += 0;
+    q += 1;
+    if (!ok) {
+        let none_q: [byte] = [];
+        return none_q;
+    };
+    q
+};
+
+// SO_RCVTIMEO and SO_SNDTIMEO of fd: secs seconds (a connect waits as
+// long as a send).
+def set_timeouts(fd: long, secs: long) -> long {
+    let tv: [long; 2] = [0; 2];
+    tv[0] = secs;
+    syscall(54, fd, 1, 20, &tv[0], 16);
+    syscall(54, fd, 1, 21, &tv[0], 16)
+};
+
+// Query q over UDP to server:port: the answer with q's ID, or [] when two
+// tries in 2 s each get none.
+def dns_udp(q: [byte], server: str, port: long) -> [byte] {
+    let out: [byte] = [];
+    let fd = syscall(41, 2, 2, 0);
+    if (fd < 0) { return out; };
+    set_timeouts(fd, 2);
+    let a: [byte; 16] = [0; 16];
+    addr_set(a, server, port);
+    if (syscall(42, fd, &a[0], 16) == 0) {
+        let tries = 0;
+        while (len(out) == 0 && tries < 2) {
+            syscall(1, fd, &q[0], len(q));
+            let buf: [byte; 4096] = [0; 4096];
+            let k = syscall(0, fd, &buf[0], 4096);
+            if (k >= 12 && buf[0] == q[0] && buf[1] == q[1]) { out = buf[0:k]; };
+            tries = tries + 1;
+        };
+    };
+    syscall(3, fd);
+    out
+};
+
+// Query q over TCP to server:port (each message after its 2-byte length):
+// the answer, or [] when the connection fails.
+def dns_tcp(q: [byte], server: str, port: long) -> [byte] {
+    let out: [byte] = [];
+    let fd = socket_tcp();
+    if (fd < 0) { return out; };
+    set_timeouts(fd, 3);
+    let a: [byte; 16] = [0; 16];
+    addr_set(a, server, port);
+    if (syscall(42, fd, &a[0], 16) == 0) {
+        let msg: [byte] = [];
+        msg += (len(q) >> 8) & 255;
+        msg += len(q) & 255;
+        msg += q;
+        if (syscall(1, fd, &msg[0], len(msg)) == len(msg)) {
+            let got = read_n(fd, 2);
+            if (len(got) == 2) { out = read_n(fd, got[0] * 256 + got[1]); };
+        };
+    };
+    syscall(3, fd);
+    out
+};
+
+// n bytes from fd, or fewer when it ends or fails first.
+def read_n(fd: long, n: long) -> [byte] {
+    let out: [byte] = [];
+    let buf: [byte; 4096] = [0; 4096];
+    let go = n > 0;
+    while (go) {
+        let want = n - len(out);
+        if (want > 4096) { want = 4096; };
+        let k = syscall(0, fd, &buf[0], want);
+        if (k <= 0) { go = false; } else {
+            out += buf[0:k];
+            go = len(out) < n;
+        };
+    };
+    out
+};
+
+// The A records of DNS answer r to query q, as dotted quads: [] for
+// another query's answer, an error or a malformed packet.
+def dns_answers(r: [byte], q: [byte]) -> [str] {
+    let out: [str] = [];
+    let n = len(r);
+    if (n < 12 || len(q) < 2 || r[0] != q[0] || r[1] != q[1] || (r[2] & 128) == 0 || (r[3] & 15) != 0) {
+        return out;
+    };
+    let qd = r[4] * 256 + r[5];
+    let an = r[6] * 256 + r[7];
+    let p = 12;
+    let i = 0;
+    while (p >= 0 && i < qd) {
+        p = dns_skip_name(r, p);
+        if (p >= 0) { p = p + 4; };
+        i = i + 1;
+    };
+    i = 0;
+    while (p >= 0 && i < an) {
+        p = dns_skip_name(r, p);
+        if (p >= 0 && p + 10 <= n) {
+            let typ = r[p] * 256 + r[p + 1];
+            let cls = r[p + 2] * 256 + r[p + 3];
+            let rdlen = r[p + 8] * 256 + r[p + 9];
+            p = p + 10;
+            if (p + rdlen > n) { p = -1; } else {
+                if (typ == 1 && cls == 1 && rdlen == 4) {
+                    out += tostring(r[p]) + "." + tostring(r[p + 1]) + "." + tostring(r[p + 2]) + "." + tostring(r[p + 3]);
+                };
+                p = p + rdlen;
+            };
+        } else { p = -1; };
+        i = i + 1;
+    };
+    out
+};
+
+// The index just past the name at p in packet r -- its labels, ended by
+// a zero byte or a compression pointer -- or -1 when it runs off the end.
+def dns_skip_name(r: [byte], p: long) -> long {
+    let n = len(r);
+    let at = p;
+    let done = false;
+    while (!done) {
+        if (at < 0 || at >= n) {
+            at = -1;
+            done = true;
+        } else {
+            let b: long = r[at];
+            if (b == 0) {
+                at = at + 1;
+                done = true;
+            } else if ((b & 192) == 192) {
+                at = at + 2;
+                if (at > n) { at = -1; };
+                done = true;
+            } else if ((b & 192) != 0) {
+                at = -1;
+                done = true;
+            } else {
+                at = at + 1 + b;
+            };
+        };
+    };
+    at
 };
 
 // http_response(status, body) -> a complete HTTP/1.1 response.
@@ -246,4 +569,4 @@ def listen_http(port: long, handler: (str) -> str) -> long {
     0
 };
 
-export { socket_tcp, bind_tcp, listen_fd, accept_tcp, connect_tcp, local_port, send_str, recv_str, close_fd, addr_set, http_response, http_read_head, http_serve_one, listen_tcp, listen_http };
+export { socket_tcp, bind_tcp, listen_fd, accept_tcp, connect_tcp, local_port, send_str, recv_str, close_fd, addr_set, resolve, resolve_with, http_response, http_read_head, http_serve_one, listen_tcp, listen_http };

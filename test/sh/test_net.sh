@@ -1,6 +1,7 @@
 #!/bin/bash
 # Exercise the blocking net listeners over loopback.  The first connection
 # is also the readiness probe; the next one makes each handler exit cleanly.
+# Then the resolver against a fake DNS server (test/y/net/dns_srv.y).
 set -u
 
 source "$(dirname "$0")/lib.sh"
@@ -338,6 +339,54 @@ http_ok=0
 tcp_ok=0
 compile_server_pair srv_http && http_ok=1
 compile_server_pair srv_tcp && tcp_ok=1
+
+# The resolver (net.resolve_with) against a fake DNS server on loopback
+# (test/y/net/dns_srv.y, UDP and TCP on one port): a CNAME and two A
+# records, a truncated answer retried over TCP, NXDOMAIN, a malformed
+# answer, an unaskable name; then names that need no server.
+DNS_EXPECTED="[10.1.2.3, 10.4.5.6]
+[10.7.8.9]
+[]
+[]
+[]
+[10.0.0.1] [127.0.0.1]"
+
+test_dns() {
+    local server="$1" label="$2" attempt=0 port="" log polls got c
+    while [ "$attempt" -lt 20 ]; do
+        port="$(random_port)"
+        start_server "$server" "$port" 0
+        log="$WORK/$(basename "$server")-$port.log"
+        polls=0
+        while [ "$polls" -lt 50 ] && job_running "$SERVER_PID" && ! grep -q ready "$log" 2>/dev/null; do
+            sleep 0.1
+            polls=$((polls + 1))
+        done
+        grep -q ready "$log" 2>/dev/null && break
+        stop_server
+        port=""
+        attempt=$((attempt + 1))
+    done
+    if [ -z "$port" ]; then
+        fail "$label DNS server" "no DNS server became ready after 20 port attempts"
+        return
+    fi
+    for c in "$WORK/dns_cli.copy" "$WORK/dns_cli.ref"; do
+        got=$(run_bin 30 "$c" "$port" </dev/null 2>&1)
+        if [ "$got" = "$DNS_EXPECTED" ]; then
+            pass "$label DNS server: $(basename "$c") resolves"
+        else
+            fail "$label DNS server: $(basename "$c") resolves" "got: $got"
+        fi
+    done
+    stop_server
+}
+dns_ok=0
+compile_server_pair dns_srv && compile_server_pair dns_cli && dns_ok=1
+if [ "$dns_ok" -eq 1 ]; then
+    test_dns "$WORK/dns_srv.copy" "C copy"
+    test_dns "$WORK/dns_srv.ref" "reference"
+fi
 
 if [ "$http_ok" -eq 1 ]; then
     test_http "$WORK/srv_http.copy" "C copy"

@@ -452,3 +452,19 @@ of day; `clock_us()` is CLOCK_MONOTONIC, good for intervals only.
 
 Calendar arithmetic (UTC dates from it, and back) lives with what needs
 it, in std, not in the compiler.
+
+### 28. Name resolution
+
+- Where: **in `std/net`** (`resolve`, `resolve_with`), not a new module:
+  `connect_tcp` is its first user (it now takes a host name), and the
+  http client will import net anyway. net imports fs for /etc/hosts and
+  /etc/resolv.conf (a std module importing another works like a
+  program's import).
+- What: /etc/hosts, then the resolv.conf nameservers in turn, with
+  `search` domains for a name without a dot (what glibc does with the
+  default `ndots:1`); an A query over UDP (two tries, 2 s each), over
+  TCP when the answer is truncated. IPv4 only: the socket layer is
+  AF_INET throughout, and AAAA plus IPv6 sockets can come together.
+- Failure is `[]` -- no address -- for every cause (NXDOMAIN, timeout, a
+  malformed packet), never a trap: the answer is untrusted input.
+  `connect_tcp` turns it into -2 (ENOENT).

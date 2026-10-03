@@ -764,9 +764,15 @@ reads its sources and writes its binaries through it.
 
 `src/y/std/net.y` is the first network module: TCP over raw sockets
 (`socket_tcp`/`bind_tcp`/`listen_fd`/`accept_tcp`/`connect_tcp`/
-`send_str`/`recv_str`/`local_port`) and a tiny HTTP server
-(`http_response`, `http_read_head`, `http_serve_one`, `listen_http`), all Y
-over `syscall`. A `ui` module would land the same way.
+`send_str`/`recv_str`/`local_port`), host names (`resolve`: a dotted quad,
+/etc/hosts, then DNS to the /etc/resolv.conf nameservers -- `search`
+domains for a name without a dot; `resolve_with` asks one server: an A
+query over UDP, twice with 2 s each, over TCP when the answer is
+truncated; a malformed answer is no addresses, never a crash), so
+`connect_tcp` takes a name, and a tiny HTTP server (`http_response`,
+`http_read_head`, `http_serve_one`, `listen_http`), all Y over `syscall`
+(it imports `fs` for the two files). IPv4 only. A `ui` module would land
+the same way.
 
 ## Embedding files
 

@@ -191,7 +191,9 @@ very build was just compared (`make test`, `check`, `rebless` do);
 - `test_net.sh` [net] — the blocking `std/net` listeners over loopback:
   `test/y/net/` servers built by both compilers (identical binaries)
   answer real HTTP/TCP clients and exit cleanly, and one serves 100
-  connections under `ulimit -n 32` (no fd leak per connection).
+  connections under `ulimit -n 32` (no fd leak per connection); the
+  resolver (`net.resolve_with`) against a fake DNS server
+  (`dns_srv.y`: CNAME, TCP fallback, NXDOMAIN, a malformed answer).
 - `test_coverage.sh` [coverage] — static, compiles nothing: every
   diagnostic the compiler can print has its message in a test
   expectation, every builtin in the manual is called by a checked test,
