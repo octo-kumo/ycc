@@ -3,7 +3,11 @@
 ## State
 
 - On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
-  `82d21975` (2542f03: union layouts, CHOICES_MADE.md 25 -- a member held
+  `860e647a` (6400bd8: optional record fields `name?: T`, CHOICES_MADE.md
+  26 -- the first http prerequisite; make test, ASan, fuzz 1500/4245
+  green; ycc.y compile +0.16% instructions; previous `82d21975` backed up
+  as `ycc.ref.pre-optf`). Before that `82d21975` (2542f03: union layouts,
+  CHOICES_MADE.md 25 -- a member held
   in a union has the union's shared fields first, casts copy where the
   layouts differ, ycc-std-pack 5 / ycc-unit 4; previous `58cfffb5` backed
   up as `ycc.ref.pre-layout`). make test, ASan (native audit examples
@@ -40,7 +44,9 @@
   (gen_as, match bindings) copy where the layouts differ (gen_convert);
   pattern field reads are in place (gen_narrow_field); my "binding is a
   view" refinement was dropped (CHOICES 25 says why).
-- Next: the task queue below (task 3, http prerequisites).
+- Next: the task queue below (task 3, http prerequisites): optional
+  record fields DONE; next a wall-clock builtin, then DNS, crypto + TLS
+  1.3, the http client, `http.session`.
 - The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
