@@ -771,7 +771,7 @@ Yv *tokenize(Yv *src) {
                 ;
             }
             ;
-        } else if (c == '"') {
+        } else if (c == '\x22') {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.

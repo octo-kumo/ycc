@@ -260,7 +260,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
             let c = byte_at(src, i);
             if (c == c'\\') {
                 i = i + 2;
-            } else if (c == c'"') {
+            } else if (c == c'\x22') {
                 i = i + 1;
                 open = false;
             } else if ((c == c'{' || c == c'}') && i + 1 < n && byte_at(src, i + 1) == c) {
@@ -655,7 +655,7 @@ def tokenize(src: str) -> [Tok] {
             } else {
                 toks += mktok(ty, word, line, startcol);
             };
-        } else if (c == c'"') {
+        } else if (c == c'\x22') {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.

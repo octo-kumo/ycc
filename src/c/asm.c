@@ -615,8 +615,8 @@ static Yv *decode_str(Yv *s) {
             } else if (e == '\\') {
                 out = ya_push(out, yv_long('\\'));
                 i = i + 2;
-            } else if (e == '"') {
-                out = ya_push(out, yv_long('"'));
+            } else if (e == '\x22') {
+                out = ya_push(out, yv_long('\x22'));
                 i = i + 2;
             } else if (is_oct_ch(e)) {
                 /* NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`

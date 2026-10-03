@@ -384,8 +384,8 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
             } else if (e == c'\\') {      // '\\'
                 out += c'\\';
                 i = i + 2;
-            } else if (e == c'"') {      // '"'
-                out += c'"';
+            } else if (e == c'\x22') {      // '"'
+                out += c'\x22';
                 i = i + 2;
             } else if (is_oct_ch(e)) {
                 // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`
