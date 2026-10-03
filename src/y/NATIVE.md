@@ -41,8 +41,13 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   element lives at `data + i*esz`, and `esz` comes from the static
   element type — so the scale factor, the allocation size and the load/store
   width follow from the type alone (`movzbq`/`movb` instead of `mov`).
-  `y_arr_push`/`y_arr_prepend`/`y_arr_slice`/`y_arr_eq` take `esz` as an
-  argument, so one implementation serves both layouts. 100k elements are
+  `y_arr_push`/`y_arr_prepend`/`y_arr_slice`/`y_arr_eq`/`y_arr_extend` take
+  `esz` as an argument, so one implementation serves both layouts.
+  `arr += other` with one element type is `y_arr_extend`: the block grows
+  once, to the capacity pushing the elements one by one would reach, and
+  they move in bulk (`y_mem_copy`, words then bytes); element types that
+  convert (a `long` into a `[float]`, a member into a union) still go one
+  by one, each converted (`gen_opassign_arr`). 100k elements are
   98 KB packed versus 781 KB unpacked; pushed one at a time (capacity
   doubling on the bump heap) they cost 256 KB versus 2 MB of heap.
   `bytes(s)` and `from_bytes(b)` convert
@@ -455,7 +460,7 @@ unwrap-of-none, OOM, a failed union cast), the
 byte-moving string cores (`y_str_eq/cmp/cat/join/slice`, and the scans
 behind `index_of`, `split` and `trim`: `y_str_index/split/trim`), `str`↔`[byte]`
 conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
-`y_arr_eq` — one implementation each, parameterized by element width,
+`y_arr_eq`/`y_arr_extend` — one implementation each, parameterized by element width,
 because Y has no generics), long and float formatting, and argv
 materialization. Everything else —
 the whole print/put/eput family, `ord`/`chr`/`tonum`/
