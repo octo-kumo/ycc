@@ -210,6 +210,11 @@ def fstr_expr_end(src: str, lo: long) -> long {
         } else if (depth > 0) {
             if (c == c')' || c == c']' || c == c'}') { depth = depth - 1; }
             i = i + 1;
+        } else if (c == c'?' && i + 1 < n && byte_at(src, i + 1) == 46) {
+            // `?.` (option propagation) is one token and opens no ternary,
+            // so a format spec's `:` after it is the spec's own -- without
+            // this, `f"{o?.p:x}"` reads as the ternary `o ? .p : x`.
+            i = i + 2;
         } else if (c == c'?') {
             tern = tern + 1;
             i = i + 1;

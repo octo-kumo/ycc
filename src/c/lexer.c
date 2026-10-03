@@ -232,6 +232,12 @@ static long fstr_expr_end(Yv *src, long lo) {
             if (c == 41 || c == 93 || c == 125) { depth = depth - 1; ; }
             i = i + 1;
             ;
+        } else if (c == 63 && i + 1 < n && ys_byte_at(src, i + 1) == 46) {
+            /* `?.` (option propagation) is one token and opens no ternary,
+               so a format spec's `:` after it is the spec's own -- without
+               this, `f"{o?.p:x}"` reads as the ternary `o ? .p : x`. */
+            i = i + 2;
+            ;
         } else if (c == 63) {
             tern = tern + 1;
             i = i + 1;

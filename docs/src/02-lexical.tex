@@ -111,8 +111,10 @@ and nested f-strings included --- and may span lines; an error inside it
 points at its own line and column. The expression ends at the first
 \ic{\}} or \ic{:} outside brackets, except a \ic{:} that answers a
 \ic{?}: \ic{\{ok ? a : b\}} works, while a cons has to be parenthesised,
-\ic{\{(x :: xs)\}}. The spec is plain text up to the field's \ic{\}}; it
-cannot hold another field.
+\ic{\{(x :: xs)\}}. A \ic{?} that is part of a \ic{?.} (Section~
+\ref{sec:opt-propagation}) answers nothing, so the \ic{:} after it is
+the spec's own: \ic{f"\{o?.port:x\}"\} is \ic{o?.port} as \ic{x}. The spec
+is plain text up to the field's \ic{\}}; it cannot hold another field.
 
 \paragraph{Booleans and none.} \ic{true}, \ic{false}. The empty option
 is spelled \ic{none}, a predeclared name rather than a keyword
