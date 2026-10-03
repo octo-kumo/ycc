@@ -1982,6 +1982,13 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: "tlong" })
         } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
             normtype({ k: "tlong" })
+        } else if (name == "keys") {
+            let kargs: [Node] = node.args;
+            let kt = infer(st, kargs[0]);
+            if (kt.k == "tmap") {
+                let map: TMap = kt;
+                normtype({ k: "tarr", of: map.key })
+            } else { normtype({ k: "tunk" }) }
         } else if (name == "sleep") {
             normtype({ k: "tvoid" })
         } else if (name == "split" || name == "argv") {
@@ -2254,7 +2261,7 @@ def is_intrinsic_name(n: str) -> bool {
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
-             "time_us", "sleep", "heap_used", "exit", "argv", "range", "typeof", "bytes",
+             "time_us", "sleep", "heap_used", "keys", "exit", "argv", "range", "typeof", "bytes",
              "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
 };
 
@@ -4547,6 +4554,13 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             gen_clock_us(st, node)
         } else if (name == "time_us") {
             emit(st, "    call y_time_us")
+        } else if (name == "keys") {
+            // a copy of the map's keys array (gen_maplit's {keys, vals, boxes})
+            let kargs: [Node] = node.args;
+            let ln = node.line;
+            let cl = node.col;
+            let whole: Slice = { k: "slice", arr: n_dot(kargs[0], "keys", ln, cl), lo: { k: "void", line: ln, col: cl }, hi: { k: "void", line: ln, col: cl }, line: ln, col: cl };
+            gen_slice(st, whole)
         } else if (name == "sleep") {
             gen_sleep(st, node)
         } else if (name == "heap_used") {

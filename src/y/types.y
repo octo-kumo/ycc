@@ -3076,6 +3076,25 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                     tc_res(type_node({ k: "tvoid" }), st)
                 }
             }
+        } else if (name == "keys") {
+            // keys(m) -> [K]: the keys of map m in insertion order, a copy
+            if (len(cargs) != 1) {
+                st = fail(st, "keys takes exactly 1 argument", node.line, node.col);
+                tc_res(t_unk(), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                let mt = unfold(r.typ);
+                if (mt.k == "tmap") {
+                    let map: TMap = mt;
+                    tc_res(type_node({ k: "tarr", of: map.key }), st)
+                } else if (mt.k == "tunk") {
+                    tc_res(t_unk(), st)
+                } else {
+                    st = fail(st, "keys needs a map, got " + tstr(r.typ), node.line, node.col);
+                    tc_res(t_unk(), st)
+                }
+            }
         } else if (name == "len") {
             if (len(cargs) != 1) {
                 st = fail(st, "len takes exactly 1 argument", node.line, node.col);

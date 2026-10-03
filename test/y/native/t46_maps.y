@@ -56,4 +56,16 @@ print(counts);
 def twice(x: long) -> long { x * 2 };
 def thrice(x: long) -> long { x * 3 };
 let ops = {"two": twice, "three": thrice};
-print(ops["three"]!(5));
+print(ops["three"]!(5));// keys(m): the keys in insertion order, a copy (growing it leaves m alone)
+let ages: {str => long} = {};
+ages["bo"] = 31;
+ages["al"] = 42;
+ages["bo"] = 32;
+let ks = keys(ages);
+foreach (k in ks) { print(k, " ", ages[k]!); };
+ks += "zed";
+print(len(ks), " ", len(ages), " ", len(keys({"x": true})));
+let byk: {long => str} = {};
+byk[7] = "seven";
+byk[3] = "three";
+print(keys(byk));

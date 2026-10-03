@@ -4050,6 +4050,28 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     return yr(2, "typ", yr(1, "k", ys("tvoid")), "st", st);
                 }
             }
+        } else if (ys_eq_lit(name, "keys")) {
+            // keys(m) -> [K]: the keys of map m in insertion order, a copy
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys("keys takes exactly 1 argument"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r, "st");
+                Yv *mt = unfold(yr_get(r, "typ"));
+                if (ys_eq_lit(yr_get(mt, "k"), "tmap")) {
+                    return yr(2, "typ", yr(2, "k", ys("tarr"), "of", yr_get(mt, "key")), "st", st);
+                } else if (ys_eq_lit(yr_get(mt, "k"), "tunk")) {
+                    return yr(2, "typ", t_unk(), "st", st);
+                } else {
+                    st = fail(st, ys_cat(ys("keys needs a map, got "), tstr(yr_get(r, "typ"))),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
+                }
+            }
         } else if (ys_eq_lit(name, "len")) {
             if (yv_len(cargs) != 1) {
                 st = fail(st, ys("len takes exactly 1 argument"),

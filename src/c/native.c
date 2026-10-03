@@ -2800,6 +2800,13 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", ys("tlong"));
         } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "time_us") || ys_eq_lit(name, "heap_used")) {
             return yr(1, "k", ys("tlong"));
+        } else if (ys_eq_lit(name, "keys")) {
+            Yv *kt = infer(st, ya_get(yr_get(node, "args"), 0));
+            if (ys_eq_lit(yr_get(kt, "k"), "tmap")) {
+                return yr(2, "k", ys("tarr"), "of", yr_get(kt, "key"));
+            } else {
+                return yr(1, "k", ys("tunk"));
+            }
         } else if (ys_eq_lit(name, "sleep")) {
             return yr(1, "k", ys("tvoid"));
         } else if (ys_eq_lit(name, "split") || ys_eq_lit(name, "argv")) {
@@ -3078,12 +3085,12 @@ int name_in(Yv *xs, Yv *n) {
 /* Builtins are resolved by name at the call site, never captured. */
 int is_intrinsic_name(Yv *n) {
     return name_in(
-        yav(34, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+        yav(35, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
             ys("is_some"), ys("unwrap"), ys("trim"), ys("ord"),
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
             ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
-            ys("heap_used"), ys("exit"), ys("argv"), ys("range"), ys("typeof"),
+            ys("heap_used"), ys("keys"), ys("exit"), ys("argv"), ys("range"), ys("typeof"),
             ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
             ys("none"), ys("#fmt")),
         n);
@@ -5457,6 +5464,16 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_clock_us(st, node);
         } else if (ys_eq_lit(name, "time_us")) {
             return emit(st, ys("    call y_time_us"));
+        } else if (ys_eq_lit(name, "keys")) {
+            /* a copy of the map's keys array (gen_maplit's {keys, vals, boxes}) */
+            Yv *ln = yr_get(node, "line");
+            Yv *cl = yr_get(node, "col");
+            Yv *whole = yr(6, "k", ys("slice"),
+                           "arr", n_dot(ya_get(yr_get(node, "args"), 0), ys("keys"), yv_l(ln), yv_l(cl)),
+                           "lo", yr(3, "k", ys("void"), "line", ln, "col", cl),
+                           "hi", yr(3, "k", ys("void"), "line", ln, "col", cl),
+                           "line", ln, "col", cl);
+            return gen_slice(st, whole);
         } else if (ys_eq_lit(name, "sleep")) {
             return gen_sleep(st, node);
         } else if (ys_eq_lit(name, "heap_used")) {

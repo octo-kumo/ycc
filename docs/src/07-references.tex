@@ -116,8 +116,9 @@ place (the store is visible through every binding of the map). A store
 to an existing key keeps its position; a new key is appended, so maps
 print in insertion order. Duplicate keys in a literal collapse the same
 way (the last value wins, the first position stays). \ic{len(m)} is the
-number of entries. The map grows as needed (amortized doubling, like
-arrays). Values are homogeneous: storing a \ic{str} into a
+number of entries, and \ic{keys(m)} lists the keys in that order (a
+copy): \ic{foreach (k in keys(m)) \{ ... \}} visits every entry. The
+map grows as needed (amortized doubling, like arrays). Values are homogeneous: storing a \ic{str} into a
 \ic{\{str => long\}} is a compile error, as is a key of the wrong type.
 
 \subsection{Equality}

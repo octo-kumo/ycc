@@ -504,3 +504,17 @@ was a syntax error).
 - **Modules, not builtins**: crypto, x509 and tls are plain Y in std,
   so nothing in the compiler grew; a program that does not import them
   pays nothing.
+
+### 31. Walking a map: `keys(m)`
+
+The http client takes request headers as a map and must send each; the
+language had no way to visit a map's entries.
+
+- a. **A builtin `keys(m)` -> [K]**: the keys in insertion order, a copy
+  of the map's own keys array (so growing it cannot break the map).
+  Chosen: one name, works with foreach, `m[k]!` reads each value.
+- b. `foreach (k, v in m)`: nicer, but new syntax in the parser, the
+  checker and the emitter of both copies.
+- c. `m.keys` as a property: the map's own array, which `+=` on it would
+  corrupt.
+A user def named `keys` still wins over the builtin (as with `len`).

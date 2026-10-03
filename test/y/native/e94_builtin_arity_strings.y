@@ -22,3 +22,7 @@ heap_used(1);
 sleep();
 time_us(1);
 // expect-error: 23:8: error: time_us takes no arguments
+keys();
+keys(5);
+// expect-error: 25:5: error: keys takes exactly 1 argument
+// expect-error: 26:5: error: keys needs a map, got long
