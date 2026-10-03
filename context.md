@@ -31,16 +31,25 @@
   the cap means fix what allocates, never raise it (the user). The old
   reference cannot compile the new ycc.y (its teq blows up): under the
   cap it fails cleanly; compile_ir.sh shows "-" for it.
-- Next: CHOICES_MADE.md 25 (the user's model: a union value puts its
-  shared fields first; union<->member casts copy when layouts differ) as
-  its own measured step -- today `node.k`/`.line`/`.col` through the
-  31-member Node dispatch on the tag, and the self binary grew 983 KB ->
-  1122 KB (cast checks, the dispatch chains); the self-compile is 11.15G
-  instructions (the previous reference on its own smaller source: 9.42G).
-  Watch: types.y set_inferred_ret writes `func.ret` through a Func cast
-  from a Node -- with copying casts that write is lost; TRef's layouts
-  coincide (k sorts first), so the tref patches in rename.y/native.y stay
-  safe. (The dead unknown-type machinery is gone: 4659fbf.)
+- Next: CHOICES_MADE.md 25 (the user's model) -- the design, in native.y
+  and native.c only (the checker does not change):
+  shared(u) = the fields every member of union u has with one type,
+  sorted; a member m held in u is laid out lay(m,u) = shared(u) ++ the
+  rest of m's fields sorted (a standalone record: all sorted), so a
+  shared field is one load at its index in shared(u). Tag: m's own
+  descriptor when lay(m,u) is m's standalone order, else one named by
+  form(m) + "@" + the layout (ty_desc keyed tsig(m) + "@" + layout).
+  Record literals created into a union use lay(m,u). Conversions (gen_as,
+  and `narrow` for match bindings): member -> union, union -> member
+  (tag-checked), union -> union; where the layouts differ, a runtime
+  routine y_rec_conv copies by a slot map in rodata (map: n, the target
+  tag, the source slot of each target slot). Union printing and match
+  compare layout tags and read layout slots. A union with no shared field
+  keeps today's layouts and tags. Pack/unit versions bump. Expect copies
+  at casts of about half the Node members (fields sorting before `line`)
+  and of TRec/TFunc/TFree/Err in Type; measure.
+  (Done first, dc1c1b3: inferred return types live in a table, not in the
+  def node, so no write goes through a cast.)
   The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
