@@ -142,6 +142,8 @@ reason.
 | 09-builtins | Input/output and the environment | stdin/EOF, argv, syscalls, exec and process exit | `native/t08_syscall.y`, `native/t10_filewrite.y`, `native/t20_files_argv.y`, `native/t35_readline.y`, `native/t38_exec.y`, `native/t58_readline_exec.y`, `sh/test_stdin_eof.sh` |
 | 09-builtins | Input/output and the environment | The clocks: clock_us (monotonic), time_us (wall clock), sleep | `native/t156_time_us.y`, `native/e94_builtin_arity_strings.y` |
 | 09-builtins | Files (the fs module) | Whole files as text and bytes, appends, paths, directories, fds with mode strings; the old builtins need the import | `native/t150_fs.y`, `native/t20_files_argv.y`, `native/t73_builtins_misc.y`, `native/e29_write_bytes_nonbyte.y`, `native/e143_fs_module.y` |
+| 09-builtins | The web (the http, tls and net modules) | HTTP/1.1 requests and sessions (keep-alive, cookies, redirects, chunked), TLS 1.3 over each suite with RSA and ECDSA certificates, DNS through a fake server | `sh/test_net.sh` |
+| 09-builtins | Cryptography (the crypto and x509 modules) | Hashes, MACs, key derivation, AEADs, X25519, RSA and ECDSA verification against known answers; a certificate chain at fixed times | `native/t158_crypto.y`, `native/t159_x509.y` |
 | 09-builtins | Pointers | Pointer-address conversion and byte-pointer operations | `native/t06_ptr.y`, `native/t62_byte_ptr.y`, `native/t82_str_pointer_conversion.y` |
 | 10-errors | Errors and diagnostics | Errors chapter heading | none: compile-time, runtime and exit behavior are detailed below |
 | 10-errors | Compile time | Fatal rejection with source-positioned diagnostics | `native/e02_undef.y`, `native/e21_hetero_append.y`, `native/e39_missing_semicolon.y`, `native/e41_import_missing.y` |

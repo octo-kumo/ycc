@@ -3,7 +3,8 @@
 ## State
 
 - On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
-  `b0ad1da3` (5d1a8ea: a module's type aliases are its own, `m.T`,
+  `4584cc1d` (e539182: keys(m); previous `b0ad1da3` backed up as
+  `ycc.ref.pre-keys`). Before that `b0ad1da3` (5d1a8ea: a module's type aliases are its own, `m.T`,
   CHOICES_MADE.md 29; previous `bececdd6` backed up as
   `ycc.ref.pre-modty`). Before that `bececdd6` (f85871b: `time_us()`, the wall clock, CHOICES_MADE.md 27;
   previous `860e647a` backed up as `ycc.ref.pre-time`). Before that
@@ -50,12 +51,14 @@
   view" refinement was dropped (CHOICES 25 says why).
 - Next: the task queue below (task 3, http prerequisites): optional
   record fields DONE; the wall clock (`time_us()`) DONE; DNS DONE
-  (net.resolve); std/crypto.y (SHA-2, HMAC, HKDF, ChaCha20-Poly1305,
-  AES-GCM, X25519, RSA and ECDSA verify) and std/x509.y (chains, names,
-  system roots) DONE, checked against Python/openssl but with no fixture
-  yet; next std/tls.y (TLS 1.3 client), then the http client,
-  `http.session`. Follow-ups: fixtures for crypto/x509 (vectors as
-  t-files), the manual for net/crypto/x509/tls/http.
+  (net.resolve); std/crypto.y, std/x509.y, std/tls.y (TLS 1.3 client),
+  std/http.y (requests, sessions) DONE with fixtures (t158, t159) and
+  test_net.sh checks (DNS, TLS vs openssl s_server, http/https vs a Y
+  server); manual 09-builtins "The web" and "Cryptography"; keys(m)
+  added for map iteration (blessed 4584cc1d). TASK 3 DONE.
+- Next: task 5 (future.y: multithreading, multiprocessing; the http
+  client is done), then task 6 (profile ycc, optimize: y_arr_slice bulk
+  copy -- every compile decodes the std pack through it).
 - The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md

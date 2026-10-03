@@ -249,6 +249,90 @@ octal permission number (\ic{420} is \ic{0644}, \ic{493} is \ic{0755});
 \item[\ic{fs.close\_file(fd)}] \ic{bool}.
 \end{description}
 
+\subsection{The web (the http, tls and net modules)}
+\label{sec:builtin-http}
+
+\ic{import http;} is an HTTP/1.1 client, \ic{https} included, in plain Y
+(it brings the modules below with it). One call makes a request; its
+options are a record whose fields may all be left out
+(Section~\ref{sec:type-records}):
+
+\begin{lstlisting}
+import http;
+let res = http.get("https://example.com/");
+print(res.status, " ", res.headers["content-type"]);    // 200 text/html...
+print(res.text());
+let made = http.post("https://api.example.com/items", "{\"a\": 1}",
+                     { headers: {"Content-Type": "application/json"} });
+\end{lstlisting}
+
+\begin{sloppypar}
+\noindent \ic{get}, \ic{head} and \ic{delete} take the URL, \ic{post},
+\ic{put} and \ic{patch} the URL and a body, \ic{request} a method and
+the URL; each then the options: \ic{headers} (a map; they replace the
+client's own of the same name), \ic{body}, \ic{timeout} (seconds a read
+or a connect may wait, 30), \ic{redirects} (how many to follow, 5),
+\ic{insecure} (do not check an \ic{https} server's chain) and
+\ic{anchors} (PEM certificates to trust instead of the system's). The
+response is a record: \ic{status} (0 when none came, and then \ic{err}
+says why), \ic{reason}, \ic{headers} (names in lower case; a repeated
+header's values joined by \ic{", "}, \ic{set-cookie}'s by newlines),
+\ic{size} (the Content-Length, or $-1$), \ic{url} (after redirects), and
+the body, read as it arrives: \ic{res.read(n)} gives up to \ty{n} bytes
+(all the rest for $n \leq 0$, \ic{[]} at its end), \ic{res.text()} the
+rest as a \ic{str}.
+\end{sloppypar}
+
+Many requests that look alike go through a session: a base URL their
+paths resolve against, headers for every request (\ic{s.header(name,
+value)} adds one), connections kept open and used again, and the cookies
+servers set, sent back:
+
+\begin{lstlisting}
+let s = http.session({ base: "https://api.example.com",
+                       headers: {"Authorization": "Bearer t0ken"} });
+let users = s.get("/users");
+let made = s.post("/users", "{\"name\": \"ann\"}");
+let gone = s.request("DELETE", "/users/7", { timeout: 5 });
+s.close();
+\end{lstlisting}
+
+\begin{sloppypar}
+\ic{import tls;} is the TLS 1.3 client underneath:
+\ic{tls.connect(host, port)} (or \ic{tls.connect\_with(host, port,
+opts)}, with \ic{anchors}, \ic{alpn}, \ic{insecure} and \ic{timeout})
+gives a connection whose \ic{err} is \ic{""} when the handshake held;
+\ic{tls.send(c, bytes)}, \ic{tls.recv(c)} (the next data, \ic{none} at
+the end) and \ic{tls.close(c)} use it. The server's chain must reach a
+trust anchor and name the host; X25519 and three suites are offered;
+there is no TLS 1.2. \ic{import net;} has the sockets: \ic{net.resolve(name)}
+(the IPv4 addresses, from \ic{/etc/hosts} and DNS),
+\ic{net.connect\_tcp(host, port)}, \ic{net.send\_str},
+\ic{net.recv\_str}, \ic{net.close\_fd}, and a small blocking server,
+\ic{net.listen\_http(port, handler)}.
+\end{sloppypar}
+
+\subsection{Cryptography (the crypto and x509 modules)}
+\label{sec:builtin-crypto}
+
+\begin{sloppypar}
+\ic{import crypto;} has what TLS uses, in plain Y over \ic{[byte]}:
+\ic{sha256}, \ic{sha384}, \ic{sha512}; \ic{hmac} and \ic{hkdf\_extract}/\ic{hkdf\_expand}
+over \ic{crypto.hash\_sha256()} or \ic{hash\_sha384()};
+\ic{chacha\_seal}/\ic{chacha\_open} (ChaCha20-Poly1305) and
+\ic{gcm\_seal}/\ic{gcm\_open} (AES-GCM), each \ic{(key, nonce, aad,
+data)}, an open giving \ic{none} for a forged message; \ic{x25519} and
+\ic{x25519\_base}; \ic{rsa\_verify\_pkcs1}, \ic{rsa\_verify\_pss} and
+\ic{ecdsa\_verify} (over \ic{crypto.p256()} or \ic{p384()});
+\ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}.
+\ic{import x509;} reads certificates: \ic{x509.verify\_chain(chain,
+host, now)} is \ic{""} when the DER certificates \ty{chain} (the
+server's first) reach a system trust anchor and name \ty{host} at
+\ty{now} (Unix seconds), else why not; \ic{verify\_chain\_with} takes
+the anchors (\ic{x509.anchors\_pem(text)}), \ic{x509.pem\_certs(text)}
+splits a PEM file.
+\end{sloppypar}
+
 \subsection{Pointers}
 \label{sec:builtin-map}
 

@@ -518,3 +518,28 @@ language had no way to visit a map's entries.
 - c. `m.keys` as a property: the map's own array, which `+=` on it would
   corrupt.
 A user def named `keys` still wins over the builtin (as with `len`).
+
+### 32. The http client's API (future.y asked for options)
+
+future.y sketched both a global `http.header(...)` that sets a header
+"for the next request" and a fetch-style `http.get(url, { headers })`,
+and asked for a choice fitting few unique requests and many similar
+ones.
+
+- a. Global state (`http.header` for the next request): short, but
+  action at a distance -- which request gets the header depends on
+  call order, and two parts of a program trip over each other.
+- b. **Fetch style for one request**: `http.get(url, opts?)`, the
+  options a record of optional fields (`{ headers: {...}, timeout: 5 }`),
+  nothing left behind. Chosen.
+- c. **A session for many similar ones**: `http.session({ base,
+  headers, ... })` returns a record of functions (`s.get("/users")`,
+  `s.post(path, body)`, `s.header(k, v)` for later requests,
+  `s.close()`), sharing a base URL, headers, kept-alive connections
+  and cookies. Chosen alongside b: the state lives in a value the
+  program holds, not in the module.
+- The response is a record (`status`, `headers` as a map, `size`,
+  `url`, `err`) with `read(n)`/`text()` as function fields, so
+  `res.text()` reads like future.y's sketch; the body is read as it
+  arrives, not buffered first. HTTP errors are responses (404 has a
+  status); only a missing response sets `err` (status 0).
