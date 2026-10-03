@@ -87,11 +87,8 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   (`types.tcanon`: fields and union members sorted, a recursive alias's
   references back to itself `^N`). A unit emits the descriptors its code
   uses and the link keeps one per label (two forms under one label stop
-  the link). A descriptor holds `koff` (where field `k` is: a value typed
-  as the shape-hole `{k: str}` reads its `k` through it), a 31-bit hash of
-  the sorted field names (`y_rec_cast`), and the field table
-  `y_dot_lookup` and `y_rec_has` search (the dynamic reads of a value
-  whose type the checker does not know). A union value is the member
+  the link). A descriptor is one byte: its address is the type's tag. A
+  union value is the member
   record itself: `match` compares its descriptor with the members'. A
   record literal is created as the type declared where it goes (`gen_as`
   passes it to `gen_reclit`), so its descriptor names that type, not the
@@ -318,8 +315,7 @@ All of these are lowered early, so the checker and emitter see little new:
 - **`match e { pat => arm, ... }`** is lowered by the parser to
   `{ let $m = e; if (test) { binds; arm } else if ... }` over three node
   kinds: `rectest` (the value's descriptor is T's, or that of a member
-  with a record pattern's fields; `y_rec_has` probes a subject of unknown
-  type), `narrow` (the value typed as T) and
+  with a record pattern's fields), `narrow` (the value typed as T) and
   `matchend` (the fall-through). Patterns: `_`, `T x`, `T {f, g: y}`, `T`,
   record patterns `{f: v} x` / `({f: v}) x` (fields equal to values) and
   literals (`1`, `"s"`, `c'a'`, `true`, `none`, `-2`, `(expr)`). Arms follow
@@ -426,7 +422,7 @@ Y code rather than in hand-rolled x86.
 The rule is that `arch_x64.y` provides small, general **primitives** and the
 runtime provides **behaviour**. What stays in assembly is only what needs raw
 machine state: the `y_alloc` bump allocator, the trap stubs (div/0, OOB,
-unwrap-of-none, OOM), dynamic record lookup (`y_dot_lookup`), the
+unwrap-of-none, OOM, a failed union cast), the
 byte-moving string cores (`y_str_eq/cmp/cat/join/slice`), `str`↔`[byte]`
 conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
 `y_arr_eq` — one implementation each, parameterized by element width,
@@ -547,7 +543,7 @@ and writes them to FILE, and the build appends that file to the `ycc`
 that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
-straight from it. The pack is text: a version line (`ycc-std-pack 3`),
+straight from it. The pack is text: a version line (`ycc-std-pack 4`),
 then each unit's name and fields as netstrings — its bodies, each
 body's label and the labels it references (so linking never rescans std
 code), rodata, globals, init label, and its exports with their types in
@@ -598,7 +594,7 @@ cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
   in defaults and optional parameters as it does for a local def.
 - **Objects**: `compile_package` compiles with line markers, like a std
   unit, so one object serves plain and `-g` builds. `unit_obj` writes it
-  to `build/obj/NAME.yo` — `ycc-unit 2`, its key, its name, then the
+  to `build/obj/NAME.yo` — `ycc-unit 3`, its key, its name, then the
   unit's fields as in the std pack — and `unit_unobj` takes it back only
   under the same key and at its exact length. The key (`build_key`, a
   two-lane hash, `pk_hash_*`) covers the compiler binary itself

@@ -238,13 +238,11 @@ Yv *gen_slice(Yv *st, Yv *node);
 Yv *gen_indirect(Yv *st, Yv *node, Yv *callee);
 Yv *gen_str_slice(Yv *st, Yv *node);
 Yv *gen_sliceassign(Yv *st, Yv *node);
-Yv *gen_rectest_rax(Yv *st, Yv *names);
 Yv *gen_rectest(Yv *st, Yv *node);
 Yv *rectest_members(Yv *s, Yv *t);
 Yv *gen_tag_in(Yv *st, Yv *ts);
 Yv *gen_union_slot(Yv *st, Yv *t, Yv *dkey, int store);
 Yv *gen_slot_move(Yv *st, long sl, int store);
-Yv *gen_union_cast(Yv *st, Yv *t);
 Yv *gen_union_str_rax(Yv *st, Yv *t);
 int is_void_node(Yv *n);
 Yv *loc_dir(long ln);
@@ -314,12 +312,10 @@ void ty_collision(Yv *lbl, Yv *form);
 Yv *ty_desc(Yv *st, Yv *rt);
 Yv *ty_form(Yv *rt);
 Yv *alias_of(Yv *t);
-long ty_shape(Yv *t);
 int same_rec(Yv *lt, Yv *t);
 Yv *rec_lit_type(Yv *lt, Yv *want);
 Yv *infer_go(Yv *st, Yv *node);
 Yv *gen_slot_load(Yv *st, long idx, Yv *dst);
-int layout_unknown(Yv *t);
 Yv *gen_func_literal(Yv *st, Yv *node);
 Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps);
 Yv *gen_decl(Yv *st, Yv *node);
@@ -4229,18 +4225,16 @@ Yv *gen_sliceassign(Yv *st, Yv *node) {
 // value of node.e matches. A union holds exactly one member: the test
 // compares the value's descriptor with those of the members the pattern
 // matches (rectest_members). A record matches by its static type (the
-// checker rejected a pattern it cannot match). A value of unknown type is
-// probed by its field names (y_rec_has).
+// checker rejected a pattern it cannot match).
 Yv *gen_rectest(Yv *st, Yv *node) {
     Yv *s = infer(st, yr_get(node, "e"));
     Yv *sk = yr_get(s, "k");
     st = gen(st, yr_get(node, "e"));
     if (ys_eq_lit(sk, "tunion")) {
         return gen_tag_in(st, rectest_members(s, yr_get(node, "typ")));
-    } else if (ys_eq_lit(sk, "trec")) {
-        return emit(st, ys("    mov $1, %rax"));
     } else {
-        return gen_rectest_rax(st, type_names(yr_get(node, "typ")));
+        // a record: the checker took the pattern as its own type
+        return emit(st, ys("    mov $1, %rax"));
     }
 }
 
@@ -4290,39 +4284,6 @@ Yv *gen_tag_in(Yv *st, Yv *ts) {
     st = emit(st, ys_cat(yr_get(yes, "lbl"), ys(":")));
     st = emit(st, ys("    mov $1, %rax"));
     return emit(st, ys_cat(yr_get(rdone, "lbl"), ys(":")));
-}
-
-// Record in %rax -> 1 when it has every field in names, else 0 (the
-// record's own field table answers, through y_rec_has).
-Yv *gen_rectest_rax(Yv *st, Yv *names) {
-    if (yv_len(names) == 0) {
-        return emit(st, ys("    mov $1, %rax"));
-    } else {
-        Yv *rfail = next_loc(st);
-        st = yr_get(rfail, "st");
-        Yv *rdone = next_loc(st);
-        st = yr_get(rdone, "st");
-        st = emit(st, ys("    push %rax"));
-        long i = 0;
-        while (i < yv_len(names)) {
-            st = emit(st, ys("    mov (%rsp), %rax"));
-            st = emit(st, ys("    push %rax"));
-            st = gen_str_const(st, ya_get(names, i));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_rec_has"));
-            st = emit(st, ys("    add $16, %rsp"));
-            st = emit(st, ys("    test %rax, %rax"));
-            st = emit(st, ys_cat(ys("    jz "), yr_get(rfail, "lbl")));
-            i = i + 1;
-        }
-        st = emit(st, ys("    add $8, %rsp"));
-        st = emit(st, ys("    mov $1, %rax"));
-        st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
-        st = emit(st, ys_cat(yr_get(rfail, "lbl"), ys(":")));
-        st = emit(st, ys("    add $8, %rsp"));
-        st = emit(st, ys("    xor %eax, %eax"));
-        return emit(st, ys_cat(yr_get(rdone, "lbl"), ys(":")));
-    }
 }
 
 // Union value in %rax -> its string form: the member its descriptor names
@@ -5231,11 +5192,9 @@ Yv *gen_conv(Yv *st, Yv *got, Yv *want) {
 /* gen, then gen_conv to `want`: every place a value is stored under a
  * declared type (variable, parameter, return value, element, field,
  * pointee) goes through here. A record literal is created as the declared
- * record type (gen_reclit). A value whose layout the checker could not
- * know (unknown, or behind the unknown-shape marker) going where a record
- * type or a union is declared is checked at run time to be a record of
- * that type's fields, or of a member's (y_rec_cast, gen_union_cast): a
- * mismatch traps rather than read fields at the wrong offsets. */
+ * record type (gen_reclit). A union value going where one of its members,
+ * or a union of some of them, is declared is a cast: its tag is checked
+ * (gen_cast_check), and a value holding another member stops the program. */
 Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
     Yv *want = unfold(want0);
     Yv *nk = yr_get(node, "k");
@@ -5249,12 +5208,6 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
     }
     if (ys_eq_lit(wk, "tfloat") || ys_eq_lit(wk, "tbyte")) {
         return gen_conv(st, infer(st, node), want);
-    } else if (ys_eq_lit(wk, "trec") && layout_unknown(infer(st, node))) {
-        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(ty_shape(want))),
-                             ys(", %rcx")));
-        return emit(st, ys("    call y_rec_cast"));
-    } else if (ys_eq_lit(wk, "tunion") && layout_unknown(infer(st, node))) {
-        return gen_union_cast(st, want);
     } else if ((ys_eq_lit(wk, "trec") || ys_eq_lit(wk, "tunion")) &&
                ys_eq_lit(yr_get(unfold(infer(st, node)), "k"), "tunion") &&
                !union_within(infer(st, node), want0)) {
@@ -5326,37 +5279,6 @@ Yv *gen_cast_check(Yv *st, Yv *ts) {
     }
     st = emit(st, ys("    jmp y_cast_trap"));
     return emit(st, ys_cat(yr_get(ok, "lbl"), ys(":")));
-}
-
-/* gen_as's check of a value of unknown type going where union t is
- * declared: a record with the fields of one of t's members, or a trap
- * (y_cast_trap, as y_rec_cast). */
-Yv *gen_union_cast(Yv *st, Yv *t) {
-    Yv *ok = next_loc(st);
-    st = yr_get(ok, "st");
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(ok, "lbl")));
-    st = emit(st, ys("    mov -8(%rax), %rdx"));
-    st = emit(st, ys("    mov 8(%rdx), %rdx"));
-    Yv *ms = members(t);
-    long i = 0;
-    while (i < yv_len(ms)) {
-        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(ty_shape(ya_get(ms, i)))),
-                             ys(", %rcx")));
-        st = emit(st, ys("    cmp %rcx, %rdx"));
-        st = emit(st, ys_cat(ys("    je "), yr_get(ok, "lbl")));
-        i = i + 1;
-    }
-    st = emit(st, ys("    jmp y_cast_trap"));
-    return emit(st, ys_cat(yr_get(ok, "lbl"), ys(":")));
-}
-
-/* A type that says nothing about a record's fields: unknown to the
- * checker. */
-int layout_unknown(Yv *t) {
-    Yv *tk = yr_get(t, "k");
-    return ys_eq_lit(tk, "tunk") || ys_eq_lit(tk, "tnone") ||
-           ys_eq_lit(tk, "tname") || ys_eq_lit(tk, "tparams");
 }
 
 /* The type of the function being emitted: emit_one_fn records it as a
@@ -6420,13 +6342,9 @@ long mfield_idx(Yv *names, Yv *name) {
  * canonical form (tcanon). Each unit emits the descriptors its code uses
  * (ty_desc), and the link keeps one per label (link_units). The canonical
  * form travels with the descriptor, so two types with one hash are an
- * error, never a merge. A descriptor is quads:
- *     koff   the byte offset of field `k`, 0 when there is none: where a
- *            value typed {k: str} (the unknown-shape marker) has its k
- *     shape  a 31-bit hash of the sorted field names (y_rec_cast)
- *     1498307412, n, then per field its byte offset, the length of its
- *            name and a quad per byte of the name: the table y_dot_lookup
- *            and y_rec_has search (`add $16` past koff and shape) */
+ * error, never a merge. A descriptor is one byte: its address is the tag
+ * that `match`, a union's printer, a field read through a union and a
+ * cast compare. */
 
 /* FNV-1a over the bytes of s, 64-bit (the multiply wraps). */
 long fnv64(Yv *s) {
@@ -6681,48 +6599,18 @@ Yv *ty_desc(Yv *st, Yv *rt) {
         ty_collision(lbl, form);
     }
     if (added > 0) {
-        Yv *rtu = unfold(rt);
-        Yv *fs = yr_get(rtu, "fields");
-        Yv *names = rec_names(fs);
-        long n = yv_len(names);
-        long koff = 0;
+        /* [label, canonical form]: the form only travels for the link's
+         * collision check; the descriptor is one byte (rodata_pieces) */
         Yv *te = yav(0);
         te = ya_push(te, lbl);
         te = ya_push(te, form);
-        long kslot = mfield_idx(names, ys("k"));
-        if (kslot > 0) {
-            koff = 8 * kslot;
-        }
-        te = ya_push(te, ys_long(koff));
-        te = ya_push(te, ys_long((long)((unsigned long)fnv64(ys_join(names, ys(","))) >> 33)));
-        te = ya_push(te, ys("1498307412"));
-        te = ya_push(te, ys_long(n));
-        long j = 0;
-        while (j < n) {
-            Yv *nm = ya_get(names, j);
-            te = ya_push(te, ys_long(8 * j));
-            long nl = yv_len(nm);
-            te = ya_push(te, ys_long(nl));
-            long c = 0;
-            while (c < nl) {
-                te = ya_push(te, ys_long(ys_byte_at(nm, c)));
-                c = c + 1;
-            }
-            j = j + 1;
-        }
         ya_push(yr_get(st, "rodata"), te);
     }
     return yr(2, "st", st, "lbl", lbl);
 }
 
-/* The shape hash a descriptor of record type t carries (ty_desc). */
-long ty_shape(Yv *t) {
-    Yv *fs = yr_get(t, "fields");
-    return (long)((unsigned long)fnv64(ys_join(rec_names(fs), ys(","))) >> 33);
-}
-
 /* lt (a record literal's type) is the record type t: the same field names
- * (without the unknown-shape marker's leniency) and equal types. */
+ * and equal types. */
 int same_rec(Yv *lt, Yv *t) {
     if (!ys_eq_lit(yr_get(t, "k"), "trec") ||
         !ys_eq_lit(yr_get(lt, "k"), "trec")) {
@@ -8312,43 +8200,14 @@ Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
 /* Record field read; `t` is the record's static type. */
 Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
     long idx = rec_field_idx(t, dkey);
-    if (idx < 0) {
-        /* unknown static shape ({k}-holes, bare params): dynamic field
-         * lookup. The record carries its shape table (see gen_reclit note);
-         * the key goes through the regular string rodata channel. */
-        Yv *r = next_uid(st);
-        st = yr_get(r, "st");
-        Yv *klbl = arch_str_label(yv_l(yr_get(r, "uid")));
-        Yv *krod = yav(0);
-        krod = ya_push(krod, klbl);
-        krod = ya_push(krod, ys_long(yv_len(dkey)));
-        krod = ya_push(krod, esc_asm(dkey));
-        Yv *rod = ya_push(yr_get(st, "rodata"), krod);
-        st = yr(11, "out", yr_get(st, "out"), "rodata", rod, "uid",
-                yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
-                yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
-                yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns",
-                yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
-        st = gen(st, dobj);
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys_cat(ys_cat(ys("    lea "), klbl), ys("(%rip), %rax")));
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_dot_lookup"));
-        st = emit(st, ys("    add $16, %rsp"));
-        ;
-    } else {
-        st = gen(st, dobj);
-        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(idx * 8)),
-                             ys("(%rax), %rax")));
-        ;
-    }
-    return st;
+    st = gen(st, dobj);
+    return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(idx * 8)),
+                           ys("(%rax), %rax")));
 }
 
 /* The slot of field `key` in a record of static type t (fields sorted by
- * name, see "records at run time"); -1 when t has no such field (an
- * unknown type: the read is dynamic, y_dot_lookup). */
+ * name, see "records at run time"); -1 when t has no such field (the
+ * checker rejects such a read). */
 long rec_field_idx(Yv *t, Yv *key) {
     long idx = -1;
     if (ys_eq_lit(yr_get(t, "k"), "trec")) {
@@ -10431,14 +10290,9 @@ Yv *rodata_pieces(Yv *pieces, Yv *allrod) {
                 ty_collision(lbl, form);
             }
             if (added > 0) {
-                pieces = ya_push(pieces, ys_cat(lbl, ys(":\n")));
-                long q = 2;
-                while (q < yv_len(pair)) {
-                    pieces = ya_push(
-                        pieces,
-                        ys_cat(ys_cat(ys(".quad "), ya_get(pair, q)), ys("\n")));
-                    q = q + 1;
-                }
+                /* a descriptor's address is its type's tag: one byte
+                 * makes it an address of its own */
+                pieces = ya_push(pieces, ys_cat(lbl, ys(":\n.zero 1\n")));
             }
             ;
         }
@@ -10665,11 +10519,11 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 3\n");
+    return ys("ycc-std-pack 4\n");
 }
 
 Yv *obj_version(void) {
-    return ys("ycc-unit 2\n");
+    return ys("ycc-unit 3\n");
 }
 
 Yv *pack_put(Yv *out, Yv *s) {

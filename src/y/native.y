@@ -3423,18 +3423,16 @@ def gen_sliceassign(st: EmitSt, node: SliceAssign) -> EmitSt {
 // value of node.e matches. A union holds exactly one member: the test
 // compares the value's descriptor with those of the members the pattern
 // matches (rectest_members). A record matches by its static type (the
-// checker rejected a pattern it cannot match). A value of unknown type is
-// probed by its field names (y_rec_has).
+// checker rejected a pattern it cannot match).
 def gen_rectest(st: EmitSt, node: Narrow) -> EmitSt {
     let s = infer(st, node.e);
     let sk: str = s.k;
     st = gen(st, node.e);
     if (sk == "tunion") {
         gen_tag_in(st, rectest_members(s, node.typ))
-    } else if (sk == "trec") {
-        emit(st, "    mov $1, %rax")
     } else {
-        gen_rectest_rax(st, types.type_names(node.typ))
+        // a record: the checker took the pattern as its own type
+        emit(st, "    mov $1, %rax")
     }
 };
 
@@ -3481,39 +3479,6 @@ def gen_tag_in(st: EmitSt, ts: [Type]) -> EmitSt {
     st = emit(st, yes.lbl + ":");
     st = emit(st, "    mov $1, %rax");
     emit(st, rdone.lbl + ":")
-};
-
-// Record in %rax -> 1 when it has every field in names, else 0 (the
-// record's own field table answers, through y_rec_has).
-def gen_rectest_rax(st: EmitSt, names: [str]) -> EmitSt {
-    if (len(names) == 0) {
-        emit(st, "    mov $1, %rax")
-    } else {
-        let rfail = next_loc(st);
-        st = rfail.st;
-        let rdone = next_loc(st);
-        st = rdone.st;
-        st = emit(st, "    push %rax");
-        let i = 0;
-        while (i < len(names)) {
-            st = emit(st, "    mov (%rsp), %rax");
-            st = emit(st, "    push %rax");
-            st = gen_str_const(st, names[i]);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_rec_has");
-            st = emit(st, "    add $16, %rsp");
-            st = emit(st, "    test %rax, %rax");
-            st = emit(st, "    jz " + rfail.lbl);
-            i = i + 1;
-        };
-        st = emit(st, "    add $8, %rsp");
-        st = emit(st, "    mov $1, %rax");
-        st = emit(st, "    jmp " + rdone.lbl);
-        st = emit(st, rfail.lbl + ":");
-        st = emit(st, "    add $8, %rsp");
-        st = emit(st, "    xor %eax, %eax");
-        emit(st, rdone.lbl + ":")
-    }
 };
 
 // Union value in %rax -> its string form: the member its descriptor names
@@ -4331,11 +4296,9 @@ def gen_conv(st: EmitSt, got: Type, want: Type) -> EmitSt {
 // gen, then gen_conv to `want`: every place a value is stored under a
 // declared type (variable, parameter, return value, element, field,
 // pointee) goes through here. A record literal is created as the declared
-// record type (gen_reclit). A value whose layout the checker could not
-// know (unknown, or behind the unknown-shape marker) going where a record
-// type or a union is declared is checked at run time to be a record of
-// that type's fields, or of a member's (y_rec_cast, gen_union_cast): a
-// mismatch traps rather than read fields at the wrong offsets.
+// record type (gen_reclit). A union value going where one of its members,
+// or a union of some of them, is declared is a cast: its tag is checked
+// (gen_cast_check), and a value holding another member stops the program.
 def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
     let want = types.unfold(want0);
     let nk: str = node.k;
@@ -4351,11 +4314,6 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
     };
     if (wk == "tfloat" || wk == "tbyte") {
         gen_conv(st, infer(st, node), want)
-    } else if (wk == "trec" && layout_unknown(infer(st, node))) {
-        st = emit(st, "    mov $" + tostring(ty_shape(want)) + ", %rcx");
-        emit(st, "    call y_rec_cast")
-    } else if (wk == "tunion" && layout_unknown(infer(st, node))) {
-        gen_union_cast(st, want)
     } else if ((wk == "trec" || wk == "tunion") && types.unfold(infer(st, node)).k == "tunion" && !union_within(infer(st, node), want0)) {
         gen_cast_check(st, cast_members(infer(st, node), want0))
     } else {
@@ -4421,35 +4379,6 @@ def gen_cast_check(st: EmitSt, ts: [Type]) -> EmitSt {
     };
     st = emit(st, "    jmp y_cast_trap");
     emit(st, ok.lbl + ":")
-};
-
-// gen_as's check of a value of unknown type going where union t is
-// declared: a record with the fields of one of t's members, or a trap
-// (y_cast_trap, as y_rec_cast).
-def gen_union_cast(st: EmitSt, t: Type) -> EmitSt {
-    let ok = next_loc(st);
-    st = ok.st;
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + ok.lbl);
-    st = emit(st, "    mov -8(%rax), %rdx");
-    st = emit(st, "    mov 8(%rdx), %rdx");
-    let ms = types.members(t);
-    let i = 0;
-    while (i < len(ms)) {
-        st = emit(st, "    mov $" + tostring(ty_shape(ms[i])) + ", %rcx");
-        st = emit(st, "    cmp %rcx, %rdx");
-        st = emit(st, "    je " + ok.lbl);
-        i = i + 1;
-    };
-    st = emit(st, "    jmp y_cast_trap");
-    emit(st, ok.lbl + ":")
-};
-
-// A type that says nothing about a record's fields: unknown to the
-// checker.
-def layout_unknown(t: Type) -> bool {
-    let tk: str = t.k;
-    tk == "tunk" || tk == "tnone" || tk == "tname" || tk == "tparams"
 };
 
 // The type of the function being emitted: emit_one_fn records it as a
@@ -5442,13 +5371,9 @@ def mfield_idx(names: [str], name: str) -> long {
 // canonical form (tcanon). Each unit emits the descriptors its code uses
 // (ty_desc), and the link keeps one per label (link_units). The canonical
 // form travels with the descriptor, so two types with one hash are an
-// error, never a merge. A descriptor is quads:
-//     koff   the byte offset of field `k`, 0 when there is none: where a
-//            value typed {k: str} (the unknown-shape marker) has its k
-//     shape  a 31-bit hash of the sorted field names (y_rec_cast)
-//     1498307412, n, then per field its byte offset, the length of its
-//            name and a quad per byte of the name: the table y_dot_lookup
-//            and y_rec_has search (`add $16` past koff and shape)
+// error, never a merge. A descriptor is one byte: its address is the tag
+// that `match`, a union's printer, a field read through a union and a
+// cast compare.
 
 // FNV-1a over the bytes of s, 64-bit (the multiply wraps).
 def fnv64(s: str) -> long {
@@ -5672,49 +5597,19 @@ def ty_desc(st: EmitSt, rt: Type) -> StLbl {
     let added = tyset_add(lbl, form);
     if (added < 0) { ty_collision(lbl, form); };
     if (added > 0) {
-        let rtu: Type = types.unfold(rt);
-        let rec: TRec = rtu;
-        let fs: [Field] = rec.fields;
-        let names = types.rec_names(fs);
-        let n = len(names);
-        let koff = 0;
+        // [label, canonical form]: the form only travels for the link's
+        // collision check; the descriptor is one byte (rodata_pieces)
         let te: [str] = [];
         te += lbl;
         te += form;
-        let kslot = mfield_idx(names, "k");
-        if (kslot > 0) { koff = 8 * kslot; 0; };
-        te += tostring(koff);
-        te += tostring(fnv64(join(names, ",")) >>> 33);
-        te += "1498307412";
-        te += tostring(n);
-        let j = 0;
-        while (j < n) {
-            let nm: str = names[j];
-            te += tostring(8 * j);
-            let nl = len(nm);
-            te += tostring(nl);
-            let c = 0;
-            while (c < nl) {
-                te += tostring(nm[c]);
-                c = c + 1;
-            };
-            j = j + 1;
-        };
         st.rodata += [te];
         0
     };
     { st: st, lbl: lbl }
 };
 
-// The shape hash a descriptor of record type t carries (ty_desc).
-def ty_shape(t: Type) -> long {
-    let rec: TRec = t;
-    let fs: [Field] = rec.fields;
-    fnv64(join(types.rec_names(fs), ",")) >>> 33
-};
-
 // lt (a record literal's type) is the record type t: the same field names
-// (without the unknown-shape marker's leniency) and equal types.
+// and equal types.
 def same_rec(lt: Type, t: Type) -> bool {
     let tk: str = t.k;
     let lk: str = lt.k;
@@ -7003,41 +6898,13 @@ def gen_prop(st: EmitSt, obj: Node, key: str, line: long, col: long) -> EmitSt {
 // Record field read; `t` is the record's static type.
 def gen_dot_rec(st: EmitSt, dobj: Node, dkey: str, t: Type) -> EmitSt {
     let idx = rec_field_idx(t, dkey);
-    if (idx < 0) {
-        // unknown static shape ({k}-holes, bare params): dynamic field
-        // lookup. The record carries its shape table (see gen_reclit note);
-        // the key goes through the regular string rodata channel.
-        let r = next_uid(st);
-        st = r.st;
-        let klbl = arch.arch_str_label(r.uid);
-        let krod: [str] = [];
-        krod += klbl;
-        krod += tostring(len(dkey));
-        krod += esc_asm(dkey);
-        st.rodata += [krod];
-        let rod = st.rodata;
-        st = { out: st.out, rodata: rod, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies };
-        st = gen(st, dobj);
-        st = emit(st, "    push %rax");
-        st = emit(st, "    lea " + klbl + "(%rip), %rax");
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_dot_lookup");
-        st = emit(st, "    add $16, %rsp");
-        0
-    } else {
-        st = gen(st, dobj);
-        st = emit(st, "    mov " + tostring(idx * 8) + "(%rax), %rax");
-        0
-    };
-    st
+    st = gen(st, dobj);
+    emit(st, "    mov " + tostring(idx * 8) + "(%rax), %rax")
 };
 
 // The slot of field `key` in a record of static type t (fields sorted by
-// name, see "records at run time"); -1 when t has no such field (an
-// unknown type: the read is dynamic, y_dot_lookup).
+// name, see "records at run time"); -1 when t has no such field (the
+// checker rejects such a read).
 def rec_field_idx(t: Type, key: str) -> long {
     let idx = -1;
     if (t.k == "trec") {
@@ -8740,12 +8607,9 @@ def rodata_pieces(pieces: [str], allrod: [[str]]) -> [str] {
             let added = tyset_add(lbl, form);
             if (added < 0) { ty_collision(lbl, form); };
             if (added > 0) {
-                pieces += lbl + ":\n";
-                let q = 2;
-                while (q < len(pair)) {
-                    pieces += ".quad " + pair[q] + "\n";
-                    q = q + 1;
-                };
+                // a descriptor's address is its type's tag: one byte
+                // makes it an address of its own
+                pieces += lbl + ":\n.zero 1\n";
                 0
             } else { 0; };
             0
@@ -8927,7 +8791,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 3\n"
+    "ycc-std-pack 4\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -9312,7 +9176,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
 // fields, after a version line and the key it was compiled under (ycc.y
 // build_key) -- an object of another key, or a cut-off one, is no hit.
 def obj_version() -> str {
-    "ycc-unit 2\n"
+    "ycc-unit 3\n"
 };
 
 def unit_obj(u: Unit, key: str) -> str {

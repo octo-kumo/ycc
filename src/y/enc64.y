@@ -68,12 +68,7 @@ def reg_size(name: str) -> long {
     }
 };
 
-// Safe size read: a non-register yields 0 without touching `.size`. A
-// field read of a key the record does not carry TRAPS at run time (the
-// y_dot_lookup primitive in arch_x64.y), so this shape gate is what keeps
-// a mem/lbl/imm operand from faulting. (`&&` short-circuits — gen_bin /
-// gen_logic in native.y — so `o.k == "reg" && o.size` would be safe too;
-// the gate stays as the explicit form.)
+// Safe size read: a non-register yields 0, whatever its `.size` holds.
 def op_size(o: Operand) -> long {
     if (o.k == "reg") { o.size } else { 0 }
 };

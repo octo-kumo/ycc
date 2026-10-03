@@ -115,12 +115,7 @@ long reg_size(Yv *name) {
     }
 }
 
-/* Safe size read: a non-register yields 0 without touching `.size`. A
-   field read of a key the record does not carry is a run-time trap in the
-   native backend (the y_dot_lookup primitive in arch_x64.y), so this shape
-   gate is what keeps a mem/lbl/imm operand from faulting. (`&&`
-   short-circuits — gen_bin / gen_logic in native.y — so `o.k == "reg" &&
-   o.size` would be safe too; the gate stays as the explicit form.) */
+/* Safe size read: a non-register yields 0, whatever its `.size` holds. */
 static long op_size(Yv *o) {
     if (ys_eq_lit(yr_get(o, "k"), "reg")) { return yv_l(yr_get(o, "size")); } else { return 0; }
 }

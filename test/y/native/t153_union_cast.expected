@@ -2,4 +2,4 @@
 2.000000
 wedge {name: wedge, a: 3.000000, b: 4.000000, c: 5.000000}
 wedge
-runtime error: a record does not have the fields of its declared type
+runtime error: a union value cast to a member it does not hold

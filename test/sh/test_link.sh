@@ -46,7 +46,7 @@ if [ "$(tail -c 8 "$YCC")" = "YCCPACK1" ] && [[ "$plen" =~ ^[0-9]{8}$ ]] \
     pass "ycc carries a std pack ($((10#$plen)) bytes)"
     plen=$((10#$plen))
     tail -c $((plen + 16)) "$YCC" >"$TMPD/attached.pack"
-    if [ "$(head -c 15 "$TMPD/attached.pack" | tr '\n' '|')" = "ycc-std-pack 3|" ]; then
+    if [ "$(head -c 15 "$TMPD/attached.pack" | tr '\n' '|')" = "ycc-std-pack 4|" ]; then
         pass "the pack opens with its version line"
     else
         fail "the pack opens with its version line" "$(head -c 20 "$TMPD/attached.pack" | od -c | head -2)"
@@ -105,7 +105,7 @@ import sys
 d = open(sys.argv[1], "rb").read()
 n = int(d[-16:-8])
 i = len(d) - 16 - n
-v = b"ycc-std-pack 3\n"
+v = b"ycc-std-pack 4\n"
 assert d[i:i + len(v)] == v
 open(sys.argv[2], "wb").write(d[:i] + b"ycc-std-pack 0\n" + d[i + len(v):])
 open(sys.argv[3], "wb").write(d[:i])

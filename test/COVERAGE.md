@@ -173,6 +173,5 @@ so the list cannot rot.
 | `src/y/types.y` | `operator '" + op + "' is unsupported in native mode` | The parser builds a `bin` node only for an operator `op_prec` knows, and the checker's operator table handles every one of them; the `bin` nodes the parser and emitter synthesize use only `+` `==` `&&` `<` and the compound-assignment operators. |
 | `src/y/types.y` | `is not a supported expression form` | Every expression node the parser builds has an arm in `typeof_expr`; `optarg` (optional-parameter metadata) is replaced with `none`/`some(...)` by `rn_fill_defaults` before checking. |
 | `src/y/ycc.y` | `"error: assemble: "` | The assembler only reads the emitter's output, so a bad line is a compiler bug, not something a program can cause. |
-| `src/y/arch_x64.y` | `record has no field '` | `y_dot_lookup` reads a field of a value whose type the checker did not know; with no unknown types it is never called, and it goes in the next step with the descriptors' field tables. |
 | `src/y/ycc.y` | `the std pack is too large` | The trailer gives the pack's length in 8 digits; the std units come to about 190 KB, so no build gets near 100 MB. |
 | `src/y/pkg.y` | `cannot read the compiler's own binary` | `/proc/self/exe` is the running compiler itself (`self_pack` reads it too); a test cannot take it away from a running process. |
