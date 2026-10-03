@@ -3,10 +3,15 @@
 ## State
 
 - On `master`. Everything is committed and BLESSED: `refs/ycc.ref` =
-  `58cfffb5` (4659fbf: the unknown-type runtime removed, descriptors one
-  byte, ycc-std-pack 4 / ycc-unit 3; previous `c5dc23f0` backed up as
-  `ycc.ref.pre-desc`). make test, ASan (native audit examples pkg,
-  RSS-capped) and fuzz (1500, seeds 4242/4243) green. Before that,
+  `82d21975` (2542f03: union layouts, CHOICES_MADE.md 25 -- a member held
+  in a union has the union's shared fields first, casts copy where the
+  layouts differ, ycc-std-pack 5 / ycc-unit 4; previous `58cfffb5` backed
+  up as `ycc.ref.pre-layout`). make test, ASan (native audit examples
+  pkg) and fuzz (1500, seed 4244) green. Self binary -13.9%, compiling
+  ycc.y -8.3% instructions, every bench compile -0.3..-0.8%.
+  Before that, `58cfffb5` (4659fbf: the unknown-type runtime removed,
+  descriptors one byte; previous `c5dc23f0` backed up as
+  `ycc.ref.pre-desc`). Before that,
   `c5dc23f0` (no unknown types; f3a5a9a). Since 02651975 (backed up as
   `ycc.ref.pre-nounk`): cycc and
   src/y have no unknown types (cb89e46, 7eec451, f1b147f, de7fc24,
@@ -31,15 +36,11 @@
   the cap means fix what allocates, never raise it (the user). The old
   reference cannot compile the new ycc.y (its teq blows up): under the
   cap it fails cleanly; compile_ir.sh shows "-" for it.
-- CHOICES_MADE.md 25 (the user's model) is IMPLEMENTED and committed
-  (e70fcdb), NOT blessed yet: a member held in a union is laid out with
-  the union's shared fields first; casts (gen_as, match bindings) copy
-  where the layouts differ (gen_convert); pattern field reads are in
-  place (gen_narrow_field); my "binding is a view" refinement was dropped
-  (CHOICES 25 says why). 376 programs: 15 compile differently (unions),
-  none behave differently; make ynew, every suite with ynew green.
-  Next: measure (check.sh), bless (back up refs as ycc.ref.pre-layout),
-  make test, ASan, fuzz.
+- CHOICES_MADE.md 25 is done and blessed (e70fcdb, 2542f03): casts
+  (gen_as, match bindings) copy where the layouts differ (gen_convert);
+  pattern field reads are in place (gen_narrow_field); my "binding is a
+  view" refinement was dropped (CHOICES 25 says why).
+- Next: the task queue below (task 3, http prerequisites).
 - The user REJECTED making field order part of a record type: `{a, b}`
   and `{b, a}` are one type, always.
 - The user's own files: TODO.md, the TODO.y deletion, future.y, PACKAGES.md
