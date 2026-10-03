@@ -1694,6 +1694,9 @@ def sync_stmt(toks: [Tok], p: long) -> long {
 def parse_if(toks: [Tok], p: long) -> Parsed {
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
+    // `if let` is its own form, not an `if` whose condition starts with a
+    // keyword: `let` is a whole word, so nothing else can reach here.
+    if (is_kw(toks, p + 1, "let")) { return parse_if_let(toks, p) };
     let cond = parse_expr(toks, p + 1);
     let then_b = parse_block(toks, cond.pos);
     let pos = then_b.pos;
@@ -1713,6 +1716,43 @@ def parse_if(toks: [Tok], p: long) -> Parsed {
         has_else = true;
     };
     res({ k: K.kw_if, cond: cond.node, then: then_b.node, els: else_b, has_else: has_else, line: ln, col: cl }, pos)
+};
+
+// `if let PATTERN = EXPR { ... } else { ... }`: run the block when EXPR
+// matches PATTERN, with the pattern's names bound, and the else when it does
+// not. It is the two-arm match (see parse_match) with the else as the
+// wildcard, so the pattern need not be exhaustive -- that is what the else
+// is for -- and it lowers the same way:
+//     { let $l = EXPR; if <test> { <binds>; ... } else { ... } }
+// A missing else is an `if` with none: a statement, no value.
+def parse_if_let(toks: [Tok], p: long) -> Parsed {
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    let tmp = "$l" + tostring(ln) + "_" + tostring(cl);
+    let pr = parse_pattern(toks, p + 2, tmp);
+    let pos = pr.pos;
+    if (!is_op(toks, pos, "=")) {
+        return res({ k: K.err, msg: "expected '=' after the pattern of 'if let', got '" + tv(toks, pos) + "'", line: tline(toks, pos), col: tcol(toks, pos) }, pos);
+    };
+    let subj = parse_expr(toks, pos + 1);
+    let then_b = parse_block(toks, subj.pos);
+    pos = then_b.pos;
+    let else_b: Node = { k: K.void, line: ln, col: cl };
+    let has_else = false;
+    if (is_kw(toks, pos, "else")) {
+        let eb = parse_block(toks, pos + 1);
+        else_b = eb.node;
+        pos = eb.pos;
+        has_else = true;
+    };
+    let pb: [Node] = pr.binds;
+    let ts: [Node] = [];
+    ts += pb;
+    ts += then_b.node;
+    let stmts: [Node] = [];
+    stmts += let_node(tmp, subj.node, ln, cl);
+    stmts += { k: K.kw_if, cond: pr.test, then: { k: K.block, stmts: ts, line: ln, col: cl }, els: else_b, has_else: has_else, line: ln, col: cl };
+    res({ k: K.block, stmts: stmts, line: ln, col: cl }, pos)
 };
 
 def parse_while(toks: [Tok], p: long) -> Parsed {
@@ -1947,6 +1987,8 @@ def parse_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     let nob: [Node] = [];
     if (t == "id" && v == "_") {
         pat_res({ k: K.void, line: ln, col: cl }, nob, { k: K.tnone }, true, p + 1)
+    } else if (t == "id" && v == "some" && is_punct(toks, p + 1, "(")) {
+        parse_some_pattern(toks, p, tmp)
     } else if (t == "id" && v != "none") {
         parse_type_pattern(toks, p, tmp)
     } else if (is_punct(toks, p, "{")) {
@@ -1959,6 +2001,45 @@ def parse_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
         let ru = parse_unary(toks, p);
         pat_res({ k: K.bin, op: "==", l: subj, r: ru.node, line: ln, col: cl }, nob, { k: K.tnone }, false, ru.pos)
     }
+};
+
+// `some(x)`: an option that holds a value, the payload bound to x. The test
+// is is_some and the binding unwraps -- the two halves of `x!` -- so a
+// non-exhaustive pattern like this one needs no wildcard of its own in an
+// `if let` (the else is it). `some()` matches any option and binds nothing.
+def parse_some_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    let subj = { k: K.id, v: tmp, line: ln, col: cl };
+    let cargs: [Node] = [];
+    cargs += subj;
+    let test: Node = { k: K.call, callee: { k: K.id, v: "is_some", line: ln, col: cl }, args: cargs, line: ln, col: cl };
+    let binds: [Node] = [];
+    let pos = p + 2;  // past `some` and `(`
+    if (!is_punct(toks, pos, ")")) {
+        if (tt(toks, pos) == "id") {
+            let uargs: [Node] = [];
+            uargs += subj;
+            binds += let_node(tv(toks, pos), { k: K.call, callee: { k: K.id, v: "unwrap", line: ln, col: cl }, args: uargs, line: ln, col: cl }, ln, cl);
+            pos = pos + 1;
+        } else {
+            binds += { k: K.err, msg: "expected a name to bind in 'some(', got '" + tv(toks, pos) + "'", line: tline(toks, pos), col: tcol(toks, pos) };
+            pos = pos + 1;
+        };
+        if (is_punct(toks, pos, ",")) {
+            // One payload fits: name it once and skip the rest of the list,
+            // so the ')' below closes the pattern instead of reporting a
+            // second error on the same mistake.
+            binds += { k: K.err, msg: "'some' binds exactly one name", line: tline(toks, pos), col: tcol(toks, pos) };
+            while (!is_punct(toks, pos, ")") && tt(toks, pos) != "eof") { pos = pos + 1; };
+        };
+    };
+    if (is_punct(toks, pos, ")")) {
+        pos = pos + 1;
+    } else {
+        binds += { k: K.err, msg: "expected ')' to close 'some(', got '" + tv(toks, pos) + "'", line: tline(toks, pos), col: tcol(toks, pos) };
+    };
+    pat_res(test, binds, { k: K.tnone }, false, pos)
 };
 
 // T / T x / T {f, g: y}: T names a record type (an alias; `m.T` one of

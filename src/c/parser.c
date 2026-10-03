@@ -1986,9 +1986,16 @@ long sync_stmt(Yv *toks, long p) {
 
 // ── control flow ─────────────────────────────────────────────────────────
 
+Yv *parse_if_let(Yv *toks, long p);
+
 Yv *parse_if(Yv *toks, long p) {
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
+    /* `if let` is its own form, not an `if` whose condition starts with a
+       keyword: `let` is a whole word, so nothing else can reach here. */
+    if (is_kw(toks, p + 1, ys("let"))) {
+        return parse_if_let(toks, p);
+    }
     Yv *cond = parse_expr(toks, p + 1);
     Yv *then_b = parse_block(toks, yv_l(yr_get(cond, "pos")));
     long pos = yv_l(yr_get(then_b, "pos"));
@@ -2012,6 +2019,45 @@ Yv *parse_if(Yv *toks, long p) {
         ;
     }
     return res(yr(7, "k", yv_long(K_kw_if), "cond", yr_get(cond, "node"), "then", yr_get(then_b, "node"), "els", else_b, "has_else", yv_bool(has_else), "line", yv_long(ln), "col", yv_long(cl)), pos);
+}
+
+/* `if let PATTERN = EXPR { ... } else { ... }`: run the block when EXPR
+   matches PATTERN, with the pattern's names bound, and the else when it does
+   not. It is the two-arm match (see parse_match) with the else as the
+   wildcard, so the pattern need not be exhaustive -- that is what the else
+   is for -- and it lowers the same way:
+        { let $l = EXPR; if <test> { <binds>; ... } else { ... } }
+   A missing else is an `if` with none: a statement, no value. */
+Yv *parse_if_let(Yv *toks, long p) {
+    long ln = tline(toks, p);
+    long cl = tcol(toks, p);
+    Yv *tmp = ys_cat(ys_cat(ys_cat(ys("$l"), ys_long(ln)), ys("_")), ys_long(cl));
+    Yv *pr = parse_pattern(toks, p + 2, tmp);
+    long pos = yv_l(yr_get(pr, "pos"));
+    if (!is_op(toks, pos, ys("="))) {
+        return res(yr(4, "k", yv_long(K_err), "msg", ys_cat(ys("expected '=' after the pattern of 'if let', got '"), ys_cat(tv(toks, pos), ys("'"))), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))), pos);
+    }
+    Yv *subj = parse_expr(toks, pos + 1);
+    Yv *then_b = parse_block(toks, yv_l(yr_get(subj, "pos")));
+    pos = yv_l(yr_get(then_b, "pos"));
+    Yv *else_b = yr(3, "k", yv_long(K_void), "line", yv_long(ln), "col",
+                    yv_long(cl));
+    int has_else = 0;
+    if (is_kw(toks, pos, ys("else"))) {
+        Yv *eb = parse_block(toks, pos + 1);
+        else_b = yr_get(eb, "node");
+        pos = yv_l(yr_get(eb, "pos"));
+        has_else = 1;
+        ;
+    }
+    Yv *pb = yr_get(pr, "binds");
+    Yv *ts = yav(0);
+    for (long bi = 0; bi < yv_len(pb); bi++) ts = ya_push(ts, ya_get(pb, bi));
+    ts = ya_push(ts, yr_get(then_b, "node"));
+    Yv *stmts = yav(0);
+    stmts = ya_push(stmts, let_node(tmp, yr_get(subj, "node"), ln, cl));
+    stmts = ya_push(stmts, yr(7, "k", yv_long(K_kw_if), "cond", yr_get(pr, "test"), "then", yr(4, "k", yv_long(K_block), "stmts", ts, "line", yv_long(ln), "col", yv_long(cl)), "els", else_b, "has_else", yv_bool(has_else), "line", yv_long(ln), "col", yv_long(cl)));
+    return res(yr(4, "k", yv_long(K_block), "stmts", stmts, "line", yv_long(ln), "col", yv_long(cl)), pos);
 }
 
 Yv *parse_while(Yv *toks, long p) {
@@ -2275,6 +2321,8 @@ static Yv *subj_id(Yv *tmp, long ln, long cl) {
     return yr(4, "k", yv_long(K_id), "v", tmp, "line", yv_long(ln), "col", yv_long(cl));
 }
 
+Yv *parse_some_pattern(Yv *toks, long p, Yv *tmp);
+
 Yv *parse_pattern(Yv *toks, long p, Yv *tmp) {
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
@@ -2286,6 +2334,9 @@ Yv *parse_pattern(Yv *toks, long p, Yv *tmp) {
         return pat_res(yr(3, "k", yv_long(K_void), "line", yv_long(ln), "col",
                           yv_long(cl)),
                        nob, yr(1, "k", yv_long(K_tnone)), 1, p + 1);
+    } else if (ys_eq_lit(t, "id") && ys_eq_lit(v, "some") &&
+               is_punct(toks, p + 1, ys("("))) {
+        return parse_some_pattern(toks, p, tmp);
     } else if (ys_eq_lit(t, "id") && !ys_eq_lit(v, "none")) {
         return parse_type_pattern(toks, p, tmp);
     } else if (is_punct(toks, p, ys("{"))) {
@@ -2302,6 +2353,48 @@ Yv *parse_pattern(Yv *toks, long p, Yv *tmp) {
 
 static Yv *narrow_node(Yv *subj, Yv *ty, long ln, long cl) {
     return yr(5, "k", yv_long(K_narrow), "e", subj, "typ", ty, "line", yv_long(ln), "col", yv_long(cl));
+}
+
+/* `some(x)`: an option that holds a value, the payload bound to x. The test
+   is is_some and the binding unwraps -- the two halves of `x!` -- so a
+   non-exhaustive pattern like this one needs no wildcard of its own in an
+   `if let` (the else is it). `some()` matches any option and binds
+   nothing. */
+Yv *parse_some_pattern(Yv *toks, long p, Yv *tmp) {
+    long ln = tline(toks, p);
+    long cl = tcol(toks, p);
+    Yv *subj = subj_id(tmp, ln, cl);
+    Yv *cargs = ya_push(yav(0), subj);
+    Yv *test = yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("is_some"), "line", yv_long(ln), "col", yv_long(cl)), "args", cargs, "line", yv_long(ln), "col", yv_long(cl));
+    Yv *binds = yav(0);
+    long pos = p + 2;  /* past `some` and `(` */
+    if (!is_punct(toks, pos, ys(")"))) {
+        if (ys_eq_lit(tt(toks, pos), "id")) {
+            Yv *uargs = ya_push(yav(0), subj);
+            binds = ya_push(binds, let_node(tv(toks, pos), yr(5, "k", yv_long(K_call), "callee", yr(4, "k", yv_long(K_id), "v", ys("unwrap"), "line", yv_long(ln), "col", yv_long(cl)), "args", uargs, "line", yv_long(ln), "col", yv_long(cl)), ln, cl));
+            pos = pos + 1;
+        } else {
+            binds = ya_push(binds, yr(4, "k", yv_long(K_err), "msg", ys_cat(ys("expected a name to bind in 'some(', got '"), ys_cat(tv(toks, pos), ys("'"))), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
+            pos = pos + 1;
+        }
+        if (is_punct(toks, pos, ys(","))) {
+            /* One payload fits: name it once and skip the rest of the list,
+               so the ')' below closes the pattern instead of reporting a
+               second error on the same mistake. */
+            binds = ya_push(binds, yr(4, "k", yv_long(K_err), "msg", ys("'some' binds exactly one name"), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
+            while (!is_punct(toks, pos, ys(")")) &&
+                   !ys_eq_lit(tt(toks, pos), "eof")) {
+                pos = pos + 1;
+            }
+        }
+        ;
+    }
+    if (is_punct(toks, pos, ys(")"))) {
+        pos = pos + 1;
+    } else {
+        binds = ya_push(binds, yr(4, "k", yv_long(K_err), "msg", ys_cat(ys("expected ')' to close 'some(', got '"), ys_cat(tv(toks, pos), ys("'"))), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
+    }
+    return pat_res(test, binds, yr(1, "k", yv_long(K_tnone)), 0, pos);
 }
 
 // T / T x / T {f, g: y}: T names a record type (an alias).

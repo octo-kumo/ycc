@@ -201,6 +201,8 @@ rejected as an unknown type.
   |~& \ic{return}~[\ty{expr}]~\ic{;} \\
   |~& \ty{block} \\
   |~& \ic{if}~\ic{(}~\ty{expr}~\ic{)}~\ty{block}~[\ic{else}~(\ty{block} \mid \ty{statement})] \\
+  |~& \ic{if}~\ic{let}~\ty{pattern}~\ic{=}~\ty{expr}~\ty{block}
+        ~[\ic{else}~(\ty{block} \mid \ty{statement})] \\
   |~& \ic{while}~\ic{(}~\ty{expr}~\ic{)}~\ty{block} \\
   |~& \ic{for}~\ic{(}~[\ty{stmt}]~\ic{;}~[\ty{expr}]~\ic{;}~[\ty{stmt}]~\ic{)}~\ty{block} \\
   |~& \ic{for}~\ty{name}~\ic{in}~\ty{expr}~\ic{..}~\ty{expr}~\ty{block} \\
@@ -220,6 +222,18 @@ the elements of an array; the \ic{for} range form iterates \ic{lo..hi}
 with the low bound inclusive and the high bound exclusive. A C-style
 \ic{for} without a condition loops until a \ic{return} leaves it, as in
 C.
+
+\noindent \ic{if let}~\ty{pattern}~\ic{=}~\ty{expr}~\ty{block} is the
+pattern form of \ic{if} (Section~\ref{sec:type-unions}): the block runs when
+the expression matches the pattern, with the pattern's names bound in it, and
+the \ic{else} when it does not. \ic{let} is a whole word, so this is
+reached only where the keyword is written; the pattern is whatever a
+\ic{match} arm takes --- \ic{some(x)} for an option, \ic{T x},
+\ic{T \{f: y\}} for a record type, \ic{\{f: v\}} for equal fields, or a
+value --- and \ic{some()} binds nothing. The subject is read once. The
+\ic{else} may be left out (a statement, no value), and a pattern that can
+fail needs none of its own here: the \ic{else} is the arm that does not
+match. The binding is in scope in the block only.
 
 \subsection{Expressions}
 \label{sec:expr-grammar}
