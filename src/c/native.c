@@ -79,6 +79,8 @@ Yv *pat_members(Yv *s, Yv *t);
 Yv *lit_target(Yv *node, Yv *want);
 Yv *tcanon(Yv *t);
 Yv *tsig(Yv *t);
+Yv *inferred_ret(long line, long col);
+Yv *fn_ret(Yv *func);
 Yv *str_sorted(Yv *xs);
 Yv *rec_names(Yv *fs);
 /* src/y/rename.y */
@@ -8857,7 +8859,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     /* This function's type, for conversions at returns and self calls. */
     f = env_define(f, ys(""), ys("fnty"), 0, ys(""),
                    yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"),
-                       "ret", yr_get(func, "ret")));
+                       "ret", fn_ret(func)));
     Yv *bnames = box_names(func);
     long bi = 0;
     while (bi < yv_len(bnames)) {
@@ -9079,16 +9081,27 @@ Yv *infer_fn_ret(Yv *st, Yv *func) {
     return infer(f, yr_get(func, "body"));
 }
 
+/* A def's return type: as written, or as the checker inferred it
+ * (types.c inferred_ret); tnone when neither. */
+Yv *fn_ret(Yv *func) {
+    Yv *r = yr_get(func, "ret");
+    if (ys_eq_lit(yr_get(r, "k"), "tnone")) {
+        return inferred_ret(yv_l(yr_get(func, "line")), yv_l(yr_get(func, "col")));
+    } else {
+        return r;
+    }
+}
+
 Yv *func_type(Yv *func) {
     return yr(3, "k", ys("tfunc"), "args", yr_get(func, "ptypes"), "ret",
-              yr_get(func, "ret"));
+              fn_ret(func));
 }
 
 /* Same, but with an unannotated return type resolved from the body — the
  * checker infers it too, so a literal's call sites must agree (whether `+`
  * stringifies, which print arm runs, ...). */
 Yv *func_type_in(Yv *st, Yv *func) {
-    Yv *r = yr_get(func, "ret");
+    Yv *r = fn_ret(func);
     if (ys_eq_lit(yr_get(r, "k"), "tnone")) {
         r = infer_fn_ret(st, func);
         ;
@@ -9408,7 +9421,7 @@ Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only) {
 }
 
 int ret_omitted(Yv *func) {
-    return ys_eq_lit(yr_get(yr_get(func, "ret"), "k"), "tnone");
+    return ys_eq_lit(yr_get(fn_ret(func), "k"), "tnone");
 }
 
 Yv *fn_ptypes(Yv *func) {
@@ -9985,11 +9998,11 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
                                        yr(1, "argv", yv_bool(0)));
             st = emit_one_fn(
                 st, ys("_start"), yv_l(yr_get(rm, "uid")),
-                yr(5, "params", yav(0), "ptypes", yav(0), "ret",
+                yr(6, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", ys("tvoid")), "body",
                    yr(4, "k", ys("block"), "stmts", main_stmts, "line",
                       yv_long(0), "col", yv_long(0)),
-                   "line", yv_long(0)),
+                   "line", yv_long(0), "col", yv_long(0)),
                 1, yv_b(yr_get(want, "argv")) || yv_b(yr_get(xt, "argv")),
                 yav(0), ys(""));
             ;
@@ -9997,11 +10010,11 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, Yv *name,
             init = arch_fn_label(yv_l(yr_get(rm, "uid")), ys("init"));
             st = emit_one_fn(
                 st, init, yv_l(yr_get(rm, "uid")),
-                yr(5, "params", yav(0), "ptypes", yav(0), "ret",
+                yr(6, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", ys("tvoid")), "body",
                    yr(4, "k", ys("block"), "stmts", main_stmts, "line",
                       yv_long(0), "col", yv_long(0)), "line",
-                   yv_long(0)),
+                   yv_long(0), "col", yv_long(0)),
                 0, 0, yav(0), ys(""));
             ;
         } else {

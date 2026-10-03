@@ -3743,15 +3743,52 @@ def ret_note(rl: TInfer, typ: Type, line: long, col: long) -> long {
     0
 };
 
-// The inferred return type is recorded in the def node, where `-> T`
-// would be: the emitter then types calls, `self` and every `return` as
-// the checker did, instead of re-inferring from the trailing expression
-// alone (which cannot see the body's locals). `fnode` is the def node
-// as rename.y builds it (rn_func_finish), so `ret` is a static field (a
-// node of another shape traps here, native.y gen_as).
+// The return types typeof_def inferred, by the def's position: the
+// emitter types calls, `self` and every `return` with them, as the checker
+// did (native.y fn_ret), instead of re-inferring from the trailing
+// expression alone (which cannot see the body's locals). They are not
+// written into the def node: a node read through a cast from a union may
+// be a copy (CHOICES_MADE.md 25), and lint reads the node for the types
+// the program writes. 1024 buckets of indices into inf_keys/inf_typs
+// (key: line * 65536 + col); check_program empties them.
+let inf_keys: [long] = [];
+let inf_typs: [Type] = [];
+let inf_bkts: [[long]] = [];
+
+def inf_reset() {
+    let keys: [long] = [];
+    let typs: [Type] = [];
+    let bkts: [[long]] = [];
+    let i = 0;
+    while (i < 1024) {
+        let b: [long] = [];
+        bkts += b;
+        i = i + 1;
+    };
+    inf_keys = keys;
+    inf_typs = typs;
+    inf_bkts = bkts;
+};
+
 def set_inferred_ret(func: Func, ret: Type) -> long {
-    func.ret = ret;
+    if (len(inf_bkts) == 0) { inf_reset(); };
+    let key = func.line * 65536 + func.col;
+    let bkt: [long] = inf_bkts[key % 1024];
+    inf_keys += key;
+    inf_typs += ret;
+    bkt += len(inf_keys) - 1;
     0
+};
+
+// The return type inferred for the def at (line, col); tnone for none.
+def inferred_ret(line: long, col: long) -> Type {
+    let found: Type = { k: "tnone" };
+    if (len(inf_bkts) > 0) {
+        let key = line * 65536 + col;
+        let bkt: [long] = inf_bkts[key % 1024];
+        foreach (ix in bkt) { if (inf_keys[ix] == key) { found = inf_typs[ix]; }; };
+    };
+    found
 };
 
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
@@ -3923,6 +3960,7 @@ def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.e
 // `ext`: the externs -- top-level defs of the units this one links
 // against (native.y compile_unit), visible by name like the unit's own.
 def check_program(ast: Block, ext: [Sym]) -> [Diag] {
+    inf_reset();
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
     let pstmts: [Node] = ast.stmts;
@@ -3994,4 +4032,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, typ: type_node({ k: "tfunc", args: args, ret: ret }) }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, tsig, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

@@ -29,6 +29,7 @@ Yv *pat_members(Yv *s, Yv *t); /* members with a record pattern's fields */
 Yv *lit_target(Yv *node, Yv *want); /* a record literal's declared type */
 Yv *tcanon(Yv *t);            /* a type's canonical form */
 Yv *tsig(Yv *t);              /* its signature: recursive aliases by name */
+Yv *inferred_ret(long line, long col); /* typeof_def's inferred return type */
 Yv *str_sorted(Yv *xs);       /* [str] sorted */
 Yv *rec_names(Yv *fs);        /* a record's field names, sorted */
 Yv *type_names(Yv *t);        /* field names a record type / pattern tests */

@@ -1520,7 +1520,7 @@ type Slot = { name: str, kind: str, off: long, label: str, typ: Type };
 type ArrTy = TOf | TFix;
 type NodeE = Wrap | Un | Narrow | MatchEnd;
 type NodeV = ArrRep | Assign | Decl;
-type EmitMain = { params: [str], ptypes: [Type], ret: Type, body: Node, line: long };
+type EmitMain = { params: [str], ptypes: [Type], ret: Type, body: Node, line: long, col: long };
 type EmitFunc = Func | EmitMain;
 type EmitSt = { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: str, end_label: str, fns: [Sym], bodies: [str] };
 // The state after making a label (next_loc, ty_desc), and the label.
@@ -7482,7 +7482,7 @@ def emit_one_fn(st: EmitSt, label: str, fuid: long, func: EmitFunc, is_main: boo
     f = env_define(f, "", "frame", 0, "", type_node({ k: "tnone" }));
     // This function's type, for the conversions at its returns and its
     // self calls (cur_fn_type).
-    let ftype: Type = type_node({ k: "tfunc", args: func.ptypes, ret: func.ret });
+    let ftype: Type = type_node({ k: "tfunc", args: func.ptypes, ret: fn_ret(func) });
     f = env_define(f, "", "fnty", 0, "", ftype);
     let bnames = box_names(func);
     let bi = 0;
@@ -7669,15 +7669,22 @@ def infer_fn_ret(st: EmitSt, func: Func) -> Type {
 // A function's type node.
 type FuncTy = TFunc;
 
+// A def's return type: as written, or as the checker inferred it
+// (types.y inferred_ret); tnone when neither.
+def fn_ret(func: EmitFunc) -> Type {
+    let r: Type = func.ret;
+    if (r.k == "tnone") { types.inferred_ret(func.line, func.col) } else { r }
+};
+
 def func_type(func: Func) -> FuncTy {
-    { k: "tfunc", args: func.ptypes, ret: func.ret }
+    { k: "tfunc", args: func.ptypes, ret: fn_ret(func) }
 };
 
 // Same, but with an unannotated return type resolved from the body — the
 // checker infers it too, so a literal's call sites must agree (whether `+`
 // stringifies, which print arm runs, ...).
 def func_type_in(st: EmitSt, func: Func) -> FuncTy {
-    let r: Type = func.ret;
+    let r: Type = fn_ret(func);
     if (r.k == "tnone") {
         r = infer_fn_ret(st, func);
         0
@@ -7931,7 +7938,7 @@ def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
 };
 
 def ret_omitted(func: Func) -> bool {
-    let r = func.ret;
+    let r = fn_ret(func);
     r.k == "tnone"
 };
 
@@ -8397,13 +8404,13 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, name: 
             // (or a package it links does).
             let want = uses_scan_block(ast3.stmts, { argv: false });
             let main_body: Block = { k: "block", stmts: main_stmts, line: 0, col: 0 };
-            let start_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: "tvoid" }), body: main_body, line: 0 };
+            let start_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: "tvoid" }), body: main_body, line: 0, col: 0 };
             st = emit_one_fn(st, "_start", rm.uid, start_fn, true, want.argv || xt.argv, [], "");
             0
         } else if (len(main_stmts) > 0) {
             init = arch.arch_fn_label(rm.uid, "init");
             let init_body: Block = { k: "block", stmts: main_stmts, line: 0, col: 0 };
-            let init_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: "tvoid" }), body: init_body, line: 0 };
+            let init_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: "tvoid" }), body: init_body, line: 0, col: 0 };
             st = emit_one_fn(st, init, rm.uid, init_fn, false, false, [], "");
             0
         } else { 0; };

@@ -4988,15 +4988,58 @@ static long ret_note(Yv *rl, Yv *typ, long line, long col) {
     return 0;
 }
 
-// The inferred return type is recorded in the def node, where `-> T`
-// would be: the emitter then types calls, `self` and every `return` as
-// the checker did, instead of re-inferring from the trailing expression
-// alone (which cannot see the body's locals). `fnode` is the def node
-// as rename.y builds it (rn_func_finish), so `ret` is a static field (a
-// node of another shape traps here, native.y gen_as).
+// The return types typeof_def inferred, by the def's position: the
+// emitter types calls, `self` and every `return` with them, as the checker
+// did (native.c fn_ret), instead of re-inferring from the trailing
+// expression alone (which cannot see the body's locals). They are not
+// written into the def node: a node read through a cast from a union may
+// be a copy (CHOICES_MADE.md 25), and lint reads the node for the types
+// the program writes. 1024 buckets of indices into inf_keys/inf_typs
+// (key: line * 65536 + col); check_program empties them.
+static Yv *inf_keys;
+static Yv *inf_typs;
+static Yv *inf_bkts;
+
+static void inf_reset(void) {
+    Yv *bkts = yav(0);
+    long i = 0;
+    while (i < 1024) {
+        bkts = ya_push(bkts, yav(0));
+        i = i + 1;
+    }
+    inf_keys = yav(0);
+    inf_typs = yav(0);
+    inf_bkts = bkts;
+}
+
 static long set_inferred_ret(Yv *func, Yv *ret) {
-    yr_set(func, "ret", ret);
+    if (!inf_bkts || yv_len(inf_bkts) == 0) {
+        inf_reset();
+    }
+    long key = yv_l(yr_get(func, "line")) * 65536 + yv_l(yr_get(func, "col"));
+    Yv *bkt = ya_get(inf_bkts, key % 1024);
+    inf_keys = ya_push(inf_keys, yv_long(key));
+    inf_typs = ya_push(inf_typs, ret);
+    ya_push(bkt, yv_long(yv_len(inf_keys) - 1));
     return 0;
+}
+
+// The return type inferred for the def at (line, col); tnone for none.
+Yv *inferred_ret(long line, long col) {
+    Yv *found = yr(1, "k", ys("tnone"));
+    if (inf_bkts && yv_len(inf_bkts) > 0) {
+        long key = line * 65536 + col;
+        Yv *bkt = ya_get(inf_bkts, key % 1024);
+        long q = 0;
+        while (q < yv_len(bkt)) {
+            long ix = yv_l(ya_get(bkt, q));
+            if (yv_l(ya_get(inf_keys, ix)) == key) {
+                found = ya_get(inf_typs, ix);
+            }
+            q = q + 1;
+        }
+    }
+    return found;
 }
 
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
@@ -5222,6 +5265,7 @@ static Yv *st_fdepth(Yv *st, long d) {
 // ── entry point ──────────────────────────────────────────────────────────
 
 Yv *check_program(Yv *ast, Yv *ext) {
+    inf_reset();
     // pass 1: collect top-level def signatures (allows mutual recursion).
     Yv *defs = yav(0);
     Yv *pstmts = yr_get(ast, "stmts");
