@@ -10,7 +10,7 @@ operators (`::`, `..`, `->`).
 ## Install (user level)
 
 ```sh
-code --install-extension vscode-y-lang/y-lang-0.1.0.vsix
+code --install-extension y-lang-0.1.0.vsix
 ```
 
 Then reload VS Code. `.y` files will be highlighted automatically.
@@ -18,7 +18,7 @@ Then reload VS Code. `.y` files will be highlighted automatically.
 ## Rebuild the .vsix
 
 ```sh
-cd vscode-y-lang && npx -y @vscode/vsce package --allow-missing-repository
+npx -y @vscode/vsce package --allow-missing-repository && code --install-extension y-lang-0.1.0.vsix
 ```
 
 ## Files

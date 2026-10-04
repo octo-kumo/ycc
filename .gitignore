@@ -34,3 +34,4 @@ refs/
 cycc-asan
 # test/fuzz/fuzz.sh scratch directories
 test/fuzz/work.*
+compiler-audit
