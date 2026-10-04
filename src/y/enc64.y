@@ -515,7 +515,7 @@ def enc_alu_imm_go(op: str, dst: Operand, v: long) -> Encoded {
 };
 
 def enc_alu_imm_body(op: str, dst: Operand, v: long) -> Encoded {
-    // (the size gate lives in enc_alu_imm; no gate here)
+    // (the size gate lives in enc_alu_imm; this one is on the value)
     let ext = 0;
     if (op == "sub") { ext = 5; }
     else if (op == "cmp") { ext = 7; }
@@ -529,6 +529,17 @@ def enc_alu_imm_body(op: str, dst: Operand, v: long) -> Encoded {
         let imm: [byte] = [u8(v)];
         let b = concat(prefix, imm);
         { bytes: with_rex(r, b), fix: [], err: "" }
+    } else if (v < -2147483648 || v > 2147483647) {
+        // 81 /n id takes a sign-extended imm32 and nothing else, and le32
+        // would quietly keep the low four bytes: `cmp $4294967366, %rcx` (a
+        // fixed array of 4 billion elements) would encode as `cmp $10` and
+        // the bounds check would pass for every index under ten. No emitter
+        // path reaches it -- the checker caps a fixed array's size at int32
+        // ("an integer literal from 0 to 2147483647 in a type") and every
+        // other immediate here is a frame offset or a small constant -- but
+        // an encoder that would quietly encode a different instruction is
+        // worth a door, and this is that door.
+        { bytes: [], fix: [], err: "an immediate does not fit in 32 bits" }
     } else {
         let prefix: [byte] = [129, modrm(3, ext, dst.n)];
         let b = concat(prefix, le32(v));

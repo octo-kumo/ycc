@@ -593,7 +593,7 @@ static Yv *enc_alu_imm_go(Yv *op, Yv *dst, long v) {
 }
 
 static Yv *enc_alu_imm_body(Yv *op, Yv *dst, long v) {
-    /* (the size gate lives in enc_alu_imm; no gate here) */
+    /* (the size gate lives in enc_alu_imm; this one is on the value) */
     long ext = 0;
     if (ys_eq_lit(op, "sub")) { ext = 5; ; }
     else if (ys_eq_lit(op, "cmp")) { ext = 7; ; }
@@ -608,6 +608,19 @@ static Yv *enc_alu_imm_body(Yv *op, Yv *dst, long v) {
         Yv *b = concat(prefix, imm);
         return yr(3, "bytes", with_rex(r, b), "fix", yav(0), "err", ys(""));
     } else {
+        if (v < -2147483648L || v > 2147483647L) {
+            /* 81 /n id takes a sign-extended imm32 and nothing else, and le32
+               would quietly keep the low four bytes: `cmp $4294967366, %rcx` (a
+               fixed array of 4 billion elements) would encode as `cmp $10` and
+               the bounds check would pass for every index under ten. No emitter
+               path reaches it -- the checker caps a fixed array's size at int32
+               ("an integer literal from 0 to 2147483647 in a type") and every
+               other immediate here is a frame offset or a small constant -- but
+               an encoder that would quietly encode a different instruction is
+               worth a door, and this is that door. */
+            return yr(3, "bytes", yav(0), "fix", yav(0), "err",
+                      ys("an immediate does not fit in 32 bits"));
+        }
         Yv *prefix = yav(2, yv_long(129), yv_long(modrm(3, ext, yv_l(yr_get(dst, "n")))));
         Yv *b = concat(prefix, le32(v));
         return yr(3, "bytes", with_rex(r, b), "fix", yav(0), "err", ys(""));
