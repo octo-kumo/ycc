@@ -57,8 +57,6 @@ Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
-Yv *tdisp(Yv *t);
-Yv *tdisp_fnval(Yv *t);
 Yv *tstr(Yv *t);
 Yv *check_program(Yv *ast, Yv *ext);
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
@@ -5902,10 +5900,11 @@ Yv *gen_print(Yv *st, Yv *node) {
         return emit(st, ys("    xor %eax, %eax"));
     } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
         /* A function value has no printable contents; show its signature
-         * (`<function (params)->(ret)>`, types.y tdisp_fnval). */
+         * (`<function (params) -> ret>`, in the spelling types.y tstr gives,
+         * the one every diagnostic uses). */
         st = gen(st, pa0);
         st = gen_str_const(
-            st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(t)), ys(">")));
+            st, ys_cat(ys_cat(ys("<function "), tstr(t)), ys(">")));
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
     } else if (yv_l(yr_get(t, "k")) == K_tarr ||
@@ -5963,7 +5962,7 @@ Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t) {
  * type, so this is a plain string constant. */
 Yv *gen_typeof(Yv *st, Yv *node) {
     Yv *targs = yr_get(node, "args");
-    return gen_str_const(st, tdisp(infer(st, ya_get(targs, 0))));
+    return gen_str_const(st, tstr(infer(st, ya_get(targs, 0))));
 }
 
 /* ── record formatting ──────────────────────────────────────────────────
@@ -6186,7 +6185,7 @@ Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path) {
         st = emit(st, ys("    add $8, %rsp"));
     } else if (yv_l(fk) == K_tfunc) {
         st = gen_str_const(
-            st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(ft)), ys(">")));
+            st, ys_cat(ys_cat(ys("<function "), tstr(ft)), ys(">")));
     } else {
         /* Arrays, options, maps, records and unions nested in a RECORD: the
          * value walk formats them, the same text tostring() gives. This used to
@@ -8993,7 +8992,7 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path) {
     t = unfold(t);
     Yv *tk = yr_get(t, "k");
     if (type_on_path(t, path)) {
-        return gen_str_const(st, ys_cat(ys_cat(ys("<"), tdisp(named)), ys(">")));
+        return gen_str_const(st, ys_cat(ys_cat(ys("<"), tstr(named)), ys(">")));
     } else if (yv_l(tk) == K_tstr) {
         return st;
     } else if (yv_l(tk) == K_tbool) {

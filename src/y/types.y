@@ -642,6 +642,14 @@ def trec_field_type(rec: Type, key: str) -> Type {
     found
 };
 
+// The one spelling of a type. Every diagnostic prints it, and so does
+// `typeof`, a printed function value (`<function (long) -> long>`) and the
+// `<...>` a recursive type prints as its own placeholder: a program can read a
+// type out of an error message and type it back, and `typeof(x)` gives text
+// the compiler itself would print. There used to be a second renderer, tdisp,
+// with tighter spacing (`(long)->long`, `{a: long}`), used only by those four
+// emitter sites; one type had two spellings and only one of them was in the
+// diagnostics.
 def tstr_go(t: Type) -> str {
     if (t.k == K.tlong) { "long" }
     else if (t.k == K.tbyte) { "byte" }
@@ -709,16 +717,6 @@ def tstr_union(ts: [Type], sep: str) -> str {
         i = i + 1;
     };
     join(parts, sep)
-};
-
-def tdisp_union(ts: [Type]) -> str {
-    let parts: [str] = [];
-    let i = 0;
-    while (i < len(ts)) {
-        parts += tdisp(ts[i]);
-        i = i + 1;
-    };
-    join(parts, " | ")
 };
 
 // ── unions and match ─────────────────────────────────────────────────────
@@ -944,53 +942,6 @@ def num_is_float(s: str) -> bool {
     }
 };
 
-// User-visible rendering (`typeof` / print of a function or record value):
-// tight spacing, no padding. tstr() stays as it is — compiler diagnostics
-// (and the tests that match on them) use the roomier spacing. The two copies
-// must agree on every type they both render.
-def tdisp(t: Type) -> str {
-    if (t.k == K.trec) {
-        let parts: [str] = [];
-        let rec: TRec = t;
-        let fs: [Field] = rec.fields;
-        let i = 0;
-        while (i < len(fs)) {
-            let f = fs[i];
-            parts += f.name + ": " + tdisp(f.typ);
-            i = i + 1;
-        };
-        "{" + join(parts, ", ") + "}"
-    } else if (t.k == K.tfunc) {
-        let parts: [str] = [];
-        let func: TFunc = t;
-        let ta: [Type] = func.args;
-        let i = 0;
-        while (i < len(ta)) {
-            parts += tdisp(ta[i]);
-            i = i + 1;
-        };
-        "(" + join(parts, ", " ) + ")->" + tdisp(func.ret)
-    } else if (t.k == K.tarr) {
-        let arr: TOf = t;
-        "[" + tdisp(arr.of) + "]"
-    } else if (t.k == K.tarrfix) {
-        let arr: TFix = t;
-        "[" + tdisp(arr.of) + "; " + tostring(arr.n) + "]"
-    } else if (t.k == K.tptr) {
-        let ptr: TPtr = t;
-        "*" + tdisp(ptr.to)
-    } else if (t.k == K.tunion) {
-        let union: TList = t;
-        tdisp_union(union.ts)
-    } else if (t.k == K.topt) {
-        let opt: TOf = t;
-        let tof = opt.of;
-        if (tof.k == K.tunk) { "none" } else { tdisp(tof) + "?" }
-    } else {
-        tstr_go(t)
-    }
-};
-
 // Merge one field into a record literal's field list, in place: the array is
 // the caller's (every call site assigns the result straight back) and Y arrays
 // are references. A name the list does not have yet -- all but a repeated key
@@ -1086,20 +1037,6 @@ def is_hash_key(t: Type) -> bool {
     else if (t.k == K.tbyte) { true }
     else if (t.k == K.tbool) { true }
     else { t.k == K.tfloat }
-};
-
-// A function VALUE prints as `<function (params)->(ret)>` — note the extra
-// parens around the return type, which is how both compilers render it.
-def tdisp_fnval(t: Type) -> str {
-    let func: TFunc = t;
-    let parts: [str] = [];
-    let ta: [Type] = func.args;
-    let i = 0;
-    while (i < len(ta)) {
-        parts += tdisp(ta[i]);
-        i = i + 1;
-    };
-    "(" + join(parts, ", ") + ")->(" + tdisp(func.ret) + ")"
 };
 
 // ── checker state ────────────────────────────────────────────────────────
@@ -4324,4 +4261,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

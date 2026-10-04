@@ -103,7 +103,15 @@ a record still calls the field. \ic{s.length} is a property, so
   \ic{12}, \ic{tonum("3.14")} is \ic{3}), and only a string with no such
   prefix at all gives \ic{0}.
 \item[\ic{typeof(v)}] The static type as a printable value
-  (\ic{typeof(none)} is \ic{"none"}).
+  (\ic{typeof(none)} is \ic{"none"}). The rendering is the one the
+  compiler's own diagnostics use, character for character, so what
+  \ic{typeof} prints is text a type error may quote back at you:
+  \ic{typeof(add)} is \ic{(long, long) -> long} and a diagnostic says
+  \ic{expected (long, long) -> long}. Printing a \emph{value} is a
+  different thing: a record prints as \ic{\{a: 1\}} with its contents,
+  a function has no printable contents and prints its signature as
+  \ic{<function (long, long) -> long>}, and a type that refers to
+  itself prints as \ic{<T>} in place of the cycle.
 \end{description}
 
 \subsection{Format specifications}

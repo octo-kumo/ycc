@@ -138,7 +138,6 @@ static long set_inferred_ret(Yv *func, Yv *ret);
 static Yv *st_fdepth(Yv *st, long d);
 static Yv *def_sig(Yv *name, Yv *func);
 static Yv *tstr_union(Yv *ts, Yv *sep);
-static Yv *tdisp_union(Yv *ts);
 static int rec_has_names(Yv *r, Yv *names);
 static int union_ok(Yv *t);
 static int union_accepts(Yv *got, Yv *want);
@@ -888,16 +887,6 @@ static Yv *tstr_union(Yv *ts, Yv *sep) {
     return ys_join(parts, sep);
 }
 
-static Yv *tdisp_union(Yv *ts) {
-    Yv *parts = yav(0);
-    long i = 0;
-    while (i < yv_len(ts)) {
-        parts = ya_push(parts, tdisp(ya_get(ts, i)));
-        i = i + 1;
-    }
-    return ys_join(parts, ys(" | "));
-}
-
 // ── unions and match ─────────────────────────────────────────────────────
 // A union `A | B` holds a record whose type is exactly one of its members.
 // Every record carries its type's descriptor (native.y "records at run
@@ -1176,52 +1165,6 @@ static int num_is_float(Yv *s) {
     }
 }
 
-// User-visible rendering (`typeof` / print of a function or record value):
-// tight spacing, no padding. tstr() stays as it is — compiler diagnostics
-// (and the tests that match on them) use the roomier spacing. The two copies
-// must agree on every type they both render.
-Yv *tdisp(Yv *t) {
-    if (yv_l(yr_get(t, "k")) == K_trec) {
-        Yv *parts = yav(0);
-        Yv *fs = yr_get(t, "fields");
-        long i = 0;
-        while (i < yv_len(fs)) {
-            Yv *f = ya_get(fs, i);
-            parts = ya_push(parts, ys_cat(ys_cat(yr_get(f, "name"), ys(": ")),
-                                          tdisp(yr_get(f, "typ"))));
-            i = i + 1;
-        }
-        return ys_cat(ys_cat(ys("{"), ys_join(parts, ys(", "))), ys("}"));
-    } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
-        Yv *parts = yav(0);
-        Yv *ta = yr_get(t, "args");
-        long i = 0;
-        while (i < yv_len(ta)) {
-            parts = ya_push(parts, tdisp(ya_get(ta, i)));
-            i = i + 1;
-        }
-        return ys_cat(ys_cat(ys_cat(ys("("), ys_join(parts, ys(", "))),
-                             ys(")->")),
-                      tdisp(yr_get(t, "ret")));
-    } else if (yv_l(yr_get(t, "k")) == K_tarr) {
-        return ys_cat(ys_cat(ys("["), tdisp(yr_get(t, "of"))), ys("]"));
-    } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
-        return ys_cat(ys_cat(ys_cat(ys_cat(ys("["), tdisp(yr_get(t, "of"))),
-                                    ys("; ")),
-                          ys_tostring(yr_get(t, "n"))),
-                    ys("]"));
-    } else if (yv_l(yr_get(t, "k")) == K_tptr) {
-        return ys_cat(ys("*"), tdisp(yr_get(t, "to")));
-    } else if (yv_l(yr_get(t, "k")) == K_tunion) {
-        return tdisp_union(yr_get(t, "ts"));
-    } else if (yv_l(yr_get(t, "k")) == K_topt) {
-        Yv *tof = yr_get(t, "of");
-        if (yv_l(yr_get(tof, "k")) == K_tunk) { return ys("none"); } else { return ys_cat(tdisp(tof), ys("?")); }
-    } else {
-        return tstr_go(t);
-    }
-}
-
 static Yv *field_merge_dup(Yv *fields, Yv *name, Yv *typ);
 
 // Merge one field into a record literal's field list, in place: the array is
@@ -1354,22 +1297,6 @@ static int is_hash_key(Yv *t) {
     else if (yv_l(yr_get(t, "k")) == K_tbyte) { return 1; }
     else if (yv_l(yr_get(t, "k")) == K_tbool) { return 1; }
     else { return yv_l(yr_get(t, "k")) == K_tfloat; }
-}
-
-// A function VALUE prints as `<function (params)->(ret)>` — note the extra
-// parens around the return type, which is how both compilers render it.
-Yv *tdisp_fnval(Yv *t) {
-    Yv *parts = yav(0);
-    Yv *ta = yr_get(t, "args");
-    long i = 0;
-    while (i < yv_len(ta)) {
-        parts = ya_push(parts, tdisp(ya_get(ta, i)));
-        i = i + 1;
-    }
-    return ys_cat(ys_cat(ys_cat(ys_cat(ys("("), ys_join(parts, ys(", "))),
-                                 ys(")->(")),
-                          tdisp(yr_get(t, "ret"))),
-                  ys(")"));
 }
 
 // ── checker state ────────────────────────────────────────────────────────

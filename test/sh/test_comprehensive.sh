@@ -105,7 +105,13 @@ run_test "typeof: bool" 'print(typeof(true));' 'bool'
 run_test "typeof: none" 'print(typeof(none));' 'none'
 run_test "typeof: option" 'let o: long? = some(1); print(typeof(o));' 'long?'
 run_test "typeof: array" 'print(typeof([1,2]));' '[long]'
-run_test "typeof: map" 'print(typeof({a:1}));' '{a: long}'
+# The spelling is the one a diagnostic gives the same type (m16): types.y has
+# one renderer, so `typeof` and "expected { a: long }" cannot drift apart.
+run_test "typeof: record" 'print(typeof({a:1}));' '{ a: long }'
+run_test "typeof: function" 'def f(x: long) -> long { x }; print(typeof(f));' '(long) -> long'
+run_test "typeof: nested function" 'def g(f: (long) -> long) -> long { f(1) }; print(typeof(g));' '((long) -> long) -> long'
+run_test "typeof: fixed array" 'let a: [long; 2] = [1,2]; print(typeof(a));' '[long; 2]'
+run_test "typeof: mutex" 'let m = mutex(); print(typeof(m));' 'mutex'
 
 # ── Builtins: tostring ──
 echo ""

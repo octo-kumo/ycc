@@ -5,7 +5,7 @@ Matched B: 10
 {field1: 1, field2: 2.000000}
 {bfield: 10}
 [{field1: 1, field2: 2.000000}, {bfield: 10}]
-{field1: long, field2: float} | {bfield: long}
+{ field1: long, field2: float } | { bfield: long }
 zero one minus one many
 letter a other
 {x: 11, y: 22}

@@ -1,6 +1,6 @@
 6
 {head: 1, tail: {head: 2, tail: <L?>}}
-{head: long, tail: L?}
+{ head: long, tail: L? }
 6
 6
 {l: <Expr>, r: <Expr>}

@@ -4796,9 +4796,10 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
         emit(st, "    xor %eax, %eax")
     } else if (t.k == K.tfunc) {
         // A function value has no printable contents; show its signature
-        // (`<function (params)->(ret)>`, types.y tdisp_fnval).
+        // (`<function (params) -> ret>`, in the spelling types.y tstr gives,
+        // the one every diagnostic uses).
         st = gen(st, pa0);
-        st = gen_str_const(st, "<function " + types.tdisp_fnval(t) + ">");
+        st = gen_str_const(st, "<function " + types.tstr(t) + ">");
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == K.tarr || t.k == K.tarrfix) {
@@ -4854,7 +4855,7 @@ def gen_print_scalar(st: EmitSt, arg: Node, t: Type) -> EmitSt {
 // type, so this is a plain string constant.
 def gen_typeof(st: EmitSt, node: Call) -> EmitSt {
     let targs: [Node] = node.args;
-    gen_str_const(st, types.tdisp(infer(st, targs[0])))
+    gen_str_const(st, types.tstr(infer(st, targs[0])))
 };
 
 // ── record formatting ──────────────────────────────────────────────────
@@ -5053,7 +5054,7 @@ def gen_rec_field_str(st: EmitSt, idx: long, ft: Type, path: [Type]) -> EmitSt {
         st = emit(st, "    call y_float_tostr");
         emit(st, "    add $8, %rsp")
     } else if (fk == K.tfunc) {
-        gen_str_const(st, "<function " + types.tdisp_fnval(ft) + ">")
+        gen_str_const(st, "<function " + types.tstr(ft) + ">")
     } else {
         // Arrays, options, maps, records and unions nested in a RECORD: the
         // value walk formats them, the same text tostring() gives. This used
@@ -7459,7 +7460,7 @@ def gen_val_tostr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     t = types.unfold(t);
     let tk = t.k;
     if (type_on_path(t, path)) {
-        gen_str_const(st, "<" + types.tdisp(named) + ">")
+        gen_str_const(st, "<" + types.tstr(named) + ">")
     } else if (tk == K.tstr) {
         st
     } else if (tk == K.tbool) {
