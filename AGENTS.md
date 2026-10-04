@@ -382,7 +382,9 @@ replaces the std one at link time).
   in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string
   methods) — the four embedded into the compiler — and `fs.y` (files,
   paths, directories: `import fs;`), `net.y` (TCP, DNS), `struct.y`,
-  `crypto.y`, `x509.y`, `tls.y` (a TLS 1.3 client)).
+  `crypto.y`, `x509.y`, `tls.y` (a TLS 1.3 client), `regex.y` (patterns:
+  `import regex;` — a Pike VM over bytes, linear time, no
+  backreferences)).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
 - `refs/` — backed-up reference binaries for the port gate (see

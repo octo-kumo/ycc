@@ -573,6 +573,126 @@ date arithmetic \ic{verify\_chain} uses, and \ic{b64\_decode} the
 Base64 one.
 \end{sloppypar}
 
+\subsection{Patterns (the regex module)}
+\label{sec:builtin-regex}
+
+\ic{import regex;} compiles patterns and matches them. The engine is a Pike VM
+--- a Thompson NFA simulated with priority-ordered thread lists --- so a match
+takes time linear in the subject times the pattern, whatever the pattern says:
+\ic{(a*)*b} and \ic{(a|aa)+b} against a megabyte of \ic{a} answer at once, where
+a backtracker would not finish. What it buys with that is no backreferences
+(\ic{\textbackslash1} has no path to compare against) and no pattern recursion
+(\ic{(?R)} would want the machine stack). The only recursion at match time is a
+lookaround's, and a pattern nesting more than 32 of them is refused.
+
+Matching is over \ty{bytes}, like every other text operation in the language:
+\ic{.} is one byte, \ic{\textbackslash d} \ic{\textbackslash w} \ic{\textbackslash s}
+\ic{\textbackslash b} and \ic{(?i)} are ASCII, and \ic{\textbackslash x\{\ldots\}} is a
+code point encoded as UTF-8 at compile time. There are no code points and no
+\ic{\textbackslash p\{\ldots\}}. The dialect is Perl's where it can be, and the
+choices are leftmost-then-first-alternative, greedy unless lazy --- so
+\ic{a|ab} against \ic{ab} matches \ic{a}, and \ic{regex.full} with it matches
+\ic{ab} (the short branch fails the end and the search goes on, as a backtracker
+would try the next alternative).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{regex.compile(pattern)}] The compiled pattern as \ic{Re?}: \ic{none}
+  for one that does not compile, since a pattern is data (a config file, an
+  \ic{argv}) rather than a caller bug.
+\item[\ic{regex.check(pattern)}] Why it does not compile, or \ic{""} when it
+  does --- the same pass, so \ic{compile} plus \ic{check} is never two answers.
+\item[\ic{regex.escape(s)}] \ty{s} with the bytes a pattern would read as
+  syntax escaped, so it can be pasted into one.
+\item[\ic{regex.match(re, s)}] A match at position 0, as \ic{Match?}.
+\item[\ic{regex.match\_at(re, s, at)}] A match at \ic{at} --- \ic{none} when
+  \ic{at} is out of range.
+\item[\ic{regex.search(re, s)}] The leftmost match anywhere in \ty{s}.
+\item[\ic{regex.search\_at(re, s, at)}] The leftmost match at or after \ic{at}.
+\item[\ic{regex.full(re, s)}] A match of the whole subject, whatever \ic{(?m)}
+  does to \ic{\^{} } and \ic{\$} elsewhere in the pattern.
+\item[\ic{regex.is\_match(re, s)}] \ic{bool}: whether there is any match, with
+  nothing built for it.
+\item[\ic{regex.find(re, s, limit = -1)}] Every non-overlapping match, left to
+  right, as \ic{[Match]} (\ic{limit} 0 gives none, a positive one stops there).
+\item[\ic{regex.split(re, s)}] The subject cut at every match, as \ic{[str]}.
+\item[\ic{regex.replace(re, s, rep)}] Every match replaced by \ic{rep}, in
+  which \ic{\$0}..\ic{\$9} and \ic{\$\{name\}} are a group's text and \ic{\$\$} a
+  literal \ic{\$}; a name or count the pattern has no group for stays as
+  written, so a typo shows instead of going quietly.
+\item[\ic{regex.replace\_with(re, s, f)}] The same, with
+  \ic{f: (regex.Match) -> str} deciding each one --- the module has no
+  closures, so this is a function the caller passes, not a method on a match.
+\item[\ic{regex.group(m, n)}] What group \ic{n} matched, as \ic{str?}: \ic{none}
+  when it took no part, which is not the same as matching nothing (that is
+  \ic{some("")}). A count past the last group traps, as any index does.
+\item[\ic{regex.named(m, name)}] The same by name; \ic{none} for a name the
+  pattern does not have.
+\item[\ic{regex.start(m, n)}] Group \ic{n}'s offset, \ic{-1} when it took no
+  part.
+\item[\ic{regex.end(m, n)}] Its end offset, on the same terms.
+\end{description}
+
+A \ic{Match} is plain data --- \ic{subject}, \ic{text}, \ic{start}, \ic{end},
+\ic{caps} (two slots per group, group 0 first, \ic{-1} for one that took no
+part) and \ic{names} --- so an offset needs no call at all: \ic{m.caps[2 * 1]} is
+group 1's start. \ic{text} is a copy (a string slice always is). An \ic{Re} is
+the pattern's own fields, the engine's included: \ic{prog}, \ic{classes},
+\ic{nclass}, \ic{first}, \ic{literal}, \ic{need}, \ic{anchored}, \ic{groups},
+\ic{names}. A record type is exact, so there is nowhere to hide them; they are
+there because a Y program is free to look.
+
+The dialect, roughly in the order a pattern is read:
+
+\begin{itemize}
+\item Literals, \ic{.} for any byte, and the classes \ic{[abc]}
+  \ic{[\^{}a-z]} \ic{[[:alpha:]]}, the POSIX names \ic{alnum} \ic{alpha}
+  \ic{ascii} \ic{blank} \ic{cntrl} \ic{digit} \ic{graph} \ic{lower}
+  \ic{print} \ic{punct} \ic{space} \ic{upper} \ic{word} \ic{xdigit} as well,
+  each negatable with \ic{\^{}} inside the brackets.
+\item The shorthands \ic{\textbackslash d} \ic{\textbackslash D}
+  \ic{\textbackslash w} \ic{\textbackslash W} \ic{\textbackslash s}
+  \ic{\textbackslash S} \ic{\textbackslash b} \ic{\textbackslash B}
+  \ic{\textbackslash A} \ic{\textbackslash z} --- ASCII by definition --- and the
+  escapes \ic{\textbackslash n} \ic{\textbackslash r} \ic{\textbackslash t}
+  \ic{\textbackslash f} \ic{\textbackslash v} \ic{\textbackslash a}
+  \ic{\textbackslash 0} \ic{\textbackslash xHH} \ic{\textbackslash x\{H+\}}.
+\item The anchors \ic{\^{}} \ic{\$}, alternation \ic{a|b}, the groups \ic{(}
+  \ic{)} \ic{(?:} \ic{(?<name>}, and the repetitions \ic{*} \ic{+} \ic{?}
+  \ic{\{n\}} \ic{\{n,\}} \ic{\{n,m\}}, each of them lazy with a trailing
+  \ic{?}.
+\item Flags \ic{(?i)} \ic{(?s)} \ic{(?m)}, scoped with \ic{(?is: \ldots )}, and
+  the lookarounds \ic{(?=} \ic{(?!} \ic{(?<=} \ic{(?<!}, where a lookbehind
+  must be of a fixed width.
+\item Deliberately not: \ic{(?>...)} and \ic{a*+} (they need backtracking to
+  mean anything), \ic{(?-i)} (turning a flag off would re-fold an
+  already-emitted set), and a capture group inside a lookaround (an NFA
+  simulation has no path to give it to).
+\end{itemize}
+
+Three rules are worth stating outright, because every engine spells them
+differently and they are the ones a reader is most likely to trip on:
+
+\begin{itemize}
+\item An empty match in \ic{find} abutting the previous match's end is
+  \emph{skipped}, and the scan then moves on one byte --- Go's rule, and
+  CPython's since 3.7. So \ic{a*} over \ic{baab} gives \ic{""}, \ic{aa}, \ic{""}.
+\item \ic{split} cuts only on a match that took bytes, and drops one trailing
+  empty piece: the rules \ic{str.split} already has, with a pattern in place of
+  the separator.
+\item \ic{replace} replaces nothing for an empty match --- the text passes
+  through and the scan moves on, where Python's \ic{re.sub} inserts at every
+  one. \ic{replace\_with} is the way to insert between matches.
+\end{itemize}
+
+Where an NFA and a backtracker differ, this is the NFA: the captures of a loop
+whose last iteration took no bytes are the last one that did, so \ic{(a*)*}
+against \ic{aa} reports group 1 as \ic{aa} where PCRE reports it empty. A
+\ic{\{} that does not open a valid repetition is a literal byte, so
+\ic{a\{,3\}} is those four bytes where PCRE reads \ic{\{0,3\}}; a repetition
+count over 1000, a pattern over 4096 instructions, more than 200 capture groups,
+more than 32 lookarounds and more than 200 levels of \ic{(} nesting are each
+refused with a message from \ic{check}.
+
 \subsection{Pointers}
 \label{sec:builtin-pointers}
 

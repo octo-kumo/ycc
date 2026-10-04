@@ -1,0 +1,38 @@
+[(a)] on [a] -> [a] at 0 | groups [a] | spans 0..1 | caps 0,1,0,1
+[(a)(b)] on [ab] -> [ab] at 0 | groups [a] [b] | spans 0..1 1..2 | caps 0,2,0,1,1,2
+[((a)(b))] on [ab] -> [ab] at 0 | groups [ab] [a] [b] | spans 0..2 0..1 1..2 | caps 0,2,0,2,0,1,1,2
+[(a(b(c)))] on [abc] -> [abc] at 0 | groups [abc] [bc] [c] | spans 0..3 1..3 2..3 | caps 0,3,0,3,1,3,2,3
+[(a)(b)(c)] on [abc] -> [abc] at 0 | groups [a] [b] [c] | spans 0..1 1..2 2..3 | caps 0,3,0,1,1,2,2,3
+[(?:a)(b)] on [ab] -> [ab] at 0 | groups [b] | spans 1..2 | caps 0,2,1,2
+[(a)(?:b)(c)] on [abc] -> [abc] at 0 | groups [a] [c] | spans 0..1 2..3 | caps 0,3,0,1,2,3
+[(?<year>\d{4})-(?<month>\d{2})] on [2026-10] -> [2026-10] at 0 | groups [2026] [10] | spans 0..4 5..7 | caps 0,7,0,4,5,7
+[(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})] on [2026-10-04] -> [2026-10-04] at 0 | groups [2026] [10] [04] | spans 0..4 5..7 8..10 | caps 0,10,0,4,5,7,8,10
+names: [host, port]
+by name: root localhost 22
+no such name: none
+numbered from a name: root
+underscore name: a
+[(a)|(b)] on [b] -> [b] at 0 | groups - [b] | spans -1..-1 0..1 | caps 0,1,-1,-1,0,1
+[(a)?b] on [b] -> [b] at 0 | groups - | spans -1..-1 | caps 0,1,-1,-1
+[a()b] on [ab] -> [ab] at 0 | groups [] | spans 1..1 | caps 0,2,1,1
+[(x)?(y)] on [y] -> [y] at 0 | groups - [y] | spans -1..-1 0..1 | caps 0,1,-1,-1,0,1
+[(?:(a)|(b))+] on [ab] -> [ab] at 0 | groups [a] [b] | spans 0..1 1..2 | caps 0,2,0,1,1,2
+[(a)|(b)] on [a] -> [a] at 0 | groups [a] - | spans 0..1 -1..-1 | caps 0,1,0,1,-1,-1
+[(\d)(\d)?] on [7] -> [7] at 0 | groups [7] - | spans 0..1 -1..-1 | caps 0,1,0,1,-1,-1
+whole: 2..7 caps 2,7,2,4,5,7
+caps[2] is group 1 start: 2 and caps[5] group 2 end: 7
+accessors agree: 2 4 5 7
+group 0 is the whole match: 12-34
+group 1: none start -1 end -1
+group 2: some start 0 end 1
+named:   on 04/10/2026 and 31/12/1999
+mixed:   on 10-2026 and 12-1999
+whole:   on [2026-10-04] and [1999-12-31]
+escaped: on $1 and $1
+unknown name stays: on $9 and ${nope} and $9 and ${nope}
+function: on 2027/10 and 2000/12
+  a=1 -> a is 1 at 0
+  bb=22 -> bb is 22 at 4
+  ccc=333 -> ccc is 333 at 10
+groups: 2 3
+names: []

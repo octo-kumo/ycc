@@ -1,0 +1,48 @@
+find    [a] on [banana] -> [a]@1,[a]@3,[a]@5
+find    [an] on [banana] -> [an]@1,[an]@3
+find    [ana] on [banana] -> [ana]@1
+find(1) [ana] on [banana] -> [ana]@1
+find(2) [ana] on [banana] -> [ana]@1
+find    [z] on [banana] -> -
+find    [\d+] on [a1 b22 c333] -> [1]@1,[22]@4,[333]@8
+find    [(\w)(\d)] on [a1 b2] -> [a1]@0,[b2]@3
+find    [^\d] on [12 34] -> [1]@0
+find    [(?m)^\d] on [12\n34] -> [1]@0,[3]@3
+find    [\b\w+\b] on [  hi there  ] -> [hi]@2,[there]@5
+find    [a*] on [baab] -> []@0,[aa]@1,[]@4
+find    [a*] on [] -> []@0
+find    [.*] on [abc] -> [abc]@0
+find    [x*] on [abc] -> []@0,[]@1,[]@2,[]@3
+find    [()] on [ab] -> []@0,[]@1,[]@2
+find    [|a] on [ba] -> []@0,[]@1,[]@2
+find    [a|ab] on [ab ab] -> [a]@0,[a]@3
+find    [\b] on [ab] -> []@0,[]@2
+find    [(a*)*] on [aa] -> [aa]@0
+find    [(|a)*] on [aa] -> [aa]@0
+split   [,] on [a,b,,c] -> [a] [b] [] [c]
+split   [,] on [a,b,] -> [a] [b]
+split   [,] on [,a] -> [] [a]
+split   [,] on [] -> []
+split   [,] on [abc] -> [abc]
+split   [\s+] on [a  b\tc\n] -> [a] [b] [c]
+split   [\d+] on [ab12cd345ef] -> [ab] [cd] [ef]
+split   [[;,]] on [a;b,c] -> [a] [b] [c]
+split   [a*] on [baab] -> [] [b]
+split   [x] on [abc] -> [abc]
+split   [^\s+|\s+$] on [  a b  ] -> [] [a b]
+split   [(?i)B] on [aBcB] -> [a] [c]
+replace [,] on [a,b,c] -> [a;b;c]
+replace [\s+] on [a  b\tc] -> [a_b_c]
+replace [(\w+)@(\w+)] on [root@host, a@b] -> [host/root, b/a]
+replace [(\d{4})-(\d{2})-(\d{2})] on [2026-10-04] -> [04.10.2026]
+replace [x*] on [abc] -> [abc]
+replace [a] on [aaa] -> []
+replace [(?i)abc] on [xABCx] -> [x[x]
+replace [^\d+] on [12ab] -> [#ab]
+replace [(?m)^\d+] on [1\n2] -> [#\n#]
+replace [\$] on [a$b] -> [a!b]
+replace [(a)|(b)] on [ab] -> [[a][b]]
+with    HI THERE
+shape   a b0b c2c
+shape-  abc
+  web01 GET /a/b?q=1 200 bytes=512

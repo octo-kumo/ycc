@@ -1,0 +1,150 @@
+[abc] on [xxabcyy] -> [abc] at 2
+[abc] on [ab] -> no match
+[a.c] on [abc] -> [abc] at 0
+[a.c] on [a\nc] -> no match
+[a.c] on [a\tc] -> [a\tc] at 0
+[.] on [a] -> [a] at 0
+[.] on [\n] -> no match
+[x] on [x] -> [x] at 0
+[\.] on [a.b] -> [.] at 1
+[\x41\x42] on [zABz] -> [AB] at 1
+[\x{263A}] on [a\xe2\x98\xbab] -> [\xe2\x98\xba] at 1
+[\x{7e}] on [a~b] -> [~] at 1
+[\0] on [a\x00b] -> [\x00] at 1
+[\t] on [a\tb] -> [\t] at 1
+[\$\^\.\*\+\?\(\)\[\]\{\}\|] on [$^.*+?()[]{}|] -> [$^.*+?()[]{}|] at 0
+[a\\b] on [a\b] -> [a\b] at 0
+[[abc]+] on [xxcabz] -> [cab] at 2
+[[^abc]+] on [abxyz] -> [xyz] at 2
+[[a-z0-9_]+] on [Ab_9-] -> [b_9] at 1
+[[-a]] on [-a] -> [-] at 0
+[[a-]] on [a-] -> [a] at 0
+[[]a]] on []a] -> []] at 0
+[[]]] on []] -> []] at 0
+[[\]]] on []] -> []] at 0
+[[\-]] on [-] -> [-] at 0
+[[\d]] on [5] -> [5] at 0
+[[\dx]] on [5x] -> [5] at 0
+[[a-c-e]] on [b] -> [b] at 0
+[[[:digit:]]+] on [x42] -> [42] at 1
+[[[:^digit:]]+] on [4a2] -> [a] at 1
+[[[:alpha:][:digit:]]+] on [a1-] -> [a1] at 0
+[[[:space:]]+] on [a \tb] -> [ \t] at 1
+[[^[:alnum:]]+] on [ab!!cd] -> [!!] at 2
+[\d+] on [x42y] -> [42] at 1
+[\D+] on [ab1] -> [ab] at 0
+[\w+] on [ a_1 ] -> [a_1] at 1
+[\W+] on [ab!!cd] -> [!!] at 2
+[\s+] on [a \t\nb] -> [ \t\n] at 1
+[\S+] on [  ab  ] -> [ab] at 2
+[\bfoo\b] on [a foo b] -> [foo] at 2
+[\bfoo\b] on [afoob] -> no match
+[\Bfoo] on [afoob] -> [foo] at 1
+[\Bfoo] on [a foo b] -> no match
+[\b] on [ab] -> [] at 0
+[\B] on [ab] -> [] at 1
+[^abc] on [abc] -> [abc] at 0
+[^abc] on [xabc] -> no match
+[abc$] on [abc] -> [abc] at 0
+[abc$] on [abcx] -> no match
+[^abc$] on [abc] -> [abc] at 0
+[a\z] on [a] -> [a] at 0
+[\Aa\z] on [a] -> [a] at 0
+[(?m)^b] on [a\nbc] -> [b] at 2
+[(?m)c$] on [a\nbc] -> [c] at 3
+[(?m)^$] on [a\n\nb] -> [] at 2
+[^$] on [] -> [] at 0
+[(?s).+] on [a\nb] -> [a\nb] at 0
+[a.b] on [a\nb] -> no match
+[a|ab] on [ab] -> [a] at 0
+[ab|a] on [ab] -> [ab] at 0
+[a|ab|abc] on [abc] -> [a] at 0
+[(a|ab)c] on [abc] -> [abc] at 0
+[foo|bar|baz] on [xbarz] -> [bar] at 1
+[a|ab] on [ab] -> match [a], full [ab], is_match yes
+[a|ab] on [abc] -> match [a], full -, is_match yes
+[ab|a] on [ab] -> match [ab], full [ab], is_match yes
+[a+] on [aa] -> [aa] at 0
+[a+?] on [aa] -> [a] at 0
+[a*?] on [aaa] -> [] at 0
+[a*] on [aaa] -> [aaa] at 0
+[a{3}] on [aaaa] -> [aaa] at 0
+[a{3}] on [aa] -> no match
+[a{2,}] on [aaaa] -> [aaaa] at 0
+[a{2,3}] on [aaaa] -> [aaa] at 0
+[a{2,3}?] on [aaaa] -> [aa] at 0
+[a{0,2}] on [aaa] -> [aa] at 0
+[a{0}] on [aaa] -> [] at 0
+[a{,3}] on [a{,3}] -> [a{,3}] at 0
+[a}] on [a}] -> [a}] at 0
+[<.+>] on [<a><b>] -> [<a><b>] at 0
+[<.+?>] on [<a><b>] -> [<a>] at 0
+[(ab)+] on [ababab] -> [ababab] at 0
+[(ab)*] on [abab] -> [abab] at 0
+[(a|b)+c] on [ababc] -> [ababc] at 0
+[(?i)abc] on [ABC] -> [ABC] at 0
+[(?i)abc] on [abc] -> [abc] at 0
+[(?i)[a-z]+] on [AbC] -> [AbC] at 0
+[(?i)(?:AB)+] on [abAB] -> [abAB] at 0
+[(?i)a(?i)b] on [AB] -> [AB] at 0
+[(?i)(a)] on [A] -> [A] at 0
+[(?i)(?-i:a)b] on [Ab] -> does not compile
+[(?s).+] on [a\nb] -> [a\nb] at 0
+[(?im)^a$] on [A\nb] -> [A] at 0
+[foo(?=bar)] on [foobar] -> [foo] at 0
+[foo(?!bar)] on [foobar] -> no match
+[(?=bar)foo] on [barfoo] -> no match
+[(?!x)] on [abc] -> [] at 0
+[foo(?<=foo)bar] on [foobar] -> [foobar] at 0
+[(?<!x)bar] on [bar] -> [bar] at 0
+[(?<=a)b] on [ab] -> [b] at 1
+[(?<=ab)c] on [abc] -> [c] at 2
+[\d+(?=%)] on [50%] -> [50] at 0
+[(?!b)(?!c)a] on [ad] -> [a] at 0
+[(?<=a|ab)c] on [abc] -> does not compile
+search_at: 123 123 none none
+match_at:  12 none none
+anchored:  none none some
+escape: a\.b\*c\ d
+escape: x\x09y
+[[a] on [a] -> does not compile
+[(ab] on [ab] -> does not compile
+[ab)] on [ab] -> does not compile
+[*a] on [a] -> does not compile
+[a**] on [a] -> does not compile
+[a*+] on [a] -> does not compile
+[a\] on [a] -> does not compile
+[a\q] on [aq] -> does not compile
+[a{2,x}] on [a] -> does not compile
+[a{5,2}] on [a] -> does not compile
+[a{1,2000}] on [a] -> does not compile
+[(?<=a+)b] on [aab] -> does not compile
+[(?=(a))a] on [a] -> does not compile
+[(?P<n>a)] on [a] -> does not compile
+[(?<n>a)(?<n>b)] on [ab] -> does not compile
+[(?<1n>a)] on [a] -> does not compile
+[(?<>a)] on [a] -> does not compile
+[(?q)a] on [a] -> does not compile
+[(?i)(?-i:a)] on [a] -> does not compile
+[[[:foo:]]] on [a] -> does not compile
+[[z-a]] on [a] -> does not compile
+[[a-]] on [a] -> [a] at 0
+[\x{110000}] on [a] -> does not compile
+[\x{ d}] on [a] -> does not compile
+[\x{41] on [a] -> does not compile
+[\xZZ] on [a] -> does not compile
+[\1] on [a] -> does not compile
+[(a)\1] on [aa] -> does not compile
+1000 reps: 
+1001 reps: a repetition count must be at most 1000 at byte 7
+too many instructions: the pattern needs more than 4096 instructions
+200 groups: 
+201 groups: more than 200 capture groups
+32 lookarounds: 
+33 lookarounds: more than 32 lookarounds in one pattern
+nesting  50: 
+nesting 200: 
+nesting 201: pattern nested more than 200 deep at byte 603
+none for a{1001}: yes
+blank compiles: yes
+blank matches at: 0
