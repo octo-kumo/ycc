@@ -6302,14 +6302,76 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
 
 /* ── control flow ─────────────────────────────────────────────────────── */
 
+/* Is `t` a type whose == / < / <= ... is one `cmp` of two machine words?
+   The numeric fall-through in gen_bin_rest is what answers those, so this is
+   the complement of the shapes it sends elsewhere: a float (ucomisd, where
+   unordered decides the flags and a NaN must stay a NaN), a string
+   (y_str_eq / y_str_cmp), an array or record (structural), a map, and an
+   option whose payload is compared (gen_eq_opt -- `x == none` is a plain test
+   and is left to the slow path rather than special-cased here). */
+int cmp_word(Yv *t) {
+    long k = yv_l(yr_get(t, "k"));
+    return k == K_tlong || k == K_tbyte || k == K_tbool || k == K_tptr;
+}
+
+/* The jcc that takes the FALSE edge of `node` when it is a plain integer
+   comparison -- the instruction a branch needs anyway -- or "" when the
+   condition is anything else.
+
+   Driven by the operator, never by matching the text of an emitted setcc: the
+   materialisation and the branch can disagree (ucomisd sets ZF/PF/CF for an
+   unordered compare, a structural == is a call), and the emitter may change how
+   a bool is built without this going stale. Each jcc is the negation of its
+   setcc form: `<` is setl, so its false edge is jge. */
+Yv *int_cmp_jcc(Yv *st, Yv *node) {
+    Yv *jcc = ys("");
+    if (yv_l(yr_get(node, "k")) == K_bin) {
+        Yv *bin = node;
+        Yv *op = yr_get(bin, "op");
+        if (cmp_word(infer(st, yr_get(bin, "l")))
+            && cmp_word(infer(st, yr_get(bin, "r")))) {
+            if (ys_eq_lit(op, "<")) { jcc = ys("jge"); }
+            else if (ys_eq_lit(op, ">")) { jcc = ys("jle"); }
+            else if (ys_eq_lit(op, "<=")) { jcc = ys("jg"); }
+            else if (ys_eq_lit(op, ">=")) { jcc = ys("jl"); }
+            else if (ys_eq_lit(op, "==")) { jcc = ys("jne"); }
+            else if (ys_eq_lit(op, "!=")) { jcc = ys("je"); }
+            ;
+        }
+        ;
+    }
+    return jcc;
+}
+
+/* The operands the way the numeric path emits them -- left into %rax, right
+   into %rcx -- so the `cmp %rcx, %rax` that follows reads left - right and the
+   same setcc/jcc forms apply. */
+Yv *gen_cmp_flags(Yv *st, Yv *node) {
+    st = gen(st, yr_get(node, "l"));
+    st = emit(st, ys("    push %rax"));
+    st = gen(st, yr_get(node, "r"));
+    st = emit(st, ys("    mov %rax, %rcx"));
+    st = emit(st, ys("    pop %rax"));
+    return emit(st, ys("    cmp %rcx, %rax"));
+}
+
 Yv *gen_if(Yv *st, Yv *node) {
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = gen(st, yr_get(node, "cond"));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(r1, "lbl")));
+    Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    if (yv_len(jcc) > 0) {
+        /* A comparison branches on the flags it has just set: the bool is
+           never built. `setcc; movzbq; test; jcc` (four instructions) becomes
+           `cmp; jcc` (two) -- 3,049 such sites in ycc's own output. */
+        st = gen_cmp_flags(st, yr_get(node, "cond"));
+        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), yr_get(r1, "lbl"))));
+    } else {
+        st = gen(st, yr_get(node, "cond"));
+        st = emit(st, ys("    test %rax, %rax"));
+        st = emit(st, ys_cat(ys("    jz "), yr_get(r1, "lbl")));
+    }
     st = gen(st, yr_get(node, "then"));
     if (yv_b(yr_get(node, "has_else"))) {
         st = emit(st, ys_cat(ys("    jmp "), yr_get(r2, "lbl")));
@@ -6328,9 +6390,15 @@ Yv *gen_while(Yv *st, Yv *node) {
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
-    st = gen(st, yr_get(node, "cond"));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
+    Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    if (yv_len(jcc) > 0) {
+        st = gen_cmp_flags(st, yr_get(node, "cond"));
+        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), yr_get(r2, "lbl"))));
+    } else {
+        st = gen(st, yr_get(node, "cond"));
+        st = emit(st, ys("    test %rax, %rax"));
+        st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
+    }
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
@@ -6351,9 +6419,15 @@ Yv *gen_for(Yv *st, Yv *node) {
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
-    st = gen(st, yr_get(node, "cond"));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
+    Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    if (yv_len(jcc) > 0) {
+        st = gen_cmp_flags(st, yr_get(node, "cond"));
+        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), yr_get(r2, "lbl"))));
+    } else {
+        st = gen(st, yr_get(node, "cond"));
+        st = emit(st, ys("    test %rax, %rax"));
+        st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
+    }
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
     st = gen(st, yr_get(node, "step"));
@@ -6567,15 +6641,24 @@ Yv *gen_tail(Yv *st, Yv *node) {
         }
         return st;
     } else if (yv_l(k) == K_kw_if) {
-        st = gen(st, yr_get(node, "cond"));
-        st = emit(st, ys("    test %rax, %rax"));
+        Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+        if (yv_len(jcc) == 0) {
+            st = gen(st, yr_get(node, "cond"));
+        }
         Yv *rl1 = next_loc(st);
         st = yr_get(rl1, "st");
         Yv *lelse = yr_get(rl1, "lbl");
         Yv *rl2 = next_loc(st);
         st = yr_get(rl2, "st");
         Yv *lend = yr_get(rl2, "lbl");
-        st = emit(st, ys_cat(ys("    jz "), lelse));
+        if (yv_len(jcc) > 0) {
+            /* the flags come from the comparison itself (see int_cmp_jcc) */
+            st = gen_cmp_flags(st, yr_get(node, "cond"));
+            st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lelse)));
+        } else {
+            st = emit(st, ys("    test %rax, %rax"));
+            st = emit(st, ys_cat(ys("    jz "), lelse));
+        }
         st = gen_tail(st, yr_get(node, "then"));
         if (yv_b(yr_get(node, "has_else"))) {
             st = emit(st, ys_cat(ys("    jmp "), lend));

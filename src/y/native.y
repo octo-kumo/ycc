@@ -5164,14 +5164,73 @@ def gen_direct(st: EmitSt, node: Call, name: str) -> EmitSt {
 
 // ── control flow ───────────────────────────────────────────────────────
 
+// Is `t` a type whose == / < / <= ... is one `cmp` of two machine words?
+// The numeric fall-through in gen_bin_rest is what answers those, so this is
+// the complement of the shapes it sends elsewhere: a float (ucomisd, where
+// unordered decides the flags and a NaN must stay a NaN), a string
+// (y_str_eq / y_str_cmp), an array or record (structural), a map, and an
+// option whose payload is compared (gen_eq_opt -- `x == none` is a plain test
+// and is left to the slow path rather than special-cased here).
+def cmp_word(t: Type) -> bool {
+    t.k == K.tlong || t.k == K.tbyte || t.k == K.tbool || t.k == K.tptr
+};
+
+// The jcc that takes the FALSE edge of `node` when it is a plain integer
+// comparison -- the instruction a branch needs anyway -- or "" when the
+// condition is anything else.
+//
+// Driven by the operator, never by matching the text of an emitted setcc: the
+// materialisation and the branch can disagree (ucomisd sets ZF/PF/CF for an
+// unordered compare, a structural == is a call), and the emitter may change how
+// a bool is built without this going stale. Each jcc is the negation of its
+// setcc form: `<` is setl, so its false edge is jge.
+def int_cmp_jcc(st: EmitSt, node: Node) -> str {
+    let jcc = "";
+    if (node.k == K.bin) {
+        let bin: Bin = node;
+        let op = bin.op;
+        if (cmp_word(infer(st, bin.l)) && cmp_word(infer(st, bin.r))) {
+            if (op == "<") { jcc = "jge"; }
+            else if (op == ">") { jcc = "jle"; }
+            else if (op == "<=") { jcc = "jg"; }
+            else if (op == ">=") { jcc = "jl"; }
+            else if (op == "==") { jcc = "jne"; }
+            else if (op == "!=") { jcc = "je"; };
+        };
+    };
+    jcc
+};
+
+// The operands the way the numeric path emits them -- left into %rax, right
+// into %rcx -- so the `cmp %rcx, %rax` that follows reads left - right and the
+// same setcc/jcc forms apply.
+def gen_cmp_flags(st: EmitSt, node: Bin) -> EmitSt {
+    st = gen(st, node.l);
+    st = emit(st, "    push %rax");
+    st = gen(st, node.r);
+    st = emit(st, "    mov %rax, %rcx");
+    st = emit(st, "    pop %rax");
+    emit(st, "    cmp %rcx, %rax")
+};
+
 def gen_if(st: EmitSt, node: If) -> EmitSt {
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
     st = r2.st;
-    st = gen(st, node.cond);
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + r1.lbl);
+    let jcc = int_cmp_jcc(st, node.cond);
+    if (jcc != "") {
+        // A comparison branches on the flags it has just set: the bool is
+        // never built. `setcc; movzbq; test; jcc` (four instructions) becomes
+        // `cmp; jcc` (two) -- 3,049 such sites in ycc's own output.
+        let cbin: Bin = node.cond;
+        st = gen_cmp_flags(st, cbin);
+        st = emit(st, "    " + jcc + " " + r1.lbl);
+    } else {
+        st = gen(st, node.cond);
+        st = emit(st, "    test %rax, %rax");
+        st = emit(st, "    jz " + r1.lbl);
+    };
     st = gen(st, node.then);
     if (node.has_else) {
         st = emit(st, "    jmp " + r2.lbl);
@@ -5190,9 +5249,16 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
     let r2 = next_loc(st);
     st = r2.st;
     st = emit(st, r1.lbl + ":");
-    st = gen(st, node.cond);
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + r2.lbl);
+    let jcc = int_cmp_jcc(st, node.cond);
+    if (jcc != "") {
+        let cbin: Bin = node.cond;
+        st = gen_cmp_flags(st, cbin);
+        st = emit(st, "    " + jcc + " " + r2.lbl);
+    } else {
+        st = gen(st, node.cond);
+        st = emit(st, "    test %rax, %rax");
+        st = emit(st, "    jz " + r2.lbl);
+    };
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
     st = emit(st, "    jmp " + r1.lbl);
@@ -5213,9 +5279,16 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
     let r2 = next_loc(st);
     st = r2.st;
     st = emit(st, r1.lbl + ":");
-    st = gen(st, node.cond);
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + r2.lbl);
+    let jcc = int_cmp_jcc(st, node.cond);
+    if (jcc != "") {
+        let cbin: Bin = node.cond;
+        st = gen_cmp_flags(st, cbin);
+        st = emit(st, "    " + jcc + " " + r2.lbl);
+    } else {
+        st = gen(st, node.cond);
+        st = emit(st, "    test %rax, %rax");
+        st = emit(st, "    jz " + r2.lbl);
+    };
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
     st = gen(st, node.step);
@@ -5424,15 +5497,23 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
         st
     } else if (k == K.kw_if) {
         let branch: If = node;
-        st = gen(st, branch.cond);
-        st = emit(st, "    test %rax, %rax");
+        let jcc = int_cmp_jcc(st, branch.cond);
+        if (jcc == "") { st = gen(st, branch.cond); }
         let rl1 = next_loc(st);
         st = rl1.st;
         let lelse = rl1.lbl;
         let rl2 = next_loc(st);
         st = rl2.st;
         let lend = rl2.lbl;
-        st = emit(st, "    jz " + lelse);
+        if (jcc != "") {
+            // the flags come from the comparison itself (see int_cmp_jcc)
+            let cbin: Bin = branch.cond;
+            st = gen_cmp_flags(st, cbin);
+            st = emit(st, "    " + jcc + " " + lelse);
+        } else {
+            st = emit(st, "    test %rax, %rax");
+            st = emit(st, "    jz " + lelse);
+        };
         st = gen_tail(st, branch.then);
         if (branch.has_else) {
             st = emit(st, "    jmp " + lend);
