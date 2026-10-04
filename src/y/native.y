@@ -9601,22 +9601,45 @@ def link_locs(b: str, off: long) -> str {
     }
 };
 
-// One unit's rodata entries as text. String entries are exactly [label,
-// len, escaped]; record-type descriptors (ty_desc) are [label, canonical
-// form, quads...]: one per label in the program (ty_seen, emptied by
-// link_units), and two different forms under one label stop the link.
-def rodata_pieces(pieces: [str], allrod: [[str]]) -> [str] {
+// One unit's rodata entries as text, keeping only the blocks a kept body
+// reaches: `refs` is the same union `shake_refs` gets for arch_consts (the
+// kept bodies' own references plus the kept prelude's), so a literal with no
+// `lea` pointing at it is dead -- measured at 29-92% of a program's rodata,
+// and almost always the same 308 bytes, the std runtime's error strings and
+// format tables, in every program that does not happen to call those
+// functions.
+//
+// String entries are exactly [label, len, escaped]; record-type descriptors
+// (ty_desc) are [label, canonical form, quads...]: one per label in the
+// program (ty_seen, emptied by link_units), and two different forms under one
+// label stop the link -- a check that stays over EVERY descriptor, reachable
+// or not, since two shapes for one type is a program error either way.
+//
+// The membership test is asm's hashed labmap, not name_in: 6,727 literals
+// against ~30,000 refs would be 200 million string compares. Twice the refs,
+// because labmap probes linearly and a full table makes every insert walk half
+// the slots.
+def rodata_pieces(pieces: [str], allrod: [[str]], refs: [str]) -> [str] {
+    let m = asm.labmap_new(len(refs) * 2 + 64);
+    let ri = 0;
+    while (ri < len(refs)) {
+        let r = asm.labmap_put(m, refs[ri], 1, 0);
+        m = r.map;
+        ri = ri + 1;
+    };
     let s2 = 0;
     while (s2 < len(allrod)) {
         let pair = allrod[s2];
+        let lbl: str = pair[0];
         if (len(pair) == 3) {
-            pieces += pair[0] + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + pair[2] + "\"\n";
+            if (asm.labmap_get(m, lbl).sec > 0) {
+                pieces += lbl + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + pair[2] + "\"\n";
+            }
         } else {
-            let lbl: str = pair[0];
             let form: str = pair[1];
             let added = tyset_add(lbl, form);
             if (added < 0) { ty_collision(lbl, form); };
-            if (added > 0) {
+            if (added > 0 && asm.labmap_get(m, lbl).sec > 0) {
                 // a descriptor's address is its type's tag: one byte
                 // makes it an address of its own
                 pieces += lbl + ":\n.zero 1\n";
@@ -9815,19 +9838,24 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     };
     let consts_text = shake_refs(arch.arch_consts(), const_refs);
     asm = asm + arch.arch_rodata() + consts_text;
-    // every unit's rodata and globals, in link order
+    // every unit's rodata and globals, in link order. The rodata of every
+    // unit goes through ONE rodata_pieces call: the reachability set is the
+    // same for all of them, and building the map per unit cost 4% of a
+    // self-compile (a hash map filled to load factor 1 probes linearly, so
+    // five or six builds of a 40,000-entry set are quadratic).
     tyset_reset();
-    let rodpieces: [str] = [];
+    let allrod: [[str]] = [];
     let gls: [str] = [];
     let ju = 0;
     while (ju < nu) {
         let u = units[ju];
-        rodpieces = rodata_pieces(rodpieces, u.rodata);
+        allrod += u.rodata;
         gls += u.globals;
         ju = ju + 1;
     };
-    rodpieces = rodata_pieces(rodpieces, prog.rodata);
+    allrod += prog.rodata;
     gls += prog.globals;
+    let rodpieces = rodata_pieces([], allrod, const_refs);
     asm = asm + join(rodpieces, "");
     // .bss: the allocator's cells when the kept prelude still uses
     // them, then one cell per global.

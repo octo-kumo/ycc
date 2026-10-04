@@ -510,7 +510,7 @@ Yv *lit_decode(Yv *c);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                  Yv *name, long base, Yv *xt);
 Yv *link_locs(Yv *body, long file);
-Yv *rodata_pieces(Yv *pieces, Yv *allrod);
+Yv *rodata_pieces(Yv *pieces, Yv *allrod, Yv *refs);
 Yv *link_units(Yv *std, Yv *deps, Yv *prog);
 Yv *pack_version(void);
 Yv *obj_version(void);
@@ -11520,28 +11520,55 @@ Yv *link_locs(Yv *body, long off) {
  * len, escaped]; record-type descriptors (ty_desc) are [label, canonical
  * form, quads...]: one per label in the program (ty_seen, emptied by
  * link_units), and two different forms under one label stop the link. */
-Yv *rodata_pieces(Yv *pieces, Yv *allrod) {
+Yv *rodata_pieces(Yv *pieces, Yv *allrod, Yv *refs) {
+    /* One unit's rodata entries as text, keeping only the blocks a kept body
+       reaches: `refs` is the same union `shake_refs` gets for arch_consts
+       (the kept bodies' own references plus the kept prelude's), so a literal
+       with no `lea` pointing at it is dead -- measured at 29-92% of a
+       program's rodata, and almost always the same 308 bytes, the std
+       runtime's error strings and format tables, in every program that does
+       not happen to call those functions.
+
+       String entries are exactly [label, len, escaped]; record-type
+       descriptors (ty_desc) are [label, canonical form, quads...]: one per
+       label in the program (ty_seen, emptied by link_units), and two different
+       forms under one label stop the link -- a check that stays over EVERY
+       descriptor, reachable or not, since two shapes for one type is a
+       program error either way.
+
+       The membership test is asm's hashed labmap, not name_in: 6,727
+       literals against ~30,000 refs would be 200 million string compares.
+       Twice the refs, because labmap probes linearly and a full table makes
+       every insert walk half the slots. */
+    Yv *m = labmap_new(yv_len(refs) * 2 + 64);
+    long ri = 0;
+    while (ri < yv_len(refs)) {
+        Yv *r = labmap_put(m, ya_get(refs, ri), 1, 0);
+        m = yr_get(r, "map");
+        ri = ri + 1;
+    }
     long s2 = 0;
     while (s2 < yv_len(allrod)) {
         Yv *pair = ya_get(allrod, s2);
+        Yv *lbl = ya_get(pair, 0);
         if (yv_len(pair) == 3) {
-            Yv *entry =
-                ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ya_get(pair, 0),
-                                                     ys(":\n.quad ")),
-                                             ys_tostring(ya_get(pair, 1))),
-                                      ys("\n.string \"")),
-                               ya_get(pair, 2)),
-                       ys("\"\n"));
-            pieces = ya_push(pieces, entry);
-            ;
+            if (yv_l(yr_get(labmap_get(m, lbl), "sec")) > 0) {
+                Yv *entry =
+                    ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(lbl, ys(":\n.quad ")),
+                                                 ys_tostring(ya_get(pair, 1))),
+                                          ys("\n.string \"")),
+                                   ya_get(pair, 2)),
+                           ys("\"\n"));
+                pieces = ya_push(pieces, entry);
+                ;
+            }
         } else {
-            Yv *lbl = ya_get(pair, 0);
             Yv *form = ya_get(pair, 1);
             long added = tyset_add(lbl, form);
             if (added < 0) {
                 ty_collision(lbl, form);
             }
-            if (added > 0) {
+            if (added > 0 && yv_l(yr_get(labmap_get(m, lbl), "sec")) > 0) {
                 /* a descriptor's address is its type's tag: one byte
                  * makes it an address of its own */
                 pieces = ya_push(pieces, ys_cat(lbl, ys(":\n.zero 1\n")));
@@ -11795,14 +11822,23 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     }
     Yv *consts_text = shake_refs(arch_consts(), const_refs);
     asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
-    /* every unit's rodata and globals, in link order */
+    /* every unit's rodata and globals, in link order. The rodata of every unit
+       goes through ONE rodata_pieces call: the reachability set is the same
+       for all of them, and building the map per unit cost 4% of a
+       self-compile (a hash map filled to load factor 1 probes linearly, so
+       five or six builds of a 40,000-entry set are quadratic). */
     tyset_reset();
-    Yv *rodpieces = yav(0);
+    Yv *allrod = yav(0);
     Yv *gls = yav(0);
     long ju = 0;
     while (ju < nu) {
         Yv *u = ya_get(units, ju);
-        rodpieces = rodata_pieces(rodpieces, yr_get(u, "rodata"));
+        Yv *ur = yr_get(u, "rodata");
+        long ri2 = 0;
+        while (ri2 < yv_len(ur)) {
+            allrod = ya_push(allrod, ya_get(ur, ri2));
+            ri2 = ri2 + 1;
+        }
         Yv *ug = yr_get(u, "globals");
         long gi = 0;
         while (gi < yv_len(ug)) {
@@ -11811,13 +11847,19 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         }
         ju = ju + 1;
     }
-    rodpieces = rodata_pieces(rodpieces, yr_get(prog, "rodata"));
+    Yv *progrod = yr_get(prog, "rodata");
+    long pri = 0;
+    while (pri < yv_len(progrod)) {
+        allrod = ya_push(allrod, ya_get(progrod, pri));
+        pri = pri + 1;
+    }
     Yv *pg = yr_get(prog, "globals");
     long pgi = 0;
     while (pgi < yv_len(pg)) {
         gls = ya_push(gls, ya_get(pg, pgi));
         pgi = pgi + 1;
     }
+    Yv *rodpieces = rodata_pieces(yav(0), allrod, const_refs);
     asm_ = ys_cat(asm_, ys_join(rodpieces, ys("")));
     Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
     if (yv_len(gls) > 0 || yv_len(heap_text) > 0) {
