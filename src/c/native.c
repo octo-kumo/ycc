@@ -6384,6 +6384,14 @@ Yv *gen_if(Yv *st, Yv *node) {
     }
 }
 
+/* A loop's value is void (types.y: every loop kind's typeof is
+ * tvoid), so nothing can read what the merge label leaves in %rax:
+ * `let x = while (...) {...}`, `print(while ...)`,
+ * `let z: long = if (c) { while ... } else {2}` and a function
+ * whose body's last statement is a loop are all checker errors
+ * ("cannot bind a void value", "got void"). So the merge label
+ * needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+ * output, 586 of them in statement position. */
 Yv *gen_while(Yv *st, Yv *node) {
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
@@ -6402,8 +6410,7 @@ Yv *gen_while(Yv *st, Yv *node) {
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
-    return emit(st, ys("    xor %eax, %eax"));
+    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
 }
 
 /* ── counted loops ──────────────────────────────────────────────────────
@@ -6411,6 +6418,14 @@ Yv *gen_while(Yv *st, Yv *node) {
  * body, a step, and a jump back. The loop variable is a normal local slot,
  * so nothing new is needed at runtime. */
 
+/* A loop's value is void (types.y: every loop kind's typeof is
+ * tvoid), so nothing can read what the merge label leaves in %rax:
+ * `let x = while (...) {...}`, `print(while ...)`,
+ * `let z: long = if (c) { while ... } else {2}` and a function
+ * whose body's last statement is a loop are all checker errors
+ * ("cannot bind a void value", "got void"). So the merge label
+ * needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+ * output, 586 of them in statement position. */
 Yv *gen_for(Yv *st, Yv *node) {
     /* for (init; cond; step) body */
     st = gen(st, yr_get(node, "init"));
@@ -6432,10 +6447,17 @@ Yv *gen_for(Yv *st, Yv *node) {
     st = gen_loc_loop(st, node);
     st = gen(st, yr_get(node, "step"));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
-    return emit(st, ys("    xor %eax, %eax"));
+    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
 }
 
+/* A loop's value is void (types.y: every loop kind's typeof is
+ * tvoid), so nothing can read what the merge label leaves in %rax:
+ * `let x = while (...) {...}`, `print(while ...)`,
+ * `let z: long = if (c) { while ... } else {2}` and a function
+ * whose body's last statement is a loop are all checker errors
+ * ("cannot bind a void value", "got void"). So the merge label
+ * needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+ * output, 586 of them in statement position. */
 Yv *gen_forrange(Yv *st, Yv *node) {
     /* for (x in lo..hi) body — half-open: lo inclusive, hi exclusive.
      * Slot layout: [var][limit]; the limit is evaluated once. */
@@ -6477,10 +6499,17 @@ Yv *gen_forrange(Yv *st, Yv *node) {
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(voff)),
                          ys("(%rbp)")));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
-    return emit(st, ys("    xor %eax, %eax"));
+    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
 }
 
+/* A loop's value is void (types.y: every loop kind's typeof is
+ * tvoid), so nothing can read what the merge label leaves in %rax:
+ * `let x = while (...) {...}`, `print(while ...)`,
+ * `let z: long = if (c) { while ... } else {2}` and a function
+ * whose body's last statement is a loop are all checker errors
+ * ("cannot bind a void value", "got void"). So the merge label
+ * needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+ * output, 586 of them in statement position. */
 Yv *gen_foreach(Yv *st, Yv *node) {
     /* foreach (x in arr) body. Slots: [x][arr][i]. The array is evaluated
      * once; `x` is refreshed from arr[i] at the top of every iteration. */
@@ -6538,8 +6567,7 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
                          ys("(%rbp)")));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
-    return emit(st, ys("    xor %eax, %eax"));
+    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
 }
 
 /* ── tail calls ─────────────────────────────────────────────────────────
@@ -7326,7 +7354,11 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
                     st = yr_get(dr, "st");
                     st = gen_copy_rec(st, from, to, yr_get(dr, "lbl"));
                 }
-                st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+                /* not on the last arm: that one falls through into `done:` */
+                if (i < yv_len(ms) - 1) {
+                    st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+                    ;
+                }
                 i = i + 1;
             }
             return emit(st, ys_cat(yr_get(done, "lbl"), ys(":")));
@@ -9501,7 +9533,11 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
         while (e < yv_len(lbls)) {
             st = emit(st, ys_cat(ya_get(lbls, e), ys(":")));
             st = gen_slot_move(st, yv_l(ya_get(ds, e)), 0);
-            st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+            /* not on the last arm: that one falls through into `done:` */
+            if (e < yv_len(lbls) - 1) {
+                st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+                ;
+            }
             e = e + 1;
         }
         return emit(st, ys_cat(yr_get(done, "lbl"), ys(":")));

@@ -5243,6 +5243,14 @@ def gen_if(st: EmitSt, node: If) -> EmitSt {
     }
 };
 
+// A loop's value is void (types.y: every loop kind's typeof is
+// tvoid), so nothing can read what the merge label leaves in %rax:
+// `let x = while (...) {...}`, `print(while ...)`,
+// `let z: long = if (c) { while ... } else {2}` and a function
+// whose body's last statement is a loop are all checker errors
+// ("cannot bind a void value", "got void"). So the merge label
+// needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+// output, 586 of them in statement position.
 def gen_while(st: EmitSt, node: While) -> EmitSt {
     let r1 = next_loc(st);
     st = r1.st;
@@ -5262,8 +5270,7 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
     st = emit(st, "    jmp " + r1.lbl);
-    st = emit(st, r2.lbl + ":");
-    emit(st, "    xor %eax, %eax")
+    emit(st, r2.lbl + ":")
 };
 
 // ── counted loops ──────────────────────────────────────────────────────
@@ -5271,6 +5278,14 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
 // body, a step, and a jump back. The loop variable is a normal local slot,
 // so nothing new is needed at runtime.
 
+// A loop's value is void (types.y: every loop kind's typeof is
+// tvoid), so nothing can read what the merge label leaves in %rax:
+// `let x = while (...) {...}`, `print(while ...)`,
+// `let z: long = if (c) { while ... } else {2}` and a function
+// whose body's last statement is a loop are all checker errors
+// ("cannot bind a void value", "got void"). So the merge label
+// needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+// output, 586 of them in statement position.
 def gen_for(st: EmitSt, node: For) -> EmitSt {
     // for (init; cond; step) body
     st = gen(st, node.init);
@@ -5293,10 +5308,17 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
     st = gen_loc_loop(st, node);
     st = gen(st, node.step);
     st = emit(st, "    jmp " + r1.lbl);
-    st = emit(st, r2.lbl + ":");
-    emit(st, "    xor %eax, %eax")
+    emit(st, r2.lbl + ":")
 };
 
+// A loop's value is void (types.y: every loop kind's typeof is
+// tvoid), so nothing can read what the merge label leaves in %rax:
+// `let x = while (...) {...}`, `print(while ...)`,
+// `let z: long = if (c) { while ... } else {2}` and a function
+// whose body's last statement is a loop are all checker errors
+// ("cannot bind a void value", "got void"). So the merge label
+// needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+// output, 586 of them in statement position.
 def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     // for (x in lo..hi) body — half-open: lo inclusive, hi exclusive.
     // Slot layout: [var][limit]; the limit is evaluated once.
@@ -5329,10 +5351,17 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     st = emit(st, "    inc %rax");
     st = emit(st, "    mov %rax, " + tostring(voff) + "(%rbp)");
     st = emit(st, "    jmp " + r1.lbl);
-    st = emit(st, r2.lbl + ":");
-    emit(st, "    xor %eax, %eax")
+    emit(st, r2.lbl + ":")
 };
 
+// A loop's value is void (types.y: every loop kind's typeof is
+// tvoid), so nothing can read what the merge label leaves in %rax:
+// `let x = while (...) {...}`, `print(while ...)`,
+// `let z: long = if (c) { while ... } else {2}` and a function
+// whose body's last statement is a loop are all checker errors
+// ("cannot bind a void value", "got void"). So the merge label
+// needs no `xor %eax, %eax` at all -- 1,235 of them in ycc's own
+// output, 586 of them in statement position.
 def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     // foreach (x in arr) body. Slots: [x][arr][i]. The array is evaluated
     // once; `x` is refreshed from arr[i] at the top of every iteration.
@@ -5379,8 +5408,7 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     st = emit(st, "    inc %rax");
     st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
     st = emit(st, "    jmp " + r1.lbl);
-    st = emit(st, r2.lbl + ":");
-    emit(st, "    xor %eax, %eax")
+    emit(st, r2.lbl + ":")
 };
 
 // ── tail calls ─────────────────────────────────────────────────────────
@@ -6075,7 +6103,8 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
                     st = dr.st;
                     st = gen_copy_rec(st, from, to, dr.lbl);
                 };
-                st = emit(st, "    jmp " + done.lbl);
+                // not on the last arm: that one falls through into `done:`
+                if (i < len(ms) - 1) { st = emit(st, "    jmp " + done.lbl); };
                 i = i + 1;
             };
             emit(st, done.lbl + ":")
@@ -7900,7 +7929,8 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
         while (e < len(lbls)) {
             st = emit(st, lbls[e] + ":");
             st = gen_slot_move(st, ds[e], false);
-            st = emit(st, "    jmp " + done.lbl);
+            // not on the last arm: that one falls through into `done:`
+            if (e < len(lbls) - 1) { st = emit(st, "    jmp " + done.lbl); };
             e = e + 1;
         };
         emit(st, done.lbl + ":")
