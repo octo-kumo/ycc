@@ -60,14 +60,15 @@ def rn_push(st: RnSt) -> RnSt {
     { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 
+// One slice, not one array per frame: rn_pop used to push the frames it kept
+// one at a time, so a scope exit allocated an array per frame above it --
+// quadratic in a program's nesting depth, in allocations (601 MB at 4 000
+// levels). A slice is one allocation and one copy. (It stays a copy: the stack
+// is shared between a unit and the nested unit rn_fresh starts, so emptying a
+// frame in place would empty it for both.)
 def rn_pop(st: RnSt) -> RnSt {
-    let scopes: [[RnBind]] = [];
     let old = st.scopes;
-    let i = 0;
-    while (i < len(old) - 1) {
-        scopes += [old[i]];
-        i = i + 1;
-    };
+    let scopes: [[RnBind]] = old[0:len(old) - 1];
     { scopes: scopes, n: st.n, tys: st.tys, dfl: st.dfl }
 };
 

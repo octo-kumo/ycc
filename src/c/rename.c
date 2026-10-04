@@ -60,14 +60,17 @@ Yv *rn_push(Yv *st) {
     return yr(4, "scopes", scopes, "n", yr_get(st, "n"), "tys", yr_get(st, "tys"), "dfl", yr_get(st, "dfl"));
 }
 
+/* One slice, not one array per frame: rn_pop used to push the frames it kept
+ * one at a time, so a scope exit allocated an array per frame above it --
+ * quadratic in a program's nesting depth, in allocations (601 MB at 4 000
+ * levels). A slice is one allocation and one copy. (It stays a copy: the stack
+ * is shared between a unit and the nested unit rn_fresh starts, so emptying a
+ * frame in place would empty it for both.) */
 Yv *rn_pop(Yv *st) {
-    Yv *scopes = yav(0);
     Yv *old = yr_get(st, "scopes");
-    long i = 0;
-    while (i < yv_len(old) - 1) {
-        scopes = ya_push(scopes, ya_get(old, i));
-        i = i + 1;
-    }
+    /* ya_slice, not ys_slice: this is an array (an empty stack has no frame
+     * to drop, and a clamped slice of it is empty anyway) */
+    Yv *scopes = ya_slice(old, 0, yv_len(old) - 1);
     return yr(4, "scopes", scopes, "n", yr_get(st, "n"), "tys", yr_get(st, "tys"), "dfl", yr_get(st, "dfl"));
 }
 
