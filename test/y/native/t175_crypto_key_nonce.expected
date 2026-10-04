@@ -1,0 +1,40 @@
+aes128 69c4e0d86a7b0430d8cdb78070b4c55a
+aes192 dda97ca4864cdfe06eaf70a0ec0d7191
+aes256 8ea2b7ca516745bfeafc49904b496089
+chacha 9254f381a439c613fb0e9d50afc520fd617bf2096856f821db75
+crypto: a ChaCha20 key must be 32 bytes, 16 given
+chacha key 16 -> 1
+crypto: a ChaCha20 key must be 32 bytes, 31 given
+chacha key 31 -> 1
+crypto: a ChaCha20 key must be 32 bytes, 40 given
+chacha key 40 -> 1
+crypto: a ChaCha20 key must be 32 bytes, 64 given
+chacha key 64 -> 1
+crypto: a ChaCha20 nonce must be 12 bytes, 0 given
+chacha nonce 0 -> 1
+crypto: a ChaCha20 nonce must be 12 bytes, 4 given
+chacha nonce 4 -> 1
+crypto: a ChaCha20 nonce must be 12 bytes, 8 given
+chacha nonce 8 -> 1
+crypto: a ChaCha20 nonce must be 12 bytes, 13 given
+chacha nonce 13 -> 1
+crypto: a ChaCha20 nonce must be 12 bytes, 16 given
+chacha nonce 16 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 0 given
+aes key 0 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 8 given
+aes key 8 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 15 given
+aes key 15 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 20 given
+aes key 20 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 31 given
+aes key 31 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 33 given
+aes key 33 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 64 given
+aes key 64 -> 1
+crypto: an AES key must be 16, 24 or 32 bytes, 15 given
+gcm key 15 -> 1
+crypto: a ChaCha20 key must be 32 bytes, 40 given
+chacha20 key 40 -> 1

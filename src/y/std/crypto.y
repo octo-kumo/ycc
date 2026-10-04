@@ -23,11 +23,19 @@ def arg_error(what: str) -> long {
     0
 };
 
-// An AEAD nonce is 12 bytes -- SP 800-38D fixes GCM's there and RFC 8439
-// ChaCha20-Poly1305's -- and each of the two reads exactly that many.
+// A nonce is 12 bytes -- SP 800-38D fixes GCM's there, RFC 8439
+// ChaCha20's -- and each of the ciphers reads exactly that many.
 def check_nonce(cipher: str, nonce: [byte]) -> long {
     if (len(nonce) != 12) {
         arg_error("a " + cipher + " nonce must be 12 bytes, " + tostring(len(nonce)) + " given");
+    };
+    0
+};
+
+// A key of exactly n bytes.
+def check_key(cipher: str, n: long, key: [byte]) -> long {
+    if (len(key) != n) {
+        arg_error("a " + cipher + " key must be " + tostring(n) + " bytes, " + tostring(len(key)) + " given");
     };
     0
 };
@@ -364,7 +372,11 @@ def qround(x: [long; 16], a: long, b: long, c: long, d: long) {
 };
 
 // The 64-byte ChaCha20 block for key (32 bytes), counter and nonce (12).
+// A longer key would be used truncated and a short one read past its end,
+// so both are refused by name.
 def chacha20_block(key: [byte], counter: long, nonce: [byte]) -> [byte] {
+    check_key("ChaCha20", 32, key);
+    check_nonce("ChaCha20", nonce);
     let s: [long; 16] = [0; 16];
     s[0] = 0x61707865;
     s[1] = 0x3320646e;
@@ -622,8 +634,15 @@ def aes_tables() {
     };
 };
 
-// The round keys of an AES key (16 or 32 bytes), as 32-bit words.
+// The round keys of an AES key (16, 24 or 32 bytes), as 32-bit words.
+// Any other length was silently rounded down to a multiple of four and
+// its tail ignored -- 15 bytes read as 12, and 8 bytes as eight rounds,
+// which is no AES at all -- so it is refused by name (FIPS 197 has
+// nothing else).
 def aes_key(key: [byte]) -> [long] {
+    if (len(key) != 16 && len(key) != 24 && len(key) != 32) {
+        arg_error("an AES key must be 16, 24 or 32 bytes, " + tostring(len(key)) + " given");
+    };
     aes_tables();
     let nk = len(key) / 4;
     let nr = nk + 6;
@@ -801,7 +820,8 @@ def gcm_j0(nonce: [byte], last: long) -> [byte] {
     j
 };
 
-// AES-GCM (key 16 or 32 bytes, nonce 12): the ciphertext, then its tag.
+// AES-GCM (key 16, 24 or 32 bytes, nonce 12): the ciphertext, then its
+// tag.
 def gcm_seal(key: [byte], nonce: [byte], aad: [byte], plain: [byte]) -> [byte] {
     let rk = aes_key(key);
     let ct = gctr(rk, gcm_j0(nonce, 2), plain);
