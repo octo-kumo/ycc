@@ -418,6 +418,8 @@ Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *gen_opassign_arr(Yv *st, Yv *node);
 Yv *gen_idxassign(Yv *st, Yv *node);
 Yv *gen_val_tostr_rax(Yv *st, Yv *t);
+Yv *gen_acc_cat_rax(Yv *st, long aoff);
+Yv *gen_map_repr_rax(Yv *st, Yv *t);
 Yv *gen_arr_tostr_rax(Yv *st, Yv *elty);
 Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s);
 long elem_bytes(Yv *t);
@@ -8337,11 +8339,119 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
         return gen_rec_str_rax(st, t, lay_of(t, t));
     } else if (yv_l(tk) == K_tunion) {
         return gen_union_str_rax(st, t);
+    } else if (yv_l(tk) == K_tmap) {
+        return gen_map_repr_rax(st, t);
     } else {
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_long_tostr"));
         return emit(st, ys("    add $8, %rsp"));
     }
+}
+
+/* acc = acc + <the string in %rax>. */
+Yv *gen_acc_cat_rax(Yv *st, long aoff) {
+    st = emit(st, ys("    mov %rax, %rdx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    push %rax"));
+    st = emit(st, ys("    push %rdx"));
+    st = emit(st, ys("    call y_str_cat"));
+    st = emit(st, ys("    add $16, %rsp"));
+    return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
+                           ys("(%rbp)")));
+}
+
+/* The record address of a map sits in %rax; leave '{"k": v, ...}' -- the same
+ * text tostring() gives it (gen_map_repr builds that loop from nodes; this one
+ * walks the value in hand). A map is the {boxes, keys, vals} record
+ * (gen_maplit), so its two arrays sit at 8 and 16. This arm is what
+ * gen_val_tostr_rax was missing: with the long-to-string fallback there
+ * instead, a map nested in an array, an option or a record printed as its heap
+ * address, which differs every run. */
+Yv *gen_map_repr_rax(Yv *st, Yv *t) {
+    long moff = (yv_l(yr_get(st, "slots")) + 1) * -8;
+    long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
+    long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
+    long koff = (yv_l(yr_get(st, "slots")) + 4) * -8;
+    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+            yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
+            yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
+            yv_long(yv_l(yr_get(st, "slots")) + 4), "self_label",
+            yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
+            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(moff)),
+                         ys("(%rbp)")));
+    st = gen_str_const(st, ys("{"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys("    xor %eax, %eax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    Yv *r1 = next_loc(st);
+    st = yr_get(r1, "st");
+    Yv *r2 = next_loc(st);
+    st = yr_get(r2, "st");
+    Yv *r3 = next_loc(st);
+    st = yr_get(r3, "st");
+    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys("    mov 8(%rdx), %rdx"));
+    st = emit(st, ys("    mov (%rdx), %rcx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    cmp %rcx, %rax"));
+    st = emit(st, ys_cat(ys("    jge "), yr_get(r2, "lbl")));
+    st = emit(st, ys("    test %rax, %rax"));
+    st = emit(st, ys_cat(ys("    jz "), yr_get(r3, "lbl")));
+    st = gen_acc_cat_slot(st, aoff, ys(", "));
+    st = emit(st, ys_cat(yr_get(r3, "lbl"), ys(":")));
+    /* the key, quoted when it is a str (map_key_repr's rule) */
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys("    mov 8(%rdx), %rdx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rcx")));
+    st = emit(st, elem_load(elem_bytes(yr_get(t, "key")), ys("%rdx"),
+                            ys("%rcx"), ys("%rax")));
+    if (yv_l(yr_get(yr_get(t, "key"), "k")) == K_tstr) {
+        /* The key goes to a slot first: appending the opening quote is a call
+         * that leaves its result in %rax, so a key still living there would be
+         * appended twice over instead. */
+        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(koff)),
+                             ys("(%rbp)")));
+        st = gen_acc_cat_slot(st, aoff, ys("\""));
+        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(koff)),
+                             ys("(%rbp), %rax")));
+        st = gen_acc_cat_rax(st, aoff);
+        st = gen_acc_cat_slot(st, aoff, ys("\""));
+        ;
+    } else {
+        st = gen_val_tostr_rax(st, yr_get(t, "key"));
+        st = gen_acc_cat_rax(st, aoff);
+        ;
+    }
+    st = gen_acc_cat_slot(st, aoff, ys(": "));
+    /* the value */
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
+                         ys("(%rbp), %rdx")));
+    st = emit(st, ys("    mov 16(%rdx), %rdx"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rcx")));
+    st = emit(st, elem_load(elem_bytes(yr_get(t, "of")), ys("%rdx"), ys("%rcx"),
+                            ys("%rax")));
+    st = gen_val_tostr_rax(st, yr_get(t, "of"));
+    st = gen_acc_cat_rax(st, aoff);
+    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
+                         ys("(%rbp), %rax")));
+    st = emit(st, ys("    inc %rax"));
+    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
+                         ys("(%rbp)")));
+    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
+    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = gen_acc_cat_slot(st, aoff, ys("}"));
+    return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
+                           ys("(%rbp), %rax")));
 }
 
 /* Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()

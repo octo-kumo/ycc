@@ -1,0 +1,18 @@
+in array: [{"k": 1, "j": 26}, {"k": 1, "j": 26}]
+in fixed array: [{"k": 1, "j": 26}, {"k": 1, "j": 26}]
+in option: {"k": 1, "j": 26}
+in array of options: [{"k": 1, "j": 26}, none]
+alone: {"k": 1, "j": 26}
+empty: {} [{}]
+long keys: [{1: one, 2: two}, {1: one, 2: two}]
+deep: {"outer": [{"k": 1, "j": 26}, {"k": 1, "j": 26}]}
+map of maps: {"a": {"b": 1}}
+map of options: {"p": 1, "q": none}
+map of arrays: {"xs": [1, 2], "ys": [3]}
+map of bytes: {"raw": b'\x01\x02\xff'}
+map of long-keyed maps: {"outer": {1: one, 2: two}}
+true
+true
+true
+1 26 two
+true true

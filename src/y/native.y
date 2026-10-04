@@ -6856,11 +6856,98 @@ def gen_val_tostr_rax(st: EmitSt, t: Type) -> EmitSt {
         gen_rec_str_rax(st, t, lay_of(t, t))
     } else if (tk == K.tunion) {
         gen_union_str_rax(st, t)
+    } else if (tk == K.tmap) {
+        gen_map_repr_rax(st, t)
     } else {
         st = emit(st, "    push %rax");
         st = emit(st, "    call y_long_tostr");
         emit(st, "    add $8, %rsp")
     }
+};
+
+// acc = acc + <the string in %rax>.
+def gen_acc_cat_rax(st: EmitSt, aoff: long) -> EmitSt {
+    st = emit(st, "    mov %rax, %rdx");
+    st = emit(st, "    mov " + tostring(aoff) + "(%rbp), %rax");
+    st = emit(st, "    push %rax");
+    st = emit(st, "    push %rdx");
+    st = emit(st, "    call y_str_cat");
+    st = emit(st, "    add $16, %rsp");
+    emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)")
+};
+
+// The record address of a map sits in %rax; leave '{"k": v, ...}' -- the same
+// text tostring() gives it (gen_map_repr builds that loop from nodes; this one
+// walks the value in hand). A map is the {boxes, keys, vals} record
+// (gen_maplit), so its two arrays sit at 8 and 16. This arm is what
+// gen_val_tostr_rax was missing: with the long-to-string fallback there
+// instead, a map nested in an array, an option or a record printed as its heap
+// address, which differs every run.
+def gen_map_repr_rax(st: EmitSt, t: Type) -> EmitSt {
+    let moff = (st.slots + 1) * -8;
+    let aoff = (st.slots + 2) * -8;
+    let ioff = (st.slots + 3) * -8;
+    let koff = (st.slots + 4) * -8;
+    st = { out: st.out, rodata: st.rodata, uid: st.uid,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 4,
+      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+      bodies: st.bodies };
+    st = emit(st, "    mov %rax, " + tostring(moff) + "(%rbp)");
+    st = gen_str_const(st, "{");
+    st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
+    st = emit(st, "    xor %eax, %eax");
+    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    let r1 = next_loc(st);
+    st = r1.st;
+    let r2 = next_loc(st);
+    st = r2.st;
+    let r3 = next_loc(st);
+    st = r3.st;
+    let map: TMap = t;
+    st = emit(st, r1.lbl + ":");
+    st = emit(st, "    mov " + tostring(moff) + "(%rbp), %rdx");
+    st = emit(st, "    mov 8(%rdx), %rdx");
+    st = emit(st, "    mov (%rdx), %rcx");
+    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
+    st = emit(st, "    cmp %rcx, %rax");
+    st = emit(st, "    jge " + r2.lbl);
+    st = emit(st, "    test %rax, %rax");
+    st = emit(st, "    jz " + r3.lbl);
+    st = gen_acc_cat_slot(st, aoff, ", ");
+    st = emit(st, r3.lbl + ":");
+    // the key, quoted when it is a str (map_key_repr's rule)
+    st = emit(st, "    mov " + tostring(moff) + "(%rbp), %rdx");
+    st = emit(st, "    mov 8(%rdx), %rdx");
+    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
+    st = emit(st, elem_load(elem_bytes(map.key), "%rdx", "%rcx", "%rax"));
+    if (map.key.k == K.tstr) {
+        // The key goes to a slot first: appending the opening quote is a call
+        // that leaves its result in %rax, so a key still living there would be
+        // appended twice over instead.
+        st = emit(st, "    mov %rax, " + tostring(koff) + "(%rbp)");
+        st = gen_acc_cat_slot(st, aoff, "\"");
+        st = emit(st, "    mov " + tostring(koff) + "(%rbp), %rax");
+        st = gen_acc_cat_rax(st, aoff);
+        st = gen_acc_cat_slot(st, aoff, "\"");
+    } else {
+        st = gen_val_tostr_rax(st, map.key);
+        st = gen_acc_cat_rax(st, aoff);
+    };
+    st = gen_acc_cat_slot(st, aoff, ": ");
+    // the value
+    st = emit(st, "    mov " + tostring(moff) + "(%rbp), %rdx");
+    st = emit(st, "    mov 16(%rdx), %rdx");
+    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
+    st = emit(st, elem_load(elem_bytes(map.of), "%rdx", "%rcx", "%rax"));
+    st = gen_val_tostr_rax(st, map.of);
+    st = gen_acc_cat_rax(st, aoff);
+    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
+    st = emit(st, "    inc %rax");
+    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    st = emit(st, "    jmp " + r1.lbl);
+    st = emit(st, r2.lbl + ":");
+    st = gen_acc_cat_slot(st, aoff, "}");
+    emit(st, "    mov " + tostring(aoff) + "(%rbp), %rax")
 };
 
 // Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
