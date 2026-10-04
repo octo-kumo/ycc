@@ -785,6 +785,203 @@ Yv *arch_prelude_lines(void) {
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
+    // y_fmod(x, y) -> x % y: the IEEE remainder truncated toward zero, the
+    // one C's fmod returns -- the result keeps the sign of the dividend and
+    // is under |y| in magnitude. x87 had fprem for it in one instruction
+    // and SSE2 has nothing, so this is long division on the significands.
+    //
+    // Registers, not the stack: only gen_float_bin's `%` calls this, and it
+    // has both operands in SSE registers already. %xmm0 = x and %xmm1 = y
+    // on entry, the remainder in %xmm0 on return.
+    //
+    // Each side comes apart into a significand and an exponent: a normal
+    // double is (mantissa | 2^52) * 2^(field - 1075), and a subnormal has
+    // no implicit leading bit, so its significand is the raw mantissa at
+    // the fixed exponent -1074. Measured in the unit 2^-1074 that they
+    // share, x is mx * 2^(ex - ey + 1074) and y is my * 2^-1074, so
+    //
+    //     x % y == ((mx * 2^e) % my) * 2^ey,   e = ex - ey >= 0,
+    //
+    // because |x| >= |y| is all that is left of the early exits. mx and my
+    // are both under 2^53, so mx % my is one `div`, and the e passes after
+    // it double a remainder already known to be under my: no overflow, and
+    // no rounding either, since scaling by a power of two and subtracting
+    // an integer are both exact. Every bit pattern compared below has its
+    // sign cleared, so the signed jumps are the unsigned ones; this
+    // assembler has jb/jl/jg/jge/jle and no jae.
+    lines = ya_push(lines, ys("y_fmod:"));
+    lines = ya_push(lines, ys("    push %rbp"));
+    lines = ya_push(lines, ys("    mov %rsp, %rbp"));
+    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    push %r12"));
+    lines = ya_push(lines, ys("    push %r13"));
+    lines = ya_push(lines, ys("    push %r14"));
+    lines = ya_push(lines, ys("    push %r15"));
+    lines = ya_push(lines, ys("    movq %xmm0, %rbx"));
+    lines = ya_push(lines, ys("    movq %xmm1, %r12"));
+    lines = ya_push(lines, ys("    mov $9223372036854775807, %rax"));
+    lines = ya_push(lines, ys("    mov %rbx, %r13"));
+    lines = ya_push(lines, ys("    and %rax, %r13"));
+    lines = ya_push(lines, ys("    and %rax, %r12"));
+    // x infinite or NaN, y zero, or y NaN: all NaN. A NaN sorts above
+    // infinity as a bit pattern, which is the whole test, and the order is
+    // what makes an infinite y answer with x itself: y is known finite by
+    // the time |x| < |y| runs, and the only y that reaches here as
+    // infinity is the one every finite x is under.
+    lines = ya_push(lines, ys("    mov $9218868437227405312, %rax"));
+    lines = ya_push(lines, ys("    cmp %rax, %r13"));
+    lines = ya_push(lines, ys("    jge yfm_nan"));
+    lines = ya_push(lines, ys("    test %r12, %r12"));
+    lines = ya_push(lines, ys("    jz yfm_nan"));
+    lines = ya_push(lines, ys("    cmp %rax, %r12"));
+    lines = ya_push(lines, ys("    jle yfm_y_le_inf"));
+    lines = ya_push(lines, ys("    jmp yfm_nan"));
+    lines = ya_push(lines, ys("yfm_y_le_inf:"));
+    lines = ya_push(lines, ys("    cmp %r12, %r13"));
+    lines = ya_push(lines, ys("    jl yfm_ret_x"));
+    // e = field(x) - field(y), plus one for each side that is subnormal:
+    // its significand is half as big, so it sits a power of two lower
+    lines = ya_push(lines, ys("    mov %r13, %rsi"));
+    lines = ya_push(lines, ys("    shr $52, %rsi"));
+    lines = ya_push(lines, ys("    mov %r12, %rcx"));
+    lines = ya_push(lines, ys("    shr $52, %rcx"));
+    lines = ya_push(lines, ys("    sub %rcx, %rsi"));
+    // A subnormal's significand carries no implicit bit, so its exponent is
+    // one lower than its field says -- +1 for x above, and the same -1 for
+    // y here, since e is the difference of the two.
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    jnz yfm_ynorm"));
+    lines = ya_push(lines, ys("    dec %rsi"));
+    lines = ya_push(lines, ys("yfm_ynorm:"));
+    lines = ya_push(lines, ys("    mov %r13, %rdx"));
+    lines = ya_push(lines, ys("    shr $52, %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    jnz yfm_got_e"));
+    lines = ya_push(lines, ys("    inc %rsi"));
+    lines = ya_push(lines, ys("yfm_got_e:"));
+    lines = ya_push(lines, ys("    mov %rsi, %r14"));
+    // ey: a subnormal sits at -1074, everything else at field - 1075
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    jnz yfm_ey_norm"));
+    lines = ya_push(lines, ys("    mov $-1074, %r15"));
+    lines = ya_push(lines, ys("    jmp yfm_have_ey"));
+    lines = ya_push(lines, ys("yfm_ey_norm:"));
+    lines = ya_push(lines, ys("    mov %rcx, %r15"));
+    lines = ya_push(lines, ys("    add $-1075, %r15"));
+    lines = ya_push(lines, ys("yfm_have_ey:"));
+    // mx and my, with the implicit leading bit where there is one
+    lines = ya_push(lines, ys("    mov $4503599627370495, %rax"));
+    lines = ya_push(lines, ys("    mov %r13, %rdx"));
+    lines = ya_push(lines, ys("    and %rax, %rdx"));
+    lines = ya_push(lines, ys("    mov %r12, %rdi"));
+    lines = ya_push(lines, ys("    and %rax, %rdi"));
+    lines = ya_push(lines, ys("    mov $4503599627370496, %rax"));
+    lines = ya_push(lines, ys("    mov %r13, %rsi"));
+    lines = ya_push(lines, ys("    shr $52, %rsi"));
+    lines = ya_push(lines, ys("    test %rsi, %rsi"));
+    lines = ya_push(lines, ys("    jz yfm_mx_done"));
+    lines = ya_push(lines, ys("    add %rax, %rdx"));
+    lines = ya_push(lines, ys("yfm_mx_done:"));
+    lines = ya_push(lines, ys("    mov %r12, %rsi"));
+    lines = ya_push(lines, ys("    shr $52, %rsi"));
+    lines = ya_push(lines, ys("    test %rsi, %rsi"));
+    lines = ya_push(lines, ys("    jz yfm_my_done"));
+    lines = ya_push(lines, ys("    add %rax, %rdi"));
+    lines = ya_push(lines, ys("yfm_my_done:"));
+    // mx % my -- both fit in 53 bits, so the 128-bit divide never widens
+    lines = ya_push(lines, ys("    mov %rdi, %rcx"));
+    lines = ya_push(lines, ys("    mov %rdx, %rax"));
+    lines = ya_push(lines, ys("    xor %edx, %edx"));
+    lines = ya_push(lines, ys("    div %rcx"));
+    lines = ya_push(lines, ys("    mov %rdx, %r12"));
+    lines = ya_push(lines, ys("    mov %rdi, %r13"));
+    lines = ya_push(lines, ys("    mov $1, %rcx"));
+    lines = ya_push(lines, ys("yfm_loop:"));
+    lines = ya_push(lines, ys("    cmp %r14, %rcx"));
+    lines = ya_push(lines, ys("    jg yfm_put"));
+    lines = ya_push(lines, ys("    add %r12, %r12"));
+    lines = ya_push(lines, ys("    cmp %r13, %r12"));
+    lines = ya_push(lines, ys("    jl yfm_next"));
+    lines = ya_push(lines, ys("    sub %r13, %r12"));
+    lines = ya_push(lines, ys("yfm_next:"));
+    lines = ya_push(lines, ys("    inc %rcx"));
+    lines = ya_push(lines, ys("    jmp yfm_loop"));
+    // The remainder is r * 2^ey, and r is under 2^53, so its bit length
+    // and y's exponent place it exactly.
+    lines = ya_push(lines, ys("yfm_put:"));
+    lines = ya_push(lines, ys("    test %r12, %r12"));
+    lines = ya_push(lines, ys("    jz yfm_zero"));
+    lines = ya_push(lines, ys("    mov %r12, %rax"));
+    lines = ya_push(lines, ys("    xor %rcx, %rcx"));
+    // shifts needed to empty r, so the loop leaves k = the exponent
+    lines = ya_push(lines, ys("yfm_len:"));
+    lines = ya_push(lines, ys("    test %rax, %rax"));
+    lines = ya_push(lines, ys("    jz yfm_len_done"));
+    lines = ya_push(lines, ys("    shr $1, %rax"));
+    lines = ya_push(lines, ys("    inc %rcx"));
+    lines = ya_push(lines, ys("    jmp yfm_len"));
+    lines = ya_push(lines, ys("yfm_len_done:"));
+    lines = ya_push(lines, ys("    dec %rcx"));
+    lines = ya_push(lines, ys("    mov %rcx, %rsi"));
+    lines = ya_push(lines, ys("    mov %rsi, %rdx"));
+    lines = ya_push(lines, ys("    add %r15, %rdx"));
+    lines = ya_push(lines, ys("    add $1023, %rdx"));
+    lines = ya_push(lines, ys("    cmp $1, %rdx"));
+    lines = ya_push(lines, ys("    jl yfm_sub"));
+    lines = ya_push(lines, ys("    mov $52, %rcx"));
+    lines = ya_push(lines, ys("    sub %rsi, %rcx"));
+    lines = ya_push(lines, ys("    mov %r12, %rax"));
+    lines = ya_push(lines, ys("    shl %cl, %rax"));
+    // a normal's leading bit is implicit, and bit 52 of the pattern is the
+    // exponent's -- so it comes off before the field goes in
+    lines = ya_push(lines, ys("    mov $4503599627370496, %rsi"));
+    lines = ya_push(lines, ys("    sub %rsi, %rax"));
+    lines = ya_push(lines, ys("    shl $52, %rdx"));
+    lines = ya_push(lines, ys("    or %rdx, %rax"));
+    lines = ya_push(lines, ys("    jmp yfm_sign"));
+    lines = ya_push(lines, ys("yfm_zero:"));
+    lines = ya_push(lines, ys("    xor %eax, %eax"));
+    lines = ya_push(lines, ys("    jmp yfm_sign"));
+    // Under the smallest normal, so the value is m * 2^-1074. The bits
+    // that shift out are zero -- or this remainder would not be a double.
+    lines = ya_push(lines, ys("yfm_sub:"));
+    lines = ya_push(lines, ys("    mov %r15, %rdx"));
+    lines = ya_push(lines, ys("    add $1074, %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, %rcx"));
+    lines = ya_push(lines, ys("    test %rcx, %rcx"));
+    lines = ya_push(lines, ys("    jle yfm_sub_shr"));
+    lines = ya_push(lines, ys("    mov %r12, %rax"));
+    lines = ya_push(lines, ys("    shl %cl, %rax"));
+    lines = ya_push(lines, ys("    jmp yfm_sign"));
+    lines = ya_push(lines, ys("yfm_sub_shr:"));
+    lines = ya_push(lines, ys("    neg %rcx"));
+    lines = ya_push(lines, ys("    mov %r12, %rax"));
+    lines = ya_push(lines, ys("    shr %cl, %rax"));
+    lines = ya_push(lines, ys("    jmp yfm_sign"));
+    lines = ya_push(lines, ys("yfm_sign:"));
+    // The remainder carries x's sign and nothing else. A shift by 63 keeps
+    // bit 0, not bit 63, so the sign comes down and goes back up.
+    lines = ya_push(lines, ys("    mov %rbx, %rcx"));
+    lines = ya_push(lines, ys("    shr $63, %rcx"));
+    lines = ya_push(lines, ys("    shl $63, %rcx"));
+    lines = ya_push(lines, ys("    or %rcx, %rax"));
+    lines = ya_push(lines, ys("    movq %rax, %xmm0"));
+    lines = ya_push(lines, ys("    jmp yfm_done"));
+    lines = ya_push(lines, ys("yfm_nan:"));
+    lines = ya_push(lines, ys("    mov $9220233022162178560, %rax"));
+    lines = ya_push(lines, ys("    movq %rax, %xmm0"));
+    lines = ya_push(lines, ys("    jmp yfm_done"));
+    lines = ya_push(lines, ys("yfm_ret_x:"));
+    lines = ya_push(lines, ys("    mov %rbx, %rax"));
+    lines = ya_push(lines, ys("    movq %rax, %xmm0"));
+    lines = ya_push(lines, ys("yfm_done:"));
+    lines = ya_push(lines, ys("    pop %r15"));
+    lines = ya_push(lines, ys("    pop %r14"));
+    lines = ya_push(lines, ys("    pop %r13"));
+    lines = ya_push(lines, ys("    pop %r12"));
+    lines = ya_push(lines, ys("    pop %rbx"));
+    lines = ya_push(lines, ys("    pop %rbp"));
+    lines = ya_push(lines, ys("    ret"));
     lines = ya_push(lines, ys("y_str_slice:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));

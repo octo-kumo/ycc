@@ -4815,30 +4815,58 @@ Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     } else if (ys_eq_lit(op, "/")) {
         st = emit(st, ys("    divsd %xmm1, %xmm0"));
         return emit(st, ys("    movq %xmm0, %rax"));
+    } else if (ys_eq_lit(op, "%")) {
+        /* The IEEE remainder truncated toward zero -- C's fmod, the one with
+         * the dividend's sign. There is no x87-style bit twiddling for it on
+         * SSE2 (fmod has no instruction), so the prelude does the reduction;
+         * both operands are already in SSE registers. */
+        st = emit(st, ys("    call y_fmod"));
+        return emit(st, ys("    movq %xmm0, %rax"));
     } else {
-        /* Comparisons: ucomisd sets CF/ZF, so the UNSIGNED conditions are
-         * the right ones (a/ae/b/be), not the signed g/ge/l/le. */
-        st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
+        /* Comparisons. ucomisd sets ZF=PF=CF=1 when the operands are unordered
+         * (a NaN anywhere), so every test has to look at the parity flag: the
+         * unsigned conditions on their own (a/ae/b/be) read unordered as
+         * ordered.
+         *
+         * `<` and `<=` compare the operands the other way round and take the
+         * conditions that test CF=0, which unordered cannot satisfy; `>` and
+         * `>=` already did. `==` and `!=` cannot be spelled out of CF/ZF at
+         * all, so they test parity as well: two byte results and a combine,
+         * since this assembler has no 8-bit `and`/`or`. */
         if (ys_eq_lit(op, "<")) {
-            st = emit(st, ys("    setb %al"));
-            ;
-        } else if (ys_eq_lit(op, "<=")) {
-            st = emit(st, ys("    setbe %al"));
-            ;
-        } else if (ys_eq_lit(op, ">")) {
+            st = emit(st, ys("    ucomisd %xmm0, %xmm1"));
             st = emit(st, ys("    seta %al"));
-            ;
-        } else if (ys_eq_lit(op, ">=")) {
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, "<=")) {
+            st = emit(st, ys("    ucomisd %xmm0, %xmm1"));
             st = emit(st, ys("    setae %al"));
-            ;
-        } else if (ys_eq_lit(op, "==")) {
-            st = emit(st, ys("    sete %al"));
-            ;
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, ">")) {
+            st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
+            st = emit(st, ys("    seta %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
+        } else if (ys_eq_lit(op, ">=")) {
+            st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
+            st = emit(st, ys("    setae %al"));
+            return emit(st, ys("    movzbq %al, %rax"));
         } else {
-            st = emit(st, ys("    setne %al"));
-            ;
+            st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
+            if (ys_eq_lit(op, "==")) {
+                st = emit(st, ys("    sete %al"));
+                st = emit(st, ys("    setnp %cl"));
+            } else {
+                st = emit(st, ys("    setne %al"));
+                st = emit(st, ys("    setp %cl"));
+            }
+            st = emit(st, ys("    movzbq %al, %rax"));
+            st = emit(st, ys("    movzbq %cl, %rcx"));
+            if (ys_eq_lit(op, "==")) {
+                st = emit(st, ys("    and %rcx, %rax"));
+            } else {
+                st = emit(st, ys("    or %rcx, %rax"));
+            }
+            return st;
         }
-        return emit(st, ys("    movzbq %al, %rax"));
     }
 }
 
@@ -4901,13 +4929,17 @@ Yv *gen_eq_vals(Yv *st, Yv *t) {
         st = emit(st, ys("    call y_str_eq"));
         return emit(st, ys("    add $16, %rsp"));
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
-        /* as gen_float_bin's == */
+        /* as gen_float_bin's ==: equal, and ordered -- NaN is equal to nothing,
+         * itself included, which is what setnp is for */
         st = emit(st, ys("    movq %rax, %xmm1"));
         st = emit(st, ys("    pop %rax"));
         st = emit(st, ys("    movq %rax, %xmm0"));
         st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
         st = emit(st, ys("    sete %al"));
-        return emit(st, ys("    movzbq %al, %rax"));
+        st = emit(st, ys("    setnp %cl"));
+        st = emit(st, ys("    movzbq %al, %rax"));
+        st = emit(st, ys("    movzbq %cl, %rcx"));
+        return emit(st, ys("    and %rcx, %rax"));
     } else {
         /* one word: a scalar by value, a record or map by identity */
         st = emit(st, ys("    pop %rcx"));
@@ -7771,15 +7803,34 @@ void flit_ddiv_limb(Yv *a, long n) {
     ya_set(a, n - 1, yv_long(0));
 }
 
-/* a >= c, both limb arrays. c may be more than one limb (2^62 is one, but the
- * comparison is written for any of them). */
-int flit_dgea(Yv *a, Yv *c, long n) {
+/* a > c, both limb arrays. STRICTLY greater: equal limbs fall off the end with
+ * the answer still false, which is what the name now says -- it used to claim
+ * ">=" and the narrowing below believed it, which cost an exponent (and a
+ * factor of two) on every literal that was an exact power of two, smallest
+ * normal included. c may be more than one limb (2^62 is one, but the comparison
+ * is written for any of them). */
+int flit_dgt(Yv *a, Yv *c, long n) {
     long i = n - 1;
     int r = 0;
     int go = 1;
     while (i >= 0 && go) {
         if (yv_l(ya_get(a, i)) != yv_l(ya_get(c, i))) {
             r = yv_l(ya_get(a, i)) > yv_l(ya_get(c, i));
+            go = 0;
+        } else {
+            i = i - 1;
+        }
+    }
+    return r;
+}
+
+int flit_dlt(Yv *a, Yv *c, long n) {
+    long i = n - 1;
+    int r = 0;
+    int go = 1;
+    while (i >= 0 && go) {
+        if (yv_l(ya_get(a, i)) != yv_l(ya_get(c, i))) {
+            r = yv_l(ya_get(a, i)) < yv_l(ya_get(c, i));
             go = 0;
         } else {
             i = i - 1;
@@ -7928,7 +7979,7 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
      * 1216 is past what any subnormal needs (1074 + 85): past that a zero really
      * does mean the value is below the smallest double, and growing further would
      * only overflow the limbs and turn zero into inf. */
-    while (!yv_truth(ya_get(flags, 1)) && !flit_dgea(a, p85, n) && t < 1216) {
+    while (!yv_truth(ya_get(flags, 1)) && flit_dlt(a, p85, n) && t < 1216) {
         t = t + 32;
         n = flit_size(ndig, dp, t);
         a = flit_scaled(digs, n, dp, t, flags);
@@ -7959,7 +8010,7 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
          * which is more than the rest of an ordinary literal costs. */
         Yv *p53 = flit_dfrom(9007199254740992, n);  /* 2^53 */
         Yv *p54 = flit_dfrom(18014398509481984, n); /* 2^54 */
-        while (!flit_dgea(a, p53, n)) {
+        while (flit_dlt(a, p53, n)) {
             flit_dmul(a, 2, n);
         }
         /* Then 32 bits a pass while the value is over 2^85, which is where the
@@ -7968,14 +8019,14 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
          * and a pass per bit wanted 935 of them -- two thirds of the whole
          * conversion. */
         long down = 0;
-        while (flit_dgea(a, p85, n)) {
+        while (flit_dgt(a, p85, n)) {
             if (flit_ddiv(a, 4294967296, n) != 0) ya_set(flags, 0, yv_bool(1));
             down = down + 32;
         }
         /* And then a bit at a time down to 2^54: what that leaves is the 53
          * significand bits AND the round bit above them, and everything it
          * dropped is below the round bit, so sticky is all that carries. */
-        while (flit_dgea(a, p54, n)) {
+        while (!flit_dlt(a, p54, n)) {
             if (flit_ddiv(a, 2, n) != 0) ya_set(flags, 0, yv_bool(1));
             down = down + 1;
         }
@@ -7984,8 +8035,12 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
         long wide = yv_l(ya_get(a, 0));
         if (n > 1) wide = wide + yv_l(ya_get(a, 1)) * FLIT_BASE;
         long e = 53 + down - t; /* the value is in [2^e, 2^(e+1)) */
+        /* A subnormal's significand is the value on the 2^-1074 grid: value is
+         * a * 2^(down - t), so the fraction is a shifted right by t - down - 1074
+         * -- which is one bit short of -e - 1022, and every subnormal literal
+         * with an even significand came out halved when it was that. */
         long sh = 0;
-        if (e < -1022) sh = 0 - e - 1022; /* a subnormal's extra shift */
+        if (e < -1022) sh = t - down - 1074;
         long round = 0;
         long mant = 0;
         if (sh == 0) {

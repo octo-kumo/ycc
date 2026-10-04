@@ -3801,24 +3801,58 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     } else if (op == "/") {
         st = emit(st, "    divsd %xmm1, %xmm0");
         emit(st, "    movq %xmm0, %rax")
+    } else if (op == "%") {
+        // The IEEE remainder truncated toward zero -- C's fmod, the one with
+        // the dividend's sign. There is no x87-style bit twiddling for it on
+        // SSE2 (fmod has no instruction), so the prelude does the reduction;
+        // both operands are already in SSE registers.
+        st = emit(st, "    call y_fmod");
+        emit(st, "    movq %xmm0, %rax")
     } else {
-        // Comparisons: ucomisd sets CF/ZF, so the UNSIGNED conditions are
-        // the right ones (a/ae/b/be), not the signed g/ge/l/le.
-        st = emit(st, "    ucomisd %xmm1, %xmm0");
+        // Comparisons. ucomisd sets ZF=PF=CF=1 when the operands are unordered
+        // (a NaN anywhere), so every test has to look at the parity flag: the
+        // unsigned conditions on their own (a/ae/b/be) read unordered as
+        // ordered.
+        //
+        // `<` and `<=` compare the operands the other way round and take the
+        // conditions that test CF=0, which unordered cannot satisfy; `>` and
+        // `>=` already did. `==` and `!=` cannot be spelled out of CF/ZF at
+        // all, so they test parity as well: two byte results and a combine,
+        // since this assembler has no 8-bit `and`/`or`.
         if (op == "<") {
-            st = emit(st, "    setb %al");
-        } else if (op == "<=") {
-            st = emit(st, "    setbe %al");
-        } else if (op == ">") {
+            st = emit(st, "    ucomisd %xmm0, %xmm1");
             st = emit(st, "    seta %al");
-        } else if (op == ">=") {
+            emit(st, "    movzbq %al, %rax")
+        } else if (op == "<=") {
+            st = emit(st, "    ucomisd %xmm0, %xmm1");
             st = emit(st, "    setae %al");
-        } else if (op == "==") {
-            st = emit(st, "    sete %al");
+            emit(st, "    movzbq %al, %rax")
+        } else if (op == ">") {
+            st = emit(st, "    ucomisd %xmm1, %xmm0");
+            st = emit(st, "    seta %al");
+            emit(st, "    movzbq %al, %rax")
+        } else if (op == ">=") {
+            st = emit(st, "    ucomisd %xmm1, %xmm0");
+            st = emit(st, "    setae %al");
+            emit(st, "    movzbq %al, %rax")
         } else {
-            st = emit(st, "    setne %al");
-        };
-        emit(st, "    movzbq %al, %rax")
+            st = emit(st, "    ucomisd %xmm1, %xmm0");
+            if (op == "==") {
+                st = emit(st, "    sete %al");
+                st = emit(st, "    setnp %cl");
+            } else {
+                st = emit(st, "    setne %al");
+                st = emit(st, "    setp %cl");
+            };
+            st = emit(st, "    movzbq %al, %rax");
+            st = emit(st, "    movzbq %cl, %rcx");
+            if (op == "==") {
+                st = emit(st, "    and %rcx, %rax");
+            } else {
+                st = emit(st, "    or %rcx, %rax");
+            };
+            st
+        }
     }
 };
 
@@ -3875,13 +3909,17 @@ def gen_eq_vals(st: EmitSt, t: Type) -> EmitSt {
         st = emit(st, "    call y_str_eq");
         emit(st, "    add $16, %rsp")
     } else if (t.k == K.tfloat) {
-        // as gen_float_bin's ==
+        // as gen_float_bin's ==: equal, and ordered -- NaN is equal to nothing,
+        // itself included, which is what setnp is for
         st = emit(st, "    movq %rax, %xmm1");
         st = emit(st, "    pop %rax");
         st = emit(st, "    movq %rax, %xmm0");
         st = emit(st, "    ucomisd %xmm1, %xmm0");
         st = emit(st, "    sete %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit(st, "    setnp %cl");
+        st = emit(st, "    movzbq %al, %rax");
+        st = emit(st, "    movzbq %cl, %rcx");
+        emit(st, "    and %rcx, %rax")
     } else {
         // one word: a scalar by value, a record or map by identity
         st = emit(st, "    pop %rcx");
@@ -6403,15 +6441,36 @@ def flit_ddiv_limb(a: [long], n: long) {
     a[n - 1] = 0;
 };
 
-// a >= c, both limb arrays. c may be more than one limb (2^62 is one, but the
-// comparison is written for any of them).
-def flit_dgea(a: [long], c: [long], n: long) -> bool {
+// a > c, both limb arrays. STRICTLY greater: equal limbs fall off the end with
+// the answer still false, which is what the name now says -- it used to claim
+// ">=" and the narrowing below believed it, which cost an exponent (and a
+// factor of two) on every literal that was an exact power of two, smallest
+// normal included. c may be more than one limb (2^62 is one, but the comparison
+// is written for any of them).
+def flit_dgt(a: [long], c: [long], n: long) -> bool {
     let i = n - 1;
     let r = false;
     let go = true;
     while (i >= 0 && go) {
         if (a[i] != c[i]) {
             r = a[i] > c[i];
+            go = false;
+        } else {
+            i = i - 1;
+        }
+    };
+    r
+};
+
+// a < c, the mirror. Written out rather than reusing dgt on the complement so
+// the limb walk stays a single pass with no extra carry to reason about.
+def flit_dlt(a: [long], c: [long], n: long) -> bool {
+    let i = n - 1;
+    let r = false;
+    let go = true;
+    while (i >= 0 && go) {
+        if (a[i] != c[i]) {
+            r = a[i] < c[i];
             go = false;
         } else {
             i = i - 1;
@@ -6541,7 +6600,7 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
     // 1216 is past what any subnormal needs (1074 + 85): past that a zero really
     // does mean the value is below the smallest double, and growing further would
     // only overflow the limbs and turn zero into inf.
-    while (!flags[1] && !flit_dgea(a, p85, n) && t < 1216) {
+    while (!flags[1] && flit_dlt(a, p85, n) && t < 1216) {
         t = t + 32;
         n = flit_size(ndig, dp, t);
         a = flit_scaled(digs, n, dp, t, flags);
@@ -6565,7 +6624,7 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
         // an ordinary literal costs
         let p53 = flit_dfrom(9007199254740992, n);               // 2^53
         let p54 = flit_dfrom(18014398509481984, n);              // 2^54
-        while (!flit_dgea(a, p53, n)) {
+        while (flit_dlt(a, p53, n)) {
             flit_dmul(a, 2, n);
         };
         // Then 32 bits a pass while the value is over 2^85, which is where the
@@ -6574,14 +6633,14 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
         // and a pass per bit wanted 935 of them -- two thirds of the whole
         // conversion.
         let down = 0;
-        while (flit_dgea(a, p85, n)) {
+        while (flit_dgt(a, p85, n)) {
             if (flit_ddiv(a, 4294967296, n) != 0) { flags[0] = true; };
             down = down + 32;
         };
         // And then a bit at a time down to 2^54: what that leaves is the 53
         // significand bits AND the round bit above them, and everything it
         // dropped is below the round bit, so sticky is all that carries.
-        while (flit_dgea(a, p54, n)) {
+        while (!flit_dlt(a, p54, n)) {
             if (flit_ddiv(a, 2, n) != 0) { flags[0] = true; };
             down = down + 1;
         };
@@ -6590,8 +6649,12 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
         let wide = a[0];
         if (n > 1) { wide = wide + a[1] * FLIT_BASE; };
         let e = 53 + down - t;               // the value is in [2^e, 2^(e+1))
+        // A subnormal's significand is the value on the 2^-1074 grid: value is
+        // a * 2^(down - t), so the fraction is a shifted right by t - down - 1074
+        // -- which is one bit short of -e - 1022, and every subnormal literal
+        // with an even significand came out halved when it was that.
         let sh = 0;
-        if (e < -1022) { sh = 0 - e - 1022; }; // a subnormal's extra shift
+        if (e < -1022) { sh = t - down - 1074; };
         let round = 0;
         let mant = 0;
         if (sh == 0) {

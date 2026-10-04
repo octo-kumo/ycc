@@ -777,6 +777,203 @@ def arch_prelude_lines() -> [str] {
         "    pop %rbx",
         "    pop %rbp",
         "    ret",
+        // y_fmod(x, y) -> x % y: the IEEE remainder truncated toward zero, the
+        // one C's fmod returns -- the result keeps the sign of the dividend and
+        // is under |y| in magnitude. x87 had fprem for it in one instruction
+        // and SSE2 has nothing, so this is long division on the significands.
+        //
+        // Registers, not the stack: only gen_float_bin's `%` calls this, and it
+        // has both operands in SSE registers already. %xmm0 = x and %xmm1 = y
+        // on entry, the remainder in %xmm0 on return.
+        //
+        // Each side comes apart into a significand and an exponent: a normal
+        // double is (mantissa | 2^52) * 2^(field - 1075), and a subnormal has
+        // no implicit leading bit, so its significand is the raw mantissa at
+        // the fixed exponent -1074. Measured in the unit 2^-1074 that they
+        // share, x is mx * 2^(ex - ey + 1074) and y is my * 2^-1074, so
+        //
+        //     x % y == ((mx * 2^e) % my) * 2^ey,   e = ex - ey >= 0,
+        //
+        // because |x| >= |y| is all that is left of the early exits. mx and my
+        // are both under 2^53, so mx % my is one `div`, and the e passes after
+        // it double a remainder already known to be under my: no overflow, and
+        // no rounding either, since scaling by a power of two and subtracting
+        // an integer are both exact. Every bit pattern compared below has its
+        // sign cleared, so the signed jumps are the unsigned ones; this
+        // assembler has jb/jl/jg/jge/jle and no jae.
+        "y_fmod:",
+        "    push %rbp",
+        "    mov %rsp, %rbp",
+        "    push %rbx",
+        "    push %r12",
+        "    push %r13",
+        "    push %r14",
+        "    push %r15",
+        "    movq %xmm0, %rbx",
+        "    movq %xmm1, %r12",
+        "    mov $9223372036854775807, %rax",
+        "    mov %rbx, %r13",
+        "    and %rax, %r13",
+        "    and %rax, %r12",
+        // x infinite or NaN, y zero, or y NaN: all NaN. A NaN sorts above
+        // infinity as a bit pattern, which is the whole test, and the order is
+        // what makes an infinite y answer with x itself: y is known finite by
+        // the time |x| < |y| runs, and the only y that reaches here as
+        // infinity is the one every finite x is under.
+        "    mov $9218868437227405312, %rax",
+        "    cmp %rax, %r13",
+        "    jge yfm_nan",
+        "    test %r12, %r12",
+        "    jz yfm_nan",
+        "    cmp %rax, %r12",
+        "    jle yfm_y_le_inf",
+        "    jmp yfm_nan",
+        "yfm_y_le_inf:",
+        "    cmp %r12, %r13",
+        "    jl yfm_ret_x",
+        // e = field(x) - field(y), plus one for each side that is subnormal:
+        // its significand is half as big, so it sits a power of two lower
+        "    mov %r13, %rsi",
+        "    shr $52, %rsi",
+        "    mov %r12, %rcx",
+        "    shr $52, %rcx",
+        "    sub %rcx, %rsi",
+        // A subnormal's significand carries no implicit bit, so its exponent is
+        // one lower than its field says -- +1 for x above, and the same -1 for
+        // y here, since e is the difference of the two.
+        "    test %rcx, %rcx",
+        "    jnz yfm_ynorm",
+        "    dec %rsi",
+        "yfm_ynorm:",
+        "    mov %r13, %rdx",
+        "    shr $52, %rdx",
+        "    test %rdx, %rdx",
+        "    jnz yfm_got_e",
+        "    inc %rsi",
+        "yfm_got_e:",
+        "    mov %rsi, %r14",
+        // ey: a subnormal sits at -1074, everything else at field - 1075
+        "    test %rcx, %rcx",
+        "    jnz yfm_ey_norm",
+        "    mov $-1074, %r15",
+        "    jmp yfm_have_ey",
+        "yfm_ey_norm:",
+        "    mov %rcx, %r15",
+        "    add $-1075, %r15",
+        "yfm_have_ey:",
+        // mx and my, with the implicit leading bit where there is one
+        "    mov $4503599627370495, %rax",
+        "    mov %r13, %rdx",
+        "    and %rax, %rdx",
+        "    mov %r12, %rdi",
+        "    and %rax, %rdi",
+        "    mov $4503599627370496, %rax",
+        "    mov %r13, %rsi",
+        "    shr $52, %rsi",
+        "    test %rsi, %rsi",
+        "    jz yfm_mx_done",
+        "    add %rax, %rdx",
+        "yfm_mx_done:",
+        "    mov %r12, %rsi",
+        "    shr $52, %rsi",
+        "    test %rsi, %rsi",
+        "    jz yfm_my_done",
+        "    add %rax, %rdi",
+        "yfm_my_done:",
+        // mx % my -- both fit in 53 bits, so the 128-bit divide never widens
+        "    mov %rdi, %rcx",
+        "    mov %rdx, %rax",
+        "    xor %edx, %edx",
+        "    div %rcx",
+        "    mov %rdx, %r12",
+        "    mov %rdi, %r13",
+        "    mov $1, %rcx",
+        "yfm_loop:",
+        "    cmp %r14, %rcx",
+        "    jg yfm_put",
+        "    add %r12, %r12",
+        "    cmp %r13, %r12",
+        "    jl yfm_next",
+        "    sub %r13, %r12",
+        "yfm_next:",
+        "    inc %rcx",
+        "    jmp yfm_loop",
+        // The remainder is r * 2^ey, and r is under 2^53, so its bit length
+        // and y's exponent place it exactly.
+        "yfm_put:",
+        "    test %r12, %r12",
+        "    jz yfm_zero",
+        "    mov %r12, %rax",
+        "    xor %rcx, %rcx",
+        // shifts needed to empty r, so the loop leaves k = the exponent
+        "yfm_len:",
+        "    test %rax, %rax",
+        "    jz yfm_len_done",
+        "    shr $1, %rax",
+        "    inc %rcx",
+        "    jmp yfm_len",
+        "yfm_len_done:",
+        "    dec %rcx",
+        "    mov %rcx, %rsi",
+        "    mov %rsi, %rdx",
+        "    add %r15, %rdx",
+        "    add $1023, %rdx",
+        "    cmp $1, %rdx",
+        "    jl yfm_sub",
+        "    mov $52, %rcx",
+        "    sub %rsi, %rcx",
+        "    mov %r12, %rax",
+        "    shl %cl, %rax",
+        // a normal's leading bit is implicit, and bit 52 of the pattern is the
+        // exponent's -- so it comes off before the field goes in
+        "    mov $4503599627370496, %rsi",
+        "    sub %rsi, %rax",
+        "    shl $52, %rdx",
+        "    or %rdx, %rax",
+        "    jmp yfm_sign",
+        "yfm_zero:",
+        "    xor %eax, %eax",
+        "    jmp yfm_sign",
+        // Under the smallest normal, so the value is m * 2^-1074. The bits
+        // that shift out are zero -- or this remainder would not be a double.
+        "yfm_sub:",
+        "    mov %r15, %rdx",
+        "    add $1074, %rdx",
+        "    mov %rdx, %rcx",
+        "    test %rcx, %rcx",
+        "    jle yfm_sub_shr",
+        "    mov %r12, %rax",
+        "    shl %cl, %rax",
+        "    jmp yfm_sign",
+        "yfm_sub_shr:",
+        "    neg %rcx",
+        "    mov %r12, %rax",
+        "    shr %cl, %rax",
+        "    jmp yfm_sign",
+        "yfm_sign:",
+        // The remainder carries x's sign and nothing else. A shift by 63 keeps
+        // bit 0, not bit 63, so the sign comes down and goes back up.
+        "    mov %rbx, %rcx",
+        "    shr $63, %rcx",
+        "    shl $63, %rcx",
+        "    or %rcx, %rax",
+        "    movq %rax, %xmm0",
+        "    jmp yfm_done",
+        "yfm_nan:",
+        "    mov $9220233022162178560, %rax",
+        "    movq %rax, %xmm0",
+        "    jmp yfm_done",
+        "yfm_ret_x:",
+        "    mov %rbx, %rax",
+        "    movq %rax, %xmm0",
+        "yfm_done:",
+        "    pop %r15",
+        "    pop %r14",
+        "    pop %r13",
+        "    pop %r12",
+        "    pop %rbx",
+        "    pop %rbp",
+        "    ret",
         // y_str_slice(s, lo, hi) -> NEW str = s[lo:hi], half-open and
         // clamped like an array slice: lo < 0 counts from 0, hi > len stops
         // at len, hi <= lo is "".

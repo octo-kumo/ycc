@@ -25,6 +25,21 @@ widen the long side. Unary minus on a \ic{float} flips the sign, so
 \ic{-0.0} is a negative zero (\ic{1.0 / -0.0} is $-\infty$) and
 \ic{-(-x)} is \ic{x} for every \ic{x}.
 
+\ic{\%} on two \ic{float}s is the remainder truncated toward zero ---
+C's \ic{fmod}, not C's \ic{\%}, which is the same thing for integers
+and something else entirely here: the sign follows the dividend
+(\ic{-5.5 \% 2.0} is \ic{-1.5}), the magnitude is under that of the
+divisor, and the result is exact for every finite input (the quotient
+may be any size, \ic{1e300 \% 3.0} included). Dividing by a zero
+divisor, and any operand that is a NaN or an infinity as the dividend,
+give a NaN; an infinite divisor answers with the dividend.
+
+Every comparison is IEEE-ordered: a NaN compares \ic{false} to
+everything, itself included, in both directions. \ic{x != x} is
+therefore the NaN test (and the one the linter leaves alone,
+Section~\ref{sec:errors}), \ic{[nan] == [1.0]} is \ic{false}, and an
+\ic{inf} compares exactly as an infinity should.
+
 \subsection{Bitwise operators}
 \label{sec:bitwise}
 

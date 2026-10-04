@@ -741,8 +741,16 @@ static Yv *enc_movq(Yv *dst, Yv *src) {
         return yr(3, "bytes",
                   concat(prefix, tail),
                   "fix", yav(0), "err", ys(""));
+    } else if (op_size(src) != 128) {
+        /* Neither side is an xmm, so this is not a float move at all. Taking it
+         * as one would quietly read an SSE register and write a GPR (or the
+         * other way round) where the source said a register move -- a silent
+         * miscompile, and this assembler's one rule is to be loud instead. */
+        return yr(3, "bytes",
+                  yav(0),
+                  "fix", yav(0), "err", ys("movq needs an xmm register"));
     } else {
-        /* out of an xmm: the xmm is still the reg field */
+        /* out of an xmm: 66 REX.W 0F 7E /r is reg=xmm, rm=r/m64 */
         long r = rex(1, yv_l(yr_get(src, "n")), -1, yv_l(yr_get(dst, "n")));
         Yv *prefix = yav(2, yv_long(102), yv_long(r));
         Yv *tail = yav(3, yv_long(15), yv_long(126), yv_long(modrm(3, yv_l(yr_get(src, "n")), yv_l(yr_get(dst, "n")))));
@@ -997,6 +1005,14 @@ Yv *enc_insn(Yv *mn, Yv *ops) {
     } else if (ys_eq_lit(mn, "setbe")) {
         Yv *e = need1(mn, ops);
         if (!ys_eq_lit(e, "")) { return yr(3, "bytes", yav(0), "fix", yav(0), "err", e); } else { return enc_setcc(150, ya_get(ops, 0)); }
+    } else if (ys_eq_lit(mn, "setp")) {
+        /* parity set: after ucomisd, unordered */
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return yr(3, "bytes", yav(0), "fix", yav(0), "err", e); } else { return enc_setcc(154, ya_get(ops, 0)); }
+    } else if (ys_eq_lit(mn, "setnp")) {
+        /* parity clear: after ucomisd, ordered */
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return yr(3, "bytes", yav(0), "fix", yav(0), "err", e); } else { return enc_setcc(155, ya_get(ops, 0)); }
     } else if (ys_eq_lit(mn, "cmpb")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) {

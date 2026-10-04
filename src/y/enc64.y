@@ -657,8 +657,14 @@ def enc_movq(dst: Operand, src: Operand) -> Encoded {
         let prefix: [byte] = [102, r];
         let tail: [byte] = [15, 110, modrm(3, dst.n, src.n)];
         { bytes: concat(prefix, tail), fix: [], err: "" }
+    } else if (op_size(src) != 128) {
+        // Neither side is an xmm, so this is not a float move at all. Taking
+        // it as one would quietly read an SSE register and write a GPR (or the
+        // other way round) where the source said a register move -- a silent
+        // miscompile, and this assembler's one rule is to be loud instead.
+        { bytes: [], fix: [], err: "movq needs an xmm register" }
     } else {
-        // out of an xmm: the xmm is still the reg field
+        // out of an xmm: 66 REX.W 0F 7E /r is reg=xmm, rm=r/m64
         let r = rex(true, src.n, -1, dst.n);
         let prefix: [byte] = [102, r];
         let tail: [byte] = [15, 126, modrm(3, src.n, dst.n)];
@@ -908,6 +914,14 @@ def enc_insn(mn: str, ops: [Operand]) -> Encoded {
     } else if (mn == "setbe") {
         let e = need1(mn, ops);
         if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(150, ops[0]) }
+    } else if (mn == "setp") {
+        // parity set: after ucomisd, unordered
+        let e = need1(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(154, ops[0]) }
+    } else if (mn == "setnp") {
+        // parity clear: after ucomisd, ordered
+        let e = need1(mn, ops);
+        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(155, ops[0]) }
     } else if (mn == "cmpb") {
         let e = need2(mn, ops);
         if (e != "") {
