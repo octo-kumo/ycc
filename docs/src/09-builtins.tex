@@ -181,6 +181,61 @@ fill is one byte, and widths count bytes.
 \item[\ic{from\_bytes(b)}] String from a \ic{[byte]} or fixed \ic{[byte; N]} array.
 \end{description}
 
+\subsection{Binary layouts (the struct module)}
+\label{sec:builtin-struct}
+
+\noindent\ic{import struct;} writes and reads binary layouts --- a file
+header, a message framing, the \ic{struct} in a C header --- one field at
+a time over \ic{[byte]}. \ty{le} and \ty{be} are the byte orders, little
+and big endian, and there is no ``host's'' spelling: name both or one.
+Every value is stored in two's complement, truncated to the field's width,
+so \ic{struct.u8(-1)} is \ic{b'\bs xff'} and \ic{struct.u8(300)} is
+\ic{b','} (300 mod 256). A reader gives the same bytes back signed or
+unsigned as its name says, and an offset past the end of the array
+\textbf{traps}.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{struct.u8(v)}, \ic{struct.i8(v)}, \ic{struct.u16le(v)},
+  \ic{struct.u16be(v)}, \ic{struct.i16le(v)}, \ic{struct.i16be(v)},
+  \ic{struct.u32le(v)}, \ic{struct.u32be(v)}, \ic{struct.i32le(v)},
+  \ic{struct.i32be(v)}, \ic{struct.u64le(v)}, \ic{struct.u64be(v)},
+  \ic{struct.i64le(v)}, \ic{struct.i64be(v)}] One field as \ic{[byte]}:
+  the 8-bit pair is one byte wide, the 16-bit pairs two, the 32-bit pairs
+  four, the 64-bit pairs eight.
+\item[\ic{struct.get\_u8(b, off)}, \ic{struct.get\_i8(b, off)},
+  \ic{struct.get\_u16le(b, off)}, \ic{struct.get\_u16be(b, off)},
+  \ic{struct.get\_i16le(b, off)}, \ic{struct.get\_i16be(b, off)},
+  \ic{struct.get\_u32le(b, off)}, \ic{struct.get\_u32be(b, off)},
+  \ic{struct.get\_i32le(b, off)}, \ic{struct.get\_i32be(b, off)},
+  \ic{struct.get\_u64le(b, off)}, \ic{struct.get\_u64be(b, off)},
+  \ic{struct.get\_i64le(b, off)}, \ic{struct.get\_i64be(b, off)}] One
+  field out of \ic{b} at byte \ic{off}, the same widths, a \ic{u} name
+  giving the bytes' unsigned value and an \ic{i} name the signed one
+  (\ic{struct.get\_i8(b, off)} on \ic{b'\bs xff'} is $-1$).
+\item[\ic{struct.pad(n)}] \ty{n} zero bytes, for a field whose value
+  does not matter; \ic{struct.fill(n, v)} \ty{n} copies of the byte
+  \ty{v}.
+\item[\ic{struct.pack(fmt, values)}, \ic{struct.unpack(fmt, b)}] A whole
+  layout from a format string: \ic{fmt} is a comma-separated list of
+  field names, each with one value, and \ic{pack} writes them in order
+  while \ic{unpack} reads them back as \ic{[long]}. A name is one of the
+  fourteen writers above --- that is the value to store --- or \ic{pad},
+  whose value is a \emph{width}, or \ic{fill}, whose value is the
+  \emph{byte} to store. To write \ty{n} copies of one byte, call
+  \ic{struct.fill(n, v)} itself, since a format carries one value per
+  name. \ic{pad} has no width of its own to read back --- a reader
+  advances by each field's width --- so a format containing it can be
+  packed but not unpacked, and the fields after one are read by offset; a
+  name that is not a field stops the program saying so.
+
+\begin{lstlisting}
+let hdr = struct.pack("u32be,i16le,pad,fill", [0x01020304, -2, 3, 65]);
+print(hdr);                 // b'\bs x01\bs x02\bs x03\bs x04\bs xfe\bs xff\bs x00\bs x00\bs x00A'
+print(struct.unpack("u32be,i16le", hdr));      // [16909060, -2]
+print(struct.get_u8(hdr, 9));                  // 65 -- the fill's byte, by offset
+\end{lstlisting}
+\end{description}
+
 \subsection{Options}
 \label{sec:builtin-option-b}
 
@@ -446,7 +501,9 @@ instead), \ic{net.connect\_tcp(host, port)}, \ic{net.send\_str(fd,
 data)}, \ic{net.recv\_str(fd, max)} (the next \ic{str}, \ic{none} at the
 end) and \ic{net.close\_fd(fd)}. Under them are the pieces a server is
 built from: \ic{net.socket\_tcp()}, \ic{net.addr\_set(addr, host,
-port)}, \ic{net.bind\_tcp(fd, port)}, \ic{net.listen\_fd(fd, backlog)},
+port)} (\ic{net.is\_quad(addr)} is whether that address is four decimal
+octets, which is what \ic{resolve} reads \ic{/etc/hosts} and a resolver's
+answers for), \ic{net.bind\_tcp(fd, port)}, \ic{net.listen\_fd(fd, backlog)},
 \ic{net.accept\_tcp(fd)}, \ic{net.local\_port(fd)} (the port a socket
 took, which is how port 0 is used) and \ic{net.set\_timeouts(fd, secs)}.
 A descriptor that fails is negative, never a value to close.

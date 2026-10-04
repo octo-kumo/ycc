@@ -7,6 +7,20 @@ def hello(req: str) -> str {
     net.http_response(200, "hello")
 };
 
+// is_quad: the address form addr_set takes, and what resolve reads
+print(net.is_quad("127.0.0.1"));
+print(net.is_quad("0.0.0.0"));
+print(net.is_quad("255.255.255.255"));
+print(net.is_quad("1.2.3"));         // too few parts
+print(net.is_quad("1.2.3.4.5"));     // too many
+print(net.is_quad("1.2.3.256"));     // out of range
+print(net.is_quad("1.2.3.4a"));      // not decimal
+print(net.is_quad("1.2..4"));        // an empty part
+print(net.is_quad("1.2.3.4000"));    // a four-digit part
+print(net.is_quad("::1"));           // not a dotted quad
+print(net.is_quad(""));
+print(net.is_quad("localhost"));
+
 let srv = net.socket_tcp();
 print(srv >= 0);
 net.bind_tcp(srv, 0);

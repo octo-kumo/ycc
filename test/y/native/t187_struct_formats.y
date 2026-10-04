@@ -33,6 +33,13 @@ let with_pad = struct.pack("u8,pad,fill", [1, 3, 2]);
 print(with_pad);
 print(len(with_pad));
 
+// the manual's worked example, verbatim: a header with a width-padded field
+// and a filled one, read back field by field and by offset
+let hdr = struct.pack("u32be,i16le,pad,fill", [0x01020304, -2, 3, 65]);
+print(hdr);
+print(struct.unpack("u32be,i16le", hdr));
+print(struct.get_u8(hdr, 9));          // the fill's byte: a format cannot skip a pad
+
 print("pad has no width of its own:");
 struct.width_of("pad");
 
