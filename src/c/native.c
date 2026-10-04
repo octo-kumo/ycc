@@ -668,10 +668,14 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
         std = ya_push(std, ys("exec"));
         ;
     }
-    if (seen_any(seen, px, yv_len(seen), 2)) {
-        std = ya_push(std, ys("str"));
-        ;
-    }
+    /* str is linked into EVERY program too, for the same reason rt is:
+     * y_float_tostr (the runtime's float printer, arch_x64.y) calls std's
+     * y_fmt_f, which writes a double's exact decimal value and rounds half to
+     * even, so print(x) and f"{x:.6f}" give the same text as C's printf. The
+     * link costs nothing in the output -- prune_bodies drops whatever the
+     * program does not reach (hello.y is 8312 bytes either way) -- and with
+     * the std pack it is one precompiled unit. */
+    std = ya_push(std, ys("str"));
     /* The runtime library (std/rt.y) is linked into EVERY program:
      * generated code calls into it by fixed label (`call y_print_long`),
      * so there is no name to test for. Unused helpers cost nothing in the

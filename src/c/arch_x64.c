@@ -745,107 +745,46 @@ Yv *arch_prelude_lines(void) {
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
     lines = ya_push(lines, ys("y_float_tostr:"));
+    /* print(f) / tostring(f): the float's IEEE-754 bits, as y_fmt_f takes
+     * them, formatted at the 6 places this has always printed. It USED to be
+     * double arithmetic -- int part by cvttsd2si, fraction times 1e6, +0.5,
+     * truncate -- which is round-half-up and loses the digits below the 53 the
+     * product carries, so print(x) and f"{x:.6f}" disagreed on a tie and
+     * neither always matched C: 3123845.1640625 printed 3123845.164063 here
+     * and 3123845.164062 there, and 0.0000025 (whose exact value is a hair
+     * above the midpoint) printed 0.000002 against C's 0.000003. std/str.y's
+     * y_fmt_f writes the exact binary value out in decimal and rounds half to
+     * even, so one call gives print and the f-string the same text, C's
+     * answer, and -0.0 its sign (the sign is the top bit of the bits, which
+     * `x < 0` never sees). It also formats a magnitude at or past 2^63
+     * exactly, where this used to give up with "<float magnitude >2^63>".
+     *
+     * Args: (bits: long, code: long, width: long, prec: long), pushed right to
+     * left; code 102 is 'f' with no fill, alignment, alternate form, grouping
+     * or sign override, width -1 none, 6 places. */
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
     lines = ya_push(lines, ys("    push %rbx"));
     lines = ya_push(lines, ys("    push %r12"));
     lines = ya_push(lines, ys("    push %r13"));
+    /* the float arrives as the first stack argument, not in %xmm0 (the old
+     * body read it from 16(%rbp) for the same reason) */
     lines = ya_push(lines, ys("    mov 16(%rbp), %rax"));
-    lines = ya_push(lines, ys("    movq %rax, %xmm0"));
-    lines = ya_push(lines, ys("    xor %r13d, %r13d"));
-    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
-    lines = ya_push(lines, ys("    movq %rcx, %xmm2"));
-    lines = ya_push(lines, ys("    ucomisd %xmm2, %xmm0"));
-    lines = ya_push(lines, ys("    setb %al"));
-    lines = ya_push(lines, ys("    movzbq %al, %rax"));
-    lines = ya_push(lines, ys("    test %rax, %rax"));
-    lines = ya_push(lines, ys("    jz yft_pos"));
-    lines = ya_push(lines, ys("    mov $1, %r13"));
-    lines = ya_push(lines, ys("    xor %ecx, %ecx"));
-    lines = ya_push(lines, ys("    movq %rcx, %xmm2"));
-    lines = ya_push(lines, ys("    subsd %xmm0, %xmm2"));
-    lines = ya_push(lines, ys("    movq %xmm2, %rax"));
-    lines = ya_push(lines, ys("    movq %rax, %xmm0"));
-    lines = ya_push(lines, ys("yft_pos:"));
-    // Magnitudes at or past 2^63 cannot go through cvttsd2si (it yields
-    // the "integer indefinite" value and the digits come out as noise),
-    // and printing them exactly the way printf %f does needs bignum
-    // arithmetic. Say so instead of lying. +/-inf lands here too.
-    lines = ya_push(lines, ys("    mov $1, %rcx"));
-    lines = ya_push(lines, ys("    shl $62, %rcx"));
-    lines = ya_push(lines, ys("    cvtsi2sd %rcx, %xmm2"));
-    lines = ya_push(lines, ys("    addsd %xmm2, %xmm2"));
-    lines = ya_push(lines, ys("    ucomisd %xmm2, %xmm0"));
-    lines = ya_push(lines, ys("    setae %al"));
-    lines = ya_push(lines, ys("    movzbq %al, %rax"));
-    lines = ya_push(lines, ys("    test %rax, %rax"));
-    lines = ya_push(lines, ys("    jz yft_small"));
-    lines = ya_push(lines, ys("    lea ystr_bigflt_h(%rip), %rax"));
-    lines = ya_push(lines, ys("    jmp yft_ret"));
-    lines = ya_push(lines, ys("yft_small:"));
-    lines = ya_push(lines, ys("    cvttsd2si %xmm0, %rbx"));
-    lines = ya_push(lines, ys("    cvtsi2sd %rbx, %xmm1"));
-    lines = ya_push(lines, ys("    subsd %xmm1, %xmm0"));
-    lines = ya_push(lines, ys("    mov $1000000, %rcx"));
-    lines = ya_push(lines, ys("    cvtsi2sd %rcx, %xmm1"));
-    lines = ya_push(lines, ys("    mulsd %xmm1, %xmm0"));
-    lines = ya_push(lines, ys("    mov $1, %rcx"));
-    lines = ya_push(lines, ys("    cvtsi2sd %rcx, %xmm1"));
-    lines = ya_push(lines, ys("    mov $2, %rcx"));
-    lines = ya_push(lines, ys("    cvtsi2sd %rcx, %xmm2"));
-    lines = ya_push(lines, ys("    divsd %xmm2, %xmm1"));
-    lines = ya_push(lines, ys("    addsd %xmm1, %xmm0"));
-    lines = ya_push(lines, ys("    cvttsd2si %xmm0, %r12"));
-    lines = ya_push(lines, ys("    mov $1000000, %rcx"));
-    lines = ya_push(lines, ys("    cmp %rcx, %r12"));
-    lines = ya_push(lines, ys("    jl yft_fr"));
-    lines = ya_push(lines, ys("    xor %r12d, %r12d"));
-    lines = ya_push(lines, ys("    inc %rbx"));
-    lines = ya_push(lines, ys("yft_fr:"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    call y_long_tostr"));
-    lines = ya_push(lines, ys("    add $8, %rsp"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("    test %r13, %r13"));
-    lines = ya_push(lines, ys("    jz yft_nosign"));
-    lines = ya_push(lines, ys("    lea ystr_minus_h(%rip), %rax"));
     lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    call y_str_cat"));
-    lines = ya_push(lines, ys("    add $16, %rsp"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("yft_nosign:"));
-    lines = ya_push(lines, ys("    lea ystr_dot_h(%rip), %rax"));
-    lines = ya_push(lines, ys("    push %rbx"));
+    lines = ya_push(lines, ys("    mov $102, %rax"));
     lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    call y_str_cat"));
-    lines = ya_push(lines, ys("    add $16, %rsp"));
-    lines = ya_push(lines, ys("    mov %rax, %rbx"));
-    lines = ya_push(lines, ys("    mov $1000000, %rcx"));
-    lines = ya_push(lines, ys("    add %r12, %rcx"));
-    lines = ya_push(lines, ys("    push %rcx"));
-    lines = ya_push(lines, ys("    call y_long_tostr"));
-    lines = ya_push(lines, ys("    add $8, %rsp"));
+    lines = ya_push(lines, ys("    mov $-1, %rax"));
     lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    mov $1, %rax"));
+    lines = ya_push(lines, ys("    mov $6, %rax"));
     lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    mov $7, %rax"));
-    lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    call y_str_slice"));
-    lines = ya_push(lines, ys("    add $24, %rsp"));
-    lines = ya_push(lines, ys("    push %rbx"));
-    lines = ya_push(lines, ys("    push %rax"));
-    lines = ya_push(lines, ys("    call y_str_cat"));
-    lines = ya_push(lines, ys("    add $16, %rsp"));
+    lines = ya_push(lines, ys("    call y_fmt_f"));
+    lines = ya_push(lines, ys("    add $32, %rsp"));
     lines = ya_push(lines, ys("yft_ret:"));
     lines = ya_push(lines, ys("    pop %r13"));
     lines = ya_push(lines, ys("    pop %r12"));
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    pop %rbp"));
     lines = ya_push(lines, ys("    ret"));
-    // y_str_slice(s, lo, hi) -> NEW str = s[lo:hi], half-open and
-    // clamped like an array slice: lo < 0 counts from 0, hi > len stops
-    // at len, hi <= lo is "".
     lines = ya_push(lines, ys("y_str_slice:"));
     lines = ya_push(lines, ys("    push %rbp"));
     lines = ya_push(lines, ys("    mov %rsp, %rbp"));
@@ -1944,9 +1883,6 @@ Yv *arch_consts(void) {
     lines = ya_push(lines, ys("ystr_dot_h:"));
     lines = ya_push(lines, ys(".quad 1"));
     lines = ya_push(lines, ys(".string \".\""));
-    lines = ya_push(lines, ys("ystr_bigflt_h:"));
-    lines = ya_push(lines, ys(".quad 23"));
-    lines = ya_push(lines, ys(".string \"<float magnitude >2^63>\""));
     lines = ya_push(lines, ys("ystr_divzero: .ascii \"runtime error: division by zero\\n\""));
     lines = ya_push(lines, ys("ystr_divzero_end:"));
     lines = ya_push(lines, ys("ystr_oob: .ascii \"runtime error: index out of bounds\\n\""));
