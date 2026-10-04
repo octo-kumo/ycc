@@ -982,11 +982,28 @@ def tdisp(t: Type) -> str {
     }
 };
 
-// Merge one field into a record literal's field list. A later entry wins
-// the value (and its type); the first appearance keeps the position. That
-// is the static union rule for `{a: 1, ...obj}`: obj may overwrite a, and
-// a later explicit key may overwrite what obj spread.
+// Merge one field into a record literal's field list, in place: the array is
+// the caller's (every call site assigns the result straight back) and Y arrays
+// are references. A name the list does not have yet -- all but a repeated key
+// or a spread that overlaps one -- is an append, O(1). Rebuilding the array
+// per field was quadratic in the literal's field count in *copies*: 722 MB at
+// 4 000 fields, every field copied once per field after it.
 def field_merge(fields: [Field], name: str, typ: Type) -> [Field] {
+    let i = 0;
+    while (i < len(fields)) {
+        if (fields[i].name == name) { return field_merge_dup(fields, name, typ); };
+        i = i + 1;
+    };
+    fields += { name: name, opt: false, typ: typ };
+    fields
+};
+
+// A later entry wins the value (and its type); the first appearance keeps the
+// position. That is the static union rule for `{a: 1, ...obj}`: obj may
+// overwrite a, and a later explicit key may overwrite what obj spread. The
+// list is copied here because Y cannot remove an array element, so the later
+// appearances of the name have to go -- rare enough that the copy is worth it.
+def field_merge_dup(fields: [Field], name: str, typ: Type) -> [Field] {
     let out: [Field] = [];
     let i = 0;
     let seen = false;

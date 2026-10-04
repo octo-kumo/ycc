@@ -1220,11 +1220,31 @@ Yv *tdisp(Yv *t) {
     }
 }
 
-// Merge one field into a record literal's field list. A later entry wins
-// the value (and its type); the first appearance keeps the position. That
-// is the static union rule for `{a: 1, ...obj}`: obj may overwrite a, and
-// a later explicit key may overwrite what obj spread.
+static Yv *field_merge_dup(Yv *fields, Yv *name, Yv *typ);
+
+// Merge one field into a record literal's field list, in place: the array is
+// the caller's (every call site assigns the result straight back) and Y arrays
+// are references. A name the list does not have yet -- all but a repeated key
+// or a spread that overlaps one -- is an append, O(1). Rebuilding the array per
+// field was quadratic in the literal's field count in *copies*: 722 MB at 4 000
+// fields, every field copied once per field after it.
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ) {
+    long i = 0;
+    while (i < yv_len(fields)) {
+        if (ys_eq(yr_get(ya_get(fields, i), "name"), name)) {
+            return field_merge_dup(fields, name, typ);
+        }
+        i = i + 1;
+    }
+    return ya_push(fields, yr(3, "name", name, "opt", yv_bool(0), "typ", typ));
+}
+
+// A later entry wins the value (and its type); the first appearance keeps the
+// position. That is the static union rule for `{a: 1, ...obj}`: obj may
+// overwrite a, and a later explicit key may overwrite what obj spread. The
+// list is copied here because Y cannot remove an array element, so the later
+// appearances of the name have to go -- rare enough that the copy is worth it.
+static Yv *field_merge_dup(Yv *fields, Yv *name, Yv *typ) {
     Yv *out = yav(0);
     long i = 0;
     int seen = 0;
