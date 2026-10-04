@@ -8391,6 +8391,35 @@ long flit_bits(Yv *s) {
     }
 }
 
+/* The low 64 bits of a decimal literal, as the compiler runs it: the same wrap
+ * as the runtime's tonum (rt.y, which is where an out-of-range literal becomes
+ * a value), spelled out so the two agree on it rather than on whatever a C
+ * library's strtoll clamps to (ys_tonum clamps: it answered
+ * 9223372036854775807 where the Y twin's tonum answers 0, so the copies
+ * emitted different code for the same literal). Unsigned arithmetic, because a
+ * signed overflow is undefined in C where the Y arithmetic is defined to wrap.
+ *
+ * norm_num's output, which is decimal but can carry the sign its own radix
+ * arithmetic wrapped to -- 0xFFFFFFFFFFFFFFFF comes out as "-1" -- and which
+ * keeps any underscores a decimal literal may hold, so the sign is read
+ * separately and anything that is not a digit is skipped. */
+static long num_i64(Yv *s) {
+    unsigned long long v = 0;
+    size_t n = yv_len(s), i = 0;
+    int neg = 0;
+    while (i < n) {
+        long c = (long)(unsigned char)s->u.s.p[i];
+        if (c >= 48 && c <= 57) {
+            v = v * 10ULL + (unsigned long long)(c - 48);
+        } else if (c == 45 && i == 0) {
+            neg = 1;
+        }
+        i = i + 1;
+    }
+    if (neg) { return -(long)v; }
+    return (long)v;
+}
+
 Yv *gen_lit(Yv *st, Yv *node) {
     if (lit_is_float(yr_get(node, "v"))) {
         /* Float literal: its IEEE-754 bits, decided above. Floats live in %rax
@@ -8399,8 +8428,16 @@ Yv *gen_lit(Yv *st, Yv *node) {
                                        ys_long(flit_bits(yr_get(node, "v")))),
                                 ys(", %rax")));
     } else {
+        /* An integer literal is emitted as its VALUE, not its text: a literal
+         * wider than 64 bits runs as its low 64 bits (which is what the
+         * compiler has always done -- the checker accepts it and the runtime's
+         * tonum wraps), and `mov $18446744073709551616` is not an instruction
+         * GNU as can read, so a -S listing of such a program did not assemble
+         * at all. norm_num has already turned hex and binary into decimal, so
+         * an in-range literal emits exactly the text it did before. */
         return emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                      norm_num(yr_get(node, "v"))),
+                                      ys_long(num_i64(norm_num(
+                                          yr_get(node, "v"))))),
                                ys(", %rax")));
     }
 }

@@ -257,4 +257,33 @@ else
     skip "GNU as on -S -g" "binutils not installed"
 fi
 
+# An integer literal is emitted as its value, so a -S listing says what the
+# program runs: a literal wider than 64 bits (which the checker accepts, and
+# which runs as its low 64 bits) used to be written out as itself, and
+# `mov $18446744073709551616` is not something GNU as can read -- the listing
+# did not assemble at all. Hex and binary literals keep their value through
+# norm_num, including one that wraps (0xFFFFFFFFFFFFFFFF runs as -1).
+if command -v as >/dev/null 2>&1; then
+    printf 'print(0xff, 0b1010, 255, -7, 4294967296, 0xFFFFFFFFFFFFFFFF, 18446744073709551616, 99999999999999999999999);\n' \
+        > "$TMPD/lit.y"
+    if timeout "$CTO" "$YCC" -S "$TMPD/lit.y" </dev/null >"$TMPD/lit.s" 2>"$TMPD/lit.err" \
+        && ! grep -qE 'mov \$[0-9]{19,}' "$TMPD/lit.s" \
+        && as -o "$TMPD/lit.o" "$TMPD/lit.s" 2>"$TMPD/as.err" \
+        && timeout "$CTO" "$YCC" "$TMPD/lit.y" -o "$TMPD/lit.bin" </dev/null 2>>"$TMPD/lit.err"; then
+        run=$(run_bin 10 "$TMPD/lit.bin" </dev/null 2>&1)
+        # 255 10 255 -7 4294967296 -1 0 200376420520689663, printed one after
+        # another with no separator
+        if [ "$run" = "25510255-74294967296-10200376420520689663" ]; then
+            pass "-S emits a literal as its value, and GNU as assembles it"
+        else
+            fail "-S emits a literal as its value, and GNU as assembles it" "run '$run'"
+        fi
+    else
+        fail "-S emits a literal as its value, and GNU as assembles it" \
+            "$(head -c 200 "$TMPD/lit.err")$(head -c 200 "$TMPD/as.err")"
+    fi
+else
+    skip "-S emits a literal as its value" "binutils not installed"
+fi
+
 print_summary "debug"

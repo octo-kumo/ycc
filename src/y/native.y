@@ -6956,13 +6956,45 @@ def flit_bits(s: str) -> long {
     }
 };
 
+// The low 64 bits of a decimal literal, as the compiler runs it: the same wrap
+// as the runtime's tonum (rt.y, which is where an out-of-range literal becomes
+// a value), spelled out so the two agree on it rather than on whatever a C
+// library's strtoll clamps to.
+//
+// norm_num's output, which is decimal but can carry the sign its own radix
+// arithmetic wrapped to -- 0xFFFFFFFFFFFFFFFF comes out as "-1" -- and which
+// keeps any underscores a decimal literal may hold, so the sign is read
+// separately and anything that is not a digit is skipped.
+def num_i64(s: str) -> long {
+    let v = 0;
+    let neg = false;
+    let i = 0;
+    while (i < len(s)) {
+        let c = ord(s[i:i + 1]);
+        if (c >= c'0' && c <= c'9') {
+            v = v * 10 + c - c'0';
+        } else {
+            if (c == c'-' && i == 0) { neg = true; };
+        };
+        i = i + 1;
+    };
+    if (neg) { 0 - v } else { v }
+};
+
 def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
     if (lit_is_float(node.v)) {
         // Float literal: its IEEE-754 bits, decided above. Floats live in %rax
         // as raw bits; only arithmetic and comparison use %xmm.
         emit(st, "    mov $" + tostring(flit_bits(node.v)) + ", %rax")
     } else {
-        emit(st, "    mov $" + norm_num(node.v) + ", %rax")
+        // An integer literal is emitted as its VALUE, not its text: a literal
+        // wider than 64 bits runs as its low 64 bits (which is what the
+        // compiler has always done -- the checker accepts it and the runtime's
+        // tonum wraps), and `mov $18446744073709551616` is not an instruction
+        // GNU as can read, so a -S listing of such a program did not assemble
+        // at all. norm_num has already turned hex and binary into decimal, so
+        // an in-range literal emits exactly the text it did before.
+        emit(st, "    mov $" + tostring(num_i64(norm_num(node.v))) + ", %rax")
     }
 };
 def gen_index(st: EmitSt, node: Index) -> EmitSt {
