@@ -220,9 +220,19 @@ def y_str_repeat(s: str, n: long) -> str {
 };
 
 // `fill` repeated and cut to exactly k bytes (k > 0, fill not empty).
+//
+// The count is a division and a remainder, not `(k + f - 1) / f`: that sum
+// overflows for a width near 2^63 and comes out negative, y_str_repeat
+// answers "" for a negative count, and the padding silently vanished --
+// "7".pad_left(9223372036854775807, "abc") gave "7", where the same width
+// with a one-byte fill (no overflow) tried to allocate and trapped with "out
+// of memory". Now both ask for the same number of bytes and trap alike, which
+// is the honest answer for a width of 2^63.
 def y_str_fill(fill: str, k: long) -> str {
     let f = len(fill);
-    y_str_repeat(fill, (k + f - 1) / f)[0:k]
+    let n = k / f;
+    if (k % f > 0) { n = n + 1; };
+    y_str_repeat(fill, n)[0:k]
 };
 
 // Pad to `width` bytes with `fill`, repeated and cut where it overruns.
