@@ -114,8 +114,8 @@ static int num_eq_ok(Yv *lt, Yv *rt);
 static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static Yv *typeof_logic(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
 static int tcompat(Yv *got, Yv *want);
-static int arr_lit_adopts(Yv *got, Yv *want);
-static int arr_lit_adopts_go(Yv *got, Yv *want);
+static int arr_lit_adopts(Yv *got, Yv *want, Yv *n);
+static int arr_lit_adopts_go(Yv *got, Yv *want, Yv *n);
 static Yv *typeof_expr(Yv *st, Yv *node);
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt);
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt);
@@ -1891,17 +1891,17 @@ static int tcompat(Yv *got, Yv *want) {
 // (`let b: [byte] = [104, 105]`). Restricted to literals on purpose: the
 // layouts differ (packed vs one word each), so reinterpreting an existing
 // array would be a type pun.
-static int arr_lit_adopts(Yv *got, Yv *want) {
+static int arr_lit_adopts(Yv *got, Yv *want, Yv *n) {
     if (yv_l(yr_get(got, "k")) == K_tarr) {
-        return arr_lit_adopts_go(got, want);
+        return arr_lit_adopts_go(got, want, n);
     } else if (yv_l(yr_get(got, "k")) == K_tarrfix) {
-        return arr_lit_adopts_go(got, want);
+        return arr_lit_adopts_go(got, want, n);
     } else {
         return 0;
     }
 }
 
-static int arr_lit_adopts_go(Yv *got, Yv *want) {
+static int arr_lit_adopts_go(Yv *got, Yv *want, Yv *n) {
     if (yv_l(yr_get(want, "k")) == K_tarr) {
         return tcompat(yr_get(got, "of"), yr_get(want, "of"));
     } else if (yv_l(yr_get(want, "k")) == K_tarrfix) {
@@ -1912,6 +1912,12 @@ static int arr_lit_adopts_go(Yv *got, Yv *want) {
                 return 0;
             }
         } else {
+            /* A literal of n elements under a [T; N] annotation: n must be N,
+             * or the emitter bounds-checks a fixed array against N over a
+             * block of n (types.y arr_lit_adopts_go). */
+            if (yv_l(n) != yv_l(yr_get(want, "n"))) {
+                return 0;
+            }
             return tcompat(yr_get(got, "of"), yr_get(want, "of"));
         }
     } else {
@@ -5133,7 +5139,8 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             } else {
                 Yv *at = yr_get(r, "typ");
                 if (yv_l(yr_get(yr_get(node, "typ"), "k")) != K_tnone) {
-                    if (arr_lit_adopts(yr_get(r, "typ"), yr_get(node, "typ"))) {
+                    if (arr_lit_adopts(yr_get(r, "typ"), yr_get(node, "typ"),
+                                       yr_get(yr_get(node, "v"), "n"))) {
                         ;
                     } else {
                         st = expect_type(st, yr_get(r, "typ"),
@@ -5171,7 +5178,8 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                     // into one byte each. Only literals — assigning an
                     // existing [long] to a [byte] binding would reinterpret
                     // eight-byte slots as one, so that still errors.
-                    if (arr_lit_adopts(yr_get(r, "typ"), yr_get(node, "typ"))) {
+                    if (arr_lit_adopts(yr_get(r, "typ"), yr_get(node, "typ"),
+                                       yv_long(yv_len(yr_get(yr_get(node, "v"), "elems"))))) {
                         ;
                     } else {
                         st = expect_type(st, yr_get(r, "typ"),

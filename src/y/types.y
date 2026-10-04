@@ -1492,13 +1492,21 @@ def tcompat(got: Type, want: Type) -> bool {
 // (`let b: [byte] = [104, 105]`). Restricted to literals on purpose: the
 // layouts differ (packed vs one word each), so reinterpreting an existing
 // array would be a type pun.
-def arr_lit_adopts(got: Type, want: Type) -> bool {
-    if (got.k == K.tarr) { arr_lit_adopts_go(got, want) }
-    else if (got.k == K.tarrfix) { arr_lit_adopts_go(got, want) }
+// An array LITERAL adopts an annotated array type (`[1, 2]` under `[long; 2]`),
+// so `n` is how many elements it actually has. That matters only for a fixed
+// target: `let gx: [long; 5] = [1, 2]` must not be accepted, because the
+// emitter bounds-checks a fixed array against the annotated N while the
+// literal built a block of 2 -- every index from 2 up would read and write
+// outside it, with no trap (06-arrays.tex: "allocated with exactly N slots",
+// "bounds-trapped"). A `[T; N]` on the other side already carries its own
+// count, so it is compared against n there.
+def arr_lit_adopts(got: Type, want: Type, n: long) -> bool {
+    if (got.k == K.tarr) { arr_lit_adopts_go(got, want, n) }
+    else if (got.k == K.tarrfix) { arr_lit_adopts_go(got, want, n) }
     else { false }
 };
 
-def arr_lit_adopts_go(got: Type, want: Type) -> bool {
+def arr_lit_adopts_go(got: Type, want: Type, n: long) -> bool {
     if (want.k == K.tarr) {
         let warr: TOf = want;
         let ge: Type = t_unk();
@@ -1513,7 +1521,7 @@ def arr_lit_adopts_go(got: Type, want: Type) -> bool {
             if (garr.n == warr.n) { tcompat(garr.of, warr.of) } else { false }
         } else {
             let garr: TOf = got;
-            tcompat(garr.of, warr.of)
+            if (n != warr.n) { false } else { tcompat(garr.of, warr.of) }
         }
     }
     else { false }
@@ -3839,7 +3847,8 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
             } else {
                 let at = r.typ;
                 if (node.typ.k != K.tnone) {
-                    if (arr_lit_adopts(r.typ, node.typ)) {
+                    let rep: ArrRep = node.v;
+                    if (arr_lit_adopts(r.typ, node.typ, rep.n)) {
                     } else {
                         st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                     };
@@ -3862,7 +3871,8 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                     // into one byte each. Only literals — assigning an
                     // existing [long] to a [byte] binding would reinterpret
                     // eight-byte slots as one, so that still errors.
-                    if (arr_lit_adopts(r.typ, node.typ)) { } else {
+                    let lit: ArrLit = node.v;
+                    if (arr_lit_adopts(r.typ, node.typ, len(lit.elems))) { } else {
                         st = expect_type(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
                     };
                     t = node.typ;
