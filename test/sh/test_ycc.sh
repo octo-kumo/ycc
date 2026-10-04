@@ -140,6 +140,8 @@ expect_cli_error() {
 }
 
 expect_cli_error "unknown flag" "ycc: unknown flag '--bad' (see ycc -h)" --bad
+expect_cli_error "-o with an empty path" "ycc: -o needs a path, got ''" \
+    -o "" "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "-W without a level" "ycc: -W needs a warning level (0, or 1)" \
     -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y" -W
 expect_cli_error "-W with a bad level" "ycc: -W needs a warning level (0, or 1), got 'x'" \

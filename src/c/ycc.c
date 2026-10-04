@@ -56,6 +56,13 @@ Yv *parse_cli_args(Yv *argv) {
             if (i + 1 < n) {
                 i = i + 1;
                 out = ya_get(argv, i);
+                /* An empty path used to be taken for "no -o", and the binary
+                 * landed in ./a.out -- a silent write to the wrong place,
+                 * which `make` scripts get wrong in turn (ycc.y). */
+                if (yv_len(out) == 0) {
+                    puts_(ys("ycc: -o needs a path, got ''\n"));
+                    exit_(1);
+                }
                 ;
             } else {
                 puts_(ys("ycc: -o needs an argument\n"));

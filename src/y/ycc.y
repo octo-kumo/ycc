@@ -44,6 +44,13 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             if (i + 1 < n) {
                 i = i + 1;
                 out = argv[i];
+                if (len(out) == 0) {
+                    // an empty path used to be taken for "no -o", and the
+                    // binary landed in ./a.out -- a silent write to the
+                    // wrong place, which `make` scripts get wrong in turn
+                    puts("ycc: -o needs a path, got ''\n");
+                    exit(1);
+                };
             } else {
                 puts("ycc: -o needs an argument\n");
                 exit(1);
