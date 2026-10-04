@@ -30,7 +30,7 @@
 
 import tags from "./tags.y";
 import arch from "./arch_x64.y";
-// For its alias AsmLabel.
+// For its aliases AsmLabel and AsmNum.
 import asm from "./asm.y";
 import types from "./types.y";
 import rename from "./rename.y";
@@ -7272,13 +7272,70 @@ def block6(a: Node, b: Node, c: Node, d: Node, e: Node, f: Node, ln: long, cl: l
     { k: K.block, stmts: st, line: ln, col: cl }
 };
 
+// The frame offset of `node` when it names a plain long local that can be
+// stepped or adjusted in place -- one `inc`/`dec`/`add $imm` on the slot, with
+// no register and no frame slot of its own. Everything else is 0 (offsets grow
+// downward from -8, so 0 is never a slot):
+//   - an index or field target has to evaluate its place once, which is what
+//     the desugar's synthetic bind is for;
+//   - an appendable string ("own"), a global, and a box/capture cell all need
+//     the desugar's path -- a string read clears its companion cell and a box
+//     write goes through the shared cell;
+//   - a byte slot must wrap at 128, which a 64-bit ALU op on the slot would
+//     not do (the desugar's movzbq/movb pair does).
+def inplace_slot(st: EmitSt, node: Node) -> long {
+    let off = 0;
+    if (node.k == K.id) {
+        let id: Leaf = node;
+        let e = env_find(st, id.v);
+        if (e.kind == "local" && e.typ.k == K.tlong) { off = e.off; };
+    };
+    off
+};
+
+// The immediate of an `add $imm, slot`: an integer literal the 83 /ext ib and
+// 81 /ext id forms can take (a signed byte, else a signed 32-bit word), and
+// nothing else -- x86 has no ALU form with a memory *source*, so a computed
+// right-hand side has to travel in a register and keeps the desugar.
+def int_imm(r: Node) -> AsmNum {
+    let ok = false;
+    let v = 0;
+    if (r.k == K.num) {
+        let num: Leaf = r;
+        if (!lit_is_float(num.v)) {
+            let n = tonum(norm_num(num.v));
+            if (n >= -2147483648 && n <= 2147483647) {
+                ok = true;
+                v = n;
+            };
+        };
+    };
+    { ok: ok, v: v }
+};
+
 // `dropped` is gen_stmt's: the desugar builds `{ bind; let v = <place>;
 // <target> = <v op e>; v }`, whose value is the place read -- the old x for
-// `x++`. As a statement nothing reads that load, and it is one instruction
-// per site (1,026 in ycc's own output). A statement context therefore runs
-// the block through gen_discard, whose last statement is a statement too, and
-// gen_stmt drops the frame read.
+// `x++`. As a statement nothing reads that load (654 such reads in ycc's own
+// output), so a statement context runs the block through gen_discard, whose
+// last statement is a statement too, and gen_stmt drops the local read.
+//
+// Where the target is a plain long local, all ten instructions of the desugar
+// become one: `inc -8(%rbp)` where the desugar wrote a bind, a read, a copy
+// in, an immediate, a copy back and a store -- and took a frame slot for it.
 def gen_incdec(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
+    let slot = 0;
+    if (dropped) { slot = inplace_slot(st, node.tgt); };
+    if (slot != 0) {
+        let mn = "inc";
+        if (node.op == "--") { mn = "dec"; };
+        emit(st, "    " + mn + " " + tostring(slot) + "(%rbp)")
+    } else {
+        gen_incdec_desugar(st, node, dropped)
+    }
+};
+
+// The desugar gen_incdec's fast path skips (see its comment).
+def gen_incdec_desugar(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
     let op = node.op;
     let binop = "+";
     if (op == "--") { binop = "-"; }
@@ -7352,9 +7409,64 @@ def gen_opassign(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     }
 };
 
+// `x op= v` for numbers and strings -> `x = x op v`, with the target's
+// index/base evaluated once through a synthetic let. The desugar is ten
+// instructions and a frame slot; on a plain long local, as a statement, the
+// operation is two to six and no slot at all:
+//
+//   x += 2      add $2, -8(%rbp)                       (the 83 /ext ib form)
+//   x += e      mov -8(%rbp), %rax ; push %rax ; <e> ; mov %rax, %rcx ;
+//               pop %rax ; add %rcx, %rax ; mov %rax, -8(%rbp)
+//
+// The place is read FIRST in the register form, exactly as the desugar orders
+// it, so a right-hand side that writes the variable through a closure still
+// sees the old value.
+//
+// The ops left to the desugar are the ones whose computation is more than the
+// ALU instruction: `/` and `%` need its zero check and idiv, the shifts their
+// count check, and a byte, float or non-local target a different instruction
+// altogether (see inplace_slot).
 def gen_opassign_arith(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
-    // `x op= v` for numbers and strings -> `x = x op v`, with the target's
-    // index/base evaluated once through a synthetic let.
+    let mn = "";
+    let slot = 0;
+    let imm = 0;
+    let has_imm = false;
+    if (dropped) {
+        slot = inplace_slot(st, node.tgt);
+        if (slot != 0) {
+            let op = node.op;
+            if (op == "+") { mn = "add"; }
+            else if (op == "-") { mn = "sub"; }
+            else if (op == "*") { mn = "imul"; }
+            else if (op == "|") { mn = "or"; }
+            else if (op == "&") { mn = "and"; }
+            else if (op == "^") { mn = "xor"; };
+            if (mn != "") {
+                let im = int_imm(node.v);
+                if (im.ok) {
+                    has_imm = true;
+                    imm = im.v;
+                };
+            };
+        };
+    };
+    if (mn == "") {
+        gen_opassign_desugar(st, node, dropped)
+    } else if (has_imm) {
+        emit(st, "    " + mn + " $" + tostring(imm) + ", " + tostring(slot) + "(%rbp)")
+    } else {
+        st = emit(st, "    mov " + tostring(slot) + "(%rbp), %rax");
+        st = emit(st, "    push %rax");
+        st = gen(st, node.v);
+        st = emit(st, "    mov %rax, %rcx");
+        st = emit(st, "    pop %rax");
+        st = emit(st, "    " + mn + " %rcx, %rax");
+        emit(st, "    mov %rax, " + tostring(slot) + "(%rbp)")
+    }
+};
+
+// The desugar gen_opassign_arith's fast path skips (see its comment).
+def gen_opassign_desugar(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     let tgt = node.tgt;
     let op = node.op;
     let ln = node.line;

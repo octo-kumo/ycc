@@ -374,6 +374,8 @@ Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl);
 Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl);
 Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl);
 Yv *gen_incdec(Yv *st, Yv *node, int dropped);
+Yv *gen_incdec_desugar(Yv *st, Yv *node, int dropped);
+Yv *gen_opassign_desugar(Yv *st, Yv *node, int dropped);
 Yv *gen_incdec_end(Yv *st, Yv *bind, Yv *d2, Yv *asg, int dropped,
                    long ln, long cl);
 Yv *place_value_type(Yv *t);
@@ -8749,7 +8751,80 @@ Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl) {
  * per site (654 in ycc's own output). A statement context therefore runs the
  * block through gen_discard, whose last statement is a statement too, and
  * gen_stmt drops the local read. */
+/* The frame offset of `node` when it names a plain long local that can be
+   stepped or adjusted in place -- one `inc`/`dec`/`add $imm` on the slot, with
+   no register and no frame slot of its own. Everything else is 0 (offsets grow
+   downward from -8, so 0 is never a slot):
+     - an index or field target has to evaluate its place once, which is what
+       the desugar's synthetic bind is for;
+     - an appendable string ("own"), a global, and a box/capture cell all need
+       the desugar's path -- a string read clears its companion cell and a box
+       write goes through the shared cell;
+     - a byte slot must wrap at 128, which a 64-bit ALU op on the slot would
+       not do (the desugar's movzbq/movb pair does). */
+long inplace_slot(Yv *st, Yv *node) {
+    long off = 0;
+    if (yv_l(yr_get(node, "k")) == K_id) {
+        Yv *id = node;
+        Yv *e = env_find(st, yr_get(id, "v"));
+        if (ys_eq_lit(yr_get(e, "kind"), "local") &&
+            yv_l(yr_get(yr_get(e, "typ"), "k")) == K_tlong) {
+            off = yv_l(yr_get(e, "off"));
+            ;
+        }
+    }
+    return off;
+}
+
+/* The immediate of an `add $imm, slot`: an integer literal the 83 /ext ib and
+   81 /ext id forms can take (a signed byte, else a signed 32-bit word), and
+   nothing else -- x86 has no ALU form with a memory *source*, so a computed
+   right-hand side has to travel in a register. (AsmNum: asm.y's alias for
+   {ok, v}.) */
+Yv *int_imm(Yv *r) {
+    int ok = 0;
+    long v = 0;
+    if (yv_l(yr_get(r, "k")) == K_num) {
+        Yv *num = r;
+        if (!lit_is_float(yr_get(num, "v"))) {
+            long n = ys_tonum(norm_num(yr_get(num, "v")));
+            if (n >= -2147483648L && n <= 2147483647L) {
+                ok = 1;
+                v = n;
+                ;
+            }
+            ;
+        }
+        ;
+    }
+    return yr(2, "ok", yv_bool(ok), "v", yv_long(v));
+}
+
+
 Yv *gen_incdec(Yv *st, Yv *node, int dropped) {
+    /* Where the target is a plain long local, all ten instructions of the
+       desugar become one: `inc -8(%rbp)` where the desugar wrote a bind, a
+       read, a copy in, an immediate, a copy back and a store -- and took a
+       frame slot for it. See gen_incdec_desugar for the rest. */
+    long slot = 0;
+    if (dropped) {
+        slot = inplace_slot(st, yr_get(node, "tgt"));
+        ;
+    }
+    if (slot != 0) {
+        Yv *mn = ys("inc");
+        if (ys_eq_lit(yr_get(node, "op"), "--")) {
+            mn = ys("dec");
+            ;
+        }
+        return emit(st, ys_cat(ys_cat(ys_cat(ys("    "), mn), ys(" ")),
+                               ys_cat(ys_long(slot), ys("(%rbp)"))));
+    } else {
+        return gen_incdec_desugar(st, node, dropped);
+    }
+}
+
+Yv *gen_incdec_desugar(Yv *st, Yv *node, int dropped) {
     Yv *op = yr_get(node, "op");
     Yv *binop = ys("+");
     if (ys_eq_lit(op, "--")) {
@@ -8818,6 +8893,81 @@ Yv *gen_opassign(Yv *st, Yv *node, int dropped) {
 }
 
 Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped) {
+    /* `x op= v` for numbers and strings -> `x = x op v`, with the target's
+       index/base evaluated once through a synthetic let. The desugar is ten
+       instructions and a frame slot; on a plain long local, as a statement, the
+       operation is two to six and no slot at all:
+
+         x += 2      add $2, -8(%rbp)                    (the 83 /ext ib form)
+         x += e      mov -8(%rbp), %rax ; push %rax ; <e> ; mov %rax, %rcx ;
+                     pop %rax ; add %rcx, %rax ; mov %rax, -8(%rbp)
+
+       The place is read FIRST in the register form, exactly as the desugar
+       orders it, so a right-hand side that writes the variable through a
+       closure still sees the old value.
+
+       The ops left to the desugar are the ones whose computation is more than
+       the ALU instruction: `/` and `%` need its zero check and idiv, the
+       shifts their count check, and a byte, float or non-local target a
+       different instruction altogether (see inplace_slot). */
+    Yv *mn = ys("");
+    long slot = 0;
+    long imm = 0;
+    int has_imm = 0;
+    if (dropped) {
+        slot = inplace_slot(st, yr_get(node, "tgt"));
+        if (slot != 0) {
+            Yv *op = yr_get(node, "op");
+            if (ys_eq_lit(op, "+")) {
+                mn = ys("add");
+                ;
+            } else if (ys_eq_lit(op, "-")) {
+                mn = ys("sub");
+                ;
+            } else if (ys_eq_lit(op, "*")) {
+                mn = ys("imul");
+                ;
+            } else if (ys_eq_lit(op, "|")) {
+                mn = ys("or");
+                ;
+            } else if (ys_eq_lit(op, "&")) {
+                mn = ys("and");
+                ;
+            } else if (ys_eq_lit(op, "^")) {
+                mn = ys("xor");
+                ;
+            }
+            if (yv_len(mn) > 0) {
+                Yv *im = int_imm(yr_get(node, "v"));
+                if (yv_b(yr_get(im, "ok"))) {
+                    has_imm = 1;
+                    imm = yv_l(yr_get(im, "v"));
+                    ;
+                }
+                ;
+            }
+            ;
+        }
+        ;
+    }
+    if (yv_len(mn) == 0) {
+        return gen_opassign_desugar(st, node, dropped);
+    } else if (has_imm) {
+        Yv *t1 = ys_cat(ys_cat(ys("    "), mn), ys(" $"));
+        Yv *t2 = ys_cat(ys_long(imm), ys(", "));
+        return emit(st, ys_cat(ys_cat(t1, t2), ys_cat(ys_long(slot), ys("(%rbp)"))));
+    } else {
+        st = emit(st, ys_cat(ys("    mov "), ys_cat(ys_long(slot), ys("(%rbp), %rax"))));
+        st = emit(st, ys("    push %rax"));
+        st = gen(st, yr_get(node, "v"));
+        st = emit(st, ys("    mov %rax, %rcx"));
+        st = emit(st, ys("    pop %rax"));
+        st = emit(st, ys_cat(ys_cat(ys("    "), mn), ys(" %rcx, %rax")));
+        return emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(slot), ys("(%rbp)"))));
+    }
+}
+
+Yv *gen_opassign_desugar(Yv *st, Yv *node, int dropped) {
     /* `x op= v` for numbers and strings -> `x = x op v`, with the target's
      * index/base evaluated once through a synthetic let. */
     Yv *tgt = yr_get(node, "tgt");
