@@ -14,7 +14,7 @@ source "$(dirname "$0")/lib.sh"
 
 port_check() {
     local file="$1"
-    local name="${file#"$ROOT"/}"
+    local name="${file#"$ROOT"/}${2:+ ($2)}"
     local binr binc
     binr=$(mktemp /tmp/yport_ref_XXXXXX)
     binc=$(mktemp /tmp/yport_cop_XXXXXX)
@@ -50,6 +50,19 @@ port_check() {
 # `make ycc`, `make check`, `make rebless`).
 while IFS= read -r f; do
     next_case && port_check "$f"
+done < <(find "$ROOT/test/y" -name '*.y' | sort
+         [ "${YPORT_SELF:-1}" = 0 ] || echo "$ROOT/src/y/ycc.y")
+
+# And again at warning level 1. At the default level every level-1 lint check
+# draws nothing (lint.y gates them on `wlevel >= 1`), so the warning comparison
+# above could not see a divergence in any of them — the C twin's node table
+# against lint.y's is hand-replicated, and hand-replicated tables drift. Same
+# comparison, same binaries, different flags: warnings to stderr, and the
+# emitted bytes must still be identical (a warning level changes what is
+# *said*, never what is emitted).
+YFLAGS="-W 1"
+while IFS= read -r f; do
+    next_case && port_check "$f" "-W 1"
 done < <(find "$ROOT/test/y" -name '*.y' | sort
          [ "${YPORT_SELF:-1}" = 0 ] || echo "$ROOT/src/y/ycc.y")
 

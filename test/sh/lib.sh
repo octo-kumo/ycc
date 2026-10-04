@@ -90,15 +90,23 @@ next_case() {
     [ -z "${YSHARD:-}" ] || (( _YCASE % ${YSHARD#*/} == ${YSHARD%/*} ))
 }
 
+# $YFLAGS rides on every compile a suite drives (e.g. YFLAGS="-W 1"). Empty by
+# default, so a suite behaves exactly as before unless it asks. The port gate
+# uses it to compare the two copies at warning level 1, where the level-1 lint
+# runs: without that pass a divergence in any level-1 check is invisible,
+# because at the default level those checks draw nothing (lint.y's
+# `wlevel >= 1` guards).
+YFLAGS=${YFLAGS:-}
+
 # compile_ref <file> <bin> [timeout]  — compile with the reference ycc.
 # compile_copy <file> <bin> [timeout] — compile with the C copy.
 # Exit = the compiler's exit; diagnostics land in RUN_RERR / RUN_CERR.
 compile_ref() {
-    RUN_RERR=$(timeout "${3:-60}" "$YREF" -o "$2" "$1" </dev/null 2>&1)
+    RUN_RERR=$(timeout "${3:-60}" "$YREF" ${YFLAGS:+$YFLAGS} -o "$2" "$1" </dev/null 2>&1)
     return $?
 }
 compile_copy() {
-    RUN_CERR=$(timeout "${3:-60}" "$CYCC" -o "$2" "$1" </dev/null 2>&1)
+    RUN_CERR=$(timeout "${3:-60}" "$CYCC" ${YFLAGS:+$YFLAGS} -o "$2" "$1" </dev/null 2>&1)
     return $?
 }
 

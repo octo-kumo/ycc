@@ -541,11 +541,23 @@ static long lint_unused_expr(LintSt st, Yv *node, int used) {
 }
 
 /* The kinds with one operand, `e`; a unary operator's dropped result is
- * a mistake. */
+ * a mistake. NOTE: the arms mirror lint.y's lint_one one for one, in the
+ * same order. K_matchend is the compiler's own marker at the end of a match:
+ * descend into the match as used and draw nothing -- it is not a value
+ * anybody computed. It was missing here, so a `match` used as a statement
+ * drew a spurious "the value computed here is not used" from the C copy
+ * only, at the `match` keyword. The port gate could not see it: it compares
+ * the two compilers' warnings at the default level, where every level-1
+ * check draws nothing (test/sh/test_port.sh now also runs a `-W 1` pass). */
 static long lint_one(LintSt st, Yv *node, int used) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_un) {
         return lint_un(st, node, used);
+    } else if (yv_l(k) == K_rectest || yv_l(k) == K_narrow) {
+        (void)lint_node(st, yr_get(node, "e"), 1);
+        return lint_unused_expr(st, node, used);
+    } else if (yv_l(k) == K_matchend) {
+        return lint_node(st, yr_get(node, "e"), 1);
     } else if (yv_l(k) == K_ret) {
         return lint_node(st, yr_get(node, "e"), 1);
     } else {
