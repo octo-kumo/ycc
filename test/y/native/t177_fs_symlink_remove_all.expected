@@ -1,0 +1,24 @@
+tree true true true true
+link true
+the link names a dir true false true
+remove_all(link) true
+link gone true target kept keep
+ inner
+
+file link true true true plain
+
+inside true true true true
+remove_all(tree) true true target kept [deep, keep.txt]
+a dangling link true true true
+remove_all(target) true true
+remove_all(nothing) false true true
+slash link true true true
+remove_all(slink/) false [] true [dir, slink]
+setup true true true true true true
+it names true [in.txt] dst
+ 4
+rename moves the link true true true [in.txt]
+copy_file writes through true src
+ true
+remove_file unlinks true [in.txt] false [dir, dir2, dst.txt, slink, src.txt, wlink]
+cleanup true true

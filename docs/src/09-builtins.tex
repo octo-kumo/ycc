@@ -294,7 +294,9 @@ octal permission number (\ic{420} is \ic{0644}, \ic{493} is \ic{0755});
   \ic{.} and \ic{..}; \ic{[str]?}.
 \item[\ic{fs.remove\_dir(path)}] An empty directory; \ic{bool}.
 \item[\ic{fs.remove\_all(path)}] A file, or a directory and everything in
-  it; \ic{bool}.
+  it; \ic{bool}. A symlink is unlinked, never followed: what it names is
+  not this path's to delete, as with \ic{rm -rf}. A trailing slash is a
+  different path, and names what the link names.
 \item[\ic{fs.cwd()}] The working directory.
 \item[\ic{fs.chdir(path)}] Change it; \ic{bool}.
 \item[\ic{fs.open\_file(path, how, mode = 420)}] Open with a mode string:

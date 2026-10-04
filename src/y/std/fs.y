@@ -171,16 +171,27 @@ def copy_file(from: str, to: str) -> bool {
 
 // ── paths ────────────────────────────────────────────────────────────────
 
+// The st_mode of path by newfstatat: -1 when there is no such path. flags
+// 0 is stat, which follows a symlink; 256 (AT_SYMLINK_NOFOLLOW) is lstat,
+// which does not.
+def mode_of(path: str, flags: long) -> long {
+    let st: [long; 18] = [0; 18];
+    if (syscall(262, fs_at_cwd(), path, &st[0], flags) != 0) { -1 } else { st[3] & 4294967295 }
+};
+
 // The st_mode of path (stat follows a symlink), -1 when there is no such
 // path.
-def path_mode(path: str) -> long {
-    let st: [long; 18] = [0; 18];
-    if (syscall(262, fs_at_cwd(), path, &st[0], 0) != 0) { -1 } else { st[3] & 4294967295 }
-};
+def path_mode(path: str) -> long { mode_of(path, 0) };
+
+// The same for path's last component itself, so a symlink's mode is S_IFL
+// whatever it names.
+def path_mode_itself(path: str) -> long { mode_of(path, 256) };
 
 def exists(path: str) -> bool { path_mode(path) >= 0 };
 def is_file(path: str) -> bool { (path_mode(path) & 61440) == 32768 };
 def is_dir(path: str) -> bool { (path_mode(path) & 61440) == 16384 };
+// A directory itself: a symlink to one is not.
+def is_dir_itself(path: str) -> bool { (path_mode_itself(path) & 61440) == 16384 };
 
 // The size of path in bytes.
 def file_size(path: str) -> long? {
@@ -193,9 +204,13 @@ def remove_file(path: str) -> bool { syscall(263, fs_at_cwd(), path, 0) == 0 };
 // An empty directory.
 def remove_dir(path: str) -> bool { syscall(263, fs_at_cwd(), path, 512) == 0 };
 
-// path and everything in it.
+// path and everything in it. A symlink is unlinked, never followed: what
+// it names is not this path's to delete (and rm -rf, which decides
+// "directory" with lstat too, takes the link and leaves the target). A
+// trailing slash is a different path -- resolution makes "link/" name the
+// target's contents, and rm -rf empties it there too.
 def remove_all(path: str) -> bool {
-    if (is_dir(path)) {
+    if (is_dir_itself(path)) {
         let names = list_dir(path);
         let ok = names != none;
         if (ok) {
