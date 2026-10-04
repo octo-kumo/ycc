@@ -19,8 +19,14 @@
 
 static long g_heap_used = 0;
 
+/* Nothing is ever freed, so a compile that runs out of memory says so and
+   stops -- with the same text, on the same stream, and the same status as the
+   Y copy's own trap (arch_x64.y y_alloc_fail writes to fd 1 and exit_groups).
+   The port gate cannot compare this: it looks at output, not at exits, and
+   lib.sh's 3.5 GB cap never reaches an allocation failure. */
 static void yoom(void) {
-    fprintf(stderr, "out of memory\n");
+    fputs("runtime error: out of memory\n", stdout);
+    fflush(stdout);
     exit(1);
 }
 

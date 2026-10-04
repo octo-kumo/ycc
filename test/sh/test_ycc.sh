@@ -177,6 +177,36 @@ expect_cli_error "import depth" "error: native import depth exceeded (cycle?)" \
     -o "$DEPTH_DIR/a.out" "$DEPTH_DIR/main.y"
 rm -rf "$DEPTH_DIR"
 
+# The compiler running out of memory must look the same from both copies: the
+# same text, on the same stream, with the same status. The port gate cannot see
+# this -- it compares output, not exits -- and lib.sh's 3.5 GB cap never gets
+# near an allocation failure, so the case brings its own ulimit and its own
+# input: 120 000 tiny functions need well over 400 MB to check and emit.
+# 400 MB leaves a dynamically linked cycc enormous headroom, so this fails in
+# the allocator rather than in the loader on any machine.
+OOM_DIR=$(mktemp -d /tmp/ycc_oom.XXXXXX)
+{
+    for i in $(seq 0 119999); do
+        echo "def f$i(a: long) -> long { let s = 0; s += a; s * 2; }"
+    done
+    echo 'print(f0(1));'
+} > "$OOM_DIR/big.y"
+oom_seen=0
+for compiler in "$YCC_BIN" "$CYCC"; do
+    oom_out=$( (ulimit -S -v 409600; timeout $(( 120 * YTIMEOUT_SCALE )) "$compiler" \
+        -o "$OOM_DIR/big.bin" "$OOM_DIR/big.y" </dev/null) 2>"$OOM_DIR/err" )
+    oom_ec=$?
+    if [ "$oom_ec" -eq 1 ] && [ "$oom_out" = "runtime error: out of memory" ] \
+        && [ ! -s "$OOM_DIR/err" ]; then
+        oom_seen=$((oom_seen + 1))
+    else
+        fail "OOM report (${compiler##*/})" \
+            "exit=$oom_ec, out='$oom_out', err='$(cat "$OOM_DIR/err")'"
+    fi
+done
+[ "$oom_seen" -eq 2 ] && pass "OOM report identical from both copies"
+rm -rf "$OOM_DIR"
+
 echo ""
 echo "═══════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))
