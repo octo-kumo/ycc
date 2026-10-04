@@ -129,6 +129,7 @@ division or remainder by zero & \ic{runtime error: division by zero} \\
 shift by a negative count & \ic{runtime error: negative shift count} \\
 \ic{unwrap(none)}, \ic{none!} & \ic{runtime error: unwrap of none} \\
 slice assignment out of range & \ic{runtime error: slice assignment out of bounds} \\
+\ic{a[lo:hi] = b}, wrong \ic{len(b)} & \ic{runtime error: slice assignment length mismatch} \\
 match with no arm covering a value & \ic{runtime error: no match arm matched} \\
 a union value cast to a member & \ic{runtime error: a union value cast to} \\
 \quad it does not hold (Section~\ref{sec:type-unions}) & \quad\ic{a member it does not hold} \\

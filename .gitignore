@@ -18,15 +18,9 @@ _rb[12]
 _rbp
 *.pack
 _check/
+# docs/build/ is Tectonic's output (docs/build/default/default.pdf)
+docs/build/
 .vscode/
-wasm/ycc-single.js
-wasm/ycc.js
-wasm/ycc.wasm
-wasm/test-single.js
-wasm/playground/ycc-single.js
-wasm/playground/emit-as.js
-wasm/playground/check.js
-tools/lsp/check.js
 embedded_runtime.inc
 
 # Reference binaries kept for port verification (see refs/SHA256SUMS)
@@ -35,3 +29,9 @@ cycc-asan
 # test/fuzz/fuzz.sh scratch directories
 test/fuzz/work.*
 compiler-audit
+
+
+# ignore files in examples without extensions (that means they are compiled binaries)
+examples/**
+!examples/**/
+!examples/**/*.*

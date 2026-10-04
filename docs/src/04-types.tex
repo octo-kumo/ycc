@@ -66,7 +66,10 @@ with exactly one field, \ic{k}.
 
 A record literal written where a record type is declared --- an
 annotated \ic{let}, an argument, a \ic{return} or trailing value, a
-field, an element --- is created as that type: each value is checked
+field, an element, an assignment \ic{r = \{... \}}, a map store
+\ic{m['k'] = \{... \}}, a pointee \ic{*p = \{... \}} and the element
+that \ic{+=}, \ic{*=} or \ic{::} adds --- is created as that type: each
+value is checked
 against its field's type, converting as any store does
 (Section~\ref{sec:conversions}), and a record literal among them
 likewise. Where a union is declared, the literal is the member with its
@@ -381,8 +384,8 @@ on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} accept any
 values: a non-zero value is true and the result is \ic{bool}
 (Section~\ref{sec:evaluation}). Equality works on any two values of the
 same type; it is by content for scalars and strings, structural for
-arrays and options (at any depth), and by identity for records and maps
-(Section~\ref{sec:equality}).
+heap arrays and options (at any depth), and by identity for records and
+maps (Section~\ref{sec:equality}).
 
 \subsection{Compound assignment typing}
 \label{sec:opassign-typing}

@@ -15,9 +15,14 @@ a runtime error (Section~\ref{sec:errors}).
   \ic{foreach (k in keys(m)) \{ print(k, m[k]!); \};}.
 \item[\ic{range(n)}] \ic{[0, 1, ..., n-1]}.
 \item[\ic{trim(s)}] Strip leading/trailing space, tab, CR, LF.
-\item[\ic{join(xs, sep)}] Concatenate \ic{[str]} with a separator.
+\item[\ic{join(xs, sep)}] Concatenate an array with a separator. The
+  elements need not be strings --- each is converted as \ic{tostring}
+  would, so a \ic{float}, a \ic{bool} or a \ic{[long]} may be joined as
+  readily as a \ic{str}.
 \item[\ic{split(s, sep)}] Split on every occurrence of a non-empty
-  separator; returns \ic{[str]} (empty for empty separator).
+  separator; returns \ic{[str]} (empty for empty separator). A trailing
+  empty piece is dropped, so \ic{"a,".split(",")} is \ic{["a"]} where
+  Python's \ic{split} would give \ic{['a', '']}.
 \item[\ic{index\_of(s, sub)}] First index of \ic{sub} in \ic{s}, or
   \ic{-1}.
 \item[\ic{last\_index\_of(s, sub)}] Last index, or \ic{-1}.
@@ -28,7 +33,8 @@ a runtime error (Section~\ref{sec:errors}).
 \end{description}
 
 \noindent There is no \ic{substr}: a substring is a slice,
-\ic{s[i:i + n]} (Section~\ref{sec:slices}).
+\ic{s[i:i + n]} (Section~\ref{sec:slices}). Joining is not restricted to
+strings either, so \ic{join([1, 2, 3], ",")} is \ic{"1,2,3"}.
 
 \subsection{String methods}
 \label{sec:string-methods}
@@ -72,12 +78,20 @@ a record still calls the field. \ic{s.length} is a property, so
 \label{sec:builtin-tostring}
 
 \begin{description}[style=nextline,leftmargin=5.2em]
-\item[\ic{tostring(v)}] String form: numbers as decimal (floats with six
-  decimals), \ic{true}/\ic{false}, strings unchanged, options as their
-  payload or \ic{"none"}, arrays as \ic{"[e0, e1, ...]"}, records as
+\item[\ic{tostring(v)}] String form: numbers as decimal (a \ic{float}
+  with six decimals, its digits exact), \ic{true}/\ic{false}, strings
+  unchanged, options as their
+  payload or \ic{"none"}, arrays as \ic{"[e0, e1, ...]"} --- except a
+  \ic{[byte]} or \ic{[byte; N]}, which is the byte-string repr
+  \ic{b'...'} of Section~\ref{sec:arrays} --- records as
   \ic{"\{k: v, ...\}"}, maps as \ic{"\{"k": v, ...\}"} (string keys
-  quoted).
-\item[\ic{tonum(s)}] Parse a decimal integer (\ic{0} on garbage).
+  quoted). A function is \emph{not} accepted here (only \ic{print} takes
+  one, Section~\ref{sec:builtin-io}).
+\item[\ic{tonum(s)}] Parse a decimal integer. The scan takes an optional
+  \ic{-} and then digits, and \emph{stops} at the first byte that is
+  neither: a prefix is used and the rest ignored (\ic{tonum("12x")} is
+  \ic{12}, \ic{tonum("3.14")} is \ic{3}), and only a string with no such
+  prefix at all gives \ic{0}.
 \item[\ic{typeof(v)}] The static type as a printable value
   (\ic{typeof(none)} is \ic{"none"}).
 \end{description}
@@ -160,12 +174,25 @@ fill is one byte, and widths count bytes.
 \end{description}
 
 \subsection{Input/output and the environment}
+\label{sec:builtin-io}
 
 \begin{description}[style=nextline,leftmargin=5.2em]
-\item[\ic{print(x)}] Print a value followed by a newline to stdout.
-\item[\ic{puts(s)}] Write a string to stdout, no newline added.
+\item[\ic{print(x)}] Print a value followed by a newline to stdout. Any
+  value may be printed, \ic{void} excepted; a function prints as its
+  type, spelled out:
+
+\begin{lstlisting}
+def add(a: long, b: long) -> long { return a + b; };
+print(add);      // <function (long, long)->(long)>
+\end{lstlisting}
+\item[\ic{print(a, b, ...)}] Several arguments are allowed: each is
+  written as \ic{tostring} would and they are concatenated with no
+  separator, so \ic{print(n, " ", xs)} prints \ic{7 [1, 2]}. A call with
+  no argument at all is an error (\ic{print takes exactly 1 argument}).
+\item[\ic{puts(s)}] Write to stdout, no newline added. A \ic{long},
+  \ic{bool} or \ic{float} is written as \ic{tostring} would.
 \item[\ic{eputs(s)}] Same, to stderr (keeps \ic{--time} output and
-  program output apart).
+  program output apart); the same three numeric types as \ic{puts}.
 \item[\ic{readline()}] One line from stdin without its newline, or
   \ic{none} at end of input (\ic{str?}). Stdin is buffered (16\,KB per
   \ic{read(2)}); before \ic{exec()} starts a child, the unread part is
@@ -174,7 +201,8 @@ fill is one byte, and widths count bytes.
   C stdio.
 \item[\ic{clear\_eof()}] No-op: \ic{readline()} reads again whenever
   its buffer is empty, so end of input is never latched. Present so the
-  same source runs on every compiler.
+  same source runs on every compiler. It answers \ic{0} (a \ic{long}),
+  so it may stand where a value is wanted.
 \item[\ic{argv()}] \ic{[str]} of the program's arguments.
 \item[\ic{exit(code)}] Terminate with an exit code.
 \item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}: for
@@ -184,10 +212,16 @@ fill is one byte, and widths count bytes.
   set.
 \item[\ic{heap\_used()}] Bytes allocated so far (by the thread that
   asks: each has a heap of its own).
-\item[\ic{sleep(ms)}] Suspend the process (\ic{void}).
-\item[\ic{syscall(...)}] Raw Linux syscall wrapper; the first argument
-  is the syscall number.
-\item[\ic{exec(cmd)}] Run a shell command, return its exit code.
+\item[\ic{sleep(ms)}] Suspend the calling \emph{thread} for \ty{ms}
+  milliseconds, so every other thread keeps running
+  (Section~\ref{sec:builtin-threads}); \ic{void}.
+\item[\ic{syscall(...)}] Raw Linux syscall wrapper: the first argument
+  is the syscall number and one to six arguments follow it, each a
+  \ic{long}, \ic{bool}, \ic{str} or \ic{*T}. A call outside that shape is
+  an error, as is a first argument that is not a number; a failure is the
+  kernel's own negative return.
+\item[\ic{exec(cmd)}] Run a shell command, return its exit code, or
+  \ic{-1} when the child could not be started or died on a signal.
   Removed from the binary entirely by \ic{--no-exec} (then calling it
   is a compile error).
 \end{description}
@@ -371,11 +405,41 @@ gives a connection whose \ic{err} is \ic{""} when the handshake held;
 \ic{tls.send(c, bytes)}, \ic{tls.recv(c)} (the next data, \ic{none} at
 the end) and \ic{tls.close(c)} use it. The server's chain must reach a
 trust anchor and name the host; X25519 and three suites are offered;
-there is no TLS 1.2. \ic{import net;} has the sockets: \ic{net.resolve(name)}
+there is no TLS 1.2.
+\end{sloppypar}
+
+\begin{sloppypar}
+\ic{import net;} has the sockets: \ic{net.resolve(name)}
 (the IPv4 addresses, from \ic{/etc/hosts} and DNS),
-\ic{net.connect\_tcp(host, port)}, \ic{net.send\_str},
-\ic{net.recv\_str}, \ic{net.close\_fd}, and a small blocking server,
-\ic{net.listen\_http(port, handler)}.
+\ic{net.resolve\_with(name, server, port)} (asking that resolver
+instead), \ic{net.connect\_tcp(host, port)}, \ic{net.send\_str(fd,
+data)}, \ic{net.recv\_str(fd, max)} (the next \ic{str}, \ic{none} at the
+end) and \ic{net.close\_fd(fd)}. Under them are the pieces a server is
+built from: \ic{net.socket\_tcp()}, \ic{net.addr\_set(addr, host,
+port)}, \ic{net.bind\_tcp(fd, port)}, \ic{net.listen\_fd(fd, backlog)},
+\ic{net.accept\_tcp(fd)}, \ic{net.local\_port(fd)} (the port a socket
+took, which is how port 0 is used) and \ic{net.set\_timeouts(fd, secs)}.
+A descriptor that fails is negative, never a value to close.
+\end{sloppypar}
+
+\begin{sloppypar}
+Two accept loops sit on that. \ic{net.listen\_tcp(port, handler)} calls
+\ic{handler} --- a \ic{(long) -> long} --- with each connection's
+descriptor until an accept fails. \ic{net.listen\_http(port, handler)} is
+a small blocking HTTP server whose \ic{handler} is a \ic{(str) -> str}
+given the request head and answering the body, usually through
+\ic{net.http\_response(code, body)};
+\ic{net.http\_read\_head(fd)} reads one request head by hand and
+\ic{net.http\_serve\_one(fd, handler)} serves a single connection
+already accepted. Neither loop checks the socket, bind and listen
+results, so a busy port shows up as an immediate \ic{0}.
+\end{sloppypar}
+
+\begin{sloppypar}
+Two URL helpers stand apart from the requests, since a redirect or a
+\ic{<base>} path is often already split: \ic{http.parse\_url(s)} gives
+the parts of a URL, and \ic{http.resolve\_ref(base, ref)} resolves a
+reference against a base URL the way a browser would.
 \end{sloppypar}
 
 \subsection{Cryptography (the crypto and x509 modules)}
@@ -397,23 +461,40 @@ and a 32-byte point, where a peer point of low order --- one that would
 make the shared secret all zeros --- stops the program, as RFC 8446
 \S7.4.2 requires; \ic{rsa\_verify\_pkcs1}, \ic{rsa\_verify\_pss} and
 \ic{ecdsa\_verify} (over \ic{crypto.p256()} or \ic{p384()});
-\ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}.
+\ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}. The primitives those
+use are exported too, for building something the above does not cover:
+\ic{bytes\_eq} (a constant-time compare of two \ic{[byte]}), the
+endianness helpers \ic{be\_bytes}/\ic{le\_bytes}, \ic{poly1305}, and the
+raw ciphers \ic{chacha20} and \ic{aes\_encrypt} under \ic{aes\_key}.
+\end{sloppypar}
+
+\begin{sloppypar}
 \ic{import x509;} reads certificates: \ic{x509.verify\_chain(chain,
 host, now)} is \ic{""} when the DER certificates \ty{chain} (the
 server's first) reach a system trust anchor and name \ty{host} at
 \ty{now} (Unix seconds), else why not; \ic{verify\_chain\_with} takes
 the anchors (\ic{x509.anchors\_pem(text)}), \ic{x509.pem\_certs(text)}
-splits a PEM file.
+splits a PEM file, and \ic{x509.system\_roots()} gives the system's own
+as PEM. A single certificate is \ic{parse\_cert(der)}, checked with
+\ic{verify\_signed(cert, signature, key)} and matched to a name with
+\ic{name\_matches(cert, host)}; \ic{days\_from\_civil(y, m, d)} is the
+date arithmetic \ic{verify\_chain} uses, and \ic{b64\_decode} the
+Base64 one.
 \end{sloppypar}
 
 \subsection{Pointers}
-\label{sec:builtin-map}
+\label{sec:builtin-pointers}
 
 \begin{description}[style=nextline,leftmargin=5.2em]
-\item[\ic{ptr\_addr(p)}] The address of a pointer as \ic{long}.
+\item[\ic{ptr\_addr(p)}] The address of a pointer as \ic{long}. A
+  \ic{str} is accepted as well as a \ic{*T} --- a string value is a byte
+  address --- so the address of a string's bytes is one call away
+  (Section~\ref{sec:pointers}).
 \end{description}
 
 \noindent Mutating and keying are symbolic, not functional: arrays use
-\ic{+=} / \ic{*=}, records use \ic{r.f}, maps use \ic{m['k']} and
+\ic{+=} / \ic{*=} and slice assignment, records use \ic{r.f}, maps use
+\ic{m['k']} and
 \ic{m['k'] = v}. The legacy functions \ic{push}, \ic{prepend},
-\ic{map\_get} and \ic{map\_set} do not exist.
+\ic{map\_get} and \ic{map\_set} do not exist --- the operators above are
+the whole interface (Section~\ref{sec:arrays}).

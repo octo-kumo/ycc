@@ -124,7 +124,8 @@ map grows as needed (amortized doubling, like arrays). Values are homogeneous: s
 \subsection{Equality}
 \label{sec:equality}
 
-\ic{==} and \ic{!=} on two \textbf{arrays} are \textbf{structural}: same
+\ic{==} and \ic{!=} on two \textbf{heap arrays} \ic{[T]} are
+\textbf{structural}: same
 length, pairwise-equal elements. It is never a pointer comparison;
 \ic{arr == []} is an emptiness test. Each pair of elements is compared
 with the element type's own \ic{==}, at any depth: numbers as numbers

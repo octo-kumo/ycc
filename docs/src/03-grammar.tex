@@ -157,6 +157,35 @@ for the compound forms). The binding is constant, not the value: a
 \ic{r.x = v} and the in-place \ic{+=}/\ic{*=} on a \ic{const} array
 change its contents.
 
+A parameter may be \emph{optional}, written \ic{name?: T}: its type
+becomes \ty{T?} and a caller may leave the argument out, which is
+\ic{none} inside the function (Section~\ref{sec:type-records} for the
+same mark on a record field). Three rules keep the list readable, and
+each names the mistake:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+mistake & message \\
+\midrule
+no type after it &
+  \ic{optional parameter 'x' needs a type ('x?: T')} \\
+a default as well &
+  \ic{optional parameter 'x' cannot have a default} \\
+one after it &
+  \ic{required parameter 'y' cannot follow optional parameter 'x'} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The third is the reading order: optional parameters come last.
+
+\begin{lstlisting}
+def draw(canvas: Canvas, fg?: Color, bg?: Color) -> void { ... };
+draw(cv);                     // fg, bg: none
+draw(cv, {r: 255});           // fg: some({r: 255}); bg: none
+\end{lstlisting}
+
 Function literals may also appear bound or anonymous:
 \ic{let f = def (x: long) -> long \{ x \};}.
 
@@ -192,6 +221,19 @@ or a name there is an error at the size. The type name
 name must be a \ic{type} alias in scope: \ic{let s: strr = "x"} is
 rejected as an unknown type.
 
+The last row, \ic{A | B}, is a form of a whole annotation only: a
+\ic{let}, a parameter list, a return type or a \ic{type} declaration.
+It cannot appear inside another type --- \ic{[Circle | Rect]},
+\ic{\{ shape: Circle | Rect \}} and \ic{(Circle | Rect) -> R} are all
+rejected at the \ic{|} --- so a union used in a nested position goes
+through an alias, as recursive types do:
+
+\begin{lstlisting}
+type Shape = Circle | Rect;
+let shapes: [Shape] = [];       // the union, named
+def area(s: Shape) -> float { ... };
+\end{lstlisting}
+
 \subsection{Statements}
 
 \begin{align*}
@@ -221,7 +263,11 @@ expect --- nothing is skipped silently. \ic{foreach} iterates
 the elements of an array; the \ic{for} range form iterates \ic{lo..hi}
 with the low bound inclusive and the high bound exclusive. A C-style
 \ic{for} without a condition loops until a \ic{return} leaves it, as in
-C.
+C. A C-style \ic{for} binds its head like a \ic{let}, so the names it
+declares are still visible after the loop, holding the value the loop
+last gave them. A \ic{for x in a..b} or \ic{foreach (x in a)} variable
+belongs to its loop and is gone after it --- reading it there is
+\ic{undefined variable 'i'}.
 
 \noindent \ic{if let}~\ty{pattern}~\ic{=}~\ty{expr}~\ty{block} is the
 pattern form of \ic{if} (Section~\ref{sec:type-unions}): the block runs when
@@ -229,8 +275,9 @@ the expression matches the pattern, with the pattern's names bound in it, and
 the \ic{else} when it does not. \ic{let} is a whole word, so this is
 reached only where the keyword is written; the pattern is whatever a
 \ic{match} arm takes --- \ic{some(x)} for an option, \ic{T x},
-\ic{T \{f: y\}} for a record type, \ic{\{f: v\}} for equal fields, or a
-value --- and \ic{some()} binds nothing. The subject is read once. The
+\ic{T \{f: y\}} for a record type, \ic{\{f: v\}} for equal fields,
+\ic{\_} for anything (binding nothing), or a value --- and \ic{some()} binds
+nothing. The subject is read once. The
 \ic{else} may be left out (a statement, no value), and a pattern that can
 fail needs none of its own here: the \ic{else} is the arm that does not
 match. The binding is in scope in the block only.
@@ -241,7 +288,7 @@ match. The binding is in scope in the block only.
 \begin{align*}
 \ty{primary} ::={}& \ty{long} \mid \ty{float} \mid \ty{string}
      \mid \ic{true} \mid \ic{false} \mid \ty{name} \\
-  |~& \ic{(}~\ty{expr}~\ic{)} \mid \ty{block} \\
+  |~& \ic{(}~\ty{expr}~\ic{)} \mid \ic{(}~\ic{)} \mid \ty{block} \\
   |~& \ic{[}~[\ty{expr}~\{,\ty{expr}\}]~\ic{]}
        \mid \ic{[}~\ty{expr}~\ic{;}~\ty{nat}~\ic{]} \\
   |~& \ic{b}~\ty{string} \mid \ic{c}~\ty{character}                && \text{(byte string / byte)} \\
@@ -249,11 +296,31 @@ match. The binding is in scope in the block only.
   |~& \ic{\{}~[\ty{name}~\ic{:}~\ty{expr}~\{,\ldots\}]~\ic{\}}
        \quad \ic{\{}~[\ty{string}~\ic{:}~\ty{expr}~\{,\ldots\}]~\ic{\}} \\
   |~& \ic{def}~\ic{(}~\ty{params}~\ic{)}~[\ic{->}~\ty{type}]~\ty{block} \\
+  |~& \ic{if}~\ic{(}~\ty{expr}~\ic{)}~\ty{block}
+       ~[\ic{else}~(\ty{block} \mid \ty{statement})] \\
+  |~& \ic{while}~\ic{(}~\ty{expr}~\ic{)}~\ty{block}
+       \mid \ic{for}~\ty{head}~\ic{(}~\ic{)}~\ty{block} \\
+  |~& \ic{foreach}~\ic{(}~\ty{name}~\ic{in}~\ty{expr}~\ic{)}~\ty{block} \\
+  |~& \ic{match}~\ty{expr}~\ty{\{}~\ty{arms}~\ic{\}} \\
   |~& (\ic{spawn} \mid \ic{fork})~\ty{block}
        && \text{(threads, processes)} \\
   |~& (\ic{lock} \mid \ic{try\_lock})~\ty{postfix}~\ty{block} \\
   |~& (\ic{join} \mid \ic{post} \mid \ic{wait})~\ty{postfix}
 \end{align*}
+
+\noindent The forms a \ic{loop} or \ic{if} takes here are the
+statement forms of the previous subsection; they are \emph{expressions}
+too, so \ic{let v = if (ok) \{ 1 \} else \{ 2 \};} binds the arm's value
+and \ic{let v = while (more) \{ next(); \};} binds a loop's, which is
+\ic{void} and so cannot be bound (Section~\ref{sec:void}). \ty{head} is
+the comma-separated head of a C-style \ic{for} --- its three optional
+parts --- and \ty{arms} the comma-separated \ic{pattern => expr} arms of
+a \ic{match}, the last one without its comma
+(Section~\ref{sec:type-unions}). \ic{()} is
+the void value: nothing is computed, and using it as one is an error
+like any other (\ic{cannot bind a void value to 'x'}). \ic{[e; n]} is a
+fixed array of \ty{n} elements --- a \ic{[T; N]}, not a \ic{[T]}
+(Section~\ref{sec:type-arrays}).
 
 \begin{align*}
 \ty{postfix} ::={}& \ty{primary}

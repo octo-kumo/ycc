@@ -72,6 +72,34 @@ while (i < 3) {
 };
 \end{lstlisting}
 
+\noindent The \emph{loop variable} of a \ic{for x in a..b} or a
+\ic{foreach (x in a)} is fresh on each iteration, like the \ic{let}
+inside the loop above --- it is the one binding the loop makes per
+iteration rather than one the body does:
+
+\begin{lstlisting}
+let fns: [() -> long] = [];
+for i in 0..3 {
+    fns += def() -> long { i };     // this iteration's i: 0, 1, 2
+};
+foreach (e in [7, 8, 9]) {
+    fns += def() -> long { e };     // 7, 8, 9
+};
+\end{lstlisting}
+
+\noindent A binding that is \emph{not} a loop variable --- one declared
+before the loop, or the \ic{let} inside its body --- is a single cell,
+and every closure the loop makes shares it, so they all see where the
+loop ended:
+
+\begin{lstlisting}
+let k = 0;
+while (k < 3) {
+    k = k + 1;
+    fns += def() -> long { k };     // one k, shared: every call says 3
+};
+\end{lstlisting}
+
 \subsection{Options}
 \label{sec:builtin-option}
 

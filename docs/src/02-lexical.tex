@@ -19,17 +19,26 @@ in diagnostics are 1-based line and column, the column counted in bytes.
 
 \subsection{Identifiers and keywords}
 
-\ic{isalpha}(c) is true for \ic{A}--\ic{Z}, \ic{a}--\ic{z} and
-\ic{\_}; \ic{isdigit}(c) for \ic{0}--\ic{9}. An identifier is
+A \emph{word character} is a letter (\ic{A}--\ic{Z}, \ic{a}--\ic{z}), a
+digit (\ic{0}--\ic{9}) or \ic{\_}, and an identifier is one word character
+followed by any number of them:
 
 \begin{align*}
 \ty{identifier} &::= \ty{isalpha}~\{~\ty{isalnum}~\}
 \end{align*}
 
-\noindent so \ic{\_} is a word character: \ic{is\_digit} is a single
-identifier, not three tokens. The prefix \ic{y\_} is \emph{reserved}:
-identifiers beginning with \ic{y\_} are used by the compiler's generated
-code and must not be written by hand.
+\noindent \ic{isalpha} and \ic{isalnum} are the same test, a word
+character: a digit may begin a name in the grammar, but a leading digit
+always begins a number literal instead, so none does in practice. So
+\ic{\_} is a word character and a digit is ordinary inside a name ---
+\ic{is\_digit}, \ic{t0} and \ic{r64} are each a single identifier, not
+three tokens.
+
+The prefix \ic{y\_} is \emph{reserved} for the compiler's own generated
+code, which calls its runtime helpers by those fixed names. A program may
+nevertheless define one: that is the override hook, and the program's own
+definition replaces the standard library's helper of that name for the
+whole program (Section~\ref{sec:builtin-pointers}).
 
 The keywords are:
 \begin{center}
@@ -145,7 +154,7 @@ three- and four-character &
   \ic{>{}>{}>} \ic{<{}<=} \ic{>{}>=} \ic{>{}>{}>=} \\
 two-character &
   \ic{==} \ic{!=} \ic{<=} \ic{>=} \ic{\&\&} \ic{||} \ic{::} \ic{..}
-  \ic{->} \ic{=>} \ic{++} \ic{--} \ic{<{}<} \ic{>{}>} \\
+  \ic{->} \ic{=>} \ic{++} \ic{--} \ic{<{}<} \ic{>{}>} \ic{?.} \\
  &
   \ic{+=} \ic{-=} \ic{*=} \ic{/=} \ic{\%=}
   \ic{\&=} \ic{|=} \ic{\textasciicircum{}=} \\
@@ -167,11 +176,29 @@ that matches, exactly like C:
 \item \ic{/=} is one token; \ic{//} starts a comment, and
       \ic{/ == y} must be written with a space to divide;
 \item \ic{x>{}>{}>=1} is the compound \ic{x >{}>{}>= 1};
+\item \ic{x?.y} is the propagation operator, not a conditional \ic{x} whose
+      arm starts with \ic{.y} (Section~\ref{sec:opt-propagation}).
 \end{itemize}
 
-\paragraph{Contextual keywords.} \ic{none}, \ic{match}, \ic{type} and
-\ic{void} are ordinary identifiers to the lexer: \ic{none} is a
-predeclared name (Section~\ref{sec:type-options}), \ic{match} is the
-match-expression keyword only when an expression and \ic{\{} follow it,
-and \ic{type} starts a type alias only when followed by \ic{name =}. Each
-stays usable as an ordinary name elsewhere.
+\paragraph{Contextual keywords.} These words are ordinary identifiers to
+the lexer and mean their keyword only where the syntax calls for one, so a
+program may bind a name like any of them and keep it:
+
+\begin{sloppypar}
+\begin{itemize}[nosep]
+\item \ic{none} is a predeclared name (Section~\ref{sec:type-options}), not
+  a keyword at all;
+\item \ic{match} is the match-expression keyword only when an expression
+  and \ic{\{} follow it, and \ic{type} starts a type alias only when
+  followed by \ic{name =};
+\item the type names \ic{long}, \ic{byte}, \ic{bool}, \ic{float},
+  \ic{str}, \ic{int}, \ic{void}, \ic{mutex} and \ic{sem} are names in a
+  type position only --- in an expression they are ordinary variables;
+\item the thread and process words \ic{spawn}, \ic{fork}, \ic{lock},
+  \ic{try\_lock}, \ic{join}, \ic{post} and \ic{wait} begin their form only
+  before a block or an operand (Section~\ref{sec:expr-grammar}), so
+  \ic{join} may equally be a function's name;
+\item \ic{self} names the enclosing function inside a \ic{def} body, and
+  is an error anywhere else (\ic{'self' outside of a function}).
+\end{itemize}
+\end{sloppypar}

@@ -1,0 +1,36 @@
+{
+  "name": "y-lang",
+  "displayName": "Y Language Support",
+  "description": "Syntax highlighting for the Y programming language (ycc / ysh)",
+  "version": "0.1.0",
+  "publisher": "yun",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "y",
+        "aliases": [
+          "Y",
+          "y"
+        ],
+        "extensions": [
+          ".y"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "y",
+        "scopeName": "source.y",
+        "path": "./syntaxes/y.tmLanguage.json"
+      }
+    ]
+  }
+}

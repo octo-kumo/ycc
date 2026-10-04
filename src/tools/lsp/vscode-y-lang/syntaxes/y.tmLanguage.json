@@ -1,0 +1,229 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Y",
+  "scopeName": "source.y",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#def-name"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#self"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#calls"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.y",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            {
+              "name": "comment.block.y",
+              "match": "\\*/"
+            }
+          ]
+        },
+        {
+          "name": "comment.line.double-slash.y",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.y",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.other.y",
+          "begin": "\\b[bf]\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.y",
+          "begin": "\\b[bc]'",
+          "end": "'",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            }
+          ]
+        }
+      ]
+    },
+    "string-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.hex.y",
+          "match": "\\\\x[0-9a-fA-F]{2}"
+        },
+        {
+          "name": "constant.character.escape.y",
+          "match": "\\\\[ntr\\\\\"'{}]"
+        },
+        {
+          "name": "constant.character.escape.y",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.hex.y",
+          "match": "\\b0[xX][0-9a-fA-F][0-9a-fA-F_]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.binary.y",
+          "match": "\\b0[bB][01][01_]*\\b"
+        },
+        {
+          "name": "constant.numeric.float.y",
+          "match": "\\b\\d[\\d_]*\\.[\\d_]+([eE][+-]?\\d[\\d_]*)?"
+        },
+        {
+          "name": "constant.numeric.float.y",
+          "match": "\\b\\d[\\d_]*[eE][+-]?\\d[\\d_]*"
+        },
+        {
+          "name": "constant.numeric.integer.y",
+          "match": "\\b\\d[\\d_]*\\b"
+        }
+      ]
+    },
+    "def-name": {
+      "patterns": [
+        {
+          "match": "\\b(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.y"
+            },
+            "2": {
+              "name": "entity.name.function.y"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow.y",
+          "match": "\\b(if|else|while|for|foreach|in|return|match)\\b"
+        },
+        {
+          "name": "keyword.control.import.y",
+          "match": "\\b(import|embed|from|export)\\b"
+        },
+        {
+          "name": "storage.type.y",
+          "match": "\\b(let|const|type)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.y",
+          "match": "\\b(true|false|none)\\b"
+        }
+      ]
+    },
+    "self": {
+      "patterns": [
+        {
+          "name": "variable.language.y",
+          "match": "\\bself\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.y",
+          "match": "\\b(str|long|int|bool|float|byte|void|mutex|sem)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.y",
+          "match": "\\b(print|puts|eputs|tostring|tonum|typeof|range|keys|len|trim|exit|argv|readline|clear_eof|join|split|ord|chr|index_of|last_index_of|byte_at|bytes|from_bytes|syscall|clock_us|time_us|heap_used|sleep|ptr_addr|some|is_some|unwrap|spawn|fork|mutex|sem|lock|try_lock|post|wait|wait_pid)\\b"
+        }
+      ]
+    },
+    "calls": {
+      "patterns": [
+        {
+          "name": "entity.name.function.y",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.y",
+          "match": ">>>=|<<=|>>=|>>>|&&|\\|\\||==|!=|<=|>=|::|\\.\\.|->|=>|\\?\\.|\\+\\+|--|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<|>>|[+\\-*/%<>!=&|^~?]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.y",
+          "match": "[;,:]"
+        },
+        {
+          "name": "punctuation.bracket.y",
+          "match": "[{}()\\[\\]]"
+        }
+      ]
+    }
+  }
+}
