@@ -1734,7 +1734,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 tc_res(type_node({ k: K.tptr, to: got.typ }), st)
             }
             } else {
-                st = fail(st, "'&' needs a plain variable (only locals/params have addresses)", addr.line, addr.col);
+                st = fail(st, "'&' needs a plain variable (only a local, a parameter or a global has an address)", addr.line, addr.col);
                 tc_res(t_unk(), st)
             }
         } else if (addr.e.k == K.index) {
@@ -1780,7 +1780,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 }
             }
         } else {
-            st = fail(st, "'&' needs a plain variable (only locals/params have addresses)", addr.line, addr.col);
+            st = fail(st, "'&' needs a plain variable (only a local, a parameter or a global has an address)", addr.line, addr.col);
             tc_res(t_unk(), st)
         }
     } else if (k == K.deref) {

@@ -153,3 +153,19 @@ let x = log("hi");         // error: cannot bind a void value to 'x'
 \noindent Pointers are for interfacing with the system-call level
 (buffers for \ic{read}/\ic{write}-style calls); ordinary code uses
 arrays and records.
+
+\noindent\textbf{A pointer does not outlive what it points into.}
+\ic{\&x} on a local or a parameter is the address of a cell in that
+function's frame, and the frame is reclaimed the moment the function
+returns: a pointer to a local that escapes reads whatever the stack
+holds by then --- a number that was never written, or an address, and
+it changes from run to run. Returning one is not a type error,
+because the checker cannot see how long a value lives; the rule is that
+a pointer into a frame may only be used while that frame is live, which
+means in practice that it must not be returned and must not be stored
+in anything outliving the call. Taking the address of a \emph{global}
+is fine (its storage is permanent), and so is \ic{\&a[i]}: a heap
+array's elements and a fixed array's live in a heap cell, never in a
+frame. To hand data to a function or keep it, return the value, an
+array or a record --- those never dangle --- and take a pointer to
+\ic{\&a[i]} where the callee needs an address.

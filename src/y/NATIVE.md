@@ -245,9 +245,17 @@ cc/as/ld involved.
   every alias sees the growth).
   Indexing either kind is bounds-trapped (`y_oob`). Unwrap of `none` traps
   (`y_opt_unwrap`).
-- Memory safety today = static types + trapped OOB + arena heap (nothing
-  freed, nothing dangles; no pointer arithmetic — `p + 1` is a type error).
-  Later: GC, heap maps/strings, fat pointers or a borrow checker.
+- Memory safety today = static types + trapped OOB + arena heap (nothing is
+  freed; no pointer arithmetic — `p + 1` is a type error). **Heap values never
+  dangle** — an array, a string, a record and a fixed array all live in a heap
+  cell that outlives every frame, and a `&a[i]` points into one. **A pointer
+  into a frame does**: `&x` on a local or a parameter is the address of a cell
+  in that frame, and the frame goes when the function returns, so such a
+  pointer is only valid while that frame is live. Nothing catches it — the
+  checker cannot see how long a value lives — and the manual's pointers section
+  (docs/src/08-functions.tex) says so. Later: GC, heap maps/strings, fat
+  pointers or a borrow checker (which is what would make the frame case an
+  error instead of a rule).
 
 ## Syscalls & std
 

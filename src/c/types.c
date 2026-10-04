@@ -2185,7 +2185,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 }
             } else {
                 st = fail(st,
-                          ys("'&' needs a plain variable (only locals/params have addresses)"),
+                          ys("'&' needs a plain variable (only a local, a parameter or a global has an address)"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
@@ -2255,7 +2255,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             }
         } else {
             st = fail(st,
-                      ys("'&' needs a plain variable (only locals/params have addresses)"),
+                      ys("'&' needs a plain variable (only a local, a parameter or a global has an address)"),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
