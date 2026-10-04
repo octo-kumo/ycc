@@ -385,7 +385,12 @@ there is no TLS 1.2. \ic{import net;} has the sockets: \ic{net.resolve(name)}
 over \ic{crypto.hash\_sha256()} or \ic{hash\_sha384()};
 \ic{chacha\_seal}/\ic{chacha\_open} (ChaCha20-Poly1305) and
 \ic{gcm\_seal}/\ic{gcm\_open} (AES-GCM), each \ic{(key, nonce, aad,
-data)}, an open giving \ic{none} for a forged message; \ic{x25519} and
+data)}, an open giving \ic{none} for a forged message; a key of 16, 24 or
+32 bytes and a nonce of 12 are what the two ciphers take --- any other
+length stops the program saying so, since sealing under the wrong length
+would give two different nonces the same ciphertext and the same tag
+(SP 800-38D's rule for a longer GCM nonce, a GHASH of it, is not
+implemented); \ic{x25519} and
 \ic{x25519\_base}; \ic{rsa\_verify\_pkcs1}, \ic{rsa\_verify\_pss} and
 \ic{ecdsa\_verify} (over \ic{crypto.p256()} or \ic{p384()});
 \ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}.

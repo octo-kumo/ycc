@@ -12,6 +12,26 @@
 // arithmetic happens to be: it verifies and encrypts, and its one secret
 // key (the X25519 share) lives for one handshake.
 
+// ── argument checks ──────────────────────────────────────────────────────
+// A wrong argument is a bug in the caller, not a message to encrypt: say
+// what was wanted and stop, the way struct's format check does.
+
+// A wrong argument, named: `what` says what the call needs.
+def arg_error(what: str) -> long {
+    puts("crypto: " + what + "\n");
+    exit(1);
+    0
+};
+
+// An AEAD nonce is 12 bytes -- SP 800-38D fixes GCM's there and RFC 8439
+// ChaCha20-Poly1305's -- and each of the two reads exactly that many.
+def check_nonce(cipher: str, nonce: [byte]) -> long {
+    if (len(nonce) != 12) {
+        arg_error("a " + cipher + " nonce must be 12 bytes, " + tostring(len(nonce)) + " given");
+    };
+    0
+};
+
 // ── bytes ────────────────────────────────────────────────────────────────
 
 // b as lowercase hex.
@@ -766,7 +786,14 @@ def gcm_tag(rk: [long], j0: [byte], aad: [byte], ct: [byte]) -> [byte] {
 };
 
 // The counter blocks for a 12-byte nonce: J0 and inc32(J0).
+// SP 800-38D 7.1 defines J0 for a nonce of any length, but only the
+// 12-byte one is the plain concatenation below: a longer nonce needs a
+// GHASH of it, which this module does not build. Reject such a nonce
+// rather than seal with the wrong J0 (two nonces sharing their first
+// 16 bytes would then give the same ciphertext *and* the same tag, a
+// nonce reuse in all but name).
 def gcm_j0(nonce: [byte], last: long) -> [byte] {
+    check_nonce("GCM", nonce);
     let j: [byte] = [];
     j += nonce;
     j += [0, 0, 0];
