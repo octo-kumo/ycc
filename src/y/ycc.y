@@ -403,7 +403,9 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
 };
 
 // The decimal level after `-W`, or the flag's own complaint. `i` points at
-// "-W". Levels past 1 are the same as 1: the optional checks are a set.
+// "-W". Only 0 and 1 exist, so anything else is rejected -- and the scan
+// saturates, because a long enough digit run wraps the accumulator and
+// "-W 99999999999999999999" would come back as an accepted level.
 def wlevel_arg(argv: [str], i: long, n: long) -> long {
     if (i + 1 >= n) {
         puts("ycc: -W needs a warning level (0, or 1)\n");
@@ -417,15 +419,13 @@ def wlevel_arg(argv: [str], i: long, n: long) -> long {
         while (ok && d < len(a)) {
             let c = byte_at(a, d);
             ok = c >= c'0' && c <= c'9';
-            if (ok) { v = v * 10 + (c - c'0'); 0; }
+            if (ok && v <= 1) { v = v * 10 + (c - c'0'); 0; };
             d = d + 1;
         };
-        if (!ok) {
+        if (!ok || v > 1) {
             puts("ycc: -W needs a warning level (0, or 1), got '" + a + "'\n");
             exit(1);
             0
-        } else if (v > 1) {
-            1
         } else {
             v
         }
