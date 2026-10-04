@@ -128,7 +128,15 @@ def be_bytes(v: long, n: long) -> [byte] {
 
 // ── SHA-2 (FIPS 180-4) ───────────────────────────────────────────────────
 
-let K256: [long] = [
+// sha256's 64 immediates are built on first use, not as a top-level `let`: a top-level
+// binding is inlined at _start, which is a shake root, so the table was in
+// every binary that imports crypto whether it ever hashes anything (and this
+// def, reachable from nothing else, is dropped).
+let K256: [long] = [];
+
+def k256_tab() -> [long] {
+    if (len(K256) > 0) { return K256; };
+    K256 = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
     0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -137,9 +145,19 @@ let K256: [long] = [
     0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-];
+    ];
+    K256
+};
 
-let K512: [long] = [
+// sha384/sha512's 80 immediates are built on first use, not as a top-level `let`: a top-level
+// binding is inlined at _start, which is a shake root, so the table was in
+// every binary that imports crypto whether it ever hashes anything (and this
+// def, reachable from nothing else, is dropped).
+let K512: [long] = [];
+
+def k512_tab() -> [long] {
+    if (len(K512) > 0) { return K512; };
+    K512 = [
     0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
     0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
     0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
@@ -160,7 +178,9 @@ let K512: [long] = [
     0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
     0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
     0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817
-];
+    ];
+    K512
+};
 
 def rotr32(x: long, n: long) -> long { ((x >>> n) | (x << (32 - n))) & 0xffffffff };
 def rotr64(x: long, n: long) -> long { (x >>> n) | (x << (64 - n)) };
@@ -207,9 +227,10 @@ def sha256(data: [byte]) -> [byte] {
         let f = h[5];
         let g = h[6];
         let k = h[7];
+        let ktab = k256_tab();
         i = 0;
         while (i < 64) {
-            let t1 = (k + (rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)) + ((e & f) ^ (~e & g)) + K256[i] + w[i]) & 0xffffffff;
+            let t1 = (k + (rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)) + ((e & f) ^ (~e & g)) + ktab[i] + w[i]) & 0xffffffff;
             let t2 = ((rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) & 0xffffffff;
             k = g;
             g = f;
@@ -270,9 +291,10 @@ def sha512_from(data: [byte], h: [long], n: long) -> [byte] {
         let f = h[5];
         let g = h[6];
         let k = h[7];
+        let ktab = k512_tab();
         i = 0;
         while (i < 80) {
-            let t1 = k + (rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41)) + ((e & f) ^ (~e & g)) + K512[i] + w[i];
+            let t1 = k + (rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41)) + ((e & f) ^ (~e & g)) + ktab[i] + w[i];
             let t2 = (rotr64(a, 28) ^ rotr64(a, 34) ^ rotr64(a, 39)) + ((a & b) ^ (a & c) ^ (b & c));
             k = g;
             g = f;
@@ -615,10 +637,20 @@ def chacha_open(key: [byte], nonce: [byte], aad: [byte], sealed: [byte]) -> [byt
 
 // ── AES (FIPS 197) and GCM (SP 800-38D) ──────────────────────────────────
 
-let SBOX = unhex("637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b27509832c1a1b6e5aa0523bd6b329e32f8453d100ed20fcb15b6acbbe394a4c58cfd0efaafb434d338545f9027f503c9fa851a3408f929d38f5bcb6da2110fff3d2cd0c13ec5f974417c4a77e3d645d197360814fdc222a908846eeb814de5e0bdbe0323a0a4906245cc2d3ac629195e479e7c8376d8dd54ea96c56f4ea657aae08ba78252e1ca6b4c6e8dd741f4bbd8b8a703eb5664803f60e613557b986c11d9ee1f8981169d98e949b1e87e9ce5528df8ca1890dbfe6426841992d0fb054bb16");
+// As K256: built on first use. The 256 bytes were in every binary importing
+// crypto, the immediates because _start is a shake root and the table because
+// a str literal's bytes go in .rodata whether or not the def reading it
+// survives (the rule str.y's header states).
+let SBOX: [byte] = [];
+
+def sbox_tab() -> [byte] {
+    if (len(SBOX) > 0) { return SBOX; };
+    SBOX = unhex("637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b27509832c1a1b6e5aa0523bd6b329e32f8453d100ed20fcb15b6acbbe394a4c58cfd0efaafb434d338545f9027f503c9fa851a3408f929d38f5bcb6da2110fff3d2cd0c13ec5f974417c4a77e3d645d197360814fdc222a908846eeb814de5e0bdbe0323a0a4906245cc2d3ac629195e479e7c8376d8dd54ea96c56f4ea657aae08ba78252e1ca6b4c6e8dd741f4bbd8b8a703eb5664803f60e613557b986c11d9ee1f8981169d98e949b1e87e9ce5528df8ca1890dbfe6426841992d0fb054bb16");
+    SBOX
+};
 
 // T-tables: a round's SubBytes, ShiftRows and MixColumns as four lookups
-// per column (TE0[x] = 2s, s, s, 3s for s = SBOX[x]; TE1..3 rotate it).
+// per column (TE0[x] = 2s, s, s, 3s for s = sbox[x]; TE1..3 rotate it).
 let TE0: [long] = [];
 let TE1: [long] = [];
 let TE2: [long] = [];
@@ -632,9 +664,10 @@ def xtime(b: long) -> long {
 
 def aes_tables() {
     if (len(TE0) > 0) { return; };
+    let sbox = sbox_tab();
     let i = 0;
     while (i < 256) {
-        let s: long = SBOX[i];
+        let s: long = sbox[i];
         let s2 = xtime(s);
         let s3 = s2 ^ s;
         let w = (s2 << 24) | (s << 16) | (s << 8) | s3;
@@ -656,6 +689,7 @@ def aes_key(key: [byte]) -> [long] {
         arg_error("an AES key must be 16, 24 or 32 bytes, " + tostring(len(key)) + " given");
     };
     aes_tables();
+    let sbox = sbox_tab();
     let nk = len(key) / 4;
     let nr = nk + 6;
     let w: [long] = [];
@@ -668,11 +702,11 @@ def aes_key(key: [byte]) -> [long] {
     while (i < 4 * (nr + 1)) {
         let t = w[i - 1];
         if (i % nk == 0) {
-            t = (SBOX[(t >> 16) & 255] << 24) | (SBOX[(t >> 8) & 255] << 16) | (SBOX[t & 255] << 8) | SBOX[(t >> 24) & 255];
+            t = (sbox[(t >> 16) & 255] << 24) | (sbox[(t >> 8) & 255] << 16) | (sbox[t & 255] << 8) | sbox[(t >> 24) & 255];
             t = t ^ (rcon << 24);
             rcon = xtime(rcon);
         } else if (nk > 6 && i % nk == 4) {
-            t = (SBOX[(t >> 24) & 255] << 24) | (SBOX[(t >> 16) & 255] << 16) | (SBOX[(t >> 8) & 255] << 8) | SBOX[t & 255];
+            t = (sbox[(t >> 24) & 255] << 24) | (sbox[(t >> 16) & 255] << 16) | (sbox[(t >> 8) & 255] << 8) | sbox[t & 255];
         };
         w += w[i - nk] ^ t;
         i = i + 1;
@@ -683,6 +717,7 @@ def aes_key(key: [byte]) -> [long] {
 // One 16-byte block (b[off..off+16]) encrypted under round keys rk, into
 // out (four 32-bit words).
 def aes_block(rk: [long], b: [byte], off: long, out: [long; 4]) {
+    let sbox = sbox_tab();
     let nr = len(rk) / 4 - 1;
     let s0 = ((b[off] << 24) | (b[off + 1] << 16) | (b[off + 2] << 8) | b[off + 3]) ^ rk[0];
     let s1 = ((b[off + 4] << 24) | (b[off + 5] << 16) | (b[off + 6] << 8) | b[off + 7]) ^ rk[1];
@@ -702,10 +737,10 @@ def aes_block(rk: [long], b: [byte], off: long, out: [long; 4]) {
         r = r + 1;
     };
     let k = 4 * nr;
-    out[0] = ((SBOX[s0 >> 24] << 24) | (SBOX[(s1 >> 16) & 255] << 16) | (SBOX[(s2 >> 8) & 255] << 8) | SBOX[s3 & 255]) ^ rk[k];
-    out[1] = ((SBOX[s1 >> 24] << 24) | (SBOX[(s2 >> 16) & 255] << 16) | (SBOX[(s3 >> 8) & 255] << 8) | SBOX[s0 & 255]) ^ rk[k + 1];
-    out[2] = ((SBOX[s2 >> 24] << 24) | (SBOX[(s3 >> 16) & 255] << 16) | (SBOX[(s0 >> 8) & 255] << 8) | SBOX[s1 & 255]) ^ rk[k + 2];
-    out[3] = ((SBOX[s3 >> 24] << 24) | (SBOX[(s0 >> 16) & 255] << 16) | (SBOX[(s1 >> 8) & 255] << 8) | SBOX[s2 & 255]) ^ rk[k + 3];
+    out[0] = ((sbox[s0 >> 24] << 24) | (sbox[(s1 >> 16) & 255] << 16) | (sbox[(s2 >> 8) & 255] << 8) | sbox[s3 & 255]) ^ rk[k];
+    out[1] = ((sbox[s1 >> 24] << 24) | (sbox[(s2 >> 16) & 255] << 16) | (sbox[(s3 >> 8) & 255] << 8) | sbox[s0 & 255]) ^ rk[k + 1];
+    out[2] = ((sbox[s2 >> 24] << 24) | (sbox[(s3 >> 16) & 255] << 16) | (sbox[(s0 >> 8) & 255] << 8) | sbox[s1 & 255]) ^ rk[k + 2];
+    out[3] = ((sbox[s3 >> 24] << 24) | (sbox[(s0 >> 16) & 255] << 16) | (sbox[(s1 >> 8) & 255] << 8) | sbox[s2 & 255]) ^ rk[k + 3];
 };
 
 // One block encrypted, as bytes.

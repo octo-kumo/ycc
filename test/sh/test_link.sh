@@ -167,7 +167,37 @@ else
     fail "std line markers: none plain, file 2..5 under -g" "$(grep -E '^\.file ' "$TMPD/allg.s" 2>/dev/null | tr '\n' '|') $(head -c 200 "$TMPD/err")"
 fi
 
-# 8. --std-pack's own errors
+# 8. A std module's own tables are built on first use, so importing it costs
+# only what the program uses. crypto.y's SHA-2 round constants and its AES
+# S-box were top-level `let`s: a top-level binding is inlined at _start, a
+# shake root, so their immediates and (for the S-box, a str literal) their
+# bytes were in every binary importing crypto. A program that imports crypto
+# and never hashes must be within a kilobyte of hello.y's size; one that does
+# hash is bigger, and both run.
+printf 'import crypto;\nlet b = crypto.random_bytes(16);\nprint(len(b));\n' > "$TMPD/cry0.y"
+printf 'print("hi");\n' > "$TMPD/hi.y"
+printf 'import crypto;\ndef u(s: str) -> [byte] { crypto.unhex(s) };\nprint(crypto.hex(crypto.sha256(bytes("abc"))));\n' > "$TMPD/cry1.y"
+if timeout "$CTO" "$YCC" "$TMPD/cry0.y" -o "$TMPD/cry0" </dev/null >"$TMPD/e0" 2>&1 \
+    && timeout "$CTO" "$YCC" "$TMPD/hi.y" -o "$TMPD/hi" </dev/null >>"$TMPD/e0" 2>&1 \
+    && timeout "$CTO" "$YCC" "$TMPD/cry1.y" -o "$TMPD/cry1" </dev/null >>"$TMPD/e0" 2>&1; then
+    s0=$(stat -c%s "$TMPD/cry0")
+    shi=$(stat -c%s "$TMPD/hi")
+    s1=$(stat -c%s "$TMPD/cry1")
+    r0=$(run_bin 10 "$TMPD/cry0" </dev/null 2>&1)
+    r1=$(run_bin 10 "$TMPD/cry1" </dev/null 2>&1)
+    # 8312 for hello.y, 12464 before (the tables), 8368 now
+    if [ "$r0" = 16 ] && [ "$r1" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" ] \
+        && [ "$s0" -lt $((shi + 1024)) ] && [ "$s1" -gt $((s0 + 3000)) ]; then
+        pass "crypto's tables are built on first use (import only $s0 B vs hello $shi B; hashing $s1 B)"
+    else
+        fail "crypto's tables are built on first use" \
+            "sizes $s0/$shi/$s1, runs '$r0' '$r1'"
+    fi
+else
+    fail "crypto's tables are built on first use" "$(head -c 200 "$TMPD/e0")"
+fi
+
+# 9. --std-pack's own errors
 timeout "$CTO" "$YCC" --std-pack </dev/null >"$TMPD/e1" 2>&1
 e1=$?
 timeout "$CTO" "$YCC" --std-pack "$TMPD/no/such/dir/p" </dev/null >"$TMPD/e2" 2>&1
