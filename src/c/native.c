@@ -2506,25 +2506,155 @@ Yv *esc_asm(Yv *s) {
 
 /* ── flat environment ─────────────────────────────────────────────────── */
 
-Yv *env_find(Yv *st, Yv *name) {
-    /* Miss marker: kind "none". Real entries have name/kind/off/label/typ
-     * but NO k field — never test e.k. */
-    /* The function's own entries first, from the END (the last binding of
-     * a name wins), then the unit's defs (st.fns, by its index). */
-    Yv *env = yr_get(st, "env");
+/* ── the flat environment ───────────────────────────────────────────────────
+ *
+ * The env is one array per function, appended to and never popped, and
+ * env_find scans it from the END -- the newest binding of a name wins, and
+ * most lookups are of the newest binding (a local just defined, a capture, a
+ * name the emitter is binding right now), which a pointer compare settles in a
+ * couple of instructions. So the scan gets a short prefix (ENV_SCAN_BACK) and
+ * stays cheap.
+ *
+ * Past ENV_SCAN_MAX entries it stops being a scan. A wide env is real: a
+ * function with 800 locals spent 96% of a compile scanning, and a unit with
+ * 40 000 top-level defs spent 63% in env_find and the y_str_eq calls under it
+ * (4.8 s, 562 MB). So a wide env is indexed by name with asm.y's labmap -- the
+ * one hashed name table here, and the only one that can be filled
+ * incrementally (a Y map is itself a linear scan: gen_map_get walks the keys).
+ *
+ * One index, many envs: the emitter's env is fresh per function, so every
+ * env's FIRST slot is a sentinel -- name "", kind "env", off the env's own id
+ * -- and the index remembers the id it was built for. The index is a hint,
+ * never the truth: a hit is checked against the slot it names, and it is
+ * rebuilt whenever it describes another env or the env has outgrown half its
+ * table (labmap_put does not grow, and a full table drops entries). A miss on
+ * an index that describes this env and still has room is final -- the index
+ * holds every binding -- and skips the rest of the scan. */
+#define ENV_SCAN_MAX 64
+#define ENV_SCAN_BACK 8
+
+/* The index (a labmap: name -> slot), and the env id it describes. */
+static Yv *env_ix = NULL;
+static long env_ix_id = 0;
+static long env_id = 0;
+
+/* Open a fresh env: the sentinel that carries its id (its off field). */
+static Yv *env_open(Yv *env) {
+    env_id = env_id + 1;
+    ya_push(env, yr(5, "name", ys(""), "kind", ys("env"), "off",
+                     yv_long(env_id), "label", ys(""), "typ",
+                     yr(1, "k", yv_long(K_tnone))));
+    return env;
+}
+
+/* Index every binding of env, walking it BACKWARDS: labmap_put keeps the
+ * first insert for a name, and a name bound twice in one env (a boxed local
+ * defined again) must read as the newest binding, which is what env_find's
+ * scan-from-the-end gives -- so the first insert per name has to be the
+ * highest slot.
+ *
+ * The table is sized for the env as it is now, and with `grow` (the rebuild
+ * the env outgrowing its table makes) at least twice what it was, so the next
+ * such rebuild is at least twice as far off: without that the size would track
+ * the env one step at a time and every rebuild would be O(n) of a growing n.
+ * A re-bound name rebuilds without growing -- those come in bursts (every
+ * boxed local of a closure-heavy function), and a doubling cap per rebuild
+ * reaches a million slots and out of memory on t89. */
+static Yv *env_index_all(Yv *env, int grow) {
+    long cap = yv_len(env) * 2 + 16;
+    /* twice the old table, but only while it is this env's: a fresh env sizes
+     * its own (or a unit with two wide units would inherit the first's) */
+    if (grow && yv_l(yr_get(ya_get(env, 0), "off")) == env_ix_id &&
+        cap < yv_len(env_ix) * 2) {
+        cap = yv_len(env_ix) * 2;
+    }
+    Yv *m = labmap_new(cap);
     long i = yv_len(env) - 1;
-    Yv *found = yr(5, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
-                   "label", ys(""), "typ", yr(1, "k", yv_long(K_tnone)));
     while (i >= 0) {
         Yv *e = ya_get(env, i);
-        if (ys_eq(yr_get(e, "name"), name)) {
-            found = e;
-            i = -1;
-            ;
+        /* the unnamed entries (the sentinel, a function's frame/fnty/boxmark
+         * marks) are no name and no lookup can ask for one -- and indexing
+         * them would rebuild on every one of them, since they repeat */
+        if (yv_len(yr_get(e, "name")) > 0) {
+            m = yr_get(labmap_put(m, yr_get(e, "name"), i, 0), "map");
         }
         i = i - 1;
     }
-    if (ys_eq_lit(yr_get(found, "kind"), "none")) {
+    env_ix = m;
+    env_ix_id = yv_l(yr_get(ya_get(env, 0), "off"));
+    return yv_long(0);
+}
+
+/* Index the binding just appended to env, or rebuild. Four cases: a fresh env
+ * (the id differs), the env crossing the threshold -- which is a rebuild and
+ * not a put, or the entries below the threshold would never be indexed at all
+ * -- the env outgrowing half its table, and a re-bound name (the table keeps
+ * the first insert for a name, so the newest slot has to be put by a rebuild
+ * that walks backwards). */
+static Yv *env_index_add(Yv *env) {
+    if (yv_l(yr_get(ya_get(env, 0), "off")) != env_ix_id ||
+        yv_len(env) == ENV_SCAN_MAX + 1 ||
+        yv_len(env) * 2 > yv_len(env_ix)) {
+        return env_index_all(env, 1);
+    } else if (yv_len(env) > ENV_SCAN_MAX) {
+        Yv *e = ya_get(env, yv_len(env) - 1);
+        Yv *g = labmap_get(env_ix, yr_get(e, "name"));
+        if (yv_len(yr_get(e, "name")) == 0) {
+            /* an unnamed entry: not a name, not indexed (see env_index_all) */
+        } else if (yv_l(yr_get(g, "sec")) >= 0) {
+            /* a re-bound name: the table keeps the first insert, so the
+             * newest slot needs the rebuild (which walks backwards) */
+            return env_index_all(env, 0);
+        } else {
+            env_ix = yr_get(labmap_put(env_ix, yr_get(e, "name"),
+                                       yv_len(env) - 1, 0),
+                            "map");
+        }
+    }
+    return yv_long(0);
+}
+
+Yv *env_find(Yv *st, Yv *name) {
+    /* Miss marker: kind "none". Real entries have name/kind/off/label/typ
+     * but NO k field — never test e.k. */
+    /* The function's own entries first — the newest binding of a name — then
+     * the unit's defs (st.fns, by its index). */
+    Yv *env = yr_get(st, "env");
+    long n = yv_len(env);
+    long at = -1;
+    /* the newest bindings, by scan */
+    long lo = n - ENV_SCAN_BACK;
+    if (lo < 0) { lo = 0; }
+    long i = n - 1;
+    while (i >= lo && at < 0) {
+        Yv *e = ya_get(env, i);
+        if (ys_eq(yr_get(e, "name"), name)) { at = i; }
+        i = i - 1;
+    }
+    /* the rest by index, once the env is wide and the index is this env's */
+    if (at < 0 && n > ENV_SCAN_MAX &&
+        yv_l(yr_get(ya_get(env, 0), "off")) == env_ix_id && n < yv_len(env_ix)) {
+        long g = yv_l(yr_get(labmap_get(env_ix, name), "sec"));
+        if (g >= 0 && g < n && ys_eq(yr_get(ya_get(env, g), "name"), name)) {
+            at = g;
+        } else if (g < 0) {
+            at = -2;
+        }
+    }
+    /* and by scan when there is no index to ask (at == -1; a final miss is -2) */
+    if (at == -1 && lo > 0) {
+        i = lo - 1;
+        while (i >= 0 && at < 0) {
+            Yv *e = ya_get(env, i);
+            if (ys_eq(yr_get(e, "name"), name)) { at = i; }
+            i = i - 1;
+        }
+    }
+    if (at >= 0) {
+        return ya_get(env, at);
+    } else {
+        Yv *found = yr(5, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
+                       "label", ys(""), "typ", yr(1, "k", yv_long(K_tnone)));
         Yv *fns = yr_get(st, "fns");
         long j = namemap_get(yr_get(fns, "ix"), name);
         if (j >= 0) {
@@ -2533,15 +2663,17 @@ Yv *env_find(Yv *st, Yv *name) {
                        fns_kind(yr_get(fe, "label")), "off", yv_long(0),
                        "label", yr_get(fe, "label"), "typ", yr_get(fe, "typ"));
         }
+        return found;
     }
-    return found;
 }
 
 Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ) {
-    Yv *env = ya_push(
-        yr_get(st, "env"),
-        yr(5, "name", name, "kind", kind, "off", yv_long(off), "label", label,
-           "typ", typ));
+    Yv *env = yr_get(st, "env");
+    if (yv_len(env) == 0) { env = env_open(env); }
+    env = ya_push(env,
+                  yr(5, "name", name, "kind", kind, "off", yv_long(off),
+                     "label", label, "typ", typ));
+    env_index_add(env);
     return yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
               "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
               yr_get(st, "loc"), "env", env, "slots", yr_get(st, "slots"),

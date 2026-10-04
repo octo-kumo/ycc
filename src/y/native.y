@@ -1652,24 +1652,146 @@ def esc_asm(s: str) -> str {
 };
 
 // ── flat environment ───────────────────────────────────────────────────
+//
+// The env is one array per function, appended to and never popped, and
+// env_find scans it from the END -- the newest binding of a name wins, and
+// most lookups are of the newest binding (a local just defined, a capture, a
+// name the emitter is binding right now), which a pointer compare settles in a
+// couple of instructions. So the scan gets a short prefix (ENV_SCAN_BACK) and
+// stays cheap.
+//
+// Past ENV_SCAN_MAX entries it stops being a scan. A wide env is real: a
+// function with 800 locals spent 96% of a compile scanning, and a unit with
+// 40 000 top-level defs spent 63% in env_find and the y_str_eq calls under it
+// (4.8 s, 562 MB). So a wide env is indexed by name with asm.y's labmap -- the
+// one hashed name table here, and the only one that can be filled
+// incrementally (a Y map is itself a linear scan: gen_map_get walks the keys).
+//
+// One index, many envs: the emitter's env is fresh per function, so every
+// env's FIRST slot is a sentinel -- name "", kind "env", off the env's own id
+// -- and the index remembers the id it was built for. The index is a hint,
+// never the truth: a hit is checked against the slot it names, and it is
+// rebuilt whenever it describes another env or the env has outgrown half its
+// table (labmap_put does not grow, and a full table drops entries). A miss on
+// an index that describes this env and still has room is final -- the index
+// holds every binding -- and skips the rest of the scan.
+const ENV_SCAN_MAX = 64;
+const ENV_SCAN_BACK = 8;
+
+// The index (a labmap: name -> slot), and the env id it describes.
+let env_ix: [AsmLabel] = [];
+let env_ix_id = 0;
+let env_id = 0;
+
+// Open a fresh env: the sentinel that carries its id (its off field).
+def env_open(env: [Slot]) -> [Slot] {
+    env_id = env_id + 1;
+    env += { name: "", kind: "env", off: env_id, label: "", typ: normtype({ k: K.tnone }) };
+    env
+};
+
+// Index every binding of env, walking it BACKWARDS: labmap_put keeps the
+// first insert for a name, and a name bound twice in one env (a boxed local
+// defined again) must read as the newest binding, which is what env_find's
+// scan-from-the-end gives -- so the first insert per name has to be the
+// highest slot.
+//
+// The table is sized for the env as it is now, and with `grow` (the rebuild
+// the env outgrowing its table makes) at least twice what it was, so the next
+// such rebuild is at least twice as far off: without that the size would track
+// the env one step at a time and every rebuild would be O(n) of a growing n.
+// A re-bound name rebuilds without growing -- those come in bursts (every
+// boxed local of a closure-heavy function), and a doubling cap per rebuild
+// reaches a million slots and out of memory on t89.
+def env_index_all(env: [Slot], grow: bool) -> long {
+    let cap = len(env) * 2 + 16;
+    // twice the old table, but only while it is this env's: a fresh env sizes
+    // its own (or a unit with two wide units would inherit the first's)
+    if (grow && env[0].off == env_ix_id && cap < len(env_ix) * 2) { cap = len(env_ix) * 2; };
+    let m = asm.labmap_new(cap);
+    let i = len(env) - 1;
+    while (i >= 0) {
+        let e = env[i];
+        // the unnamed entries (the sentinel, a function's frame/fnty/boxmark
+        // marks) are no name and no lookup can ask for one -- and indexing
+        // them would rebuild on every one of them, since they repeat
+        if (len(e.name) > 0) {
+            let r = asm.labmap_put(m, e.name, i, 0);
+            m = r.map;
+        };
+        i = i - 1;
+    };
+    env_ix = m;
+    env_ix_id = env[0].off;
+    0
+};
+
+// Index the binding just appended to env, or rebuild. Four cases: a fresh env
+// (the id differs), the env crossing the threshold -- which is a rebuild and
+// not a put, or the entries below the threshold would never be indexed at all
+// -- the env outgrowing half its table, and a re-bound name (the table keeps
+// the first insert for a name, so the newest slot has to be put by a rebuild
+// that walks backwards).
+def env_index_add(env: [Slot]) -> long {
+    if (env[0].off != env_ix_id || len(env) == ENV_SCAN_MAX + 1 || len(env) * 2 > len(env_ix)) {
+        env_index_all(env, true);
+    } else if (len(env) > ENV_SCAN_MAX) {
+        let e = env[len(env) - 1];
+        let g = asm.labmap_get(env_ix, e.name);
+        if (len(e.name) == 0) {
+            0
+        } else if (g.sec >= 0) {
+            // a re-bound name: the table keeps the first insert, so the
+            // newest slot needs the rebuild (which walks backwards)
+            env_index_all(env, false)
+        } else {
+            let r = asm.labmap_put(env_ix, e.name, len(env) - 1, 0);
+            env_ix = r.map;
+            0
+        };
+    };
+    0
+};
 
 def env_find(st: EmitSt, name: str) -> Slot {
     // Miss marker: kind "none". Real entries have name/kind/off/label/typ
     // but NO k field — never test e.k.
-    // The function's own entries first, from the END (the last binding of
-    // a name wins), then the unit's defs (st.fns, by its index).
+    // The function's own entries first — the newest binding of a name — then
+    // the unit's defs (st.fns, by its index).
     let env = st.env;
-    let i = len(env) - 1;
-    let found: Slot = { name: "", kind: "none", off: 0, label: "", typ: normtype({ k: K.tnone }) };
-    while (i >= 0) {
+    let n = len(env);
+    let at = -1;
+    // the newest bindings, by scan
+    let lo = n - ENV_SCAN_BACK;
+    if (lo < 0) { lo = 0; };
+    let i = n - 1;
+    while (i >= lo && at < 0) {
         let e = env[i];
-        if (e.name == name) {
-            found = e;
-            i = -1;
-        }
+        if (e.name == name) { at = i; };
         i = i - 1;
     };
-    if (found.kind == "none") {
+    // the rest by index, once the env is wide and the index is this env's
+    if (at < 0 && n > ENV_SCAN_MAX && env[0].off == env_ix_id && n < len(env_ix)) {
+        let g = asm.labmap_get(env_ix, name);
+        if (g.sec >= 0 && g.sec < n && env[g.sec].name == name) {
+            at = g.sec;
+        } else if (g.sec < 0) {
+            at = -2;
+        };
+    };
+    // and by scan when there is no index to ask (at == -1; a final miss is -2)
+    if (at == -1 && lo > 0) {
+        i = lo - 1;
+        while (i >= 0 && at < 0) {
+            let e = env[i];
+            if (e.name == name) { at = i; };
+            i = i - 1;
+        };
+    };
+    if (at >= 0) {
+        env[at]
+    } else {
+        let found: Slot = { name: "", kind: "none", off: 0, label: "", typ: normtype({ k: K.tnone }) };
         let fns = st.fns;
         let j = namemap_get(fns.ix, name);
         if (j >= 0) {
@@ -1677,12 +1799,15 @@ def env_find(st: EmitSt, name: str) -> Slot {
             let fe = syms[j];
             found = { name: fe.name, kind: fns_kind(fe.label), off: 0, label: fe.label, typ: fe.typ };
         };
-    };
-    found
+        found
+    }
 };
 
 def env_define(st: EmitSt, name: str, kind: str, off: long, label: str, typ: Type) -> EmitSt {
+    let env = st.env;
+    if (len(env) == 0) { env = env_open(env); };
     st.env += { name: name, kind: kind, off: off, label: label, typ: typ };
+    env_index_add(env);
     let env = st.env;
     { out: st.out, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: env, slots: st.slots,
@@ -2119,7 +2244,9 @@ def infer_block(st: EmitSt, node: Block) -> Type {
             if (s.k == K.decl) {
                 let d: Decl = s;
                 if (d.kind == "let" && env_find(st, d.name).kind == "none") {
+                    if (len(st.env) == 0) { st.env = env_open(st.env); };
                     st.env += { name: d.name, kind: "temp", off: 0, label: "", typ: infer(st, d.v) };
+                    env_index_add(st.env);
                 };
             };
             i = i + 1;
