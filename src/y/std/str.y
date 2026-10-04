@@ -51,6 +51,89 @@ def y_str_at(s: str, p: str, at: long) -> bool {
     }
 };
 
+// KMP's failure table for p: fail[i] is the length of the longest proper
+// prefix of p that is also a suffix of p[0:i]. Built once per search and
+// reused, which is the whole point: it turns "does p match here" from m
+// comparisons into one, so a scan costs the haystack and not the haystack
+// times the needle.
+def y_str_fail(p: str) -> [long] {
+    let m = len(p);
+    let f: [long] = [];
+    let i = 0;
+    while (i < m) { f += 0; i = i + 1; };
+    // f[0] is 0 from the fill; each f[j] is assigned, never appended
+    let k = 0;
+    let j = 1;
+    while (j < m) {
+        if (byte_at(p, k) == byte_at(p, j)) {
+            f[j] = k + 1;
+            k = k + 1;
+            j = j + 1;
+        } else if (k > 0) {
+            k = f[k - 1];
+        } else {
+            j = j + 1;
+        };
+    };
+    f
+};
+
+// The first match of p in s at or after `from`, or -1. `f` is p's failure
+// table (the caller's: count and replace build it once and scan many times).
+// A short remainder is walked window by window, which beats the table when
+// there is barely a window to read.
+def y_str_scan(s: str, p: str, f: [long], from: long) -> long {
+    let n = len(s);
+    let m = len(p);
+    let at = 0 - 1;
+    if (m > 0 && from < n) {
+        if (n - from < m + m) {
+            let i = from;
+            while (i + m <= n && at < 0) {
+                if (y_str_at(s, p, i)) { at = i; };
+                i = i + 1;
+            };
+        } else {
+            let k = 0;
+            let i = from;
+            while (i < n && at < 0) {
+                let c = byte_at(s, i);
+                while (k > 0 && c != byte_at(p, k)) { k = f[k - 1]; };
+                if (c == byte_at(p, k)) { k = k + 1; };
+                if (k == m) { at = i + 1 - m; };
+                i = i + 1;
+            };
+        };
+    };
+    at
+};
+
+// last_index_of: the last match of p in s, -1 when absent; an empty needle
+// never matches, and overlaps count. One pass over the haystack with the
+// match length carried along, keeping the last hit -- the scan resumes where
+// it left off rather than starting over, so overlaps cost nothing.
+// (index_of, split and trim are assembly: arch_x64.y y_str_index,
+// y_str_split, y_str_trim -- this one lives here, next to the scan it is
+// built on, and native.y reaches it by label.)
+def y_str_lastidx(s: str, p: str) -> long {
+    let n = len(s);
+    let m = len(p);
+    let found = 0 - 1;
+    if (m > 0 && m <= n) {
+        let f = y_str_fail(p);
+        let k = 0;
+        let i = 0;
+        while (i < n) {
+            let c = byte_at(s, i);
+            while (k > 0 && c != byte_at(p, k)) { k = f[k - 1]; };
+            if (c == byte_at(p, k)) { k = k + 1; };
+            if (k == m) { found = i + 1 - m; k = f[m - 1]; };
+            i = i + 1;
+        };
+    };
+    found
+};
+
 def y_str_starts_with(s: str, p: str) -> bool { y_str_at(s, p, 0) };
 
 def y_str_ends_with(s: str, p: str) -> bool { y_str_at(s, p, len(s) - len(p)) };
@@ -63,10 +146,15 @@ def y_str_count(s: str, t: str) -> long {
     let m = len(t);
     let n = len(s);
     let c = 0;
-    let i = 0;
-    if (m > 0) {
+    if (m > 0 && m <= n) {
+        // one failure table for the whole haystack (see y_str_scan): the
+        // matches are non-overlapping, as before, but a miss costs one
+        // comparison instead of comparing the needle again
+        let f = y_str_fail(t);
+        let i = 0;
         while (i + m <= n) {
-            if (y_str_at(s, t, i)) { c = c + 1; i = i + m; } else { i = i + 1; };
+            let at: long = y_str_scan(s, t, f, i);
+            if (at < 0) { i = n; } else { c = c + 1; i = at + m; };
         };
     };
     c
@@ -79,15 +167,19 @@ def y_str_replace(s: str, pat: str, rep: str) -> str {
     let n = len(s);
     let parts: [str] = [];
     let start = 0;
-    let i = 0;
     if (m > 0) {
+        let f = y_str_fail(pat);          // as in y_str_count
+        let i = 0;
         while (i + m <= n) {
-            if (y_str_at(s, pat, i)) {
-                parts += s[start:i];
+            let at: long = y_str_scan(s, pat, f, i);
+            if (at < 0) {
+                i = n;
+            } else {
+                parts += s[start:at];
                 parts += rep;
-                i = i + m;
+                i = at + m;
                 start = i;
-            } else { i = i + 1; };
+            };
         };
     };
     if (start == 0) {
