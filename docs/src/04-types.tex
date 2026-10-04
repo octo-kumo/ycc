@@ -34,7 +34,14 @@ let bad = [1, "two"];        // error: array element: expected long, got str
 \end{lstlisting}
 
 \noindent This applies recursively --- \ic{[[1], [2]]} has type
-\ic{[[long]]}, and every operator that mixes arrays and elements
+\ic{[[long]]}, and each element of the outer literal is checked against that
+inner type like any other element:
+
+\begin{lstlisting}
+let bad = [[1], 2];            // error: array element: expected [long], got long
+\end{lstlisting}
+
+\noindent Every operator that mixes arrays and elements
 (Section~\ref{sec:arrays}) enforces the same rule.
 
 \subsection{Records}
@@ -219,11 +226,13 @@ The receiver is read \emph{once}, whatever it is, and \emph{every} link
 after the \ic{?.} propagates: \ic{obj?.inner.inneragain.inneragainn} is
 \ic{none} whenever \ic{obj} is, not just the first field. So a method
 call, a \ic{.length}, a slice or an index may all follow it:
-\ic{here()?.name.length}. A \ic{?.} partway down a chain that already
-propagates works the same way: the earlier \ic{?.} has made the whole
-chain an option, so the next one reads through it whatever the links
-between hold --- \ic{obj?.a.b?.c} is \ic{none} when \ic{obj} is or when
-\ic{b} is, and \ic{a?.xs?.[0]?.f} reaches through two subscripts.
+\ic{here()?.name.length}. A link whose own type is an option ends the
+propagating chain --- \ic{inneragain} is \ic{X?} here, so reading a field
+of \emph{it} needs a \ic{?.} of its own, and \ic{obj?.inner.inneragain.name}
+is a type error. Write \ic{obj?.inner.inneragain?.inneragainn} instead, or
+\ic{obj?.inner.inneragain?.name}. Further down, the same applies to a
+subscript or a method: \ic{a?.xs?.[0]?.f} reaches through two subscripts
+and a field.
 
 The type is the option of the field's --- of the subscript's, or of the
 method's return --- and it is \emph{flat}: a field that is itself an

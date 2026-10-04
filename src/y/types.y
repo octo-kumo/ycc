@@ -977,6 +977,27 @@ def field_merge(fields: [Field], name: str, typ: Type) -> [Field] {
     out
 };
 
+// Does this type carry an error that has already been reported, at any depth?
+// `tunk` is the poison a failed check leaves behind, and it unifies with
+// everything through teq. A container of it -- the type of `[[zzz]]` after zzz
+// was reported undefined -- has to as well, or the enclosing literal reports
+// the same failure a second time under a worse name ("expected [<error>]").
+// tname/tnone/tparams already unify quietly in tcompat and are not poison.
+def t_poisoned(t: Type) -> bool { t_poisoned_go(t, 0) };
+
+def t_poisoned_go(t: Type, d: long) -> bool {
+    if (t.k == K.tunk) { true }
+    else if (d >= 16) { false }
+    else if (t.k == K.tarr) { let a: TOf = t; t_poisoned_go(a.of, d + 1) }
+    else if (t.k == K.tarrfix) { let a: TFix = t; t_poisoned_go(a.of, d + 1) }
+    else if (t.k == K.topt) { let a: TOf = t; t_poisoned_go(a.of, d + 1) }
+    else if (t.k == K.tmap) {
+        let m: TMap = t;
+        if (t_poisoned_go(m.key, d + 1)) { true } else { t_poisoned_go(m.of, d + 1) }
+    }
+    else { false }
+};
+
 def is_value_type(t: Type) -> bool {
     if (t.k == K.tlong) { true }
     else if (t.k == K.tbyte) { true }
@@ -2294,19 +2315,22 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 tc_res(type_node({ k: K.tarr, of: t_unk() }), st)
             } else if (r0.typ.k == K.tname) {
                 tc_res(type_node({ k: K.tarr, of: t_unk() }), st)
-            } else if (r0.typ.k == K.tarr) {
-                // nested array literal [[..], ..]: the inner literal's type
-                // IS known, so keep it as the element type ([[1], [2]] :
-                // [[long]]) — that is what lets the checker enforce
-                // homogeneity through `+=` / `*=` / `+`. A poisoned inner
-                // (tunk inside) still unifies quietly through teq, so the
-                // report-once law holds.
+            } else if (r0.typ.k != K.tunk && t_poisoned(r0.typ)) {
+                // A nested literal that already reported its own error: its
+                // type is [[<error>]], and checking later elements against it
+                // would only echo that error back. Report once, here.
                 tc_res(type_node({ k: K.tarr, of: r0.typ }), st)
             } else if (!is_value_type(r0.typ)) {
                 st = fail(st, "array element type " + tstr(r0.typ) + " is unsupported in native mode", array.line, array.col);
                 tc_res(t_unk(), st)
             } else {
                 let i = 1;
+                // A nested literal [[..], ..] lands here too: the inner
+                // literal type IS known, so it becomes the element type
+                // ([[1], [2]] : [[long]]) and every later element is
+                // checked against it. It used to return early with the
+                // inner type and check nothing, so [[1], 2] compiled and
+                // then read element 1 as an array.
                 let elt = r0.typ;
                 while (i < len(elems)) {
                     let r = typeof_expr(st, elems[i]);

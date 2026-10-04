@@ -69,6 +69,8 @@ static Yv *trec_field_type(Yv *rec, Yv *key);
 static Yv *tstr_go(Yv *t);
 static int num_is_float(Yv *s);
 static int is_value_type(Yv *t);
+static int t_poisoned(Yv *t);
+static int t_poisoned_go(Yv *t, long d);
 static int is_hash_key(Yv *t);
 static Yv *lookup(Yv *bindings, Yv *name);
 static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind);
@@ -1216,6 +1218,36 @@ Yv *field_merge(Yv *fields, Yv *name, Yv *typ) {
         ;
     }
     return out;
+}
+
+/* Does this type carry an error that has already been reported, at any depth?
+ * tunk is the poison a failed check leaves behind, and it unifies with
+ * everything through teq. A container of it -- the type of [[zzz]] after zzz
+ * was reported undefined -- has to as well, or the enclosing literal reports
+ * the same failure a second time under a worse name ("expected [<error>]").
+ * tname/tnone/tparams already unify quietly in tcompat and are not poison. */
+static int t_poisoned(Yv *t) { return t_poisoned_go(t, 0); }
+
+static int t_poisoned_go(Yv *t, long d) {
+    Yv *k = yr_get(t, "k");
+    if (yv_l(k) == K_tunk) {
+        return 1;
+    } else if (d >= 16) {
+        return 0;
+    } else if (yv_l(k) == K_tarr) {
+        return t_poisoned_go(yr_get(t, "of"), d + 1);
+    } else if (yv_l(k) == K_tarrfix) {
+        return t_poisoned_go(yr_get(t, "of"), d + 1);
+    } else if (yv_l(k) == K_topt) {
+        return t_poisoned_go(yr_get(t, "of"), d + 1);
+    } else if (yv_l(k) == K_tmap) {
+        if (t_poisoned_go(yr_get(t, "key"), d + 1)) {
+            return 1;
+        }
+        return t_poisoned_go(yr_get(t, "of"), d + 1);
+    } else {
+        return 0;
+    }
 }
 
 static int is_value_type(Yv *t) {
@@ -3028,15 +3060,13 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             } else if (yv_l(yr_get(yr_get(r0, "typ"), "k")) == K_tname) {
                 return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", t_unk()), "st",
                           st);
-            } else if (yv_l(yr_get(yr_get(r0, "typ"), "k")) == K_tarr) {
-                // nested array literal [[..], ..]: the inner literal's type
-                // IS known, so keep it as the element type ([[1], [2]] :
-                // [[long]]) -- that is what lets the checker enforce
-                // homogeneity through `+=` / `*=` / `+`. A poisoned inner
-                // (tunk inside) still unifies quietly through teq, so the
-                // report-once law holds.
-                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", yr_get(r0, "typ")),
-                          "st", st);
+            } else if (yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tunk &&
+                       t_poisoned(yr_get(r0, "typ"))) {
+                /* A nested literal that already reported its own error: its
+                 * type is [[<error>]], and checking later elements against it
+                 * would only echo that error back. Report once, here. */
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr),
+                                       "of", yr_get(r0, "typ")), "st", st);
             } else if (!is_value_type(yr_get(r0, "typ"))) {
                 st = fail(st,
                           ys_cat(ys_cat(ys("array element type "),
@@ -3047,6 +3077,12 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
                 long i = 1;
+                /* A nested literal [[..], ..] lands here too: the inner
+                 * literal type IS known, so it becomes the element type
+                 * ([[1], [2]] : [[long]]) and every later element is
+                 * checked against it. It used to return early with the
+                 * inner type and check nothing, so [[1], 2] compiled and
+                 * then read element 1 as an array. */
                 Yv *elt = yr_get(r0, "typ");
                 while (i < yv_len(elems)) {
                     Yv *r = typeof_expr(st, ya_get(elems, i));
