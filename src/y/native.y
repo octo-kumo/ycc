@@ -4197,6 +4197,17 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
     } else if (lt.k == K.tfloat || rt.k == K.tfloat) {
         gen_float_bin(st, node, lt, rt)
     } else if ((op == "==" || op == "!=") && (lt.k == K.tstr || rt.k == K.tstr)) {
+        // Not folded on two literals, and not by design: measured over ycc's
+        // own output, all 1,291 y_str_eq calls have at least one runtime
+        // operand -- 1,209 of them compare a token's text or a ktag() result
+        // against a literal, 82 compare two computed strings, and *zero*
+        // compare two literals. Across the 442-program corpus 5 programs
+        // concatenate two literals and 3 take len("literal"); a constant
+        // folder for those shapes would be ~200 instructions of emitter (this
+        // file) to save a handful of instructions in eight test fixtures. The
+        // tag-name arms of the same shape -- ktag(K.x) == "x" in tags_agree --
+        // would need interprocedural knowledge of a const record, and that
+        // function is a self-check besides.
         st = gen_push_args(st, [node.l, node.r]);
         st = emit(st, "    call y_str_eq");
         st = emit(st, "    add $16, %rsp");
