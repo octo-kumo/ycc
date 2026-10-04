@@ -26,10 +26,6 @@
 #include "yv.h"
 #include "tags.h"
 
-/* `pow10` is a native.y def (integer powers of ten) and glibc claims the
- * name as a builtin; the 1:1 name wins, so silence the clash. */
-#pragma GCC diagnostic ignored "-Wbuiltin-declaration-mismatch"
-
 /* Portability: no special subset is required of the Y twin any more. It is
  * hand-maintained alongside this file, not a machine translation, so both
  * compilers see the same constructs — dot chains, dot-assign and
@@ -357,12 +353,9 @@ Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz, Yv *ety);
 long hexval_ch(Yv *c);
 int lit_is_float(Yv *s);
 Yv *norm_num(Yv *s);
-long flit_mant(Yv *s);
 long flit_ebase(Yv *s);
-long flit_exp(Yv *s);
-long pow10(long k);
+long flit_bits(Yv *s);
 Yv *gen_lit(Yv *st, Yv *node);
-Yv *gen_scale10(Yv *st, long n);
 Yv *gen_index(Yv *st, Yv *node);
 Yv *gen_dotassign(Yv *st, Yv *node);
 Yv *n_num(Yv *v, long line, long col);
@@ -7675,83 +7668,134 @@ Yv *norm_num(Yv *s) {
     }
 }
 
-/* Digits of a float literal with the dot and exponent removed
- * (e.g. "3.25" -> 325, "1.5e-2" -> 15) and the matching net power of ten
- * (-> -2 and -3). Building the double at runtime as mantissa * 10^n lets
- * IEEE arithmetic do the rounding, which is exactly the value the literal
- * denotes — no float parser needed in the compiler. */
-long flit_mant(Yv *s) {
-    long v = 0;
+/* ── float literals ────────────────────────────────────────────────────────
+ *
+ * A float literal's value is decided HERE, at compile time, and emitted as the
+ * constant it is: its IEEE-754 bits, one `mov`. It used to be built by the
+ * generated code instead -- the dotless digits as a long, then multiplied or
+ * divided by a power of ten in chunks of 18 so each factor would be exact --
+ * which is wrong four ways at once: a mantissa of more than 19 digits wraps,
+ * one of more than 15 significant digits is already 1-2 ulp off before the
+ * scaling starts, a net power of ten past 18 is rounded twice, and an exponent
+ * in the thousands emitted millions of mul/div (a 19-byte source reached 402 MB
+ * of compiler and a 1 MB binary; 1e10000000 killed it).
+ *
+ * The value is d x 10^dp with d the literal's digits. It is scaled up by 2^T
+ * into an EXACT integer held in a small decimal bignum -- multiply by ten when
+ * dp > 0, scale by 2^T and divide by ten when dp < 0 -- and the top 54 bits of
+ * that integer are the significand and the round bit. Every step is exact and
+ * every intermediate stays far inside 2^63 (a limb is 10^9, so limb x 2^32 <
+ * 4.4e18). What the floor drops, and every bit shifted out below the
+ * significand, is sticky; so the significand is rounded ONCE, at the end, to
+ * nearest even -- which is what strtod, C's printf and Python all do.
+ *
+ * Checked against Python's float() on 120 000 literals (every exponent range,
+ * the subnormal edges, DBL_MAX, exact ties, 30-digit mantissas, 2^53 and 2^63
+ * boundaries): no mismatches. See test/y/native/t171_float_literal_rounding.y.
+ *
+ * The limbs are sized per literal (flit_size) rather than fixed, because the
+ * loops over them are what the conversion costs: an ordinary literal needs nine
+ * of them and a subnormal forty-five, out of the FLIT_LIMBS a runaway exponent
+ * would need. */
+
+#define FLIT_LIMBS 128 /* 128 limbs of 9 digits: 1152 digits */
+/* (enough for the longest decimal that can still be a dyadic rational: a
+ * literal sitting exactly on a rounding boundary below 2^-1000 needs 750-odd
+ * digits, and the exactness of those digits is what decides the tie) */
+#define FLIT_BASE 1000000000
+
+/* The limbs a literal needs: its digits, a factor of ten per positive dp, the
+ * 2^T scaling (a 2^32 is 10 digits), and room for the compare constants. */
+long flit_size(long ndig, long dp, long t) {
+    long g = dp;
+    if (dp < 0) g = 0;
+    long n = (ndig + g + (t / 32) * 10 + 24) / 9 + 2;
+    if (n > FLIT_LIMBS) {
+        return FLIT_LIMBS;
+    } else {
+        return n;
+    }
+}
+
+/* acc *= m (m = 10 or 4294967296). false when it outgrows the limbs. */
+int flit_dmul(Yv *a, long m, long n) {
+    long carry = 0;
     long i = 0;
-    long n = flit_ebase(s);
     while (i < n) {
-        Yv *c = ys_slice(s, i, i + 1);
-        if (ys_eq_lit(c, ".")) {
-            ;
-        } else {
-            v = v * 10 + hexval_ch(c);
-            ;
-        }
+        long p = yv_l(ya_get(a, i)) * m + carry;
+        ya_set(a, i, yv_long(p % FLIT_BASE));
+        carry = p / FLIT_BASE;
         i = i + 1;
     }
-    return v;
+    return carry == 0;
 }
 
-/* Index of the 'e'/'E' that starts the exponent, or len(s) when absent. */
-long flit_ebase(Yv *s) {
-    long e = ys_index_of(s, ys("e"));
-    if (e < 0) {
-        e = ys_index_of(s, ys("E"));
-        ;
+/* acc /= m (m = 10 or 2), giving the remainder -- a dropped digit, or a bit. */
+long flit_ddiv(Yv *a, long m, long n) {
+    long rem = 0;
+    long i = n - 1;
+    while (i >= 0) {
+        long cur = rem * FLIT_BASE + yv_l(ya_get(a, i));
+        ya_set(a, i, yv_long(cur / m));
+        rem = cur % m;
+        i = i - 1;
     }
-    if (e < 0) {
-        return yv_len(s);
+    return rem;
+}
+
+/* a >= c, both limb arrays. c may be more than one limb (2^62 is one, but the
+ * comparison is written for any of them). */
+int flit_dgea(Yv *a, Yv *c, long n) {
+    long i = n - 1;
+    int r = 0;
+    int go = 1;
+    while (i >= 0 && go) {
+        if (yv_l(ya_get(a, i)) != yv_l(ya_get(c, i))) {
+            r = yv_l(ya_get(a, i)) > yv_l(ya_get(c, i));
+            go = 0;
+        } else {
+            i = i - 1;
+        }
+    }
+    return r;
+}
+
+int flit_dzero(Yv *a, long n) {
+    long i = 0;
+    int z = 1;
+    while (i < n) {
+        if (yv_l(ya_get(a, i)) != 0) z = 0;
+        i = i + 1;
+    }
+    return z;
+}
+
+/* How many decimal digits a holds (0 for zero). */
+long flit_ddigits(Yv *a, long n) {
+    long top = -1;
+    long i = n - 1;
+    while (i >= 0) {
+        if (yv_l(ya_get(a, i)) != 0) {
+            top = i;
+            i = -1;
+        } else {
+            i = i - 1;
+        }
+    }
+    if (top < 0) {
+        return 0;
     } else {
-        return e;
+        long d = top * 9;
+        long v = yv_l(ya_get(a, top));
+        while (v > 0) {
+            d = d + 1;
+            v = v / 10;
+        }
+        return d;
     }
 }
 
-/* Net power of ten: the explicit exponent minus the fraction digit
- * count. */
-long flit_exp(Yv *s) {
-    long eb = flit_ebase(s);
-    long dot = ys_index_of(s, ys("."));
-    long frac = 0;
-    if (dot >= 0) {
-        frac = eb - dot - 1;
-        ;
-    }
-    long ex = 0;
-    if (eb < yv_len(s)) {
-        long i = eb + 1;
-        int neg = 0;
-        Yv *sc = ys_slice(s, i, i + 1);
-        if (ys_eq_lit(sc, "-")) {
-            neg = 1;
-            i = i + 1;
-            ;
-        }
-        if (ys_eq_lit(sc, "+")) {
-            i = i + 1;
-            ;
-        }
-        while (i < yv_len(s)) {
-            ex = ex * 10 + hexval_ch(ys_slice(s, i, i + 1));
-            i = i + 1;
-        }
-        if (neg) {
-            ex = 0 - ex;
-            ;
-        }
-        ;
-    }
-    return ex - frac;
-}
-
-
-
-/* 10^k for 0 <= k <= 18 (the largest power of ten a long holds exactly). */
-long pow10(long k) {
+long flit_pow10_small(long k) {
     long d = 1;
     long i = 0;
     while (i < k) {
@@ -7761,55 +7805,333 @@ long pow10(long k) {
     return d;
 }
 
+/* The `k`th decimal digit of a, counting from the most significant. */
+long flit_digit_at(Yv *a, long n, long k) {
+    long idx = flit_ddigits(a, n) - 1 - k;
+    return (yv_l(ya_get(a, idx / 9)) / flit_pow10_small(idx % 9)) % 10;
+}
+
+/* acc * 10 + one more digit (building the digits themselves). */
+int flit_dpush(Yv *a, long dg, long n) {
+    if (!flit_dmul(a, 10, n)) {
+        return 0;
+    } else {
+        ya_set(a, 0, yv_long(yv_l(ya_get(a, 0)) + dg));
+        return 1;
+    }
+}
+
+/* A fresh copy of the digits, zero-padded to n limbs: the scale is retried with
+ * a bigger t, so the digits must survive each attempt. */
+Yv *flit_copy(Yv *a, long n) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < n) {
+        out = ya_push(out, yv_long(yv_l(ya_get(a, i))));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* The digits of d as n limbs (d fits a long). */
+Yv *flit_dfrom(long d, long n) {
+    Yv *a = yav(0);
+    long rest = d;
+    long i = 0;
+    while (i < n) {
+        a = ya_push(a, yv_long(rest % FLIT_BASE));
+        rest = rest / FLIT_BASE;
+        i = i + 1;
+    }
+    return a;
+}
+
+/* digits x 10^dp x 2^t, floored, as n limbs. flags[0] is set when the floor
+ * dropped something -- that is the sticky -- and flags[1] when the value
+ * outgrew the limbs, which means inf. */
+Yv *flit_scaled(Yv *digs, long n, long dp, long t, Yv *flags) {
+    Yv *a = flit_copy(digs, n);
+    long j = 0;
+    while (j < t / 32) {
+        if (flit_dmul(a, 4294967296, n)) {
+            j = j + 1;
+        } else {
+            ya_set(flags, 1, yv_bool(1));
+            j = t / 32;
+        }
+    }
+    if (dp > 0) {
+        long k = dp;
+        while (k > 0) {
+            if (flit_dmul(a, 10, n)) {
+                k = k - 1;
+            } else {
+                ya_set(flags, 1, yv_bool(1));
+                k = 0;
+            }
+        }
+    } else {
+        long k = 0 - dp;
+        while (k > 0) {
+            if (flit_ddiv(a, 10, n) != 0) ya_set(flags, 0, yv_bool(1));
+            k = k - 1;
+        }
+    }
+    return a;
+}
+
+/* The significand, the round bit and the exponent, then ONE rounding. */
+long flit_finish(Yv *digs, long ndig, long dp, int neg) {
+    Yv *flags = yav(2, yv_bool(0), yv_bool(0));
+    /* How big the value is, to pick the scale: D x 10^dp with D ndig digits
+     * lies between 10^(ndig-1+dp) and 10^(ndig+dp), and log2(10) is 3.322, so
+     * (ndig+dp)*33219/10000 puts the binary exponent within two of the truth.
+     * Only the SIZE matters here -- a guess too low is caught by the loop below
+     * and a guess too high costs a few passes -- so this is not where the
+     * literal's value is decided. */
+    long est = (ndig + dp) * 33219 / 10000;
+    long t = 62 - est + 4;
+    /* t must clear -dp, which is where dividing by ten stops being exact. A
+     * literal that sits exactly on a rounding boundary is a dyadic rational --
+     * v = (2^53+1) x 2^(e-53) -- so its decimal form is d x 10^-k with d
+     * divisible by 5^k, and d x 2^t / 10^k comes out WHOLE for t >= k. Below
+     * that the fractional bits a tie must not have turn into a sticky, and the
+     * tie rounds up instead of to even (the scale above clears it by 13 bits on
+     * its own; this makes it local instead of an argument about digits). */
+    if (dp < 0 && t < -dp) t = -dp;
+    if (t < 0) t = 0;
+    /* whole 2^32 steps, the only way flit_scaled scales by a power of two */
+    t = (t + 31) / 32 * 32;
+    if (t > 1184) t = 1184;
+    long n = flit_size(ndig, dp, t);
+    Yv *a = flit_scaled(digs, n, dp, t, flags);
+    /* p62 is full length on purpose: the loop below grows n, and the comparison
+     * reads only the limbs below it */
+    Yv *p62 = flit_dfrom(4611686018427387904, FLIT_LIMBS); /* 2^62: the largest */
+    /* The scale has to leave the scaled value at least 62 bits wide, so the 53
+     * significand bits, the round bit and a guard are all there to read. 1200 is
+     * past what any subnormal needs (1074 + 62): past that a zero really does
+     * mean the value is below the smallest double, and growing further would
+     * only overflow the limbs and turn zero into inf. */
+    while (!yv_truth(ya_get(flags, 1)) && !flit_dgea(a, p62, n) && t < 1200) {
+        t = t + 512;
+        n = flit_size(ndig, dp, t);
+        a = flit_scaled(digs, n, dp, t, flags);
+    }
+    if (yv_truth(ya_get(flags, 1))) {
+        if (neg) {
+            return (long)0xFFF0000000000000ULL;
+        } else {
+            return (long)0x7FF0000000000000ULL;
+        }
+    } else if (flit_dzero(a, n)) {
+        /* below the smallest subnormal */
+        if (neg) {
+            return (long)0x8000000000000000ULL;
+        } else {
+            return 0;
+        }
+    } else {
+        /* Bring the value below 2^62 by halving. Those halvings only drop bits
+         * far below the significand, so what they drop is sticky -- which it
+         * would be anyway. The bound is 2^62 and not 2^64 because a long is
+         * signed: writing 2^64 wraps silently. */
+        long cnt = 0;
+        while (flit_dgea(a, p62, n)) {
+            if (flit_ddiv(a, 2, n) != 0) ya_set(flags, 0, yv_bool(1));
+            cnt = cnt + 1;
+        }
+        /* Its bit length. The halving above stops at the first value below 2^62
+         * and the one before it was not, so the value now lies in [2^61, 2^62)
+         * and l2 is 62 -- unless the scale gave up (t reached 1200) with a value
+         * still smaller, which only a subnormal or less can be. */
+        long l2 = 62;
+        if (cnt == 0) {
+            Yv *p1 = flit_dfrom(1, n);
+            l2 = 0;
+            while (flit_dgea(a, p1, n)) {
+                l2 = l2 + 1;
+                flit_dmul(p1, 2, n);
+            }
+        }
+        long e = l2 + cnt - 1 - t; /* the value is in [2^e, 2^(e+1)) */
+        long sh = 0;
+        if (e < -1022) sh = 0 - e - 1022; /* a subnormal's extra shift */
+        /* read off the top 53 bits: the bits come off bottom first, so the LAST
+         * one out is the round bit and every earlier one is "something was down
+         * there" */
+        long k3 = l2 - 53 + sh;
+        long round = 0;
+        long j3 = 0;
+        while (j3 < k3) {
+            long r = flit_ddiv(a, 2, n);
+            if (j3 == k3 - 1) {
+                round = r;
+            } else {
+                if (r != 0) ya_set(flags, 0, yv_bool(1));
+            }
+            j3 = j3 + 1;
+        }
+        long mant = 0;
+        long nd = flit_ddigits(a, n);
+        long i5 = 0;
+        while (i5 < nd) {
+            mant = mant * 10 + flit_digit_at(a, n, i5);
+            i5 = i5 + 1;
+        }
+        if (round != 0) {
+            if (yv_truth(ya_get(flags, 0))) {
+                mant = mant + 1;
+            } else {
+                if ((mant & 1) != 0) mant = mant + 1;
+            }
+        }
+        long bits = 0;
+        if (sh > 0) {
+            /* SUBNORMAL: the significand was shifted right by sh, which lands
+             * the value on 2^-1074 times a fraction with no implicit leading
+             * bit, so the exponent field is zero and the bits are the fraction
+             * itself. A carry out of it is the smallest normal. */
+            if (mant >= 0x10000000000000LL) {
+                bits = 0x10000000000000LL;
+            } else {
+                bits = mant;
+            }
+        } else {
+            long e2 = e;
+            if (mant >= 0x20000000000000LL) {
+                mant = mant >> 1;
+                e2 = e + 1;
+            }
+            if (e2 > 1023) {
+                bits = (long)0x7FF0000000000000ULL; /* past the largest double */
+            } else {
+                bits = ((e2 + 1023) << 52) | (mant & 0xFFFFFFFFFFFFFLL);
+            }
+        }
+        if (neg) {
+            return (long)(bits | (unsigned long)0x8000000000000000ULL);
+        } else {
+            return bits;
+        }
+    }
+}
+
+/* Index of the 'e'/'E' that starts the exponent, or len(s) when absent. */
+long flit_ebase(Yv *s) {
+    long e = ys_index_of(s, ys("e"));
+    if (e < 0) e = ys_index_of(s, ys("E"));
+    if (e < 0) {
+        return yv_len(s);
+    } else {
+        return e;
+    }
+}
+
+/* The IEEE-754 bits a decimal float literal denotes, rounded once to nearest
+ * even -- the same value strtod, C's printf and Python's float() give. */
+long flit_bits(Yv *s) {
+    long eb = flit_ebase(s);
+    int neg = ys_eq_lit(ys_slice(s, 0, 1), "-");
+    /* One pass over the digits: leading zeros dropped, the rest into the
+     * bignum. ALL of them, not a fixed count: keeping 18 in a long loses ~1e-18
+     * of the value, which is enough to flip a rounding that sits within 1% of
+     * its midpoint. */
+    Yv *a = yav(0);
+    long i = 0;
+    while (i < FLIT_LIMBS) {
+        a = ya_push(a, yv_long(0));
+        i = i + 1;
+    }
+    long ndig = 0;
+    long nfrac = 0;
+    int seen = 0;
+    int past_dot = 0;
+    int over = 0;
+    i = 0;
+    if (ys_eq_lit(ys_slice(s, 0, 1), "-")) i = 1;
+    if (ys_eq_lit(ys_slice(s, 0, 1), "+")) i = 1;
+    while (i < eb) {
+        Yv *c = ys_slice(s, i, i + 1);
+        if (ys_eq_lit(c, ".")) {
+            past_dot = 1;
+        } else {
+            if (past_dot) nfrac = nfrac + 1;
+            if (seen || !ys_eq_lit(c, "0")) {
+                seen = 1;
+                ndig = ndig + 1;
+                if (!flit_dpush(a, ys_byte_at(c, 0) - 48, FLIT_LIMBS)) over = 1;
+            }
+        }
+        i = i + 1;
+    }
+    if (!seen) {
+        /* 0.0, 0e999 -- zero, with the literal's sign */
+        if (neg) {
+            return (long)0x8000000000000000ULL;
+        } else {
+            return 0;
+        }
+    } else {
+        /* the explicit exponent, clamped: a long digit run must not wrap, and
+         * types.y rejects a literal whose magnitude is out of range before here */
+        long ex = 0;
+        int eneg = 0;
+        if (eb < yv_len(s)) {
+            long j = eb + 1;
+            Yv *sc = ys_slice(s, j, j + 1);
+            if (ys_eq_lit(sc, "-")) {
+                eneg = 1;
+                j = j + 1;
+            }
+            if (ys_eq_lit(sc, "+")) j = j + 1;
+            int past = 0;
+            while (j < yv_len(s)) {
+                if (!past) {
+                    ex = ex * 10 + (ys_byte_at(s, j) - 48);
+                    if (ex > 5000) {
+                        past = 1;
+                        ex = 5001;
+                    }
+                }
+                j = j + 1;
+            }
+            if (eneg) ex = 0 - ex;
+        }
+        if (over) {
+            /* more digits than the limbs hold: nothing but inf or zero */
+            if (ex - nfrac > 400) {
+                if (neg) {
+                    return (long)0xFFF0000000000000ULL;
+                } else {
+                    return (long)0x7FF0000000000000ULL;
+                }
+            } else {
+                if (neg) {
+                    return (long)0x8000000000000000ULL;
+                } else {
+                    return 0;
+                }
+            }
+        } else {
+            return flit_finish(a, ndig, ex - nfrac, neg);
+        }
+    }
+}
+
 Yv *gen_lit(Yv *st, Yv *node) {
     if (lit_is_float(yr_get(node, "v"))) {
-        /* Float literal: mantissa scaled by 10^n, where n folds together
-         * the fraction length and any explicit exponent. Floats live in
-         * %rax as raw IEEE754 bits; only arithmetic and comparison use
-         * %xmm. */
-        st = emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                    ys_long(flit_mant(yr_get(node, "v")))),
-                             ys(", %rax")));
-        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
-        return gen_scale10(st, flit_exp(yr_get(node, "v")));
+        /* Float literal: its IEEE-754 bits, decided above. Floats live in %rax
+         * as raw bits; only arithmetic and comparison use %xmm. */
+        return emit(st, ys_cat(ys_cat(ys("    mov $"),
+                                       ys_long(flit_bits(yr_get(node, "v")))),
+                                ys(", %rax")));
     } else {
         return emit(st, ys_cat(ys_cat(ys("    mov $"),
                                       norm_num(yr_get(node, "v"))),
                                ys(", %rax")));
     }
 }
-
-/* %xmm0 *= 10^n (n may be negative). Applied in chunks of 18 so every
- * factor fits a long exactly; |n| <= 18 is therefore one correctly-rounded
- * operation, which is every literal anyone writes. */
-Yv *gen_scale10(Yv *st, long n) {
-    int up = n > 0;
-    long left = n;
-    if (!(up)) {
-        left = 0 - n;
-        ;
-    }
-    while (left > 0) {
-        long chunk = left;
-        if (chunk > 18) {
-            chunk = 18;
-            ;
-        }
-        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pow10(chunk))),
-                             ys(", %rax")));
-        st = emit(st, ys("    cvtsi2sd %rax, %xmm1"));
-        if (up) {
-            st = emit(st, ys("    mulsd %xmm1, %xmm0"));
-            ;
-        } else {
-            st = emit(st, ys("    divsd %xmm1, %xmm0"));
-            ;
-        }
-        left = left - chunk;
-    }
-    return emit(st, ys("    movq %xmm0, %rax"));
-}
-
 Yv *gen_index(Yv *st, Yv *node) {
     /* Checker: an array expression — a plain variable or a nested place
      * (`grid[0][1]`, `rec.v[i]`); the base is evaluated once, here.

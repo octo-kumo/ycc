@@ -46,6 +46,7 @@ reason.
 | 02-lexical | Literals | `_` digit separators in decimal integers and floats, wherever a literal is read (array lengths, shift counts, defaults, f-string fields); not right after the dot or the `e` | `native/t142_digit_separators.y`, `native/e135_digit_separators.y` |
 | 02-lexical | Literals | A radix prefix needs a digit of its radix: `0x`, `0X_`, `0b2` are errors, one for the whole word | `native/e139_radix_no_digits.y` |
 | 02-lexical | Literals | Float, boolean and none literal forms | `native/t28_floats.y`, `native/t34_sci_literals.y`, `native/t47_none_void.y` |
+| 02-lexical | Literals | A float literal's value is decided by the compiler and rounded once to nearest even, from the digits as written (17+ significant digits, exponents both sides of zero, ties, subnormals, both edges of the range); past the range it is `inf` or `0.0` as IEEE says, and a net power of ten past 100000 is an error | `native/t171_float_literal_rounding.y`, `native/e164_float_literal_exponent.y` |
 | 02-lexical | Literals | String, byte, character and format-string escapes | `native/t41_byte_strings.y`, `native/t45_byte_repr.y`, `native/t51_strings_slices.y`, `native/t69_fstrings.y` |
 | 02-lexical | Operators and punctuation | Maximal munch for adjacent increment and arithmetic tokens | `native/t74_lexical_operators.y`, `native/t39_incdec_opassign.y` |
 | 02-lexical | Operators and punctuation | Compound operators, range, cons and match punctuation | `native/t39_incdec_opassign.y`, `native/t43_spread_cons.y`, `native/t50_unions_match.y` |

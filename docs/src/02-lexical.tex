@@ -64,6 +64,18 @@ exponent: \ic{1\_000.5}, \ic{0.000\_001}, \ic{1e1\_0} (\ic{1.\_5} and
 \emph{not} a fractional part --- \ic{a..b} lexes as \ic{a}, \ic{..},
 \ic{b}. Float literals are IEEE-754 binary64 (\ty{float}).
 
+The compiler decides a float literal's value itself, and rounds it
+\emph{once}, to nearest even, from the digits as written --- so a
+literal is the double \ic{strtod}, C's \ic{printf} and Python's \ic{float}
+would give, however many digits it has: \ic{9007199254740991.0} is
+$2^{53}-1$ and exact, \ic{1e23} is the nearest double to $10^{23}$, and
+both were a ulp out before. Magnitude past the range becomes \ic{inf} or
+\ic{0.0}, as IEEE says (\ic{1e400}, \ic{-1e-400}); a magnitude nobody
+means --- a net power of ten (the exponent less the digits after the dot)
+past 100000 --- is an error instead, since it is a slip and not a value.
+A literal is a constant: the generated code holds its bits, and no
+decimal is parsed at runtime.
+
 \paragraph{Strings.} Double-quoted byte strings:
 
 \begin{center}

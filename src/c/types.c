@@ -68,6 +68,7 @@ static int str_in(Yv *xs, Yv *s);
 static Yv *trec_field_type(Yv *rec, Yv *key);
 static Yv *tstr_go(Yv *t);
 static int num_is_float(Yv *s);
+static long num_net_exp(Yv *s);
 static int is_value_type(Yv *t);
 static int t_poisoned(Yv *t);
 static int t_poisoned_go(Yv *t, long d);
@@ -1094,9 +1095,43 @@ static int union_accepts(Yv *got, Yv *want) {
     }
 }
 
-// A numeric literal denotes a float when it has a fraction or an exponent.
-// Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'.
-// (native.y keeps its own copy — the two modules never share helpers.)
+/* A float literal's net power of ten: the explicit exponent minus the digits
+ * after the dot, clamped so a long digit run cannot wrap. |dp| past 100000 is
+ * nobody's magnitude -- a double holds 10^-308 to 10^308 -- and the conversion
+ * used to emit megabytes of mul/div for such a literal (1e10000000 killed the
+ * compiler), so the checker rejects it. A literal merely past the range is not
+ * an error: 1e400 and 1e40000 are inf, as IEEE says (t171). (native.y keeps its
+ * own copy of this scan -- the two modules never share helpers.) */
+static long num_net_exp(Yv *s) {
+    long dot = ys_index_of(s, ys("."));
+    long eb = ys_index_of(s, ys("e"));
+    if (eb < 0) eb = ys_index_of(s, ys("E"));
+    if (eb < 0) eb = yv_len(s);
+    long nfrac = 0;
+    if (dot >= 0) nfrac = eb - dot - 1;
+    long ex = 0;
+    if (eb < yv_len(s)) {
+        long i = eb + 1;
+        int neg = 0;
+        Yv *sc = ys_slice(s, i, i + 1);
+        if (ys_eq_lit(sc, "-")) { neg = 1; i = i + 1; }
+        if (ys_eq_lit(sc, "+")) { i = i + 1; }
+        int past = 0;
+        while (i < yv_len(s)) {
+            if (!past) {
+                ex = ex * 10 + (ys_byte_at(s, i) - 48);
+                if (ex > 100001) { past = 1; ex = 100002; }
+            }
+            i = i + 1;
+        }
+        if (neg) ex = 0 - ex;
+    }
+    return ex - nfrac;
+}
+
+/* A numeric literal denotes a float when it has a fraction or an exponent.
+ * Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'.
+ * (native.y keeps its own copy -- the two modules never share helpers.) */
 static int num_is_float(Yv *s) {
     int radix = 0;
     if (yv_len(s) > 2) {
@@ -1973,6 +2008,16 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_num) {
         if (num_is_float(yr_get(node, "v"))) {
+            long dp = num_net_exp(yr_get(node, "v"));
+            if (dp > 100000 || dp < -100000) {
+                /* out of range by thousands of decades: a mistake, not a value.
+                 * A literal merely past the double's range (1e400) is still
+                 * accepted and becomes inf, as IEEE says. */
+                st = fail(st,
+                          ys("float literal magnitude out of range (a double holds 10^-308 to 10^308)"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+            }
             return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
         } else {
             return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);

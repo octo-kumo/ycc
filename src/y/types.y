@@ -880,6 +880,40 @@ def union_accepts(got: Type, want: Type) -> bool {
     }
 };
 
+// A float literal's net power of ten: the explicit exponent minus the digits
+// after the dot, clamped so a long digit run cannot wrap. |dp| past 100000 is
+// nobody's magnitude -- a double holds 10^-308 to 10^308 -- and the conversion
+// used to emit megabytes of mul/div for such a literal (1e10000000 killed the
+// compiler), so the checker rejects it. A literal merely past the range is not
+// an error: 1e400 and 1e40000 are inf, as IEEE says (t171). (native.y keeps its
+// own copy of this scan -- the two modules never share helpers.)
+def num_net_exp(s: str) -> long {
+    let dot = index_of(s, ".");
+    let eb = index_of(s, "e");
+    if (eb < 0) { eb = index_of(s, "E"); };
+    if (eb < 0) { eb = len(s); };
+    let nfrac = 0;
+    if (dot >= 0) { nfrac = eb - dot - 1; };
+    let ex = 0;
+    if (eb < len(s)) {
+        let i = eb + 1;
+        let neg = false;
+        let sc = s[i:i + 1];
+        if (sc == "-") { neg = true; i = i + 1; };
+        if (sc == "+") { i = i + 1; };
+        let past = false;
+        while (i < len(s)) {
+            if (!past) {
+                ex = ex * 10 + (byte_at(s[i:i + 1], 0) - 48);
+                if (ex > 100001) { past = true; ex = 100002; };
+            };
+            i = i + 1;
+        };
+        if (neg) { ex = 0 - ex; };
+    };
+    ex - nfrac
+};
+
 // A numeric literal denotes a float when it has a fraction or an exponent.
 // Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'.
 // (native.y keeps its own copy — the two modules never share helpers.)
@@ -1561,6 +1595,13 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
     if (k == K.num) {
         let lit: Leaf = node;
         if (num_is_float(lit.v)) {
+            let dp = num_net_exp(lit.v);
+            if (dp > 100000 || dp < 0 - 100000) {
+                // out of range by thousands of decades: a mistake, not a
+                // value. A literal merely past the double's range (1e400) is
+                // still accepted and becomes inf, as IEEE says.
+                st = fail(st, "float literal magnitude out of range (a double holds 10^-308 to 10^308)", lit.line, lit.col);
+            };
             tc_res(type_node({ k: K.tfloat }), st)
         } else {
             tc_res(type_node({ k: K.tlong }), st)

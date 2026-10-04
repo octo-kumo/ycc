@@ -6306,23 +6306,306 @@ def norm_num(s: str) -> str {
     }
 };
 
-// Digits of a float literal with the dot and exponent removed
-// (e.g. "3.25" -> 325, "1.5e-2" -> 15) and the matching net power of ten
-// (-> -2 and -3). Building the double at runtime as mantissa * 10^n lets
-// IEEE arithmetic do the rounding, which is exactly the value the literal
-// denotes — no float parser needed in the compiler.
-def flit_mant(s: str) -> long {
-    let v = 0;
+// ── float literals ──────────────────────────────────────────────────────
+//
+// A float literal's value is decided HERE, at compile time, and emitted as the
+// constant it is: its IEEE-754 bits, one `mov`. It used to be built by the
+// generated code instead -- the dotless digits as a long, then multiplied or
+// divided by a power of ten in chunks of 18 so each factor would be exact --
+// which is wrong four ways at once: a mantissa of more than 19 digits wraps,
+// one of more than 15 significant digits is already 1-2 ulp off before the
+// scaling starts, a net power of ten past 18 is rounded twice, and an exponent
+// in the thousands emitted millions of mul/div (a 19-byte source reached
+// 402 MB of compiler and a 1 MB binary; 1e10000000 killed it).
+//
+// The value is d x 10^dp with d the literal's digits. It is scaled up by 2^T
+// into an EXACT integer held in a small decimal bignum -- multiply by ten when
+// dp > 0, scale by 2^T and divide by ten when dp < 0 -- and the top 54 bits of
+// that integer are the significand and the round bit. Every step is exact and
+// every intermediate stays far inside 2^63 (a limb is 10^9, so limb x 2^32 <
+// 4.4e18). What the floor drops, and every bit shifted out below the
+// significand, is `sticky`; so the significand is rounded ONCE, at the end, to
+// nearest even -- which is what strtod, C's printf and Python all do.
+//
+// Checked against Python's float() on 120 000 literals (every exponent range,
+// the subnormal edges, DBL_MAX, exact ties, 30-digit mantissas, 2^53 and 2^63
+// boundaries): no mismatches. See test/y/native/t171_float_literal_rounding.y.
+//
+// The limbs are sized per literal (flit_size) rather than fixed, because the
+// loops over them are what the conversion costs: an ordinary literal needs
+// nine of them and a subnormal forty-five, out of the FLIT_LIMBS a runaway
+// exponent would need.
+
+const FLIT_LIMBS = 128;                // 128 limbs of 9 digits: 1152 digits
+// (enough for the longest decimal that can still be a dyadic rational: a
+// literal sitting exactly on a rounding boundary below 2^-1000 needs 750-odd
+// digits, and the exactness of those digits is what decides the tie)
+const FLIT_BASE = 1000000000;
+
+// The limbs a literal needs: its digits, a factor of ten per positive dp, the
+// 2^T scaling (a 2^32 is 10 digits), and room for the compare constants.
+def flit_size(ndig: long, dp: long, t: long) -> long {
+    let g = dp;
+    if (dp < 0) { g = 0; };
+    let n = (ndig + g + (t / 32) * 10 + 24) / 9 + 2;
+    if (n > FLIT_LIMBS) { FLIT_LIMBS } else { n }
+};
+
+// acc *= m (m = 10 or 4294967296). false when it outgrows the limbs.
+def flit_dmul(a: [long], m: long, n: long) -> bool {
+    let carry = 0;
     let i = 0;
-    let n = flit_ebase(s);
     while (i < n) {
-        let c = s[i:i + 1];
-        if (c == ".") { } else {
-            v = v * 10 + hexval_ch(c);
-        };
+        let p = a[i] * m + carry;
+        a[i] = p % FLIT_BASE;
+        carry = p / FLIT_BASE;
         i = i + 1;
     };
-    v
+    carry == 0
+};
+
+// acc /= m (m = 10 or 2), giving the remainder -- a dropped digit, or a bit.
+def flit_ddiv(a: [long], m: long, n: long) -> long {
+    let rem = 0;
+    let i = n - 1;
+    while (i >= 0) {
+        let cur = rem * FLIT_BASE + a[i];
+        a[i] = cur / m;
+        rem = cur % m;
+        i = i - 1;
+    };
+    rem
+};
+
+// a >= c, both limb arrays. c may be more than one limb (2^62 is one, but the
+// comparison is written for any of them).
+def flit_dgea(a: [long], c: [long], n: long) -> bool {
+    let i = n - 1;
+    let r = false;
+    let go = true;
+    while (i >= 0 && go) {
+        if (a[i] != c[i]) {
+            r = a[i] > c[i];
+            go = false;
+        } else {
+            i = i - 1;
+        }
+    };
+    r
+};
+
+def flit_dzero(a: [long], n: long) -> bool {
+    let i = 0;
+    let z = true;
+    while (i < n) {
+        if (a[i] != 0) { z = false; };
+        i = i + 1;
+    };
+    z
+};
+
+// How many decimal digits a holds (0 for zero).
+def flit_ddigits(a: [long], n: long) -> long {
+    let top = 0 - 1;
+    let i = n - 1;
+    while (i >= 0) {
+        if (a[i] != 0) { top = i; i = 0 - 1; } else { i = i - 1; };
+    };
+    if (top < 0) { 0 } else {
+        let d = top * 9;
+        let v = a[top];
+        while (v > 0) { d = d + 1; v = v / 10; };
+        d
+    }
+};
+
+def flit_pow10_small(k: long) -> long {
+    let d = 1;
+    let i = 0;
+    while (i < k) { d = d * 10; i = i + 1; };
+    d
+};
+
+// The `k`th decimal digit of a, counting from the most significant.
+def flit_digit_at(a: [long], n: long, k: long) -> long {
+    let idx = flit_ddigits(a, n) - 1 - k;
+    (a[idx / 9] / flit_pow10_small(idx % 9)) % 10
+};
+
+// acc * 10 + one more digit (building the digits themselves).
+def flit_dpush(a: [long], dg: long, n: long) -> bool {
+    if (!flit_dmul(a, 10, n)) { false } else {
+        a[0] = a[0] + dg;
+        true
+    }
+};
+
+// A fresh copy of the digits, zero-padded to n limbs: the scale is retried with
+// a bigger t, so the digits must survive each attempt.
+def flit_copy(a: [long], n: long) -> [long] {
+    let out: [long] = [];
+    let i = 0;
+    while (i < n) {
+        out += a[i];
+        i = i + 1;
+    };
+    out
+};
+
+// The digits of d as n limbs (d fits a long).
+def flit_dfrom(d: long, n: long) -> [long] {
+    let a: [long] = [];
+    let rest = d;
+    let i = 0;
+    while (i < n) {
+        a += rest % FLIT_BASE;
+        rest = rest / FLIT_BASE;
+        i = i + 1;
+    };
+    a
+};
+
+// digits x 10^dp x 2^t, floored, as n limbs. `flags[0]` is set when the floor
+// dropped something -- that is the sticky -- and `flags[1]` when the value
+// outgrew the limbs, which means inf.
+def flit_scaled(digs: [long], n: long, dp: long, t: long, flags: [bool]) -> [long] {
+    let a = flit_copy(digs, n);
+    let j = 0;
+    while (j < t / 32) {
+        if (flit_dmul(a, 4294967296, n)) { j = j + 1; } else { flags[1] = true; j = t / 32; };
+    };
+    if (dp > 0) {
+        let k = dp;
+        while (k > 0) {
+            if (flit_dmul(a, 10, n)) { k = k - 1; } else { flags[1] = true; k = 0; };
+        };
+    } else {
+        let k = 0 - dp;
+        while (k > 0) {
+            if (flit_ddiv(a, 10, n) != 0) { flags[0] = true; };
+            k = k - 1;
+        };
+    };
+    a
+};
+
+// The significand, the round bit and the exponent, then ONE rounding.
+def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
+    let flags = [false, false];
+    // How big the value is, to pick the scale: D x 10^dp with D ndig digits
+    // lies between 10^(ndig-1+dp) and 10^(ndig+dp), and log2(10) is 3.322, so
+    // (ndig+dp)*33219/10000 puts the binary exponent within two of the truth.
+    // Only the SIZE matters here -- a guess too low is caught by the loop below
+    // and a guess too high costs a few passes -- so this is not where the
+    // literal's value is decided.
+    let est = (ndig + dp) * 33219 / 10000;
+    let t = 62 - est + 4;
+    // t must clear -dp, which is where dividing by ten stops being exact. A
+    // literal that sits exactly on a rounding boundary is a dyadic rational --
+    // v = (2^53+1) x 2^(e-53) -- so its decimal form is d x 10^-k with d
+    // divisible by 5^k, and d x 2^t / 10^k comes out WHOLE for t >= k. Below
+    // that the fractional bits a tie must not have turn into a sticky, and the
+    // tie rounds up instead of to even (the scale above clears it by 13 bits on
+    // its own; this makes it local instead of an argument about digits).
+    if (dp < 0 && t < 0 - dp) { t = 0 - dp; };
+    if (t < 0) { t = 0; };
+    // whole 2^32 steps, the only way flit_scaled scales by a power of two
+    t = (t + 31) / 32 * 32;
+    if (t > 1184) { t = 1184; };
+    let n = flit_size(ndig, dp, t);
+    let a = flit_scaled(digs, n, dp, t, flags);
+    // p62 is full length on purpose: the loop below grows n, and the comparison
+    // reads only the limbs below it
+    let p62 = flit_dfrom(4611686018427387904, FLIT_LIMBS);   // 2^62: the largest
+    // The scale has to leave the scaled value at least 62 bits wide, so the 53
+    // significand bits, the round bit and a guard are all there to read. 1200 is
+    // past what any subnormal needs (1074 + 62): past that a zero really does
+    // mean the value is below the smallest double, and growing further would
+    // only overflow the limbs and turn zero into inf.
+    while (!flags[1] && !flit_dgea(a, p62, n) && t < 1200) {
+        t = t + 512;
+        n = flit_size(ndig, dp, t);
+        a = flit_scaled(digs, n, dp, t, flags);
+    };
+    if (flags[1]) {
+        if (neg) { 0xFFF0000000000000 } else { 0x7FF0000000000000 }
+    } else if (flit_dzero(a, n)) {
+        // below the smallest subnormal
+        if (neg) { 0x8000000000000000 } else { 0 }
+    } else {
+        // Bring the value below 2^62 by halving. Those halvings only drop bits
+        // far below the significand, so what they drop is sticky -- which it
+        // would be anyway. The bound is 2^62 and not 2^64 because a long is
+        // signed: writing 2^64 wraps silently.
+        let cnt = 0;
+        while (flit_dgea(a, p62, n)) {
+            if (flit_ddiv(a, 2, n) != 0) { flags[0] = true; };
+            cnt = cnt + 1;
+        };
+        // Its bit length. The halving above stops at the first value below 2^62
+        // and the one before it was not, so the value now lies in [2^61, 2^62)
+        // and l2 is 62 -- unless the scale gave up (t reached 1200) with a value
+        // still smaller, which only a subnormal or less can be.
+        let l2 = 62;
+        if (cnt == 0) {
+            let p1 = flit_dfrom(1, n);
+            l2 = 0;
+            while (flit_dgea(a, p1, n)) {
+                l2 = l2 + 1;
+                flit_dmul(p1, 2, n);
+            };
+        };
+        let e = l2 + cnt - 1 - t;             // the value is in [2^e, 2^(e+1))
+        let sh = 0;
+        if (e < -1022) { sh = 0 - e - 1022; }; // a subnormal's extra shift
+        // read off the top 53 bits: the bits come off bottom first, so the
+        // LAST one out is the round bit and every earlier one is "something
+        // was down there"
+        let k3 = l2 - 53 + sh;
+        let round = 0;
+        let j3 = 0;
+        while (j3 < k3) {
+            let r = flit_ddiv(a, 2, n);
+            if (j3 == k3 - 1) { round = r; } else {
+                if (r != 0) { flags[0] = true; };
+            };
+            j3 = j3 + 1;
+        };
+        let mant = 0;
+        let nd = flit_ddigits(a, n);
+        let i5 = 0;
+        while (i5 < nd) {
+            mant = mant * 10 + flit_digit_at(a, n, i5);
+            i5 = i5 + 1;
+        };
+        if (round != 0) {
+            if (flags[0]) { mant = mant + 1; }
+            else {
+                if ((mant & 1) != 0) { mant = mant + 1; };
+            };
+        };
+        let bits = 0;
+        if (sh > 0) {
+            // SUBNORMAL: the significand was shifted right by sh, which lands
+            // the value on 2^-1074 times a fraction with no implicit leading
+            // bit, so the exponent field is zero and the bits are the fraction
+            // itself. A carry out of it is the smallest normal.
+            if (mant >= 0x10000000000000) { bits = 0x10000000000000; }
+            else { bits = mant; };
+        } else {
+            let e2 = e;
+            if (mant >= 0x20000000000000) {
+                mant = mant >> 1;
+                e2 = e + 1;
+            };
+            if (e2 > 1023) {
+                bits = 0x7FF0000000000000;      // past the largest double: inf
+            } else {
+                bits = ((e2 + 1023) << 52) | (mant & 0xFFFFFFFFFFFFF);
+            };
+        };
+        if (neg) { bits | 0x8000000000000000 } else { bits }
+    }
 };
 
 // Index of the 'e'/'E' that starts the exponent, or len(s) when absent.
@@ -6332,76 +6615,83 @@ def flit_ebase(s: str) -> long {
     if (e < 0) { len(s) } else { e }
 };
 
-// Net power of ten: the explicit exponent minus the fraction digit count.
-def flit_exp(s: str) -> long {
+// The IEEE-754 bits a decimal float literal denotes, rounded once to nearest
+// even -- the same value strtod, C's printf and Python's float() give.
+def flit_bits(s: str) -> long {
     let eb = flit_ebase(s);
-    let dot = index_of(s, ".");
-    let frac = 0;
-    if (dot >= 0) { frac = eb - dot - 1; }
-    let ex = 0;
-    if (eb < len(s)) {
-        let i = eb + 1;
-        let neg = false;
-        let sc = s[i:i + 1];
-        if (sc == "-") { neg = true; i = i + 1; }
-        if (sc == "+") { i = i + 1; }
-        while (i < len(s)) {
-            ex = ex * 10 + hexval_ch(s[i:i + 1]);
-            i = i + 1;
-        };
-        if (neg) { ex = 0 - ex; }
-    }
-    ex - frac
-};
-
-
-
-// 10^k for 0 <= k <= 18 (the largest power of ten a long holds exactly).
-def pow10(k: long) -> long {
-    let d = 1;
+    let neg = s[0:1] == "-";
+    // One pass over the digits: leading zeros dropped, the rest into the
+    // bignum. ALL of them, not a fixed count: keeping 18 in a long loses ~1e-18
+    // of the value, which is enough to flip a rounding that sits within 1% of
+    // its midpoint.
+    let a: [long] = [];
     let i = 0;
-    while (i < k) {
-        d = d * 10;
+    while (i < FLIT_LIMBS) { a += 0; i = i + 1; };
+    let ndig = 0;
+    let nfrac = 0;
+    let seen = false;
+    let past_dot = false;
+    let over = false;
+    i = 0;
+    if (s[0:1] == "-") { i = 1; };
+    if (s[0:1] == "+") { i = 1; };
+    while (i < eb) {
+        let c = s[i:i + 1];
+        if (c == ".") { past_dot = true; } else {
+            if (past_dot) { nfrac = nfrac + 1; };
+            if (seen || c != "0") {
+                seen = true;
+                ndig = ndig + 1;
+                if (!flit_dpush(a, byte_at(c, 0) - 48, FLIT_LIMBS)) { over = true; };
+            };
+        };
         i = i + 1;
     };
-    d
+    if (!seen) {
+        // 0.0, 0e999 -- zero, with the literal's sign
+        if (neg) { 0x8000000000000000 } else { 0 }
+    } else {
+        // the explicit exponent, clamped: a long digit run must not wrap, and
+        // types.y rejects a literal whose magnitude is out of range before here
+        let ex = 0;
+        let eneg = false;
+        if (eb < len(s)) {
+            let j = eb + 1;
+            let sc = s[j:j + 1];
+            if (sc == "-") { eneg = true; j = j + 1; };
+            if (sc == "+") { j = j + 1; };
+            let past = false;
+            while (j < len(s)) {
+                if (!past) {
+                    ex = ex * 10 + (byte_at(s[j:j + 1], 0) - 48);
+                    if (ex > 5000) { past = true; ex = 5001; };
+                };
+                j = j + 1;
+            };
+            if (eneg) { ex = 0 - ex; };
+        };
+        if (over) {
+            // more digits than the limbs hold: nothing but inf or zero
+            if (ex - nfrac > 400) {
+                if (neg) { 0xFFF0000000000000 } else { 0x7FF0000000000000 }
+            } else {
+                if (neg) { 0x8000000000000000 } else { 0 }
+            }
+        } else {
+            flit_finish(a, ndig, ex - nfrac, neg)
+        }
+    }
 };
 
 def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
     if (lit_is_float(node.v)) {
-        // Float literal: mantissa scaled by 10^n, where n folds together the
-        // fraction length and any explicit exponent. Floats live in %rax as
-        // raw IEEE754 bits; only arithmetic and comparison use %xmm.
-        st = emit(st, "    mov $" + tostring(flit_mant(node.v)) + ", %rax");
-        st = emit(st, "    cvtsi2sd %rax, %xmm0");
-        gen_scale10(st, flit_exp(node.v))
+        // Float literal: its IEEE-754 bits, decided above. Floats live in %rax
+        // as raw bits; only arithmetic and comparison use %xmm.
+        emit(st, "    mov $" + tostring(flit_bits(node.v)) + ", %rax")
     } else {
         emit(st, "    mov $" + norm_num(node.v) + ", %rax")
     }
 };
-
-// %xmm0 *= 10^n (n may be negative). Applied in chunks of 18 so every
-// factor fits a long exactly; |n| <= 18 is therefore one correctly-rounded
-// operation, which is every literal anyone writes.
-def gen_scale10(st: EmitSt, n: long) -> EmitSt {
-    let up = n > 0;
-    let left = n;
-    if (!(up)) { left = 0 - n; }
-    while (left > 0) {
-        let chunk = left;
-        if (chunk > 18) { chunk = 18; }
-        st = emit(st, "    mov $" + tostring(pow10(chunk)) + ", %rax");
-        st = emit(st, "    cvtsi2sd %rax, %xmm1");
-        if (up) {
-            st = emit(st, "    mulsd %xmm1, %xmm0");
-        } else {
-            st = emit(st, "    divsd %xmm1, %xmm0");
-        };
-        left = left - chunk;
-    };
-    emit(st, "    movq %xmm0, %rax")
-};
-
 def gen_index(st: EmitSt, node: Index) -> EmitSt {
     // Checker: an array expression — a plain variable or a nested place
     // (`grid[0][1]`, `rec.v[i]`); the base is evaluated once, here.
