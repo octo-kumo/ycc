@@ -468,6 +468,25 @@ def dir_of(p: str) -> str {
     if (s < 0) { "" } else { p[:s] }
 };
 
+// The directory this compiler runs from: /proc/self/exe (readlink), so a
+// compiler found through PATH still finds its std units next to itself --
+// argv()[0] is then just "ycc" and dir_of("ycc") is empty, which is how
+// `PATH=... ycc prog.y` failed to find fs with the units sitting beside the
+// binary. argv()[0] stays the fallback: a host with no /proc, and a binary
+// replaced while it runs (the link then names a path that may be gone, which
+// the candidates simply miss).
+def self_dir() -> str {
+    let by_argv = "";
+    let av = argv();
+    if (len(av) > 0) { by_argv = dir_of(av[0]); };
+    let buf: [byte; 4096] = [0; 4096];
+    let n = syscall(89, "/proc/self/exe", &buf[0], len(buf));
+    if (n > 0) {
+        let d = dir_of(from_bytes(buf[0:n]));
+        if (len(d) > 0) { d } else { by_argv }
+    } else { by_argv }
+};
+
 def std_resolve(name: str, base_dir: str) -> str {
     let cands: [str] = [];
     cands += base_dir + "/" + name + ".y";
@@ -481,15 +500,11 @@ def std_resolve(name: str, base_dir: str) -> str {
     };
     cands += "std/" + name + ".y";
     cands += "src/y/std/" + name + ".y";
-    let av = argv();
-    if (len(av) > 0) {
-        let exe: str = av[0];
-        let d = dir_of(exe);
-        if (len(d) > 0) {
-            cands += d + "/std/" + name + ".y";
-            cands += d + "/src/y/std/" + name + ".y";
-            cands += d + "/../src/y/std/" + name + ".y";
-        }
+    let d = self_dir();
+    if (len(d) > 0) {
+        cands += d + "/std/" + name + ".y";
+        cands += d + "/src/y/std/" + name + ".y";
+        cands += d + "/../src/y/std/" + name + ".y";
     }
     let found = "";
     let i = 0;

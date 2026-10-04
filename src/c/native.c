@@ -17,6 +17,8 @@
  * Every value is 8 bytes (long/bool/ptr/str-address); expression values in
  * %rax; locals at negative rbp offsets; Y-function args pushed on the stack.
  */
+#include <sys/syscall.h>
+#include <unistd.h>
 #include "native.h"
 
 #include "lexer.h"
@@ -1046,6 +1048,29 @@ Yv *dir_of(Yv *p) {
     }
 }
 
+/* The directory this compiler runs from: /proc/self/exe (readlink), so a
+ * compiler found through PATH still finds its std units next to itself --
+ * argv()[0] is then just "ycc" and dir_of("ycc") is empty, which is how
+ * `PATH=... ycc prog.y` failed to find fs with the units sitting beside the
+ * binary. argv()[0] stays the fallback: a host with no /proc, and a binary
+ * replaced while it runs (the link then names a path that may be gone, which
+ * the candidates simply miss).
+ *
+ * The Y twin writes the link into a [byte; 4096] and reads it back with
+ * from_bytes; a C buffer and ys_n are the same bytes read as a string. */
+static Yv *self_dir(void) {
+    Yv *by_argv = ys("");
+    Yv *av = argv_();
+    if (yv_len(av) > 0) { by_argv = dir_of(ya_get(av, 0)); }
+    char buf[4096];
+    long n = syscall(SYS_readlink, "/proc/self/exe", buf, sizeof(buf));
+    if (n > 0) {
+        Yv *d = dir_of(ys_n((const char *)buf, (size_t)n));
+        if (yv_len(d) > 0) { return d; }
+    }
+    return by_argv;
+}
+
 Yv *std_resolve(Yv *name, Yv *base_dir) {
     Yv *cands = yav(0);
     cands = ya_push(cands,
@@ -1061,21 +1086,15 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
     }
     cands = ya_push(cands, ys_cat(ys_cat(ys("std/"), name), ys(".y")));
     cands = ya_push(cands, ys_cat(ys_cat(ys("src/y/std/"), name), ys(".y")));
-    Yv *av = argv_();
-    if (yv_len(av) > 0) {
-        Yv *exe = ya_get(av, 0);
-        Yv *d = dir_of(exe);
-        if (yv_len(d) > 0) {
-            cands = ya_push(
-                cands, ys_cat(ys_cat(ys_cat(d, ys("/std/")), name), ys(".y")));
-            cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/src/y/std/")),
-                                                 name),
-                                        ys(".y")));
-            cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/../src/y/std/")),
-                                                 name),
-                                        ys(".y")));
-            ;
-        }
+    Yv *d = self_dir();
+    if (yv_len(d) > 0) {
+        cands = ya_push(
+            cands, ys_cat(ys_cat(ys_cat(d, ys("/std/")), name), ys(".y")));
+        cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/src/y/std/")), name),
+                                      ys(".y")));
+        cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/../src/y/std/")),
+                                             name),
+                                      ys(".y")));
         ;
     }
     Yv *found = ys("");

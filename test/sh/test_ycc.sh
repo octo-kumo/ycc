@@ -121,6 +121,62 @@ for compiler in "$YCC_BIN" "$CYCC"; do
 done
 rm -rf "$WARN_DIR"
 
+# A compiler found through PATH resolves its std units from /proc/self/exe,
+# not from argv()[0] -- which is then just "ycc", naming no directory. A
+# checkout reached by bare name (std in src/y/std beside the binary) and an
+# installed copy with std/ beside it both have to find fs, and both copies of
+# the compiler have to agree. Run from a neutral cwd, so nothing can be picked
+# up out of the source tree by accident.
+PATH_DIR=$(mktemp -d /tmp/ycc_path.XXXXXX)
+mkdir -p "$PATH_DIR/work"
+printf 'import fs;\nprint(fs.exists("/tmp"));\n' > "$PATH_DIR/work/prog.y"
+for compiler in "$YCC_BIN" "$CYCC"; do
+    tag="${compiler##*/}"
+    bindir=$(dirname "$compiler")
+    # (a) the compiler's own directory on PATH, bare name, neutral cwd: in a
+    # checkout std/ lives at src/y/std beside the binary
+    out=$(cd "$PATH_DIR/work" && PATH="$bindir:$PATH" timeout $(( 120 * YTIMEOUT_SCALE )) \
+        "$(basename "$compiler")" prog.y -o out </dev/null 2>&1)
+    ec=$?
+    run=$(run_bin 10 "$PATH_DIR/work/out" </dev/null 2>&1)
+    if [ $ec -eq 0 ] && [ -z "$out" ] && [ "$run" = true ]; then
+        pass "std units found through PATH in a checkout ($tag)"
+    else
+        fail "std units found through PATH in a checkout ($tag)" \
+            "exit=$ec, output '$(printf '%s' "$out" | tr '\n' '|')', run '$run'"
+    fi
+    # (b) an installed copy with std/ beside it
+    install="$PATH_DIR/install-$tag"
+    mkdir -p "$install"
+    cp "$compiler" "$install/ycc-installed"
+    cp -r "$ROOT/src/y/std" "$install/std"
+    rm -f "$PATH_DIR/work/out"
+    out=$(cd "$PATH_DIR/work" && PATH="$install:$PATH" timeout $(( 120 * YTIMEOUT_SCALE )) \
+        ycc-installed prog.y -o out </dev/null 2>&1)
+    ec=$?
+    run=$(run_bin 10 "$PATH_DIR/work/out" </dev/null 2>&1)
+    if [ $ec -eq 0 ] && [ -z "$out" ] && [ "$run" = true ]; then
+        pass "std units found through PATH beside the binary ($tag)"
+    else
+        fail "std units found through PATH beside the binary ($tag)" \
+            "exit=$ec, output '$(printf '%s' "$out" | tr '\n' '|')', run '$run'"
+    fi
+    # and the same binary with the checkout's directory behind it on PATH, so
+    # the module it finds is the one next to it
+    rm -f "$PATH_DIR/work/out"
+    out=$(cd "$PATH_DIR/work" && PATH="$install:$bindir:$PATH" timeout $(( 120 * YTIMEOUT_SCALE )) \
+        ycc-installed prog.y -o out </dev/null 2>&1)
+    ec=$?
+    run=$(run_bin 10 "$PATH_DIR/work/out" </dev/null 2>&1)
+    if [ $ec -eq 0 ] && [ -z "$out" ] && [ "$run" = true ]; then
+        pass "an installed copy prefers its own std ($tag)"
+    else
+        fail "an installed copy prefers its own std ($tag)" \
+            "exit=$ec, output '$(printf '%s' "$out" | tr '\n' '|')', run '$run'"
+    fi
+done
+rm -rf "$PATH_DIR"
+
 # Driver failures: each diagnostic must be identical in the self-hosted
 # compiler and its C copy, and each compiler must exit with status 1.
 expect_cli_error() {
