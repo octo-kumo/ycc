@@ -270,7 +270,7 @@ Yv *gen_tag_in(Yv *st, Yv *ts, Yv *inu);
 Yv *gen_union_slot(Yv *st, Yv *t, Yv *dkey, int store);
 Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey);
 Yv *gen_slot_move(Yv *st, long sl, int store);
-Yv *gen_union_str_rax(Yv *st, Yv *t);
+Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path);
 int is_void_node(Yv *n);
 Yv *loc_dir(long ln);
 Yv *gen_loc_stmt(Yv *st, Yv *node);
@@ -305,14 +305,14 @@ Yv *gen_method(Yv *st, Yv *node);
 Yv *gen_print(Yv *st, Yv *node);
 Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t);
 Yv *gen_typeof(Yv *st, Yv *node);
-Yv *gen_opt_str_rax(Yv *st, Yv *t);
+Yv *gen_opt_str_rax(Yv *st, Yv *t, Yv *path);
 Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t);
-Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay);
+Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay, Yv *path);
 Yv *gen_cons(Yv *st, Yv *node);
 Yv *gen_cat_conv(Yv *st, Yv *node, Yv *lt);
 Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_acc_cat_const(Yv *st, Yv *s);
-Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft);
+Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path);
 Yv *gen_syscall(Yv *st, Yv *node);
 long capture_off(Yv *st);
 Yv *gen_direct(Yv *st, Yv *node, Yv *name);
@@ -417,10 +417,11 @@ Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *gen_opassign_arr(Yv *st, Yv *node);
 Yv *gen_idxassign(Yv *st, Yv *node);
-Yv *gen_val_tostr_rax(Yv *st, Yv *t);
+Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path);
+static Yv *path_push(Yv *path, Yv *t);
 Yv *gen_acc_cat_rax(Yv *st, long aoff);
-Yv *gen_map_repr_rax(Yv *st, Yv *t);
-Yv *gen_arr_tostr_rax(Yv *st, Yv *elty);
+Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path);
+Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path);
 Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s);
 long elem_bytes(Yv *t);
 long arr_elem_bytes(Yv *t);
@@ -4460,7 +4461,7 @@ Yv *gen_tag_in(Yv *st, Yv *ts, Yv *inu) {
 
 // Union value in %rax -> its string form: the member its descriptor names
 // ("<union>" for none).
-Yv *gen_union_str_rax(Yv *st, Yv *t) {
+Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path) {
     Yv *ms = union_parts(t);
     Yv *rdone = next_loc(st);
     st = yr_get(rdone, "st");
@@ -4478,7 +4479,7 @@ Yv *gen_union_str_rax(Yv *st, Yv *t) {
         st = emit(st, ys_cat(ys("    jz "), yr_get(rnext, "lbl")));
         st = emit(st, ys("    pop %rax"));
         Yv *mu = unfold(mt);
-        st = gen_rec_str_rax(st, mu, union_lay(mu, t));
+        st = gen_rec_str_rax(st, mu, union_lay(mu, t), path_push(path, t));
         st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
         st = emit(st, ys_cat(yr_get(rnext, "lbl"), ys(":")));
         m = m + 1;
@@ -5722,14 +5723,14 @@ Yv *gen_print(Yv *st, Yv *node) {
             st = gen_helper1(st, ys("y_bytes_repr"));
             ;
         } else {
-            st = gen_arr_tostr_rax(st, yr_get(t, "of"));
+            st = gen_arr_tostr_rax(st, yr_get(t, "of"), yav(0));
             ;
         }
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
     } else if (yv_l(yr_get(t, "k")) == K_topt) {
         st = gen(st, pa0);
-        st = gen_opt_str_rax(st, t);
+        st = gen_opt_str_rax(st, t, yav(0));
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
     } else if (yv_l(yr_get(t, "k")) == K_tmap) {
@@ -5739,7 +5740,7 @@ Yv *gen_print(Yv *st, Yv *node) {
         return emit(st, ys("    xor %eax, %eax"));
     } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         st = gen(st, pa0);
-        st = gen_union_str_rax(st, t);
+        st = gen_union_str_rax(st, t, yav(0));
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit(st, ys("    xor %eax, %eax"));
     } else {
@@ -5778,7 +5779,7 @@ Yv *gen_typeof(Yv *st, Yv *node) {
 
 /* Option value in %rax (0 = none, else the box address): leave "none" or
  * the payload's string form in %rax. Options are 0-or-box (NATIVE.md). */
-Yv *gen_opt_str_rax(Yv *st, Yv *t) {
+Yv *gen_opt_str_rax(Yv *st, Yv *t, Yv *path) {
     Yv *rdone = next_loc(st);
     st = yr_get(rdone, "st");
     Yv *rnul = next_loc(st);
@@ -5786,7 +5787,7 @@ Yv *gen_opt_str_rax(Yv *st, Yv *t) {
     st = emit(st, ys("    test %rax, %rax"));
     st = emit(st, ys_cat(ys("    jz "), yr_get(rnul, "lbl")));
     st = emit(st, ys("    mov (%rax), %rax"));
-    st = gen_val_tostr_rax(st, yr_get(t, "of"));
+    st = gen_val_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
     st = emit(st, ys_cat(yr_get(rnul, "lbl"), ys(":")));
     st = gen_str_const(st, ys("none"));
@@ -5795,14 +5796,14 @@ Yv *gen_opt_str_rax(Yv *st, Yv *t) {
 
 Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t) {
     st = gen(st, arg);
-    return gen_rec_str_rax(st, t, lay_of(t, t));
+    return gen_rec_str_rax(st, t, lay_of(t, t), yav(0));
 }
 
 /* The record's address sits in %rax; leave "{a: 1, b: ...}" in %rax.
  * Values are formatted from the static shape (the walk is unrolled at
  * compile time). Stack layout while building: [record][accumulator], the
  * record pushed first (8(%rsp)), the accumulator on top (0(%rsp)). */
-Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay) {
+Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay, Yv *path) {
     st = emit(st, ys("    push %rax"));
     st = gen_str_const(st, ys("{"));
     st = emit(st, ys("    push %rax"));
@@ -5817,7 +5818,7 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay) {
         }
         Yv *fname = yr_get(f, "name");
         st = gen_acc_cat_const(st, ys_cat(ys_cat(sep, fname), ys(": ")));
-        st = gen_rec_field_str(st, mfield_idx(lay, fname), yr_get(f, "typ"));
+        st = gen_rec_field_str(st, mfield_idx(lay, fname), yr_get(f, "typ"), path);
         i = i + 1;
     }
     st = gen_acc_cat_const(st, ys("}"));
@@ -5961,43 +5962,48 @@ Yv *gen_slot_load(Yv *st, long idx, Yv *dst) {
 }
 
 /* acc = acc + <field in slot idx, rendered by its static type>. */
-Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft) {
+/* acc = acc + <field in slot idx, rendered by its static type>. Each arm ends
+ * in the walk it ran, and every one of them must leave its EmitSt in `st`:
+ * dropping it drops the uid counter with it, and the next string constant would
+ * take a label already emitted (native.y gen_rec_field_str). */
+Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path) {
     Yv *fk = yr_get(ft, "k");
     if (yv_l(fk) == K_tstr) {
+        /* a str is already its own form */
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = gen_slot_load(st, idx, ys("%rdx"));
+        st = gen_slot_load(st, idx, ys("%rax"));
     } else if (yv_l(fk) == K_tlong) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
         st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_long_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
-        st = emit(st, ys("    mov %rax, %rdx"));
     } else if (yv_l(fk) == K_tbool) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
         st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_bool_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
-        st = emit(st, ys("    mov %rax, %rdx"));
     } else if (yv_l(fk) == K_tfloat) {
         st = emit(st, ys("    mov 8(%rsp), %rcx"));
         st = gen_slot_load(st, idx, ys("%rax"));
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_float_tostr"));
         st = emit(st, ys("    add $8, %rsp"));
-        st = emit(st, ys("    mov %rax, %rdx"));
     } else if (yv_l(fk) == K_tfunc) {
         st = gen_str_const(
             st, ys_cat(ys_cat(ys("<function "), tdisp_fnval(ft)), ys(">")));
-        st = emit(st, ys("    mov %rax, %rdx"));
     } else {
-        /* Arrays, options, maps and records nested in a RECORD: printed as
-         * their type name — only gen_val_tostr_rax (the value formatter)
-         * walks them recursively. */
-        st = gen_str_const(st, ys_cat(ys_cat(ys("<"), tdisp(ft)), ys(">")));
-        st = emit(st, ys("    mov %rax, %rdx"));
+        /* Arrays, options, maps, records and unions nested in a RECORD: the
+         * value walk formats them, the same text tostring() gives. This used to
+         * print the field's TYPE instead ("<{str => long}>") on the mistaken
+         * belief that only gen_val_tostr_rax walked them -- it does, and it is
+         * exactly what a field needs. */
+        st = emit(st, ys("    mov 8(%rsp), %rcx"));
+        st = gen_slot_load(st, idx, ys("%rax"));
+        st = gen_val_tostr_rax(st, ft, path);
     }
+    st = emit(st, ys("    mov %rax, %rdx"));
     st = emit(st, ys("    mov (%rsp), %rax"));
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys("    push %rdx"));
@@ -8308,10 +8314,45 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
  * The walk is unrolled at compile time (the type is static), so nested
  * arrays emit nested loops rather than needing a runtime type tag. */
 
-Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
+/* Is this type one the walk is already inside? `path` holds the types being
+ * formatted, outermost first, and a type that repeats is a recursive one
+ * (04-types.tex, Type aliases: recursion through a record field). This walk is
+ * unrolled at compile time, so a recursive type has no finite unrolling: the
+ * compiler ran out of stack (test/y/native/t154_union_layout.y), and bounding
+ * the DEPTH instead only traded that for an explosion -- the unrolling
+ * multiplies with every level, and a recursive AST type took the compile over
+ * the memory cap. Cutting where the type repeats costs one comparison per
+ * level, formats a finite type as deep as it goes, and prints the repeated one
+ * as its type, which is the text the record walk used to give every aggregate
+ * field. A type that appears twice on DIFFERENT branches (a diamond) is not on
+ * the path and is formatted both times, as it must be. */
+
+/* path + t: a NEW array with t on the end (Y's `+` on arrays, which copies;
+ * ya_push alone would append to the caller's list). */
+static Yv *path_push(Yv *path, Yv *t) {
+    Yv *p = yav(yv_len(path));
+    for (size_t i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
+    return ya_push(p, t);
+}
+
+static int type_on_path(Yv *t, Yv *path) {
+    int found = 0;
+    for (size_t i = 0; i < yv_len(path); i++) {
+        /* the same node: a recursive alias is one shared node (teq) */
+        if (ya_get(path, i) == t) found = 1;
+    }
+    return found;
+}
+
+Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path) {
+    /* the walk compares the UNFOLDED type (a recursive alias and its
+     * union are one node) but prints the type as the program wrote it */
+    Yv *named = t;
     t = unfold(t);
     Yv *tk = yr_get(t, "k");
-    if (yv_l(tk) == K_tstr) {
+    if (type_on_path(t, path)) {
+        return gen_str_const(st, ys_cat(ys_cat(ys("<"), tdisp(named)), ys(">")));
+    } else if (yv_l(tk) == K_tstr) {
         return st;
     } else if (yv_l(tk) == K_tbool) {
         st = emit(st, ys("    push %rax"));
@@ -8326,21 +8367,21 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
-        return gen_arr_tostr_rax(st, yr_get(t, "of"));
+        return gen_arr_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
     } else if (yv_l(tk) == K_tarrfix) {
         if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
-        return gen_arr_tostr_rax(st, yr_get(t, "of"));
+        return gen_arr_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
     } else if (yv_l(tk) == K_topt) {
-        return gen_opt_str_rax(st, t);
+        return gen_opt_str_rax(st, t, path_push(path, t));
     } else if (yv_l(tk) == K_trec) {
-        return gen_rec_str_rax(st, t, lay_of(t, t));
+        return gen_rec_str_rax(st, t, lay_of(t, t), path_push(path, t));
     } else if (yv_l(tk) == K_tunion) {
-        return gen_union_str_rax(st, t);
+        return gen_union_str_rax(st, t, path_push(path, t));
     } else if (yv_l(tk) == K_tmap) {
-        return gen_map_repr_rax(st, t);
+        return gen_map_repr_rax(st, t, path_push(path, t));
     } else {
         st = emit(st, ys("    push %rax"));
         st = emit(st, ys("    call y_long_tostr"));
@@ -8368,7 +8409,7 @@ Yv *gen_acc_cat_rax(Yv *st, long aoff) {
  * gen_val_tostr_rax was missing: with the long-to-string fallback there
  * instead, a map nested in an array, an option or a record printed as its heap
  * address, which differs every run. */
-Yv *gen_map_repr_rax(Yv *st, Yv *t) {
+Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
     long moff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
     long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
@@ -8427,7 +8468,7 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t) {
         st = gen_acc_cat_slot(st, aoff, ys("\""));
         ;
     } else {
-        st = gen_val_tostr_rax(st, yr_get(t, "key"));
+        st = gen_val_tostr_rax(st, yr_get(t, "key"), path_push(path, t));
         st = gen_acc_cat_rax(st, aoff);
         ;
     }
@@ -8440,7 +8481,7 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t) {
                          ys("(%rbp), %rcx")));
     st = emit(st, elem_load(elem_bytes(yr_get(t, "of")), ys("%rdx"), ys("%rcx"),
                             ys("%rax")));
-    st = gen_val_tostr_rax(st, yr_get(t, "of"));
+    st = gen_val_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
     st = gen_acc_cat_rax(st, aoff);
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
                          ys("(%rbp), %rax")));
@@ -8456,7 +8497,7 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t) {
 
 /* Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
  * gives. Slots: [src][acc][i]. */
-Yv *gen_arr_tostr_rax(Yv *st, Yv *elty) {
+Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
     long soff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
     long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
@@ -8498,7 +8539,7 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty) {
                          ys("(%rbp), %rcx")));
     st = emit(st, elem_load(elem_bytes(elty), ys("%rdx"), ys("%rcx"),
                             ys("%rax")));
-    st = gen_val_tostr_rax(st, elty);
+    st = gen_val_tostr_rax(st, elty, path);
     st = emit(st, ys("    mov %rax, %rdx"));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
                          ys("(%rbp), %rax")));
@@ -9049,23 +9090,23 @@ Yv *gen_tostring(Yv *st, Yv *node) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
-        return gen_arr_tostr_rax(st, yr_get(t, "of"));
+        return gen_arr_tostr_rax(st, yr_get(t, "of"), yav(0));
     } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
         st = gen(st, a0);
         if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] stringifies Python-style: b'...' with escapes */
             return gen_helper1(st, ys("y_bytes_repr"));
         }
-        return gen_arr_tostr_rax(st, yr_get(t, "of"));
+        return gen_arr_tostr_rax(st, yr_get(t, "of"), yav(0));
     } else if (yv_l(yr_get(t, "k")) == K_topt) {
         st = gen(st, a0);
-        return gen_opt_str_rax(st, t);
+        return gen_opt_str_rax(st, t, yav(0));
     } else if (yv_l(yr_get(t, "k")) == K_trec) {
         st = gen(st, a0);
-        return gen_rec_str_rax(st, t, lay_of(t, t));
+        return gen_rec_str_rax(st, t, lay_of(t, t), yav(0));
     } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         st = gen(st, a0);
-        return gen_union_str_rax(st, t);
+        return gen_union_str_rax(st, t, yav(0));
     } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         return gen_map_repr(st, a0, t);
     } else {

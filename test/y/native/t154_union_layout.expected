@@ -21,8 +21,8 @@ mul
 add
 mul 20
 {a: <Expr>, b: <Expr>, id: 5, scale: 10, tag: mul}
-{a: <Expr>, b: <Expr>, id: 3, tag: add}
-{a: <Expr>, b: <Expr>, id: 3, tag: add}
+{a: {id: 1, tag: leaf, v: 1}, b: {id: 2, tag: leaf, v: 2}, id: 3, tag: add}
+{a: {id: 1, tag: leaf, v: 1}, b: {id: 2, tag: leaf, v: 2}, id: 3, tag: add}
 42 -1
 neg 4
 3 50

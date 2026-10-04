@@ -3481,7 +3481,7 @@ def gen_tag_in(st: EmitSt, ts: [Type], inu: Type) -> EmitSt {
 
 // Union value in %rax -> its string form: the member its descriptor names
 // ("<union>" for none).
-def gen_union_str_rax(st: EmitSt, t: Type) -> EmitSt {
+def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let ms = types.union_parts(t);
     let rdone = next_loc(st);
     st = rdone.st;
@@ -3499,7 +3499,7 @@ def gen_union_str_rax(st: EmitSt, t: Type) -> EmitSt {
         st = emit(st, "    jz " + rnext.lbl);
         st = emit(st, "    pop %rax");
         let mu = types.unfold(mt);
-        st = gen_rec_str_rax(st, mu, union_lay(mu, t));
+        st = gen_rec_str_rax(st, mu, union_lay(mu, t), path + t);
         st = emit(st, "    jmp " + rdone.lbl);
         st = emit(st, rnext.lbl + ":");
         m = m + 1;
@@ -4613,13 +4613,13 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
         if (arr.of.k == K.tbyte) {
             st = gen_helper1(st, "y_bytes_repr");
         } else {
-            st = gen_arr_tostr_rax(st, arr.of);
+            st = gen_arr_tostr_rax(st, arr.of, []);
         };
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == K.topt) {
         st = gen(st, pa0);
-        st = gen_opt_str_rax(st, t);
+        st = gen_opt_str_rax(st, t, []);
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
     } else if (t.k == K.tmap) {
@@ -4629,7 +4629,7 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
         emit(st, "    xor %eax, %eax")
     } else if (t.k == K.tunion) {
         st = gen(st, pa0);
-        st = gen_union_str_rax(st, t);
+        st = gen_union_str_rax(st, t, []);
         st = gen_helper1(st, "y_print_hstr");
         emit(st, "    xor %eax, %eax")
     } else {
@@ -4668,7 +4668,7 @@ def gen_typeof(st: EmitSt, node: Call) -> EmitSt {
 
 // Option value in %rax (0 = none, else the box address): leave "none" or
 // the payload's string form in %rax. Options are 0-or-box (NATIVE.md).
-def gen_opt_str_rax(st: EmitSt, t: Type) -> EmitSt {
+def gen_opt_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let rdone = next_loc(st);
     st = rdone.st;
     let rnul = next_loc(st);
@@ -4677,7 +4677,7 @@ def gen_opt_str_rax(st: EmitSt, t: Type) -> EmitSt {
     st = emit(st, "    jz " + rnul.lbl);
     st = emit(st, "    mov (%rax), %rax");
     let opt: TOf = t;
-    st = gen_val_tostr_rax(st, opt.of);
+    st = gen_val_tostr_rax(st, opt.of, path + t);
     st = emit(st, "    jmp " + rdone.lbl);
     st = emit(st, rnul.lbl + ":");
     st = gen_str_const(st, "none");
@@ -4686,14 +4686,14 @@ def gen_opt_str_rax(st: EmitSt, t: Type) -> EmitSt {
 
 def gen_rec_str(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     st = gen(st, arg);
-    gen_rec_str_rax(st, t, lay_of(t, t))
+    gen_rec_str_rax(st, t, lay_of(t, t), [])
 };
 
 // The record's address sits in %rax; leave "{a: 1, b: ...}" in %rax.
 // Values are formatted from the static shape (the walk is unrolled at
 // compile time). Stack layout while building: [record][accumulator], the
 // record pushed first (8(%rsp)), the accumulator on top (0(%rsp)).
-def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str]) -> EmitSt {
+def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str], path: [Type]) -> EmitSt {
     st = emit(st, "    push %rax");
     st = gen_str_const(st, "{");
     st = emit(st, "    push %rax");
@@ -4706,7 +4706,7 @@ def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str]) -> EmitSt {
         let sep = "";
         if (i > 0) { sep = ", "; }
         st = gen_acc_cat_const(st, sep + fname + ": ");
-        st = gen_rec_field_str(st, mfield_idx(lay, fname), f.typ);
+        st = gen_rec_field_str(st, mfield_idx(lay, fname), f.typ, path);
         i = i + 1;
     };
     st = gen_acc_cat_const(st, "}");
@@ -4827,43 +4827,48 @@ def gen_slot_load(st: EmitSt, idx: long, dst: str) -> EmitSt {
     emit(st, "    mov " + tostring(8 * idx) + "(%rcx), " + dst)
 };
 
-// acc = acc + <field in slot idx, rendered by its static type>.
-def gen_rec_field_str(st: EmitSt, idx: long, ft: Type) -> EmitSt {
+// acc = acc + <field in slot idx, rendered by its static type>. The chain is
+// ASSIGNED, not run as a statement: an arm's value is the EmitSt its walk
+// returned, and dropping it drops the uid counter with it -- the next string
+// constant would take a label already emitted, and the assembler would reject
+// the duplicate.
+def gen_rec_field_str(st: EmitSt, idx: long, ft: Type, path: [Type]) -> EmitSt {
     let fk = ft.k;
-    if (fk == K.tstr) {
+    st = if (fk == K.tstr) {
+        // a str is already its own form
         st = emit(st, "    mov 8(%rsp), %rcx");
-        st = gen_slot_load(st, idx, "%rdx")
+        gen_slot_load(st, idx, "%rax")
     } else if (fk == K.tlong) {
         st = emit(st, "    mov 8(%rsp), %rcx");
         st = gen_slot_load(st, idx, "%rax");
         st = emit(st, "    push %rax");
         st = emit(st, "    call y_long_tostr");
-        st = emit(st, "    add $8, %rsp");
-        st = emit(st, "    mov %rax, %rdx")
+        emit(st, "    add $8, %rsp")
     } else if (fk == K.tbool) {
         st = emit(st, "    mov 8(%rsp), %rcx");
         st = gen_slot_load(st, idx, "%rax");
         st = emit(st, "    push %rax");
         st = emit(st, "    call y_bool_tostr");
-        st = emit(st, "    add $8, %rsp");
-        st = emit(st, "    mov %rax, %rdx")
+        emit(st, "    add $8, %rsp")
     } else if (fk == K.tfloat) {
         st = emit(st, "    mov 8(%rsp), %rcx");
         st = gen_slot_load(st, idx, "%rax");
         st = emit(st, "    push %rax");
         st = emit(st, "    call y_float_tostr");
-        st = emit(st, "    add $8, %rsp");
-        st = emit(st, "    mov %rax, %rdx")
+        emit(st, "    add $8, %rsp")
     } else if (fk == K.tfunc) {
-        st = gen_str_const(st, "<function " + types.tdisp_fnval(ft) + ">");
-        st = emit(st, "    mov %rax, %rdx")
+        gen_str_const(st, "<function " + types.tdisp_fnval(ft) + ">")
     } else {
-        // Arrays, options, maps and records nested in a RECORD: printed as their
-        // type name — only gen_val_tostr_rax (the value formatter) walks
-        // them recursively.
-        st = gen_str_const(st, "<" + types.tdisp(ft) + ">");
-        st = emit(st, "    mov %rax, %rdx")
+        // Arrays, options, maps, records and unions nested in a RECORD: the
+        // value walk formats them, the same text tostring() gives. This used
+        // to print the field's TYPE instead ("<{str => long}>") on the
+        // mistaken belief that only gen_val_tostr_rax walked them -- it does,
+        // and it is exactly what a field needs.
+        st = emit(st, "    mov 8(%rsp), %rcx");
+        st = gen_slot_load(st, idx, "%rax");
+        gen_val_tostr_rax(st, ft, path)
     };
+    st = emit(st, "    mov %rax, %rdx");
     st = emit(st, "    mov (%rsp), %rax");
     st = emit(st, "    push %rax");
     st = emit(st, "    push %rdx");
@@ -6822,10 +6827,38 @@ def gen_idxassign(st: EmitSt, node: IdxAssign) -> EmitSt {
 // The walk is unrolled at compile time (the type is static), so nested
 // arrays emit nested loops rather than needing a runtime type tag.
 
-def gen_val_tostr_rax(st: EmitSt, t: Type) -> EmitSt {
+// Is this type one the walk is already inside? `path` holds the types being
+// formatted, outermost first, and a type that repeats is a recursive one
+// (04-types.tex, Type aliases: recursion through a record field). This walk is
+// unrolled at compile time, so a recursive type has no finite unrolling: the
+// compiler ran out of stack (test/y/native/t154_union_layout.y), and bounding
+// the DEPTH instead only traded that for an explosion -- the unrolling
+// multiplies with every level, and a recursive AST type took the compile over
+// the memory cap. Cutting where the type repeats costs one comparison per
+// level, formats a finite type as deep as it goes, and prints the repeated one
+// as its type, which is the text the record walk used to give every aggregate
+// field. A type that appears twice on DIFFERENT branches (a diamond) is not on
+// the path and is formatted both times, as it must be.
+def type_on_path(t: Type, path: [Type]) -> bool {
+    let i = 0;
+    let found = false;
+    while (i < len(path)) {
+        // the same node: a recursive alias is one shared node (teq)
+        if (path[i] == t) { found = true; };
+        i = i + 1;
+    };
+    found
+};
+
+def gen_val_tostr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
+    // the walk compares the UNFOLDED type (a recursive alias and its
+    // union are one node) but prints the type as the program wrote it
+    let named = t;
     t = types.unfold(t);
     let tk = t.k;
-    if (tk == K.tstr) {
+    if (type_on_path(t, path)) {
+        gen_str_const(st, "<" + types.tdisp(named) + ">")
+    } else if (tk == K.tstr) {
         st
     } else if (tk == K.tbool) {
         st = emit(st, "    push %rax");
@@ -6836,28 +6869,31 @@ def gen_val_tostr_rax(st: EmitSt, t: Type) -> EmitSt {
         st = emit(st, "    call y_float_tostr");
         emit(st, "    add $8, %rsp")
     } else if (tk == K.tarr) {
+        // every aggregate arm below puts ITS OWN type on the path and hands
+        // `path + t` to the walk it starts; a scalar type is never recursion
+        // and stays off it
         let arr: TOf = t;
         if (arr.of.k == K.tbyte) {
             // [byte] stringifies Python-style: b'...' with escapes
             gen_helper1(st, "y_bytes_repr")
         } else {
-            gen_arr_tostr_rax(st, arr.of)
+            gen_arr_tostr_rax(st, arr.of, path + t)
         }
     } else if (tk == K.tarrfix) {
         let arr: TFix = t;
         if (arr.of.k == K.tbyte) {
             gen_helper1(st, "y_bytes_repr")
         } else {
-            gen_arr_tostr_rax(st, arr.of)
+            gen_arr_tostr_rax(st, arr.of, path + t)
         }
     } else if (tk == K.topt) {
-        gen_opt_str_rax(st, t)
+        gen_opt_str_rax(st, t, path + t)
     } else if (tk == K.trec) {
-        gen_rec_str_rax(st, t, lay_of(t, t))
+        gen_rec_str_rax(st, t, lay_of(t, t), path + t)
     } else if (tk == K.tunion) {
-        gen_union_str_rax(st, t)
+        gen_union_str_rax(st, t, path + t)
     } else if (tk == K.tmap) {
-        gen_map_repr_rax(st, t)
+        gen_map_repr_rax(st, t, path + t)
     } else {
         st = emit(st, "    push %rax");
         st = emit(st, "    call y_long_tostr");
@@ -6883,7 +6919,7 @@ def gen_acc_cat_rax(st: EmitSt, aoff: long) -> EmitSt {
 // gen_val_tostr_rax was missing: with the long-to-string fallback there
 // instead, a map nested in an array, an option or a record printed as its heap
 // address, which differs every run.
-def gen_map_repr_rax(st: EmitSt, t: Type) -> EmitSt {
+def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let moff = (st.slots + 1) * -8;
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
@@ -6930,7 +6966,7 @@ def gen_map_repr_rax(st: EmitSt, t: Type) -> EmitSt {
         st = gen_acc_cat_rax(st, aoff);
         st = gen_acc_cat_slot(st, aoff, "\"");
     } else {
-        st = gen_val_tostr_rax(st, map.key);
+        st = gen_val_tostr_rax(st, map.key, path + t);
         st = gen_acc_cat_rax(st, aoff);
     };
     st = gen_acc_cat_slot(st, aoff, ": ");
@@ -6939,7 +6975,7 @@ def gen_map_repr_rax(st: EmitSt, t: Type) -> EmitSt {
     st = emit(st, "    mov 16(%rdx), %rdx");
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
     st = emit(st, elem_load(elem_bytes(map.of), "%rdx", "%rcx", "%rax"));
-    st = gen_val_tostr_rax(st, map.of);
+    st = gen_val_tostr_rax(st, map.of, path + t);
     st = gen_acc_cat_rax(st, aoff);
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
     st = emit(st, "    inc %rax");
@@ -6952,7 +6988,7 @@ def gen_map_repr_rax(st: EmitSt, t: Type) -> EmitSt {
 
 // Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
 // gives. Slots: [src][acc][i].
-def gen_arr_tostr_rax(st: EmitSt, elty: Type) -> EmitSt {
+def gen_arr_tostr_rax(st: EmitSt, elty: Type, path: [Type]) -> EmitSt {
     let soff = (st.slots + 1) * -8;
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
@@ -6984,7 +7020,7 @@ def gen_arr_tostr_rax(st: EmitSt, elty: Type) -> EmitSt {
     st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rdx");
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
     st = emit(st, elem_load(elem_bytes(elty), "%rdx", "%rcx", "%rax"));
-    st = gen_val_tostr_rax(st, elty);
+    st = gen_val_tostr_rax(st, elty, path);
     st = emit(st, "    mov %rax, %rdx");
     st = emit(st, "    mov " + tostring(aoff) + "(%rbp), %rax");
     st = emit(st, "    push %rax");
@@ -7482,20 +7518,20 @@ def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
     } else if (t.k == K.tarr) {
         st = gen(st, a0);
         let arr: TOf = t;
-        if (arr.of.k == K.tbyte) { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, arr.of) }
+        if (arr.of.k == K.tbyte) { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, arr.of, []) }
     } else if (t.k == K.tarrfix) {
         st = gen(st, a0);
         let arr: TFix = t;
-        if (arr.of.k == K.tbyte) { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, arr.of) }
+        if (arr.of.k == K.tbyte) { gen_helper1(st, "y_bytes_repr") } else { gen_arr_tostr_rax(st, arr.of, []) }
     } else if (t.k == K.topt) {
         st = gen(st, a0);
-        gen_opt_str_rax(st, t)
+        gen_opt_str_rax(st, t, [])
     } else if (t.k == K.trec) {
         st = gen(st, a0);
-        gen_rec_str_rax(st, t, lay_of(t, t))
+        gen_rec_str_rax(st, t, lay_of(t, t), [])
     } else if (t.k == K.tunion) {
         st = gen(st, a0);
-        gen_union_str_rax(st, t)
+        gen_union_str_rax(st, t, [])
     } else if (t.k == K.tmap) {
         gen_map_repr(st, a0, t)
     } else {

@@ -1,5 +1,5 @@
 6
-{head: 1, tail: <L?>}
+{head: 1, tail: {head: 2, tail: <L?>}}
 {head: long, tail: L?}
 6
 6
