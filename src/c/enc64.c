@@ -31,6 +31,7 @@ static Yv *mem_tail(Yv *m, long reg);
 static long rex_rm(int w, long reg, Yv *m);
 static Yv *with_rex(long r, Yv *bytes);
 static Yv *enc_mem_result(long r, Yv *b, Yv *t);
+static Yv *enc_mem_imm_result(long r, Yv *head, Yv *t, Yv *imm);
 static Yv *enc_xchg(Yv *a, Yv *b);
 static Yv *enc_push(Yv *o);
 static Yv *enc_pop(Yv *o);
@@ -42,6 +43,7 @@ static Yv *enc_lea(Yv *dst, Yv *src);
 static Yv *enc_arith(Yv *op, Yv *dst, Yv *src);
 static Yv *enc_xor32(Yv *dst, Yv *src);
 static Yv *enc_alu_imm(Yv *op, Yv *dst, long v);
+static Yv *enc_alu_imm_mem(Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_go(Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_body(Yv *op, Yv *dst, long v);
 static Yv *enc_shift(Yv *mn, Yv *dst, Yv *cnt);
@@ -52,6 +54,7 @@ static Yv *enc_cvttsd2si(Yv *dst, Yv *src);
 static Yv *enc_movq(Yv *dst, Yv *src);
 static Yv *enc_imul(Yv *dst, Yv *src);
 static Yv *enc_unary(Yv *op, Yv *o);
+static Yv *enc_unary_mem(Yv *op, Yv *o);
 static Yv *enc_jmp(Yv *o);
 static Yv *enc_call(Yv *o);
 static Yv *enc_jcc(long code, Yv *o);
@@ -422,8 +425,7 @@ static Yv *enc_mov(Yv *dst, Yv *src) {
         Yv *t = mem_tail(dst, 0);
         long r = rex_rm(1, 0, dst);
         Yv *prefix = yav(2, yv_long(199), yr_get(t, "modrm"));
-        Yv *b = concat(concat(prefix, yr_get(t, "extra")), le32(yv_l(yr_get(src, "v"))));
-        return enc_mem_result(r, b, t);
+        return enc_mem_imm_result(r, prefix, t, le32(yv_l(yr_get(src, "v"))));
     } else if (yv_l(yr_get(dst, "k")) == K_mem && yv_l(yr_get(src, "k")) == K_reg) {
         if (op_size(src) == 64) {
             Yv *t = mem_tail(dst, yv_l(yr_get(src, "n")));
@@ -461,6 +463,35 @@ static Yv *enc_xchg(Yv *a, Yv *b) {
         long r = rex_rm(1, yv_l(yr_get(reg, "n")), mem);
         Yv *prefix = yav(2, yv_long(135), yr_get(t, "modrm"));
         return enc_mem_result(r, concat(prefix, yr_get(t, "extra")), t);
+    }
+}
+
+/* Like enc_mem_result, but for the forms whose immediate comes AFTER the
+   memory operand (C7 /0 id, C6 /0 ib, 83 /ext ib, 81 /ext id). x86 orders a
+   form ModRM, SIB, displacement, immediate, while enc_mem_result appends the
+   rip disp32 placeholder last — so the forms with an immediate need this
+   order. It matters for `mov $imm32, sym(%rip)`: with the placeholder after
+   the immediate the instruction silently addresses the wrong 4 bytes. */
+static Yv *enc_mem_imm_result(long r, Yv *head, Yv *t, Yv *imm) {
+    if (yv_l(yr_get(t, "modrm")) < 0) {
+        return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("bad memory form"));
+    } else {
+        Yv *fx = yav(0);
+        /* head is the opcode and ModRM; the SIB byte and the displacement in
+           `extra` come after both and still before the immediate. */
+        Yv *bb = concat(head, yr_get(t, "extra"));
+        if (yv_b(yr_get(t, "disp32"))) {
+            long off = yv_len(bb);
+            if (r >= 0) { off = off + 1; ; }
+            if (!ys_eq_lit(yr_get(t, "rip_lbl"), "")) {
+                fx = ya_push(fx, fixup(off, ys("rip32"), yr_get(t, "rip_lbl"), ys("")));
+                Yv *zeros = yav(4, yv_long(0), yv_long(0), yv_long(0), yv_long(0));
+                bb = concat(bb, zeros);
+                ;
+            }
+            ;
+        }
+        return yr(3, "bytes", with_rex(r, concat(bb, imm)), "fix", fx, "err", ys(""));
     }
 }
 
@@ -509,8 +540,7 @@ static Yv *enc_movb_imm(Yv *dst, Yv *src) {
         long r = rex_rm(0, 0, dst);
         Yv *prefix = yav(2, yv_long(198), yr_get(t, "modrm"));
         Yv *imm = yav(1, yv_long(u8(yv_l(yr_get(src, "v")))));
-        Yv *b = concat(concat(prefix, yr_get(t, "extra")), imm);
-        return enc_mem_result(r, b, t);
+        return enc_mem_imm_result(r, prefix, t, imm);
     }
 }
 
@@ -571,9 +601,22 @@ static Yv *enc_xor32(Yv *dst, Yv *src) {
     }
 }
 
+/* The /ext of the ALU group (add is 0): the register and the memory forms are
+   the same instruction with a different ModRM, so they share the table. */
+static long alu_ext(Yv *op) {
+    if (ys_eq_lit(op, "sub")) { return 5; }
+    else if (ys_eq_lit(op, "cmp")) { return 7; }
+    else if (ys_eq_lit(op, "xor")) { return 6; }
+    else if (ys_eq_lit(op, "and")) { return 4; }
+    else if (ys_eq_lit(op, "or")) { return 1; }
+    else { return 0; }
+}
+
 static Yv *enc_alu_imm(Yv *op, Yv *dst, long v) {
-    /* add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32 */
-    if (yv_l(yr_get(dst, "k")) != K_reg) {
+    /* add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32; and $imm, mem */
+    if (yv_l(yr_get(dst, "k")) == K_mem) {
+        return enc_alu_imm_mem(op, dst, v);
+    } else if (yv_l(yr_get(dst, "k")) != K_reg) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("alu-imm dst"));
     } else if (op_size(dst) != 64) {
         if (op_size(dst) != 32) {
@@ -586,6 +629,29 @@ static Yv *enc_alu_imm(Yv *op, Yv *dst, long v) {
     }
 }
 
+static Yv *enc_alu_imm_mem(Yv *op, Yv *dst, long v) {
+    /* (split from enc_alu_imm: the shape gate above narrows; this body sees a
+       memory destination, and no size — a memory operand carries none, so this
+       is the 64-bit form, which is what a Y long is. GNU as guesses 32-bit for
+       a sizeless memory operand with no register operand, and that would zero
+       the upper half of every long.) */
+    long ext = alu_ext(op);
+    if (fits8(v)) {
+        Yv *t = mem_tail(dst, ext);
+        Yv *prefix = yav(2, yv_long(131), yr_get(t, "modrm"));
+        Yv *imm = yav(1, yv_long(u8(v)));
+        return enc_mem_imm_result(rex_rm(1, ext, dst), prefix, t, imm);
+    } else if (v < -2147483648L || v > 2147483647L) {
+        /* the same door the register form has (see enc_alu_imm_body) */
+        return yr(3, "bytes", yav(0), "fix", yav(0), "err",
+                  ys("an immediate does not fit in 32 bits"));
+    } else {
+        Yv *t = mem_tail(dst, ext);
+        Yv *prefix = yav(2, yv_long(129), yr_get(t, "modrm"));
+        return enc_mem_imm_result(rex_rm(1, ext, dst), prefix, t, le32(v));
+    }
+}
+
 static Yv *enc_alu_imm_go(Yv *op, Yv *dst, long v) {
     /* (split from enc_alu_imm: the size gate above narrows; this body sees
        only r64/r32 regs — no merged-shape reads.) */
@@ -594,12 +660,7 @@ static Yv *enc_alu_imm_go(Yv *op, Yv *dst, long v) {
 
 static Yv *enc_alu_imm_body(Yv *op, Yv *dst, long v) {
     /* (the size gate lives in enc_alu_imm; this one is on the value) */
-    long ext = 0;
-    if (ys_eq_lit(op, "sub")) { ext = 5; ; }
-    else if (ys_eq_lit(op, "cmp")) { ext = 7; ; }
-    else if (ys_eq_lit(op, "xor")) { ext = 6; ; }
-    else if (ys_eq_lit(op, "and")) { ext = 4; ; }
-    else if (ys_eq_lit(op, "or")) { ext = 1; ; }
+    long ext = alu_ext(op);
     int wide = op_size(dst) == 64;
     long r = rex(wide, -1, -1, yv_l(yr_get(dst, "n")));
     if (fits8(v)) {
@@ -784,7 +845,9 @@ static Yv *enc_imul(Yv *dst, Yv *src) {
 }
 
 static Yv *enc_unary(Yv *op, Yv *o) {
-    if (yv_l(yr_get(o, "k")) != K_reg) {
+    if (yv_l(yr_get(o, "k")) == K_mem) {
+        return enc_unary_mem(op, o);
+    } else if (yv_l(yr_get(o, "k")) != K_reg) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("unary form"));
     } else if (op_size(o) != 64) {
         return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("unary form"));
@@ -799,6 +862,25 @@ static Yv *enc_unary(Yv *op, Yv *o) {
         long r = rex(1, -1, -1, yv_l(yr_get(o, "n")));
         Yv *b = yav(2, yv_long(opc), yv_long(modrm(3, ext, yv_l(yr_get(o, "n")))));
         return yr(3, "bytes", with_rex(r, b), "fix", yav(0), "err", ys(""));
+    }
+}
+
+static Yv *enc_unary_mem(Yv *op, Yv *o) {
+    /* (split from enc_unary: the shape gate above narrows; this body sees a
+       memory operand, hence a ModRM that is not mod=11.) inc/dec/not have
+       memory forms — FF /0, FF /1, F7 /2 — and are 64-bit here for the same
+       reason the ALU form is. idiv/div/imul/neg do not (their encoding is
+       F7 with mod=11 only), so they stay an error. */
+    long ext = 0;
+    long opc = 255;
+    if (ys_eq_lit(op, "dec")) { ext = 1; ; }
+    else if (ys_eq_lit(op, "not")) { ext = 2; opc = 247; ; }
+    if (ys_eq_lit(op, "inc") || ys_eq_lit(op, "dec") || ys_eq_lit(op, "not")) {
+        Yv *t = mem_tail(o, ext);
+        Yv *prefix = yav(2, yv_long(opc), yr_get(t, "modrm"));
+        return enc_mem_result(rex_rm(1, ext, o), concat(prefix, yr_get(t, "extra")), t);
+    } else {
+        return yr(3, "bytes", yav(0), "fix", yav(0), "err", ys("unary form"));
     }
 }
 

@@ -347,8 +347,7 @@ def enc_mov(dst: Operand, src: Operand) -> Encoded {
         let t = mem_tail(dst, 0);
         let r = rex_rm(true, 0, dst);
         let prefix: [byte] = [199, t.modrm];
-        let b = concat(concat(prefix, t.extra), le32(src.v));
-        enc_mem_result(r, b, t)
+        enc_mem_imm_result(r, prefix, t, le32(src.v))
     } else if (dst.k == K.mem && src.k == K.reg) {
         if (op_size(src) == 64) {
             let t = mem_tail(dst, src.n);
@@ -385,6 +384,33 @@ def enc_xchg(a: Operand, b: Operand) -> Encoded {
         let r = rex_rm(true, reg.n, mem);
         let prefix: [byte] = [135, t.modrm];
         enc_mem_result(r, concat(prefix, t.extra), t)
+    }
+};
+
+// Like enc_mem_result, but for the forms whose immediate comes AFTER the
+// memory operand (C7 /0 id, C6 /0 ib, 83 /ext ib, 81 /ext id). x86 orders a
+// form ModRM, SIB, displacement, immediate, while enc_mem_result appends the
+// rip disp32 placeholder last -- so the forms with an immediate need this
+// order. It matters for `mov $imm32, sym(%rip)`: with the placeholder after
+// the immediate the instruction silently addresses the wrong 4 bytes.
+def enc_mem_imm_result(r: long, head: [byte], t: MemTail, imm: [byte]) -> Encoded {
+    if (t.modrm < 0) {
+        { bytes: [], fix: [], err: "bad memory form" }
+    } else {
+        let fx: [Fixup] = [];
+        // head is the opcode and ModRM; the SIB byte and the displacement in
+        // `extra` come after both and still before the immediate.
+        let bb = concat(head, t.extra);
+        if (t.disp32) {
+            let off = len(bb);
+            if (r >= 0) { off = off + 1; };
+            if (t.rip_lbl != "") {
+                fx += fixup(off, "rip32", t.rip_lbl, "");
+                let zeros: [byte] = [0, 0, 0, 0];
+                bb = concat(bb, zeros);
+            };
+        };
+        { bytes: with_rex(r, concat(bb, imm)), fix: fx, err: "" }
     }
 };
 
@@ -431,8 +457,7 @@ def enc_movb_imm(dst: Operand, src: Operand) -> Encoded {
         let r = rex_rm(false, 0, dst);
         let prefix: [byte] = [198, t.modrm];
         let imm: [byte] = [u8(src.v)];
-        let b = concat(concat(prefix, t.extra), imm);
-        enc_mem_result(r, b, t)
+        enc_mem_imm_result(r, prefix, t, imm)
     }
 };
 
@@ -493,9 +518,22 @@ def enc_xor32(dst: Operand, src: Operand) -> Encoded {
     }
 };
 
+// The /ext of the ALU group (add is 0): the register and the memory forms are
+// the same instruction with a different ModRM, so they share the table.
+def alu_ext(op: str) -> long {
+    if (op == "sub") { 5 }
+    else if (op == "cmp") { 7 }
+    else if (op == "xor") { 6 }
+    else if (op == "and") { 4 }
+    else if (op == "or") { 1 }
+    else { 0 }
+};
+
 def enc_alu_imm(op: str, dst: Operand, v: long) -> Encoded {
-    // add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32
-    if (dst.k != K.reg) {
+    // add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32; and $imm, mem
+    if (dst.k == K.mem) {
+        enc_alu_imm_mem(op, dst, v)
+    } else if (dst.k != K.reg) {
         { bytes: [], fix: [], err: "alu-imm dst" }
     } else if (op_size(dst) != 64) {
         if (op_size(dst) != 32) {
@@ -508,6 +546,28 @@ def enc_alu_imm(op: str, dst: Operand, v: long) -> Encoded {
     }
 };
 
+def enc_alu_imm_mem(op: str, dst: Operand, v: long) -> Encoded {
+    // (split from enc_alu_imm: the shape gate above narrows; this body sees a
+    // memory destination, and no size -- a memory operand carries none, so this
+    // is the 64-bit form, which is what a Y long is. GNU as guesses 32-bit for
+    // a sizeless memory operand with no register operand, and that would zero
+    // the upper half of every long.)
+    let ext = alu_ext(op);
+    if (fits8(v)) {
+        let t = mem_tail(dst, ext);
+        let prefix: [byte] = [131, t.modrm];
+        let imm: [byte] = [u8(v)];
+        enc_mem_imm_result(rex_rm(true, ext, dst), prefix, t, imm)
+    } else if (v < -2147483648 || v > 2147483647) {
+        // the same door the register form has (see enc_alu_imm_body)
+        { bytes: [], fix: [], err: "an immediate does not fit in 32 bits" }
+    } else {
+        let t = mem_tail(dst, ext);
+        let prefix: [byte] = [129, t.modrm];
+        enc_mem_imm_result(rex_rm(true, ext, dst), prefix, t, le32(v))
+    }
+};
+
 def enc_alu_imm_go(op: str, dst: Operand, v: long) -> Encoded {
     // (split from enc_alu_imm: the size gate above narrows; this body sees
     // only r64/r32 regs — no merged-shape reads.)
@@ -516,12 +576,7 @@ def enc_alu_imm_go(op: str, dst: Operand, v: long) -> Encoded {
 
 def enc_alu_imm_body(op: str, dst: Operand, v: long) -> Encoded {
     // (the size gate lives in enc_alu_imm; this one is on the value)
-    let ext = 0;
-    if (op == "sub") { ext = 5; }
-    else if (op == "cmp") { ext = 7; }
-    else if (op == "xor") { ext = 6; }
-    else if (op == "and") { ext = 4; }
-    else if (op == "or") { ext = 1; }
+    let ext = alu_ext(op);
     let wide = op_size(dst) == 64;
     let r = rex(wide, -1, -1, dst.n);
     if (fits8(v)) {
@@ -694,7 +749,9 @@ def enc_imul(dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_unary(op: str, o: Operand) -> Encoded {
-    if (o.k != K.reg) {
+    if (o.k == K.mem) {
+        enc_unary_mem(op, o)
+    } else if (o.k != K.reg) {
         { bytes: [], fix: [], err: "unary form" }
     } else if (op_size(o) != 64) {
         { bytes: [], fix: [], err: "unary form" }
@@ -709,6 +766,25 @@ def enc_unary(op: str, o: Operand) -> Encoded {
         let r = rex(true, -1, -1, o.n);
         let b: [byte] = [opc, modrm(3, ext, o.n)];
         { bytes: with_rex(r, b), fix: [], err: "" }
+    }
+};
+
+def enc_unary_mem(op: str, o: Operand) -> Encoded {
+    // (split from enc_unary: the shape gate above narrows; this body sees a
+    // memory operand, hence a ModRM that is not mod=11.) inc/dec/not have
+    // memory forms -- FF /0, FF /1, F7 /2 -- and are 64-bit here for the same
+    // reason the ALU form is. idiv/div/imul/neg do not (their encoding is
+    // F7 with mod=11 only), so they stay an error.
+    let ext = 0;
+    let opc = 255;
+    if (op == "dec") { ext = 1; }
+    else if (op == "not") { ext = 2; opc = 247; };
+    if (op == "inc" || op == "dec" || op == "not") {
+        let t = mem_tail(o, ext);
+        let prefix: [byte] = [opc, t.modrm];
+        enc_mem_result(rex_rm(true, ext, o), concat(prefix, t.extra), t)
+    } else {
+        { bytes: [], fix: [], err: "unary form" }
     }
 };
 
@@ -956,4 +1032,7 @@ def enc_insn(mn: str, ops: [Operand]) -> Encoded {
     }
 };
 
-export { r64, reg_num, reg_size, enc_insn, concat, fixup, byte_of, le16, le32, le64 };
+// The types are exported too: enc_insn takes [Operand] and returns
+// Encoded, so a caller that wants to name either needs the name.
+export { Operand, Fixup, Encoded, r64, reg_num, reg_size, enc_insn, concat, fixup,
+         byte_of, le16, le32, le64 };

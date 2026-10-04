@@ -12,8 +12,10 @@
  * Only the forms our backend emits exist here — anything else is a loud
  * error from the assembler, never a silent miscompile.
  *
- * Mirrors `export { r64, reg_num, reg_size, enc_insn, concat, fixup,
- * byte_of, le16, le32, le64 };` from enc64.y.
+ * Mirrors `export { Operand, Fixup, Encoded, r64, reg_num, reg_size,
+ * enc_insn, concat, fixup, byte_of, le16, le32, le64 };` from enc64.y. The
+ * three types have no C declaration of their own -- a record is a Yv* here --
+ * so the export exists for the Y side's callers.
  */
 #ifndef ENC64_H
 #define ENC64_H
