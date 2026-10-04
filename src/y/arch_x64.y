@@ -1831,7 +1831,7 @@ def arch_prelude_threads_lines() -> [str] {
         "    push %r12",
         "    mov %rax, %rbx",
         "    call y_threads_on",
-        "    mov $72, %rdi",
+        "    mov $80, %rdi",
         "    call y_alloc",
         "    mov %rax, %r12",
         "    mov %r12, 24(%r12)",
@@ -1868,6 +1868,13 @@ def arch_prelude_threads_lines() -> [str] {
         "    mov 32(%r12), %rsi",
         "    add $8392688, %rsi",
         "    mov %r12, 0(%rsi)",
+        // the tcb names the pid that started the thread, so a forked child's
+        // join can tell the thread is not its own (y_join_code)
+        // the tcb names the pid that started the thread, so a forked child's
+        // join can tell the thread is not its own (y_join_code)
+        "    mov $39, %rax",
+        "    syscall",
+        "    mov %rax, 72(%r12)",
         "    mov $56, %rax",
         "    mov $4001536, %rdi",
         "    lea 48(%r12), %rdx",
@@ -1916,6 +1923,29 @@ def arch_prelude_threads_lines() -> [str] {
         "    mov 8(%rax), %rcx",
         "    push %rbx",
         "    mov %rcx, %rbx",
+        // The tcb's word 9 -- one past the eight the thread code uses -- is the
+        // pid that started the thread (y_spawn sets
+        // it, and it is 0 only for a tcb no spawn has written yet). A forked
+        // child's copy names its parent, and that thread cannot end as far as
+        // this address space is concerned -- it would wait on the child's own
+        // copy of a tid nobody will ever clear, and the parent waits in
+        // wait_pid, so both stop with no diagnostic. The pid lives in %rdx
+        // because syscall leaves %rcx as the return address.
+        "    mov 72(%rbx), %rdx",
+        "    test %rdx, %rdx",
+        "    je y_join_wait",
+        "    mov $39, %rax",
+        "    syscall",
+        "    cmp %rax, %rdx",
+        "    je y_join_wait",
+        "    mov $1, %rax",
+        "    mov $1, %rdi",
+        "    lea ystr_thread_foreign(%rip), %rsi",
+        "    mov $ystr_thread_foreign_end-ystr_thread_foreign, %rdx",
+        "    syscall",
+        "    mov $231, %rax",
+        "    mov $1, %rdi",
+        "    syscall",
         "y_join_wait:",
         "    mov 48(%rbx), %rdx",
         "    test %rdx, %rdx",
@@ -1943,13 +1973,48 @@ def arch_prelude_threads_lines() -> [str] {
         "    mov 56(%rbx), %rax",
         "    pop %rbx",
         "    ret",
-        // a mutex (%rax): its word 0 is 0 when free, 1 when held, 2 when
-        // held and a thread may be waiting for it (Drepper, "Futexes Are
-        // Tricky", with xchg alone): a waiter marks it 2 before it sleeps,
-        // and only an unlock that finds 2 makes a syscall (the wake)
+        // a mutex (%rax): word 0 is 0 when free, 1 when held, 2 when held
+        // and a thread may be waiting for it (Drepper, "Futexes Are Tricky",
+        // with xchg alone): a waiter marks it 2 before it sleeps, and only an
+        // unlock that finds 2 makes a syscall (the wake). Word 8 is the pid
+        // holding it, and is 0 exactly when the mutex is free.
+        //
+        // That word is what keeps a fork from hanging. A child inherits the
+        // lock word but nobody in the child will ever release it, so waiting
+        // on it waits on a futex nobody wakes -- and the parent waits in
+        // wait_pid as well, so the program stops with no diagnostic at all.
+        // Taking a mutex another process holds is undefined (POSIX says as
+        // much of fork in a threaded program), so now it traps; a mutex the
+        // child itself holds carries the child's own pid and locks as usual.
+        //
+        // Every comparison below keeps the pid in %rdx or %r8: syscall leaves
+        // %rcx as the return address and %r11 as the flags, so a value read
+        // before getpid and compared after it has to live somewhere else.
+        // the two trap messages this prelude can print, in the prelude so
+        // that a program without threads does not carry them in .rodata
+        "ystr_mutex_foreign: .ascii \"runtime error: this mutex is held by another process (a fork) and a lock held across a fork is undefined\\n\"",
+        "ystr_mutex_foreign_end:",
+        "ystr_thread_foreign: .ascii \"runtime error: this thread belongs to another process (a fork) and cannot end in the child\\n\"",
+        "ystr_thread_foreign_end:",
         "y_mutex_lock:",
         "    push %rbx",
         "    mov %rax, %rbx",
+        "    mov 8(%rbx), %rdx",
+        "    test %rdx, %rdx",
+        "    je y_mutex_lock_free",
+        "    mov $39, %rax",
+        "    syscall",
+        "    cmp %rax, %rdx",
+        "    je y_mutex_lock_free",
+        "    mov $1, %rax",
+        "    mov $1, %rdi",
+        "    lea ystr_mutex_foreign(%rip), %rsi",
+        "    mov $ystr_mutex_foreign_end-ystr_mutex_foreign, %rdx",
+        "    syscall",
+        "    mov $231, %rax",
+        "    mov $1, %rdi",
+        "    syscall",
+        "y_mutex_lock_free:",
         "    mov $1, %rcx",
         "    xchg %rcx, 0(%rbx)",
         "    test %rcx, %rcx",
@@ -1967,11 +2032,18 @@ def arch_prelude_threads_lines() -> [str] {
         "    syscall",
         "    jmp y_mutex_wait",
         "y_mutex_got:",
+        "    mov $39, %rax",
+        "    syscall",
+        "    mov %rax, 8(%rbx)",
         "    pop %rbx",
         "    ret",
         "y_mutex_unlock:",
         "    xor %ecx, %ecx",
         "    xchg %rcx, 0(%rax)",
+        // %rcx is the word just taken (0, 1 or 2) and decides the wake below;
+        // the owner goes to 0, which is what "free" means here
+        "    mov $0, %rdx",
+        "    mov %rdx, 8(%rax)",
         "    cmp $2, %rcx",
         "    jne y_mutex_free",
         "    mov %rax, %rdi",
@@ -1984,20 +2056,38 @@ def arch_prelude_threads_lines() -> [str] {
         // 1 in %rax when the mutex (%rax) was free and is now held. Taking
         // it with xchg 1 may erase a 2 (a waiter's mark), which then goes
         // back -- and if the mutex was released meanwhile, that takes it.
+        // The mutex is kept in %r8 through the whole helper, because the owner
+        // check calls getpid and syscall leaves %rax as the pid -- it would
+        // have taken the mutex pointer with it (a try_lock of a held mutex
+        // then swapped 1 into the pid's address, and the program faulted).
         "y_mutex_trylock:",
+        "    mov %rax, %r8",
+        "    mov 8(%r8), %rdx",
+        "    test %rdx, %rdx",
+        "    je y_mutex_try_swap",
+        "    mov $39, %rax",
+        "    syscall",
+        "    cmp %rax, %rdx",
+        "    je y_mutex_try_swap",
+        "    xor %eax, %eax",
+        "    ret",
+        "y_mutex_try_swap:",
         "    mov $1, %rcx",
-        "    xchg %rcx, 0(%rax)",
+        "    xchg %rcx, 0(%r8)",
         "    test %rcx, %rcx",
         "    je y_mutex_took",
         "    cmp $2, %rcx",
         "    jne y_mutex_busy",
-        "    xchg %rcx, 0(%rax)",
+        "    xchg %rcx, 0(%r8)",
         "    test %rcx, %rcx",
         "    je y_mutex_took",
         "y_mutex_busy:",
         "    xor %eax, %eax",
         "    ret",
         "y_mutex_took:",
+        "    mov $39, %rax",
+        "    syscall",
+        "    mov %rax, 8(%r8)",
         "    mov $1, %rax",
         "    ret",
         // a semaphore (%rax): its count at 0, guarded by the mutex at 8; a

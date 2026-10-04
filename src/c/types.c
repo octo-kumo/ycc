@@ -189,6 +189,7 @@ static Yv *t_unk(void) {
 Yv *t_mutex(void) {
     Yv *fs = yav(0);
     fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+    fs = ya_push(fs, yr(3, "name", ys("$o"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
     return yr(2, "k", yv_long(K_trec), "fields", fs);
 }
 
@@ -196,6 +197,7 @@ Yv *t_sem(void) {
     Yv *fs = yav(0);
     fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
     fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+    fs = ya_push(fs, yr(3, "name", ys("$o"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
     return yr(2, "k", yv_long(K_trec), "fields", fs);
 }
 

@@ -10052,7 +10052,10 @@ Yv *gen_sync_new(Yv *st, Yv *node) {
     Yv *keys = yav(0);
     Yv *vals = yav(0);
     if (ys_eq_lit(yr_get(callee, "v"), "mutex")) {
+        /* the owner pid word, 0 = free (arch_x64.y y_mutex_lock) */
         keys = ya_push(keys, ys("$m"));
+        vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
+        keys = ya_push(keys, ys("$o"));
         vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
         Yv *rec = yr(5, "k", yv_long(K_rec), "keys", keys, "vals", vals, "line", ln, "col", cl);
         return gen_reclit(st, rec, t_mutex());
@@ -10061,6 +10064,8 @@ Yv *gen_sync_new(Yv *st, Yv *node) {
         keys = ya_push(keys, ys("$n"));
         vals = ya_push(vals, ya_get(sargs, 0));
         keys = ya_push(keys, ys("$w"));
+        vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
+        keys = ya_push(keys, ys("$o"));
         vals = ya_push(vals, n_num(ys("0"), yv_l(ln), yv_l(cl)));
         Yv *rec = yr(5, "k", yv_long(K_rec), "keys", keys, "vals", vals, "line", ln, "col", cl);
         return gen_reclit(st, rec, t_sem());

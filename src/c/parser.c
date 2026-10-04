@@ -373,9 +373,11 @@ Yv *sync_type(Yv *nm) {
     Yv *fs = yav(0);
     if (ys_eq_lit(nm, "mutex")) {
         fs = ya_push(fs, yr(3, "name", ys("$m"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+        fs = ya_push(fs, yr(3, "name", ys("$o"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
     } else {
         fs = ya_push(fs, yr(3, "name", ys("$n"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
         fs = ya_push(fs, yr(3, "name", ys("$w"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
+        fs = ya_push(fs, yr(3, "name", ys("$o"), "opt", yv_bool(0), "typ", yr(1, "k", yv_long(K_tlong))));
     }
     return yr(2, "k", yv_long(K_trec), "fields", fs);
 }

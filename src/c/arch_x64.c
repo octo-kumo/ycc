@@ -1836,7 +1836,7 @@ Yv *arch_prelude_threads_lines(void) {
     lines = ya_push(lines, ys("    push %r12"));
     lines = ya_push(lines, ys("    mov %rax, %rbx"));
     lines = ya_push(lines, ys("    call y_threads_on"));
-    lines = ya_push(lines, ys("    mov $72, %rdi"));
+    lines = ya_push(lines, ys("    mov $80, %rdi"));
     lines = ya_push(lines, ys("    call y_alloc"));
     lines = ya_push(lines, ys("    mov %rax, %r12"));
     lines = ya_push(lines, ys("    mov %r12, 24(%r12)"));
@@ -1873,6 +1873,11 @@ Yv *arch_prelude_threads_lines(void) {
     lines = ya_push(lines, ys("    mov 32(%r12), %rsi"));
     lines = ya_push(lines, ys("    add $8392688, %rsi"));
     lines = ya_push(lines, ys("    mov %r12, 0(%rsi)"));
+    /* the tcb names the pid that started the thread, so a forked */
+    /* child's join can tell the thread is not its own */
+    lines = ya_push(lines, ys("    mov $39, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov %rax, 72(%r12)"));
     lines = ya_push(lines, ys("    mov $56, %rax"));
     lines = ya_push(lines, ys("    mov $4001536, %rdi"));
     lines = ya_push(lines, ys("    lea 48(%r12), %rdx"));
@@ -1920,7 +1925,28 @@ Yv *arch_prelude_threads_lines(void) {
     lines = ya_push(lines, ys("    mov 8(%rax), %rax"));
     lines = ya_push(lines, ys("    mov 8(%rax), %rcx"));
     lines = ya_push(lines, ys("    push %rbx"));
+    /* The tcb's word 9 -- one past the eight the thread code uses -- is */
+    /* the pid that started the thread (y_spawn sets it). A forked */
+    /* child's copy names its parent, and that thread cannot end as far */
+    /* as this address space is concerned: waiting would hang the child, */
+    /* and the parent with it in wait_pid. The pid lives in %rdx because */
+    /* syscall leaves %rcx as the return address. */
     lines = ya_push(lines, ys("    mov %rcx, %rbx"));
+    lines = ya_push(lines, ys("    mov 72(%rbx), %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    je y_join_wait"));
+    lines = ya_push(lines, ys("    mov $39, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    cmp %rax, %rdx"));
+    lines = ya_push(lines, ys("    je y_join_wait"));
+    lines = ya_push(lines, ys("    mov $1, %rax"));
+    lines = ya_push(lines, ys("    mov $1, %rdi"));
+    lines = ya_push(lines, ys("    lea ystr_thread_foreign(%rip), %rsi"));
+    lines = ya_push(lines, ys("    mov $ystr_thread_foreign_end-ystr_thread_foreign, %rdx"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov $231, %rax"));
+    lines = ya_push(lines, ys("    mov $1, %rdi"));
+    lines = ya_push(lines, ys("    syscall"));
     lines = ya_push(lines, ys("y_join_wait:"));
     lines = ya_push(lines, ys("    mov 48(%rbx), %rdx"));
     lines = ya_push(lines, ys("    test %rdx, %rdx"));
@@ -1952,9 +1978,48 @@ Yv *arch_prelude_threads_lines(void) {
     /* held and a thread may be waiting for it (Drepper, "Futexes Are */
     /* Tricky", with xchg alone): a waiter marks it 2 before it sleeps, */
     /* and only an unlock that finds 2 makes a syscall (the wake) */
+    /* a mutex (%rax): word 0 is 0 when free, 1 when held, 2 when held */
+    /* and a thread may be waiting for it (Drepper, "Futexes Are Tricky", */
+    /* with xchg alone): a waiter marks it 2 before it sleeps, and only an */
+    /* unlock that finds 2 makes a syscall (the wake). Word 8 is the pid */
+    /* holding it, and is 0 exactly when the mutex is free. */
+    /*  */
+    /* That word is what keeps a fork from hanging. A child inherits the */
+    /* lock word but nobody in the child will ever release it, so waiting */
+    /* on it waits on a futex nobody wakes -- and the parent waits in */
+    /* wait_pid as well, so the program stops with no diagnostic at all. */
+    /* Taking a mutex another process holds is undefined (POSIX says as */
+    /* much of fork in a threaded program), so now it traps; a mutex the */
+    /* child itself holds carries the child's own pid and locks as usual. */
+    /*  */
+    /* Every comparison below keeps the pid in %rdx or %r8: syscall leaves */
+    /* %rcx as the return address and %r11 as the flags, so a value read */
+    /* before getpid and compared after it has to live somewhere else. */
+    /* the two trap messages this prelude can print, in the prelude */
+    /* so that a program without threads does not carry them */
+    lines = ya_push(lines, ys("ystr_mutex_foreign: .ascii \"runtime error: this mutex is held by another process (a fork) and a lock held across a fork is undefined\\n\""));
+    lines = ya_push(lines, ys("ystr_mutex_foreign_end:"));
+    lines = ya_push(lines, ys("ystr_thread_foreign: .ascii \"runtime error: this thread belongs to another process (a fork) and cannot end in the child\\n\""));
+    lines = ya_push(lines, ys("ystr_thread_foreign_end:"));
     lines = ya_push(lines, ys("y_mutex_lock:"));
     lines = ya_push(lines, ys("    push %rbx"));
     lines = ya_push(lines, ys("    mov %rax, %rbx"));
+    lines = ya_push(lines, ys("    mov 8(%rbx), %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    je y_mutex_lock_free"));
+    lines = ya_push(lines, ys("    mov $39, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    cmp %rax, %rdx"));
+    lines = ya_push(lines, ys("    je y_mutex_lock_free"));
+    lines = ya_push(lines, ys("    mov $1, %rax"));
+    lines = ya_push(lines, ys("    mov $1, %rdi"));
+    lines = ya_push(lines, ys("    lea ystr_mutex_foreign(%rip), %rsi"));
+    lines = ya_push(lines, ys("    mov $ystr_mutex_foreign_end-ystr_mutex_foreign, %rdx"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov $231, %rax"));
+    lines = ya_push(lines, ys("    mov $1, %rdi"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("y_mutex_lock_free:"));
     lines = ya_push(lines, ys("    mov $1, %rcx"));
     lines = ya_push(lines, ys("    xchg %rcx, 0(%rbx)"));
     lines = ya_push(lines, ys("    test %rcx, %rcx"));
@@ -1972,11 +2037,18 @@ Yv *arch_prelude_threads_lines(void) {
     lines = ya_push(lines, ys("    syscall"));
     lines = ya_push(lines, ys("    jmp y_mutex_wait"));
     lines = ya_push(lines, ys("y_mutex_got:"));
+    lines = ya_push(lines, ys("    mov $39, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov %rax, 8(%rbx)"));
     lines = ya_push(lines, ys("    pop %rbx"));
     lines = ya_push(lines, ys("    ret"));
+    /* %rcx is the word just taken (0, 1 or 2) and decides the wake */
+    /* below; the owner goes to 0, which is what "free" means here */
     lines = ya_push(lines, ys("y_mutex_unlock:"));
     lines = ya_push(lines, ys("    xor %ecx, %ecx"));
     lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    mov $0, %rdx"));
+    lines = ya_push(lines, ys("    mov %rdx, 8(%rax)"));
     lines = ya_push(lines, ys("    cmp $2, %rcx"));
     lines = ya_push(lines, ys("    jne y_mutex_free"));
     lines = ya_push(lines, ys("    mov %rax, %rdi"));
@@ -1989,20 +2061,39 @@ Yv *arch_prelude_threads_lines(void) {
     /* 1 in %rax when the mutex (%rax) was free and is now held. Taking */
     /* it with xchg 1 may erase a 2 (a waiter's mark), which then goes */
     /* back -- and if the mutex was released meanwhile, that takes it. */
+    /* The mutex is kept in %r8 through the whole helper, because the */
+    /* owner check calls getpid and syscall leaves %rax as the pid -- it */
+    /* would have taken the mutex pointer with it (a try_lock of a held */
+    /* mutex then swapped 1 into the pid's address, and the program */
+    /* faulted). */
     lines = ya_push(lines, ys("y_mutex_trylock:"));
+    lines = ya_push(lines, ys("    mov %rax, %r8"));
+    lines = ya_push(lines, ys("    mov 8(%r8), %rdx"));
+    lines = ya_push(lines, ys("    test %rdx, %rdx"));
+    lines = ya_push(lines, ys("    je y_mutex_try_swap"));
+    lines = ya_push(lines, ys("    mov $39, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    cmp %rax, %rdx"));
+    lines = ya_push(lines, ys("    je y_mutex_try_swap"));
+    lines = ya_push(lines, ys("    xor %eax, %eax"));
+    lines = ya_push(lines, ys("    ret"));
+    lines = ya_push(lines, ys("y_mutex_try_swap:"));
     lines = ya_push(lines, ys("    mov $1, %rcx"));
-    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    xchg %rcx, 0(%r8)"));
     lines = ya_push(lines, ys("    test %rcx, %rcx"));
     lines = ya_push(lines, ys("    je y_mutex_took"));
     lines = ya_push(lines, ys("    cmp $2, %rcx"));
     lines = ya_push(lines, ys("    jne y_mutex_busy"));
-    lines = ya_push(lines, ys("    xchg %rcx, 0(%rax)"));
+    lines = ya_push(lines, ys("    xchg %rcx, 0(%r8)"));
     lines = ya_push(lines, ys("    test %rcx, %rcx"));
     lines = ya_push(lines, ys("    je y_mutex_took"));
     lines = ya_push(lines, ys("y_mutex_busy:"));
     lines = ya_push(lines, ys("    xor %eax, %eax"));
     lines = ya_push(lines, ys("    ret"));
     lines = ya_push(lines, ys("y_mutex_took:"));
+    lines = ya_push(lines, ys("    mov $39, %rax"));
+    lines = ya_push(lines, ys("    syscall"));
+    lines = ya_push(lines, ys("    mov %rax, 8(%r8)"));
     lines = ya_push(lines, ys("    mov $1, %rax"));
     lines = ya_push(lines, ys("    ret"));
     /* a semaphore (%rax): its count at 0, guarded by the mutex at 8; a */

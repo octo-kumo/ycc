@@ -286,8 +286,20 @@ When the program ends --- its last statement, \ic{exit} or a trap in any
 thread --- its threads end with it; \ic{join} the ones whose work must
 finish. None of these waits has a timeout: \ic{join} of a thread that never
 returns, and \ic{wait s} on a semaphore nobody posts, block forever, so the
-program has to be killed from outside. The words are not reserved: \ic{lock},
-\ic{join} and the others
+program has to be killed from outside.
+
+\ic{fork} copies the process, and a copy of a lock is still locked: a
+mutex another process holds is one whose owner will never release it, and
+a thread that started in the parent cannot end in the child. Both are
+undefined (POSIX says as much of \ic{fork} in a threaded program), so
+\ic{lock} and \ic{join} of one \emph{trap} in the child rather than wait
+for a release that never comes; \ic{try\_lock} answers \ic{false}, which is
+what the mutex being held already said. A mutex or a thread the child
+makes for itself is its own and works as usual. For the same reason, take
+no mutex across a \ic{fork} in the parent unless every child is to take
+that same mutex after it has released it --- and release it before the
+child is created where the child needs to lock it. The words are not
+reserved: \ic{lock}, \ic{join} and the others
 mean these forms only where one is written, and a def or a variable of
 the program named like one wins.
 

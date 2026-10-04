@@ -1,0 +1,5 @@
+runtime error: this thread belongs to another process (a fork) and cannot end in the child
+parent: reaped
+parent: join gives 42
+child: my own thread gives 7
+done

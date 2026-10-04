@@ -52,11 +52,19 @@ def t_unk() -> Type { { k: K.tunk } };
 
 // The types of a mutex and a semaphore (CHOICES_MADE.md 33): records no
 // program can spell (a `$` in each field's name), written `mutex` and
-// `sem` (parser.y parse_type_atom2). A mutex's word is 1 while held; a
-// semaphore's count is guarded by its own lock word.
+// `sem` (parser.y parse_type_atom2, whose sync_type must agree with this).
+//
+// A mutex is two words: its first is 1 while held (2 when a thread may be
+// waiting for it -- see arch_x64.y y_mutex_lock), its second the pid holding
+// it, 0 exactly when it is free. That pid is what makes a fork fail fast
+// instead of hanging: a child inherits the held word and nobody in the child
+// will release it, so waiting on it waits on a futex nobody wakes. A
+// semaphore is its count, its own lock word, and that lock word's owner pid --
+// three contiguous words, because the lock reads the owner at +8.
 def t_mutex() -> Type {
     let fs: [Field] = [];
     fs += { name: "$m", opt: false, typ: { k: K.tlong } };
+    fs += { name: "$o", opt: false, typ: { k: K.tlong } };
     let t: TRec = { k: K.trec, fields: fs };
     let r: Type = t;
     r
@@ -66,6 +74,7 @@ def t_sem() -> Type {
     let fs: [Field] = [];
     fs += { name: "$n", opt: false, typ: { k: K.tlong } };
     fs += { name: "$w", opt: false, typ: { k: K.tlong } };
+    fs += { name: "$o", opt: false, typ: { k: K.tlong } };
     let t: TRec = { k: K.trec, fields: fs };
     let r: Type = t;
     r

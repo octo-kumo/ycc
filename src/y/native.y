@@ -8398,7 +8398,10 @@ def gen_sync_new(st: EmitSt, node: Call) -> EmitSt {
     let keys: [str] = [];
     let vals: [Node] = [];
     if (callee.v == "mutex") {
+        // the owner pid word, 0 = free (arch_x64.y y_mutex_lock)
         keys += "$m";
+        vals += n_num("0", ln, cl);
+        keys += "$o";
         vals += n_num("0", ln, cl);
         let rec: RecLit = { k: K.rec, keys: keys, vals: vals, line: ln, col: cl };
         gen_reclit(st, rec, types.t_mutex())
@@ -8407,6 +8410,8 @@ def gen_sync_new(st: EmitSt, node: Call) -> EmitSt {
         keys += "$n";
         vals += sargs[0];
         keys += "$w";
+        vals += n_num("0", ln, cl);
+        keys += "$o";
         vals += n_num("0", ln, cl);
         let rec: RecLit = { k: K.rec, keys: keys, vals: vals, line: ln, col: cl };
         gen_reclit(st, rec, types.t_sem())

@@ -365,14 +365,18 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
 };
 
 // The types `mutex` and `sem` (types.y t_mutex, t_sem): records whose
-// fields no program can name.
+// fields no program can name. A mutex's last word is the pid holding it (0
+// when free) and a semaphore's the same word of the mutex at 8, so that a
+// fork fails fast instead of hanging -- arch_x64.y's y_mutex_lock reads them.
 def sync_type(nm: str) -> Type {
     let fs: [Field] = [];
     if (nm == "mutex") {
         fs += { name: "$m", opt: false, typ: { k: K.tlong } };
+        fs += { name: "$o", opt: false, typ: { k: K.tlong } };
     } else {
         fs += { name: "$n", opt: false, typ: { k: K.tlong } };
         fs += { name: "$w", opt: false, typ: { k: K.tlong } };
+        fs += { name: "$o", opt: false, typ: { k: K.tlong } };
     };
     let t: TRec = { k: K.trec, fields: fs };
     let r: Type = t;
