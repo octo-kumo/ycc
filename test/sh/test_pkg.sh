@@ -673,6 +673,91 @@ YCMD=vendor fails "vendor: a broken manifest" "error: y.toml:1: unknown table [n
 (cd "$G/app" && timeout "$CTO" "$YCC" vendor </dev/null >"$TMPD/out" 2>&1)
 same_text "vendor: no git dependencies" "nothing to vendor: no git dependencies" "$TMPD/out"
 
+# ── 6b. two packages defining one y_ name ─────────────────────────────────
+# `y_` is not a namespace: such a def is emitted under its bare name because
+# generated code calls it by a fixed label, so the name IS the interface. The
+# linker keeps one body per label and drops the other, and which one survived
+# followed the order the packages were compiled in -- a.who() and b.who() both
+# printed "from a" with (a, b) and both "from b" with (b, a). Both orders must
+# now be refused, naming the label and the two packages.
+P="$TMPD/p6b"
+for n in aa bb; do
+    mk "$P/$n/y.toml" <<EOF
+[package]
+name = "$n"
+lib = "$n.y"
+EOF
+    mk "$P/$n/$n.y" <<EOF
+export { who };
+def who() -> str { y_who() };
+def y_who() -> str { "from $n" };
+EOF
+done
+mk "$P/app/main.y" <<'EOF'
+import aa;
+import bb;
+print(aa.who(), " ", bb.who());
+EOF
+for order in "aa bb" "bb aa"; do
+    set -- $order
+    mk "$P/app/y.toml" <<EOF
+[package]
+name = "app"
+
+[dependencies]
+$1 = { path = "../$1" }
+$2 = { path = "../$2" }
+
+[bin]
+app = "main.y"
+EOF
+    (cd "$P/app" && timeout "$CTO" "$YCC" build . </dev/null >"$TMPD/out" 2>&1)
+    # the whole message, verbatim: that is what a user reads, and it is what
+    # test_coverage.sh matches the diagnostic against
+    dupmsg="error: duplicate y_ name 'y_who': '$1' and '$2' both define it -- a y_ name is a fixed label generated code calls by, not a name in a namespace, so only one body could be linked; rename one"
+    if [ ! -e "$P/app/build/app" ] && grep -qxF -- "$dupmsg" "$TMPD/out"; then
+        pass "two packages defining one y_ name is an error ($1, $2)"
+    else
+        fail "two packages defining one y_ name is an error ($1, $2)" \
+            "$(head -c 200 "$TMPD/out")"
+    fi
+    rm -rf "$P/app/build"
+done
+# and a package's own y_ name -- one no std unit defines, since std's are the
+# ones a package may replace -- is not a collision at all
+P="$TMPD/p6c"
+mk "$P/solo/y.toml" <<'EOF'
+[package]
+name = "solo"
+lib = "solo.y"
+EOF
+mk "$P/solo/solo.y" <<'EOF'
+export { go };
+def y_solo_marker() -> long { 9 };
+def go() -> long { y_solo_marker() };
+EOF
+mk "$P/soloapp/y.toml" <<'EOF'
+[package]
+name = "soloapp"
+
+[dependencies]
+solo = { path = "../solo" }
+
+[bin]
+soloapp = "main.y"
+EOF
+mk "$P/soloapp/main.y" <<'EOF'
+import solo;
+print(solo.go());
+EOF
+(cd "$P/soloapp" && timeout "$CTO" "$YCC" build . </dev/null >"$TMPD/out" 2>&1)
+solo_out=$(run_bin 10 "$P/soloapp/build/soloapp" </dev/null 2>&1)
+if [ "$solo_out" = 9 ]; then
+    pass "a package's own y_ name is not a collision"
+else
+    fail "a package's own y_ name is not a collision" "built: $(head -c 150 "$TMPD/out") / run '$solo_out'"
+fi
+
 # ── 7. git dependencies ──────────────────────────────────────────────────
 if ! command -v git >/dev/null; then
     skip "git dependencies" "no git"

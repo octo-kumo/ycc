@@ -9625,6 +9625,52 @@ def rodata_pieces(pieces: [str], allrod: [[str]]) -> [str] {
 // packages (`deps`, link order: each after those it imports) and then
 // the program's, shaken together; the arch prelude and constants the
 // kept bodies reach; every unit's rodata; the .bss cells.
+// Two units defining the same `y_`-prefixed name: say so, or return.
+//
+// That prefix is not a namespace: such a def is emitted under its bare name
+// because generated code calls it by a fixed label, so the name IS the
+// interface. The linker keeps one body per label (namemap_build in
+// prune_bodies, and shake_keep with it) and drops the other, silently -- and
+// which one survives follows the order the packages were compiled in:
+//
+//   app depending on a then b:  a.who() and b.who() both printed "from a"
+//   app depending on b then a:  both printed "from b"
+//
+// std's own `y_` bodies are the exception and are meant to be replaced: a
+// program's (or a package's) replaces std's, and link_units drops std's. So
+// only the packages and the program are compared here, and a bin with no
+// package pays nothing for the check.
+def dup_y_label(deps: [Unit], prog: Unit) -> long {
+    let nu = len(deps);
+    if (nu > 0) {
+        let m = asm.labmap_new((nu + 1) * 2 + 16);
+        let i = 0;
+        while (i <= nu) {
+            let u: Unit = if (i < nu) { deps[i] } else { prog };
+            let labs = u.labels;
+            let k = 0;
+            while (k < len(labs)) {
+                let lb: str = labs[k];
+                if (lb[:2] == "y_") {
+                    let g = asm.labmap_get(m, lb);
+                    if (g.sec > 0) {
+                        let f = g.sec - 1;
+                        let first: str = if (f < nu) { deps[f].name } else { prog.name };
+                        puts("error: duplicate y_ name '" + lb + "': '" + first + "' and '" + u.name + "' both define it -- a y_ name is a fixed label generated code calls by, not a name in a namespace, so only one body could be linked; rename one\n");
+                        exit(1);
+                    } else {
+                        let r = asm.labmap_put(m, lb, i + 1, 0);
+                        m = r.map;
+                    };
+                };
+                k = k + 1;
+            };
+            i = i + 1;
+        };
+    };
+    0
+};
+
 def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     let units: [Unit] = [];
     units += std;
@@ -10354,6 +10400,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
     let r = compile_unit(ast, nr.imports, nr.origin, debug, wlevel, "", 0, xt);
     let times = r.times;
     if (r.ok) {
+        dup_y_label(deps, r.unit);
         let pt = clock_us();
         let ph = heap_used();
         let asm = link_units(std, deps, r.unit);

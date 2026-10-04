@@ -11553,6 +11553,70 @@ Yv *rodata_pieces(Yv *pieces, Yv *allrod) {
  * (each after those it imports), then the program, shaken together; the
  * arch prelude and constants the kept bodies reach; every unit's rodata
  * and globals. */
+/* Two units defining the same `y_`-prefixed name: say so, or return.
+ *
+ * That prefix is not a namespace: such a def is emitted under its bare name
+ * because generated code calls it by a fixed label, so the name IS the
+ * interface. The linker keeps one body per label (namemap_build in
+ * prune_bodies, and shake_keep with it) and drops the other, silently -- and
+ * which one survives follows the order the packages were compiled in:
+ *
+ *   app depending on a then b:  a.who() and b.who() both printed "from a"
+ *   app depending on b then a:  both printed "from b"
+ *
+ * std's own `y_` bodies are the exception and are meant to be replaced: a
+ * program's (or a package's) replaces std's, and link_units drops std's. So
+ * only the packages and the program are compared here, and a bin with no
+ * package pays nothing for the check. */
+static long dup_y_label(Yv *deps, Yv *prog) {
+    long nu = yv_len(deps);
+    if (nu > 0) {
+        Yv *m = labmap_new((nu + 1) * 2 + 16);
+        long i = 0;
+        while (i <= nu) {
+            Yv *u = i < nu ? ya_get(deps, i) : prog;
+            Yv *labs = yr_get(u, "labels");
+            long k = 0;
+            while (k < yv_len(labs)) {
+                Yv *lb = ya_get(labs, k);
+                if (ys_eq_lit(ys_slice(lb, 0, 2), "y_")) {
+                    Yv *g = labmap_get(m, lb);
+                    if (yv_l(yr_get(g, "sec")) > 0) {
+                        long f = yv_l(yr_get(g, "sec")) - 1;
+                        Yv *first = f < nu ? yr_get(ya_get(deps, f), "name")
+                                           : yr_get(prog, "name");
+                        Yv *msg = ys("error: duplicate y_ name '");
+                        msg = ys_cat(msg, lb);
+                        msg = ys_cat(msg, ys("': '"));
+                        msg = ys_cat(msg, first);
+                        msg = ys_cat(msg, ys("' and '"));
+                        msg = ys_cat(msg, yr_get(u, "name"));
+                        msg = ys_cat(msg,
+                                     ys("' both define it -- a y_ name is a "
+                                        "fixed label generated code calls by, "
+                                        "not a name in a namespace, so only "
+                                        "one body could be linked; rename "
+                                        "one\n"));
+                        puts_(msg);
+                        exit_(1);
+                        ;
+                    } else {
+                        m = yr_get(labmap_put(m, lb, i + 1, 0), "map");
+                        ;
+                    }
+                    ;
+                }
+                k = k + 1;
+                ;
+            }
+            i = i + 1;
+            ;
+        }
+        ;
+    }
+    return 0;
+}
+
 Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *units = yav(0);
     long j = 0;
@@ -12399,6 +12463,7 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
                          debug, wlevel, ys(""), 0, xt);
     Yv *times = yr_get(r, "times");
     if (yv_b(yr_get(r, "ok"))) {
+        dup_y_label(deps, yr_get(r, "unit"));
         long pt = clock_us();
         long ph = heap_used();
         Yv *asm_ = link_units(std, deps, yr_get(r, "unit"));
