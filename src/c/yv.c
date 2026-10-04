@@ -720,6 +720,33 @@ void eputs_(const Yv *s) {
 
 void exit_(long code) { exit((int)code); }
 
+/* The whole stream, for an input that cannot be seeked: a fifo, a pipe, or
+   /dev/stdin. read(2) on one of those has no size to ask for, which is why
+   this exists at all -- ftell answers -1 (ESPIPE) and the file-size path in
+   read_file gave up there, so `cycc <(...)` could not read what `ycc <(...)`
+   reads. The buffer is exactly as long as the contents plus one, so nothing
+   over-allocates; nothing is freed (see yalloc), which is one realloc'd
+   pointer per pipe read in a compile that used one. */
+static Yv *read_stream(FILE *f) {
+    size_t cap = 65536, len = 0;
+    char *buf = malloc(cap + 1);
+    if (!buf) yoom();
+    for (;;) {
+        if (len == cap) {
+            size_t ncap = cap * 2;
+            char *nb = realloc(buf, ncap + 1);
+            if (!nb) yoom();
+            buf = nb;
+            cap = ncap;
+        }
+        size_t rd = fread(buf + len, 1, cap - len, f);
+        len += rd;
+        if (rd == 0) break; /* eof, or a read error: both end the stream */
+    }
+    buf[len] = '\0';
+    return ys_own(buf, len);
+}
+
 Yv *read_file(const Yv *path) {
     if (!path || path->tag != Y_STR) return yv_none();
     FILE *f = fopen(path->u.s.p, "rb");
@@ -728,8 +755,7 @@ Yv *read_file(const Yv *path) {
        which the fread below sees only as end-of-file -- so read_file("dir")
        answered "" and `ycc <a dir>` compiled that into an empty executable.
        The Y twin asks the same question with one stat (std/fs.y read_bytes).
-       Only a directory is refused here: a fifo still hits the fseek/ftell
-       below, which is what m6 is about. */
+       Only a directory is refused here: a fifo is read to the end. */
     {
         struct stat st;
         if (fstat(fileno(f), &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -737,10 +763,13 @@ Yv *read_file(const Yv *path) {
             return yv_none();
         }
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
+    long sz = 0;
+    if (fseek(f, 0, SEEK_END) != 0 || (sz = ftell(f)) < 0) {
+        Yv *v = read_stream(f);
+        fclose(f);
+        return v;
+    }
     fseek(f, 0, SEEK_SET);
-    if (sz < 0) { fclose(f); return yv_none(); }
     char *buf = yalloc((size_t)sz + 1);
     size_t rd = fread(buf, 1, (size_t)sz, f);
     buf[rd] = '\0';

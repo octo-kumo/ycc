@@ -207,6 +207,35 @@ done
 [ "$oom_seen" -eq 2 ] && pass "OOM report identical from both copies"
 rm -rf "$OOM_DIR"
 
+# A fifo is not seekable: there is no size to ask for, so the whole-file path
+# (fseek/ftell) cannot be used and the stream has to be read to its end. The Y
+# copy always managed `ycc <(cat prog.y)`; the C copy's ftell answered -1 and it
+# reported "cannot read file" instead. One fifo per compiler -- a second reader
+# would block with no writer to feed it -- and the two assemblies must match.
+fifo_asm() {
+    local d
+    d=$(mktemp -d /tmp/ycc_fifo.XXXXXX)
+    mkfifo "$d/in.y"
+    (cat "$ROOT/test/y/native/t01_arith.y" > "$d/in.y" &)
+    timeout $(( 60 * YTIMEOUT_SCALE )) "$1" -S "$d/in.y" -o "$2" </dev/null
+    local ec=$?
+    rm -rf "$d"
+    return $ec
+}
+fifo_ec=0
+for compiler in "$YCC_BIN" "$CYCC"; do
+    if fifo_asm "$compiler" "/tmp/ycc_fifo_$(basename "$compiler").s"; then
+        fifo_ec=$((fifo_ec + 1))
+    else
+        fail "read a fifo (${compiler##*/})" "exit $? from -S on a fifo"
+    fi
+done
+if [ "$fifo_ec" -eq 2 ] && cmp -s "/tmp/ycc_fifo_$(basename "$YCC_BIN").s" \
+    "/tmp/ycc_fifo_$(basename "$CYCC").s"; then
+    pass "fifo read identical from both copies"
+fi
+rm -f /tmp/ycc_fifo_*.s
+
 echo ""
 echo "═══════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))
