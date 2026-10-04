@@ -2074,7 +2074,16 @@ Yv *parse_if_let(Yv *toks, long p) {
     ts = ya_push(ts, yr_get(then_b, "node"));
     Yv *stmts = yav(0);
     stmts = ya_push(stmts, let_node(tmp, yr_get(subj, "node"), ln, cl));
-    stmts = ya_push(stmts, yr(7, "k", yv_long(K_kw_if), "cond", yr_get(pr, "test"), "then", yr(4, "k", yv_long(K_block), "stmts", ts, "line", yv_long(ln), "col", yv_long(cl)), "els", else_b, "has_else", yv_bool(has_else), "line", yv_long(ln), "col", yv_long(cl)));
+    if (yv_b(yr_get(pr, "wild"))) {
+        /* `_` always matches, so there is no test to make -- the same
+         * fallback arm a `_` pattern is in a match. The subject is still read
+         * (it may compute something), and an else can never run. */
+        stmts = ya_push(stmts, yr_get(then_b, "node"));
+        ;
+    } else {
+        stmts = ya_push(stmts, yr(7, "k", yv_long(K_kw_if), "cond", yr_get(pr, "test"), "then", yr(4, "k", yv_long(K_block), "stmts", ts, "line", yv_long(ln), "col", yv_long(cl)), "els", else_b, "has_else", yv_bool(has_else), "line", yv_long(ln), "col", yv_long(cl)));
+        ;
+    }
     return res(yr(4, "k", yv_long(K_block), "stmts", stmts, "line", yv_long(ln), "col", yv_long(cl)), pos);
 }
 

@@ -69,3 +69,15 @@ while (i < len(items)) {
     i = i + 1;
 };
 print("total ", total);
+
+// `_` is the wildcard: it always matches, binds nothing and tests nothing,
+// so the block runs and the else cannot. The subject is still read once.
+let hits = 0;
+def counted_wild() -> long { hits = hits + 1; 0 };
+if let _ = counted_wild() { print("wild ran") } else { print("wild else") };
+print("hits ", hits);
+let nothing: long? = none;
+if let _ = nothing { print("wild over none") };
+print(if let _ = 0 { "wild value" } else { "unreachable" });
+// the level-1 lint stays quiet about the dropped value
+if let _ = 1 { print("dropped") };

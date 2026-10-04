@@ -1765,7 +1765,14 @@ def parse_if_let(toks: [Tok], p: long) -> Parsed {
     ts += then_b.node;
     let stmts: [Node] = [];
     stmts += let_node(tmp, subj.node, ln, cl);
-    stmts += { k: K.kw_if, cond: pr.test, then: { k: K.block, stmts: ts, line: ln, col: cl }, els: else_b, has_else: has_else, line: ln, col: cl };
+    if (pr.wild) {
+        // `_` always matches, so there is no test to make -- the same
+        // fallback arm a `_` pattern is in a match. The subject is still read
+        // (it may compute something), and an else can never run.
+        stmts += then_b.node;
+    } else {
+        stmts += { k: K.kw_if, cond: pr.test, then: { k: K.block, stmts: ts, line: ln, col: cl }, els: else_b, has_else: has_else, line: ln, col: cl };
+    };
     res({ k: K.block, stmts: stmts, line: ln, col: cl }, pos)
 };
 
