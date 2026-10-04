@@ -22,7 +22,17 @@ a runtime error (Section~\ref{sec:errors}).
 \item[\ic{split(s, sep)}] Split on every occurrence of a non-empty
   separator; returns \ic{[str]} (empty for empty separator). A trailing
   empty piece is dropped, so \ic{"a,".split(",")} is \ic{["a"]} where
-  Python's \ic{split} would give \ic{['a', '']}.
+  Python's \ic{split} would give \ic{['a', '']}. Exactly one is
+  dropped, so \ic{"a,,".split(",")} is \ic{["a", ""]}, and an empty
+  string gives an empty array --- \ic{"".split(",")} is \ic{[]} rather
+  than Python's \ic{['']}. That is Python's \ic{splitlines} rule, not
+  its \ic{split}: \ic{s.split(sep)} with a newline separator and
+  \ic{s.lines()} give the same pieces --- except that \ic{lines()} also
+  drops the \ic{CR} of a \ic{CRLF} pair, which is the point of it. It
+  does mean \ic{join(s.split(sep), sep)} is \ic{s} only when \ic{s} does
+  not end in \ic{sep}; for the pieces of a line-based text use
+  \ic{lines()}, and to rebuild a string that does end in the separator,
+  join the pieces with the separator's bytes yourself.
 \item[\ic{index\_of(s, sub)}] First index of \ic{sub} in \ic{s}, or
   \ic{-1}.
 \item[\ic{last\_index\_of(s, sub)}] Last index, or \ic{-1}.
