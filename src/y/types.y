@@ -3574,9 +3574,17 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                 while (i < len(cargs)) {
                     let r = typeof_expr(st, cargs[i]);
                     st = r.st;
-                    if (r.typ.k != K.tlong && r.typ.k != K.tbool && r.typ.k != K.tstr && r.typ.k != K.tptr && r.typ.k != K.tunk) {
+                    if (i == 0) {
+                        // The number lands in %rax. A str there is a heap
+                        // pointer, so the kernel would take its address as
+                        // the call number -- with every argument register
+                        // still holding whatever the stack held.
+                        if (r.typ.k != K.tlong && r.typ.k != K.tbyte && r.typ.k != K.tunk) {
+                            st = fail(st, "syscall needs a number first, got " + tstr(r.typ), node.line, node.col);
+                        }
+                    } else if (r.typ.k != K.tlong && r.typ.k != K.tbool && r.typ.k != K.tstr && r.typ.k != K.tptr && r.typ.k != K.tunk) {
                         st = fail(st, "syscall arg " + tostring(i) + " must be long/bool/str/*T, got " + tstr(r.typ), node.line, node.col);
-                    }
+                    };
                     i = i + 1;
                 };
                 tc_res(type_node({ k: K.tlong }), st)

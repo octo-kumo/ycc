@@ -4785,11 +4785,25 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 while (i < yv_len(yr_get(node, "args"))) {
                     Yv *r = typeof_expr(st, ya_get(cargs, i));
                     st = yr_get(r, "st");
-                    if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong &&
-                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tbool &&
-                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr &&
-                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tptr &&
-                        yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tunk) {
+                    if (i == 0) {
+                        /* The number lands in %rax. A str there is a heap
+                         * pointer, so the kernel would take its address as
+                         * the call number -- with every argument register
+                         * still holding whatever the stack held (types.y). */
+                        if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong &&
+                            yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tbyte &&
+                            yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tunk) {
+                            st = fail(st,
+                                      ys_cat(ys("syscall needs a number first, got "),
+                                             tstr(yr_get(r, "typ"))),
+                                      yv_l(yr_get(node, "line")),
+                                      yv_l(yr_get(node, "col")));
+                        }
+                    } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong &&
+                               yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tbool &&
+                               yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr &&
+                               yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tptr &&
+                               yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tunk) {
                         st = fail(st,
                                   ys_cat(ys_cat(ys_cat(ys("syscall arg "),
                                                      ys_long(i)),
