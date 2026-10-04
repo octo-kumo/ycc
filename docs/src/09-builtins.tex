@@ -250,7 +250,10 @@ maps and owned strings lock nothing: threads that change one value must
 hold a mutex while they do. \ic{readline()} serves one thread at a time.
 When the program ends --- its last statement, \ic{exit} or a trap in any
 thread --- its threads end with it; \ic{join} the ones whose work must
-finish. The words are not reserved: \ic{lock}, \ic{join} and the others
+finish. None of these waits has a timeout: \ic{join} of a thread that never
+returns, and \ic{wait s} on a semaphore nobody posts, block forever, so the
+program has to be killed from outside. The words are not reserved: \ic{lock},
+\ic{join} and the others
 mean these forms only where one is written, and a def or a variable of
 the program named like one wins.
 

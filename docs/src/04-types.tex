@@ -127,11 +127,10 @@ holds.
 \end{sloppypar}
 
 A union value also goes where one of its members is declared --- an
-annotated \ic{let}, an argument, a \ic{return}, a field or an element ---
-or a union of some of its members: that is a \emph{cast}, checked when
-the program runs. A value holding another member stops the program
-(Section~\ref{sec:errors}). After the cast the member's own fields read
-directly:
+annotated \ic{let}, an argument or a \ic{return} --- or a union of some of
+its members: that is a \emph{cast}, checked when the program runs. A value
+holding another member stops the program (Section~\ref{sec:errors}). After the
+cast the member's own fields read directly:
 
 \begin{lstlisting}
 def radius(s: Shape) -> float {
@@ -139,6 +138,11 @@ def radius(s: Shape) -> float {
     c.r
 }
 \end{lstlisting}
+
+A cast needs the member's type written down, so it cannot happen through a
+field or an element: reading \ic{r} out of a field of union type, or out of
+\ic{shapes[0]}, is an error --- nothing there states which member is meant.
+Bind or match one first (\ic{let c: Circle = ...;} and then \ic{c.r}).
 
 \begin{sloppypar}
 A union value keeps the fields its members share at one place, whatever

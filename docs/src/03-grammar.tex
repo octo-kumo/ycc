@@ -302,6 +302,7 @@ bind tighter:
 \toprule
 level & operators & notes \\
 \midrule
+0 & \ic{?~:~} & conditional, right-associative, lowest precedence \\
 1 & \ic{||} & short-circuit \\
 2 & \ic{\&\&} & short-circuit \\
 3 & \ic{==} \ic{!=} & structural equality \\
@@ -320,6 +321,21 @@ level & operators & notes \\
 
 \noindent Unlike C, the bitwise operators bind tighter than the
 comparisons, so \ic{x \& 1 == 0} means \ic{(x \& 1) == 0}.
+
+\begin{align*}
+\ty{expr} ::={}& \ty{binary} \mid \ty{binary}~\ic{?}~\ty{expr}~\ic{:}~\ty{expr}
+\end{align*}
+
+\noindent \ty{binary} is any of rows 1 to 11 above. The conditional
+\ic{c ? a : b} is the lowest-precedence form there is: it binds looser than
+every operator, so \ic{n < 5 ? "small" : "large"} needs no parentheses, and
+it is right-associative, so an arm may be another conditional written without
+any (\ic{c ? a : c ? b : d}). It is exactly
+\ic{if (c) \{ a \} else \{ b \}}, so \ic{c} is read once and arms that
+disagree in type make the whole thing void (Section~\ref{sec:void}). A
+\ic{?} immediately followed by \ic{[} is not a conditional at all --- that
+spelling belongs to option propagation --- so \ic{x?[0]} is an error and
+\ic{x ? [0] : [1]} needs its space.
 
 \subsection*{Assignment forms}
 
