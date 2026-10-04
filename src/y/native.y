@@ -30,6 +30,7 @@
 
 import tags from "./tags.y";
 import arch from "./arch_x64.y";
+// For its alias AsmLabel.
 import asm from "./asm.y";
 import types from "./types.y";
 import rename from "./rename.y";
@@ -9602,24 +9603,35 @@ def link_locs(b: str, off: long) -> str {
 };
 
 // One unit's rodata entries as text, keeping only the blocks a kept body
-// reaches: `refs` is the same union `shake_refs` gets for arch_consts (the
-// kept bodies' own references plus the kept prelude's), so a literal with no
-// `lea` pointing at it is dead -- measured at 29-92% of a program's rodata,
-// and almost always the same 308 bytes, the std runtime's error strings and
-// format tables, in every program that does not happen to call those
-// functions.
+// reaches AND emitting each distinct literal text once. `refs` is the union
+// `shake_refs` gets for arch_consts (the kept bodies' own references plus the
+// kept prelude's), so a literal no `lea` names is dead -- measured at 29-92%
+// of a program's rodata, and almost always the same 308 bytes, the std
+// runtime's error strings and format tables, in every program that does not
+// happen to call those functions.
+//
+// The interning is at link, not in gen_str_const: most duplicates are
+// std-vs-program and std-vs-std, so a per-unit table would miss them, and
+// putting one in EmitSt would mean touching all 21 rebuild sites plus the C
+// twin for nothing. The FIRST block of a text in link order keeps its own
+// label and is the one written; every later block of the same text is a loser,
+// recorded in `dup_old`/`dup_new` so the body texts can be relabelled
+// (relabel_dups).
 //
 // String entries are exactly [label, len, escaped]; record-type descriptors
 // (ty_desc) are [label, canonical form, quads...]: one per label in the
 // program (ty_seen, emptied by link_units), and two different forms under one
 // label stop the link -- a check that stays over EVERY descriptor, reachable
 // or not, since two shapes for one type is a program error either way.
+// Descriptors need no interning: `tyset_add` already emits one block per
+// distinct form.
 //
-// The membership test is asm's hashed labmap, not name_in: 6,727 literals
-// against ~30,000 refs would be 200 million string compares. Twice the refs,
+// The membership tests are asm's hashed labmap, not name_in: 6,727 literals
+// against ~30,000 refs would be 200 million string compares. Twice the size,
 // because labmap probes linearly and a full table makes every insert walk half
-// the slots.
-def rodata_pieces(pieces: [str], allrod: [[str]], refs: [str]) -> [str] {
+// the slots -- and ONE map for all the units' rodata, because five or six
+// builds of a 40,000-entry set at load factor 1 cost 4% of a self-compile.
+def rodata_intern(pieces: [str], allrod: [[str]], refs: [str]) -> { pieces: [str], dup_old: [str], dup_new: [str] } {
     let m = asm.labmap_new(len(refs) * 2 + 64);
     let ri = 0;
     while (ri < len(refs)) {
@@ -9627,13 +9639,32 @@ def rodata_pieces(pieces: [str], allrod: [[str]], refs: [str]) -> [str] {
         m = r.map;
         ri = ri + 1;
     };
+    let nall = len(allrod);
+    // text -> the index of the winner in `win`, plus loser pairs
+    let texts = asm.labmap_new(nall * 2 + 64);
+    let win: [str] = [];
+    let dup_old: [str] = [];
+    let dup_new: [str] = [];
     let s2 = 0;
-    while (s2 < len(allrod)) {
+    while (s2 < nall) {
         let pair = allrod[s2];
         let lbl: str = pair[0];
         if (len(pair) == 3) {
             if (asm.labmap_get(m, lbl).sec > 0) {
-                pieces += lbl + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + pair[2] + "\"\n";
+                // the key is the escaped text: the 8-byte length is derived
+                // from it, so two blocks with one text are one block's worth
+                // of bytes
+                let text: str = pair[2];
+                let seen = asm.labmap_get(texts, text);
+                if (seen.sec > 0) {
+                    dup_old += lbl;
+                    dup_new += win[seen.off];
+                } else {
+                    let ti = asm.labmap_put(texts, text, 1, len(win));
+                    texts = ti.map;
+                    win += lbl;
+                    pieces += lbl + ":\n.quad " + tostring(pair[1]) + "\n.string \"" + text + "\"\n";
+                };
             }
         } else {
             let form: str = pair[1];
@@ -9647,7 +9678,42 @@ def rodata_pieces(pieces: [str], allrod: [[str]], refs: [str]) -> [str] {
         };
         s2 = s2 + 1;
     };
-    pieces
+    { pieces: pieces, dup_old: dup_old, dup_new: dup_new }
+};
+
+// Point a body's `lea` at the label its literal's text ended up with. Only the
+// `lea <label>(%rip)` form can name a literal -- the other reference form,
+// `mov $A-B`, is arch_consts' trap-string lengths -- so this is the whole job.
+//
+// Line by line, and the emitter writes one instruction per line, so a line
+// holds at most one `lea`: split once, ask each line, put the body back
+// together once. The two shapes before it were both quadratic in the body's
+// size -- a `str.replace` per reference (490 ms and 345 MB in asm_text on
+// ycc.y) and an index_of per reference over the whole body (+9.23% of every
+// compile, 511 million instructions). A per-`lea` scan that re-sliced the
+// remainder of the body each time allocated 600 MB for the same work.
+def relabel_dups(body: str, m: [AsmLabel], dup_new: [str]) -> str {
+    let lines = split(body, "\n");
+    let i = 0;
+    while (i < len(lines)) {
+        let ln: str = lines[i];
+        let at = index_of(ln, "lea ");
+        if (at >= 0) {
+            let rest = ln[at + 4:len(ln)];
+            let e = index_of(rest, "(%rip)");
+            if (e >= 0) {
+                let lbl = rest[0:e];
+                let g = asm.labmap_get(m, lbl);
+                if (g.sec > 0) {
+                    // the label's own length is what is cut out: the winner's
+                    // label is what gets longer or shorter
+                    lines[i] = ln[0:at + 4] + dup_new[g.off] + rest[e:len(rest)];
+                };
+            };
+        };
+        i = i + 1;
+    };
+    join(lines, "\n")
 };
 
 // The program's assembly text: the bodies of the std units and of the
@@ -9807,28 +9873,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
     };
-    // Piece-list + single join: `asm = asm + piece` per iteration is
-    // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
-    // the arena never frees), which OOMs on self-compilation.
-    let pieces: [str] = [];
-    let ab = 0;
-    while (ab < len(all)) {
-        if (keep[ab]) {
-            let kb: str = all[ab];
-            let kf = fno[ab];
-            if (kf >= 0) { kb = link_locs(kb, kf); }
-            pieces += kb;
-            pieces += "\n";
-        }
-        ab = ab + 1;
-    };
-    let body_text = join(pieces, "");
-    let asm = arch.arch_header();
-    if (dbg_lines) {
-        asm = file_dirs(files) + asm;
-    }
-    asm = asm + arch.arch_text() + ps.text;
-    asm = asm + body_text;
+    // Everything the kept code can reach: the kept bodies' own references
+    // plus the kept prelude's. Computed before the rodata, which uses it as
+    // its reachability set.
     let const_refs: [str] = [];
     const_refs += ps.refs;
     let ci = 0;
@@ -9836,13 +9883,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         const_refs += [body_refs[ci]];
         ci = ci + 1;
     };
-    let consts_text = shake_refs(arch.arch_consts(), const_refs);
-    asm = asm + arch.arch_rodata() + consts_text;
-    // every unit's rodata and globals, in link order. The rodata of every
-    // unit goes through ONE rodata_pieces call: the reachability set is the
-    // same for all of them, and building the map per unit cost 4% of a
-    // self-compile (a hash map filled to load factor 1 probes linearly, so
-    // five or six builds of a 40,000-entry set are quadratic).
+    // The rodata first, because it decides the labels the bodies use: one
+    // block per distinct literal text, the losers recorded.
     tyset_reset();
     let allrod: [[str]] = [];
     let gls: [str] = [];
@@ -9855,7 +9897,43 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     };
     allrod += prog.rodata;
     gls += prog.globals;
-    let rodpieces = rodata_pieces([], allrod, const_refs);
+    let interned = rodata_intern([], allrod, const_refs);
+    let dup_old = interned.dup_old;
+    let rodpieces = interned.pieces;
+    // loser label -> index into dup_new, so a body's refs can be relabelled
+    // in one probe each.
+    let dupmap = asm.labmap_new(len(dup_old) * 2 + 64);
+    let di = 0;
+    while (di < len(dup_old)) {
+        let dr = asm.labmap_put(dupmap, dup_old[di], 1, di);
+        dupmap = dr.map;
+        di = di + 1;
+    };
+    // Piece-list + single join: `asm = asm + piece` per iteration is
+    // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
+    // the arena never frees), which OOMs on self-compilation.
+    let pieces: [str] = [];
+    let ab = 0;
+    while (ab < len(all)) {
+        if (keep[ab]) {
+            let kb: str = all[ab];
+            let kf = fno[ab];
+            if (kf >= 0) { kb = link_locs(kb, kf); };
+            if (len(dup_old) > 0) { kb = relabel_dups(kb, dupmap, interned.dup_new); };
+            pieces += kb;
+            pieces += "\n";
+        }
+        ab = ab + 1;
+    };
+    let body_text = join(pieces, "");
+    let asm = arch.arch_header();
+    if (dbg_lines) {
+        asm = file_dirs(files) + asm;
+    }
+    asm = asm + arch.arch_text() + ps.text;
+    asm = asm + body_text;
+    let consts_text = shake_refs(arch.arch_consts(), const_refs);
+    asm = asm + arch.arch_rodata() + consts_text;
     asm = asm + join(rodpieces, "");
     // .bss: the allocator's cells when the kept prelude still uses
     // them, then one cell per global.

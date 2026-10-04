@@ -510,7 +510,8 @@ Yv *lit_decode(Yv *c);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                  Yv *name, long base, Yv *xt);
 Yv *link_locs(Yv *body, long file);
-Yv *rodata_pieces(Yv *pieces, Yv *allrod, Yv *refs);
+Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs);
+Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new);
 Yv *link_units(Yv *std, Yv *deps, Yv *prog);
 Yv *pack_version(void);
 Yv *obj_version(void);
@@ -11520,47 +11521,74 @@ Yv *link_locs(Yv *body, long off) {
  * len, escaped]; record-type descriptors (ty_desc) are [label, canonical
  * form, quads...]: one per label in the program (ty_seen, emptied by
  * link_units), and two different forms under one label stop the link. */
-Yv *rodata_pieces(Yv *pieces, Yv *allrod, Yv *refs) {
-    /* One unit's rodata entries as text, keeping only the blocks a kept body
-       reaches: `refs` is the same union `shake_refs` gets for arch_consts
-       (the kept bodies' own references plus the kept prelude's), so a literal
-       with no `lea` pointing at it is dead -- measured at 29-92% of a
-       program's rodata, and almost always the same 308 bytes, the std
-       runtime's error strings and format tables, in every program that does
-       not happen to call those functions.
+/* One unit's rodata entries as text, keeping only the blocks a kept body
+   reaches AND emitting each distinct literal text once. `refs` is the union
+   `shake_refs` gets for arch_consts (the kept bodies' own references plus the
+   kept prelude's), so a literal no `lea` names is dead -- measured at 29-92%
+   of a program's rodata, and almost always the same 308 bytes, the std
+   runtime's error strings and format tables, in every program that does not
+   happen to call those functions.
 
-       String entries are exactly [label, len, escaped]; record-type
-       descriptors (ty_desc) are [label, canonical form, quads...]: one per
-       label in the program (ty_seen, emptied by link_units), and two different
-       forms under one label stop the link -- a check that stays over EVERY
-       descriptor, reachable or not, since two shapes for one type is a
-       program error either way.
+   The interning is at link, not in gen_str_const: most duplicates are
+   std-vs-program and std-vs-std, so a per-unit table would miss them, and
+   putting one in EmitSt would mean touching all 21 rebuild sites plus the C
+   twin for nothing. The FIRST block of a text in link order keeps its own
+   label and is the one written; every later block of the same text is a loser,
+   recorded in `dup_old`/`dup_new` so the body texts can be relabelled
+   (relabel_dups).
 
-       The membership test is asm's hashed labmap, not name_in: 6,727
-       literals against ~30,000 refs would be 200 million string compares.
-       Twice the refs, because labmap probes linearly and a full table makes
-       every insert walk half the slots. */
+   String entries are exactly [label, len, escaped]; record-type descriptors
+   (ty_desc) are [label, canonical form, quads...]: one per label in the
+   program (ty_seen, emptied by link_units), and two different forms under one
+   label stop the link -- a check that stays over EVERY descriptor, reachable
+   or not, since two shapes for one type is a program error either way.
+   Descriptors need no interning: `tyset_add` already emits one block per
+   distinct form.
+
+   The membership tests are asm's hashed labmap, not name_in: 6,727 literals
+   against ~30,000 refs would be 200 million string compares. Twice the size,
+   because labmap probes linearly and a full table makes every insert walk half
+   the slots -- and ONE map for all the units' rodata, because five or six
+   builds of a 40,000-entry set at load factor 1 cost 4% of a self-compile. */
+Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs) {
     Yv *m = labmap_new(yv_len(refs) * 2 + 64);
     long ri = 0;
     while (ri < yv_len(refs)) {
-        Yv *r = labmap_put(m, ya_get(refs, ri), 1, 0);
-        m = yr_get(r, "map");
+        m = yr_get(labmap_put(m, ya_get(refs, ri), 1, 0), "map");
         ri = ri + 1;
     }
+    long nall = yv_len(allrod);
+    /* text -> the index of the winner in `win`, plus loser pairs */
+    Yv *texts = labmap_new(nall * 2 + 64);
+    Yv *win = yav(0);
+    Yv *dup_old = yav(0);
+    Yv *dup_new = yav(0);
     long s2 = 0;
-    while (s2 < yv_len(allrod)) {
+    while (s2 < nall) {
         Yv *pair = ya_get(allrod, s2);
         Yv *lbl = ya_get(pair, 0);
         if (yv_len(pair) == 3) {
             if (yv_l(yr_get(labmap_get(m, lbl), "sec")) > 0) {
-                Yv *entry =
-                    ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(lbl, ys(":\n.quad ")),
+                /* the key is the escaped text: the 8-byte length is derived
+                   from it, so two blocks with one text are one block's worth
+                   of bytes */
+                Yv *text = ya_get(pair, 2);
+                Yv *seen = labmap_get(texts, text);
+                if (yv_l(yr_get(seen, "sec")) > 0) {
+                    dup_old = ya_push(dup_old, lbl);
+                    dup_new = ya_push(dup_new, ya_get(win, yv_l(yr_get(seen, "off"))));
+                } else {
+                    texts = yr_get(labmap_put(texts, text, 1, yv_len(win)), "map");
+                    win = ya_push(win, lbl);
+                    Yv *entry =
+                        ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(lbl, ys(":\n.quad ")),
                                                  ys_tostring(ya_get(pair, 1))),
                                           ys("\n.string \"")),
-                                   ya_get(pair, 2)),
-                           ys("\"\n"));
-                pieces = ya_push(pieces, entry);
-                ;
+                                   text),
+                               ys("\"\n"));
+                    pieces = ya_push(pieces, entry);
+                    ;
+                }
             }
         } else {
             Yv *form = ya_get(pair, 1);
@@ -11577,7 +11605,45 @@ Yv *rodata_pieces(Yv *pieces, Yv *allrod, Yv *refs) {
         }
         s2 = s2 + 1;
     }
-    return pieces;
+    return yr(3, "pieces", pieces, "dup_old", dup_old, "dup_new", dup_new);
+}
+
+/* Point a body's `lea` at the label its literal's text ended up with. Only the
+   `lea <label>(%rip)` form can name a literal -- the other reference form,
+   `mov $A-B`, is arch_consts' trap-string lengths -- so this is the whole job.
+
+   Line by line, and the emitter writes one instruction per line, so a line
+   holds at most one `lea`: split once, ask each line, put the body back
+   together once. The two shapes before it were both quadratic in the body's
+   size -- a `str.replace` per reference (490 ms and 345 MB in asm_text on
+   ycc.y) and an index_of per reference over the whole body (+9.23% of every
+   compile, 511 million instructions). A per-`lea` scan that re-sliced the
+   remainder of the body each time allocated 600 MB for the same work. */
+Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new) {
+    Yv *lines = ys_split(body, ys("\n"));
+    long i = 0;
+    while (i < yv_len(lines)) {
+        Yv *ln = ya_get(lines, i);
+        long at = ys_index_of(ln, ys("lea "));
+        if (at >= 0) {
+            Yv *rest = ys_slice(ln, at + 4, yv_len(ln));
+            long e = ys_index_of(rest, ys("(%rip)"));
+            if (e >= 0) {
+                Yv *lbl = ys_slice(rest, 0, e);
+                Yv *g = labmap_get(m, lbl);
+                if (yv_l(yr_get(g, "sec")) > 0) {
+                    /* the label's own length is what is cut out: the winner's
+                       label is what gets longer or shorter */
+                    ya_set(lines, i,
+                           ys_cat(ys_cat(ys_slice(ln, 0, at + 4),
+                                         ya_get(dup_new, yv_l(yr_get(g, "off")))),
+                                  ys_slice(rest, e, yv_len(rest))));
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return ys_join(lines, ys("\n"));
 }
 
 /* The program's assembly text: std units, then its package dependencies
@@ -11785,30 +11851,9 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
     }
-    Yv *pieces = yav(0);
-    long ab = 0;
-    while (ab < yv_len(all)) {
-        if (yv_b(ya_get(keep, ab))) {
-            Yv *kb = ya_get(all, ab);
-            long kf = yv_l(ya_get(fno, ab));
-            if (kf >= 0) {
-                kb = link_locs(kb, kf);
-                ;
-            }
-            pieces = ya_push(pieces, kb);
-            pieces = ya_push(pieces, ys("\n"));
-            ;
-        }
-        ab = ab + 1;
-    }
-    Yv *body_text = ys_join(pieces, ys(""));
-    Yv *asm_ = arch_header();
-    if (dbg_lines) {
-        asm_ = ys_cat(file_dirs(files), asm_);
-        ;
-    }
-    asm_ = ys_cat(ys_cat(asm_, arch_text()), yr_get(ps, "text"));
-    asm_ = ys_cat(asm_, body_text);
+    /* Everything the kept code can reach: the kept bodies' own references plus
+       the kept prelude's. Computed before the rodata, which uses it as its
+       reachability set. */
     Yv *const_refs = yav(0);
     long cr = 0;
     while (cr < yv_len(yr_get(ps, "refs"))) {
@@ -11820,13 +11865,12 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         const_refs = ya_push(const_refs, ya_get(body_refs, ci));
         ci = ci + 1;
     }
-    Yv *consts_text = shake_refs(arch_consts(), const_refs);
-    asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
-    /* every unit's rodata and globals, in link order. The rodata of every unit
-       goes through ONE rodata_pieces call: the reachability set is the same
-       for all of them, and building the map per unit cost 4% of a
-       self-compile (a hash map filled to load factor 1 probes linearly, so
-       five or six builds of a 40,000-entry set are quadratic). */
+    /* The rodata first, because it decides the labels the bodies use: one
+       block per distinct literal text, the losers recorded. Every unit's
+       rodata goes through ONE call: the reachability set is the same for all
+       of them, and building the map per unit cost 4% of a self-compile (a
+       hash map filled to load factor 1 probes linearly, so five or six builds
+       of a 40,000-entry set are quadratic). */
     tyset_reset();
     Yv *allrod = yav(0);
     Yv *gls = yav(0);
@@ -11859,7 +11903,47 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         gls = ya_push(gls, ya_get(pg, pgi));
         pgi = pgi + 1;
     }
-    Yv *rodpieces = rodata_pieces(yav(0), allrod, const_refs);
+    Yv *interned = rodata_intern(yav(0), allrod, const_refs);
+    Yv *rodpieces = yr_get(interned, "pieces");
+    Yv *dup_old = yr_get(interned, "dup_old");
+    /* loser label -> index into dup_new, so a body's refs can be relabelled in
+       one probe each. */
+    Yv *dupmap = labmap_new(yv_len(dup_old) * 2 + 64);
+    long di = 0;
+    while (di < yv_len(dup_old)) {
+        dupmap = yr_get(labmap_put(dupmap, ya_get(dup_old, di), 1, di), "map");
+        di = di + 1;
+    }
+    Yv *pieces = yav(0);
+    long ab = 0;
+    while (ab < yv_len(all)) {
+        if (yv_b(ya_get(keep, ab))) {
+            Yv *kb = ya_get(all, ab);
+            long kf = yv_l(ya_get(fno, ab));
+            if (kf >= 0) {
+                kb = link_locs(kb, kf);
+                ;
+            }
+            if (yv_len(dup_old) > 0) {
+                kb = relabel_dups(kb, dupmap, yr_get(interned, "dup_new"));
+                ;
+            }
+            pieces = ya_push(pieces, kb);
+            pieces = ya_push(pieces, ys("\n"));
+            ;
+        }
+        ab = ab + 1;
+    }
+    Yv *body_text = ys_join(pieces, ys(""));
+    Yv *asm_ = arch_header();
+    if (dbg_lines) {
+        asm_ = ys_cat(file_dirs(files), asm_);
+        ;
+    }
+    asm_ = ys_cat(ys_cat(asm_, arch_text()), yr_get(ps, "text"));
+    asm_ = ys_cat(asm_, body_text);
+    Yv *consts_text = shake_refs(arch_consts(), const_refs);
+    asm_ = ys_cat(ys_cat(asm_, arch_rodata()), consts_text);
     asm_ = ys_cat(asm_, ys_join(rodpieces, ys("")));
     Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
     if (yv_len(gls) > 0 || yv_len(heap_text) > 0) {
