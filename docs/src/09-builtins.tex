@@ -388,10 +388,12 @@ over \ic{crypto.hash\_sha256()} or \ic{hash\_sha384()};
 data)}, an open giving \ic{none} for a forged message; the AES key is 16,
 24 or 32 bytes, the ChaCha20 key 32, and the nonce 12 bytes either way ---
 any other length stops the program saying so, since sealing under the
-wrong length would give two different nonces the same ciphertext and the same tag
-(SP 800-38D's rule for a longer GCM nonce, a GHASH of it, is not
-implemented); \ic{x25519} and
-\ic{x25519\_base}; \ic{rsa\_verify\_pkcs1}, \ic{rsa\_verify\_pss} and
+wrong length would give two different nonces the same ciphertext and the
+same tag (SP 800-38D's rule for a longer GCM nonce, a GHASH of it, is not
+implemented); \ic{x25519} and \ic{x25519\_base}, each a 32-byte scalar
+and a 32-byte point, where a peer point of low order --- one that would
+make the shared secret all zeros --- stops the program, as RFC 8446
+\S7.4.2 requires; \ic{rsa\_verify\_pkcs1}, \ic{rsa\_verify\_pss} and
 \ic{ecdsa\_verify} (over \ic{crypto.p256()} or \ic{p384()});
 \ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}.
 \ic{import x509;} reads certificates: \ic{x509.verify\_chain(chain,

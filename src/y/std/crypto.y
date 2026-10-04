@@ -103,6 +103,18 @@ def bytes_eq(a: [byte], b: [byte]) -> bool {
     d == 0
 };
 
+// Every byte of b is zero; the time taken does not depend on where the
+// first zero is.
+def is_zero(b: [byte]) -> bool {
+    let d = 0;
+    let i = 0;
+    while (i < len(b)) {
+        d = d | b[i];
+        i = i + 1;
+    };
+    d == 0
+};
+
 // The big-endian n-byte encoding of v.
 def be_bytes(v: long, n: long) -> [byte] {
     let out: [byte] = [];
@@ -984,7 +996,16 @@ def pack25519(n: [long]) -> [byte] {
 };
 
 // X25519(k, u): the scalar k (32 bytes) times the point u (32 bytes).
+// A u longer than 32 bytes would be used truncated, so both lengths are
+// refused by name. And RFC 8446 7.4.2 says a shared secret of all zeros
+// must abort the handshake: the seven other low-order points of RFC 7748
+// 6.1 (0, 1, p-1, p, p+1 and two more) all give it, and a peer that
+// offers one would otherwise learn everything sent under that key --
+// which is none at all, so the key exchange decides nothing.
 def x25519(k: [byte], u: [byte]) -> [byte] {
+    if (len(k) != 32 || len(u) != 32) {
+        arg_error("X25519 takes a 32-byte scalar and a 32-byte point, " + tostring(len(k)) + " and " + tostring(len(u)) + " given");
+    };
     let z: [byte] = [];
     z += k;
     z[31] = (k[31] & 127) | 64;
@@ -1031,7 +1052,11 @@ def x25519(k: [byte], u: [byte]) -> [byte] {
     };
     fe_inv(c, c);
     fe_mul(a, a, c);
-    pack25519(a)
+    let s = pack25519(a);
+    if (is_zero(s)) {
+        arg_error("an X25519 point of low order: the shared secret is all zeros");
+    };
+    s
 };
 
 // The X25519 base point, u = 9.
