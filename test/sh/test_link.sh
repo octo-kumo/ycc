@@ -171,27 +171,37 @@ fi
 # only what the program uses. crypto.y's SHA-2 round constants and its AES
 # S-box were top-level `let`s: a top-level binding is inlined at _start, a
 # shake root, so their immediates and (for the S-box, a str literal) their
-# bytes were in every binary importing crypto. A program that imports crypto
-# and never hashes must be within a kilobyte of hello.y's size; one that does
-# hash is bigger, and both run.
+# bytes were in every binary importing crypto.
+#
+# The ratchet is the *gap* between a program that never hashes and one that
+# does, not a program's size against hello's: this used to compare two
+# page-rounded file sizes (8,368 vs 8,368 — the padding made them equal, and
+# the tables' return would have shown up as 12,464 only because it crossed a
+# page). Now that a binary is its own payload, the sizes are 3,431 / 4,436 /
+# 10,760 for hello+import / import+CSPRNG / import+sha256, and the guarantee
+# is directly visible: a program that never hashes is 7.3 kB smaller than one
+# that does, and hashing costs 6.3 kB more than the CSPRNG alone.
+printf 'import crypto;\nprint("hi");\n' > "$TMPD/cryi.y"
 printf 'import crypto;\nlet b = crypto.random_bytes(16);\nprint(len(b));\n' > "$TMPD/cry0.y"
 printf 'print("hi");\n' > "$TMPD/hi.y"
 printf 'import crypto;\ndef u(s: str) -> [byte] { crypto.unhex(s) };\nprint(crypto.hex(crypto.sha256(bytes("abc"))));\n' > "$TMPD/cry1.y"
-if timeout "$CTO" "$YCC" "$TMPD/cry0.y" -o "$TMPD/cry0" </dev/null >"$TMPD/e0" 2>&1 \
+if timeout "$CTO" "$YCC" "$TMPD/cryi.y" -o "$TMPD/cryi" </dev/null >"$TMPD/e0" 2>&1 \
+    && timeout "$CTO" "$YCC" "$TMPD/cry0.y" -o "$TMPD/cry0" </dev/null >>"$TMPD/e0" 2>&1 \
     && timeout "$CTO" "$YCC" "$TMPD/hi.y" -o "$TMPD/hi" </dev/null >>"$TMPD/e0" 2>&1 \
     && timeout "$CTO" "$YCC" "$TMPD/cry1.y" -o "$TMPD/cry1" </dev/null >>"$TMPD/e0" 2>&1; then
+    si=$(stat -c%s "$TMPD/cryi")
     s0=$(stat -c%s "$TMPD/cry0")
     shi=$(stat -c%s "$TMPD/hi")
     s1=$(stat -c%s "$TMPD/cry1")
     r0=$(run_bin 10 "$TMPD/cry0" </dev/null 2>&1)
     r1=$(run_bin 10 "$TMPD/cry1" </dev/null 2>&1)
-    # 8312 for hello.y, 12464 before (the tables), 8368 now
     if [ "$r0" = 16 ] && [ "$r1" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" ] \
-        && [ "$s0" -lt $((shi + 1024)) ] && [ "$s1" -gt $((s0 + 3000)) ]; then
-        pass "crypto's tables are built on first use (import only $s0 B vs hello $shi B; hashing $s1 B)"
+        && [ "$si" -lt $((shi + 3000)) ] && [ "$s1" -gt $((si + 3000)) ] \
+        && [ "$s1" -gt $((s0 + 3000)) ]; then
+        pass "crypto's tables are built on first use (import only $si B, CSPRNG $s0 B, hashing $s1 B)"
     else
         fail "crypto's tables are built on first use" \
-            "sizes $s0/$shi/$s1, runs '$r0' '$r1'"
+            "sizes $si/$shi/$s0/$s1, runs '$r0' '$r1'"
     fi
 else
     fail "crypto's tables are built on first use" "$(head -c 200 "$TMPD/e0")"

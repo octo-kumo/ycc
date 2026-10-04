@@ -25,7 +25,7 @@ extern long reg_size(Yv *name);             /* enc64.c: enc.reg_size */
 extern Yv *enc_insn(Yv *mn, Yv *ops);       /* enc64.c: enc.enc_insn */
 extern Yv *le64(long v);                    /* enc64.c: enc.le64 */
 extern Yv *le32(long v);                    /* enc64.c: enc.le32 */
-extern long elf_bss_from_ro(long ro_len, long bss_len); /* elf.c: elf.elf_bss_from_ro */
+extern long elf_bss_from_ro(long code_len, long ro_len, long bss_len); /* elf.c: elf.elf_bss_from_ro */
 extern long elf_code_off(long bss_len);      /* elf.c: elf.elf_code_off */
 extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
                      Yv *syms, Yv *dsecs); /* elf.c: elf.elf_build */
@@ -1410,11 +1410,11 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
         i = i + 1;
         ;
     };
-    /* A .bss label resolves like a rodata one, past the padded rodata (see
+    /* A .bss label resolves like a rodata one, past the mapped image (see
        elf_bss_from_ro), so the fixups below only know two sections. */
     Yv *labs = labels;
     if (bss_len > 0) {
-        long bshift = elf_bss_from_ro(ro_len, bss_len);
+        long bshift = elf_bss_from_ro(code_len, ro_len, bss_len);
         labs = yav(0);
         long j = 0;
         while (j < yv_len(labels)) {
@@ -1447,10 +1447,10 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
                   "error", ys("data or code in .bss"),
                   "times", yav(1, yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0))));
     } else {
-        /* pad code to a page so rodata lands page-aligned (mirrors elf.y) */
+        /* No padding between the code and the rodata (mirrors elf.y): the
+           loader zero-fills the last page of the mapping instead, so a
+           rodata label's offset is exactly code_len + its own offset. */
         long pad = 0;
-        long trail = code_len % 4096;
-        if (trail != 0) { pad = 4096 - trail; ; }
         Yv *code = yav(0);
         Yv *ro = yav(0);
         Yv *err = ys("");

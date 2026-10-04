@@ -1,9 +1,16 @@
 // elf.y — minimal ELF64 writer for ycc output.
 // One PT_LOAD segment (read+execute), static, no interpreter, no libc:
 // the entry point is our own `_start`, and user code only uses raw syscalls.
-// Layout: [EHDR 64][PHDR 56][code][rodata]; base vaddr 0x400000.
+// Layout: [EHDR 64][PHDR 56][code][rodata]; base vaddr 0x400000. Nothing is
+// padded in the file: the R+E segment's p_memsz is rounded up to a page while
+// its p_filesz is the bytes actually written, and ELF already says what the
+// tail holds -- the loader zero-fills it. That tail is not slack (the kernel
+// maps whole pages and string helpers over-read a few bytes past a trailing
+// NUL), so it has to be mapped and zeroed, which is what p_memsz > p_filesz
+// buys. A hello-world binary is 585 bytes instead of 8,312, of which 7,727
+// were zeros the loader threw away and rebuilt anyway.
 // A program with globals gets a second PT_LOAD (read+write, no file bytes):
-// the zeroed .bss, on the page after the file mapping; its PHDR makes the
+// the zeroed .bss, on the page after the mapped image; its PHDR makes the
 // headers 176 bytes.
 // `ycc -g` appends [.symtab][.strtab][.shstrtab][.debug_*][section
 // headers] AFTER the loaded image (see elf_debug), and backs the first
@@ -26,46 +33,53 @@ def elf_code_off(bss_len: long) -> long {
     if (bss_len > 0) { 176 } else { 120 }
 };
 
-// Rodata plus its 8-byte trailer, padded to a page (see elf_build).
-def elf_ro_total(ro_len: long) -> long {
-    let rosz = ro_len + 8;
-    let trail = rosz % 4096;
-    if (trail != 0) { rosz + 4096 - trail } else { rosz }
+// The R+E image's size in MEMORY, from the code's start: the code, the
+// rodata and its 8-byte trailer, rounded up to a page. The tail past the last
+// byte in the file is the loader's zero-fill (see the header).
+def elf_mem_code(codesz: long, ro_len: long) -> long {
+    let n = codesz + ro_len + 8;
+    let trail = n % 4096;
+    if (trail != 0) { n + 4096 - trail } else { n }
 };
 
-// Where the .bss starts, as an offset from the rodata start: past the
-// padded rodata to the end of the file mapping's last page (the headers
-// shift everything by code_off, which is less than a page).
-def elf_bss_from_ro(ro_len: long, bss_len: long) -> long {
-    elf_ro_total(ro_len) + 4096 - elf_code_off(bss_len)
+// The same rounding for a file size that includes the headers (p_memsz).
+def elf_memsz(filesz: long) -> long {
+    let trail = filesz % 4096;
+    if (trail != 0) { filesz + 4096 - trail } else { filesz }
+};
+
+// Where the .bss starts, as an offset from the rodata start: past the mapped
+// image's last page, to the page after it. Only the rodata's length and the
+// code's own length are involved -- rodata starts right after the code now
+// that nothing is padded.
+def elf_bss_from_ro(code_len: long, ro_len: long, bss_len: long) -> long {
+    elf_mem_code(code_len, ro_len) + 4096 - code_len
 };
 
 def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec]) -> [byte] {
     let code_off = elf_code_off(bss_len);
     let base = 4194304;
-    // Pad the code to a page so rodata starts page-aligned; pad rodata tail
-    // to a page so the mapping covers every string byte (the kernel maps
-    // whole pages, and string helpers may over-read a few bytes past a
-    // trailing NUL). Layout: [EHDR 64][PHDR 56][code][pad][rodata][pad].
-    // Without full-page coverage the last partial page is the end of the
-    // mapping, so those over-reads (and any read of the tail) fault with
-    // EFAULT or return garbage.
+    // Layout: [EHDR 64][PHDR 56][code][rodata + trailer]. Nothing is padded:
+    // rodata need not be page-aligned (it is reached through a patched
+    // rip-relative lea), and the mapping's last page is zero-filled by the
+    // loader rather than by bytes in the file.
     // NOTE: out is appended to IN PLACE, one byte at a time, rather than
     // re-concatenated per header field: `+=` grows the array geometrically,
     // while `out = concat(out, f)` would allocate a fresh array and copy
     // every byte written so far, for every field. Helpers below append.
     let out: [byte] = [];
     let codesz = len(code);
-    let codetrail = codesz % 4096;
-    let codepad = 0;
-    if (codetrail != 0) { codepad = 4096 - codetrail; }
-    let rosz = len(rodata) + 8;
-    let rotrail = rosz % 4096;
-    let ropad = 0;
-    if (rotrail != 0) { ropad = 4096 - rotrail; }
-    let total = code_off + codesz + codepad + rosz + ropad;
+    let ro_len = len(rodata);
+    // What the file holds and what the loader maps. The difference is the
+    // last page's zero-fill (elf_mem_code), and it is what the kernel used to
+    // be handed as 7,727 literal zero bytes.
+    let filesz = code_off + codesz + ro_len + 8;
+    let memsz = elf_memsz(filesz);
+    let bss_vaddr = base + elf_mem_code(codesz, ro_len) + 4096;
     let entry = base + code_off + entry_off;
-    let dbg = elf_debug(code_off, codesz, codepad, len(rodata), total, bss_len, syms, dsecs);
+    // the .bss address is computed once, here, and handed down: the plain and
+    // the -g build must not each have their own formula for it.
+    let dbg = elf_debug(code_off, codesz, ro_len, filesz, bss_vaddr, bss_len, syms, dsecs);
     // EHDR
     let header: [byte] = [127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     out = push_bytes(out, header);
@@ -90,14 +104,13 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
     out = push_le64(out, 0);
     out = push_le64(out, base);
     out = push_le64(out, base);
-    out = push_le64(out, total);
-    out = push_le64(out, total);
+    out = push_le64(out, filesz);   // p_filesz: the bytes this file holds
+    out = push_le64(out, memsz);    // p_memsz: what is mapped, zero-filled
     out = push_le64(out, 4096);
     if (bss_len > 0) {
         // PHDR: PT_LOAD, R+W, nothing from the file (the kernel maps
         // zeroed pages; -g: a few zero bytes, see elf_debug), on the page
         // after the file mapping.
-        let bss_vaddr = base + total - code_off + 4096;
         out = push_le32(out, 1);
         out = push_le32(out, 6);
         out = push_le64(out, dbg.bss_foff);
@@ -108,19 +121,9 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
         out = push_le64(out, 4096);
     }
     out = push_bytes(out, code);
-    let p = 0;
-    while (p < codepad) {
-        out += 0;
-        p = p + 1;
-    };
     out = push_bytes(out, rodata);
     let trailer: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
     out = push_bytes(out, trailer);
-    let q = 0;
-    while (q < ropad) {
-        out += 0;
-        q = q + 1;
-    };
     out += dbg.bytes;
     out
 };
@@ -139,14 +142,14 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
 // R+W PHDR's p_offset/p_filesz), at the page boundary past the image
 // (p_offset must share p_vaddr's page offset). The loader zeroes the rest
 // of that page, so memory holds the same zeros as without -g.
-def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec]) -> { bytes: [byte], shoff: long, shnum: long, shstrndx: long, bss_foff: long, bss_fsz: long } {
+def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vaddr: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec]) -> { bytes: [byte], shoff: long, shnum: long, shstrndx: long, bss_foff: long, bss_fsz: long } {
     if (len(syms) == 0) {
         let none_b: [byte] = [];
         { bytes: none_b, shoff: 0, shnum: 0, shstrndx: 0, bss_foff: 0, bss_fsz: 0 }
     } else {
         let base = 4194304;
-        let ro_off = code_off + codesz + codepad;
-        let bss_addr = base + total - code_off + 4096;
+        let ro_off = code_off + codesz;
+        let bss_addr = base + bss_vaddr;
         let bss_idx = 0;
         let symtab_idx = 3;
         if (bss_len > 0) {
@@ -194,14 +197,20 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         let blob: [byte] = [];
         let bss_foff = 0;
         let bss_fsz = 0;
-        let symtab_off = total;
+        let symtab_off = filesz;
         if (bss_len > 0) {
-            bss_foff = total;
-            let trail = total % 4096;
-            if (trail != 0) { bss_foff = total + 4096 - trail; };
+            // The .bss head must sit at a file offset that shares the mapped
+            // page offset of its address (the R+W PHDR's p_offset against
+            // p_vaddr), and that address is on a page boundary, so this
+            // offset is too -- which, now that the image is not padded, means
+            // up to 4095 zeros between the image and the debug blob. They are
+            // zeros the loader would have written anyway; the blob cannot
+            // move into that gap because then it would be mapped, and a
+            // string over-read would see it instead of the zeros.
+            bss_foff = elf_memsz(filesz);
             bss_fsz = 8;
             if (bss_len < 8) { bss_fsz = bss_len; };
-            blob = push_zeros(blob, bss_foff + bss_fsz - total);
+            blob = push_zeros(blob, bss_foff + bss_fsz - filesz);
             symtab_off = bss_foff + bss_fsz;
         };
         let strtab_off = symtab_off + len(symtab);
@@ -211,12 +220,12 @@ def elf_debug(code_off: long, codesz: long, codepad: long, ro_len: long, total: 
         blob += shstr;
         let doffs: [long] = [];
         foreach (ds in dsecs) {
-            doffs += total + len(blob);
+            doffs += filesz + len(blob);
             blob += ds.data;
         };
         let pad = (8 - len(blob) % 8) % 8;
         blob = push_zeros(blob, pad);
-        let shoff = total + len(blob);
+        let shoff = filesz + len(blob);
         // section headers
         blob = push_zeros(blob, 64);
         blob = push_shdr(blob, n_text, 1, 6, base + code_off, code_off, codesz, 0, 0, 1, 0);

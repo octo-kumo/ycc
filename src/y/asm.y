@@ -1036,11 +1036,11 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
             if (len(it.bytes) > 0) { bss_data = true; };
         };
     };
-    // A .bss label resolves like a rodata one, past the padded rodata (see
+    // A .bss label resolves like a rodata one, past the mapped image (see
     // elf_bss_from_ro), so the fixups below only know two sections.
     let labs: [AsmLabel] = labels;
     if (bss_len > 0) {
-        let bshift = elf.elf_bss_from_ro(ro_len, bss_len);
+        let bshift = elf.elf_bss_from_ro(code_len, ro_len, bss_len);
         labs = [];
         foreach (lb in labels) {
             if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off }; }
@@ -1062,10 +1062,10 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
         { ok: false, bytes: [], error: "data or code in .bss",
           times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else {
-        // pad code to a page so rodata lands page-aligned (mirrors elf.y)
+        // No padding between the code and the rodata (mirrors elf.y): the
+        // loader zero-fills the last page of the mapping instead, so a
+        // rodata label's offset is exactly code_len + its own offset.
         let pad = 0;
-        let trail = code_len % 4096;
-        if (trail != 0) { pad = 4096 - trail; };
         let code: [byte] = [];
         let ro: [byte] = [];
         let err = "";
