@@ -105,11 +105,17 @@ def seek(fd: long, off: long, whence: long) -> long {
 // ── whole files ──────────────────────────────────────────────────────────
 
 def read_bytes(path: str) -> [byte]? {
-    let fd = open_file(path, "r");
-    if (fd < 0) { none } else {
-        let b = read_all_bytes(fd);
-        close_file(fd);
-        some(b)
+    // A directory opens for reading, and read(2) refuses one with EISDIR --
+    // which a read loop sees only as end-of-file. So read_file("some/dir")
+    // answered some(""), and `ycc <a dir>` compiled that nothing into an
+    // empty executable. is_dir is one stat of the same path (newfstatat).
+    if (is_dir(path)) { none } else {
+        let fd = open_file(path, "r");
+        if (fd < 0) { none } else {
+            let b = read_all_bytes(fd);
+            close_file(fd);
+            some(b)
+        }
     }
 };
 

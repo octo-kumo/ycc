@@ -156,6 +156,10 @@ expect_cli_error "multiple input files" "error: ycc compiles one program; use im
     "$ROOT/test/y/native/t01_arith.y" "$ROOT/test/y/native/t02_recursion.y"
 expect_cli_error "cannot read input" "error: cannot read file '/no-such-cov-ycc-input.y'" \
     /no-such-cov-ycc-input.y
+# A directory opens for reading but read(2) refuses it, so it used to read as
+# "" and compile into an empty executable. fs.read_file now answers none for
+# one (std/fs.y read_bytes).
+expect_cli_error "input is a directory" "error: cannot read file '/tmp'" /tmp
 expect_cli_error "assembly write failure" "error: writing '/nonexistent/dir/out' failed" \
     -S -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "executable write failure" "error: writing '/nonexistent/dir/out' failed" \

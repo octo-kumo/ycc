@@ -718,6 +718,19 @@ Yv *read_file(const Yv *path) {
     if (!path || path->tag != Y_STR) return yv_none();
     FILE *f = fopen(path->u.s.p, "rb");
     if (!f) return yv_none();
+    /* A directory opens for reading and read(2) refuses one with EISDIR,
+       which the fread below sees only as end-of-file -- so read_file("dir")
+       answered "" and `ycc <a dir>` compiled that into an empty executable.
+       The Y twin asks the same question with one stat (std/fs.y read_bytes).
+       Only a directory is refused here: a fifo still hits the fseek/ftell
+       below, which is what m6 is about. */
+    {
+        struct stat st;
+        if (fstat(fileno(f), &st) == 0 && S_ISDIR(st.st_mode)) {
+            fclose(f);
+            return yv_none();
+        }
+    }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
