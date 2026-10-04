@@ -678,6 +678,16 @@ Yv *parse_unary(Yv *toks, long p) {
 }
 
 Yv *parse_expr(Yv *toks, long p) {
+    yv_nest++;
+    if (yv_nest > MAX_NEST) {
+        too_deep(ys("an expression"), yv_long(tline(toks, p)), yv_long(tcol(toks, p)));
+    }
+    Yv *r = parse_expr_go(toks, p);
+    yv_nest--;
+    return r;
+}
+
+Yv *parse_expr_go(Yv *toks, long p) {
     Yv *c = parse_binary(toks, p, 1);
     long cp = yv_l(yr_get(c, "pos"));
     if (is_op(toks, cp, ys("?"))) {
@@ -952,6 +962,16 @@ Yv *maplit_node(int is_map, Yv *keys, Yv *vals, long ln, long cl) {
 // Extra fields are ignored by the C backend, so this is additive.
 
 Yv *parse_type_node(Yv *toks, long p) {
+    yv_nest++;
+    if (yv_nest > MAX_NEST) {
+        too_deep(ys("a type"), yv_long(tline(toks, p)), yv_long(tcol(toks, p)));
+    }
+    Yv *r = parse_type_node_go(toks, p);
+    yv_nest--;
+    return r;
+}
+
+Yv *parse_type_node_go(Yv *toks, long p) {
     // NOTE: NO `node`/`pos` locals shared across arms. Earlier this function
     // used one `node` name rebound in every arm; the checker env is
     // flow-INSENSITIVE (last shape wins), so `node.ts` in the arrow tail
@@ -1616,6 +1636,16 @@ Yv *parse_func(Yv *toks, long p) {
 // ── block { stmt; stmt; ... } ────────────────────────────────────────────
 
 Yv *parse_block(Yv *toks, long p) {
+    yv_nest++;
+    if (yv_nest > MAX_NEST) {
+        too_deep(ys("a statement"), yv_long(tline(toks, p)), yv_long(tcol(toks, p)));
+    }
+    Yv *r = parse_block_go(toks, p);
+    yv_nest--;
+    return r;
+}
+
+Yv *parse_block_go(Yv *toks, long p) {
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
     if (!is_punct(toks, p, ys("{"))) {

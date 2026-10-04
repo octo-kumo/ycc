@@ -25,6 +25,30 @@ Yv *ktag(long n) {
     return ys("");
 }
 
+/* ── how deep the recursive walks may nest ────────────────────────────────
+ * 1:1 with the MAX_NEST block in src/y/tags.y (whose comment says why 1000
+ * and what it replaces: nesting past it ended in a raw SIGSEGV, and at a
+ * different depth in each copy). Every walk that follows the tree -- the
+ * parser, the renamer, the checker, the emitter -- counts its depth here,
+ * at its own entry, so `yv_nest` is a plain long as `nest` is a top-level
+ * one in Y. No reset between phases: every walk that enters also leaves. */
+long yv_nest = 0;
+
+Yv *nest_reset(void) { yv_nest = 0; return yv_long(0); }
+
+Yv *too_deep(Yv *what, Yv *line, Yv *col) {
+    Yv *msg = ys_cat(ys_cat(ys_long(yv_l(line)), ys(":")),
+                     ys_long(yv_l(col)));
+    msg = ys_cat(ys_cat(msg, ys(": error: ")), what);
+    msg = ys_cat(ys_cat(msg, ys(" nests deeper than ")),
+                 ys_long(MAX_NEST));
+    puts_(ys_cat(msg, ys(", the compiler's limit\n")));
+    exit_(1);
+    return yv_long(0);
+}
+
+int max_nest_agree(void) { return MAX_NEST == 1000; }
+
 int tags_agree(void) {
     if (!ys_eq_lit(ktag(K_a), "a")) { return 0; }
     if (!ys_eq_lit(ktag(K_addr), "addr")) { return 0; }

@@ -1584,8 +1584,13 @@ def arr_lit_adopts_go(got: Type, want: Type, n: long) -> bool {
 
 // The type of an expression (typeof_expr_go), a recursive alias unfolded
 // (unfold): the checker looks into it.
+// The checker's walk counts its depth (tags.y MAX_NEST): a `+` chain is a
+// loop in the parser and a recursion here.
 def typeof_expr(st: TcSt, node: Node) -> TcRes {
+    nest = nest + 1;
+    if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
     let r = typeof_expr_go(st, node);
+    nest = nest - 1;
     let t: Type = r.typ;
     if (t.k == K.tref) { tc_res(unfold(t), r.st) } else { r }
 };

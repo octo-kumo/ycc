@@ -638,7 +638,19 @@ def parse_unary(toks: [Tok], p: long) -> Parsed {
     }
 };
 
+// The recursive walks count their depth (tags.y MAX_NEST): a program
+// nested past the limit stops with the position that was too deep instead
+// of running the stack out. Each guard is a wrapper, so the one return path
+// decrements again.
 def parse_expr(toks: [Tok], p: long) -> Parsed {
+    nest = nest + 1;
+    if (nest > MAX_NEST) { too_deep("an expression", tline(toks, p), tcol(toks, p)); };
+    let r = parse_expr_go(toks, p);
+    nest = nest - 1;
+    r
+};
+
+def parse_expr_go(toks: [Tok], p: long) -> Parsed {
     let c = parse_binary(toks, p, 1);
     if (is_op(toks, c.pos, "?")) {
         if (is_punct(toks, c.pos + 1, "[") && tcol(toks, c.pos + 1) == tcol(toks, c.pos) + 1) {
@@ -865,6 +877,14 @@ def maplit_node(is_map: bool, keys: [str], vals: [Node], ln: long, cl: long) -> 
 // additive.
 
 def parse_type_node(toks: [Tok], p: long) -> PType {
+    nest = nest + 1;
+    if (nest > MAX_NEST) { too_deep("a type", tline(toks, p), tcol(toks, p)); };
+    let r = parse_type_node_go(toks, p);
+    nest = nest - 1;
+    r
+};
+
+def parse_type_node_go(toks: [Tok], p: long) -> PType {
     // NOTE: NO `node`/`pos` locals shared across arms. Earlier this function
     // used one `node` name rebound in every arm; the checker env is
     // flow-INSENSITIVE (last shape wins), so `node.ts` in the arrow tail
@@ -1389,6 +1409,14 @@ def parse_func(toks: [Tok], p: long) -> Parsed {
 // ── block { stmt; stmt; ... } ────────────────────────────────────────────
 
 def parse_block(toks: [Tok], p: long) -> Parsed {
+    nest = nest + 1;
+    if (nest > MAX_NEST) { too_deep("a statement", tline(toks, p), tcol(toks, p)); };
+    let r = parse_block_go(toks, p);
+    nest = nest - 1;
+    r
+};
+
+def parse_block_go(toks: [Tok], p: long) -> Parsed {
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
     if (!is_punct(toks, p, "{")) {

@@ -30,6 +30,17 @@ through the enclosing uses. Typical families:
 \item void use: \ic{cannot bind a void value to 'x'}.
 \end{itemize}
 
+\noindent One limit is not a typing rule but a resource: the compiler
+walks the program recursively (the parser, then the renamer, the
+checker and the emitter), so an expression, a type or a block nested
+deeper than \textbf{1000} is refused with the position that was too
+deep, \ic{line:col: error: an expression nests deeper than 1000, the
+compiler's limit}. Both compilers share the number, so the same program
+is accepted or refused by each. A long chain counts too, once the
+walks reach it: \ic{1+1+1+...} parses in a loop, but the checker and
+the emitter follow it down, so a chain of a thousand terms is refused
+the same way.
+
 \subsection{Warnings}
 \label{sec:warnings}
 

@@ -44,6 +44,7 @@ Yv *rn_block(Yv *stmts, Yv *st);
 
 /* one def per AST shape (see rn_node note in rename.c) */
 Yv *rn_node(Yv *node, Yv *st);
+Yv *rn_node_go(Yv *node, Yv *st);
 Yv *rn_un(Yv *node, Yv *st);
 Yv *rn_addrderef(Yv *node, Yv *st);
 Yv *rn_bin(Yv *node, Yv *st);

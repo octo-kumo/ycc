@@ -569,6 +569,12 @@ def main(cmdline: [str]) -> long {
         exit(1);
         0
     }
+    // ... and the nesting limit, which the two copies must also hold the same.
+    if (!tags.max_nest_agree()) {
+        puts("ycc: internal error: the nesting limit disagrees (src/y/tags.y)\n");
+        exit(1);
+        0
+    }
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
         if (cmdline[1] == "build") {

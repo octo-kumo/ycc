@@ -61,6 +61,46 @@ def ktag(n: long) -> str {
     KTAGS[n - 1]
 };
 
+// ── how deep the recursive walks may nest ────────────────────────────────
+// Every walk that follows the tree -- the parser, the renamer, the checker,
+// the emitter -- used to recurse as deep as the input nested, with nothing
+// counting: deep nesting ended in a raw SIGSEGV when the stack ran out, and
+// at a DIFFERENT depth in each copy (with the default 8 MB stack, 5397
+// levels for ycc against 7975 for cycc on `1+1+1+...` or `!!!...`, and 8912
+// against 12661 on `((((...))))`). One limit, here, so the two copies
+// cannot disagree about where the cliff is (as with the tag tables below:
+// MAX_NEST_agree is the same kind of check).
+//
+// 1000 is Python's own default recursion limit, five times below the
+// shallowest cliff measured here, and far deeper than any program that
+// means anything: a thousand nested parens, or a thousand terms in one
+// expression. Past it the compiler stops with the position that was too
+// deep instead of dying.
+const MAX_NEST = 1000;
+
+// How deep the walk in hand is. A walk's entry counts it and its one return
+// path counts it back (a wrapper, so no early return leaks a level), and the
+// counter needs no reset between phases because every walk that enters also
+// leaves.
+//
+// The count and the test are written out at each of those entries rather than
+// called: it runs once per node of every program, in four phases, and a call
+// per node cost up to 0.7% of every compile. Only the failure is a call.
+// `nest` is a global, so the test is a load, an add, a compare and a store.
+let nest = 0;
+
+def nest_reset() { nest = 0; 0 };
+
+// Past the limit: say what was too deep and stop. `what` names the walk
+// ("an expression", "a type", "a statement"), since a program can be too deep
+// in more than one way.
+def too_deep(what: str, line: long, col: long) -> long {
+    puts(tostring(line) + ":" + tostring(col) + ": error: " + what +
+         " nests deeper than " + tostring(MAX_NEST) + ", the compiler's limit");
+    exit(1);
+    0
+};
+
 // K and KTAGS are written out twice because a record has fields named by
 // name and an array is indexed by number, and Y has nothing that reads a
 // record's field table. This is the check that the two agree: ycc.y runs it
@@ -96,4 +136,8 @@ def tags_agree() -> bool {
     ktag(K.kw_while) == "while"
 };
 
-export { K, KTAGS, ktag, tags_agree };
+// MAX_NEST is the other number the two copies must hold the same: a limit
+// they disagreed about would put the cliff back on one side only.
+def max_nest_agree() -> bool { MAX_NEST == 1000 };
+
+export { K, KTAGS, ktag, tags_agree, MAX_NEST, nest, nest_reset, too_deep, max_nest_agree };

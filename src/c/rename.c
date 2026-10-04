@@ -928,6 +928,16 @@ Yv *rn_block(Yv *stmts, Yv *st) {
 }
 
 Yv *rn_node(Yv *node, Yv *st) {
+    yv_nest++;
+    if (yv_nest > MAX_NEST) {
+        too_deep(ys("an expression"), yr_get(node, "line"), yr_get(node, "col"));
+    }
+    Yv *r = rn_node_go(node, st);
+    yv_nest--;
+    return r;
+}
+
+Yv *rn_node_go(Yv *node, Yv *st) {
     /* NOTE: dispatch WITHOUT a shared-shape if-chain (see parser.y
      * parse_type_arrow note): a long arm chain on one name merges every
      * arm's node shape through the flow-insensitive env (each arm's return

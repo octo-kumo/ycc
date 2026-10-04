@@ -42,6 +42,7 @@ Yv *parse_args(Yv *toks, long p);
 Yv *parse_binary(Yv *toks, long p, long min_prec);
 Yv *parse_unary(Yv *toks, long p);
 Yv *parse_expr(Yv *toks, long p);
+Yv *parse_expr_go(Yv *toks, long p);
 
 /* ── compound literals ──────────────────────────────────────────────────── */
 long size_lit(Yv *s);
@@ -52,6 +53,7 @@ Yv *maplit_node(int is_map, Yv *keys, Yv *vals, long ln, long cl);
 
 /* ── type parsing ───────────────────────────────────────────────────────── */
 Yv *parse_type_node(Yv *toks, long p);
+Yv *parse_type_node_go(Yv *toks, long p);
 Yv *parse_type_array(Yv *toks, long p);
 Yv *parse_type_params(Yv *toks, long p);
 Yv *map_key_type(Yv *name);
@@ -75,6 +77,7 @@ Yv *parse_func(Yv *toks, long p);
 
 /* ── block { stmt; stmt; ... } ──────────────────────────────────────────── */
 Yv *parse_block(Yv *toks, long p);
+Yv *parse_block_go(Yv *toks, long p);
 long stmt_end(Yv *toks, long start, long pos, Yv *sn, Yv *stmts);
 
 /* ── statements ─────────────────────────────────────────────────────────── */

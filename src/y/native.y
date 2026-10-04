@@ -2693,7 +2693,16 @@ def fns_kind(label: str) -> str {
 
 // ── expression emission (value in %rax) ────────────────────────────────
 
+// The emitter's walk counts its depth (tags.y MAX_NEST) like the others'.
 def gen(st: EmitSt, node: Node) -> EmitSt {
+    nest = nest + 1;
+    if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
+    let r = gen_go(st, node);
+    nest = nest - 1;
+    r
+};
+
+def gen_go(st: EmitSt, node: Node) -> EmitSt {
     let k = node.k;
     if (k == K.num) {
         let lit: Leaf = node;

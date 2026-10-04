@@ -1995,7 +1995,12 @@ static int arr_lit_adopts_go(Yv *got, Yv *want, Yv *n) {
 // The type of an expression (typeof_expr_go), a recursive alias unfolded
 // (unfold): the checker looks into it.
 static Yv *typeof_expr(Yv *st, Yv *node) {
+    yv_nest++;
+    if (yv_nest > MAX_NEST) {
+        too_deep(ys("an expression"), yr_get(node, "line"), yr_get(node, "col"));
+    }
     Yv *r = typeof_expr_go(st, node);
+    yv_nest--;
     Yv *t = yr_get(r, "typ");
     if (yv_l(yr_get(t, "k")) == K_tref) {
         return yr(2, "typ", unfold(t), "st", yr_get(r, "st"));

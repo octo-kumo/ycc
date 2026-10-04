@@ -782,7 +782,18 @@ def rn_block(stmts: [Node], st: RnSt) -> RnStmts {
     { st: st, stmts: r.nodes }
 };
 
+// The renamer's walk counts its depth (tags.y MAX_NEST) like the parser's:
+// a `+` chain parses in a loop but renames recursively, so a chain of a few
+// thousand terms would run the stack out here even with the parser's guard.
 def rn_node(node: Node, st: RnSt) -> RnRes {
+    nest = nest + 1;
+    if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
+    let r = rn_node_go(node, st);
+    nest = nest - 1;
+    r
+};
+
+def rn_node_go(node: Node, st: RnSt) -> RnRes {
     // NOTE: dispatch WITHOUT a shared-shape if-chain (see parser.y
     // parse_type_arrow note): a long arm chain on one name merges every
     // arm's node shape through the flow-insensitive env (each arm's return

@@ -229,6 +229,7 @@ Yv *fv_bind_params(Yv *ps, Yv *out);
 Yv *fn_names_of(Yv *fns);
 Yv *fns_kind(Yv *label);
 Yv *gen(Yv *st, Yv *node);
+Yv *gen_go(Yv *st, Yv *node);
 Yv *gen_as(Yv *st, Yv *node, Yv *want);
 int union_within(Yv *s, Yv *t);
 Yv *cast_members(Yv *s, Yv *t);
@@ -3600,6 +3601,16 @@ Yv *fns_kind(Yv *label) {
 /* ── expression emission (value in %rax) ──────────────────────────────── */
 
 Yv *gen(Yv *st, Yv *node) {
+    yv_nest++;
+    if (yv_nest > MAX_NEST) {
+        too_deep(ys("an expression"), yr_get(node, "line"), yr_get(node, "col"));
+    }
+    Yv *r = gen_go(st, node);
+    yv_nest--;
+    return r;
+}
+
+Yv *gen_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_num) {
         return gen_lit(st, node);
@@ -8764,9 +8775,16 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
  * the path and is formatted both times, as it must be. */
 
 /* path + t: a NEW array with t on the end (Y's `+` on arrays, which copies;
- * ya_push alone would append to the caller's list). */
+ * ya_push alone would append to the caller's list).
+ * `yav(0)`, NOT `yav(yv_len(path))`: yav's arguments ARE variadic -- n of them
+ * are read off the stack -- and this call passed none, so every level of a
+ * nested type's walk read n words of uninitialized stack into the array (the
+ * garbage prefix is harmless to the walk, which only compares identities, but
+ * it doubles the array's length and, deep enough, reads off the top of the
+ * stack: cycc died with a SIGSEGV on `print([[[...15 deep...]]])` where ycc
+ * compiled it. */
 static Yv *path_push(Yv *path, Yv *t) {
-    Yv *p = yav(yv_len(path));
+    Yv *p = yav(0);
     for (size_t i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
     return ya_push(p, t);
 }
