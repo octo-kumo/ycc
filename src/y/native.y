@@ -6377,6 +6377,32 @@ def flit_ddiv(a: [long], m: long, n: long) -> long {
     rem
 };
 
+// acc *= 10^9: every limb moves up one and the top one carries out. The limb
+// base is 10^9, so this is a shift, not a multiply -- and the exponent of a
+// literal is spent on exactly these steps.
+def flit_dmul_limb(a: [long], n: long) -> bool {
+    let carry = 0;
+    let i = 0;
+    while (i < n) {
+        let v = a[i];
+        a[i] = carry;
+        carry = v;
+        i = i + 1;
+    };
+    carry == 0
+};
+
+// acc /= 10^9: the lowest limb drops out whole. What was in it is below the
+// significand, so the caller looks at it for sticky first.
+def flit_ddiv_limb(a: [long], n: long) {
+    let i = 0;
+    while (i < n - 1) {
+        a[i] = a[i + 1];
+        i = i + 1;
+    };
+    a[n - 1] = 0;
+};
+
 // a >= c, both limb arrays. c may be more than one limb (2^62 is one, but the
 // comparison is written for any of them).
 def flit_dgea(a: [long], c: [long], n: long) -> bool {
@@ -6404,35 +6430,9 @@ def flit_dzero(a: [long], n: long) -> bool {
     z
 };
 
-// How many decimal digits a holds (0 for zero).
-def flit_ddigits(a: [long], n: long) -> long {
-    let top = 0 - 1;
-    let i = n - 1;
-    while (i >= 0) {
-        if (a[i] != 0) { top = i; i = 0 - 1; } else { i = i - 1; };
-    };
-    if (top < 0) { 0 } else {
-        let d = top * 9;
-        let v = a[top];
-        while (v > 0) { d = d + 1; v = v / 10; };
-        d
-    }
-};
-
-def flit_pow10_small(k: long) -> long {
-    let d = 1;
-    let i = 0;
-    while (i < k) { d = d * 10; i = i + 1; };
-    d
-};
-
-// The `k`th decimal digit of a, counting from the most significant.
-def flit_digit_at(a: [long], n: long, k: long) -> long {
-    let idx = flit_ddigits(a, n) - 1 - k;
-    (a[idx / 9] / flit_pow10_small(idx % 9)) % 10
-};
-
-// acc * 10 + one more digit (building the digits themselves).
+// acc * 10 + one more digit. `n` is the limb count this literal needs, not
+// FLIT_LIMBS: a pass over the whole bignum per digit is only expensive if the
+// bignum is sized for the worst case, and a literal needs a handful of limbs.
 def flit_dpush(a: [long], dg: long, n: long) -> bool {
     if (!flit_dmul(a, 10, n)) { false } else {
         a[0] = a[0] + dg;
@@ -6440,13 +6440,14 @@ def flit_dpush(a: [long], dg: long, n: long) -> bool {
     }
 };
 
-// A fresh copy of the digits, zero-padded to n limbs: the scale is retried with
-// a bigger t, so the digits must survive each attempt.
+// A fresh copy, zero-padded to n limbs: the digits arrive with only the limbs
+// they needed, and the scale is retried with a bigger t, so they must survive
+// each attempt whole.
 def flit_copy(a: [long], n: long) -> [long] {
     let out: [long] = [];
     let i = 0;
     while (i < n) {
-        out += a[i];
+        if (i < len(a)) { out += a[i]; } else { out += 0; };
         i = i + 1;
     };
     out
@@ -6474,13 +6475,26 @@ def flit_scaled(digs: [long], n: long, dp: long, t: long, flags: [bool]) -> [lon
     while (j < t / 32) {
         if (flit_dmul(a, 4294967296, n)) { j = j + 1; } else { flags[1] = true; j = t / 32; };
     };
+    // Nine decades per pass: a limb is 10^9, so multiplying by it moves the
+    // value up one limb and dividing drops the lowest limb outright (whatever
+    // was in it is below the significand -- sticky). One pass per decade made
+    // 1e300 cost 300 of them, and the exponent, not the digits, is what a
+    // literal like that spends its time on.
     if (dp > 0) {
         let k = dp;
+        while (k >= 9) {
+            if (flit_dmul_limb(a, n)) { k = k - 9; } else { flags[1] = true; k = 0; };
+        };
         while (k > 0) {
             if (flit_dmul(a, 10, n)) { k = k - 1; } else { flags[1] = true; k = 0; };
         };
     } else {
         let k = 0 - dp;
+        while (k >= 9) {
+            if (a[0] != 0) { flags[0] = true; };
+            flit_ddiv_limb(a, n);
+            k = k - 9;
+        };
         while (k > 0) {
             if (flit_ddiv(a, 10, n) != 0) { flags[0] = true; };
             k = k - 1;
@@ -6511,21 +6525,29 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
     if (t < 0) { t = 0; };
     // whole 2^32 steps, the only way flit_scaled scales by a power of two
     t = (t + 31) / 32 * 32;
-    if (t > 1184) { t = 1184; };
+    if (t > 1216) { t = 1216; };
     let n = flit_size(ndig, dp, t);
     let a = flit_scaled(digs, n, dp, t, flags);
-    // p62 is full length on purpose: the loop below grows n, and the comparison
-    // reads only the limbs below it
-    let p62 = flit_dfrom(4611686018427387904, FLIT_LIMBS);   // 2^62: the largest
-    // The scale has to leave the scaled value at least 62 bits wide, so the 53
-    // significand bits, the round bit and a guard are all there to read. 1200 is
-    // past what any subnormal needs (1074 + 62): past that a zero really does
-    // mean the value is below the smallest double, and growing further would
+    // p62 and p85 are rebuilt with the value below whenever the scale grows, so
+    // a comparison always has n limbs on both sides. 2^62 is the largest power
+    // of two a long holds (writing 2^64 wraps silently); 2^85 = 2^62 x 2^23.
+    let p62 = flit_dfrom(4611686018427387904, n);
+    let p85 = flit_copy(p62, n);
+    flit_dmul(p85, 8388608, n);
+    // The scale has to leave the scaled value above 2^85, so that narrowing it
+    // to the significand 32 bits at a time cannot drop a bit of it -- the
+    // narrowing stops at 2^62, and a whole pass below that could land anywhere
+    // in [2^30, 2^62). One 32-bit step of growth is the most it can overshoot by.
+    // 1216 is past what any subnormal needs (1074 + 85): past that a zero really
+    // does mean the value is below the smallest double, and growing further would
     // only overflow the limbs and turn zero into inf.
-    while (!flags[1] && !flit_dgea(a, p62, n) && t < 1200) {
-        t = t + 512;
+    while (!flags[1] && !flit_dgea(a, p85, n) && t < 1216) {
+        t = t + 32;
         n = flit_size(ndig, dp, t);
         a = flit_scaled(digs, n, dp, t, flags);
+        p62 = flit_dfrom(4611686018427387904, n);
+        p85 = flit_copy(p62, n);
+        flit_dmul(p85, 8388608, n);
     };
     if (flags[1]) {
         if (neg) { 0xFFF0000000000000 } else { 0x7FF0000000000000 }
@@ -6533,50 +6555,68 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
         // below the smallest subnormal
         if (neg) { 0x8000000000000000 } else { 0 }
     } else {
-        // Bring the value below 2^62 by halving. Those halvings only drop bits
-        // far below the significand, so what they drop is sticky -- which it
-        // would be anyway. The bound is 2^62 and not 2^64 because a long is
-        // signed: writing 2^64 wraps silently.
-        let cnt = 0;
-        while (flit_dgea(a, p62, n)) {
+        // Narrow the scaled value to its significand, keeping every bit lost
+        // below the significand.
+        //
+        // Scale up first if it is short: exact, and nothing has been dropped
+        // yet, so it cannot lose anything.
+        // sized like the value itself: a compare constant built at the full
+        // FLIT_LIMBS is 128 pushes per literal, which is more than the rest of
+        // an ordinary literal costs
+        let p53 = flit_dfrom(9007199254740992, n);               // 2^53
+        let p54 = flit_dfrom(18014398509481984, n);              // 2^54
+        while (!flit_dgea(a, p53, n)) {
+            flit_dmul(a, 2, n);
+        };
+        // Then 32 bits a pass while the value is over 2^85, which is where the
+        // scale above leaves it: a whole pass there can only drop bits far
+        // above the significand, so it lands in [2^53, 2^85). 1e300 is 2^997,
+        // and a pass per bit wanted 935 of them -- two thirds of the whole
+        // conversion.
+        let down = 0;
+        while (flit_dgea(a, p85, n)) {
+            if (flit_ddiv(a, 4294967296, n) != 0) { flags[0] = true; };
+            down = down + 32;
+        };
+        // And then a bit at a time down to 2^54: what that leaves is the 53
+        // significand bits AND the round bit above them, and everything it
+        // dropped is below the round bit, so sticky is all that carries.
+        while (flit_dgea(a, p54, n)) {
             if (flit_ddiv(a, 2, n) != 0) { flags[0] = true; };
-            cnt = cnt + 1;
+            down = down + 1;
         };
-        // Its bit length. The halving above stops at the first value below 2^62
-        // and the one before it was not, so the value now lies in [2^61, 2^62)
-        // and l2 is 62 -- unless the scale gave up (t reached 1200) with a value
-        // still smaller, which only a subnormal or less can be.
-        let l2 = 62;
-        if (cnt == 0) {
-            let p1 = flit_dfrom(1, n);
-            l2 = 0;
-            while (flit_dgea(a, p1, n)) {
-                l2 = l2 + 1;
-                flit_dmul(p1, 2, n);
-            };
-        };
-        let e = l2 + cnt - 1 - t;             // the value is in [2^e, 2^(e+1))
+        // 2^54 fits in two limbs, so the significand and the round bit are one
+        // divide apart
+        let wide = a[0];
+        if (n > 1) { wide = wide + a[1] * FLIT_BASE; };
+        let e = 53 + down - t;               // the value is in [2^e, 2^(e+1))
         let sh = 0;
         if (e < -1022) { sh = 0 - e - 1022; }; // a subnormal's extra shift
-        // read off the top 53 bits: the bits come off bottom first, so the
-        // LAST one out is the round bit and every earlier one is "something
-        // was down there"
-        let k3 = l2 - 53 + sh;
         let round = 0;
-        let j3 = 0;
-        while (j3 < k3) {
-            let r = flit_ddiv(a, 2, n);
-            if (j3 == k3 - 1) { round = r; } else {
-                if (r != 0) { flags[0] = true; };
-            };
-            j3 = j3 + 1;
-        };
         let mant = 0;
-        let nd = flit_ddigits(a, n);
-        let i5 = 0;
-        while (i5 < nd) {
-            mant = mant * 10 + flit_digit_at(a, n, i5);
-            i5 = i5 + 1;
+        if (sh == 0) {
+            // bit 53 is the round bit and the 53 below it are the significand
+            round = wide % 2;
+            mant = wide / 2;
+        } else {
+            // a subnormal shifts the significand right, so the round bit moves
+            // up with it and the one below it is sticky
+            if ((wide % 2) != 0) { flags[0] = true; };
+            let words = sh / 32;
+            let bits = sh % 32;
+            if (words > 0) {
+                let rem = flit_ddiv(a, 4294967296, n);
+                round = rem / 2147483648;
+                if ((rem % 2147483648) != 0) { flags[0] = true; };
+            };
+            if (bits > 0) {
+                let rem = flit_ddiv(a, 1 << bits, n);
+                round = (rem / (1 << (bits - 1))) % 2;
+                if ((rem % (1 << (bits - 1))) != 0) { flags[0] = true; };
+            };
+            // what is left is the fraction itself: no implicit leading bit
+            mant = a[0];
+            if (n > 1) { mant = mant + a[1] * FLIT_BASE; };
         };
         if (round != 0) {
             if (flags[0]) { mant = mant + 1; }
@@ -6624,15 +6664,14 @@ def flit_bits(s: str) -> long {
     // bignum. ALL of them, not a fixed count: keeping 18 in a long loses ~1e-18
     // of the value, which is enough to flip a rounding that sits within 1% of
     // its midpoint.
-    let a: [long] = [];
-    let i = 0;
-    while (i < FLIT_LIMBS) { a += 0; i = i + 1; };
+    // One pass to count, one to fill: the bignum has to be sized before the
+    // first digit goes in, and sizing it for the worst case made every digit
+    // cost a pass over 128 limbs.
     let ndig = 0;
     let nfrac = 0;
     let seen = false;
     let past_dot = false;
-    let over = false;
-    i = 0;
+    let i = 0;
     if (s[0:1] == "-") { i = 1; };
     if (s[0:1] == "+") { i = 1; };
     while (i < eb) {
@@ -6642,7 +6681,27 @@ def flit_bits(s: str) -> long {
             if (seen || c != "0") {
                 seen = true;
                 ndig = ndig + 1;
-                if (!flit_dpush(a, byte_at(c, 0) - 48, FLIT_LIMBS)) { over = true; };
+            };
+        };
+        i = i + 1;
+    };
+    let n0 = flit_size(ndig, 0, 0);
+    let over = n0 > FLIT_LIMBS;
+    if (over) { n0 = FLIT_LIMBS; };
+    let a: [long] = [];
+    i = 0;
+    while (i < n0) { a += 0; i = i + 1; };
+    seen = false;
+    past_dot = false;
+    i = 0;
+    if (s[0:1] == "-") { i = 1; };
+    if (s[0:1] == "+") { i = 1; };
+    while (i < eb) {
+        let c = s[i:i + 1];
+        if (c == ".") { past_dot = true; } else {
+            if (seen || c != "0") {
+                seen = true;
+                if (!flit_dpush(a, byte_at(c, 0) - 48, n0)) { over = true; };
             };
         };
         i = i + 1;

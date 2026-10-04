@@ -355,6 +355,8 @@ int lit_is_float(Yv *s);
 Yv *norm_num(Yv *s);
 long flit_ebase(Yv *s);
 long flit_bits(Yv *s);
+int flit_dmul_limb(Yv *a, long n);
+void flit_ddiv_limb(Yv *a, long n);
 Yv *gen_lit(Yv *st, Yv *node);
 Yv *gen_index(Yv *st, Yv *node);
 Yv *gen_dotassign(Yv *st, Yv *node);
@@ -7743,6 +7745,32 @@ long flit_ddiv(Yv *a, long m, long n) {
     return rem;
 }
 
+/* acc *= 10^9: every limb moves up one and the top one carries out. The limb
+ * base is 10^9, so this is a shift, not a multiply -- and the exponent of a
+ * literal is spent on exactly these steps. */
+int flit_dmul_limb(Yv *a, long n) {
+    long carry = 0;
+    long i = 0;
+    while (i < n) {
+        long v = yv_l(ya_get(a, i));
+        ya_set(a, i, yv_long(carry));
+        carry = v;
+        i = i + 1;
+    }
+    return carry == 0;
+}
+
+/* acc /= 10^9: the lowest limb drops out whole. What was in it is below the
+ * significand, so the caller looks at it for sticky first. */
+void flit_ddiv_limb(Yv *a, long n) {
+    long i = 0;
+    while (i < n - 1) {
+        ya_set(a, i, ya_get(a, i + 1));
+        i = i + 1;
+    }
+    ya_set(a, n - 1, yv_long(0));
+}
+
 /* a >= c, both limb arrays. c may be more than one limb (2^62 is one, but the
  * comparison is written for any of them). */
 int flit_dgea(Yv *a, Yv *c, long n) {
@@ -7770,47 +7798,6 @@ int flit_dzero(Yv *a, long n) {
     return z;
 }
 
-/* How many decimal digits a holds (0 for zero). */
-long flit_ddigits(Yv *a, long n) {
-    long top = -1;
-    long i = n - 1;
-    while (i >= 0) {
-        if (yv_l(ya_get(a, i)) != 0) {
-            top = i;
-            i = -1;
-        } else {
-            i = i - 1;
-        }
-    }
-    if (top < 0) {
-        return 0;
-    } else {
-        long d = top * 9;
-        long v = yv_l(ya_get(a, top));
-        while (v > 0) {
-            d = d + 1;
-            v = v / 10;
-        }
-        return d;
-    }
-}
-
-long flit_pow10_small(long k) {
-    long d = 1;
-    long i = 0;
-    while (i < k) {
-        d = d * 10;
-        i = i + 1;
-    }
-    return d;
-}
-
-/* The `k`th decimal digit of a, counting from the most significant. */
-long flit_digit_at(Yv *a, long n, long k) {
-    long idx = flit_ddigits(a, n) - 1 - k;
-    return (yv_l(ya_get(a, idx / 9)) / flit_pow10_small(idx % 9)) % 10;
-}
-
 /* acc * 10 + one more digit (building the digits themselves). */
 int flit_dpush(Yv *a, long dg, long n) {
     if (!flit_dmul(a, 10, n)) {
@@ -7821,13 +7808,18 @@ int flit_dpush(Yv *a, long dg, long n) {
     }
 }
 
-/* A fresh copy of the digits, zero-padded to n limbs: the scale is retried with
- * a bigger t, so the digits must survive each attempt. */
+/* A fresh copy, zero-padded to n limbs: the digits arrive with only the limbs
+ * they needed, and the scale is retried with a bigger t, so they must survive
+ * each attempt whole. */
 Yv *flit_copy(Yv *a, long n) {
     Yv *out = yav(0);
     long i = 0;
     while (i < n) {
-        out = ya_push(out, yv_long(yv_l(ya_get(a, i))));
+        if (i < yv_len(a)) {
+            out = ya_push(out, yv_long(yv_l(ya_get(a, i))));
+        } else {
+            out = ya_push(out, yv_long(0));
+        }
         i = i + 1;
     }
     return out;
@@ -7860,8 +7852,21 @@ Yv *flit_scaled(Yv *digs, long n, long dp, long t, Yv *flags) {
             j = t / 32;
         }
     }
+    /* Nine decades per pass: a limb is 10^9, so multiplying by it moves the
+     * value up one limb and dividing drops the lowest limb outright (whatever
+     * was in it is below the significand -- sticky). One pass per decade made
+     * 1e300 cost 300 of them, and the exponent, not the digits, is what a
+     * literal like that spends its time on. */
     if (dp > 0) {
         long k = dp;
+        while (k >= 9) {
+            if (flit_dmul_limb(a, n)) {
+                k = k - 9;
+            } else {
+                ya_set(flags, 1, yv_bool(1));
+                k = 0;
+            }
+        }
         while (k > 0) {
             if (flit_dmul(a, 10, n)) {
                 k = k - 1;
@@ -7872,6 +7877,11 @@ Yv *flit_scaled(Yv *digs, long n, long dp, long t, Yv *flags) {
         }
     } else {
         long k = 0 - dp;
+        while (k >= 9) {
+            if (yv_l(ya_get(a, 0)) != 0) ya_set(flags, 0, yv_bool(1));
+            flit_ddiv_limb(a, n);
+            k = k - 9;
+        }
         while (k > 0) {
             if (flit_ddiv(a, 10, n) != 0) ya_set(flags, 0, yv_bool(1));
             k = k - 1;
@@ -7902,21 +7912,29 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
     if (t < 0) t = 0;
     /* whole 2^32 steps, the only way flit_scaled scales by a power of two */
     t = (t + 31) / 32 * 32;
-    if (t > 1184) t = 1184;
+    if (t > 1216) t = 1216;
     long n = flit_size(ndig, dp, t);
     Yv *a = flit_scaled(digs, n, dp, t, flags);
-    /* p62 is full length on purpose: the loop below grows n, and the comparison
-     * reads only the limbs below it */
-    Yv *p62 = flit_dfrom(4611686018427387904, FLIT_LIMBS); /* 2^62: the largest */
-    /* The scale has to leave the scaled value at least 62 bits wide, so the 53
-     * significand bits, the round bit and a guard are all there to read. 1200 is
-     * past what any subnormal needs (1074 + 62): past that a zero really does
-     * mean the value is below the smallest double, and growing further would
+    /* p62 and p85 are rebuilt with the value below whenever the scale grows, so
+     * a comparison always has n limbs on both sides. 2^62 is the largest power
+     * of two a long holds (writing 2^64 wraps silently); 2^85 = 2^62 x 2^23. */
+    Yv *p62 = flit_dfrom(4611686018427387904, n);
+    Yv *p85 = flit_copy(p62, n);
+    flit_dmul(p85, 8388608, n);
+    /* The scale has to leave the scaled value above 2^85, so that narrowing it
+     * to the significand 32 bits at a time cannot drop a bit of it -- the
+     * narrowing stops at 2^85, and a whole pass below that could land anywhere
+     * in [2^53, 2^85). One 32-bit step of growth is the most it can overshoot by.
+     * 1216 is past what any subnormal needs (1074 + 85): past that a zero really
+     * does mean the value is below the smallest double, and growing further would
      * only overflow the limbs and turn zero into inf. */
-    while (!yv_truth(ya_get(flags, 1)) && !flit_dgea(a, p62, n) && t < 1200) {
-        t = t + 512;
+    while (!yv_truth(ya_get(flags, 1)) && !flit_dgea(a, p85, n) && t < 1216) {
+        t = t + 32;
         n = flit_size(ndig, dp, t);
         a = flit_scaled(digs, n, dp, t, flags);
+        p62 = flit_dfrom(4611686018427387904, n);
+        p85 = flit_copy(p62, n);
+        flit_dmul(p85, 8388608, n);
     }
     if (yv_truth(ya_get(flags, 1))) {
         if (neg) {
@@ -7932,52 +7950,69 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
             return 0;
         }
     } else {
-        /* Bring the value below 2^62 by halving. Those halvings only drop bits
-         * far below the significand, so what they drop is sticky -- which it
-         * would be anyway. The bound is 2^62 and not 2^64 because a long is
-         * signed: writing 2^64 wraps silently. */
-        long cnt = 0;
-        while (flit_dgea(a, p62, n)) {
+        /* Narrow the scaled value to its significand, keeping every bit lost
+         * below the significand.
+         *
+         * Scale up first if it is short: exact, and nothing has been dropped
+         * yet, so it cannot lose anything. The constants are sized like the
+         * value: one built at the full FLIT_LIMBS is 128 pushes per literal,
+         * which is more than the rest of an ordinary literal costs. */
+        Yv *p53 = flit_dfrom(9007199254740992, n);  /* 2^53 */
+        Yv *p54 = flit_dfrom(18014398509481984, n); /* 2^54 */
+        while (!flit_dgea(a, p53, n)) {
+            flit_dmul(a, 2, n);
+        }
+        /* Then 32 bits a pass while the value is over 2^85, which is where the
+         * scale above leaves it: a whole pass there can only drop bits far
+         * above the significand, so it lands in [2^53, 2^85). 1e300 is 2^997,
+         * and a pass per bit wanted 935 of them -- two thirds of the whole
+         * conversion. */
+        long down = 0;
+        while (flit_dgea(a, p85, n)) {
+            if (flit_ddiv(a, 4294967296, n) != 0) ya_set(flags, 0, yv_bool(1));
+            down = down + 32;
+        }
+        /* And then a bit at a time down to 2^54: what that leaves is the 53
+         * significand bits AND the round bit above them, and everything it
+         * dropped is below the round bit, so sticky is all that carries. */
+        while (flit_dgea(a, p54, n)) {
             if (flit_ddiv(a, 2, n) != 0) ya_set(flags, 0, yv_bool(1));
-            cnt = cnt + 1;
+            down = down + 1;
         }
-        /* Its bit length. The halving above stops at the first value below 2^62
-         * and the one before it was not, so the value now lies in [2^61, 2^62)
-         * and l2 is 62 -- unless the scale gave up (t reached 1200) with a value
-         * still smaller, which only a subnormal or less can be. */
-        long l2 = 62;
-        if (cnt == 0) {
-            Yv *p1 = flit_dfrom(1, n);
-            l2 = 0;
-            while (flit_dgea(a, p1, n)) {
-                l2 = l2 + 1;
-                flit_dmul(p1, 2, n);
-            }
-        }
-        long e = l2 + cnt - 1 - t; /* the value is in [2^e, 2^(e+1)) */
+        /* 2^54 fits in two limbs, so the significand and the round bit are one
+         * divide apart */
+        long wide = yv_l(ya_get(a, 0));
+        if (n > 1) wide = wide + yv_l(ya_get(a, 1)) * FLIT_BASE;
+        long e = 53 + down - t; /* the value is in [2^e, 2^(e+1)) */
         long sh = 0;
         if (e < -1022) sh = 0 - e - 1022; /* a subnormal's extra shift */
-        /* read off the top 53 bits: the bits come off bottom first, so the LAST
-         * one out is the round bit and every earlier one is "something was down
-         * there" */
-        long k3 = l2 - 53 + sh;
         long round = 0;
-        long j3 = 0;
-        while (j3 < k3) {
-            long r = flit_ddiv(a, 2, n);
-            if (j3 == k3 - 1) {
-                round = r;
-            } else {
-                if (r != 0) ya_set(flags, 0, yv_bool(1));
-            }
-            j3 = j3 + 1;
-        }
         long mant = 0;
-        long nd = flit_ddigits(a, n);
-        long i5 = 0;
-        while (i5 < nd) {
-            mant = mant * 10 + flit_digit_at(a, n, i5);
-            i5 = i5 + 1;
+        if (sh == 0) {
+            /* bit 53 is the round bit and the 53 below it are the significand */
+            round = wide % 2;
+            mant = wide / 2;
+        } else {
+            /* a subnormal shifts the significand right, so the round bit moves
+             * up with it and the one below it is sticky */
+            if ((wide % 2) != 0) ya_set(flags, 0, yv_bool(1));
+            long words = sh / 32;
+            long bits = sh % 32;
+            if (words > 0) {
+                long rem = flit_ddiv(a, 4294967296, n);
+                round = rem / 2147483648;
+                if ((rem % 2147483648) != 0) ya_set(flags, 0, yv_bool(1));
+            }
+            if (bits > 0) {
+                /* (long) on the shifts: 1 << 31 is INT_MIN in C, and the
+                 * divisor would come out negative -- native.y shifts longs */
+                long rem = flit_ddiv(a, (long)1 << bits, n);
+                round = (rem / ((long)1 << (bits - 1))) % 2;
+                if ((rem % ((long)1 << (bits - 1))) != 0) ya_set(flags, 0, yv_bool(1));
+            }
+            /* what is left is the fraction itself: no implicit leading bit */
+            mant = yv_l(ya_get(a, 0));
+            if (n > 1) mant = mant + yv_l(ya_get(a, 1)) * FLIT_BASE;
         }
         if (round != 0) {
             if (yv_truth(ya_get(flags, 0))) {
@@ -8033,22 +8068,16 @@ long flit_ebase(Yv *s) {
 long flit_bits(Yv *s) {
     long eb = flit_ebase(s);
     int neg = ys_eq_lit(ys_slice(s, 0, 1), "-");
-    /* One pass over the digits: leading zeros dropped, the rest into the
-     * bignum. ALL of them, not a fixed count: keeping 18 in a long loses ~1e-18
-     * of the value, which is enough to flip a rounding that sits within 1% of
-     * its midpoint. */
-    Yv *a = yav(0);
-    long i = 0;
-    while (i < FLIT_LIMBS) {
-        a = ya_push(a, yv_long(0));
-        i = i + 1;
-    }
+    /* Two passes over the digits: one to count, one to fill. The bignum has to
+     * be sized before the first digit goes in, and sizing it for the worst case
+     * made every digit cost a pass over 128 limbs. ALL of the digits go in, not
+     * a fixed count: keeping 18 in a long loses ~1e-18 of the value, which is
+     * enough to flip a rounding that sits within 1% of its midpoint. */
     long ndig = 0;
     long nfrac = 0;
     int seen = 0;
     int past_dot = 0;
-    int over = 0;
-    i = 0;
+    long i = 0;
     if (ys_eq_lit(ys_slice(s, 0, 1), "-")) i = 1;
     if (ys_eq_lit(ys_slice(s, 0, 1), "+")) i = 1;
     while (i < eb) {
@@ -8060,7 +8089,32 @@ long flit_bits(Yv *s) {
             if (seen || !ys_eq_lit(c, "0")) {
                 seen = 1;
                 ndig = ndig + 1;
-                if (!flit_dpush(a, ys_byte_at(c, 0) - 48, FLIT_LIMBS)) over = 1;
+            }
+        }
+        i = i + 1;
+    }
+    long n0 = flit_size(ndig, 0, 0);
+    int over = n0 > FLIT_LIMBS;
+    if (over) n0 = FLIT_LIMBS;
+    Yv *a = yav(0);
+    i = 0;
+    while (i < n0) {
+        a = ya_push(a, yv_long(0));
+        i = i + 1;
+    }
+    seen = 0;
+    past_dot = 0;
+    i = 0;
+    if (ys_eq_lit(ys_slice(s, 0, 1), "-")) i = 1;
+    if (ys_eq_lit(ys_slice(s, 0, 1), "+")) i = 1;
+    while (i < eb) {
+        Yv *c = ys_slice(s, i, i + 1);
+        if (ys_eq_lit(c, ".")) {
+            past_dot = 1;
+        } else {
+            if (seen || !ys_eq_lit(c, "0")) {
+                seen = 1;
+                if (!flit_dpush(a, ys_byte_at(c, 0) - 48, n0)) over = 1;
             }
         }
         i = i + 1;
