@@ -200,7 +200,12 @@ def get_i64be(b: [byte], off: long) -> long { get_u64be(b, off) };
 // ── bulk pack/unpack over a format ────────────────────────────────────
 // A format is a comma-separated list of the writer/reader names:
 //     pack("u32be,i16le,pad", [1, -2, 4])   -- pad takes its width
+//     pack("u8,fill", [65, 66])             -- u8 takes a value, fill a byte
 //     unpack("u32be,i16le", hdr)            -- reads two values
+//
+// A format carries one value per name, and each name says what its value is:
+// a writer takes the value to store, `pad` a width, `fill` the byte to store.
+// To write n bytes of one byte, call fill(n, v) itself.
 // pack reads vals[i] for name i, so the two lists must line up: a format
 // longer than the value list runs off the end (index trap), and names are
 // trimmed, so "u32be, u16le" and "u32be,u16le" are the same format. An
@@ -222,7 +227,13 @@ def pack_one(name: str, v: long) -> [byte] {
     else if (name == "i64le") { i64le(v) }
     else if (name == "i64be") { i64be(v) }
     else if (name == "pad") { pad(v) }
-    else if (name == "fill") { fill(v, 0) }
+    // `fill`'s value is the BYTE, not a count: a format carries one value, so
+    // there is no way to spell "n bytes of v" in a format string (that is what
+    // fill(n, v) is for), and the old `fill(v, 0)` read the value as the count
+    // and hardcoded 0 as the byte -- so pack("fill", [3]) came out as three
+    // zero bytes, exactly pad(3), and the format could never fill with
+    // anything but zero.
+    else if (name == "fill") { fill(1, v) }
     else {
         puts("struct.pack: unknown format '" + name + "'\n");
         exit(1);
@@ -260,6 +271,7 @@ def unpack_one(name: str, b: [byte], off: long) -> long {
     else if (name == "u64be") { get_u64be(b, off) }
     else if (name == "i64le") { get_i64le(b, off) }
     else if (name == "i64be") { get_i64be(b, off) }
+    else if (name == "fill") { get_u8(b, off) }
     else {
         puts("struct.unpack: unknown format '" + name + "'\n");
         exit(1);
@@ -267,7 +279,14 @@ def unpack_one(name: str, b: [byte], off: long) -> long {
     }
 };
 
-// widths for the format names (pad/fill are pack-only)
+// The width of a format name: what unpack advances by after reading one.
+// The four 64-bit names used to come out of an `else { 8 }` that answered 8
+// for `pad`, for `fill` and for a typo alike -- right by accident for the
+// 64-bit names, wrong for the other two. `fill` is one byte. `pad` has no
+// width at all: its width is the value the format carries, not a property of
+// the name. So both of those now say what they are, which is the answer a
+// program needs before it hands a `pad` to unpack: that `pad` is something
+// you pack with and not something you read back.
 def width_of(name: str) -> long {
     if (name == "u8") { 1 }
     else if (name == "i8") { 1 }
@@ -279,7 +298,21 @@ def width_of(name: str) -> long {
     else if (name == "u32be") { 4 }
     else if (name == "i32le") { 4 }
     else if (name == "i32be") { 4 }
-    else { 8 }
+    else if (name == "u64le") { 8 }
+    else if (name == "u64be") { 8 }
+    else if (name == "i64le") { 8 }
+    else if (name == "i64be") { 8 }
+    else if (name == "fill") { 1 }
+    else if (name == "pad") {
+        puts("struct.width_of: 'pad' has no width of its own (it is the value a format carries)\n");
+        exit(1);
+        0
+    }
+    else {
+        puts("struct.width_of: unknown format '" + name + "'\n");
+        exit(1);
+        0
+    }
 };
 
 def unpack(fmt: str, b: [byte]) -> [long] {

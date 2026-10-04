@@ -149,7 +149,7 @@ print([
     struct.width_of("u64be"),
     struct.width_of("i64le"),
     struct.width_of("i64be"),
-    struct.width_of("pad"),
     struct.width_of("fill")
 ]);
-print(struct.width_of("unknown"));
+// pad has no width of its own and a name that is not a format has none either;
+// both are named in t187_struct_formats.y, which ends there.
