@@ -8691,21 +8691,46 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
         }
         i = i + 1;
     };
+    // A name's earlier definitions, not every statement's: with 20 000
+    // top-level defs the scan of all earlier names was 75% of the compile
+    // (10 billion instructions), and nothing in it but the name's own
+    // repetitions was ever a candidate. So a name reaches only its own
+    // definitions: labmap_new maps the name to a chain head, and each entry
+    // holds its file, its position and the entry before it. Walking that chain
+    // backwards gives the last definition from another file -- the same answer
+    // the scan gave, since the chain is in the order the scan went.
+    let ix = asm.labmap_new(len(names) * 2 + 16);
+    let top: [long] = [];
+    let pfile: [long] = [];
+    let ppos: [long] = [];
+    let pnext: [long] = [];
     let errs: [Diag] = [];
-    let j = 1;
+    let j = 0;
     while (j < len(names)) {
         let nj = names[j];
+        let fj = fids[j];
+        let slot = -1;
+        let g = asm.labmap_get(ix, nj);
+        if (g.sec >= 0) { slot = g.sec; };
+        if (slot < 0) {
+            top += -1;
+            slot = len(top) - 1;
+            let r = asm.labmap_put(ix, nj, slot, 0);
+            ix = r.map;
+        };
         let other = -1;
-        let m = 0;
-        while (m < j) {
-            if (fids[m] != fids[j]) {
-                if (names[m] == nj) { other = m; }
-            }
-            m = m + 1;
+        let q = top[slot];
+        while (q >= 0 && other < 0) {
+            if (pfile[q] != fj) { other = ppos[q]; };
+            q = pnext[q];
         };
         if (other >= 0) {
             errs += { msg: "duplicate definition '" + nj + "': " + origin_at(origin, lines[other], false) + " defines it too (imported files share one namespace; rename one)", line: lines[j], col: cols[j] };
-        }
+        };
+        pfile += fj;
+        ppos += j;
+        pnext += top[slot];
+        top[slot] = len(pfile) - 1;
         j = j + 1;
     };
     errs

@@ -10377,21 +10377,41 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
         }
         i = i + 1;
     }
+    /* A name's earlier definitions, not every statement's: with 20 000
+     * top-level defs the scan of all earlier names was 75% of the compile
+     * (10 billion instructions), and nothing in it but the name's own
+     * repetitions was ever a candidate. So a name reaches only its own
+     * definitions: labmap_new maps the name to a chain head, and each entry
+     * holds its file, its position and the entry before it. Walking that chain
+     * backwards gives the last definition from another file -- the same answer
+     * the scan gave, since the chain is in the order the scan went. */
+    Yv *ix = labmap_new(yv_len(names) * 2 + 16);
+    Yv *top = yav(0);
+    Yv *pfile = yav(0);
+    Yv *ppos = yav(0);
+    Yv *pnext = yav(0);
     Yv *errs = yav(0);
-    long j = 1;
+    long j = 0;
     while (j < yv_len(names)) {
         Yv *nj = ya_get(names, j);
+        long fj = yv_l(ya_get(fids, j));
+        long slot = -1;
+        Yv *g = labmap_get(ix, nj);
+        if (yv_l(yr_get(g, "sec")) >= 0) { slot = yv_l(yr_get(g, "sec")); }
+        if (slot < 0) {
+            top = ya_push(top, yv_long(-1));
+            slot = yv_len(top) - 1;
+            ix = yr_get(labmap_put(ix, nj, slot, 0), "map");
+            ;
+        }
         long other = -1;
-        long m = 0;
-        while (m < j) {
-            if (yv_l(ya_get(fids, m)) != yv_l(ya_get(fids, j))) {
-                if (ys_eq(ya_get(names, m), nj)) {
-                    other = m;
-                    ;
-                }
+        long q = yv_l(ya_get(top, slot));
+        while (q >= 0 && other < 0) {
+            if (yv_l(ya_get(pfile, q)) != fj) {
+                other = yv_l(ya_get(ppos, q));
                 ;
             }
-            m = m + 1;
+            q = yv_l(ya_get(pnext, q));
         }
         if (other >= 0) {
             Yv *msg = ys_cat(ys_cat(ys("duplicate definition '"), nj),
@@ -10403,6 +10423,10 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
                                     "col", ya_get(cols, j)));
             ;
         }
+        pfile = ya_push(pfile, yv_long(fj));
+        ppos = ya_push(ppos, yv_long(j));
+        pnext = ya_push(pnext, ya_get(top, slot));
+        ya_set(top, slot, yv_long(yv_len(pfile) - 1));
         j = j + 1;
     }
     return errs;
