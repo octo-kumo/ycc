@@ -4010,21 +4010,43 @@ static Yv *fmt_check(Yv *f, long kind, Yv *tname) {
     }
 }
 
+/* node as a Leaf, or none when it is the err node the parser plants where
+ * the token stream stopped making sense. Casting one blindly is a CHECKED
+ * cast and traps, which is how `1 f"{a b}"` killed ycc (a malformed field
+ * drops the spec argument and leaves the error in its place): the C twin
+ * reads a field that is simply not there and carries on to three proper
+ * diagnostics, and so must this side. */
+Yv *leaf_of(Yv *node) {
+    if (yv_l(yr_get(node, "k")) == K_err) { return yv_none(); }
+    Yv *leaf = yr(4, "k", yr_get(node, "k"), "v", yr_get(node, "v"),
+                  "line", yr_get(node, "line"), "col", yr_get(node, "col"));
+    return leaf;
+}
+
 /* #fmt(e, spec) is a str. Without a spec e is whatever tostring takes;
- * with one, the spec has to read and to suit e's type (fmt_check). */
+ * with one, the spec has to read and to suit e's type (fmt_check). A spec
+ * argument that is an err node is reported here -- typeof_expr's own K.err
+ * arm would have reported it, had the argument gone through it -- and the
+ * spec itself left alone. */
 static Yv *typeof_fmt(Yv *st, Yv *node) {
     Yv *fargs = yr_get(node, "args");
     Yv *r = typeof_expr(st, ya_get(fargs, 0));
     st = yr_get(r, "st");
     Yv *t = yr_get(r, "typ");
-    Yv *spec = yr_get(ya_get(fargs, 1), "v");
+    Yv *sp = leaf_of(ya_get(fargs, 1));
+    Yv *spec = yv_is_none(sp) ? ys("") : yr_get(sp, "v");
     Yv *k = yr_get(t, "k");
-    if (!(yv_l(k) == K_tlong || yv_l(k) == K_tbyte ||
-          yv_l(k) == K_tbool || yv_l(k) == K_tstr ||
-          yv_l(k) == K_tfloat || yv_l(k) == K_tunk ||
-          yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
-          yv_l(k) == K_trec || yv_l(k) == K_tmap ||
-          yv_l(k) == K_topt || yv_l(k) == K_tunion)) {
+    if (yv_is_none(sp)) {
+        Yv *e = ya_get(fargs, 1);
+        st = fail(st, yr_get(e, "msg"), yv_l(yr_get(e, "line")),
+                  yv_l(yr_get(e, "col")));
+        ;
+    } else if (!(yv_l(k) == K_tlong || yv_l(k) == K_tbyte ||
+                 yv_l(k) == K_tbool || yv_l(k) == K_tstr ||
+                 yv_l(k) == K_tfloat || yv_l(k) == K_tunk ||
+                 yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
+                 yv_l(k) == K_trec || yv_l(k) == K_tmap ||
+                 yv_l(k) == K_topt || yv_l(k) == K_tunion)) {
         st = fail(st,
                   ys_cat(ys("an f-string field takes long/bool/float/str/array/record/map/option, got "),
                         tstr(t)),

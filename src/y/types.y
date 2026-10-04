@@ -3036,16 +3036,37 @@ def fmt_check(f: FmtSpec, kind: long, tname: str) -> str {
     }
 };
 
+// node as a Leaf, or none when it is the err node the parser plants where
+// the token stream stopped making sense. Casting one blindly is a CHECKED
+// cast and traps, which is how `1 f"{a b}"` killed ycc (a malformed field
+// drops the spec argument and leaves the error in its place): the C twin
+// reads a field that is simply not there and carries on to three proper
+// diagnostics, and so must this side.
+def leaf_of(node: Node) -> Leaf? {
+    if (node.k == K.err) {
+        none
+    } else {
+        let leaf: Leaf = node;
+        some(leaf)
+    }
+};
+
 // #fmt(e, spec) is a str. Without a spec e is whatever tostring takes;
-// with one, the spec has to read and to suit e's type (fmt_check).
+// with one, the spec has to read and to suit e's type (fmt_check). A spec
+// argument that is an err node is reported here -- typeof_expr's own K.err
+// arm would have reported it, had the argument gone through it -- and the
+// spec itself left alone.
 def typeof_fmt(st: TcSt, node: Call) -> TcRes {
     let fargs: [Node] = node.args;
     let r = typeof_expr(st, fargs[0]);
     st = r.st;
     let t: Type = r.typ;
-    let specnode: Leaf = fargs[1];
-    let spec: str = specnode.v;
-    if (!(t.k == K.tlong || t.k == K.tbyte || t.k == K.tbool || t.k == K.tstr || t.k == K.tfloat || t.k == K.tunk || t.k == K.tarr || t.k == K.tarrfix || t.k == K.trec || t.k == K.tmap || t.k == K.topt || t.k == K.tunion)) {
+    let sp = leaf_of(fargs[1]);
+    let spec: str = if (sp == none) { "" } else { sp!.v };
+    if (sp == none) {
+        let e: Err = fargs[1];
+        st = fail(st, e.msg, e.line, e.col);
+    } else if (!(t.k == K.tlong || t.k == K.tbyte || t.k == K.tbool || t.k == K.tstr || t.k == K.tfloat || t.k == K.tunk || t.k == K.tarr || t.k == K.tarrfix || t.k == K.trec || t.k == K.tmap || t.k == K.topt || t.k == K.tunion)) {
         st = fail(st, "an f-string field takes long/bool/float/str/array/record/map/option, got " + tstr(t), node.line, node.col);
     } else if (spec != "") {
         let e = fmt_check(fmt_spec(spec), fmt_kind(t), tstr(t));
@@ -4272,4 +4293,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, tstr, tdisp, tdisp_fnval, teq, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, tdisp, tdisp_fnval, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

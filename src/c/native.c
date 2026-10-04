@@ -63,6 +63,7 @@ Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
 Yv *str_method(Yv *m);
 Yv *fmt_spec(Yv *spec);
 long fmt_kind(Yv *t);
+Yv *leaf_of(Yv *node);
 Yv *narrow_type(Yv *s, Yv *t);
 Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
@@ -9561,7 +9562,11 @@ Yv *gen_tostring(Yv *st, Yv *node) {
 Yv *gen_fmt(Yv *st, Yv *node) {
     Yv *fargs = yr_get(node, "args");
     Yv *a0 = ya_get(fargs, 0);
-    Yv *spec = yr_get(ya_get(fargs, 1), "v");
+    /* As in types.y's typeof_fmt: a spec argument that is an err node has
+     * no spec to read. The checker rejects the program before here, so this
+     * only keeps the emitter from casting a member it does not hold. */
+    Yv *sp = leaf_of(ya_get(fargs, 1));
+    Yv *spec = yv_is_none(sp) ? ys("") : yr_get(sp, "v");
     Yv *ts = n_call1(ys("tostring"), a0,
                      yv_l(yr_get(node, "line")),
                      yv_l(yr_get(node, "col")));

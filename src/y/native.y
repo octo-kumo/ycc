@@ -7970,8 +7970,11 @@ def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
 def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
     let fargs: [Node] = node.args;
     let a0 = fargs[0];
-    let specnode: Leaf = fargs[1];
-    let spec: str = specnode.v;
+    // As in types.y's typeof_fmt: a spec argument that is an err node has
+    // no spec to read. The checker rejects the program before here, so this
+    // only keeps the emitter from casting a member it does not hold.
+    let sp = types.leaf_of(fargs[1]);
+    let spec: str = if (sp == none) { "" } else { sp!.v };
     let ts = n_call1("tostring", a0, node.line, node.col);
     if (spec == "") {
         gen_tostring(st, ts)

@@ -182,6 +182,7 @@ so the list cannot rot.
 | `src/y/parser.y` | `msg: v, line: ln` | Re-raises a lexer error token as a parse error; the lexer's messages are checked at their own sites. |
 | `src/y/parser.y` | `msg: e.msg` | Re-raises a type-syntax error (`terr`) as an expression error; the `terr` site is checked. |
 | `src/y/types.y` | `fail(st, err.msg` | The checker reporting a parser error node; the parser's sites are checked. |
+| `src/y/types.y` | `fail(st, e.msg` | An f-string field whose spec argument is a parser error node (typeof_fmt): reported here, where the blind cast used to be; the parser's site is checked. |
 | `src/y/types.y` | `fail(st, fterr` | Reports the call-target error chosen just above; each `fterr = "..."` site is checked. |
 | `src/y/types.y` | `internal: params/ptypes length mismatch` | An internal consistency check: the parser appends a parameter's name and its type in the same loop iteration, so the two lists always match. |
 | `src/y/types.y` | `after '?.'` | `opt$val` (the value side of a `?.`) asks `is_value_type` of the chain's type, as `some` does. The types it rejects --- void, which is handled above, a mutex or a semaphore, and a union `union_ok` refuses --- are all types no declaration can name, so no chain can end in one. |
