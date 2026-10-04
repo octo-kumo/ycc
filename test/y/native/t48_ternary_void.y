@@ -33,3 +33,11 @@ print(pick(5), " ", pick(-5));
 
 // a record, an array and a bool in one line
 print("r=", {x: 1}, " a=", [1, 2], " t=", true);
+
+// An arm may itself be an array literal. The space matters: `x?[` with no
+// space is the option-propagation operator with its dot left out, and is
+// rejected as such (e163).
+let rows = a ? [1, 2] : [3];
+print(len(rows), " ", rows[1]);
+let mixed = !a ? [9] : [8, 8];
+print(len(mixed), " ", mixed[1]);

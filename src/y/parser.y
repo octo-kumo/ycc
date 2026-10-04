@@ -641,7 +641,11 @@ def parse_unary(toks: [Tok], p: long) -> Parsed {
 def parse_expr(toks: [Tok], p: long) -> Parsed {
     let c = parse_binary(toks, p, 1);
     if (is_op(toks, c.pos, "?")) {
-        parse_ternary(toks, c.node, c.pos)
+        if (is_punct(toks, c.pos + 1, "[") && tcol(toks, c.pos + 1) == tcol(toks, c.pos) + 1) {
+            res({ k: K.err, msg: "'?[' is not a conditional: write '?.[' to propagate into a subscript (x?.[i])", line: tline(toks, c.pos), col: tcol(toks, c.pos) }, c.pos)
+        } else {
+            parse_ternary(toks, c.node, c.pos)
+        }
     } else {
         c
     }

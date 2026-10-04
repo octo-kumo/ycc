@@ -679,8 +679,17 @@ Yv *parse_unary(Yv *toks, long p) {
 
 Yv *parse_expr(Yv *toks, long p) {
     Yv *c = parse_binary(toks, p, 1);
-    if (is_op(toks, yv_l(yr_get(c, "pos")), ys("?"))) {
-        return parse_ternary(toks, yr_get(c, "node"), yv_l(yr_get(c, "pos")));
+    long cp = yv_l(yr_get(c, "pos"));
+    if (is_op(toks, cp, ys("?"))) {
+        // `x?[i]` -- the option-propagation operator with its dot left out.
+        // '[' right against the '?' cannot be a conditional: `c ? a : b`
+        // spells its arms with room around the '?'.
+        if (is_punct(toks, cp + 1, ys("[")) &&
+            tcol(toks, cp + 1) == tcol(toks, cp) + 1) {
+            return res(yr(4, "k", yv_long(K_err), "msg", ys("'?[' is not a conditional: write '?.[' to propagate into a subscript (x?.[i])"), "line", yv_long(tline(toks, cp)), "col", yv_long(tcol(toks, cp))), cp);
+        } else {
+            return parse_ternary(toks, yr_get(c, "node"), cp);
+        }
     } else {
         return c;
     }

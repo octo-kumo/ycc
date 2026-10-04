@@ -8,3 +8,5 @@ a = true
 ()->void
 1 2
 r={x: 1} a=[1, 2] t=true
+2 2
+2 8
