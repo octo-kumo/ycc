@@ -2914,10 +2914,10 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         gen_assign(st, assign)
     } else if (k == K.incdec) {
         let incdec: IncDec = node;
-        gen_incdec(st, incdec)
+        gen_incdec(st, incdec, false)
     } else if (k == K.opassign) {
         let assign: OpAssign = node;
-        gen_opassign(st, assign)
+        gen_opassign(st, assign, false)
     } else if (k == K.index) {
         let index: Index = node;
         // maps scan their keys; strings read a byte; arrays index directly
@@ -3377,7 +3377,22 @@ def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
 // (an "own" local, or a global with a companion cell) goes through
 // gen_sappend (the checker made x a str); anything else is plain gen.
 def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
-    if (node.k == K.opassign) {
+    if (node.k == K.id) {
+        // A local read as a statement is one `mov %rbp`-relative nobody reads:
+        // these are the temporaries the `x++` / `x op= v` desugar leaves
+        // behind (the synthetic `let v` is a kind "local" slot). Only that
+        // kind is dropped: "own" is an appendable string, whose read clears
+        // the companion cell, "global" may have one, and "box"/"capture" read
+        // through a cell.
+        let id: Leaf = node;
+        let e = env_find(st, id.v);
+        if (e.kind == "local") { st } else { gen(st, node) }
+    } else if (node.k == K.incdec) {
+        // `x++` as a statement: the desugar's block value is the old x, and
+        // nothing reads it (see gen_incdec's `dropped`).
+        let inc: IncDec = node;
+        gen_incdec(st, inc, true)
+    } else if (node.k == K.opassign) {
         let assign: OpAssign = node;
         if (assign.op == "+" && assign.tgt.k == K.id) {
             let id: Leaf = assign.tgt;
@@ -3387,15 +3402,15 @@ def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
             } else if (e.kind == "global" && e.typ.k == K.tstr) {
                 let oe = env_find(st, id.v + "#o");
                 if (oe.kind == "none") {
-                    gen(st, node)
+                    gen_opassign(st, assign, true)
                 } else {
                     gen_sappend(st, assign.v, e.label + "(%rip)", oe.label + "(%rip)")
                 }
             } else {
-                gen(st, node)
+                gen_opassign(st, assign, true)
             }
         } else {
-            gen(st, node)
+            gen_opassign(st, assign, true)
         }
     } else {
         gen(st, node)
@@ -7257,7 +7272,13 @@ def block6(a: Node, b: Node, c: Node, d: Node, e: Node, f: Node, ln: long, cl: l
     { k: K.block, stmts: st, line: ln, col: cl }
 };
 
-def gen_incdec(st: EmitSt, node: IncDec) -> EmitSt {
+// `dropped` is gen_stmt's: the desugar builds `{ bind; let v = <place>;
+// <target> = <v op e>; v }`, whose value is the place read -- the old x for
+// `x++`. As a statement nothing reads that load, and it is one instruction
+// per site (1,026 in ycc's own output). A statement context therefore runs
+// the block through gen_discard, whose last statement is a statement too, and
+// gen_stmt drops the frame read.
+def gen_incdec(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
     let op = node.op;
     let binop = "+";
     if (op == "--") { binop = "-"; }
@@ -7278,14 +7299,31 @@ def gen_incdec(st: EmitSt, node: IncDec) -> EmitSt {
         let nv: Bin = { k: K.bin, op: binop, l: place, r: one, line: ln, col: cl };
         let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
         let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
-        gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+        gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
     } else {
         // x++ -> { bind; let v = x; x = v + 1; v }
         let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl };
         let nv: Bin = { k: K.bin, op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
         let asg: Node = gen_place_assign(tgt, nv, t1, ln, cl);
-        gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+        gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
     }
+};
+
+// `{ bind; let v = ...; target = v; v }` -- both `++x` and `x++`, whose value
+// is the trailing read of the temporary. As a statement that read is dead.
+def gen_incdec_end(st: EmitSt, bind: Node, d2: Node, asg: Node, dropped: bool, ln: long, cl: long) -> EmitSt {
+    if (dropped) {
+        gen_discard(st, block4(bind, d2, asg, n_id_of(d2, ln, cl), ln, cl))
+    } else {
+        gen(st, block4(bind, d2, asg, n_id_of(d2, ln, cl), ln, cl))
+    }
+};
+
+// The temporary's own name: `let v = ...` binds <t1>v, and the block's value
+// reads it back.
+def n_id_of(d2: Node, ln: long, cl: long) -> Node {
+    let decl: Decl = d2;
+    n_id(decl.name, ln, cl)
 };
 
 // `x op= v`: arrays take the in-place forms (`+=` push/append, `*=`
@@ -7293,16 +7331,28 @@ def gen_incdec(st: EmitSt, node: IncDec) -> EmitSt {
 // the arithmetic desugar. Arrays are homogeneous by design, so `+=` on an
 // array is either a same-typed element (push) or a same-typed array
 // (append) — never a mix.
-def gen_opassign(st: EmitSt, node: OpAssign) -> EmitSt {
-    let t = infer(st, node.tgt);
-    if (t.k == K.tarr || t.k == K.tarrfix) {
-        gen_opassign_arr(st, node)
+// `{ bind; target = <e>; place }` -- the array append forms' shape, whose value
+// is the place read (the array, for `+=` / `*=`). As a statement that read is
+// dead, unless it is a named local: reading one clears a string's companion
+// cell (gen_id), which gen_stmt's frame test deliberately leaves alone.
+def gen_opassign_end(st: EmitSt, bind: Node, asg: Node, read: Node, dropped: bool, ln: long, cl: long) -> EmitSt {
+    if (dropped) {
+        gen_discard(st, block3(bind, asg, read, ln, cl))
     } else {
-        gen_opassign_arith(st, node)
+        gen(st, block3(bind, asg, read, ln, cl))
     }
 };
 
-def gen_opassign_arith(st: EmitSt, node: OpAssign) -> EmitSt {
+def gen_opassign(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
+    let t = infer(st, node.tgt);
+    if (t.k == K.tarr || t.k == K.tarrfix) {
+        gen_opassign_arr(st, node, dropped)
+    } else {
+        gen_opassign_arith(st, node, dropped)
+    }
+};
+
+def gen_opassign_arith(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     // `x op= v` for numbers and strings -> `x = x op v`, with the target's
     // index/base evaluated once through a synthetic let.
     let tgt = node.tgt;
@@ -7317,8 +7367,15 @@ def gen_opassign_arith(st: EmitSt, node: OpAssign) -> EmitSt {
     let bin: Bin = { k: K.bin, op: op, l: rd, r: node.v, line: ln, col: cl };
     let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
     let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
-    gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+    if (dropped) {
+        gen_discard(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+    } else {
+        gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+    }
 };
+
+// `{ bind; let v = <place op e>; target = v; v }` -- the arithmetic `op=`
+// shape, whose value is the same trailing read (see gen_incdec_end).
 
 // The place an opassign target names. `t1` is the synthetic name that
 // captured the target's index (a[i]) or base (o.f) — an id target needs
@@ -7440,7 +7497,7 @@ def gen_place_bind(tgt: Node, t1: str, ln: long, cl: long) -> Node {
     }
 };
 
-def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
+def gen_opassign_arr(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     // In-place array forms. `*=` prepends one element. `+=` pushes one
     // element — or, when the VALUE is an array of the same element type
     // (types.arr_plus_kind "cat"), appends its elements: in bulk when the
@@ -7472,7 +7529,7 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
     };
     if (mode == "append" && bulk) {
         let all = n_call2("push$all", gen_place_read(tgt, t1, ln, cl), v, ln, cl);
-        gen(st, block3(gen_place_bind(tgt, t1, ln, cl), gen_place_assign(tgt, all, t1, ln, cl), gen_place_read(tgt, t1, ln, cl), ln, cl))
+        gen_opassign_end(st, gen_place_bind(tgt, t1, ln, cl), gen_place_assign(tgt, all, t1, ln, cl), gen_place_read(tgt, t1, ln, cl), dropped, ln, cl)
     } else if (mode == "append") {
         // { let tv = v; let ti = 0; let tn = len(tv);
         //   while (ti < tn) { place += tv[ti]; ti = ti + 1 }
@@ -7484,12 +7541,16 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign) -> EmitSt {
         let put: Node = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
         let step: Assign = { k: K.assign, name: t1 + "i", v: { k: K.bin, op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
         let loop: While = { k: K.kw_while, cond: { k: K.bin, op: "<", l: n_id(t1 + "i", ln, cl), r: n_id(t1 + "n", ln, cl), line: ln, col: cl }, body: block2(put, step, ln, cl), line: ln, col: cl };
-        gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+        if (dropped) {
+            gen_discard(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+        } else {
+            gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+        }
     } else {
         let fname = "push";
         if (mode == "prepend") { fname = "prepend"; }
         let call = n_call2(fname, gen_place_read(tgt, t1, ln, cl), v, ln, cl);
-        gen(st, block3(gen_place_bind(tgt, t1, ln, cl), gen_place_assign(tgt, call, t1, ln, cl), gen_place_read(tgt, t1, ln, cl), ln, cl))
+        gen_opassign_end(st, gen_place_bind(tgt, t1, ln, cl), gen_place_assign(tgt, call, t1, ln, cl), gen_place_read(tgt, t1, ln, cl), dropped, ln, cl)
     }
 };
 

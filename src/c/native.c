@@ -373,9 +373,11 @@ Yv *block3(Yv *a, Yv *b, Yv *c, long ln, long cl);
 Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl);
 Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl);
 Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl);
-Yv *gen_incdec(Yv *st, Yv *node);
+Yv *gen_incdec(Yv *st, Yv *node, int dropped);
+Yv *gen_incdec_end(Yv *st, Yv *bind, Yv *d2, Yv *asg, int dropped,
+                   long ln, long cl);
 Yv *place_value_type(Yv *t);
-Yv *gen_opassign(Yv *st, Yv *node);
+Yv *gen_opassign(Yv *st, Yv *node, int dropped);
 /* maps (the section at the end of the file) */
 Yv *n_str(Yv *v, long line, long col);
 Yv *n_bool(Yv *v, long line, long col);
@@ -396,7 +398,7 @@ Yv *gen_map_get(Yv *st, Yv *node, Yv *mode);
 Yv *gen_map_set(Yv *st, Yv *node);
 Yv *map_key_repr(Yv *node, Yv *kt, long ln, long cl);
 Yv *gen_map_repr(Yv *st, Yv *arg, Yv *t);
-Yv *gen_opassign_arith(Yv *st, Yv *node);
+Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped);
 Yv *place_read_id(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *place_read_idx(Yv *tgt, Yv *t1, long ln, long cl);
@@ -412,7 +414,7 @@ Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl);
 Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *gen_opassign_arr(Yv *st, Yv *node);
+Yv *gen_opassign_arr(Yv *st, Yv *node, int dropped);
 Yv *gen_idxassign(Yv *st, Yv *node);
 Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path);
 static Yv *path_push(Yv *path, Yv *t);
@@ -3813,9 +3815,9 @@ Yv *gen_go(Yv *st, Yv *node) {
     } else if (yv_l(k) == K_assign) {
         return gen_assign(st, node);
     } else if (yv_l(k) == K_incdec) {
-        return gen_incdec(st, node);
+        return gen_incdec(st, node, 0);
     } else if (yv_l(k) == K_opassign) {
-        return gen_opassign(st, node);
+        return gen_opassign(st, node, 0);
     } else if (yv_l(k) == K_index) {
         /* maps scan their keys; strings read a byte; arrays index directly */
         Yv *kbt = infer(st, yr_get(node, "arr"));
@@ -4334,32 +4336,54 @@ Yv *bind_own(Yv *st, Yv *name, Yv *t) {
  * (an "own" local, or a global with a companion cell) goes through
  * gen_sappend (the checker made x a str); anything else is plain gen. */
 Yv *gen_stmt(Yv *st, Yv *node) {
-    if (yv_l(yr_get(node, "k")) == K_opassign &&
-        ys_eq_lit(yr_get(node, "op"), "+") &&
-        yv_l(yr_get(yr_get(node, "tgt"), "k")) == K_id) {
-        Yv *tgt = yr_get(node, "tgt");
-        Yv *e = env_find(st, yr_get(tgt, "v"));
-        if (ys_eq_lit(yr_get(e, "kind"), "own")) {
-            long off = yv_l(yr_get(e, "off"));
-            return gen_sappend(
-                st, yr_get(node, "v"), ys_cat(ys_long(off), ys("(%rbp)")),
-                ys_cat(ys_long(off - 8), ys("(%rbp)")));
-        } else if (ys_eq_lit(yr_get(e, "kind"), "global") &&
-                   yv_l(yr_get(yr_get(e, "typ"), "k")) == K_tstr) {
-            Yv *oe = env_find(st, ys_cat(yr_get(tgt, "v"), ys("#o")));
-            if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
-                return gen(st, node);
-            } else {
-                return gen_sappend(
-                    st, yr_get(node, "v"),
-                    ys_cat(yr_get(e, "label"), ys("(%rip)")),
-                    ys_cat(yr_get(oe, "label"), ys("(%rip)")));
-            }
+    /* A local read as a statement is one `mov %rbp`-relative nobody reads:
+     * these are the temporaries the `x++` / `x op= v` desugar leaves behind
+     * (the synthetic `let v` is a kind "local" slot). Only that kind is
+     * dropped: "own" is an appendable string, whose read clears the companion
+     * cell, "global" may have one, and "box"/"capture" read through a cell. */
+    if (yv_l(yr_get(node, "k")) == K_id) {
+        Yv *id = node;
+        Yv *e = env_find(st, yr_get(id, "v"));
+        if (ys_eq_lit(yr_get(e, "kind"), "local")) {
+            return st;
         } else {
             return gen(st, node);
         }
+    } else if (yv_l(yr_get(node, "k")) == K_incdec) {
+        /* `x++` as a statement: the desugar's block value is the old x, and
+         * nothing reads it (see gen_incdec's `dropped`). */
+        return gen_incdec(st, node, 1);
+    } else if (yv_l(yr_get(node, "k")) == K_opassign) {
+        Yv *assign = node;
+        if (ys_eq_lit(yr_get(assign, "op"), "+") &&
+            yv_l(yr_get(yr_get(assign, "tgt"), "k")) == K_id) {
+            Yv *tgt = yr_get(assign, "tgt");
+            Yv *e = env_find(st, yr_get(tgt, "v"));
+            if (ys_eq_lit(yr_get(e, "kind"), "own")) {
+                long off = yv_l(yr_get(e, "off"));
+                return gen_sappend(
+                    st, yr_get(assign, "v"), ys_cat(ys_long(off), ys("(%rbp)")),
+                    ys_cat(ys_long(off - 8), ys("(%rbp)")));
+            } else if (ys_eq_lit(yr_get(e, "kind"), "global") &&
+                       yv_l(yr_get(yr_get(e, "typ"), "k")) == K_tstr) {
+                Yv *oe = env_find(st, ys_cat(yr_get(tgt, "v"), ys("#o")));
+                if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
+                    return gen_opassign(st, assign, 1);
+                } else {
+                    return gen_sappend(
+                        st, yr_get(assign, "v"),
+                        ys_cat(yr_get(e, "label"), ys("(%rip)")),
+                        ys_cat(yr_get(oe, "label"), ys("(%rip)")));
+                }
+            } else {
+                return gen_opassign(st, assign, 1);
+            }
+        } else {
+            return gen_opassign(st, assign, 1);
+        }
+    } else {
+        return gen(st, node);
     }
-    return gen(st, node);
 }
 
 /* `s += v` as a statement on an appendable string; `var` and `cell` are
@@ -8719,7 +8743,13 @@ Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl) {
               yv_long(cl));
 }
 
-Yv *gen_incdec(Yv *st, Yv *node) {
+/* `dropped` is gen_stmt's: the desugar builds `{ bind; let v = <place>;
+ * <target> = <v op e>; v }`, whose value is the place read -- the old x for
+ * `x++`. As a statement nothing reads that load, and it is one instruction
+ * per site (654 in ycc's own output). A statement context therefore runs the
+ * block through gen_discard, whose last statement is a statement too, and
+ * gen_stmt drops the local read. */
+Yv *gen_incdec(Yv *st, Yv *node, int dropped) {
     Yv *op = yr_get(node, "op");
     Yv *binop = ys("+");
     if (ys_eq_lit(op, "--")) {
@@ -8748,8 +8778,8 @@ Yv *gen_incdec(Yv *st, Yv *node) {
                     "col", yv_long(cl));
         Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1,
                                    ln, cl);
-        return gen(st, block4(bind, d2, asg,
-                              n_id(ys_cat(t1, ys("v")), ln, cl), ln, cl));
+        return gen_incdec_end(st, bind, d2, asg, dropped, ln, cl);
+
     } else {
         /* x++ -> { bind; let v = x; x = v + 1; v } */
         Yv *d2 = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
@@ -8759,22 +8789,35 @@ Yv *gen_incdec(Yv *st, Yv *node) {
                     n_id(ys_cat(t1, ys("v")), ln, cl), "r", one, "line",
                     yv_long(ln), "col", yv_long(cl));
         Yv *asg = gen_place_assign(tgt, nv, t1, ln, cl);
-        return gen(st, block4(bind, d2, asg,
-                              n_id(ys_cat(t1, ys("v")), ln, cl), ln, cl));
+        return gen_incdec_end(st, bind, d2, asg, dropped, ln, cl);
+
     }
 }
 
-Yv *gen_opassign(Yv *st, Yv *node) {
+/* `{ bind; let v = ...; target = v; v }` -- both `++x` and `x++`, whose value
+   is the trailing read of the temporary. As a statement that read is dead. */
+Yv *gen_incdec_end(Yv *st, Yv *bind, Yv *d2, Yv *asg, int dropped, long ln,
+                   long cl) {
+    Yv *vid = n_id(yr_get(d2, "name"), ln, cl);
+    if (dropped) {
+        return gen_discard(st, block4(bind, d2, asg, vid, ln, cl));
+    } else {
+        return gen(st, block4(bind, d2, asg, vid, ln, cl));
+    }
+}
+
+
+Yv *gen_opassign(Yv *st, Yv *node, int dropped) {
     Yv *t = infer(st, yr_get(node, "tgt"));
     if (yv_l(yr_get(t, "k")) == K_tarr ||
         yv_l(yr_get(t, "k")) == K_tarrfix) {
-        return gen_opassign_arr(st, node);
+        return gen_opassign_arr(st, node, dropped);
     } else {
-        return gen_opassign_arith(st, node);
+        return gen_opassign_arith(st, node, dropped);
     }
 }
 
-Yv *gen_opassign_arith(Yv *st, Yv *node) {
+Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped) {
     /* `x op= v` for numbers and strings -> `x = x op v`, with the target's
      * index/base evaluated once through a synthetic let. */
     Yv *tgt = yr_get(node, "tgt");
@@ -8793,8 +8836,13 @@ Yv *gen_opassign_arith(Yv *st, Yv *node) {
                 "v", bin, "line", yv_long(ln), "col", yv_long(cl));
     Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1, ln,
                                cl);
-    return gen(st, block4(bind, d2, asg, n_id(ys_cat(t1, ys("v")), ln, cl), ln,
-                          cl));
+    if (dropped) {
+        return gen_discard(st, block4(bind, d2, asg,
+                                  n_id(ys_cat(t1, ys("v")), ln, cl), ln, cl));
+    } else {
+        return gen(st, block4(bind, d2, asg, n_id(ys_cat(t1, ys("v")), ln, cl),
+                                  ln, cl));
+    }
 }
 
 /* The place an opassign target names. `t1` is the synthetic name that
@@ -8921,7 +8969,21 @@ Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl) {
     }
 }
 
-Yv *gen_opassign_arr(Yv *st, Yv *node) {
+/* `{ bind; target = <e>; place }` -- the array append forms' shape, whose value
+   is the place read (the array, for `+=` / `*=`). As a statement that read is
+   dead, unless it is a named local: reading one clears a string's companion
+   cell (gen_id), which gen_stmt's local test deliberately leaves alone. */
+Yv *gen_opassign_end(Yv *st, Yv *bind, Yv *asg, Yv *read, int dropped, long ln,
+                     long cl) {
+    if (dropped) {
+        return gen_discard(st, block3(bind, asg, read, ln, cl));
+    } else {
+        return gen(st, block3(bind, asg, read, ln, cl));
+    }
+}
+
+
+Yv *gen_opassign_arr(Yv *st, Yv *node, int dropped) {
     /* In-place array forms. `*=` prepends one element. `+=` pushes one
      * element — or, when the VALUE is an array of the same element type
      * (types.arr_plus_kind "cat"), appends its elements: in bulk when the
@@ -8955,10 +9017,10 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
     if (ys_eq_lit(mode, "append") && bulk) {
         Yv *all = n_call2(ys("push$all"), gen_place_read(tgt, t1, ln, cl), v,
                           ln, cl);
-        return gen(st,
-                   block3(gen_place_bind(tgt, t1, ln, cl),
-                          gen_place_assign(tgt, all, t1, ln, cl),
-                          gen_place_read(tgt, t1, ln, cl), ln, cl));
+        return gen_opassign_end(st, gen_place_bind(tgt, t1, ln, cl),
+                                gen_place_assign(tgt, all, t1, ln, cl),
+                                gen_place_read(tgt, t1, ln, cl), dropped, ln,
+                                cl);
     } else if (ys_eq_lit(mode, "append")) {
         /* { let tv = v; let ti = 0; let tn = len(tv);
          *   while (ti < tn) { place = push(place, tv[ti]); ti = ti + 1 }
@@ -8997,8 +9059,13 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
                yv_long(cl)),
             "body", block2(put, step, ln, cl), "line", yv_long(ln), "col",
             yv_long(cl));
-        return gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop,
-                              gen_place_read(tgt, t1, ln, cl), ln, cl));
+        if (dropped) {
+            return gen_discard(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop,
+                                       gen_place_read(tgt, t1, ln, cl), ln, cl));
+        } else {
+            return gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop,
+                                  gen_place_read(tgt, t1, ln, cl), ln, cl));
+        }
     } else {
         Yv *fname = ys("push");
         if (ys_eq_lit(mode, "prepend")) {
@@ -9006,10 +9073,10 @@ Yv *gen_opassign_arr(Yv *st, Yv *node) {
             ;
         }
         Yv *call = n_call2(fname, gen_place_read(tgt, t1, ln, cl), v, ln, cl);
-        return gen(st,
-                   block3(gen_place_bind(tgt, t1, ln, cl),
-                          gen_place_assign(tgt, call, t1, ln, cl),
-                          gen_place_read(tgt, t1, ln, cl), ln, cl));
+        return gen_opassign_end(st, gen_place_bind(tgt, t1, ln, cl),
+                                gen_place_assign(tgt, call, t1, ln, cl),
+                                gen_place_read(tgt, t1, ln, cl), dropped, ln,
+                                cl);
     }
 }
 
