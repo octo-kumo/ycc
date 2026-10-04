@@ -57,8 +57,29 @@ def addr_set(a: [byte; 16], host: str, port: long) -> long {
     0
 };
 
-// bind(fd, port) on 0.0.0.0. Port 0 lets the kernel pick a free one —
-// read it back with local_port.
+// A call that cannot go on, named: `what` says what failed and `errno` the
+// kernel's own answer (syscalls give it negative). The listeners use it
+// instead of carrying on, which is what this module used to do with a bind
+// that failed: the socket was bound to nothing, listen had nothing to listen
+// on, accept answered at once and the server returned 0 -- so a program that
+// asked for a busy port got what looked like a server that had served
+// nothing, and no word about why.
+def net_error(what: str, errno: long) -> long {
+    let name = if (errno == -98) { " (address in use)" } else {
+        if (errno == -13) { " (permission denied)" } else {
+            if (errno == -99) { " (address not available)" } else { "" }
+        }
+    };
+    puts("net: " + what + ": errno " + tostring(errno) + name + "\n");
+    exit(1);
+    0
+};
+
+// bind(fd, port) on 0.0.0.0, answering the syscall's own result: 0 when the
+// socket is bound, negative errno when it could not be (a port already in
+// use is -98). A caller that ignores that answer is listening on a socket
+// bound to nothing -- see listen_tcp. Port 0 lets the kernel pick a free
+// one; read it back with local_port.
 def bind_tcp(fd: long, port: long) -> long {
     let a: [byte; 16] = [0; 16];
     addr_set(a, "0.0.0.0", port);
@@ -516,8 +537,13 @@ def http_serve_one(fd: long, handler: (str) -> str) -> long {
 // recycled fd. As in listen_http, socket/bind/listen results go unchecked.
 def listen_tcp(port: long, handler: (long) -> long) -> long {
     let fd = socket_tcp();
-    bind_tcp(fd, port);
-    listen_fd(fd, 16);
+    let b = bind_tcp(fd, port);
+    if (b < 0) { net_error("cannot listen on port " + tostring(port), b); };
+    let l = listen_fd(fd, 16);
+    if (l < 0) {
+        close_fd(fd);
+        net_error("cannot listen on port " + tostring(port), l);
+    };
     let go = true;
     while (go) {
         let c = accept_tcp(fd);
@@ -533,13 +559,17 @@ def listen_tcp(port: long, handler: (long) -> long) -> long {
 
 // listen_http(port, handler): a tiny blocking HTTP server. `handler` maps
 // a request head to a response, usually `net.http_response(code, body)`.
-// Same loop as listen_tcp: accept until an accept fails, and the socket,
-// bind and listen results are not checked -- a busy port shows up as an
-// immediate return of 0 rather than an error.
+// Same loop as listen_tcp, and the same check: a port that could not be
+// bound is reported, not carried on from.
 def listen_http(port: long, handler: (str) -> str) -> long {
     let fd = socket_tcp();
-    bind_tcp(fd, port);
-    listen_fd(fd, 16);
+    let b = bind_tcp(fd, port);
+    if (b < 0) { net_error("cannot serve on port " + tostring(port), b); };
+    let l = listen_fd(fd, 16);
+    if (l < 0) {
+        close_fd(fd);
+        net_error("cannot serve on port " + tostring(port), l);
+    };
     let go = true;
     while (go) {
         let c = accept_tcp(fd);

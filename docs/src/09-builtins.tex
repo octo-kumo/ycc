@@ -443,8 +443,12 @@ given the request head and answering the body, usually through
 \ic{net.http\_response(code, body)};
 \ic{net.http\_read\_head(fd)} reads one request head by hand and
 \ic{net.http\_serve\_one(fd, handler)} serves a single connection
-already accepted. Neither loop checks the socket, bind and listen
-results, so a busy port shows up as an immediate \ic{0}.
+already accepted. Both loops check the bind and listen results, and a port
+that could not be taken is reported on standard output and stops the
+program (\ic{net: cannot listen on port 34567: errno -98 (address in
+use)}) rather than leaving \ic{accept} to wait on a socket bound to
+nothing. The socket itself is not checked --- it fails only when the
+process is out of descriptors.
 \end{sloppypar}
 
 \begin{sloppypar}
