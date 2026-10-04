@@ -62,7 +62,7 @@ static Yv *mem_scaleThree(Yv *t, Yv *parts, long disp, long bn, long xn);
 static Yv *mem_scaleVal(Yv *t, long v, long disp, long bn, long xn);
 static Yv *decode_str(Yv *s);
 static Yv *decode_oct(Yv *s, long k, long n);
-static long hash_str(Yv *s);
+long hash_str(Yv *s);
 Yv *labmap_new(long cap);
 Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
 Yv *labmap_get(Yv *m, Yv *name);
@@ -684,18 +684,31 @@ static Yv *decode_oct(Yv *s, long k, long n) {
    absent (first wins, matching linear-scan order). Plain Y only (arrays,
    longs, strings, ord) — nothing yv.c lacks already. */
 
-static long hash_str(Yv *s) {
+long hash_str(Yv *s) {
     /* byte_at, not ord(s[i:i + 1]): the slice allocated a throwaway string
      * per character, and the tree shaker hashes ~191k names per compile
-     * through this (native.c namemap_build/namemap_get). */
+     * through this (native.c namemap_build/namemap_get).
+     *
+     * Masked to 32 bits with a final shift-xor, as in src/y/asm.y -- and it has
+     * to be the same function, not just a same-shaped one: an object file
+     * carries a checksum over its body (native.c unit_obj), and a .yo the C
+     * copy wrote would not verify in the Y compiler (or the reverse) while
+     * this one kept the pre-mask version. What the Y copy changed and this one
+     * did not: no `% 1000000007` per byte. That is a 64-bit idiv -- twenty-odd
+     * instructions -- and with it a lookup in either table cost 509
+     * instructions a call, 2.6% of everything ycc executes. Both users
+     * take the result modulo a table size, so any well-spread 32-bit
+     * value is as good as a prime: masking to 32 bits keeps `h * 31` from
+     * overflowing (it cannot exceed 2^37), and the final shift-xor spreads
+     * the high bits down into the low ones the modulo keeps. */
     long h = 0;
     long i = 0;
     long n = yv_len(s);
     while (i < n) {
-        h = (h * 31 + ys_byte_at(s, i)) % 1000000007;
+        h = (h * 31 + ys_byte_at(s, i)) & 4294967295L;
         i = i + 1;
     }
-    return h;
+    return h ^ (h >> 13);
 }
 
 Yv *labmap_new(long cap) {

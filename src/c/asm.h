@@ -22,6 +22,7 @@ Yv *asm_assemble(Yv *text, int debug);
 Yv *ycc_assemble(Yv *asm_text, int debug);
 
 Yv *labmap_new(long cap);
+long hash_str(Yv *s);   /* the name hash, and an object's checksum */
 Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
 Yv *labmap_get(Yv *m, Yv *name);
 

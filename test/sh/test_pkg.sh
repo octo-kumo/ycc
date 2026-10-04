@@ -264,6 +264,23 @@ if cmp -s "$P/app/build/app" "$TMPD/app.2"; then
 else
     fail "a fresh build gives the same bytes as a cached one"
 fi
+# A byte flipped inside the object -- in a string constant, where the key and
+# the length both stay right -- used to ride through the cache: the key covers
+# what the unit was BUILT from and nothing covered its body, so the rebuild
+# linked the corrupt unit and the program printed the flipped text. The object
+# carries a checksum over its own bytes now.
+YO="$P/app/build/obj/c.yo"
+off=$(grep -abo 'hello' "$YO" | head -1 | cut -d: -f1)
+if [ -n "$off" ]; then
+    printf '\110' | dd of="$YO" bs=1 seek="$((off + 1))" conv=notrunc 2>/dev/null
+    yb "$YCC" "$P/app"
+    same_text "a flipped byte inside an object is rebuilt" "compiling c
+built build/app
+built build/tool" "$TMPD/out"
+    runs "and the program still prints what it should" "$APP_OUT" "$P/app/build/app"
+else
+    skip "a flipped byte inside an object is rebuilt" "no string constant in the object"
+fi
 agree "the diamond" "$P/app"
 if [ "$CYCC" -ef "$YCC" ]; then
     skip "an object another compiler wrote is rebuilt" "\$CYCC is \$YSELF"

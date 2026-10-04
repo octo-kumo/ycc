@@ -10202,12 +10202,25 @@ def obj_version() -> str {
     "ycc-unit 4\n"
 };
 
+// An object carries a checksum over its own bytes, after them.
+//
+// The key covers what the unit was BUILT from -- its text, its flags, the
+// interfaces it was compiled against -- and the length check covered
+// truncation, but nothing covered the body: one flipped byte inside a string
+// constant or a table entry rode straight through the cache, and the rebuild
+// linked the corrupt unit (a m.yo with a single byte changed rebuilt into a
+// program printing "hello From m"). asm.y's hash_str is the hash the compiler
+// already runs over ~191k names per compile, so it is both strong enough for
+// this and free.
 def unit_obj(u: Unit, key: str) -> str {
     let out: [str] = [];
     out += obj_version();
     out = pack_put(out, key);
+    let at_fields = len(join(out, ""));
     out = pack_put(out, u.name);
     out = pack_put(out, pack_unit_fields(u));
+    let body = join(out, "");
+    out = pack_put(out, tostring(asm.hash_str(body[at_fields:len(body)])));
     join(out, "")
 };
 
@@ -10218,11 +10231,22 @@ def unit_unobj(text: str, key: str) -> { ok: bool, unit: Unit } {
     if (text[:len(ver)] == ver) {
         let cur = { s: text, p: len(ver) };
         if (pack_get(cur) == key) {
-            let nm = pack_get(cur);
+            let body_at = cur.p;   // the name field starts here, and the
+            let nm = pack_get(cur);  // checksum covers it and the fields
             let ul = pack_len(cur);
-            if (cur.p + ul == len(text)) {
-                u = unit_read(cur, nm, true);
-                ok = cur.p == len(text);
+            let body_end = cur.p + ul;   // where unit_read starts, once the
+                                         // checksum has been checked
+            // the checksum field must be there (one byte at least), so an
+            // object written before this one is rebuilt rather than read at a
+            // byte past its end
+            if (body_end < len(text)) {
+                let sum = asm.hash_str(text[body_at:body_end]);
+                cur.p = body_end;
+                if (pack_num(cur) == sum && cur.p == len(text)) {
+                    cur.p = body_end - ul;
+                    u = unit_read(cur, nm, true);
+                    ok = cur.p == body_end;
+                }
             }
         }
     }

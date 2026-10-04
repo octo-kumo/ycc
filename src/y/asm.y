@@ -1360,4 +1360,4 @@ def ycc_assemble(asm_text: str, debug: bool) -> {ok: bool, bytes: [byte], octal:
     }
 };
 
-export { asm_assemble, ycc_assemble, labmap_new, labmap_put, labmap_get };
+export { asm_assemble, ycc_assemble, labmap_new, labmap_put, labmap_get, hash_str };

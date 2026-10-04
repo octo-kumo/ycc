@@ -12221,12 +12221,27 @@ Yv *std_unpack(Yv *pack, Yv *names) {
     return out;
 }
 
+/* An object carries a checksum over its own bytes, after them.
+ *
+ * The key covers what the unit was BUILT from -- its text, its flags, the
+ * interfaces it was compiled against -- and the length check covered
+ * truncation, but nothing covered the body: one flipped byte inside a string
+ * constant or a table entry rode straight through the cache, and the rebuild
+ * linked the corrupt unit (a m.yo with a single byte changed rebuilt into a
+ * program printing "hello From m"). asm.y's hash_str is the hash the compiler
+ * already runs over ~191k names per compile, so it is both strong enough for
+ * this and free. */
 Yv *unit_obj(Yv *unit, Yv *key) {
     Yv *out = yav(0);
     out = ya_push(out, obj_version());
     out = pack_put(out, key);
+    long at_fields = yv_len(ys_join(out, ys("")));
     out = pack_put(out, yr_get(unit, "name"));
     out = pack_put(out, pack_unit_fields(unit));
+    Yv *body = ys_join(out, ys(""));
+    out = pack_put(out,
+                   ys_long(hash_str(ys_slice(body, at_fields,
+                                             yv_len(body)))));
     return ys_join(out, ys(""));
 }
 
@@ -12237,12 +12252,24 @@ Yv *unit_unobj(Yv *text, Yv *key) {
     if (ys_eq(ys_slice(text, 0, yv_len(ver)), ver)) {
         Yv *cur = yr(2, "s", text, "p", yv_long(yv_len(ver)));
         if (ys_eq(pack_get(cur), key)) {
+            long body_at = yv_l(yr_get(cur, "p")); /* the name field starts
+             * here, and the checksum covers it and the fields */
             Yv *name = pack_get(cur);
             long ul = pack_len(cur);
-            long p = yv_l(yr_get(cur, "p"));
-            if (p + ul == yv_len(text)) {
-                unit = unit_read(cur, name, 1);
-                ok = yv_l(yr_get(cur, "p")) == yv_len(text);
+            /* where unit_read starts, once the checksum has been checked */
+            long body_end = yv_l(yr_get(cur, "p")) + ul;
+            /* the checksum field must be there (one byte at least), so an
+             * object written before this one is rebuilt rather than read at a
+             * byte past its end */
+            if (body_end < yv_len(text)) {
+                long sum = hash_str(ys_slice(text, body_at, body_end));
+                yr_set(cur, "p", yv_long(body_end));
+                if (pack_num(cur) == sum && yv_l(yr_get(cur, "p")) == yv_len(text)) {
+                    yr_set(cur, "p", yv_long(body_end - ul));
+                    unit = unit_read(cur, name, 1);
+                    ok = yv_l(yr_get(cur, "p")) == body_end;
+                    ;
+                }
                 ;
             }
             ;
