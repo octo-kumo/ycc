@@ -5,6 +5,7 @@
 //   -o OUTPUT    output path (executable, or .s file with -S)
 //   -S           emit assembly only (stdout, or the -o file)
 //   -t, --time   print per-phase time and heap use to stderr
+//   --target=NAME  object format and OS: linux (the default) or windows
 //   -g           add a symbol table and DWARF line info (for perf, gdb,
 //                valgrind, addr2line; see -h)
 //   -w           do not print warnings (lint.y)
@@ -16,6 +17,7 @@
 //   ycc vendor [DIR]   copy its git dependencies into DIR/vendor
 
 import tags from "./tags.y";
+import wintgt from "./target.y";
 import lexer from "./lexer.y";
 import parser from "./parser.y";
 import nasm from "./asm.y";
@@ -57,6 +59,16 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             };
         } else if (a == "-S") {
             asm_only = true;
+        } else if (a[0:9] == "--target=") {
+            parse_target(a[9:]);
+        } else if (a == "--target") {
+            if (i + 1 < n) {
+                i = i + 1;
+                parse_target(argv[i]);
+            } else {
+                puts("ycc: --target needs a name (linux, windows)\n");
+                exit(1);
+            };
         } else if (a == "--time" || a == "-t") {
             timing = true;
         } else if (a == "--no-exec") {
@@ -85,6 +97,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
+            puts("  --target=NAME  emit for NAME: linux (the default, an ELF)\n");
+            puts("               or windows (a PE32+ executable, x64)\n");
             puts("  -t, --time   print per-phase time and heap use to stderr\n");
             puts("  -g           add section headers, a symbol table (functions,\n");
             puts("               globals) and DWARF line info, so perf, gdb,\n");
@@ -118,6 +132,22 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         i = i + 1;
     };
     { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack }
+};
+
+// --target NAME: the one place a target name becomes the global every other
+// place reads (src/y/target.y).  A bad name is a driver failure with the
+// accepted spellings, not a silently-defaulted build: a program compiled for
+// the wrong OS is worse than one that did not compile.
+def parse_target(name: str) -> long {
+    if (name == "linux") {
+        res_target = "linux";
+    } else if (name == "windows") {
+        res_target = "windows";
+    } else {
+        puts("ycc: unknown target '" + name + "' (linux, windows)\n");
+        exit(1);
+    };
+    0
 };
 
 // ── the std pack ─────────────────────────────────────────────────────────

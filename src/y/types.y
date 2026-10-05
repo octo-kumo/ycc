@@ -3596,8 +3596,16 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                 }
             }
         } else if (name == "syscall") {
-            if (len(cargs) < 1 || len(cargs) > 7) {
-                st = fail(st, "syscall needs 1-7 arguments (number + up to 6 args)", node.line, node.col);
+            // Up to six arguments on SysV (rdi..r9), up to NINE on Win64:
+            // its `syscall` takes six in registers and the seventh and after
+            // at 32(%rsp), 40(%rsp), ... -- and NtWriteFile, the only way to
+            // put a byte on the standard output, takes nine. gen_syscall
+            // reserves that room itself on the Windows side.
+            let maxargs = 7;
+            if (target_is_windows()) { maxargs = 10; };
+            if (len(cargs) < 1 || len(cargs) > maxargs) {
+                let m = tostring(maxargs - 1);
+                st = fail(st, "syscall needs 1-" + tostring(maxargs) + " arguments (number + up to " + m + " args)", node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             } else {
                 let i = 0;

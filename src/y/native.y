@@ -4494,15 +4494,63 @@ def shift_imm(r: Node) -> long {
 };
 
 // ── calls ──────────────────────────────────────────────────────────────
-// Linux syscall arg regs (in order): rdi, rsi, rdx, r10, r8, r9.
+// Syscall arg registers. SysV: rdi, rsi, rdx, r10, r8, r9. Win64 `syscall`:
+// r10, r9, r8, rdx, rcx, r11 -- and it is the SEVENTH argument that lives at
+// 32(%rsp), not the sixth, so an intrinsic of at most six arguments (the
+// number plus six) needs nothing on the stack. That is the whole ABI delta
+// for the `syscall` intrinsic: one ladder, the number still in %rax.
 
 def syscall_reg(i: long) -> long {
+    if (target_is_windows()) { w_syscall_reg(i) } else { l_syscall_reg(i) }
+};
+
+def l_syscall_reg(i: long) -> long {
     if (i == 0) { insn.R_RDI }
     else if (i == 1) { insn.R_RSI }
     else if (i == 2) { insn.R_RDX }
     else if (i == 3) { insn.R_R10 }
     else if (i == 4) { insn.R_R8 }
     else { insn.R_R9 }
+};
+
+def w_syscall_reg(i: long) -> long {
+    if (i == 0) { insn.R_R10 }
+    else if (i == 1) { insn.R_R9 }
+    else if (i == 2) { insn.R_R8 }
+    else if (i == 3) { insn.R_RDX }
+    else if (i == 4) { insn.R_RCX }
+    else { insn.R_R11 }
+};
+
+// The same, for `_start`'s tail, which is built straight into the body's IR
+// (emit_one_fn) rather than through an EmitSt. The status is 0: the Linux
+// side zeroed %edi and the Windows side zeroes %rax before this.
+def ir_terminate(body: [long]) -> [long] {
+    if (target_is_windows()) {
+        body = insn.ir_push(body, insn.F_MOV_I_R, 0 - 1, insn.R_R10, 64, 0, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_R9, 32, insn.R_R9, 32, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_MOV_I_R, 44, 0, 64, 0, 0, 0, 0);
+    } else {
+        body = insn.ir_push(body, insn.F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_RDI, 32, insn.R_RDI, 32, 0, 0, 0);
+    };
+    insn.ir_push(body, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0)
+};
+
+// End the process with the status in %rax: exit_group(status) on Linux,
+// NtTerminateProcess(-1, status) on Windows. The two share the syscall
+// instruction and nothing else -- the number, the handle argument and the
+// register the status travels in all move.
+def gen_terminate(st: EmitSt) -> EmitSt {
+    if (target_is_windows()) {
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_R9, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, 0 - 1, insn.R_R10, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, 44, insn.R_RAX, 64, 0, 0, 0, 0);
+    } else {
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDI, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, 231, insn.R_RAX, 64, 0, 0, 0, 0);
+    };
+    emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0)
 };
 
 def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
@@ -5182,7 +5230,8 @@ def gen_rec_field_str(st: EmitSt, idx: long, ft: Type, path: [Type]) -> EmitSt {
 
 def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
     let args: [Node] = node.args;
-    // args[0] is the number; rest are a1..a6. Push all, pop into regs.
+    // args[0] is the number; the rest are the call's arguments. Push all, pop
+    // into registers.
     st = gen_push_args(st, args);
     let n = len(args) - 1;
     let i = n;
@@ -5196,7 +5245,39 @@ def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
         i = i - 1;
     };
     st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0)
+    let tail = target_is_windows() && len(args) - 1 > 6;
+    if (tail) { st = gen_syscall_tail(st, args); };
+    st = emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+    if (tail) { st = emit_insn(st, insn.F_ADD_I_R, 64, insn.R_RSP, 64, 0, 0, 0, 0); };
+    st
+};
+
+// Win64's seventh argument and after live on the stack, at 32(%rsp),
+// 40(%rsp), 48(%rsp) -- the caller's own frame, since the shadow space the
+// ABI reserves for register arguments sits at 8(%rsp)..32(%rsp) and our
+// frames do not reserve one. So the room is reserved HERE, immediately below
+// the current %rsp, which is exactly where the kernel reads: 64 bytes is
+// more than the three slots need and keeps the frame 16-aligned.
+//
+// NtWriteFile is why this exists at all: it takes nine arguments, and it is
+// the only way to put a byte on the standard output (the emitter's no-libc,
+// no-import-table rule leaves the Win32 API unreachable by address).
+def gen_syscall_tail(st: EmitSt, args: [Node]) -> EmitSt {
+    let n = len(args) - 1;
+    if (n > 6) {
+        st = emit_insn(st, insn.F_SUB_I_R, 64, insn.R_RSP, 64, 0, 0, 0, 0);
+        let i = 6;
+        while (i < n) {
+            st = gen(st, args[i + 1]);
+            let at = infer(st, args[i + 1]);
+            if (at.k == K.tstr) {
+                st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
+            };
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8 * i, -1, insn.R_RAX, 64);
+            i = i + 1;
+        };
+    };
+    st
 };
 
 // The frame offset of the closure record of the body being emitted, or -1
@@ -5319,6 +5400,10 @@ def gen_cmp_flags(st: EmitSt, node: Bin) -> EmitSt {
 };
 
 def gen_if(st: EmitSt, node: If) -> EmitSt {
+    gen_if_go(st, node)
+};
+
+def gen_if_go(st: EmitSt, node: If) -> EmitSt {
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
@@ -8875,9 +8960,7 @@ def gen_exit(st: EmitSt, node: Call) -> EmitSt {
     let eargs: [Node] = node.args;
     let ea = eargs[0];
     st = gen(st, ea);
-    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDI, 64, 0, 0, 0);
-    st = emit_insn(st, insn.F_MOV_I_R, 231, insn.R_RAX, 64, 0, 0, 0, 0);
-    st = emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+    st = gen_terminate(st);
     // exit() terminates the process; the epilogue (ret / exit(0)) is
     // unreachable. Emit a jump to the function end so the backend never
     // falls through into dead code (and exit codes are never masked).
@@ -9041,9 +9124,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     body = body + f.ir;
     body = insn.ir_push(body, insn.IR_LABEL, f.end_label, 0, 0, 0, 0, 0, 0);
     if (is_main) {
-        body = insn.ir_push(body, insn.F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
-        body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_RDI, 32, insn.R_RDI, 32, 0, 0, 0);
-        body = insn.ir_push(body, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+        body = ir_terminate(body);
     } else {
         body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RBP, 64, insn.R_RSP, 64, 0, 0, 0);
         body = insn.ir_push(body, insn.F_POP_R, insn.R_RBP, 64, 0, 0, 0, 0, 0);
