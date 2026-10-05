@@ -23,7 +23,7 @@
 //
 // ── modules ───────────────────────────────────────────────────────────────
 //
-// args.y    vendored from examples/_toolkit/, unmodified
+// args    vendored from examples/_toolkit/, unmodified
 // b64.y     RFC 4648 encode and decode, both written here
 // csvio.y   RFC 4180 parse and emit, plus the two JSON bridges
 // jsonval.y the JSON value, a strict parser, a deterministic emitter
@@ -392,7 +392,7 @@ const HELP_LINES: [str] = [
 
 const COMMANDS: [str] = ["json", "csv", "base64", "selftest", "demo", "help", "version"];
 
-// Every option, so `selftest` can refuse all of them by name. args.y
+// Every option, so `selftest` can refuse all of them by name. args
 // exposes `has` per option rather than "was anything given", so the check
 // walks the list instead of asking one question.
 const ALL_OPTS: [str] = ["op", "indent", "path", "sort-keys", "delim", "line-end",

@@ -1,3 +1,4 @@
+import tui;
 // sink.y -- the deterministic output path behind --no-tty, and the text form of
 // a frame.
 //
@@ -16,7 +17,6 @@
 // digit scratch and the frame digest is over the cells rather than the byte
 // stream, so a text dump and a colour dump have separate checksums.
 
-import fb;
 
 const OB_CAP: long = 65536;
 const FNV_SEED: long = 0 - 3750763034362895579;   // 14695981039346656037
@@ -110,10 +110,10 @@ def out_glyph(cp: long) -> void {
     let c = cp;
     if (c < 0) { c = 32; };
     if (c > 1114111) { c = 65533; };
-    let n = fb.utf8_len(c);
+    let n = tui.utf8_len(c);
     let i = 0;
     while (i < n) {
-        out_byte(fb.utf8_byte(c, i));
+        out_byte(tui.utf8_byte(c, i));
         i = i + 1;
     }
 };
@@ -133,7 +133,7 @@ def out_written() -> long { WRITTEN };
 // examples: the half-block glyph carries the lower half's colour in the cell
 // BACKGROUND, so a lighting change can be a background-only change and a
 // digest over codepoints alone would call that frame unchanged.
-def grid_digest(s: fb.Surface) -> long {
+def grid_digest(s: tui.Surface) -> long {
     let h: long = FNV_SEED;
     let n = s.rows * s.cols;
     let i = 0;
@@ -151,7 +151,7 @@ def grid_digest(s: fb.Surface) -> long {
 // is why the deterministic output is readable in a diff and not merely
 // comparable.
 //
-// Each glyph goes through fb.utf8_byte into the module-level byte buffer and
+// Each glyph goes through tui.utf8_byte into the module-level byte buffer and
 // leaves through one write(2).  That is the only route to a non-ASCII glyph in
 // this language: `line = line + chr(cp)` segfaults (str + byte, examples/
 // BUGS.md), and chr() is byte-wide anyway -- chr(9608) is a ONE-byte string
@@ -159,7 +159,7 @@ def grid_digest(s: fb.Surface) -> long {
 // Every glyph a renderer wants (the block elements, the braille block from
 // U+2800) is outside ASCII.  Filed as SUGGESTIONS: Y has no way to build a
 // `str` from a codepoint at all.
-def grid_text(s: fb.Surface) -> void {
+def grid_text(s: tui.Surface) -> void {
     let r = 0;
     while (r < s.rows) {
         let c = 0;
@@ -186,7 +186,7 @@ def out_capture(fd: long, n: long) -> void {
         if (take > 4096) { take = 4096; };
         let i = 0;
         while (i < take) {
-            CHUNK[i] = fb.capture_byte(at + i);
+            CHUNK[i] = tui.capture_byte(at + i);
             i = i + 1;
         };
         syscall(1, fd, &CHUNK[0], take);

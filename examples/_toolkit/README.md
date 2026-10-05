@@ -1,46 +1,64 @@
-# `examples/_toolkit/` — shared modules for the examples campaign
+# `examples/_toolkit/` — what is left here, and where the rest went
 
-Shared, tested code the examples vendor (§4 of `ORCHESTRATOR.md`). An example
-**copies** the file it wants into its own folder; nothing imports across folders
-at run time.
+Four of the five modules that used to live in this folder now live in **std**,
+and the examples import them:
 
-> This file is written by the `fx.y` (wave 0a) agent. The other modules in this
-> folder landed in parallel — add your section, do not replace the file. The
-> authoritative copy of the `fx` documentation is the header comment of `fx.y`
-> itself, which is deliberately long enough to stand alone.
-
-| file | what | self-test |
+| was | is now | an example writes |
 |---|---|---|
-| `fx.y` | integer fixed-point maths: no floats, no `sin`, no `sqrt` | `fx_test.y` — 292 checks, exits 0 |
-| `term.y` | termios raw mode, window size, key decode, alt screen | `term_test.y`, `term_pty_test.py` |
-| `fb.y` | ANSI framebuffer: SGR, truecolor, glyph ramp, row diffing | `fb_test.y` |
-| `args.y` | flag parsing, usage text, exit codes | `args_test.y` — 57 checks |
-| `time.y` | sub-millisecond pacing, fps meter | `time_test.y` — 47 checks, ~7 s of real pacing |
+| `term.y` (1156 lines) | `std/tui.y` | `import tui;` — raw mode, window size, key decode, alt screen, escape output |
+| `fb.y` (975 lines) | `std/tui.y` | the same import — the ANSI surface, SGR, truecolor, glyph ramp, row diffing |
+| `time.y` (245 lines) | `std/tui.y`, and `clock_us()` is a builtin | the frame pacer and the fps meter |
+| `args.y` (512 lines) | `std/args.y` | `import args;` — flag parsing, usage text, exit codes |
 
-`time.y` had **no** self-test while wave 0d's gate criterion named it
-explicitly ("sustained target fps"), which made it the one wave-0 module
-whose criterion was a *number* with nothing checking that number.
-`time_test.y` closes that, and it is the only suite here that needs no pty —
-but it does need real time, because a sustained *rate* cannot be checked
-without pacing frames for seconds:
+**`fx.y` is the only module still here.** SUGGESTIONS #1 proposes `std/math` for
+it, and that does not exist, so `fx.y` stays vendored: an example that wants it
+copies the file into its own folder, byte-identical, exactly as before. The
+other fourteen copies in the corpus are unchanged by this migration.
+
+So this folder holds `fx.y` and five self-test suites — and four of those suites
+now test **std** rather than a sibling copy. `fb_test.y` and `term_test.y`
+exercise the two halves of `std/tui.y`, `time_test.y` its pacer and fps meter,
+`args_test.y` `std/args.y`. They were written against this folder's own copies
+and were carried across by the same rename as everything else; the behaviour
+they assert did not change, so their check counts did not either:
+
+| suite | checks | tests |
+|---|---|---|
+| `fx_test.y` | 292 | `fx.y`, still vendored |
+| `args_test.y` | 61 | `std/args.y`, and the `tui` pacer it paces with |
+| `fb_test.y` | 47 | the surface half of `std/tui.y` |
+| `term_test.y` | 43 | the terminal half of `std/tui.y` — needs a real pty |
+| `time_test.y` | 47 | the `tui` pacer and fps meter — needs real time |
 
 ```
-(ulimit -S -v 3670016; \
+(ulimit -S -v 3670016; \\
+ ../../refs/ycc.ref args_test.y -o /tmp/a && /tmp/a) </dev/null
+```
+
+Nothing imports across folders at run time. An example that wants `fx.y`
+**copies** the file into its own folder; one that wants `tui` or `args` names the
+std unit, and the compiler resolves it from its own std directory — which is why
+39 folders could drop 80 vendored files in one pass and every one of them still
+builds from a clean checkout of its own folder.
+
+`time_test.y` needs no pty and does need real time, because a sustained *rate*
+cannot be checked without pacing frames for seconds:
+
+```
+(ulimit -S -v 3670016; \\
  ../../refs/ycc.ref time_test.y -o /tmp/tim && /tmp/tim) </dev/null
 ```
 
-It measures the sustained rate **from outside** `time.y`'s own meter, and
-that is deliberate rather than redundant. `fps_new(win_us = 500000)` closes
-a half-second window holding ~15 frames at 30 fps, so one frame either way
-is ~6.7% and the on-screen number cannot resolve 29 from 30. An earlier
-harness in this campaign read that meter, got 29 against a target of 30,
-and nearly filed a defect against an example that was holding **29.99**.
+It measures the sustained rate **from outside** the pacer's own meter, and that
+is deliberate rather than redundant. `fps_new(win_us = 500000)` closes a
+half-second window holding ~15 frames at 30 fps, so one frame either way is
+~6.7% and the on-screen number cannot resolve 29 from 30. An earlier harness in
+this campaign read that meter, got 29 against a target of 30, and nearly filed a
+defect against an example that was holding **29.99**.
 
-Its allocation section carries a deliberate **control**: a `[0; 4]` literal
-per iteration, which *must* move `heap_used()`. If that control ever stops
-allocating, every "allocates nothing" result in the file has become
-vacuous — so the suite checks its own instrument, and prints what the
-control measured.
+Its allocation section carries a deliberate **control**: a `[0; 4]` literal per
+iteration, which *must* move `heap_used()`. If that control ever stops moving,
+the section is not measuring what it thinks it is.
 
 ## Pinned compiler
 
@@ -381,24 +399,35 @@ Nothing here is a bug in Y, and nothing here is patched in the compiler. See
 
 ## Vendoring
 
-Copy `fx.y` into your example's folder and import it there. Do not import
-`../_toolkit/fx.y`, and do not edit the copy: if you need different behaviour,
-add your own file beside it. Record which revision you froze in your README.
+Only `fx.y` is vendored now. Copy it into your example's folder and import it
+there. Do not import `../_toolkit/fx.y`, and do not edit the copy: if you need
+different behaviour, add your own file beside it. Record which revision you
+froze in your README.
 
 `fx.y` has no dependencies beyond itself — no other toolkit module, no std
 module, no asset file — so a vendored copy is exactly this one file.
 
+The other four are **not** vendored and must not be: `tui` and `args` are std
+units, named by `import tui;` / `import args;` and resolved by the compiler from
+its own std directory. A folder that carries its own `tui.y` would shadow the
+std one — which is exactly the trap this migration had to avoid, and the reason
+the file-inventory tables in the 39 READMEs lost four rows each rather than four
+rewrites.
+
 ## Errata in the frozen sources
 
-The frozen files are **byte-identical copies** vendored into every gated
-example, so a fix here would invalidate their recorded shas and force a
-re-gate of examples that already passed. Where a frozen file is wrong, the
-correction is recorded here instead of edited in.
+While four modules were vendored byte-identically into every gated example, a fix
+to one of them would have invalidated the recorded shas of folders that had
+already passed, so corrections were recorded here instead of edited in. **Three
+of those four modules are std now, and a fix is an ordinary edit to
+`src/y/std/`** — no re-gate of the corpus is implied by changing a std unit that
+no example's bytes depend on. What follows is kept because each entry describes a
+defect that is still in the code, not merely the policy that hid it.
 
-**`term.y` §`read_key_timeout` — the header comment is wrong by 10×.** It
-says the deadline is "rounded UP to the next 10 ms and a request below 10 ms
-becomes 10 ms". The code is `let ds = (ms + 99) / 100;` — **100 ms**, because
-`VTIME` counts *deciseconds*. The comment should read "the next 100 ms".
+**`tui` §`read_key_timeout` — the header comment is wrong by 10×.** It says the
+deadline is "rounded UP to the next 10 ms and a request below 10 ms becomes
+10 ms". The code is `let ds = (ms + 99) / 100;` — **100 ms**, because `VTIME`
+counts *deciseconds*. The comment should read "the next 100 ms".
 
 The code is right; only the comment is wrong. Measured on the pinned compiler
 `c53cc41524a7baa2`: **five `read_key_timeout(1)` calls took 518 ms** (~104 ms
@@ -412,6 +441,12 @@ reports **~0.6 fps with its frame counter stuck on 1**. It presents as "the
 animation is slow", so it survives review.
 
 **Rule for any live view: poll with `read_key_timeout(0)`** — non-blocking,
-returns `KEY_NONE` immediately — and let `time.y`'s pacer own the frame
+returns `KEY_NONE` immediately — and let the `tui` pacer own the frame
 deadline. This is what `life.y` does, and it is why `life` holds 30.00 fps
-where a 1 ms poll would not.
+
+**`fb`'s `emit_num` dropped a zero in the tens place.** Filed in
+`examples/BUGS.md` as "fb.y's emit_num drops a zero digit"; the title names the
+module as it was then. The fix belongs in `std/tui.y` now — it is a defect in
+the unit, not in any example — but changing it would alter the byte stream every
+drawing example produces, so `maze` and `wavefunction` still nudge their own
+palettes around it and say so in the source.

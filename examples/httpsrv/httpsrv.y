@@ -17,13 +17,12 @@
 // the model's `mode` and a real terminal in front of it.
 
 import args;
-import term;
-import time;
 import http;
 import json;
 import httpc;
 import srv;
 import dash;
+import tui;
 
 const WIN = 32;                 // the model's window, samples
 
@@ -675,21 +674,21 @@ def transcript(port: long, samples: long, seed: long, ephemeral: bool) -> long {
 // ── the live view ──────────────────────────────────────────────────────
 
 def live(port: long, poll_ms: long) -> long {
-    if (!term.is_tty(1)) {
+    if (!tui.is_tty(1)) {
         eputs("httpsrv --live: stdout is not a terminal.\n");
         eputs("httpsrv: the default run prints the same frame as text, and\n");
         eputs("httpsrv: --self-test checks the server it would have drawn.\n");
         stop_server();
         return 1;
     };
-    term.raw_mode();
-    term.arm_watchdog();
-    term.enter_screen();
+    tui.raw_mode();
+    tui.arm_watchdog();
+    tui.enter_screen();
     dash.winsize();
     let warned = false;
     let fps = 1000 / poll_ms;
-    let pacer = time.pacer_new(fps);
-    let meter = time.fps_new();
+    let pacer = tui.pacer_new(fps);
+    let meter = tui.fps_new();
     let go = true;
     let paused = false;
     let worst = 0;
@@ -702,7 +701,7 @@ def live(port: long, poll_ms: long) -> long {
         // be the thing that waits (read_key_timeout cannot be finer than
         // 100 ms -- VTIME counts deciseconds -- so 0 is the only value a
         // frame loop may pass).
-        let waited = time.pacer_next(pacer);
+        let waited = tui.pacer_next(pacer);
         if (waited >= 0) {
             // pull() answers the status, so 200 is success -- writing
             // `!= 0` here made every good poll look like a failure, and
@@ -721,30 +720,30 @@ def live(port: long, poll_ms: long) -> long {
                 warned = true;
             };
             dash.paint(st, false);
-            time.fps_tick(meter);
-            if (worst < time.pacer_lag_us(pacer)) { worst = time.pacer_lag_us(pacer); };
+            tui.fps_tick(meter);
+            if (worst < tui.pacer_lag_us(pacer)) { worst = tui.pacer_lag_us(pacer); };
         };
-        let k = term.read_key_timeout(0);
+        let k = tui.read_key_timeout(0);
         if (k == 113 || k == 27) { go = false; };        // q or ESC
         if (k == 32) { paused = !paused; };              // space
     };
     // read the heap BEFORE the report lines: each of them concatenates
     // strings for its own text, and the loop must not be charged for them
     let h1 = heap_used();
-    term.leave_screen();
+    tui.leave_screen();
     puts("\n");
-    puts(time.fps_line(meter) + "\n");
-    puts("  frames " + tostring(time.fps_frames(meter)) + ", dropped " + tostring(time.pacer_dropped(pacer)) +
+    puts(tui.fps_line(meter) + "\n");
+    puts("  frames " + tostring(tui.fps_frames(meter)) + ", dropped " + tostring(tui.pacer_dropped(pacer)) +
          ", worst lag " + tostring(worst / 1000) + " ms, polls that failed " + tostring(misses) + "\n");
     puts("  heap over the loop: " + tostring(h0) + " -> " + tostring(h1) +
-         " (delta " + tostring(h1 - h0) + " for " + tostring(time.fps_frames(meter)) + " frames)\n");
+         " (delta " + tostring(h1 - h0) + " for " + tostring(tui.fps_frames(meter)) + " frames)\n");
     let code = stop_server();
     puts("  server stopped: wait_pid " + tostring(code) + "\n");
     // The view's own exit code, NOT the server's 143 -- a SIGTERMed server
     // is how this program stops it, so 143 here would report a clean quit
     // as a failure. restore_exit puts the terminal back and then exits, so
     // this has to be the last thing that happens.
-    term.restore_exit((if (misses > 0) { 1 } else { 0 }));
+    tui.restore_exit((if (misses > 0) { 1 } else { 0 }));
     0
 };
 

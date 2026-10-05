@@ -309,7 +309,7 @@ load, not the program. The 60×24 figure is the number to quote: **300 frames
 in 234 ms, 128 fps**.
 
 **30 fps holds up to about 120×40 cells**, which is most terminals. Past that
-the renderer cannot keep up and `time.y`'s pacer does what it is built to do:
+the renderer cannot keep up and `tui`'s pacer does what it is built to do:
 drop the frame, keep the absolute schedule, and let the rate recover. The
 status line's fps meter shows the truth when that happens. The interactive run
 at 80×24 measured **30.0 fps** over 120 frames (4.003 s wall clock).
@@ -422,7 +422,7 @@ different shape.
 | `golden/frame-012.txt` | 35 | tilted — the shading wraps, the hole almost closed |
 | `golden/frame-045.txt` | 35 | nearly edge on — the torus seen from its own plane |
 
-### The frozen toolkit
+## The std units this uses
 
 Vendored byte-identical from `examples/_toolkit/` and **not edited** (the folder
 contract, `ORCHESTRATOR.md` §4):
@@ -430,15 +430,11 @@ contract, `ORCHESTRATOR.md` §4):
 | file | sha256 prefix | lines |
 |---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 |
-| `fb.y` | `95a7663b7f1c7a90` | 962 |
-| `term.y` | `07135b31109fcecd` | 1156 |
-| `time.y` | `6050605cfcfb35db` | 245 |
-| `args.y` | `cdac36da1cf2cd85` | 19081 |
 
 Re-verify with:
 
 ```sh
-cd examples/donut && sha256sum fx.y fb.y term.y time.y args.y
+cd examples/donut && sha256sum fx.y tui tui tui args
 ```
 
 Every toolkit call this example makes: `fx.mul` `fx.cos` `fx.sin` `fx.abs`
@@ -591,6 +587,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

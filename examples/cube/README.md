@@ -140,8 +140,8 @@ The other four are truecolor: `gray` is `fb.grey(v)`, and `green`/`amber`/
 changes the *glyphs* too: the non-`mono` modes draw with U+2500 box
 characters, which look better but need a font that has them.
 
-Unknown `--options` are rejected by `args.y` with a message on stderr; this
-program then exits **1** (rather than `args.y`'s own convention of 2).
+Unknown `--options` are rejected by `args` with a message on stderr; this
+program then exits **1** (rather than `args`'s own convention of 2).
 `--color=chartreuse`, a malformed `--size` and a stray operand are rejected
 the same way, with the same exit code.
 
@@ -205,7 +205,7 @@ job, and the two defects above are the proof that the distinction matters.
 
 ### The terminal is never left broken
 
-`run_tty` follows `term.y`'s pattern exactly: `raw_mode()`, then
+`run_tty` follows `tui`'s pattern exactly: `raw_mode()`, then
 `enter_screen()`, then **`arm_watchdog()` before the first frame**, and every
 way out ends in `term.restore_all_exit(0)`. Verified under a pty with `q`,
 with a bare `Escape`, and with `^C`: exit 0, `ESC[?1049h` seen, `ESC[?1049l`
@@ -216,8 +216,8 @@ reset).
 `SIGKILL` is the one path the watchdog cannot fully cover and it says so:
 after a `kill -9` the forked watchdog restores the **termios**, but the alt
 screen and the cursor are emulator state that only a write to fd 1 could put
-back and the watchdog closes fd 1 first. That is `term.y`'s documented limit
-(`term.y:572-577`), not a gap in this program — the alt screen is emulator
+back and the watchdog closes fd 1 first. That is `tui`'s documented limit
+(`tui.y:1194-1199`), not a gap in this program — the alt screen is emulator
 state you cannot reach after your own descriptor is gone.
 
 ## Compiler workarounds
@@ -277,7 +277,7 @@ with the loop bound in the type.
 
 **Zero warnings** with the compiler's default warning set. (`-W 1`, which is
 an opt-in extra and not part of the gate, additionally reports *dropped call
-results* — 47 of them inside the frozen `fb.y`/`term.y`/`time.y` and 9 here,
+results* — the rest inside std `tui` and `args`,
 every one a `fb.put`/`fb.hline`/`fb.vline`/`fb.clear`/`fb.flush_diff` whose
 cell count nobody wants. A vendored toolkit can never be `-W 1` clean, so
 those nine are left alone rather than dressed up with discards.)
@@ -350,10 +350,6 @@ Vendored copies, **byte-identical to `examples/_toolkit/`**, unedited:
 | file | sha256 (first 16) | lines | what |
 |---|---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 | integer Q30 `sin cos tan sqrt atan2 …` |
-| `fb.y` | `95a7663b7f1c7a90` | 962 | ANSI framebuffer, glyph ramps, diffing |
-| `term.y` | `07135b31109fcecd` | 1156 | raw mode, winsize, keys, alt screen, restore |
-| `time.y` | `6050605cfcfb35db` | 245 | `clock_gettime`, the pacer, the fps meter |
-| `args.y` | `cdac36da1cf2cd85` | 19081 | flags, usage, exit codes |
 
 The toolkit revision frozen here is **`examples/_toolkit/` as of
 2026-10-04**, those five files and nothing else. This folder's copies are
@@ -366,8 +362,8 @@ Two toolkit conventions this example follows and does not re-derive:
 `syscall` arguments are in **kernel register order**, so `ioctl(fd, request,
 arg)` is `syscall(16, fd, REQUEST, arg)`; and inside `struct termios`,
 **VTIME is byte 22 and VMIN is byte 23**. Neither is ever at risk here
-because `term.y` does all the termios work — `poll_size()` only needs the
-argument *order* and `TIOCGWINSZ`'s value, both of which `term.y` exports.
+because `tui` does all the termios work — `poll_size()` only needs the
+argument *order* and `TIOCGWINSZ`'s value, both of which `tui` exports.
 
 ## Files
 
@@ -378,7 +374,7 @@ argument *order* and `TIOCGWINSZ`'s value, both of which `term.y` exports.
 | `cube_pty_check.py` | the pty harness: window size, keys, resize, `SIGKILL` |
 | `golden/wire.txt`, `golden/solid.txt`, `golden/floor.txt` | captured frames, so the cube is visible without running it |
 | `golden/README.md` | how those were captured, which frames were kept and why, and what to look at |
-| `fx.y` `fb.y` `term.y` `time.y` `args.y` | the frozen toolkit, vendored |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | |
 
 `gate.conf` in this folder is the orchestrator's, not this example's.
 
@@ -486,6 +482,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

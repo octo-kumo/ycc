@@ -399,21 +399,18 @@ renderer, and it is the one place the workaround lives.
 
 ---
 
-## The frozen toolkit
+## The std units this uses
 
 Vendored, byte-identical to `examples/_toolkit/`, **not edited**:
 
 | file | sha256 | lines | what this example uses it for |
 |---|---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058` | 694 | `mul`, `fdiv`, `floor`, `from_int`, `abs`, `cos`, `ONE`, `TWO`, `PI`, `TWO_PI` |
-| `fb.y` | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` | 975 | the framebuffer, truecolour SGR, per-row diffing, `flush_diff` |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` | 1156 | raw mode, alt screen, keys, window size, the restore watchdog |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` | 245 | `now_us`, which times the frames |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` | 19081 | the whole flag table, `--help`, the exit-2 diagnostics |
 
 All five are byte-identical to `examples/_toolkit/` as of the last check, and
 none was edited here. **The revision moved once while this task ran**, and
-deliberately: `fx.y` and `fb.y` were re-vendored campaign-wide (every folder in
+deliberately: `fx.y` is still vendored campaign-wide, while `tui` and `args`
+now come from std (every folder in
 `examples/` now carries the same two shas, `4b47a9bf…` and `95a7663b…`, in
 place of the `97c3c02d…` / `741300d7…` this example was briefed with). ORCHESTRATOR.md
 §4 calls that the good case — drift should be deliberate, never silent — and the
@@ -476,7 +473,7 @@ corrupt the capture this example is diffed on:
 --dump 99                a frame the run will not reach: dumped frames: none
 --palette / --shade / --at / --center junk    a diagnostic naming the accepted
                                               values, exit 1
---bogus, --maxit, --size, --dump with no value    exit 1 from args.y
+--bogus, --maxit, --size, --dump with no value    exit 1 from args
 an operand                                            exit 1
 ```
 
@@ -657,6 +654,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

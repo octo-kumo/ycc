@@ -29,11 +29,6 @@ different paths, same bytes):
 
 Vendored toolkit, byte-identical to `examples/_toolkit/`:
 
-| file | sha256 | used for |
-|---|---|---|
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` | every flag: `--fen`, `--depth`, `--name`, `--moves`, `--split`, `--check`, `--bench`, `--heap`, `--threads`, `--positions` |
-| `time.y`  | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` | `time.now_us()` in `--bench` — it reads CLOCK_MONOTONIC into module scratch and allocates nothing, which `clock_us()` does not |
-
 `ref_perft.py` and `queue_test.y` are development/test tools, not part of the
 build; see *Cross-checks* and *The bug in the pool* below.
 
@@ -274,7 +269,7 @@ Everything here is a property of Y as documented, not a bug and not filed:
   (`ms_of`, `rate_of`, `group` and the speedup are all integer), no `sort` and
   no `push`.
 - `time.now_us()` rather than `clock_us()`, which allocates two words per call —
-  the reason `time.y` is vendored for one function.
+  the reason this folder reaches for the whole of std `tui` for one function.
 
 ## Honest limits
 
@@ -379,6 +374,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

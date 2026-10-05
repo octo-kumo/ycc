@@ -1,3 +1,4 @@
+import tui;
 // sink.y -- the deterministic output path behind --no-tty.
 //
 // Everything the program prints on the headless path goes through this file,
@@ -9,7 +10,6 @@
 // would allocate every frame -- which is the whole thing the renderer is trying
 // to avoid.
 
-import fb;
 
 const OB_CAP: long = 65536;
 const FNV_SEED: long = -3750763034362895579;   // 14695981039346656037, signed
@@ -108,10 +108,10 @@ def out_glyph(cp: long) -> void {
     let c = cp;
     if (c < 0) { c = 32; };
     if (c > 1114111) { c = 65533; };
-    let n = fb.utf8_len(c);
+    let n = tui.utf8_len(c);
     let i = 0;
     while (i < n) {
-        out_byte(fb.utf8_byte(c, i));
+        out_byte(tui.utf8_byte(c, i));
         i = i + 1;
     }
 };
@@ -137,7 +137,7 @@ def out_written() -> long { WRITTEN };
 // byte chunks.  This is how --ansi gets the frame out: the headless path
 // otherwise throws the byte stream away.  It copies rather than pointing at
 // fb's buffer because fb exposes the capture one byte at a time
-// (fb.capture_byte), and a write(2) per byte would turn a 24 KiB frame into
+// (tui.capture_byte), and a write(2) per byte would turn a 24 KiB frame into
 // 24000 syscalls; a 4 KiB staging buffer makes it eight.
 let CHUNK: [byte; 4096] = [0; 4096];
 
@@ -148,7 +148,7 @@ def out_capture(fd: long, n: long) -> void {
         if (take > 4096) { take = 4096; };
         let i = 0;
         while (i < take) {
-            CHUNK[i] = fb.capture_byte(at + i);
+            CHUNK[i] = tui.capture_byte(at + i);
             i = i + 1;
         };
         syscall(1, fd, &CHUNK[0], take);
@@ -156,7 +156,7 @@ def out_capture(fd: long, n: long) -> void {
     }
 };
 
-def grid_digest(s: fb.Surface) -> long {
+def grid_digest(s: tui.Surface) -> long {
     let h: long = FNV_SEED;
     let n = s.rows * s.cols;
     let i = 0;
@@ -174,7 +174,7 @@ def grid_digest(s: fb.Surface) -> long {
 // tail of the --no-tty output are, and it is why the deterministic output is
 // readable in a diff and not merely comparable.
 //
-// Each glyph goes through fb.utf8_byte into the module-level byte buffer, one
+// Each glyph goes through tui.utf8_byte into the module-level byte buffer, one
 // write(2) at the end.  That is not a stylistic choice, it is the third way
 // round a hole the language has:
 //
@@ -190,7 +190,7 @@ def grid_digest(s: fb.Surface) -> long {
 //
 // So the buffer it is.  Filed as a suggestion: Y has no way to make a `str` from
 // a Unicode codepoint at all.
-def grid_text(s: fb.Surface) -> void {
+def grid_text(s: tui.Surface) -> void {
     let r = 0;
     while (r < s.rows) {
         let c = 0;
@@ -208,7 +208,7 @@ def grid_text(s: fb.Surface) -> void {
 // byte chunks.  This is how --ansi gets the frame out: the headless path
 // otherwise throws the byte stream away.  It copies rather than pointing at
 // fb's buffer because fb exposes the capture one byte at a time
-// (fb.capture_byte), and a write(2) per byte would turn a 24 KiB frame into
+// (tui.capture_byte), and a write(2) per byte would turn a 24 KiB frame into
 // 24000 syscalls; a 4 KiB staging buffer makes it eight.
 let CHUNK: [byte; 4096] = [0; 4096];
 
@@ -219,7 +219,7 @@ def out_capture(fd: long, n: long) -> void {
         if (take > 4096) { take = 4096; };
         let i = 0;
         while (i < take) {
-            CHUNK[i] = fb.capture_byte(at + i);
+            CHUNK[i] = tui.capture_byte(at + i);
             i = i + 1;
         };
         syscall(1, fd, &CHUNK[0], take);

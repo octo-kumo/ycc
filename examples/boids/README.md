@@ -301,13 +301,13 @@ concatenation at all, and the per-frame cost is confirmed independently by
 
 ### The render loop
 
-The interactive path is the shape `term.y`'s header asks for: raw mode, alt
+The interactive path is the shape `tui`'s header asks for: raw mode, alt
 screen, the crash watchdog, and **one** `restore_all_exit` at the bottom that
 every early exit routes through. `pty_check.py` asserts on every path — the quit
 key, `Escape`, `Ctrl-C`, a resize, and an error path that never enters the alt
 screen — that the alt screen is left, the cursor is shown and termios is restored.
 
-The keyboard is polled with **`read_key_timeout(0)`** and `time.y`'s pacer owns
+The keyboard is polled with **`read_key_timeout(0)`** and `tui`'s pacer owns
 the deadline. `read_key_timeout(ms)` spends its wait in the terminal's `VTIME`,
 which counts **deciseconds**, so any non-zero request rounds *up* to the next
 100 ms: `read_key_timeout(20)` is a 100 ms block, which at a 33 ms frame period
@@ -375,10 +375,6 @@ Copied byte-identical with `cp` from `examples/_toolkit/` and **not modified**:
 | file | sha256 |
 |---|---|
 | `fx.y`   | `4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058` |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` |
-| `fb.y`   | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` |
 
 Everything this example needs of its own is in a file beside them:
 `flock.y`, `report.y`, `check.y`. `gate.py` item 1 compiles all nine `.y` files
@@ -395,7 +391,7 @@ language that the code works around, and each is visible where it happens.
 | what | where | why |
 |---|---|---|
 | `a / b` on two fixed-point values is their **ratio** | `flock.qmul`/`qdiv`/`q32`/`unit`/`steer`, checked in `--check` group 1 | a scaled quotient needs the 65536 in the numerator. Cost this example two real defects; `--check` and `inject.sh` #5 now pin it |
-| `term.size()` builds a **record literal** per call (~40 B) | `boids.y`'s own `winsize()` | polling it once a frame leaks 40 B a frame. The frozen `term.y` is not edited; the four lines it would take to fix it upstream are written out instead, into a module-level `[byte; 64]`, returning one packed `long` so the allocation count stays at zero |
+| `tui.size()` builds a **record literal** per call (~40 B) | `boids.y`'s own `winsize()` | polling it once a frame leaks 40 B a frame. The frozen `tui` is not edited; the four lines it would take to fix it upstream are written out instead, into a module-level `[byte; 64]`, returning one packed `long` so the allocation count stays at zero |
 | a `str` built by concatenation allocates | `boids.y`'s `status()` takes the rule names as a parameter | `mask_name()` is three concatenations. Called from the render loop it leaked 168 B a frame; found by `--stats`, and `pty_check.py` group 8 asserts the heap stays put over 241 live frames |
 | a literal array or record inside a loop body allocates 64/40 B an iteration | `flock.y`'s `Flock`, `report.y`'s buffers, `check.y`'s `TALLY`/`HD_A`/`HD_B` | the heap is an arena. All the scratch is module-level and sized by a literal |
 | `[0; n]` needs an integer **literal** size | `report.y`'s `GRID` | so the text grid is sized for the largest world the store allows (256×129 = 33024) rather than from a variable at run time |
@@ -516,6 +512,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

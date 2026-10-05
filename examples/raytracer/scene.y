@@ -32,7 +32,7 @@
 //   rather than in a record.
 
 import fx;
-import fb;
+import tui;
 
 // ───────────────────────────────────────────────────────────────── scale ────
 
@@ -80,7 +80,7 @@ let PLD: [long; 2] = [0 - 65536, 0 - 393216];
 // the cheapest way to give the deeper levels something to see.
 let SREFL: [long; 6] = [0, 255, 110, 0, 45, 0];
 
-// Base albedo per object, filled by init() because fb.rgb is a call.
+// Base albedo per object, filled by init() because tui.rgb is a call.
 let OBJRGB: [long; 6] = [0, 0, 0, 0, 0, 0];
 
 let CHKA: long = 0;                 // the floor's checkerboard, two greys
@@ -104,19 +104,19 @@ const FOG0: long = 327680;           // fog starts at 5.0 units
 const FOG1: long = 1703936;          // and is total at 26.0 units
 
 def init() -> void {
-    OBJRGB[0] = fb.rgb(196, 62, 54);      // sphere 0, crimson, matte
-    OBJRGB[1] = fb.rgb(226, 230, 238);    // sphere 1, the mirror
-    OBJRGB[2] = fb.rgb(226, 176, 74);     // sphere 2, gold, part mirror
-    OBJRGB[3] = fb.rgb(62, 150, 158);     // sphere 3, teal, matte
-    OBJRGB[4] = fb.rgb(0, 0, 0);          // the floor's checker supplies it
-    OBJRGB[5] = fb.rgb(40, 44, 56);       // the wall's gradient starts here
-    CHKA = fb.rgb(34, 36, 42);
-    CHKB = fb.rgb(84, 86, 98);
-    SKYH = fb.rgb(122, 132, 150);
-    SKYZ = fb.rgb(28, 40, 72);
-    SUNC = fb.rgb(255, 238, 198);
-    FOGC = fb.rgb(46, 54, 72);
-    WALLHI = fb.rgb(96, 104, 126);
+    OBJRGB[0] = tui.rgb(196, 62, 54);      // sphere 0, crimson, matte
+    OBJRGB[1] = tui.rgb(226, 230, 238);    // sphere 1, the mirror
+    OBJRGB[2] = tui.rgb(226, 176, 74);     // sphere 2, gold, part mirror
+    OBJRGB[3] = tui.rgb(62, 150, 158);     // sphere 3, teal, matte
+    OBJRGB[4] = tui.rgb(0, 0, 0);          // the floor's checker supplies it
+    OBJRGB[5] = tui.rgb(40, 44, 56);       // the wall's gradient starts here
+    CHKA = tui.rgb(34, 36, 42);
+    CHKB = tui.rgb(84, 86, 98);
+    SKYH = tui.rgb(122, 132, 150);
+    SKYZ = tui.rgb(28, 40, 72);
+    SUNC = tui.rgb(255, 238, 198);
+    FOGC = tui.rgb(46, 54, 72);
+    WALLHI = tui.rgb(96, 104, 126);
 };
 
 // POBJ is the palette's version of the object colours; palette() rebuilds the
@@ -274,7 +274,7 @@ def plane_t(ox: long, oy: long, oz: long,
 // lum(c) -- BT.601 luma of a packed colour, 0..255.  The weights sum to 256, so
 // the shift is exact at full white.
 def lum(c: long) -> long {
-    (fb.r_of(c) * 77 + fb.g_of(c) * 151 + fb.b_of(c) * 28) >> 8
+    (tui.r_of(c) * 77 + tui.g_of(c) * 151 + tui.b_of(c) * 28) >> 8
 };
 
 // diffuse_level(nx, ny, nz) -- how lit a surface with this unit normal is,
@@ -336,17 +336,17 @@ def sky(dx: long, dy: long, dz: long) -> long {
     let t = (dy >> 9) + 128;
     if (t < 0) { t = 0; };
     if (t > 255) { t = 255; };
-    let col = fb.lerp_rgb(SKYH, SKYZ, t);
+    let col = tui.lerp_rgb(SKYH, SKYZ, t);
     let g = (dx * LNX + dy * LNY + dz * LNZ) >> 16;
     if (g > 0) {
         // g^8, so the sun is a small disc rather than half the sky
         let g2 = (g * g) >> 16;
         let g4 = (g2 * g2) >> 16;
         let g8 = (g4 * g4) >> 16;
-        let r = fb.r_of(col) + ((SPMAX * g8) >> 16);
-        let gg = fb.g_of(col) + ((SPMAX * g8) >> 16);
-        let b = fb.b_of(col) + ((SPMAX * g8) >> 16);
-        col = fb.rgb(r, gg, b);
+        let r = tui.r_of(col) + ((SPMAX * g8) >> 16);
+        let gg = tui.g_of(col) + ((SPMAX * g8) >> 16);
+        let b = tui.b_of(col) + ((SPMAX * g8) >> 16);
+        col = tui.rgb(r, gg, b);
     };
     col
 };
@@ -377,7 +377,7 @@ def object_rgb(obj: long, hx: long, hy: long, hz: long) -> long {
         let t = (((hy + 65536) * 255) / 327680) ;
         if (t < 0) { t = 0; };
         if (t > 255) { t = 255; };
-        fb.lerp_rgb(POBJ[OBJ_WALL], WALLHI, t)
+        tui.lerp_rgb(POBJ[OBJ_WALL], WALLHI, t)
     } else {
         POBJ[obj]
     }
@@ -392,10 +392,10 @@ def shade_local(obj: long, hx: long, hy: long, hz: long,
     let base = object_rgb(obj, hx, hy, hz);
     let lv = diffuse_level(nx, ny, nz);
     let sp = specular_level(nx, ny, nz, dx, dy, dz) * SPMAX / 255;
-    let r = fb.r_of(base) * lv / 255 + sp;
-    let g = fb.g_of(base) * lv / 255 + sp;
-    let b = fb.b_of(base) * lv / 255 + sp;
-    fb.rgb(r, g, b)
+    let r = tui.r_of(base) * lv / 255 + sp;
+    let g = tui.g_of(base) * lv / 255 + sp;
+    let b = tui.b_of(base) * lv / 255 + sp;
+    tui.rgb(r, g, b)
 };
 
 // fog(col, t, dx, dy, dz) -- blend a surface toward THE SKY IN THE RAY'S OWN
@@ -418,16 +418,16 @@ def fog(col: long, t: long, dx: long, dy: long, dz: long) -> long {
     let f = ((t - FOG0) * 255) / (FOG1 - FOG0);
     if (f < 0) { f = 0; };
     if (f > 255) { f = 255; };
-    fb.lerp_rgb(col, sky(dx, dy, dz), f)
+    tui.lerp_rgb(col, sky(dx, dy, dz), f)
 };
 
 // mix(a, b, k) -- a*k/255 + b*(255-k)/255.  The reflectivity blend, so a part
 // mirror is a part mirror rather than a binary one.
 def mix(a: long, b: long, k: long) -> long {
     let ia = 255 - k;
-    fb.rgb((fb.r_of(a) * k + fb.r_of(b) * ia) / 255,
-           (fb.g_of(a) * k + fb.g_of(b) * ia) / 255,
-           (fb.b_of(a) * k + fb.b_of(b) * ia) / 255)
+    tui.rgb((tui.r_of(a) * k + tui.r_of(b) * ia) / 255,
+           (tui.g_of(a) * k + tui.g_of(b) * ia) / 255,
+           (tui.b_of(a) * k + tui.b_of(b) * ia) / 255)
 };
 
 // reflect(dx, dy, dz, nx, ny, nz) -- d - 2(d.n)n, the mirror formula for a unit
@@ -599,21 +599,21 @@ def trace(ox: long, oy: long, oz: long,
 // set of hand-picked values, so a new look is one line and the geometry is
 // never touched.  The table is built once per palette change, never per pixel.
 def tintc(c: long, p: long) -> long {
-    let r = fb.r_of(c);
-    let g = fb.g_of(c);
-    let b = fb.b_of(c);
+    let r = tui.r_of(c);
+    let g = tui.g_of(c);
+    let b = tui.b_of(c);
     if (p == 1) {
         let nb = (b * 4) / 3;
         if (nb > 255) { nb = 255; };
-        fb.rgb((r * 3) / 4, (g * 9) / 10, nb)
+        tui.rgb((r * 3) / 4, (g * 9) / 10, nb)
     } else if (p == 2) {
-        fb.rgb(b, r, g)
+        tui.rgb(b, r, g)
     } else if (p == 3) {
         let l = (r * 77 + g * 151 + b * 28) >> 8;
-        fb.rgb(l, l, l)
+        tui.rgb(l, l, l)
     } else if (p == 4) {
         let l = (r * 77 + g * 151 + b * 28) >> 8;
-        fb.rgb((l * 3) / 10, l, (l * 4) / 10)
+        tui.rgb((l * 3) / 10, l, (l * 4) / 10)
     } else {
         c
     }
@@ -625,13 +625,13 @@ def palette(p: long) -> void {
         POBJ[i] = tintc(OBJRGB[i], p);
         i = i + 1;
     };
-    CHKA = tintc(fb.rgb(34, 36, 42), p);
-    CHKB = tintc(fb.rgb(84, 86, 98), p);
-    SKYH = tintc(fb.rgb(122, 132, 150), p);
-    SKYZ = tintc(fb.rgb(28, 40, 72), p);
-    SUNC = tintc(fb.rgb(255, 238, 198), p);
-    FOGC = tintc(fb.rgb(46, 54, 72), p);
-    WALLHI = tintc(fb.rgb(96, 104, 126), p);
+    CHKA = tintc(tui.rgb(34, 36, 42), p);
+    CHKB = tintc(tui.rgb(84, 86, 98), p);
+    SKYH = tintc(tui.rgb(122, 132, 150), p);
+    SKYZ = tintc(tui.rgb(28, 40, 72), p);
+    SUNC = tintc(tui.rgb(255, 238, 198), p);
+    FOGC = tintc(tui.rgb(46, 54, 72), p);
+    WALLHI = tintc(tui.rgb(96, 104, 126), p);
 };
 
 // ───────────────────────────────────────────────────────────────── camera ───

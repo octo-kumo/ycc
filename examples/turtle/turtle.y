@@ -29,14 +29,12 @@
 // "why the polygons close", has the arithmetic.
 
 import fx;
-import fb;
-import term;
-import time;
 import args;
 import tlang;
 import scene;
 import sink;
 import check;
+import tui;
 
 // ──────────────────────────────────────────────────────────── options ───
 
@@ -103,14 +101,14 @@ def die(msg: str) -> void {
 
 // ─────────────────────────────────────────────────── the terminal size ───
 //
-// term.size() returns a FRESH record every call (~40 bytes), so it cannot be in
+// tui.size() returns a FRESH record every call (~40 bytes), so it cannot be in
 // a per-frame resize poll on an arena heap.  This does the TIOCGWINSZ ioctl
 // into a module-level buffer and compares against the size we already have, so
 // the common answer is "nothing changed" and nothing was allocated.
 def poll_winsize() -> long {
     if (syscall(16, 1, 0x5413, &WSB[0]) < 0) { return 0 };
-    let r = term.rd16(WSB, 0);
-    let c = term.rd16(WSB, 2);
+    let r = tui.rd16(WSB, 0);
+    let c = tui.rd16(WSB, 2);
     if (r < 1 || c < 1) { return 0 };
     if (r == trows && c == tcols) { return 0 };
     trows = r;
@@ -168,7 +166,7 @@ def slurp(p: str) -> str {
 def to_devnull() -> void {
     let d = 0 - 1;
     if (cpath("/dev/null") >= 0) { d = syscall(257, 0 - 100, &PATHBUF[0], 1, 0) };
-    if (d >= 0) { fb.set_fd(d) }
+    if (d >= 0) { tui.set_fd(d) }
 };
 
 // ────────────────────────────────────────────────────────── the header ───
@@ -244,9 +242,9 @@ def headless() -> void {
     // thrown away: fb's capture buffer keeps them, and the per-frame line
     // reports the capture length, so the stream is still there to be measured.
     to_devnull();
-    fb.capture_on();
+    tui.capture_on();
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let f = 0;
     let bytes_sum = 0;
     while (f < FRAMES) {
@@ -260,14 +258,14 @@ def headless() -> void {
         };
         scene.erase_cursor();
         scene.draw_cursor(tlang.X, tlang.Y, tlang.H);
-        fb.capture_reset();
-        bytes_sum = bytes_sum + fb.flush_diff(scene.SRF);
+        tui.capture_reset();
+        bytes_sum = bytes_sum + tui.flush_diff(scene.SRF);
         sink.out_str("frame ");
         sink.out_pad(f, 3);
         sink.out_str(" bytes ");
-        sink.out_pad(fb.frame_bytes(), 6);
+        sink.out_pad(tui.frame_bytes(), 6);
         sink.out_str(" cap ");
-        sink.out_pad(fb.capture_len(), 6);
+        sink.out_pad(tui.capture_len(), 6);
         sink.out_str(" cmds ");
         sink.out_pad(tlang.STEPS, 5);
         sink.out_str(" px ");
@@ -303,7 +301,7 @@ def headless() -> void {
         };
         f = f + 1
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     sink.out_flush();
     if (SHOWTIME != 0) {
@@ -334,8 +332,8 @@ def headless() -> void {
 // ─────────────────────────────────────────────────────── the status line ───
 //
 // Assembled into sink's module-level byte buffer and blitted a byte at a time
-// into the bottom row of the surface.  NOT fb.text() and NOT a `+=` string:
-// fb.text wants a str, and building one per frame is ~40-80 bytes a frame on an
+// into the bottom row of the surface.  NOT tui.text() and NOT a `+=` string:
+// tui.text wants a str, and building one per frame is ~40-80 bytes a frame on an
 // arena heap, which is the leak the brief's trap 4 is about.
 def hud(f: long, fps: long, auto: long) -> void {
     let m = sink.out_mark();
@@ -363,11 +361,11 @@ def hud(f: long, fps: long, auto: long) -> void {
     let n = sink.out_len() - m;
     let i = 0;
     while (i < n) {
-        fb.put(scene.SRF, r, i, sink.ob_at(m + i), fb.grey(170), fb.DEFAULT);
+        tui.put(scene.SRF, r, i, sink.ob_at(m + i), tui.grey(170), tui.DEFAULT);
         i = i + 1
     };
     while (i < scene.SC) {
-        fb.put(scene.SRF, r, i, fb.space, fb.DEFAULT, fb.DEFAULT);
+        tui.put(scene.SRF, r, i, tui.space, tui.DEFAULT, tui.DEFAULT);
         i = i + 1
     };
     sink.out_trunc(m)
@@ -486,9 +484,9 @@ if (SCRIPT != "") {
 // ── the size ──
 let sz = args.get_str("size", "");
 if (sz == "") {
-    if (term.is_tty(1)) {
-        trows = term.size().rows;
-        tcols = term.size().cols;
+    if (tui.is_tty(1)) {
+        trows = tui.size().rows;
+        tcols = tui.size().cols;
         if (trows < 6) { trows = 6 };
         if (tcols < 20) { tcols = 20 };
         if (trows > 128) { trows = 128 };
@@ -537,7 +535,7 @@ if (ncmd < 0) {
 };
 
 // ── the dry pass, the fit, and the first frame ──
-scene.SRF = fb.resize(scene.SRF, ROWS, COLS);
+scene.SRF = tui.resize(scene.SRF, ROWS, COLS);
 scene.SR = ROWS;
 scene.SC = COLS;
 tlang.reset();
@@ -581,24 +579,24 @@ if (FRAMES > 0 || args.has("no-tty")) {
 
 // ═══════════════════════════════════════════════════ the interactive path ══
 //
-// term.y's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
+// tui's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
 // leaves.  Y has no atexit and no signal handler, so every exit below is
-// term.restore_all_exit() and there is no path out of this loop that does not go
+// tui.restore_all_exit() and there is no path out of this loop that does not go
 // through it; a SIGKILL is covered by the watchdog, which restores termios.
 //
 // It starts HELD, not running: this is a turtle, and the interesting thing about
 // a turtle is watching where it goes.  `.` steps one command, `a` hands the
 // stepping to the pacer.
-if (!term.raw_mode()) {
+if (!tui.raw_mode()) {
     eputs("turtle: not a terminal; try --frames N --no-tty\n");
     exit(1)
 };
-term.enter_screen();
-term.arm_watchdog();
+tui.enter_screen();
+tui.arm_watchdog();
 
-let pacer = time.pacer_new(FPSWANT);
-let meter = time.fps_new();
-time.pacer_start(pacer);
+let pacer = tui.pacer_new(FPSWANT);
+let meter = tui.fps_new();
+tui.pacer_start(pacer);
 
 let frame = 0;
 let quit = false;
@@ -606,16 +604,16 @@ let auto = 0;
 let checked = 0;
 let bytes_sum = 0;
 let ih0 = heap_used();
-let t0 = time.now_us();
+let t0 = clock_us();
 
 while (quit == false) {
-    // time.y's pacer owns the frame deadline.  The key poll is
+    // tui's pacer owns the frame deadline.  The key poll is
     // read_key_timeout(0) -- an immediate poll, never a blocking read -- because
     // VTIME counts deciseconds, so any non-zero millisecond count rounds UP to
     // the next 100 ms (measured: 5 x read_key_timeout(1) took 518 ms).  A 1..99
     // poll would put every frame a period late and report ~0.6 fps with a stuck
     // frame counter, which reads as "the animation is slow" rather than as a bug.
-    if (time.pacer_next(pacer) >= 0) {
+    if (tui.pacer_next(pacer) >= 0) {
         if (auto != 0) {
             let i = 0;
             let stop = false;
@@ -626,9 +624,9 @@ while (quit == false) {
         };
         scene.erase_cursor();
         scene.draw_cursor(tlang.X, tlang.Y, tlang.H);
-        hud(frame, time.fps_x100(meter), auto);
-        bytes_sum = bytes_sum + fb.flush_diff(scene.SRF);
-        time.fps_tick(meter);
+        hud(frame, tui.fps_x100(meter), auto);
+        bytes_sum = bytes_sum + tui.flush_diff(scene.SRF);
+        tui.fps_tick(meter);
         frame = frame + 1;
         if (tlang.DONE == 1 && auto != 0) { auto = 0 }
     };
@@ -637,8 +635,8 @@ while (quit == false) {
     // read_key_timeout(0) never blocks.  Keys come back as bytes, so they are
     // compared as bytes -- Y has no character literal, and ord() is how a name
     // becomes the byte it means.
-    let k = term.read_key_timeout(0);
-    if (k == ord("q") || k == ord("Q") || k == term.KEY_ESC) {
+    let k = tui.read_key_timeout(0);
+    if (k == ord("q") || k == ord("Q") || k == tui.KEY_ESC) {
         quit = true
     } else if (k == ord(".") || k == ord(" ") || k == ord("\r") || k == ord("\n")) {
         auto = 0;
@@ -672,7 +670,7 @@ while (quit == false) {
     };
 
     // A resize is looked for on every fourth frame, because Y has no SIGWINCH.
-    // The surface is resized (allocation-free in fb.y) and then the drawing is
+    // The surface is resized (allocation-free in tui) and then the drawing is
     // REDRAWN from the start up to the command it had reached: the two shifts
     // have changed, so every pixel on screen is now in the wrong place, and
     // re-running is the only honest repair.
@@ -698,7 +696,7 @@ while (quit == false) {
     }
 };
 
-let el = time.now_us() - t0;
+let el = clock_us() - t0;
 eputs("turtle: ");
 eputs(tostring(frame));
 eputs(" frames in ");
@@ -712,4 +710,4 @@ eputs(tostring(ih0));
 eputs(" -> ");
 eputs(tostring(heap_used()));
 eputs("\n");
-term.restore_all_exit(0);
+tui.restore_all_exit(0);

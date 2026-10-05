@@ -138,19 +138,20 @@ python3 gen_tree.py              # regenerate data/tree
 
 ## No toolkit is vendored
 
-`examples/_toolkit/` holds `fx.y term.y fb.y args.y time.y`. **This folder
+`examples/_toolkit/` holds `fx.y tui tui args tui. **This folder
 vendors none of them, and that is deliberate, not an omission.**
 
-- `term.y` / `fb.y` — indexer does not own a terminal in the raw-mode sense.
+- `tui` — indexer does not own a terminal in the raw-mode sense; it takes
+  the frame pacer and nothing else.
   It prints lines and exits; there is no mode to set, nothing to restore, and
   no signal path. The only terminal question it has is "is stdout a tty",
   which is one `ioctl(TCGETS)` (see below).
-- `time.y` — nothing here is interactive, so there is no frame deadline to
+- `tui` — nothing here is interactive, so there is no frame deadline to
   own. `--bench` reads `clock_us()` directly, twice, and is behind a flag
   precisely so the clock cannot reach `EXPECTED`.
 - `fx.y` — no trigonometry and no square roots. `head_of` truncates a string;
   nothing needs a fixed-point divide.
-- `args.y` — seven flags and a positional root, all hand-parsed in `cli.y`.
+- `args` — seven flags and a positional root, all hand-parsed in `cli.y`.
 
 So the folder is `ix.y cli.y selftest.y indexer.y` plus two Python drivers
 and a generated `data/tree`. Nothing is imported across folders at run time,
@@ -505,6 +506,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

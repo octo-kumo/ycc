@@ -1,3 +1,4 @@
+import tui;
 // textout.y -- the deterministic sink behind --no-tty.
 //
 // Everything the program prints on the --no-tty path goes through this file,
@@ -8,7 +9,7 @@
 // WHY NOT puts() AND f-strings.  Both would be correct and both would be a
 // per-call allocation on the frame loop, and the acceptance gate for this
 // example is heap_used() unchanged across 300 frames (ORCHESTRATOR.md 2.7).
-// A buffer of longs plus fb.utf8_byte is the only way to write a frame of
+// A buffer of longs plus tui.utf8_byte is the only way to write a frame of
 // Unicode glyphs without touching the heap.
 //
 // ZERO ALLOCATION, LIKE EVERY FRAME PATH.  `ob` is a module-level fixed
@@ -17,7 +18,6 @@
 // uses, so the per-frame line in the output is a checksum of what was actually
 // drawn rather than a claim about it.
 
-import fb;
 
 const OB_CAP: long = 65536;
 const FNV_SEED: long = -3750763034362895579;   // 14695981039346656037, signed
@@ -120,10 +120,10 @@ def out_glyph(cp: long) -> void {
     let c = cp;
     if (c < 0) { c = 32 };
     if (c > 1114111) { c = 65533 };
-    let n = fb.utf8_len(c);
+    let n = tui.utf8_len(c);
     let i = 0;
     while (i < n) {
-        out_byte(fb.utf8_byte(c, i));
+        out_byte(tui.utf8_byte(c, i));
         i = i + 1;
     }
 };
@@ -140,7 +140,7 @@ def out_flush() -> void {
 // foreground colour, so a frame that changed colour but not shape is a
 // different digest.  This is what the per-frame line in the deterministic
 // output reports, and it is why that line is evidence rather than decoration.
-def grid_digest(s: fb.Surface) -> long {
+def grid_digest(s: tui.Surface) -> long {
     let h: long = FNV_SEED;
     let n = s.rows * s.cols;
     let i = 0;
@@ -156,7 +156,7 @@ def grid_digest(s: fb.Surface) -> long {
 // cell, no escape sequences at all.  This is what the golden frames and the
 // tail of the --no-tty output are, and it is why the deterministic output is
 // readable in a diff and not just comparable.
-def grid_text(s: fb.Surface) -> void {
+def grid_text(s: tui.Surface) -> void {
     let r = 0;
     while (r < s.rows) {
         let c = 0;

@@ -24,13 +24,13 @@
 // ===========================================================================
 // THE TWO MODES
 //
-// The interactive path follows the pattern term.y's header insists on --
+// The interactive path follows the pattern tui's header insists on --
 //
-//     if (!term.raw_mode()) { ...exit 1... };
-//     term.enter_screen();
-//     term.arm_watchdog();
+//     if (!tui.raw_mode()) { ...exit 1... };
+//     tui.enter_screen();
+//     tui.arm_watchdog();
 //     ... the loop, whose only exit is `running = false` ...
-//     term.restore_all_exit(0);
+//     tui.restore_all_exit(0);
 //
 // and the headless path never touches the terminal at all: no termios, no
 // escape sequences, no watchdog.  That is what makes its stdout diffable, and
@@ -43,12 +43,10 @@
 // see the comment above step().
 
 import args;
-import fb;
 import grid;
 import props;
 import scene;
-import term;
-import time;
+import tui;
 
 // The report's fixed bookkeeping.  Allocated once, at module scope, and never
 // grown: the heap is an arena, so a per-generation `+=` into an array would
@@ -142,13 +140,13 @@ def parse_size(spec: str) -> Size {
     good
 };
 
-// The grid the program would use when --size was not given.  term.size() is
+// The grid the program would use when --size was not given.  tui.size() is
 // right here -- it answers 24x80 when stdin is not a terminal, which is also
 // the right answer for a headless run whose stdout went to a file -- and this
 // is called ONCE at start-up, so the record it builds is one record.  The
 // frame loop uses winsize() below instead: the same ioctl, no allocation.
 def default_size() -> Size {
-    let ws = term.size();
+    let ws = tui.size();
     let w = ws.cols - 2;            // the ghost border, one cell each side
     let h = ws.rows - 3;            // two rows of status, one for the frame
     if (w < 4) { w = 4 };
@@ -228,9 +226,9 @@ def counts_line() -> str {
 // ===========================================================================
 
 // The status line is assembled into this, never into a fresh string: one
-// fb.text per frame with an f-string and three concatenations measured ~2.4 KB
+// tui.text per frame with an f-string and three concatenations measured ~2.4 KB
 // a frame, and a program that looks fine for an hour then meets the 3.5 GiB
-// cap.  Same discipline as term.y's ESC_BUF, one size up.
+// cap.  Same discipline as tui's ESC_BUF, one size up.
 let SBUF: [byte; 256] = [0; 256];
 let SN = 0;
 
@@ -299,8 +297,8 @@ def sb_hundredths(x100: long) {
 };
 
 // winsize() -> long -- the terminal size packed as rows * 1000 + cols, from the
-// same TIOCGWINSZ ioctl term.size() uses but into THIS module's buffer, so a
-// per-frame resize poll allocates nothing.  term.size() returns a fresh record
+// same TIOCGWINSZ ioctl tui.size() uses but into THIS module's buffer, so a
+// per-frame resize poll allocates nothing.  tui.size() returns a fresh record
 // (~40 bytes) per call, which in a frame loop is 40 bytes a frame for ever.
 // The syscall is 16 (ioctl) with the kernel register order -- fd, request,
 // argument; the request is 0x5413 and the result is four 16-bit little-endian
@@ -333,33 +331,33 @@ def winsize() -> long {
 // thousands of cells.
 def colour(m: long, mode: long) -> long {
     if (mode == 0) {
-        if (m == grid.M_STONE) { return fb.grey(140) };
-        if (m == grid.M_SAND) { return fb.grey(205) };
-        if (m == grid.M_WATER) { return fb.grey(95) };
-        if (m == grid.M_OIL) { return fb.grey(70) };
-        if (m == grid.M_FIRE) { return fb.grey(255) };
-        if (m == grid.M_SMOKE) { return fb.grey(160) };
-        return fb.grey(18)
+        if (m == grid.M_STONE) { return tui.grey(140) };
+        if (m == grid.M_SAND) { return tui.grey(205) };
+        if (m == grid.M_WATER) { return tui.grey(95) };
+        if (m == grid.M_OIL) { return tui.grey(70) };
+        if (m == grid.M_FIRE) { return tui.grey(255) };
+        if (m == grid.M_SMOKE) { return tui.grey(160) };
+        return tui.grey(18)
     };
-    if (m == grid.M_STONE) { return fb.rgb(132, 132, 140) };
-    if (m == grid.M_SAND) { return fb.rgb(216, 180, 98) };
-    if (m == grid.M_WATER) { return fb.rgb(64, 128, 232) };
-    if (m == grid.M_OIL) { return fb.rgb(156, 116, 44) };
-    if (m == grid.M_FIRE) { return fb.rgb(255, 132, 32) };
-    if (m == grid.M_SMOKE) { return fb.rgb(178, 178, 186) };
-    fb.rgb(14, 14, 22)
+    if (m == grid.M_STONE) { return tui.rgb(132, 132, 140) };
+    if (m == grid.M_SAND) { return tui.rgb(216, 180, 98) };
+    if (m == grid.M_WATER) { return tui.rgb(64, 128, 232) };
+    if (m == grid.M_OIL) { return tui.rgb(156, 116, 44) };
+    if (m == grid.M_FIRE) { return tui.rgb(255, 132, 32) };
+    if (m == grid.M_SMOKE) { return tui.rgb(178, 178, 186) };
+    tui.rgb(14, 14, 22)
 };
 
 // draw(surf, bg, mode) -- the grid into an fb surface, cell by cell.  The
 // surface already holds the last frame, so flush_diff() redraws only what
 // changed -- which for a settled automaton is almost nothing.
-def draw(surf: fb.Surface, bg: long, mode: long) {
+def draw(surf: tui.Surface, bg: long, mode: long) {
     let y = 0;
     while (y < grid.GHa) {
         let x = 0;
         while (x < grid.GWa) {
             let m = grid.at(x, y);
-            fb.put(surf, y, x, grid.glyph(m), colour(m, mode), bg);
+            tui.put(surf, y, x, grid.glyph(m), colour(m, mode), bg);
             x = x + 1
         };
         y = y + 1
@@ -367,8 +365,8 @@ def draw(surf: fb.Surface, bg: long, mode: long) {
 };
 
 // status(surf, row, cols, cscene, mode, fps100, running) -- the status line,
-// cell by cell out of SBUF.  One fb.put per cell and no allocation at all.
-def status(surf: fb.Surface, row: long, cols: long, cscene: str, mode: long, fps100: long, running: bool) {
+// cell by cell out of SBUF.  One tui.put per cell and no allocation at all.
+def status(surf: tui.Surface, row: long, cols: long, cscene: str, mode: long, fps100: long, running: bool) {
     sb_reset();
     sb_str("gen ");
     sb_num(grid.GEN);
@@ -395,13 +393,13 @@ def status(surf: fb.Surface, row: long, cols: long, cscene: str, mode: long, fps
     sb_str(" | h keys");
     let i = 0;
     while (i < SN && i < cols) {
-        fb.put(surf, row, i, SBUF[i], fb.grey(200), fb.grey(12));
+        tui.put(surf, row, i, SBUF[i], tui.grey(200), tui.grey(12));
         i = i + 1
     };
     // pad the rest of the line, so a shorter line next frame cannot leave stale
     // text behind it
     while (i < cols) {
-        fb.put(surf, row, i, 32, fb.grey(200), fb.grey(12));
+        tui.put(surf, row, i, 32, tui.grey(200), tui.grey(12));
         i = i + 1
     }
 };
@@ -427,21 +425,21 @@ let HELP: [str] = [
 // run_live(...) -- the interactive path.  Every exit routes through the single
 // restore_all_exit at the bottom, and so does the error path above it.
 def run_live(sz: Size, cscene: str, seed: long, fps: long, mode: long, stats: bool) -> long {
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         exit(die("not a terminal; try --frames N --no-tty"))
     };
-    term.enter_screen();
-    term.arm_watchdog();
+    tui.enter_screen();
+    tui.arm_watchdog();
 
-    let surf = fb.new(24, 80);
-    let bg = fb.rgb(8, 8, 14);
-    let pacer = time.pacer_new(fps);
-    time.pacer_start(pacer);
-    let meter = time.fps_new();
+    let surf = tui.new(24, 80);
+    let bg = tui.rgb(8, 8, 14);
+    let pacer = tui.pacer_new(fps);
+    tui.pacer_start(pacer);
+    let meter = tui.fps_new();
     let running = true;
     let showing_help = false;
     let gen_at_start = grid.GEN;
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let h0 = heap_used();
     let worst = 0;
 
@@ -453,10 +451,10 @@ def run_live(sz: Size, cscene: str, seed: long, fps: long, mode: long, stats: bo
     // the loop lands a whole period late every frame and reports ~0.6 fps with
     // a stuck generation counter.  The pacer owns the deadline instead.
     while (running) {
-        let k = term.read_key_timeout(0);
+        let k = tui.read_key_timeout(0);
         if (k >= 0) {
             let quit = false;
-            if (k == ord("q") || k == term.KEY_ESC || k == 3) { quit = true };
+            if (k == ord("q") || k == tui.KEY_ESC || k == 3) { quit = true };
             if (k == ord(" ")) { running = !running };
             if (k == ord(".")) { grid.step() };
             if (k == ord("h")) { showing_help = !showing_help };
@@ -474,8 +472,8 @@ def run_live(sz: Size, cscene: str, seed: long, fps: long, mode: long, stats: bo
                 seed = seed + 1;
                 let why = scene.build(cscene, sz.w, sz.h, seed);
                 if (len(why) > 0) {
-                    term.leave_screen();
-                    term.restore_exit(die(why))
+                    tui.leave_screen();
+                    tui.restore_exit(die(why))
                 }
             };
             if (quit) { running = false }
@@ -488,62 +486,62 @@ def run_live(sz: Size, cscene: str, seed: long, fps: long, mode: long, stats: bo
         if (cols < 12) { cols = 12 };
         // Rebuild the grid only when it no longer fits the window, so a resize
         // poll that returns the same size every frame costs nothing and
-        // allocates nothing.  fb.resize is called only when the size changed.
+        // allocates nothing.  tui.resize is called only when the size changed.
         if (cols - 2 != sz.w || rows - 3 != sz.h) {
             let ns = parse_size(tostring(cols - 2) + "x" + tostring(rows - 3));
             if (!ns.ok) {
-                term.leave_screen();
-                term.restore_exit(die(ns.msg))
+                tui.leave_screen();
+                tui.restore_exit(die(ns.msg))
             };
             sz = ns;
             let why = scene.build(cscene, sz.w, sz.h, seed);
             if (len(why) > 0) {
-                term.leave_screen();
-                term.restore_exit(die(why))
+                tui.leave_screen();
+                tui.restore_exit(die(why))
             };
-            surf = fb.resize(surf, rows, cols)
+            surf = tui.resize(surf, rows, cols)
         };
 
         // The deadline: pace first, then draw.  Dropping a frame is better than
-        // accumulating lag, and time.y already does that.
-        time.pacer_next(pacer);
-        let dropped = time.pacer_dropped(pacer);
+        // accumulating lag, and tui already does that.
+        tui.pacer_next(pacer);
+        let dropped = tui.pacer_dropped(pacer);
         if (dropped > worst) { worst = dropped };
         if (running) { grid.step() };
         grid.tally();
-        fb.begin_frame();
+        tui.begin_frame();
         if (showing_help) {
-            fb.clear(surf, bg);
+            tui.clear(surf, bg);
             let r = 1;
             while (r <= len(HELP) && r < rows - 1) {
                 let i = 0;
                 while (i < len(HELP[r - 1]) && i < cols) {
-                    fb.put(surf, r, i, HELP[r - 1][i], fb.grey(210), bg);
+                    tui.put(surf, r, i, HELP[r - 1][i], tui.grey(210), bg);
                     i = i + 1
                 };
                 r = r + 1
             }
         } else {
             draw(surf, bg, mode);
-            status(surf, rows - 1, cols, cscene, mode, time.fps_avg_x100(meter), running)
+            status(surf, rows - 1, cols, cscene, mode, tui.fps_avg_x100(meter), running)
         };
-        fb.flush_diff(surf);
-        fb.end_frame(surf);
-        time.fps_tick(meter)
+        tui.flush_diff(surf);
+        tui.end_frame(surf);
+        tui.fps_tick(meter)
     };
 
     let h1 = heap_used();
-    let el = time.now_us() - t0;
+    let el = clock_us() - t0;
     let frames = grid.GEN - gen_at_start;
     if (stats) {
         eputs("sandfall: " + tostring(el / 1000) + " ms, " + tostring(frames)
-            + " generations, " + tostring(time.fps_avg_x100(meter) / 100)
+            + " generations, " + tostring(tui.fps_avg_x100(meter) / 100)
             + " fps, " + tostring(worst) + " frames dropped by the pacer\n");
         eputs("sandfall: heap " + tostring(h0) + " -> " + tostring(h1)
             + ", growth " + tostring(h1 - h0) + " bytes over "
             + tostring(frames) + " generations\n")
     };
-    term.restore_all_exit(0);
+    tui.restore_all_exit(0);
     0
 };
 
@@ -575,7 +573,7 @@ def run_headless(sz: Size, cscene: str, frames: long, dump_every: long, stats: b
     // the delta, which is the number that would catch a literal in the loop
     // body (64 bytes an iteration, and the heap is an arena).
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let next_dump = dump_every;
     let dumped = 0;
     let settled_at = 0;
@@ -590,7 +588,7 @@ def run_headless(sz: Size, cscene: str, frames: long, dump_every: long, stats: b
         };
         k = k + 1
     };
-    let el = time.now_us() - t0;
+    let el = clock_us() - t0;
     let h1 = heap_used();
     grid.tally();
 
@@ -652,7 +650,7 @@ def run_headless(sz: Size, cscene: str, frames: long, dump_every: long, stats: b
 def main() -> long {
     args.init("sandfall", "a falling-sand cellular automaton in the terminal", OPTS);
 
-    // args.y's own convention is exit 2 for a usage error; this program's
+    // args's own convention is exit 2 for a usage error; this program's
     // contract is 1 for every diagnostic it raises, and it is a one-line
     // difference.  The message is already on stderr.
     let st = args.parse(argv());
@@ -705,7 +703,7 @@ def main() -> long {
     if (len(why) > 0) { return die(why) };
 
     if (!args.has("no-tty") && frames == 0) {
-        if (!term.is_tty(0)) {
+        if (!tui.is_tty(0)) {
             return die("not a terminal; try --frames N --no-tty")
         };
         return run_live(sz, cscene, seed, fps, mode, stats)

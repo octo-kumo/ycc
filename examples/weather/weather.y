@@ -268,10 +268,10 @@ def live(city: str, days: long) -> long {
 
 // ── the command line ────────────────────────────────────────────────────
 //
-// args.y is the frozen toolkit module, vendored byte-identical (see
+// args is the frozen toolkit module, vendored byte-identical (see
 // README.md); the flag table below is this example's own.
 //
-// `--help` and `-h` are deliberately NOT declared here. args.y only treats
+// `--help` and `-h` are deliberately NOT declared here. args only treats
 // them as help when they are absent from the table -- a declared one is an
 // ordinary option and would demand a value.
 const OPTS: [args.Opt] = [
@@ -285,7 +285,7 @@ const OPTS: [args.Opt] = [
 ];
 
 def main() -> long {
-    // args.y's usage layout is: the usage line, then `tail` appended to it,
+    // args's usage layout is: the usage line, then `tail` appended to it,
     // then `desc`, then the option table. So the description goes in the
     // TAIL and starts with a newline, or it ends up glued to "usage:" and,
     // in `desc`, below the examples where it reads as part of them.

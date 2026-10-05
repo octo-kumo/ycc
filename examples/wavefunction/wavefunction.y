@@ -25,14 +25,12 @@
 // records.
 
 import args;
-import fb;
 import fx;
-import term;
-import time;
 import tiles;
 import wfc;
 import sink;
 import check;
+import tui;
 
 // ─────────────────────────────────────────────────────────────────── the CLI ───
 
@@ -192,13 +190,13 @@ def components() -> long {
 // and the PRNG) precisely so no frame depends on the frame before it.
 def text_run() -> void {
     let av = tiles.SUBMASK[TWANT];
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let h0 = heap_used();
     wfc.setup(WANT_W, WANT_H, av, SEED);
     RES_H0 = h0;
     let hmean = wfc.mean_entropy();
     let rc = wfc.solve();
-    let t1 = time.now_us();
+    let t1 = clock_us();
     RES_RC = rc;
     RES_EVENTS = wfc.EV_N;
     RES_PAIRS = adj_pairs();
@@ -413,7 +411,7 @@ def soak(n: long) -> void {
     let av = tiles.SUBMASK[TWANT];
     wfc.setup(WANT_W, WANT_H, av, SEED);
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let i = 0;
     let last = 0;
     while (i < n) {
@@ -421,7 +419,7 @@ def soak(n: long) -> void {
         last = wfc.solve();
         i = i + 1
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     let each = 0;
     if (n > 0) { each = (t1 - t0) / n };
@@ -449,11 +447,11 @@ def soak(n: long) -> void {
 
 // ─────────────────────────────────────────────────────────── the interactive path ───
 //
-// term.y's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
+// tui's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
 // leaves.  Y has no atexit and no signal handler, so every exit below is
-// term.restore_all_exit().
+// tui.restore_all_exit().
 //
-// The palette is one fb.rgb() per role, computed ONCE at module scope.  A call
+// The palette is one tui.rgb() per role, computed ONCE at module scope.  A call
 // inside the draw loop would be fine numerically and wrong in spirit: the claim
 // this example makes is that a frame costs no heap, and a palette recomputed per
 // frame is exactly the sort of thing that would stop that being true.
@@ -469,13 +467,16 @@ let G_OPEN: long = 9634;             // U+25A2 BLACK SMALL SQUARE: an undecided 
 // CIRCLE, which is what the first version of this drew for every cell the search
 // had not reached.  0x2500 is 9472, so U+25A2 is 9472 + 0xA2 = 9634.)
 
-// safe_ch(v) -> long -- one colour channel, moved off the values fb.y's SGR
+// safe_ch(v) -> long -- one colour channel, moved off the values tui's SGR
 // writer gets wrong.
 //
-// fb.y's `emit_num` drops a zero in the TENS place, so a channel of 205 reaches
+// tui's `emit_num` drops a zero in the TENS place, so a channel of 205 reaches
 // the terminal as 25 and 104 as 14 -- a silently wrong colour, not an error.
-// Filed in examples/BUGS.md ("fb.y's emit_num drops a zero digit").  The frozen
-// vendored copy cannot be edited, so the palette is nudged instead: any channel
+// Filed in examples/BUGS.md ("fb.y's emit_num drops a zero digit"), where the
+// title still names the module as it was when the defect was found.  std `tui`
+// COULD be edited to fix it -- that is what moved the other three modules out
+// of the folders -- but it would change the byte stream every drawing example
+// produces, so the palette is nudged here instead: any channel
 // with `v % 100 < 10` moves UP to the next value with no zero digit in it, so
 // 104 becomes 112 and 205 becomes 212.  The hues are within a couple of units of
 // what they were meant to be, and the picture is right on this compiler.
@@ -486,7 +487,7 @@ def safe_ch(v: long) -> long {
 };
 
 def safe_rgb(r: long, g: long, b: long) -> long {
-    fb.rgb(safe_ch(r), safe_ch(g), safe_ch(b))
+    tui.rgb(safe_ch(r), safe_ch(g), safe_ch(b))
 };
 
 def palette() -> void {
@@ -520,7 +521,7 @@ def shade_of(h: long) -> long {
     if (whole < 0) { whole = 0 };
     let t = whole * 42;
     if (t > 255) { t = 255 };
-    fb.lerp_rgb(C_COLD, C_HOT, t)
+    tui.lerp_rgb(C_COLD, C_HOT, t)
 };
 
 // draw(srf, heat) -- one interactive frame.
@@ -528,8 +529,8 @@ def shade_of(h: long) -> long {
 // heat == 1 tints the undecided cells by entropy; heat == 0 leaves them flat.
 // The pipe glyphs are the same sixteen codepoints the ASCII table maps, so the
 // terminal shows the actual socket pattern and not a proxy for it.
-def draw(srf: fb.Surface, heat: long) -> void {
-    fb.fill(srf, 32, BG, BG);
+def draw(srf: tui.Surface, heat: long) -> void {
+    tui.fill(srf, 32, BG, BG);
     let y = 0;
     while (y < wfc.GH) {
         let x = 0;
@@ -537,11 +538,11 @@ def draw(srf: fb.Surface, heat: long) -> void {
             let i = y * wfc.GW + x;
             if (wfc.CNT[i] == 1) {
                 let t = wfc.first_bit(wfc.MASK[i]);
-                fb.put(srf, y, x, tiles.GLY[t], colour_of(t), BG);
+                tui.put(srf, y, x, tiles.GLY[t], colour_of(t), BG);
             } else if (heat == 1) {
-                fb.put(srf, y, x, G_OPEN, shade_of(wfc.HENT[i]), BG);
+                tui.put(srf, y, x, G_OPEN, shade_of(wfc.HENT[i]), BG);
             } else {
-                fb.put(srf, y, x, G_OPEN, C_COLD, BG)
+                tui.put(srf, y, x, G_OPEN, C_COLD, BG)
             };
             x = x + 1
         };
@@ -556,7 +557,7 @@ def draw(srf: fb.Surface, heat: long) -> void {
 // example's whole claim is that the frame loop does not.
 let DIG: [long; 20] = [48; 20];
 
-def sline(srf: fb.Surface, row: long, col: long, v: long) -> long {
+def sline(srf: tui.Surface, row: long, col: long, v: long) -> long {
     let d = DIG;
     // The seed may be negative and a HUD with no room for a minus sign would
     // print -1 as 1, which is a lie; the --no-tty header shows it in full.
@@ -574,7 +575,7 @@ def sline(srf: fb.Surface, row: long, col: long, v: long) -> long {
     let at = col;
     let i = 20 - n;
     while (i < 20) {
-        fb.put(srf, row, at, d[i], FG_DIM, BG);
+        tui.put(srf, row, at, d[i], FG_DIM, BG);
         at = at + 1;
         i = i + 1
     };
@@ -583,60 +584,60 @@ def sline(srf: fb.Surface, row: long, col: long, v: long) -> long {
 
 // hud(srf, row) -- the status line, one terminal row.
 //
-// The hint text is only drawn when there is room for it: fb.text() does not
+// The hint text is only drawn when there is room for it: tui.text() does not
 // bound-check the column, so a line longer than the window silently wraps into
-// the next row and lands ON the grid.  fb.put() ignores an out-of-range cell, so
+// the next row and lands ON the grid.  tui.put() ignores an out-of-range cell, so
 // the guard below is not about safety, it is about the picture.
 let HINT = "space step  a auto  n reseed  t heat  q quit";
 
-def hud(srf: fb.Surface, row: long) -> void {
+def hud(srf: tui.Surface, row: long) -> void {
     let c = 1;
     c = sline(srf, row, c, wfc.GW);
-    fb.text(srf, row, c, "x", FG_DIM, BG); c = c + 1;
+    tui.text(srf, row, c, "x", FG_DIM, BG); c = c + 1;
     c = sline(srf, row, c, wfc.GH);
     c = c + 2;
-    fb.text(srf, row, c, "seed ", FG_DIM, BG); c = c + 5;
+    tui.text(srf, row, c, "seed ", FG_DIM, BG); c = c + 5;
     c = sline(srf, row, c, SEED);
     c = c + 2;
-    fb.text(srf, row, c, tiles.SUBSETS[TWANT], FG_KEY, BG);
+    tui.text(srf, row, c, tiles.SUBSETS[TWANT], FG_KEY, BG);
     c = c + len(tiles.SUBSETS[TWANT]) + 2;
-    fb.text(srf, row, c, "decided ", FG_DIM, BG); c = c + 8;
+    tui.text(srf, row, c, "decided ", FG_DIM, BG); c = c + 8;
     c = sline(srf, row, c, decided());
-    fb.text(srf, row, c, "/", FG_DIM, BG); c = c + 1;
+    tui.text(srf, row, c, "/", FG_DIM, BG); c = c + 1;
     c = sline(srf, row, c, wfc.NC);
     c = c + 2;
-    fb.text(srf, row, c, "open ", FG_DIM, BG); c = c + 5;
+    tui.text(srf, row, c, "open ", FG_DIM, BG); c = c + 5;
     c = sline(srf, row, c, wfc.undecided());
     c = c + 2;
-    fb.text(srf, row, c, "bt ", FG_DIM, BG); c = c + 3;
+    tui.text(srf, row, c, "bt ", FG_DIM, BG); c = c + 3;
     c = sline(srf, row, c, wfc.BACKTRACKS);
     c = c + 2;
-    fb.text(srf, row, c, "H ", FG_DIM, BG); c = c + 2;
+    tui.text(srf, row, c, "H ", FG_DIM, BG); c = c + 2;
     // The mean entropy in bits, one decimal: a Q30 integer divided by 2^30 is
     // done with fx.to_int and then by a plain 10, never by 2^30.
     let b10 = (wfc.mean_entropy() * 10) >>> 30;
     c = sline(srf, row, c, b10 / 1000);
-    fb.text(srf, row, c, ".", FG_DIM, BG); c = c + 1;
+    tui.text(srf, row, c, ".", FG_DIM, BG); c = c + 1;
     c = sline(srf, row, c, b10 % 1000);
     if (c + 2 + len(HINT) <= srf.cols) {
-        fb.text(srf, row, c + 2, HINT, safe_rgb(92, 100, 116), BG)
+        tui.text(srf, row, c + 2, HINT, safe_rgb(92, 100, 116), BG)
     }
 };
 
 def interactive() -> void {
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         eputs("wavefunction: not a terminal; try --no-tty\n");
         exit(1)
     };
-    term.enter_screen();
-    term.arm_watchdog();
+    tui.enter_screen();
+    tui.arm_watchdog();
 
-    let pacer = time.pacer_new(FPSWANT);
-    time.pacer_start(pacer);
+    let pacer = tui.pacer_new(FPSWANT);
+    tui.pacer_start(pacer);
 
-    // The surface is allocated once and resized, never rebuilt: fb.resize
-    // allocates nothing (fb.y's own note).
-    let srf = fb.new(WANT_H + 1, WANT_W);
+    // The surface is allocated once and resized, never rebuilt: tui.resize
+    // allocates nothing (tui's own note).
+    let srf = tui.new(WANT_H + 1, WANT_W);
     let av = tiles.SUBMASK[TWANT];
     wfc.setup(WANT_W, WANT_H, av, SEED);
     let rc = wfc.solve();
@@ -656,7 +657,7 @@ def interactive() -> void {
     let ih0 = heap_used();
 
     while (quit == false) {
-        let due = time.pacer_next(pacer);
+        let due = tui.pacer_next(pacer);
         if (due >= 0) {
             if (auto == 1 && ev < total) {
                 wfc.next_event();
@@ -664,7 +665,7 @@ def interactive() -> void {
             };
             draw(srf, heat);
             hud(srf, WANT_H);
-            bytes = bytes + fb.flush_diff(srf);
+            bytes = bytes + tui.flush_diff(srf);
             frames = frames + 1;
             if (FRAMES > 0 && frames >= FRAMES) {
                 // heap_used() is READ BEFORE anything is printed, because
@@ -683,15 +684,15 @@ def interactive() -> void {
                 eputs(" delta ");
                 eputs(tostring(h1 - ih0));
                 eputs("\n");
-                term.restore_all_exit(0)
+                tui.restore_all_exit(0)
             }
         };
 
         // Keys are polled every frame; read_key_timeout(0) never blocks.  A
         // 1..99 ms poll would round up to 100 ms (VTIME counts deciseconds) and
         // report ~0.6 fps with a stuck frame counter.
-        let k = term.read_key_timeout(0);
-        if (k == ord("q") || k == ord("Q") || k == term.KEY_ESC) {
+        let k = tui.read_key_timeout(0);
+        if (k == ord("q") || k == ord("Q") || k == tui.KEY_ESC) {
             quit = true;
         } else if (k == ord(" ")) {
             if (ev < total) { wfc.next_event(); ev = ev + 1 }
@@ -728,7 +729,7 @@ def interactive() -> void {
     eputs(" delta ");
     eputs(tostring(h1 - ih0));
     eputs("\n");
-    term.restore_all_exit(0)
+    tui.restore_all_exit(0)
 };
 
 // ───────────────────────────────────────────────────────────────── the run ───
@@ -806,7 +807,7 @@ if (INJECT != 0 && CHECKMODE == 0) { die("--inject only means something with --c
 // without it the terminal decides (or a fixed default when there is no
 // terminal, which is what makes the deterministic run reproducible on a machine
 // whose window happens to be a different shape).
-let ws = term.size();
+let ws = tui.size();
 if (args.has("size")) {
     let sz = parse_size(args.get_str("size", ""));
     if (sz < 0) {
@@ -823,7 +824,7 @@ if (args.has("size")) {
     // nothing else, so the size it measures should be the size the golden run
     // uses and not the size of whatever window happens to be attached -- without
     // this, `--soak 200` on a machine with no terminal measured a 49x22 grid,
-    // because term.size() reports the fallback shape when stdin is not a tty.
+    // because tui.size() reports the fallback shape when stdin is not a tty.
     WANT_W = 24;
     WANT_H = 14;
 } else {
@@ -831,7 +832,7 @@ if (args.has("size")) {
     // window fits 23 rows of grid and an 80-column one fits 80 columns.
     //
     // 99 columns and 99 rows is the CEILING, and it is a bug workaround rather
-    // than a taste: fb.y writes the CUP with the same emit_num that drops a zero
+    // than a taste: tui writes the CUP with the same emit_num that drops a zero
     // digit (examples/BUGS.md), so column 101 is emitted as 11 and everything
     // from there is written in the wrong place.  1..99 is exactly the range
     // emit_num gets right, so 49x23 fills a 50x24 window and a 200-column window

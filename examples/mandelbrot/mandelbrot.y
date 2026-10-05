@@ -1,7 +1,7 @@
 // mandelbrot.y -- a threaded Mandelbrot explorer.
 //
 //   build:  ycc -o mandelbrot mandelbrot.y
-//           (fx.y fb.y term.y time.y args.y mandel.y render.y textout.y must
+//           (fx.y tui tui tui args mandel.y render.y textout.y must
 //            all sit beside it -- they are vendored, not imported across
 //            folders: ORCHESTRATOR.md 4)
 //   run:    ./mandelbrot                     the interactive explorer
@@ -20,13 +20,11 @@
 // self-test, not a decoration.
 
 import fx;
-import fb;
-import term;
-import time;
 import args;
 import mandel;
 import render;
 import textout;
+import tui;
 
 // ──────────────────────────────────────────────────────────────── options ───
 //
@@ -147,10 +145,10 @@ def index_of(name: str, table: [str]) -> long {
 // is reported, which is what makes the `ansi` column of the per-frame table
 // evidence that the terminal path ran too, rather than a claim that it would.
 //
-// One fb.put per cell and nothing else: the glyph ramp and the palette are
+// One tui.put per cell and nothing else: the glyph ramp and the palette are
 // both module-level tables, so no lookup allocates and no literal is built
 // inside the loop.
-def paint(s: fb.Surface) -> void {
+def paint(s: tui.Surface) -> void {
     let bg = mandel.md_inside_bg();
     let r: long = 0;
     while (r < render.grid_rows()) {
@@ -158,9 +156,9 @@ def paint(s: fb.Surface) -> void {
         while (c < render.grid_cols()) {
             let cell = mandel.md_cell(render.at(r, c));
             if (cell == 0) {
-                fb.put(s, r, c, 32, fb.DEFAULT, bg);
+                tui.put(s, r, c, 32, tui.DEFAULT, bg);
             } else {
-                fb.put(s, r, c, mandel.md_glyph(cell, SHD),
+                tui.put(s, r, c, mandel.md_glyph(cell, SHD),
                        mandel.md_colour(cell), bg);
             };
             c = c + 1;
@@ -213,19 +211,19 @@ def chars_line_row(r: long) -> str {
 // The status row is the one thing drawn every frame that is not part of the
 // picture, and it is mostly numbers.  tostring() once a frame would allocate on
 // the frame loop, so digits go through a module-level scratch buffer and
-// fb.put, one cell at a time.  That is the sharp edge of the rule this file
+// tui.put, one cell at a time.  That is the sharp edge of the rule this file
 // lives by: an ARRAY LITERAL is evaluated onto the heap every time the
 // expression runs (examples/SUGGESTIONS.md section 7), so a literal written inside
 // put_num here would leak once per number drawn.
 let DIG: [long; 12] = [48; 12];
-let HDR = fb.rgb(92, 100, 110);
-let HFG = fb.rgb(208, 216, 224);
-let HKEY = fb.rgb(224, 184, 90);
+let HDR = tui.rgb(92, 100, 110);
+let HFG = tui.rgb(208, 216, 224);
+let HKEY = tui.rgb(224, 184, 90);
 let HBG: long = 0;
 
 // put_num(s, row, col, v, width) -> long -- v right-aligned in `width` cells,
 // blank-padded.  Answers the column just past the number.
-def put_num(s: fb.Surface, row: long, col: long, v: long, width: long) -> long {
+def put_num(s: tui.Surface, row: long, col: long, v: long, width: long) -> long {
     let q = if (v < 0) { 0 } else { v };
     let n: long = 0;
     while (q > 0 && n < 12) {
@@ -237,13 +235,13 @@ def put_num(s: fb.Surface, row: long, col: long, v: long, width: long) -> long {
     let at = col;
     let i: long = 0;
     while (i < pad) {
-        fb.put(s, row, at, 32, HDR, HBG);
+        tui.put(s, row, at, 32, HDR, HBG);
         at = at + 1;
         i = i + 1;
     };
     let j: long = 12 - n;
     while (j < 12) {
-        fb.put(s, row, at, DIG[j], HFG, HBG);
+        tui.put(s, row, at, DIG[j], HFG, HBG);
         at = at + 1;
         j = j + 1;
     };
@@ -256,16 +254,16 @@ def put_num(s: fb.Surface, row: long, col: long, v: long, width: long) -> long {
 // digits are put individually, so there is no string and no rounding mode to
 // get wrong -- which is the whole reason this is 30 lines instead of one call
 // to fx.to_str.
-def put_fixed(s: fb.Surface, row: long, col: long, v: long, decimals: long) -> long {
+def put_fixed(s: tui.Surface, row: long, col: long, v: long, decimals: long) -> long {
     let neg = v < 0;
     let a = if (neg) { 0 - v } else { v };
     let at = col;
     if (neg) {
-        fb.put(s, row, at, 45, HFG, HBG);
+        tui.put(s, row, at, 45, HFG, HBG);
         at = at + 1;
     };
     at = put_num(s, row, at, a >> 30, 1);
-    fb.put(s, row, at, 46, HFG, HBG);            // '.'
+    tui.put(s, row, at, 46, HFG, HBG);            // '.'
     at = at + 1;
     let scale: long = 1;
     let k: long = 0;
@@ -277,7 +275,7 @@ def put_fixed(s: fb.Surface, row: long, col: long, v: long, decimals: long) -> l
     k = 0;
     while (k < decimals) {
         let d = (micro / div) % 10;
-        fb.put(s, row, at, 48 + d, HFG, HBG);
+        tui.put(s, row, at, 48 + d, HFG, HBG);
         at = at + 1;
         div = div / 10;
         k = k + 1
@@ -285,37 +283,37 @@ def put_fixed(s: fb.Surface, row: long, col: long, v: long, decimals: long) -> l
     at
 };
 
-def hud(s: fb.Surface, row: long, ms_x100: long, frame: long) -> void {
+def hud(s: tui.Surface, row: long, ms_x100: long, frame: long) -> void {
     let bg = mandel.md_inside_bg();
     let k: long = 0;
     while (k < s.cols) {
-        fb.put(s, row, k, 32, HFG, bg);
+        tui.put(s, row, k, 32, HFG, bg);
         k = k + 1
     };
-    let c = fb.text(s, row, 1, "mandelbrot", HKEY, bg);
+    let c = tui.text(s, row, 1, "mandelbrot", HKEY, bg);
     c = c + 1;
-    c = fb.text(s, row, c, "at", HDR, bg); c = c + 3;
-    c = fb.text(s, row, c, mandel.place_name(PLACE), HFG, bg);
-    c = c + fb.text(s, row, c, " x", HDR, bg);
+    c = tui.text(s, row, c, "at", HDR, bg); c = c + 3;
+    c = tui.text(s, row, c, mandel.place_name(PLACE), HFG, bg);
+    c = c + tui.text(s, row, c, " x", HDR, bg);
     c = put_fixed(s, row, c, mandel.md_cx(), 4);
-    c = c + fb.text(s, row, c, " y", HDR, bg);
+    c = c + tui.text(s, row, c, " y", HDR, bg);
     c = put_fixed(s, row, c, mandel.md_cy(), 4);
-    c = c + fb.text(s, row, c, " span", HDR, bg);
+    c = c + tui.text(s, row, c, " span", HDR, bg);
     c = put_fixed(s, row, c, mandel.md_span(), 7);
     c = c + 1;
-    c = fb.text(s, row, c, "maxit", HDR, bg); c = c + 6;
+    c = tui.text(s, row, c, "maxit", HDR, bg); c = c + 6;
     c = put_num(s, row, c, MAXIT, 6);
     c = c + 1;
-    c = fb.text(s, row, c, "thr", HDR, bg); c = c + 4;
+    c = tui.text(s, row, c, "thr", HDR, bg); c = c + 4;
     c = put_num(s, row, c, render.threads(), 2);
     c = c + 1;
-    c = fb.text(s, row, c, "ms", HDR, bg); c = c + 3;
+    c = tui.text(s, row, c, "ms", HDR, bg); c = c + 3;
     c = put_num(s, row, c, ms_x100, 5);
     c = c + 1;
-    c = fb.text(s, row, c, "frame", HDR, bg); c = c + 6;
+    c = tui.text(s, row, c, "frame", HDR, bg); c = c + 6;
     c = put_num(s, row, c, frame, 6);
     c = c + 2;
-    fb.text(s, row, c, "hjkl/arrows pan  +/- zoom  0-6 places  [ ] maxit  r reset  q quit",
+    tui.text(s, row, c, "hjkl/arrows pan  +/- zoom  0-6 places  [ ] maxit  r reset  q quit",
             HDR, bg)
 };
 
@@ -599,7 +597,7 @@ if (HAVE_SIZE) {
     if (FRAMES < 1) { FRAMES = 1; };
 } else {
     // One row of the terminal is the status line.
-    let ws = term.size();
+    let ws = tui.size();
     GRID_COLS = ws.cols;
     GRID_ROWS = ws.rows - 1;
     if (GRID_ROWS < 2) { GRID_ROWS = 2; };
@@ -615,11 +613,11 @@ if (render.threads_clamped() != 0) {
          + tostring(render.max_threads()))
 };
 
-let srf = fb.new(GRID_ROWS, GRID_COLS);
+let srf = tui.new(GRID_ROWS, GRID_COLS);
 
 // ══════════════════════════════════════════════ the deterministic path ═══
 //
-// The same render and the same fb.flush_diff as the terminal path -- the ANSI
+// The same render and the same tui.flush_diff as the terminal path -- the ANSI
 // stream is built and counted either way, which is what makes the `ansi`
 // column evidence rather than a claim -- except that it goes to /dev/null and
 // the text goes to stdout instead.
@@ -628,8 +626,8 @@ let srf = fb.new(GRID_ROWS, GRID_COLS);
 // draw", and a sleep in the middle of it would measure nanosleep instead.
 if (NOTTY != 0) {
     let devnull = syscall(257, 0 - 100, "/dev/null", 1, 0, 0, 0);   // openat
-    if (devnull >= 0) { fb.set_fd(devnull); };
-    fb.capture_on();
+    if (devnull >= 0) { tui.set_fd(devnull); };
+    tui.capture_on();
 
     textout.out_str("mandelbrot grid ");
     textout.out_num(GRID_COLS);
@@ -692,7 +690,7 @@ if (NOTTY != 0) {
     textout.out_str("\n");
 
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     // SPAN_BASE is the view's span as the command line asked for it, captured
     // once: frame f is SPAN_BASE halved f times, so frame 0 is the view itself
     // and the frames differ from each other.  Halving the LIVE span each frame
@@ -707,8 +705,8 @@ if (NOTTY != 0) {
 
         let iters = render.frame();
         paint(srf);
-        fb.capture_reset();
-        fb.flush_diff(srf);
+        tui.capture_reset();
+        tui.flush_diff(srf);
 
         let cells = GRID_ROWS * GRID_COLS;
         let esc = render.escaped();
@@ -723,7 +721,7 @@ if (NOTTY != 0) {
         textout.out_str(" mean-it-x10 ");
         textout.out_pad((iters * 10) / cells, 6);
         textout.out_str(" ansi ");
-        textout.out_pad(fb.frame_bytes(), 7);
+        textout.out_pad(tui.frame_bytes(), 7);
         textout.out_str(" sha ");
         textout.out_hex16(render.digest());
         if (wanted(f)) {
@@ -744,7 +742,7 @@ if (NOTTY != 0) {
         textout.out_str("\n");
         f = f + 1
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     textout.out_flush();
 
@@ -772,18 +770,18 @@ if (NOTTY != 0) {
 
 // ═══════════════════════════════════════════════════ the interactive path ══
 //
-// term.y's pattern verbatim: raw mode, alt screen, watchdog, and ONE place
+// tui's pattern verbatim: raw mode, alt screen, watchdog, and ONE place
 // that leaves.  Y has no atexit and no signal handler, so every exit below is
-// a call to term.restore_all_exit() -- there is no path out of this loop that
+// a call to tui.restore_all_exit() -- there is no path out of this loop that
 // does not go through it.  The watchdog is armed BEFORE the pool starts, so
 // the child it forks is a copy of a single-threaded process and cannot be
 // holding an inherited lock.
-if (!term.raw_mode()) {
+if (!tui.raw_mode()) {
     eputs("mandelbrot: not a terminal; try --frames N --no-tty\n");
     exit(1)
 };
-term.enter_screen();
-term.arm_watchdog();
+tui.enter_screen();
+tui.arm_watchdog();
 
 let frame: long = 0;
 let quit = false;
@@ -791,33 +789,33 @@ let checked: long = 0;
 let ms_x100: long = 0;
 let ih0 = heap_used();
 
-// WSB is a growable [byte] because term.rd16 takes a [byte] and a [byte; N] is
-// NOT a [byte] in Y -- see term.y's header.
+// WSB is a growable [byte] because tui.rd16 takes a [byte] and a [byte; N] is
+// NOT a [byte] in Y -- see tui's header.
 let WSB: [byte] = [0; 64];
 
 while (quit == false) {
     // A 16 ms deadline rather than a poll: read_key_timeout(0) would spin the
     // CPU flat while nobody is typing, and the render loop below is the only
     // thing that should cost anything when the view has not changed.
-    let k = term.read_key_timeout(16);
-    if (k != term.KEY_NONE) {
+    let k = tui.read_key_timeout(16);
+    if (k != tui.KEY_NONE) {
         // Keys come back as bytes, so they are compared as bytes: Y has no
         // bare character literal (c'a' is the syntax), so ord() is how a name
         // becomes the byte it means.
         let pan = mandel.md_span() / 8;
         let panx = pan / 2;
-        if (k == ord("q") || k == ord("Q") || k == term.KEY_ESC) {
+        if (k == ord("q") || k == ord("Q") || k == tui.KEY_ESC) {
             quit = true;
-        } else if (k == ord("l") || k == term.KEY_RIGHT) {
+        } else if (k == ord("l") || k == tui.KEY_RIGHT) {
             mandel.md_set(mandel.md_cx() + panx, mandel.md_cy(), mandel.md_span(), MAXIT);
             dirty = 1;
-        } else if (k == ord("h") || k == term.KEY_LEFT) {
+        } else if (k == ord("h") || k == tui.KEY_LEFT) {
             mandel.md_set(mandel.md_cx() - panx, mandel.md_cy(), mandel.md_span(), MAXIT);
             dirty = 1;
-        } else if (k == ord("k") || k == term.KEY_UP) {
+        } else if (k == ord("k") || k == tui.KEY_UP) {
             mandel.md_set(mandel.md_cx(), mandel.md_cy() + pan, mandel.md_span(), MAXIT);
             dirty = 1;
-        } else if (k == ord("j") || k == term.KEY_DOWN) {
+        } else if (k == ord("j") || k == tui.KEY_DOWN) {
             mandel.md_set(mandel.md_cx(), mandel.md_cy() - pan, mandel.md_span(), MAXIT);
             dirty = 1;
         } else if (k == ord("+") || k == ord("=")) {
@@ -858,12 +856,12 @@ while (quit == false) {
     // workers are parked on `wait GO` and no pixel is recomputed until the
     // view, the grid or maxit actually changes.
     if (dirty != 0 && quit == false) {
-        let ta = time.now_us();
+        let ta = clock_us();
         render.frame();
         paint(srf);
         hud(srf, GRID_ROWS, ms_x100, frame);
-        fb.flush_diff(srf);
-        ms_x100 = ((time.now_us() - ta) * 100) / 1000;
+        tui.flush_diff(srf);
+        ms_x100 = ((clock_us() - ta) * 100) / 1000;
         frame = frame + 1;
         dirty = 0;
         // With --frames on the TERMINAL, each frame is the same zoom step the
@@ -883,20 +881,20 @@ while (quit == false) {
     // a check inside would exit after one frame however many were asked for.
     if (FRAMES > 0 && frame >= FRAMES && quit == false) {
         report(frame, ms_x100, ih0, heap_used());
-        term.restore_all_exit(0)
+        tui.restore_all_exit(0)
     };
 
-    // Follow a resize.  Y has no SIGWINCH, so this is a poll -- and term.size()
+    // Follow a resize.  Y has no SIGWINCH, so this is a poll -- and tui.size()
     // ANSWERS WITH A RECORD, which is a heap allocation every time the
     // expression is evaluated, so the poll is TIOCGWINSZ into a byte buffer of
-    // our own plus term.rd16: the same decode term.size() performs, one
+    // our own plus tui.rd16: the same decode tui.size() performs, one
     // syscall, zero bytes of heap.
     checked = checked + 1;
     if (checked >= 16) {
         checked = 0;
-        if (syscall(16, 1, term.TIOCGWINSZ, &WSB[0]) >= 0) {
-            let nr = term.rd16(WSB, 0) - 1;
-            let nc = term.rd16(WSB, 2);
+        if (syscall(16, 1, tui.TIOCGWINSZ, &WSB[0]) >= 0) {
+            let nr = tui.rd16(WSB, 0) - 1;
+            let nc = tui.rd16(WSB, 2);
             if (nr >= 2 && nc >= 24 && nr <= render.MAXR && nc <= render.MAXC) {
                 if (nr != GRID_ROWS || nc != GRID_COLS) {
                     // The pool does not need restarting: a worker's row band is
@@ -904,7 +902,7 @@ while (quit == false) {
                     render.resize(nr, nc);
                     GRID_ROWS = nr;
                     GRID_COLS = nc;
-                    srf = fb.resize(srf, GRID_ROWS, GRID_COLS);
+                    srf = tui.resize(srf, GRID_ROWS, GRID_COLS);
                     dirty = 1
                 }
             }
@@ -913,4 +911,4 @@ while (quit == false) {
 };
 
 report(frame, ms_x100, ih0, heap_used());
-term.restore_all_exit(0);
+tui.restore_all_exit(0);

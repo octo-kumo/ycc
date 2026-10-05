@@ -5,7 +5,7 @@
 // One ray per sample through a pinhole camera into a small scene of four
 // spheres and two planes, shading by depth (fog) and normal (diffuse plus a
 // Blinn highlight), recursing on reflection to a hard depth cap, and shading
-// the result through fb.y's surface with one of four ramps.
+// the result through tui's surface with one of four ramps.
 //
 //   build:  ycc -o raytracer raytracer.y    (scene.y, sink.y, check.y and the
 //                                             vendored toolkit must sit beside it)
@@ -18,13 +18,11 @@
 // and the two frame loops.
 
 import fx;
-import fb;
-import term;
-import time;
 import args;
 import scene;
 import sink;
 import check;
+import tui;
 
 // ─────────────────────────────────────────────────────────── glyph modes ───
 //
@@ -124,7 +122,7 @@ let GH: long = 1;
 // ───────────────────────────────────────────────────────── cell assembly ───
 
 // cell_half -- a cell sampled twice, once per vertical half, so the shading has
-// two independent levels a row.  The glyph is fb.shade_half(lvl, 4), where lvl
+// two independent levels a row.  The glyph is tui.shade_half(lvl, 4), where lvl
 // is 0..3 built as upper_hit + 2*lower_hit; that is the toolkit's own four
 // entry half-block ramp through its own monotonic ramp_index, so no codepoint
 // is spelled out here.
@@ -134,33 +132,33 @@ let GH: long = 1;
 // fills the BOTTOM, so the colour that belongs to the lower sample is the one
 // that has to be the foreground.  Levels 0 and 3 fill the whole cell with one
 // colour, so those average the two.
-def cell_half(s: fb.Surface, r: long, c: long) -> void {
+def cell_half(s: tui.Surface, r: long, c: long) -> void {
     let iu = (r * 2) * GW + c;
     let il = iu + GW;
     let lvl = scene.shit(iu) + 2 * scene.shit(il);
-    let cp = fb.shade_half(lvl, 4);
+    let cp = tui.shade_half(lvl, 4);
     let cu = scene.scol(iu);
     let cl = scene.scol(il);
     if (lvl == 1) {
-        fb.put(s, r, c, cp, cu, cl);
+        tui.put(s, r, c, cp, cu, cl);
     } else if (lvl == 2) {
-        fb.put(s, r, c, cp, cl, cu);
+        tui.put(s, r, c, cp, cl, cu);
     } else {
-        fb.put(s, r, c, cp, fb.lerp_rgb(cu, cl, 128), cu);
+        tui.put(s, r, c, cp, tui.lerp_rgb(cu, cl, 128), cu);
     }
 };
 
 // cell_flat -- one sample a cell and the glyph carries the LUMINANCE, which is
 // what the ascii and blocks ramps are for.  The background is the terminal's
 // own, not a colour of ours.
-def cell_flat(s: fb.Surface, r: long, c: long) -> void {
+def cell_flat(s: tui.Surface, r: long, c: long) -> void {
     let i = r * GW + c;
     let cp = if (GM == GMODE_ASCII) {
-        fb.shade_ascii(scene.lum(scene.scol(i)), 256)
+        tui.shade_ascii(scene.lum(scene.scol(i)), 256)
     } else {
-        fb.shade_blocks(scene.lum(scene.scol(i)), 256)
+        tui.shade_blocks(scene.lum(scene.scol(i)), 256)
     };
-    fb.put(s, r, c, cp, scene.scol(i), fb.DEFAULT)
+    tui.put(s, r, c, cp, scene.scol(i), tui.DEFAULT)
 };
 
 // cell_braille -- a cell used as what it is, a 2-wide by 4-tall dot bitmap, so
@@ -175,7 +173,7 @@ def cell_flat(s: fb.Surface, r: long, c: long) -> void {
 // cell is actually good at.
 let VS: [long] = [0; 8];
 
-def cell_braille(s: fb.Surface, r: long, c: long) -> void {
+def cell_braille(s: tui.Surface, r: long, c: long) -> void {
     let base = (r * 4) * GW + c * 2;
     let sr = 0;
     let sg = 0;
@@ -184,36 +182,36 @@ def cell_braille(s: fb.Surface, r: long, c: long) -> void {
     let k = 0;
     while (k < 8) {
         let i = base + (k / 2) * GW + (k % 2);
-        // fb.braille takes COVERAGE and sets a dot at or above the threshold, so
+        // tui.braille takes COVERAGE and sets a dot at or above the threshold, so
         // a hit is 255 and a miss 0
         VS[k] = scene.shit(i) * 255;
         if (scene.shit(i) != 0) {
             let col = scene.scol(i);
-            sr = sr + fb.r_of(col);
-            sg = sg + fb.g_of(col);
-            sb = sb + fb.b_of(col);
+            sr = sr + tui.r_of(col);
+            sg = sg + tui.g_of(col);
+            sb = sb + tui.b_of(col);
             n = n + 1;
         };
         k = k + 1;
     };
-    let cp = fb.braille(VS, 128);
+    let cp = tui.braille(VS, 128);
     if (n == 0) {
         let c0 = scene.scol(base);
-        fb.put(s, r, c, cp, tint(c0, 200), tint(c0, 128));
+        tui.put(s, r, c, cp, tint(c0, 200), tint(c0, 128));
     } else {
-        let c1 = fb.rgb(sr / n, sg / n, sb / n);
-        fb.put(s, r, c, cp, tint(c1, 200), tint(c1, 128));
+        let c1 = tui.rgb(sr / n, sg / n, sb / n);
+        tui.put(s, r, c, cp, tint(c1, 200), tint(c1, 128));
     }
 };
 
 // tint(c, k) -- c's channels scaled by k over 255, so 255 is the colour itself
 // and 128 is half of it.  Two multiplies and two divisions a channel.
 def tint(c: long, k: long) -> long {
-    fb.rgb((fb.r_of(c) * k) / 255, (fb.g_of(c) * k) / 255, (fb.b_of(c) * k) / 255)
+    tui.rgb((tui.r_of(c) * k) / 255, (tui.g_of(c) * k) / 255, (tui.b_of(c) * k) / 255)
 };
 
 // assemble(s) -- the whole cell pass, zero allocation of any kind.
-def assemble(s: fb.Surface) -> void {
+def assemble(s: tui.Surface) -> void {
     let r = 0;
     while (r < s.rows) {
         let c = 0;
@@ -243,7 +241,7 @@ def assemble(s: fb.Surface) -> void {
 // twice a frame.
 let DIG: [long; 12] = [48; 12];
 
-def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
+def sline(s: tui.Surface, row: long, col: long, v: long) -> long {
     let d = DIG;
     let q = if (v < 0) { 0 } else { v };
     let n = 0;
@@ -255,7 +253,7 @@ def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
     let at = col;
     let i = 12 - n;
     while (i < 12) {
-        fb.put(s, row, at, d[i], 150, fb.DEFAULT);
+        tui.put(s, row, at, d[i], 150, tui.DEFAULT);
         at = at + 1;
         i = i + 1;
     };
@@ -266,47 +264,47 @@ def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
 // is the conversion, and it is the only place the two fixed-point formats meet.
 def q16to30(v: long) -> long { v << 14 };
 
-def hud(s: fb.Surface, row: long, frame: long, fps: long) -> void {
-    let bg = fb.rgb(12, 14, 18);
-    let dim = fb.rgb(96, 104, 116);
-    let key = fb.rgb(150, 160, 172);
-    let warm = fb.rgb(226, 168, 84);
-    for k in 0..s.cols { fb.put(s, row, k, 9472, fb.rgb(30, 34, 40), bg); };
+def hud(s: tui.Surface, row: long, frame: long, fps: long) -> void {
+    let bg = tui.rgb(12, 14, 18);
+    let dim = tui.rgb(96, 104, 116);
+    let key = tui.rgb(150, 160, 172);
+    let warm = tui.rgb(226, 168, 84);
+    for k in 0..s.cols { tui.put(s, row, k, 9472, tui.rgb(30, 34, 40), bg); };
     let c = 1;
-    fb.text(s, row, c, "raytracer", key, bg);
+    tui.text(s, row, c, "raytracer", key, bg);
     c = c + 10;
     c = sline(s, row, c, frame);
-    fb.text(s, row, c, "fps", dim, bg); c = c + 4;
+    tui.text(s, row, c, "fps", dim, bg); c = c + 4;
     c = sline(s, row, c, fps);
     c = c + 1;
-    fb.text(s, row, c, PALNAMES[PAL], warm, bg);
+    tui.text(s, row, c, PALNAMES[PAL], warm, bg);
     c = c + len(PALNAMES[PAL]);
-    fb.text(s, row, c, "az", dim, bg); c = c + 3;
+    tui.text(s, row, c, "az", dim, bg); c = c + 3;
     c = sline(s, row, c, fx.to_int(fx.to_deg(q16to30(AZ))));
-    fb.text(s, row, c, "el", dim, bg); c = c + 3;
+    tui.text(s, row, c, "el", dim, bg); c = c + 3;
     c = sline(s, row, c, fx.to_int(fx.to_deg(q16to30(EL))));
-    fb.text(s, row, c, "d", dim, bg); c = c + 2;
+    tui.text(s, row, c, "d", dim, bg); c = c + 2;
     let d10 = (DDIST * 10) / 65536;
     c = sline(s, row, c, d10 / 10);
-    fb.put(s, row, c, 46, dim, bg); c = c + 1;
+    tui.put(s, row, c, 46, dim, bg); c = c + 1;
     c = sline(s, row, c, d10 % 10);
-    fb.text(s, row, c, "bounce", dim, bg); c = c + 7;
+    tui.text(s, row, c, "bounce", dim, bg); c = c + 7;
     c = sline(s, row, c, BNCE);
     c = c + 2;
-    fb.text(s, row, c, "q quit   arrows orbit   +/- dolly   p palette   g glyph   b bounces",
+    tui.text(s, row, c, "q quit   arrows orbit   +/- dolly   p palette   g glyph   b bounces",
             dim, bg)
 };
 
 // ──────────────────────────────────────────── allocation-free size poll ───
 //
 // Y has no SIGWINCH, so a program that wants to follow a resize has to ask.
-// term.size() is the right call and it is used ONCE, at start-up -- but on a
+// tui.size() is the right call and it is used ONCE, at start-up -- but on a
 // poll it is a leak: it ANSWERS WITH A RECORD, and a record literal is
 // evaluated onto the heap every time the expression runs, so a once-a-frame
 // size check would leak about 1.4 MB an hour.
 //
-// So the poll is TIOCGWINSZ into a byte buffer of our own plus term.rd16, which
-// is the very decode term.size() performs: same answer, one syscall, zero bytes
+// So the poll is TIOCGWINSZ into a byte buffer of our own plus tui.rd16, which
+// is the very decode tui.size() performs: same answer, one syscall, zero bytes
 // of heap.  A [byte] has to be growable to be passed to syscall at all -- a
 // [byte; N] is not a [byte] in Y.
 let WSB: [byte] = [0; 64];
@@ -314,9 +312,9 @@ let trows: long = 24;
 let tcols: long = 80;
 
 def poll_winsize() -> long {
-    if (syscall(16, 1, term.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
-    let r = term.rd16(WSB, 0);
-    let c = term.rd16(WSB, 2);
+    if (syscall(16, 1, tui.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
+    let r = tui.rd16(WSB, 0);
+    let c = tui.rd16(WSB, 2);
     if (r < 1 || c < 1) { return 0; };
     if (r == trows && c == tcols) { return 0; };
     trows = r;
@@ -453,8 +451,8 @@ if (st == args.HELP) {
     puts("  phosphor  green, the classic terminal\n");
     puts("\nglyph modes:\n");
     puts("  ascii     ' .:-=+*#%@' by luminance, one ray a cell\n");
-    puts("  blocks    fb.y's block ramp by luminance, 5 levels\n");
-    puts("  half      fb.y's half-block ramp: TWO rays a cell, and the two halves'\n");
+    puts("  blocks    tui's block ramp by luminance, 5 levels\n");
+    puts("  half      tui's half-block ramp: TWO rays a cell, and the two halves'\n");
     puts("            colours ride in the foreground and the background, so the\n");
     puts("            shading is two levels a row\n");
     puts("  braille   U+2800+mask by coverage: EIGHT rays a cell\n");
@@ -547,7 +545,7 @@ if (CHECK != 0) { NOTTY = 1; };
 
 // The size, decided before anything is built: the sample grid and the surface
 // have to agree, so both come from the same two numbers.
-let ws = term.size();
+let ws = tui.size();
 trows = ws.rows;
 tcols = ws.cols;
 let grow = 0;
@@ -586,7 +584,7 @@ GW = scene.grid_w();
 GH = scene.grid_h();
 let SR: long = grow;
 let SC: long = gcol;
-let srf = fb.new(SR, SC);
+let srf = tui.new(SR, SC);
 load_dumps(args.get_str("dump", ""), FRAMES - 1);
 
 // ═══════════════════════════════════════════════════ the property check ═══
@@ -603,7 +601,7 @@ if (CHECK > 0) {
 // ═════════════════════════════════════════════════════ the deterministic path ═
 //
 // The same scene, the same tracer, the same cell pass and the same
-// fb.flush_diff as the terminal path -- the ANSI stream is built and counted
+// tui.flush_diff as the terminal path -- the ANSI stream is built and counted
 // either way, which is what makes the `bytes` column in the digest evidence
 // rather than a claim -- except that it goes to /dev/null and the text goes to
 // stdout instead.
@@ -616,8 +614,8 @@ if (CHECK > 0) {
 // byte-identical between two runs.
 if (NOTTY != 0) {
     let devnull = syscall(257, 0 - 100, "/dev/null", 1, 0, 0, 0);   // openat
-    if (devnull >= 0) { fb.set_fd(devnull); };
-    fb.capture_on();
+    if (devnull >= 0) { tui.set_fd(devnull); };
+    tui.capture_on();
 
     sink.out_str("raytracer: frames=");
     sink.out_num(FRAMES);
@@ -661,7 +659,7 @@ if (NOTTY != 0) {
     };
 
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let f = 0;
     while (f < FRAMES) {
         // The orbit advances one keypress-step a frame, so consecutive frames
@@ -669,14 +667,14 @@ if (NOTTY != 0) {
         scene.set_camera(AZ + f * AZ_STEP, EL, DDIST);
         scene.render(SEED, f);
         assemble(srf);
-        fb.capture_reset();
-        fb.flush_diff(srf);
+        tui.capture_reset();
+        tui.flush_diff(srf);
         sink.out_str("frame ");
         sink.out_pad(f, 5);
         sink.out_str(" bytes ");
-        sink.out_pad(fb.frame_bytes(), 8);
+        sink.out_pad(tui.frame_bytes(), 8);
         sink.out_str(" rows ");
-        sink.out_pad(fb.row_count(), 5);
+        sink.out_pad(tui.row_count(), 5);
         sink.out_str(" hits ");
         sink.out_pad(scene.hits(), 7);
         sink.out_str(" hitpc ");
@@ -711,9 +709,9 @@ if (NOTTY != 0) {
         if (ansifd >= 0 && f == FRAMES - 1) {
             // point the emitter at the file and repaint in full, so what lands
             // there is the frame and not a diff against whatever came before it
-            fb.set_fd(ansifd);
-            fb.flush(srf);
-            fb.set_fd(devnull);
+            tui.set_fd(ansifd);
+            tui.flush(srf);
+            tui.set_fd(devnull);
         };
         if (want_dump[f] != 0) {
             sink.out_str("\n--- frame ");
@@ -725,13 +723,13 @@ if (NOTTY != 0) {
         f = f + 1;
     };
     if (ansifd >= 0) {
-        // fb.spill() has already pushed the last flush down its own descriptor;
+        // tui.spill() has already pushed the last flush down its own descriptor;
         // this is fb's capture buffer, which holds the same bytes and is what the
         // headless path has been counting all along
-        sink.out_capture(ansifd, fb.capture_len());
+        sink.out_capture(ansifd, tui.capture_len());
         syscall(3, ansifd, 0, 0, 0, 0, 0);      // close(2)
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     sink.out_flush();
 
@@ -778,21 +776,21 @@ if (NOTTY != 0) {
 
 // ═════════════════════════════════════════════════════ the interactive path ═
 //
-// term.y's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
+// tui's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
 // leaves.  Y has no atexit and no signal handler, so every exit below is a call
-// to term.restore_all_exit() -- there is no path out of this loop that does not
+// to tui.restore_all_exit() -- there is no path out of this loop that does not
 // go through it -- and a SIGKILL of the program is covered by the watchdog,
 // which restores the saved termios itself.
-if (!term.raw_mode()) {
+if (!tui.raw_mode()) {
     eputs("raytracer: not a terminal; try --frames N --no-tty\n");
     exit(1)
 };
-term.enter_screen();
-term.arm_watchdog();
+tui.enter_screen();
+tui.arm_watchdog();
 
-let pacer = time.pacer_new(FPSWANT);
-let meter = time.fps_new();
-time.pacer_start(pacer);
+let pacer = tui.pacer_new(FPSWANT);
+let meter = tui.fps_new();
+tui.pacer_start(pacer);
 
 let frame = 0;
 let quit = false;
@@ -802,7 +800,7 @@ let bytes_sum = 0;
 let ih0 = heap_used();
 
 while (quit == false) {
-    let wait = time.pacer_next(pacer);
+    let wait = tui.pacer_next(pacer);
     if (wait >= 0) {
         if (paused == 0) {
             AZ = AZ + AZ_STEP;
@@ -810,13 +808,13 @@ while (quit == false) {
         };
         scene.render(SEED, frame);
         assemble(srf);
-        hud(srf, SR - 1, frame, time.fps_x100(meter) / 100);
-        bytes_sum = bytes_sum + fb.flush_diff(srf);
-        time.fps_tick(meter);
+        hud(srf, SR - 1, frame, tui.fps_x100(meter) / 100);
+        bytes_sum = bytes_sum + tui.flush_diff(srf);
+        tui.fps_tick(meter);
         frame = frame + 1;
         if (FRAMES > 0 && frame >= FRAMES) {
-            report(frame, bytes_sum, time.fps_x100(meter) / 100, ih0, heap_used());
-            term.restore_all_exit(0)
+            report(frame, bytes_sum, tui.fps_x100(meter) / 100, ih0, heap_used());
+            tui.restore_all_exit(0)
         };
     };
 
@@ -836,9 +834,9 @@ while (quit == false) {
         // keys come back as bytes, so they are compared as bytes: Y has no char
         // literal (c'a' is the character form), and ord() is how a name becomes
         // the byte it means
-        let k = term.read_key_timeout(0);
+        let k = tui.read_key_timeout(0);
         let moved = 0;
-        if (k == ord("q") || k == ord("Q") || k == term.KEY_ESC) {
+        if (k == ord("q") || k == ord("Q") || k == tui.KEY_ESC) {
             quit = true;
         } else if (k == ord("p") || k == ord("P")) {
             PAL = (PAL + 1) % 5;
@@ -867,16 +865,16 @@ while (quit == false) {
         } else if (k == ord("-") || k == ord("_")) {
             if (DDIST > D_MIN) { DDIST = DDIST - D_STEP; };
             moved = 1;
-        } else if (k == term.KEY_LEFT) {
+        } else if (k == tui.KEY_LEFT) {
             AZ = AZ - AZ_STEP;
             moved = 1;
-        } else if (k == term.KEY_RIGHT) {
+        } else if (k == tui.KEY_RIGHT) {
             AZ = AZ + AZ_STEP;
             moved = 1;
-        } else if (k == term.KEY_UP) {
+        } else if (k == tui.KEY_UP) {
             EL = EL + EL_STEP;
             moved = 1;
-        } else if (k == term.KEY_DOWN) {
+        } else if (k == tui.KEY_DOWN) {
             EL = EL - EL_STEP;
             moved = 1;
         };
@@ -894,7 +892,7 @@ while (quit == false) {
             if (nr > scene.MAXR) { nr = scene.MAXR; };
             if (nc < 4) { nc = 4; };
             if (nc > scene.MAXC) { nc = scene.MAXC; };
-            srf = fb.resize(srf, nr, nc);
+            srf = tui.resize(srf, nr, nc);
             SR = nr;
             SC = nc;
             scene.grid_setup(SC, SR, SXA[GM], SYA[GM]);
@@ -904,5 +902,5 @@ while (quit == false) {
     }
 };
 
-report(frame, bytes_sum, time.fps_x100(meter) / 100, ih0, heap_used());
-term.restore_all_exit(0);
+report(frame, bytes_sum, tui.fps_x100(meter) / 100, ih0, heap_used());
+tui.restore_all_exit(0);

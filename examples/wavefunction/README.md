@@ -381,7 +381,7 @@ the value-used exact-size copy):
     tiles.y        no string appends at all
 
 Every `y_str_cat` in the binary is in `check.y` building a check *name*, or in
-`args.y`. There is no `str` on the solve path, the render path or the golden
+`args`. There is no `str` on the solve path, the render path or the golden
 path at all, so there is nothing there to be quadratic. (A note for the next
 example: `print()` is `println` — it appends a newline to every argument — which
 is why a 24-cell row printed a character at a time comes out as 24 one-character
@@ -406,11 +406,7 @@ Vendored from `examples/_toolkit/`, byte-identical, never edited:
 
 | file | sha256 |
 |---|---|
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` |
-| `fb.y` | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` |
 | `fx.y` | `4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058` |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` |
 
 ## Language workarounds, all of them visible in the code
 
@@ -422,8 +418,8 @@ Vendored from `examples/_toolkit/`, byte-identical, never edited:
 | `print()` is `println` | `sink.y` | one byte buffer and one `write(2)` instead |
 | `term.read_key_timeout(0)` | `wavefunction.interactive` | a 1..99 ms poll rounds up to 100 ms (VTIME counts deciseconds) and reports ~0.6 fps with a stuck frame counter |
 | `winsize()` by ioctl | not needed — the size is read once, before the loop | `term.size()` returns a fresh record per call (~40 B) and the loop is the frame loop |
-| fb.y's `emit_num` drops a zero digit | `wavefunction.safe_ch()` | filed: BUGS.md, "fb.y's emit_num drops a zero digit" — a channel of 205 reaches the terminal as 25 |
-| fb.y's CUP has the same bug | the interactive grid is capped at 49x23 | column 101 would be emitted as 11; 1..99 is the range `emit_num` gets right |
+| tui's `emit_num` drops a zero digit | `wavefunction.safe_ch()` | filed: BUGS.md, "tui's emit_num drops a zero digit" — a channel of 205 reaches the terminal as 25 |
+| tui's CUP has the same bug | the interactive grid is capped at 49x23 | column 101 would be emitted as 11; 1..99 is the range `emit_num` gets right |
 | `>>` vs `>>>` | `wfc.rs_next`, `sink.sink_hex16`, `sink.sink_q30` | `>>>` is logical; it is used only where zero-extension is wanted and only on values that are non-negative by construction |
 | a fixed array in a loop body | every table in `tiles.y` and `wfc.y` is module-level | an array literal in a loop body allocates 64 bytes an iteration |
 | `str + byte` | never written | `s[i]` on a `str` is a byte and `str + byte` segfaults; nothing here concatenates one |
@@ -495,6 +491,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

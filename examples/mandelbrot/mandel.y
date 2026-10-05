@@ -463,10 +463,10 @@ def md_glyph(cell: long, lum_mode: long) -> long {
     fb_ascii(b, 255)
 };
 
-// fb.shade_ascii reimplemented here rather than imported: md_glyph must stay
+// tui.shade_ascii reimplemented here rather than imported: md_glyph must stay
 // callable from a worker without dragging the whole framebuffer into the
 // set's module, and the ramp is ten integers.  ramp_index's rule -- v <= 0 is
-// the emptiest glyph, v >= n the fullest, otherwise v*levels/n -- is fb.y's,
+// the emptiest glyph, v >= n the fullest, otherwise v*levels/n -- is tui's,
 // so the two agree cell for cell.
 let ARAMP: [long; 10] = [32, 46, 58, 45, 61, 43, 42, 35, 37, 64];
 

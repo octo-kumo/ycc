@@ -6,41 +6,41 @@
 // THE THREE THINGS THAT SHAPE THIS FILE
 //
 // 1. THE REDRAW IS EVENT-DRIVEN, AND THE POLL MUST NOT HAVE A TIMEOUT.
-//    `term.read_key_timeout(ms)` cannot be finer than 100 ms: VTIME counts
+//    `tui.read_key_timeout(ms)` cannot be finer than 100 ms: VTIME counts
 //    DECISECONDS, so any non-zero ms rounds UP to the next 100 ms -- measured on
 //    the pinned compiler at ~104 ms per call, and five calls taking 518 ms.
 //    An editor that polled with read_key_timeout(16) would spend 100 ms per
 //    frame, feel broken, and report nothing wrong.  So the loop polls with
 //    read_key_timeout(0) -- non-blocking, returns KEY_NONE at once -- and naps
-//    with time.nap_us() when there is nothing to do.  A frame is drawn only
+//    with tui.nap_us() when there is nothing to do.  A frame is drawn only
 //    because something changed, never because a timer fired.
 //
-// 2. THE WINDOW SIZE IS QUERIED WITH OUR OWN winsize(), NOT term.size().
-//    term.size() builds a fresh record on every call (~40 bytes, measured with
+// 2. THE WINDOW SIZE IS QUERIED WITH OUR OWN winsize(), NOT tui.size().
+//    tui.size() builds a fresh record on every call (~40 bytes, measured with
 //    heap_used()); calling it once per redraw is a per-frame leak with no
 //    diagnostic.  screen.winsize() does the TIOCGWINSZ ioctl into a
 //    module-level buffer and assigns two module-level longs, so it is free
-//    however often it runs.  term.y is vendored byte-identical and term.size()
+//    however often it runs.  tui is vendored byte-identical and tui.size()
 //    is simply not on this path -- see README.md.
 //
 // 3. THE TERMINAL IS ALWAYS RESTORED, ON EVERY EXIT PATH.
-//    Y has no atexit and no signal handlers, so the ONLY way is term.y's
+//    Y has no atexit and no signal handlers, so the ONLY way is tui's
 //    pattern, used verbatim:
-//        if (term.raw_mode()) {
-//            term.enter_screen();
-//            term.arm_watchdog();
-//            <one place: term.restore_all_exit(code)>
+//        if (tui.raw_mode()) {
+//            tui.enter_screen();
+//            tui.arm_watchdog();
+//            <one place: tui.restore_all_exit(code)>
 //        }
 //    and every early exit inside is `return <code>` -- one exit point at the
 //    bottom, so nothing can forget half of it.  The watchdog child calls
-//    setsid(2) (term.y does that already), which is what makes it survive the
+//    setsid(2) (tui does that already), which is what makes it survive the
 //    parent's death instead of being SIGHUP'd before it can restore.
 //
 // ===========================================================================
 // THE `--no-tty` MODE
 //
 // `--no-tty` never touches the terminal: it decodes `--keys` into the same
-// longs term.read_key() returns, feeds them through the same modes.feed(), and
+// longs tui.read_key() returns, feeds them through the same modes.feed(), and
 // then prints the buffer, the screen and the message log.  That is what makes
 // the example testable without a pty AND what makes a diagnostic that reached
 // only the status line show up in `diff EXPECTED`.
@@ -52,10 +52,9 @@
 import buf;
 import modes;
 import screen;
-import term;
 import args;
-import time;
 import check;
+import tui;
 
 // ---- the option spec -----------------------------------------------------
 // A module-level literal, not one inside main(): a record or array literal in
@@ -165,7 +164,7 @@ def dump_screen(rows: long, cols: long) -> void {
 // ===========================================================================
 
 // Returns the process exit code.  Every early exit is a `return` from here, and
-// the caller has exactly one `term.restore_all_exit(...)` -- so there is one
+// the caller has exactly one `tui.restore_all_exit(...)` -- so there is one
 // place the terminal is put back and it cannot be missed half way.
 def interactive() -> long {
     let act = 0;
@@ -190,8 +189,8 @@ def interactive() -> long {
         // once.  Any non-zero ms would round UP to the next 100 ms because VTIME
         // counts deciseconds, so polling with read_key_timeout(16) would spend
         // 100 ms per frame and feel broken with nothing wrong anywhere.
-        let k = term.read_key_timeout(0);
-        if (k != term.KEY_NONE) {
+        let k = tui.read_key_timeout(0);
+        if (k != tui.KEY_NONE) {
             act = modes.feed(k);
             dirty = true;
             if (act != modes.ACT_CONTINUE) { alive = false }
@@ -202,7 +201,7 @@ def interactive() -> long {
             // one ioctl into a module-level buffer.
             screen.winsize();
             if (screen.rows() != last_r || screen.cols() != last_c) { dirty = true };
-            time.nap_us(6000)
+            tui.nap_us(6000)
         }
     };
     if (act == modes.ACT_FAIL) { 1 } else { 0 }
@@ -233,7 +232,7 @@ def run_scripted(rows: long, cols: long) -> long {
     let applied = 0;
     while (more) {
         let k = modes.script_take();
-        if (k != term.KEY_NONE) { applied = applied + 1 };
+        if (k != tui.KEY_NONE) { applied = applied + 1 };
         act = modes.feed(k);
         if (act != modes.ACT_CONTINUE) {
             more = false
@@ -296,14 +295,14 @@ def run_bench(rows: long, cols: long, frames: long) -> long {
     screen.build_grid(rows, cols);
     screen.emit_ansi(rows, cols);
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let i = 0;
     let total = 0;
     while (i < frames) {
         total = total + screen.render_capture(rows, cols);
         i = i + 1
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     d_line("bench     rows " + tostring(rows) + " cols " + tostring(cols) + "  frames " + tostring(frames));
     let per = total;
@@ -380,7 +379,7 @@ def main() -> long {
         eputs("editor: one file at a time; got " + tostring(len(ops)) + "\n");
         return 2
     };
-    // args.y's has() cannot tell "not given" from "given as false", so a BOOL
+    // args's has() cannot tell "not given" from "given as false", so a BOOL
     // option cannot express "on unless you turn it off".  A STR option with an
     // explicit value can, which is why the gutter is spelled --numbers on|off.
     let nums = args.get_str("numbers", "on");
@@ -442,15 +441,15 @@ def main() -> long {
         return code
     };
 
-    // --- interactive: term.y's pattern, verbatim -------------------------
-    if (!term.raw_mode()) {
+    // --- interactive: tui's pattern, verbatim -------------------------
+    if (!tui.raw_mode()) {
         eputs("editor: standard input is not a terminal; try --no-tty --keys \"...\"\n");
         return 1
     };
-    term.enter_screen();
-    term.arm_watchdog();
+    tui.enter_screen();
+    tui.arm_watchdog();
     let code = interactive();
-    term.restore_all_exit(code);
+    tui.restore_all_exit(code);
     code
 };
 

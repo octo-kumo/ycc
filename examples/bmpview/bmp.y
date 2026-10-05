@@ -434,9 +434,9 @@ def load(src: [byte]) -> Image {
 // ── reading the decoded image ──────────────────────────────────────────────
 
 def at(im: Image, x: long, y: long) -> long {
-    // One pixel as 0xRRGGBB, or -1 out of range.  fb.rgb takes channels, so
+    // One pixel as 0xRRGGBB, or -1 out of range.  tui.rgb takes channels, so
     // callers that want a colour use r_of/g_of/b_of or pass this straight to
-    // fb.put as a truecolour SGR pair.
+    // tui.put as a truecolour SGR pair.
     if (x < 0 || y < 0 || x >= im.w || y >= im.h) { return -1; };
     let i = (y * im.w + x) * 3;
     (im.rgb[i] << 16) | (im.rgb[i + 1] << 8) | im.rgb[i + 2]

@@ -67,9 +67,9 @@ const OP_END: long = 11;
 let OPNAME: [str] = ["?", "forward", "back", "left", "right", "heading",
                      "pen", "colour", "jump", "dot", "repeat", "end"];
 
-// The colours, by name and by packed RGB (r<<16 | g<<8 | b, the packing fb.rgb
+// The colours, by name and by packed RGB (r<<16 | g<<8 | b, the packing tui.rgb
 // uses).  The interpreter keeps them as plain longs so it stays independent of
-// fb.y; scene.y hands the number to fb.
+// tui; scene.y hands the number to fb.
 let CNAME: [str] = ["black", "red", "green", "yellow", "blue", "magenta",
                     "cyan", "white", "orange", "grey", "brown", "lime",
                     "pink", "violet", "silver", "gold"];

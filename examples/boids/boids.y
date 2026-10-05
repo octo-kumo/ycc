@@ -20,7 +20,7 @@
 // THE FOUR MODES, AND WHY EACH ONE GETS ITS OWN SCREEN STATE
 //
 //   live      raw mode, alt screen, one restore_all_exit at the bottom that
-//             every early exit routes through.  term.y's crash watchdog covers
+//             every early exit routes through.  tui's crash watchdog covers
 //             SIGKILL and a fault.
 //   headless  --no-tty or --frames: NO termios, no escape sequences, no
 //             watchdog, no clock.  That is what makes its stdout diffable byte
@@ -49,12 +49,10 @@
 // `while` -- see run_live().
 
 import args;
-import fb;
-import term;
-import time;
 import flock;
 import report;
 import check;
+import tui;
 
 const OPTS: [args.Opt] = [
     { long: "boids",   short: "n", kind: args.NUM,  help: "how many boids, 1..512 (default 120)" },
@@ -96,13 +94,13 @@ def die(msg: str) -> long {
 // winsize() -> long -- the window size packed as rows * 1000 + cols, read into
 // THIS module's own buffer.
 //
-// Why not term.size()?  Because term.size() answers `{ rows, cols }` -- a
+// Why not tui.size()?  Because tui.size() answers `{ rows, cols }` -- a
 // record LITERAL, built fresh on every call -- and a record literal inside a
 // loop body allocates (SUGGESTIONS.md 7 measures 40 bytes for a two-field
 // record).  Polling it once a frame leaked exactly 40 bytes a frame, dead
 // linear, and it would look fine for an hour and then hit the cap.
 //
-// The copy of term.y in this folder is frozen and NOT edited, so the four lines
+// The copy of tui in this folder is frozen and NOT edited, so the four lines
 // it would take to fix it upstream are written out here instead: one ioctl
 // (syscall 16, fd, REQUEST, arg -- kernel register order, ORCHESTRATOR.md 2.1)
 // into a module-level [byte; 64], then two 16-bit little-endian reads.  ROW
@@ -112,7 +110,7 @@ def die(msg: str) -> long {
 // 24x80 when the ioctl fails or reports a zero, which is what a pty from
 // pty.fork() looks like before anybody sets TIOCSWINSZ.
 //
-// WS is a GROWABLE [byte], like term.y's own WS, and not a fixed [byte; 64]: a
+// WS is a GROWABLE [byte], like tui's own WS, and not a fixed [byte; 64]: a
 // fixed array carries its elements inline, so `&WS[0]` has to box it, and the
 // box is a one-time heap block that lands inside the frame measurement.
 const WS: [byte] = [0; 64];
@@ -140,7 +138,7 @@ def ws_cols(packed: long) -> long { packed % 1000 };
 //
 // Built into a FIXED byte buffer, not into a `str`.  The obvious spelling is
 //
-//     fb.text(surf, s.h, 0, f"frame {s.gen} | {fps} fps | ...")
+//     tui.text(surf, s.h, 0, f"frame {s.gen} | {fps} fps | ...")
 //
 // which is one f-string and several `+` per frame -- and every one of those
 // allocates, because the heap is an arena and nothing is freed.  Measured
@@ -210,11 +208,11 @@ def sb_pad(to: long) {
     while (SBN < to) { sb_byte(32); }
 };
 
-def sb_draw(surf: fb.Surface, row: long, fg: long, bg: long) {
+def sb_draw(surf: tui.Surface, row: long, fg: long, bg: long) {
     let n = SBN;
     if (n > SB_CAP) { n = SB_CAP; };
     for i in 0..n {
-        fb.put(surf, row, i, SBUF[i], fg, bg)
+        tui.put(surf, row, i, SBUF[i], fg, bg)
     }
 };
 
@@ -223,8 +221,8 @@ def sb_draw(surf: fb.Surface, row: long, fg: long, bg: long) {
 // back_colour() -> long -- the board behind the birds.  The terminal's own
 // background in mono, a very dark blue otherwise.
 def back_colour(mode: long) -> long {
-    if (mode == 0) { return fb.DEFAULT };
-    fb.rgb(8, 10, 20)
+    if (mode == 0) { return tui.DEFAULT };
+    tui.rgb(8, 10, 20)
 };
 
 // bird_colour(speed, maxs, mode) -> long.  Three palettes:
@@ -236,14 +234,14 @@ def back_colour(mode: long) -> long {
 //   2 depth  blue through yellow, by speed again but reversed in feel, which
 //           makes the leaders stand out against the mass.
 def bird_colour(sp: long, maxs: long, mode: long) -> long {
-    if (mode == 0) { return fb.grey(200) };
+    if (mode == 0) { return tui.grey(200) };
     let t = 0;
     if (maxs > 0) { t = sp * 100 / maxs; };
     if (t > 100) { t = 100; };
     if (mode == 1) {
-        return fb.lerp_rgb(fb.rgb(30, 90, 150), fb.rgb(255, 250, 220), t)
+        return tui.lerp_rgb(tui.rgb(30, 90, 150), tui.rgb(255, 250, 220), t)
     };
-    fb.lerp_rgb(fb.rgb(70, 40, 120), fb.rgb(255, 220, 90), t)
+    tui.lerp_rgb(tui.rgb(70, 40, 120), tui.rgb(255, 220, 90), t)
 };
 
 // -- the live view ----------------------------------------------------------
@@ -253,7 +251,7 @@ def bird_colour(sp: long, maxs: long, mode: long) -> long {
 //
 // NOT chr(): chr() is byte-oriented and cannot make a non-ASCII glyph --
 // chr(8594).length is 1 and ord(chr(8594)) is 136, because 8594 & 255 == 136.
-// fb.put takes a CODEPOINT and encodes it through fb.utf8_byte, which is the
+// tui.put takes a CODEPOINT and encodes it through tui.utf8_byte, which is the
 // one route that works.
 def arrow(i: long) -> long { 8592 + i };
 
@@ -264,14 +262,14 @@ def arrow(i: long) -> long { 8592 + i };
 // flock.isqrt... no: in the glyph choice.  A boid on the wrap edge simply
 // appears on the other side, which is what a torus means.
 //
-// Allocation-free: fb.put writes into arrays that already exist.  It does NOT
+// Allocation-free: tui.put writes into arrays that already exist.  It does NOT
 // flush; the caller draws the status line and then flushes once, so a frame
 // costs one flush_diff and therefore one write(2) per row that changed.
-def draw(surf: fb.Surface, s: flock.Flock, mode: long) {
+def draw(surf: tui.Surface, s: flock.Flock, mode: long) {
     let back = back_colour(mode);
     for y in 0..s.h {
         for x in 0..s.w {
-            fb.put(surf, y, x, 32, fb.DEFAULT, back)
+            tui.put(surf, y, x, 32, tui.DEFAULT, back)
         }
     };
     for i in 0..s.n {
@@ -283,7 +281,7 @@ def draw(surf: fb.Surface, s: flock.Flock, mode: long) {
             // the boundaries already rounded: 0 is +x, which is octant 0, and
             // going clockwise on screen (y grows down) is heading increasing.
             let oct = (flock.heading(s, i) + 1125) / 2250;
-            fb.put(surf, y, x, arrow(oct % 8), bird_colour(sp, s.maxs, mode), back)
+            tui.put(surf, y, x, arrow(oct % 8), bird_colour(sp, s.maxs, mode), back)
         }
     }
 };
@@ -292,15 +290,15 @@ def draw(surf: fb.Surface, s: flock.Flock, mode: long) {
 // bottom of the screen, built into the fixed buffer above and drawn in place.
 // Padded to the full width so a shorter line erases the longer one it replaces.
 // 'h' puts the key list here instead.
-def status(surf: fb.Surface, s: flock.Flock, seed: long, fps: long, mode: long,
-           paused: bool, meter: time.Fps, help: bool, pairs: long,
+def status(surf: tui.Surface, s: flock.Flock, seed: long, fps: long, mode: long,
+           paused: bool, meter: tui.Fps, help: bool, pairs: long,
            rules: str) {
     let back = back_colour(mode);
     sb_reset();
     if (help) {
         sb_str("q quit  space pause  . step  r reseed  1/2/3 rules  0 all  c colour  +/- speed  h back");
         sb_pad(s.w);
-        sb_draw(surf, s.h, fb.rgb(255, 200, 0), back)
+        sb_draw(surf, s.h, tui.rgb(255, 200, 0), back)
     } else {
         sb_str("frame ");
         sb_num(s.gen);
@@ -324,9 +322,9 @@ def status(surf: fb.Surface, s: flock.Flock, seed: long, fps: long, mode: long,
         // The measured rate and the cap it is measured against, as "30.00/30",
         // so the line fits 80 columns even with a three-digit frame count.
         if (fps > 0) {
-            sb_num(time.fps_x100(meter) / 100);
+            sb_num(tui.fps_x100(meter) / 100);
             sb_byte(46);
-            let f = time.fps_x100(meter) % 100;
+            let f = tui.fps_x100(meter) % 100;
             if (f < 10) { sb_byte(48); };
             sb_num(f);
             sb_str("/");
@@ -338,7 +336,7 @@ def status(surf: fb.Surface, s: flock.Flock, seed: long, fps: long, mode: long,
         sb_str("seed ");
         sb_num(seed);
         sb_pad(s.w);
-        sb_draw(surf, s.h, fb.DEFAULT, back)
+        sb_draw(surf, s.h, tui.DEFAULT, back)
     }
 };
 
@@ -371,23 +369,23 @@ def stats_block(where: str, wall_us: long, gen: long, h0: long, h1: long,
 // restore_all_exit at the bottom, including the one the quit key causes.
 def run_live(s: flock.Flock, seed: long, fps: long, mode: long,
              want_stats: bool) -> long {
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         eputs("boids: stdin is not a terminal, so there is no live view.\n");
         eputs("boids: use --no-tty --frames N for the headless report, e.g. "
               + "`boids --no-tty --frames 200`.\n");
         return 1
     };
-    term.enter_screen();
-    term.arm_watchdog();
+    tui.enter_screen();
+    tui.arm_watchdog();
 
     let rows = s.h + 1;
     let cols = s.w;
-    let surf = fb.new(rows, cols);
-    let meter = time.fps_new();
-    let w0 = time.now_us();
+    let surf = tui.new(rows, cols);
+    let meter = tui.fps_new();
+    let w0 = clock_us();
     let cap = fps;
     if (cap < 1) { cap = 1000000; };
-    let pacer = time.pacer_new(cap);
+    let pacer = tui.pacer_new(cap);
     let running = true;
     let paused = false;
     let help = false;
@@ -402,7 +400,7 @@ def run_live(s: flock.Flock, seed: long, fps: long, mode: long,
     let cur_mask = flock.mask();
     let cur_rules = flock.mask_name(cur_mask);
 
-    // Read here, not one line earlier: time.pacer_new() above returns a RECORD
+    // Read here, not one line earlier: tui.pacer_new() above returns a RECORD
     // LITERAL and that is its own 48 bytes -- a setup cost, not a frame cost.
     // With the reading taken before it, --stats reported a constant "48 bytes
     // over N frames", which is neither zero nor a leak, and is the least useful
@@ -410,7 +408,7 @@ def run_live(s: flock.Flock, seed: long, fps: long, mode: long,
     let h0 = heap_used();
 
     while (running) {
-        let wait = time.pacer_next(pacer);
+        let wait = tui.pacer_next(pacer);
 
         // The window can change under a running program.  winsize() is one
         // ioctl into a fixed buffer, so it is cheap enough to ask every frame;
@@ -433,13 +431,13 @@ def run_live(s: flock.Flock, seed: long, fps: long, mode: long,
             s = ns;
             cols = nw;
             rows = nh + 1;
-            fb.resize(surf, rows, cols);
-            fb.clear(surf, back_colour(cur_mode));
-            time.pacer_start(pacer);
+            tui.resize(surf, rows, cols);
+            tui.clear(surf, back_colour(cur_mode));
+            tui.pacer_start(pacer);
             draw(surf, s, cur_mode);
             status(surf, s, cur_seed, cur_fps, cur_mode, paused, meter, help,
                    pairs, cur_rules);
-            fb.flush_diff(surf)
+            tui.flush_diff(surf)
         };
 
         if (wait >= 0) {
@@ -450,8 +448,8 @@ def run_live(s: flock.Flock, seed: long, fps: long, mode: long,
             draw(surf, s, cur_mode);
             status(surf, s, cur_seed, cur_fps, cur_mode, paused, meter, help,
                    pairs, cur_rules);
-            fb.flush_diff(surf);
-            time.fps_tick(meter)
+            tui.flush_diff(surf);
+            tui.fps_tick(meter)
         };
 
         // One keypress, polled WITHOUT waiting.
@@ -469,11 +467,11 @@ def run_live(s: flock.Flock, seed: long, fps: long, mode: long,
         //
         // The keys are compared with ord("q") and friends rather than written
         // as `k == 'q'`: this compiler has no character literal at all, and
-        // `'q'` is a lexer error.  term.y's header comment shows the `'q'`
+        // `'q'` is a lexer error.  tui's header comment shows the `'q'`
         // spelling; the numbers are what works.
-        let k = term.read_key_timeout(0);
-        if (k != term.KEY_NONE) {
-            if (k == ord("q") || k == term.KEY_ESC || k == 3) {
+        let k = tui.read_key_timeout(0);
+        if (k != tui.KEY_NONE) {
+            if (k == ord("q") || k == tui.KEY_ESC || k == 3) {
                 running = false
             } else if (k == 32) {
                 paused = !paused
@@ -498,31 +496,31 @@ def run_live(s: flock.Flock, seed: long, fps: long, mode: long,
                 cur_rules = flock.mask_name(cur_mask)
             } else if (k == ord("c")) {
                 cur_mode = (cur_mode + 1) % 3;
-                fb.clear(surf, back_colour(cur_mode))
+                tui.clear(surf, back_colour(cur_mode))
             } else if (k == ord("+") || k == 61) {
                 cur_fps = if (cur_fps == 0) { 30 } else { cur_fps * 2 };
-                pacer = time.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
-                time.pacer_start(pacer)
+                pacer = tui.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
+                tui.pacer_start(pacer)
             } else if (k == ord("-") || k == 95) {
                 cur_fps = cur_fps / 2;
                 if (cur_fps < 1) { cur_fps = 0; };
-                pacer = time.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
-                time.pacer_start(pacer)
+                pacer = tui.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
+                tui.pacer_start(pacer)
             }
         }
     };
 
     let h1 = heap_used();
     // --stats has to be printed on the PRIMARY screen, which is what
-    // stats_block's eputs does.  term.restore() and leave_screen() are
+    // stats_block's eputs does.  tui.restore() and leave_screen() are
     // idempotent, so doing them here and then calling restore_all_exit below is
     // safe -- the last call is still the one that exits.
-    term.restore();
-    term.leave_screen();
+    tui.restore();
+    tui.leave_screen();
     if (want_stats) {
-        stats_block("live", time.now_us() - w0, s.gen, h0, h1, pairs)
+        stats_block("live", clock_us() - w0, s.gen, h0, h1, pairs)
     };
-    term.restore_all_exit(0);
+    tui.restore_all_exit(0);
     0
 };
 

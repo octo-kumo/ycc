@@ -38,8 +38,8 @@
 // would leak 80 KB a frame.  That is why the frame path (fov.y, view.y) works
 // on plain `long` codes and only comes here for a name.
 
-import fb;
 import rnd;
+import tui;
 
 // ---------------------------------------------------------------------------
 // the tile union
@@ -273,11 +273,11 @@ def monster_glyph(k: long) -> long {
 
 def monster_colour(k: long) -> long {
     let c = k;
-    if (c == M_RAT) { return fb.rgb(150, 110, 90); };
-    if (c == M_BAT) { return fb.rgb(120, 90, 140); };
-    if (c == M_SNAKE) { return fb.rgb(90, 150, 90); };
-    if (c == M_ORC) { return fb.rgb(190, 90, 80); };
-    fb.rgb(170, 60, 170)
+    if (c == M_RAT) { return tui.rgb(150, 110, 90); };
+    if (c == M_BAT) { return tui.rgb(120, 90, 140); };
+    if (c == M_SNAKE) { return tui.rgb(90, 150, 90); };
+    if (c == M_ORC) { return tui.rgb(190, 90, 80); };
+    tui.rgb(170, 60, 170)
 };
 
 def monster_hp(k: long) -> long {

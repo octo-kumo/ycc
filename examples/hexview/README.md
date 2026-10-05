@@ -3,8 +3,8 @@
 Opens a file, shows it as **offset / hex bytes / ASCII gutter**, pages through it,
 and edits bytes in place. Two faces of one model:
 
-* **interactively** — raw mode through the vendored `term.y`, drawn through
-  `fb.y`, with a cursor, hex entry, bookmarks, search, an in-place save, and a
+* **interactively** — raw mode through std `tui`, drawn through
+  `tui`, with a cursor, hex entry, bookmarks, search, an in-place save, and a
   recent-file list;
 * **non-interactively** — `--no-tty` prints exactly what
   `od -A d -t x1z -v` prints, byte for byte, and `--check` **proves** that by
@@ -216,7 +216,7 @@ literal out of every loop"), and it is invisible in a golden. Two `sbs` calls
 fixed it. `--frames 120 --time` is what measured it; the numbers above are the
 "after".
 
-`term.read_key_timeout(0)` is the poll and `time.y`'s pacer owns the deadline
+`term.read_key_timeout(0)` is the poll and `tui`'s pacer owns the deadline
 (`VIEW_FPS = 30`) — a 1..99 ms poll rounds up to 100 ms because `VTIME` counts
 *deciseconds*, and every frame then lands a period late. The resize poll is a
 module-level `TIOCGWINSZ` into `WSBUF`, not `term.size()`, which returns a fresh
@@ -443,7 +443,7 @@ and fixing them is the reason the battery is worth more than a claim:
 Named rather than left implied:
 
 * **The vendored toolkit.** `inject.py` mutates only `hx.y` and `hexview.y`. A
-  defect in `fb.y`, `term.y`, `time.y` or `args.y` is out of scope by
+  defect in `tui` or `args` is out of scope by
   construction — they are byte-identical copies of `examples/_toolkit/` and must
   not be edited. `pty_check.py` exercises them heavily but cannot attribute a
   failure to them.
@@ -507,16 +507,9 @@ Two shapes worth calling out:
 
 ---
 
-## The frozen toolkit
+## The std units this uses
 
 Copied byte-identical from `examples/_toolkit/` with `cp`, never edited:
-
-| file | sha256 |
-|---|---|
-| `fb.y` | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` |
 
 `fx.y` is **not** vendored: a hex editor does trigonometry and square roots
 never. Nothing in this folder imports across folders.
@@ -543,7 +536,7 @@ measurement.
 | the status line is one `[byte; 256]` and `sbw`/`msgn` append to it; **two `sbs` calls instead of one call with a `+` between two literals** | `hexview.y`, `draw_status` | `examples/BUGS.md` — the `str +=` in a value-used position is O(n²) in heap — and the narrower case measured and filed as `examples/SUGGESTIONS.md` **#20**: a `str` built by `+` from constants inside a loop body allocates **48 bytes an evaluation**, while the same concatenation in a `const` costs 0. Measured here: 136 bytes a frame before, 0 after. |
 | `sput` walks the byte buffer into the surface cell by cell instead of calling `fb.text` | `hexview.y` | `ORCHESTRATOR.md` 2.7 — `fb.text` plus a freshly built `str` is ~2.4 KB a frame. |
 | a module-level `TIOCGWINSZ` read instead of `term.size()` | `poll_winsize` | `term.size()` returns a fresh record (~40 B) per call, and a per-frame resize poll leaks. |
-| `read_key_timeout(0)` plus `time.y`'s pacer | `run_interactive` | `ORCHESTRATOR.md` 2.1 — `VTIME` counts deciseconds, so a 1..99 ms poll rounds up to 100 ms and every frame lands a period late. |
+| `read_key_timeout(0)` plus `tui`'s pacer | `run_interactive` | `ORCHESTRATOR.md` 2.1 — `VTIME` counts deciseconds, so a 1..99 ms poll rounds up to 100 ms and every frame lands a period late. |
 | `&buf[i]` for the `syscall(1, 1, …)` in the buffered writer and in `selftest.say` | `hexview.y`, `selftest.y` | `syscall` accepts a `*byte` and `&buf[i]` yields one; `p + got` on a `*byte` is the missing half of **#12**, so the offset is carried in the index instead. |
 | `hexview --check` needs `exec`, so it needs a binary **not** built with `ycc --no-exec` | `gate.conf` | `exec` is spliced in only when the program mentions it, and `--no-exec` omits it entirely. Sections 1–10 and the `EXPECTED` run need nothing. |
 | a guard flag with an explicit terminal assignment for early exit | `selftest.y` §10 | there is no `break` and no `continue` in this language (`ORCHESTRATOR.md` §2.10). |
@@ -639,6 +632,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

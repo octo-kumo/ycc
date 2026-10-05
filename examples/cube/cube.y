@@ -28,15 +28,13 @@
 //
 // NOTHING IS ALLOCATED IN THE FRAME LOOP.  Y's heap is an arena and nothing is
 // ever freed (§2.7), so every per-frame buffer here is a fixed-size top-level
-// array and the only heap the program owns is the one fb.Surface from
-// fb.new() (1.5 MiB, once).  `--stats` prints heap_used() before and after the
+// array and the only heap the program owns is the one tui.Surface from
+// tui.new() (1.5 MiB, once).  `--stats` prints heap_used() before and after the
 // loop so this is checkable rather than claimed.
 
 import fx;
-import fb;
-import term;
-import time;
 import args;
+import tui;
 
 // ════════════════════════════════════════════════════════════════════ scene ══
 //
@@ -193,7 +191,7 @@ const OPT: [args.Opt] = [
 // this list is created, grown or replaced once `main` starts drawing.
 let ROWS = 24;
 let COLS = 60;
-let SURF: fb.Surface = fb.new(24, 60);   // the only heap the program owns
+let SURF: tui.Surface = tui.new(24, 60);   // the only heap the program owns
 
 let FOCAL_PX = 96;   // pixels per world unit at unit depth, on x
 let FPV = 48;        // half of that on y: a terminal cell is about twice as
@@ -233,7 +231,7 @@ let BY1: long = 0;
 let DRAW_US = 0;
 
 // TIOCGWINSZ's out-parameter buffer, ours, so that the once-a-frame resize
-// poll allocates NOTHING: term.size() builds a fresh WinSize record on every
+// poll allocates NOTHING: tui.size() builds a fresh WinSize record on every
 // call, and at 30 fps that is 40 bytes a frame in a program whose whole claim
 // is that the frame loop allocates nothing (ORCHESTRATOR.md §2.7).  Same
 // ioctl, same descriptor, same layout -- four 16-bit little-endian values,
@@ -247,7 +245,7 @@ let WSZ: [byte; 64] = [0; 64];
 def poll_size() {
     let r = 0;
     let c = 0;
-    if (syscall(16, 1, term.TIOCGWINSZ, &WSZ[0]) >= 0) {
+    if (syscall(16, 1, tui.TIOCGWINSZ, &WSZ[0]) >= 0) {
         r = WSZ[0] + WSZ[1] * 256;
         c = WSZ[2] + WSZ[3] * 256
     };
@@ -329,23 +327,23 @@ def peak(m: long) -> long {
     if (m == C_GREEN) { return RGB_GREEN; };
     if (m == C_AMBER) { return RGB_AMBER; };
     if (m == C_ICE) { return RGB_ICE; };
-    fb.grey(255)
+    tui.grey(255)
 };
 
 // The phosphor tint at brightness v (0..255).  `mono` has no colour at all and
-// says so with fb.DEFAULT, which emits SGR 39 and lets the terminal's own
+// says so with tui.DEFAULT, which emits SGR 39 and lets the terminal's own
 // palette through.
 def tint(v: long) -> long {
-    if (CMODE == C_MONO) { return fb.DEFAULT; };
+    if (CMODE == C_MONO) { return tui.DEFAULT; };
     let p = peak(CMODE);
-    if (CMODE == C_GRAY) { return fb.grey(v); };
-    fb.rgb(fb.r_of(p) * v / 255, fb.g_of(p) * v / 255, fb.b_of(p) * v / 255)
+    if (CMODE == C_GRAY) { return tui.grey(v); };
+    tui.rgb(tui.r_of(p) * v / 255, tui.g_of(p) * v / 255, tui.b_of(p) * v / 255)
 };
 
 // The page behind everything.
 def back() -> long {
-    if (CMODE == C_MONO) { return fb.DEFAULT; };
-    fb.rgb(10, 10, 16)
+    if (CMODE == C_MONO) { return tui.DEFAULT; };
+    tui.rgb(10, 10, 16)
 };
 
 // A lit colour and the shadow under the same face.  The glyph carries the
@@ -393,7 +391,7 @@ def project(i: long) {
     let d = z_depth(PZ[i]);
     SX[i] = COLS / 2 + (PX[i] * FOCAL_PX) / d;
     // The eye is a little above the middle of the frame, so the floor has
-    // somewhere to go.  A negative row is not a special case: fb.put ignores
+    // somewhere to go.  A negative row is not a special case: tui.put ignores
     // an out-of-range cell, so it clips.
     SY[i] = ROWS / 2 - 1 - (PY[i] * FPV) / d
 };
@@ -417,7 +415,7 @@ def bbox() {
 // seg(u, v, gh, gv, fg, bg) -- one cube edge.
 //
 // A projected cube edge is axis-aligned most of the time, and then one
-// fb.hline or fb.vline draws it exactly, which is what those two primitives
+// tui.hline or tui.vline draws it exactly, which is what those two primitives
 // are for.  When it is NOT axis-aligned it has to be walked: the previous
 // revision picked the dominant axis and drew a full run along it, which for
 // an edge with |dx| ~= |dy| draws a straight line that the edge does not
@@ -438,12 +436,12 @@ def seg(u: long, v: long, gh: long, gv: long, fg: long, bg: long) {
         let a = x0;
         let b = x1;
         if (a > b) { let t = a; a = b; b = t; };
-        fb.hline(SURF, y0, a, b - a + 1, gh, fg, bg)
+        tui.hline(SURF, y0, a, b - a + 1, gh, fg, bg)
     } else if (dx == 0) {
         let a = y0;
         let b = y1;
         if (a > b) { let t = a; a = b; b = t; };
-        fb.vline(SURF, a, x0, b - a + 1, gv, fg, bg)
+        tui.vline(SURF, a, x0, b - a + 1, gv, fg, bg)
     } else {
         // The diagonal case.  `steps` is the divisor and is guarded by
         // `if (steps > 0)`, which also makes a degenerate point draw once.
@@ -457,13 +455,13 @@ def seg(u: long, v: long, gh: long, gv: long, fg: long, bg: long) {
                 x = x0 + dx * i / steps;
                 y = y0 + dy * i / steps
             };
-            fb.put(SURF, y, x, if iabs(dx) >= iabs(dy) { gh } else { gv }, fg, bg);
+            tui.put(SURF, y, x, if iabs(dx) >= iabs(dy) { gh } else { gv }, fg, bg);
             i = i + 1
         }
     };
     let gc = edge_c_glyph();
-    fb.put(SURF, y0, x0, gc, fg, bg);
-    fb.put(SURF, y1, x1, gc, fg, bg)
+    tui.put(SURF, y0, x0, gc, fg, bg);
+    tui.put(SURF, y1, x1, gc, fg, bg)
 };
 
 // fput(y, x, cp, fg, bg) -- one floor cell, unless the cube owns it.
@@ -475,7 +473,7 @@ def seg(u: long, v: long, gh: long, gv: long, fg: long, bg: long) {
 // motion.
 def fput(y: long, x: long, cp: long, fg: long, bg: long) {
     let mine = y >= BY0 && y <= BY1 && x >= BX0 && x <= BX1;
-    if (!mine) { fb.put(SURF, y, x, cp, fg, bg) }
+    if (!mine) { tui.put(SURF, y, x, cp, fg, bg) }
 };
 
 // dline(x0, y0, x1, y1, cp, fg, bg) -- the floor's grid, which is diagonal in
@@ -612,7 +610,7 @@ def fill_face(f: long, v: long) {
             k = k + 1
         };
         if (got && hi >= lo) {
-            fb.hline(SURF, y, lo, hi - lo + 1, g, fg, bg)
+            tui.hline(SURF, y, lo, hi - lo + 1, g, fg, bg)
         };
         y = y + 1
     }
@@ -622,8 +620,8 @@ def fill_face(f: long, v: long) {
 // uses the block ramp, which is true coverage and survives a light terminal;
 // the capture uses the ASCII ramp, so EXPECTED is a text file.
 def face_glyph(v: long) -> long {
-    if (NOTTY) { return fb.shade_ascii(v, 255); };
-    fb.shade_blocks(v, 255)
+    if (NOTTY) { return tui.shade_ascii(v, 255); };
+    tui.shade_blocks(v, 255)
 };
 
 // ══════════════════════════════════════════════════════════════ transform ══
@@ -692,7 +690,7 @@ def draw_frame(fno: long) {
         }
     };
 
-    fb.clear(SURF, back());
+    tui.clear(SURF, back());
     // The floor is a separate subject and only appears when asked for, so a
     // `--wireframe` frame contains the 12 projected edges and nothing else.
     // See draw_floor() for what went wrong when it did not.
@@ -882,7 +880,7 @@ def selftest(n: long) -> long {
         for r in 0..ROWS {
             let c = 0;
             while (c < COLS) {
-                if (fb.get(SURF, r, c) != 32) {
+                if (tui.get(SURF, r, c) != 32) {
                     drawn = drawn + 1;
                     if (!on_edge(r, c)) { off = off + 1 };
                 };
@@ -911,7 +909,7 @@ def selftest(n: long) -> long {
         for r in 0..ROWS {
             let c = 0;
             while (c < COLS) {
-                if (fb.get(SURF, r, c) != 32) {
+                if (tui.get(SURF, r, c) != 32) {
                     let d = quad_over(r, c);
                     if (d > over) { over = d; };
                     if (d > T2_TOL) { out = out + 1 };
@@ -972,7 +970,7 @@ def emit_text(fno: long, total: long) {
     for r in 0..ROWS {
         ON = 0;
         for c in 0..COLS {
-            let cp = fb.get(SURF, r, c);
+            let cp = tui.get(SURF, r, c);
             // Everything the plain-text path draws is printable ASCII; a
             // stray byte outside that would be a bug here rather than a
             // reason to emit it.
@@ -1010,24 +1008,24 @@ def color_of(s: str) -> long {
 // ══════════════════════════════════════════════════════════════════ driver ══
 
 // The interactive path.  Every exit out of here goes through
-// term.restore_all_exit, and the watchdog is armed before the first frame so
-// a crash or a SIGKILL still puts the terminal back (term.y's whole reason).
+// tui.restore_all_exit, and the watchdog is armed before the first frame so
+// a crash or a SIGKILL still puts the terminal back (tui's whole reason).
 def run_tty(nframes: long, fps: long, stats: bool) {
-    if (!term.is_tty(0) || !term.is_tty(1)) {
+    if (!tui.is_tty(0) || !tui.is_tty(1)) {
         eputs("cube: stdout is not a terminal -- try --no-tty --frames N\n");
         exit(1);
     };
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         eputs("cube: cannot enter raw mode\n");
         exit(1);
     };
-    term.enter_screen();
-    term.arm_watchdog();
+    tui.enter_screen();
+    tui.arm_watchdog();
 
-    let pacer = time.pacer_new(if fps > 0 { fps } else { 1 });
-    let meter = time.fps_new();
+    let pacer = tui.pacer_new(if fps > 0 { fps } else { 1 });
+    let meter = tui.fps_new();
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let fno: long = 0;
     let go = true;
     while (go) {
@@ -1037,8 +1035,8 @@ def run_tty(nframes: long, fps: long, stats: bool) {
         // the loop at 10 fps and makes the pacer drop every frame.  0 is a
         // pure poll (VMIN=0, VTIME=0) and costs nothing, and the pacer below
         // owns the waiting.
-        let k = term.read_key_timeout(0);
-        if (k == K_Q || k == term.KEY_ESC || k == K_CTRL_C) { go = false; }
+        let k = tui.read_key_timeout(0);
+        if (k == K_Q || k == tui.KEY_ESC || k == K_CTRL_C) { go = false; }
         else if (k == K_S) { SOLID = !SOLID; }
         else if (k == K_C) { CMODE = (CMODE + 1) % 5; };
         if (go) {
@@ -1050,27 +1048,27 @@ def run_tty(nframes: long, fps: long, stats: bool) {
             // the schedule comes straight back.  Unpaced (`--fps 0`) there is
             // no pacer in the way and the answer is 0, which draws.
             let late: long = 0;
-            if (fps > 0) { late = time.pacer_next(pacer); };
+            if (fps > 0) { late = tui.pacer_next(pacer); };
             if (late >= 0) {
-                let d0 = time.now_us();
+                let d0 = clock_us();
                 draw_frame(fno);
-                fb.flush_diff(SURF);
-                DRAW_US = DRAW_US + (time.now_us() - d0);
-                time.fps_tick(meter);
+                tui.flush_diff(SURF);
+                DRAW_US = DRAW_US + (clock_us() - d0);
+                tui.fps_tick(meter);
                 fno = fno + 1;
                 if (nframes > 0 && fno >= nframes) { go = false; }
             }
         }
     };
     if (stats) { report(nframes, fno, h0, t0, meter) };
-    term.restore_all_exit(0)
+    tui.restore_all_exit(0)
 };
 
-// fit(rows, cols) -- adopt a geometry, clamped to what fb.Surface holds.  No
-// allocation: fb.resize() only rewrites two fields and resets the shadow.
+// fit(rows, cols) -- adopt a geometry, clamped to what tui.Surface holds.  No
+// allocation: tui.resize() only rewrites two fields and resets the shadow.
 def fit(rows: long, cols: long) -> void {
-    ROWS = clampi(rows, 1, fb.MAX_ROWS);
-    COLS = clampi(cols, 1, fb.MAX_COLS);
+    ROWS = clampi(rows, 1, tui.MAX_ROWS);
+    COLS = clampi(cols, 1, tui.MAX_COLS);
     // The focal length, in PIXELS per world unit at unit depth, and the single
     // number that decides how big the cube looks.
     //
@@ -1093,12 +1091,12 @@ def fit(rows: long, cols: long) -> void {
     if (vcap < FOCAL_PX) { FOCAL_PX = vcap; };
     if (FOCAL_PX < 1) { FOCAL_PX = 1; };
     FPV = FOCAL_PX / 2;
-    SURF = fb.resize(SURF, ROWS, COLS)
+    SURF = tui.resize(SURF, ROWS, COLS)
 };
 
-def report(want: long, got: long, h0: long, t0: long, meter: time.Fps) -> void {
-    let el = time.now_us() - t0;
-    let x100 = time.fps_avg_x100(meter);
+def report(want: long, got: long, h0: long, t0: long, meter: tui.Fps) -> void {
+    let el = clock_us() - t0;
+    let x100 = tui.fps_avg_x100(meter);
     let h1 = heap_used();
     // `got` can be 0 -- the plain-text path with --frames 0 draws nothing --
     // and a divide by it would be the one trap left in this file, so the
@@ -1125,22 +1123,22 @@ def two_digits(v: long) -> str {
 // animation, and --frames 60 should not take two seconds to produce 71 KB of
 // text.  --fps 30 asks for the pacing back.
 def run_text(nframes: long, fps: long, stats: bool) {
-    let pacer = time.pacer_new(if fps > 0 { fps } else { 1 });
-    let meter = time.fps_new();
+    let pacer = tui.pacer_new(if fps > 0 { fps } else { 1 });
+    let meter = tui.fps_new();
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let fno: long = 0;
     let go = nframes != 0;
     while (go) {
-        if (fps > 0) { time.pacer_next(pacer); };
+        if (fps > 0) { tui.pacer_next(pacer); };
         // DRAW_US covers drawing AND writing, so it is the whole cost of a
         // frame on this path and the number to compare against the 33333 us a
         // 30 fps frame allows.
-        let d0 = time.now_us();
+        let d0 = clock_us();
         draw_frame(fno);
         emit_text(fno, if nframes > 0 { nframes } else { 0 });
-        DRAW_US = DRAW_US + (time.now_us() - d0);
-        time.fps_tick(meter);
+        DRAW_US = DRAW_US + (clock_us() - d0);
+        tui.fps_tick(meter);
         fno = fno + 1;
         if (nframes > 0 && fno >= nframes) { go = false; }
     };
@@ -1152,7 +1150,7 @@ args.init("cube", "a rotating cube, wireframe or shaded solid, 30 fps", OPT);
 let ast = args.parse(argv());
 if (ast == args.HELP) { puts(args.usage()); exit(0); };
 if (ast == args.USAGE) {
-    // args.y has already printed "cube: unknown option '--whatever'" on
+    // args has already printed "cube: unknown option '--whatever'" on
     // stderr; all that is left is the exit code.
     exit(1)
 };
@@ -1183,8 +1181,8 @@ CMODE = cm;
 // --size WxH, if given.  Both halves must be whole numbers, or this is a
 // usage error: a size nobody asked for is worse than one that is rejected.
 // --size is WIDTH x HEIGHT and fit() is (rows, cols), so the halves swap
-// places on the way in; everything else here -- fb.new(rows, cols),
-// term.WinSize{rows, cols} -- is rows first, which is why this call says so.
+// places on the way in; everything else here -- tui.new(rows, cols),
+// tui.Size{rows, cols} -- is rows first, which is why this call says so.
 let sz = args.get_str("size", "");
 if (len(sz) > 0) {
     let at = sz.index_of("x");
@@ -1215,7 +1213,7 @@ if (len(sz) > 0) {
     // machine.  24 rows by 60 columns is the documented default.
     fit(24, 60)
 } else {
-    let ws = term.size();
+    let ws = tui.size();
     fit(ws.rows, ws.cols)
 };
 

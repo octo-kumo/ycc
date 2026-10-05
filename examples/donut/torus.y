@@ -1,4 +1,4 @@
-// torus.y -- Andy Sloane's torus, rasterised into an fb.Surface.
+// torus.y -- Andy Sloane's torus, rasterised into an tui.Surface.
 //
 // Vendored beside donut.y (see ORCHESTRATOR.md section 4).  This file is the
 // geometry and nothing else: the CLI, the palettes and the frame loop live in
@@ -87,7 +87,7 @@
 // extra rotation, no sqrt.  It runs over +-sqrt(2), and SQ2 is sqrt(2) in Q30.
 
 import fx;
-import fb;
+import tui;
 
 // ---------------------------------------------------------------- shape ----
 
@@ -358,7 +358,7 @@ def torus_step(a_step: long, b_step: long) -> void {
 // Either way the colour comes from the same luminance, so the tinted modes
 // shade the surface continuously while ascii puts the shading in the glyph.
 // `p.flat` is 1 in mono mode, where every glyph is one colour.
-def torus_draw(s: fb.Surface, gm: long) -> void {
+def torus_draw(s: tui.Surface, gm: long) -> void {
     let n = 0;
     let cols = if (s.cols < scols) { s.cols } else { scols };
     let rows = if (s.rows < srows) { s.rows } else { srows };
@@ -385,18 +385,18 @@ def torus_draw(s: fb.Surface, gm: long) -> void {
             let cp = 32;
             if (cov > 0) {
                 if (gm == 3) {
-                    cp = fb.braille_cp(fb.braille_mask(cov));
+                    cp = tui.braille_cp(tui.braille_mask(cov));
                 } else {
                     cp = torus_shade(bl, gm);
                 };
                 if (PAL.flat != 0) {
                     fg = PAL.mono_fg;
                 } else {
-                    fg = fb.lerp_rgb(PAL.lo, PAL.hi, bl);
+                    fg = tui.lerp_rgb(PAL.lo, PAL.hi, bl);
                 };
                 n = n + 1;
             };
-            fb.put(s, r, c, cp, fg, PAL.bg);
+            tui.put(s, r, c, cp, fg, PAL.bg);
         };
     };
     drawn = n
@@ -404,11 +404,11 @@ def torus_draw(s: fb.Surface, gm: long) -> void {
 
 // torus_shade(lum, gm) -- luminance 0..256 through fb's ramps.  The span is
 // 256 rather than 255 because that is the scale the projection produces, and
-// fb.ramp_index is monotonic in both arguments, so the ramp cannot invert.
+// tui.ramp_index is monotonic in both arguments, so the ramp cannot invert.
 def torus_shade(lum: long, gm: long) -> long {
-    if (gm == 1) { return fb.shade_blocks(lum, 256); };
-    if (gm == 2) { return fb.shade_half(lum, 256); };
-    fb.shade_ascii(lum, 256)
+    if (gm == 1) { return tui.shade_blocks(lum, 256); };
+    if (gm == 2) { return tui.shade_half(lum, 256); };
+    tui.shade_ascii(lum, 256)
 };
 
 // torus_rows() / torus_cols() -- the geometry torus_setup actually chose, so

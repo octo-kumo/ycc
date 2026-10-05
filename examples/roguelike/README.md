@@ -317,7 +317,7 @@ module-level fixed array, allocated once at module load:
 | `dungeon.TILE` + `DOOROPEN` + `REACH` + `QUEUE` | 4 × 8192 longs = 256 KiB |
 | `game.SEEN` + `game.ITEM` + `game.ICNT` | 3 × 8192 longs = 192 KiB |
 | `fov.VIS` | 8192 longs = 64 KiB |
-| `fb.y`'s capture buffer (module level, allocated even headless) | 256 KiB |
+| `tui`'s capture buffer (module level, allocated even headless) | 256 KiB |
 | `textout.ob`, plus the game and view scratch | 64 KiB + 5 KiB |
 | **the headless baseline, measured** | **`heap_used() = 876720` — 856 KiB** |
 | `fb.new(rows, cols)` on the interactive path | 1.5 MiB more (the same 856 KiB → 2 336 KiB, and it stays there) |
@@ -475,7 +475,7 @@ them. Three 5 000-turn soaks on top of that, with three different walks: no trap
 `tmux` is not installed on this machine, so `pty_check.py` allocates a pty from
 Python, sets the window size **before** `execv` (`pty.fork()` gives 0×0, and
 TIOCGWINSZ would then report nothing), feeds keys, and replays the byte stream
-through a twenty-line terminal emulator — because `fb.y` writes each row with an
+through a twenty-line terminal emulator — because `tui` writes each row with an
 absolute CUP and no newline, so the frame is not readable out of the byte stream
 without one.
 
@@ -495,7 +495,7 @@ exit status            : 0
 RESULT                 : PASS
 ```
 
-The interactive loop is `term.y`'s pattern verbatim — raw mode, alt screen,
+The interactive loop is `tui`'s pattern verbatim — raw mode, alt screen,
 watchdog, and **one** place that leaves:
 
 ```y
@@ -512,7 +512,7 @@ that does not restore the terminal. The watchdog is armed, which is what covers
 
 ---
 
-## The frozen toolkit
+## The std units this uses
 
 Copied in from `examples/_toolkit/` and **not edited** — this folder is
 self-contained and does not import across folders (`ORCHESTRATOR.md` §4).
@@ -520,15 +520,11 @@ self-contained and does not import across folders (`ORCHESTRATOR.md` §4).
 | file | sha256 (16) | lines | what |
 |---|---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 | integer Q30 fixed-point maths — used only by `fov.ray` |
-| `fb.y` | `95a7663b7f1c7a90` | 962 | the ANSI framebuffer: truecolour, glyphs, per-row diffing, double buffering |
-| `term.y` | `07135b31109fcecde` | 1156 | termios raw mode, window size, key and escape-sequence decode, alt screen, restore on every exit path |
-| `time.y` | `6050605cfcfb35db` | 245 | `clock_gettime`/`nanosleep`, allocation-free, and the fps/pacing helpers |
-| `args.y` | `cdac36da1cf2cd85` | 19081 | flag parsing, `--name=value`, short clusters, usage text, exit codes |
 
-`time.y` is vendored and imported but only `--time` uses it — the game itself never
+`tui` comes from std and is imported, but only `--time` uses it — the game itself never
 paces, because a turn-based roguelike waits for a key.
 
-Two things worth knowing about `args.y`, both found by this example:
+Two things worth knowing about `args`, both found by this example:
 
 * **Do not declare a `--help` option.** `args` recognises `--help` only when the
   spec does *not* declare it; declaring a BOOL called `help` makes it an ordinary
@@ -699,6 +695,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at
