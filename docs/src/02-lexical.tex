@@ -40,10 +40,23 @@ runs; what it returns is a \ty{str}, and that text is spliced into the program's
 source \emph{as text}. A value therefore has to be spelled as a literal before it
 lands --- \ic{\#\{ quoted(name) \}\#}, not \ic{\#\{ name \}\#} --- and a body
 whose value is not a \ty{str} is an ordinary type error. A block may be in a
-\ic{def} or \ic{type} body, between two tokens of an expression, or nested
-inside another block, is not: a block's text has no position to occupy there, and
-a nested block's text is a \emph{value} the enclosing block uses rather than code
-injected into it.
+\ic{def} or \ic{type} body, or nested inside another block, is not: in a body
+in-place emission would give compile-time-fixed values and a silent ``never
+ran'' mode, and a nested block's text is a \emph{value} the enclosing block
+uses rather than code injected into it.
+
+A block with no operand position at its own byte offset ---
+\ic{def helper\#\{nm\}\#()}, \ic{obj\#\{i\}\#.field} --- is a \emph{mid-token}
+block, and it generates a name. Its bytes are dropped from the generator
+program, and its call runs as a statement immediately before the top-level
+statement the block is in; that is legal precisely because it is mid-token,
+since dropping an adjunct between two adjacent tokens leaves them adjacent.
+Such a block works in a \ic{def} or \ic{type} \emph{header} too, but only as a
+fragment of a name with a character of the name beside it: \ic{def \#\{nm\}\#()}
+is an error, because dropping its bytes would leave \ic{def () -> long}. The
+generator program holds the \ic{def} under the short name, so a generated name
+and its call sites have to be generated together --- the source may not
+mention the full name.
 
 Because a block's body runs while the compiler runs, and the generator program
 is the file's own top level with each block replaced by a call, a file with

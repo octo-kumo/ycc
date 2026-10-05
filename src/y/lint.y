@@ -59,7 +59,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
         lint_rets(st, ast3.stmts)
     };
     lint_stmts(st, ast3.stmts, false, true);
-    if (any_gen(ogen)) { lint_meta_top(st, ast3.stmts, ogen) };
+    if (len(ogen) > 0) { lint_meta_top(st, ast3.stmts, ogen) };
     lint_vars(st);
     lint_types(st, ast.stmts);
     lint_sorted(st.warns)
@@ -84,18 +84,9 @@ def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> long {
     0
 };
 
-// Whether any line of the unit is generated at all. `ogen` has one entry per
-// output line whatever the answer is (see native_resolve_seen), so its LENGTH
-// says nothing; only a true in it means the unit has blocks.
-def any_gen(ogen: [bool]) -> bool {
-    let hit = false;
-    let i = 0;
-    while (i < len(ogen) && !hit) {
-        if (ogen[i]) { hit = true };
-        i = i + 1;
-    };
-    hit
-};
+// `ogen` is EMPTY for a unit with no meta blocks (see resolve_unit), so its
+// length is the answer to "is this file's top level also a generator's?", and
+// its entries say which lines a block generated.
 
 // A statement starting on a line a meta block generated. Its line is the
 // `#{` line (every generated line carries it, see mg_splice), and the ORIGIN

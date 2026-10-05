@@ -336,6 +336,9 @@ meta_dump "$ROOT/test/y/native/t01_arith.y" "-E dump"
 # ideas/meta.md, which lint warns about and t199 checks). t197 has only
 # declarations and one block.
 meta_dump "$ROOT/test/y/native/t197_meta_field_name_ok.y" "-E dump of a meta file"
+# and one with a MID-TOKEN block, where the dump holds generated text the
+# scanner must never read again (ideas/meta.md, "the two cases")
+meta_dump "$ROOT/test/y/native/t200_meta_mid_token.y" "-E dump of a mid-token meta file"
 
 echo ""
 echo "═══════════════════════════════════════════"

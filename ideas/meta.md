@@ -273,15 +273,78 @@ cap is **~333** — measured: 332 nested `ycc_meta_expr({ … })` compile, 333 f
 pass gets its own lower cap so a runaway nest is a diagnostic pointing at the block,
 not `too_deep` firing inside a file that does not exist.
 
-### Mid-token blocks are not supported
+### Mid-token blocks: two cases, and the call does not have to be in place
 
-`def helper#{x++}#()` — a block between two tokens of an expression — is **an error**,
-not a feature. `G` is compiled, so the block's replacement must be syntactically valid
-there, and a call cannot sit between `helper` and `(`. Supporting it needs statement
-boundary knowledge in a text-level pass.
+`def helper#{x++}#()` — a block between two tokens of an expression — generates a **name**,
+and that is intended code. It works, and the reason it works is the thing the earlier
+draft of this document got wrong:
 
-This costs generating a *name*; generating a *body* is `def helper() { #{ … }# }`, which
-is expression position and works. The diagnostic names the block and says so.
+> **The call does not have to be at the block's own byte offset.** A block's text lands
+> at its recorded byte range in `P` regardless of where its call sits in `G`; the call
+> only has to *run* before `G` finishes.
+
+So the rule is two cases, decided by the byte before the `#{`:
+
+1. **An operand position.** The preceding non-space, non-comment byte is one of
+   `(` `,` `=` `[` `{` `;` `:` `?`, or a binary or unary operator, or the block is at the
+   start of a line, or after a keyword such as `return`. The call stays **in place** as
+   `ycc_meta_expr(SLOT, { T })`. This is `let count = #{ … }#`, `f(#{ … }#, 2)`,
+   `#{ T }#` alone on a line, and anything else already sitting where an operand goes.
+2. **Mid-token.** The preceding byte is an identifier character, `)`, `]`, or a literal,
+   so there is no operand position and a call cannot go there. The block's **bytes are
+   dropped from `G` entirely** and `ycc_meta_stmt(SLOT, { T });` is emitted as a
+   statement **immediately before the top-level statement that contains the block**.
+
+Case 2 is safe precisely because it is mid-token: the block is an adjunct between two
+adjacent tokens, and dropping it leaves them adjacent.
+
+| | `G` becomes | `P` becomes |
+|---|---|---|
+| `def helper#{nm}#() -> long { 7 }` | `ycc_meta_stmt(0, { nm });`<br>`def helper() -> long { 7 }` | `def helpergen() -> long { 7 }` |
+| `obj#{i}#.field` | `ycc_meta_stmt(1, { i });`<br>`obj.field` | `obj.field` |
+| `tag#{i}#` (whole tail) | `ycc_meta_stmt(1, { i });`<br>`tag` | `tag` |
+| `f(#{x}#, 2)` (case 1) | `f(ycc_meta_expr(2, { x }), 2)` | `f(<the piece>, 2)` |
+
+**The statement start is a byproduct of the state machine**: the position of the first
+byte that is neither a blank nor a comment since the last depth-0 `;`, `{` or `}`. That
+is exact, not an approximation — a top-level statement *can* begin mid-line (`let a =
+f(); def helper#{x}#() …`), and the anchor follows the `;`, so the hoisted call still
+comes after everything the statement before it initialised.
+
+**Ordering** is the load-bearing part, and it falls out of where the calls are recorded:
+a hoisted call is appended when its block **closes**, which is innermost-first and then
+siblings in source order — the order they have to run in. Within one statement they are
+therefore inserted back to front, each landing before the one already there; statements
+are done from the last to the first so an insertion never moves a position a later pass
+still has to read.
+
+Three limits, all measured, none of them silent:
+
+- **The fragment needs a character of the name on one side.** `def #{nm}#() -> long { … }`
+  is not mid-token (nothing ends a token there) and its call cannot go in place either
+  (a def header is not an operand position), and dropping its bytes would leave
+  `def () -> long`. It is refused. `def as#{nm}#()` works.
+- **`G` holds the def under the SHORT name.** So nothing in the *source* may call the
+  generated name — the generator's copy of a call to `assembled()` would not resolve.
+  The name and its call sites have to be generated together; that is the shape, and it
+  is what makes this usable.
+- **A block cannot be adjacent to another block.** `}##{` is two blocks but `}#{` is one
+  block followed by a brace: the closing `#` is consumed by the first. Write
+  `def a#{x}#b#{y}#()` — with literal text between the fragments — not `def a#{x}##{y}#()`.
+
+**One new diagnostic**, and it is the one shape where removal provably cannot work: a
+block in a `def` or `type` header that is not part of a name.
+
+> `a meta block in a def or type header must be part of a name, with a character of the
+> name beside it: a call cannot go in a header, and dropping the block's bytes would
+> leave nothing behind`
+
+(`e187_meta_header_whole_name.y`). It is worth its own message rather than the existing
+"inside a def or type body" one, because the block is **not** inside the body — the old
+message would have pointed at the wrong place. Everything else removal cannot fix is
+still caught by `G`'s own compile: the error is `the meta generator did not compile`
+naming the block's line, which is where a bad `import` or an undefined name in a block is
+reported too.
 
 ### Sharing: one block, or a module
 
@@ -492,7 +555,8 @@ byte offsets:
 | `'` char literals | same state machine as `"` |
 | `}#` in code position with no open block | **an error** — the one stray-delimiter diagnostic |
 | `#` at EOF, or `#x` in code position | **an error** |
-| a block **inside** a block, mid-token | an error (see [Mid-token](#mid-token-blocks-are-not-supported)) |
+| a block **inside** a block, mid-token | works: hoisted like any other mid-token block, in close order, so it runs before its parent (see [Mid-token](#mid-token-blocks-two-cases-and-the-call-does-not-have-to-be-in-place)) |
+| a mid-token block at the **start** of a `def` name | **an error** — nothing ends a token there, and dropping the bytes would leave `def () -> long` |
 
 **Generated text is unconstrained, by design.** A block that emits half a statement
 works, because the pass only needs to find its own delimiters and has no idea what
@@ -537,7 +601,8 @@ With one layer there is no earlier layer to inspect, so `-E` needs no level sele
 
 `e*.y` fixtures for: unterminated `#{` at EOF; stray `}#`; `#` at EOF; unknown `#x` in
 code position; unterminated string literal (the pass should report it rather than scan
-garbage with the state machine stuck); a **mid-token** block; nesting past the pass's
+garbage with the state machine stuck); a mid-token block at the start of a `def` name;
+nesting past the pass's
 own cap; a block whose output contains a NUL byte (a Y `str` can hold one —
 `fs.write_bytes` documents NULs passing through — so it would land in the program's
 source; reject it and name the block's line); emitted text past the size cap; a block

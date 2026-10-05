@@ -665,6 +665,44 @@ let sg_gline = 1;
 // Where the current G line starts inside sg_gbuf: what is between it and the
 // end is the code since the last newline, and that decides statement position.
 let sg_gat = 0;
+// ── the mid-token buffers ────────────────────────────────────────────────
+// A block that has no operand position at its own byte offset cannot put its
+// call there (see sg_open), so its call is written HERE instead of into
+// sg_gbuf, and sg_mids_move puts it at the top-level statement that contains
+// it. The buffer is saved and restored per block, so a mid-token block nested
+// in one is hoisted out of it -- in close order, which is the order the calls
+// have to run in.
+//
+// sg_mmid says the innermost open block is mid-token, so sg_gadd and the
+// writes below go here; sg_mbuf is the text and sg_mol the source line each of
+// its lines started at (its lines move, so their origins travel with them).
+let sg_mmid = false;
+let sg_mbuf = "";
+let sg_mol: [long] = [];
+let sg_molast = false;
+let sg_mline = 1;
+// The buffer of an enclosing mid-token block, saved while a nested one is open
+// and restored when it closes (so the nested call is hoisted out of it, not
+// written into it).
+let sg_midsave: [str] = [];
+let sg_molsave: [[long]] = [];
+let sg_mlastsave: [bool] = [];
+let sg_mlinesave: [long] = [];
+// The hoisted calls, in CLOSE order: innermost first, then siblings in source
+// order -- which is exactly the order they have to run in. Each carries the
+// top-level statement it belongs to, so the move can order them per statement.
+type MidMove = { line: long, off: long, text: [str], ol: [long] };
+let sg_mids: [MidMove] = [];
+// The top-level statement in progress: its first token's position, and whether
+// one has been found yet (before it, everything is blanks and comments).
+let sg_tsline = 1;
+let sg_tsoff = 0;
+let sg_tsp = false;
+// The depth of the innermost open mid-token block, 0 for none, recomputed by
+// sg_m_live whenever a block closes. A top-level `;` or `}` only ends a
+// statement when no mid-token block is open, so the anchor cannot land inside
+// one of these hoisted calls.
+let sg_mdepth = 0;
 let sg_line = 1;
 let sg_col = 1;
 // 0 code, 1 a `//` comment, 2 a `/* */` comment, 3 a literal.
@@ -674,17 +712,21 @@ let sg_state = 0;
 // Those are the only places a keyword can be, so the word is only read there --
 // which is what keeps this a byte scan and not a parse.
 let sg_bound = false;
-// The brace stack: 0 an ordinary brace, 1 a `def`/`type` body. A block may
-// not open while any 1 is on the stack, nor while sg_pending is set (the `def`
-// keyword itself, so the header's parameter list counts as the body too).
+// The brace stack: 0 an ordinary brace, 1 a `def` body, 2 a `type` body. A block
+// may not open while any 1 or 2 is on the stack, nor while sg_pending is set
+// (the `def` keyword itself, so the header's parameter list counts as the body
+// too). sg_tkind is what is being declared: 0 a `def`, 2 a `type`.
 let sg_bkind: [long] = [];
+let sg_tkind = 0;
 let sg_pending = false;
 // Per open block: whether only blanks have been seen since its `#{` (an
-// import is only hoistable then), the brace depth at its `#{`, and whether it
-// is in statement position.
+// import is only hoistable then), the brace depth at its `#{`, whether it is in
+// statement position, and whether it is mid-token (its call is hoisted, so the
+// bytes after its `}#` belong to the file's own G, not to its buffer).
 let sg_bclean: [bool] = [];
 let sg_bbrace: [long] = [];
 let sg_bstmt: [bool] = [];
+let sg_bmid: [bool] = [];
 let sg_depth = 0;
 // The block array index this file's first block takes, and the P line a block
 // being opened sits on (-1 for a nested one, whose text P does not hold).
@@ -726,6 +768,24 @@ def sg_reset(src: str, fid: long, dir: str) -> long {
     sg_err = "";
     sg_eline = 0;
     sg_ecol = 0;
+    sg_mmid = false;
+    sg_mbuf = "";
+    sg_mol = [];
+    sg_molast = false;
+    sg_mline = sg_gline;
+    sg_mids = [];
+    sg_tsline = 1;
+    sg_tsoff = 0;
+    sg_tsp = true;
+    sg_mdepth = 0;
+    0
+};
+
+// Append text to whichever G buffer is live: the file's own, or a mid-token
+// block's (its call is written there and hoisted afterwards, so it does not
+// sit where the block stood). Blocks nest, so `mid` is the innermost block's.
+def sg_gadd(t: str, mid: bool) -> long {
+    if (mid) { sg_mbuf += t } else { sg_gbuf += t };
     0
 };
 
@@ -735,7 +795,9 @@ def sg_reset(src: str, fid: long, dir: str) -> long {
 // `import` there is at the block's top level.
 def sg_put(t: str) -> long {
     if (len(t) > 0) {
-        sg_gbuf += t;
+        let mid = sg_mmid;
+        if (!mid) { sg_ts_go(t) } else { sg_molast = sg_ml_go(t) };
+        sg_gadd(t, mid);
         if (sg_depth == 0) {
             sg_pbuf += t;
         } else if (!m_all_blank(t)) {
@@ -748,7 +810,9 @@ def sg_put(t: str) -> long {
 
 // One byte that is never a blank: a delimiter, or a word's first byte.
 def sg_put1(c: str) -> long {
-    sg_gbuf += c;
+    if (sg_mmid) { if (!sg_molast) { sg_molast = true } }
+    else { sg_ts_go(c) };
+    sg_gadd(c, sg_mmid);
     if (sg_depth == 0) {
         sg_pbuf += c;
     } else {
@@ -758,15 +822,73 @@ def sg_put1(c: str) -> long {
     0
 };
 
+// The top-level statement in progress: `t` is about to be written at
+// (sg_gline, len(sg_gbuf)) -- or into a mid-token block's buffer, where there
+// is no top-level statement to find. While one is being looked for, the first
+// byte of `t` that is not a blank IS its first token; after that the statement
+// has started and nothing moves it. Blanks and comments therefore never become
+// the anchor, which is what puts a `// note` before a statement above it
+// rather than inside it.
+def sg_ts_go(t: str) -> long {
+    if (!sg_tsp) {
+        let i = 0;
+        let go = true;
+        while (go && i < len(t)) {
+            if (!m_blank(byte_at(t, i))) {
+                sg_tsline = sg_gline;
+                sg_tsoff = len(sg_gbuf) + i;
+                sg_tsp = true;
+                go = false;
+            };
+            i = i + 1;
+        };
+    };
+    0
+};
+
+// The source line a mid-token buffer's LAST line started at: the first byte of
+// `t` that is not a blank, if there is one and none has been found yet (the
+// line began when the buffer began, at whatever `}`#` came closest to).
+def sg_ml_go(t: str) -> bool {
+    if (sg_molast) { true }
+    else {
+        let i = 0;
+        while (i < len(t)) {
+            if (!m_blank(byte_at(t, i))) {
+                sg_molast = true;
+                sg_mline = sg_gline;
+                i = len(t);
+            };
+            i = i + 1;
+        };
+        sg_molast
+    }
+};
+
+// A top-level statement ends here, so the next one starts after what follows.
+def sg_ts_end() -> long {
+    sg_tsp = false;
+    0
+};
+
 // End the current line in both texts. G always breaks (its line count tracks
 // the source's, so a diagnostic in G has a line); P breaks only outside a
 // block, because a block's own newlines belong to the call in G and not to a
 // line of P. A line is a line: neither text keeps the newline, so the two
 // join back to their sources.
+//
+// A mid-token block's call breaks into ITS buffer, and its origin goes with
+// the line: the call is hoisted to another statement afterwards, so the two
+// have to travel together or a diagnostic in G would name the wrong line.
 def sg_break() -> long {
-    sg_g += sg_gbuf;
-    sg_gf += sg_fid;
-    sg_gol += sg_gline;
+    if (sg_mmid) {
+        sg_mol += sg_gline;
+        sg_mbuf += "\n";
+    } else {
+        sg_g += sg_gbuf;
+        sg_gf += sg_fid;
+        sg_gol += sg_gline;
+    };
     sg_gbuf = "";
     sg_gline = sg_line + 1;
     sg_gat = 0;
@@ -821,18 +943,21 @@ def sg_fail(msg: str, line: long, col: long) -> long {
     0
 };
 
-// Any brace on the stack a `def`/`type` body opened?
-def sg_in_def() -> bool {
-    if (sg_pending) { true }
-    else {
-        let hit = false;
-        let i = 0;
-        while (i < len(sg_bkind)) {
-            if (sg_bkind[i] == 1) { hit = true; };
-            i = i + 1;
-        };
-        hit
-    }
+// Any brace on the stack a `def`/`type` BODY opened? A `type` body is marked
+// on the stack (2) and a `def` body by sg_pending together with its stack entry
+// (1): a `type` header has braces of its own, so one flag cannot cover both.
+// A mid-token block opens NO brace (its call is a statement somewhere else, so
+// there is nothing here to be inside), which is why sg_open asks the body
+// question and the header question separately.
+def sg_in_body() -> bool {
+    let hit = false;
+    let i = 0;
+    while (i < len(sg_bkind)) {
+        let k = sg_bkind[i];
+        if (k == 1 || k == 2) { hit = true };
+        i = i + 1;
+    };
+    hit
 };
 
 // The names a block may not use: the thread and process primitives. Under the
@@ -920,6 +1045,8 @@ def sg_word_go(w: str, after: long, n: long) -> long {
             sg_check_name(m_word_at(sg_src, j, n), true);
         };
         sg_pending = true;
+        sg_tkind = 0;
+        if (w == "type") { sg_tkind = 2 };
         after
     } else {
         sg_check_name(w, called);
@@ -999,11 +1126,14 @@ def mg_import_line(rest: str, dir: str) -> str {
 };
 
 // Whether the byte before src[i] ends a token -- a name, a number, a literal
-// or a closing bracket. Then a block sits between two tokens of one
-// expression, where a call cannot go (`def helper#{x++}#()`), and it is an
-// error rather than a feature: generating a NAME has no expression position
-// for the call to occupy. "Immediately before" -- a space is enough to make it
-// a separate token, which is why `return #{ … }#` is fine.
+// or a closing bracket. Then the block has no operand position at its own byte
+// offset, and it is a MID-TOKEN block: the call cannot go there
+// (`def helper<call>()` is not a def), so its bytes are dropped from G and its
+// call is hoisted (see sg_open and sg_mids_move).
+//
+// "Immediately before" -- a space is enough to make it a separate token, and a
+// separate token that starts an operand is not mid-token: `return #{ … }#`,
+// `f(#{ … }#, 2)` and `a[#{ … }#]` all keep the call in place.
 def m_token_end(c: long) -> bool {
     if (c == 0) { false }
     else if (c == c')' || c == c']' || c == c'}' || c == c'.' || c == c'\'' || c == c'\"') { true }
@@ -1016,11 +1146,22 @@ def m_token_end(c: long) -> bool {
 def sg_open(i: long, n: long) -> long {
     let prev = 0;
     if (i > 0) { prev = byte_at(sg_src, i - 1); };
-    if (sg_col > 1 && m_token_end(prev)) {
-        sg_fail("a meta block cannot sit between two tokens of an expression: a block generates text, and there is no position for the call between 'a' and '('", sg_line, sg_col);
-        n
-    } else if (sg_in_def()) {
+    let mid = sg_col > 1 && m_token_end(prev);
+    // A block may not be lexically inside a def or type body: in-place emission
+    // there would give compile-time-fixed values and a silent "never ran" mode.
+    // A MID-TOKEN one in a def's HEADER is not inside the body though --
+    // `def helper#{...}#()` is generating the name, which is the point -- so a
+    // body brace is what refuses it, not the `def` keyword.
+    if (sg_in_body()) {
         sg_fail("a meta block cannot be inside a def or type body: only the top level and other blocks", sg_line, sg_col);
+        n
+    } else if (sg_pending && !mid) {
+        // In a header, at an operand position: the call cannot go in a header
+        // (`def ycc_meta_stmt(...)(x)` is not a def) and the block is not
+        // mid-token, so dropping its bytes is not a join of two adjacent tokens
+        // -- for `def #{nm}#()` it would leave `def () -> long`. So a header
+        // block has to be a fragment of the name, with the name on one side.
+        sg_fail("a meta block in a def or type header must be part of a name, with a character of the name beside it: a call cannot go in a header, and dropping the block's bytes would leave nothing behind", sg_line, sg_col);
         n
     } else if (sg_depth + 1 > MG_NEST) {
         sg_fail("meta blocks nest deeper than " + tostring(MG_NEST) + ", the pass's limit", sg_line, sg_col);
@@ -1036,20 +1177,177 @@ def sg_open(i: long, n: long) -> long {
         mg_bp += mg_p_at;
         mg_bpo += len(sg_pbuf);
         mg_n = mg_n + 1;
-        let stmt = m_all_blank(sg_gbuf[sg_gat:]);
+        sg_bmid += mid;
+        // A statement-position block is one that held only blanks before it, and
+        // a mid-token one is a statement by construction (it could not be an
+        // expression there), so both want the `;` and the void helper.
+        let stmt = mid || m_all_blank(sg_gbuf[sg_gat:]);
         sg_bstmt += stmt;
         sg_bclean += true;
         sg_bbrace += len(sg_bkind);
         sg_depth = sg_depth + 1;
-        let helper = "ycc_meta_expr";
-        if (stmt) { helper = "ycc_meta_stmt" };
-        sg_gbuf += helper + "(" + tostring(slot) + ", {";
-        sg_col = sg_col + 2;
         sg_bound = true;
+        if (mid) {
+            sg_m_open(slot)
+        } else {
+            let helper = "ycc_meta_expr";
+            if (stmt) { helper = "ycc_meta_stmt" };
+            sg_gadd(helper + "(" + tostring(slot) + ", {", sg_mmid);
+            sg_col = sg_col + 2;
+        };
         let k = sg_word(i + 2, n);
         sg_col = sg_col + (k - (i + 2));
         k
     }
+};
+
+// A mid-token block: the call goes to a buffer of its own, and sg_mids_move
+// puts it at the top-level statement that contains the block. The buffer of an
+// enclosing mid-token block is saved and restored, so a nested one is hoisted
+// out of it -- and since the moves are applied in close order, it runs first.
+//
+// The call is ALWAYS a statement (`ycc_meta_stmt`, with its `;`): a mid-token
+// block is one that could not be an operand where it stands, so it is a
+// statement by construction, whatever the text around it looks like.
+def sg_m_open(slot: long) -> long {
+    sg_midsave += sg_mbuf;
+    sg_molsave += sg_mol;
+    sg_mlastsave += sg_molast;
+    sg_mlinesave += sg_mline;
+    sg_mmid = true;
+    sg_mdepth = sg_depth;
+    sg_mbuf = "";
+    sg_mol = [];
+    sg_molast = false;
+    sg_mline = sg_gline;
+    sg_mbuf += "ycc_meta_stmt(" + tostring(slot) + ", {";
+    sg_col = sg_col + 2;
+    0
+};
+
+// `}#` of a mid-token block: close the call, record it with the statement to
+// hoist it to, and restore whatever buffer was live (the enclosing block's own,
+// or an enclosing mid-token block's). Recorded in CLOSE order, which is the
+// order the calls have to run in.
+def sg_m_close() -> long {
+    sg_mbuf += "});";
+    let lines = mg_lines(sg_mbuf);
+    let ol: [long] = [];
+    let i = 0;
+    while (i < len(lines)) {
+        if (i < len(sg_mol)) { ol += sg_mol[i] }
+        else if (sg_molast) { ol += sg_mline }
+        else { ol += sg_gline };
+        i = i + 1;
+    };
+    let line = sg_tsline;
+    let off = sg_tsoff;
+    if (line < 1) { line = 1 };
+    if (off < 0) { off = 0 };
+    sg_mids += { line: line, off: off, text: lines, ol: ol };
+    sg_mbuf = sg_midsave[len(sg_midsave) - 1];
+    sg_midsave = sg_midsave[0:len(sg_midsave) - 1];
+    sg_mol = sg_molsave[len(sg_molsave) - 1];
+    sg_molsave = sg_molsave[0:len(sg_molsave) - 1];
+    sg_molast = sg_mlastsave[len(sg_mlastsave) - 1];
+    sg_mlastsave = sg_mlastsave[0:len(sg_mlastsave) - 1];
+    sg_mline = sg_mlinesave[len(sg_mlinesave) - 1];
+    sg_mlinesave = sg_mlinesave[0:len(sg_mlinesave) - 1];
+    0
+};
+
+// Which G buffer is live now that the block has closed and the per-block
+// stacks have been popped: a mid-token block's own if one is still open, and
+// sg_mdepth says at what depth (0 = the file's own buffer).
+def sg_m_live() -> long {
+    sg_mmid = false;
+    sg_mdepth = 0;
+    let k = sg_depth - 1;
+    while (k >= 0) {
+        if (sg_bmid[k]) { sg_mmid = true; sg_mdepth = k + 1 };
+        k = k - 1;
+    };
+    0
+};
+
+// Put every hoisted call at the top-level statement that contains its block.
+// The list is in close order -- innermost first, then siblings in source order
+// -- so within one statement the calls are inserted BACKWARDS, each landing
+// before the one already there, which leaves them in the list's order. And the
+// statements are done from the last to the first, so an insertion never moves a
+// position a later pass still has to read.
+def sg_mids_move() -> long {
+    let n = len(sg_mids);
+    let done: [bool] = [];
+    let i = 0;
+    while (i < n) { done += false; i = i + 1; };
+    let left = n;
+    while (left > 0) {
+        let at = 0 - 1;
+        let j = 0;
+        while (j < n) {
+            if (!done[j]) {
+                if (at < 0 || mg_after(j, at)) { at = j };
+            };
+            j = j + 1;
+        };
+        if (at < 0) { left = 0 }
+        else {
+            sg_mids_one(at);
+            done[at] = true;
+            left = left - 1;
+        };
+    };
+    sg_mids = [];
+    0
+};
+
+// Whether move `a` belongs to a LATER statement (or the same one, further along
+// the list) than `b` -- so `a` is the next one out.
+def mg_after(a: long, b: long) -> bool {
+    let la = sg_mids[a].line;
+    let lb = sg_mids[b].line;
+    if (la != lb) { la > lb }
+    else { sg_mids[a].off > sg_mids[b].off }
+};
+
+// One call, into sg_g at its statement: the statement's line is split at the
+// anchor, the call's lines go between the halves, and its origins go with them.
+def sg_mids_one(k: long) -> long {
+    let m = sg_mids[k];
+    let ln = m.line - 1;
+    if (ln < 0) { ln = 0 };
+    let cur = "";
+    if (ln < len(sg_g)) { cur = sg_g[ln] };
+    let off = m.off;
+    if (off > len(cur)) { off = len(cur) };
+    let head = cur[0:off];
+    let tail = cur[off:];
+    let rest = sg_g[0:ln];
+    let restf = sg_gf[0:ln];
+    let restl = sg_gol[0:ln];
+    if (head != "") { rest += head; restf += sg_fid; restl += m.line };
+    let i = 0;
+    while (i < len(m.text)) {
+        rest += m.text[i];
+        restf += sg_fid;
+        let o = 0;
+        if (i < len(m.ol)) { o = m.ol[i] };
+        restl += o;
+        i = i + 1;
+    };
+    if (tail != "") { rest += tail; restf += sg_fid; restl += m.line };
+    let t = ln + 1;
+    while (t < len(sg_g)) {
+        rest += sg_g[t];
+        restf += sg_gf[t];
+        restl += sg_gol[t];
+        t = t + 1;
+    };
+    sg_g = rest;
+    sg_gf = restf;
+    sg_gol = restl;
+    0
 };
 
 // `}#` with sg_depth == 0: nothing opened it.
@@ -1094,7 +1392,21 @@ def meta_scan_end() -> Scan {
         sg_p += sg_pbuf;
         sg_pf += sg_fid;
         sg_pol += sg_pline;
-        sg_g += sg_gbuf;
+        if (sg_mmid) {
+            // a file that ends inside a mid-token block: an error above (the
+            // block never closed), so nothing reads these
+            sg_mol += sg_gline;
+            sg_mbuf += "\n";
+        } else {
+            sg_g += sg_gbuf;
+            sg_gf += sg_fid;
+            // the origin too, so sg_g and sg_gol stay the same length: the
+            // hoisted calls below index both
+            sg_gol += sg_gline;
+        };
+        sg_mids_move();
+        sg_gbuf = "";
+        sg_mdepth = 0;
         // this file's G lines go onto the whole program's G, then the scanner
         // starts the next file clean. The Scan still carries this file's own
         // lines: `mg_probe` reads the result, and a caller may too.
@@ -1152,6 +1464,9 @@ def sg_code(i: long, n: long) -> long {
         sg_pending = false;
         sg_bound = true;
         sg_put1(";");
+        // a top-level `;` ends the statement in progress, so the next one starts
+        // after it (see sg_ts_go)
+        if (sg_depth == 0 && sg_mdepth < 1) { sg_ts_end() };
         j + 1
     } else {
         j
@@ -1176,10 +1491,13 @@ def sg_slash(j: long, n: long) -> long {
     }
 };
 
-// `{`: remember whether this is a `def`/`type` body.
+// `{`: remember whether this is a `def` body, a `type` body, or neither.
+// The two are told apart because only `def` marks its body with sg_pending: a
+// `type` header has braces of its own, so sg_in_body has to find its body on
+// the stack. `sg_tkind` is what is currently being declared.
 def sg_open_brace(j: long, n: long) -> long {
     if (sg_pending) {
-        sg_bkind += 1;
+        if (sg_tkind == 2) { sg_bkind += 2 } else { sg_bkind += 1 };
         sg_pending = false;
     } else {
         sg_bkind += 0;
@@ -1197,19 +1515,27 @@ def sg_close_brace(j: long, n: long) -> long {
             sg_stray(j);
             n
         } else {
-            // a statement-position call is a statement, and a statement wants
-            // its ';'; in expression position the call is the expression and a
-            // ';' there would be a syntax error
-            sg_gbuf += "})";
-            sg_col = sg_col + 2;
-            if (sg_bstmt[sg_depth - 1]) { sg_gbuf += ";"; sg_col = sg_col + 1; };
+            let was_mid = sg_bmid[sg_depth - 1];
+            if (was_mid) {
+                // the call is not here: sg_m_close hoists it to the statement
+                sg_m_close()
+            } else {
+                // a statement-position call is a statement, and a statement
+                // wants its ';'; in expression position the call is the
+                // expression and a ';' there would be a syntax error
+                sg_gadd("})", sg_mmid);
+                sg_col = sg_col + 2;
+                if (sg_bstmt[sg_depth - 1]) { sg_gadd(";", sg_mmid); sg_col = sg_col + 1; };
+            };
             // the per-block stacks are popped here, so `sg_depth - 1` is always
             // this block's entry and never one left over from a block that has
             // already closed
             sg_bstmt = sg_bstmt[0:len(sg_bstmt) - 1];
+            sg_bmid = sg_bmid[0:len(sg_bmid) - 1];
             sg_bclean = sg_bclean[0:len(sg_bclean) - 1];
             sg_bbrace = sg_bbrace[0:len(sg_bbrace) - 1];
             sg_depth = sg_depth - 1;
+            if (was_mid) { sg_m_live() };
             j + 2
         }
     } else {
@@ -1218,6 +1544,9 @@ def sg_close_brace(j: long, n: long) -> long {
         };
         sg_bound = true;
         sg_put1("}");
+        // a top-level `}` closes whatever construct it was in, and the next
+        // statement starts after it
+        if (sg_depth == 0 && sg_mdepth < 1) { sg_ts_end() };
         j + 1
     }
 };

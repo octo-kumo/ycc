@@ -216,8 +216,13 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     // so there is no name to test for. Unused helpers cost nothing in the
     // output -- prune_bodies drops them at link time.
     std += "rt";
+    // ogen is EMPTY for a unit with no blocks, which is what tells lint there is
+    // no generator whose top level is this one (see lint_meta_top): a file with
+    // blocks whose pieces happen to add no lines is still such a file.
+    let og: [bool] = [];
+    if (meta.mg_n > 0) { og = r.ogen; };
     { src: rsrc, imports: rimports, origin: origin, std: std, pkgs: res_used,
-      ogen: r.ogen }
+      ogen: og }
 };
 
 // Which file line `ln` of the spliced program came from (0, the program
