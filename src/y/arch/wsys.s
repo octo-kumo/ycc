@@ -62,6 +62,17 @@
 # where the callee looks. The trap stubs, which are reached by a `jmp` and so
 # arrive on the SysV register set, marshal by hand.
 #
+# THE PUSH ORDER, which the trap stubs below must match exactly: the
+# descriptor, then the bytes, then the count -- so the COUNT is the lowest of
+# the three and lands at 16(%rbp) inside y_os_write, the bytes at 24 and the
+# descriptor at 32. This is the order the emitter's os_write uses (native.y),
+# which is the definition; a stub that pushes the other way round hands
+# y_os_write the byte count as the file's HANDLE, which is silent -- the call
+# returns some other status and the program exits having printed nothing.
+#
+# y_os_exit takes its status ON THE STACK too (see its own comment), so these
+# stubs push it and pop afterwards rather than leaving it in %rdi.
+#
 # NO `push $immediate`: the in-tree assembler has no push-immediate form --
 # ir.y gives F_PUSH_R kinds [O_REG] and nothing else -- so a `push $1` in one
 # of these blocks is "push needs r64" at assembly time, a diagnostic that names
@@ -182,12 +193,26 @@ yow_out:
 # loudly rather than run on past its own exit. `div` by zero is the trap the
 # rest of the prelude already uses for an impossible condition (y_long_tostr);
 # the encoder has no ud2.
-#=== add: y_os_exit ===
+# y_os_exit(status) replaces the prelude's exit_group version rather than adding
+# a second one, for the reason gen_exit's comment gives: rt.y calls exit() and
+# rt.y is compiled into the std pack, which one compiler writes for one target.
+# The argument arrives on the stack (the emitter pushes it), so 16(%rbp) is the
+# status -- pushed last, so lowest. NtTerminateProcess does not return; the
+# yosx_dead trap below it is the honest statement of that, reached only if the
+# kernel returns anyway.
+#=== replace: y_os_exit ===
+#=== add: yosx_dead ===
 y_os_exit:
+    push %rbp
+    mov %rsp, %rbp
+    mov 16(%rbp), %rdx
     mov $-1, %r10
-    mov %rdi, %rdx
     mov $44, %eax
     syscall
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yosx_dead:
     xor %eax, %eax
     div %rax
 # The trap stubs. Each writes its message to the standard output and ends the
@@ -199,60 +224,70 @@ y_div_zero:
     mov $ystr_divzero_end-ystr_divzero, %rdx
     mov $1, %rax
     push %rax
-    push %rdx
     push %rsi
+    push %rdx
     call y_os_write
     add $24, %rsp
-    mov $1, %rdi
+    mov $1, %rax
+    push %rax
     call y_os_exit
+    add $8, %rsp
 #=== replace: y_oob ===
 y_oob:
     lea ystr_oob(%rip), %rsi
     mov $ystr_oob_end-ystr_oob, %rdx
     mov $1, %rax
     push %rax
-    push %rdx
     push %rsi
+    push %rdx
     call y_os_write
     add $24, %rsp
-    mov $1, %rdi
+    mov $1, %rax
+    push %rax
     call y_os_exit
+    add $8, %rsp
 #=== replace: y_cast_trap ===
 y_cast_trap:
     lea ystr_cast(%rip), %rsi
     mov $ystr_cast_end-ystr_cast, %rdx
     mov $1, %rax
     push %rax
-    push %rdx
     push %rsi
+    push %rdx
     call y_os_write
     add $24, %rsp
-    mov $1, %rdi
+    mov $1, %rax
+    push %rax
     call y_os_exit
+    add $8, %rsp
 #=== replace: y_alloc_fail ===
 y_alloc_fail:
     lea ystr_oom(%rip), %rsi
     mov $ystr_oom_end-ystr_oom, %rdx
     mov $1, %rax
     push %rax
-    push %rdx
     push %rsi
+    push %rdx
     call y_os_write
     add $24, %rsp
-    mov $1, %rdi
+    mov $1, %rax
+    push %rax
     call y_os_exit
+    add $8, %rsp
 #=== replace: y_opt_unwrap ===
 y_opt_unwrap:
     lea ystr_opt(%rip), %rsi
     mov $ystr_opt_end-ystr_opt, %rdx
     mov $1, %rax
     push %rax
-    push %rdx
     push %rsi
+    push %rdx
     call y_os_write
     add $24, %rsp
-    mov $1, %rdi
+    mov $1, %rax
+    push %rax
     call y_os_exit
+    add $8, %rsp
 # y_alloc_map: the allocator's mapping request. The size arrives in %rsi,
 # the same register the SysV mmap call it replaces takes it in (y_alloc_more
 # sets it). NtAllocateVirtualMemory takes six arguments: four in registers,

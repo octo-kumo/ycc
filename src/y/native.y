@@ -9047,11 +9047,31 @@ def gen_sleep(st: EmitSt, node: Call) -> EmitSt {
 
 
 def gen_exit(st: EmitSt, node: Call) -> EmitSt {
-    // exit(code): terminate the process with the exit-code syscall.
+    // exit(code): terminate the process with the exit-code syscall, THROUGH the
+    // arch module's y_os_exit rather than inlined.
+    //
+    // A `call` and not an inline `mov $231,%rax; syscall`, and that is the
+    // whole point. `exit` reaches std code: rt.y's own runtime-error paths call
+    // it (y_setslice_check, y_match_fail, the shift check), and rt.y is one of
+    // the four units serialized into the std pack. The pack is written by ONE
+    // compiler with ONE res_target -- `ycc --std-pack` never passes a target --
+    // so a target test made while COMPILING rt.y is baked into every program
+    // built from that pack. Measured: with exit inlined, a PE's rt.y carried
+    // Linux's exit_group (syscall 231, whose NT counterpart is some unrelated
+    // function), so every runtime error in every program printed its message
+    // and then fell through into whatever followed -- t80_slice_bounds printed
+    // "index out of bounds" as well, and three tests exited 0 where they must
+    // exit 1. Naming a label defers the choice to the arch module and makes
+    // rt.y's compiled body the same bytes for both targets.
+    //
+    // The argument goes on the stack like every other call, and y_os_exit reads
+    // it at 16(%rbp) -- pushed last, so lowest -- and the caller pops.
     let eargs: [Node] = node.args;
     let ea = eargs[0];
     st = gen(st, ea);
-    st = gen_terminate(st);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_os_exit"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
     // exit() terminates the process; the epilogue (ret / exit(0)) is
     // unreachable. Emit a jump to the function end so the backend never
     // falls through into dead code (and exit codes are never masked).

@@ -395,6 +395,23 @@ y_alloc_map:
     test %rax, %rax
     js y_alloc_fail
     ret
+# y_os_exit(status) -- exit_group(status), and it does NOT return. Called from
+# the emitter's `exit(N)` rather than inlined, because rt.y's own error paths
+# call exit(1): rt.y is compiled into the std pack, and the pack is written by
+# ONE compiler with ONE res_target, so any target test the emitter makes while
+# compiling rt.y is baked into every program built from that pack. Naming a
+# label instead puts the choice where it belongs -- the arch module -- and makes
+# rt.y's compiled body identical for both targets. Status in %rdi, the calling
+# convention every function here uses.
+y_os_exit:
+    push %rbp
+    mov %rsp, %rbp
+    mov 16(%rbp), %rdi
+    mov $231, %rax
+    syscall
+    mov %rbp, %rsp
+    pop %rbp
+    ret
 # y_os_write(fd, buf, len) -> bytes written, or -1. The named-syscall-layer
 # entry point rt.y's y_put_hstr reaches (os_write in the checker): write(2)
 # here, NtWriteFile on Windows (src/y/arch/wsys.s). One label, one calling
