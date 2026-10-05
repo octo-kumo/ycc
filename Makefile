@@ -18,12 +18,38 @@ YCC_SRCS=src/y/ycc.y src/y/tags.y src/y/pkg.y src/y/lexer.y src/y/parser.y src/y
 # root, where these rules run gcc).
 STD_EMBEDS=src/y/std/rt.y src/y/std/prelude.y src/y/std/exec.y src/y/std/str.y
 
+# The assembly the compiler hands to asm.y for every program, in src/y/arch/,
+# embedded the same way: arch_x64.y says `embed PRELUDE_ASM from
+# "./arch/prelude.s";`, the C copy Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s").
+# One copy of the asm, read by both compilers (`make asm-check`).
+ARCH_EMBEDS=$(wildcard src/y/arch/*.s)
+
 all: cycc
 
 # [1/3] gcc builds the C copy of the compiler.
-cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS)
+cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
 	$(GCC) $(CFLAGS) -o cycc $(CYC_SRCS)
 	@echo "cycc built: the C copy of the compiler ($$(stat -c%s cycc) bytes)"
+
+# GNU as reads the arch assembly: a second opinion on every line of it, so a
+# typo in hand-written asm is caught here and not by the first program that
+# calls the routine. ycc's own assembler stays the authority — these files are
+# FRAGMENTS spliced into a program, so two things differ from a whole .s and
+# are normalised before as sees them:
+#   - `$ystr_x_end-ystr_x`, a length immediate whose two labels live in
+#     arch_consts (still Y), which as cannot resolve inside a fragment;
+#   - operand size: `mov $0, (%rax)` is a movq here, a warning there.
+# Undefined labels are NOT this target's business: a wrong one is an
+# `undefined label` from asm_link, which every suite hits immediately.
+asm-check:
+	@command -v as >/dev/null 2>&1 || { echo "asm-check: no GNU as, skipped"; exit 0; }
+	@rc=0; for f in $(ARCH_EMBEDS); do \
+	    sed -E 's/\$$[A-Za-z_0-9]+-[A-Za-z_0-9]+/$$0/g' $$f > /tmp/asm-check.s; \
+	    if as -o /dev/null /tmp/asm-check.s 2>/tmp/asm-check.err; then \
+	        echo "  ok   $$f"; \
+	    else echo "  FAIL $$f"; sed 's/^/    /' /tmp/asm-check.err; rc=1; fi; \
+	  done; rm -f /tmp/asm-check.s /tmp/asm-check.err; \
+	  if [ $$rc = 0 ]; then echo "asm-check: GNU as reads every arch .s file"; fi; exit $$rc
 
 # [2/3] the C copy compiles the compiler -> ycc (native static ELF, no
 # toolchain), which then compiles the std units and carries them: PACK
@@ -43,7 +69,7 @@ YCC_MEM_KB=2097152
 ASAN_RSS_MB=3500
 # $(call PACK,BIN,OUT): OUT = BIN with its std pack attached.
 PACK = ./$(1) --std-pack $(2).pack && cat $(1) $(2).pack > $(2) && chmod 755 $(2) && rm -f $(2).pack
-ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS)
+ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _ycc0 src/y/ycc.y
 	$(call PACK,_ycc0,ycc)
 	cmp ycc refs/ycc.ref
@@ -57,7 +83,7 @@ ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS)
 # carry on, and a suite that compares outputs never sees a report it printed.
 ASAN_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
 
-cycc-asan: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS)
+cycc-asan: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
 	$(GCC) $(CFLAGS) $(ASAN_FLAGS) -o cycc-asan $(CYC_SRCS)
 
 asan: cycc-asan
@@ -114,7 +140,7 @@ NEW_DEP = $(if $(filter ./ynew ynew,$(NEW)),ynew)
 # second and third must be byte-identical (the fixpoint); the third is
 # compiled with the second's std pack attached, so that is checked too.
 # Needs no C port.
-ynew: $(YCC_SRCS) $(BOOT)
+ynew: $(YCC_SRCS) $(BOOT) $(STD_EMBEDS) $(ARCH_EMBEDS)
 	ulimit -v $(YCC_MEM_KB); $(abspath $(BOOT)) -o _ynew1 src/y/ycc.y
 	ulimit -v $(YCC_MEM_KB); ./_ynew1 -o _ynew2 src/y/ycc.y
 	$(call PACK,_ynew2,_ynewp)
@@ -188,4 +214,4 @@ clean:
 valgrind: cycc
 	valgrind --error-exitcode=1 --quiet ./cycc -o /tmp/cycc-vg test/y/examples/helloworld.y
 
-.PHONY: all clean valgrind test test-fast test-compile asan test-asan ycc check port-check corpus-diff bench bench-ir rebless
+.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc check port-check corpus-diff bench bench-ir rebless

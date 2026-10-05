@@ -29,6 +29,14 @@ same semantics.
   native.c — PORTING.md rule 10). Edit those files directly; there is no
   generator (`make ycc`/`ynew` rebuild the pack). `str.y` must not
   contain string literals (see NATIVE.md, "Runtime library").
+- The compiler's own **assembly** is in `src/y/arch/*.s`, embedded the
+  same way (`embed PRELUDE_ASM from "./arch/prelude.s";` in arch_x64.y,
+  `Y_EMBED` in arch_x64.c — PORTING.md rule 11), so there is one copy of
+  it rather than one per compiler. Whole-line `#` comments are allowed
+  there and dropped before the in-tree assembler sees the text;
+  `make asm-check` reads the files with GNU `as`. Edit the `.s` files
+  directly — `make cycc`/`ynew`/`ycc` rebuild, and `ARCH_EMBEDS` lists
+  them as prerequisites.
 - `make asan` builds `./cycc-asan` (ASan+UBSan); `make test-asan
   SUITES_ASAN="..."` runs suites against it (`CYCC`/`YCC` overridable).
   A sanitized compiler cannot run under `ulimit -v` (ASan reserves
@@ -373,6 +381,9 @@ replaces the std one at link time).
 
 ## Layout
 
+- `src/y/arch/*.s` — the compiler's own assembly (the arch prelude:
+  allocator, traps, string/array cores, `y_fmod`, float formatting, the
+  thread runtime), embedded by both copies — see PORTING.md rule 11.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`

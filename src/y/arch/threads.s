@@ -1,0 +1,366 @@
+# The first spawn moves the main thread's heap state (cur, end, used)
+# into a block of its own, points %fs at it and empties the global
+# block: from then on y_alloc_slow sends every thread to its own block.
+# A thread's block is [cur, end, used, self, ...]: %fs:24 is its address.
+y_threads_on:
+    lea y_heap(%rip), %rcx
+    mov 24(%rcx), %rdx
+    test %rdx, %rdx
+    jne y_threads_on_done
+    mov $48, %rdi
+    call y_alloc
+    lea y_heap(%rip), %rcx
+    mov (%rcx), %rdx
+    mov %rdx, 0(%rax)
+    mov 8(%rcx), %rdx
+    mov %rdx, 8(%rax)
+    mov 16(%rcx), %rdx
+    mov %rdx, 16(%rax)
+    mov %rax, 24(%rax)
+    xor %edx, %edx
+    mov %rdx, (%rcx)
+    mov %rdx, 8(%rcx)
+    mov $1, %rdx
+    mov %rdx, 24(%rcx)
+    mov %rax, %rsi
+    mov $158, %rax
+    mov $4098, %rdi
+    syscall
+y_threads_on_done:
+    ret
+# spawn: %rax the block's closure -> %rax its handle, a closure
+# [y_join_code, tcb]. The thread control block is its heap block
+# [cur, end, used, self, stack, spare] then [tid, value, closure];
+# the thread runs on an 8 MiB stack of its own (the mapping at
+# `stack`, a guard page below it), with %fs at the block. Its
+# heap starts in the spawning thread's first spare chunk tail, if
+# it has one: `spare` lists the tails its joins took back, each
+# tail's first two words [end, next].
+y_spawn:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    mov %rax, %rbx
+    call y_threads_on
+    mov $80, %rdi
+    call y_alloc
+    mov %rax, %r12
+    mov %r12, 24(%r12)
+    mov %rbx, 64(%r12)
+    mov %fs:24, %rcx
+    mov 40(%rcx), %rax
+    test %rax, %rax
+    je y_spawn_stack
+    mov 8(%rax), %rdx
+    mov %rdx, 40(%rcx)
+    mov 0(%rax), %rdx
+    xor %ecx, %ecx
+    mov %rcx, 0(%rax)
+    mov %rcx, 8(%rax)
+    mov %rax, 0(%r12)
+    mov %rdx, 8(%r12)
+y_spawn_stack:
+    mov $9, %rax
+    xor %edi, %edi
+    mov $8392704, %rsi
+    mov $3, %rdx
+    mov $131106, %r10
+    mov $-1, %r8
+    xor %r9d, %r9d
+    syscall
+    test %rax, %rax
+    js y_alloc_fail
+    mov %rax, 32(%r12)
+    mov %rax, %rdi
+    mov $4096, %rsi
+    xor %edx, %edx
+    mov $10, %rax
+    syscall
+    mov 32(%r12), %rsi
+    add $8392688, %rsi
+    mov %r12, 0(%rsi)
+# the tcb names the pid that started the thread, so a forked child's
+# join can tell the thread is not its own (y_join_code)
+# the tcb names the pid that started the thread, so a forked child's
+# join can tell the thread is not its own (y_join_code)
+    mov $39, %rax
+    syscall
+    mov %rax, 72(%r12)
+    mov $56, %rax
+    mov $4001536, %rdi
+    lea 48(%r12), %rdx
+    lea 48(%r12), %r10
+    mov %r12, %r8
+    syscall
+    test %rax, %rax
+    je y_thread_start
+    js y_alloc_fail
+    mov $16, %rdi
+    call y_alloc
+    lea y_join_code(%rip), %rcx
+    mov %rcx, 0(%rax)
+    mov %r12, 8(%rax)
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+# the new thread: its stack's top holds the tcb; it calls the
+# closure, keeps the value, unmaps its stack (nothing after the
+# munmap touches it) and ends (exit, not exit_group: the kernel
+# then clears tid, in the tcb, and wakes a join)
+y_thread_start:
+    mov %rsp, %rax
+    mov 0(%rax), %r12
+    xor %ebp, %ebp
+    mov 64(%r12), %rax
+    push %rax
+    mov 0(%rax), %rax
+    call *%rax
+    mov %rax, 56(%r12)
+    mov 32(%r12), %rdi
+    mov $8392704, %rsi
+    mov $11, %rax
+    syscall
+    mov $60, %rax
+    xor %edi, %edi
+    syscall
+# join: the handle called as a closure -> the thread's value, once
+# its tid is 0. The first join takes the unused tail of the
+# thread's chunk (a page or more; xchg takes it once) onto the
+# joining thread's spare list, for its next spawn.
+y_join_code:
+    mov %rsp, %rax
+    mov 8(%rax), %rax
+    mov 8(%rax), %rcx
+    push %rbx
+    mov %rcx, %rbx
+# The tcb's word 9 -- one past the eight the thread code uses -- is the
+# pid that started the thread (y_spawn sets
+# it, and it is 0 only for a tcb no spawn has written yet). A forked
+# child's copy names its parent, and that thread cannot end as far as
+# this address space is concerned -- it would wait on the child's own
+# copy of a tid nobody will ever clear, and the parent waits in
+# wait_pid, so both stop with no diagnostic. The pid lives in %rdx
+# because syscall leaves %rcx as the return address.
+    mov 72(%rbx), %rdx
+    test %rdx, %rdx
+    je y_join_wait
+    mov $39, %rax
+    syscall
+    cmp %rax, %rdx
+    je y_join_wait
+    mov $1, %rax
+    mov $1, %rdi
+    lea ystr_thread_foreign(%rip), %rsi
+    mov $ystr_thread_foreign_end-ystr_thread_foreign, %rdx
+    syscall
+    mov $231, %rax
+    mov $1, %rdi
+    syscall
+y_join_wait:
+    mov 48(%rbx), %rdx
+    test %rdx, %rdx
+    je y_join_done
+    mov $202, %rax
+    lea 48(%rbx), %rdi
+    xor %esi, %esi
+    xor %r10d, %r10d
+    syscall
+    jmp y_join_wait
+y_join_done:
+    xor %eax, %eax
+    xchg %rax, 8(%rbx)
+    mov 0(%rbx), %rdi
+    mov %rax, %rsi
+    sub %rdi, %rsi
+    cmp $4096, %rsi
+    jl y_join_value
+    mov %fs:24, %rcx
+    mov %rax, 0(%rdi)
+    mov 40(%rcx), %rdx
+    mov %rdx, 8(%rdi)
+    mov %rdi, 40(%rcx)
+y_join_value:
+    mov 56(%rbx), %rax
+    pop %rbx
+    ret
+# a mutex (%rax): word 0 is 0 when free, 1 when held, 2 when held
+# and a thread may be waiting for it (Drepper, "Futexes Are Tricky",
+# with xchg alone): a waiter marks it 2 before it sleeps, and only an
+# unlock that finds 2 makes a syscall (the wake). Word 8 is the pid
+# holding it, and is 0 exactly when the mutex is free.
+#
+# That word is what keeps a fork from hanging. A child inherits the
+# lock word but nobody in the child will ever release it, so waiting
+# on it waits on a futex nobody wakes -- and the parent waits in
+# wait_pid as well, so the program stops with no diagnostic at all.
+# Taking a mutex another process holds is undefined (POSIX says as
+# much of fork in a threaded program), so now it traps; a mutex the
+# child itself holds carries the child's own pid and locks as usual.
+#
+# Every comparison below keeps the pid in %rdx or %r8: syscall leaves
+# %rcx as the return address and %r11 as the flags, so a value read
+# before getpid and compared after it has to live somewhere else.
+# the two trap messages this prelude can print, in the prelude so
+# that a program without threads does not carry them in .rodata
+ystr_mutex_foreign: .ascii "runtime error: this mutex is held by another process (a fork) and a lock held across a fork is undefined\n"
+ystr_mutex_foreign_end:
+ystr_thread_foreign: .ascii "runtime error: this thread belongs to another process (a fork) and cannot end in the child\n"
+ystr_thread_foreign_end:
+y_mutex_lock:
+    push %rbx
+    mov %rax, %rbx
+    mov 8(%rbx), %rdx
+    test %rdx, %rdx
+    je y_mutex_lock_free
+    mov $39, %rax
+    syscall
+    cmp %rax, %rdx
+    je y_mutex_lock_free
+    mov $1, %rax
+    mov $1, %rdi
+    lea ystr_mutex_foreign(%rip), %rsi
+    mov $ystr_mutex_foreign_end-ystr_mutex_foreign, %rdx
+    syscall
+    mov $231, %rax
+    mov $1, %rdi
+    syscall
+y_mutex_lock_free:
+    mov $1, %rcx
+    xchg %rcx, 0(%rbx)
+    test %rcx, %rcx
+    je y_mutex_got
+y_mutex_wait:
+    mov $2, %rcx
+    xchg %rcx, 0(%rbx)
+    test %rcx, %rcx
+    je y_mutex_got
+    mov $202, %rax
+    mov %rbx, %rdi
+    mov $128, %rsi
+    mov $2, %rdx
+    xor %r10d, %r10d
+    syscall
+    jmp y_mutex_wait
+y_mutex_got:
+    mov $39, %rax
+    syscall
+    mov %rax, 8(%rbx)
+    pop %rbx
+    ret
+y_mutex_unlock:
+    xor %ecx, %ecx
+    xchg %rcx, 0(%rax)
+# %rcx is the word just taken (0, 1 or 2) and decides the wake below;
+# the owner goes to 0, which is what "free" means here
+    mov $0, %rdx
+    mov %rdx, 8(%rax)
+    cmp $2, %rcx
+    jne y_mutex_free
+    mov %rax, %rdi
+    mov $202, %rax
+    mov $129, %rsi
+    mov $1, %rdx
+    syscall
+y_mutex_free:
+    ret
+# 1 in %rax when the mutex (%rax) was free and is now held. Taking
+# it with xchg 1 may erase a 2 (a waiter's mark), which then goes
+# back -- and if the mutex was released meanwhile, that takes it.
+# The mutex is kept in %r8 through the whole helper, because the owner
+# check calls getpid and syscall leaves %rax as the pid -- it would
+# have taken the mutex pointer with it (a try_lock of a held mutex
+# then swapped 1 into the pid's address, and the program faulted).
+y_mutex_trylock:
+    mov %rax, %r8
+    mov 8(%r8), %rdx
+    test %rdx, %rdx
+    je y_mutex_try_swap
+    mov $39, %rax
+    syscall
+    cmp %rax, %rdx
+    je y_mutex_try_swap
+    xor %eax, %eax
+    ret
+y_mutex_try_swap:
+    mov $1, %rcx
+    xchg %rcx, 0(%r8)
+    test %rcx, %rcx
+    je y_mutex_took
+    cmp $2, %rcx
+    jne y_mutex_busy
+    xchg %rcx, 0(%r8)
+    test %rcx, %rcx
+    je y_mutex_took
+y_mutex_busy:
+    xor %eax, %eax
+    ret
+y_mutex_took:
+    mov $39, %rax
+    syscall
+    mov %rax, 8(%r8)
+    mov $1, %rax
+    ret
+# a semaphore (%rax): its count at 0, guarded by the mutex at 8; a
+# wait sleeps on the count while it is 0
+y_sem_wait:
+    push %rbx
+    mov %rax, %rbx
+y_sem_again:
+    lea 8(%rbx), %rax
+    call y_mutex_lock
+    mov 0(%rbx), %rcx
+    test %rcx, %rcx
+    je y_sem_sleep
+    sub $1, %rcx
+    mov %rcx, 0(%rbx)
+    lea 8(%rbx), %rax
+    call y_mutex_unlock
+    pop %rbx
+    ret
+y_sem_sleep:
+    lea 8(%rbx), %rax
+    call y_mutex_unlock
+    mov $202, %rax
+    mov %rbx, %rdi
+    mov $128, %rsi
+    xor %edx, %edx
+    xor %r10d, %r10d
+    syscall
+    jmp y_sem_again
+y_sem_post:
+    push %rbx
+    mov %rax, %rbx
+    lea 8(%rbx), %rax
+    call y_mutex_lock
+    mov 0(%rbx), %rcx
+    add $1, %rcx
+    mov %rcx, 0(%rbx)
+    lea 8(%rbx), %rax
+    call y_mutex_unlock
+    mov $202, %rax
+    mov %rbx, %rdi
+    mov $129, %rsi
+    mov $1, %rdx
+    syscall
+    pop %rbx
+    ret
+# fork: %rax the block's closure; the child runs it and ends (0),
+# the parent gets the pid (or -errno)
+y_fork:
+    push %rbx
+    mov %rax, %rbx
+    mov $57, %rax
+    syscall
+    test %rax, %rax
+    je y_fork_child
+    pop %rbx
+    ret
+y_fork_child:
+    push %rbx
+    mov 0(%rbx), %rax
+    call *%rax
+    mov $231, %rax
+    xor %edi, %edi
+    syscall

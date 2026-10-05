@@ -131,6 +131,20 @@ requires byte-identical binaries).
     `NAME()`. The Makefile lists the files in `STD_EMBEDS` so cycc rebuilds
     when one changes.
 
+11. **Assembly files**, the same mechanism and the same reason: `src/y/arch/
+    *.s` holds the machine code (arch_x64.y `embed PRELUDE_ASM from
+    "./arch/prelude.s";` → `Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s")`).
+    Unlike the std units this is not text either compiler reads — it is text
+    the compiler *emits*, line for line — so the asm exists ONCE instead of
+    once per copy, and the twin of `arch_prelude_lines` is a loop over the
+    embedded text, not 1500 string literals. Only `arch_asm_lines` (the split)
+    is ported; the lines themselves are not in the C source at all. Two
+    consequences: the Makefile lists them in `ARCH_EMBEDS` (every rule that
+    *builds* a compiler needs them, since they are read at build time), and a
+    `#` comment line in a `.s` file is legal and dropped by `arch_asm_lines`,
+    so the in-tree assembler never sees one. `make asm-check` reads them with
+    GNU `as`.
+
 ## What the port must NOT do
 
 - No tree-walking interpreter (the VM is gone).
