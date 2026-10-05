@@ -276,7 +276,7 @@ $\pi$ is \num{1.2e-16} from it and a reduction good to \num{1e-26} is already a
 hundred thousand ulps of \ic{math.sin(math.pi)}.
 
 \emph{How close.} \ic{test/sh/test\_math.sh} is the gate: a checked-in table of
-IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{1596} cases, written
+IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{2695} cases, written
 by \ic{test/math/gen\_ulp\_table.py} from this platform's libm) and a program
 that reads it, calls this module, and measures the gap in ulps. Two NaNs count as
 the same answer however their signs differ --- a sign bit is not an ulp --- and any
@@ -311,7 +311,7 @@ hundredth of an ulp, while a second \ic{exp()} call brings a whole kernel's
 error along). \ic{pow} was three and two ulps out because its logarithm formed
 \ic{z*(2 + w*P)}, whose brackets round \emph{at the size of \num{2.0}} --- a whole
 ulp of the logarithm, which \ic{pow} then multiplies by the exponent; as a
-\ic{two_sum} of \ic{2*z} and \ic{(z*w)*P} that term is \num{2.3} times more
+\ic{two\_sum} of \ic{2*z} and \ic{(z*w)*P} that term is \num{2.3} times more
 accurate and both cases went with it. \ic{asin} reached \ic{atan}, whose own ulp
 lands inside the answer whole, and then needed \ic{two = 2*asin(s)} to be a
 double before the \ic{pi/2} subtraction, whose half-ulp is a whole ulp of the
