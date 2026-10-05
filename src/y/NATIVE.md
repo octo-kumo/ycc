@@ -22,7 +22,8 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
 | `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
 | `src/y/pkg.y` | `ycc build`/`ycc vendor`: the `y.toml` reader (a TOML subset), the dependency graph, git fetching, `y.lock`, vendoring, and the hash behind the package objects' keys (*Packages* below) |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP, DNS, an HTTP server), `struct.y` (pack/unpack helpers), `crypto.y` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, RSA and ECDSA verification), `x509.y` (certificates, trust anchors, chain and name checks), `tls.y` (a TLS 1.3 client) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP, DNS, an HTTP server), `struct.y` (pack/unpack helpers), `math.y` (integers, bits, float
+comparisons and constants, RNGs, `[float]` array work), `crypto.y` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, RSA and ECDSA verification), `x509.y` (certificates, trust anchors, chain and name checks), `tls.y` (a TLS 1.3 client) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -874,6 +875,21 @@ truncated; a malformed answer is no addresses, never a crash), so
 (it imports `fs` for the two files). IPv4 only. A `ui` module would land
 the same way.
 
+`src/y/std/math.y` is the number module (`import math;`): integer and bit
+helpers (`min`/`max`/`abs`/`clamp`/`sign`, `gcd`/`lcm`, `isqrt`, `popcount`,
+`ctz`/`clz`, `next_pow2`, and `mul_mod`/`pow_mod`/`inv_mod` for a modulus up to
+2^31, where reducing the operands first keeps the product inside a `long`), the
+float comparisons and constants (`fmin`, `fmax`, `fabs`, `fsign`, `lerp`,
+`is_nan`/`is_inf`/`is_finite`, `pi` and friends, `nan`/`inf` as values), the
+SplitMix64 and xoshiro256**/+ generators over a caller-owned `[long]`, and
+whole-array work over `[float]` (`fsum`, the Neumaier-compensated `fsum_kahan`,
+`fdot`, `fmin_of`/`fmax_of`, in-place `fscale`/`faxpy`, `fmean`, `fvariance`).
+Y has no overloading, so the float flavours carry an `f`. There is deliberately
+**no** `sqrt`, `exp`, `log`, `pow` or `sin`: each needs a `float`→`long`
+conversion or a look at a float's bits, and Y has neither way to get at either
+(see the *Limits* note on `float` below), so they are not merely missing but
+unwritable until the machine primitives exist.
+
 `src/y/std/crypto.y`, `x509.y` and `tls.y` are a TLS 1.3 client in plain
 Y, each importing the one before it. crypto: SHA-256/384/512, HMAC, HKDF,
 ChaCha20-Poly1305 (RFC 8439), AES-128/256-GCM (T-tables, a bitwise
@@ -1044,6 +1060,19 @@ them starts compiling again, so the list can only shrink.
   2^63: `cvttsd2si` cannot take anything larger, and reproducing printf's
   exact expansion needs bignum arithmetic, so those print
   `<float magnitude >2^63>` rather than noise.
+- **There is no `float` → `long` conversion, and no way to read a float's
+  bits.** `cvttsd2si` exists (it is how `y_float_tostr` splits a double into
+  its integer and fractional parts) and `movq` moves a double between `%rax`
+  and an `%xmm` register, but nothing exposes either to a program: `long` →
+  `float` widens implicitly and that is the whole list. So a program cannot
+  take a `float`'s integer part, cannot pull an exponent out of one, and cannot
+  reinterpret one — which is exactly why `std/math.y` has no `sqrt`, `exp`,
+  `log`, `pow` or `sin` (see *Optional std modules*): each of those needs a
+  `float` → `long` conversion for its range reduction, and there is no
+  spelling of one. Three small machine primitives — a truncating conversion,
+  a bit cast each way, and `sqrtsd` — would unlock all of them, plus `floor`,
+  `ceil`, `round`, `ldexp` and `frexp`; that is the one thing standing between
+  this language and a numeric library.
 - `str` supports `<`, `>`, `<=`, `>=` (lexicographic, via `y_str_cmp`
   returning the sign), matching `strcmp` semantics.
 - **Embedded NUL bytes.** A `str` is length-prefixed (`{len, data..., NUL}`),
