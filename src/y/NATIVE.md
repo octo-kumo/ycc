@@ -131,6 +131,13 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   exactly. Owned buffers are `[cap][len][bytes][NUL]` (the value points
   at `len`, so to everything else it is an ordinary `str`). 10,000
   one-byte appends: 50 MB of heap and 22.7 ms → 23 KB and 0.18 ms.
+  The value-used form is `y_str_cat`, which allocates exactly
+  `len(s) + len(t)` — that is what makes the copy necessary (a string read
+  out of `s` before the append must not see the append, so the result
+  cannot be the old buffer), but it also makes a loop of them quadratic:
+  10,000 iterations building 120 KB allocate 1.2 GB. `lint.y` warns on the
+  shape (`isvused`/`dropnext` mirror `gen_block_as`'s `dropped`), and the
+  one-character fix is the `;`.
 - **Arrays and records are reference values**: a binding stores the address,
   never a copy. `let b = a`, passing, returning and storing all share, and
   `a[i] = v` / `s.f = v` are observable through every alias. Both
