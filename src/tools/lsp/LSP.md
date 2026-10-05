@@ -573,10 +573,18 @@ the `.`, a `Call` at the `(` (the parser's `Call` site, `407-408`, `447`, `1649-
 > are the other half of R6.1 and are not claimed. Mixing the two would be worse
 > than offering neither, since the user reads the list as "these go here".
 >
-> `native.unit_iface` is the third table and is still not offered. It answers
-> "which unit was this compiled against", which is a whole-program fact: serving
-> it per keystroke means compiling the program per keystroke, and §9.2's real
-> need is a program-wide index, not a lookup.
+> `native.unit_iface` is the third table and is still not offered, and reading
+> what it actually is is what settles it. It does not enumerate anything:
+> `pack_iface` (native.y 11315) packs `len(exports)`, then per export a
+> name / label / type-code triple, then the parameter defaults — an
+> order-dependent blob built to be COMPARED for equality, which is what the std
+> pack and `build/obj` staleness use it for. Asking it for "the std unit exports"
+> would mean parsing a fingerprint built for comparison to recover the one thing
+> it was derived from: `u.exports`, a `[Sym]` the compiler already has. So the
+> honest route is `u.exports` directly, and *that* is Stage B's cross-file work —
+> which is the same 84% the coverage measurement puts on Stage B (§11.3), reached
+> from the other end. The two are not two tasks: delivering either the index or
+> the externs delivers both.
 
 **R6.1** `textDocument/completion` offers, in scope at the cursor: locals,
 parameters, `self`, top-level bindings, `type` aliases, and record fields of
