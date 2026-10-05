@@ -3043,6 +3043,44 @@ def typeof_fmt(st: TcSt, node: Call) -> TcRes {
     tc_res(type_node({ k: K.tstr }), st)
 };
 
+// ── the named syscall layer ─────────────────────────────────────────────
+// The names std code may reach the kernel through, and the only list of them.
+// `os_call` (the checker arm below, native.y's emit arm) resolves a call
+// against this list and emits a `call` to the label; the bodies live in
+// src/y/arch/prelude.s on Linux and in src/y/arch/wsys.s on Windows.
+//
+// ONE list, with no target branch, and that is the load-bearing property
+// rather than a simplification. The four embedded std units (rt, prelude, exec,
+// str) are compiled ONCE per compiler and serialized into a single std pack,
+// so anything a std unit resolves at COMPILE time -- a syscall number, a struct
+// layout, a branch on the target -- is baked for whichever target wrote that
+// pack, and --target on the consuming compiler cannot undo it. A NAME is the one
+// thing that survives: rt.y saying os_call("y_os_write", fd, s, len(s))
+// compiles to the same bytes for both targets, and the arch module decides
+// which kernel call that label is. Measured both ways, with a conditional in
+// rt.y instead: a PE built from the pack carried the ELF inline write(2) and
+// printed nothing, while --std-src (which recompiles the units) worked.
+//
+// The list lives here, beside the checker that enforces it, because types.y is
+// the one module that must not import arch_x64.y: a path import is flattened
+// into its importer, so both would define the same names and the second would
+// win. native.y, which sees both, checks that every name here is a label the
+// emitted arch lines actually define (native.y check_os_call_names).
+def os_call_name(nm: str) -> bool {
+    let names = os_call_names();
+    let i = 0;
+    let found = false;
+    while (i < len(names)) {
+        if (names[i] == nm) { found = true; };
+        i = i + 1;
+    };
+    found
+};
+
+def os_call_names() -> [str] {
+    ["y_os_write", "y_os_read", "y_os_wait4", "y_os_fork", "y_os_execve"]
+};
+
 def typeof_call(st: TcSt, node: Call) -> TcRes {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
@@ -3595,27 +3633,59 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                     tc_res(type_node({ k: K.tlong }), st)
                 }
             }
-        } else if (name == "os_write") {
-            // os_write(fd, s): the named-syscall-layer entry point for "put
-            // these bytes on that file descriptor". Exactly two arguments, a
-            // number and a str -- the two things write(2) and NtWriteFile
-            // agree a caller can supply. The call itself is the arch module's
-            // (y_os_write: write(2) on Linux, NtWriteFile on Windows), so the
-            // syscall number and the argument shape do not leak into shared
-            // std code.
-            if (len(cargs) != 2) {
-                st = fail(st, "os_write takes exactly 2 arguments (fd, string)", node.line, node.col);
+        } else if (name == "os_call") {
+            // os_call("y_os_read", fd, buf, len) -> long: the NAMED syscall
+            // layer. The first argument is a name from os_call_names (the only
+            // list of them), the rest are the
+            // arguments the named block takes -- at most six, pushed on the
+            // stack in order, so the block reads them the way every Y function
+            // does (the last pushed is the first parameter, lowest).
+            //
+            // Why a NAME and not a syscall number: the four embedded std units
+            // are compiled once per compiler and serialized into one std pack,
+            // so anything they resolve at compile time is baked for whichever
+            // target wrote that pack and --target on the consuming compiler
+            // cannot undo it. A number, a struct layout or a branch on the
+            // target are all baked; a name is not, because `call y_os_read` is
+            // the same instruction on both and the arch module decides what
+            // that label is (read(2) on Linux, NtReadFile on Windows).
+            // Measured, both ways, with a conditional in rt.y instead: a PE
+            // built from the pack carried the ELF inline write(2) and printed
+            // nothing, while --std-src (which recompiles) worked.
+            if (len(cargs) < 1 || len(cargs) > 7) {
+                st = fail(st, "os_call takes a name and 0-6 arguments",
+                          node.line, node.col);
+                tc_res(type_node({ k: K.tlong }), st)
+            } else if (cargs[0].k != K.str) {
+                st = fail(st, "os_call needs a literal call name",
+                          node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             } else {
+                // The name is a str LITERAL, matched after a cast to the
+                // literal's own member (`Leaf`, which is exactly this record):
+                // `.v` is not a field every Node has, and reading it through
+                // one is what the union layout rules forbid.
+                let nm: Leaf = cargs[0];
                 let r0 = typeof_expr(st, cargs[0]);
                 st = r0.st;
-                if (r0.typ.k != K.tlong && r0.typ.k != K.tbyte && r0.typ.k != K.tunk) {
-                    st = fail(st, "os_write fd must be a number, got " + tstr(r0.typ), node.line, node.col);
+                if (!os_call_name(nm.v)) {
+                    st = fail(st, "os_call: '" + nm.v + "' is not a call name (see os_call_names)",
+                              node.line, node.col);
                 };
-                let r1 = typeof_expr(st, cargs[1]);
-                st = r1.st;
-                if (r1.typ.k != K.tstr && r1.typ.k != K.tunk) {
-                    st = fail(st, "os_write needs a string, got " + tstr(r1.typ), node.line, node.col);
+                let i = 1;
+                while (i < len(cargs)) {
+                    let r = typeof_expr(st, cargs[i]);
+                    st = r.st;
+                    // The same argument types `syscall` takes after its
+                    // number: a long, a bool, a str (whose +8 header adjustment
+                    // the emitter does), or a *T for a buffer the block fills
+                    // (rt.y's and prelude.y's timespec and status words).
+                    if (r.typ.k != K.tlong && r.typ.k != K.tbool && r.typ.k != K.tstr
+                        && r.typ.k != K.tptr && r.typ.k != K.tunk) {
+                        st = fail(st, "os_call arg " + tostring(i) + " must be long/bool/str/*T, got " + tstr(r.typ),
+                                  node.line, node.col);
+                    };
+                    i = i + 1;
                 };
                 tc_res(type_node({ k: K.tlong }), st)
             }
@@ -4257,10 +4327,11 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     let print_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong })], ret: type_node({ k: K.tvoid }) });
     st = st_bind(st, "print", print_type, "intrinsic");
     st = st_bind(st, "syscall", type_node({ k: K.tlong }), "intrinsic");
-    // (fd: long, s: str) -> long. The binding exists only so `os_write` reads
-    // as defined when it appears as a value; typeof_call matches it by name.
-    let osw_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong }), type_node({ k: K.tstr })], ret: type_node({ k: K.tlong }) });
-    st = st_bind(st, "os_write", osw_type, "intrinsic");
+    // (name: str, args...) -> long. The binding exists only so `os_call` reads
+    // as defined when it appears as a value; typeof_call matches it by name and
+    // checks the arity and the argument types itself (os_call takes a varying
+    // number of arguments, so there is no single function type to bind).
+    st = st_bind(st, "os_call", type_node({ k: K.tlong }), "intrinsic");
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
@@ -4301,4 +4372,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };

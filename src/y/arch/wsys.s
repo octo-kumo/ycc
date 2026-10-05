@@ -324,3 +324,144 @@ y_alloc_map_go:
     mov %rbp, %rsp
     pop %rbp
     ret
+# ── the rest of the named syscall layer ─────────────────────────────────
+# The same names types.y's os_call_names lists, Windows bodies. The rule that
+# governs all of them: std code says os_call("y_os_read", fd, buf, len) and
+# compiles to a `call y_os_read`, so the four embedded std units are the same
+# bytes on both targets even though they are compiled once and serialized into
+# one pack. What differs lives HERE, and nowhere else.
+#
+# Two conventions, both forced by the same fact -- a `call` does not put
+# arguments in registers, so every block takes them off the stack:
+#
+#   - A block with a frame reads its parameters at 16(%rbp) (the LAST one
+#     pushed is the FIRST parameter, so it sits lowest). A frameless block
+#     reads them at 8(%rsp), just above the return address. y_os_write above
+#     uses 16/24/32(%rbp); the frameless blocks below use 8(%rsp).
+#   - A block that needs scratch registers pushes them AFTER `push %rbp`, so
+#     they sit BELOW %rbp (-8, -16, -24, ...) and the epilogue restores them
+#     with explicit loads, not pops. `mov %rbp,%rsp; pop %rbp; ret` is only
+#     right when nothing was pushed between the frame pointer and the `sub`.
+#     The saved registers therefore own the top three words below %rbp, and
+#     any local goes below -32.
+#
+# NTSTATUS polarity: every Nt* call returns a signed status, NEGATIVE meaning
+# failure, while the Linux caller wants a negative errno and reads the return
+# with `< 0`. So each block tests the high half -- `test %eax, %eax; js` -- which
+# is what makes it work: STATUS_SUCCESS is 0, a failure is negative in its low
+# 32 bits, and no Nt call this file makes returns a positive non-zero status.
+#
+# The failure value is -1, matching y_os_write above, and NOT the negated
+# status. Two reasons, one of them a trap I fell into: an Nt stub returns the
+# status in EAX, and a 32-bit register write ZEROES bits 63:32, so the status
+# arrives in %rax as a POSITIVE 0x00000000C0000005 and a 64-bit negate of it
+# would be -3221225477 rather than an errno; getting a signed 32-bit negate
+# needs `neg %eax`, which the in-tree assembler does not accept ("unary form in
+# 'neg'" -- `make asm-check` cannot see it, because GNU as does). And nothing
+# reads the magnitude: every caller above tests `< 0` or `>= 0` and nothing
+# prints an errno, so a table from NTSTATUS to errno would be machinery with no
+# reader.
+#
+# Decimals, not hex, wherever a displacement is a number: the in-tree
+# assembler's number reader is decimal-only (parse_num in asm.y), and a hex
+# literal here is "bad operand" with a diagnostic naming the instruction.
+
+# y_os_read(fd, buf, len) -> bytes read, or a negative errno. read(2) on the
+# other side. NtReadFile has NtWriteFile's nine-argument shape and the same
+# four-registers-then-40(%rsp) split, so the frame reserves 128 bytes and the
+# byte count comes back in the IO_STATUS_BLOCK's Information field at
+# -8(%rbp). `offset` is the AbsoluteOffset pointer: 0 means "use the file
+# pointer", which is what read(2) on an ordinary descriptor does. NtReadFile
+# blocks rather than returning STATUS_PENDING for a console or a pipe, so no
+# event and no APC routine are needed -- a caller that wanted overlapped I/O
+# would have to pass both, and none of them does.
+# The descriptor is a handle, so it goes through y_os_handle like y_os_write's.
+#=== replace: y_os_read ===
+y_os_read:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    sub $128, %rsp
+    mov 32(%rbp), %r12
+    mov 24(%rbp), %rbx
+    mov 16(%rbp), %r13
+    mov %r12, %rdi
+    call y_os_handle
+    mov %rax, %r10
+    xor %edx, %edx
+    xor %r8d, %r8d
+    xor %r9d, %r9d
+    lea -16(%rbp), %rax
+    mov %rax, 40(%rsp)
+    mov %rbx, 48(%rsp)
+    mov %r13, 56(%rsp)
+    mov $0, 64(%rsp)
+    mov $0, 72(%rsp)
+    mov $6, %eax
+    syscall
+    test %eax, %eax
+    jns yor_ok
+    mov $-1, %rax
+    jmp yor_out
+yor_ok:
+    mov -8(%rbp), %rax
+yor_out:
+    mov -24(%rbp), %r13
+    mov -16(%rbp), %r12
+    mov -8(%rbp), %rbx
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_wait4(pid, status) -> the pid that changed state, or a negative errno.
+#
+# NOT IMPLEMENTED, and the comment says so rather than pretending: Windows has
+# no wait-for-a-pid, because a pid is not a handle and there is no Nt call that
+# opens a process object by id (NtOpenProcess is a Win32-era call that exists
+# only behind the win32u bridge). Resolving a pid to a handle needs either that
+# bridge -- which this image cannot use, having no import table at all (pe.y
+# writes none) -- or a handle the forking side handed over, which means a fork
+# implementation that does not exist yet either (see y_os_fork).
+#
+# So the answer is ECHILD (-10), which is exactly what the Linux caller expects
+# when there is no such child: rt.y's y_wait_pid turns it into -1, and a program
+# that checks for a failed wait sees a failed wait. What it must NOT do is block
+# forever, because the handle does not exist to block on.
+#
+# The block exists NOW rather than when the work lands, and that is the whole
+# point of the named layer: rt.y's call site is now `os_call("y_os_wait4", ...)`
+# and compiles to the same bytes for both targets, so finishing this is a change
+# to wsys.s alone, with no target branch anywhere above it to remove.
+#=== replace: y_os_wait4 ===
+y_os_wait4:
+    mov $-10, %rax
+    ret
+# y_os_fork() -> 0 in the child, the child's pid in the parent, or a negative
+# errno.
+#
+# NOT IMPLEMENTED, for the reason the shape of the thing makes unavoidable: a
+# Windows process has ONE address space, and its threads share it, so "parent
+# and child then see the same heap" cannot be true of anything Windows has.
+# What Windows has is a clone -- NtCreateThreadEx -- which is exactly what
+# `spawn` already maps onto, so the honest mapping is spawn-with-a-body and a
+# join, and the honest answer here is ENOSYS (-38), which a Linux program
+# already checks for. exec.y's fallback (fork fails -> exec in place) is what
+# keeps that usable rather than a dead end.
+#=== replace: y_os_fork ===
+y_os_fork:
+    mov $-38, %rax
+    ret
+# y_os_execve(path, argv, envp) -> does not return on success; a negative errno
+# on failure.
+#
+# NOT IMPLEMENTED, same answer and nearly the same reason. The NT-level
+# equivalent is NtCreateUserProcess (index 60), and it takes a command line and
+# an environment block in Win32 structures -- UNICODE_STRING, and the
+# RTL_USER_PROCESS_PARAMETERS the PEB already points at -- not three C arrays.
+# Building those is real work (it is the argv work in B6, which has to happen
+# anyway for `argv()`), so it is left for that rather than faked here.
+#=== replace: y_os_execve ===
+y_os_execve:
+    mov $-38, %rax
+    ret

@@ -437,6 +437,59 @@ y_os_write:
 yosw_fail:
     mov $-1, %rax
     ret
+# The named syscall layer: the blocks std code reaches the kernel through, by
+# name, so that rt.y/prelude.y/exec.y compile to the same bytes on every
+# target and the std pack stays target-independent (types.y os_call_names has
+# the argument for why that is not a simplification).
+#
+# Every one of these is frameless and reads its arguments off the stack, the
+# way y_os_write above does: pushed left to right, so the LAST parameter sits
+# lowest, just above the return address the `call` pushed. `ret` and nothing
+# else -- the block's result is in %rax, and a negative return is the kernel's
+# own errno-negative convention, which is what the caller's `>= 0` checks want.
+#
+# Each name here needs a Windows body in wsys.s, and types.y's os_call_names is
+# the list of the names both halves must define: adding a name to one and not
+# the other is a link error on the target that is missing it, and native.y
+# check_os_call_names turns that into a compile error here instead.
+#
+# y_os_read(fd, buf, len) -> bytes read, or a negative errno. read(2).
+y_os_read:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    xor %eax, %eax
+    syscall
+    ret
+# y_os_wait4(pid, status) -> the pid that changed state, or a negative errno.
+# wait4(2) with options 0, so the wait is not WNOHANG and not __WCLONE. The
+# status word is written as a plain 32-bit int, which is what rt.y's
+# `status[0] & 65535` reads.
+y_os_wait4:
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rsi
+    xor %edx, %edx
+    xor %r10d, %r10d
+    mov $61, %eax
+    syscall
+    ret
+# y_os_fork() -> 0 in the child, the child's pid in the parent, or a negative
+# errno. fork(2). Only one argument register is live here, so the ABI delta
+# this block would otherwise carry is nothing at all.
+y_os_fork:
+    mov $57, %eax
+    syscall
+    ret
+# y_os_execve(path, argv, envp) -> does not return on success; a negative errno
+# on failure. execve(2). `path` and `argv` are NUL-terminated C strings and
+# `envp` is an array of them, all made by exec.y.
+y_os_execve:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    mov $59, %eax
+    syscall
+    ret
 y_heap_used:
     lea y_heap(%rip), %rcx
     mov 24(%rcx), %rdx

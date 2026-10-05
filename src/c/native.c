@@ -3171,7 +3171,11 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", yv_long(K_tstr));
         } else if (ys_eq_lit(name, "ptr_addr")) {
             return yr(1, "k", yv_long(K_tlong));
-        } else if (ys_eq_lit(name, "os_write")) {
+        } else if (ys_eq_lit(name, "os_call")) {
+            /* os_call's result is whatever the named block returns, which is a
+               long on every name in os_call_names (types.c owns the list and
+               the checker; native.c check_os_call_names makes sure each name is
+               a label the arch lines really define). */
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "tonum") || ys_eq_lit(name, "ord") ||
                    ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "index_of") ||
@@ -3509,7 +3513,7 @@ int is_intrinsic_name(Yv *n) {
             ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
             ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
             ys("exit"), ys("argv"), ys("range"), ys("typeof"),
-            ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("os_write"),
+            ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("os_call"),
             ys("self"),
             ys("none"), ys("#fmt")),
         n);
@@ -6020,46 +6024,41 @@ Yv *gen_call(Yv *st, Yv *node) {
              * system lets the value cross into long territory. */
             Yv *paargs = yr_get(node, "args");
             return gen(st, ya_get(paargs, 0));
-        } else if (ys_eq_lit(name, "os_write")) {
-            /* os_write(fd, s) -> bytes written, or -1. The first slice of the
-             * named syscall layer W5 asks for, and the one that makes print
-             * work on Windows: `syscall(1, fd, s, len(s))` in rt.y is
-             * write(2), and 1 on Windows is a different, real Nt function, so
-             * the call returned a status nobody read and the program printed
-             * nothing while still running to completion.
+        } else if (ys_eq_lit(name, "os_call")) {
+            /* os_call("y_os_write", fd, s, len(s)) -> the block's own return
+               value. The NAME is a literal the checker already matched against
+               os_call_names (types.c), so it is emitted as a plain `call` to a
+               label: the same instruction on every target, which is what makes
+               the four embedded std units target-independent even though they
+               are compiled once and serialized into one pack.
 
-               NO target test here, and that is the design. rt.y is one of the
-               four std units EMBEDDED in the compiler and serialized into the
-               std pack, and the pack is written once by a compiler whose
-               res_target is whatever that compiler was asked for -- `ycc
-               --std-pack` never passes a target. A conditional in rt.y
-               therefore bakes ONE target's write into the pack, and every
-               program compiled from it gets that one whatever --target says.
-               (Measured, both ways: with the conditional, a PE built from the
-               pack carried the ELF inline write(2) and printed nothing, while
-               --std-src -- which recompiles the units -- worked.) The named
-               layer is exactly what lets shared std code be
-               target-independent: rt.y names one label and the arch module
-               decides which kernel call it is -- write(2) on Linux,
-               NtWriteFile on Windows.
+               The arguments go on the stack left to right, so inside the block
+               the LAST one pushed is the FIRST parameter and sits lowest, just
+               above the return address -- the same rbp+16+8*(n-1-k) layout every
+               Y function uses, and what every y_os_* block reads (see
+               prelude.s's y_os_write). The caller pops, like every other call in
+               the emitter.
 
-               The three values are pushed left to right, so inside the callee
-               the count (pushed last) is at 8(%rsp) and the descriptor at 24. */
-            Yv *owargs = yr_get(node, "args");
-            st = gen(st, ya_get(owargs, 0));
-            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-            st = gen(st, ya_get(owargs, 1));
-            st = emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
-            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-            st = gen(st, n_call1(ys("len"), ya_get(owargs, 1),
-                                 yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col"))));
-            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_os_write"))), 0, 0,
-                           0, 0, 0, 0);
-            /* y_os_write leaves the stack alone; the caller pops, like every
-               other call in the emitter. */
-            return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+               A `str` argument flows in as its header and the block wants the
+               data bytes, so +8 first -- the same adjustment syscall's
+               arguments get. */
+            Yv *oa = yr_get(node, "args");
+            long n = yv_len(oa) - 1;
+            long k = 1;
+            while (k <= n) {
+                st = gen(st, ya_get(oa, k));
+                Yv *ot = infer(st, ya_get(oa, k));
+                if (yv_l(yr_get(ot, "k")) == K_tstr) {
+                    st = emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
+                }
+                st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+                k = k + 1;
+            }
+            /* The name is a str literal: the checker required one (a variable
+               holding a name would put the choice back in the program's hands,
+               and the arch module's list is the whole point of naming it). */
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(yr_get(ya_get(oa, 0), "v"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 8 * n, R_RSP, 64, 0, 0, 0, 0);
         } else {
             return gen_direct(st, node, name);
         }

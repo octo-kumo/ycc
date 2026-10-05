@@ -123,7 +123,48 @@ static int arr_lit_adopts_go(Yv *got, Yv *want, Yv *n);
 static Yv *typeof_expr(Yv *st, Yv *node);
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt);
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt);
+/* The named syscall layer: the names std code may reach the kernel through,
+   and the only list of them. `os_call` (the checker arm below, native.c's emit
+   arm) resolves a call against this list and emits a `call` to the label; the
+   bodies live in src/y/arch/prelude.s on Linux and in src/y/arch/wsys.s on
+   Windows.
+
+   ONE list, with no target branch, and that is the load-bearing property
+   rather than a simplification. The four embedded std units (rt, prelude, exec,
+   str) are compiled ONCE per compiler and serialized into a single std pack,
+   so anything a std unit resolves at COMPILE time -- a syscall number, a struct
+   layout, a branch on the target -- is baked for whichever target wrote that
+   pack, and --target on the consuming compiler cannot undo it. A NAME is the one
+   thing that survives: rt.y saying os_call("y_os_write", fd, s, len(s))
+   compiles to the same bytes for both targets, and the arch module decides
+   which kernel call that label is. Measured both ways, with a conditional in
+   rt.y instead: a PE built from the pack carried the ELF inline write(2) and
+   printed nothing, while --std-src (which recompiles the units) worked.
+
+   The list lives here, beside the checker that enforces it, because types.y is
+   the one module that must not import arch_x64.y: a path import is flattened
+   into its importer, so both would define the same names and the second would
+   win. native.c, which sees both, checks that every name here is a label the
+   emitted arch lines actually define (native.c check_os_call_names). */
+static int os_call_name(Yv *nm) {
+    Yv *names = os_call_names();
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(names)) {
+        if (ys_eq(ya_get(names, i), nm)) { found = 1; }
+        i = i + 1;
+    }
+    return found;
+}
+
+Yv *os_call_names(void) {
+    return yav(5, ys("y_os_write"), ys("y_os_read"), ys("y_os_wait4"),
+               ys("y_os_fork"), ys("y_os_execve"));
+}
+
 static Yv *typeof_call(Yv *st, Yv *node);
+static int os_call_name(Yv *nm);
+Yv *os_call_names(void);
 static Yv *typeof_block(Yv *st, Yv *node);
 static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want);
 static Yv *typeof_want(Yv *st, Yv *node, Yv *want);
@@ -4794,41 +4835,67 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
                 }
             }
-        } else if (ys_eq_lit(name, "os_write")) {
-            /* os_write(fd, s): the named-syscall-layer entry point for "put
-               these bytes on that file descriptor". Exactly two arguments, a
-               number and a str -- the two things write(2) and NtWriteFile
-               agree a caller can supply. The call itself is the arch module's
-               (y_os_write: write(2) on Linux, NtWriteFile on Windows), so the
-               syscall number and the argument shape do not leak into shared
-               std code. */
-            if (yv_len(cargs) != 2) {
-                st = fail(st,
-                          ys("os_write takes exactly 2 arguments (fd, string)"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(name, "os_call")) {
+            /* os_call("y_os_read", fd, buf, len) -> long: the NAMED syscall
+               layer. The first argument is a name from os_call_names (the only
+               list of them), the rest are the arguments the named block takes
+               -- at most six, pushed on the stack in order, so the block reads
+               them the way every Y function does (the last pushed is the first
+               parameter, lowest).
+
+               Why a NAME and not a syscall number: the four embedded std units
+               are compiled once per compiler and serialized into one std pack,
+               so anything they resolve at compile time is baked for whichever
+               target wrote that pack and --target on the consuming compiler
+               cannot undo it. A number, a struct layout or a branch on the
+               target are all baked; a name is not, because `call y_os_read` is
+               the same instruction on both and the arch module decides what
+               that label is (read(2) on Linux, NtReadFile on Windows).
+               Measured, both ways, with a conditional in rt.y instead: a PE
+               built from the pack carried the ELF inline write(2) and printed
+               nothing, while --std-src (which recompiles) worked. */
+            if (yv_len(cargs) < 1 || yv_len(cargs) > 7) {
+                st = fail(st, ys("os_call takes a name and 0-6 arguments"),
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+            } else if (yv_l(yr_get(ya_get(cargs, 0), "k")) != K_str) {
+                st = fail(st, ys("os_call needs a literal call name"),
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
+                /* The name is a str LITERAL. The arm above proved that (`k` is
+                   K.str, the only Node kind with a `v`), so reading `v` off it
+                   is the same read the Y twin makes after its cast to the
+                   member -- and in the C copy it is a direct field read, since
+                   records are shared (yv.h) and there is no copy to write
+                   through. */
+                Yv *nmv = yr_get(ya_get(cargs, 0), "v");
                 Yv *r0 = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r0, "st");
-                if (yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tlong &&
-                    yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tbyte &&
-                    yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tunk) {
+                if (!os_call_name(nmv)) {
                     st = fail(st,
-                              ys_cat(ys("os_write fd must be a number, got "),
-                                     tstr(yr_get(r0, "typ"))),
-                              yv_l(yr_get(node, "line")),
-                              yv_l(yr_get(node, "col")));
+                              ys_cat(ys_cat(ys("os_call: '"), nmv),
+                                     ys("' is not a call name (see os_call_names)")),
+                              yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 }
-                Yv *r1 = typeof_expr(st, ya_get(cargs, 1));
-                st = yr_get(r1, "st");
-                if (yv_l(yr_get(yr_get(r1, "typ"), "k")) != K_tstr &&
-                    yv_l(yr_get(yr_get(r1, "typ"), "k")) != K_tunk) {
-                    st = fail(st,
-                              ys_cat(ys("os_write needs a string, got "),
-                                     tstr(yr_get(r1, "typ"))),
-                              yv_l(yr_get(node, "line")),
-                              yv_l(yr_get(node, "col")));
+                long i = 1;
+                while (i < yv_len(cargs)) {
+                    Yv *r = typeof_expr(st, ya_get(cargs, i));
+                    st = yr_get(r, "st");
+                    /* The same argument types `syscall` takes after its number:
+                       a long, a bool, a str (whose +8 header adjustment the
+                       emitter does), or a *T for a buffer the block fills. */
+                    if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong
+                        && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tbool
+                        && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr
+                        && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tptr
+                        && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tunk) {
+                        st = fail(st, ys_cat(ys_cat(ys("os_call arg "), ys_long(i)),
+                                              ys_cat(ys(" must be long/bool/str/*T, got "),
+                                                     tstr(yr_get(r, "typ")))),
+                                  yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                    }
+                    i = i + 1;
                 }
                 return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
@@ -5677,13 +5744,11 @@ Yv *check_program(Yv *ast, Yv *ext) {
                     "ret", yr(1, "k", yv_long(K_tvoid))),
                  ys("intrinsic"));
     st = st_bind(st, ys("syscall"), yr(1, "k", yv_long(K_tlong)), ys("intrinsic"));
-    /* (fd: long, s: str) -> long. The binding exists only so `os_write` reads
-       as defined when it appears as a value; typeof_call matches it by name. */
-    Yv *osw_type = yr(3, "k", yv_long(K_tfunc),
-                      "args", yav(2, yr(1, "k", yv_long(K_tlong)),
-                                  yr(1, "k", yv_long(K_tstr))),
-                      "ret", yr(1, "k", yv_long(K_tlong)));
-    st = st_bind(st, ys("os_write"), osw_type, ys("intrinsic"));
+    /* (name: str, args...) -> long. The binding exists only so `os_call` reads
+       as defined when it appears as a value; typeof_call matches it by name and
+       checks the arity and the argument types itself (os_call takes a varying
+       number of arguments, so there is no single function type to bind). */
+    st = st_bind(st, ys("os_call"), yr(1, "k", yv_long(K_tlong)), ys("intrinsic"));
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as

@@ -31,16 +31,20 @@
 //     not allowed (the checker would call them undefined), so every
 //     bridge into the primitives goes through an intrinsic or an operator.
 
-// One write of a string's bytes to fd 1 / fd 2 (no newline). Through
-// os_write rather than a raw `syscall(1, fd, ...)`: 1 is write(2) on Linux and
-// some unrelated Nt function on Windows, so a raw Linux number here printed
-// nothing at all under --target=windows and the program still exited 0. The
-// number and the argument shape belong to the arch module (y_os_write).
+// One write of a string's bytes to fd 1 / fd 2 (no newline). Through the named
+// syscall layer -- os_call("y_os_write", ...) -- rather than a raw
+// `syscall(1, fd, ...)`: 1 is write(2) on Linux and some unrelated Nt function
+// on Windows, so a raw Linux number here printed nothing at all under
+// --target=windows while the program still exited 0. The number and the
+// argument shape belong to the arch module (y_os_write), which is the only
+// thing that works here: rt.y is one of the four std units serialized into the
+// std pack, so anything resolved while COMPILING it is baked for whichever
+// target wrote the pack and --target on the consuming compiler cannot undo it.
 def y_put_hstr(s: str) -> long {
-    os_write(1, s)
+    os_call("y_os_write", 1, s, len(s))
 };
 def y_eput_hstr(s: str) -> long {
-    os_write(2, s)
+    os_call("y_os_write", 2, s, len(s))
 };
 def y_print_hstr(s: str) -> long {
     y_put_hstr(s);
@@ -193,8 +197,11 @@ def y_range(n: long) -> [long] {
     out
 };
 
-// Time: clock_gettime / nanosleep, straight through the syscall
-// intrinsic. clock_us is CLOCK_MONOTONIC microseconds, time_us
+// Time: clock_gettime / nanosleep. NOT yet through the named syscall layer --
+// these two are the remaining raw `syscall(` sites in this unit, and they are
+// what B1a left for B1b (the Windows halves need to convert a FILETIME and a
+// QPC tick into the caller's struct timespec, which is real work in asm rather
+// than a transliteration). clock_us is CLOCK_MONOTONIC microseconds, time_us
 // CLOCK_REALTIME's: the wall clock, since the Unix epoch. (heap_used
 // reads the allocator's own counter: y_heap_used in arch_x64.y.)
 def y_clock_us() -> long {
@@ -211,7 +218,7 @@ def y_time_us() -> long {
 // signal that ended it, or -1 when there is no such child.
 def y_wait_pid(pid: long) -> long {
     let status: [long; 1] = [0; 1];
-    let r = syscall(61, pid, &status[0], 0, 0);
+    let r = os_call("y_os_wait4", pid, &status[0]);
     let s = status[0] & 65535;
     if (r < 0) { -1 } else if ((s & 127) == 0) { (s >> 8) & 255 } else { 128 + (s & 127) }
 };

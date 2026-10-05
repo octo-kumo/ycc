@@ -201,8 +201,17 @@ def arch_prelude_lines() -> [str] {
 //   `#=== replace: NAME ===`  this block replaces prelude.s's block NAME
 //   `#=== add: NAME ===`      a new block, emitted after the last replaced
 //                              one; the tree shaker prunes it unless a kept
-//                              block calls it, so y_os_write costs a program
-//                              that never writes nothing
+//                              block calls it, so a block nothing calls costs
+//                              a program nothing
+//
+// and the difference is not cosmetic: an `add:` block whose NAME the prelude
+// also defines is DEAD. Both definitions reach the program and the assembler's
+// label map keeps one -- and it is not the one wsys.s added -- so a block that
+// is meant to REPLACE a Linux one must say `replace:`, or the Linux syscall
+// stays in a Windows binary and the failure appears in whatever called it.
+// (y_os_read, y_os_wait4, y_os_fork and y_os_execve were `add:` for one
+// revision and a PE's y_os_wait4 answered STATUS_ACCESS_VIOLATION where Linux
+// answered ECHILD, because the prelude's wait4(2) had won.)
 // A `replace:` name the prelude does not define is a hard error (see
 // arch_win_find): it means the Windows half was written against a block that
 // moved, and the substitution would silently do nothing. `make asm-check`

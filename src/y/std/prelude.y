@@ -52,7 +52,7 @@ def readline() -> str? {
                 let fresh: [byte; 16384] = [0; 16384];
                 y_rl_buf = fresh[0:16384];
             };
-            let n = syscall(0, 0, &y_rl_buf[0], len(y_rl_buf));
+            let n = os_call("y_os_read", 0, &y_rl_buf[0], len(y_rl_buf));
             if (n <= 0) {
                 go = false;
             } else {

@@ -31,16 +31,24 @@ def exec(cmd: str) -> long {
     argv[1] = ptr_addr(&dashc[0]);
     argv[2] = ptr_addr(&cmdb[0]);
     argv[3] = 0;
-    let pid = syscall(57);
+    // The named syscall layer, not raw syscall numbers: exec.y is one of the
+    // four std units serialized into the std pack, which one compiler writes
+    // for one target, so a Linux fork(2)/execve(2)/wait4(2)/_exit sequence
+    // compiled into it would be what every program on the other target ran
+    // too. y_os_fork and y_os_execve answer ENOSYS on Windows for now (there is
+    // no fork, and NtCreateUserProcess wants Win32 structures rather than three
+    // C arrays), which is what makes the `pid < 0` fallback below the path a PE
+    // takes instead of a lie.
+    let pid = os_call("y_os_fork");
     if (pid == 0) {
-        syscall(59, ptr_addr(&shpath[0]), ptr_addr(&argv[0]), 0);
-        syscall(60, 127);
+        os_call("y_os_execve", ptr_addr(&shpath[0]), ptr_addr(&argv[0]), 0);
+        exit(127);
         0
     } else if (pid < 0) {
         0 - 1
     } else {
         let status: [long; 1] = [0; 1];
-        let w = syscall(61, pid, ptr_addr(&status[0]), 0, 0);
+        let w = os_call("y_os_wait4", pid, ptr_addr(&status[0]));
         if (w < 0) { 0 - 1 } else { exit_status(status[0]) }
     }
 };

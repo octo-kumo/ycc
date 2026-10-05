@@ -1193,6 +1193,49 @@ type PBlocks = { lines: [str], starts: [long], names: [str], ix: [AsmLabel] };
 // The kept text, and every reference the kept blocks make.
 type PShake = { text: str, refs: [str] };
 
+// Every name in types.y's os_call_names must be a label in the arch lines
+// that were actually emitted. This runs on both targets, and it is here rather
+// than in the checker because this is the one module that sees BOTH the list
+// (types.y) and the arch module's output -- types.y must not import
+// arch_x64.y, because a path import is flattened into its importer and the two
+// would define the same names twice.
+//
+// Without it, a name added to one arch half and not the other is a LINK error,
+// on one target only, and only in a program whose std units happen to call it:
+// the most expensive kind of bug to find and the easiest to make. A name in the
+// list with no block behind it is a compile error with a message naming it.
+def check_os_call_names(lines: [str]) -> [str] {
+    let names = types.os_call_names();
+    let i = 0;
+    while (i < len(names)) {
+        let found = false;
+        let j = 0;
+        while (j < len(lines)) {
+            if (arch_label_is(lines[j], names[i])) { found = true; };
+            j = j + 1;
+        };
+        if (!found) {
+            puts("error: os_call_names lists '" + names[i]
+                + "', which the arch lines do not define ("
+                + (if (target_is_windows()) { "src/y/arch/wsys.s" } else { "src/y/arch/prelude.s" })
+                + ")\n");
+            exit(1);
+        };
+        i = i + 1;
+    };
+    lines
+};
+
+// A column-0 `name:` line. The arch module's own marker (arch_is_label_line)
+// is the same test; this is a second copy because native.y cannot reach into
+// arch_x64.y's non-exported defs, and a whole-line '#' comment has already
+// been dropped by then so there is nothing else to confuse it with.
+def arch_label_is(l: str, nm: str) -> bool {
+    if (len(l) < len(nm) + 1) { false }
+    else if (byte_at(l, len(l) - 1) != 58) { false }
+    else { l[0:len(nm)] == nm && (len(l) == len(nm) + 1 || byte_at(l, len(nm)) == 58) }
+};
+
 def prelude_blocks(lines: [str]) -> PBlocks {
     let starts: [long] = [];
     let names: [str] = [];
@@ -2258,19 +2301,22 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: K.tstr })
         } else if (name == "ptr_addr") {
             normtype({ k: K.tlong })
-        } else if (name == "os_write") {
-            normtype({ k: K.tlong })
+        } else if (name == "os_call") {
+            // os_call's result is whatever the named block returns, which is a
+            // long on every name in os_call_names (types.y owns the list and
+            // the checker; native.y check_os_call_names makes sure each name is
+            // a label the arch lines really define).
+            type_node({ k: K.tlong })
         } else if (name == "tonum" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
-            normtype({ k: K.tlong })
+            type_node({ k: K.tlong })
         } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
-            normtype({ k: K.tlong })
+            type_node({ k: K.tlong })
         } else if (name == "keys") {
-            let kargs: [Node] = node.args;
-            let kt = infer(st, kargs[0]);
+            let kt = infer(st, node.args[0]);
             if (kt.k == K.tmap) {
-                let map: TMap = kt;
-                normtype({ k: K.tarr, of: map.key })
-            } else { normtype({ k: K.tunk }) }
+                let km: TMap = kt;
+                normtype({ k: K.tarr, of: km.key })
+            } else { normtype({ k: K.tarr, of: normtype({ k: K.tunk }) }) }
         } else if (name == "sleep") {
             normtype({ k: K.tvoid })
         } else if (name == "split" || name == "argv") {
@@ -2570,7 +2616,7 @@ def is_intrinsic_name(n: str) -> bool {
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
              "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "os_write", "self", "none", "#fmt"], n)
+             "from_bytes", "ptr_addr", "os_call", "self", "none", "#fmt"], n)
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -4925,45 +4971,44 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             // system lets the value cross into long territory.
             let paargs: [Node] = node.args;
             gen(st, paargs[0])
-        } else if (name == "os_write") {
-            // os_write(fd, s) -> bytes written, or -1. The first slice of the
-            // named syscall layer W5 asks for, and the one that makes print
-            // work on Windows: `syscall(1, fd, s, len(s))` in rt.y is write(2),
-            // and 1 on Windows is a different, real Nt function, so the call
-            // returned a status nobody read and the program printed nothing
-            // while still running to completion.
+        } else if (name == "os_call") {
+            // os_call("y_os_write", fd, s, len(s)) -> the block's own return
+            // value. The NAME is a literal the checker already matched against
+            // os_call_names (types.y), so it is emitted as a plain `call` to a
+            // label: the same instruction on every target, which is what makes
+            // the four embedded std units target-independent even though they
+            // are compiled once and serialized into one pack.
             //
-            // NO target test here, and that is the design. rt.y is one of the
-            // four std units EMBEDDED in the compiler and serialized into the
-            // std pack, and the pack is written once by a compiler whose
-            // res_target is whatever that compiler was asked for -- `ycc
-            // --std-pack` never passes a target. A conditional in rt.y
-            // therefore bakes one target's write into the pack, and every
-            // program compiled from it gets that one whatever --target says.
-            // (Measured, both ways: with the conditional, a PE built from the
-            // pack carried the ELF inline write(2) and printed nothing, while
-            // --std-src -- which recompiles the units -- worked.) The named
-            // layer is exactly what lets shared std code be target-independent:
-            // rt.y names one label and the arch module decides which kernel
-            // call it is -- write(2) on Linux, NtWriteFile on Windows.
+            // The arguments go on the stack left to right, so inside the block
+            // the LAST one pushed is the FIRST parameter and sits lowest, just
+            // above the return address -- the same rbp+16+8*(n-1-k) layout every
+            // Y function uses, and what every y_os_* block reads (see
+            // prelude.s's y_os_write). The caller pops, like every other call in
+            // the emitter.
             //
-            // The three values are pushed left to right, so inside the callee
-            // the count (pushed last) is at 8(%rsp) and the descriptor at 24.
-            let owargs: [Node] = node.args;
-            st = gen(st, owargs[0]);
-            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-            st = gen(st, owargs[1]);
-            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
-            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-            st = gen(st, n_call1("len", owargs[1], node.line, node.col));
-            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_os_write"), 0, 0, 0, 0, 0, 0);
-            // y_os_write leaves the stack alone; the caller pops, like every
-            // other call in the emitter.
-            emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
-        } else {
-            gen_direct(st, node, name)
-        }
+            // A `str` argument flows in as its header and the block wants the
+            // data bytes, so +8 first -- the same adjustment syscall's
+            // arguments get.
+            let oa: [Node] = node.args;
+            let n = len(oa) - 1;
+            let k = 1;
+            while (k <= n) {
+                st = gen(st, oa[k]);
+                let ot = infer(st, oa[k]);
+                if (ot.k == K.tstr) {
+                    st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
+                };
+                st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+                k = k + 1;
+            };
+            // The name is a str literal: the checker required one (a variable
+            // holding a name would put the choice back in the program's hands,
+            // and the arch module's list is the whole point of naming it).
+            let onm: Leaf = oa[0];
+            st = emit_insn(st, insn.F_CALL_L, lbl_new(onm.v), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 8 * n, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else { gen_direct(st, node, name) }
+
     }
 };
 
@@ -10452,7 +10497,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     let shaken = prune_bodies(labels, refs, extra);
     let keep = shaken.keep;
     let body_refs = shaken.refs;
-    let core_lines = arch.arch_prelude_lines();
+    let core_lines = check_os_call_names(arch.arch_prelude_lines());
     let thr = uses_threads(body_refs);
     let pb = prelude_blocks(prelude_with(core_lines, thr));
     let ps = shake_prelude(pb, body_refs);
