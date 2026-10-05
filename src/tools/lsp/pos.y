@@ -147,12 +147,28 @@ def u16_len(line: str, n: long) -> long {
 }
 
 // A 1-based (line, byte column) to LSP's 0-based (line, utf16 character).
+//
+// TWO forms, and the second is the one to use in a loop. `to_lsp` builds the
+// line-start table every call -- it has to, it only has the text -- and
+// `scope.index_src` calls it once per DECLARATION, so indexing src/y/native.y
+// rebuilt an 11,000-entry table 3,576 times: measured at 694 MB of allocation
+// and 2.6 GB for the file, which is out of memory against the 3.5 GB cap and so
+// no definition, hover or completion on a file that size. This is the same trap
+// `line_bytes_from` documents above, one layer up: fix it once here rather than
+// at each of a dozen call sites.
+//
+// `doc_to_lsp` is that form. It reads the starts out of the caller's SrcDoc.
 def to_lsp(text: str, ln: long, col: long) -> Pos {
+    doc_to_lsp({ src: text, starts: scan.line_starts(text) }, ln, col)
+}
+
+// The same, from a SrcDoc whose starts are already built.
+def doc_to_lsp(d: SrcDoc, ln: long, col: long) -> Pos {
     let line = ln - 1;
     if (line < 0) { line = 0; }
     let c = col - 1;
     if (c < 0) { c = 0; }
-    let lb = line_bytes(text, ln);
+    let lb = line_bytes_from(d.src, d.starts, ln);
     let ch = u16_len(lb, c);
     { line: line, character: ch }
 }
