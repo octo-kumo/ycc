@@ -126,10 +126,10 @@ static long ty_count;
 /* ty_desc's labels in this unit, by type signature (types.c tsig): a type
  * named again needs no canonical form spelled out and hashed (a recursive
  * union's is long, and a read through a union asks for every member's).
- * 512 buckets of indices into ty_sig_keys/ty_sig_lbls, made when first
+ * 512 buckets of indices into ty_sig_keys/ty_sig_ids, made when first
  * used (ty_sig_init); tyset_reset empties them. */
 static Yv *ty_sig_keys;
-static Yv *ty_sig_lbls;
+static Yv *ty_sig_ids;
 static Yv *ty_sig_bkts;
 /* union_shared's answers in this unit, by the union's node. */
 static Yv *ush_nodes;
@@ -175,12 +175,15 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
 Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
 Yv *text_refs(Yv *text, int want_jumps);
 Yv *label_at(Yv *text, Yv *b, long lo, long hi);
-Yv *body_label(Yv *body);
 int is_data_line_b(Yv *text, Yv *b, long lo, long hi);
 int block_falls_b(Yv *text, Yv *b, long lo, long hi);
 Yv *namemap_build(Yv *names);
 long namemap_get(Yv *m, Yv *name);
-Yv *fntab_of(Yv *syms);
+Yv *fntab_of(Yv *syms, Yv *ids);
+Yv *fntab_ids(Yv *syms);
+Yv *lbl_new(Yv *name);
+Yv *lbl_fresh(Yv *name);
+Yv *lname(Yv *id);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
 Yv *prelude_blocks(Yv *lines);
@@ -204,7 +207,8 @@ Yv *next_uid(Yv *st);
 Yv *next_loc(Yv *st);
 Yv *esc_asm(Yv *s);
 Yv *env_find(Yv *st, Yv *name);
-Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ);
+Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *mark,
+               Yv *typ);
 Yv *infer(Yv *st, Yv *node);
 Yv *infer_call(Yv *st, Yv *node);
 Yv *cur_fn_type(Yv *st);
@@ -296,7 +300,7 @@ Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes);
 Yv *gen_conv(Yv *st, Yv *got, Yv *want);
 Yv *arr_elem_type(Yv *t);
 Yv *store_elem_type(Yv *t, long esz);
-Yv *gen_helper1(Yv *st, Yv *label);
+Yv *gen_helper1(Yv *st, Yv *name);
 Yv *gen_call(Yv *st, Yv *node);
 Yv *gen_fmt(Yv *st, Yv *node);
 Yv *gen_method(Yv *st, Yv *node);
@@ -1615,12 +1619,6 @@ Yv *label_at(Yv *text, Yv *b, long lo, long hi) {
     return lab;
 }
 
-/* The label a body starts with (`label: ...`). */
-Yv *body_label(Yv *body) {
-    Yv *b = bytes_of(body);
-    return label_at(body, b, 0, yv_len(b));
-}
-
 /* A line that is data, not code: blank lines, directives, or a bare label
  * (possibly followed by data on the same line). */
 int is_data_line_b(Yv *text, Yv *b, long lo, long hi) {
@@ -1728,7 +1726,14 @@ long namemap_get(Yv *m, Yv *name) {
  * in the compiler) and scanned. Of entries sharing a name the last wins,
  * as the backward env scan had it, so the index is filled from the end
  * (labmap keeps the first). */
-Yv *fntab_of(Yv *syms) {
+/* `ids` is parallel to `syms`: each def's label as an id, minted by the
+ * CALLER (compile_unit, once per def, where it binds the def's env entry too)
+ * and passed in here. env_find's miss path runs per identifier emitted, so
+ * interning there would grow the table once per lookup; and this table is
+ * built four times per unit as fix_fn_types retypes the defs, so interning
+ * per build was five lookups per def where one will do (measured: +1.9% of a
+ * compile, most of it hash_str). */
+Yv *fntab_of(Yv *syms, Yv *ids) {
     Yv *m = labmap_new(yv_len(syms) * 2 + 16);
     long i = yv_len(syms) - 1;
     while (i >= 0) {
@@ -1739,7 +1744,18 @@ Yv *fntab_of(Yv *syms) {
         }
         i = i - 1;
     }
-    return yr(2, "syms", syms, "ix", m);
+    return yr(3, "syms", syms, "ix", m, "ids", ids);
+}
+
+/* `ids` for a Sym list: intern each label, in order. */
+Yv *fntab_ids(Yv *syms) {
+    Yv *ids = yav(0);
+    long i = 0;
+    while (i < yv_len(syms)) {
+        ids = ya_push(ids, lbl_new(yr_get(ya_get(syms, i), "label")));
+        i = i + 1;
+    }
+    return ids;
 }
 
 /* Mark every names[i] some entry of `roots` points at, then close over kept
@@ -2437,49 +2453,139 @@ Yv *strip_decl(Yv *node, Yv *imports) {
     }
 }
 
+/* ── label identities ────────────────────────────────────────────────────
+ * A label is a long: an index into `lbl_names`, the one place a label's name
+ * exists. `lbl_new` mints one, `lname` reads the name back for the places that
+ * still want text -- the emitted line (asm.y still lexes it), -S, -g's symbol
+ * table, the pack and a diagnostic.
+ *
+ * Why it is an integer (OPTIMIZE.md Part 4 stage 1): a label's identity is
+ * compared, not spelled. `e.label == st.self_label` decides whether a call is
+ * a self-call, `namemap` decides whether a body is reachable, and the
+ * assembler's labmap resolves every fixup -- all of that wants a number, and
+ * today it pays for a string compare (or, once the emitter holds an operand
+ * IR, for a name built at every use). With the name built once per site
+ * instead, minting a label is an append to one array.
+ *
+ * One id per NAME, not per mint: the assembler resolves a label by name, so
+ * two labels called `yfn_3_via_return$2` are one label, and every comparison
+ * of two ids has to say so. A def's id is minted once -- compile_unit, where it
+ * binds the def's env entry -- and handed to the hoisted table and to the body
+ * (emit_one_fn); a plain counter would give those two a different number for
+ * the same name, and is_self_call, which compares a callee's id with the
+ * body's, would call a self-call an ordinary call: the tail call quietly
+ * becomes a call and the frame grows per level.
+ *
+ * The table is per process and never reset: a name's id only has to agree with
+ * itself, and a unit compiled from the pack has names, not ids (see Unit). */
+static Yv *lbl_names;
+static Yv *lbl_ix;
+static long lbl_next;
+
+/* Re-index every name at twice the old size. labmap_put does not grow (a full
+ * table drops entries), so the caller refills before it is half full. It
+ * starts at 64, not at a size that fits the compiler: labmap_new builds one
+ * record per slot, so a table sized for ycc.y costs every small compile
+ * 1,024 of them (measured: +1.5% of a hello.y compile, half the cost of
+ * this step). */
+static void lbl_reindex(long cap) {
+    Yv *m = labmap_new(cap);
+    long i = 0;
+    while (i < yv_len(lbl_names)) {
+        Yv *r = labmap_put(m, ya_get(lbl_names, i), 1, i);
+        m = yr_get(r, "map");
+        i = i + 1;
+    }
+    lbl_ix = m;
+}
+
+Yv *lbl_new(Yv *name) {
+    if (yv_len(lbl_ix) == 0) {
+        lbl_reindex(64);
+    } else {
+        if (4 * (lbl_next + 1) > 3 * yv_len(lbl_ix)) {
+            lbl_reindex(4 * yv_len(lbl_ix) + 64);
+        }
+    }
+    Yv *g = labmap_get(lbl_ix, name);
+    if (yv_l(yr_get(g, "sec")) >= 0) {
+        return yr_get(g, "off");
+    } else {
+        Yv *r = labmap_put(lbl_ix, name, 1, lbl_next);
+        lbl_ix = yr_get(r, "map");
+        long id = lbl_next;
+        lbl_names = ya_push(lbl_names, name);
+        lbl_next = lbl_next + 1;
+        return yv_long(id);
+    }
+}
+
+/* A label no one else can name: a local (`yL_<fuid>_<n>`, and the fuid is
+ * unique per body), which is 20,052 of the 26,000 labels a self-compile
+ * mints. It needs no interning -- the name is built once and never asked for
+ * again -- so it skips the table (measured: interning every label costs
+ * +1.9% of a compile; skipping the locals' share of it is most of that). */
+Yv *lbl_fresh(Yv *name) {
+    long id = lbl_next;
+    lbl_names = ya_push(lbl_names, name);
+    lbl_next = lbl_next + 1;
+    return yv_long(id);
+}
+
+/* The name of a label; "" for -1, which is what a slot with no label (a local,
+ * a mark) carries. */
+Yv *lname(Yv *id) {
+    long i = yv_l(id);
+    if (i < 0) { return ys(""); } else { return ya_get(lbl_names, i); }
+}
+
 /* ── emit state ─────────────────────────────────────────────────────────
  * st = { out, rodata, uid, fuid, loc, env, slots,
- *        self_label, end_label, fns, bodies }
- * env: FLAT list of {name, kind, off, label, typ} — names are unique
- * post-rename, so no scopes or shadowing. kind: "local"|"param"|"func". */
+ *        self_label, end_label, fns, bodies, blabels }
+ * env: FLAT list of {name, kind, off, label, mark, typ} — names are unique
+ * post-rename, so no scopes or shadowing. kind: "local"|"param"|"func".
+ * `label` is an id (see label identities); `mark` is the str a slot of kind
+ * "boxmark"/"appmark" carries instead -- a name to match against -- and a
+ * "capture"'s capture index (as text, see gen_addr). */
 
 Yv *st_new(void) {
-    return yr(11, "out", yav(0), "rodata", yav(0), "uid", yv_long(1), "fuid",
+    return yr(12, "out", yav(0), "rodata", yav(0), "uid", yv_long(1), "fuid",
               yv_long(0), "loc", yv_long(1), "env", yav(0), "slots",
-              yv_long(0), "self_label", ys(""), "end_label", ys(""), "fns",
-              fntab_of(yav(0)), "bodies", yav(0));
+              yv_long(0), "self_label", yv_long(-1), "end_label", yv_long(-1),
+              "fns", fntab_of(yav(0), yav(0)), "bodies", yav(0), "blabels",
+              yav(0));
 }
 
 Yv *emit(Yv *st, Yv *line) {
-    return yr(11, "out", ya_push(yr_get(st, "out"), line), "rodata",
+    return yr(12, "out", ya_push(yr_get(st, "out"), line), "rodata",
               yr_get(st, "rodata"), "uid", yr_get(st, "uid"), "fuid",
               yr_get(st, "fuid"), "loc", yr_get(st, "loc"), "env",
               yr_get(st, "env"), "slots", yr_get(st, "slots"), "self_label",
               yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-              "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+              "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
 }
 
 Yv *next_uid(Yv *st) {
     long u = yv_l(yr_get(st, "uid"));
-    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+    st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
             yv_long(yv_l(yr_get(st, "uid")) + 1), "fuid", yr_get(st, "fuid"),
             "loc", yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
             yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
             "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),
-            "bodies", yr_get(st, "bodies"));
+            "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     return yr(2, "st", st, "uid", yv_long(u));
 }
 
 Yv *next_loc(Yv *st) {
     long n = yv_l(yr_get(st, "loc"));
-    Yv *lbl = arch_loc_label(yv_l(yr_get(st, "fuid")), n);
-    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+    Yv *id = lbl_fresh(arch_loc_label(yv_l(yr_get(st, "fuid")), n));
+    st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yv_long(yv_l(yr_get(st, "loc")) + 1), "env", yr_get(st, "env"),
             "slots", yr_get(st, "slots"), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
-    return yr(2, "st", st, "lbl", lbl);
+            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
+    return yr(2, "st", st, "label", id);
 }
 
 /* ── string escaping for GAS .string ──────────────────────────────────── */
@@ -2563,9 +2669,9 @@ static long env_id = 0;
 /* Open a fresh env: the sentinel that carries its id (its off field). */
 static Yv *env_open(Yv *env) {
     env_id = env_id + 1;
-    ya_push(env, yr(5, "name", ys(""), "kind", ys("env"), "off",
-                     yv_long(env_id), "label", ys(""), "typ",
-                     yr(1, "k", yv_long(K_tnone))));
+    ya_push(env, yr(6, "name", ys(""), "kind", ys("env"), "off",
+                     yv_long(env_id), "label", yv_long(-1), "mark", ys(""),
+                     "typ", yr(1, "k", yv_long(K_tnone))));
     return env;
 }
 
@@ -2675,33 +2781,36 @@ Yv *env_find(Yv *st, Yv *name) {
     if (at >= 0) {
         return ya_get(env, at);
     } else {
-        Yv *found = yr(5, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
-                       "label", ys(""), "typ", yr(1, "k", yv_long(K_tnone)));
+        Yv *found = yr(6, "name", ys(""), "kind", ys("none"), "off", yv_long(0),
+                       "label", yv_long(-1), "mark", ys(""), "typ",
+                       yr(1, "k", yv_long(K_tnone)));
         Yv *fns = yr_get(st, "fns");
         long j = namemap_get(yr_get(fns, "ix"), name);
         if (j >= 0) {
             Yv *fe = ya_get(yr_get(fns, "syms"), j);
-            found = yr(5, "name", yr_get(fe, "name"), "kind",
+            found = yr(6, "name", yr_get(fe, "name"), "kind",
                        fns_kind(yr_get(fe, "label")), "off", yv_long(0),
-                       "label", yr_get(fe, "label"), "typ", yr_get(fe, "typ"));
+                       "label", ya_get(yr_get(fns, "ids"), j), "mark", ys(""),
+                       "typ", yr_get(fe, "typ"));
         }
         return found;
     }
 }
 
-Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *typ) {
+Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *mark,
+                Yv *typ) {
     Yv *env = yr_get(st, "env");
     if (yv_len(env) == 0) { env = env_open(env); }
     env = ya_push(env,
-                  yr(5, "name", name, "kind", kind, "off", yv_long(off),
-                     "label", label, "typ", typ));
+                  yr(6, "name", name, "kind", kind, "off", yv_long(off),
+                     "label", label, "mark", mark, "typ", typ));
     env_index_add(env);
-    return yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+    return yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
               "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
               yr_get(st, "loc"), "env", env, "slots", yr_get(st, "slots"),
               "self_label", yr_get(st, "self_label"), "end_label",
               yr_get(st, "end_label"), "fns", yr_get(st, "fns"), "bodies",
-              yr_get(st, "bodies"));
+              yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
 }
 
 /* ── mini type inference (for print dispatch) ───────────────────────────
@@ -3163,8 +3272,8 @@ Yv *infer_block(Yv *st, Yv *node) {
                 Yv *ge = env_find(st, dname);
                 if (ys_eq_lit(yr_get(sn, "kind"), "let") &&
                     ys_eq_lit(yr_get(ge, "kind"), "none")) {
-                    st = env_define(st, dname, ys("temp"), 0, ys(""),
-                                    infer(st, yr_get(sn, "v")));
+                    st = env_define(st, dname, ys("temp"), 0, yv_long(-1),
+                                    ys(""), infer(st, yr_get(sn, "v")));
                 }
             }
             i = i + 1;
@@ -3872,7 +3981,7 @@ Yv *gen_go(Yv *st, Yv *node) {
         return gen_store(st, node);
     } else if (yv_l(k) == K_ret) {
         st = gen_as(st, yr_get(node, "e"), cur_fn_ret(st));
-        return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
+        return emit(st, ys_cat(ys("    jmp "), lname(yr_get(st, "end_label"))));
     } else {
         /* Unreachable: the checker rejects everything else. */
         return emit(st, ys_cat(ys_cat(ys("    # INTERNAL: unhandled "), ktag(yv_l(k))),
@@ -3906,6 +4015,7 @@ Yv *gen_str_const(Yv *st, Yv *s) {
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *lbl = arch_str_label(yv_l(yr_get(r, "uid")));
+    Yv *id = lbl_new(lbl);
     /* NOTE: push-chain over a let-bound [] (not a literal). The checker
      * rejects heterogeneous array literals ([str, long, str]); these three
      * parts are all str, so a literal would check too — the push-chain is
@@ -3915,13 +4025,14 @@ Yv *gen_str_const(Yv *st, Yv *s) {
     rod0 = ya_push(rod0, ys_long(yv_len(s)));
     rod0 = ya_push(rod0, esc_asm(s));
     Yv *rod = ya_push(yr_get(st, "rodata"), rod0);
-    st = yr(11, "out", yr_get(st, "out"), "rodata", rod, "uid",
+    st = yr(12, "out", yr_get(st, "out"), "rodata", rod, "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
             yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
             "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),
-            "bodies", yr_get(st, "bodies"));
-    return emit(st, ys_cat(ys_cat(ys("    lea "), lbl), ys("(%rip), %rax")));
+            "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
+    return emit(st,
+                ys_cat(ys_cat(ys("    lea "), lname(id)), ys("(%rip), %rax")));
 }
 
 Yv *gen_id(Yv *st, Yv *node) {
@@ -3942,7 +4053,7 @@ Yv *gen_id(Yv *st, Yv *node) {
              * with no captures (hoisted defs capture nothing). A capturing
              * function naming itself hands out its own record instead. */
             long soff = -1;
-            if (ys_eq(yr_get(e, "label"), yr_get(st, "self_label"))) {
+            if (yv_eq(yr_get(e, "label"), yr_get(st, "self_label"))) {
                 soff = capture_off(st);
                 ;
             }
@@ -3961,14 +4072,16 @@ Yv *gen_id(Yv *st, Yv *node) {
                     ;
                 } else {
                     st = emit(st, ys("    xor %eax, %eax"));
-                    st = emit(st, ys_cat(
-                                      ys_cat(ys("    mov %rax, "),
-                                             yr_get(oe, "label")),
-                                      ys("(%rip)")));
+                    st = emit(st,
+                              ys_cat(ys_cat(ys("    mov %rax, "),
+                                            lname(yr_get(oe, "label"))),
+                                     ys("(%rip)")));
                 }
             }
-            return emit(st, ys_cat(ys_cat(ys("    mov "), yr_get(e, "label")),
-                                   ys("(%rip), %rax")));
+            return emit(st,
+                        ys_cat(ys_cat(ys("    mov "),
+                                      lname(yr_get(e, "label"))),
+                               ys("(%rip), %rax")));
         } else if (ys_eq_lit(yr_get(e, "kind"), "own")) {
             /* An appendable string: a read may let its buffer escape, so
              * the companion is cleared (see gen_sappend). */
@@ -3984,7 +4097,7 @@ Yv *gen_id(Yv *st, Yv *node) {
              * the shared cell pointer — and deref it (see box_capture).
              * NOTE: the index rides in `label` — env entries have no spare
              * numeric field and adding one would touch every signature. */
-            long idx = ys_tonum(yr_get(e, "label"));
+            long idx = ys_tonum(yr_get(e, "mark"));
             st = emit(st, ys_cat(ys_cat(ys("    mov "),
                                        ys_long(yv_l(yr_get(e, "off")))),
                                 ys("(%rbp), %rcx")));
@@ -4024,7 +4137,7 @@ Yv *gen_cap_ptr(Yv *st, Yv *name) {
     Yv *e = env_find(st, name);
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
         /* NOTE: the index rides in `label` (see gen_id's capture arm). */
-        long pidx = ys_tonum(yr_get(e, "label"));
+        long pidx = ys_tonum(yr_get(e, "mark"));
         st = emit(st, ys_cat(ys_cat(ys("    mov "),
                                    ys_long(yv_l(yr_get(e, "off")))),
                             ys("(%rbp), %rcx")));
@@ -4069,13 +4182,14 @@ Yv *box_capture(Yv *st, Yv *name) {
         st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(boff)),
                              ys("(%rbp)")));
         Yv *st2 =
-            yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+            yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                yv_long(yv_l(yr_get(st, "slots")) + 1), "self_label",
                yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-               "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
-        return env_define(st2, name, ys("box"), boff, ys(""), yr_get(e, "typ"));
+               "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
+        return env_define(st2, name, ys("box"), boff, yv_long(-1), ys(""),
+                          yr_get(e, "typ"));
     }
 }
 
@@ -4114,7 +4228,7 @@ Yv *box_bound(Yv *st, Yv *name) {
             more = 0;
             ;
         } else if (ys_eq_lit(yr_get(e, "kind"), "boxmark") &&
-                   ys_eq(yr_get(e, "label"), name)) {
+                   ys_eq(yr_get(e, "mark"), name)) {
             want = 1;
             more = 0;
             ;
@@ -4306,7 +4420,7 @@ int own_wanted(Yv *st, Yv *name) {
             more = 0;
             ;
         } else if (ys_eq_lit(yr_get(e, "kind"), "appmark") &&
-                   ys_eq(yr_get(e, "label"), name)) {
+                   ys_eq(yr_get(e, "mark"), name)) {
             want = 1;
             more = 0;
             ;
@@ -4325,13 +4439,13 @@ Yv *bind_own(Yv *st, Yv *name, Yv *t) {
     st = emit(st, ys_cat(ys_cat(ys("    mov $0, "), ys_long(off - 8)),
                          ys("(%rbp)")));
     Yv *st2 =
-        yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+        yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
            "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
            yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
            yv_long(yv_l(yr_get(st, "slots")) + 2), "self_label",
            yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-           "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
-    return env_define(st2, name, ys("own"), off, ys(""), t);
+           "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
+    return env_define(st2, name, ys("own"), off, yv_long(-1), ys(""), t);
 }
 
 /* A statement nobody takes the value of. `s += x` on an appendable string
@@ -4374,8 +4488,8 @@ Yv *gen_stmt(Yv *st, Yv *node) {
                 } else {
                     return gen_sappend(
                         st, yr_get(assign, "v"),
-                        ys_cat(yr_get(e, "label"), ys("(%rip)")),
-                        ys_cat(yr_get(oe, "label"), ys("(%rip)")));
+                        ys_cat(lname(yr_get(e, "label")), ys("(%rip)")),
+                        ys_cat(lname(yr_get(oe, "label")), ys("(%rip)")));
                 }
             } else {
                 return gen_opassign(st, assign, 1);
@@ -4471,7 +4585,8 @@ Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
                          ys(", %rdi")));
     st = emit(st, ys("    call y_alloc"));
     st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    lea "), label), ys("(%rip), %rcx")));
+    st = emit(st,
+              ys_cat(ys_cat(ys("    lea "), lname(label)), ys("(%rip), %rcx")));
     st = emit(st, ys("    mov %rcx, (%rax)"));
     long i = 0;
     while (i < n) {
@@ -4624,7 +4739,7 @@ Yv *gen_tag_in(Yv *st, Yv *ts, Yv *inu) {
     Yv *rdone = next_loc(st);
     st = yr_get(rdone, "st");
     st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(rno, "lbl")));
+    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rno, "label"))));
     st = emit(st, ys("    mov -8(%rax), %rcx"));
     Yv *yes = next_loc(st);
     st = yr_get(yes, "st");
@@ -4632,18 +4747,18 @@ Yv *gen_tag_in(Yv *st, Yv *ts, Yv *inu) {
     while (i < yv_len(ts)) {
         Yv *dr = ty_desc_in(st, ya_get(ts, i), inu);
         st = yr_get(dr, "st");
-        st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+        st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
                              ys("(%rip), %rdx")));
         st = emit(st, ys("    cmp %rdx, %rcx"));
-        st = emit(st, ys_cat(ys("    je "), yr_get(yes, "lbl")));
+        st = emit(st, ys_cat(ys("    je "), lname(yr_get(yes, "label"))));
         i = i + 1;
     }
-    st = emit(st, ys_cat(yr_get(rno, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(rno, "label")), ys(":")));
     st = emit(st, ys("    xor %eax, %eax"));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
-    st = emit(st, ys_cat(yr_get(yes, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rdone, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(yes, "label")), ys(":")));
     st = emit(st, ys("    mov $1, %rax"));
-    return emit(st, ys_cat(yr_get(rdone, "lbl"), ys(":")));
+    return emit(st, ys_cat(lname(yr_get(rdone, "label")), ys(":")));
 }
 
 // Union value in %rax -> its string form: the member its descriptor names
@@ -4663,17 +4778,17 @@ Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path) {
         st = emit(st, ys("    mov (%rsp), %rax"));
         st = gen_tag_in(st, one, t);
         st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), yr_get(rnext, "lbl")));
+        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rnext, "label"))));
         st = emit(st, ys("    pop %rax"));
         Yv *mu = unfold(mt);
         st = gen_rec_str_rax(st, mu, union_lay(mu, t), path_push(path, t));
-        st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
-        st = emit(st, ys_cat(yr_get(rnext, "lbl"), ys(":")));
+        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rdone, "label"))));
+        st = emit(st, ys_cat(lname(yr_get(rnext, "label")), ys(":")));
         m = m + 1;
     }
     st = emit(st, ys("    pop %rax"));
     st = gen_str_const(st, ys("<union>"));
-    return emit(st, ys_cat(yr_get(rdone, "lbl"), ys(":")));
+    return emit(st, ys_cat(lname(yr_get(rdone, "label")), ys(":")));
 }
 
 /* Indirect call through a closure value produced by `callee`. */
@@ -4725,11 +4840,12 @@ Yv *gen_addr(Yv *st, Yv *node) {
                                          ys_long(yv_l(yr_get(e, "off")))),
                                   ys("(%rbp), %rax")));
         } else if (ys_eq_lit(yr_get(e, "kind"), "global")) {
-            return emit(st, ys_cat(ys_cat(ys("    lea "),
-                                         yr_get(e, "label")),
-                                  ys("(%rip), %rax")));
+            return emit(st,
+                        ys_cat(ys_cat(ys("    lea "),
+                                      lname(yr_get(e, "label"))),
+                               ys("(%rip), %rax")));
         } else if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
-            long aidx = ys_tonum(yr_get(e, "label"));
+            long aidx = ys_tonum(yr_get(e, "mark"));
             st = emit(st, ys_cat(ys_cat(ys("    mov "),
                                        ys_long(yv_l(yr_get(e, "off")))),
                                 ys("(%rbp), %rcx")));
@@ -4815,49 +4931,49 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
     st = gen(st, yr_get(node, "l"));
     st = emit(st, ys("    test %rax, %rax"));
     if (is_or) {
-        st = emit(st, ys_cat(ys("    jnz "), yr_get(rT, "lbl")));
+        st = emit(st, ys_cat(ys("    jnz "), lname(yr_get(rT, "label"))));
         ;
     }
     if (is_or) {
         ;
     } else {
-        st = emit(st, ys_cat(ys("    jz "), yr_get(rF, "lbl")));
+        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rF, "label"))));
         ;
     }
     st = gen(st, yr_get(node, "r"));
     st = emit(st, ys("    test %rax, %rax"));
     if (is_or) {
-        st = emit(st, ys_cat(ys("    jnz "), yr_get(rT, "lbl")));
+        st = emit(st, ys_cat(ys("    jnz "), lname(yr_get(rT, "label"))));
         ;
     }
     if (is_or) {
         ;
     } else {
-        st = emit(st, ys_cat(ys("    jz "), yr_get(rF, "lbl")));
+        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rF, "label"))));
         ;
     }
     if (is_or) {
         ;
     } else {
         st = emit(st, ys("    mov $1, %rax"));
-        st = emit(st, ys_cat(ys("    jmp "), yr_get(rE, "lbl")));
+        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rE, "label"))));
         ;
     }
     if (is_or) {
         st = emit(st, ys("    xor %eax, %eax"));
-        st = emit(st, ys_cat(ys("    jmp "), yr_get(rE, "lbl")));
-        st = emit(st, ys_cat(yr_get(rT, "lbl"), ys(":")));
+        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rE, "label"))));
+        st = emit(st, ys_cat(lname(yr_get(rT, "label")), ys(":")));
         st = emit(st, ys("    mov $1, %rax"));
         ;
     }
     if (is_or) {
         ;
     } else {
-        st = emit(st, ys_cat(yr_get(rF, "lbl"), ys(":")));
+        st = emit(st, ys_cat(lname(yr_get(rF, "label")), ys(":")));
         st = emit(st, ys("    xor %eax, %eax"));
         ;
     }
-    return emit(st, ys_cat(yr_get(rE, "lbl"), ys(":")));
+    return emit(st, ys_cat(lname(yr_get(rE, "label")), ys(":")));
 }
 
 /* AUTO-STRINGIFY `+`: when a string meets a non-string, stringify the other
@@ -5148,22 +5264,22 @@ Yv *gen_eq_opt(Yv *st, Yv *pt) {
     st = yr_get(ldone, "st");
     st = emit(st, ys("    pop %rcx"));
     st = emit(st, ys("    test %rcx, %rcx"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(lnone, "lbl")));
+    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(lnone, "label"))));
     st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(lne, "lbl")));
+    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(lne, "label"))));
     st = emit(st, ys("    mov (%rcx), %rcx"));
     st = emit(st, ys("    push %rcx"));
     st = emit(st, ys("    mov (%rax), %rax"));
     st = gen_eq_vals(st, pt);
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(ldone, "lbl")));
-    st = emit(st, ys_cat(yr_get(lnone, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(ldone, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(lnone, "label")), ys(":")));
     st = emit(st, ys("    test %rax, %rax"));
     st = emit(st, ys("    sete %al"));
     st = emit(st, ys("    movzbq %al, %rax"));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(ldone, "lbl")));
-    st = emit(st, ys_cat(yr_get(lne, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(ldone, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(lne, "label")), ys(":")));
     st = emit(st, ys("    xor %eax, %eax"));
-    return emit(st, ys_cat(yr_get(ldone, "lbl"), ys(":")));
+    return emit(st, ys_cat(lname(yr_get(ldone, "label")), ys(":")));
 }
 
 /* gen_eq_vals for two arrays whose elements (of type et) need their own
@@ -5186,17 +5302,17 @@ Yv *gen_eq_arr_deep(Yv *st, Yv *et) {
     st = emit(st, ys("    mov (%rcx), %rdx"));
     st = emit(st, ys("    mov (%rax), %rsi"));
     st = emit(st, ys("    cmp %rsi, %rdx"));
-    st = emit(st, ys_cat(ys("    jne "), yr_get(lne, "lbl")));
+    st = emit(st, ys_cat(ys("    jne "), lname(yr_get(lne, "label"))));
     st = emit(st, ys("    push %rcx"));
     st = emit(st, ys("    push %rax"));
     st = emit(st, ys("    xor %edx, %edx"));
     st = emit(st, ys("    push %rdx"));
-    st = emit(st, ys_cat(yr_get(lloop, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(lloop, "label")), ys(":")));
     st = emit(st, ys("    mov (%rsp), %rdx"));
     st = emit(st, ys("    mov 16(%rsp), %rcx"));
     st = emit(st, ys("    mov (%rcx), %rsi"));
     st = emit(st, ys("    cmp %rsi, %rdx"));
-    st = emit(st, ys_cat(ys("    jge "), yr_get(lsame, "lbl")));
+    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(lsame, "label"))));
     st = emit(st, ys("    mov 16(%rcx), %rcx"));
     st = emit(st, ys("    mov (%rcx,%rdx,8), %rcx"));
     st = emit(st, ys("    mov 8(%rsp), %rax"));
@@ -5205,20 +5321,20 @@ Yv *gen_eq_arr_deep(Yv *st, Yv *et) {
     st = emit(st, ys("    push %rcx"));
     st = gen_eq_vals(st, et);
     st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(ldiff, "lbl")));
+    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(ldiff, "label"))));
     st = emit(st, ys("    mov (%rsp), %rdx"));
     st = emit(st, ys("    inc %rdx"));
     st = emit(st, ys("    mov %rdx, (%rsp)"));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(lloop, "lbl")));
-    st = emit(st, ys_cat(yr_get(lsame, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(lloop, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(lsame, "label")), ys(":")));
     st = emit(st, ys("    add $24, %rsp"));
     st = emit(st, ys("    mov $1, %rax"));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(ldone, "lbl")));
-    st = emit(st, ys_cat(yr_get(ldiff, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(ldone, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(ldiff, "label")), ys(":")));
     st = emit(st, ys("    add $24, %rsp"));
-    st = emit(st, ys_cat(yr_get(lne, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(lne, "label")), ys(":")));
     st = emit(st, ys("    xor %eax, %eax"));
-    return emit(st, ys_cat(yr_get(ldone, "lbl"), ys(":")));
+    return emit(st, ys_cat(lname(yr_get(ldone, "label")), ys(":")));
 }
 
 Yv *gen_bin_rest(Yv *st, Yv *node) {
@@ -5374,13 +5490,13 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
             Yv *d2 = next_loc(st);
             st = yr_get(d2, "st");
             st = emit(st, ys("    cmp $-1, %rcx"));
-            st = emit(st, ys_cat(ys("    jne "), yr_get(d1, "lbl")));
+            st = emit(st, ys_cat(ys("    jne "), lname(yr_get(d1, "label"))));
             st = emit(st, ys("    neg %rax"));
-            st = emit(st, ys_cat(ys("    jmp "), yr_get(d2, "lbl")));
-            st = emit(st, ys_cat(yr_get(d1, "lbl"), ys(":")));
+            st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(d2, "label"))));
+            st = emit(st, ys_cat(lname(yr_get(d1, "label")), ys(":")));
             st = emit(st, ys("    cqo"));
             st = emit(st, ys("    idiv %rcx"));
-            return emit(st, ys_cat(yr_get(d2, "lbl"), ys(":")));
+            return emit(st, ys_cat(lname(yr_get(d2, "label")), ys(":")));
         } else if (ys_eq_lit(op, "%")) {
             /* Same #DE: x % -1 is 0 for every x (see the `/` note). */
             st = emit(st, ys("    test %rcx, %rcx"));
@@ -5390,14 +5506,14 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
             Yv *m2 = next_loc(st);
             st = yr_get(m2, "st");
             st = emit(st, ys("    cmp $-1, %rcx"));
-            st = emit(st, ys_cat(ys("    jne "), yr_get(m1, "lbl")));
+            st = emit(st, ys_cat(ys("    jne "), lname(yr_get(m1, "label"))));
             st = emit(st, ys("    xor %eax, %eax"));
-            st = emit(st, ys_cat(ys("    jmp "), yr_get(m2, "lbl")));
-            st = emit(st, ys_cat(yr_get(m1, "lbl"), ys(":")));
+            st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(m2, "label"))));
+            st = emit(st, ys_cat(lname(yr_get(m1, "label")), ys(":")));
             st = emit(st, ys("    cqo"));
             st = emit(st, ys("    idiv %rcx"));
             st = emit(st, ys("    mov %rdx, %rax"));
-            return emit(st, ys_cat(yr_get(m2, "lbl"), ys(":")));
+            return emit(st, ys_cat(lname(yr_get(m2, "label")), ys(":")));
         } else if (ys_eq_lit(op, "<")) {
             st = emit(st, ys("    cmp %rcx, %rax"));
             st = emit(st, ys("    setl %al"));
@@ -5468,7 +5584,7 @@ Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
         Yv *ok = next_loc(st);
         st = yr_get(ok, "st");
         st = emit(st, ys("    cmp $64, %rcx"));
-        st = emit(st, ys_cat(ys("    jb "), yr_get(ok, "lbl")));
+        st = emit(st, ys_cat(ys("    jb "), lname(yr_get(ok, "label"))));
         if (ys_eq_lit(mn, "sar")) {
             st = emit(st, ys("    mov $63, %rcx"));
             ;
@@ -5476,7 +5592,7 @@ Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
             st = emit(st, ys("    xor %eax, %eax"));
             ;
         }
-        st = emit(st, ys_cat(yr_get(ok, "lbl"), ys(":")));
+        st = emit(st, ys_cat(lname(yr_get(ok, "label")), ys(":")));
         return emit(st, ys_cat(ys_cat(ys("    "), mn), ys(" %cl, %rax")));
     }
 }
@@ -5671,14 +5787,14 @@ Yv *gen_cast_check(Yv *st, Yv *ts, Yv *u) {
     while (i < yv_len(ts)) {
         Yv *dr = ty_desc_in(st, ya_get(ts, i), u);
         st = yr_get(dr, "st");
-        st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+        st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
                              ys("(%rip), %rdx")));
         st = emit(st, ys("    cmp %rdx, %rcx"));
-        st = emit(st, ys_cat(ys("    je "), yr_get(ok, "lbl")));
+        st = emit(st, ys_cat(ys("    je "), lname(yr_get(ok, "label"))));
         i = i + 1;
     }
     st = emit(st, ys("    jmp y_cast_trap"));
-    return emit(st, ys_cat(yr_get(ok, "lbl"), ys(":")));
+    return emit(st, ys_cat(lname(yr_get(ok, "label")), ys(":")));
 }
 
 /* The type of the function being emitted: emit_one_fn records it as a
@@ -5743,9 +5859,12 @@ Yv *store_elem_type(Yv *t, long esz) {
  * the stack — the Y convention every helper written in Y (std/rt.y) and
  * every asm helper shares; the caller cleans up. (Runtime helpers used to
  * take it in %rdi, which only hand-written asm could honour.) */
-Yv *gen_helper1(Yv *st, Yv *label) {
+/* `name` is a runtime helper's fixed name (y_wait_pid), spelled in the text
+ * rather than minted: there is nothing to identify, it is the same name every
+ * time (the reserved y_ prefix). */
+Yv *gen_helper1(Yv *st, Yv *name) {
     st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys("    call "), label));
+    st = emit(st, ys_cat(ys("    call "), name));
     return emit(st, ys("    add $8, %rsp"));
 }
 
@@ -6016,13 +6135,13 @@ Yv *gen_opt_str_rax(Yv *st, Yv *t, Yv *path) {
     Yv *rnul = next_loc(st);
     st = yr_get(rnul, "st");
     st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(rnul, "lbl")));
+    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rnul, "label"))));
     st = emit(st, ys("    mov (%rax), %rax"));
     st = gen_val_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(rdone, "lbl")));
-    st = emit(st, ys_cat(yr_get(rnul, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rdone, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(rnul, "label")), ys(":")));
     st = gen_str_const(st, ys("none"));
-    return emit(st, ys_cat(yr_get(rdone, "lbl"), ys(":")));
+    return emit(st, ys_cat(lname(yr_get(rdone, "label")), ys(":")));
 }
 
 Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t) {
@@ -6284,7 +6403,7 @@ long capture_off(Yv *st) {
 }
 
 Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
-    Yv *label = ys("");
+    Yv *label = yv_long(-1);
     int indirect = 0;
     Yv *dptypes = yav(0);
     if (ys_eq_lit(name, "self")) {
@@ -6293,7 +6412,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
     } else {
         Yv *e = env_find(st, name);
         if (ys_eq_lit(yr_get(e, "kind"), "none")) {
-            label = ys_cat(ys("y_missing_"), name);
+            label = lbl_new(ys_cat(ys("y_missing_"), name));
         } else if (ys_eq_lit(yr_get(e, "kind"), "func")) {
             label = yr_get(e, "label");
             dptypes = fn_args_of(yr_get(e, "typ"));
@@ -6311,7 +6430,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
          * closure record — pass this frame's record along, exactly as an
          * indirect call would. */
         long soff = -1;
-        if (ys_eq(label, yr_get(st, "self_label"))) {
+        if (yv_eq(label, yr_get(st, "self_label"))) {
             soff = capture_off(st);
             ;
         }
@@ -6322,7 +6441,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
             ;
         }
         st = gen_push_args_as(st, yr_get(node, "args"), dptypes);
-        st = emit(st, ys_cat(ys("    call "), label));
+        st = emit(st, ys_cat(ys("    call "), lname(label)));
         long nbytes = yv_len(yr_get(node, "args")) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
@@ -6403,21 +6522,21 @@ Yv *gen_if(Yv *st, Yv *node) {
            never built. `setcc; movzbq; test; jcc` (four instructions) becomes
            `cmp; jcc` (two) -- 3,049 such sites in ycc's own output. */
         st = gen_cmp_flags(st, yr_get(node, "cond"));
-        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), yr_get(r1, "lbl"))));
+        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lname(yr_get(r1, "label")))));
     } else {
         st = gen(st, yr_get(node, "cond"));
         st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), yr_get(r1, "lbl")));
+        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r1, "label"))));
     }
     st = gen(st, yr_get(node, "then"));
     if (yv_b(yr_get(node, "has_else"))) {
-        st = emit(st, ys_cat(ys("    jmp "), yr_get(r2, "lbl")));
-        st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r2, "label"))));
+        st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
         st = gen_loc_elif(st, yr_get(node, "els"));
         st = gen(st, yr_get(node, "els"));
-        return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+        return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
     } else {
-        return emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+        return emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     }
 }
 
@@ -6434,20 +6553,20 @@ Yv *gen_while(Yv *st, Yv *node) {
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
     if (yv_len(jcc) > 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
-        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), yr_get(r2, "lbl"))));
+        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lname(yr_get(r2, "label")))));
     } else {
         st = gen(st, yr_get(node, "cond"));
         st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
+        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r2, "label"))));
     }
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
+    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
 }
 
 /* ── counted loops ──────────────────────────────────────────────────────
@@ -6470,21 +6589,21 @@ Yv *gen_for(Yv *st, Yv *node) {
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
     if (yv_len(jcc) > 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
-        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), yr_get(r2, "lbl"))));
+        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lname(yr_get(r2, "label")))));
     } else {
         st = gen(st, yr_get(node, "cond"));
         st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), yr_get(r2, "lbl")));
+        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r2, "label"))));
     }
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
     st = gen(st, yr_get(node, "step"));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
+    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
 }
 
 /* A loop's value is void (types.y: every loop kind's typeof is
@@ -6500,31 +6619,31 @@ Yv *gen_forrange(Yv *st, Yv *node) {
      * Slot layout: [var][limit]; the limit is evaluated once. */
     long voff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long loff = (yv_l(yr_get(st, "slots")) + 2) * -8;
-    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+    st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
             yv_long(yv_l(yr_get(st, "slots")) + 2), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     st = gen(st, yr_get(node, "hi"));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(loff)),
                          ys("(%rbp)")));
     st = gen(st, yr_get(node, "lo"));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(voff)),
                          ys("(%rbp)")));
-    st = env_define(st, yr_get(node, "name"), ys("local"), voff, ys(""),
-                    yr(1, "k", yv_long(K_tlong)));
+    st = env_define(st, yr_get(node, "name"), ys("local"), voff, yv_long(-1),
+                    ys(""), yr(1, "k", yv_long(K_tlong)));
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(voff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(loff)),
                          ys("(%rbp), %rcx")));
     st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), yr_get(r2, "lbl")));
+    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
     /* a captured loop variable gets a fresh cell per iteration (the
      * counter itself stays in its raw slot) */
     st = box_bound(st, yr_get(node, "name"));
@@ -6532,8 +6651,8 @@ Yv *gen_forrange(Yv *st, Yv *node) {
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(voff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
+    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
 }
 
 /* A loop's value is void (types.y: every loop kind's typeof is
@@ -6550,12 +6669,12 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     long voff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
     long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
-    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+    st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
             yv_long(yv_l(yr_get(st, "slots")) + 3), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     Yv *elt = infer(st, yr_get(node, "iter"));
     Yv *eltyp = yr(1, "k", yv_long(K_tunk));
     if (yv_l(yr_get(elt, "k")) == K_tarr) {
@@ -6572,13 +6691,13 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     st = emit(st, ys("    xor %eax, %eax"));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
                          ys("(%rbp)")));
-    st = env_define(st, yr_get(node, "name"), ys("local"), voff, ys(""),
-                    eltyp);
+    st = env_define(st, yr_get(node, "name"), ys("local"), voff, yv_long(-1),
+                    ys(""), eltyp);
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     /* i < len(arr) — the heap header keeps the length in slot 0. The length
      * is re-read on every iteration, not hoisted into a fourth slot: a body
      * that appends to the array it walks goes on seeing what it appended
@@ -6590,7 +6709,7 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), yr_get(r2, "lbl")));
+    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
     /* x = arr[i] */
     st = emit(st, elem_load(arr_elem_bytes(elt), ys("%rdx"), ys("%rax"),
                             ys("%rcx")));
@@ -6601,8 +6720,8 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
+    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
 }
 
 /* ── tail calls ─────────────────────────────────────────────────────────
@@ -6624,7 +6743,7 @@ int is_self_call(Yv *st, Yv *node) {
     if (ys_eq_lit(cv, "self")) { return 1; }
     Yv *ee = env_find(st, cv);
     return ys_eq_lit(yr_get(ee, "kind"), "func") &&
-           ys_eq(yr_get(ee, "label"), yr_get(st, "self_label"));
+           yv_eq(yr_get(ee, "label"), yr_get(st, "self_label"));
 }
 
 Yv *gen_tail_call(Yv *st, Yv *node) {
@@ -6645,13 +6764,13 @@ Yv *gen_tail_call(Yv *st, Yv *node) {
         long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
         st = emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(off), ys("(%rbp)"))));
         offs = ya_push(offs, yv_long(off));
-        st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+        st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"),
                 "loc", yr_get(st, "loc"), "env", yr_get(st, "env"),
                 "slots", yv_long(yv_l(yr_get(st, "slots")) + 1),
                 "self_label", yr_get(st, "self_label"),
                 "end_label", yr_get(st, "end_label"),
-                "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+                "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
         i = i + 1;
     }
     /* copy the locals over the parameter slots (param k: 16 + 8*(n-1-k)) */
@@ -6667,7 +6786,8 @@ Yv *gen_tail_call(Yv *st, Yv *node) {
      * return. */
     st = emit(st, ys("    mov %rbp, %rsp"));
     st = emit(st, ys("    pop %rbp"));
-    return emit(st, ys_cat(ys("    jmp "), yr_get(st, "self_label")));
+    return emit(st,
+                ys_cat(ys("    jmp "), lname(yr_get(st, "self_label"))));
 }
 
 Yv *gen_tail(Yv *st, Yv *node) {
@@ -6678,7 +6798,7 @@ Yv *gen_tail(Yv *st, Yv *node) {
             return gen_tail_call(st, e);
         }
         st = gen_as(st, e, cur_fn_ret(st));
-        return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
+        return emit(st, ys_cat(ys("    jmp "), lname(yr_get(st, "end_label"))));
     } else if (yv_l(k) == K_call) {
         if (is_self_call(st, node)) { return gen_tail_call(st, node); }
         return gen_as(st, node, cur_fn_ret(st));
@@ -6710,27 +6830,29 @@ Yv *gen_tail(Yv *st, Yv *node) {
         }
         Yv *rl1 = next_loc(st);
         st = yr_get(rl1, "st");
-        Yv *lelse = yr_get(rl1, "lbl");
+        Yv *lelse = yr_get(rl1, "label");
         Yv *rl2 = next_loc(st);
         st = yr_get(rl2, "st");
-        Yv *lend = yr_get(rl2, "lbl");
+        Yv *lend = yr_get(rl2, "label");
         if (yv_len(jcc) > 0) {
             /* the flags come from the comparison itself (see int_cmp_jcc) */
             st = gen_cmp_flags(st, yr_get(node, "cond"));
-            st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lelse)));
+            st = emit(st,
+                      ys_cat(ys_cat(ys("    "), jcc),
+                             ys_cat(ys(" "), lname(lelse))));
         } else {
             st = emit(st, ys("    test %rax, %rax"));
-            st = emit(st, ys_cat(ys("    jz "), lelse));
+            st = emit(st, ys_cat(ys("    jz "), lname(lelse)));
         }
         st = gen_tail(st, yr_get(node, "then"));
         if (yv_b(yr_get(node, "has_else"))) {
-            st = emit(st, ys_cat(ys("    jmp "), lend));
-            st = emit(st, ys_cat(lelse, ys(":")));
+            st = emit(st, ys_cat(ys("    jmp "), lname(lend)));
+            st = emit(st, ys_cat(lname(lelse), ys(":")));
             st = gen_loc_elif(st, yr_get(node, "els"));
             st = gen_tail(st, yr_get(node, "els"));
-            return emit(st, ys_cat(lend, ys(":")));
+            return emit(st, ys_cat(lname(lend), ys(":")));
         }
-        return emit(st, ys_cat(lelse, ys(":")));
+        return emit(st, ys_cat(lname(lelse), ys(":")));
     }
     return gen_as(st, node, cur_fn_ret(st));
 }
@@ -7003,7 +7125,7 @@ void ty_sig_init(void) {
         i = i + 1;
     }
     ty_sig_keys = yav(0);
-    ty_sig_lbls = yav(0);
+    ty_sig_ids = yav(0);
     ty_sig_bkts = bkts;
 }
 
@@ -7123,22 +7245,23 @@ Yv *ty_desc_as(Yv *st, Yv *rt, Yv *lay) {
         h = h + 512;
     }
     Yv *bkt = ya_get(ty_sig_bkts, h);
-    Yv *known = ys("");
+    Yv *known = yv_long(-1);
     long q = 0;
     while (q < yv_len(bkt)) {
         long ix = yv_l(ya_get(bkt, q));
-        if (ys_eq_lit(known, "") && ys_eq(ya_get(ty_sig_keys, ix), sig)) {
-            known = ya_get(ty_sig_lbls, ix);
+        if (yv_l(known) < 0 && ys_eq(ya_get(ty_sig_keys, ix), sig)) {
+            known = ya_get(ty_sig_ids, ix);
         }
         q = q + 1;
     }
-    if (!ys_eq_lit(known, "")) {
-        return yr(2, "st", st, "lbl", known);
+    if (yv_l(known) >= 0) {
+        return yr(2, "st", st, "label", known);
     }
     Yv *form = ys_cat(ty_form(rt), lay);
     Yv *lbl = ys_cat(ys("ytt_"), hex16(fnv64(form)));
+    Yv *id = lbl_new(lbl);
     ty_sig_keys = ya_push(ty_sig_keys, sig);
-    ty_sig_lbls = ya_push(ty_sig_lbls, lbl);
+    ty_sig_ids = ya_push(ty_sig_ids, id);
     ya_push(bkt, yv_long(yv_len(ty_sig_keys) - 1));
     long added = tyset_add(lbl, form);
     if (added < 0) {
@@ -7152,7 +7275,7 @@ Yv *ty_desc_as(Yv *st, Yv *rt, Yv *lay) {
         te = ya_push(te, form);
         ya_push(yr_get(st, "rodata"), te);
     }
-    return yr(2, "st", st, "lbl", lbl);
+    return yr(2, "st", st, "label", id);
 }
 
 /* ── union layouts (CHOICES_MADE.md 25) ─────────────────────────────────
@@ -7275,7 +7398,8 @@ Yv *gen_copy_rec(Yv *st, Yv *from, Yv *to, Yv *tag) {
     st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(8 * yv_len(to) + 16)),
                          ys(", %rdi")));
     st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys_cat(ys_cat(ys("    lea "), tag), ys("(%rip), %rcx")));
+    st = emit(st,
+              ys_cat(ys_cat(ys("    lea "), lname(tag)), ys("(%rip), %rcx")));
     st = emit(st, ys("    mov %rcx, 0(%rax)"));
     st = emit(st, ys("    pop %rsi"));
     long i = 0;
@@ -7310,7 +7434,7 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
             } else {
                 Yv *dr = ty_desc_in(st, m, w);
                 st = yr_get(dr, "st");
-                return gen_copy_rec(st, from, to, yr_get(dr, "lbl"));
+                return gen_copy_rec(st, from, to, yr_get(dr, "label"));
             }
         }
     } else if (yv_l(sk) == K_tunion &&
@@ -7369,34 +7493,34 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
             while (i < yv_len(ms)) {
                 Yv *l = next_loc(st);
                 st = yr_get(l, "st");
-                lbls = ya_push(lbls, yr_get(l, "lbl"));
+                lbls = ya_push(lbls, yr_get(l, "label"));
                 Yv *dr = ty_desc_in(st, ya_get(ms, i), s);
                 st = yr_get(dr, "st");
-                st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+                st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
                                      ys("(%rip), %rdx")));
                 st = emit(st, ys("    cmp %rdx, %rcx"));
-                st = emit(st, ys_cat(ys("    je "), yr_get(l, "lbl")));
+                st = emit(st, ys_cat(ys("    je "), lname(yr_get(l, "label"))));
                 i = i + 1;
             }
             st = emit(st, ys("    jmp y_cast_trap"));
             i = 0;
             while (i < yv_len(ms)) {
-                st = emit(st, ys_cat(ya_get(lbls, i), ys(":")));
+                st = emit(st, ys_cat(lname(ya_get(lbls, i)), ys(":")));
                 Yv *from = ya_get(froms, i);
                 Yv *to = ya_get(tos, i);
                 if (!same_lay(from, to)) {
                     Yv *dr = ty_desc_in(st, ya_get(tws, i), w);
                     st = yr_get(dr, "st");
-                    st = gen_copy_rec(st, from, to, yr_get(dr, "lbl"));
+                    st = gen_copy_rec(st, from, to, yr_get(dr, "label"));
                 }
                 /* not on the last arm: that one falls through into `done:` */
                 if (i < yv_len(ms) - 1) {
-                    st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+                    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
                     ;
                 }
                 i = i + 1;
             }
-            return emit(st, ys_cat(yr_get(done, "lbl"), ys(":")));
+            return emit(st, ys_cat(lname(yr_get(done, "label")), ys(":")));
         }
     } else {
         return st;
@@ -7522,7 +7646,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
                          ys(", %rdi")));
     st = emit(st, ys("    call y_alloc"));
     st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+    st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
                          ys("(%rip), %rax")));
     st = emit(st, ys("    pop %rcx"));
     st = emit(st, ys("    mov %rax, 0(%rcx)"));
@@ -7621,7 +7745,7 @@ Yv *gen_func_literal(Yv *st, Yv *node) {
     }
     Yv *rl = next_uid(st);
     st = yr_get(rl, "st");
-    Yv *lbl = arch_fn_label(yv_l(yr_get(rl, "uid")), ys("anon"));
+    Yv *lbl = lbl_new(arch_fn_label(yv_l(yr_get(rl, "uid")), ys("anon")));
     Yv *ru = next_uid(st);
     st = yr_get(ru, "st");
     st = emit_one_fn(st, lbl, yv_l(yr_get(ru, "uid")), node, 0, 0, captypes,
@@ -7651,7 +7775,7 @@ Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
     }
     Yv *rl = next_uid(st);
     st = yr_get(rl, "st");
-    Yv *lbl = fn_label_of(yv_l(yr_get(rl, "uid")), name);
+    Yv *lbl = lbl_new(fn_label_of(yv_l(yr_get(rl, "uid")), name));
     Yv *ru = next_uid(st);
     st = yr_get(ru, "st");
     st = emit_one_fn(st, lbl, yv_l(yr_get(ru, "uid")), func, 0, 0, captypes,
@@ -7667,13 +7791,13 @@ Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(coff)),
                          ys("(%rbp)")));
     Yv *st3 =
-        yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+        yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
            yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
            yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
            yv_long(yv_l(yr_get(st, "slots")) + 1), "self_label",
            yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-           "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
-    st3 = env_define(st3, name, ys("closure"), coff, ys(""),
+           "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
+    st3 = env_define(st3, name, ys("closure"), coff, yv_long(-1), ys(""),
                      func_type_in(st3, func));
     return box_bound(st3, name);
 }
@@ -7772,9 +7896,10 @@ Yv *bind_decl(Yv *st, Yv *name, Yv *t) {
     Yv *ge = env_find(st, name);
     if (ys_eq_lit(yr_get(ge, "kind"), "global")) {
         st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
-                                   yr_get(ge, "label")),
+                                   lname(yr_get(ge, "label"))),
                             ys("(%rip)")));
-        return env_define(st, name, ys("global"), 0, yr_get(ge, "label"), t);
+        return env_define(st, name, ys("global"), 0, yr_get(ge, "label"), ys(""),
+                          t);
     } else if (yv_l(yr_get(t, "k")) == K_tstr && own_wanted(st, name)) {
         return bind_own(st, name, t);
     } else {
@@ -7782,13 +7907,13 @@ Yv *bind_decl(Yv *st, Yv *name, Yv *t) {
         st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
                              ys("(%rbp)")));
         Yv *st2 =
-            yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+            yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                yv_long(yv_l(yr_get(st, "slots")) + 1), "self_label",
                yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-               "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
-        st2 = env_define(st2, name, ys("local"), off, ys(""), t);
+               "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
+        st2 = env_define(st2, name, ys("local"), off, yv_long(-1), ys(""), t);
         return box_bound(st2, name);
     }
 }
@@ -7802,7 +7927,7 @@ Yv *gen_assign(Yv *st, Yv *node) {
      * cell and is visible in the capturing scope too. */
     st = gen_as(st, yr_get(node, "v"), yr_get(e, "typ"));
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
-        long idx = ys_tonum(yr_get(e, "label"));
+        long idx = ys_tonum(yr_get(e, "mark"));
         st = emit(st, ys_cat(ys_cat(ys("    mov "),
                                    ys_long(yv_l(yr_get(e, "off")))),
                             ys("(%rbp), %rcx")));
@@ -7819,7 +7944,7 @@ Yv *gen_assign(Yv *st, Yv *node) {
         return st;
     } else if (ys_eq_lit(yr_get(e, "kind"), "global")) {
         return emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
-                                      yr_get(e, "label")),
+                                      lname(yr_get(e, "label"))),
                                ys("(%rip)")));
     } else {
         return emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
@@ -7836,11 +7961,11 @@ Yv *gen_fill(Yv *st, long base, long n) {
         Yv *r = next_loc(st);
         st = yr_get(r, "st");
         st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", %rcx")));
-        st = emit(st, ys_cat(yr_get(r, "lbl"), ys(":")));
+        st = emit(st, ys_cat(lname(yr_get(r, "label")), ys(":")));
         st = emit(st, ys("    dec %rcx"));
         st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(base)),
                              ys("(%rbp,%rcx,8)")));
-        return emit(st, ys_cat(ys("    jnz "), yr_get(r, "lbl")));
+        return emit(st, ys_cat(ys("    jnz "), lname(yr_get(r, "label"))));
     }
 }
 
@@ -7855,10 +7980,10 @@ Yv *gen_fill_heap(Yv *st, long n, long esz) {
         st = emit(st, ys("    mov %rdx, %r10"));
         st = emit(st, ys("    mov %rax, %rdx"));
         st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", %rcx")));
-        st = emit(st, ys_cat(yr_get(r, "lbl"), ys(":")));
+        st = emit(st, ys_cat(lname(yr_get(r, "label")), ys(":")));
         st = emit(st, ys("    dec %rcx"));
         st = emit(st, elem_store_rdx(esz, ys("%r10"), ys("%rcx")));
-        st = emit(st, ys_cat(ys("    jnz "), yr_get(r, "lbl")));
+        st = emit(st, ys_cat(ys("    jnz "), lname(yr_get(r, "label"))));
         st = emit(st, ys("    mov %r10, %rdx"));
         return st;
     }
@@ -9397,12 +9522,12 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
     long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
     long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
     long koff = (yv_l(yr_get(st, "slots")) + 4) * -8;
-    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+    st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
             yv_long(yv_l(yr_get(st, "slots")) + 4), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(moff)),
                          ys("(%rbp)")));
     st = gen_str_const(st, ys("{"));
@@ -9417,7 +9542,7 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
     st = yr_get(r2, "st");
     Yv *r3 = next_loc(st);
     st = yr_get(r3, "st");
-    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
                          ys("(%rbp), %rdx")));
     st = emit(st, ys("    mov 8(%rdx), %rdx"));
@@ -9425,11 +9550,11 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), yr_get(r2, "lbl")));
+    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
     st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(r3, "lbl")));
+    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r3, "label"))));
     st = gen_acc_cat_slot(st, aoff, ys(", "));
-    st = emit(st, ys_cat(yr_get(r3, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r3, "label")), ys(":")));
     /* the key, quoted when it is a str (map_key_repr's rule) */
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
                          ys("(%rbp), %rdx")));
@@ -9468,8 +9593,8 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
     st = gen_acc_cat_rax(st, aoff);
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
     st = gen_acc_cat_slot(st, aoff, ys("}"));
     return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
                            ys("(%rbp), %rax")));
@@ -9481,12 +9606,12 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
     long soff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
     long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
-    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+    st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
             yv_long(yv_l(yr_get(st, "slots")) + 3), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(soff)),
                          ys("(%rbp)")));
     st = gen_str_const(st, ys("["));
@@ -9501,18 +9626,18 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
     st = yr_get(r2, "st");
     Yv *r3 = next_loc(st);
     st = yr_get(r3, "st");
-    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
                          ys("(%rbp), %rdx")));
     st = emit(st, ys("    mov (%rdx), %rcx"));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), yr_get(r2, "lbl")));
+    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
     st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), yr_get(r3, "lbl")));
+    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r3, "label"))));
     st = gen_acc_cat_slot(st, aoff, ys(", "));
-    st = emit(st, ys_cat(yr_get(r3, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r3, "label")), ys(":")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
                          ys("(%rbp), %rdx")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
@@ -9531,8 +9656,8 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
                          ys("(%rbp)")));
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
     st = gen_acc_cat_slot(st, aoff, ys("]"));
     return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
                            ys("(%rbp), %rax")));
@@ -9732,35 +9857,35 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
         while (d < yv_len(ds) - 1) {
             Yv *l = next_loc(st);
             st = yr_get(l, "st");
-            lbls = ya_push(lbls, yr_get(l, "lbl"));
+            lbls = ya_push(lbls, yr_get(l, "label"));
             long j = 0;
             while (j < yv_len(ms)) {
                 if (yv_l(ya_get(slots, j)) == yv_l(ya_get(ds, d))) {
                     Yv *dr = ty_desc_in(st, ya_get(ms, j), s);
                     st = yr_get(dr, "st");
-                    st = emit(st, ys_cat(ys_cat(ys("    lea "), yr_get(dr, "lbl")),
+                    st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
                                          ys("(%rip), %rsi")));
                     st = emit(st, ys("    cmp %rsi, %rcx"));
-                    st = emit(st, ys_cat(ys("    je "), yr_get(l, "lbl")));
+                    st = emit(st, ys_cat(ys("    je "), lname(yr_get(l, "label"))));
                 }
                 j = j + 1;
             }
             d = d + 1;
         }
         st = gen_slot_move(st, yv_l(ya_get(ds, yv_len(ds) - 1)), 0);
-        st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
         long e = 0;
         while (e < yv_len(lbls)) {
-            st = emit(st, ys_cat(ya_get(lbls, e), ys(":")));
+            st = emit(st, ys_cat(lname(ya_get(lbls, e)), ys(":")));
             st = gen_slot_move(st, yv_l(ya_get(ds, e)), 0);
             /* not on the last arm: that one falls through into `done:` */
             if (e < yv_len(lbls) - 1) {
-                st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
+                st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
                 ;
             }
             e = e + 1;
         }
-        return emit(st, ys_cat(yr_get(done, "lbl"), ys(":")));
+        return emit(st, ys_cat(lname(yr_get(done, "label")), ys(":")));
     }
 }
 
@@ -10261,12 +10386,12 @@ Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz) {
     long soff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     long doff = (yv_l(yr_get(st, "slots")) + 2) * -8;
     long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
-    st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
+    st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
             yv_long(yv_l(yr_get(st, "slots")) + 3), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
-            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"));
+            "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     Yv *jargs = yr_get(node, "args");
     st = gen(st, ya_get(jargs, 0));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(soff)),
@@ -10293,14 +10418,14 @@ Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz) {
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
+    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
                          ys("(%rbp), %rdx")));
     st = emit(st, ys("    mov (%rdx), %rcx"));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), yr_get(r2, "lbl")));
+    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
     st = emit(st, elem_load(esz, ys("%rdx"), ys("%rax"), ys("%rcx")));
     st = emit(st, ys("    push %rcx"));
     st = emit(st, ys_cat(ys("    call "), tostr_fn));
@@ -10314,8 +10439,8 @@ Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz) {
     st = emit(st, ys("    inc %rcx"));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rcx, "), ys_long(ioff)),
                          ys("(%rbp)")));
-    st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
-    st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
+    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
+    st = emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(doff)),
                          ys("(%rbp), %rax")));
     st = emit(st, ys("    push %rax"));
@@ -10436,15 +10561,15 @@ Yv *gen_lock(Yv *st, Yv *node, int attempt) {
         st = emit(st, ys("    mov 8(%rsp), %rax"));
         st = emit(st, ys("    call y_mutex_trylock"));
         st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    je "), yr_get(skip, "lbl")));
+        st = emit(st, ys_cat(ys("    je "), lname(yr_get(skip, "label"))));
         st = gen_call_top(st);
         st = emit(st, ys("    mov 8(%rsp), %rax"));
         st = emit(st, ys("    call y_mutex_unlock"));
         st = emit(st, ys("    mov $1, %rax"));
-        st = emit(st, ys_cat(ys("    jmp "), yr_get(done, "lbl")));
-        st = emit(st, ys_cat(yr_get(skip, "lbl"), ys(":")));
+        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
+        st = emit(st, ys_cat(lname(yr_get(skip, "label")), ys(":")));
         st = emit(st, ys("    xor %eax, %eax"));
-        st = emit(st, ys_cat(yr_get(done, "lbl"), ys(":")));
+        st = emit(st, ys_cat(lname(yr_get(done, "label")), ys(":")));
         return emit(st, ys("    add $16, %rsp"));
     }
 }
@@ -10478,7 +10603,7 @@ Yv *gen_exit(Yv *st, Yv *node) {
     /* exit() terminates the process; the epilogue (ret / exit(0)) is
      * unreachable. Emit a jump to the function end so the backend never
      * falls through into dead code (and exit codes are never masked). */
-    return emit(st, ys_cat(ys("    jmp "), yr_get(st, "end_label")));
+    return emit(st, ys_cat(ys("    jmp "), lname(yr_get(st, "end_label"))));
 }
 
 /* ── process I/O (argv) ──────────────────────────────────────────────
@@ -10520,22 +10645,25 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     /* fresh per-function state; uid/rodata/fns flow through and back.
      * Bodies see every hoisted function and global through st.fns
      * (env_find), like the checker's fresh_func_scope. */
-    Yv *f = yr(11, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
+    Yv *f = yr(12, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(fuid), "loc", yv_long(1),
                "env", yav(0), "slots", yv_long(0), "self_label", label,
-               "end_label", arch_loc_label(fuid, 0), "fns", yr_get(st, "fns"),
-               "bodies", yr_get(st, "bodies"));
+               "end_label", lbl_new(arch_loc_label(fuid, 0)), "fns",
+               yr_get(st, "fns"),
+               "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     /* The names nested functions capture (see box_names / box_bound). */
-    f = env_define(f, ys(""), ys("frame"), 0, ys(""), yr(1, "k", yv_long(K_tnone)));
+    f = env_define(f, ys(""), ys("frame"), 0, yv_long(-1), ys(""),
+                   yr(1, "k", yv_long(K_tnone)));
     /* This function's type, for conversions at returns and self calls. */
-    f = env_define(f, ys(""), ys("fnty"), 0, ys(""),
+    f = env_define(f, ys(""), ys("fnty"), 0, yv_long(-1), ys(""),
                    yr(3, "k", yv_long(K_tfunc), "args", yr_get(func, "ptypes"),
                        "ret", fn_ret(func)));
     Yv *bnames = box_names(func);
     long bi = 0;
     while (bi < yv_len(bnames)) {
         Yv *bnm = ya_get(bnames, bi);
-        f = env_define(f, ys(""), ys("boxmark"), 0, bnm, yr(1, "k", yv_long(K_tnone)));
+        f = env_define(f, ys(""), ys("boxmark"), 0, yv_long(-1), bnm,
+                       yr(1, "k", yv_long(K_tnone)));
         bi = bi + 1;
     }
     /* The names this body appends to (see own_wanted), the same way. */
@@ -10543,7 +10671,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     long ai = 0;
     while (ai < yv_len(anames)) {
         Yv *anm = ya_get(anames, ai);
-        f = env_define(f, ys(""), ys("appmark"), 0, anm,
+        f = env_define(f, ys(""), ys("appmark"), 0, yv_long(-1), anm,
                        yr(1, "k", yv_long(K_tnone)));
         ai = ai + 1;
     }
@@ -10551,7 +10679,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
      * capturing_defs): bind its own name to this body, so a call by name
      * passes the record along (gen_direct) and a value is the record. */
     if (!ys_eq_lit(selfname, "")) {
-        f = env_define(f, selfname, ys("func"), 0, label,
+        f = env_define(f, selfname, ys("func"), 0, label, ys(""),
                        func_type_in(st, func));
         ;
     }
@@ -10563,7 +10691,8 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     long i = 0;
     while (i < nargs) {
         f = env_define(f, ya_get(params, i), ys("param"),
-                       16 + (nargs - 1 - i) * 8, ys(""), ya_get(ptypes, i));
+                       16 + (nargs - 1 - i) * 8, yv_long(-1), ys(""),
+                       ya_get(ptypes, i));
         i = i + 1;
     }
     /* Captures: the caller pushed the closure record BEFORE the args, so
@@ -10588,7 +10717,8 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
                 ct = ya_get(captypes, c);
                 ;
             }
-            f = env_define(f, cn, ys("capture"), cloff, ys_long(c), ct);
+            f = env_define(f, cn, ys("capture"), cloff, yv_long(-1), ys_long(c),
+                           ct);
             c = c + 1;
         }
         ;
@@ -10624,7 +10754,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     f = gen_tail(f, yr_get(func, "body"));
     long frame = arch_frame(yv_l(yr_get(f, "slots")));
     Yv *code = yav(0);
-    code = ya_push(code, ys_cat(label, ys(":")));
+    code = ya_push(code, ys_cat(lname(label), ys(":")));
     /* -g: the prologue is the def's line; `_start` has none (line 0) */
     if (dbg_lines) {
         if (is_main) {
@@ -10671,7 +10801,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         code = ya_push(code, ya_get(fout, j));
         j = j + 1;
     }
-    code = ya_push(code, ys_cat(yr_get(f, "end_label"), ys(":")));
+    code = ya_push(code, ys_cat(lname(yr_get(f, "end_label")), ys(":")));
     if (is_main) {
         code = ya_push(code, ys("    mov $231, %rax"));
         code = ya_push(code, ys("    xor %edi, %edi"));
@@ -10691,12 +10821,19 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
      * defined. */
     Yv *bodies =
         ya_push(yr_get(f, "bodies"), ys_join(code, ys("\n")));
-    return yr(11, "out", yr_get(st, "out"), "rodata", yr_get(f, "rodata"),
+    /* The body's own label, which the linker shakes by (Unit.labels): the
+     * first line of the text, known here rather than scanned for (the old
+     * body_label). Pushed onto f.blabels the way f.bodies is, for the same
+     * reason (see above): a nested body's label has to land in the same array
+     * as its body, or every label after it shifts by one and the linker
+     * shakes by the wrong ones. */
+    Yv *blabels = ya_push(yr_get(f, "blabels"), lname(label));
+    return yr(12, "out", yr_get(st, "out"), "rodata", yr_get(f, "rodata"),
               "uid", yr_get(f, "uid"), "fuid", yr_get(st, "fuid"), "loc",
               yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
               yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
               "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),
-              "bodies", bodies);
+              "bodies", bodies, "blabels", blabels);
 }
 
 /* Build a tfunc type from a func node (params have annotations — checked).
@@ -10706,18 +10843,20 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
  * a scope holding every known def plus the params. The emitter needs one,
  * because a call's result type decides e.g. whether `+` must stringify. */
 Yv *infer_fn_ret(Yv *st, Yv *func) {
-    Yv *f = yr(11, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
+    Yv *f = yr(12, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(0), "loc", yv_long(1),
-               "env", yav(0), "slots", yv_long(0), "self_label", ys(""),
-               "end_label", ys(""), "fns", yr_get(st, "fns"), "bodies",
-               yr_get(st, "bodies"));
+               "env", yav(0), "slots", yv_long(0), "self_label",
+               yv_long(-1), "end_label", yv_long(-1), "fns", yr_get(st, "fns"),
+               "bodies", yr_get(st, "bodies"), "blabels",
+               yr_get(st, "blabels"));
     Yv *params = yr_get(func, "params");
     Yv *ptypes = yr_get(func, "ptypes");
     long n = yv_len(params);
     long i = 0;
     while (i < n) {
         f = env_define(f, ya_get(params, i), ys("param"),
-                       16 + (n - 1 - i) * 8, ys(""), ya_get(ptypes, i));
+                       16 + (n - 1 - i) * 8, yv_long(-1), ys(""),
+                       ya_get(ptypes, i));
         i = i + 1;
     }
     return infer(f, yr_get(func, "body"));
@@ -10912,11 +11051,12 @@ Yv *decl_name(Yv *d) {
  * the declaration). Labels count from the unit's `gbase` (compile_unit),
  * so two units' globals never share one. */
 Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
-    Yv *f = yr(11, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
+    Yv *f = yr(12, "out", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(0), "loc", yv_long(1),
-               "env", yav(0), "slots", yv_long(0), "self_label", ys(""),
-               "end_label", ys(""), "fns", yr_get(st, "fns"), "bodies",
-               yr_get(st, "bodies"));
+               "env", yav(0), "slots", yv_long(0), "self_label",
+               yv_long(-1), "end_label", yv_long(-1), "fns", yr_get(st, "fns"),
+               "bodies", yr_get(st, "bodies"), "blabels",
+               yr_get(st, "blabels"));
     Yv *out = yav(0);
     long i = 0;
     while (i < yv_len(gdecls)) {
@@ -10929,7 +11069,7 @@ Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
         }
         Yv *lbl = arch_global_label(gbase + i, gn);
         out = ya_push(out, yr(3, "name", gn, "label", lbl, "typ", t));
-        f = env_define(f, gn, ys("global"), 0, lbl, t);
+        f = env_define(f, gn, ys("global"), 0, lbl_new(lbl), ys(""), t);
         i = i + 1;
     }
     return out;
@@ -11364,6 +11504,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         }
         /* The externs, and the init functions `_start` calls by label. */
         Yv *xfns = yav(0);
+        Yv *xids = fntab_ids(ext);
         long xi = 0;
         while (xi < yv_len(ext)) {
             xfns = ya_push(xfns, ya_get(ext, xi));
@@ -11375,6 +11516,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             Yv *ityp = yr(3, "k", yv_long(K_tfunc), "args", yav(0),
                           "ret", yr(1, "k", yv_long(K_tvoid)));
             xfns = ya_push(xfns, yr(3, "name", il, "label", il, "typ", ityp));
+            xids = ya_push(xids, lbl_new(il));
             ii = ii + 1;
         }
         /* A def needing a closure record is emitted where it is created
@@ -11397,15 +11539,16 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         /* assign labels + env entries (also pre-binds for calls); the
          * unit's uids count from its base */
         Yv *st = st_new();
-        st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+        st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                 "uid", yv_long(base + 1), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
                 "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),
-                "bodies", yr_get(st, "bodies"));
+                "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
         Yv *r = next_uid(st);
         st = yr_get(r, "st");
         Yv *hsyms = yav(0);
+        Yv *hids = yav(0);
         long i = 0;
         while (i < yv_len(defs)) {
             Yv *d = ya_get(defs, i);
@@ -11417,12 +11560,14 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                 st = yr_get(rl, "st");
                 Yv *label = fn_label_of(yv_l(yr_get(rl, "uid")),
                                         yr_get(d, "name"));
+                Yv *lid = lbl_new(label);
                 hsyms = ya_push(
                     hsyms,
                     yr(3, "name", yr_get(d, "name"), "label", label,
                        "typ", func_type(yr_get(d, "func"))));
-                st = env_define(st, yr_get(d, "name"), ys("func"), 0, label,
-                                func_type(yr_get(d, "func")));
+                hids = ya_push(hids, lid);
+                st = env_define(st, yr_get(d, "name"), ys("func"), 0, lid,
+                                ys(""), func_type(yr_get(d, "func")));
                 ;
             }
             i = i + 1;
@@ -11430,6 +11575,17 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         /* The externs go after the hoisted defs (fix_fn_types and the
          * emission loop read those by position), the globals after both
          * (see fns_kind). */
+        Yv *ids0 = yav(0);
+        long id0i = 0;
+        while (id0i < yv_len(hids)) {
+            ids0 = ya_push(ids0, ya_get(hids, id0i));
+            id0i = id0i + 1;
+        }
+        id0i = 0;
+        while (id0i < yv_len(xids)) {
+            ids0 = ya_push(ids0, ya_get(xids, id0i));
+            id0i = id0i + 1;
+        }
         Yv *fns0 = yav(0);
         long f0i = 0;
         while (f0i < yv_len(hsyms)) {
@@ -11441,12 +11597,13 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             fns0 = ya_push(fns0, ya_get(xfns, f0i));
             f0i = f0i + 1;
         }
-        st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+        st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns", fntab_of(fns0),
-                "bodies", yr_get(st, "bodies"));
+                "end_label", yr_get(st, "end_label"),
+                "fns", fntab_of(fns0, ids0), "bodies", yr_get(st, "bodies"),
+                "blabels", yr_get(st, "blabels"));
         Yv *fixed1 = fix_fn_types(st, hdefs, yav(0));
         Yv *fns1 = yav(0);
         long f1i = 0;
@@ -11459,12 +11616,13 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             fns1 = ya_push(fns1, ya_get(xfns, f1i));
             f1i = f1i + 1;
         }
-        st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+        st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns", fntab_of(fns1),
-                "bodies", yr_get(st, "bodies"));
+                "end_label", yr_get(st, "end_label"),
+                "fns", fntab_of(fns1, ids0), "bodies", yr_get(st, "bodies"),
+                "blabels", yr_get(st, "blabels"));
         Yv *gl = app_cells(global_entries(st, gdecls, base),
                            yr_get(ast3, "stmts"));
         Yv *fixedfns = yav(0);
@@ -11483,14 +11641,22 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             fixedfns = ya_push(fixedfns, ya_get(gl, fi));
             fi = fi + 1;
         }
+        Yv *gids = fntab_ids(gl);
+        Yv *idsA = ya_slice(ids0, 0, yv_len(ids0));
+        long idai = 0;
+        while (idai < yv_len(gids)) {
+            idsA = ya_push(idsA, ya_get(gids, idai));
+            idai = idai + 1;
+        }
         if (yv_len(gl) > 0) {
-            st = yr(11, "out", yr_get(st, "out"), "rodata",
+            st = yr(12, "out", yr_get(st, "out"), "rodata",
                     yr_get(st, "rodata"), "uid", yr_get(st, "uid"), "fuid",
                     yr_get(st, "fuid"), "loc", yr_get(st, "loc"), "env",
                     yr_get(st, "env"), "slots", yr_get(st, "slots"),
                     "self_label", yr_get(st, "self_label"), "end_label",
-                    yr_get(st, "end_label"), "fns", fntab_of(fixedfns), "bodies",
-                    yr_get(st, "bodies"));
+                    yr_get(st, "end_label"),
+                    "fns", fntab_of(fixedfns, idsA), "bodies",
+                    yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
             Yv *fixed2 = fix_fn_types(st, hdefs, gnames);
             fixedfns = yav(0);
             fi = 0;
@@ -11510,23 +11676,22 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             }
             ;
         }
-        st = yr(11, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
+        st = yr(12, "out", yr_get(st, "out"), "rodata", yr_get(st, "rodata"),
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
                 yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
-                "end_label", yr_get(st, "end_label"), "fns", fntab_of(fixedfns),
-                "bodies", yr_get(st, "bodies"));
+                "end_label", yr_get(st, "end_label"),
+                "fns", fntab_of(fixedfns, idsA), "bodies",
+                yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
         /* emit each hoisted body */
         i = 0;
         while (i < yv_len(hdefs)) {
             Yv *d = ya_get(hdefs, i);
-            Yv *fns = yr_get(yr_get(st, "fns"), "syms");
-            Yv *f = ya_get(fns, i);
+            Yv *fids = yr_get(yr_get(st, "fns"), "ids");
             Yv *rf = next_uid(st);
             st = yr_get(rf, "st");
-            st = emit_one_fn(st, yr_get(f, "label"),
-                             yv_l(yr_get(rf, "uid")), yr_get(d, "func"), 0, 0,
-                             yav(0), ys(""));
+            st = emit_one_fn(st, ya_get(fids, i), yv_l(yr_get(rf, "uid")),
+                             yr_get(d, "func"), 0, 0, yav(0), ys(""));
             i = i + 1;
         }
         pr = phase_end(times, ys("emit_fns"), pt, ph);
@@ -11596,7 +11761,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             Yv *want = uses_scan_block(yr_get(ast3, "stmts"),
                                        yr(1, "argv", yv_bool(0)));
             st = emit_one_fn(
-                st, ys("_start"), yv_l(yr_get(rm, "uid")),
+                st, lbl_new(ys("_start")), yv_l(yr_get(rm, "uid")),
                 yr(6, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", yv_long(K_tvoid)), "body",
                    yr(4, "k", yv_long(K_block), "stmts", main_stmts, "line",
@@ -11608,7 +11773,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         } else if (yv_len(main_stmts) > 0) {
             init = arch_fn_label(yv_l(yr_get(rm, "uid")), ys("init"));
             st = emit_one_fn(
-                st, init, yv_l(yr_get(rm, "uid")),
+                st, lbl_new(init), yv_l(yr_get(rm, "uid")),
                 yr(6, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", yv_long(K_tvoid)), "body",
                    yr(4, "k", yv_long(K_block), "stmts", main_stmts, "line",
@@ -11629,14 +11794,15 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             gk = gk + 1;
         }
         /* Each body's label and the labels it references: what linking
-         * shakes by (prune_bodies), worked out once here. */
+         * shakes by (prune_bodies). The label the emitter recorded beside
+         * the body (emit_one_fn); the references are still read out of the
+         * text, which stage 2 fills during emission instead. */
         Yv *ubodies = yr_get(st, "bodies");
-        Yv *blabels = yav(0);
+        Yv *blabels = yr_get(st, "blabels");
         Yv *brefs = yav(0);
         long bk = 0;
         while (bk < yv_len(ubodies)) {
             Yv *ub = ya_get(ubodies, bk);
-            blabels = ya_push(blabels, body_label(ub));
             brefs = ya_push(brefs, text_refs(ub, 1));
             bk = bk + 1;
         }
