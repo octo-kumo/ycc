@@ -1666,10 +1666,17 @@ def sgr_reset() {
     out_flush();
 };
 
-// out_flush() -- write whatever is in ESC_BUF to fd 1 and empty it. One write.
+// out_flush() -- write whatever is in ESC_BUF to the output descriptor and
+// empty it. One write.
+//
+// The descriptor is `ofd`, NOT a hardcoded 1. It was 1 here while the cell
+// emitters below used `ofd`, so set_fd() redirected half the module and not the
+// other half: flush() went to the file and clear_screen()/esc_*()/the sgr_*
+// forms went to the terminal regardless. A test could therefore not capture a
+// single control sequence, which is what set_fd is for.
 def out_flush() -> void {
     if (ESC_LEN > 0) {
-        syscall(1, 1, &ESC_BUF[0], ESC_LEN);
+        syscall(1, ofd, &ESC_BUF[0], ESC_LEN);
     };
     ESC_LEN = 0;
 };
