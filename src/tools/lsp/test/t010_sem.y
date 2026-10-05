@@ -45,6 +45,33 @@ def ntok(data: [long]) -> long { len(data) / 5 }
 let legend = sem.token_types();
 print("legend: " + len(legend) + " types: " + join(legend, ", "));
 
+// The legend is a WIRE FORMAT: the client resolves a token's number against this
+// list, so index i must keep meaning what it means today. Printing the list
+// above catches a change, but only as a diff blob; this says which one moved.
+// The pairs are spelled out rather than reflected over, because the constants are
+// module-level `const`s and Y has no reflection -- and sem.y's own comment says
+// a new constant needs an entry here at the same index, which this is what holds
+// them to.
+let WIRE: [str] = [tostring(sem.T_comment) + "=comment", tostring(sem.T_string) + "=string",
+    tostring(sem.T_number) + "=number", tostring(sem.T_keyword) + "=keyword",
+    tostring(sem.T_selfnone) + "=selfNone", tostring(sem.T_operator) + "=operator",
+    tostring(sem.T_punct) + "=punctuation", tostring(sem.T_variable) + "=variable",
+    tostring(sem.T_error) + "=error"];
+let wire_ok = 0;
+let wire_bad = 0;
+let wi = 0;
+while (wi < len(WIRE)) {
+    let pair = WIRE[wi];
+    let colon = index_of(pair, "=");
+    let idx = tonum(pair[:colon]);
+    let want = pair[colon + 1:len(pair)];
+    if (idx < len(legend) && legend[idx] == want) { wire_ok = wire_ok + 1; }
+    else { wire_bad = wire_bad + 1; print("  MISMATCH at " + tostring(idx) + ": legend says " + legend[idx] + ", constant says " + want); };
+    wi = wi + 1;
+};
+print("constants matching their legend index: " + tostring(wire_ok) + ", mismatched: " + tostring(wire_bad));
+print("every type sem can emit is inside the legend: " + tostring(len(legend) == len(WIRE)));
+
 // ── a small program, token by token ─────────────────────────────────────
 let prog = "def f(x: long) -> long {\n    let y = x + 1;   // add\n    \"s\"\n}\n";
 let abs0 = sem.tokens(prog);

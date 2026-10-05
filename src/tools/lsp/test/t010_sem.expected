@@ -1,4 +1,6 @@
 legend: 9 types: comment, string, number, keyword, selfNone, operator, punctuation, variable, error
+constants matching their legend index: 9, mismatched: 0
+every type sem can emit is inside the legend: true
 small: 20 tokens, 100 numbers
 round trip exact: true
 round trip position-by-position: true

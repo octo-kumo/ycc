@@ -39,11 +39,16 @@ import pos from "./pos.y";
 // initialize; if the two ever disagree, every token after the first difference
 // is painted as the wrong kind -- silently, because nothing errors.
 //
-// Only the SYNTACTIC classes are here for now. `parameter`, `function`,
-// `method`, `type` and `builtin` need to know what a name DENOTES, which is the
-// renamer's and the checker's answer rather than the lexer's, and those come with
-// M4 (R2.3). Until then every identifier is `variable`, which is the honest
-// answer: the lexer really does not know.
+// Only the SYNTACTIC classes are here. `parameter`, `function`, `method`, `type`
+// and `builtin` need to know what a name DENOTES, which is the renamer's and the
+// checker's answer rather than the lexer's -- so they are §9.2 / Stage B, and NOT
+// M4.
+//
+// That correction matters because this comment used to say they "come with M4
+// (R2.3)", and M4 is delivered. A reader who trusted it would go looking after
+// M4 and find `variable` for every identifier, with this file having told them
+// the classes were on the way. Until §9.2 lands, `variable` is the honest answer
+// for every name: the lexer really does not know what one denotes.
 //
 // A `y.lsp.semantic` setting on the client turns the whole layer off for users
 // who do not want two colours for the same identifier.
@@ -58,6 +63,13 @@ const T_variable = 7;
 const T_error = 8;
 
 // The legend, in index order, for `semanticTokensProvider.legend.tokenTypes`.
+//
+// A NEW constant above needs an entry HERE, at the same index, or every token
+// from it on is painted as whatever sits at that index -- silently, because
+// nothing errors: a token type is just a number on the wire and the client
+// resolves it against this list. t010_sem pins the length and the order, which
+// catches a reorder; it cannot catch a constant added to neither list, because
+// nothing reflects over the constants to find one.
 def token_types() -> [str] {
     let out: [str] = [];
     out += "comment";
