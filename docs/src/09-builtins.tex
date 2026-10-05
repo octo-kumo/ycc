@@ -852,6 +852,234 @@ date arithmetic \ic{verify\_chain} uses, and \ic{b64\_decode} the
 Base64 one.
 \end{sloppypar}
 
+\subsection{The terminal (the tui module)}
+\label{sec:builtin-tui}
+
+\ic{import tui;} gives a program a terminal: the tty and its modes, a grid of
+cells with colours, the diff that turns a changed grid into escape sequences, a
+capture for testing, and a frame pacer. It is one unit rather than three
+because the parts do not separate --- diffing a grid means diffing it
+\emph{into a tty}, and a frame loop needs a pacer to call both at a rate --- so
+one import cannot get the order wrong.
+
+Four types come with it. \ic{Size} is a record of \ic{rows} and \ic{cols}. A
+\ic{Surface} is a grid: \ic{tui.new(rows, cols)} makes one, and it carries \ic{rows},
+\ic{cols} and the cell data as plain fields. \ic{Pacer} and \ic{Fps} are the
+frame clock and the frame meter.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{tui.is\_tty()}] \ty{bool}: whether the output is a terminal. Every
+  drawing program asks this first, because the answer decides whether to animate
+  or to print something a diff can check.
+\item[\ic{tui.size()}] The terminal's size as \ic{Size}, from
+  \ic{TIOCGWINSZ}.
+\item[\ic{tui.raw\_mode()}] Put the tty in raw mode and remember the old
+  termios; \ic{tui.cooked\_mode()} puts it back, and \ic{tui.restore()} puts back whatever
+  was saved at the last \ic{tui.raw\_mode()}.
+\item[\ic{tui.active()}] \ty{bool}: whether raw mode is on now, so a cleanup path
+  can be called from anywhere without checking first.
+\item[\ic{tui.restore\_exit()}] Install an \ic{atexit} handler that restores the
+  terminal, and \ic{tui.restore\_all\_exit()} the same for every standard descriptor.
+  This is what stops a crash from leaving a shell in raw mode.
+\item[\ic{tui.arm\_watchdog()}] \ic{fork} a child that waits for this process to
+  die and restores the terminal from the child --- the one path a handler cannot
+  cover, since \ic{SIGKILL} runs nothing. The alt screen and the cursor are
+  emulator state, so the watchdog can put the \emph{termios} back but not those.
+\item[\ic{tui.read\_key()}] The next key, decoded: arrows, function keys,
+  \ic{Esc}, \ic{Ctrl-C} and the rest as their own constants, printable keys as
+  their code point, and \ic{KEY\_NONE} when nothing is waiting.
+\item[\ic{tui.read\_key\_timeout(ms)}] The same, but it gives up after \ic{ms} and
+  answers \ic{KEY\_NONE}. Note the unit --- the code is \ic{let ds = (ms + 99) /
+  100;} because \ic{VTIME} counts \emph{deciseconds}, so a request under 10 ms
+  becomes 100 ms. Poll with \ic{0} for a non-blocking read, and let the pacer own
+  the frame deadline.
+\item[\ic{tui.push\_key(k)}, \ic{tui.pop\_key()}] Push a key back so a later read
+  returns it, and pop the pushed one; \ic{tui.pop\_key()} on an empty stack answers
+  \ic{KEY\_NONE}. This is how a program peeks at the keyboard without consuming
+  it.
+\item[\ic{tui.key\_pending()}] \ty{bool}: whether a key is waiting, without
+  blocking and without decoding one.
+\item[\ic{tui.enter\_screen()}, \ic{tui.leave\_screen()}] The alternate screen
+  buffer, so a full-screen program leaves the scrollback alone.
+\item[\ic{tui.hide\_cursor()}, \ic{tui.show\_cursor()}] Cursor visibility, and
+  \ic{tui.cursor\_to(row, col)}, \ic{tui.home()}, \ic{tui.clear\_screen()} to move
+  it.
+\item[\ic{tui.new(rows, cols)}] A \ic{Surface}. It allocates six
+  \ic{[long; 32768]} arrays --- 1.5 MiB --- \emph{once}, whatever size it is asked
+  for, and the surface is capped at 32768 cells: a 128x256 screen. A larger one
+  does not fit, which is why a program wanting 320x240 keeps its own byte buffer
+  instead. Cells above \ic{rows * cols} are never flushed.
+\item[\ic{tui.resize(s, rows, cols)}] The same surface at another size, without a
+  second allocation, and \ic{tui.rows(s)} / \ic{tui.cols(s)} read its size back.
+\item[\ic{tui.clear(s)}, \ic{tui.fill(s, ch, fg, bg)}] Every cell to a space, or to
+  a code point with a foreground and a background.
+\item[\ic{tui.put(s, r, c, ch, fg, bg)}] One cell; \ic{tui.put\_skip(s, r, c, ch,
+  fg, bg)} the same for a character that is a \emph{continuation} of a wide glyph
+  to its left, and \ic{tui.put\_at(s, r, c, ch, fg, bg)} an absolute write that
+  does no continuation bookkeeping.
+\item[\ic{tui.get(s, r, c)}] The code point in a cell, \ic{tui.key\_at(s, r, c)}
+  its colour packed as one integer, and \ic{tui.text(s, r, c, n)} a run of cells
+  read back as a string.
+\item[\ic{tui.hline(s, r, c, n, fg, bg)}, \ic{tui.vline(...)}, \ic{tui.rect(...)},
+  \ic{tui.fill\_rect(...)}] Straight runs and boxes --- the primitives a chart or
+  a frame border is made of.
+\item[\ic{tui.blit(dst, src, dr, dc, sr, sc, rows, cols)}] A rectangle of one
+  surface onto another.
+\item[\ic{tui.rgb(r, g, b)}, \ic{tui.grey(v)}, \ic{tui.lerp\_rgb(a, b, t)},
+  \ic{tui.clamp\_255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
+  \ic{tui.b\_of(c)} to take one apart. A colour is one integer, so a frame buffer
+  of them is an array of integers.
+\item[\ic{tui.begin\_frame(s)}, \ic{tui.cell\_same(s, r, c, ch, fg, bg)},
+  \ic{tui.cell\_commit(s, r, c, ch, fg, bg)}] The diff's three steps: start a
+  frame, ask whether a cell already holds what you want, and write it if not.
+\item[\ic{tui.flush(s)}] Every changed cell as escape sequences, and
+  \ic{tui.flush\_diff(s)} the same but only for the rows that changed ---
+  \ic{tui.row\_count()} rows in the worst case, \ic{tui.row\_bytes(s, r)} the
+  size of one, \ic{tui.frame\_bytes(s)} the whole frame.
+\item[\ic{tui.end\_frame(s)}, \ic{tui.spill(s)}] Finish a frame, and what to do
+  when one row's worth of output overflows the buffer: the cursor is positioned
+  absolutely, so a spill is a row boundary, not a corruption.
+\item[\ic{tui.set\_fd(n)}, \ic{tui.fd()}] Draw to a descriptor other than 1, which
+  is how output goes to a file or a pipe for a test.
+\item[\ic{tui.put\_byte(b)}, \ic{tui.put\_num(n)}, \ic{tui.put\_str(s)},
+  \ic{tui.put\_csi()}] The output buffer, below the grid: a byte, a decimal
+  number, a string, and a control-sequence introducer.
+\item[\ic{tui.esc\_fg(r, g, b)}, \ic{tui.esc\_bg(...)}] One complete SGR sequence
+  as a number, \ic{tui.esc\_clear()}, \ic{tui.esc\_home()}, \ic{tui.esc\_cursor(r, c)},
+  \ic{tui.esc\_reset()}, and \ic{tui.out\_flush()} to write the buffer out. The
+  \ic{sgr\_*} forms are the same sequences without the introducer, for a caller
+  assembling its own.
+\item[\ic{tui.buf\_len()}, \ic{tui.buf\_at(i)}, \ic{tui.buf\_reset()}] The output
+  buffer read back and cleared, which is how a test checks what a draw would
+  have written without a terminal.
+\item[\ic{tui.rd16(b, i)}, \ic{tui.rd32(b, i)}] Little-endian reads from a
+  \ic{[byte]}, for a protocol that arrives in that order.
+\item[\ic{tui.capture\_on()}, \ic{tui.capture\_off()}, \ic{tui.capture\_reset()}] Record
+  everything drawn, so a test can compare it; \ic{tui.capture\_len()},
+  \ic{tui.capture\_byte(i)}, \ic{tui.capture\_str(from, to)} and
+  \ic{tui.capture\_checksum()} read it back. The checksum is FNV-1a over the bytes,
+  which makes a frame comparable without being readable.
+\item[\ic{tui.grid\_digest(s)}] FNV-1a over the surface's \emph{cells} --- a
+  different number from \ic{tui.capture\_checksum()}, which is over the bytes
+  written, so a colour change moves one and not the other.
+\item[\ic{tui.grid\_text(s)}] The grid as plain text, no escapes. This is what a
+  golden file holds.
+\item[\ic{tui.shade(c)}] A colour mapped to a glyph by luminance, and
+  \ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half}, \ic{shade\_braille} the
+  ramps for each; \ic{tui.shade\_len(ramp)} and \ic{tui.ramp\_index(v, n, k)} to index
+  one. \ic{tui.braille(cp)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
+  mask)} address one braille dot pattern directly.
+\item[\ic{tui.utf8\_len(cp)}, \ic{tui.utf8\_byte(cp, i)}, \ic{tui.width\_of(cp)}] A
+  code point's UTF-8 length and bytes, and how many terminal columns it occupies
+  --- 2 for a wide CJK or emoji glyph, 0 for a combining mark.
+\item[\ic{tui.pacer\_new(fps)}] A \ic{Pacer} for a frame rate, with the period
+  clamped so a rate below 1 or above a million cannot divide by zero.
+  \ic{tui.pacer\_next(p)} draws the next frame or skips it, and returns whether it
+  drew; \ic{tui.pacer\_start(p)} re-bases the schedule for a second run;
+  \ic{tui.pacer\_period\_us(p)} the period, \ic{tui.pacer\_frames(p)} and
+  \ic{tui.pacer\_dropped(p)} the counters, and \ic{tui.pacer\_lag\_us(p)} how far behind
+  the schedule is.
+\item[\ic{tui.fps\_new(win\_us = 500000)}, \ic{tui.fps\_tick(f)},
+  \ic{tui.fps\_x100(f)}, \ic{tui.fps\_avg\_x100(f)}, \ic{tui.fps\_frames(f)},
+  \ic{tui.fps\_line(f)}] A sliding-window frame meter. The window defaults to half
+  a second, which at 30 fps holds about 15 frames --- so one frame either way is
+  6.7\% and the reading cannot resolve 29 from 30. Measure a \emph{sustained}
+  rate from outside the meter, over seconds, or you will file a defect against a
+  program holding 29.99.
+\end{description}
+
+\subsection{Command lines (the args module)}
+\label{sec:builtin-args}
+
+\ic{import args;} parses \ic{argv} against a table you declare, so a program does
+not hand-roll \ic{index\_of} loops over \ic{--} and \ic{=} and an \ic{args.exit(2)}
+convention. The table is \ic{[args.Opt]}, one entry per flag, and each
+\ic{Opt}'s \ic{kind} is \ic{args.BOOL}, \ic{args.STR} or \ic{args.NUM} --- a flag
+with no value, a flag taking one of any shape, or a flag whose value must parse
+as a whole number.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{args.init(name, blurb, opts, tail)}] Declare the program and its flags.
+  \ic{name} is what usage calls it, \ic{blurb} the line under it, \ic{opts} the
+  table, and \ic{tail} the argument summary after the flags --- \ic{"[file...]"},
+  say. Any \ic{Opt} with a non-empty \ic{help} makes \ic{--help} an ordinary flag
+  rather than a special case.
+\item[\ic{args.parse()}] Read \ic{argv}: \ic{args.OK} when every flag was
+  understood, \ic{args.HELP} for \ic{--help}, and \ic{args.USAGE} for a usage
+  error --- after which \ic{args.errmsg()} says what was wrong and
+  \ic{args.print\_usage()} writes the usage text.
+\item[\ic{args.parse\_or\_exit()}] The same, but it prints the diagnostic and
+  exits \textbf{2} itself. A program wanting a different exit code calls
+  \ic{args.parse()} and decides --- which is why one example exits 1 on an unknown
+  flag rather than \ic{args}' own 2.
+\item[\ic{args.nopts()}] How many entries the table has, and
+  \ic{args.positional()} the arguments that were not flags, as \ic{[str]}.
+\item[\ic{args.has(long)}] \ty{bool}, \ic{args.get\_str(long, default)} a
+  string, \ic{args.get\_long(long, default)} a number. \ic{get\_long} on a value
+  that is not a number is a \ic{USAGE} error, not a silent zero --- which is why
+  \ic{args.num\_ok(s)} exists to check before asking.
+\item[\ic{args.usage()}] The usage text as a \ic{str}, for a program that wants to
+  print it somewhere other than stderr.
+\end{description}
+
+Accepted spellings are \ic{--long}, \ic{--long=value} and \ic{--long value} for a
+flag that takes one, \ic{-s} and \ic{-svalue} for a short one, and \ic{--} to end
+the flags. A flag not in the table is an error naming it. An \ic{Opt} whose
+\ic{short} is empty simply has no short spelling.
+
+\subsection{Assertions (the test module)}
+\label{sec:builtin-test}
+
+\ic{import test;} is a checking harness for a program's own self-test: it counts
+checks, prints the ones that failed with what they got and what they wanted, and
+\ic{test.report()} prints the summary and returns the failure count --- which is
+what a program hands to \ic{exit}, so a self-test that fails is a non-zero exit
+rather than a line somebody has to notice.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{test.group(name)}] Start a named section; the failures under it are
+  reported beneath it.
+\item[\ic{test.ck(name, ok, detail)}] \ty{bool}: record whether \ic{ok} holds,
+  with \ic{detail} printed when it does not. Every function below is this one
+  with a comparison already written, and all of them return \ty{bool} so a caller
+  can stop at the first failure.
+\item[\ic{test.ck\_eq(name, got, want)}] Two longs equal, and
+  \ic{test.ck\_near(name, got, want, tol)} equal within \ic{tol} --- for a measurement
+  rather than a constant.
+\item[\ic{test.ck\_str(name, got, want)}, \ic{test.ck\_bytes(name, got, want)}]
+  The same for a \ic{str} and a \ic{[byte]}.
+\item[\ic{test.checks()}, \ic{test.failures()}] How many have run and how many
+  failed. \ic{test.report()} prints both plus the detail lines, and returns the
+  failure count.
+\end{description}
+
+There is no assertion that aborts on the first failure, and no way to register a
+teardown. A self-test needing either is a program, not a check list.
+
+\subsection{Randomness (the random module)}
+\label{sec:builtin-random}
+
+\ic{import random;} is one stream, and it is deliberately \emph{not}
+thread-local: \ic{random.state()} and \ic{random.set\_state()} are there so a caller needing a
+private stream can make one.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{random.seed(v)}] Start the stream at \ic{v}.
+\item[\ic{random.next()}] The next 64 bits of splitmix64. The shifts are
+  \ic{>>>} and not \ic{>>}, because the reference algorithm shifts a bit pattern
+  and an arithmetic shift on a signed long carries the sign down, mixing in a
+  weaker mixer.
+\item[\ic{random.below(n)}] A uniform integer in \ic{0..n-1}, by rejection
+  sampling --- not \ic{\% n}, which is measurably biased for an \ic{n} that does
+  not divide the range. An \ic{n} below 1 answers 0 rather than trapping: a
+  caller dividing by an empty frontier has already lost, and a trap prints to
+  stdout.
+\item[\ic{random.range(lo, hi)}] Uniform in \ic{lo..hi-1}, and
+  \ic{random.chance(pct)} a \ty{bool} true \ic{pct} times in 100.
+\item[\ic{random.state()}, \ic{random.set\_state(v)}] Read and write the state,
+  for a save file or for a second independent stream.
+\end{description}
+
 \subsection{Patterns (the regex module)}
 \label{sec:builtin-regex}
 
