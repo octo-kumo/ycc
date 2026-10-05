@@ -36,7 +36,7 @@ type Err = { k: long, msg: str, line: long, col: long };
 type For = { k: long, init: Node, cond: Node, step: Node, body: Node, line: long, col: long };
 type Foreach = { k: long, name: str, iter: Node, body: Node, line: long, col: long };
 type ForRange = { k: long, name: str, lo: Node, hi: Node, body: Node, line: long, col: long };
-type Func = { k: long, params: [str], ptypes: [Type], ret: Type, body: Node, defs: [Node], line: long, col: long };
+type Func = { k: long, params: [str], ptypes: [Type], ret: Type, body: Node, defs: [Node], label: str, line: long, col: long };
 type IdxAssign = { k: long, arr: Node, idx: Node, v: Node, line: long, col: long };
 type If = { k: long, cond: Node, then: Node, els: Node, has_else: bool, line: long, col: long };
 type IncDec = { k: long, op: str, pre: bool, tgt: Node, line: long, col: long };
@@ -342,7 +342,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
     } else if (is_punct(toks, p, "{")) {
         if (brace_is_map(toks, p)) { parse_map(toks, p) } else { parse_block(toks, p) }
     } else if (is_kw(toks, p, "def")) {
-        parse_func(toks, p)
+        parse_func(toks, p, false)
     } else if (is_kw(toks, p, "if")) {
         parse_if(toks, p)
     } else if (is_kw(toks, p, "while")) {
@@ -385,7 +385,7 @@ def sync_type(nm: str) -> Type {
 
 // A block as a function of no parameters, its return type inferred.
 def block_func(body: Node, ln: long, cl: long) -> Node {
-    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], line: ln, col: cl };
+    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], label: "", line: ln, col: cl };
     let node: Node = f;
     node
 };
@@ -1276,25 +1276,41 @@ def num_lit_type(s: str) -> Type {
     else { { k: K.tlong } }
 };
 
-def parse_func(toks: [Tok], p: long) -> Parsed {
-    // Named:    def name(params) -> ret { body }   (top-level declaration)
-    // Anonymous: def(params) -> ret { body }        (function expression)
+def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
+    // Named:    def name(params) -> ret { body }      (top-level declaration)
+    // Anonymous: def(params) -> ret { body }           (function expression)
+    // Native:   native def name(params) -> ret [= "label"];
+    //           a declaration with no body -- the assembly label named after
+    //           `=` (or `y_<name>`) IS the body
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
-    let pos = p + 1;  // skip 'def'
+    let pos = p + 1;  // skip 'def' (or 'native', handled just below)
     let fname = "";
     // A malformed header plants its errors here; they run first in the body.
     let derrs: [Node] = [];
-    // optional function name (present unless next token is '(')
+    if (isnat) {
+        // 'native' is a keyword, so `p` is on it and `def` must follow.
+        if (is_kw(toks, pos, "def")) {
+            pos = pos + 1;
+        } else {
+            derrs += expect_err(toks, pos, "'def' after 'native'");
+        };
+    };
+    // optional function name (present unless next token is '(') -- a native
+    // declaration has no anonymous form, so there it is required.
     // Only the optional-name branch changes `fname` and `pos`; both are
     // consumed by the common parsing path below.
     if (!is_punct(toks, pos, "(")) {
         if (tt(toks, pos) == "id") {
             fname = tv(toks, pos);
             pos = pos + 1;
+        } else if (isnat) {
+            derrs += expect_err(toks, pos, "a name after 'native def'");
         } else {
             derrs += expect_err(toks, pos, "a function name or '('");
         };
+    } else if (isnat) {
+        derrs += expect_err(toks, pos, "a name after 'native def'");
     };
     let hbad = len(derrs) > 0;
     if (is_punct(toks, pos, "(")) {
@@ -1393,20 +1409,46 @@ def parse_func(toks: [Tok], p: long) -> Parsed {
             ret = { k: K.tnone };
         }
     };
-    let body = parse_block(toks, pos);
-    let bnode: Block = body.node;
-    if (len(derrs) > 0) {
-        let bst: [Node] = bnode.stmts;
-        let nst: [Node] = [];
-        nst += derrs;
-        nst += bst;
-        bnode = { k: K.block, stmts: nst, line: bnode.line, col: bnode.col };
-    };
-    let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs };
-    if (fname == "") {
-        res(func, body.pos)
+    if (isnat) {
+        // `= "label"` names the assembly entry point; leave it out and the
+        // declared name gives `y_<name>`.
+        let label = "y_" + fname;
+        if (is_op(toks, pos, "=")) {
+            let lr = parse_expr(toks, pos + 1);
+            pos = lr.pos;
+            if (lr.node.k == K.str) {
+                let slit: Leaf = lr.node;
+                label = slit.v;
+            } else {
+                derrs += { k: K.err, msg: "the label after '=' must be a string", line: tline(toks, pos), col: tcol(toks, pos) };
+            };
+        };
+        // no body: the declaration ends at the ';', which the statement loop
+        // consumes like any other statement's
+        if (!is_punct(toks, pos, ";")) {
+            derrs += expect_err(toks, pos, "';' after a native declaration");
+        };
+        // the body holds only the header's errors, if any: a native has none
+        // of its own, and the checker reads them so they are reported once
+        let bnode: Block = { k: K.block, stmts: derrs, line: ln, col: cl };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label };
+        res({ k: K.decl, kind: "native", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl }, pos)
     } else {
-        res({ k: K.decl, kind: "def", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl }, body.pos)
+        let body = parse_block(toks, pos);
+        let bnode: Block = body.node;
+        if (len(derrs) > 0) {
+            let bst: [Node] = bnode.stmts;
+            let nst: [Node] = [];
+            nst += derrs;
+            nst += bst;
+            bnode = { k: K.block, stmts: nst, line: bnode.line, col: bnode.col };
+        };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: "" };
+        if (fname == "") {
+            res(func, body.pos)
+        } else {
+            res({ k: K.decl, kind: "def", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl }, body.pos)
+        }
     }
 };
 
@@ -1513,6 +1555,12 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
     else if (is_kw(toks, p, "let")) { parse_decl(toks, p) }
     else if (is_kw(toks, p, "const")) { parse_decl(toks, p) }
     else if (is_typedef_start(toks, p)) { parse_typedef(toks, p) }
+    else if (is_kw(toks, p, "native")) {
+        // `native def name(...) -> T [= "label"];` — a declaration with no
+        // body. parse_stmt sees it wherever it appears; the checker is what
+        // insists on the top level (a nested one has no assembly to land in).
+        parse_func(toks, p, true)
+    }
     else if (is_kw(toks, p, "return")) {
         if (is_punct(toks, p + 1, ";") || is_punct(toks, p + 1, "}") || tt(toks, p + 1) == "eof") {
             res({ k: K.ret, e: { k: K.void, line: tline(toks, p), col: tcol(toks, p) }, line: tline(toks, p), col: tcol(toks, p) }, p + 1)
@@ -2190,7 +2238,36 @@ def parse_program(toks: [Tok]) -> Block {
             pos = pos + 1;
         };
     };
-    { k: K.block, stmts: stmts, line: 1, col: 1 }
+    // A native def owns an assembly label, so it cannot share its name with
+    // another top-level declaration of the same unit. This is the only place
+    // that can see it: renaming makes every name unique, so by the time the
+    // checker runs the two would look like different names.
+    let clash: [Node] = [];
+    let ci = 0;
+    while (ci < len(stmts)) {
+        let cs: Node = stmts[ci];
+        if (cs.k == K.decl) {
+            let cdec: Decl = cs;
+            if (cdec.kind == "native") {
+                let co = 0;
+                while (co < len(stmts)) {
+                    let os: Node = stmts[co];
+                    if (os.k == K.decl) {
+                        let odec: Decl = os;
+                        if (co != ci && odec.name == cdec.name) {
+                            clash += { k: K.err, msg: "'" + cdec.name + "' is a native def and is declared again at the top level (a native def cannot share a name)", line: cdec.line, col: cdec.col };
+                        };
+                    };
+                    co = co + 1;
+                };
+            };
+        };
+        ci = ci + 1;
+    };
+    let all: [Node] = [];
+    all += clash;
+    all += stmts;
+    { k: K.block, stmts: all, line: 1, col: 1 }
 };
 
 export { parse_program, parse_type_full, nameix_new, nameix_put, nameix_get };

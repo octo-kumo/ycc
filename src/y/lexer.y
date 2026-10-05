@@ -613,6 +613,7 @@ def tokenize(src: str) -> [Tok] {
             if (word == "let") { ty = "kw"; }
             else if (word == "const") { ty = "kw"; }
             else if (word == "def") { ty = "kw"; }
+            else if (word == "native") { ty = "kw"; }
             else if (word == "if") { ty = "kw"; }
             else if (word == "else") { ty = "kw"; }
             else if (word == "while") { ty = "kw"; }

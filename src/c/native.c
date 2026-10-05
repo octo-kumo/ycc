@@ -2309,12 +2309,13 @@ Yv *strip_ns(Yv *node, Yv *imports) {
     } else if (yv_l(k) == K_decl) {
         return strip_decl(node, imports);
     } else if (yv_l(k) == K_func) {
-        return normnode(yr(8, "k", yv_long(K_func), "params", yr_get(node, "params"),
+        return normnode(yr(9, "k", yv_long(K_func), "params", yr_get(node, "params"),
                            "ptypes", yr_get(node, "ptypes"), "ret",
                            yr_get(node, "ret"), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col"),
-                           "defs", yr_get(node, "defs")));
+                           "defs", yr_get(node, "defs"), "label",
+                           yr_get(node, "label")));
     } else if (yv_l(k) == K_assign) {
         return normnode(yr(5, "k", yv_long(K_assign), "name", yr_get(node, "name"),
                            "v", strip_ns(yr_get(node, "v"), imports), "line",
@@ -11415,8 +11416,15 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                 hdefs = ya_push(hdefs, d);
                 Yv *rl = next_uid(st);
                 st = yr_get(rl, "st");
-                Yv *label = fn_label_of(yv_l(yr_get(rl, "uid")),
+                /* A native def's label is the one it named -- the assembly
+                 * it calls into. Everything else gets a generated label. */
+                Yv *label;
+                if (yv_len(yr_get(yr_get(d, "func"), "label")) > 0) {
+                    label = yr_get(yr_get(d, "func"), "label");
+                } else {
+                    label = fn_label_of(yv_l(yr_get(rl, "uid")),
                                         yr_get(d, "name"));
+                }
                 hsyms = ya_push(
                     hsyms,
                     yr(3, "name", yr_get(d, "name"), "label", label,
@@ -11516,17 +11524,21 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                 yr_get(st, "slots"), "self_label", yr_get(st, "self_label"),
                 "end_label", yr_get(st, "end_label"), "fns", fntab_of(fixedfns),
                 "bodies", yr_get(st, "bodies"));
-        /* emit each hoisted body */
+        /* emit each hoisted body. A native def has none: its label names
+         * assembly that is already in the output, so emitting anything under
+         * that label would duplicate it. */
         i = 0;
         while (i < yv_len(hdefs)) {
             Yv *d = ya_get(hdefs, i);
             Yv *fns = yr_get(yr_get(st, "fns"), "syms");
             Yv *f = ya_get(fns, i);
-            Yv *rf = next_uid(st);
-            st = yr_get(rf, "st");
-            st = emit_one_fn(st, yr_get(f, "label"),
-                             yv_l(yr_get(rf, "uid")), yr_get(d, "func"), 0, 0,
-                             yav(0), ys(""));
+            if (yv_len(yr_get(yr_get(d, "func"), "label")) == 0) {
+                Yv *rf = next_uid(st);
+                st = yr_get(rf, "st");
+                st = emit_one_fn(st, yr_get(f, "label"),
+                                 yv_l(yr_get(rf, "uid")), yr_get(d, "func"), 0,
+                                 0, yav(0), ys(""));
+            }
             i = i + 1;
         }
         pr = phase_end(times, ys("emit_fns"), pt, ph);

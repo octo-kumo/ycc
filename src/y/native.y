@@ -1507,7 +1507,7 @@ def strip_ns(node: Node, imports: [str]) -> Node {
         strip_decl(decl, imports)
     } else if (k == K.func) {
         let func: Func = node;
-        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs })
+        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
     } else if (k == K.assign) {
         let assign: Assign = node;
         normnode({ k: K.assign, name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
@@ -9600,7 +9600,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 hdefs += d;
                 let rl = next_uid(st);
                 st = rl.st;
-                let label = fn_label_of(rl.uid, d.name);
+                // A native def's label is the one it named -- the assembly it
+                // calls into. Everything else gets a generated label.
+                let label = "";
+                if (len(d.func.label) > 0) { label = d.func.label; } else { label = fn_label_of(rl.uid, d.name); };
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 st = env_define(st, d.name, "func", 0, label, func_type(d.func));
             };
@@ -9647,15 +9650,19 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label, fns: fntab_of(fixedfns),
           bodies: st.bodies };
-        // emit each hoisted body
+        // emit each hoisted body. A native def has none: its label names
+        // assembly that is already in the output, so emitting anything under
+        // that label would duplicate it.
         i = 0;
         while (i < len(hdefs)) {
             let d = hdefs[i];
             let fns = st.fns.syms;
             let f = fns[i];
-            let rf = next_uid(st);
-            st = rf.st;
-            st = emit_one_fn(st, f.label, rf.uid, d.func, false, false, [], "");
+            if (len(d.func.label) == 0) {
+                let rf = next_uid(st);
+                st = rf.st;
+                st = emit_one_fn(st, f.label, rf.uid, d.func, false, false, [], "");
+            };
             i = i + 1;
         };
         pr = phase_end(times, "emit_fns", pt, ph);

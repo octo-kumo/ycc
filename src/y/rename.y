@@ -1213,9 +1213,35 @@ def rn_decl(node: Decl, st: RnSt) -> RnRes {
     // its own shape's fields.
     if (node.kind == "def") {
         rn_decl_def(node, st)
+    } else if (node.kind == "native") {
+        rn_decl_native(node, st)
     } else {
         rn_decl_rest(node, st)
     }
+};
+
+// A native def renames like a def, but there is no body to walk: it holds no
+// code, only the header's errors, and the label it names is what the call
+// sites resolve to -- so it rides through untouched.
+def rn_decl_native(node: Decl, st: RnSt) -> RnRes {
+    rn_decl_native_lookup(node, rn_lookup(st, node.name), st)
+};
+
+def rn_decl_native_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
+    if (u == "") {
+        let b = rn_bind(st, node.name);
+        rn_decl_native_go(node, b.uniq, b.st)
+    } else {
+        rn_decl_native_go(node, u, st)
+    }
+};
+
+def rn_decl_native_go(node: Decl, u: str, st: RnSt) -> RnRes {
+    let f: Func = node.v;
+    let nf: Func = { k: K.func, params: f.params, ptypes: rn_types(st, f.ptypes),
+      ret: rn_type(st, f.ret), body: f.body, defs: f.defs, label: f.label,
+      line: f.line, col: f.col };
+    { st: st, node: { k: K.decl, kind: "native", name: u, typ: rn_type(st, node.typ), v: nf, line: node.line, col: node.col } }
 };
 
 def rn_decl_def(node: Decl, st: RnSt) -> RnRes {
@@ -1356,7 +1382,7 @@ def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol:
     let body: [Node] = [];
     if (un != "") { body += rn_unknown_err(un, fline, fcol); }
     body += stmts;
-    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [] } }
+    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [], label: "" } }
 };
 
 

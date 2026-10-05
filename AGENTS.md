@@ -298,6 +298,12 @@ replaces the std one at link time).
 - `&&` / `||` short-circuit, in both forms. Operands need not be `bool` —
   any non-zero value is true (`typeof_logic` in `types.y`).
 - Recursion uses `self`, not the function's own name.
+- **`native def f(params) -> T [= "label"];`** is a declaration with no body
+  whose implementation is an assembly label (docs `03-grammar.tex`, NATIVE.md
+  "Backend"). It is the way std modules reach raw machine primitives: the
+  return type must be written, the label must start with `y_`, and the
+  declaration must be at the top level under its own name. `native` is a
+  reserved keyword.
 - A nested `def` captures the enclosing bindings **that are already in
   scope where it is written** (a name declared later is an
   undefined-variable error — `let`s do not hoist, `rename.y`). Captures

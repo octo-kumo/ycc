@@ -2047,7 +2047,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         // Anonymous function literal in expression position. Check the body
         // like a named def would be, and give the expression its tfunc type;
         // the emitter closure-converts it with a generated label.
-        let ra = typeof_def(st, "", func, func.line, func.col);
+        let ra = typeof_def(st, "", func, func.line, func.col, false);
         tc_res(ra.typ, ra.st)
     } else if (k == K.arrrep) {
         let rep: ArrRep = node;
@@ -3884,7 +3884,10 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
 def typeof_decl(st: TcSt, node: Decl) -> TcRes {
     if (node.kind == "def") {
         // named function: full check (signature + body)
-        typeof_def(st, node.name, node.v, node.line, node.col)
+        typeof_def(st, node.name, node.v, node.line, node.col, false)
+    } else if (node.kind == "native") {
+        // native def: the signature, and three rules of its own
+        typeof_def(st, node.name, node.v, node.line, node.col, true)
     } else {
         // let/const. A literal def on the right names a function WITHOUT
         // going through typeof_expr (a bare func value is only legal bound).
@@ -3893,7 +3896,7 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
         let bk = "local";
         if (node.kind == "const") { bk = "const"; };
         if (node.v.k == K.func) {
-            let fr = typeof_def(st, node.name, node.v, node.line, node.col);
+            let fr = typeof_def(st, node.name, node.v, node.line, node.col, false);
             st = fr.st;
             if (node.typ.k != K.tnone) {
                 st = expect_type(st, fr.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
@@ -4036,7 +4039,10 @@ def inferred_ret(line: long, col: long) -> Type {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
-def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes {
+def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, isnat: bool) -> TcRes {
+    // `isnat` is a `native def`: the signature is checked exactly as a def's
+    // is, but there is no body -- the return type must be written, the label
+    // must be a `y_` one, and the declaration must be at the top level.
     if (len(func.params) != len(func.ptypes)) {
         st = fail(st, "internal: params/ptypes length mismatch", line, col);
         tc_res(t_unk(), st)
@@ -4063,6 +4069,23 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             i = i + 1;
         };
         let ret: Type = func.ret;
+        if (isnat) {
+            // A native's body holds no code, so the return type has nothing to
+            // be inferred from and has to be written. A body that is NOT empty
+            // means the parser planted errors in it, which say better than this
+            // would -- so wait for them rather than piling on.
+            let nbody: Block = func.body;
+            if (ret.k == K.tnone && len(nbody.stmts) == 0) {
+                st = fail(st, "native def '" + disp(name) + "' needs a return type (there is no body to infer it from)", line, col);
+                ret = t_unk();
+            };
+            if (!func.label.starts_with("y_")) {
+                st = fail(st, "native label '" + disp(func.label) + "' must start with 'y_' (generated code calls it by that prefix)", line, col);
+            };
+            if (st.fdepth > 0) {
+                st = fail(st, "native def '" + disp(name) + "' must be at the top level (an assembly label has no place inside a function)", line, col);
+            };
+        };
         let ret_inferred = false;
         // An inferred def's `return`s are checked once its type is known:
         // while the body is checked, st.ret is a marker that notes each one
@@ -4162,7 +4185,9 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 set_inferred_ret(func, br);
             }
         }
-        if (!(ret_inferred)) {
+        if (isnat) {
+            // nothing to check: there is no body, only the header's errors
+        } else if (!(ret_inferred)) {
             // `-> void` discards the body's tail value (no value returns)
             let rtk: long = ret.k;
             if (rtk == K.tvoid) { } else {

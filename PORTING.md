@@ -102,6 +102,14 @@ requires byte-identical binaries).
    Names are kept exactly as written (the Y modules do not collide).
    `alias.fn(...)` (module call) → `fn(...)` (names are flattened).
    `self(...)` recursion → the function's own name.
+   A `bool` flag parameter is `int`: `def parse_func(toks: [Tok], p: long,
+   isnat: bool)` → `Yv *parse_func(Yv *toks, long p, int isnat)`, the call
+   sites passing `0`/`1`. A record gained a field (`Func.label`) is read and
+   written with `yr`/`yr_get` at every construction site in *both* copies —
+   `block_func`, `parse_func`, `rn_func_finish`, `rn_decl_native_go` and
+   `native.c`'s `strip_ns` all rebuild the whole record, and a `yr(n, ...)`
+   whose `n` no longer matches the field pairs silently drops the tail (a
+   `col` of 0 in a diagnostic is what that looks like).
 
 7. **Control flow is 1:1**: same `if`/`else if` chains, same `while`/`for`
    loops, same early `return`s, same statement order. A block whose last

@@ -365,6 +365,18 @@ documented as unfused.
 
 ---
 
+## Status
+
+| phase | what | state |
+|---|---|---|
+| P0 | the asm moves to `src/y/arch/*.s` | **done**, merged (`0f24376`) |
+| — | the portable tier: integers/bits, float comparisons and constants, RNGs, `[float]` array work (`src/y/std/math.y`) | **done** (`85403df`) — no compiler change needed; tests `t300`–`t304` |
+| P1 | `native def` | next |
+| P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | |
+| P3 | the transcendentals in Y, gated by the ulp harness | |
+| P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | |
+| P5 | the bulk kernels | |
+
 ## 6. Sequencing
 
 Each phase ends green: `make ycc` byte-identical after `make rebless`, then

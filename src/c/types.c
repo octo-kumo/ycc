@@ -132,7 +132,7 @@ static int field_opt(Yv *t, Yv *key);
 static Yv *typeof_lit(Yv *st, Yv *node, Yv *target);
 static Yv *typeof_expr_go(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
-static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col);
+static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat);
 static long ret_note(Yv *rl, Yv *typ, long line, long col);
 static long set_inferred_ret(Yv *func, Yv *ret);
 static Yv *st_fdepth(Yv *st, long d);
@@ -2658,7 +2658,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         // like a named def would be, and give the expression its tfunc type;
         // the emitter closure-converts it with a generated label.
         Yv *ra = typeof_def(st, ys(""), node, yv_l(yr_get(node, "line")),
-                            yv_l(yr_get(node, "col")));
+                            yv_l(yr_get(node, "col")), 0);
         return yr(2, "typ", yr_get(ra, "typ"), "st", yr_get(ra, "st"));
     } else if (yv_l(k) == K_arrrep) {
         // [v; n]: n stack slots filled with v (the native array form)
@@ -5174,7 +5174,12 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
         // named function: full check (signature + body)
         return typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
                           yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
+                          yv_l(yr_get(node, "col")), 0);
+    } else if (ys_eq_lit(yr_get(node, "kind"), "native")) {
+        // native def: the signature, and three rules of its own
+        return typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")), 1);
     } else {
         // let/const. A literal def on the right names a function WITHOUT
         // going through typeof_expr (a bare func value is only legal bound).
@@ -5187,7 +5192,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
         if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_func) {
             Yv *fr = typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
                                 yv_l(yr_get(node, "line")),
-                                yv_l(yr_get(node, "col")));
+                                yv_l(yr_get(node, "col")), 0);
             st = yr_get(fr, "st");
             if (yv_l(yr_get(yr_get(node, "typ"), "k")) != K_tnone) {
                 st = expect_type(st, yr_get(fr, "typ"), yr_get(node, "typ"),
@@ -5389,7 +5394,10 @@ Yv *inferred_ret(long line, long col) {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
-static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
+/* `isnat` is a `native def`: the signature is checked exactly as a def's,
+ * but there is no body -- the return type must be written, the label must be
+ * a `y_` one, and the declaration must be at the top level. */
+static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat) {
     if (yv_len(yr_get(func, "params")) != yv_len(yr_get(func, "ptypes"))) {
         st = fail(st, ys("internal: params/ptypes length mismatch"), line, col);
         return yr(2, "typ", t_unk(), "st", st);
@@ -5429,6 +5437,33 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             i = i + 1;
         }
         Yv *ret = yr_get(func, "ret");
+        if (isnat) {
+            /* A native's body holds no code, so the return type has nothing
+             * to be inferred from and has to be written. A body that is NOT
+             * empty means the parser planted errors in it, which say better
+             * than this would -- so wait for them rather than piling on. */
+            if (yv_l(yr_get(ret, "k")) == K_tnone &&
+                yv_len(yr_get(yr_get(func, "body"), "stmts")) == 0) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("native def '"), disp(name)),
+                                 ys("' needs a return type (there is no body to infer it from)")),
+                          line, col);
+                ret = t_unk();
+            }
+            if (!ys_starts_with(yr_get(func, "label"), ys("y_"))) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("native label '"),
+                                        disp(yr_get(func, "label"))),
+                                 ys("' must start with 'y_' (generated code calls it by that prefix)")),
+                          line, col);
+            }
+            if (yv_l(yr_get(st, "fdepth")) > 0) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("native def '"), disp(name)),
+                                 ys("' must be at the top level (an assembly label has no place inside a function)")),
+                          line, col);
+            }
+        }
         int ret_inferred = 0;
         // An inferred def's `return`s are checked once its type is known:
         // while the body is checked, st.ret is a marker that notes each one
@@ -5556,7 +5591,9 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
             }
             ;
         }
-        if (!(ret_inferred)) {
+        if (isnat) {
+            /* nothing to check: there is no body, only the header's errors */
+        } else if (!(ret_inferred)) {
             // `-> void` discards the body's tail value (no value returns)
             Yv *rtk = yr_get(ret, "k");
             if (yv_l(rtk) == K_tvoid) { ; } else {

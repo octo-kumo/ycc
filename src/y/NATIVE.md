@@ -206,6 +206,27 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   "what would a reasonable scoped functional language do" (TypeScript/Rust
   intuition): lexical scope, `self` for recursion, no implicit coercions
   (except `str`→`*T` and `none` unification), exhaustiveness where cheap.
+- **`native def`: a declaration with no body.** `native def name(params) -> T
+  [= "label"];` declares a function whose implementation is an assembly
+  label. The parser makes a `Decl` with `kind: "native"` whose value is a
+  `Func` carrying the label in a new `label: str` field and an *empty* body —
+  the parser's own header errors, if any, live there, which is how they still
+  reach the diagnostics. The rules live in `types.y` (`typeof_def`'s `isnat`):
+  the return type must be written (nothing to infer it from), the label must
+  start with `y_`, and the declaration must be at the top level; the name
+  cannot be taken twice, which only `parser.y` can see, since renaming has
+  already made every name unique by then. `rename.y` passes the label through
+  untouched (`rn_decl_native`: there is no body to walk). In the emitter a
+  native is an ordinary hoisted `FnDef` that keeps the label it declared
+  (`native.y`, the hoisting loop) and gets **no body emitted** — the call
+  path already resolves through `env_find` → `e.label`, so `call y_label`
+  needs nothing new. A label with no assembly behind it surfaces as
+  `undefined label` from `asm_link`, which is the honest failure: the
+  declaration is a promise about the assembly, and nothing can check it (as
+  with an `extern` declaration in C). Because a native is called with the
+  ordinary convention — arguments pushed on the stack, result in `%rax` — it
+  can reach the runtime's string/array helpers but not one written for the
+  binary-float convention (`y_fmod`, which reads `%xmm0`/`%xmm1`).
 
 ## Output: our own executables
 
