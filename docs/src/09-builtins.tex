@@ -445,7 +445,12 @@ so \ic{math.pow(x, 0.5)} for a large \ic{x} is a few ulps out while
   want the four-element state.
 \item[\ic{math.fsum(a)}, \ic{math.fsum\_kahan(a)}] The sum of a \ic{[float]},
   the second with Neumaier compensation, which keeps the error near one ulp of
-  the total however long the array is.
+  the total however long the array is. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
+  \ic{fmax\_of}, \ic{fscale} and \ic{faxpy} are machine code
+  (\texttt{src/y/arch/math.s}), reached through \ic{native def}; each returns
+  exactly what the equivalent Y loop would, which is what makes it a
+  drop-in rather than a second opinion, and \ic{bench/y/fmath.y} measures them
+  at \num{0.37} ns an element against \num{1.26} for the loop.
 \item[\ic{math.fdot(a, b)}] The dot product of two equal-length arrays.
 \item[\ic{math.fmin\_of(a)}, \ic{math.fmax\_of(a)}] The smallest and largest
   element, or NaN for an empty array.

@@ -3497,7 +3497,7 @@ int uses_math(Yv *refs) {
             || (n == 7 && (ys_eq_lit(r, "y_fbits") || ys_eq_lit(r, "y_bitsf")))
             || (n == 8 && (ys_eq_lit(r, "y_to_int") || ys_eq_lit(r, "y_min_of") || ys_eq_lit(r, "y_max_of")
                            || ys_eq_lit(r, "y_scale") || ys_eq_lit(r, "y_axpy")))
-            || (n == 10 && ys_eq_lit(r, "y_int_trap"))
+            || (n == 10 && (ys_eq_lit(r, "y_int_trap") || ys_eq_lit(r, "y_len_stop")))
             /* the encoder's own form probes: y_sse_forms, y_sse_flags */
             || (n == 11 && (ys_eq_lit(r, "y_sse_forms") || ys_eq_lit(r, "y_sse_flags")));
         i = i + 1;

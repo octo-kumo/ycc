@@ -66,6 +66,15 @@ y_int_trap:
     mov $1, %rdi
     syscall
 
+# y_len_stop: the exit half of std/math.y's equal-length rule (its message goes
+# through eputs, which is ordinary Y; only the stop is machine code). Split the
+# same way as y_int_trap, for the same reason: a `void` native cannot fall off
+# its end into whatever follows.
+y_len_stop:
+    mov $231, %rax
+    mov $1, %rdi
+    syscall
+
 # ── the two form probes ─────────────────────────────────
 #
 # Neither of these is used by std/math.y. They exist because there is no other
@@ -185,4 +194,179 @@ ysf_b:
     ret
 ysf_b_t:
     or $16, %rax
+    ret
+
+# ── the bulk kernels ──────────────────────────────────────────────────────
+#
+# Six loops over `[float]`, which is what std/math.y's array tier is: the plain
+# sum, the dot product, an in-place scale and axpy, and the two extremes. In Y
+# each is a `while` with a bounds check and an index add per element; here the
+# pointer walks and a counter comes down.
+#
+# The contract is BIT-IDENTITY with the Y version -- same order of operations,
+# same rounding, so the result is the same double. That is why y_sum starts its
+# accumulator at +0.0 rather than at the first element (0.0 + a[0] is not a[0]
+# when a[0] is -0.0), why y_dot multiplies before it adds, and why the two
+# extremes use a comparison rather than minsd/maxsd (those return the SECOND
+# operand when either side is a NaN, which would let a NaN into the running
+# extreme; Y's `a[i] < m` is false for a NaN, so a NaN never enters).
+#
+# Each takes the array's data pointer and its length, never the array: the
+# header is four words and the elements are elsewhere (NATIVE.md, "Arrays"), so
+# the caller passes `a.ptr` and `len(a)`. A kernel reads n >= 1 -- the wrapper
+# in std/math.y answers the empty case in Y, where `nan` lives.
+
+# y_sum(p, n): p = 0.0, then p += a[i] in order.
+y_sum:
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rcx
+# xmm0 = +0.0, the accumulator the Y `let s = 0.0` starts from
+    xor %eax, %eax
+    movq %rax, %xmm0
+    test %rcx, %rcx
+    jle ysum_done
+ysum_loop:
+    addsd (%rsi), %xmm0
+    add $8, %rsi
+    dec %rcx
+    jnz ysum_loop
+ysum_done:
+    movq %xmm0, %rax
+    ret
+
+# y_dot(p, q, n): p = 0.0, then p += a[i] * b[i] in order.
+y_dot:
+    mov 24(%rsp), %rsi
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rcx
+    xor %eax, %eax
+    movq %rax, %xmm0
+    test %rcx, %rcx
+    jle ydot_done
+ydot_loop:
+# the multiply first, as Y writes it: a[i] * b[i], and multiplication is
+# commutative in IEEE, so the operand order does not change the bits
+    movsd (%rsi), %xmm1
+    mulsd (%rdi), %xmm1
+    addsd %xmm1, %xmm0
+    add $8, %rsi
+    add $8, %rdi
+    dec %rcx
+    jnz ydot_loop
+ydot_done:
+    movq %xmm0, %rax
+    ret
+
+# y_scale(p, n, k): p[i] *= k, in place. Arguments in source order, so k is the
+# LAST one and sits at 8(%rsp).
+y_scale:
+    mov 24(%rsp), %rsi
+    mov 16(%rsp), %rcx
+    mov 8(%rsp), %rax
+    movq %rax, %xmm1
+    test %rcx, %rcx
+    jle yscale_done
+yscale_loop:
+    movsd (%rsi), %xmm0
+    mulsd %xmm1, %xmm0
+    movsd %xmm0, (%rsi)
+    add $8, %rsi
+    dec %rcx
+    jnz yscale_loop
+yscale_done:
+    ret
+
+# y_axpy(y, n, k, x): y[i] += k * x[i], in place -- the axpy of numerical
+# linear algebra, which is how a vector is accumulated without allocating.
+y_axpy:
+    mov 32(%rsp), %rsi
+    mov 24(%rsp), %rcx
+    mov 16(%rsp), %rax
+    mov 8(%rsp), %rdi
+    movq %rax, %xmm1
+    test %rcx, %rcx
+    jle yaxpy_done
+yaxpy_loop:
+    movsd (%rdi), %xmm0
+    mulsd %xmm1, %xmm0
+    addsd (%rsi), %xmm0
+    movsd %xmm0, (%rsi)
+    add $8, %rsi
+    add $8, %rdi
+    dec %rcx
+    jnz yaxpy_loop
+yaxpy_done:
+    ret
+
+# y_min_of(p, n) over n >= 1: the running minimum, and a NaN never enters it.
+#
+# `ucomisd %xmm1, %xmm0` compares the DESTINATION (m) against the source (a[i]),
+# so `ja` -- CF=0 and ZF=0 -- is exactly "m is strictly above a[i]", which is
+# when Y's `a[i] < m` would have replaced it. Everything else keeps m: a[i] above
+# m sets CF, equality sets ZF, and an unordered comparison (a NaN on either side)
+# sets CF as well, so a NaN cannot enter the running minimum.
+#
+# NOT `jb`: `jb` is CF=1 on its own, and CF is 1 for the unordered case too, so
+# `jb` would let a NaN in -- which is what the first version did. And not
+# `minsd`: that returns the SECOND operand when either side is a NaN, which is
+# the opposite rule again.
+y_min_of:
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rcx
+    test %rcx, %rcx
+    jle ymin_first
+    movsd (%rsi), %xmm0
+    add $8, %rsi
+    dec %rcx
+    jz ymin_done
+ymin_loop:
+    movsd (%rsi), %xmm1
+    ucomisd %xmm1, %xmm0
+    ja ymin_take
+    add $8, %rsi
+    dec %rcx
+    jnz ymin_loop
+    jmp ymin_done
+ymin_take:
+    movsd %xmm1, %xmm0
+    add $8, %rsi
+    dec %rcx
+    jnz ymin_loop
+ymin_done:
+    movq %xmm0, %rax
+    ret
+# n <= 0: the wrapper never does this, and there is no first element to read.
+ymin_first:
+    xor %eax, %eax
+    ret
+
+# y_max_of(p, n) over n >= 1: the same shape with the operands the other way
+# round, so `ja` again means "a[i] is strictly above m".
+y_max_of:
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rcx
+    test %rcx, %rcx
+    jle ymax_first
+    movsd (%rsi), %xmm0
+    add $8, %rsi
+    dec %rcx
+    jz ymax_done
+ymax_loop:
+    movsd (%rsi), %xmm1
+    ucomisd %xmm0, %xmm1
+    ja ymax_take
+    add $8, %rsi
+    dec %rcx
+    jnz ymax_loop
+    jmp ymax_done
+ymax_take:
+    movsd %xmm1, %xmm0
+    add $8, %rsi
+    dec %rcx
+    jnz ymax_loop
+ymax_done:
+    movq %xmm0, %rax
+    ret
+ymax_first:
+    xor %eax, %eax
     ret

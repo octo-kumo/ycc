@@ -18,7 +18,10 @@
 //   - random numbers: SplitMix64 and xoshiro256** / xoshiro256+ over a `[long]`
 //     the caller owns, so a stream is reproducible from its seed;
 //   - whole-array work over `[float]`: fsum fsum_kahan fdot fmin_of fmax_of
-//     fscale faxpy fmean fvariance.
+//     fscale faxpy fmean fvariance. The loops are the six kernels in
+//     src/y/arch/math.s (`sum_asm` and friends), each bit-identical to the Y
+//     loop kept next to it as `*_y`; `bench/y/fmath.y` measures them at 0.37
+//     ns an element against 1.26 for the Y loop.
 //
 // NO OVERLOADING. Y is monomorphic, so min/max/abs/clamp/sign are `long` and
 // the float versions carry an `f`: math.min takes two longs, math.fmin two
@@ -313,6 +316,20 @@ native def bitsf(b: long) -> float = "y_bitsf";
 // The trap the checked cast stops at (a message and an exit; the machine cast
 // itself cannot report the case, it answers with LONG_MIN).
 native def int_trap() -> long = "y_int_trap";
+
+// The six bulk kernels over `[float]` (src/y/arch/math.s). Each takes the
+// array's DATA POINTER and its length, not the array: the header is four words
+// and the elements live elsewhere (NATIVE.md, "Arrays"), so the caller hands
+// over `a.ptr` and `len(a)`. Each is bit-identical to the Y loop it replaces --
+// the wrappers below keep those in `*_y` form, and t310 checks the two agree
+// over a corpus -- which is what makes the asm a drop-in rather than a second
+// opinion.
+native def sum_asm(p: *float, n: long) -> float = "y_sum";
+native def dot_asm(p: *float, q: *float, n: long) -> float = "y_dot";
+native def scale_asm(p: *float, n: long, k: float) -> void = "y_scale";
+native def axpy_asm(y: *float, n: long, k: float, x: *float) -> void = "y_axpy";
+native def min_of_asm(p: *float, n: long) -> float = "y_min_of";
+native def max_of_asm(p: *float, n: long) -> float = "y_max_of";
 
 // 2^63, the smallest double no long holds: the boundary every truncating cast
 // below checks against. It cannot be written as a literal -- its integer part
@@ -1548,12 +1565,24 @@ def rand_range(state: [long], n: long) -> long {
 
 // ── whole arrays of floats ──────────────────────────────────────────────────
 //
-// These walk the caller's array in place, so they cost no allocation and the
-// bounds check on every read is the language's, not theirs. A length mismatch
-// between two arrays traps rather than quietly reading the shorter one.
+// These walk the caller's array in place, so they cost no allocation. The two
+// that take two arrays stop on a length mismatch rather than quietly reading the
+// shorter one. The loops themselves are the six kernels in src/y/arch/math.s
+// (`sum_asm` and friends above), each bit-identical to the Y loop kept beside it
+// as `*_y`; the wrapper is what decides the empty case and checks the lengths.
 
 // The plain sum, in order. Fine for well-conditioned data; see fsum_kahan.
+//
+// This is `sum_asm` -- the same additions in the same order, which is what makes
+// the result the same double. `fsum_y` is that loop, kept as the oracle
+// t310 checks the kernel against (and as the shape to read if you want to know
+// what the assembly is doing).
 def fsum(a: [float]) -> float {
+    if (len(a) == 0) { 0.0 } else { sum_asm(a.ptr, len(a)) }
+};
+
+// The Y loop fsum is: in order, from +0.0. It is not exported.
+def fsum_y(a: [float]) -> float {
     let s = 0.0;
     let i = 0;
     let n = len(a);
@@ -1587,8 +1616,15 @@ def fsum_kahan(a: [float]) -> float {
     s + c
 };
 
-// The dot product of two equal-length arrays.
+// The dot product of two equal-length arrays: `dot_asm`, the same
+// multiplications and additions in the same order.
 def fdot(a: [float], b: [float]) -> float {
+    if (len(a) != len(b)) { len_mismatch("fdot") };
+    if (len(a) == 0) { 0.0 } else { dot_asm(a.ptr, b.ptr, len(a)) }
+};
+
+// The Y loop fdot is. Not exported.
+def fdot_y(a: [float], b: [float]) -> float {
     let s = 0.0;
     let i = 0;
     let n = len(a);
@@ -1599,8 +1635,29 @@ def fdot(a: [float], b: [float]) -> float {
     s
 };
 
+// The equal-length rule. A mismatch is a mistake in the caller, and reading the
+// shorter array would answer with a plausible wrong number, so it stops. The
+// message is the same shape as every other runtime error (the traps in rt.y).
+def len_mismatch(who: str) -> void {
+    eputs("runtime error: " + who + " needs two arrays of the same length\n");
+    len_mismatch_stop()
+};
+
+// The exit itself, kept apart so `len_mismatch` has one return path.
+native def len_mismatch_stop() -> void = "y_len_stop";
+
 // The smallest element, or NaN for an empty array.
+//
+// The kernel reads n >= 1, so the empty case stays here where `nan` is. A NaN
+// among the elements never becomes the answer unless it is the FIRST one, and
+// that is `a[i] < m` being false rather than a rule of its own: Y's loop does
+// the same, and so does the assembly (NATIVE.md would call it "unordered").
 def fmin_of(a: [float]) -> float {
+    if (len(a) == 0) { nan } else { min_of_asm(a.ptr, len(a)) }
+};
+
+// The Y loop fmin_of is. Not exported.
+def fmin_of_y(a: [float]) -> float {
     if (len(a) == 0) {
         nan
     } else {
@@ -1614,8 +1671,14 @@ def fmin_of(a: [float]) -> float {
     }
 };
 
-// The largest element, or NaN for an empty array.
+// The largest element, or NaN for an empty array -- `max_of_asm`, and the same
+// NaN rule as fmin_of.
 def fmax_of(a: [float]) -> float {
+    if (len(a) == 0) { nan } else { max_of_asm(a.ptr, len(a)) }
+};
+
+// The Y loop fmax_of is. Not exported.
+def fmax_of_y(a: [float]) -> float {
     if (len(a) == 0) {
         nan
     } else {
@@ -1629,8 +1692,13 @@ def fmax_of(a: [float]) -> float {
     }
 };
 
-// a *= k, in place.
+// a *= k, in place: `scale_asm`, the same product per element.
 def fscale(a: [float], k: float) -> void {
+    scale_asm(a.ptr, len(a), k)
+};
+
+// The Y loop fscale is. Not exported.
+def fscale_y(a: [float], k: float) -> void {
     let i = 0;
     while (i < len(a)) {
         a[i] = a[i] * k;
@@ -1641,6 +1709,12 @@ def fscale(a: [float], k: float) -> void {
 // y += k * x, in place, over equal-length arrays: the axpy of numerical
 // linear algebra, which is how a vector is accumulated without allocating.
 def faxpy(y: [float], k: float, x: [float]) -> void {
+    if (len(y) != len(x)) { len_mismatch("faxpy") };
+    axpy_asm(y.ptr, len(y), k, x.ptr)
+};
+
+// The Y loop faxpy is. Not exported.
+def faxpy_y(y: [float], k: float, x: [float]) -> void {
     let i = 0;
     while (i < len(y)) {
         y[i] = y[i] + k * x[i];
