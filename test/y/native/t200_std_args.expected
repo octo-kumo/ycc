@@ -194,6 +194,24 @@ demo: option '--fps' needs a value
           a second parse starts from the defaults, not the first parse's values
   ok    usage() is non-empty with no failure at all
           so --help works with no error to report
+usage: demo [options] [file...]
+
+  a table for the flag tests
+
+options:
+  -f, --fps N        frames per second (default 30)
+  --seed N           random seed (default 1)
+  -c, --color VALUE  color mode (default mono)
+  -s, --stats        print stats at the end
+  -h, --help         print this message and exit
+  ok    print_usage wrote the usage text above
+          the lines just before this group are it
+  ok    parse_or_exit returns on a good command line
+          got 0, want 0
+  ok    and leaves the flags parsed
+          so the body can read them
+  ok    and leaves no diagnostic
+          a clean parse has nothing to say
 
 init replaces the table
   ok    the second table is in force
@@ -203,4 +221,4 @@ init replaces the table
   ok    while nopts was that of the first
           got 1, want 1
 
-90 of 90 checks passed
+94 of 94 checks passed

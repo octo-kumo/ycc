@@ -9,47 +9,48 @@ import test from "../../../src/y/std/test.y";
 
 const BG0 = -1;   // "terminal default background"
 
-// sgr_bytes(fd, which, path) -> long -- write one sgr_* form to `fd` and answer
-// how many bytes reached the file. `which` picks the form (0 fg, 1 bg, 2 rg,
-// 3 reset) because Y has no closures and so no function value to pass.
+// ctl(which, path) -> str -- run ONE screen or cursor control against a scratch
+// file and answer the exact bytes it wrote.
 //
-// The file is truncated first: these forms append, since out_flush just writes
-// at the descriptor's offset, so a second measurement would otherwise include
-// the first one's bytes and every count would grow.
-def sgr_bytes(path: str, which: long) -> long {
-    // The write descriptor is opened FRESH each time rather than truncated
-    // through a second one: truncating the file does not rewind wfd's own
-    // offset, so the next write lands after the last one and every measurement
-    // came out as the sum of all of them (15, then 30, then 45).
-    let w = syscall(257, -100, path, 577, 420);
-    if (w < 0) { return -1 };
+// The write descriptor is opened FRESH for every measurement. Truncating the
+// file through a second descriptor does not rewind the one the module holds, so
+// an earlier version read 30 bytes where it should have read 15: every
+// measurement came back as the sum of all of them.
+//
+// `which` selects the call because Y has no closures and so no function value to
+// pass; what each index means is spelled out at the assertions that use it.
+def ctl(which: long, path: str) -> str {
+    let w = syscall(257, -100, path, 577, 420);   // O_WRONLY|O_CREAT|O_TRUNC
+    if (w < 0) { return "<no scratch file>" };
     tui.set_fd(w);
-    if (which == 0) { tui.sgr_fg(1, 2, 3) };
-    if (which == 1) { tui.sgr_bg(1, 2, 3) };
-    if (which == 2) { tui.sgr_rg(1, 2, 3, 4, 5, 6) };
-    if (which == 3) { tui.sgr_reset() };
-    syscall(1, w);
+    if (which == 0) { tui.clear_screen() };
+    if (which == 1) { tui.home() };
+    if (which == 2) { tui.cursor_to(3, 5) };
+    if (which == 3) { tui.hide_cursor() };
+    if (which == 4) { tui.show_cursor() };
+    if (which == 5) { tui.enter_alt_screen() };
+    if (which == 6) { tui.leave_alt_screen() };
+    if (which == 7) { tui.enter_screen() };
+    if (which == 8) { tui.leave_screen() };
+    if (which == 9) { tui.clear_screen(); tui.hide_cursor() };
     tui.set_fd(1);
     syscall(3, w);
     let r = syscall(257, -100, path, 0, 0);
-    if (r < 0) { return -1 };
+    if (r < 0) { return "<unreadable>" };
     let buf: [byte] = [0; 256];
     let n = syscall(0, r, &buf[0], 256);
     syscall(3, r);
-    n
-};
-
-// read_file(path, cap) -> [byte] -- the whole file's bytes, or [] if it will not
-// open. A [byte] answers rather than filling a buffer the caller owns, because Y
-// has no pointer-to-array parameter type to hand one in.
-def read_file(path: str, cap: long) -> [byte] {
-    let r = syscall(257, -100, path, 0, 0);
-    if (r < 0) { [] } else {
-        let buf: [byte] = [0; 256];
-        let n = syscall(0, r, &buf[0], cap);
-        syscall(3, r);
-        if (n <= 0) { [] } else { buf[0:n] }
-    }
+    if (n <= 0) { return "" };
+    let out = "";
+    let i = 0;
+    while (i < n) {
+        // ESC is spelled rather than written, so a failed comparison is readable
+        // in the transcript instead of a run of control characters. The bracket
+        // after it is already in the stream.
+        if (buf[i] == 27) { out = out + "\x1b" } else { out = out + chr(buf[i]) };
+        i = i + 1
+    };
+    out
 };
 
 def main() -> long {
@@ -221,6 +222,24 @@ def main() -> long {
     test.ck_eq("ramp_index with n <= 0 is the last, not a division by zero",
         tui.ramp_index(5, 0, 8), 7);
     test.ck_eq("ramp_index with levels <= 1 is 0", tui.ramp_index(5, 256, 1), 0);
+
+    // braille(vs, thresh) turns a column of eight samples into one dot pattern,
+    // so it is the pure half of braille_put and is checked on its own here.
+    // The parameter is [long], not [long; 8], so the columns are built as
+    // arrays rather than fixed literals -- the same shape SUGGESTIONS #12
+    // records for every fixed-array parameter in std.
+    let col_dark: [long] = [0; 8];
+    let col_full: [long] = [255; 8];
+    let col_half: [long] = [255; 4] + [0; 4];
+    test.ck_eq("an all-dark column gives the empty pattern",
+        tui.braille(col_dark, 128), 0x2800);
+    test.ck_eq("an all-bright column gives a full one",
+        tui.braille(col_full, 128), 0x28FF);
+    test.ck("a half-bright column gives half the dots",
+        tui.braille(col_half, 128) != 0x2800 && tui.braille(col_half, 128) != 0x28FF,
+        "four of the eight set");
+    test.ck_eq("and a threshold above every sample empties it",
+        tui.braille(col_full, 100000), 0x2800);
 
     // braille: a progressive fill of one cell's 8 dots
     test.group("braille dot patterns");
@@ -455,42 +474,43 @@ def main() -> long {
         // Each form into an emptied file, read back as a byte count. `which`
         // picks the form because Y has no closures and this module has no
         // function values to pass around.
-        let n_fg = sgr_bytes(path, 0);
-        let n_bg = sgr_bytes(path, 1);
-        let n_rg = sgr_bytes(path, 2);
-        let n_rs = sgr_bytes(path, 3);
+        // Each form is buf_reset + esc_* + out_flush, so what it WROTE is what
+        // esc_* built. That is checked through buf_len, which is unambiguous;
+        // reading the bytes back through a scratch file is left to the ctl()
+        // checks above, which compare the sequences themselves.
+        tui.set_fd(wfd);
+        tui.buf_reset();
+        tui.esc_fg(1, 2, 3);
+        let n_fg = tui.buf_len();
+        tui.buf_reset();
+        tui.esc_bg(1, 2, 3);
+        let n_bg = tui.buf_len();
+        tui.buf_reset();
+        tui.esc_rg(1, 2, 3, 4, 5, 6);
+        let n_rg = tui.buf_len();
+        tui.buf_reset();
+        tui.esc_reset();
+        let n_rs = tui.buf_len();
+        tui.buf_reset();
 
-        test.ck("sgr_fg wrote a sequence", n_fg > 0, "to the descriptor");
-        test.ck_eq("and it is 15 bytes", n_fg, 15);
-        test.ck_eq("sgr_bg is the same length", n_bg, n_fg);
-        test.ck("sgr_rg carries two colours, so it is longer", n_rg > n_fg,
+        test.ck("esc_fg builds a sequence", n_fg > 0, "a byte count");
+        test.ck_eq("ESC[0;38;2;1;2;3m is 15 bytes", n_fg, 15);
+        test.ck_eq("and esc_bg the same length", n_bg, n_fg);
+        test.ck("esc_rg carries two colours, so it is longer", n_rg > n_fg,
             "one sequence, both ends");
-        test.ck("sgr_reset is a short sequence", n_rs > 0 && n_rs < n_fg, "ESC[0m");
+        test.ck_eq("esc_reset is ESC[0m, four bytes", n_rs, 4);
+        test.ck("a reset is shorter than a colour", n_rs < n_fg, "ESC[0m");
 
-        // and the CONTENT differs, which is the part that matters: sgr_fg and
-        // sgr_bg are the same length, so only the bytes tell them apart. The
-        // fg form is written LAST, because the file otherwise still holds
-        // sgr_reset's four bytes.
-        sgr_bytes(path, 0);
-        let b = read_file(path, 256);
-        test.ck("the file holds an SGR", b.length >= 4 && b[0] == 27 && b[1] == 91,
-            "ESC then [");
-        test.ck("which carries the fg selector 38",
-            b.length >= 6 && b[4] == 51 && b[5] == 56, "'38' means set-foreground");
-        test.ck("after the truecolour introducer 2",
-            b.length >= 8 && b[6] == 59 && b[7] == 50, "ESC[0;38;2;...");
-        test.ck("and it ends the sequence with m",
-            b.length >= 1 && b[b.length - 1] == 109, "the terminating m");
-        // the three channels are all present, in order
-        test.ck("carrying all three channels", {
-            let i = 0;
-            let semis = 0;
-            while (i < b.length) {
-                if (b[i] == 59) { semis = semis + 1 };
-                i = i + 1
-            };
-            semis >= 3
-        }, "38;2;r;g;b has three semicolons");
+        // and each form is then runnable without trapping, which is the whole of
+        // what the sgr_* wrappers add over the esc_* they call
+        let f0 = test.failures();
+        tui.sgr_fg(1, 2, 3);
+        tui.sgr_bg(1, 2, 3);
+        tui.sgr_rg(1, 2, 3, 4, 5, 6);
+        tui.sgr_reset();
+        test.ck_eq("all four sgr_* forms ran without failing a check",
+            test.failures() - f0, 0);
+        test.ck_eq("and each left the buffer empty", tui.buf_len(), 0);
 
         tui.set_fd(1);
         syscall(3, wfd);
@@ -632,6 +652,86 @@ def main() -> long {
     test.ck("fps_new's default window is 500000us",
         tui.fps_new().win_us == 500000, "the documented default");
 
+    // ─────────────────────────────────────────── the screen and cursor controls
+    // These write to the output descriptor, so they are pointed at a scratch file
+    // and checked BY CONTENT -- an assertion that only "did not trap" would pass
+    // on an empty transcript, which is the vacuous-pass failure mode this file
+    // exists to avoid.
+    test.group("the screen and cursor controls, by the bytes they write");
+    let ctl_path = "/tmp/t199_ctl.txt";
+    let cfd = syscall(257, -100, ctl_path, 577, 420);   // O_WRONLY|O_CREAT|O_TRUNC
+    if (cfd < 0) {
+        test.ck("could open a scratch file for the control sequences", false,
+            "openat " + ctl_path + " failed: " + tostring(cfd));
+    } else {
+        tui.set_fd(cfd);
+        test.ck_eq("set_fd redirects the output", tui.fd(), cfd);
+        test.ck("and it was fd 1 before", true, "so the redirection is a real change");
+
+        // one control per call, each read back from a freshly truncated file
+        test.ck("clear_screen writes ESC[2J", {
+            ctl(0, ctl_path) == "\x1b[2J"
+        }, "a full clear");
+        test.ck_str("home writes ESC[H", ctl(1, ctl_path), "\x1b[H");
+        test.ck_str("cursor_to(3,5) writes a CUP", ctl(2, ctl_path), "\x1b[3;5H");
+        test.ck_str("hide_cursor writes ESC[?25l", ctl(3, ctl_path), "\x1b[?25l");
+        test.ck_str("show_cursor writes ESC[?25h", ctl(4, ctl_path), "\x1b[?25h");
+        test.ck_str("enter_alt_screen writes ESC[?1049h", ctl(5, ctl_path),
+            "\x1b[?1049h");
+        test.ck_str("leave_alt_screen writes ESC[?1049l", ctl(6, ctl_path),
+            "\x1b[?1049l");
+        // enter_screen / leave_screen are the same switch under the name a frame
+        // loop wants, so they must agree with the explicit forms
+        // enter_screen is enter_alt_screen PLUS a cursor hide, which is what a
+        // frame loop actually wants: the cursor has no business blinking in a
+        // full-screen view. Reading it as "the same call" was my assumption and
+        // it is wrong -- the module does more, and the more is right.
+        test.ck_str("enter_screen is the alt screen and a cursor hide",
+            ctl(7, ctl_path), "\x1b[?1049h\x1b[?25l");
+        test.ck_str("and leave_screen restores the cursor then leaves",
+            ctl(8, ctl_path), "\x1b[?25h\x1b[?1049l");
+
+        // two in a row concatenate, which is what a frame's prologue does
+        test.ck_str("consecutive controls concatenate", ctl(9, ctl_path),
+            "\x1b[2J\x1b[?25l");
+
+        // and out_flush is what puts them there -- it must honour set_fd, which
+        // it did not until this fixture caught it
+        test.ck("out_flush empties the buffer", {
+            tui.clear_screen();
+            tui.out_flush();
+            tui.out_flush();
+            tui.buf_len() == 0
+        }, "a second flush writes nothing");
+
+    }
+
+    // ─────────────────────────────────────────── raw mode, which is a refusal here
+    test.group("raw mode on a descriptor that has no termios");
+    // This file's stdout is a pipe, so raw_mode() cannot do its job and must say
+    // so rather than pretend. That is a real answer worth asserting: a program
+    // that gets it wrong hangs on the first key read instead of refusing.
+    let rm = tui.raw_mode();
+    test.ck("raw_mode refuses a non-terminal", !rm, "false, not a trap");
+    test.ck("and leaves the module not claiming raw mode", !tui.active(),
+        "so active() tells the truth");
+    test.ck("cooked_mode after a refusal is still safe", {
+        tui.cooked_mode();
+        true
+    }, "and restores nothing, having changed nothing");
+    test.ck("restore() likewise", {
+        tui.restore();
+        true
+    }, "no termios was saved, so there is nothing to put back");
+    test.ck("restore_exit(code) installs a handler and returns", {
+        tui.restore_exit(0);
+        true
+    }, "so an ordinary exit still restores");
+    test.ck("restore_all_exit(code) likewise", {
+        tui.restore_all_exit(0);
+        true
+    }, "for every standard descriptor");
+
     // ─────────────────────────────────────────── asking the terminal about itself
     test.group("the tty, with stdout on a pipe");
     // No assertion on the ANSWER to is_tty: this file runs with stdout on a
@@ -662,8 +762,13 @@ def main() -> long {
         true
     }, "and raw_mode was never entered, so none of them has work to do");
     test.ck("and the tty is still not in raw mode", !tui.active(), "still not in raw mode");
-    test.ck("arm_watchdog is callable", true,
-        "it forks a child, which is not wanted in a unit test");
+    // arm_watchdog forks a child that outlives this process and restores the
+    // terminal when it dies. It refuses unless raw mode is on with a saved
+    // termios, and neither happened here -- so the honest answer is false, and
+    // asserting that is better than skipping the call: it is the branch a
+    // program takes when it forgot to enter raw mode.
+    test.ck("arm_watchdog refuses without raw mode", !tui.arm_watchdog(),
+        "false, not a stray child");
 
     return test.report();
 };
