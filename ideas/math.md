@@ -374,7 +374,7 @@ documented as unfused.
 | P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
 | P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. `movsd` and SSE arithmetic with a memory source have since landed too (`f95398b`..this commit), with `movapd`/`xorpd`/`andpd`/`unpcklpd` still to come if P4 needs them |
 | P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **1596 cases** (the pinned edges plus a seeded 1500-case spread) and the worst gap is **3 ulps** (`pow`), with 4 cases over 1. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
-| P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work and `exp` are landed.** `y_exp` is **generated** by `test/math/gen_exp.py` from `math.y`'s own constants and walks the same operations in the same order, so it returns the same double: t311 checks **10,420 arguments bit for bit**, reaching every branch (the NaN test, both range edges, the reduction boundary at each end, the subnormal band, the top of the range). **1422 → 105.7 Ir/call** (ten Y functions collapse into one routine) and **69.6 → 31.9 ns/call** net of a 4.7 ns loop, on `bench/y/tmath.y`. `y_log` has landed the same way (`test/math/gen_log.py`, t312: **10,317 arguments, 0 differing**, **1335 → 115.2 Ir/call**, 71.8 → 34.9 ns/call). `y_sin`/`y_cos` have landed the same way (`test/math/gen_sin.py`, one body for both: two two-instruction entries and the choice in a register, t313: **10,410 arguments each, 0 differing**, **1775 → 190 Ir/call**, 75.4 → 40.4 ns/call). `pow` is to come, the same shape. §8 has what each attempt found |
+| P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work and `exp` are landed.** `y_exp` is **generated** by `test/math/gen_exp.py` from `math.y`'s own constants and walks the same operations in the same order, so it returns the same double: t311 checks **10,420 arguments bit for bit**, reaching every branch (the NaN test, both range edges, the reduction boundary at each end, the subnormal band, the top of the range). **1422 → 105.7 Ir/call** (ten Y functions collapse into one routine) and **69.6 → 31.9 ns/call** net of a 4.7 ns loop, on `bench/y/tmath.y`. `y_log` has landed the same way (`test/math/gen_log.py`, t312: **10,317 arguments, 0 differing**, **1335 → 115.2 Ir/call**, 71.8 → 34.9 ns/call). `y_sin`/`y_cos` have landed the same way (`test/math/gen_sin.py`, one body for both: two two-instruction entries and the choice in a register, t313: **10,410 arguments each, 0 differing**, **1775 → 190 Ir/call**, 75.4 → 40.4 ns/call). `y_pow` has landed the same way (`test/math/gen_pow.py`, t315: **15,137 pairs, 0 differing**, **3004 → 472 Ir/call**, 159.3 → 69.2 ns/call) — the first routine in the file that calls, and therefore the first with a frame. **P4 is complete.** §8 has what each attempt found |
 | P5 | the bulk kernels | **done** — `y_sum y_dot y_scale y_axpy y_min_of y_max_of` in `src/y/arch/math.s`, reached from `std/math.y` through `a.ptr` and `len(a)`, each **bit-identical** to the Y loop kept beside it as `*_y` (t310, over 64 corpora plus the edge values: ±0, both infinities, NaN in first/middle/last position, subnormals, one element, empty). The equal-length rule moved out of the loop, so `fdot`/`faxpy` stop on a mismatch (`y_len_stop`). `bench/y/fmath.y`: **0.37 ns/element against the Y loop's 1.26**, and the 1.27 baseline the plan quotes is the last row of that file |
 
 ## 6. Sequencing
@@ -388,7 +388,7 @@ Each phase ends green: `make ycc` byte-identical after `make rebless`, then
 | **P1** | `native def` end to end, **no asm yet** — parser, AST, types, rename, native, lint, `src/c/`, docs, one fixture | `make ycc` byte-identical; a `t*.y` calls a native whose label exists; fuzz clean (R12) |
 | **P2** | `enc64` mnemonics; `math.s` gains `y_sqrt y_to_int y_fbits y_bitsf`; math.y's portable half | every suite; `make asm-check`; size/time in `make check` |
 | **P3** | the transcendentals in Y on the primitives | the ulp harness: max ulp per function against a **checked-in** `(input bits → expected bits)` table generated once from the platform's libm (checked in, so the suite needs no python at run time), and a seeded random spread on top of the hand-picked edges -- which is what found `cbrt`'s seed bug, a case no hand-picked list had; plus property checks (exp∘log ≈ id, sin²+cos² ≈ 1, `sqrt(x*x) == \|x\|` for normal x, monotonicity, ±0/±inf/NaN/subnormal/2^53/INT64 edges) |
-| **P4** | `exp` (done), then `log`, `pow`, `sin`, `cos` moved into `math.s`, **one at a time** | **bit-identical to the Y version** over a 10k-case corpus (random + edge). The Y version stays in the tree as the oracle. Done for `exp`: `t311_math_exp_asm.y`, 10,420 arguments, 0 differing; `test/math/gen_exp.py` generates the routine from the Y so the table cannot drift; the three encoder bugs it needed are in `e123e2a` |
+| **P4** | `exp` (done), then `log`, `pow`, `sin`, `cos` moved into `math.s`, **one at a time** | **bit-identical to the Y version** over a 10k-case corpus (random + edge). The Y version stays in the tree as the oracle. **All five are done**: `t311` 10,420 arguments, `t312` 10,317, `t313` 10,410 each for sin and cos, `t315` 15,137 pow pairs — all 0 differing. Done for `exp`: `t311_math_exp_asm.y`, 10,420 arguments, 0 differing; `test/math/gen_exp.py` generates the routine from the Y so the table cannot drift; the three encoder bugs it needed are in `e123e2a` |
 | **P5** | the bulk kernels | `make bench` on `bench/y/fmath.y`: the ns/element numbers vs the measured 1.27 ns/element Y baseline |
 
 P0 is independent of everything else and worth doing first on its own merits: it
@@ -665,3 +665,93 @@ not a missing block but `undefined label 'y_test_imm'`, from a probe whose own
 text is right there in the file. Any new `y_` label in `src/y/arch/*.s` has to
 be added to that list, and the list is the only place the tree records which
 labels are entry points.
+
+### What the power attempt found (2026-10-05)
+
+`y_pow` is the first routine in `math.s` that **calls** anything, and that single
+fact decided its shape before a single instruction was written. The dispatch, the
+two-part logarithm, `exp2` of the pair and `ldexp` are four routines; every SSE
+register is caller-saved, so anything that has to outlive a call has to live in
+memory. Hence the frame, hence `y` being read into `-8(%rbp)` once and reloaded
+after each call, and hence `log2_dd` answering a **pair in two registers** where
+the Y leaves it in the module-level cells `log2_hi`/`log2_lo`/`ts_lo`/`z_lo`.
+
+Two decisions worth recording as decisions rather than as accidents:
+
+**`prod_err` is inlined here and called in the trigonometry, which is the
+opposite of what the trigonometry does with the same routine.** In `pow_pos` the
+first product's error is one of four terms the answer is summed from, so a call
+would spill three live values and reload them around it — and a spill is the kind
+of mistake that no test of the arithmetic catches. The trigonometry's two calls
+feed an accumulator and nothing else, so it calls. Twenty-eight instructions
+twice beats one call plus three spills.
+
+**The exponent kernel is a second copy of `y_exp`'s polynomial, reading the same
+`yexp_tab`.** Sharing it would mean `y_exp` calling a helper, and `y_exp`'s live
+values at that point are `t` in `%xmm2`, `k` in `%rcx` and `f2` in `%xmm6` — all
+caller-saved, so the call would cost a spill and two reloads in **exp's own hot
+path** to save twenty-eight instructions of code that only a program using both
+`exp` and `pow` carries twice. The tables are shared, so there is still one copy
+of every coefficient.
+
+**Six bugs, and three of them are the same mistake in three costumes.**
+
+**`movq %gpr, %xmm` moves BITS on this machine.** The Dekker splitter
+`134217729.0` was materialised as `mov $134217729, %rdx` followed by
+`movq %rdx, %xmm2`, and the answer was a *bit* copy, so `xmm2` held the integer's
+bit pattern and every product split into itself and a zero — `prod_err` returned
+`0.0` for every argument, exactly, which is what a broken product looks like
+rather than what a subtle one looks like. The fix is to read the splitter from a
+table entry like the trigonometry always did. **The lesson is that "assembled,
+ran, and moved the wrong thing" is a class of its own**, and the only reason this
+one was found in an hour rather than a week is that a routine answering exactly
+zero for every input is not a bug anybody rationalises.
+
+**An unordered comparison sets ZF as well as PF.** `y == 0.0` was one `je` after
+`ucomisd`, so a NaN exponent took that arm — `ucomisd` sets ZF on an unordered
+result, and `je` does not care about PF — and `pow(2, nan)` answered `1.0`. The
+fix is a second branch that skips the arm when the comparison was unordered, *not*
+moving the NaN test up: the Y's order is what makes `pow(nan, 0.0)` come out
+`1.0` rather than `nan`, and reordering to "tidy" the NaN test would have broken
+that while fixing this.
+
+**A two-argument native reads the LAST argument from `8(%rsp)`.** The emitter
+pushes arguments in source order, so the first is at `16(%rsp)` and the second at
+`8(%rsp)` — the reverse of the natural reading, and `y_sum` is the cross-check
+(`sum_asm(a.ptr, len(a))`: its pointer, the first argument, is at `16(%rsp)`).
+This was wrong twice in opposite directions before it was right, and the
+symptom in both cases was `y == 0` answering `-0.0`: the kernel thought the base
+was zero. Note what the evidence was — `y_sum`'s own reading, visible in the
+source, contradicting the reading the arguments' names suggest.
+
+**`trunc`'s guard was inverted.** `jbe` after the comparison against `2^63`
+returns *small* values unchanged, so `trunc(0.5)` came back `0.5`, `is_int(0.5)`
+came back true, and **every fractional exponent went down the integer path**.
+The kernel answered `1.0` for `pow(2, 0.5)`. The guards also have to test the
+NaN *first* and on its own: a NaN sets CF and ZF together, so one
+below-or-equal covers "below", "equal" and "unordered" at once, and the conversion
+of a NaN is the indefinite value — a very large number rather than no number at
+all.
+
+**A sign flag read after the instruction that clobbered it.** `ypow_int` decided
+"reciprocate?" by testing the sign of `%rdi` *after* `neg %rdi` had put the
+opposite sign there, so every positive exponent was reciprocated and
+`pow(2, 3)` answered `0.125` — `pow(2, -3)`. The flag is a register now, and the
+comment says why: the test has to survive the arithmetic that produced the value
+it is testing.
+
+**`0.0 - v` was assembled as `subsd %xmm0, %xmm0`.** The zero was loaded *into*
+the answer register and then subtracted from itself, which is `+0.0` for any `v`.
+So an odd exponent past 1024 answered `+inf` where the Y answers `-inf`, and
+`pow(-2, -1025)` answered `+0.0` where the Y answers `-0.0`. The negation is
+`0.0 - v` and the zero has to be somewhere else.
+
+**The probes found everything, and the last one found nothing.** The generator's
+`l`, `lo`, `p`, `q`, `e1`, `e2` and `e2a` stages each return one intermediate,
+compared against the Y's own value at that point. `log2_dd`'s two halves and
+`exp2_corr` were exact on the first run; `p` was exact; and `q` was the odd one
+out — which is what pointed at `prod_err` and then at the splitter constant. The
+stages are also how the *stage probes themselves* were debugged: `p` and `q` read
+their two arguments out of the two slots the one-argument stages do not use, and
+reading them the other way round swaps `p` and `q`, so the `exp2_corr` probe
+measured nothing while looking entirely plausible.

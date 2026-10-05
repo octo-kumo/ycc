@@ -883,13 +883,20 @@ def enc_movq(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     } else if (src.k != K.reg) {
         enc_err(at, "movq src")
     } else if (op_size(dst) == 128 && op_size(src) == 128) {
-        // xmm -> xmm: F3 0F 7E /r (MOVDQ2), destination in the reg field.
+        // xmm -> xmm: F3 0F 7E /r (MOVDQ2), the DESTINATION in the reg field.
         //
         // This arm is not optional. Without it the gpr->xmm arm below took
         // the pair and read the SOURCE'S NUMBER as a GPR, so `movq %xmm2,
         // %xmm0` assembled to `movq %rdx, %xmm0` -- a silent miscompile, and
         // the first one this encoder had that the "be loud instead" rule
         // below is about.
+        //
+        // It is F3 and not 66, and the reason is the one worth remembering: 66
+        // 0F 7E is MOVQ with a 64-bit GENERAL-PURPOSE register or memory operand,
+        // so its rm field names a GPR -- `movq %xmm1, %xmm0` with a 66 prefix
+        // reads %rcx. F3 0F 7E is the same instruction with a 32-bit operand, and
+        // for a REGISTER source that is MOVDQ2, which moves all 64 bits. GNU as
+        // spells it F3 too; measured here, after getting it wrong.
         let n = put(buf, at, 243);
         let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
         enc_ok(put3(buf, m, 15, 126, modrm(3, dst.n, src.n)), [])

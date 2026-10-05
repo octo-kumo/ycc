@@ -981,13 +981,22 @@ static Yv *enc_movq(Yv *buf, long at, Yv *dst, Yv *src) {
     } else if (yv_l(yr_get(src, "k")) != K_reg) {
         return enc_err(at, ys("movq src"));
     } else if (op_size(dst) == 128 && op_size(src) == 128) {
-        /* xmm -> xmm: F3 0F 7E /r (MOVDQ2), destination in the reg field.
-           This arm is not optional. Without it the gpr->xmm arm below took the
-           pair and read the SOURCE'S NUMBER as a GPR, so `movq %xmm2, %xmm0`
-           assembled to `movq %rdx, %xmm0` -- a silent miscompile. */
+        /* xmm -> xmm: F3 0F 7E /r (MOVDQ2), the DESTINATION in the reg field.
+           This arm is not optional. Without it the gpr->xmm arm below took
+           the pair and read the SOURCE'S NUMBER as a GPR, so `movq %xmm2,
+           %xmm0` assembled to `movq %rdx, %xmm0` -- a silent miscompile, and
+           the first one this encoder had that the "be loud instead" rule
+           below is about.
+
+           It is F3 and not 66, and the reason is the one worth remembering: 66
+           0F 7E is MOVQ with a 64-bit GENERAL-PURPOSE register or memory operand,
+           so its rm field names a GPR -- `movq %xmm1, %xmm0` with a 66 prefix
+           reads %rcx. F3 0F 7E is the same instruction with a 32-bit operand, and
+           for a REGISTER source that is MOVDQ2, which moves all 64 bits. GNU as
+           spells it F3 too; measured here, after getting it wrong. */
         long n = put(buf, at, 243);
-        long mm = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
-        return enc_ok(put3(buf, mm, 15, 126, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+        long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
+        return enc_ok(put3(buf, m, 15, 126, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
     } else if (op_size(dst) == 128) {
         /* into an xmm: the xmm is the reg field, the gpr the rm field */
         long n = put(buf, at, 102);

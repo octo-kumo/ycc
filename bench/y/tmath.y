@@ -5,8 +5,14 @@
 // is the routine in src/y/arch/math.s and `exp (y)` is the loop in std/math.y it
 // replaced, and each pair returns the same double for every argument
 // (t311 checks 10,420 exp arguments, t312 10,317 log, t313 10,410 each for sin
-// and cos, all bit for bit), so the gap between a pair is the whole of what
-// moving it into assembly bought.
+// and cos, t315 15,137 pow pairs, all bit for bit), so the gap between a pair is
+// the whole of what moving it into assembly bought.
+//
+// pow's argument is a base near 1 and an exponent near 0, so it takes the
+// general path -- the logarithm, the two-part exponent and exp2 of it -- which is
+// the expensive one, and which is the row worth having. An integer exponent goes
+// through the repeated-squaring path instead and is far quicker than either row
+// above.
 //
 // The argument varies inside the timed loop on purpose: a loop-invariant call is
 // something the hoister can settle once, and then the row measures the hoister
@@ -118,15 +124,8 @@ t = best5(def () -> long {
 row("cos (y)", t);
 
 // The rest of the module, so a change to one kernel is visible against the
-// others. These are all still the Y versions.
-t = best5(def () -> long {
-    let s = 0.0;
-    let j = 0;
-    while (j < n) { s = s + math.pow(1.0009, 0.5 + (j % 997) * 0.001); j = j + 1; };
-    sink = s;
-    0
-});
-row("pow", t);
+// others. These are all still the Y versions -- pow was the last one to move, and
+// it has its own pair above.
 t = best5(def () -> long {
     let s = 0.0;
     let j = 0;
@@ -167,6 +166,22 @@ t = best5(def () -> long {
     0
 });
 row("log1p", t);
+t = best5(def () -> long {
+    let s = 0.0;
+    let j = 0;
+    while (j < n) { s = s + math.pow(1.125, 0.125 + (j % 997) * 0.001); j = j + 1; };
+    sink = s;
+    0
+});
+row("pow (asm)", t);
+t = best5(def () -> long {
+    let s = 0.0;
+    let j = 0;
+    while (j < n) { s = s + math.pow_y(1.125, 0.125 + (j % 997) * 0.001); j = j + 1; };
+    sink = s;
+    0
+});
+row("pow (y)", t);
 t = best5(def () -> long {
     let s = 0.0;
     let j = 0;

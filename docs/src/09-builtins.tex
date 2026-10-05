@@ -426,7 +426,20 @@ so \ic{math.pow(x, 0.5)} for a large \ic{x} is a few ulps out while
     the reduced argument in two parts, because the exponent multiplies the
     logarithm's error --- one ulp of an exponent of \num{500} is
     \num{5.7e-14} of the answer, which is 360 ulps of it. That is also why $1/\ln 2$
-    is a pair of constants here and not one.
+    is a pair of constants here and not one. \ic{math.pow} is machine code
+    (\texttt{src/y/arch/math.s}) like \ic{exp}, \ic{log} and \ic{sin}, reached
+    through \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t315\_math\_pow\_asm.y} says so over \num{15137}
+    pairs, every arm of the dispatch and then the general path from a subnormal
+    base to an overflowing exponent --- \num{472} instructions a call against
+    \num{3004}. It is the only kernel in the file with a frame, because it is the
+    only one that \emph{calls}: the dispatch, the two-part logarithm, $\exp 2$ of
+    the pair and \ic{ldexp} are four routines, and every SSE register is
+    caller-saved, so what has to outlive a call lives in memory. \ic{pow\_y} is the
+    loop, kept as the oracle, and \texttt{test/math/gen\_pow.py} generates the
+    routine from the module's own constants --- the same generator shape as the
+    three before it, and its intermediate probes are what located the four bugs
+    listed in \texttt{ideas/math.md} \S8.
 \item[\ic{math.min(a, b)}, \ic{math.max(a, b)}] The smaller or larger of two
   \ty{long}s.
 \item[\ic{math.abs(x)}] \ic{|x|}. The most negative \ty{long} has no positive

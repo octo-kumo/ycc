@@ -232,10 +232,22 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   `test/math/`, walk the same operations in the same order as the Y function
   beside them, and are bit-identical to it — which is the whole promise, so each
   is gated by a fixture that compares thousands of arguments bit for bit
-  (`t311`, `t312`, `t313`). They are reached the same way, through a
+  (`t311`, `t312`, `t313`, `t315`). They are reached the same way, through a
   `native def`, and each has its `*_y` oracle kept beside it in the module. The
   generator exists because a retyped coefficient table would silently disagree
   with the function it is meant to reproduce, and nothing else would notice.
+
+  `y_pow` is the fifth and the odd one out, because it is the first of them that
+  *calls*: the dispatch, the two-part logarithm, `exp2` of the pair and `ldexp`
+  are four routines rather than one leaf. Every SSE register is caller-saved, so
+  it is the only kernel with a frame, and two conventions fall out of that: a
+  routine that has to outlive a call keeps the value in its frame and reloads it,
+  and an internal helper answers a pair in *two registers* where the Y leaves it
+  in module-level cells. Its generator emits the same intermediate probes the
+  other three do (`l`, `lo`, `p`, `q`, `e1`, `e2`), each returning one
+  intermediate against the Y's own value at that point — which is what makes a
+  472-instruction routine debuggable at all, and `ideas/math.md` §8 has the
+  six bugs they found.
 - **`native def`: a declaration with no body.** `native def name(params) -> T
   [= "label"];` declares a function whose implementation is an assembly
   label. The parser makes a `Decl` with `kind: "native"` whose value is a
