@@ -448,6 +448,67 @@ function main() {
             comp.items.every((i) => i.textEdit && typeof i.textEdit.newText === 'string'),
             JSON.stringify(comp.items.filter((i) => !i.textEdit).map((i) => i.label)));
 
+        // ── the member position: a `.` and a name after it ──
+        // A SECOND document, so the positions above stay the ones the rest of
+        // this file computed from `text` -- adding lines to that buffer would
+        // move `fCol` and quietly change what every earlier case tests.
+        const smText = [
+            'let csv = "a,b,c";',           // 0
+            'let parts = csv.split(",");',  // 1  `.` at 15, split at 16..20
+            'let w = csv.pad_left(8);',     // 2  `.` at 11, pad_left at 12..19
+            'let rec = { k: 1 };',          // 3
+            'let v = rec.k;',               // 4  `.` at 11, k at 12
+            'let bare = csv.;',             // 5  `.` at 14, nothing after it
+            '',
+        ].join('\n');
+        const smPath = path.join(ws, 'sm.y');
+        const smUri = uri(smPath);
+        fs.writeFileSync(smPath, smText);
+        send('textDocument/didOpen', {
+            textDocument: { uri: smUri, languageId: 'y', version: 1, text: smText },
+        });
+        await settle();
+        const smAt = (l, c) => ({ textDocument: { uri: smUri }, position: { line: l, character: c } });
+
+        const smHov = await request('textDocument/hover', smAt(1, 18));
+        check('str method: hover names the method and its signature',
+            !!smHov && smHov.contents && smHov.contents.kind === 'markdown' &&
+                typeof smHov.contents.value === 'string' &&
+                smHov.contents.value.includes('split(str) -> [str]'),
+            JSON.stringify(smHov && smHov.contents));
+        check('str method: the hover range is the word under the mouse',
+            !!smHov && smHov.range && smHov.range.start.character === 16 &&
+                smHov.range.end.character === 21,
+            JSON.stringify(smHov && smHov.range));
+        const smHov2 = await request('textDocument/hover', smAt(2, 14));
+        check('str method: a default argument shows in the signature',
+            !!smHov2 && smHov2.contents.value.includes('pad_left(long, str = " ") -> str'),
+            JSON.stringify(smHov2 && smHov2.contents));
+        // A record field after a dot is NOT a string method, and Stage A cannot
+        // type the receiver, so the honest answer is null. Checking it here is
+        // what stops the string-method branch from answering everything after a
+        // dot -- which would be worse than answering nothing.
+        check('str method: a record field after a dot is null, not a guess',
+            (await request('textDocument/hover', smAt(4, 12))) === null);
+
+        const smComp = await request('textDocument/completion', smAt(5, 15));
+        const smLabels = smComp && smComp.items ? smComp.items.map((i) => i.label) : [];
+        check('str method: completion after a dot offers the methods',
+            smLabels.includes('split') && smLabels.includes('pad_left') &&
+                smLabels.includes('lstrip'), JSON.stringify(smLabels));
+        check('str method: and NOT the names -- a member is not a name',
+            !smLabels.includes('print') && !smLabels.includes('csv'), JSON.stringify(smLabels));
+        check('str method: each item is Method(2) and carries its signature',
+            smComp.items.filter((i) => i.label === 'pad_left')
+                .every((i) => i.kind === 2 && typeof i.detail === 'string' &&
+                    i.detail.includes('-> str')),
+            JSON.stringify(smComp.items.filter((i) => i.label === 'pad_left')));
+        const smPref = await request('textDocument/completion', smAt(1, 18));
+        check('str method: isIncomplete is still set on the member list',
+            !!smPref && smPref.isIncomplete === true, JSON.stringify(smPref));
+        check('str method: every member item has a textEdit',
+            smComp.items.every((i) => i.textEdit && typeof i.textEdit.newText === 'string'));
+
         const syms = await request('textDocument/documentSymbol', { textDocument: { uri: mainUri } });
         const arr = syms && syms.documentSymbol;
         check('documentSymbol: a non-empty array', Array.isArray(arr) && arr.length > 0,
