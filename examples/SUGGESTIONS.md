@@ -2481,56 +2481,33 @@ Six proposals become four modules plus one function and two extensions.
 
 ---
 
-# The API, as function headers only
+# The proposed API, as function headers only
 
-Every signature below was extracted by `grep`-equivalent over the vendored
-copies and over `src/y/std/`, not transcribed by hand. Line for line they are
-what already compiles with zero warnings.
+Internal helpers are dropped. Names that exist only to let the module call its
+own internals (`ar_*`, `rd32`/`wr32`, `buf_*`, `emit_*`, `esc_*`, `sgr_*`) are
+not part of a std unit's surface.
 
-### tui / term: modes, size, keys   [term.y]
-def rd32(b: [byte], at: long) -> long
-def wr32(b: [byte], at: long, v: long)
-def rd16(b: [byte], at: long) -> long
+## `std/tui` — terminal, surface, frames, pacing, capture
+
+```
 def is_tty(fd: long) -> bool
-def set_cc(vtime_ds: long, vmin: long)
-def blocking_mode()
-def timeout_mode(vtime_ds: long)
-def install_raw() -> bool
 def raw_mode() -> bool
+def cooked_mode()
 def active() -> bool
-def cooked_mode() -> void
-def restore() -> void
+def restore()
 def restore_exit(code: long)
 def arm_watchdog() -> bool
-def size() -> WinSize
+def size() -> Size
 def set_size(rows: long, cols: long) -> bool
-def pb_pop() -> long
-def pb_push(n: long)
-def raw_read() -> long
-def classify() -> long
-def decode_esc() -> long
+
 def read_key() -> long
 def read_key_timeout(ms: long) -> long
-def buf_reset()
-def buf_len() -> long
-def buf_at(i: long) -> long
-def put_byte(b: long)
-def put_num(v: long)
-def put_str(s: str)
-def put_csi()
-def esc_fg(r: long, g: long, b: long) -> long
-def esc_bg(r: long, g: long, b: long) -> long
-def esc_rg(fr: long, fg: long, fb: long, br: long, bg: long, bb: long) -> long
-def esc_reset() -> long
-def esc_clear() -> long
-def esc_home() -> long
-def esc_cursor(row: long, col: long) -> long
-def clamp255(v: long) -> long
-def sgr_fg(r: long, g: long, b: long)
-def sgr_bg(r: long, g: long, b: long)
-def sgr_rg(fr: long, fg: long, fb: long, br: long, bg: long, bb: long)
-def sgr_reset()
-def flush() -> void
+def push_key(k: long)
+def pop_key() -> long
+def key_pending() -> long
+
+def enter_screen()
+def leave_screen()
 def enter_alt_screen()
 def leave_alt_screen()
 def hide_cursor()
@@ -2538,57 +2515,22 @@ def show_cursor()
 def clear_screen()
 def home()
 def cursor_to(row: long, col: long)
-def enter_screen()
-def leave_screen()
-def restore_all_exit(code: long)
 
-### tui / fb: surface, ANSI, capture   [fb.y]
 def rgb(r: long, g: long, b: long) -> long
 def r_of(c: long) -> long
 def g_of(c: long) -> long
 def b_of(c: long) -> long
-def clamp255(v: long) -> long
 def grey(v: long) -> long
 def lerp_rgb(a: long, b: long, t: long) -> long
-def utf8_len(cp: long) -> long
-def utf8_byte(cp: long, i: long) -> long
-def fd() -> long
-def set_fd(d: long)
-def spill()
-def emit_byte(b: long) -> long
-def emit_num(v: long)
-def emit_cup(r: long, c: long)
-def emit_sgr(fg: long, bg: long)
-def emit_codepoint(cp: long) -> long
-def emit_str(t: str) -> long
-def capture_on()
-def capture_off()
-def capture_reset()
-def capture_len() -> long
-def capture_byte(i: long) -> long
-def capture_checksum() -> long
-def capture_str(from: long, to: long) -> str
-def ramp_index(v: long, n: long, levels: long) -> long
-def shade_ascii(v: long, n: long) -> long
-def shade_blocks(v: long, n: long) -> long
-def shade_half(v: long, n: long) -> long
-def shade(v: long, n: long) -> long
-def shade_len(mode: long) -> long
-def braille_dot(px: long, py: long) -> long
-def braille_mask(level: long) -> long
-def braille_cp(mask: long) -> long
-def shade_braille(v: long, n: long) -> long
-def braille(vs: [long], thresh: long) -> long
-def braille_put(s: Surface, row: long, col: long, vs: [long], thresh: long, fg: long, bg: long) -> long
-def width_of(cp: long) -> long
-def clamp_dim(v: long, hi: long) -> long
+
 def new(rows: long, cols: long) -> Surface
 def resize(s: Surface, rows: long, cols: long) -> Surface
+def rows(s: Surface) -> long
+def cols(s: Surface) -> long
 def clear(s: Surface, bg: long) -> long
 def fill(s: Surface, cp: long, fg: long, bg: long) -> long
-def put_at(s: Surface, i: long, cp: long, fg: long, bg: long) -> long
 def put(s: Surface, row: long, col: long, cp: long, fg: long, bg: long) -> long
-def put_skip(s: Surface, row: long, col: long, fg: long, bg: long) -> long
+def put_skip(s: Surface, row: long, col: long, cp: long, fg: long, bg: long) -> long
 def get(s: Surface, row: long, col: long) -> long
 def key_at(s: Surface, row: long, col: long) -> long
 def text(s: Surface, row: long, col: long, t: str, fg: long, bg: long) -> long
@@ -2597,18 +2539,39 @@ def vline(s: Surface, row: long, col: long, n: long, cp: long, fg: long, bg: lon
 def rect(s: Surface, row: long, col: long, h: long, w: long, cp: long, fg: long, bg: long) -> long
 def fill_rect(s: Surface, row: long, col: long, h: long, w: long, cp: long, fg: long, bg: long) -> long
 def blit(dst: Surface, src: Surface, srow: long, scol: long, drow: long, dcol: long, h: long, w: long) -> long
-def frame_bytes() -> long
-def row_bytes() -> long
-def row_count() -> long
+
+def utf8_len(cp: long) -> long
+def utf8_byte(cp: long, i: long) -> long
+def width_of(cp: long) -> long
+
+def ramp_index(v: long, n: long, levels: long) -> long
+def shade(v: long, n: long) -> long
+def shade_ascii(v: long, n: long) -> long
+def shade_blocks(v: long, n: long) -> long
+def shade_half(v: long, n: long) -> long
+def shade_braille(v: long, n: long) -> long
+def shade_len(mode: long) -> long
+def braille(vs: [long], thresh: long) -> long
+def braille_cp(mask: long) -> long
+def braille_put(s: Surface, row: long, col: long, vs: [long], thresh: long, fg: long, bg: long) -> long
+
 def begin_frame()
 def cell_same(s: Surface, i: long) -> bool
 def cell_commit(s: Surface, i: long)
-def emit_cell(s: Surface, i: long)
 def flush(s: Surface) -> long
 def flush_diff(s: Surface) -> long
 def end_frame(s: Surface) -> long
 
-### tui / pacing   [time.y]
+def capture_on()
+def capture_off()
+def capture_reset()
+def capture_len() -> long
+def capture_byte(i: long) -> long
+def capture_str(from: long, to: long) -> str
+def capture_checksum() -> long
+def grid_digest(s: Surface) -> long
+def grid_text(s: Surface) -> str
+
 def pacer_new(fps: long) -> Pacer
 def pacer_start(p: Pacer)
 def pacer_next(p: Pacer) -> long
@@ -2623,112 +2586,79 @@ def fps_frames(f: Fps) -> long
 def fps_avg_x100(f: Fps) -> long
 def fps_line(f: Fps) -> str
 
-### rt: the clock (ALREADY IN STD -- this is why time.y's clock half is duplication)
-def y_clock_us() -> long
-def y_time_us() -> long
-def y_sleep(ms: long) -> long
+type Size = { rows: long, cols: long };
+type Surface = { rows: long, cols: long, cp: [long], fg: [byte], bg: [byte], key: [long] };
+type Pacer = { period_us: long, sched: long, frames: long, dropped: long, last: long };
+type Fps = { win_us: long, t_beg: long, t0: long, f0: long, n: long, x100: long };
+```
 
-def y_nap_us(us: long) -> long          # PROPOSED: the one missing primitive
+`grid_text` **returns a `str`** where `sink.y` wrote into the capture buffer and
+returned nothing; nine folders wanted the same function and each wrote it
+differently. One signature, one behaviour.
 
-### args   [args.y]
+## `rt` — the one addition
+
+```
+def y_nap_us(us: long) -> long
+```
+
+`y_clock_us`, `y_time_us` and `y_sleep` already exist and are unchanged. This is
+the whole proposal: `y_sleep` takes whole milliseconds.
+
+## `std/args`
+
+```
+type Opt = { long: str, short: str, kind: long, help: str };
+
 def init(prog: str, desc: str, spec: [Opt], tail: str = "")
-def nopts() -> long
-def ar_find_long(name: str) -> long
-def ar_find_short(c: str) -> long
-def ar_flagish(t: str) -> bool
-def ar_fail(msg: str)
-def ar_bool_val(v: str) -> bool
-def ar_num_ok(s: str) -> bool
-def ar_store(k: long, v: str)
-def ar_take(k: long, as: str, v: str)
-def ar_long(t: str)
-def ar_short(t: str)
 def parse(toks: [str]) -> long
 def parse_or_exit(toks: [str])
+def has(name: str) -> bool
 def get_str(name: str, dflt: str) -> str
 def get_long(name: str, dflt: long) -> long
-def has(name: str) -> bool
 def positional() -> [str]
-def errmsg() -> str
-def num_ok(s: str) -> bool
-def ar_left(k: long) -> str
-def ar_help(k: long) -> str
+def nopts() -> long
 def usage() -> str
 def print_usage()
+def errmsg() -> str
+```
 
-### test: the shared assertion helpers, headers only
+`kind: 0` is a flag with no value, `1` takes one.
 
-The four `ck` forms and the two `ck_eq` forms are shown in the correction above
-with the folder each came from. The listing is the union, deduplicated.
+## `std/test`
 
+```
+def ck(name: str, ok: bool, detail: str) -> bool
+def ck_eq(name: str, got: long, want: long) -> bool
+def ck_near(name: str, got: long, want: long, tol: long) -> bool
+def ck_str(name: str, got: str, want: str) -> bool
+def ck_bytes(name: str, got: [byte], want: [byte]) -> bool
+def group(name: str)
+def checks() -> long
+def failures() -> long
+def report() -> long
+```
+
+**One `ck`, and it returns `bool`.** The corpus has four incompatible forms —
+`sandfall`, `hexview`, `audio` and `x11` with `wavefunction` respectively — and
+the second of these is not an assertion at all but an equality check wearing
+the name, so `ck(a, b, "name")` is equality there and truthiness everywhere
+else:
+
+```
 def ck(cond: bool, what: str) -> bool
 def ck(got: long, want: long, what: str) -> bool
 def ck(name: str, ok: bool, detail: str)
 def ck(name: str, ok: bool, detail: str) -> void
-def ck_eq(name: str, got: long, want: long)
-def ck_eq(name: str, got: long, want: long) -> void
-def ck_near(name: str, got: long, want: long, tol: long)
-def ck_num(got: long, want: long, what: str) -> bool
-def failed() -> long
+```
 
-### random: the union of the three folders that wrote one anyway
-def rnd_seed(seed: long) -> long
-def rng_seed(v: long) -> void
-def seed(v: long)
-def next() -> long
-def rnd_next() -> long
-def rng_next() -> long
-def below(n: long) -> long
-def rnd_below(n: long) -> long
-def rng_below(n: long) -> long
-def range(lo: long, hi: long) -> long
-def chance(pct: long) -> bool
-def rnd_set_state(v: long) -> long
-def rnd_state() -> long
+`ck_str` and `ck_bytes` exist because there are no generics, so a `ck_eq` over
+`str` cannot be the same function.
 
-### json: std/json.y as it stands
-def obj()
-def arr() -> [Val]
-def jobj(o: { str => Val }) -> Val
-def jarr(a: [Val]) -> Val
-def num(n: long) -> Val
-def numtext(t: str) -> Val
-def str(s: str) -> Val
-def boolean(b: bool) -> Val
-def nul() -> Val
-def keys_of(o: { str => Val }) -> [str]
-def field(o: Val, k: str) -> Val?
-def index(a: Val, i: long) -> Val?
-def as_str(v: Val) -> str?
-def as_long(v: Val) -> long?
-def as_bool(v: Val) -> bool?
-def as_arr(v: Val) -> [Val]?
-def as_obj(v: Val)
-def is_null(v: Val) -> bool
-def hex2(c: long) -> str
-def utf8_put(b: [byte], cp: long) -> [byte]
-def escape(s: str) -> str
-def stringify_val(v: Val, depth: long) -> str
-def stringify(o: { str => Val }) -> str
-def stringify_obj(o: { str => Val }, depth: long) -> str
-def hexval(c: long) -> long
-def p_ws(p: P) -> long
-def at(p: P) -> long
-def lit(p: P, t: str) -> bool
-def p_hex4(p: P) -> long
-def p_uescape(p: P, out: [byte]) -> long
-def p_string(p: P) -> str?
-def p_number(p: P) -> str?
-def p_array(p: P, depth: long) -> Val?
-def p_object(p: P, depth: long) -> Val?
-def p_value(p: P, depth: long) -> Val?
-def parse_val(s: str) -> Val?
-def parse(s: str)
-def parse_err(s: str)
-def p_show(s: str, i: long) -> str
+## `std/json` — the eight additions
 
-
-### the eight additions `std/json` needs
+The unit already has 24 functions; these are what it is missing, and every one
+is already written and working in the folder that needs it.
 
 ```
 def parse_bytes(b: [byte; N], len: long) -> Val?
@@ -2741,18 +2671,20 @@ def node_count(v: Val) -> long
 def max_depth(v: Val) -> long
 ```
 
-The first four are the zero-copy and accessor-with-a-default shapes that
-`httpsrv`, `rest-client` and `weather` each had to write; the last four are
-what any golden-diffing tool needs and `stringify_val(v, depth)` does not
-provide.
-
-### the two additions `std/random` needs beyond `TODO.md` #4
+## `std/random` — the delta to `TODO.md` #4
 
 ```
+def seed(v: long)
+def next() -> long
+def below(n: long) -> long
+def range(lo: long, hi: long) -> long
+def chance(pct: long) -> bool
 def state() -> long
 def set_state(v: long)
 ```
 
-`below(n)` must reject rather than use `%`: `x % n` is biased for every `n`
-that is not a power of two, because 2^62 does not divide by `n`. All three
-vendored copies use splitmix64 and only `maze/rng.y` gets the rejection right.
+splitmix64. `below` rejects rather than using `%`, because `x % n` is biased for
+every `n` that is not a power of two. `state`/`set_state` are what `TODO.md` #4's
+sketch lacks: it says a failing case is worthless if it cannot be replayed, but
+can only seed from the start — `mud/rnd.y` has them because a MUD bug reproduces
+only from the divergence point, not from tick 0.
