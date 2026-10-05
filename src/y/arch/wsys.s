@@ -62,6 +62,12 @@
 # where the callee looks. The trap stubs, which are reached by a `jmp` and so
 # arrive on the SysV register set, marshal by hand.
 #
+# NO `push $immediate`: the in-tree assembler has no push-immediate form --
+# ir.y gives F_PUSH_R kinds [O_REG] and nothing else -- so a `push $1` in one
+# of these blocks is "push needs r64" at assembly time, a diagnostic that names
+# the instruction rather than the missing form. The trap stubs go through %rax
+# for it, which is what every other call site in the tree does.
+#
 # A block here must NOT assume a callee-saved register survives it. Win64 makes
 # %rbx, %r12, %r13, %r14 and %r15 callee-saved; these blocks push and pop their
 # own, and y_os_write's own prologue pushes %r13 -- which is why the byte
@@ -191,7 +197,8 @@ y_os_exit:
 y_div_zero:
     lea ystr_divzero(%rip), %rsi
     mov $ystr_divzero_end-ystr_divzero, %rdx
-    push $1
+    mov $1, %rax
+    push %rax
     push %rdx
     push %rsi
     call y_os_write
@@ -202,7 +209,8 @@ y_div_zero:
 y_oob:
     lea ystr_oob(%rip), %rsi
     mov $ystr_oob_end-ystr_oob, %rdx
-    push $1
+    mov $1, %rax
+    push %rax
     push %rdx
     push %rsi
     call y_os_write
@@ -213,7 +221,8 @@ y_oob:
 y_cast_trap:
     lea ystr_cast(%rip), %rsi
     mov $ystr_cast_end-ystr_cast, %rdx
-    push $1
+    mov $1, %rax
+    push %rax
     push %rdx
     push %rsi
     call y_os_write
@@ -224,7 +233,8 @@ y_cast_trap:
 y_alloc_fail:
     lea ystr_oom(%rip), %rsi
     mov $ystr_oom_end-ystr_oom, %rdx
-    push $1
+    mov $1, %rax
+    push %rax
     push %rdx
     push %rsi
     call y_os_write
@@ -235,7 +245,8 @@ y_alloc_fail:
 y_opt_unwrap:
     lea ystr_opt(%rip), %rsi
     mov $ystr_opt_end-ystr_opt, %rdx
-    push $1
+    mov $1, %rax
+    push %rax
     push %rdx
     push %rsi
     call y_os_write
