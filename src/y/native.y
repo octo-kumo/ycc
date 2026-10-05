@@ -1722,28 +1722,78 @@ type EmitFunc = Func | EmitMain;
 // IR_TEXT items index -- that body's own, since a function is emitted with a
 // fresh `txt` (emit_one_fn) -- and `txt` the lines the body being emitted now
 // writes to.
-type EmitSt = { ir: [long], txt: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: long, end_label: long, fns: FnTab, bodies: [[long]], btext: [[str]], blabels: [str] };
+// `slots` counts the frame slots a block's NAMES and loop state hold (a
+// stack of block depths: see gen_block_as); `temp` counts the slots ONE
+// statement's temporaries hold, released as that statement ends. Locals come
+// first, so a temporary sits below every local of the block -- which is what
+// keeps a statement's temporaries safe from the blocks inside it.
+type EmitSt = { ir: [long], txt: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, temp: long, self_label: long, end_label: long, fns: FnTab, bodies: [[long]], btext: [[str]], blabels: [str] };
 // The state after making a label (next_loc, ty_desc), and the label's id.
 type StLbl = { st: EmitSt, label: long };
 
 def st_new() -> EmitSt {
     { ir: [], txt: [], rodata: [], uid: 1, fuid: 0, loc: 1, env: [],
-      slots: 0, self_label: -1, end_label: -1, fns: fntab_of([], []), bodies: [], btext: [],
+      slots: 0, temp: 0, self_label: -1, end_label: -1, fns: fntab_of([], []), bodies: [], btext: [],
       blabels: [] }
 };
 
 // The state with its IR buffer (and, where it changes, its raw lines)
 // replaced: every append to a body goes through one of these, the way every
 // append to `out` went through emit.
+// The DEEPEST frame the function being emitted ever needs: st.slots is a
+// stack of block depths (st_slots), so its value on the way out of a block is
+// a depth the frame has to cover whether or not the counter is there now.
+// Every allocation is either still counted when the function ends or released
+// by a block on the way, so this is the high-water mark; emit_one_fn resets it
+// and sizes the frame from it.
+let frame_max = 0;
+
 def st_with(st: EmitSt, b: [long], txt: [str]) -> EmitSt {
     { ir: b, txt: txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels }
 };
 
 def st_ir(st: EmitSt, b: [long]) -> EmitSt {
     st_with(st, b, st.txt)
+};
+
+// The state with the frame counter set: what a block does on the way out, so
+// the counter is a stack of depths (see gen_block_as) rather than a running
+// total of every slot the body ever took.
+def st_slots(st: EmitSt, n: long) -> EmitSt {
+    // A block that took no slot of its own has nothing to release, and the
+    // depth it hands back is the one it was given -- which the mark already
+    // covers (every allocation is marked where it is taken).
+    if (n == st.slots) {
+        st
+    } else {
+        let deep = st.slots + st.temp;
+        if (deep > frame_max) { frame_max = deep; };
+        { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: n, temp: st.temp,
+          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+          bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+    }
+};
+
+// The state with a statement's temporaries released: they are dead once the
+// statement is (its value is in %rax or a local's slot), and the next
+// statement starts below them again. The high-water mark goes with them, so
+// the frame still covers the deepest a single statement reached.
+def st_temp(st: EmitSt, n: long) -> EmitSt {
+    // a statement that took no temporary, as above
+    if (n == st.temp) {
+        st
+    } else {
+        let deep = st.slots + st.temp;
+        if (deep > frame_max) { frame_max = deep; };
+        { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: n,
+          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+          bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+    }
 };
 
 // One instruction: form `f` and its seven field words (see ir.y). The shapes
@@ -1782,7 +1832,7 @@ def emit(st: EmitSt, line: str) -> EmitSt {
 def next_uid(st: EmitSt) -> { st: EmitSt, uid: long } {
     let u = st.uid;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid + 1,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     { st: st, uid: u }
@@ -1792,7 +1842,7 @@ def next_loc(st: EmitSt) -> StLbl {
     let n = st.loc;
     let id = lbl_fresh(arch.arch_loc_label(st.fuid, n));
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc + 1, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc + 1, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     { st: st, label: id }
@@ -1994,7 +2044,7 @@ def env_define(st: EmitSt, name: str, kind: str, off: long, label: long, mark: s
     env_index_add(env);
     let env = st.env;
     { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels }
 };
@@ -3191,7 +3241,7 @@ def gen_str_const(st: EmitSt, s: str) -> EmitSt {
     st.rodata += [rod0];
     let rod = st.rodata;
     st = { ir: st.ir, txt: st.txt, rodata: rod, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, id, insn.R_RAX, 64)
@@ -3311,7 +3361,7 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
         let boff = (st.slots + 1) * -8;
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, boff, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
           bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         env_define(st2, name, "box", boff, -1, "", e.typ)
@@ -3536,7 +3586,7 @@ def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
     st = emit_insn(st, insn.F_MOV_I_D, 0, insn.R_RBP, -1, 1, off - 8, -1, 0);
     let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     env_define(st2, name, "own", off, -1, "", t)
@@ -5536,7 +5586,7 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     let voff = (st.slots + 1) * -8;
     let loff = (st.slots + 2) * -8;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     st = gen(st, node.hi);
@@ -5579,7 +5629,7 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     let elt: Type = infer(st, node.iter);
@@ -5667,13 +5717,10 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
         } else {
             st = gen(st, targs[i]);
         };
-        let off = (st.slots + 1) * -8;
+        let off = (st.slots + st.temp + 1) * -8;
+        st = st_temp(st, st.temp + 1);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         offs += off;
-        st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         i = i + 1;
     };
     // copy the locals over the parameter slots (param k: 16 + 8*(n-1-k))
@@ -5723,10 +5770,12 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
         // a trailing `;` (void) leaves the statement before it in tail
         // position: the block's value is void either way
         if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; }
+        let tdepth = st.temp;
         let ti = 0;
         while (ti < m - 1) {
             st = gen_loc_stmt(st, tl[ti]);
             st = gen_stmt(st, tl[ti]);
+            st = st_temp(st, tdepth);
             ti = ti + 1;
         };
         if (m > 0) {
@@ -5775,12 +5824,18 @@ def gen_block(st: EmitSt, node: Block) -> EmitSt {
 
 // `dropped`: nobody takes the block's value (a loop body), so its last
 // statement is a statement (gen_stmt) as well as the ones before it.
-def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No scope push: names are unique post-rename, blocks share the frame.
+def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No scope push: names are unique post-rename, so a block reuses the slots of the blocks around it.
     let stmts = node.stmts;
     if (len(stmts) == 0) {
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
-        // A trailing `;` (void) computes nothing: nothing to emit.
+        // The frame is the DEEPEST block's slots, not the sum of them all: the
+        // slots a block takes are released as it ends. Sound because nothing
+        // outside reads them -- a name it declared is out of scope there (the
+        // checker agrees), and a captured variable lives in a heap cell that a
+        // closure reaches through its own captures, not through this slot.
+        let depth = st.slots;
+        let tdepth = st.temp;
         let m = len(stmts);
         if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; }
         let i = 0;
@@ -5791,9 +5846,12 @@ def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No sc
             } else {
                 st = gen(st, stmts[i]);
             };
+            // this statement's own temporaries are dead; the ones of the
+            // statement this block sits in are not, hence the depth and not 0.
+            st = st_temp(st, tdepth);
             i = i + 1;
         };
-        st
+        st_slots(st, depth)
     }
 };
 
@@ -6569,12 +6627,13 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
         bci = bci + 1;
     };
     st = gen_make_closure(st, lbl, caps);
+    // a NAME (let f = ...), so its slot lives to the end of the block
     let coff = (st.slots + 1) * -8;
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, coff, -1);
     let st3 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+      temp: st.temp, self_label: st.self_label, end_label: st.end_label,
+      fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     st3 = env_define(st3, name, "closure", coff, -1, "", func_type_in(st3, func));
     box_bound(st3, name)
 };
@@ -6676,7 +6735,7 @@ def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
         let off = (st.slots + 1) * -8;
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
           bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         st2 = env_define(st2, name, "local", off, -1, "", t);
@@ -7455,6 +7514,31 @@ def block3(a: Node, b: Node, c: Node, ln: long, cl: long) -> Block {
     { k: K.block, stmts: st, line: ln, col: cl }
 };
 
+// `first` (a place binding, which is a BLOCK for a nested place) then
+// `rest`, all in ONE block: the statements after it read the names the binding
+// declares, so a nested block would take their slots out of scope under them
+// (frame slots are released per block -- see gen_block_as).
+def block_bind(first: Node, rest: [Node], ln: long, cl: long) -> Block {
+    let st: [Node] = [];
+    if (first.k == K.block) {
+        let fb: Block = first;
+        let fs = fb.stmts;
+        let i = 0;
+        while (i < len(fs)) {
+            st += [fs[i]];
+            i = i + 1;
+        };
+    } else {
+        st += [first];
+    };
+    let j = 0;
+    while (j < len(rest)) {
+        st += [rest[j]];
+        j = j + 1;
+    };
+    { k: K.block, stmts: st, line: ln, col: cl }
+};
+
 def block4(a: Node, b: Node, c: Node, d: Node, ln: long, cl: long) -> Block {
     let st: [Node] = [];
     st += a;
@@ -7582,10 +7666,14 @@ def gen_incdec_desugar(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
 // `{ bind; let v = ...; target = v; v }` -- both `++x` and `x++`, whose value
 // is the trailing read of the temporary. As a statement that read is dead.
 def gen_incdec_end(st: EmitSt, bind: Node, d2: Node, asg: Node, dropped: bool, ln: long, cl: long) -> EmitSt {
+    let rest: [Node] = [];
+    rest += d2;
+    rest += asg;
+    rest += n_id_of(d2, ln, cl);
     if (dropped) {
-        gen_discard(st, block4(bind, d2, asg, n_id_of(d2, ln, cl), ln, cl))
+        gen_discard(st, block_bind(bind, rest, ln, cl))
     } else {
-        gen(st, block4(bind, d2, asg, n_id_of(d2, ln, cl), ln, cl))
+        gen(st, block_bind(bind, rest, ln, cl))
     }
 };
 
@@ -7606,10 +7694,13 @@ def n_id_of(d2: Node, ln: long, cl: long) -> Node {
 // dead, unless it is a named local: reading one clears a string's companion
 // cell (gen_id), which gen_stmt's frame test deliberately leaves alone.
 def gen_opassign_end(st: EmitSt, bind: Node, asg: Node, read: Node, dropped: bool, ln: long, cl: long) -> EmitSt {
+    let rest: [Node] = [];
+    rest += asg;
+    rest += read;
     if (dropped) {
-        gen_discard(st, block3(bind, asg, read, ln, cl))
+        gen_discard(st, block_bind(bind, rest, ln, cl))
     } else {
-        gen(st, block3(bind, asg, read, ln, cl))
+        gen(st, block_bind(bind, rest, ln, cl))
     }
 };
 
@@ -7693,10 +7784,14 @@ def gen_opassign_desugar(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     let bin: Bin = { k: K.bin, op: op, l: rd, r: node.v, line: ln, col: cl };
     let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
     let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
+    let rest: [Node] = [];
+    rest += d2;
+    rest += asg;
+    rest += n_id(t1 + "v", ln, cl);
     if (dropped) {
-        gen_discard(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+        gen_discard(st, block_bind(bind, rest, ln, cl))
     } else {
-        gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+        gen(st, block_bind(bind, rest, ln, cl))
     }
 };
 
@@ -7867,10 +7962,17 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
         let put: Node = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
         let step: Assign = { k: K.assign, name: t1 + "i", v: { k: K.bin, op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
         let loop: While = { k: K.kw_while, cond: { k: K.bin, op: "<", l: n_id(t1 + "i", ln, cl), r: n_id(t1 + "n", ln, cl), line: ln, col: cl }, body: block2(put, step, ln, cl), line: ln, col: cl };
+        let rest: [Node] = [];
+        rest += tv;
+        rest += ti;
+        rest += tn;
+        rest += loop;
+        rest += gen_place_read(tgt, t1, ln, cl);
+        let bnd: Node = gen_place_bind(tgt, t1, ln, cl);
         if (dropped) {
-            gen_discard(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+            gen_discard(st, block_bind(bnd, rest, ln, cl))
         } else {
-            gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+            gen(st, block_bind(bnd, rest, ln, cl))
         }
     } else {
         let fname = "push";
@@ -8021,14 +8123,11 @@ def gen_acc_cat_rax(st: EmitSt, aoff: long) -> EmitSt {
 // instead, a map nested in an array, an option or a record printed as its heap
 // address, which differs every run.
 def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
-    let moff = (st.slots + 1) * -8;
-    let aoff = (st.slots + 2) * -8;
-    let ioff = (st.slots + 3) * -8;
-    let koff = (st.slots + 4) * -8;
-    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 4,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+    let moff = (st.slots + st.temp + 1) * -8;
+    let aoff = (st.slots + st.temp + 2) * -8;
+    let ioff = (st.slots + st.temp + 3) * -8;
+    let koff = (st.slots + st.temp + 4) * -8;
+    st = st_temp(st, st.temp + 4);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, moff, -1);
     st = gen_str_const(st, "{");
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
@@ -8089,13 +8188,10 @@ def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
 // Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
 // gives. Slots: [src][acc][i].
 def gen_arr_tostr_rax(st: EmitSt, elty: Type, path: [Type]) -> EmitSt {
-    let soff = (st.slots + 1) * -8;
-    let aoff = (st.slots + 2) * -8;
-    let ioff = (st.slots + 3) * -8;
-    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+    let soff = (st.slots + st.temp + 1) * -8;
+    let aoff = (st.slots + st.temp + 2) * -8;
+    let ioff = (st.slots + st.temp + 3) * -8;
+    st = st_temp(st, st.temp + 3);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, soff, -1);
     st = gen_str_const(st, "[");
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
@@ -8780,13 +8876,10 @@ def gen_join(st: EmitSt, node: Call) -> EmitSt {
 
 // Slots: [src][dst][i]. Builds dst = [tostr(src[0]), ...] then joins it.
 def gen_join_conv(st: EmitSt, node: Call, tostr_fn: str, esz: long) -> EmitSt {
-    let soff = (st.slots + 1) * -8;
-    let doff = (st.slots + 2) * -8;
-    let ioff = (st.slots + 3) * -8;
-    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+    let soff = (st.slots + st.temp + 1) * -8;
+    let doff = (st.slots + st.temp + 2) * -8;
+    let ioff = (st.slots + st.temp + 3) * -8;
+    st = st_temp(st, st.temp + 3);
     let jargs: [Node] = node.args;
     st = gen(st, jargs[0]);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, soff, -1);
@@ -9020,8 +9113,12 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // fresh per-function state; uid/rodata/fns flow through and back.
     // Bodies see every hoisted function and global through st.fns
     // (env_find), like the checker's fresh_func_scope.
+    // frame_max is this function's: emit_one_fn nests (a hoisted def, a
+    // closure literal), so the caller's mark is put back on the way out.
+    let prev_max = frame_max;
+    frame_max = 0;
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: fuid, loc: 1, env: [], slots: 0,
+      fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
       self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
       fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     // The names nested functions capture (see box_names / box_bound).
@@ -9110,7 +9207,9 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
         opi = opi + 1;
     };
     f = gen_tail(f, func.body);
-    let frame = arch.arch_frame(f.slots);
+    if (f.slots + f.temp > frame_max) { frame_max = f.slots + f.temp; };
+    let frame = arch.arch_frame(frame_max);
+    frame_max = prev_max;
     // The body is one IR stream: the prologue, what the body emitted, the
     // epilogue (see ir.y). The text the linker and -S read is rendered from
     // it, so nothing here is spelled twice.
@@ -9179,7 +9278,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     f.blabels += lname(label);
     let blabels = f.blabels;
     { ir: st.ir, txt: st.txt, rodata: f.rodata, uid: f.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: bodies, btext: btext, blabels: blabels }
 };
@@ -9192,7 +9291,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
 // because a call's result type decides e.g. whether `+` must stringify.
 def infer_fn_ret(st: EmitSt, func: Func) -> Type {
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: 0, loc: 1, env: [], slots: 0,
+      fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
       btext: st.btext, blabels: st.blabels };
     let params: [str] = func.params;
@@ -9372,7 +9471,7 @@ def decl_name(d: Decl) -> str {
 // so two units' globals never share one.
 def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: 0, loc: 1, env: [], slots: 0,
+      fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
       btext: st.btext, blabels: st.blabels };
     let out: [Sym] = [];
@@ -9813,7 +9912,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         // unit's uids count from its base
         let st = st_new();
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: base + 1,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
           bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         let r = next_uid(st);
@@ -9845,7 +9944,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         ids0 += hids;
         ids0 += xids;
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fns0, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         // Fill in the return type of every unannotated def, so call sites
@@ -9856,7 +9955,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         fns1 += fixed1;
         fns1 += xfns;
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fns1, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         let gl = app_cells(global_entries(st, gdecls, base), ast3.stmts);
@@ -9870,7 +9969,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         idsA += gids;
         if (len(gl) > 0) {
             st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
               self_label: st.self_label, end_label: st.end_label,
               fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
               btext: st.btext, blabels: st.blabels };
@@ -9881,7 +9980,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             fixedfns += gl;
         }
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
           btext: st.btext, blabels: st.blabels };

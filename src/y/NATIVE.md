@@ -65,6 +65,11 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   compare may recurse or call those cores. `gen_eq_vals` is the one
   dispatcher: left pushed, right in `%rax`, 0/1 back in `%rax`.
 - Locals live at fixed `rbp` offsets (one flat frame per function, 8 bytes/slot).
+  A block releases its slots as it ends and a statement releases its
+  temporaries as it does (`st_slots`/`st_temp` over `EmitSt.slots`/`temp`), so
+  the frame is the **deepest** the body ever reached (`frame_max`), not the sum
+  of every slot ever taken — the two counters are separate because a
+  statement's temporaries must outlive the blocks inside that statement.
   **Top-level variables are globals**: each gets an 8-byte `.bss` cell
   (`yg_<n>_<name>`, read and written `%rip`-relative), so every function —
   hoisted or not, called from anywhere — sees the same variable.
