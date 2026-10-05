@@ -1,0 +1,22 @@
+-- the legend, in index order
+legend: 14 types: comment, string, number, keyword, selfNone, operator, punctuation, variable, error, parameter, function, property, type, builtin
+-- the five semantic classes
+Pair, a type alias: type
+twice, a def: function
+n, a parameter: parameter
+a, a closure parameter: parameter
+mul, a let bound to a signature: function
+print, a builtin: builtin
+a of p.a, a property: property
+a of a record literal, still variable: variable
+-- and what stays `variable`
+inner, a let: variable
+p, an ordinary variable: variable
+a name nothing declares: variable
+a name used before its own line: variable
+-- and the syntactic classes are untouched
+the `type` keyword: keyword
+a number: number
+-- every identifier in the buffer got a class from the legend
+tokens outside the legend: 0 of 115
+done

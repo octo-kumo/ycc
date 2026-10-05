@@ -1,5 +1,5 @@
-legend: 9 types: comment, string, number, keyword, selfNone, operator, punctuation, variable, error
-constants matching their legend index: 9, mismatched: 0
+legend: 14 types: comment, string, number, keyword, selfNone, operator, punctuation, variable, error, parameter, function, property, type, builtin
+constants matching their legend index: 14, mismatched: 0
 every type sem can emit is inside the legend: true
 small: 20 tokens, 100 numbers
 round trip exact: true
@@ -15,6 +15,10 @@ five numbers per token: true
   '1' is a number:       number
   '//' is a comment:     comment
   the string is a string:string
+no trailing newline: 18 tokens for 18 spans
+with one: 18 tokens for 18 spans
+the last line survives either way: true
+tokens on the last line of the no-newline buffer: 4 (want 4)
 sorted, disjoint, positive length: true
 block comment spans: 3 lines
 comment tokens: 3 (want 3)

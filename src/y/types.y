@@ -1617,6 +1617,22 @@ def type_index_on() -> void {
 
 def type_index_off() -> void { tc_index = false };
 
+// One entry, unless the key is already there -- the FIRST type wins, as above.
+def tci_note_key(key: long, t: Type) {
+    let bkt: [long] = tci_bkts[key % 1024];
+    let seen = false;
+    let i = 0;
+    while (i < len(bkt)) {
+        if (tci_keys[bkt[i]] == key) { seen = true; i = len(bkt); }
+        else { i = i + 1; };
+    };
+    if (!seen) {
+        tci_keys += key;
+        tci_typs += t;
+        bkt += len(tci_keys) - 1;
+    };
+};
+
 // Only ever called when tc_index is set: the flag is tested at the call site in
 // typeof_expr rather than here, so the off path costs a load and a branch and
 // not a call. Measured: testing it inside made the call itself the cost, and
@@ -1641,6 +1657,24 @@ def tci_note(node: Node, t: Type) {
                 tci_typs += t;
                 bkt += len(tci_keys) - 1;
             };
+        };
+        // A member access records its type at the KEY's position too.
+        //
+        // `a.b` parses with the Dot at the `.`, so the table holds the FIELD's
+        // type under the dot and nothing under the field's own name -- which is
+        // where an editor puts the cursor and what go-to-highlight asks about. The
+        // parser keeps the key's position for exactly this (Decl/Dot `nline`/
+        // `ncol`, 9.2 A5), so it is recorded as well.
+        //
+        // Only when the index is on, so a real compile pays nothing: this is
+        // inside tci_note, which typeof_expr does not even call.
+        let nk = node.k;
+        if (nk == K.dot) {
+            let d: Dot = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
+        } else if (nk == K.dotassign) {
+            let d: DotAssign = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
         };
     };
 };

@@ -25,6 +25,10 @@ range start line 10 char 6
 range end char 11
 return type present: true
 base, no annotation: ```y
+long
+```
+
+```y
 base
 ```
 hover on nothing: true

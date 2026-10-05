@@ -214,8 +214,15 @@ function main() {
         const leg = init.capabilities.semanticTokensProvider && init.capabilities.semanticTokensProvider.legend;
         check(
             'initialize: the semantic token legend is present and ordered',
-            !!leg && Array.isArray(leg.tokenTypes) && leg.tokenTypes.length === 9 &&
-                leg.tokenTypes[0] === 'comment' && leg.tokenTypes[8] === 'error',
+            // The five SEMANTIC classes are in the legend now (R2.3), appended so
+            // the eight before them keep their wire indices -- an editor's theme is
+            // keyed on those. The length was 9 and the check said so literally, so
+            // the day the classes landed this read as "the legend is broken".
+            !!leg && Array.isArray(leg.tokenTypes) && leg.tokenTypes.length === 14 &&
+                leg.tokenTypes[0] === 'comment' && leg.tokenTypes[8] === 'error' &&
+                leg.tokenTypes[9] === 'parameter' && leg.tokenTypes[10] === 'function' &&
+                leg.tokenTypes[11] === 'property' && leg.tokenTypes[12] === 'type' &&
+                leg.tokenTypes[13] === 'builtin',
             JSON.stringify(leg && leg.tokenTypes),
         );
         send('initialized', {});
@@ -340,6 +347,67 @@ function main() {
             outside + ' outside, ' + (data.length / 5) + ' tokens over ' + lines.length + ' lines');
         check('semanticTokens: the file produced a plausible number of tokens',
             data.length > 40, data.length + ' numbers for ' + lines.length + ' lines');
+
+        // What a name DENOTES (R2.3). The five semantic classes are resolved by the
+        // server's own index and the compiler's own builtin list -- never guessed --
+        // so each is checked by NAME through the legend, which is the only thing a
+        // client ever sees.
+        const semText = [
+            'type Pair = { a: long, b: long };',        // 0
+            'def twice(n: long) -> long {',               // 1
+            '    let inner = n * 2;',                     // 2
+            '    inner',                                  // 3
+            '}',                                          // 4
+            'let p: Pair = { a: 1, b: 2 };',              // 5
+            'let q = p.a;',                               // 6
+            'print(twice(p.a));',                         // 7
+            'let z = nosuchthing;',                       // 8
+        ].join('\n');
+        send('textDocument/didChange', {
+            textDocument: { uri: mainUri, version: 12 },
+            contentChanges: [{ text: semText }],
+        });
+        await settle();
+        const semToks = await request('textDocument/semanticTokens/full', { textDocument: { uri: mainUri } });
+        const semData = semToks && semToks.data;
+        const names = leg.tokenTypes;
+        const semLines = semText.split('\n');
+        // The class of the first identifier at (line, needle), by legend NAME.
+        // Decoded the way an editor decodes it. `pc` is the previous token's START
+        // and it is not optional: deltaStartChar is relative to it when two tokens
+        // share a line and absolute otherwise, so a decoder that keeps only `dc`
+        // silently reads every second token on a line from the wrong place. It is
+        // the first thing t010_sem's own decode gets right and the thing this one
+        // got wrong, which showed up as two cases answering `no-token` for a
+        // parameter and a property that are both there.
+        const classOf = (line, needle) => {
+            const at = semLines[line].indexOf(needle);
+            if (at < 0) { return 'NO-SUCH-COLUMN'; }
+            let pl = 0, pc = 0;
+            for (let i = 0; i + 4 < semData.length; i += 5) {
+                const dl = semData[i];
+                const line2 = pl + dl;
+                const ch = dl === 0 ? pc + semData[i + 1] : semData[i + 1];
+                const len = semData[i + 2];
+                if (line2 === line && at >= ch && at < ch + len) {
+                    const t = semData[i + 3];
+                    return t >= 0 && t < names.length ? names[t] : 'type' + t;
+                }
+                pl = line2;
+                pc = ch;
+            }
+            return 'no-token';
+        };
+        check('semantic classes: a type alias is a type', classOf(0, 'Pair') === 'type', classOf(0, 'Pair'));
+        check('semantic classes: a def is a function', classOf(1, 'twice') === 'function', classOf(1, 'twice'));
+        check('semantic classes: a parameter is a parameter', classOf(1, 'n:') === 'parameter', classOf(1, 'n:'));
+        check('semantic classes: a member after a dot is a property', classOf(6, 'a;') === 'property', classOf(6, 'a;'));
+        check('semantic classes: a builtin is a builtin', classOf(7, 'print') === 'builtin', classOf(7, 'print'));
+        check('semantic classes: an ordinary let stays a variable', classOf(3, 'inner') === 'variable', classOf(3, 'inner'));
+        // And the one that matters most: a name nothing declares must NOT get a
+        // class it did not earn, or an editor paints a typo as real code.
+        check('semantic classes: a name nothing declares stays a variable',
+            classOf(8, 'nosuchthing') === 'variable', classOf(8, 'nosuchthing'));
         // A multi-line comment must be SEVERAL tokens: one token crossing a line
         // break paints from its start to the end of the file, and the result looks
         // like a broken theme rather than a broken server.
@@ -484,12 +552,34 @@ function main() {
         check('str method: a default argument shows in the signature',
             !!smHov2 && smHov2.contents.value.includes('pad_left(long, str = " ") -> str'),
             JSON.stringify(smHov2 && smHov2.contents));
-        // A record field after a dot is NOT a string method, and Stage A cannot
-        // type the receiver, so the honest answer is null. Checking it here is
-        // what stops the string-method branch from answering everything after a
-        // dot -- which would be worse than answering nothing.
-        check('str method: a record field after a dot is null, not a guess',
-            (await request('textDocument/hover', smAt(4, 12))) === null);
+        // A record field after a dot is NOT a string method. It used to be
+        // asserted as `null`, because Stage A could not type the receiver. With the
+        // checker's type index (LSP.md 9.2 A2) the receiver IS typed, so the field
+        // answers with its own type -- and the assertion has to change with it,
+        // because what it was really testing is that the string-method branch does
+        // not swallow a field. It checks the exact answer and that it is not a
+        // signature.
+        const recField = await request('textDocument/hover', smAt(4, 12));
+        check('str method: a record field answers its own type, not a signature',
+            !!recField && recField.contents.value.trim() === 'long',
+            JSON.stringify(recField && recField.contents.value));
+
+        // A record's OWN fields after a dot, chosen by the checker's type of the
+        // object rather than by guessing (LSP.md 9.2, R6.1). Driven through the
+        // same protocol path as the string methods above, because the point is
+        // that one member branch serves both and picks the right list.
+        const recComp = await request('textDocument/completion', smAt(4, 13));
+        const recLabels = recComp && recComp.items ? recComp.items.map((i) => i.label) : [];
+        check('member: a record offers its own fields after a dot',
+            recLabels.length === 1 && recLabels[0] === 'k', JSON.stringify(recLabels));
+        check('member: and NOT the 26 string methods',
+            !recLabels.includes('split') && !recLabels.includes('pad_left'),
+            JSON.stringify(recLabels));
+        check('member: a field item is Field(5) and carries the field type',
+            recComp.items.every((i) => i.kind === 5 && i.detail === 'long'),
+            JSON.stringify(recComp.items));
+        check('member: every field item has a textEdit',
+            recComp.items.every((i) => i.textEdit && typeof i.textEdit.newText === 'string'));
 
         const smComp = await request('textDocument/completion', smAt(5, 15));
         const smLabels = smComp && smComp.items ? smComp.items.map((i) => i.label) : [];

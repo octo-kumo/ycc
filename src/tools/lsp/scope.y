@@ -62,6 +62,17 @@ type IdxDecl = {
     // level. Packed in the SAME 0-based convention as `line`/`ch` above -- see
     // index_src's `opens` for why that is worth saying.
     scope_start: long,
+    // The packed position at which that scope CLOSES, or -1 while it is still
+    // open. Resolved once per index in a post-pass rather than looked up per
+    // question: `nav.in_scope` asked `scope_end` for every candidate of every
+    // lookup, and the highlighter asks about EVERY identifier, so the cost was
+    // proportional to (identifiers x declarations of that name) -- 2.0 s on
+    // `src/y/native.y`, where `st` alone has hundreds.
+    //
+    // It cannot be filled in while the index is built, because a scope's end is
+    // only known when its `}` is reached and declarations are recorded on the way
+    // in. The post-pass walks `decls` once, which is linear in the file.
+    scope_end: long,
     order: long           // source order, for "declared before this use"
 };
 
@@ -82,19 +93,39 @@ type FileIdx = {
     // declared inside one function stayed visible for the rest of the file, and
     // `print(shared)` after a function that had its own `shared` resolved to
     // the wrong declaration (scope.y's in_params comment has the other half).
-    closed: [long]
+    closed: [long],
+    // The same pairs as a start -> end map, because `closed` cannot be searched:
+    // it is in the order the braces CLOSED, so the starts are not ascending and a
+    // binary search over them would be wrong. `scope_end` therefore walked all
+    // ~7,000 entries per call, and `nav.in_scope` calls it once per candidate per
+    // lookup -- invisible when a completion asked once, and 2.3 s for the
+    // highlighter's pass over every identifier in `src/y/native.y`.
+    //
+    // Built here rather than in the caller so every consumer gets it: completion,
+    // go-to-definition and hover all call `in_scope` too.
+    scope_ends: { long => long }
 };
 
 // The packed end of the scope that begins at `start`, or -1 if it has not
 // closed (or `start` is -1, meaning top level, which never ends).
-def scope_end(closed: [long], start: long) -> long {
+def scope_end(ends: { long => long }, start: long) -> long {
     let out = 0 - 1;
     if (start >= 0) {
-        let i = 0;
-        while (i + 1 < len(closed)) {
-            if (closed[i] == start) { out = closed[i + 1]; }
-            if (out >= 0) { i = len(closed); } else { i = i + 2; };
-        };
+        let got = ends[start];
+        if is_some(got) { out = got!; };
+    };
+    out
+}
+
+// The start -> end map for a `closed` pair list. A scope that has not closed has
+// no entry, which is the -1 `scope_end` returns and `in_scope` reads as "still
+// open".
+def scope_end_map(closed: [long]) -> { long => long } {
+    let out: { long => long } = {};
+    let i = 0;
+    while (i + 1 < len(closed)) {
+        out[closed[i]] = closed[i + 1];
+        i = i + 2;
     };
     out
 };
@@ -367,7 +398,7 @@ def index_src(src: str, path: str) -> FileIdx {
                         line: p.line, ch: p.character,
                         end_line: p.line, end_ch: p.character + len(src[s.off:s.end]),
                         detail: param_detail(sps, src, i), doc: "",
-                        depth: depth, scope_start: -1, order: i
+                        depth: depth, scope_start: -1, scope_end: -1, order: i
                     };
                     decls += one;
                     pending_params += one;
@@ -376,7 +407,26 @@ def index_src(src: str, path: str) -> FileIdx {
             }
         }
     }
-    let f: FileIdx = { path: path, decls: decls, opens: opens, closed: closed };
+    // Fill in each declaration's scope end, now that every `}` has been seen.
+    //
+    // One linear pass, done once per index, so that `nav.in_scope` -- which asks
+    // this of every candidate of every lookup -- is two comparisons and an integer
+    // test. It used to ask `scope_end` per candidate, and the highlighter's pass
+    // over every identifier in `src/y/native.y` cost 2.0 s for that alone.
+    let ends = scope_end_map(closed);
+    let di = 0;
+    while (di < len(decls)) {
+        let dcl = decls[di];
+        if (dcl.scope_start >= 0) {
+            let got = ends[dcl.scope_start];
+            let e = 0 - 1;
+            if is_some(got) { e = got!; };
+            dcl.scope_end = e;
+            decls[di] = dcl;
+        };
+        di = di + 1;
+    };
+    let f: FileIdx = { path: path, decls: decls, opens: opens, closed: closed, scope_ends: ends };
     f
 }
 
@@ -408,7 +458,7 @@ def decl_after(sps: [Span], src: str, i: long, path: str, kind: long, depth: lon
             line: a.line, ch: a.character,
             end_line: a.line, end_ch: a.character + len(nm),
             detail: det, doc: "",
-            depth: depth, scope_start: scope, order: ni
+            depth: depth, scope_start: scope, scope_end: -1, order: ni
         };
         out = some(one);
     }
@@ -556,6 +606,18 @@ def def_params_at(sps: [Span], src: str, k: long) -> bool {
     let out = false;
     let j = k - 1;
     while (j >= 0 && sps[j].kind == scan.K_comment) { j = j - 1; };
+    // `def (`: an ANONYMOUS def -- a function literal, `let mul = def (a: long)
+    // -> long { ... }`. `def` on its own cannot be anything else, because a
+    // `native def` must be named and a named def has a name here.
+    //
+    // Without this the parameters of every closure in a file were unindexed, and
+    // that is not a rare shape: it is how a lambda is written in Y, and the first
+    // thing to break is the semantic token painting `a` in `(a: long)` as an
+    // ordinary variable while the same `a` in a `def f(a: long)` is a parameter.
+    if (j >= 0 && sps[j].kind == scan.K_keyword) {
+        let w0 = src[sps[j].off:sps[j].end];
+        if (w0 == "def") { out = true; };
+    };
     // the def's name
     if (j >= 0 && sps[j].kind == scan.K_ident) {
         j = j - 1;
@@ -596,6 +658,6 @@ def in_params(sps: [Span], src: str, i: long) -> bool {
 export {
   D_DEF, D_LET, D_CONST, D_PARAM, D_TYPE, D_IMPORT, D_SELF,
   IdxDecl, FileIdx, index_src, doc_above, trim_both, is_nameish,
-  header_text, annotation_text, param_detail, colon_tail, import_target, scope_end,
+  header_text, annotation_text, param_detail, colon_tail, import_target, scope_end, scope_end_map,
   in_params, scan_word, pack
 };

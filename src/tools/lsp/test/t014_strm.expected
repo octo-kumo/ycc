@@ -4,8 +4,9 @@ pad_left: ```y|pad_left(long, str = " ") -> str|```||string method
 count: ```y|count(str) -> long|```||string method
 range on split: line 1 char 16..21
 -- hover NOT on a string method
-rec.k: true
-a local of the same name, no dot: ```y|split|```
+rec.k: long
+rec.k is a type, not a method: true
+a local of the same name, no dot: ```y|long|```||```y|split|```
 -- completion after a dot
 after `csv.`: 26 items
 has split: true

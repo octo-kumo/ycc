@@ -170,4 +170,103 @@ def tops_pairs(x: XRef) -> [str] {
     out
 }
 
-export { Top, XRef, strip_uniq, tops_of, top_decl, top_line, tops_names, tops_pairs, is_ambiguous };
+// The SPLICED line for each of the buffer's own lines, 1-based at both ends and
+// 0 where the buffer has no line there.
+//
+// The program's own lines are a verbatim SUFFIX of the spliced text: the resolver
+// inlines each imported module and the buffer's own lines follow, unchanged, in
+// order. So the whole map is arithmetic on two line counts --
+//
+//     mine[k] = spliced_lines - buffer_lines + k
+//
+// for every k at or after the buffer's first non-import line, and 0 before it.
+//
+// Three things this gets wrong if you do it the obvious way instead, all measured
+// on `client-check.js`'s buffer (which imports) and all of them invisible on a
+// buffer that does not (the first fixture had no imports, and passed):
+//
+// - The import STATEMENT's own line is REPLACED by the module's lines, so it has
+//   no spliced line of its own. `t015_xref` shows it: mod.y's 10 lines are spliced
+//   1..10 and main.y's four lines are 10..13, overlapping at 10 -- main line 1 (the
+//   import) is not there at all. It gets 0, and `mine[0]` is the array's own
+//   sentinel.
+// - Filtering `origin.file == 0` and counting is off by ONE, because the origin
+//   map still has an entry for the replaced line. The failure mode is the nasty
+//   one: a hover asked about the line ABOVE the one under the cursor and got that
+//   line's type, so hovering a blank line between an `import` and a `def` returned
+//   the function's own signature.
+// - Using `origin.line[i]` as the buffer line has the same off-by-one for the
+//   same reason, which is why it is not used here: the two counts are facts about
+//   two texts, and `diag.xref_for` holds both.
+//
+// 0 is the honest answer where there is no spliced line: no type is indexed at
+// line 0, so expr_type returns tunk and the server says nothing rather than
+// something wrong.
+// `out` is indexed by the BUFFER's own 1-based line, so every line before
+// `first_own` needs a slot of its own even though its value is 0. Appending only
+// from `first_own` on leaves `out[1]` holding line 2's answer, which is an
+// off-by-one that reads as "the map is one line late" and is invisible on a buffer
+// whose first line is already its own (no import, so first_own == 1).
+def own_lines(spliced_lines: long, buffer_lines: long, first_own: long) -> [long] {
+    let out: [long] = [0];
+    let shift = spliced_lines - buffer_lines;
+    let k = 1;
+    while (k < first_own) {
+        out += 0;
+        k = k + 1;
+    };
+    while (k <= buffer_lines) {
+        out += shift + k;
+        k = k + 1;
+    };
+    out
+}
+
+// The 1-based buffer line of the first line that is not an import statement, or
+// buffer_lines + 1 when every line is one.
+//
+// Y requires imports at the top of a file, so the first line that does not begin
+// with the keyword is where the program's own statements start -- and that is
+// exactly the first line the splice keeps under its own name.
+def first_own_line(text: str, buffer_lines: long) -> long {
+    let out = buffer_lines + 1;
+    let k = 1;
+    while (k <= buffer_lines) {
+        let lb = line_text(text, k);
+        let i = 0;
+        while (i < len(lb) && (lb[i] == 32 || lb[i] == 9)) { i = i + 1; };
+        if (i >= len(lb) || lb[i:i + 7] != "import ") { out = k; k = buffer_lines + 1; } else { k = k + 1; };
+    };
+    out
+}
+
+// How many lines `text` has, counting a trailing newline as ending the last line
+// rather than starting an empty one -- which is what `split` gives, so this is
+// `len(split(text, "\n"))` written out. Both counts in `own_lines` are taken this
+// way, and the trailing empty element CANCELS in their difference, so the map does
+// not depend on the convention either way.
+def nlines(text: str) -> long { len(split(text, "\n")) }
+
+// One 1-based line of `text` without its newline, which is all this needs.
+def line_text(text: str, n: long) -> str {
+    let line = 1;
+    let i = 0;
+    while (i < len(text) && line < n) {
+        if (text[i] == 10) { line = line + 1; };
+        i = i + 1;
+    };
+    let stop = i;
+    while (stop < len(text) && text[stop] != 10) { stop = stop + 1; };
+    text[i:stop]
+}
+
+// Is this position one the checker indexed? tunk is the "nothing here" sentinel
+// (types.expr_type), and a consumer must test it rather than print it -- tunk
+// renders as `<error>`, which would read as a diagnostic about the user's code.
+def indexed_line(mine: [long], line: long) -> long {
+    let out = 0;
+    if (line >= 1 && line < len(mine)) { out = mine[line]; };
+    out
+}
+
+export { Top, XRef, strip_uniq, tops_of, top_decl, top_line, tops_names, tops_pairs, is_ambiguous, own_lines, indexed_line, nlines, first_own_line };

@@ -2016,6 +2016,24 @@ void type_index_on(void) {
 
 void type_index_off(void) { tc_index = 0; }
 
+/* One entry, unless the key is already there -- the FIRST type wins, as above. */
+static void tci_note_key(long key, Yv *t) {
+    Yv *bkt = ya_get(tci_bkts, key % 1024);
+    int seen = 0;
+    long i = 0;
+    while (i < yv_len(bkt) && !seen) {
+        if (yv_l(ya_get(tci_keys, yv_l(ya_get(bkt, i)))) == key) {
+            seen = 1;
+        }
+        i = i + 1;
+    }
+    if (!seen) {
+        tci_keys = ya_push(tci_keys, yv_long(key));
+        tci_typs = ya_push(tci_typs, t);
+        ya_push(bkt, yv_long(yv_len(tci_keys) - 1));
+    }
+}
+
 /* Only ever called when tc_index is set: the flag is tested at the call site in
  * typeof_expr rather than here, so the off path costs a load and a branch and
  * not a call. Measured: testing it inside made the call itself the cost, and the
@@ -2045,8 +2063,24 @@ static void tci_note(Yv *node, Yv *t) {
                 ya_push(bkt, yv_long(yv_len(tci_keys) - 1));
             }
         }
+        /* A member access records its type at the KEY's position too.
+         *
+         * `a.b` parses with the Dot at the `.`, so the table holds the FIELD's
+         * type under the dot and nothing under the field's own name -- which is
+         * where an editor puts the cursor and what go-to-highlight asks about. The
+         * parser keeps the key's position for exactly this (Decl/Dot `nline`/
+         * `ncol`, 9.2 A5), so it is recorded as well.
+         *
+         * Only when the index is on, so a real compile pays nothing: this is
+         * inside tci_note, which typeof_expr does not even call. */
+        long nk = yv_l(yr_get(node, "k"));
+        if ((nk == K_dot || nk == K_dotassign) && yv_l(yr_get(node, "nline")) > 0 &&
+            yv_l(yr_get(node, "ncol")) > 0) {
+            tci_note_key(yv_l(yr_get(node, "nline")) * 65536 + yv_l(yr_get(node, "ncol")), t);
+        }
     }
 }
+
 
 /* The type inferred for the expression at (line, col), or tunk() when nothing was
  * indexed there. tunk rather than tnone: tnone is a real type a program can write,

@@ -209,7 +209,12 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
 // expensive half of a compile. The trade is that a buffer with a type error
 // still navigates, which is what an editor wants -- the error is already in the
 // diagnostics channel.
-type Prepared = { names: [str], lines: { str => long }, files: { str => str } };
+// `mine` is the buffer's own line -> the SPLICED line, which is what every
+// position in the compiler's tables is keyed by. It is built from the origin map
+// rather than guessed from the splice order, because a program can import the
+// same module twice, nest imports, or have an import whose own source declares
+// things -- the order is an implementation detail and the map is the truth.
+type Prepared = { names: [str], lines: { str => long }, files: { str => str }, mine: [long] };
 
 // The prepared index for `text`, or none when it cannot be resolved -- a missing
 // import, an unterminated literal, a path that does not exist. None is the
@@ -234,8 +239,20 @@ def xref_for(text: str, dir: str, path: str) -> Prepared? {
             // attributed to the wrong file.
             let ast = parser.parse_program(lexer.tokenize(nr.src));
             let ast2: Block = strip_ns(ast, nr.imports);
-            let ast3: Block = rename.rename_program_x(ast2, [], nr.origin.file, nr.origin.mods);
+            // rename_program_x2, not rename_program_x, and only the tree is read
+            // back. The second half of its answer -- the def site of every
+            // binding, including the locals and parameters no LSP table has -- is
+            // not consumed here, and LSP.md 9.2 says why with the measurement:
+            // the cross-file definition path still re-reads the target file to get
+            // its declaration's SIGNATURE and doc comment, which a position does
+            // not carry, so a column the server already had is all the map would
+            // save. Binding it to a name would only have made the compiler warn.
+            let ast3: Block = rename.rename_program_x2(ast2, [], nr.origin.file, nr.origin.mods).ast;
             let x = xref.tops_of(ast3);
+            let mine = xref.own_lines(
+                xref.nlines(nr.src),
+                xref.nlines(rp.text),
+                xref.first_own_line(rp.text, xref.nlines(rp.text)));
             let lines: { str => long } = {};
             let files: { str => str } = {};
             let names: [str] = [];
@@ -247,7 +264,20 @@ def xref_for(text: str, dir: str, path: str) -> Prepared? {
                 files[nm] = file_of(nr.origin, ln);
                 names += nm;
             };
-            out = some({ names: names, lines: lines, files: files });
+            // check_program with the expression index ON. The table it leaves
+            // behind lives in types.y's module globals, which is where
+            // expr_type() reads it from -- so the LSP never copies a type, it
+            // asks the checker for the one it already computed.
+            type_index_on();
+            let errs = check_program(ast3, externs_none().ext);
+            type_index_off();
+            // The errors themselves are diagnose()'s job; xref_for only wants the
+            // side effect. A buffer that does not type-check still navigates and
+            // still hovers: the errors are already in the diagnostics channel, and
+            // refusing to answer because of them would make the editor feel broken
+            // in exactly the situation where a person is trying to fix it.
+            let _ = errs;
+            out = some({ names: names, lines: lines, files: files, mine: mine });
         };
     };
     out
