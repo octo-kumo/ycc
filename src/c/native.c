@@ -26,6 +26,7 @@
 #include "parser.h"
 #include "lint.h"
 #include "asm.h"
+#include "labels.h"
 #include "yv.h"
 #include "tags.h"
 
@@ -182,9 +183,6 @@ Yv *namemap_build(Yv *names);
 long namemap_get(Yv *m, Yv *name);
 Yv *fntab_of(Yv *syms, Yv *ids);
 Yv *fntab_ids(Yv *syms);
-Yv *lbl_new(Yv *name);
-Yv *lbl_fresh(Yv *name);
-Yv *lname(Yv *id);
 Yv *labmap_new(long cap);
 Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
 Yv *labmap_get(Yv *m, Yv *name);
@@ -262,7 +260,8 @@ Yv *app_names(Yv *node, int deep, Yv *skip);
 int own_wanted(Yv *st, Yv *name);
 Yv *bind_own(Yv *st, Yv *name, Yv *t);
 Yv *gen_stmt(Yv *st, Yv *node);
-Yv *gen_sappend(Yv *st, Yv *v, Yv *var, Yv *cell);
+Yv *gen_sappend(Yv *st, Yv *v, Yv *var_lbl, long var_disp, Yv *cell_lbl,
+                long cell_disp);
 Yv *gen_discard(Yv *st, Yv *node);
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps);
 Yv *gen_range(Yv *st, Yv *node);
@@ -300,7 +299,7 @@ Yv *gen_eq_arr_deep(Yv *st, Yv *et);
 Yv *gen_bin_rest(Yv *st, Yv *node);
 Yv *gen_shift(Yv *st, Yv *node, Yv *op);
 long shift_imm(Yv *r);
-Yv *syscall_reg(long i);
+long syscall_reg(long i);
 Yv *gen_push_args(Yv *st, Yv *args);
 Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes);
 Yv *gen_conv(Yv *st, Yv *got, Yv *want);
@@ -352,7 +351,7 @@ Yv *alias_of(Yv *t);
 int same_rec(Yv *lt, Yv *t);
 Yv *rec_lit_type(Yv *lt, Yv *want);
 Yv *infer_go(Yv *st, Yv *node);
-Yv *gen_slot_load(Yv *st, long idx, Yv *dst);
+Yv *gen_slot_load(Yv *st, long idx);
 Yv *gen_func_literal(Yv *st, Yv *node);
 Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps);
 Yv *gen_decl(Yv *st, Yv *node);
@@ -437,9 +436,9 @@ Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s);
 long elem_bytes(Yv *t);
 long arr_elem_bytes(Yv *t);
 long ptr_width(Yv *t);
-Yv *elem_load(long esz, Yv *base, Yv *idx, Yv *dst);
-Yv *elem_store_rdx(long esz, Yv *base, Yv *idx);
-Yv *elem_store_rdx_const(long esz, Yv *base, long k);
+Yv *elem_load(Yv *st, long esz, long base, long idx, long dst);
+Yv *elem_store_rdx(Yv *st, long esz, long base, long idx);
+Yv *elem_store_rdx_const(Yv *st, long esz, long base, long k);
 long arr_alloc_size(long esz, long n);
 long arr_header_size(void);
 Yv *gen_dot(Yv *st, Yv *node);
@@ -2500,9 +2499,30 @@ static Yv *emit_insn(Yv *st, long f, long a, long b, long c, long d, long e,
     return st_ir(st, ir_push(yr_get(st, "ir"), f, a, b, c, d, e, g, h));
 }
 
-/* A line the emitter still spells as text: a comment, or an instruction not
- * yet moved to the IR. It becomes an IR_TEXT item, so the body is one ordered
- * stream either way and ir_render_all puts the text back where it was. */
+/* A label definition (`yfn_3_foo:`), as an item carrying the label's id: the
+ * assembler takes the name from the table, and tree shaking compares ids. */
+static Yv *emit_label(Yv *st, long id) {
+    return emit_insn(st, IR_LABEL, id, 0, 0, 0, 0, 0, 0);
+}
+
+/* The five words of a memory operand that is a frame slot (lbl < 0: the
+ * displacement is from %rbp) or a symbol at (%rip) (lbl >= 0) -- base, index,
+ * scale, disp, label. For the operands whose shape the emitter only learns from
+ * the variable: gen_sappend's variable and its companion cell are a local for
+ * one program and a global for the next. */
+static Yv *memop(Yv *lbl, long disp) {
+    if (yv_l(lbl) >= 0) {
+        return yav(5, yv_long(-1), yv_long(-1), yv_long(1), yv_long(0), lbl);
+    } else {
+        return yav(5, yv_long(R_RBP), yv_long(-1), yv_long(1), yv_long(disp),
+                   yv_long(-1));
+    }
+}
+
+/* A line the emitter still spells as text: the three comment lines it writes
+ * (two `INTERNAL:` traps and the discarded bare self, which carries a
+ * trailing comment of its own). It becomes an IR_TEXT item, so the body is one
+ * ordered stream either way and ir_render_all puts the text back where it was. */
 Yv *emit(Yv *st, Yv *line) {
     Yv *txt = ya_push(yr_get(st, "txt"), line);
     Yv *b = ir_push(yr_get(st, "ir"), IR_TEXT, yv_len(txt) - 1, 0, 0, 0, 0, 0, 0);
@@ -3823,16 +3843,16 @@ Yv *gen_go(Yv *st, Yv *node) {
         return gen_lit(st, node);
     } else if (yv_l(k) == K_bool) {
         if (ys_eq_lit(yr_get(node, "v"), "true")) {
-            return emit(st, ys("    mov $1, %rax"));
+            return emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
         } else {
-            return emit(st, ys("    xor %eax, %eax"));
+            return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
         }
     } else if (yv_l(k) == K_str) {
         return gen_str_const(st, yr_get(node, "v"));
     } else if (yv_l(k) == K_bstr) {
         return gen_bstr(st, node);
     } else if (yv_l(k) == K_void) {
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(k) == K_id) {
         return gen_id(st, node);
     } else if (yv_l(k) == K_un) {
@@ -3845,9 +3865,9 @@ Yv *gen_go(Yv *st, Yv *node) {
         long dw = ptr_width(infer(st, yr_get(node, "e")));
         st = gen(st, yr_get(node, "e"));
         if (dw == 1) {
-            return emit(st, ys("    movzbq (%rax), %rax"));
+            return emit_insn(st, F_MOVZBQ_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
         } else {
-            return emit(st, ys("    mov (%rax), %rax"));
+            return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
         }
     } else if (yv_l(k) == K_bin) {
         return gen_bin(st, node);
@@ -3898,8 +3918,8 @@ Yv *gen_go(Yv *st, Yv *node) {
         return gen_convert(st, src, narrow_type(src, yr_get(node, "typ")), 0);
     } else if (yv_l(k) == K_matchend) {
         /* unreachable when the checker accepted the match */
-        st = emit(st, ys("    call y_match_fail"));
-        return emit(st, ys("    xor %eax, %eax"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_match_fail"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(k) == K_sliceassign) {
         return gen_sliceassign(st, node);
     } else if (yv_l(k) == K_idxassign) {
@@ -3925,7 +3945,7 @@ Yv *gen_go(Yv *st, Yv *node) {
         return gen_store(st, node);
     } else if (yv_l(k) == K_ret) {
         st = gen_as(st, yr_get(node, "e"), cur_fn_ret(st));
-        return emit(st, ys_cat(ys("    jmp "), lname(yr_get(st, "end_label"))));
+        return emit_insn(st, F_JMP_L, yv_l(yr_get(st, "end_label")), 0, 0, 0, 0, 0, 0);
     } else {
         /* Unreachable: the checker rejects everything else. */
         return emit(st, ys_cat(ys_cat(ys("    # INTERNAL: unhandled "), ktag(yv_l(k))),
@@ -3986,7 +4006,7 @@ Yv *gen_id(Yv *st, Yv *node) {
         return emit(st, ys("    xor %eax, %eax  # bare self (discarded)"));
     } else if (ys_eq_lit(yr_get(node, "v"), "none")) {
         /* The empty option (checker gives it typeof from context). */
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         Yv *e = env_find(st, yr_get(node, "v"));
         if (ys_eq_lit(yr_get(e, "kind"), "none")) {
@@ -4002,8 +4022,7 @@ Yv *gen_id(Yv *st, Yv *node) {
                 ;
             }
             if (soff >= 0) {
-                return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
-                                       ys("(%rbp), %rax")));
+                return emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, soff, -1, R_RAX, 64);
             } else {
                 return gen_make_closure(st, yr_get(e, "label"), yav(0));
             }
@@ -4015,7 +4034,7 @@ Yv *gen_id(Yv *st, Yv *node) {
                 if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
                     ;
                 } else {
-                    st = emit(st, ys("    xor %eax, %eax"));
+                    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
                     st = emit(st,
                               ys_cat(ys_cat(ys("    mov %rax, "),
                                             lname(yr_get(oe, "label"))),
@@ -4030,11 +4049,8 @@ Yv *gen_id(Yv *st, Yv *node) {
             /* An appendable string: a read may let its buffer escape, so
              * the companion is cleared (see gen_sappend). */
             long off = yv_l(yr_get(e, "off"));
-            st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(off)),
-                                 ys("(%rbp), %rax")));
-            return emit(st, ys_cat(ys_cat(ys("    mov $0, "),
-                                          ys_long(off - 8)),
-                                   ys("(%rbp)")));
+            st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, off, -1, R_RAX, 64);
+            return emit_insn(st, F_MOV_I_D, 0, R_RBP, -1, 1, off - 8, -1, 0);
         } else if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
             /* Captured by the enclosing closure: load the closure record
              * (at the frame offset recorded in `off`), read slot idx+1 —
@@ -4042,24 +4058,16 @@ Yv *gen_id(Yv *st, Yv *node) {
              * NOTE: the index rides in `label` — env entries have no spare
              * numeric field and adding one would touch every signature. */
             long idx = ys_tonum(yr_get(e, "mark"));
-            st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                       ys_long(yv_l(yr_get(e, "off")))),
-                                ys("(%rbp), %rcx")));
-            st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                       ys_long(8 * (idx + 1))),
-                                ys("(%rcx), %rax")));
-            return emit(st, ys("    mov (%rax), %rax"));
+            st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
+            st = emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (idx + 1), -1, R_RAX, 64);
+            return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
         } else if (ys_eq_lit(yr_get(e, "kind"), "box")) {
             /* A captured variable's shared cell; the slot holds its
              * pointer. */
-            st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                       ys_long(yv_l(yr_get(e, "off")))),
-                                ys("(%rbp), %rax")));
-            return emit(st, ys("    mov (%rax), %rax"));
+            st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RAX, 64);
+            return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
         } else {
-            return emit(st, ys_cat(ys_cat(ys("    mov "),
-                                         ys_long(yv_l(yr_get(e, "off")))),
-                                  ys("(%rbp), %rax")));
+            return emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RAX, 64);
         }
     }
 }
@@ -4082,16 +4090,10 @@ Yv *gen_cap_ptr(Yv *st, Yv *name) {
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
         /* NOTE: the index rides in `label` (see gen_id's capture arm). */
         long pidx = ys_tonum(yr_get(e, "mark"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                   ys_long(yv_l(yr_get(e, "off")))),
-                            ys("(%rbp), %rcx")));
-        return emit(st, ys_cat(ys_cat(ys("    mov "),
-                                      ys_long(8 * (pidx + 1))),
-                               ys("(%rcx), %rax")));
+        st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
+        return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (pidx + 1), -1, R_RAX, 64);
     } else {
-        return emit(st, ys_cat(ys_cat(ys("    mov "),
-                                      ys_long(yv_l(yr_get(e, "off")))),
-                               ys("(%rbp), %rax")));
+        return emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RAX, 64);
     }
 }
 
@@ -4117,14 +4119,13 @@ Yv *box_capture(Yv *st, Yv *name) {
     } else {
         st = gen_id(st, yr(4, "k", yv_long(K_id), "v", name, "line", yv_long(0),
                            "col", yv_long(0)));
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    mov $8, %rdi"));
-        st = emit(st, ys("    call y_alloc"));
-        st = emit(st, ys("    pop %rdx"));
-        st = emit(st, ys("    mov %rdx, (%rax)"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_I_R, 8, R_RDI, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_0, R_RDX, 64, R_RAX, -1, 1, -1, -1);
         long boff = (yv_l(yr_get(st, "slots")) + 1) * -8;
-        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(boff)),
-                             ys("(%rbp)")));
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, boff, -1);
         Yv *st2 =
             yr(13, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"),
                "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
@@ -4378,10 +4379,8 @@ int own_wanted(Yv *st, Yv *name) {
  * companion in the slot below, cleared. */
 Yv *bind_own(Yv *st, Yv *name, Yv *t) {
     long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
-                         ys("(%rbp)")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $0, "), ys_long(off - 8)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, off, -1);
+    st = emit_insn(st, F_MOV_I_D, 0, R_RBP, -1, 1, off - 8, -1, 0);
     Yv *st2 =
         yr(13, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"),
            "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
@@ -4421,19 +4420,17 @@ Yv *gen_stmt(Yv *st, Yv *node) {
             Yv *e = env_find(st, yr_get(tgt, "v"));
             if (ys_eq_lit(yr_get(e, "kind"), "own")) {
                 long off = yv_l(yr_get(e, "off"));
-                return gen_sappend(
-                    st, yr_get(assign, "v"), ys_cat(ys_long(off), ys("(%rbp)")),
-                    ys_cat(ys_long(off - 8), ys("(%rbp)")));
+                return gen_sappend(st, yr_get(assign, "v"), yv_long(-1), off,
+                                   yv_long(-1), off - 8);
             } else if (ys_eq_lit(yr_get(e, "kind"), "global") &&
                        yv_l(yr_get(yr_get(e, "typ"), "k")) == K_tstr) {
                 Yv *oe = env_find(st, ys_cat(yr_get(tgt, "v"), ys("#o")));
                 if (ys_eq_lit(yr_get(oe, "kind"), "none")) {
                     return gen_opassign(st, assign, 1);
                 } else {
-                    return gen_sappend(
-                        st, yr_get(assign, "v"),
-                        ys_cat(lname(yr_get(e, "label")), ys("(%rip)")),
-                        ys_cat(lname(yr_get(oe, "label")), ys("(%rip)")));
+                    return gen_sappend(st, yr_get(assign, "v"),
+                                       yr_get(e, "label"), 0,
+                                       yr_get(oe, "label"), 0);
                 }
             } else {
                 return gen_opassign(st, assign, 1);
@@ -4452,22 +4449,37 @@ Yv *gen_stmt(Yv *st, Yv *node) {
  * does to the variable (a read clears the companion, a nested append
  * stores its buffer there) leaves it != 1, and y_str_app copies. The
  * order is s = s + v's: the old value first, then v. */
-Yv *gen_sappend(Yv *st, Yv *v, Yv *var, Yv *cell) {
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), var), ys(", %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), cell), ys(", %rdx")));
-    st = emit(st, ys("    cmp %rdx, %rax"));
-    st = emit(st, ys("    sete %al"));
-    st = emit(st, ys("    movzbq %al, %rax"));
-    st = emit(st, ys_cat(ys("    mov %rax, "), cell));
+Yv *gen_sappend(Yv *st, Yv *v, Yv *var_lbl, long var_disp, Yv *cell_lbl,
+                 long cell_disp) {
+    Yv *va = memop(var_lbl, var_disp);
+    Yv *ca = memop(cell_lbl, cell_disp);
+    st = emit_insn(st, F_MOV_P_R, yv_l(ya_get(va, 0)), yv_l(ya_get(va, 1)),
+                   yv_l(ya_get(va, 2)), yv_l(ya_get(va, 3)),
+                   yv_l(ya_get(va, 4)), R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_P_R, yv_l(ya_get(ca, 0)), yv_l(ya_get(ca, 1)),
+                   yv_l(ya_get(ca, 2)), yv_l(ya_get(ca, 3)),
+                   yv_l(ya_get(ca, 4)), R_RDX, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_P, R_RAX, 64, yv_l(ya_get(ca, 0)),
+                   yv_l(ya_get(ca, 1)), yv_l(ya_get(ca, 2)),
+                   yv_l(ya_get(ca, 3)), yv_l(ya_get(ca, 4)));
     st = gen(st, v);
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), cell), ys(", %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_str_app"));
-    st = emit(st, ys("    add $24, %rsp"));
-    st = emit(st, ys_cat(ys("    mov %rax, "), var));
-    return emit(st, ys_cat(ys("    mov %rax, "), cell));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_P_R, yv_l(ya_get(ca, 0)), yv_l(ya_get(ca, 1)),
+                   yv_l(ya_get(ca, 2)), yv_l(ya_get(ca, 3)),
+                   yv_l(ya_get(ca, 4)), R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_app"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_P, R_RAX, 64, yv_l(ya_get(va, 0)),
+                   yv_l(ya_get(va, 1)), yv_l(ya_get(va, 2)),
+                   yv_l(ya_get(va, 3)), yv_l(ya_get(va, 4)));
+    return emit_insn(st, F_MOV_R_P, R_RAX, 64, yv_l(ya_get(ca, 0)),
+                     yv_l(ya_get(ca, 1)), yv_l(ya_get(ca, 2)),
+                     yv_l(ya_get(ca, 3)), yv_l(ya_get(ca, 4)));
 }
 
 /* A loop body: its value is dropped, so a block body's last statement is
@@ -4525,34 +4537,31 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
 
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
     long n = yv_len(caps);
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(8 + 8 * n)),
-                         ys(", %rdi")));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_MOV_I_R, 8 + 8 * n, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit(st,
               ys_cat(ys_cat(ys("    lea "), lname(label)), ys("(%rip), %rcx")));
-    st = emit(st, ys("    mov %rcx, (%rax)"));
+    st = emit_insn(st, F_MOV_R_0, R_RCX, 64, R_RAX, -1, 1, -1, -1);
     long i = 0;
     while (i < n) {
         Yv *cn = ya_get(caps, i);
         /* Captured as a shared cell pointer (see box_capture). */
         st = gen_cap_ptr(st, cn);
-        st = emit(st, ys("    pop %rcx"));
-        st = emit(st, ys("    push %rcx"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
-                                    ys_long(8 * (i + 1))),
-                             ys("(%rcx)")));
+        st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, 8 * (i + 1), -1);
         i = i + 1;
     }
-    return emit(st, ys("    pop %rax"));
+    return emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
 }
 
 /* range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin;
  * y_range in std/rt.y). */
 Yv *gen_range(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_range"));
-    return emit(st, ys("    add $8, %rsp"));
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_range"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands
@@ -4562,30 +4571,30 @@ Yv *gen_slice(Yv *st, Yv *node) {
     Yv *hi = yr_get(node, "hi");
     long slesz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
     st = gen(st, yr_get(node, "arr"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(lo, "k")) == K_void) {
-        st = emit(st, ys("    xor %eax, %eax"));
+        st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
         ;
     } else {
         st = gen(st, lo);
         ;
     }
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(hi, "k")) == K_void) {
         /* default: the array's length (the header keeps it in slot 0);
          * the array pointer sits one slot below the pushed lo. */
-        st = emit(st, ys("    mov 8(%rsp), %rax"));
-        st = emit(st, ys("    mov (%rax), %rax"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RAX, 64);
+        st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
         ;
     } else {
         st = gen(st, hi);
         ;
     }
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(slesz)), ys(", %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_arr_slice"));
-    return emit(st, ys("    add $32, %rsp"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, slesz, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_slice"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
 }
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
@@ -4594,22 +4603,22 @@ Yv *gen_str_slice(Yv *st, Yv *node) {
     Yv *lo = yr_get(node, "lo");
     Yv *hi = yr_get(node, "hi");
     st = gen(st, yr_get(node, "arr"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(lo, "k")) == K_void) {
-        st = emit(st, ys("    xor %eax, %eax"));
+        st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         st = gen(st, lo);
     }
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(hi, "k")) == K_void) {
-        st = emit(st, ys("    mov 8(%rsp), %rax"));
-        st = emit(st, ys("    mov (%rax), %rax"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RAX, 64);
+        st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     } else {
         st = gen(st, hi);
     }
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_str_slice"));
-    return emit(st, ys("    add $24, %rsp"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_slice"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
 }
 
 // a[lo:hi] = src: y_arr_setslice{1,8} (rt.y) check the range and the
@@ -4619,25 +4628,27 @@ Yv *gen_sliceassign(Yv *st, Yv *node) {
     Yv *hi = yr_get(node, "hi");
     long esz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
     st = gen(st, yr_get(node, "arr"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(lo, "k")) == K_void) {
-        st = emit(st, ys("    xor %eax, %eax"));
+        st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         st = gen(st, lo);
     }
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(hi, "k")) == K_void) {
-        st = emit(st, ys("    mov 8(%rsp), %rax"));
-        st = emit(st, ys("    mov (%rax), %rax"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RAX, 64);
+        st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     } else {
         st = gen(st, hi);
     }
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "v"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys("    call y_arr_setslice"), ys_long(esz)));
-    st = emit(st, ys("    add $32, %rsp"));
-    return emit(st, ys("    xor %eax, %eax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys_cat(ys("y_arr_setslice"),
+                                                     ys_long(esz)))),
+                   0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
+    return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
 }
 
 // `T` / `{f: v}` pattern test (types.y typeof_rectest): 1 in %rax when the
@@ -4653,7 +4664,7 @@ Yv *gen_rectest(Yv *st, Yv *node) {
         return gen_tag_in(st, rectest_members(s, yr_get(node, "typ")), s);
     } else {
         // a record: the checker took the pattern as its own type
-        return emit(st, ys("    mov $1, %rax"));
+        return emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     }
 }
 
@@ -4682,27 +4693,26 @@ Yv *gen_tag_in(Yv *st, Yv *ts, Yv *inu) {
     st = yr_get(rno, "st");
     Yv *rdone = next_loc(st);
     st = yr_get(rdone, "st");
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rno, "label"))));
-    st = emit(st, ys("    mov -8(%rax), %rcx"));
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(rno, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
     Yv *yes = next_loc(st);
     st = yr_get(yes, "st");
     long i = 0;
     while (i < yv_len(ts)) {
         Yv *dr = ty_desc_in(st, ya_get(ts, i), inu);
         st = yr_get(dr, "st");
-        st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
-                             ys("(%rip), %rdx")));
-        st = emit(st, ys("    cmp %rdx, %rcx"));
-        st = emit(st, ys_cat(ys("    je "), lname(yr_get(yes, "label"))));
+        st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(yr_get(dr, "label")), R_RDX, 64);
+        st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JE_L, yv_l(yr_get(yes, "label")), 0, 0, 0, 0, 0, 0);
         i = i + 1;
     }
-    st = emit(st, ys_cat(lname(yr_get(rno, "label")), ys(":")));
-    st = emit(st, ys("    xor %eax, %eax"));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rdone, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(yes, "label")), ys(":")));
-    st = emit(st, ys("    mov $1, %rax"));
-    return emit(st, ys_cat(lname(yr_get(rdone, "label")), ys(":")));
+    st = emit_label(st, yv_l(yr_get(rno, "label")));
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(rdone, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(yes, "label")));
+    st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(rdone, "label")));
 }
 
 // Union value in %rax -> its string form: the member its descriptor names
@@ -4711,7 +4721,7 @@ Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path) {
     Yv *ms = union_parts(t);
     Yv *rdone = next_loc(st);
     st = yr_get(rdone, "st");
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     long m = 0;
     while (m < yv_len(ms)) {
         Yv *rnext = next_loc(st);
@@ -4719,20 +4729,20 @@ Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path) {
         Yv *mt = ya_get(ms, m);
         Yv *one = yav(0);
         one = ya_push(one, mt);
-        st = emit(st, ys("    mov (%rsp), %rax"));
+        st = emit_insn(st, F_MOV_0_R, R_RSP, -1, 1, -1, -1, R_RAX, 64);
         st = gen_tag_in(st, one, t);
-        st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rnext, "label"))));
-        st = emit(st, ys("    pop %rax"));
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JZ_L, yv_l(yr_get(rnext, "label")), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
         Yv *mu = unfold(mt);
         st = gen_rec_str_rax(st, mu, union_lay(mu, t), path_push(path, t));
-        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rdone, "label"))));
-        st = emit(st, ys_cat(lname(yr_get(rnext, "label")), ys(":")));
+        st = emit_insn(st, F_JMP_L, yv_l(yr_get(rdone, "label")), 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, yv_l(yr_get(rnext, "label")));
         m = m + 1;
     }
-    st = emit(st, ys("    pop %rax"));
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, ys("<union>"));
-    return emit(st, ys_cat(lname(yr_get(rdone, "label")), ys(":")));
+    return emit_label(st, yv_l(yr_get(rdone, "label")));
 }
 
 /* Indirect call through a closure value produced by `callee`. */
@@ -4741,16 +4751,14 @@ Yv *gen_indirect(Yv *st, Yv *node, Yv *callee) {
     long n = yv_len(args);
     Yv *iptypes = fn_args_of(infer(st, callee));
     st = gen(st, callee);
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_push_args_as(st, args, iptypes);
     /* Reload the closure (it sits just below the n pushed args) and call
      * through its code pointer. */
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * n)),
-                         ys("(%rsp), %rax")));
-    st = emit(st, ys("    mov (%rax), %rax"));
-    st = emit(st, ys("    call *%rax"));
-    return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(8 * (n + 1))),
-                          ys(", %rsp")));
+    st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8 * n, -1, R_RAX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
+    st = emit_insn(st, F_CALL_IND, R_RAX, 64, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8 * (n + 1), R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_un(Yv *st, Yv *node) {
@@ -4759,16 +4767,16 @@ Yv *gen_un(Yv *st, Yv *node) {
     if (ys_eq_lit(yr_get(node, "op"), "-")) {
         if (yv_l(yr_get(ut, "k")) == K_tfloat) {
             /* flip the sign bit: -0.0 is a negative zero, -nan a nan */
-            st = emit(st, ys("    mov $1, %rcx"));
-            st = emit(st, ys("    shl $63, %rcx"));
-            return emit(st, ys("    xor %rcx, %rax"));
+            st = emit_insn(st, F_MOV_I_R, 1, R_RCX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_SHL_I_R, 63, R_RCX, 64, 0, 0, 0, 0);
+            return emit_insn(st, F_XOR_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
         } else {
-            return emit(st, ys("    neg %rax"));
+            return emit_insn(st, F_NEG_R, R_RAX, 64, 0, 0, 0, 0, 0);
         }
     } else if (ys_eq_lit(yr_get(node, "op"), "~")) {
-        return emit(st, ys("    not %rax"));
+        return emit_insn(st, F_NOT_R, R_RAX, 64, 0, 0, 0, 0, 0);
     } else {
-        return emit(st, ys("    xor $1, %rax"));
+        return emit_insn(st, F_XOR_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     }
 }
 
@@ -4780,9 +4788,7 @@ Yv *gen_addr(Yv *st, Yv *node) {
         Yv *e = env_find(st, yr_get(yr_get(node, "e"), "v"));
         if (ys_eq_lit(yr_get(e, "kind"), "box")) {
             /* the shared cell IS the variable's address */
-            return emit(st, ys_cat(ys_cat(ys("    mov "),
-                                         ys_long(yv_l(yr_get(e, "off")))),
-                                  ys("(%rbp), %rax")));
+            return emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RAX, 64);
         } else if (ys_eq_lit(yr_get(e, "kind"), "global")) {
             return emit(st,
                         ys_cat(ys_cat(ys("    lea "),
@@ -4790,16 +4796,10 @@ Yv *gen_addr(Yv *st, Yv *node) {
                                ys("(%rip), %rax")));
         } else if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
             long aidx = ys_tonum(yr_get(e, "mark"));
-            st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                       ys_long(yv_l(yr_get(e, "off")))),
-                                ys("(%rbp), %rcx")));
-            return emit(st, ys_cat(ys_cat(ys("    mov "),
-                                         ys_long(8 * (aidx + 1))),
-                                  ys("(%rcx), %rax")));
+            st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
+            return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (aidx + 1), -1, R_RAX, 64);
         } else {
-            return emit(st, ys_cat(ys_cat(ys("    lea "),
-                                         ys_long(yv_l(yr_get(e, "off")))),
-                                  ys("(%rbp), %rax")));
+            return emit_insn(st, F_LEA_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RAX, 64);
         }
     }
 }
@@ -4813,33 +4813,30 @@ Yv *gen_elem_addr(Yv *st, Yv *node) {
     Yv *earr = yr_get(node, "arr");
     Yv *bt = infer(st, earr);
     long eaesz = arr_elem_bytes(bt);
-    Yv *eascale = ys("8");
+    long eascale = 8;
     if (eaesz == 1) {
-        eascale = ys("1");
+        eascale = 1;
         ;
     }
     st = gen(st, earr);
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "idx"));
-    st = emit(st, ys("    mov %rax, %rcx"));
-    st = emit(st, ys("    pop %rax"));
-    st = emit(st, ys("    test %rcx, %rcx"));
-    st = emit(st, ys("    js y_oob"));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JS_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(bt, "k")) == K_tarrfix) {
-        st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
-                                    ys_long(yv_l(yr_get(bt, "n")))),
-                             ys(", %rcx")));
-        st = emit(st, ys("    jge y_oob"));
+        st = emit_insn(st, F_CMP_I_R, yv_l(yr_get(bt, "n")), R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
         ;
     } else {
-        st = emit(st, ys("    mov (%rax), %rdx"));
-        st = emit(st, ys("    cmp %rdx, %rcx"));
-        st = emit(st, ys("    jge y_oob"));
+        st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RDX, 64);
+        st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
         ;
     }
-    st = emit(st, ys("    mov 16(%rax), %rax"));
-    return emit(st, ys_cat(ys_cat(ys("    lea (%rax,%rcx,"), eascale),
-                           ys("), %rax")));
+    st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 16, -1, R_RAX, 64);
+    return emit_insn(st, F_LEA_M_R, R_RAX, R_RCX, eascale, 0, -1, R_RAX, 64);
 }
 
 Yv *gen_bin(Yv *st, Yv *node) {
@@ -4873,51 +4870,51 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
     Yv *rE = next_loc(st);
     st = yr_get(rE, "st");
     st = gen(st, yr_get(node, "l"));
-    st = emit(st, ys("    test %rax, %rax"));
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
     if (is_or) {
-        st = emit(st, ys_cat(ys("    jnz "), lname(yr_get(rT, "label"))));
+        st = emit_insn(st, F_JNZ_L, yv_l(yr_get(rT, "label")), 0, 0, 0, 0, 0, 0);
         ;
     }
     if (is_or) {
         ;
     } else {
-        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rF, "label"))));
+        st = emit_insn(st, F_JZ_L, yv_l(yr_get(rF, "label")), 0, 0, 0, 0, 0, 0);
         ;
     }
     st = gen(st, yr_get(node, "r"));
-    st = emit(st, ys("    test %rax, %rax"));
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
     if (is_or) {
-        st = emit(st, ys_cat(ys("    jnz "), lname(yr_get(rT, "label"))));
+        st = emit_insn(st, F_JNZ_L, yv_l(yr_get(rT, "label")), 0, 0, 0, 0, 0, 0);
         ;
     }
     if (is_or) {
         ;
     } else {
-        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rF, "label"))));
+        st = emit_insn(st, F_JZ_L, yv_l(yr_get(rF, "label")), 0, 0, 0, 0, 0, 0);
         ;
     }
     if (is_or) {
         ;
     } else {
-        st = emit(st, ys("    mov $1, %rax"));
-        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rE, "label"))));
+        st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_JMP_L, yv_l(yr_get(rE, "label")), 0, 0, 0, 0, 0, 0);
         ;
     }
     if (is_or) {
-        st = emit(st, ys("    xor %eax, %eax"));
-        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rE, "label"))));
-        st = emit(st, ys_cat(lname(yr_get(rT, "label")), ys(":")));
-        st = emit(st, ys("    mov $1, %rax"));
+        st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, F_JMP_L, yv_l(yr_get(rE, "label")), 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, yv_l(yr_get(rT, "label")));
+        st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
         ;
     }
     if (is_or) {
         ;
     } else {
-        st = emit(st, ys_cat(lname(yr_get(rF, "label")), ys(":")));
-        st = emit(st, ys("    xor %eax, %eax"));
+        st = emit_label(st, yv_l(yr_get(rF, "label")));
+        st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
         ;
     }
-    return emit(st, ys_cat(lname(yr_get(rE, "label")), ys(":")));
+    return emit_label(st, yv_l(yr_get(rE, "label")));
 }
 
 /* AUTO-STRINGIFY `+`: when a string meets a non-string, stringify the other
@@ -4938,38 +4935,38 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
         if (yv_l(yr_get(rt, "k")) == K_tstr) {
             st = gen_push_args(st, yav(2, yr_get(node, "l"),
                                       yr_get(node, "r")));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else if (yv_l(yr_get(rt, "k")) == K_tlong) {
             st = gen(st, yr_get(node, "l"));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_long_tostr"));
-            st = emit(st, ys("    add $8, %rsp"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else if (yv_l(yr_get(rt, "k")) == K_tbool) {
             st = gen(st, yr_get(node, "l"));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_bool_tostr"));
-            st = emit(st, ys("    add $8, %rsp"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else if (yv_l(yr_get(rt, "k")) == K_tfloat) {
             st = gen(st, yr_get(node, "l"));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_float_tostr"));
-            st = emit(st, ys("    add $8, %rsp"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_float_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else {
             /* Unknown right operand: treat it as a string. Most unknowns
              * here ARE strings (a field read through an untyped hole infers
@@ -4978,49 +4975,49 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
              * long-returning calls that used to land in this arm. */
             st = gen_push_args(st, yav(2, yr_get(node, "l"),
                                       yr_get(node, "r")));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         }
         ;
     }
     if (yv_l(yr_get(lt, "k")) != K_tstr) {
         if (yv_l(yr_get(lt, "k")) == K_tlong) {
             st = gen(st, yr_get(node, "l"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_long_tostr"));
-            st = emit(st, ys("    add $8, %rsp"));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else if (yv_l(yr_get(lt, "k")) == K_tbool) {
             st = gen(st, yr_get(node, "l"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_bool_tostr"));
-            st = emit(st, ys("    add $8, %rsp"));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else if (yv_l(yr_get(lt, "k")) == K_tfloat) {
             st = gen(st, yr_get(node, "l"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_float_tostr"));
-            st = emit(st, ys("    add $8, %rsp"));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_float_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else {
             /* Unknown left operand: treat it as a string (see the note on
              * the right-operand arm). */
             st = gen_push_args(st, yav(2, yr_get(node, "l"),
                                       yr_get(node, "r")));
-            st = emit(st, ys("    call y_str_cat"));
-            st = emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         }
         ;
     }
@@ -5035,41 +5032,41 @@ Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     if (yv_l(yr_get(lt, "k")) == K_tfloat) {
         ;
     } else {
-        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
-        st = emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
         ;
     }
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "r"));
     if (yv_l(yr_get(rt, "k")) == K_tfloat) {
         ;
     } else {
-        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
-        st = emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
         ;
     }
-    st = emit(st, ys("    movq %rax, %xmm1"));
-    st = emit(st, ys("    pop %rax"));
-    st = emit(st, ys("    movq %rax, %xmm0"));
+    st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM1, 128, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
     if (ys_eq_lit(op, "+")) {
-        st = emit(st, ys("    addsd %xmm1, %xmm0"));
-        return emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_ADDSD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
     } else if (ys_eq_lit(op, "-")) {
-        st = emit(st, ys("    subsd %xmm1, %xmm0"));
-        return emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_SUBSD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
     } else if (ys_eq_lit(op, "*")) {
-        st = emit(st, ys("    mulsd %xmm1, %xmm0"));
-        return emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_MULSD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
     } else if (ys_eq_lit(op, "/")) {
-        st = emit(st, ys("    divsd %xmm1, %xmm0"));
-        return emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_DIVSD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
     } else if (ys_eq_lit(op, "%")) {
         /* The IEEE remainder truncated toward zero -- C's fmod, the one with
          * the dividend's sign. There is no x87-style bit twiddling for it on
          * SSE2 (fmod has no instruction), so the prelude does the reduction;
          * both operands are already in SSE registers. */
-        st = emit(st, ys("    call y_fmod"));
-        return emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_fmod"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
     } else {
         /* Comparisons. ucomisd sets ZF=PF=CF=1 when the operands are unordered
          * (a NaN anywhere), so every test has to look at the parity flag: the
@@ -5082,36 +5079,36 @@ Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
          * all, so they test parity as well: two byte results and a combine,
          * since this assembler has no 8-bit `and`/`or`. */
         if (ys_eq_lit(op, "<")) {
-            st = emit(st, ys("    ucomisd %xmm0, %xmm1"));
-            st = emit(st, ys("    seta %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_UCOMISD_R_R, R_XMM0, 128, R_XMM1, 128, 0, 0, 0);
+            st = emit_insn(st, F_SETA_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "<=")) {
-            st = emit(st, ys("    ucomisd %xmm0, %xmm1"));
-            st = emit(st, ys("    setae %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_UCOMISD_R_R, R_XMM0, 128, R_XMM1, 128, 0, 0, 0);
+            st = emit_insn(st, F_SETAE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, ">")) {
-            st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
-            st = emit(st, ys("    seta %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_UCOMISD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+            st = emit_insn(st, F_SETA_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, ">=")) {
-            st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
-            st = emit(st, ys("    setae %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_UCOMISD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+            st = emit_insn(st, F_SETAE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else {
-            st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
+            st = emit_insn(st, F_UCOMISD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
             if (ys_eq_lit(op, "==")) {
-                st = emit(st, ys("    sete %al"));
-                st = emit(st, ys("    setnp %cl"));
+                st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+                st = emit_insn(st, F_SETNP_R, R_RCX, 8, 0, 0, 0, 0, 0);
             } else {
-                st = emit(st, ys("    setne %al"));
-                st = emit(st, ys("    setp %cl"));
+                st = emit_insn(st, F_SETNE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+                st = emit_insn(st, F_SETP_R, R_RCX, 8, 0, 0, 0, 0, 0);
             }
-            st = emit(st, ys("    movzbq %al, %rax"));
-            st = emit(st, ys("    movzbq %cl, %rcx"));
+            st = emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_MOVZBQ_R_R, R_RCX, 8, R_RCX, 64, 0, 0, 0);
             if (ys_eq_lit(op, "==")) {
-                st = emit(st, ys("    and %rcx, %rax"));
+                st = emit_insn(st, F_AND_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
             } else {
-                st = emit(st, ys("    or %rcx, %rax"));
+                st = emit_insn(st, F_OR_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
             }
             return st;
         }
@@ -5120,23 +5117,23 @@ Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
 
 Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op) {
     st = gen_push_args(st, yav(2, yr_get(node, "l"), yr_get(node, "r")));
-    st = emit(st, ys("    call y_str_cmp"));
-    st = emit(st, ys("    add $16, %rsp"));
-    st = emit(st, ys("    cmp $0, %rax"));
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cmp"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
     if (ys_eq_lit(op, "<")) {
-        st = emit(st, ys("    setl %al"));
+        st = emit_insn(st, F_SETL_R, R_RAX, 8, 0, 0, 0, 0, 0);
         ;
     } else if (ys_eq_lit(op, ">")) {
-        st = emit(st, ys("    setg %al"));
+        st = emit_insn(st, F_SETG_R, R_RAX, 8, 0, 0, 0, 0, 0);
         ;
     } else if (ys_eq_lit(op, "<=")) {
-        st = emit(st, ys("    setle %al"));
+        st = emit_insn(st, F_SETLE_R, R_RAX, 8, 0, 0, 0, 0, 0);
         ;
     } else {
-        st = emit(st, ys("    setge %al"));
+        st = emit_insn(st, F_SETGE_R, R_RAX, 8, 0, 0, 0, 0, 0);
         ;
     }
-    return emit(st, ys("    movzbq %al, %rax"));
+    return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
 }
 
 /* == on values whose equality looks inside them (NATIVE.md, "Equality"):
@@ -5160,40 +5157,38 @@ Yv *gen_eq_vals(Yv *st, Yv *t) {
         if (eq_elem_loop(yr_get(t, "of"))) {
             return gen_eq_arr_deep(st, yr_get(t, "of"));
         } else if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tstr) {
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_arr_eq_str"));
-            return emit(st, ys("    add $16, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_eq_str"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else {
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                        ys_long(elem_bytes(yr_get(t, "of")))),
-                                 ys(", %rax")));
-            st = emit(st, ys("    push %rax"));
-            st = emit(st, ys("    call y_arr_eq"));
-            return emit(st, ys("    add $24, %rsp"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_MOV_I_R, elem_bytes(yr_get(t, "of")), R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_eq"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
         }
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_str_eq"));
-        return emit(st, ys("    add $16, %rsp"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_eq"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         /* as gen_float_bin's ==: equal, and ordered -- NaN is equal to nothing,
          * itself included, which is what setnp is for */
-        st = emit(st, ys("    movq %rax, %xmm1"));
-        st = emit(st, ys("    pop %rax"));
-        st = emit(st, ys("    movq %rax, %xmm0"));
-        st = emit(st, ys("    ucomisd %xmm1, %xmm0"));
-        st = emit(st, ys("    sete %al"));
-        st = emit(st, ys("    setnp %cl"));
-        st = emit(st, ys("    movzbq %al, %rax"));
-        st = emit(st, ys("    movzbq %cl, %rcx"));
-        return emit(st, ys("    and %rcx, %rax"));
+        st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM1, 128, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, F_UCOMISD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETNP_R, R_RCX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_MOVZBQ_R_R, R_RCX, 8, R_RCX, 64, 0, 0, 0);
+        return emit_insn(st, F_AND_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
     } else {
         /* one word: a scalar by value, a record or map by identity */
-        st = emit(st, ys("    pop %rcx"));
-        st = emit(st, ys("    cmp %rax, %rcx"));
-        st = emit(st, ys("    sete %al"));
-        return emit(st, ys("    movzbq %al, %rax"));
+        st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CMP_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
     }
 }
 
@@ -5206,24 +5201,24 @@ Yv *gen_eq_opt(Yv *st, Yv *pt) {
     st = yr_get(lne, "st");
     Yv *ldone = next_loc(st);
     st = yr_get(ldone, "st");
-    st = emit(st, ys("    pop %rcx"));
-    st = emit(st, ys("    test %rcx, %rcx"));
-    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(lnone, "label"))));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(lne, "label"))));
-    st = emit(st, ys("    mov (%rcx), %rcx"));
-    st = emit(st, ys("    push %rcx"));
-    st = emit(st, ys("    mov (%rax), %rax"));
+    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(lnone, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(lne, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_0_R, R_RCX, -1, 1, -1, -1, R_RCX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     st = gen_eq_vals(st, pt);
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(ldone, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(lnone, "label")), ys(":")));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys("    sete %al"));
-    st = emit(st, ys("    movzbq %al, %rax"));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(ldone, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(lne, "label")), ys(":")));
-    st = emit(st, ys("    xor %eax, %eax"));
-    return emit(st, ys_cat(lname(yr_get(ldone, "label")), ys(":")));
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(ldone, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(lnone, "label")));
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(ldone, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(lne, "label")));
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(ldone, "label")));
 }
 
 /* gen_eq_vals for two arrays whose elements (of type et) need their own
@@ -5242,43 +5237,43 @@ Yv *gen_eq_arr_deep(Yv *st, Yv *et) {
     st = yr_get(lne, "st");
     Yv *ldone = next_loc(st);
     st = yr_get(ldone, "st");
-    st = emit(st, ys("    pop %rcx"));
-    st = emit(st, ys("    mov (%rcx), %rdx"));
-    st = emit(st, ys("    mov (%rax), %rsi"));
-    st = emit(st, ys("    cmp %rsi, %rdx"));
-    st = emit(st, ys_cat(ys("    jne "), lname(yr_get(lne, "label"))));
-    st = emit(st, ys("    push %rcx"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    xor %edx, %edx"));
-    st = emit(st, ys("    push %rdx"));
-    st = emit(st, ys_cat(lname(yr_get(lloop, "label")), ys(":")));
-    st = emit(st, ys("    mov (%rsp), %rdx"));
-    st = emit(st, ys("    mov 16(%rsp), %rcx"));
-    st = emit(st, ys("    mov (%rcx), %rsi"));
-    st = emit(st, ys("    cmp %rsi, %rdx"));
-    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(lsame, "label"))));
-    st = emit(st, ys("    mov 16(%rcx), %rcx"));
-    st = emit(st, ys("    mov (%rcx,%rdx,8), %rcx"));
-    st = emit(st, ys("    mov 8(%rsp), %rax"));
-    st = emit(st, ys("    mov 16(%rax), %rax"));
-    st = emit(st, ys("    mov (%rax,%rdx,8), %rax"));
-    st = emit(st, ys("    push %rcx"));
+    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_0_R, R_RCX, -1, 1, -1, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RSI, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RSI, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JNE_L, yv_l(yr_get(lne, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_XOR_R_R, R_RDX, 32, R_RDX, 32, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(lloop, "label")));
+    st = emit_insn(st, F_MOV_0_R, R_RSP, -1, 1, -1, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 16, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RCX, -1, 1, -1, -1, R_RSI, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RSI, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JGE_L, yv_l(yr_get(lsame, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 16, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_M_R, R_RCX, R_RDX, 8, 0, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RAX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 16, -1, R_RAX, 64);
+    st = emit_insn(st, F_MOV_M_R, R_RAX, R_RDX, 8, 0, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
     st = gen_eq_vals(st, et);
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(ldiff, "label"))));
-    st = emit(st, ys("    mov (%rsp), %rdx"));
-    st = emit(st, ys("    inc %rdx"));
-    st = emit(st, ys("    mov %rdx, (%rsp)"));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(lloop, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(lsame, "label")), ys(":")));
-    st = emit(st, ys("    add $24, %rsp"));
-    st = emit(st, ys("    mov $1, %rax"));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(ldone, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(ldiff, "label")), ys(":")));
-    st = emit(st, ys("    add $24, %rsp"));
-    st = emit(st, ys_cat(lname(yr_get(lne, "label")), ys(":")));
-    st = emit(st, ys("    xor %eax, %eax"));
-    return emit(st, ys_cat(lname(yr_get(ldone, "label")), ys(":")));
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(ldiff, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_0_R, R_RSP, -1, 1, -1, -1, R_RDX, 64);
+    st = emit_insn(st, F_INC_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_0, R_RDX, 64, R_RSP, -1, 1, -1, -1);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(lloop, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(lsame, "label")));
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(ldone, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(ldiff, "label")));
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(lne, "label")));
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(ldone, "label")));
 }
 
 Yv *gen_bin_rest(Yv *st, Yv *node) {
@@ -5320,10 +5315,10 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
          * would need interprocedural knowledge of a const record, and that
          * function is a self-check besides. */
         st = gen_push_args(st, yav(2, yr_get(node, "l"), yr_get(node, "r")));
-        st = emit(st, ys("    call y_str_eq"));
-        st = emit(st, ys("    add $16, %rsp"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_eq"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         if (ys_eq_lit(op, "!=")) {
-            return emit(st, ys("    xor $1, %rax"));
+            return emit_insn(st, F_XOR_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
         } else {
             return st;
         }
@@ -5355,29 +5350,27 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         }
         if (eq_elem_loop(elt)) {
             st = gen(st, yr_get(node, "l"));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
             st = gen_eq_arr_deep(st, elt);
             ;
         } else {
             st = gen_push_args(st, yav(2, yr_get(node, "l"), yr_get(node, "r")));
             if (yv_l(yr_get(elt, "k")) == K_tstr) {
-                st = emit(st, ys("    call y_arr_eq_str"));
-                st = emit(st, ys("    add $16, %rsp"));
+                st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_eq_str"))), 0, 0, 0, 0, 0, 0);
+                st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
                 ;
             } else {
-                st = emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                            ys_long(elem_bytes(elt))),
-                                     ys(", %rax")));
-                st = emit(st, ys("    push %rax"));
-                st = emit(st, ys("    call y_arr_eq"));
-                st = emit(st, ys("    add $24, %rsp"));
+                st = emit_insn(st, F_MOV_I_R, elem_bytes(elt), R_RAX, 64, 0, 0, 0, 0);
+                st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+                st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_eq"))), 0, 0, 0, 0, 0, 0);
+                st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
                 ;
             }
             ;
         }
         if (ys_eq_lit(op, "!=")) {
-            return emit(st, ys("    xor $1, %rax"));
+            return emit_insn(st, F_XOR_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
         } else {
             return st;
         }
@@ -5401,93 +5394,93 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
             ;
         }
         st = gen(st, yr_get(node, "l"));
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, yr_get(node, "r"));
         st = gen_eq_opt(st, pt);
         if (ys_eq_lit(op, "!=")) {
-            return emit(st, ys("    xor $1, %rax"));
+            return emit_insn(st, F_XOR_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
         } else {
             return st;
         }
     } else {
         st = gen(st, yr_get(node, "l"));
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, yr_get(node, "r"));
-        st = emit(st, ys("    mov %rax, %rcx"));
-        st = emit(st, ys("    pop %rax"));
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
         if (ys_eq_lit(op, "+")) {
-            return emit(st, ys("    add %rcx, %rax"));
+            return emit_insn(st, F_ADD_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "-")) {
-            return emit(st, ys("    sub %rcx, %rax"));
+            return emit_insn(st, F_SUB_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "*")) {
-            return emit(st, ys("    imul %rcx, %rax"));
+            return emit_insn(st, F_IMUL_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "/")) {
             /* idiv raises #DE on LONG_MIN / -1 (the quotient does not fit),
              * so divisor -1 is handled as a negation instead: neg of
              * LONG_MIN wraps back to LONG_MIN (the language's rule for the
              * whole long range, NATIVE.md), and every other value negates
              * exactly. */
-            st = emit(st, ys("    test %rcx, %rcx"));
-            st = emit(st, ys("    jz y_div_zero"));
+            st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+            st = emit_insn(st, F_JZ_L, yv_l(lbl_new(ys("y_div_zero"))), 0, 0, 0, 0, 0, 0);
             Yv *d1 = next_loc(st);
             st = yr_get(d1, "st");
             Yv *d2 = next_loc(st);
             st = yr_get(d2, "st");
-            st = emit(st, ys("    cmp $-1, %rcx"));
-            st = emit(st, ys_cat(ys("    jne "), lname(yr_get(d1, "label"))));
-            st = emit(st, ys("    neg %rax"));
-            st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(d2, "label"))));
-            st = emit(st, ys_cat(lname(yr_get(d1, "label")), ys(":")));
-            st = emit(st, ys("    cqo"));
-            st = emit(st, ys("    idiv %rcx"));
-            return emit(st, ys_cat(lname(yr_get(d2, "label")), ys(":")));
+            st = emit_insn(st, F_CMP_I_R, -1, R_RCX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_JNE_L, yv_l(yr_get(d1, "label")), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_NEG_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_JMP_L, yv_l(yr_get(d2, "label")), 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, yv_l(yr_get(d1, "label")));
+            st = emit_insn(st, F_CQO, 0, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_IDIV_R, R_RCX, 64, 0, 0, 0, 0, 0);
+            return emit_label(st, yv_l(yr_get(d2, "label")));
         } else if (ys_eq_lit(op, "%")) {
             /* Same #DE: x % -1 is 0 for every x (see the `/` note). */
-            st = emit(st, ys("    test %rcx, %rcx"));
-            st = emit(st, ys("    jz y_div_zero"));
+            st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+            st = emit_insn(st, F_JZ_L, yv_l(lbl_new(ys("y_div_zero"))), 0, 0, 0, 0, 0, 0);
             Yv *m1 = next_loc(st);
             st = yr_get(m1, "st");
             Yv *m2 = next_loc(st);
             st = yr_get(m2, "st");
-            st = emit(st, ys("    cmp $-1, %rcx"));
-            st = emit(st, ys_cat(ys("    jne "), lname(yr_get(m1, "label"))));
-            st = emit(st, ys("    xor %eax, %eax"));
-            st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(m2, "label"))));
-            st = emit(st, ys_cat(lname(yr_get(m1, "label")), ys(":")));
-            st = emit(st, ys("    cqo"));
-            st = emit(st, ys("    idiv %rcx"));
-            st = emit(st, ys("    mov %rdx, %rax"));
-            return emit(st, ys_cat(lname(yr_get(m2, "label")), ys(":")));
+            st = emit_insn(st, F_CMP_I_R, -1, R_RCX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_JNE_L, yv_l(yr_get(m1, "label")), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+            st = emit_insn(st, F_JMP_L, yv_l(yr_get(m2, "label")), 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, yv_l(yr_get(m1, "label")));
+            st = emit_insn(st, F_CQO, 0, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_IDIV_R, R_RCX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_MOV_R_R, R_RDX, 64, R_RAX, 64, 0, 0, 0);
+            return emit_label(st, yv_l(yr_get(m2, "label")));
         } else if (ys_eq_lit(op, "<")) {
-            st = emit(st, ys("    cmp %rcx, %rax"));
-            st = emit(st, ys("    setl %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_SETL_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, ">")) {
-            st = emit(st, ys("    cmp %rcx, %rax"));
-            st = emit(st, ys("    setg %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_SETG_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "<=")) {
-            st = emit(st, ys("    cmp %rcx, %rax"));
-            st = emit(st, ys("    setle %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_SETLE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, ">=")) {
-            st = emit(st, ys("    cmp %rcx, %rax"));
-            st = emit(st, ys("    setge %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_SETGE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "==")) {
-            st = emit(st, ys("    cmp %rcx, %rax"));
-            st = emit(st, ys("    sete %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "!=")) {
-            st = emit(st, ys("    cmp %rcx, %rax"));
-            st = emit(st, ys("    setne %al"));
-            return emit(st, ys("    movzbq %al, %rax"));
+            st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_SETNE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "&")) {
-            return emit(st, ys("    and %rcx, %rax"));
+            return emit_insn(st, F_AND_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "|")) {
-            return emit(st, ys("    or %rcx, %rax"));
+            return emit_insn(st, F_OR_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
         } else if (ys_eq_lit(op, "^")) {
-            return emit(st, ys("    xor %rcx, %rax"));
+            return emit_insn(st, F_XOR_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
         }
         /* No &&/|| arms here: gen_bin routes those to gen_logic (lazy
            jumps) BEFORE calling this, so an eager and/or would be dead
@@ -5505,39 +5498,43 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
  * neither check. */
 Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
     Yv *mn = ys("shl");
+    long fi = F_SHL_I_R;
+    long fr = F_SHL_R_R;
     if (ys_eq_lit(op, ">>")) {
         mn = ys("sar");
+        fi = F_SAR_I_R;
+        fr = F_SAR_R_R;
         ;
     } else if (ys_eq_lit(op, ">>>")) {
         mn = ys("shr");
+        fi = F_SHR_I_R;
+        fr = F_SHR_R_R;
         ;
     }
     long n = shift_imm(yr_get(node, "r"));
     st = gen(st, yr_get(node, "l"));
     if (n >= 0) {
-        return emit(st, ys_cat(ys_cat(ys_cat(ys_cat(ys("    "), mn), ys(" $")),
-                                      ys_long(n)),
-                               ys(", %rax")));
+        return emit_insn(st, fi, n, R_RAX, 64, 0, 0, 0, 0);
     } else {
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, yr_get(node, "r"));
-        st = emit(st, ys("    mov %rax, %rcx"));
-        st = emit(st, ys("    pop %rax"));
-        st = emit(st, ys("    test %rcx, %rcx"));
-        st = emit(st, ys("    js y_shift_neg"));
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JS_L, yv_l(lbl_new(ys("y_shift_neg"))), 0, 0, 0, 0, 0, 0);
         Yv *ok = next_loc(st);
         st = yr_get(ok, "st");
-        st = emit(st, ys("    cmp $64, %rcx"));
-        st = emit(st, ys_cat(ys("    jb "), lname(yr_get(ok, "label"))));
+        st = emit_insn(st, F_CMP_I_R, 64, R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_JB_L, yv_l(yr_get(ok, "label")), 0, 0, 0, 0, 0, 0);
         if (ys_eq_lit(mn, "sar")) {
-            st = emit(st, ys("    mov $63, %rcx"));
+            st = emit_insn(st, F_MOV_I_R, 63, R_RCX, 64, 0, 0, 0, 0);
             ;
         } else {
-            st = emit(st, ys("    xor %eax, %eax"));
+            st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
             ;
         }
-        st = emit(st, ys_cat(lname(yr_get(ok, "label")), ys(":")));
-        return emit(st, ys_cat(ys_cat(ys("    "), mn), ys(" %cl, %rax")));
+        st = emit_label(st, yv_l(yr_get(ok, "label")));
+        return emit_insn(st, fr, R_RCX, 8, R_RAX, 64, 0, 0, 0);
     }
 }
 
@@ -5565,19 +5562,19 @@ long shift_imm(Yv *r) {
 /* ── calls ──────────────────────────────────────────────────────────────
  * Linux syscall arg regs (in order): rdi, rsi, rdx, r10, r8, r9. */
 
-Yv *syscall_reg(long i) {
+long syscall_reg(long i) {
     if (i == 0) {
-        return ys("%rdi");
+        return R_RDI;
     } else if (i == 1) {
-        return ys("%rsi");
+        return R_RSI;
     } else if (i == 2) {
-        return ys("%rdx");
+        return R_RDX;
     } else if (i == 3) {
-        return ys("%r10");
+        return R_R10;
     } else if (i == 4) {
-        return ys("%r8");
+        return R_R8;
     } else {
-        return ys("%r9");
+        return R_R9;
     }
 }
 
@@ -5585,7 +5582,7 @@ Yv *gen_push_args(Yv *st, Yv *args) {
     long i = 0;
     while (i < yv_len(args)) {
         st = gen(st, ya_get(args, i));
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         i = i + 1;
     }
     return st;
@@ -5603,7 +5600,7 @@ Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes) {
             st = gen(st, ya_get(args, i));
             ;
         }
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         i = i + 1;
     }
     return st;
@@ -5620,10 +5617,10 @@ Yv *gen_conv(Yv *st, Yv *got, Yv *want) {
     Yv *wk = yr_get(want, "k");
     if (yv_l(wk) == K_tfloat &&
         (yv_l(gk) == K_tlong || yv_l(gk) == K_tbyte)) {
-        st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
-        return emit(st, ys("    movq %xmm0, %rax"));
+        st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
     } else if (yv_l(wk) == K_tbyte && yv_l(gk) == K_tlong) {
-        return emit(st, ys("    movzbq %al, %rax"));
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
     } else {
         return st;
     }
@@ -5726,19 +5723,18 @@ Yv *cast_members(Yv *s, Yv *t) {
 Yv *gen_cast_check(Yv *st, Yv *ts, Yv *u) {
     Yv *ok = next_loc(st);
     st = yr_get(ok, "st");
-    st = emit(st, ys("    mov -8(%rax), %rcx"));
+    st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
     long i = 0;
     while (i < yv_len(ts)) {
         Yv *dr = ty_desc_in(st, ya_get(ts, i), u);
         st = yr_get(dr, "st");
-        st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
-                             ys("(%rip), %rdx")));
-        st = emit(st, ys("    cmp %rdx, %rcx"));
-        st = emit(st, ys_cat(ys("    je "), lname(yr_get(ok, "label"))));
+        st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(yr_get(dr, "label")), R_RDX, 64);
+        st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JE_L, yv_l(yr_get(ok, "label")), 0, 0, 0, 0, 0, 0);
         i = i + 1;
     }
-    st = emit(st, ys("    jmp y_cast_trap"));
-    return emit(st, ys_cat(lname(yr_get(ok, "label")), ys(":")));
+    st = emit_insn(st, F_JMP_L, yv_l(lbl_new(ys("y_cast_trap"))), 0, 0, 0, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(ok, "label")));
 }
 
 /* The type of the function being emitted: emit_one_fn records it as a
@@ -5803,13 +5799,13 @@ Yv *store_elem_type(Yv *t, long esz) {
  * the stack — the Y convention every helper written in Y (std/rt.y) and
  * every asm helper shares; the caller cleans up. (Runtime helpers used to
  * take it in %rdi, which only hand-written asm could honour.) */
-/* `name` is a runtime helper's fixed name (y_wait_pid), spelled in the text
- * rather than minted: there is nothing to identify, it is the same name every
- * time (the reserved y_ prefix). */
+/* `name` is a runtime helper's fixed name (y_wait_pid): the reserved y_
+ * prefix means it is the same name every time, so it is interned rather than
+ * minted (there is nothing to identify). */
 Yv *gen_helper1(Yv *st, Yv *name) {
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys("    call "), name));
-    return emit(st, ys("    add $8, %rsp"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(name)), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_call(Yv *st, Yv *node) {
@@ -5878,13 +5874,17 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_indirect(st, jc, ya_get(ja, 0));
         } else if (ys_eq_lit(name, "spawn") || ys_eq_lit(name, "fork")) {
             st = gen(st, ya_get(yr_get(node, "args"), 0));
-            return emit(st, ys_cat(ys("    call y_"), name));
+            return emit_insn(st, F_CALL_L,
+                              yv_l(lbl_new(ys_cat(ys("y_"), name))), 0, 0, 0, 0,
+                              0, 0);
         } else if (ys_eq_lit(name, "wait_pid")) {
             st = gen(st, ya_get(yr_get(node, "args"), 0));
             return gen_helper1(st, ys("y_wait_pid"));
         } else if (ys_eq_lit(name, "post") || ys_eq_lit(name, "wait")) {
             st = gen(st, ya_get(yr_get(node, "args"), 0));
-            return emit(st, ys_cat(ys("    call y_sem_"), name));
+            return emit_insn(st, F_CALL_L,
+                              yv_l(lbl_new(ys_cat(ys("y_sem_"), name))), 0, 0, 0,
+                              0, 0, 0);
         } else if (ys_eq_lit(name, "mutex") || ys_eq_lit(name, "sem")) {
             return gen_sync_new(st, node);
         } else if (ys_eq_lit(name, "lock") || ys_eq_lit(name, "try_lock")) {
@@ -5900,7 +5900,7 @@ Yv *gen_call(Yv *st, Yv *node) {
         } else if (ys_eq_lit(name, "clock_us")) {
             return gen_clock_us(st, node);
         } else if (ys_eq_lit(name, "time_us")) {
-            return emit(st, ys("    call y_time_us"));
+            return emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_time_us"))), 0, 0, 0, 0, 0, 0);
         } else if (ys_eq_lit(name, "keys")) {
             /* a copy of the map's keys array (gen_maplit's {keys, vals, boxes}) */
             Yv *ln = yr_get(node, "line");
@@ -5921,12 +5921,12 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_argv(st, node);
         } else if (ys_eq_lit(name, "bytes")) {
             st = gen_push_args(st, yr_get(node, "args"));
-            st = emit(st, ys("    call y_str_to_bytes"));
-            return emit(st, ys("    add $8, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_to_bytes"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
         } else if (ys_eq_lit(name, "from_bytes")) {
             st = gen_push_args(st, yr_get(node, "args"));
-            st = emit(st, ys("    call y_bytes_to_str"));
-            return emit(st, ys("    add $8, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bytes_to_str"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
         } else if (ys_eq_lit(name, "ptr_addr")) {
             /* A pointer IS its numeric value at run time: nothing to emit
              * beyond evaluating the operand. This exists only so the type
@@ -5974,7 +5974,7 @@ Yv *gen_method(Yv *st, Yv *node) {
     Yv *fname = yr_get(sm, "fn");
     if (yv_len(runtime_base(fname)) > 0) {
         st = gen_push_args(st, args);
-        st = emit(st, ys_cat(ys("    call "), fname));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(fname)), 0, 0, 0, 0, 0, 0);
         return emit(st,
                     ys_cat(ys_cat(ys("    add $"),
                                   ys_long(yv_len(args) * 8)),
@@ -5998,7 +5998,7 @@ Yv *gen_print(Yv *st, Yv *node) {
         /* Records are formatted field by field from their static shape. */
         st = gen_rec_str(st, pa0, t);
         st = gen_helper1(st, ys("y_print_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
         /* A function value has no printable contents; show its signature
          * (`<function (params) -> ret>`, in the spelling types.y tstr gives,
@@ -6007,7 +6007,7 @@ Yv *gen_print(Yv *st, Yv *node) {
         st = gen_str_const(
             st, ys_cat(ys_cat(ys("<function "), tstr(t)), ys(">")));
         st = gen_helper1(st, ys("y_print_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tarr ||
                yv_l(yr_get(t, "k")) == K_tarrfix) {
         /* Arrays print like tostring: "[e0, e1, ...]". */
@@ -6021,22 +6021,22 @@ Yv *gen_print(Yv *st, Yv *node) {
             ;
         }
         st = gen_helper1(st, ys("y_print_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_topt) {
         st = gen(st, pa0);
         st = gen_opt_str_rax(st, t, yav(0));
         st = gen_helper1(st, ys("y_print_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         /* Maps format entry by entry: {"k": v, ...} (quoted keys). */
         st = gen_map_repr(st, pa0, t);
         st = gen_helper1(st, ys("y_print_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         st = gen(st, pa0);
         st = gen_union_str_rax(st, t, yav(0));
         st = gen_helper1(st, ys("y_print_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         return gen_print_scalar(st, pa0, t);
     }
@@ -6046,16 +6046,16 @@ Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t) {
     st = gen(st, arg);
     if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_helper1(st, ys("y_print_bool"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = gen_helper1(st, ys("y_print_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         st = gen_helper1(st, ys("y_print_float"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         st = gen_helper1(st, ys("y_print_long"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     }
 }
 
@@ -6078,14 +6078,14 @@ Yv *gen_opt_str_rax(Yv *st, Yv *t, Yv *path) {
     st = yr_get(rdone, "st");
     Yv *rnul = next_loc(st);
     st = yr_get(rnul, "st");
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(rnul, "label"))));
-    st = emit(st, ys("    mov (%rax), %rax"));
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(rnul, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     st = gen_val_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(rdone, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(rnul, "label")), ys(":")));
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(rdone, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(rnul, "label")));
     st = gen_str_const(st, ys("none"));
-    return emit(st, ys_cat(lname(yr_get(rdone, "label")), ys(":")));
+    return emit_label(st, yv_l(yr_get(rdone, "label")));
 }
 
 Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t) {
@@ -6098,9 +6098,9 @@ Yv *gen_rec_str(Yv *st, Yv *arg, Yv *t) {
  * compile time). Stack layout while building: [record][accumulator], the
  * record pushed first (8(%rsp)), the accumulator on top (0(%rsp)). */
 Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay, Yv *path) {
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, ys("{"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     Yv *fs = yr_get(t, "fields");
     long i = 0;
     while (i < yv_len(fs)) {
@@ -6116,8 +6116,8 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay, Yv *path) {
         i = i + 1;
     }
     st = gen_acc_cat_const(st, ys("}"));
-    st = emit(st, ys("    mov (%rsp), %rax"));
-    return emit(st, ys("    add $16, %rsp"));
+    st = emit_insn(st, F_MOV_0_R, R_RSP, -1, 1, -1, -1, R_RAX, 64);
+    return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
@@ -6130,13 +6130,13 @@ Yv *gen_cons(Yv *st, Yv *node) {
     Yv *one = yr(4, "k", yv_long(K_array), "elems", args1(yr_get(node, "l")), "line",
                  ln, "col", cl);
     st = gen_array_esz(st, one, cesz, store_elem_type(crt, cesz));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "r"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys("    mov $"), ys_cat(ys_long(cesz), ys(", %rax"))));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_arr_cat"));
-    return emit(st, ys("    add $24, %rsp"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, cesz, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_cat"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* `l + r` on two arrays whose element types differ by an implicit numeric
@@ -6219,7 +6219,7 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     }
     if (larr) {
         st = gen(st, yr_get(node, "l"));
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         if (ys_eq_lit(how, "cat")) {
             st = gen(st, yr_get(node, "r"));
         } else {
@@ -6227,32 +6227,30 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
         }
     } else {
         st = gen_array_esz(st, one, esz, ety);
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, yr_get(node, "r"));
     }
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(esz)), ys(", %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_arr_cat"));
-    return emit(st, ys("    add $24, %rsp"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, esz, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_cat"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* acc = acc + <constant>, with the layout above still in place. */
 Yv *gen_acc_cat_const(Yv *st, Yv *s) {
-    st = emit(st, ys("    mov (%rsp), %rax"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_MOV_0_R, R_RSP, -1, 1, -1, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, s);
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_str_cat"));
-    st = emit(st, ys("    add $16, %rsp"));
-    return emit(st, ys("    mov %rax, (%rsp)"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+    return emit_insn(st, F_MOV_R_0, R_RAX, 64, R_RSP, -1, 1, -1, -1);
 }
 
 /* Slot idx of the record in %rcx into register dst. */
-Yv *gen_slot_load(Yv *st, long idx, Yv *dst) {
-    return emit(st, ys_cat(ys_cat(ys_cat(ys("    mov "), ys_long(8 * idx)),
-                                  ys("(%rcx), ")),
-                           dst));
+Yv *gen_slot_load(Yv *st, long idx) {
+    return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * idx, -1, R_RAX, 64);
 }
 
 /* acc = acc + <field in slot idx, rendered by its static type>. */
@@ -6264,26 +6262,26 @@ Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path) {
     Yv *fk = yr_get(ft, "k");
     if (yv_l(fk) == K_tstr) {
         /* a str is already its own form */
-        st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = gen_slot_load(st, idx, ys("%rax"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RCX, 64);
+        st = gen_slot_load(st, idx);
     } else if (yv_l(fk) == K_tlong) {
-        st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = gen_slot_load(st, idx, ys("%rax"));
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_long_tostr"));
-        st = emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RCX, 64);
+        st = gen_slot_load(st, idx);
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(fk) == K_tbool) {
-        st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = gen_slot_load(st, idx, ys("%rax"));
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_bool_tostr"));
-        st = emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RCX, 64);
+        st = gen_slot_load(st, idx);
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(fk) == K_tfloat) {
-        st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = gen_slot_load(st, idx, ys("%rax"));
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_float_tostr"));
-        st = emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RCX, 64);
+        st = gen_slot_load(st, idx);
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_float_tostr"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(fk) == K_tfunc) {
         st = gen_str_const(
             st, ys_cat(ys_cat(ys("<function "), tstr(ft)), ys(">")));
@@ -6293,17 +6291,17 @@ Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path) {
          * print the field's TYPE instead ("<{str => long}>") on the mistaken
          * belief that only gen_val_tostr_rax walked them -- it does, and it is
          * exactly what a field needs. */
-        st = emit(st, ys("    mov 8(%rsp), %rcx"));
-        st = gen_slot_load(st, idx, ys("%rax"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RCX, 64);
+        st = gen_slot_load(st, idx);
         st = gen_val_tostr_rax(st, ft, path);
     }
-    st = emit(st, ys("    mov %rax, %rdx"));
-    st = emit(st, ys("    mov (%rsp), %rax"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    push %rdx"));
-    st = emit(st, ys("    call y_str_cat"));
-    st = emit(st, ys("    add $16, %rsp"));
-    return emit(st, ys("    mov %rax, (%rsp)"));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_MOV_0_R, R_RSP, -1, 1, -1, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+    return emit_insn(st, F_MOV_R_0, R_RAX, 64, R_RSP, -1, 1, -1, -1);
 }
 
 Yv *gen_syscall(Yv *st, Yv *node) {
@@ -6313,17 +6311,18 @@ Yv *gen_syscall(Yv *st, Yv *node) {
     long n = yv_len(args) - 1;
     long i = n;
     while (i >= 1) {
-        st = emit(st, ys_cat(ys("    pop "), syscall_reg(i - 1)));
+        st = emit_insn(st, F_POP_R, syscall_reg(i - 1), 64, 0, 0, 0, 0, 0);
         /* a str flows in as its header; the kernel wants the data bytes. */
         Yv *at = infer(st, ya_get(args, i));
         if (yv_l(yr_get(at, "k")) == K_tstr) {
-            st = emit(st, ys_cat(ys("    add $8, "), syscall_reg(i - 1)));
+            st = emit_insn(st, F_ADD_I_R, 8, syscall_reg(i - 1), 64, 0, 0, 0,
+                           0);
             ;
         }
         i = i - 1;
     }
-    st = emit(st, ys("    pop %rax"));
-    return emit(st, ys("    syscall"));
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
 }
 
 /* The frame offset of the closure record of the body being emitted, or -1
@@ -6379,13 +6378,12 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
             ;
         }
         if (soff >= 0) {
-            st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
-                                 ys("(%rbp), %rax")));
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, soff, -1, R_RAX, 64);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             ;
         }
         st = gen_push_args_as(st, yr_get(node, "args"), dptypes);
-        st = emit(st, ys_cat(ys("    call "), lname(label)));
+        st = emit_insn(st, F_CALL_L, yv_l(label), 0, 0, 0, 0, 0, 0);
         long nbytes = yv_len(yr_get(node, "args")) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
@@ -6394,8 +6392,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
         if (nbytes == 0) {
             return st;
         } else {
-            return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(nbytes)),
-                                   ys(", %rsp")));
+            return emit_insn(st, F_ADD_I_R, nbytes, R_RSP, 64, 0, 0, 0, 0);
         }
     }
 }
@@ -6423,19 +6420,19 @@ int cmp_word(Yv *t) {
    unordered compare, a structural == is a call), and the emitter may change how
    a bool is built without this going stale. Each jcc is the negation of its
    setcc form: `<` is setl, so its false edge is jge. */
-Yv *int_cmp_jcc(Yv *st, Yv *node) {
-    Yv *jcc = ys("");
+long int_cmp_jcc(Yv *st, Yv *node) {
+    long jcc = 0;
     if (yv_l(yr_get(node, "k")) == K_bin) {
         Yv *bin = node;
         Yv *op = yr_get(bin, "op");
         if (cmp_word(infer(st, yr_get(bin, "l")))
             && cmp_word(infer(st, yr_get(bin, "r")))) {
-            if (ys_eq_lit(op, "<")) { jcc = ys("jge"); }
-            else if (ys_eq_lit(op, ">")) { jcc = ys("jle"); }
-            else if (ys_eq_lit(op, "<=")) { jcc = ys("jg"); }
-            else if (ys_eq_lit(op, ">=")) { jcc = ys("jl"); }
-            else if (ys_eq_lit(op, "==")) { jcc = ys("jne"); }
-            else if (ys_eq_lit(op, "!=")) { jcc = ys("je"); }
+            if (ys_eq_lit(op, "<")) { jcc = F_JGE_L; }
+            else if (ys_eq_lit(op, ">")) { jcc = F_JLE_L; }
+            else if (ys_eq_lit(op, "<=")) { jcc = F_JG_L; }
+            else if (ys_eq_lit(op, ">=")) { jcc = F_JL_L; }
+            else if (ys_eq_lit(op, "==")) { jcc = F_JNE_L; }
+            else if (ys_eq_lit(op, "!=")) { jcc = F_JE_L; }
             ;
         }
         ;
@@ -6448,11 +6445,11 @@ Yv *int_cmp_jcc(Yv *st, Yv *node) {
    same setcc/jcc forms apply. */
 Yv *gen_cmp_flags(Yv *st, Yv *node) {
     st = gen(st, yr_get(node, "l"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "r"));
-    st = emit(st, ys("    mov %rax, %rcx"));
-    st = emit(st, ys("    pop %rax"));
-    return emit(st, ys("    cmp %rcx, %rax"));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
 }
 
 Yv *gen_if(Yv *st, Yv *node) {
@@ -6460,27 +6457,27 @@ Yv *gen_if(Yv *st, Yv *node) {
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
-    if (yv_len(jcc) > 0) {
+    long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    if (jcc != 0) {
         /* A comparison branches on the flags it has just set: the bool is
            never built. `setcc; movzbq; test; jcc` (four instructions) becomes
            `cmp; jcc` (two) -- 3,049 such sites in ycc's own output. */
         st = gen_cmp_flags(st, yr_get(node, "cond"));
-        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lname(yr_get(r1, "label")))));
+        st = emit_insn(st, jcc, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
     } else {
         st = gen(st, yr_get(node, "cond"));
-        st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r1, "label"))));
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JZ_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
     }
     st = gen(st, yr_get(node, "then"));
     if (yv_b(yr_get(node, "has_else"))) {
-        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r2, "label"))));
-        st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
+        st = emit_insn(st, F_JMP_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, yv_l(yr_get(r1, "label")));
         st = gen_loc_elif(st, yr_get(node, "els"));
         st = gen(st, yr_get(node, "els"));
-        return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
+        return emit_label(st, yv_l(yr_get(r2, "label")));
     } else {
-        return emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
+        return emit_label(st, yv_l(yr_get(r1, "label")));
     }
 }
 
@@ -6497,20 +6494,20 @@ Yv *gen_while(Yv *st, Yv *node) {
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
-    Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
-    if (yv_len(jcc) > 0) {
+    st = emit_label(st, yv_l(yr_get(r1, "label")));
+    long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    if (jcc != 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
-        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lname(yr_get(r2, "label")))));
+        st = emit_insn(st, jcc, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     } else {
         st = gen(st, yr_get(node, "cond"));
-        st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r2, "label"))));
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JZ_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     }
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
-    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(r2, "label")));
 }
 
 /* ── counted loops ──────────────────────────────────────────────────────
@@ -6533,21 +6530,21 @@ Yv *gen_for(Yv *st, Yv *node) {
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
-    Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
-    if (yv_len(jcc) > 0) {
+    st = emit_label(st, yv_l(yr_get(r1, "label")));
+    long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    if (jcc != 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
-        st = emit(st, ys_cat(ys_cat(ys("    "), jcc), ys_cat(ys(" "), lname(yr_get(r2, "label")))));
+        st = emit_insn(st, jcc, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     } else {
         st = gen(st, yr_get(node, "cond"));
-        st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r2, "label"))));
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JZ_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     }
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
     st = gen(st, yr_get(node, "step"));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
-    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(r2, "label")));
 }
 
 /* A loop's value is void (types.y: every loop kind's typeof is
@@ -6570,33 +6567,29 @@ Yv *gen_forrange(Yv *st, Yv *node) {
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
             "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     st = gen(st, yr_get(node, "hi"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(loff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, loff, -1);
     st = gen(st, yr_get(node, "lo"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(voff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, voff, -1);
     st = env_define(st, yr_get(node, "name"), ys("local"), voff, yv_long(-1),
                     ys(""), yr(1, "k", yv_long(K_tlong)));
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(voff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(loff)),
-                         ys("(%rbp), %rcx")));
-    st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
+    st = emit_label(st, yv_l(yr_get(r1, "label")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, voff, -1, R_RAX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, loff, -1, R_RCX, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     /* a captured loop variable gets a fresh cell per iteration (the
      * counter itself stays in its raw slot) */
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
-    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(voff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
-    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
+    st = emit_insn(st, F_INC_D, R_RBP, -1, 1, voff, -1, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(r2, "label")));
 }
 
 /* A loop's value is void (types.y: every loop kind's typeof is
@@ -6630,42 +6623,36 @@ Yv *gen_foreach(Yv *st, Yv *node) {
         ;
     }
     st = gen(st, yr_get(node, "iter"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
-                         ys("(%rbp)")));
-    st = emit(st, ys("    xor %eax, %eax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
     st = env_define(st, yr_get(node, "name"), ys("local"), voff, yv_long(-1),
                     ys(""), eltyp);
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
+    st = emit_label(st, yv_l(yr_get(r1, "label")));
     /* i < len(arr) — the heap header keeps the length in slot 0. The length
      * is re-read on every iteration, not hoisted into a fourth slot: a body
      * that appends to the array it walks goes on seeing what it appended
      * (`foreach (x in a) { a += x }` never ends), which hoisting would
      * change. */
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys("    mov (%rdx), %rcx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RAX, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     /* x = arr[i] */
-    st = emit(st, elem_load(arr_elem_bytes(elt), ys("%rdx"), ys("%rax"),
-                            ys("%rcx")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rcx, "), ys_long(voff)),
-                         ys("(%rbp)")));
+    st = elem_load(st, arr_elem_bytes(elt), R_RDX, R_RAX, R_RCX);
+    st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RBP, -1, 1, voff, -1);
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
-    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
-    return emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
+    st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(r2, "label")));
 }
 
 /* ── tail calls ─────────────────────────────────────────────────────────
@@ -6706,7 +6693,7 @@ Yv *gen_tail_call(Yv *st, Yv *node) {
             ;
         }
         long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
-        st = emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(off), ys("(%rbp)"))));
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, off, -1);
         offs = ya_push(offs, yv_long(off));
         st = yr(13, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"),
                 "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"),
@@ -6721,15 +6708,15 @@ Yv *gen_tail_call(Yv *st, Yv *node) {
     long j = 0;
     while (j < n) {
         long po = 16 + 8 * (n - 1 - j);
-        st = emit(st, ys_cat(ys("    mov "), ys_cat(ys_long(yv_l(ya_get(offs, j))), ys("(%rbp), %rax"))));
-        st = emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(po), ys("(%rbp)"))));
+        st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(ya_get(offs, j)), -1, R_RAX, 64);
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, po, -1);
         j = j + 1;
     }
     /* tear down this frame and re-enter the prologue; the return address
      * of the original call stays where it is, so the caller sees a normal
      * return. */
-    st = emit(st, ys("    mov %rbp, %rsp"));
-    st = emit(st, ys("    pop %rbp"));
+    st = emit_insn(st, F_MOV_R_R, R_RBP, 64, R_RSP, 64, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RBP, 64, 0, 0, 0, 0, 0);
     return emit(st,
                 ys_cat(ys("    jmp "), lname(yr_get(st, "self_label"))));
 }
@@ -6742,7 +6729,7 @@ Yv *gen_tail(Yv *st, Yv *node) {
             return gen_tail_call(st, e);
         }
         st = gen_as(st, e, cur_fn_ret(st));
-        return emit(st, ys_cat(ys("    jmp "), lname(yr_get(st, "end_label"))));
+        return emit_insn(st, F_JMP_L, yv_l(yr_get(st, "end_label")), 0, 0, 0, 0, 0, 0);
     } else if (yv_l(k) == K_call) {
         if (is_self_call(st, node)) { return gen_tail_call(st, node); }
         return gen_as(st, node, cur_fn_ret(st));
@@ -6768,8 +6755,8 @@ Yv *gen_tail(Yv *st, Yv *node) {
         }
         return st;
     } else if (yv_l(k) == K_kw_if) {
-        Yv *jcc = int_cmp_jcc(st, yr_get(node, "cond"));
-        if (yv_len(jcc) == 0) {
+        long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+        if (jcc == 0) {
             st = gen(st, yr_get(node, "cond"));
         }
         Yv *rl1 = next_loc(st);
@@ -6778,25 +6765,23 @@ Yv *gen_tail(Yv *st, Yv *node) {
         Yv *rl2 = next_loc(st);
         st = yr_get(rl2, "st");
         Yv *lend = yr_get(rl2, "label");
-        if (yv_len(jcc) > 0) {
+        if (jcc != 0) {
             /* the flags come from the comparison itself (see int_cmp_jcc) */
             st = gen_cmp_flags(st, yr_get(node, "cond"));
-            st = emit(st,
-                      ys_cat(ys_cat(ys("    "), jcc),
-                             ys_cat(ys(" "), lname(lelse))));
+            st = emit_insn(st, jcc, yv_l(lelse), 0, 0, 0, 0, 0, 0);
         } else {
-            st = emit(st, ys("    test %rax, %rax"));
-            st = emit(st, ys_cat(ys("    jz "), lname(lelse)));
+            st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, F_JZ_L, yv_l(lelse), 0, 0, 0, 0, 0, 0);
         }
         st = gen_tail(st, yr_get(node, "then"));
         if (yv_b(yr_get(node, "has_else"))) {
-            st = emit(st, ys_cat(ys("    jmp "), lname(lend)));
-            st = emit(st, ys_cat(lname(lelse), ys(":")));
+            st = emit_insn(st, F_JMP_L, yv_l(lend), 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, yv_l(lelse));
             st = gen_loc_elif(st, yr_get(node, "els"));
             st = gen_tail(st, yr_get(node, "els"));
-            return emit(st, ys_cat(lname(lend), ys(":")));
+            return emit_label(st, yv_l(lend));
         }
-        return emit(st, ys_cat(lname(lelse), ys(":")));
+        return emit_label(st, yv_l(lelse));
     }
     return gen_as(st, node, cur_fn_ret(st));
 }
@@ -6812,7 +6797,7 @@ Yv *gen_block_as(Yv *st, Yv *node, int dropped) {
      * frame. */
     Yv *stmts = yr_get(node, "stmts");
     if (yv_len(stmts) == 0) {
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         /* A trailing `;` (void) computes nothing: nothing to emit. */
         long m = yv_len(stmts);
@@ -7354,22 +7339,21 @@ Yv *ty_desc_in(Yv *st, Yv *m, Yv *inu) {
 /* The record in %rax (slots `from`) copied into slots `to`, tagged
  * `tag`: a new record in %rax. */
 Yv *gen_copy_rec(Yv *st, Yv *from, Yv *to, Yv *tag) {
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(8 * yv_len(to) + 16)),
-                         ys(", %rdi")));
-    st = emit(st, ys("    call y_alloc"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, 8 * yv_len(to) + 16, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit(st,
               ys_cat(ys_cat(ys("    lea "), lname(tag)), ys("(%rip), %rcx")));
-    st = emit(st, ys("    mov %rcx, 0(%rax)"));
-    st = emit(st, ys("    pop %rsi"));
+    st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 0, -1);
+    st = emit_insn(st, F_POP_R, R_RSI, 64, 0, 0, 0, 0, 0);
     long i = 0;
     while (i < yv_len(to)) {
         long s = mfield_idx(from, ya_get(to, i));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * s)), ys("(%rsi), %rcx")));
-        st = emit(st, ys_cat(ys_cat(ys("    mov %rcx, "), ys_long(8 + 8 * i)), ys("(%rax)")));
+        st = emit_insn(st, F_MOV_D_R, R_RSI, -1, 1, 8 * s, -1, R_RCX, 64);
+        st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 8 + 8 * i, -1);
         i = i + 1;
     }
-    return emit(st, ys("    add $8, %rax"));
+    return emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
 }
 
 /* The value in %rax, of static type src0, going where want0 is declared:
@@ -7447,7 +7431,7 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
         } else {
             Yv *done = next_loc(st);
             st = yr_get(done, "st");
-            st = emit(st, ys("    mov -8(%rax), %rcx"));
+            st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
             Yv *lbls = yav(0);
             long i = 0;
             while (i < yv_len(ms)) {
@@ -7456,16 +7440,15 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
                 lbls = ya_push(lbls, yr_get(l, "label"));
                 Yv *dr = ty_desc_in(st, ya_get(ms, i), s);
                 st = yr_get(dr, "st");
-                st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
-                                     ys("(%rip), %rdx")));
-                st = emit(st, ys("    cmp %rdx, %rcx"));
-                st = emit(st, ys_cat(ys("    je "), lname(yr_get(l, "label"))));
+                st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(yr_get(dr, "label")), R_RDX, 64);
+                st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
+                st = emit_insn(st, F_JE_L, yv_l(yr_get(l, "label")), 0, 0, 0, 0, 0, 0);
                 i = i + 1;
             }
-            st = emit(st, ys("    jmp y_cast_trap"));
+            st = emit_insn(st, F_JMP_L, yv_l(lbl_new(ys("y_cast_trap"))), 0, 0, 0, 0, 0, 0);
             i = 0;
             while (i < yv_len(ms)) {
-                st = emit(st, ys_cat(lname(ya_get(lbls, i)), ys(":")));
+                st = emit_label(st, yv_l(ya_get(lbls, i)));
                 Yv *from = ya_get(froms, i);
                 Yv *to = ya_get(tos, i);
                 if (!same_lay(from, to)) {
@@ -7475,12 +7458,12 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
                 }
                 /* not on the last arm: that one falls through into `done:` */
                 if (i < yv_len(ms) - 1) {
-                    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
+                    st = emit_insn(st, F_JMP_L, yv_l(yr_get(done, "label")), 0, 0, 0, 0, 0, 0);
                     ;
                 }
                 i = i + 1;
             }
-            return emit(st, ys_cat(lname(yr_get(done, "label")), ys(":")));
+            return emit_label(st, yv_l(yr_get(done, "label")));
         }
     } else {
         return st;
@@ -7602,15 +7585,13 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
     }
     Yv *dr = ty_desc_in(st, rt, wu);
     st = yr_get(dr, "st");
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(8 * n + 16)),
-                         ys(", %rdi")));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
-                         ys("(%rip), %rax")));
-    st = emit(st, ys("    pop %rcx"));
-    st = emit(st, ys("    mov %rax, 0(%rcx)"));
-    st = emit(st, ys("    push %rcx"));
+    st = emit_insn(st, F_MOV_I_R, 8 * n + 16, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(yr_get(dr, "label")), R_RAX, 64);
+    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, 0, -1);
+    st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
     long i = 0;
     while (i < nent) {
         /* mv is walked twice (gen, then infer), so bind it once. */
@@ -7620,8 +7601,8 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
             /* Spread: the source runs ONCE; copy each of its fields into
              * the slot it has here. A later entry's store overwrites. */
             st = gen(st, mv);
-            st = emit(st, ys("    pop %rcx"));
-            st = emit(st, ys("    mov %rax, %rdx"));
+            st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
             Yv *srec2 = infer(st, mv);
             if (yv_l(yr_get(srec2, "k")) == K_trec) {
                 Yv *sfs2 = yr_get(srec2, "fields");
@@ -7631,12 +7612,8 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
                     long mi2 = mfield_idx(slots, yr_get(sf2, "name"));
                     /* %rdx is the source's record VALUE (slot 0 at +0);
                      * %rcx is the fresh record's ALLOC base (slots at +8). */
-                    st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                                ys_long(8 * rec_slot(sfs2, yr_get(sf2, "name")))),
-                                         ys("(%rdx), %rsi")));
-                    st = emit(st, ys_cat(ys_cat(ys("    mov %rsi, "),
-                                                ys_long(8 + mi2 * 8)),
-                                         ys("(%rcx)")));
+                    st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, 8 * rec_slot(sfs2, yr_get(sf2, "name")), -1, R_RSI, 64);
+                    st = emit_insn(st, F_MOV_R_D, R_RSI, 64, R_RCX, -1, 1, 8 + mi2 * 8, -1);
                     sj = sj + 1;
                 }
             }
@@ -7649,17 +7626,15 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
             } else {
                 st = gen_as(st, mv, ft);
             }
-            st = emit(st, ys("    pop %rcx"));
+            st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
             long mi = mfield_idx(slots, mk);
-            st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
-                                        ys_long(8 + mi * 8)),
-                                 ys("(%rcx)")));
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, 8 + mi * 8, -1);
         }
-        st = emit(st, ys("    push %rcx"));
+        st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
         i = i + 1;
     }
-    st = emit(st, ys("    pop %rax"));
-    return emit(st, ys("    add $8, %rax"));
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
 }
 
 /* Value mv given for field mk of rtu, the record type a literal is created
@@ -7748,8 +7723,7 @@ Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
     }
     st = gen_make_closure(st, lbl, caps);
     long coff = (yv_l(yr_get(st, "slots")) + 1) * -8;
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(coff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, coff, -1);
     Yv *st3 =
         yr(13, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"), "uid",
            yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
@@ -7855,17 +7829,14 @@ Yv *gen_decl(Yv *st, Yv *node) {
 Yv *bind_decl(Yv *st, Yv *name, Yv *t) {
     Yv *ge = env_find(st, name);
     if (ys_eq_lit(yr_get(ge, "kind"), "global")) {
-        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
-                                   lname(yr_get(ge, "label"))),
-                            ys("(%rip)")));
+        st = emit_insn(st, F_MOV_R_P, R_RAX, 64, -1, -1, 1, 0, yv_l(yr_get(ge, "label")));
         return env_define(st, name, ys("global"), 0, yr_get(ge, "label"), ys(""),
                           t);
     } else if (yv_l(yr_get(t, "k")) == K_tstr && own_wanted(st, name)) {
         return bind_own(st, name, t);
     } else {
         long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
-        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
-                             ys("(%rbp)")));
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, off, -1);
         Yv *st2 =
             yr(13, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"),
                "uid", yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
@@ -7888,28 +7859,18 @@ Yv *gen_assign(Yv *st, Yv *node) {
     st = gen_as(st, yr_get(node, "v"), yr_get(e, "typ"));
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
         long idx = ys_tonum(yr_get(e, "mark"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                   ys_long(yv_l(yr_get(e, "off")))),
-                            ys("(%rbp), %rcx")));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                   ys_long(8 * (idx + 1))),
-                            ys("(%rcx), %rdx")));
-        st = emit(st, ys("    mov %rax, (%rdx)"));
+        st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
+        st = emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (idx + 1), -1, R_RDX, 64);
+        st = emit_insn(st, F_MOV_R_0, R_RAX, 64, R_RDX, -1, 1, -1, -1);
         return st;
     } else if (ys_eq_lit(yr_get(e, "kind"), "box")) {
-        st = emit(st, ys_cat(ys_cat(ys("    mov "),
-                                   ys_long(yv_l(yr_get(e, "off")))),
-                            ys("(%rbp), %rdx")));
-        st = emit(st, ys("    mov %rax, (%rdx)"));
+        st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RDX, 64);
+        st = emit_insn(st, F_MOV_R_0, R_RAX, 64, R_RDX, -1, 1, -1, -1);
         return st;
     } else if (ys_eq_lit(yr_get(e, "kind"), "global")) {
-        return emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
-                                      lname(yr_get(e, "label"))),
-                               ys("(%rip)")));
+        return emit_insn(st, F_MOV_R_P, R_RAX, 64, -1, -1, 1, 0, yv_l(yr_get(e, "label")));
     } else {
-        return emit(st, ys_cat(ys_cat(ys("    mov %rax, "),
-                                      ys_long(yv_l(yr_get(e, "off")))),
-                               ys("(%rbp)")));
+        return emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1);
     }
 }
 
@@ -7920,12 +7881,11 @@ Yv *gen_fill(Yv *st, long base, long n) {
     } else {
         Yv *r = next_loc(st);
         st = yr_get(r, "st");
-        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", %rcx")));
-        st = emit(st, ys_cat(lname(yr_get(r, "label")), ys(":")));
-        st = emit(st, ys("    dec %rcx"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(base)),
-                             ys("(%rbp,%rcx,8)")));
-        return emit(st, ys_cat(ys("    jnz "), lname(yr_get(r, "label"))));
+        st = emit_insn(st, F_MOV_I_R, n, R_RCX, 64, 0, 0, 0, 0);
+        st = emit_label(st, yv_l(yr_get(r, "label")));
+        st = emit_insn(st, F_DEC_R, R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_M, R_RAX, 64, R_RBP, R_RCX, 8, base, -1);
+        return emit_insn(st, F_JNZ_L, yv_l(yr_get(r, "label")), 0, 0, 0, 0, 0, 0);
     }
 }
 
@@ -7937,14 +7897,14 @@ Yv *gen_fill_heap(Yv *st, long n, long esz) {
     } else {
         Yv *r = next_loc(st);
         st = yr_get(r, "st");
-        st = emit(st, ys("    mov %rdx, %r10"));
-        st = emit(st, ys("    mov %rax, %rdx"));
-        st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", %rcx")));
-        st = emit(st, ys_cat(lname(yr_get(r, "label")), ys(":")));
-        st = emit(st, ys("    dec %rcx"));
-        st = emit(st, elem_store_rdx(esz, ys("%r10"), ys("%rcx")));
-        st = emit(st, ys_cat(ys("    jnz "), lname(yr_get(r, "label"))));
-        st = emit(st, ys("    mov %r10, %rdx"));
+        st = emit_insn(st, F_MOV_R_R, R_RDX, 64, R_R10, 64, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+        st = emit_insn(st, F_MOV_I_R, n, R_RCX, 64, 0, 0, 0, 0);
+        st = emit_label(st, yv_l(yr_get(r, "label")));
+        st = emit_insn(st, F_DEC_R, R_RCX, 64, 0, 0, 0, 0, 0);
+        st = elem_store_rdx(st, esz, R_R10, R_RCX);
+        st = emit_insn(st, F_JNZ_L, yv_l(yr_get(r, "label")), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_R, R_R10, 64, R_RDX, 64, 0, 0, 0);
         return st;
     }
 }
@@ -7964,22 +7924,20 @@ Yv *gen_arrrep(Yv *st, Yv *node) {
 Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz, Yv *ety) {
     long n = yv_l(yr_get(node, "n"));
     st = gen_as(st, yr_get(node, "v"), ety);
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(arr_alloc_size(esz, n))),
-                         ys(", %rdi")));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(arr_header_size())),
-                         ys(", %rdi")));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    pop %rdx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", (%rax)")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", 8(%rax)")));
-    st = emit(st, ys("    mov %rdx, 16(%rax)"));
-    st = emit(st, ys("    mov %rax, %rdx"));
-    st = emit(st, ys("    pop %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, arr_alloc_size(esz, n), R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, arr_header_size(), R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_0, n, R_RAX, -1, 1, -1, -1, 0);
+    st = emit_insn(st, F_MOV_I_D, n, R_RAX, -1, 1, 8, -1, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_RAX, -1, 1, 16, -1);
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_fill_heap(st, n, esz);
-    return emit(st, ys("    mov %rdx, %rax"));
+    return emit_insn(st, F_MOV_R_R, R_RDX, 64, R_RAX, 64, 0, 0, 0);
 }
 
 /* Radix literals (0x../0b..) reach the emitter as their source text; the
@@ -8659,9 +8617,7 @@ Yv *gen_lit(Yv *st, Yv *node) {
     if (lit_is_float(yr_get(node, "v"))) {
         /* Float literal: its IEEE-754 bits, decided above. Floats live in %rax
          * as raw bits; only arithmetic and comparison use %xmm. */
-        return emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                       ys_long(flit_bits(yr_get(node, "v")))),
-                                ys(", %rax")));
+        return emit_insn(st, F_MOV_I_R, flit_bits(yr_get(node, "v")), R_RAX, 64, 0, 0, 0, 0);
     } else {
         /* An integer literal is emitted as its VALUE, not its text: a literal
          * wider than 64 bits runs as its low 64 bits (which is what the
@@ -8670,10 +8626,8 @@ Yv *gen_lit(Yv *st, Yv *node) {
          * GNU as can read, so a -S listing of such a program did not assemble
          * at all. norm_num has already turned hex and binary into decimal, so
          * an in-range literal emits exactly the text it did before. */
-        return emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                      ys_long(num_i64(norm_num(
-                                          yr_get(node, "v"))))),
-                               ys(", %rax")));
+        return emit_insn(st, F_MOV_I_R, num_i64(norm_num(
+                                          yr_get(node, "v"))), R_RAX, 64, 0, 0, 0, 0);
     }
 }
 Yv *gen_index(Yv *st, Yv *node) {
@@ -8686,23 +8640,21 @@ Yv *gen_index(Yv *st, Yv *node) {
     Yv *bt = infer(st, garr);
     long ixesz = arr_elem_bytes(bt);
     st = gen(st, garr);
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "idx"));
-    st = emit(st, ys("    mov %rax, %rcx"));
-    st = emit(st, ys("    pop %rax"));
-    st = emit(st, ys("    test %rcx, %rcx"));
-    st = emit(st, ys("    js y_oob"));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JS_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(bt, "k")) == K_tarrfix) {
-        st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
-                                    ys_long(yv_l(yr_get(bt, "n")))),
-                             ys(", %rcx")));
-        st = emit(st, ys("    jge y_oob"));
-        return emit(st, elem_load(ixesz, ys("%rax"), ys("%rcx"), ys("%rax")));
+        st = emit_insn(st, F_CMP_I_R, yv_l(yr_get(bt, "n")), R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
+        return elem_load(st, ixesz, R_RAX, R_RCX, R_RAX);
     } else {
-        st = emit(st, ys("    mov (%rax), %rdx"));
-        st = emit(st, ys("    cmp %rdx, %rcx"));
-        st = emit(st, ys("    jge y_oob"));
-        return emit(st, elem_load(ixesz, ys("%rax"), ys("%rcx"), ys("%rax")));
+        st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RDX, 64);
+        st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
+        return elem_load(st, ixesz, R_RAX, R_RCX, R_RAX);
     }
 }
 
@@ -8719,14 +8671,13 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
     Yv *dt = infer(st, dobj);
     long idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_as(st, yr_get(node, "v"), rec_field_type(dt, dkey));
-    st = emit(st, ys("    pop %rdx"));
+    st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(dt, "k")) == K_tunion) {
         return gen_union_slot(st, dt, dkey, 1);
     } else {
-        return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * idx)),
-                               ys("(%rdx)")));
+        return emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RDX, -1, 1, 8 * idx, -1);
     }
 }
 
@@ -8906,13 +8857,12 @@ Yv *gen_incdec(Yv *st, Yv *node, int dropped) {
         ;
     }
     if (slot != 0) {
-        Yv *mn = ys("inc");
+        long f = F_INC_D;
         if (ys_eq_lit(yr_get(node, "op"), "--")) {
-            mn = ys("dec");
+            f = F_DEC_D;
             ;
         }
-        return emit(st, ys_cat(ys_cat(ys_cat(ys("    "), mn), ys(" ")),
-                               ys_cat(ys_long(slot), ys("(%rbp)"))));
+        return emit_insn(st, f, R_RBP, -1, 1, slot, -1, 0, 0);
     } else {
         return gen_incdec_desugar(st, node, dropped);
     }
@@ -9004,7 +8954,8 @@ Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped) {
        the ALU instruction: `/` and `%` need its zero check and idiv, the
        shifts their count check, and a byte, float or non-local target a
        different instruction altogether (see inplace_slot). */
-    Yv *mn = ys("");
+    long fr = 0;
+    long fi = 0;
     long slot = 0;
     long imm = 0;
     int has_imm = 0;
@@ -9013,25 +8964,31 @@ Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped) {
         if (slot != 0) {
             Yv *op = yr_get(node, "op");
             if (ys_eq_lit(op, "+")) {
-                mn = ys("add");
+                fr = F_ADD_R_R;
+                fi = F_ADD_I_D;
                 ;
             } else if (ys_eq_lit(op, "-")) {
-                mn = ys("sub");
+                fr = F_SUB_R_R;
+                fi = F_SUB_I_D;
                 ;
             } else if (ys_eq_lit(op, "*")) {
-                mn = ys("imul");
+                fr = F_IMUL_R_R;
+                fi = 0;
                 ;
             } else if (ys_eq_lit(op, "|")) {
-                mn = ys("or");
+                fr = F_OR_R_R;
+                fi = F_OR_I_D;
                 ;
             } else if (ys_eq_lit(op, "&")) {
-                mn = ys("and");
+                fr = F_AND_R_R;
+                fi = F_AND_I_D;
                 ;
             } else if (ys_eq_lit(op, "^")) {
-                mn = ys("xor");
+                fr = F_XOR_R_R;
+                fi = F_XOR_I_D;
                 ;
             }
-            if (yv_len(mn) > 0) {
+            if (fi != 0) {
                 Yv *im = int_imm(yr_get(node, "v"));
                 if (yv_b(yr_get(im, "ok"))) {
                     has_imm = 1;
@@ -9044,20 +9001,18 @@ Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped) {
         }
         ;
     }
-    if (yv_len(mn) == 0) {
+    if (fr == 0) {
         return gen_opassign_desugar(st, node, dropped);
     } else if (has_imm) {
-        Yv *t1 = ys_cat(ys_cat(ys("    "), mn), ys(" $"));
-        Yv *t2 = ys_cat(ys_long(imm), ys(", "));
-        return emit(st, ys_cat(ys_cat(t1, t2), ys_cat(ys_long(slot), ys("(%rbp)"))));
+        return emit_insn(st, fi, imm, R_RBP, -1, 1, slot, -1, 0);
     } else {
-        st = emit(st, ys_cat(ys("    mov "), ys_cat(ys_long(slot), ys("(%rbp), %rax"))));
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, slot, -1, R_RAX, 64);
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, yr_get(node, "v"));
-        st = emit(st, ys("    mov %rax, %rcx"));
-        st = emit(st, ys("    pop %rax"));
-        st = emit(st, ys_cat(ys_cat(ys("    "), mn), ys(" %rcx, %rax")));
-        return emit(st, ys_cat(ys("    mov %rax, "), ys_cat(ys_long(slot), ys("(%rbp)"))));
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, fr, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+        return emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, slot, -1);
     }
 }
 
@@ -9337,34 +9292,32 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
     Yv *bt = infer(st, garr);
     long iaesz = arr_elem_bytes(bt);
     st = gen(st, garr);
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "idx"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_as(st, yr_get(node, "v"), store_elem_type(bt, iaesz));
-    st = emit(st, ys("    pop %rcx"));
-    st = emit(st, ys("    pop %rdx"));
-    st = emit(st, ys("    test %rcx, %rcx"));
-    st = emit(st, ys("    js y_oob"));
+    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JS_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(bt, "k")) == K_tarrfix) {
-        st = emit(st, ys_cat(ys_cat(ys("    cmp $"),
-                                    ys_long(yv_l(yr_get(bt, "n")))),
-                             ys(", %rcx")));
-        st = emit(st, ys("    jge y_oob"));
-        st = emit(st, ys("    mov %rdx, %r10"));
-        st = emit(st, ys("    mov %rax, %rdx"));
-        st = emit(st, elem_store_rdx(iaesz, ys("%r10"), ys("%rcx")));
-        st = emit(st, ys("    mov %r10, %rdx"));
+        st = emit_insn(st, F_CMP_I_R, yv_l(yr_get(bt, "n")), R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_R, R_RDX, 64, R_R10, 64, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+        st = elem_store_rdx(st, iaesz, R_R10, R_RCX);
+        st = emit_insn(st, F_MOV_R_R, R_R10, 64, R_RDX, 64, 0, 0, 0);
         ;
     } else {
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    mov (%rdx), %rax"));
-        st = emit(st, ys("    cmp %rax, %rcx"));
-        st = emit(st, ys("    jge y_oob"));
-        st = emit(st, ys("    pop %rax"));
-        st = emit(st, ys("    mov %rdx, %r10"));
-        st = emit(st, ys("    mov %rax, %rdx"));
-        st = emit(st, elem_store_rdx(iaesz, ys("%r10"), ys("%rcx")));
-        st = emit(st, ys("    mov %r10, %rdx"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RAX, 64);
+        st = emit_insn(st, F_CMP_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_R, R_RDX, 64, R_R10, 64, 0, 0, 0);
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+        st = elem_store_rdx(st, iaesz, R_R10, R_RCX);
+        st = emit_insn(st, F_MOV_R_R, R_R10, 64, R_RDX, 64, 0, 0, 0);
         ;
     }
     return st;
@@ -9423,13 +9376,13 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path) {
     } else if (yv_l(tk) == K_tstr) {
         return st;
     } else if (yv_l(tk) == K_tbool) {
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_bool_tostr"));
-        return emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(tk) == K_tfloat) {
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_float_tostr"));
-        return emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_float_tostr"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(tk) == K_tarr) {
         if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
             /* [byte] stringifies Python-style: b'...' with escapes */
@@ -9451,23 +9404,21 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path) {
     } else if (yv_l(tk) == K_tmap) {
         return gen_map_repr_rax(st, t, path_push(path, t));
     } else {
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    call y_long_tostr"));
-        return emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     }
 }
 
 /* acc = acc + <the string in %rax>. */
 Yv *gen_acc_cat_rax(Yv *st, long aoff) {
-    st = emit(st, ys("    mov %rax, %rdx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    push %rdx"));
-    st = emit(st, ys("    call y_str_cat"));
-    st = emit(st, ys("    add $16, %rsp"));
-    return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
-                           ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+    return emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
 }
 
 /* The record address of a map sits in %rax; leave '{"k": v, ...}' -- the same
@@ -9488,50 +9439,40 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
             yv_long(yv_l(yr_get(st, "slots")) + 4), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
             "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(moff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, moff, -1);
     st = gen_str_const(st, ys("{"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
-                         ys("(%rbp)")));
-    st = emit(st, ys("    xor %eax, %eax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     Yv *r3 = next_loc(st);
     st = yr_get(r3, "st");
-    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys("    mov 8(%rdx), %rdx"));
-    st = emit(st, ys("    mov (%rdx), %rcx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r3, "label"))));
+    st = emit_label(st, yv_l(yr_get(r1, "label")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, moff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, 8, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RAX, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(r3, "label")), 0, 0, 0, 0, 0, 0);
     st = gen_acc_cat_slot(st, aoff, ys(", "));
-    st = emit(st, ys_cat(lname(yr_get(r3, "label")), ys(":")));
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
     /* the key, quoted when it is a str (map_key_repr's rule) */
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys("    mov 8(%rdx), %rdx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rcx")));
-    st = emit(st, elem_load(elem_bytes(yr_get(t, "key")), ys("%rdx"),
-                            ys("%rcx"), ys("%rax")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, moff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, 8, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RCX, 64);
+    st = elem_load(st, elem_bytes(yr_get(t, "key")), R_RDX, R_RCX, R_RAX);
     if (yv_l(yr_get(yr_get(t, "key"), "k")) == K_tstr) {
         /* The key goes to a slot first: appending the opening quote is a call
          * that leaves its result in %rax, so a key still living there would be
          * appended twice over instead. */
-        st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(koff)),
-                             ys("(%rbp)")));
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, koff, -1);
         st = gen_acc_cat_slot(st, aoff, ys("\""));
-        st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(koff)),
-                             ys("(%rbp), %rax")));
+        st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, koff, -1, R_RAX, 64);
         st = gen_acc_cat_rax(st, aoff);
         st = gen_acc_cat_slot(st, aoff, ys("\""));
         ;
@@ -9542,22 +9483,18 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
     }
     st = gen_acc_cat_slot(st, aoff, ys(": "));
     /* the value */
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(moff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys("    mov 16(%rdx), %rdx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rcx")));
-    st = emit(st, elem_load(elem_bytes(yr_get(t, "of")), ys("%rdx"), ys("%rcx"),
-                            ys("%rax")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, moff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, 16, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RCX, 64);
+    st = elem_load(st, elem_bytes(yr_get(t, "of")), R_RDX, R_RCX, R_RAX);
     st = gen_val_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
     st = gen_acc_cat_rax(st, aoff);
     /* the counter in place: one instruction, not a load, an inc and a store */
-    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
+    st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(r2, "label")));
     st = gen_acc_cat_slot(st, aoff, ys("}"));
-    return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
-                           ys("(%rbp), %rax")));
+    return emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
 }
 
 /* Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
@@ -9572,67 +9509,55 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
             yv_long(yv_l(yr_get(st, "slots")) + 3), "self_label",
             yr_get(st, "self_label"), "end_label", yr_get(st, "end_label"),
             "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(soff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, soff, -1);
     st = gen_str_const(st, ys("["));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
-                         ys("(%rbp)")));
-    st = emit(st, ys("    xor %eax, %eax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     Yv *r3 = next_loc(st);
     st = yr_get(r3, "st");
-    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys("    mov (%rdx), %rcx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys_cat(ys("    jz "), lname(yr_get(r3, "label"))));
+    st = emit_label(st, yv_l(yr_get(r1, "label")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, soff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RAX, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(r3, "label")), 0, 0, 0, 0, 0, 0);
     st = gen_acc_cat_slot(st, aoff, ys(", "));
-    st = emit(st, ys_cat(lname(yr_get(r3, "label")), ys(":")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rcx")));
-    st = emit(st, elem_load(elem_bytes(elty), ys("%rdx"), ys("%rcx"),
-                            ys("%rax")));
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, soff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RCX, 64);
+    st = elem_load(st, elem_bytes(elty), R_RDX, R_RCX, R_RAX);
     st = gen_val_tostr_rax(st, elty, path);
-    st = emit(st, ys("    mov %rax, %rdx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    push %rdx"));
-    st = emit(st, ys("    call y_str_cat"));
-    st = emit(st, ys("    add $16, %rsp"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
     /* the counter in place: one instruction, not a load, an inc and a store */
-    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
+    st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(r2, "label")));
     st = gen_acc_cat_slot(st, aoff, ys("]"));
-    return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
-                           ys("(%rbp), %rax")));
+    return emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
 }
 
 /* slot(%rbp) = slot(%rbp) + <constant>. */
 Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s) {
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(off)), ys("(%rbp), %rax")));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, off, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, s);
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_str_cat"));
-    st = emit(st, ys("    add $16, %rsp"));
-    return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(off)),
-                           ys("(%rbp)")));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+    return emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, off, -1);
 }
 
 /* ── element size ───────────────────────────────────────────────────────
@@ -9673,27 +9598,12 @@ long ptr_width(Yv *t) {
 /* Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
  * the index register, `dst` the result. Headers are {len, cap, data} with
  * the elements in a separate block, so the data pointer rides through %dst. */
-Yv *elem_load(long esz, Yv *base, Yv *idx, Yv *dst) {
+Yv *elem_load(Yv *st, long esz, long base, long idx, long dst) {
+    st = emit_insn(st, F_MOV_D_R, base, -1, 1, 16, -1, dst, 64);
     if (esz == 1) {
-        return ys_cat(
-            ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base), ys("), ")),
-                          dst),
-                   ys("\n")),
-            ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("    movzbq ("), dst),
-                                          ys(",")),
-                                   idx),
-                            ys(",1), ")),
-                   dst));
+        return emit_insn(st, F_MOVZBQ_M_R, dst, idx, 1, 0, -1, dst, 64);
     } else {
-        return ys_cat(
-            ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base), ys("), ")),
-                          dst),
-                   ys("\n")),
-            ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov ("), dst),
-                                          ys(",")),
-                                   idx),
-                            ys(",8), ")),
-                   dst));
+        return emit_insn(st, F_MOV_M_R, dst, idx, 8, 0, -1, dst, 64);
     }
 }
 
@@ -9702,31 +9612,23 @@ Yv *elem_load(long esz, Yv *base, Yv *idx, Yv *dst) {
  * table; a packed store truncates to 8 bits, which is the narrowing.
  * %r11 is the scratch that carries the data pointer: no generated value
  * lives in it across a store (the syscall instruction clobbers it). */
-Yv *elem_store_rdx(long esz, Yv *base, Yv *idx) {
+Yv *elem_store_rdx(Yv *st, long esz, long base, long idx) {
+    st = emit_insn(st, F_MOV_D_R, base, -1, 1, 16, -1, R_R11, 64);
     if (esz == 1) {
-        return ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
-                                    ys("), %r11\n    movb %dl, (%r11,")),
-                             idx),
-                      ys(",1)"));
+        return emit_insn(st, F_MOVB_R_M, R_RDX, 8, R_R11, idx, 1, 0, -1);
     } else {
-        return ys_cat(ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
-                                    ys("), %r11\n    mov %rdx, (%r11,")),
-                             idx),
-                      ys(",8)"));
+        return emit_insn(st, F_MOV_R_M, R_RDX, 64, R_R11, idx, 8, 0, -1);
     }
 }
 
 /* Same, for a compile-time-constant index (array literals): fold the
  * offset into the displacement instead of using an index register. */
-Yv *elem_store_rdx_const(long esz, Yv *base, long k) {
+Yv *elem_store_rdx_const(Yv *st, long esz, long base, long k) {
+    st = emit_insn(st, F_MOV_D_R, base, -1, 1, 16, -1, R_R11, 64);
     if (esz == 1) {
-        return ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
-                                    ys("), %r11\n    movb %dl, ")),
-                      ys_cat(ys_long(k), ys("(%r11)")));
+        return emit_insn(st, F_MOVB_R_D, R_RDX, 8, R_R11, -1, 1, k, -1);
     } else {
-        return ys_cat(ys_cat(ys_cat(ys("    mov 16("), base),
-                                    ys("), %r11\n    mov %rdx, ")),
-                      ys_cat(ys_long(k * 8), ys("(%r11)")));
+        return emit_insn(st, F_MOV_R_D, R_RDX, 64, R_R11, -1, 1, k * 8, -1);
     }
 }
 
@@ -9805,13 +9707,13 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
     st = gen(st, yr_get(nar, "e"));
     if (yv_len(ds) == 0) {
         /* no member matches: the arm never runs */
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_len(ds) == 1) {
         return gen_slot_move(st, yv_l(ya_get(ds, 0)), 0);
     } else {
         Yv *done = next_loc(st);
         st = yr_get(done, "st");
-        st = emit(st, ys("    mov -8(%rax), %rcx"));
+        st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
         Yv *lbls = yav(0);
         long d = 0;
         while (d < yv_len(ds) - 1) {
@@ -9823,29 +9725,28 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
                 if (yv_l(ya_get(slots, j)) == yv_l(ya_get(ds, d))) {
                     Yv *dr = ty_desc_in(st, ya_get(ms, j), s);
                     st = yr_get(dr, "st");
-                    st = emit(st, ys_cat(ys_cat(ys("    lea "), lname(yr_get(dr, "label"))),
-                                         ys("(%rip), %rsi")));
-                    st = emit(st, ys("    cmp %rsi, %rcx"));
-                    st = emit(st, ys_cat(ys("    je "), lname(yr_get(l, "label"))));
+                    st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(yr_get(dr, "label")), R_RSI, 64);
+                    st = emit_insn(st, F_CMP_R_R, R_RSI, 64, R_RCX, 64, 0, 0, 0);
+                    st = emit_insn(st, F_JE_L, yv_l(yr_get(l, "label")), 0, 0, 0, 0, 0, 0);
                 }
                 j = j + 1;
             }
             d = d + 1;
         }
         st = gen_slot_move(st, yv_l(ya_get(ds, yv_len(ds) - 1)), 0);
-        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
+        st = emit_insn(st, F_JMP_L, yv_l(yr_get(done, "label")), 0, 0, 0, 0, 0, 0);
         long e = 0;
         while (e < yv_len(lbls)) {
-            st = emit(st, ys_cat(lname(ya_get(lbls, e)), ys(":")));
+            st = emit_label(st, yv_l(ya_get(lbls, e)));
             st = gen_slot_move(st, yv_l(ya_get(ds, e)), 0);
             /* not on the last arm: that one falls through into `done:` */
             if (e < yv_len(lbls) - 1) {
-                st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
+                st = emit_insn(st, F_JMP_L, yv_l(yr_get(done, "label")), 0, 0, 0, 0, 0, 0);
                 ;
             }
             e = e + 1;
         }
-        return emit(st, ys_cat(lname(yr_get(done, "label")), ys(":")));
+        return emit_label(st, yv_l(yr_get(done, "label")));
     }
 }
 
@@ -9853,11 +9754,9 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
  * (store) %rax into slot sl of the record in %rdx. */
 Yv *gen_slot_move(Yv *st, long sl, int store) {
     if (store) {
-        return emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(8 * sl)),
-                               ys("(%rdx)")));
+        return emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RDX, -1, 1, 8 * sl, -1);
     } else {
-        return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(8 * sl)),
-                               ys("(%rax), %rax")));
+        return emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 8 * sl, -1, R_RAX, 64);
     }
 }
 
@@ -9868,7 +9767,7 @@ Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
         return gen_len(st, n_call1(ys("len"), obj, line, col));
     } else {
         st = gen(st, obj);
-        return emit(st, ys("    mov 16(%rax), %rax"));
+        return emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 16, -1, R_RAX, 64);
     }
 }
 
@@ -9876,8 +9775,7 @@ Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
 Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
     long idx = rec_field_idx(t, dkey);
     st = gen(st, dobj);
-    return emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(idx * 8)),
-                           ys("(%rax), %rax")));
+    return emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, idx * 8, -1, R_RAX, 64);
 }
 
 /* The slot of field `key` in a record of static type t (fields sorted by
@@ -9940,30 +9838,27 @@ Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety) {
     long gi = 0;
     while (gi < yv_len(elems)) {
         st = gen_as(st, ya_get(elems, gi), ety);
-        st = emit(st, ys("    push %rax"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         gi = gi + 1;
     }
     long n = yv_len(elems);
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"),
-                                ys_long(arr_alloc_size(esz, n))),
-                         ys(", %rdi")));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(arr_header_size())),
-                         ys(", %rdi")));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    mov %rax, %r10"));
-    st = emit(st, ys("    pop %rdx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", (%r10)")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(n)), ys(", 8(%r10)")));
-    st = emit(st, ys("    mov %rdx, 16(%r10)"));
+    st = emit_insn(st, F_MOV_I_R, arr_alloc_size(esz, n), R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, arr_header_size(), R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_R10, 64, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_0, n, R_R10, -1, 1, -1, -1, 0);
+    st = emit_insn(st, F_MOV_I_D, n, R_R10, -1, 1, 8, -1, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_R10, -1, 1, 16, -1);
     long k = n - 1;
     while (k >= 0) {
-        st = emit(st, ys("    pop %rdx"));
-        st = emit(st, elem_store_rdx_const(esz, ys("%r10"), k));
+        st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+        st = elem_store_rdx_const(st, esz, R_R10, k);
         k = k - 1;
     }
-    return emit(st, ys("    mov %r10, %rax"));
+    return emit_insn(st, F_MOV_R_R, R_R10, 64, R_RAX, 64, 0, 0, 0);
 }
 
 Yv *gen_len(Yv *st, Yv *node) {
@@ -9979,10 +9874,10 @@ Yv *gen_len(Yv *st, Yv *node) {
         return gen(st, n_call1(ys("len"), n_dot(ya_get(args, 0), ys("keys"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))));
     } else if (yv_l(yr_get(at, "k")) == K_tstr) {
         st = gen(st, ya_get(args, 0));
-        return emit(st, ys("    mov (%rax), %rax"));
+        return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     } else {
         st = gen(st, ya_get(args, 0));
-        return emit(st, ys("    mov (%rax), %rax"));
+        return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     }
 }
 
@@ -9995,12 +9890,11 @@ Yv *gen_push(Yv *st, Yv *node) {
     st = gen_push_args_as(st, yr_get(node, "args"),
                           args2(yr(1, "k", yv_long(K_tnone)),
                                 store_elem_type(pat, pesz)));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_arr_push"));
+    st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_push"))), 0, 0, 0, 0, 0, 0);
     long nbytes = yv_len(yr_get(node, "args")) * 8 + 8;
-    return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(nbytes)),
-                           ys(", %rsp")));
+    return emit_insn(st, F_ADD_I_R, nbytes, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* `arr += other` with one element type (gen_opassign_arr makes the call,
@@ -10010,10 +9904,10 @@ Yv *gen_push_all(Yv *st, Yv *node) {
     Yv *pargs = yr_get(node, "args");
     long pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
     st = gen_push_args_as(st, yr_get(node, "args"), yav(0));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_arr_extend"));
-    return emit(st, ys("    add $24, %rsp"));
+    st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_extend"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* The payload of a `?.` chain, back in an option box (parser.y). A payload
@@ -10037,11 +9931,11 @@ Yv *gen_some(Yv *st, Yv *node) {
 
 /* The value in %rax boxed: some(v), the box in %rax. */
 Yv *gen_box_rax(Yv *st) {
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    mov $8, %rdi"));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    pop %rcx"));
-    return emit(st, ys("    mov %rcx, (%rax)"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, 8, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_MOV_R_0, R_RCX, 64, R_RAX, -1, 1, -1, -1);
 }
 
 Yv *gen_is_some(Yv *st, Yv *node) {
@@ -10051,9 +9945,9 @@ Yv *gen_is_some(Yv *st, Yv *node) {
         return gen_map_get(st, ya_get(args, 0), ys("has"));
     } else {
         st = gen(st, ya_get(args, 0));
-        st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys("    setne %al"));
-        return emit(st, ys("    movzbq %al, %rax"));
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_SETNE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
     }
 }
 
@@ -10064,9 +9958,9 @@ Yv *gen_unwrap(Yv *st, Yv *node) {
         return gen_map_get(st, ya_get(args, 0), ys("val"));
     } else {
         st = gen(st, ya_get(args, 0));
-        st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys("    jz y_opt_unwrap"));
-        return emit(st, ys("    mov (%rax), %rax"));
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JZ_L, yv_l(lbl_new(ys("y_opt_unwrap"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     }
 }
 
@@ -10077,8 +9971,8 @@ Yv *gen_unwrap(Yv *st, Yv *node) {
 
 Yv *gen_trim(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_str_trim"));
-    return emit(st, ys("    add $8, %rsp"));
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_trim"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* prepend(arr, v) -> arr: in-place insert at the front (the header never
@@ -10090,12 +9984,11 @@ Yv *gen_prepend(Yv *st, Yv *node) {
     st = gen_push_args_as(st, yr_get(node, "args"),
                           args2(yr(1, "k", yv_long(K_tnone)),
                                 store_elem_type(pat, pesz)));
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(pesz)), ys(", %rax")));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_arr_prepend"));
+    st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_prepend"))), 0, 0, 0, 0, 0, 0);
     long nbytes = yv_len(yr_get(node, "args")) * 8 + 8;
-    return emit(st, ys_cat(ys_cat(ys("    add $"), ys_long(nbytes)),
-                           ys(", %rsp")));
+    return emit_insn(st, F_ADD_I_R, nbytes, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* byte_at(s, i): byte i of string s, trapped when out of bounds. This is
@@ -10105,33 +9998,33 @@ Yv *gen_prepend(Yv *st, Yv *node) {
 Yv *gen_byte_at(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
     st = gen(st, ya_get(args, 0));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, ya_get(args, 1));
-    st = emit(st, ys("    pop %rcx"));
-    st = emit(st, ys("    mov (%rcx), %rdx"));
-    st = emit(st, ys("    test %rax, %rax"));
-    st = emit(st, ys("    js y_oob"));
-    st = emit(st, ys("    cmp %rdx, %rax"));
-    st = emit(st, ys("    jge y_oob"));
-    return emit(st, ys("    movzbq 8(%rcx,%rax,1), %rax"));
+    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_0_R, R_RCX, -1, 1, -1, -1, R_RDX, 64);
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JS_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_MOVZBQ_M_R, R_RCX, R_RAX, 1, 8, -1, R_RAX, 64);
 }
 
 Yv *gen_ord(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_str_ord"));
-    return emit(st, ys("    add $8, %rsp"));
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_ord"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_chr(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_str_chr"));
-    return emit(st, ys("    add $8, %rsp"));
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_chr"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_tonum(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_str_tonum"));
-    return emit(st, ys("    add $8, %rsp"));
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_tonum"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_tostring(Yv *st, Yv *node) {
@@ -10144,12 +10037,12 @@ Yv *gen_tostring(Yv *st, Yv *node) {
         return gen(st, a0);
     } else if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_push_args(st, yr_get(node, "args"));
-        st = emit(st, ys("    call y_bool_tostr"));
-        return emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         st = gen_push_args(st, yr_get(node, "args"));
-        st = emit(st, ys("    call y_float_tostr"));
-        return emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_float_tostr"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tarr) {
         st = gen(st, a0);
         if (yv_l(yr_get(yr_get(t, "of"), "k")) == K_tbyte) {
@@ -10177,8 +10070,8 @@ Yv *gen_tostring(Yv *st, Yv *node) {
         return gen_map_repr(st, a0, t);
     } else {
         st = gen_push_args(st, yr_get(node, "args"));
-        st = emit(st, ys("    call y_long_tostr"));
-        return emit(st, ys("    add $8, %rsp"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     }
 }
 
@@ -10216,43 +10109,43 @@ Yv *gen_fmt(Yv *st, Yv *node) {
         long code = fmt_code(f, kind, ty);
         if (ty == 115) {
             st = gen_tostring(st, ts);
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
             st = fmt_push(st, yv_l(yr_get(f, "width")));
             st = fmt_push(st, yv_l(yr_get(f, "prec")));
-            st = emit(st, ys("    call y_fmt_s"));
-            return emit(st, ys("    add $32, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_fmt_s"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
         } else if (ty == 100 || ty == 120 || ty == 88 ||
                    ty == 111 || ty == 98 || ty == 99) {
             st = gen(st, a0);
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
             st = fmt_push(st, yv_l(yr_get(f, "width")));
-            st = emit(st, ys("    call y_fmt_i"));
-            return emit(st, ys("    add $24, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_fmt_i"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
         } else {
             st = gen(st, a0);
             if (kind == 1) {
-                st = emit(st, ys("    cvtsi2sd %rax, %xmm0"));
-                st = emit(st, ys("    movq %xmm0, %rax"));
+                st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+                st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
                 ;
             }
             if (ty == 37) {
-                st = emit(st, ys("    movq %rax, %xmm0"));
-                st = emit(st, ys("    mov $100, %rax"));
-                st = emit(st, ys("    cvtsi2sd %rax, %xmm1"));
-                st = emit(st, ys("    mulsd %xmm1, %xmm0"));
-                st = emit(st, ys("    movq %xmm0, %rax"));
+                st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+                st = emit_insn(st, F_MOV_I_R, 100, R_RAX, 64, 0, 0, 0, 0);
+                st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM1, 128, 0, 0, 0);
+                st = emit_insn(st, F_MULSD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
+                st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
                 ;
             }
             long prec = yv_l(yr_get(f, "prec"));
             if (prec < 0) { prec = 6; ; }
-            st = emit(st, ys("    push %rax"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
             st = fmt_push(st, yv_l(yr_get(f, "width")));
             st = fmt_push(st, prec);
-            st = emit(st, ys("    call y_fmt_f"));
-            return emit(st, ys("    add $32, %rsp"));
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_fmt_f"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
         }
     }
 }
@@ -10291,19 +10184,18 @@ long fmt_code(Yv *f, long kind, long ty) {
 
 /* Push the number v (an argument of a helper call). */
 Yv *fmt_push(Yv *st, long v) {
-    st = emit(st, ys_cat(ys_cat(ys("    mov $"), ys_long(v)),
-                         ys(", %rax")));
-    return emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_MOV_I_R, v, R_RAX, 64, 0, 0, 0, 0);
+    return emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
 }
 
 Yv *gen_index_of(Yv *st, Yv *node, int last) {
     st = gen_push_args(st, yr_get(node, "args"));
     if (last) {
-        st = emit(st, ys("    call y_str_lastidx"));
-        return emit(st, ys("    add $16, %rsp"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_lastidx"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     } else {
-        st = emit(st, ys("    call y_str_index"));
-        return emit(st, ys("    add $16, %rsp"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_index"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     }
 }
 
@@ -10336,8 +10228,8 @@ Yv *gen_join(Yv *st, Yv *node) {
         return gen_join_conv(st, node, ys("y_float_tostr"), 8);
     } else {
         st = gen_push_args(st, yr_get(node, "args"));
-        st = emit(st, ys("    call y_str_join"));
-        return emit(st, ys("    add $16, %rsp"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_join"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     }
 }
 
@@ -10354,66 +10246,56 @@ Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz) {
             "fns", yr_get(st, "fns"), "bodies", yr_get(st, "bodies"), "blabels", yr_get(st, "blabels"));
     Yv *jargs = yr_get(node, "args");
     st = gen(st, ya_get(jargs, 0));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(soff)),
-                         ys("(%rbp)")));
-    st = emit(st, ys("    mov (%rax), %rdi"));
-    st = emit(st, ys("    shl $3, %rdi"));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    mov $24, %rdi"));
-    st = emit(st, ys("    call y_alloc"));
-    st = emit(st, ys("    pop %rdx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(doff)),
-                         ys("(%rbp)")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
-                         ys("(%rbp), %rcx")));
-    st = emit(st, ys("    mov (%rcx), %rcx"));
-    st = emit(st, ys("    mov %rcx, (%rax)"));
-    st = emit(st, ys("    mov %rcx, 8(%rax)"));
-    st = emit(st, ys("    mov %rdx, 16(%rax)"));
-    st = emit(st, ys("    xor %eax, %eax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
-                         ys("(%rbp)")));
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, soff, -1);
+    st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RDI, 64);
+    st = emit_insn(st, F_SHL_I_R, 3, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, 24, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, doff, -1);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, soff, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RCX, -1, 1, -1, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_R_0, R_RCX, 64, R_RAX, -1, 1, -1, -1);
+    st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 8, -1);
+    st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_RAX, -1, 1, 16, -1);
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
     Yv *r1 = next_loc(st);
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    st = emit(st, ys_cat(lname(yr_get(r1, "label")), ys(":")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(soff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys("    mov (%rdx), %rcx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    cmp %rcx, %rax"));
-    st = emit(st, ys_cat(ys("    jge "), lname(yr_get(r2, "label"))));
-    st = emit(st, elem_load(esz, ys("%rdx"), ys("%rax"), ys("%rcx")));
-    st = emit(st, ys("    push %rcx"));
-    st = emit(st, ys_cat(ys("    call "), tostr_fn));
-    st = emit(st, ys("    add $8, %rsp"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rcx")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(doff)),
-                         ys("(%rbp), %rdx")));
-    st = emit(st, ys("    mov 16(%rdx), %rdx"));
-    st = emit(st, ys("    mov %rax, (%rdx,%rcx,8)"));
-    st = emit(st, ys("    inc %rcx"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rcx, "), ys_long(ioff)),
-                         ys("(%rbp)")));
-    st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(r1, "label"))));
-    st = emit(st, ys_cat(lname(yr_get(r2, "label")), ys(":")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(doff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    push %rax"));
+    st = emit_label(st, yv_l(yr_get(r1, "label")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, soff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RAX, 64);
+    st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
+    st = elem_load(st, esz, R_RDX, R_RAX, R_RCX);
+    st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(tostr_fn)), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, doff, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, 16, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_R_M, R_RAX, 64, R_RDX, R_RCX, 8, 0, -1);
+    st = emit_insn(st, F_INC_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RBP, -1, 1, ioff, -1);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(r2, "label")));
+    st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, doff, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, ya_get(jargs, 1));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    call y_str_join"));
-    return emit(st, ys("    add $16, %rsp"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_join"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_split(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
-    st = emit(st, ys("    call y_str_split"));
-    return emit(st, ys("    add $16, %rsp"));
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_split"))), 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_puts(Yv *st, Yv *node) {
@@ -10425,13 +10307,13 @@ Yv *gen_puts(Yv *st, Yv *node) {
     Yv *t = infer(st, pa);
     if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_helper1(st, ys("y_put_bool"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = gen_helper1(st, ys("y_put_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         st = gen_helper1(st, ys("y_put_long"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     }
 }
 
@@ -10444,26 +10326,26 @@ Yv *gen_eputs(Yv *st, Yv *node) {
     Yv *t = infer(st, pa);
     if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_helper1(st, ys("y_eput_bool"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = gen_helper1(st, ys("y_eput_hstr"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else {
         st = gen_helper1(st, ys("y_eput_long"));
-        return emit(st, ys("    xor %eax, %eax"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     }
 }
 
 Yv *gen_clock_us(Yv *st, Yv *node) {
     /* clock_us() -> long (monotonic microseconds, via clock_gettime). */
     (void)node; /* unused in native.y's def too */
-    return emit(st, ys("    call y_clock_us"));
+    return emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_clock_us"))), 0, 0, 0, 0, 0, 0);
 }
 
 Yv *gen_heap_used(Yv *st, Yv *node) {
     /* heap_used() -> long (bytes the allocator has handed out so far). */
     (void)node; /* unused in native.y's def too */
-    return emit(st, ys("    call y_heap_used"));
+    return emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_heap_used"))), 0, 0, 0, 0, 0, 0);
 }
 
 /* mutex() / sem(n): a record of the type (types.c t_mutex, t_sem), its
@@ -10501,46 +10383,46 @@ Yv *gen_sync_new(Yv *st, Yv *node) {
 Yv *gen_lock(Yv *st, Yv *node, int attempt) {
     Yv *largs = yr_get(node, "args");
     st = gen(st, ya_get(largs, 0));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, ya_get(largs, 1));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (!attempt) {
-        st = emit(st, ys("    mov 8(%rsp), %rax"));
-        st = emit(st, ys("    call y_mutex_lock"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RAX, 64);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_mutex_lock"))), 0, 0, 0, 0, 0, 0);
         st = gen_call_top(st);
-        st = emit(st, ys("    push %rax"));
-        st = emit(st, ys("    mov 16(%rsp), %rax"));
-        st = emit(st, ys("    call y_mutex_unlock"));
-        st = emit(st, ys("    pop %rax"));
-        return emit(st, ys("    add $16, %rsp"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 16, -1, R_RAX, 64);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_mutex_unlock"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     } else {
         Yv *skip = next_loc(st);
         st = yr_get(skip, "st");
         Yv *done = next_loc(st);
         st = yr_get(done, "st");
-        st = emit(st, ys("    mov 8(%rsp), %rax"));
-        st = emit(st, ys("    call y_mutex_trylock"));
-        st = emit(st, ys("    test %rax, %rax"));
-        st = emit(st, ys_cat(ys("    je "), lname(yr_get(skip, "label"))));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RAX, 64);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_mutex_trylock"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_JE_L, yv_l(yr_get(skip, "label")), 0, 0, 0, 0, 0, 0);
         st = gen_call_top(st);
-        st = emit(st, ys("    mov 8(%rsp), %rax"));
-        st = emit(st, ys("    call y_mutex_unlock"));
-        st = emit(st, ys("    mov $1, %rax"));
-        st = emit(st, ys_cat(ys("    jmp "), lname(yr_get(done, "label"))));
-        st = emit(st, ys_cat(lname(yr_get(skip, "label")), ys(":")));
-        st = emit(st, ys("    xor %eax, %eax"));
-        st = emit(st, ys_cat(lname(yr_get(done, "label")), ys(":")));
-        return emit(st, ys("    add $16, %rsp"));
+        st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8, -1, R_RAX, 64);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_mutex_unlock"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_JMP_L, yv_l(yr_get(done, "label")), 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, yv_l(yr_get(skip, "label")));
+        st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+        st = emit_label(st, yv_l(yr_get(done, "label")));
+        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     }
 }
 
 /* Call the closure on top of the stack with no arguments (it stays there). */
 Yv *gen_call_top(Yv *st) {
-    st = emit(st, ys("    mov 0(%rsp), %rax"));
-    st = emit(st, ys("    push %rax"));
-    st = emit(st, ys("    mov 0(%rax), %rax"));
-    st = emit(st, ys("    call *%rax"));
-    return emit(st, ys("    add $8, %rsp"));
+    st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 0, -1, R_RAX, 64);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 0, -1, R_RAX, 64);
+    st = emit_insn(st, F_CALL_IND, R_RAX, 64, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_sleep(Yv *st, Yv *node) {
@@ -10557,13 +10439,13 @@ Yv *gen_exit(Yv *st, Yv *node) {
     Yv *eargs = yr_get(node, "args");
     Yv *ea = ya_get(eargs, 0);
     st = gen(st, ea);
-    st = emit(st, ys("    mov %rax, %rdi"));
-    st = emit(st, ys("    mov $231, %rax"));
-    st = emit(st, ys("    syscall"));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDI, 64, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, 231, R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
     /* exit() terminates the process; the epilogue (ret / exit(0)) is
      * unreachable. Emit a jump to the function end so the backend never
      * falls through into dead code (and exit codes are never masked). */
-    return emit(st, ys_cat(ys("    jmp "), lname(yr_get(st, "end_label"))));
+    return emit_insn(st, F_JMP_L, yv_l(yr_get(st, "end_label")), 0, 0, 0, 0, 0, 0);
 }
 
 /* ── process I/O (argv) ──────────────────────────────────────────────
@@ -10574,7 +10456,7 @@ Yv *gen_exit(Yv *st, Yv *node) {
 
 Yv *gen_argv(Yv *st, Yv *node) {
     (void)node; /* native.y has no statement here; the node is unread */
-    return emit(st, ys("    call y_argv"));
+    return emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_argv"))), 0, 0, 0, 0, 0, 0);
 }
 
 Yv *gen_store(Yv *st, Yv *node) {
@@ -10586,13 +10468,13 @@ Yv *gen_store(Yv *st, Yv *node) {
         ;
     }
     st = gen(st, yr_get(node, "p"));
-    st = emit(st, ys("    push %rax"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_as(st, yr_get(node, "v"), sto);
-    st = emit(st, ys("    pop %rcx"));
+    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
     if (sw == 1) {
-        return emit(st, ys("    movb %al, (%rcx)"));
+        return emit_insn(st, F_MOVB_R_0, R_RAX, 8, R_RCX, -1, 1, -1, -1);
     } else {
-        return emit(st, ys("    mov %rax, (%rcx)"));
+        return emit_insn(st, F_MOV_R_0, R_RAX, 64, R_RCX, -1, 1, -1, -1);
     }
 }
 
@@ -10703,9 +10585,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         Yv *opt = ya_get(ptypes, opi);
         if (yv_l(yr_get(opt, "k")) == K_tstr && own_wanted(f, opn)) {
             Yv *ope = env_find(f, opn);
-            f = emit(f, ys_cat(ys_cat(ys("    mov "),
-                                      ys_long(yv_l(yr_get(ope, "off")))),
-                               ys("(%rbp), %rax")));
+            f = emit_insn(f, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(ope, "off")), -1, R_RAX, 64);
             f = bind_own(f, opn, opt);
             ;
         }

@@ -1648,9 +1648,25 @@ def emit_insn(st: EmitSt, f: long, a: long, b: long, c: long, d: long, e: long, 
     st_ir(st, insn.ir_push(st.ir, f, a, b, c, d, e, g, h))
 };
 
-// A line the emitter still spells as text: a comment, or an instruction not
-// yet moved to the IR. It becomes an IR_TEXT item, so the body is one ordered
-// stream either way and ir_render_all puts the text back where it was.
+// A label definition (`yfn_3_foo:`), as an item carrying the label's id: the
+// assembler takes the name from the table, and tree shaking compares ids.
+def emit_label(st: EmitSt, id: long) -> EmitSt {
+    emit_insn(st, insn.IR_LABEL, id, 0, 0, 0, 0, 0, 0)
+};
+
+// The five words of a memory operand that is a frame slot (lbl < 0: the
+// displacement is from %rbp) or a symbol at (%rip) (lbl >= 0) -- base, index,
+// scale, disp, label. For the operands whose shape the emitter only learns from
+// the variable: gen_sappend's variable and its companion cell are a local for
+// one program and a global for the next.
+def memop(lbl: long, disp: long) -> [long] {
+    if (lbl >= 0) { [-1, -1, 1, 0, lbl] } else { [insn.R_RBP, -1, 1, disp, -1] }
+};
+
+// A line the emitter still spells as text: the three comment lines it writes
+// (two `INTERNAL:` traps and the discarded bare self, which carries a
+// trailing comment of its own). It becomes an IR_TEXT item, so the body is one
+// ordered stream either way and ir_render_all puts the text back where it was.
 def emit(st: EmitSt, line: str) -> EmitSt {
     let txt = st.txt;
     txt += line;
@@ -2899,9 +2915,9 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.bool) {
         let lit: Leaf = node;
         if (lit.v == "true") {
-            emit(st, "    mov $1, %rax")
+            emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
         } else {
-            emit(st, "    xor %eax, %eax")
+            emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
         }
     } else if (k == K.str) {
         let lit: Leaf = node;
@@ -2910,7 +2926,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let lit: Leaf = node;
         gen_bstr(st, lit)
     } else if (k == K.void) {
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (k == K.id) {
         let id: Leaf = node;
         gen_id(st, id)
@@ -2927,7 +2943,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let deref: Wrap = node;
         let dw = ptr_width(infer(st, deref.e));
         st = gen(st, deref.e);
-        if (dw == 1) { emit(st, "    movzbq (%rax), %rax") } else { emit(st, "    mov (%rax), %rax") }
+        if (dw == 1) { emit_insn(st, insn.F_MOVZBQ_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64) } else { emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64) }
     } else if (k == K.bin) {
         let bin: Bin = node;
         gen_bin(st, bin)
@@ -2990,8 +3006,8 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         gen_convert(st, src, types.narrow_type(src, narrow.typ), false)
     } else if (k == K.matchend) {
         // unreachable when the checker accepted the match
-        st = emit(st, "    call y_match_fail");
-        emit(st, "    xor %eax, %eax")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_match_fail"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (k == K.sliceassign) {
         let assign: SliceAssign = node;
         gen_sliceassign(st, assign)
@@ -3027,7 +3043,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.ret) {
         let ret: Wrap = node;
         st = gen_as(st, ret.e, cur_fn_ret(st));
-        emit(st, "    jmp " + lname(st.end_label))
+        emit_insn(st, insn.F_JMP_L, st.end_label, 0, 0, 0, 0, 0, 0)
     } else {
         // Unreachable: the checker rejects everything else.
         emit(st, "    # INTERNAL: unhandled " + ktag(k) + " (checker drift)")
@@ -3072,7 +3088,7 @@ def gen_str_const(st: EmitSt, s: str) -> EmitSt {
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
-    emit(st, "    lea " + lname(id) + "(%rip), %rax")
+    emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, id, insn.R_RAX, 64)
 };
 
 def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
@@ -3082,7 +3098,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
         emit(st, "    xor %eax, %eax  # bare self (discarded)")
     } else if (node.v == "none") {
         // The empty option (checker gives it typeof from context).
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
         let e = env_find(st, node.v);
         if (e.kind == "none") {
@@ -3096,7 +3112,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
                 soff = capture_off(st);
             }
             if (soff >= 0) {
-                emit(st, "    mov " + tostring(soff) + "(%rbp), %rax")
+                emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, soff, -1, insn.R_RAX, 64)
             } else {
                 gen_make_closure(st, e.label, [])
             }
@@ -3106,16 +3122,16 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             if (e.typ.k == K.tstr) {
                 let oe = env_find(st, node.v + "#o");
                 if (oe.kind == "none") { } else {
-                    st = emit(st, "    xor %eax, %eax");
-                    st = emit(st, "    mov %rax, " + lname(oe.label) + "(%rip)");
+                    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+                    st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, -1, -1, 1, 0, oe.label);
                 };
             }
-            emit(st, "    mov " + lname(e.label) + "(%rip), %rax")
+            emit_insn(st, insn.F_MOV_P_R, -1, -1, 1, 0, e.label, insn.R_RAX, 64)
         } else if (e.kind == "own") {
             // an appendable string: a read may let its buffer escape, so
             // the companion is cleared (see gen_sappend)
-            st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax");
-            emit(st, "    mov $0, " + tostring(e.off - 8) + "(%rbp)")
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64);
+            emit_insn(st, insn.F_MOV_I_D, 0, insn.R_RBP, -1, 1, e.off - 8, -1, 0)
         } else if (e.kind == "capture") {
             // Captured by the enclosing closure: load the closure record
             // (at the frame offset recorded in `off`), read slot idx+1 —
@@ -3123,15 +3139,15 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             // NOTE: the index rides in `label` — env entries have no spare
             // numeric field and adding one would touch every signature.
             let idx = tonum(e.mark);
-            st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
-            st = emit(st, "    mov " + tostring(8 * (idx + 1)) + "(%rcx), %rax");
-            emit(st, "    mov (%rax), %rax")
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RAX, 64);
+            emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
         } else if (e.kind == "box") {
             // A captured variable's shared cell; the slot holds its pointer.
-            st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax");
-            emit(st, "    mov (%rax), %rax")
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64);
+            emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
         } else {
-            emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
+            emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64)
         }
     }
 };
@@ -3154,10 +3170,10 @@ def gen_cap_ptr(st: EmitSt, name: str) -> EmitSt {
     if (e.kind == "capture") {
         // NOTE: the index rides in `label` (see gen_id's capture arm).
         let pidx = tonum(e.mark);
-        st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
-        emit(st, "    mov " + tostring(8 * (pidx + 1)) + "(%rcx), %rax")
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
+        emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (pidx + 1), -1, insn.R_RAX, 64)
     } else {
-        emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
+        emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64)
     }
 };
 
@@ -3181,13 +3197,13 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
         st
     } else {
         st = gen_id(st, { k: K.id, v: name, line: 0, col: 0 });
-        st = emit(st, "    push %rax");
-        st = emit(st, "    mov $8, %rdi");
-        st = emit(st, "    call y_alloc");
-        st = emit(st, "    pop %rdx");
-        st = emit(st, "    mov %rdx, (%rax)");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, 8, insn.R_RDI, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_0, insn.R_RDX, 64, insn.R_RAX, -1, 1, -1, -1);
         let boff = (st.slots + 1) * -8;
-        st = emit(st, "    mov %rax, " + tostring(boff) + "(%rbp)");
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, boff, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
@@ -3411,8 +3427,8 @@ def own_wanted(st: EmitSt, name: str) -> bool {
 // companion in the slot below, cleared.
 def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
     let off = (st.slots + 1) * -8;
-    st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
-    st = emit(st, "    mov $0, " + tostring(off - 8) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
+    st = emit_insn(st, insn.F_MOV_I_D, 0, insn.R_RBP, -1, 1, off - 8, -1, 0);
     let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
@@ -3445,13 +3461,13 @@ def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
             let id: Leaf = assign.tgt;
             let e = env_find(st, id.v);
             if (e.kind == "own") {
-                gen_sappend(st, assign.v, tostring(e.off) + "(%rbp)", tostring(e.off - 8) + "(%rbp)")
+                gen_sappend(st, assign.v, -1, e.off, -1, e.off - 8)
             } else if (e.kind == "global" && e.typ.k == K.tstr) {
                 let oe = env_find(st, id.v + "#o");
                 if (oe.kind == "none") {
                     gen_opassign(st, assign, true)
                 } else {
-                    gen_sappend(st, assign.v, lname(e.label) + "(%rip)", lname(oe.label) + "(%rip)")
+                    gen_sappend(st, assign.v, e.label, 0, oe.label, 0)
                 }
             } else {
                 gen_opassign(st, assign, true)
@@ -3470,22 +3486,31 @@ def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
 // does to the variable (a read clears the companion, a nested append
 // stores its buffer there) leaves it != 1, and y_str_app copies. The
 // order is s = s + v's: the old value first, then v.
-def gen_sappend(st: EmitSt, v: Node, var: str, cell: str) -> EmitSt {
-    st = emit(st, "    mov " + var + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov " + cell + ", %rdx");
-    st = emit(st, "    cmp %rdx, %rax");
-    st = emit(st, "    sete %al");
-    st = emit(st, "    movzbq %al, %rax");
-    st = emit(st, "    mov %rax, " + cell);
+def gen_sappend(st: EmitSt, v: Node, var_lbl: long, var_disp: long,
+                cell_lbl: long, cell_disp: long) -> EmitSt {
+    let va = memop(var_lbl, var_disp);
+    let ca = memop(cell_lbl, cell_disp);
+    st = emit_insn(st, insn.F_MOV_P_R, va[0], va[1], va[2], va[3], va[4],
+                   insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_P_R, ca[0], ca[1], ca[2], ca[3], ca[4],
+                   insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, ca[0], ca[1], ca[2],
+                   ca[3], ca[4]);
     st = gen(st, v);
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov " + cell + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_str_app");
-    st = emit(st, "    add $24, %rsp");
-    st = emit(st, "    mov %rax, " + var);
-    emit(st, "    mov %rax, " + cell)
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_P_R, ca[0], ca[1], ca[2], ca[3], ca[4],
+                   insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_app"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, va[0], va[1], va[2],
+                   va[3], va[4]);
+    emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, ca[0], ca[1], ca[2], ca[3],
+              ca[4])
 };
 
 // A loop body: its value is dropped, so a block body's last statement is
@@ -3531,30 +3556,30 @@ def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
 
 def gen_make_closure(st: EmitSt, label: long, caps: [str]) -> EmitSt {
     let n = len(caps);
-    st = emit(st, "    mov $" + tostring(8 + 8 * n) + ", %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    lea " + lname(label) + "(%rip), %rcx");
-    st = emit(st, "    mov %rcx, (%rax)");
+    st = emit_insn(st, insn.F_MOV_I_R, 8 + 8 * n, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, label, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_R_0, insn.R_RCX, 64, insn.R_RAX, -1, 1, -1, -1);
     let i = 0;
     while (i < n) {
         let cn: str = caps[i];
         // Captured as a shared cell pointer (see box_capture).
         st = gen_cap_ptr(st, cn);
-        st = emit(st, "    pop %rcx");
-        st = emit(st, "    push %rcx");
-        st = emit(st, "    mov %rax, " + tostring(8 * (i + 1)) + "(%rcx)");
+        st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 8 * (i + 1), -1);
         i = i + 1;
     };
-    emit(st, "    pop %rax")
+    emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0)
 };
 
 // range(n) -> [0, 1, ..., n-1] as a heap array (the loop-friendly builtin;
 // y_range in std/rt.y).
 def gen_range(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
-    st = emit(st, "    call y_range");
-    emit(st, "    add $8, %rsp")
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_range"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands
@@ -3564,26 +3589,26 @@ def gen_slice(st: EmitSt, node: Slice) -> EmitSt {
     let hi = node.hi;
     let slesz = arr_elem_bytes(infer(st, node.arr));
     st = gen(st, node.arr);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (lo.k == K.void) {
-        st = emit(st, "    xor %eax, %eax");
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
     } else {
         st = gen(st, lo);
     };
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (hi.k == K.void) {
         // default: the array's length (the header keeps it in slot 0);
         // the array pointer sits one slot below the pushed lo.
-        st = emit(st, "    mov 8(%rsp), %rax");
-        st = emit(st, "    mov (%rax), %rax");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64);
     } else {
         st = gen(st, hi);
     };
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $" + tostring(slesz) + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_arr_slice");
-    emit(st, "    add $32, %rsp")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, slesz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_slice"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
@@ -3592,22 +3617,22 @@ def gen_str_slice(st: EmitSt, node: Slice) -> EmitSt {
     let lo = node.lo;
     let hi = node.hi;
     st = gen(st, node.arr);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (lo.k == K.void) {
-        st = emit(st, "    xor %eax, %eax");
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
     } else {
         st = gen(st, lo);
     };
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (hi.k == K.void) {
-        st = emit(st, "    mov 8(%rsp), %rax");
-        st = emit(st, "    mov (%rax), %rax");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64);
     } else {
         st = gen(st, hi);
     };
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_str_slice");
-    emit(st, "    add $24, %rsp")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_slice"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // a[lo:hi] = src: y_arr_setslice{1,8} (rt.y) check the range and the
@@ -3617,25 +3642,26 @@ def gen_sliceassign(st: EmitSt, node: SliceAssign) -> EmitSt {
     let hi = node.hi;
     let esz = arr_elem_bytes(infer(st, node.arr));
     st = gen(st, node.arr);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (lo.k == K.void) {
-        st = emit(st, "    xor %eax, %eax");
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
     } else {
         st = gen(st, lo);
     };
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (hi.k == K.void) {
-        st = emit(st, "    mov 8(%rsp), %rax");
-        st = emit(st, "    mov (%rax), %rax");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64);
     } else {
         st = gen(st, hi);
     };
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.v);
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_arr_setslice" + tostring(esz));
-    st = emit(st, "    add $32, %rsp");
-    emit(st, "    xor %eax, %eax")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_setslice" + tostring(esz)),
+                   0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
 };
 
 // `T` / `{f: v}` pattern test (types.y typeof_rectest): 1 in %rax when the
@@ -3651,7 +3677,7 @@ def gen_rectest(st: EmitSt, node: Narrow) -> EmitSt {
         gen_tag_in(st, rectest_members(s, node.typ), s)
     } else {
         // a record: the checker took the pattern as its own type
-        emit(st, "    mov $1, %rax")
+        emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
     }
 };
 
@@ -3678,26 +3704,26 @@ def gen_tag_in(st: EmitSt, ts: [Type], inu: Type) -> EmitSt {
     st = rno.st;
     let rdone = next_loc(st);
     st = rdone.st;
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + lname(rno.label));
-    st = emit(st, "    mov -8(%rax), %rcx");
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, rno.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
     let yes = next_loc(st);
     st = yes.st;
     let i = 0;
     while (i < len(ts)) {
         let dr = ty_desc_in(st, ts[i], inu);
         st = dr.st;
-        st = emit(st, "    lea " + lname(dr.label) + "(%rip), %rdx");
-        st = emit(st, "    cmp %rdx, %rcx");
-        st = emit(st, "    je " + lname(yes.label));
+        st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JE_L, yes.label, 0, 0, 0, 0, 0, 0);
         i = i + 1;
     };
-    st = emit(st, lname(rno.label) + ":");
-    st = emit(st, "    xor %eax, %eax");
-    st = emit(st, "    jmp " + lname(rdone.label));
-    st = emit(st, lname(yes.label) + ":");
-    st = emit(st, "    mov $1, %rax");
-    emit(st, lname(rdone.label) + ":")
+    st = emit_label(st, rno.label);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, rdone.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yes.label);
+    st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+    emit_label(st, rdone.label)
 };
 
 // Union value in %rax -> its string form: the member its descriptor names
@@ -3706,7 +3732,7 @@ def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let ms = types.union_parts(t);
     let rdone = next_loc(st);
     st = rdone.st;
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     let m = 0;
     while (m < len(ms)) {
         let rnext = next_loc(st);
@@ -3714,20 +3740,20 @@ def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
         let mt = ms[m];
         let one: [Type] = [];
         one += mt;
-        st = emit(st, "    mov (%rsp), %rax");
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RAX, 64);
         st = gen_tag_in(st, one, t);
-        st = emit(st, "    test %rax, %rax");
-        st = emit(st, "    jz " + lname(rnext.label));
-        st = emit(st, "    pop %rax");
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JZ_L, rnext.label, 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         let mu = types.unfold(mt);
         st = gen_rec_str_rax(st, mu, union_lay(mu, t), path + t);
-        st = emit(st, "    jmp " + lname(rdone.label));
-        st = emit(st, lname(rnext.label) + ":");
+        st = emit_insn(st, insn.F_JMP_L, rdone.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, rnext.label);
         m = m + 1;
     };
-    st = emit(st, "    pop %rax");
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, "<union>");
-    emit(st, lname(rdone.label) + ":")
+    emit_label(st, rdone.label)
 };
 
 // Indirect call through a closure value produced by `callee`.
@@ -3736,14 +3762,14 @@ def gen_indirect(st: EmitSt, node: Call, callee: Node) -> EmitSt {
     let n = len(args);
     let iptypes = fn_args_of(infer(st, callee));
     st = gen(st, callee);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_push_args_as(st, args, iptypes);
     // Reload the closure (it sits just below the n pushed args) and call
     // through its code pointer.
-    st = emit(st, "    mov " + tostring(8 * n) + "(%rsp), %rax");
-    st = emit(st, "    mov (%rax), %rax");
-    st = emit(st, "    call *%rax");
-    emit(st, "    add $" + tostring(8 * (n + 1)) + ", %rsp")
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8 * n, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CALL_IND, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8 * (n + 1), insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_un(st: EmitSt, node: Un) -> EmitSt {
@@ -3752,16 +3778,16 @@ def gen_un(st: EmitSt, node: Un) -> EmitSt {
     if (node.op == "-") {
         if (ut.k == K.tfloat) {
             // flip the sign bit: -0.0 is a negative zero, -nan a nan
-            st = emit(st, "    mov $1, %rcx");
-            st = emit(st, "    shl $63, %rcx");
-            emit(st, "    xor %rcx, %rax")
+            st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RCX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_SHL_I_R, 63, insn.R_RCX, 64, 0, 0, 0, 0);
+            emit_insn(st, insn.F_XOR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
         } else {
-            emit(st, "    neg %rax")
+            emit_insn(st, insn.F_NEG_R, insn.R_RAX, 64, 0, 0, 0, 0, 0)
         }
     } else if (node.op == "~") {
-        emit(st, "    not %rax")
+        emit_insn(st, insn.F_NOT_R, insn.R_RAX, 64, 0, 0, 0, 0, 0)
     } else {
-        emit(st, "    xor $1, %rax")
+        emit_insn(st, insn.F_XOR_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
     }
 };
 
@@ -3775,15 +3801,15 @@ def gen_addr(st: EmitSt, node: Wrap) -> EmitSt {
         let e = env_find(st, id.v);
         if (e.kind == "box") {
             // the shared cell IS the variable's address
-            emit(st, "    mov " + tostring(e.off) + "(%rbp), %rax")
+            emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64)
         } else if (e.kind == "global") {
-            emit(st, "    lea " + lname(e.label) + "(%rip), %rax")
+            emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, e.label, insn.R_RAX, 64)
         } else if (e.kind == "capture") {
             let aidx = tonum(e.mark);
-            st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
-            emit(st, "    mov " + tostring(8 * (aidx + 1)) + "(%rcx), %rax")
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
+            emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (aidx + 1), -1, insn.R_RAX, 64)
         } else {
-            emit(st, "    lea " + tostring(e.off) + "(%rbp), %rax")
+            emit_insn(st, insn.F_LEA_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64)
         }
     }
 };
@@ -3797,26 +3823,27 @@ def gen_elem_addr(st: EmitSt, node: Index) -> EmitSt {
     let earr = node.arr;
     let bt = infer(st, earr);
     let eaesz = arr_elem_bytes(bt);
-    let eascale = "8";
-    if (eaesz == 1) { eascale = "1"; }
+    let eascale = 8;
+    if (eaesz == 1) { eascale = 1; }
     st = gen(st, earr);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.idx);
-    st = emit(st, "    mov %rax, %rcx");
-    st = emit(st, "    pop %rax");
-    st = emit(st, "    test %rcx, %rcx");
-    st = emit(st, "    js y_oob");
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JS_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     if (bt.k == K.tarrfix) {
         let arr: TFix = bt;
-        st = emit(st, "    cmp $" + tostring(arr.n) + ", %rcx");
-        st = emit(st, "    jge y_oob");
+        st = emit_insn(st, insn.F_CMP_I_R, arr.n, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     } else {
-        st = emit(st, "    mov (%rax), %rdx");
-        st = emit(st, "    cmp %rdx, %rcx");
-        st = emit(st, "    jge y_oob");
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     };
-    st = emit(st, "    mov 16(%rax), %rax");
-    emit(st, "    lea (%rax,%rcx," + eascale + "), %rax")
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 16, -1, insn.R_RAX, 64);
+    emit_insn(st, insn.F_LEA_M_R, insn.R_RAX, insn.R_RCX, eascale, 0, -1,
+               insn.R_RAX, 64)
 };
 
 def gen_bin(st: EmitSt, node: Bin) -> EmitSt {
@@ -3850,40 +3877,40 @@ def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
     let rE = next_loc(st);
     st = rE.st;
     st = gen(st, node.l);
-    st = emit(st, "    test %rax, %rax");
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
     if (is_or) {
-        st = emit(st, "    jnz " + lname(rT.label));
+        st = emit_insn(st, insn.F_JNZ_L, rT.label, 0, 0, 0, 0, 0, 0);
     }
     if (is_or) {
     } else {
-        st = emit(st, "    jz " + lname(rF.label));
+        st = emit_insn(st, insn.F_JZ_L, rF.label, 0, 0, 0, 0, 0, 0);
     };
     st = gen(st, node.r);
-    st = emit(st, "    test %rax, %rax");
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
     if (is_or) {
-        st = emit(st, "    jnz " + lname(rT.label));
+        st = emit_insn(st, insn.F_JNZ_L, rT.label, 0, 0, 0, 0, 0, 0);
     }
     if (is_or) {
     } else {
-        st = emit(st, "    jz " + lname(rF.label));
+        st = emit_insn(st, insn.F_JZ_L, rF.label, 0, 0, 0, 0, 0, 0);
     };
     if (is_or) {
     } else {
-        st = emit(st, "    mov $1, %rax");
-        st = emit(st, "    jmp " + lname(rE.label));
+        st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, rE.label, 0, 0, 0, 0, 0, 0);
     };
     if (is_or) {
-        st = emit(st, "    xor %eax, %eax");
-        st = emit(st, "    jmp " + lname(rE.label));
-        st = emit(st, lname(rT.label) + ":");
-        st = emit(st, "    mov $1, %rax");
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, rE.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, rT.label);
+        st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
     }
     if (is_or) {
     } else {
-        st = emit(st, lname(rF.label) + ":");
-        st = emit(st, "    xor %eax, %eax");
+        st = emit_label(st, rF.label);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
     };
-    st = emit(st, lname(rE.label) + ":")
+    st = emit_label(st, rE.label)
 };
 
 // AUTO-STRINGIFY `+`: when a string meets a non-string, stringify the other
@@ -3900,38 +3927,38 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     if (lt.k == K.tstr) {
         if (rt.k == K.tstr) {
             st = gen_push_args(st, [node.l, node.r]);
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (rt.k == K.tlong) {
             st = gen(st, node.l);
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_long_tostr");
-            st = emit(st, "    add $8, %rsp");
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (rt.k == K.tbool) {
             st = gen(st, node.l);
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_bool_tostr");
-            st = emit(st, "    add $8, %rsp");
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (rt.k == K.tfloat) {
             st = gen(st, node.l);
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_float_tostr");
-            st = emit(st, "    add $8, %rsp");
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_float_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else {
             // Unknown right operand: treat it as a string. Most unknowns
             // here ARE strings (a field read through an untyped hole infers
@@ -3939,47 +3966,47 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             // the return-type inference in emit_program now pins down the
             // long-returning calls that used to land in this arm.
             st = gen_push_args(st, [node.l, node.r]);
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         };
     }
     if (!(lt.k == K.tstr)) {
         if (lt.k == K.tlong) {
             st = gen(st, node.l);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_long_tostr");
-            st = emit(st, "    add $8, %rsp");
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (lt.k == K.tbool) {
             st = gen(st, node.l);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_bool_tostr");
-            st = emit(st, "    add $8, %rsp");
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (lt.k == K.tfloat) {
             st = gen(st, node.l);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_float_tostr");
-            st = emit(st, "    add $8, %rsp");
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_float_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else {
             // Unknown left operand: treat it as a string (see the note on
             // the right-operand arm).
             st = gen_push_args(st, [node.l, node.r]);
-            st = emit(st, "    call y_str_cat");
-            st = emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         };
     }
     st
@@ -3991,37 +4018,37 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     let op = node.op;
     st = gen(st, node.l);
     if (lt.k == K.tfloat) { } else {
-        st = emit(st, "    cvtsi2sd %rax, %xmm0");
-        st = emit(st, "    movq %xmm0, %rax");
+        st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
     };
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.r);
     if (rt.k == K.tfloat) { } else {
-        st = emit(st, "    cvtsi2sd %rax, %xmm0");
-        st = emit(st, "    movq %xmm0, %rax");
+        st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
     };
-    st = emit(st, "    movq %rax, %xmm1");
-    st = emit(st, "    pop %rax");
-    st = emit(st, "    movq %rax, %xmm0");
+    st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM1, 128, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
     if (op == "+") {
-        st = emit(st, "    addsd %xmm1, %xmm0");
-        emit(st, "    movq %xmm0, %rax")
+        st = emit_insn(st, insn.F_ADDSD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "-") {
-        st = emit(st, "    subsd %xmm1, %xmm0");
-        emit(st, "    movq %xmm0, %rax")
+        st = emit_insn(st, insn.F_SUBSD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "*") {
-        st = emit(st, "    mulsd %xmm1, %xmm0");
-        emit(st, "    movq %xmm0, %rax")
+        st = emit_insn(st, insn.F_MULSD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "/") {
-        st = emit(st, "    divsd %xmm1, %xmm0");
-        emit(st, "    movq %xmm0, %rax")
+        st = emit_insn(st, insn.F_DIVSD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "%") {
         // The IEEE remainder truncated toward zero -- C's fmod, the one with
         // the dividend's sign. There is no x87-style bit twiddling for it on
         // SSE2 (fmod has no instruction), so the prelude does the reduction;
         // both operands are already in SSE registers.
-        st = emit(st, "    call y_fmod");
-        emit(st, "    movq %xmm0, %rax")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_fmod"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
     } else {
         // Comparisons. ucomisd sets ZF=PF=CF=1 when the operands are unordered
         // (a NaN anywhere), so every test has to look at the parity flag: the
@@ -4034,36 +4061,36 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
         // all, so they test parity as well: two byte results and a combine,
         // since this assembler has no 8-bit `and`/`or`.
         if (op == "<") {
-            st = emit(st, "    ucomisd %xmm0, %xmm1");
-            st = emit(st, "    seta %al");
-            emit(st, "    movzbq %al, %rax")
+            st = emit_insn(st, insn.F_UCOMISD_R_R, insn.R_XMM0, 128, insn.R_XMM1, 128, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETA_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
         } else if (op == "<=") {
-            st = emit(st, "    ucomisd %xmm0, %xmm1");
-            st = emit(st, "    setae %al");
-            emit(st, "    movzbq %al, %rax")
+            st = emit_insn(st, insn.F_UCOMISD_R_R, insn.R_XMM0, 128, insn.R_XMM1, 128, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETAE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
         } else if (op == ">") {
-            st = emit(st, "    ucomisd %xmm1, %xmm0");
-            st = emit(st, "    seta %al");
-            emit(st, "    movzbq %al, %rax")
+            st = emit_insn(st, insn.F_UCOMISD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETA_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
         } else if (op == ">=") {
-            st = emit(st, "    ucomisd %xmm1, %xmm0");
-            st = emit(st, "    setae %al");
-            emit(st, "    movzbq %al, %rax")
+            st = emit_insn(st, insn.F_UCOMISD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETAE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
         } else {
-            st = emit(st, "    ucomisd %xmm1, %xmm0");
+            st = emit_insn(st, insn.F_UCOMISD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
             if (op == "==") {
-                st = emit(st, "    sete %al");
-                st = emit(st, "    setnp %cl");
+                st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+                st = emit_insn(st, insn.F_SETNP_R, insn.R_RCX, 8, 0, 0, 0, 0, 0);
             } else {
-                st = emit(st, "    setne %al");
-                st = emit(st, "    setp %cl");
+                st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+                st = emit_insn(st, insn.F_SETP_R, insn.R_RCX, 8, 0, 0, 0, 0, 0);
             };
-            st = emit(st, "    movzbq %al, %rax");
-            st = emit(st, "    movzbq %cl, %rcx");
+            st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RCX, 8, insn.R_RCX, 64, 0, 0, 0);
             if (op == "==") {
-                st = emit(st, "    and %rcx, %rax");
+                st = emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
             } else {
-                st = emit(st, "    or %rcx, %rax");
+                st = emit_insn(st, insn.F_OR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
             };
             st
         }
@@ -4072,19 +4099,19 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
 
 def gen_str_cmp(st: EmitSt, node: Bin, op: str) -> EmitSt {
     st = gen_push_args(st, [node.l, node.r]);
-    st = emit(st, "    call y_str_cmp");
-    st = emit(st, "    add $16, %rsp");
-    st = emit(st, "    cmp $0, %rax");
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cmp"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
     if (op == "<") {
-        st = emit(st, "    setl %al");
+        st = emit_insn(st, insn.F_SETL_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
     } else if (op == ">") {
-        st = emit(st, "    setg %al");
+        st = emit_insn(st, insn.F_SETG_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
     } else if (op == "<=") {
-        st = emit(st, "    setle %al");
+        st = emit_insn(st, insn.F_SETLE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
     } else {
-        st = emit(st, "    setge %al");
+        st = emit_insn(st, insn.F_SETGE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
     };
-    emit(st, "    movzbq %al, %rax")
+    emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
 };
 
 // == on values whose equality looks inside them (NATIVE.md, "Equality"):
@@ -4108,38 +4135,38 @@ def gen_eq_vals(st: EmitSt, t: Type) -> EmitSt {
         if (eq_elem_loop(arr.of)) {
             gen_eq_arr_deep(st, arr.of)
         } else if (arr.of.k == K.tstr) {
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_arr_eq_str");
-            emit(st, "    add $16, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_eq_str"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else {
-            st = emit(st, "    push %rax");
-            st = emit(st, "    mov $" + tostring(elem_bytes(arr.of)) + ", %rax");
-            st = emit(st, "    push %rax");
-            st = emit(st, "    call y_arr_eq");
-            emit(st, "    add $24, %rsp")
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOV_I_R, elem_bytes(arr.of), insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_eq"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
         }
     } else if (t.k == K.tstr) {
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_str_eq");
-        emit(st, "    add $16, %rsp")
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_eq"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (t.k == K.tfloat) {
         // as gen_float_bin's ==: equal, and ordered -- NaN is equal to nothing,
         // itself included, which is what setnp is for
-        st = emit(st, "    movq %rax, %xmm1");
-        st = emit(st, "    pop %rax");
-        st = emit(st, "    movq %rax, %xmm0");
-        st = emit(st, "    ucomisd %xmm1, %xmm0");
-        st = emit(st, "    sete %al");
-        st = emit(st, "    setnp %cl");
-        st = emit(st, "    movzbq %al, %rax");
-        st = emit(st, "    movzbq %cl, %rcx");
-        emit(st, "    and %rcx, %rax")
+        st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM1, 128, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, insn.F_UCOMISD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETNP_R, insn.R_RCX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RCX, 8, insn.R_RCX, 64, 0, 0, 0);
+        emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
     } else {
         // one word: a scalar by value, a record or map by identity
-        st = emit(st, "    pop %rcx");
-        st = emit(st, "    cmp %rax, %rcx");
-        st = emit(st, "    sete %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     }
 };
 
@@ -4152,24 +4179,24 @@ def gen_eq_opt(st: EmitSt, pt: Type) -> EmitSt {
     st = lne.st;
     let ldone = next_loc(st);
     st = ldone.st;
-    st = emit(st, "    pop %rcx");
-    st = emit(st, "    test %rcx, %rcx");
-    st = emit(st, "    jz " + lname(lnone.label));
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + lname(lne.label));
-    st = emit(st, "    mov (%rcx), %rcx");
-    st = emit(st, "    push %rcx");
-    st = emit(st, "    mov (%rax), %rax");
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, lnone.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, lne.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RCX, -1, 1, -1, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64);
     st = gen_eq_vals(st, pt);
-    st = emit(st, "    jmp " + lname(ldone.label));
-    st = emit(st, lname(lnone.label) + ":");
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    sete %al");
-    st = emit(st, "    movzbq %al, %rax");
-    st = emit(st, "    jmp " + lname(ldone.label));
-    st = emit(st, lname(lne.label) + ":");
-    st = emit(st, "    xor %eax, %eax");
-    emit(st, lname(ldone.label) + ":")
+    st = emit_insn(st, insn.F_JMP_L, ldone.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, lnone.label);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, ldone.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, lne.label);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    emit_label(st, ldone.label)
 };
 
 // gen_eq_vals for two arrays whose elements (of type et) need their own
@@ -4188,43 +4215,43 @@ def gen_eq_arr_deep(st: EmitSt, et: Type) -> EmitSt {
     st = lne.st;
     let ldone = next_loc(st);
     st = ldone.st;
-    st = emit(st, "    pop %rcx");
-    st = emit(st, "    mov (%rcx), %rdx");
-    st = emit(st, "    mov (%rax), %rsi");
-    st = emit(st, "    cmp %rsi, %rdx");
-    st = emit(st, "    jne " + lname(lne.label));
-    st = emit(st, "    push %rcx");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    xor %edx, %edx");
-    st = emit(st, "    push %rdx");
-    st = emit(st, lname(lloop.label) + ":");
-    st = emit(st, "    mov (%rsp), %rdx");
-    st = emit(st, "    mov 16(%rsp), %rcx");
-    st = emit(st, "    mov (%rcx), %rsi");
-    st = emit(st, "    cmp %rsi, %rdx");
-    st = emit(st, "    jge " + lname(lsame.label));
-    st = emit(st, "    mov 16(%rcx), %rcx");
-    st = emit(st, "    mov (%rcx,%rdx,8), %rcx");
-    st = emit(st, "    mov 8(%rsp), %rax");
-    st = emit(st, "    mov 16(%rax), %rax");
-    st = emit(st, "    mov (%rax,%rdx,8), %rax");
-    st = emit(st, "    push %rcx");
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RCX, -1, 1, -1, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RSI, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RSI, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JNE_L, lne.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RDX, 32, insn.R_RDX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_label(st, lloop.label);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 16, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RCX, -1, 1, -1, -1, insn.R_RSI, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RSI, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, lsame.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 16, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_M_R, insn.R_RCX, insn.R_RDX, 8, 0, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 16, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_M_R, insn.R_RAX, insn.R_RDX, 8, 0, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
     st = gen_eq_vals(st, et);
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + lname(ldiff.label));
-    st = emit(st, "    mov (%rsp), %rdx");
-    st = emit(st, "    inc %rdx");
-    st = emit(st, "    mov %rdx, (%rsp)");
-    st = emit(st, "    jmp " + lname(lloop.label));
-    st = emit(st, lname(lsame.label) + ":");
-    st = emit(st, "    add $24, %rsp");
-    st = emit(st, "    mov $1, %rax");
-    st = emit(st, "    jmp " + lname(ldone.label));
-    st = emit(st, lname(ldiff.label) + ":");
-    st = emit(st, "    add $24, %rsp");
-    st = emit(st, lname(lne.label) + ":");
-    st = emit(st, "    xor %eax, %eax");
-    emit(st, lname(ldone.label) + ":")
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, ldiff.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_INC_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_0, insn.R_RDX, 64, insn.R_RSP, -1, 1, -1, -1);
+    st = emit_insn(st, insn.F_JMP_L, lloop.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, lsame.label);
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, ldone.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, ldiff.label);
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    st = emit_label(st, lne.label);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    emit_label(st, ldone.label)
 };
 
 def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
@@ -4256,10 +4283,10 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         // would need interprocedural knowledge of a const record, and that
         // function is a self-check besides.
         st = gen_push_args(st, [node.l, node.r]);
-        st = emit(st, "    call y_str_eq");
-        st = emit(st, "    add $16, %rsp");
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_eq"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
         if (op == "!=") {
-            emit(st, "    xor $1, %rax")
+            emit_insn(st, insn.F_XOR_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
         } else {
             st
         }
@@ -4286,23 +4313,23 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         }
         if (eq_elem_loop(elt)) {
             st = gen(st, node.l);
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
             st = gen_eq_arr_deep(st, elt);
         } else {
             st = gen_push_args(st, [node.l, node.r]);
             if (elt.k == K.tstr) {
-                st = emit(st, "    call y_arr_eq_str");
-                st = emit(st, "    add $16, %rsp");
+                st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_eq_str"), 0, 0, 0, 0, 0, 0);
+                st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
             } else {
-                st = emit(st, "    mov $" + tostring(elem_bytes(elt)) + ", %rax");
-                st = emit(st, "    push %rax");
-                st = emit(st, "    call y_arr_eq");
-                st = emit(st, "    add $24, %rsp");
+                st = emit_insn(st, insn.F_MOV_I_R, elem_bytes(elt), insn.R_RAX, 64, 0, 0, 0, 0);
+                st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+                st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_eq"), 0, 0, 0, 0, 0, 0);
+                st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
             };
         };
         if (op == "!=") {
-            emit(st, "    xor $1, %rax")
+            emit_insn(st, insn.F_XOR_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
         } else {
             st
         }
@@ -4321,92 +4348,92 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
             }
         }
         st = gen(st, node.l);
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, node.r);
         st = gen_eq_opt(st, pt);
         if (op == "!=") {
-            emit(st, "    xor $1, %rax")
+            emit_insn(st, insn.F_XOR_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
         } else {
             st
         }
     } else {
     st = gen(st, node.l);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.r);
-    st = emit(st, "    mov %rax, %rcx");
-    st = emit(st, "    pop %rax");
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (op == "+") {
-        emit(st, "    add %rcx, %rax")
+        emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "-") {
-        emit(st, "    sub %rcx, %rax")
+        emit_insn(st, insn.F_SUB_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "*") {
-        emit(st, "    imul %rcx, %rax")
+        emit_insn(st, insn.F_IMUL_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "/") {
         // idiv raises #DE on LONG_MIN / -1 (the quotient does not fit), so
         // divisor -1 is handled as a negation instead: neg of LONG_MIN
         // wraps back to LONG_MIN (the language's rule for the whole long
         // range, NATIVE.md), and every other value negates exactly.
-        st = emit(st, "    test %rcx, %rcx");
-        st = emit(st, "    jz y_div_zero");
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JZ_L, lbl_new("y_div_zero"), 0, 0, 0, 0, 0, 0);
         let d1 = next_loc(st);
         st = d1.st;
         let d2 = next_loc(st);
         st = d2.st;
-        st = emit(st, "    cmp $-1, %rcx");
-        st = emit(st, "    jne " + lname(d1.label));
-        st = emit(st, "    neg %rax");
-        st = emit(st, "    jmp " + lname(d2.label));
-        st = emit(st, lname(d1.label) + ":");
-        st = emit(st, "    cqo");
-        st = emit(st, "    idiv %rcx");
-        emit(st, lname(d2.label) + ":")
+        st = emit_insn(st, insn.F_CMP_I_R, -1, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JNE_L, d1.label, 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_NEG_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, d2.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, d1.label);
+        st = emit_insn(st, insn.F_CQO, 0, 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_IDIV_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        emit_label(st, d2.label)
     } else if (op == "%") {
         // Same #DE: x % -1 is 0 for every x (see the `/` note).
-        st = emit(st, "    test %rcx, %rcx");
-        st = emit(st, "    jz y_div_zero");
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JZ_L, lbl_new("y_div_zero"), 0, 0, 0, 0, 0, 0);
         let m1 = next_loc(st);
         st = m1.st;
         let m2 = next_loc(st);
         st = m2.st;
-        st = emit(st, "    cmp $-1, %rcx");
-        st = emit(st, "    jne " + lname(m1.label));
-        st = emit(st, "    xor %eax, %eax");
-        st = emit(st, "    jmp " + lname(m2.label));
-        st = emit(st, lname(m1.label) + ":");
-        st = emit(st, "    cqo");
-        st = emit(st, "    idiv %rcx");
-        st = emit(st, "    mov %rdx, %rax");
-        emit(st, lname(m2.label) + ":")
+        st = emit_insn(st, insn.F_CMP_I_R, -1, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JNE_L, m1.label, 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, m2.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, m1.label);
+        st = emit_insn(st, insn.F_CQO, 0, 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_IDIV_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
+        emit_label(st, m2.label)
     } else if (op == "<") {
-        st = emit(st, "    cmp %rcx, %rax");
-        st = emit(st, "    setl %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETL_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == ">") {
-        st = emit(st, "    cmp %rcx, %rax");
-        st = emit(st, "    setg %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETG_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "<=") {
-        st = emit(st, "    cmp %rcx, %rax");
-        st = emit(st, "    setle %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETLE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == ">=") {
-        st = emit(st, "    cmp %rcx, %rax");
-        st = emit(st, "    setge %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETGE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "==") {
-        st = emit(st, "    cmp %rcx, %rax");
-        st = emit(st, "    sete %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "!=") {
-        st = emit(st, "    cmp %rcx, %rax");
-        st = emit(st, "    setne %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "&") {
-        emit(st, "    and %rcx, %rax")
+        emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "|") {
-        emit(st, "    or %rcx, %rax")
+        emit_insn(st, insn.F_OR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
     } else if (op == "^") {
-        emit(st, "    xor %rcx, %rax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
     } else {
         st
     }
@@ -4423,30 +4450,32 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
 // neither check.
 def gen_shift(st: EmitSt, node: Bin, op: str) -> EmitSt {
     let mn = "shl";
-    if (op == ">>") { mn = "sar"; }
-    else if (op == ">>>") { mn = "shr"; }
+    let fi = insn.F_SHL_I_R;
+    let fr = insn.F_SHL_R_R;
+    if (op == ">>") { mn = "sar"; fi = insn.F_SAR_I_R; fr = insn.F_SAR_R_R; }
+    else if (op == ">>>") { mn = "shr"; fi = insn.F_SHR_I_R; fr = insn.F_SHR_R_R; };
     let n = shift_imm(node.r);
     st = gen(st, node.l);
     if (n >= 0) {
-        emit(st, "    " + mn + " $" + tostring(n) + ", %rax")
+        emit_insn(st, fi, n, insn.R_RAX, 64, 0, 0, 0, 0)
     } else {
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, node.r);
-        st = emit(st, "    mov %rax, %rcx");
-        st = emit(st, "    pop %rax");
-        st = emit(st, "    test %rcx, %rcx");
-        st = emit(st, "    js y_shift_neg");
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JS_L, lbl_new("y_shift_neg"), 0, 0, 0, 0, 0, 0);
         let ok = next_loc(st);
         st = ok.st;
-        st = emit(st, "    cmp $64, %rcx");
-        st = emit(st, "    jb " + lname(ok.label));
+        st = emit_insn(st, insn.F_CMP_I_R, 64, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JB_L, ok.label, 0, 0, 0, 0, 0, 0);
         if (mn == "sar") {
-            st = emit(st, "    mov $63, %rcx");
+            st = emit_insn(st, insn.F_MOV_I_R, 63, insn.R_RCX, 64, 0, 0, 0, 0);
         } else {
-            st = emit(st, "    xor %eax, %eax");
+            st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
         };
-        st = emit(st, lname(ok.label) + ":");
-        emit(st, "    " + mn + " %cl, %rax")
+        st = emit_label(st, ok.label);
+        emit_insn(st, fr, insn.R_RCX, 8, insn.R_RAX, 64, 0, 0, 0)
     }
 };
 
@@ -4467,20 +4496,20 @@ def shift_imm(r: Node) -> long {
 // ── calls ──────────────────────────────────────────────────────────────
 // Linux syscall arg regs (in order): rdi, rsi, rdx, r10, r8, r9.
 
-def syscall_reg(i: long) -> str {
-    if (i == 0) { "%rdi" }
-    else if (i == 1) { "%rsi" }
-    else if (i == 2) { "%rdx" }
-    else if (i == 3) { "%r10" }
-    else if (i == 4) { "%r8" }
-    else { "%r9" }
+def syscall_reg(i: long) -> long {
+    if (i == 0) { insn.R_RDI }
+    else if (i == 1) { insn.R_RSI }
+    else if (i == 2) { insn.R_RDX }
+    else if (i == 3) { insn.R_R10 }
+    else if (i == 4) { insn.R_R8 }
+    else { insn.R_R9 }
 };
 
 def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
     let i = 0;
     while (i < len(args)) {
         st = gen(st, args[i]);
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         i = i + 1;
     };
     st
@@ -4496,7 +4525,7 @@ def gen_push_args_as(st: EmitSt, args: [Node], ptypes: [Type]) -> EmitSt {
         } else {
             st = gen(st, args[i]);
         };
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         i = i + 1;
     };
     st
@@ -4512,10 +4541,10 @@ def gen_conv(st: EmitSt, got: Type, want: Type) -> EmitSt {
     let gk: long = got.k;
     let wk: long = want.k;
     if (wk == K.tfloat && (gk == K.tlong || gk == K.tbyte)) {
-        st = emit(st, "    cvtsi2sd %rax, %xmm0");
-        emit(st, "    movq %xmm0, %rax")
+        st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
+        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
     } else if (wk == K.tbyte && gk == K.tlong) {
-        emit(st, "    movzbq %al, %rax")
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else {
         st
     }
@@ -4615,18 +4644,18 @@ def cast_members(s: Type, t: Type) -> [Type] {
 def gen_cast_check(st: EmitSt, ts: [Type], u: Type) -> EmitSt {
     let ok = next_loc(st);
     st = ok.st;
-    st = emit(st, "    mov -8(%rax), %rcx");
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
     let i = 0;
     while (i < len(ts)) {
         let dr = ty_desc_in(st, ts[i], u);
         st = dr.st;
-        st = emit(st, "    lea " + lname(dr.label) + "(%rip), %rdx");
-        st = emit(st, "    cmp %rdx, %rcx");
-        st = emit(st, "    je " + lname(ok.label));
+        st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JE_L, ok.label, 0, 0, 0, 0, 0, 0);
         i = i + 1;
     };
-    st = emit(st, "    jmp y_cast_trap");
-    emit(st, lname(ok.label) + ":")
+    st = emit_insn(st, insn.F_JMP_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0);
+    emit_label(st, ok.label)
 };
 
 // The type of the function being emitted: emit_one_fn records it as a
@@ -4686,13 +4715,13 @@ def store_elem_type(t: Type, esz: long) -> Type {
 // the stack — the Y convention every helper written in Y (std/rt.y) and
 // every asm helper shares; the caller cleans up. (Runtime helpers used to
 // take it in %rdi, which only hand-written asm could honour.)
-// `name` is a runtime helper's fixed name (y_wait_pid), spelled in the text
-// rather than minted: there is nothing to identify, it is the same name every
-// time (the reserved y_ prefix).
+// `name` is a runtime helper's fixed name (y_wait_pid): the reserved y_
+// prefix means it is the same name every time, so it is interned rather than
+// minted (there is nothing to identify).
 def gen_helper1(st: EmitSt, name: str) -> EmitSt {
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call " + name);
-    emit(st, "    add $8, %rsp")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(name), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_call(st: EmitSt, node: Call) -> EmitSt {
@@ -4768,7 +4797,7 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
         } else if (name == "spawn" || name == "fork") {
             let sa: [Node] = node.args;
             st = gen(st, sa[0]);
-            emit(st, "    call y_" + name)
+            emit_insn(st, insn.F_CALL_L, lbl_new("y_" + name), 0, 0, 0, 0, 0, 0)
         } else if (name == "wait_pid") {
             let wa: [Node] = node.args;
             st = gen(st, wa[0]);
@@ -4776,7 +4805,7 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
         } else if (name == "post" || name == "wait") {
             let pa: [Node] = node.args;
             st = gen(st, pa[0]);
-            emit(st, "    call y_sem_" + name)
+            emit_insn(st, insn.F_CALL_L, lbl_new("y_sem_" + name), 0, 0, 0, 0, 0, 0)
         } else if (name == "mutex" || name == "sem") {
             gen_sync_new(st, node)
         } else if (name == "lock" || name == "try_lock") {
@@ -4792,7 +4821,7 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
         } else if (name == "clock_us") {
             gen_clock_us(st, node)
         } else if (name == "time_us") {
-            emit(st, "    call y_time_us")
+            emit_insn(st, insn.F_CALL_L, lbl_new("y_time_us"), 0, 0, 0, 0, 0, 0)
         } else if (name == "keys") {
             // a copy of the map's keys array (gen_maplit's {keys, vals, boxes})
             let kargs: [Node] = node.args;
@@ -4811,13 +4840,13 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
         } else if (name == "bytes") {
             let args: [Node] = node.args;
             st = gen_push_args(st, args);
-            st = emit(st, "    call y_str_to_bytes");
-            emit(st, "    add $8, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_to_bytes"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (name == "from_bytes") {
             let args: [Node] = node.args;
             st = gen_push_args(st, args);
-            st = emit(st, "    call y_bytes_to_str");
-            emit(st, "    add $8, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bytes_to_str"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (name == "ptr_addr") {
             // A pointer IS its numeric value at run time: nothing to emit
             // beyond evaluating the operand. This exists only so the type
@@ -4855,8 +4884,8 @@ def gen_method(st: EmitSt, node: Call) -> EmitSt {
     let fname = sm.fn;
     if (len(runtime_base(fname)) > 0) {
         st = gen_push_args(st, args);
-        st = emit(st, "    call " + fname);
-        emit(st, "    add $" + tostring(len(args) * 8) + ", %rsp")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new(fname), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, len(args) * 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else {
         gen_call(st, { k: K.call, callee: { k: K.id, v: fname, line: node.line, col: node.col }, args: args, line: node.line, col: node.col })
     }
@@ -4870,7 +4899,7 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
         // Records are formatted field by field from their static shape.
         st = gen_rec_str(st, pa0, t);
         st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tfunc) {
         // A function value has no printable contents; show its signature
         // (`<function (params) -> ret>`, in the spelling types.y tstr gives,
@@ -4878,7 +4907,7 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
         st = gen(st, pa0);
         st = gen_str_const(st, "<function " + types.tstr(t) + ">");
         st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tarr || t.k == K.tarrfix) {
         // Arrays print like tostring: "[e0, e1, ...]", or b'...' for
         // [byte] (Python-style byte strings).
@@ -4890,22 +4919,22 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
             st = gen_arr_tostr_rax(st, arr.of, []);
         };
         st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.topt) {
         st = gen(st, pa0);
         st = gen_opt_str_rax(st, t, []);
         st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tmap) {
         // Maps format entry by entry: {"k": v, ...} (quoted keys).
         st = gen_map_repr(st, pa0, t);
         st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tunion) {
         st = gen(st, pa0);
         st = gen_union_str_rax(st, t, []);
         st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
         gen_print_scalar(st, pa0, t)
     }
@@ -4915,16 +4944,16 @@ def gen_print_scalar(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     st = gen(st, arg);
     if (t.k == K.tbool) {
         st = gen_helper1(st, "y_print_bool");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tstr) {
         st = gen_helper1(st, "y_print_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tfloat) {
         st = gen_helper1(st, "y_print_float");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
         st = gen_helper1(st, "y_print_long");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     }
 };
 
@@ -4947,15 +4976,15 @@ def gen_opt_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     st = rdone.st;
     let rnul = next_loc(st);
     st = rnul.st;
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + lname(rnul.label));
-    st = emit(st, "    mov (%rax), %rax");
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, rnul.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64);
     let opt: TOf = t;
     st = gen_val_tostr_rax(st, opt.of, path + t);
-    st = emit(st, "    jmp " + lname(rdone.label));
-    st = emit(st, lname(rnul.label) + ":");
+    st = emit_insn(st, insn.F_JMP_L, rdone.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, rnul.label);
     st = gen_str_const(st, "none");
-    emit(st, lname(rdone.label) + ":")
+    emit_label(st, rdone.label)
 };
 
 def gen_rec_str(st: EmitSt, arg: Node, t: Type) -> EmitSt {
@@ -4968,9 +4997,9 @@ def gen_rec_str(st: EmitSt, arg: Node, t: Type) -> EmitSt {
 // compile time). Stack layout while building: [record][accumulator], the
 // record pushed first (8(%rsp)), the accumulator on top (0(%rsp)).
 def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str], path: [Type]) -> EmitSt {
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, "{");
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     let rec: TRec = t;
     let fs: [Field] = rec.fields;
     let i = 0;
@@ -4984,8 +5013,8 @@ def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str], path: [Type]) -> EmitSt {
         i = i + 1;
     };
     st = gen_acc_cat_const(st, "}");
-    st = emit(st, "    mov (%rsp), %rax");
-    emit(st, "    add $16, %rsp")
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RAX, 64);
+    emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
@@ -4997,13 +5026,13 @@ def gen_cons(st: EmitSt, node: Bin) -> EmitSt {
     let cesz = arr_elem_bytes(crt);
     let one = { k: K.array, elems: args1(node.l), line: ln, col: cl };
     st = gen_array_esz(st, one, cesz, store_elem_type(crt, cesz));
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.r);
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $" + tostring(cesz) + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_arr_cat");
-    emit(st, "    add $24, %rsp")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, cesz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_cat"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // `l + r` on two arrays whose element types differ by an implicit numeric
@@ -5067,7 +5096,7 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     };
     if (larr) {
         st = gen(st, node.l);
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         if (how == "cat") {
             st = gen(st, node.r);
         } else {
@@ -5075,30 +5104,30 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
         };
     } else {
         st = gen_array_esz(st, one, esz, ety);
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, node.r);
     };
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $" + tostring(esz) + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_arr_cat");
-    emit(st, "    add $24, %rsp")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_cat"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // acc = acc + <constant>, with the layout above still in place.
 def gen_acc_cat_const(st: EmitSt, s: str) -> EmitSt {
-    st = emit(st, "    mov (%rsp), %rax");
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, s);
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_str_cat");
-    st = emit(st, "    add $16, %rsp");
-    emit(st, "    mov %rax, (%rsp)")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RSP, -1, 1, -1, -1)
 };
 
-// Slot idx of the record in %rcx into register dst.
-def gen_slot_load(st: EmitSt, idx: long, dst: str) -> EmitSt {
-    emit(st, "    mov " + tostring(8 * idx) + "(%rcx), " + dst)
+// Slot idx of the record in %rcx into %rax (every caller wants it there).
+def gen_slot_load(st: EmitSt, idx: long) -> EmitSt {
+    emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * idx, -1, insn.R_RAX, 64)
 };
 
 // acc = acc + <field in slot idx, rendered by its static type>. The chain is
@@ -5110,26 +5139,26 @@ def gen_rec_field_str(st: EmitSt, idx: long, ft: Type, path: [Type]) -> EmitSt {
     let fk = ft.k;
     st = if (fk == K.tstr) {
         // a str is already its own form
-        st = emit(st, "    mov 8(%rsp), %rcx");
-        gen_slot_load(st, idx, "%rax")
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RCX, 64);
+        gen_slot_load(st, idx)
     } else if (fk == K.tlong) {
-        st = emit(st, "    mov 8(%rsp), %rcx");
-        st = gen_slot_load(st, idx, "%rax");
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_long_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RCX, 64);
+        st = gen_slot_load(st, idx);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (fk == K.tbool) {
-        st = emit(st, "    mov 8(%rsp), %rcx");
-        st = gen_slot_load(st, idx, "%rax");
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_bool_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RCX, 64);
+        st = gen_slot_load(st, idx);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (fk == K.tfloat) {
-        st = emit(st, "    mov 8(%rsp), %rcx");
-        st = gen_slot_load(st, idx, "%rax");
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_float_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RCX, 64);
+        st = gen_slot_load(st, idx);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_float_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (fk == K.tfunc) {
         gen_str_const(st, "<function " + types.tstr(ft) + ">")
     } else {
@@ -5138,17 +5167,17 @@ def gen_rec_field_str(st: EmitSt, idx: long, ft: Type, path: [Type]) -> EmitSt {
         // to print the field's TYPE instead ("<{str => long}>") on the
         // mistaken belief that only gen_val_tostr_rax walked them -- it does,
         // and it is exactly what a field needs.
-        st = emit(st, "    mov 8(%rsp), %rcx");
-        st = gen_slot_load(st, idx, "%rax");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RCX, 64);
+        st = gen_slot_load(st, idx);
         gen_val_tostr_rax(st, ft, path)
     };
-    st = emit(st, "    mov %rax, %rdx");
-    st = emit(st, "    mov (%rsp), %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    push %rdx");
-    st = emit(st, "    call y_str_cat");
-    st = emit(st, "    add $16, %rsp");
-    emit(st, "    mov %rax, (%rsp)")
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RSP, -1, 1, -1, -1)
 };
 
 def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
@@ -5158,16 +5187,16 @@ def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
     let n = len(args) - 1;
     let i = n;
     while (i >= 1) {
-        st = emit(st, "    pop " + syscall_reg(i - 1));
+        st = emit_insn(st, insn.F_POP_R, syscall_reg(i - 1), 64, 0, 0, 0, 0, 0);
         // a str flows in as its header; the kernel wants the data bytes.
         let at = infer(st, args[i]);
         if (at.k == K.tstr) {
-            st = emit(st, "    add $8, " + syscall_reg(i - 1));
+            st = emit_insn(st, insn.F_ADD_I_R, 8, syscall_reg(i - 1), 64, 0, 0, 0, 0);
         }
         i = i - 1;
     };
-    st = emit(st, "    pop %rax");
-    emit(st, "    syscall")
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0)
 };
 
 // The frame offset of the closure record of the body being emitted, or -1
@@ -5221,11 +5250,11 @@ def gen_direct(st: EmitSt, node: Call, name: str) -> EmitSt {
             soff = capture_off(st);
         }
         if (soff >= 0) {
-            st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rax");
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, soff, -1, insn.R_RAX, 64);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         }
         st = gen_push_args_as(st, node.args, dptypes);
-        st = emit(st, "    call " + lname(label));
+        st = emit_insn(st, insn.F_CALL_L, label, 0, 0, 0, 0, 0, 0);
         let nbytes = len(node.args) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
@@ -5233,7 +5262,7 @@ def gen_direct(st: EmitSt, node: Call, name: str) -> EmitSt {
         if (nbytes == 0) {
             st
         } else {
-            emit(st, "    add $" + tostring(nbytes) + ", %rsp")
+            emit_insn(st, insn.F_ADD_I_R, nbytes, insn.R_RSP, 64, 0, 0, 0, 0)
         }
     }
 };
@@ -5252,26 +5281,26 @@ def cmp_word(t: Type) -> bool {
 };
 
 // The jcc that takes the FALSE edge of `node` when it is a plain integer
-// comparison -- the instruction a branch needs anyway -- or "" when the
-// condition is anything else.
+// comparison -- the instruction a branch needs anyway -- or 0 when the
+// condition is anything else. The form, not the mnemonic: the site emits it.
 //
 // Driven by the operator, never by matching the text of an emitted setcc: the
 // materialisation and the branch can disagree (ucomisd sets ZF/PF/CF for an
 // unordered compare, a structural == is a call), and the emitter may change how
 // a bool is built without this going stale. Each jcc is the negation of its
 // setcc form: `<` is setl, so its false edge is jge.
-def int_cmp_jcc(st: EmitSt, node: Node) -> str {
-    let jcc = "";
+def int_cmp_jcc(st: EmitSt, node: Node) -> long {
+    let jcc = 0;
     if (node.k == K.bin) {
         let bin: Bin = node;
         let op = bin.op;
         if (cmp_word(infer(st, bin.l)) && cmp_word(infer(st, bin.r))) {
-            if (op == "<") { jcc = "jge"; }
-            else if (op == ">") { jcc = "jle"; }
-            else if (op == "<=") { jcc = "jg"; }
-            else if (op == ">=") { jcc = "jl"; }
-            else if (op == "==") { jcc = "jne"; }
-            else if (op == "!=") { jcc = "je"; };
+            if (op == "<") { jcc = insn.F_JGE_L; }
+            else if (op == ">") { jcc = insn.F_JLE_L; }
+            else if (op == "<=") { jcc = insn.F_JG_L; }
+            else if (op == ">=") { jcc = insn.F_JL_L; }
+            else if (op == "==") { jcc = insn.F_JNE_L; }
+            else if (op == "!=") { jcc = insn.F_JE_L; };
         };
     };
     jcc
@@ -5282,11 +5311,11 @@ def int_cmp_jcc(st: EmitSt, node: Node) -> str {
 // same setcc/jcc forms apply.
 def gen_cmp_flags(st: EmitSt, node: Bin) -> EmitSt {
     st = gen(st, node.l);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.r);
-    st = emit(st, "    mov %rax, %rcx");
-    st = emit(st, "    pop %rax");
-    emit(st, "    cmp %rcx, %rax")
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
 };
 
 def gen_if(st: EmitSt, node: If) -> EmitSt {
@@ -5295,27 +5324,27 @@ def gen_if(st: EmitSt, node: If) -> EmitSt {
     let r2 = next_loc(st);
     st = r2.st;
     let jcc = int_cmp_jcc(st, node.cond);
-    if (jcc != "") {
+    if (jcc != 0) {
         // A comparison branches on the flags it has just set: the bool is
         // never built. `setcc; movzbq; test; jcc` (four instructions) becomes
         // `cmp; jcc` (two) -- 3,049 such sites in ycc's own output.
         let cbin: Bin = node.cond;
         st = gen_cmp_flags(st, cbin);
-        st = emit(st, "    " + jcc + " " + lname(r1.label));
+        st = emit_insn(st, jcc, r1.label, 0, 0, 0, 0, 0, 0);
     } else {
         st = gen(st, node.cond);
-        st = emit(st, "    test %rax, %rax");
-        st = emit(st, "    jz " + lname(r1.label));
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JZ_L, r1.label, 0, 0, 0, 0, 0, 0);
     };
     st = gen(st, node.then);
     if (node.has_else) {
-        st = emit(st, "    jmp " + lname(r2.label));
-        st = emit(st, lname(r1.label) + ":");
+        st = emit_insn(st, insn.F_JMP_L, r2.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, r1.label);
         st = gen_loc_elif(st, node.els);
         st = gen(st, node.els);
-        emit(st, lname(r2.label) + ":")
+        emit_label(st, r2.label)
     } else {
-        emit(st, lname(r1.label) + ":")
+        emit_label(st, r1.label)
     }
 };
 
@@ -5332,21 +5361,21 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
     st = r1.st;
     let r2 = next_loc(st);
     st = r2.st;
-    st = emit(st, lname(r1.label) + ":");
+    st = emit_label(st, r1.label);
     let jcc = int_cmp_jcc(st, node.cond);
-    if (jcc != "") {
+    if (jcc != 0) {
         let cbin: Bin = node.cond;
         st = gen_cmp_flags(st, cbin);
-        st = emit(st, "    " + jcc + " " + lname(r2.label));
+        st = emit_insn(st, jcc, r2.label, 0, 0, 0, 0, 0, 0);
     } else {
         st = gen(st, node.cond);
-        st = emit(st, "    test %rax, %rax");
-        st = emit(st, "    jz " + lname(r2.label));
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
-    st = emit(st, "    jmp " + lname(r1.label));
-    emit(st, lname(r2.label) + ":")
+    st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
+    emit_label(st, r2.label)
 };
 
 // ── counted loops ──────────────────────────────────────────────────────
@@ -5369,22 +5398,22 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
     st = r1.st;
     let r2 = next_loc(st);
     st = r2.st;
-    st = emit(st, lname(r1.label) + ":");
+    st = emit_label(st, r1.label);
     let jcc = int_cmp_jcc(st, node.cond);
-    if (jcc != "") {
+    if (jcc != 0) {
         let cbin: Bin = node.cond;
         st = gen_cmp_flags(st, cbin);
-        st = emit(st, "    " + jcc + " " + lname(r2.label));
+        st = emit_insn(st, jcc, r2.label, 0, 0, 0, 0, 0, 0);
     } else {
         st = gen(st, node.cond);
-        st = emit(st, "    test %rax, %rax");
-        st = emit(st, "    jz " + lname(r2.label));
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
     st = gen(st, node.step);
-    st = emit(st, "    jmp " + lname(r1.label));
-    emit(st, lname(r2.label) + ":")
+    st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
+    emit_label(st, r2.label)
 };
 
 // A loop's value is void (types.y: every loop kind's typeof is
@@ -5405,28 +5434,28 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
     st = gen(st, node.hi);
-    st = emit(st, "    mov %rax, " + tostring(loff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, loff, -1);
     st = gen(st, node.lo);
-    st = emit(st, "    mov %rax, " + tostring(voff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, voff, -1);
     st = env_define(st, node.name, "local", voff, -1, "", normtype({ k: K.tlong }));
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
     st = r2.st;
-    st = emit(st, lname(r1.label) + ":");
-    st = emit(st, "    mov " + tostring(voff) + "(%rbp), %rax");
-    st = emit(st, "    mov " + tostring(loff) + "(%rbp), %rcx");
-    st = emit(st, "    cmp %rcx, %rax");
-    st = emit(st, "    jge " + lname(r2.label));
+    st = emit_label(st, r1.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, voff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, loff, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
     // a captured loop variable gets a fresh cell per iteration (the
     // counter itself stays in its raw slot)
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
-    st = emit(st, "    inc " + tostring(voff) + "(%rbp)");
-    st = emit(st, "    jmp " + lname(r1.label));
-    emit(st, lname(r2.label) + ":")
+    st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, voff, -1, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
+    emit_label(st, r2.label)
 };
 
 // A loop's value is void (types.y: every loop kind's typeof is
@@ -5458,34 +5487,34 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
         eltyp = arr.of;
     }
     st = gen(st, node.iter);
-    st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
-    st = emit(st, "    xor %eax, %eax");
-    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
     st = env_define(st, node.name, "local", voff, -1, "", eltyp);
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
     st = r2.st;
-    st = emit(st, lname(r1.label) + ":");
+    st = emit_label(st, r1.label);
     // i < len(arr) — the heap header keeps the length in slot 0. The length
     // is re-read on every iteration, not hoisted into a fourth slot: a body
     // that appends to the array it walks goes on seeing what it appended
     // (`foreach (x in a) { a += x }` never ends), which hoisting would change.
-    st = emit(st, "    mov " + tostring(aoff) + "(%rbp), %rdx");
-    st = emit(st, "    mov (%rdx), %rcx");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
-    st = emit(st, "    cmp %rcx, %rax");
-    st = emit(st, "    jge " + lname(r2.label));
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
     // x = arr[i]
-    st = emit(st, elem_load(arr_elem_bytes(elt), "%rdx", "%rax", "%rcx"));
-    st = emit(st, "    mov %rcx, " + tostring(voff) + "(%rbp)");
+    st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
-    st = emit(st, "    inc " + tostring(ioff) + "(%rbp)");
-    st = emit(st, "    jmp " + lname(r1.label));
-    emit(st, lname(r2.label) + ":")
+    st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
+    emit_label(st, r2.label)
 };
 
 // ── tail calls ─────────────────────────────────────────────────────────
@@ -5533,7 +5562,7 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
             st = gen(st, targs[i]);
         };
         let off = (st.slots + 1) * -8;
-        st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         offs += off;
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
@@ -5545,16 +5574,16 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
     let j = 0;
     while (j < n) {
         let po = 16 + 8 * (n - 1 - j);
-        st = emit(st, "    mov " + tostring(offs[j]) + "(%rbp), %rax");
-        st = emit(st, "    mov %rax, " + tostring(po) + "(%rbp)");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, offs[j], -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, po, -1);
         j = j + 1;
     };
     // tear down this frame and re-enter the prologue; the return address
     // of the original call stays where it is, so the caller sees a normal
     // return.
-    st = emit(st, "    mov %rbp, %rsp");
-    st = emit(st, "    pop %rbp");
-    emit(st, "    jmp " + lname(st.self_label))
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RBP, 64, insn.R_RSP, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RBP, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_JMP_L, st.self_label, 0, 0, 0, 0, 0, 0)
 };
 
 def gen_tail(st: EmitSt, node: Node) -> EmitSt {
@@ -5568,11 +5597,11 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
                 gen_tail_call(st, call)
             } else {
                 st = gen_as(st, e, cur_fn_ret(st));
-                emit(st, "    jmp " + lname(st.end_label))
+                emit_insn(st, insn.F_JMP_L, st.end_label, 0, 0, 0, 0, 0, 0)
             }
         } else {
             st = gen_as(st, e, cur_fn_ret(st));
-            emit(st, "    jmp " + lname(st.end_label))
+            emit_insn(st, insn.F_JMP_L, st.end_label, 0, 0, 0, 0, 0, 0)
         }
     } else if (k == K.call) {
         let call: Call = node;
@@ -5603,31 +5632,31 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.kw_if) {
         let branch: If = node;
         let jcc = int_cmp_jcc(st, branch.cond);
-        if (jcc == "") { st = gen(st, branch.cond); }
+        if (jcc == 0) { st = gen(st, branch.cond); }
         let rl1 = next_loc(st);
         st = rl1.st;
         let lelse = rl1.label;
         let rl2 = next_loc(st);
         st = rl2.st;
         let lend = rl2.label;
-        if (jcc != "") {
+        if (jcc != 0) {
             // the flags come from the comparison itself (see int_cmp_jcc)
             let cbin: Bin = branch.cond;
             st = gen_cmp_flags(st, cbin);
-            st = emit(st, "    " + jcc + " " + lname(lelse));
+            st = emit_insn(st, jcc, lelse, 0, 0, 0, 0, 0, 0);
         } else {
-            st = emit(st, "    test %rax, %rax");
-            st = emit(st, "    jz " + lname(lelse));
+            st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_JZ_L, lelse, 0, 0, 0, 0, 0, 0);
         };
         st = gen_tail(st, branch.then);
         if (branch.has_else) {
-            st = emit(st, "    jmp " + lname(lend));
-            st = emit(st, lname(lelse) + ":");
+            st = emit_insn(st, insn.F_JMP_L, lend, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, lelse);
             st = gen_loc_elif(st, branch.els);
             st = gen_tail(st, branch.els);
-            emit(st, lname(lend) + ":")
+            emit_label(st, lend)
         } else {
-            st = emit(st, lname(lelse) + ":")
+            st = emit_label(st, lelse)
         }
     } else {
         gen_as(st, node, cur_fn_ret(st))
@@ -5643,7 +5672,7 @@ def gen_block(st: EmitSt, node: Block) -> EmitSt {
 def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No scope push: names are unique post-rename, blocks share the frame.
     let stmts = node.stmts;
     if (len(stmts) == 0) {
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
         // A trailing `;` (void) computes nothing: nothing to emit.
         let m = len(stmts);
@@ -6103,20 +6132,20 @@ def ty_desc_in(st: EmitSt, m: Type, inu: Type) -> StLbl {
 // The record in %rax (slots `from`) copied into slots `to`, tagged
 // `tag`: a new record in %rax.
 def gen_copy_rec(st: EmitSt, from: [str], to: [str], tag: long) -> EmitSt {
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $" + tostring(8 * len(to) + 16) + ", %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    lea " + lname(tag) + "(%rip), %rcx");
-    st = emit(st, "    mov %rcx, 0(%rax)");
-    st = emit(st, "    pop %rsi");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, 8 * len(to) + 16, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, tag, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 0, -1);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RSI, 64, 0, 0, 0, 0, 0);
     let i = 0;
     while (i < len(to)) {
         let s = mfield_idx(from, to[i]);
-        st = emit(st, "    mov " + tostring(8 * s) + "(%rsi), %rcx");
-        st = emit(st, "    mov %rcx, " + tostring(8 + 8 * i) + "(%rax)");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSI, -1, 1, 8 * s, -1, insn.R_RCX, 64);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8 + 8 * i, -1);
         i = i + 1;
     };
-    emit(st, "    add $8, %rax")
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
 };
 
 // The value in %rax, of static type src0, going where want0 is declared:
@@ -6171,7 +6200,7 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
         } else {
             let done = next_loc(st);
             st = done.st;
-            st = emit(st, "    mov -8(%rax), %rcx");
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
             let lbls: [long] = [];
             let i = 0;
             while (i < len(ms)) {
@@ -6180,15 +6209,15 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
                 lbls += l.label;
                 let dr = ty_desc_in(st, ms[i], s);
                 st = dr.st;
-                st = emit(st, "    lea " + lname(dr.label) + "(%rip), %rdx");
-                st = emit(st, "    cmp %rdx, %rcx");
-                st = emit(st, "    je " + lname(l.label));
+                st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
+                st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
+                st = emit_insn(st, insn.F_JE_L, l.label, 0, 0, 0, 0, 0, 0);
                 i = i + 1;
             };
-            st = emit(st, "    jmp y_cast_trap");
+            st = emit_insn(st, insn.F_JMP_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0);
             i = 0;
             while (i < len(ms)) {
-                st = emit(st, lname(lbls[i]) + ":");
+                st = emit_label(st, lbls[i]);
                 let from: [str] = froms[i];
                 let to: [str] = tos[i];
                 if (!same_lay(from, to)) {
@@ -6197,10 +6226,10 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
                     st = gen_copy_rec(st, from, to, dr.label);
                 };
                 // not on the last arm: that one falls through into `done:`
-                if (i < len(ms) - 1) { st = emit(st, "    jmp " + lname(done.label)); };
+                if (i < len(ms) - 1) { st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0); };
                 i = i + 1;
             };
-            emit(st, lname(done.label) + ":")
+            emit_label(st, done.label)
         }
     } else { st }
 };
@@ -6304,13 +6333,13 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
     if (wu.k == K.tunion && rtu.k == K.trec) { slots = union_lay(rtu, wu); };
     let dr = ty_desc_in(st, rt, wu);
     st = dr.st;
-    st = emit(st, "    mov $" + tostring(8 * n + 16) + ", %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    lea " + lname(dr.label) + "(%rip), %rax");
-    st = emit(st, "    pop %rcx");
-    st = emit(st, "    mov %rax, 0(%rcx)");
-    st = emit(st, "    push %rcx");
+    st = emit_insn(st, insn.F_MOV_I_R, 8 * n + 16, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 0, -1);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
     let i = 0;
     while (i < nent) {
         // mv is walked twice (gen, then infer), so bind it once.
@@ -6320,8 +6349,8 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             // Spread: the source runs ONCE; copy each of its fields into
             // the slot it has here. A later entry's store overwrites.
             st = gen(st, mv);
-            st = emit(st, "    pop %rcx");
-            st = emit(st, "    mov %rax, %rdx");
+            st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
             let srec2 = infer(st, mv);
             if (srec2.k == K.trec) {
                 let spread: TRec = srec2;
@@ -6332,8 +6361,8 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                     let mi2 = mfield_idx(slots, sf2.name);
                     // %rdx is the source's record VALUE (slot 0 at +0);
                     // %rcx is the fresh record's ALLOC base (slots at +8).
-                    st = emit(st, "    mov " + tostring(8 * rec_slot(sfs2, sf2.name)) + "(%rdx), %rsi");
-                    st = emit(st, "    mov %rsi, " + tostring(8 + mi2 * 8) + "(%rcx)");
+                    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 8 * rec_slot(sfs2, sf2.name), -1, insn.R_RSI, 64);
+                    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RSI, 64, insn.R_RCX, -1, 1, 8 + mi2 * 8, -1);
                     sj = sj + 1;
                 };
             }
@@ -6347,15 +6376,15 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             } else {
                 st = gen_as(st, mv, ft);
             };
-            st = emit(st, "    pop %rcx");
+            st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
             let mi = mfield_idx(slots, mk);
-            st = emit(st, "    mov %rax, " + tostring(8 + mi * 8) + "(%rcx)");
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 8 + mi * 8, -1);
         };
-        st = emit(st, "    push %rcx");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
         i = i + 1;
     };
-    st = emit(st, "    pop %rax");
-    emit(st, "    add $8, %rax")
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
 };
 
 // Value mv given for field mk of rtu, the record type a literal is created
@@ -6435,7 +6464,7 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
     };
     st = gen_make_closure(st, lbl, caps);
     let coff = (st.slots + 1) * -8;
-    st = emit(st, "    mov %rax, " + tostring(coff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, coff, -1);
     let st3 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
@@ -6533,13 +6562,13 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
 def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
     let ge = env_find(st, name);
     if (ge.kind == "global") {
-        st = emit(st, "    mov %rax, " + lname(ge.label) + "(%rip)");
+        st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, -1, -1, 1, 0, ge.label);
         env_define(st, name, "global", 0, ge.label, "", t)
     } else if (t.k == K.tstr && own_wanted(st, name)) {
         bind_own(st, name, t)
     } else {
         let off = (st.slots + 1) * -8;
-        st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
@@ -6559,18 +6588,18 @@ def gen_assign(st: EmitSt, node: Assign) -> EmitSt {
     st = gen_as(st, node.v, e.typ);
     if (e.kind == "capture") {
         let idx = tonum(e.mark);
-        st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rcx");
-        st = emit(st, "    mov " + tostring(8 * (idx + 1)) + "(%rcx), %rdx");
-        st = emit(st, "    mov %rax, (%rdx)");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RDX, -1, 1, -1, -1);
         st
     } else if (e.kind == "box") {
-        st = emit(st, "    mov " + tostring(e.off) + "(%rbp), %rdx");
-        st = emit(st, "    mov %rax, (%rdx)");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RDX, -1, 1, -1, -1);
         st
     } else if (e.kind == "global") {
-        emit(st, "    mov %rax, " + lname(e.label) + "(%rip)")
+        emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, -1, -1, 1, 0, e.label)
     } else {
-        emit(st, "    mov %rax, " + tostring(e.off) + "(%rbp)")
+        emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, e.off, -1)
     }
 };
 
@@ -6581,11 +6610,11 @@ def gen_fill(st: EmitSt, base: long, n: long) -> EmitSt {
     } else {
         let r = next_loc(st);
         st = r.st;
-        st = emit(st, "    mov $" + tostring(n) + ", %rcx");
-        st = emit(st, lname(r.label) + ":");
-        st = emit(st, "    dec %rcx");
-        st = emit(st, "    mov %rax, " + tostring(base) + "(%rbp,%rcx,8)");
-        emit(st, "    jnz " + lname(r.label))
+        st = emit_insn(st, insn.F_MOV_I_R, n, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_label(st, r.label);
+        st = emit_insn(st, insn.F_DEC_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_M, insn.R_RAX, 64, insn.R_RBP, insn.R_RCX, 8, base, -1);
+        emit_insn(st, insn.F_JNZ_L, r.label, 0, 0, 0, 0, 0, 0)
     }
 };
 
@@ -6597,14 +6626,14 @@ def gen_fill_heap(st: EmitSt, n: long, esz: long) -> EmitSt {
     } else {
         let r = next_loc(st);
         st = r.st;
-        st = emit(st, "    mov %rdx, %r10");
-        st = emit(st, "    mov %rax, %rdx");
-        st = emit(st, "    mov $" + tostring(n) + ", %rcx");
-        st = emit(st, lname(r.label) + ":");
-        st = emit(st, "    dec %rcx");
-        st = emit(st, elem_store_rdx(esz, "%r10", "%rcx"));
-        st = emit(st, "    jnz " + lname(r.label));
-        st = emit(st, "    mov %r10, %rdx");
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_R10, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, n, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_label(st, r.label);
+        st = emit_insn(st, insn.F_DEC_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = elem_store_rdx(st, esz, insn.R_R10, insn.R_RCX);
+        st = emit_insn(st, insn.F_JNZ_L, r.label, 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RDX, 64, 0, 0, 0);
         st
     }
 };
@@ -6622,20 +6651,20 @@ def gen_arrrep(st: EmitSt, node: ArrRep) -> EmitSt {
 def gen_arrrep_esz(st: EmitSt, node: ArrRep, esz: long, ety: Type) -> EmitSt {
     let n = node.n;
     st = gen_as(st, node.v, ety);
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $" + tostring(arr_alloc_size(esz, n)) + ", %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $" + tostring(arr_header_size()) + ", %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    pop %rdx");
-    st = emit(st, "    mov $" + tostring(n) + ", (%rax)");
-    st = emit(st, "    mov $" + tostring(n) + ", 8(%rax)");
-    st = emit(st, "    mov %rdx, 16(%rax)");
-    st = emit(st, "    mov %rax, %rdx");
-    st = emit(st, "    pop %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, arr_alloc_size(esz, n), insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, arr_header_size(), insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_0, n, insn.R_RAX, -1, 1, -1, -1, 0);
+    st = emit_insn(st, insn.F_MOV_I_D, n, insn.R_RAX, -1, 1, 8, -1, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_RAX, -1, 1, 16, -1);
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_fill_heap(st, n, esz);
-    emit(st, "    mov %rdx, %rax")
+    emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0)
 };
 
 // Radix literals (0x../0b..) reach the emitter as their source text; the
@@ -7190,7 +7219,7 @@ def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
     if (lit_is_float(node.v)) {
         // Float literal: its IEEE-754 bits, decided above. Floats live in %rax
         // as raw bits; only arithmetic and comparison use %xmm.
-        emit(st, "    mov $" + tostring(flit_bits(node.v)) + ", %rax")
+        emit_insn(st, insn.F_MOV_I_R, flit_bits(node.v), insn.R_RAX, 64, 0, 0, 0, 0)
     } else {
         // An integer literal is emitted as its VALUE, not its text: a literal
         // wider than 64 bits runs as its low 64 bits (which is what the
@@ -7199,7 +7228,7 @@ def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
         // GNU as can read, so a -S listing of such a program did not assemble
         // at all. norm_num has already turned hex and binary into decimal, so
         // an in-range literal emits exactly the text it did before.
-        emit(st, "    mov $" + tostring(num_i64(norm_num(node.v))) + ", %rax")
+        emit_insn(st, insn.F_MOV_I_R, num_i64(norm_num(node.v)), insn.R_RAX, 64, 0, 0, 0, 0)
     }
 };
 def gen_index(st: EmitSt, node: Index) -> EmitSt {
@@ -7212,22 +7241,22 @@ def gen_index(st: EmitSt, node: Index) -> EmitSt {
     let bt = infer(st, garr);
     let ixesz = arr_elem_bytes(bt);
     st = gen(st, garr);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.idx);
-    st = emit(st, "    mov %rax, %rcx");
-    st = emit(st, "    pop %rax");
-    st = emit(st, "    test %rcx, %rcx");
-    st = emit(st, "    js y_oob");
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JS_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     if (bt.k == K.tarrfix) {
         let fixed: TFix = bt;
-        st = emit(st, "    cmp $" + tostring(fixed.n) + ", %rcx");
-        st = emit(st, "    jge y_oob");
-        emit(st, elem_load(ixesz, "%rax", "%rcx", "%rax"))
+        st = emit_insn(st, insn.F_CMP_I_R, fixed.n, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
+        elem_load(st, ixesz, insn.R_RAX, insn.R_RCX, insn.R_RAX)
     } else {
-        st = emit(st, "    mov (%rax), %rdx");
-        st = emit(st, "    cmp %rdx, %rcx");
-        st = emit(st, "    jge y_oob");
-        emit(st, elem_load(ixesz, "%rax", "%rcx", "%rax"))
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
+        elem_load(st, ixesz, insn.R_RAX, insn.R_RCX, insn.R_RAX)
     }
 };
 
@@ -7244,13 +7273,13 @@ def gen_dotassign(st: EmitSt, node: DotAssign) -> EmitSt {
     let dt = infer(st, dobj);
     let idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_as(st, node.v, rec_field_type(dt, dkey));
-    st = emit(st, "    pop %rdx");
+    st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
     if (dt.k == K.tunion) {
         gen_union_slot(st, dt, dkey, true)
     } else {
-        emit(st, "    mov %rax, " + tostring(8 * idx) + "(%rdx)")
+        emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RDX, -1, 1, 8 * idx, -1)
     }
 };
 
@@ -7404,9 +7433,9 @@ def gen_incdec(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
     let slot = 0;
     if (dropped) { slot = inplace_slot(st, node.tgt); };
     if (slot != 0) {
-        let mn = "inc";
-        if (node.op == "--") { mn = "dec"; };
-        emit(st, "    " + mn + " " + tostring(slot) + "(%rbp)")
+        let f = insn.F_INC_D;
+        if (node.op == "--") { f = insn.F_DEC_D; };
+        emit_insn(st, f, insn.R_RBP, -1, 1, slot, -1, 0, 0)
     } else {
         gen_incdec_desugar(st, node, dropped)
     }
@@ -7505,7 +7534,8 @@ def gen_opassign(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
 // count check, and a byte, float or non-local target a different instruction
 // altogether (see inplace_slot).
 def gen_opassign_arith(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
-    let mn = "";
+    let fr = 0;
+    let fi = 0;
     let slot = 0;
     let imm = 0;
     let has_imm = false;
@@ -7513,13 +7543,13 @@ def gen_opassign_arith(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
         slot = inplace_slot(st, node.tgt);
         if (slot != 0) {
             let op = node.op;
-            if (op == "+") { mn = "add"; }
-            else if (op == "-") { mn = "sub"; }
-            else if (op == "*") { mn = "imul"; }
-            else if (op == "|") { mn = "or"; }
-            else if (op == "&") { mn = "and"; }
-            else if (op == "^") { mn = "xor"; };
-            if (mn != "") {
+            if (op == "+") { fr = insn.F_ADD_R_R; fi = insn.F_ADD_I_D; }
+            else if (op == "-") { fr = insn.F_SUB_R_R; fi = insn.F_SUB_I_D; }
+            else if (op == "*") { fr = insn.F_IMUL_R_R; fi = 0; }
+            else if (op == "|") { fr = insn.F_OR_R_R; fi = insn.F_OR_I_D; }
+            else if (op == "&") { fr = insn.F_AND_R_R; fi = insn.F_AND_I_D; }
+            else if (op == "^") { fr = insn.F_XOR_R_R; fi = insn.F_XOR_I_D; };
+            if (fi != 0) {
                 let im = int_imm(node.v);
                 if (im.ok) {
                     has_imm = true;
@@ -7528,18 +7558,18 @@ def gen_opassign_arith(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
             };
         };
     };
-    if (mn == "") {
+    if (fr == 0) {
         gen_opassign_desugar(st, node, dropped)
     } else if (has_imm) {
-        emit(st, "    " + mn + " $" + tostring(imm) + ", " + tostring(slot) + "(%rbp)")
+        emit_insn(st, fi, imm, insn.R_RBP, -1, 1, slot, -1, 0)
     } else {
-        st = emit(st, "    mov " + tostring(slot) + "(%rbp), %rax");
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, slot, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, node.v);
-        st = emit(st, "    mov %rax, %rcx");
-        st = emit(st, "    pop %rax");
-        st = emit(st, "    " + mn + " %rcx, %rax");
-        emit(st, "    mov %rax, " + tostring(slot) + "(%rbp)")
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, fr, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, slot, -1)
     }
 };
 
@@ -7757,32 +7787,32 @@ def gen_idxassign(st: EmitSt, node: IdxAssign) -> EmitSt {
     let bt: Type = infer(st, garr);
     let iaesz = arr_elem_bytes(bt);
     st = gen(st, garr);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, node.idx);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_as(st, node.v, store_elem_type(bt, iaesz));
-    st = emit(st, "    pop %rcx");
-    st = emit(st, "    pop %rdx");
-    st = emit(st, "    test %rcx, %rcx");
-    st = emit(st, "    js y_oob");
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JS_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     if (bt.k == K.tarrfix) {
         let fixed: TFix = bt;
-        st = emit(st, "    cmp $" + tostring(fixed.n) + ", %rcx");
-        st = emit(st, "    jge y_oob");
-        st = emit(st, "    mov %rdx, %r10");
-        st = emit(st, "    mov %rax, %rdx");
-        st = emit(st, elem_store_rdx(iaesz, "%r10", "%rcx"));
-        st = emit(st, "    mov %r10, %rdx");
+        st = emit_insn(st, insn.F_CMP_I_R, fixed.n, insn.R_RCX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_R10, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+        st = elem_store_rdx(st, iaesz, insn.R_R10, insn.R_RCX);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RDX, 64, 0, 0, 0);
     } else {
-        st = emit(st, "    push %rax");
-        st = emit(st, "    mov (%rdx), %rax");
-        st = emit(st, "    cmp %rax, %rcx");
-        st = emit(st, "    jge y_oob");
-        st = emit(st, "    pop %rax");
-        st = emit(st, "    mov %rdx, %r10");
-        st = emit(st, "    mov %rax, %rdx");
-        st = emit(st, elem_store_rdx(iaesz, "%r10", "%rcx"));
-        st = emit(st, "    mov %r10, %rdx");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_R10, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+        st = elem_store_rdx(st, iaesz, insn.R_R10, insn.R_RCX);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RDX, 64, 0, 0, 0);
     };
     st
 };
@@ -7826,13 +7856,13 @@ def gen_val_tostr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     } else if (tk == K.tstr) {
         st
     } else if (tk == K.tbool) {
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_bool_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (tk == K.tfloat) {
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_float_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_float_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (tk == K.tarr) {
         // every aggregate arm below puts ITS OWN type on the path and hands
         // `path + t` to the walk it starts; a scalar type is never recursion
@@ -7860,21 +7890,21 @@ def gen_val_tostr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     } else if (tk == K.tmap) {
         gen_map_repr_rax(st, t, path + t)
     } else {
-        st = emit(st, "    push %rax");
-        st = emit(st, "    call y_long_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     }
 };
 
 // acc = acc + <the string in %rax>.
 def gen_acc_cat_rax(st: EmitSt, aoff: long) -> EmitSt {
-    st = emit(st, "    mov %rax, %rdx");
-    st = emit(st, "    mov " + tostring(aoff) + "(%rbp), %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    push %rdx");
-    st = emit(st, "    call y_str_cat");
-    st = emit(st, "    add $16, %rsp");
-    emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)")
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1)
 };
 
 // The record address of a map sits in %rax; leave '{"k": v, ...}' -- the same
@@ -7893,11 +7923,11 @@ def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 4,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
-    st = emit(st, "    mov %rax, " + tostring(moff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, moff, -1);
     st = gen_str_const(st, "{");
-    st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
-    st = emit(st, "    xor %eax, %eax");
-    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
@@ -7905,29 +7935,29 @@ def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let r3 = next_loc(st);
     st = r3.st;
     let map: TMap = t;
-    st = emit(st, lname(r1.label) + ":");
-    st = emit(st, "    mov " + tostring(moff) + "(%rbp), %rdx");
-    st = emit(st, "    mov 8(%rdx), %rdx");
-    st = emit(st, "    mov (%rdx), %rcx");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
-    st = emit(st, "    cmp %rcx, %rax");
-    st = emit(st, "    jge " + lname(r2.label));
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + lname(r3.label));
+    st = emit_label(st, r1.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, moff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 8, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, r3.label, 0, 0, 0, 0, 0, 0);
     st = gen_acc_cat_slot(st, aoff, ", ");
-    st = emit(st, lname(r3.label) + ":");
+    st = emit_label(st, r3.label);
     // the key, quoted when it is a str (map_key_repr's rule)
-    st = emit(st, "    mov " + tostring(moff) + "(%rbp), %rdx");
-    st = emit(st, "    mov 8(%rdx), %rdx");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
-    st = emit(st, elem_load(elem_bytes(map.key), "%rdx", "%rcx", "%rax"));
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, moff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 8, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RCX, 64);
+    st = elem_load(st, elem_bytes(map.key), insn.R_RDX, insn.R_RCX, insn.R_RAX);
     if (map.key.k == K.tstr) {
         // The key goes to a slot first: appending the opening quote is a call
         // that leaves its result in %rax, so a key still living there would be
         // appended twice over instead.
-        st = emit(st, "    mov %rax, " + tostring(koff) + "(%rbp)");
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, koff, -1);
         st = gen_acc_cat_slot(st, aoff, "\"");
-        st = emit(st, "    mov " + tostring(koff) + "(%rbp), %rax");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, koff, -1, insn.R_RAX, 64);
         st = gen_acc_cat_rax(st, aoff);
         st = gen_acc_cat_slot(st, aoff, "\"");
     } else {
@@ -7936,18 +7966,18 @@ def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     };
     st = gen_acc_cat_slot(st, aoff, ": ");
     // the value
-    st = emit(st, "    mov " + tostring(moff) + "(%rbp), %rdx");
-    st = emit(st, "    mov 16(%rdx), %rdx");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
-    st = emit(st, elem_load(elem_bytes(map.of), "%rdx", "%rcx", "%rax"));
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, moff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 16, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RCX, 64);
+    st = elem_load(st, elem_bytes(map.of), insn.R_RDX, insn.R_RCX, insn.R_RAX);
     st = gen_val_tostr_rax(st, map.of, path + t);
     st = gen_acc_cat_rax(st, aoff);
     // the counter in place: one instruction, not a load, an inc and a store
-    st = emit(st, "    inc " + tostring(ioff) + "(%rbp)");
-    st = emit(st, "    jmp " + lname(r1.label));
-    st = emit(st, lname(r2.label) + ":");
+    st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, r2.label);
     st = gen_acc_cat_slot(st, aoff, "}");
-    emit(st, "    mov " + tostring(aoff) + "(%rbp), %rax")
+    emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64)
 };
 
 // Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
@@ -7960,55 +7990,55 @@ def gen_arr_tostr_rax(st: EmitSt, elty: Type, path: [Type]) -> EmitSt {
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
-    st = emit(st, "    mov %rax, " + tostring(soff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, soff, -1);
     st = gen_str_const(st, "[");
-    st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
-    st = emit(st, "    xor %eax, %eax");
-    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
     st = r2.st;
     let r3 = next_loc(st);
     st = r3.st;
-    st = emit(st, lname(r1.label) + ":");
-    st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rdx");
-    st = emit(st, "    mov (%rdx), %rcx");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
-    st = emit(st, "    cmp %rcx, %rax");
-    st = emit(st, "    jge " + lname(r2.label));
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    jz " + lname(r3.label));
+    st = emit_label(st, r1.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, soff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, r3.label, 0, 0, 0, 0, 0, 0);
     st = gen_acc_cat_slot(st, aoff, ", ");
-    st = emit(st, lname(r3.label) + ":");
-    st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rdx");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
-    st = emit(st, elem_load(elem_bytes(elty), "%rdx", "%rcx", "%rax"));
+    st = emit_label(st, r3.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, soff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RCX, 64);
+    st = elem_load(st, elem_bytes(elty), insn.R_RDX, insn.R_RCX, insn.R_RAX);
     st = gen_val_tostr_rax(st, elty, path);
-    st = emit(st, "    mov %rax, %rdx");
-    st = emit(st, "    mov " + tostring(aoff) + "(%rbp), %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    push %rdx");
-    st = emit(st, "    call y_str_cat");
-    st = emit(st, "    add $16, %rsp");
-    st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     // the counter in place: one instruction, not a load, an inc and a store
-    st = emit(st, "    inc " + tostring(ioff) + "(%rbp)");
-    st = emit(st, "    jmp " + lname(r1.label));
-    st = emit(st, lname(r2.label) + ":");
+    st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, r2.label);
     st = gen_acc_cat_slot(st, aoff, "]");
-    emit(st, "    mov " + tostring(aoff) + "(%rbp), %rax")
+    emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64)
 };
 
 // slot(%rbp) = slot(%rbp) + <constant>.
 def gen_acc_cat_slot(st: EmitSt, off: long, s: str) -> EmitSt {
-    st = emit(st, "    mov " + tostring(off) + "(%rbp), %rax");
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, off, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, s);
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_str_cat");
-    st = emit(st, "    add $16, %rsp");
-    emit(st, "    mov %rax, " + tostring(off) + "(%rbp)")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1)
 };
 
 // ── element size ───────────────────────────────────────────────────────
@@ -8043,38 +8073,41 @@ def ptr_width(t: Type) -> long {
 };
 
 // Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
-// the index register, `dst` the result. Headers are {len, cap, data} with
-// the elements in a separate block, so the data pointer rides through %dst.
-def elem_load(esz: long, base: str, idx: str, dst: str) -> str {
+// the index register, `dst` the result (all register numbers). Headers are
+// {len, cap, data} with the elements in a separate block, so the data pointer
+// rides through %dst.
+def elem_load(st: EmitSt, esz: long, base: long, idx: long, dst: long) -> EmitSt {
+    st = emit_insn(st, insn.F_MOV_D_R, base, -1, 1, 16, -1, dst, 64);
     if (esz == 1) {
-        "    mov 16(" + base + "), " + dst + "\n"
-            + "    movzbq (" + dst + "," + idx + ",1), " + dst
+        emit_insn(st, insn.F_MOVZBQ_M_R, dst, idx, 1, 0, -1, dst, 64)
     } else {
-        "    mov 16(" + base + "), " + dst + "\n"
-            + "    mov (" + dst + "," + idx + ",8), " + dst
+        emit_insn(st, insn.F_MOV_M_R, dst, idx, 8, 0, -1, dst, 64)
     }
 };
 
-// Store %rdx into element [idx] of the array based at `base`. The value
-// always arrives in %rdx so the byte form can name %dl without a register
-// table; a packed store truncates to 8 bits, which is the narrowing.
-// %r11 is the scratch that carries the data pointer: no generated value
-// lives in it across a store (the syscall instruction clobbers it).
-def elem_store_rdx(esz: long, base: str, idx: str) -> str {
+// Store %rdx into element [idx] of the array based at `base` (register
+// numbers). The value always arrives in %rdx so the byte form can name %dl
+// without a register table; a packed store truncates to 8 bits, which is the
+// narrowing. %r11 is the scratch that carries the data pointer: no generated
+// value lives in it across a store (the syscall instruction clobbers it).
+def elem_store_rdx(st: EmitSt, esz: long, base: long, idx: long) -> EmitSt {
+    st = emit_insn(st, insn.F_MOV_D_R, base, -1, 1, 16, -1, insn.R_R11, 64);
     if (esz == 1) {
-        "    mov 16(" + base + "), %r11\n    movb %dl, (%r11," + idx + ",1)"
+        emit_insn(st, insn.F_MOVB_R_M, insn.R_RDX, 8, insn.R_R11, idx, 1, 0, -1)
     } else {
-        "    mov 16(" + base + "), %r11\n    mov %rdx, (%r11," + idx + ",8)"
+        emit_insn(st, insn.F_MOV_R_M, insn.R_RDX, 64, insn.R_R11, idx, 8, 0, -1)
     }
 };
 
 // Same, for a compile-time-constant index (array literals): fold the
 // offset into the displacement instead of using an index register.
-def elem_store_rdx_const(esz: long, base: str, k: long) -> str {
+def elem_store_rdx_const(st: EmitSt, esz: long, base: long, k: long) -> EmitSt {
+    st = emit_insn(st, insn.F_MOV_D_R, base, -1, 1, 16, -1, insn.R_R11, 64);
     if (esz == 1) {
-        "    mov 16(" + base + "), %r11\n    movb %dl, " + tostring(k) + "(%r11)"
+        emit_insn(st, insn.F_MOVB_R_D, insn.R_RDX, 8, insn.R_R11, -1, 1, k, -1)
     } else {
-        "    mov 16(" + base + "), %r11\n    mov %rdx, " + tostring(k * 8) + "(%r11)"
+        emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_R11, -1, 1,
+                  k * 8, -1)
     }
 };
 
@@ -8146,13 +8179,13 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
     st = gen(st, nar.e);
     if (len(ds) == 0) {
         // no member matches: the arm never runs
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (len(ds) == 1) {
         gen_slot_move(st, ds[0], false)
     } else {
         let done = next_loc(st);
         st = done.st;
-        st = emit(st, "    mov -8(%rax), %rcx");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
         let lbls: [long] = [];
         let d = 0;
         while (d < len(ds) - 1) {
@@ -8164,25 +8197,25 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
                 if (slots[j] == ds[d]) {
                     let dr = ty_desc_in(st, ms[j], s);
                     st = dr.st;
-                    st = emit(st, "    lea " + lname(dr.label) + "(%rip), %rsi");
-                    st = emit(st, "    cmp %rsi, %rcx");
-                    st = emit(st, "    je " + lname(l.label));
+                    st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RSI, 64);
+                    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RSI, 64, insn.R_RCX, 64, 0, 0, 0);
+                    st = emit_insn(st, insn.F_JE_L, l.label, 0, 0, 0, 0, 0, 0);
                 };
                 j = j + 1;
             };
             d = d + 1;
         };
         st = gen_slot_move(st, ds[len(ds) - 1], false);
-        st = emit(st, "    jmp " + lname(done.label));
+        st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0);
         let e = 0;
         while (e < len(lbls)) {
-            st = emit(st, lname(lbls[e]) + ":");
+            st = emit_label(st, lbls[e]);
             st = gen_slot_move(st, ds[e], false);
             // not on the last arm: that one falls through into `done:`
-            if (e < len(lbls) - 1) { st = emit(st, "    jmp " + lname(done.label)); };
+            if (e < len(lbls) - 1) { st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0); };
             e = e + 1;
         };
-        emit(st, lname(done.label) + ":")
+        emit_label(st, done.label)
     }
 };
 
@@ -8190,9 +8223,9 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
 // (store) %rax into slot sl of the record in %rdx.
 def gen_slot_move(st: EmitSt, sl: long, store: bool) -> EmitSt {
     if (store) {
-        emit(st, "    mov %rax, " + tostring(8 * sl) + "(%rdx)")
+        emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RDX, -1, 1, 8 * sl, -1)
     } else {
-        emit(st, "    mov " + tostring(8 * sl) + "(%rax), %rax")
+        emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 8 * sl, -1, insn.R_RAX, 64)
     }
 };
 
@@ -8203,7 +8236,7 @@ def gen_prop(st: EmitSt, obj: Node, key: str, line: long, col: long) -> EmitSt {
         gen_len(st, n_call1("len", obj, line, col))
     } else {
         st = gen(st, obj);
-        emit(st, "    mov 16(%rax), %rax")
+        emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 16, -1, insn.R_RAX, 64)
     }
 };
 
@@ -8211,7 +8244,7 @@ def gen_prop(st: EmitSt, obj: Node, key: str, line: long, col: long) -> EmitSt {
 def gen_dot_rec(st: EmitSt, dobj: Node, dkey: str, t: Type) -> EmitSt {
     let idx = rec_field_idx(t, dkey);
     st = gen(st, dobj);
-    emit(st, "    mov " + tostring(idx * 8) + "(%rax), %rax")
+    emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, idx * 8, -1, insn.R_RAX, 64)
 };
 
 // The slot of field `key` in a record of static type t (fields sorted by
@@ -8272,27 +8305,27 @@ def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
     let gi = 0;
     while (gi < len(elems)) {
         st = gen_as(st, elems[gi], ety);
-        st = emit(st, "    push %rax");
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         gi = gi + 1;
     };
     let n = len(elems);
-    st = emit(st, "    mov $" + tostring(arr_alloc_size(esz, n)) + ", %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $" + tostring(arr_header_size()) + ", %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    mov %rax, %r10");
-    st = emit(st, "    pop %rdx");
-    st = emit(st, "    mov $" + tostring(n) + ", (%r10)");
-    st = emit(st, "    mov $" + tostring(n) + ", 8(%r10)");
-    st = emit(st, "    mov %rdx, 16(%r10)");
+    st = emit_insn(st, insn.F_MOV_I_R, arr_alloc_size(esz, n), insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, arr_header_size(), insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_R10, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_0, n, insn.R_R10, -1, 1, -1, -1, 0);
+    st = emit_insn(st, insn.F_MOV_I_D, n, insn.R_R10, -1, 1, 8, -1, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_R10, -1, 1, 16, -1);
     let k = n - 1;
     while (k >= 0) {
-        st = emit(st, "    pop %rdx");
-        st = emit(st, elem_store_rdx_const(esz, "%r10", k));
+        st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+        st = elem_store_rdx_const(st, esz, insn.R_R10, k);
         k = k - 1;
     };
-    emit(st, "    mov %r10, %rax")
+    emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RAX, 64, 0, 0, 0)
 };
 
 def gen_len(st: EmitSt, node: Call) -> EmitSt {
@@ -8308,10 +8341,10 @@ def gen_len(st: EmitSt, node: Call) -> EmitSt {
         gen(st, n_call1("len", n_dot(args[0], "keys", node.line, node.col), node.line, node.col))
     } else if (at.k == K.tstr) {
         st = gen(st, args[0]);
-        emit(st, "    mov (%rax), %rax")
+        emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
     } else {
         st = gen(st, args[0]);
-        emit(st, "    mov (%rax), %rax")
+        emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
     }
 };
 
@@ -8325,11 +8358,11 @@ def gen_push(st: EmitSt, node: Call) -> EmitSt {
     ptypes += type_node({ k: K.tnone });
     ptypes += store_elem_type(pat, pesz);
     st = gen_push_args_as(st, node.args, ptypes);
-    st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_arr_push");
+    st = emit_insn(st, insn.F_MOV_I_R, pesz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_push"), 0, 0, 0, 0, 0, 0);
     let nbytes = len(node.args) * 8 + 8;
-    emit(st, "    add $" + tostring(nbytes) + ", %rsp")
+    emit_insn(st, insn.F_ADD_I_R, nbytes, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // `arr += other` with one element type (gen_opassign_arr makes the call,
@@ -8339,10 +8372,10 @@ def gen_push_all(st: EmitSt, node: Call) -> EmitSt {
     let pargs: [Node] = node.args;
     let pesz = arr_elem_bytes(infer(st, pargs[0]));
     st = gen_push_args_as(st, node.args, []);
-    st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_arr_extend");
-    emit(st, "    add $24, %rsp")
+    st = emit_insn(st, insn.F_MOV_I_R, pesz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_extend"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // some(v): box v in 8 heap bytes; the box address (nonzero) is the value.
@@ -8367,11 +8400,11 @@ def gen_some(st: EmitSt, node: Call) -> EmitSt {
 
 // The value in %rax boxed: some(v), the box in %rax.
 def gen_box_rax(st: EmitSt) -> EmitSt {
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $8, %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    pop %rcx");
-    emit(st, "    mov %rcx, (%rax)")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, 8, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOV_R_0, insn.R_RCX, 64, insn.R_RAX, -1, 1, -1, -1)
 };
 
 def gen_is_some(st: EmitSt, node: Call) -> EmitSt {
@@ -8381,9 +8414,9 @@ def gen_is_some(st: EmitSt, node: Call) -> EmitSt {
         gen_map_get(st, args[0], "has")
     } else {
         st = gen(st, args[0]);
-        st = emit(st, "    test %rax, %rax");
-        st = emit(st, "    setne %al");
-        emit(st, "    movzbq %al, %rax")
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     }
 };
 
@@ -8394,9 +8427,9 @@ def gen_unwrap(st: EmitSt, node: Call) -> EmitSt {
         gen_map_get(st, args[0], "val")
     } else {
         st = gen(st, args[0]);
-        st = emit(st, "    test %rax, %rax");
-        st = emit(st, "    jz y_opt_unwrap");
-        emit(st, "    mov (%rax), %rax")
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JZ_L, lbl_new("y_opt_unwrap"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
     }
 };
 
@@ -8407,8 +8440,8 @@ def gen_unwrap(st: EmitSt, node: Call) -> EmitSt {
 
 def gen_trim(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
-    st = emit(st, "    call y_str_trim");
-    emit(st, "    add $8, %rsp")
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_trim"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // arr *= v -> arr: in-place insert at the front (the header never
@@ -8421,11 +8454,11 @@ def gen_prepend(st: EmitSt, node: Call) -> EmitSt {
     ptypes += type_node({ k: K.tnone });
     ptypes += store_elem_type(pat, pesz);
     st = gen_push_args_as(st, node.args, ptypes);
-    st = emit(st, "    mov $" + tostring(pesz) + ", %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_arr_prepend");
+    st = emit_insn(st, insn.F_MOV_I_R, pesz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_prepend"), 0, 0, 0, 0, 0, 0);
     let nbytes = len(node.args) * 8 + 8;
-    emit(st, "    add $" + tostring(nbytes) + ", %rsp")
+    emit_insn(st, insn.F_ADD_I_R, nbytes, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // byte_at(s, i): byte i of string s, trapped when out of bounds. This is
@@ -8435,33 +8468,33 @@ def gen_prepend(st: EmitSt, node: Call) -> EmitSt {
 def gen_byte_at(st: EmitSt, node: Call) -> EmitSt {
     let args: [Node] = node.args;
     st = gen(st, args[0]);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, args[1]);
-    st = emit(st, "    pop %rcx");
-    st = emit(st, "    mov (%rcx), %rdx");
-    st = emit(st, "    test %rax, %rax");
-    st = emit(st, "    js y_oob");
-    st = emit(st, "    cmp %rdx, %rax");
-    st = emit(st, "    jge y_oob");
-    emit(st, "    movzbq 8(%rcx,%rax,1), %rax")
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RCX, -1, 1, -1, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JS_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOVZBQ_M_R, insn.R_RCX, insn.R_RAX, 1, 8, -1, insn.R_RAX, 64)
 };
 
 def gen_ord(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
-    st = emit(st, "    call y_str_ord");
-    emit(st, "    add $8, %rsp")
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_ord"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_chr(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
-    st = emit(st, "    call y_str_chr");
-    emit(st, "    add $8, %rsp")
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_chr"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_tonum(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
-    st = emit(st, "    call y_str_tonum");
-    emit(st, "    add $8, %rsp")
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_tonum"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
@@ -8473,12 +8506,12 @@ def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
         gen(st, a0)
     } else if (t.k == K.tbool) {
         st = gen_push_args(st, node.args);
-        st = emit(st, "    call y_bool_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (t.k == K.tfloat) {
         st = gen_push_args(st, node.args);
-        st = emit(st, "    call y_float_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_float_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else if (t.k == K.tarr) {
         st = gen(st, a0);
         let arr: TOf = t;
@@ -8500,8 +8533,8 @@ def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
         gen_map_repr(st, a0, t)
     } else {
         st = gen_push_args(st, node.args);
-        st = emit(st, "    call y_long_tostr");
-        emit(st, "    add $8, %rsp")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     }
 };
 
@@ -8534,40 +8567,40 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
         let code = fmt_code(f, kind, ty);
         if (ty == c's') {
             st = gen_tostring(st, ts);
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
             st = fmt_push(st, f.width);
             st = fmt_push(st, f.prec);
-            st = emit(st, "    call y_fmt_s");
-            emit(st, "    add $32, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_fmt_s"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (ty == c'd' || ty == c'x' || ty == c'X' || ty == c'o' || ty == c'b' || ty == c'c') {
             st = gen(st, a0);
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
             st = fmt_push(st, f.width);
-            st = emit(st, "    call y_fmt_i");
-            emit(st, "    add $24, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_fmt_i"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
         } else {
             st = gen(st, a0);
             if (kind == 1) {
-                st = emit(st, "    cvtsi2sd %rax, %xmm0");
-                st = emit(st, "    movq %xmm0, %rax");
+                st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
+                st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
             }
             if (ty == c'%') {
-                st = emit(st, "    movq %rax, %xmm0");
-                st = emit(st, "    mov $100, %rax");
-                st = emit(st, "    cvtsi2sd %rax, %xmm1");
-                st = emit(st, "    mulsd %xmm1, %xmm0");
-                st = emit(st, "    movq %xmm0, %rax");
+                st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
+                st = emit_insn(st, insn.F_MOV_I_R, 100, insn.R_RAX, 64, 0, 0, 0, 0);
+                st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM1, 128, 0, 0, 0);
+                st = emit_insn(st, insn.F_MULSD_R_R, insn.R_XMM1, 128, insn.R_XMM0, 128, 0, 0, 0);
+                st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
             }
             let prec = f.prec;
             if (prec < 0) { prec = 6; }
-            st = emit(st, "    push %rax");
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
             st = fmt_push(st, f.width);
             st = fmt_push(st, prec);
-            st = emit(st, "    call y_fmt_f");
-            emit(st, "    add $32, %rsp")
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_fmt_f"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0)
         }
     }
 };
@@ -8596,18 +8629,18 @@ def fmt_code(f: FmtSpec, kind: long, ty: long) -> long {
 
 // Push the number v (an argument of a helper call).
 def fmt_push(st: EmitSt, v: long) -> EmitSt {
-    st = emit(st, "    mov $" + tostring(v) + ", %rax");
-    emit(st, "    push %rax")
+    st = emit_insn(st, insn.F_MOV_I_R, v, insn.R_RAX, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0)
 };
 
 def gen_index_of(st: EmitSt, node: Call, last: bool) -> EmitSt {
     st = gen_push_args(st, node.args);
     if (last) {
-        st = emit(st, "    call y_str_lastidx");
-        emit(st, "    add $16, %rsp")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_lastidx"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
     } else {
-        st = emit(st, "    call y_str_index");
-        emit(st, "    add $16, %rsp")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_index"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
     }
 };
 
@@ -8634,8 +8667,8 @@ def gen_join(st: EmitSt, node: Call) -> EmitSt {
         gen_join_conv(st, node, "y_float_tostr", 8)
     } else {
         st = gen_push_args(st, node.args);
-        st = emit(st, "    call y_str_join");
-        emit(st, "    add $16, %rsp")
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_join"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
     }
 };
 
@@ -8650,56 +8683,56 @@ def gen_join_conv(st: EmitSt, node: Call, tostr_fn: str, esz: long) -> EmitSt {
       bodies: st.bodies, blabels: st.blabels };
     let jargs: [Node] = node.args;
     st = gen(st, jargs[0]);
-    st = emit(st, "    mov %rax, " + tostring(soff) + "(%rbp)");
-    st = emit(st, "    mov (%rax), %rdi");
-    st = emit(st, "    shl $3, %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov $24, %rdi");
-    st = emit(st, "    call y_alloc");
-    st = emit(st, "    pop %rdx");
-    st = emit(st, "    mov %rax, " + tostring(doff) + "(%rbp)");
-    st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rcx");
-    st = emit(st, "    mov (%rcx), %rcx");
-    st = emit(st, "    mov %rcx, (%rax)");
-    st = emit(st, "    mov %rcx, 8(%rax)");
-    st = emit(st, "    mov %rdx, 16(%rax)");
-    st = emit(st, "    xor %eax, %eax");
-    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, soff, -1);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RDI, 64);
+    st = emit_insn(st, insn.F_SHL_I_R, 3, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, 24, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, doff, -1);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, soff, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RCX, -1, 1, -1, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_R_0, insn.R_RCX, 64, insn.R_RAX, -1, 1, -1, -1);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8, -1);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_RAX, -1, 1, 16, -1);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
     st = r2.st;
-    st = emit(st, lname(r1.label) + ":");
-    st = emit(st, "    mov " + tostring(soff) + "(%rbp), %rdx");
-    st = emit(st, "    mov (%rdx), %rcx");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
-    st = emit(st, "    cmp %rcx, %rax");
-    st = emit(st, "    jge " + lname(r2.label));
-    st = emit(st, elem_load(esz, "%rdx", "%rax", "%rcx"));
-    st = emit(st, "    push %rcx");
-    st = emit(st, "    call " + tostr_fn);
-    st = emit(st, "    add $8, %rsp");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rcx");
-    st = emit(st, "    mov " + tostring(doff) + "(%rbp), %rdx");
-    st = emit(st, "    mov 16(%rdx), %rdx");
-    st = emit(st, "    mov %rax, (%rdx,%rcx,8)");
-    st = emit(st, "    inc %rcx");
-    st = emit(st, "    mov %rcx, " + tostring(ioff) + "(%rbp)");
-    st = emit(st, "    jmp " + lname(r1.label));
-    st = emit(st, lname(r2.label) + ":");
-    st = emit(st, "    mov " + tostring(doff) + "(%rbp), %rax");
-    st = emit(st, "    push %rax");
+    st = emit_label(st, r1.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, soff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
+    st = elem_load(st, esz, insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(tostr_fn), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, doff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 16, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_R_M, insn.R_RAX, 64, insn.R_RDX, insn.R_RCX, 8, 0, -1);
+    st = emit_insn(st, insn.F_INC_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, ioff, -1);
+    st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, r2.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, doff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, jargs[1]);
-    st = emit(st, "    push %rax");
-    st = emit(st, "    call y_str_join");
-    emit(st, "    add $16, %rsp")
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_join"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_split(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
-    st = emit(st, "    call y_str_split");
-    emit(st, "    add $16, %rsp")
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_split"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_puts(st: EmitSt, node: Call) -> EmitSt {
@@ -8711,13 +8744,13 @@ def gen_puts(st: EmitSt, node: Call) -> EmitSt {
     let t = infer(st, pa);
     if (t.k == K.tbool) {
         st = gen_helper1(st, "y_put_bool");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tstr) {
         st = gen_helper1(st, "y_put_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
         st = gen_helper1(st, "y_put_long");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     }
 };
 
@@ -8730,24 +8763,24 @@ def gen_eputs(st: EmitSt, node: Call) -> EmitSt {
     let t = infer(st, pa);
     if (t.k == K.tbool) {
         st = gen_helper1(st, "y_eput_bool");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tstr) {
         st = gen_helper1(st, "y_eput_hstr");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
         st = gen_helper1(st, "y_eput_long");
-        emit(st, "    xor %eax, %eax")
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     }
 };
 
 def gen_clock_us(st: EmitSt, node: Call) -> EmitSt {
     // clock_us() -> long (monotonic microseconds, via clock_gettime).
-    emit(st, "    call y_clock_us")
+    emit_insn(st, insn.F_CALL_L, lbl_new("y_clock_us"), 0, 0, 0, 0, 0, 0)
 };
 
 def gen_heap_used(st: EmitSt, node: Call) -> EmitSt {
     // heap_used() -> long (bytes the allocator has handed out so far).
-    emit(st, "    call y_heap_used")
+    emit_insn(st, insn.F_CALL_L, lbl_new("y_heap_used"), 0, 0, 0, 0, 0, 0)
 };
 
 // mutex() / sem(n): a record of the type (types.y t_mutex, t_sem), its
@@ -8785,46 +8818,46 @@ def gen_sync_new(st: EmitSt, node: Call) -> EmitSt {
 def gen_lock(st: EmitSt, node: Call, attempt: bool) -> EmitSt {
     let largs: [Node] = node.args;
     st = gen(st, largs[0]);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, largs[1]);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (!attempt) {
-        st = emit(st, "    mov 8(%rsp), %rax");
-        st = emit(st, "    call y_mutex_lock");
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_mutex_lock"), 0, 0, 0, 0, 0, 0);
         st = gen_call_top(st);
-        st = emit(st, "    push %rax");
-        st = emit(st, "    mov 16(%rsp), %rax");
-        st = emit(st, "    call y_mutex_unlock");
-        st = emit(st, "    pop %rax");
-        emit(st, "    add $16, %rsp")
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 16, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_mutex_unlock"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
     } else {
         let skip = next_loc(st);
         st = skip.st;
         let done = next_loc(st);
         st = done.st;
-        st = emit(st, "    mov 8(%rsp), %rax");
-        st = emit(st, "    call y_mutex_trylock");
-        st = emit(st, "    test %rax, %rax");
-        st = emit(st, "    je " + lname(skip.label));
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_mutex_trylock"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JE_L, skip.label, 0, 0, 0, 0, 0, 0);
         st = gen_call_top(st);
-        st = emit(st, "    mov 8(%rsp), %rax");
-        st = emit(st, "    call y_mutex_unlock");
-        st = emit(st, "    mov $1, %rax");
-        st = emit(st, "    jmp " + lname(done.label));
-        st = emit(st, lname(skip.label) + ":");
-        st = emit(st, "    xor %eax, %eax");
-        st = emit(st, lname(done.label) + ":");
-        emit(st, "    add $16, %rsp")
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_mutex_unlock"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, skip.label);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_label(st, done.label);
+        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
     }
 };
 
 // Call the closure on top of the stack with no arguments (it stays there).
 def gen_call_top(st: EmitSt) -> EmitSt {
-    st = emit(st, "    mov 0(%rsp), %rax");
-    st = emit(st, "    push %rax");
-    st = emit(st, "    mov 0(%rax), %rax");
-    st = emit(st, "    call *%rax");
-    emit(st, "    add $8, %rsp")
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 0, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 0, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CALL_IND, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_sleep(st: EmitSt, node: Call) -> EmitSt {
@@ -8842,13 +8875,13 @@ def gen_exit(st: EmitSt, node: Call) -> EmitSt {
     let eargs: [Node] = node.args;
     let ea = eargs[0];
     st = gen(st, ea);
-    st = emit(st, "    mov %rax, %rdi");
-    st = emit(st, "    mov $231, %rax");
-    st = emit(st, "    syscall");
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDI, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, 231, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
     // exit() terminates the process; the epilogue (ret / exit(0)) is
     // unreachable. Emit a jump to the function end so the backend never
     // falls through into dead code (and exit codes are never masked).
-    emit(st, "    jmp " + lname(st.end_label))
+    emit_insn(st, insn.F_JMP_L, st.end_label, 0, 0, 0, 0, 0, 0)
 };
 
 // ── process I/O (argv) ──────────────────────────────────────────────
@@ -8858,7 +8891,7 @@ def gen_exit(st: EmitSt, node: Call) -> EmitSt {
 // (Files are std/fs.y: `import fs;`.)
 
 def gen_argv(st: EmitSt, node: Call) -> EmitSt {
-    emit(st, "    call y_argv")
+    emit_insn(st, insn.F_CALL_L, lbl_new("y_argv"), 0, 0, 0, 0, 0, 0)
 };
 
 def gen_store(st: EmitSt, node: Store) -> EmitSt {
@@ -8867,10 +8900,10 @@ def gen_store(st: EmitSt, node: Store) -> EmitSt {
     let sto: Type = type_node({ k: K.tnone });
     if (sw == 8 && spt.k == K.tptr) { let ptr: TPtr = spt; sto = ptr.to; }
     st = gen(st, node.p);
-    st = emit(st, "    push %rax");
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_as(st, node.v, sto);
-    st = emit(st, "    pop %rcx");
-    if (sw == 1) { emit(st, "    movb %al, (%rcx)") } else { emit(st, "    mov %rax, (%rcx)") }
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    if (sw == 1) { emit_insn(st, insn.F_MOVB_R_0, insn.R_RAX, 8, insn.R_RCX, -1, 1, -1, -1) } else { emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RCX, -1, 1, -1, -1) }
 };
 
 // ── functions ──────────────────────────────────────────────────────────
@@ -8965,7 +8998,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
         let opt = ptypes[opi];
         if (opt.k == K.tstr && own_wanted(f, opn)) {
             let ope = env_find(f, opn);
-            f = emit(f, "    mov " + tostring(ope.off) + "(%rbp), %rax");
+            f = emit_insn(f, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ope.off, -1, insn.R_RAX, 64);
             f = bind_own(f, opn, opt);
         }
         opi = opi + 1;

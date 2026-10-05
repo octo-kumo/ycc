@@ -3,10 +3,10 @@
 //
 //     word 0    the form (see the table below)
 //     words 1.. the form's fields, in operand order: each operand consumes
-//               the number of fields its kind says (see OK_*)
+//               the number of fields its kind says (see O_*)
 //
-// 90 forms cover every instruction the emitter writes (measured on ycc.y and
-// the whole test corpus: 480,182 instructions, 90 distinct (mnemonic, operand
+// 91 forms cover every instruction the emitter writes (measured on ycc.y and
+// the whole test corpus: 480,182 instructions, 91 distinct (mnemonic, operand
 // shape) pairs, the top 31 of them 99.2% of the instructions). A `[long]`
 // rather than the plan's packed `[byte]`: the same buffer in both compilers
 // without a byte order to get wrong, and 235,092 items of eight words is
@@ -31,14 +31,17 @@ const O_IND = 2;   // 2: register number, size -- `*%rax`, a closure's code
 const O_IMM = 3;   // 1: the immediate
 const O_LBL = 4;   // 1: a label id -- `call foo`, `jmp yL_1_2`
 const O_DIFF = 5;  // 2: two label ids -- `mov $A-B, %rax`
-const O_MEM = 6;   // 5: base, index, scale, disp, label -- the disp is written
+const O_MEM = 6;   // 5: base, index, scale, disp, label. The label is a symbol
+                    // at (%rip) -- no base, no index -- and the assembler
+                    // resolves it; it is -1 in every other memory operand, and
+                    // disp is written only when it is not O_MEM0.
 const O_FS = 7;    // 1: the %fs:N offset (a thread's heap block)
 const O_MEM0 = 8;  // 5, like O_MEM, but `(%base)`: no displacement written
 
 // Not instructions (see the header).
-const IR_LABEL = 90;  // 1: a label id -- `yfn_3_foo:`
-const IR_LOC = 91;    // 2: file, line -- `.loc 1 42` (-g)
-const IR_TEXT = 92;   // 1: index into the body's raw lines
+const IR_LABEL = 97;  // 1: a label id -- `yfn_3_foo:`
+const IR_LOC = 98;    // 2: file, line -- `.loc 1 42` (-g)
+const IR_TEXT = 99;   // 1: index into the body's raw lines
 
 // The forms. The table below is in this order and ir_init checks it, so a
 // form added in the wrong place is a startup error and not a wrong encoding.
@@ -99,39 +102,46 @@ const F_LEA_M_R = 53;
 const F_LEA_P_R = 54;
 const F_ADD_I_R = 55;
 const F_ADD_R_R = 56;
-const F_SUB_I_R = 57;
-const F_SUB_R_R = 58;
-const F_XOR_I_R = 59;
-const F_XOR_R_R = 60;
-const F_AND_I_R = 61;
-const F_AND_R_R = 62;
-const F_OR_R_R = 63;
-const F_SHL_I_R = 64;
-const F_SHL_R_R = 65;
-const F_SAR_I_R = 66;
-const F_SAR_R_R = 67;
-const F_SHR_I_R = 68;
-const F_SHR_R_R = 69;
-const F_CMP_I_R = 70;
-const F_CMP_R_R = 71;
-const F_TEST_R_R = 72;
-const F_IMUL_R_R = 73;
-const F_IDIV_R = 74;
-const F_DIV_R = 75;
-const F_NEG_R = 76;
-const F_NOT_R = 77;
-const F_INC_R = 78;
-const F_INC_D = 79;
-const F_DEC_R = 80;
-const F_XCHG_R_D = 81;
-const F_SYSCALL = 82;
-const F_CQO = 83;
-const F_MOV_F_R = 84;
-const F_CVTSI2SD_R_R = 85;
-const F_DIVSD_R_R = 86;
-const F_MULSD_R_R = 87;
-const F_ADDSD_R_R = 88;
-const F_SUBSD_R_R = 89;
+const F_ADD_I_D = 57;
+const F_SUB_I_R = 58;
+const F_SUB_R_R = 59;
+const F_SUB_I_D = 60;
+const F_XOR_I_R = 61;
+const F_XOR_R_R = 62;
+const F_XOR_I_D = 63;
+const F_AND_I_R = 64;
+const F_AND_R_R = 65;
+const F_AND_I_D = 66;
+const F_OR_R_R = 67;
+const F_OR_I_D = 68;
+const F_SHL_I_R = 69;
+const F_SHL_R_R = 70;
+const F_SAR_I_R = 71;
+const F_SAR_R_R = 72;
+const F_SHR_I_R = 73;
+const F_SHR_R_R = 74;
+const F_CMP_I_R = 75;
+const F_CMP_R_R = 76;
+const F_TEST_R_R = 77;
+const F_IMUL_R_R = 78;
+const F_IDIV_R = 79;
+const F_DIV_R = 80;
+const F_NEG_R = 81;
+const F_NOT_R = 82;
+const F_INC_R = 83;
+const F_INC_D = 84;
+const F_DEC_R = 85;
+const F_DEC_D = 86;
+const F_XCHG_R_D = 87;
+const F_SYSCALL = 88;
+const F_CQO = 89;
+const F_MOV_F_R = 90;
+const F_CVTSI2SD_R_R = 91;
+const F_DIVSD_R_R = 92;
+const F_MULSD_R_R = 93;
+const F_ADDSD_R_R = 94;
+const F_SUBSD_R_R = 95;
+const F_UCOMISD_R_R = 96;
 
 // Register numbers, x86 encoding order (enc64's reg_num is the same table:
 // %rax %rcx %rdx %rbx %rsp %rbp %rsi %rdi %r8..%r15, and %xmm0..).
@@ -151,6 +161,10 @@ const R_R12 = 12;
 const R_R13 = 13;
 const R_R14 = 14;
 const R_R15 = 15;
+const R_XMM0 = 0;   // the SSE registers number from zero again, in their own
+const R_XMM1 = 1;   // set: an item's size field says which set it is in
+const R_XMM2 = 2;
+const R_XMM3 = 3;
 
 // A form: its mnemonic, and the kinds of its operands in order.
 type IrForm = { id: long, mn: str, kinds: [long] };
@@ -217,13 +231,18 @@ def ir_init() {
     t += { id: F_LEA_P_R, mn: "lea", kinds: [O_MEM, O_REG] };
     t += { id: F_ADD_I_R, mn: "add", kinds: [O_IMM, O_REG] };
     t += { id: F_ADD_R_R, mn: "add", kinds: [O_REG, O_REG] };
+    t += { id: F_ADD_I_D, mn: "add", kinds: [O_IMM, O_MEM] };
     t += { id: F_SUB_I_R, mn: "sub", kinds: [O_IMM, O_REG] };
     t += { id: F_SUB_R_R, mn: "sub", kinds: [O_REG, O_REG] };
+    t += { id: F_SUB_I_D, mn: "sub", kinds: [O_IMM, O_MEM] };
     t += { id: F_XOR_I_R, mn: "xor", kinds: [O_IMM, O_REG] };
     t += { id: F_XOR_R_R, mn: "xor", kinds: [O_REG, O_REG] };
+    t += { id: F_XOR_I_D, mn: "xor", kinds: [O_IMM, O_MEM] };
     t += { id: F_AND_I_R, mn: "and", kinds: [O_IMM, O_REG] };
     t += { id: F_AND_R_R, mn: "and", kinds: [O_REG, O_REG] };
+    t += { id: F_AND_I_D, mn: "and", kinds: [O_IMM, O_MEM] };
     t += { id: F_OR_R_R, mn: "or", kinds: [O_REG, O_REG] };
+    t += { id: F_OR_I_D, mn: "or", kinds: [O_IMM, O_MEM] };
     t += { id: F_SHL_I_R, mn: "shl", kinds: [O_IMM, O_REG] };
     t += { id: F_SHL_R_R, mn: "shl", kinds: [O_REG, O_REG] };
     t += { id: F_SAR_I_R, mn: "sar", kinds: [O_IMM, O_REG] };
@@ -241,6 +260,7 @@ def ir_init() {
     t += { id: F_INC_R, mn: "inc", kinds: [O_REG] };
     t += { id: F_INC_D, mn: "inc", kinds: [O_MEM] };
     t += { id: F_DEC_R, mn: "dec", kinds: [O_REG] };
+    t += { id: F_DEC_D, mn: "dec", kinds: [O_MEM] };
     t += { id: F_XCHG_R_D, mn: "xchg", kinds: [O_REG, O_MEM] };
     t += { id: F_SYSCALL, mn: "syscall", kinds: [] };
     t += { id: F_CQO, mn: "cqo", kinds: [] };
@@ -250,6 +270,7 @@ def ir_init() {
     t += { id: F_MULSD_R_R, mn: "mulsd", kinds: [O_REG, O_REG] };
     t += { id: F_ADDSD_R_R, mn: "addsd", kinds: [O_REG, O_REG] };
     t += { id: F_SUBSD_R_R, mn: "subsd", kinds: [O_REG, O_REG] };
+    t += { id: F_UCOMISD_R_R, mn: "ucomisd", kinds: [O_REG, O_REG] };
     // The ids above are positions in this list; a form added in the wrong
     // place would decode and print as a different instruction, so check it.
     let i = 0;
@@ -319,21 +340,27 @@ def ir_reg8(n: long) -> str {
 };
 
 // A memory operand: `off(%base)`, `(%base)`, `off(%base,%idx,scale)`,
-// `(%base,%idx,scale)` or `sym(%rip)`. disp -1 prints no displacement (the
-// emitter writes `0(%rbp)` and `(%rax)` differently and so must this).
+// `(%base,%idx,scale)` or `sym(%rip)`. `nodisp` (O_MEM0) prints `(%base)`
+// whatever the disp word holds: the emitter spells `0(%rbp)` and `(%rax)`
+// differently, and a frame slot's displacement is negative, so the spelling
+// cannot come from its sign.
 def ir_render_mem(ir: [long], at: long, nodisp: bool) -> str {
     // The operand's five words start AT `at`: base, index, scale, disp, label.
-    // `nodisp` (O_MEM0) prints `(%base)` whatever the disp word holds: the
-    // emitter spells `0(%rbp)` and `(%rax)` differently, and a frame slot's
-    // displacement is negative, so the spelling cannot come from its sign.
     let ml = ir[at + 4];
     if (ml >= 0) {
         lname(ml) + "(%rip)"
     } else {
         let disp = ir[at + 3];
         let idx = ir[at + 1];
+        // The displacement is written whenever the kind says so -- but an
+        // indexed operand leaves a zero one out, which is what the emitter
+        // wrote (`(%rax,%rcx,8)`, and `8(%rcx,%rax,1)` beside it). The bytes
+        // are the same either way: mod=00 in an SIB operand carries no
+        // displacement.
         let head = "";
-        if (!nodisp) { head = tostring(disp); };
+        if (!nodisp) {
+            if (idx < 0 || disp != 0) { head = tostring(disp); };
+        };
         if (idx < 0) {
             head + "(" + ir_reg(ir[at], 64) + ")"
         } else {

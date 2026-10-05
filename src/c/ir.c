@@ -1,8 +1,8 @@
 /* ir.c -- the instruction IR: 1:1 C copy of src/y/ir.y (see PORTING.md).
  *
  * One flat [long] per body, IR_W words per item: the form, then its seven
- * field words. 90 forms cover every instruction the emitter writes (measured
- * on ycc.y and the whole test corpus: 480,182 instructions, 90 distinct
+ * field words. 97 forms cover every instruction the emitter writes (measured
+ * on ycc.y and the whole test corpus: 480,182 instructions, 97 distinct
  * (mnemonic, operand shape) pairs, the top 31 of them 99.2% of them).
  *
  * ir_render prints an item back as the text it replaces, byte for byte: it
@@ -73,13 +73,18 @@ static void ir_init(void) {
     t = ya_push(t, yr(3, "id", yv_long(F_LEA_P_R), "mn", ys("lea"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_ADD_I_R), "mn", ys("add"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_ADD_R_R), "mn", ys("add"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_ADD_I_D), "mn", ys("add"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_SUB_I_R), "mn", ys("sub"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_SUB_R_R), "mn", ys("sub"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_SUB_I_D), "mn", ys("sub"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_XOR_I_R), "mn", ys("xor"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_XOR_R_R), "mn", ys("xor"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_XOR_I_D), "mn", ys("xor"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_AND_I_R), "mn", ys("and"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_AND_R_R), "mn", ys("and"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_AND_I_D), "mn", ys("and"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_OR_R_R), "mn", ys("or"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_OR_I_D), "mn", ys("or"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_SHL_I_R), "mn", ys("shl"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_SHL_R_R), "mn", ys("shl"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_SAR_I_R), "mn", ys("sar"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
@@ -97,6 +102,7 @@ static void ir_init(void) {
     t = ya_push(t, yr(3, "id", yv_long(F_INC_R), "mn", ys("inc"), "kinds", yav(1, yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_INC_D), "mn", ys("inc"), "kinds", yav(1, yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_DEC_R), "mn", ys("dec"), "kinds", yav(1, yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_DEC_D), "mn", ys("dec"), "kinds", yav(1, yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_XCHG_R_D), "mn", ys("xchg"), "kinds", yav(2, yv_long(O_REG), yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_SYSCALL), "mn", ys("syscall"), "kinds", yav(0)));
     t = ya_push(t, yr(3, "id", yv_long(F_CQO), "mn", ys("cqo"), "kinds", yav(0)));
@@ -106,10 +112,11 @@ static void ir_init(void) {
     t = ya_push(t, yr(3, "id", yv_long(F_MULSD_R_R), "mn", ys("mulsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_ADDSD_R_R), "mn", ys("addsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_SUBSD_R_R), "mn", ys("subsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_UCOMISD_R_R), "mn", ys("ucomisd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     /* The ids above are positions in this list; a form added in the wrong
        place would decode and print as a different instruction, so check it. */
     long i = 0;
-    while (i < 90) {
+    while (i < 97) {
         if (yv_l(yr_get(ya_get(t, i), "id")) != i) {
             eputs_(ys_cat(ys("INTERNAL: ir form table: "),
                           ys_long(yv_l(yr_get(ya_get(t, i), "id")))));
@@ -210,8 +217,15 @@ Yv *ir_render_mem(Yv *ir, long at, int nodisp) {
     } else {
         long disp = yv_l(ya_get(ir, at + 3));
         long idx = yv_l(ya_get(ir, at + 1));
+        /* The displacement is written whenever the kind says so -- but an
+           indexed operand leaves a zero one out, which is what the emitter
+           wrote (`(%rax,%rcx,8)`, and `8(%rcx,%rax,1)` beside it). The bytes
+           are the same either way: mod=00 in an SIB operand carries no
+           displacement. */
         Yv *head = ys("");
-        if (!nodisp) { head = ys_long(disp); }
+        if (!nodisp) {
+            if (idx < 0 || disp != 0) { head = ys_long(disp); }
+        }
         if (idx < 0) {
             return ys_cat(head,
                           ys_cat(ys("("),
