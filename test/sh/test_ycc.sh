@@ -207,6 +207,17 @@ expect_cli_error "-W above 1" "ycc: -W needs a warning level (0, or 1), got '2'"
 expect_cli_error "-W that would wrap the scan" \
     "ycc: -W needs a warning level (0, or 1), got '99999999999999999999'" \
     -W 99999999999999999999 -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
+# --target: the one global the whole compiler branches on (target.y), written
+# before anything reads it. Both spellings are accepted and both are checked,
+# because a flag that works in one form and not the other is a flag nobody can
+# rely on.
+# ...with the flag LAST, which is the only way to reach the "needs a name"
+# branch: anything after --target is its name, so `--target -o out` is an
+# unknown TARGET called -o, not a missing one.
+expect_cli_error "--target without a name" "ycc: --target needs a name (linux, windows)" \
+    -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y" --target
+expect_cli_error "--target with an unknown name" "ycc: unknown target 'plan9' (linux, windows)" \
+    --target=plan9 -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "no input file" "error: no input file (see ycc -h)"
 expect_cli_error "multiple input files" "error: ycc compiles one program; use imports to combine files" \
     "$ROOT/test/y/native/t01_arith.y" "$ROOT/test/y/native/t02_recursion.y"
