@@ -306,7 +306,7 @@ Getting every case inside one ulp took three one-rounding
 fixes, and all three were the same mistake in different clothes: the question is
 never \emph{which} line rounds, it is \emph{at what size}. \ic{cosh} summed two
 exponentials where one exponential and its reciprocal is enough (for
-\ic{a >= 0.5}, \ic{e^-a} is \num{1.2}\% of the answer, so its own rounding is a
+\ic{a >= 0.5}, \ic{$e^{-a}$} is \num{1.2}\% of the answer, so its own rounding is a
 hundredth of an ulp, while a second \ic{exp()} call brings a whole kernel's
 error along). \ic{pow} was three and two ulps out because its logarithm formed
 \ic{z*(2 + w*P)}, whose brackets round \emph{at the size of \num{2.0}} --- a whole
@@ -316,7 +316,7 @@ accurate and both cases went with it. \ic{asin} reached \ic{atan}, whose own ulp
 lands inside the answer whole, and then needed \ic{two = 2*asin(s)} to be a
 double before the \ic{pi/2} subtraction, whose half-ulp is a whole ulp of the
 answer; it has its own \num{24}-term kernel on the Taylor values
-\ic{C(2k,k)/(4^k(2k+1))} --- the same rationals \ic{sinh} uses --- with the square
+\ic{$C(2k,k)/(4^k(2k+1))$} --- the same rationals \ic{sinh} uses --- with the square
 root's own residual put back and \ic{two} carried in two parts \emph{through} the
 subtraction. \ic{acos} was the same cancellation seen from the other side: it
 was \ic{pi/2 - asin(x)}, and near \ic{x = 1} that answer is \num{3e-8} against a
@@ -374,13 +374,13 @@ computed by squaring).
     $e^r$ in $[0.707, 1.414)$, and $2^k$ goes back on by adding to the exponent
     field --- which is exact, so the whole answer is as accurate as the kernel and
     the reduction. The top of the range is the interesting part: $2^{1024}$ is an
-    overflow and $\round(x\log_2 e)$ reaches \num{1024} for every $x$ above
+    overflow and $\operatorname{round}(x\log_2 e)$ reaches \num{1024} for every $x$ above
     \num{709.4}, so the last whole $\ln 2$ stays in $r$ and its factor of two
     goes in by hand. \ic{expm1} is not $e^x - 1$ with a cast: it is
     $2^k\!\left(e^r-1\right) + \left(2^k-1\right)$, and the second term is
     \emph{exact} ($2^k-1$ needs at most 53 bits), so nothing is ever subtracted
     from something nearly equal to it --- which is the whole difficulty with
-    $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}, and at $x = -9$ it is
+    $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}$, and at $x = -9$ it is
     \num{1.23e-4} $- 1$ with the answer's last bits gone.
     \ic{exp} is machine code (\texttt{src/y/arch/math.s}), reached through
     \ic{native def}: \num{106} instructions with no calls at
@@ -413,11 +413,11 @@ computed by squaring).
   \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
     reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
     round (the first piece's product needs more than 53 bits once $n$ passes
-    \num{2^21}, the first tail piece's once $n$ passes \num{2^10}; the other two
+    $2^{21}$, the first tail piece's once $n$ passes $2^{10}$; the other two
     are \num{3.5e-27} and below, where the rounding is twenty orders under the
     answer's last bit however large $n$ grows). The quadrant is $n \bmod 4$
     normalized --- C's \% keeps the sign of the dividend, so a negative count
-    comes out negative. The range is $|x| \lesssim \num{2^52}$: like every library
+    comes out negative. The range is $|x| \lesssim 2^{52}$: like every library
     without Payne--Hanek reduction, a larger argument reduces to something near
     $x$ rather than to its own angle. \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
     lets one routine answer both: \ic{sin} and \ic{cos} are two instructions
@@ -438,17 +438,17 @@ computed by squaring).
     argument is inside the kernel's range --- the reciprocal above 1, then the
     tangent addition at $\pi/8$ --- and both folds are exact identities, so unlike
     a division they cost nothing of their own. \ic{asin} above $0.5$ uses the
-    half-angle step $\asin x = \pi/2 - 2\asin\sqrt{(1-x)/2}$, one step, with the
+    half-angle step $\arcsin x = \pi/2 - 2\arcsin\sqrt{(1-x)/2}$, one step, with the
     square root computed from $1-x$ alone (which Sterbenz makes exact) so nothing
-    is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \asin x$ with the
+    is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \arcsin x$ with the
     subtraction corrected afterwards, because $\pi/2$ minus something an ulp off
     is an ulp off. \ic{atan2} is the quadrant of $(y,x)$, with every zero and
     infinity spelled out --- and the sign of a \emph{zero} is a direction:
     \ic{math.atan2(-0.0, -1.0)} is $-\pi$.
   \item[\ic{math.sinh(x)}, \ic{math.cosh(x)}, \ic{math.tanh(x)}] One formula
     each, out of \ic{expm1}:
-    $\cosh x = 1 + (\expm1 x + \expm1(-x))/2$ and
-    $\tanh x = \expm1(2x)/(\expm1(2x) + 2)$. The plain forms ---
+    $\cosh x = 1 + (\operatorname{expm1} x + \operatorname{expm1}(-x))/2$ and
+    $\tanh x = \operatorname{expm1}(2x)/(\operatorname{expm1}(2x) + 2)$. The plain forms ---
     $(e^x+e^{-x})/2$ and $\sinh/\cosh$ --- are a rounding or two worse, because
     each of their terms is computed to its own last bit and then added.
     \ic{sinh} needs a polynomial of its own below \num{0.5}, where $(e^x-e^{-x})/2$
@@ -457,7 +457,7 @@ computed by squaring).
     computed by repeated squaring, which is exact --- so every integer exponent
     below \num{1024} comes out exactly, and it is the only way a negative base
     is defined at all. Past that, and for a fractional exponent, it is
-    $\expm1$-style: the logarithm in two parts, the exponent in two parts, and
+    $\operatorname{expm1}$-style: the logarithm in two parts, the exponent in two parts, and
     the reduced argument in two parts, because the exponent multiplies the
     logarithm's error --- one ulp of an exponent of \num{500} is
     \num{5.7e-14} of the answer, which is 360 ulps of it. That is also why $1/\ln 2$

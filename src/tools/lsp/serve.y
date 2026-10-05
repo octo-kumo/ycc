@@ -52,6 +52,7 @@ import scan from "./scan.y";
 import scope from "./scope.y";
 import nav from "./nav.y";
 import strm from "./strm.y";
+import xref from "./xref.y";
 
 // ── the open documents ──────────────────────────────────────────────────
 
@@ -67,6 +68,15 @@ type Doc = { uri: str, path: str, text: str, version: long };
 type State = {
     docs: { str => Doc },
     open: [str],
+    // The cross-file index per document, keyed by uri. `xc` holds the CURRENT
+    // version's answer and `xc_none` the uris that have none, because a map
+    // cannot hold a `Prepared?` without every read widening (the same trap
+    // `docs` documents below) -- and a document with no cross-file index is a
+    // normal state, not an error: a buffer that imports nothing, or one that
+    // does not lex.
+    xc: { str => Prepared },
+    xc_none: [str],
+    xc_ver: { str => long },
     root: str,          // the workspace root, for a document with no path
     pack: str,          // the std pack, or "" to compile the std units from source
     wlevel: long,       // 0 or 1, as `ycc -W`
@@ -77,8 +87,43 @@ type State = {
 
 def server_state(root: str, pack: str, wlevel: long) -> State {
     let m: { str => Doc } = {};
-    let s: State = { docs: m, open: [], root: root, pack: pack, wlevel: wlevel, shutting: false, exiting: false, initialized: false };
+    let e: { str => Prepared } = {};
+    let v: { str => long } = {};
+    let s: State = { docs: m, open: [], xc: e, xc_none: [], xc_ver: v, root: root, pack: pack, wlevel: wlevel, shutting: false, exiting: false, initialized: false };
     s
+}
+
+// The cross-file index for a document, or none. CACHED PER VERSION, because
+// building it resolves the imports, parses and renames -- the same work
+// `publish_for` does for diagnostics, and at the same cost. A completion
+// followed by a hover on an unedited buffer is the common shape, and without the
+// cache that is the work done twice for one keystroke.
+def xref_of(st: State, d: Doc) -> Prepared? {
+    if (is_some(st.xc_ver[d.uri])) {
+        if (st.xc_ver[d.uri]! == d.version) {
+            if (is_some(st.xc[d.uri])) { return st.xc[d.uri]; } else { return none; };
+        };
+    };
+    let got = diag.xref_for(d.text, doc_dir(st, d.path), d.path);
+    st.xc_ver[d.uri] = d.version;
+    if is_some(got) {
+        let pr: Prepared = got!;
+        st.xc[d.uri] = pr;
+        st.xc_none = drop(st.xc_none, d.uri);
+        return some(pr);
+    };
+    st.xc_none += d.uri;
+    none
+}
+
+def drop(xs: [str], w: str) -> [str] {
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(xs)) {
+        if (xs[i] != w) { out += xs[i]; };
+        i = i + 1;
+    };
+    out
 }
 
 // The JSON-RPC error codes this server returns.
@@ -692,24 +737,98 @@ def do_definition(st: State, id: json.Val, p: { str => json.Val }) -> str {
     let answer = json.nul();
     if (h != none && u.text != "") {
         let w: Hit = h!;
-        let at = request_position(p);
-        let found = nav.find_decl(scope.index_src(u.text, ""), w.name, at.line, at.character);
-        if (found != none) {
-            let dcl: IdxDecl = found!;
-            let r = json.obj();
-            r["start"] = lsp_pos(dcl.line, dcl.ch);
-            r["end"] = lsp_pos(dcl.line, dcl.ch + len(dcl.name));
-            let loc = json.obj();
-            // The document's OWN uri, not the one from the request: they are the
-            // same document by construction (the index is built from this
-            // buffer), and reading it back from the request is one more field
-            // that could be missing.
-            loc["uri"] = json.str(str_field(field_of(p, "textDocument"), "uri"));
-            loc["range"] = json.jobj(r);
-            answer = json.jobj(loc);
+        let got = doc_get(st, str_field(field_of(p, "textDocument"), "uri"));
+        if is_some(got) {
+            let d: Doc = got!;
+            // Where it is DECLARED, which is the buffer's own index first and
+            // then the spliced program's -- so an imported name answers, and the
+            // answer can name a file the client does not have open (LSP.md 11.4).
+            let at = request_position(p);
+            let member = after_dot(u.text, w.off);
+            let found = resolve_name(st, d, w.name, member, at.line, at.character);
+            if (is_some(found)) {
+                let wh: Where = found!;
+                let r = json.obj();
+                r["start"] = lsp_pos(wh.line, wh.ch);
+                r["end"] = lsp_pos(wh.line, wh.ch + len(w.name));
+                let loc = json.obj();
+                // The TARGET's uri. For the buffer's own declaration that is the
+                // document's own uri verbatim -- the editor may have sent one with
+                // percent escapes, or an `untitled:` one, and echoing back
+                // exactly what we were given is the only way to be sure it
+                // matches. A file that is not this document is a real path on
+                // disk, so it gets a file:// URI built here.
+                loc["uri"] = json.str(if (wh.cross) { file_uri(wh.path) } else { d.uri });
+                loc["range"] = json.jobj(r);
+                answer = json.jobj(loc);
+            };
         };
     };
     result_msg(id, answer)
+}
+
+// A real path on disk as the file:// URI the protocol uses. The buffer's OWN uri
+// is never passed through this: it came from the client and is echoed verbatim
+// instead (see do_definition), because only the client's own spelling is
+// guaranteed to match what it sent.
+def file_uri(path: str) -> str { "file://" + path }
+
+// Where a name is DECLARED, across files. none when nothing declares it.
+//
+// Two steps, and the second is the whole of the cross-file case:
+//
+//   1. the spliced program's own top-level index (`xref`), which is where an
+//      imported module's declarations are -- a splice inlines it at top level,
+//      and the renamer gave each binding a name shared by its definition and its
+//      uses (LSP.md 11.4);
+//   2. the target file's OWN span index, for the exact position of the name --
+//      the AST's is the keyword, not the name, and the positions have always come
+//      from `scope`.
+//
+// Returns the target file's path, a 0-based LSP line and character, and the
+// target's IdxDecl, so hover can reuse it. `own` is the buffer's own path, for
+// telling "the answer is in this file" from "it is in another".
+type Where = { path: str, line: long, ch: long, dcl: IdxDecl, cross: bool };
+
+def resolve_name(st: State, d: Doc, name: str, member: bool, line: long, ch: long) -> Where? {
+    let out: Where? = none;
+    // The buffer first: a local is a better answer than an import of the same
+    // name, and the single-file index already knows the scope rules.
+    //
+    // UNLESS the name is after a `.`, in which case the buffer's own top-level
+    // bindings are not candidates at all -- `helper.helper` names a member of
+    // the module `helper`, and answering with the buffer's own `import helper`
+    // line sends the user to the import instead of the definition, which is the
+    // one place go-to-definition must not go wrong. (That import binding is named
+    // after the module, so it collides with every member lookup.)
+    let own = scope.index_src(d.text, d.path);
+    let here: IdxDecl? = none;
+    if (!member) { here = nav.find_decl(own, name, line, ch); };
+    if (is_some(here)) {
+        let dc: IdxDecl = here!;
+        out = some({ path: d.path, line: dc.line, ch: dc.ch, dcl: dc, cross: false });
+    } else {
+        let x = xref_of(st, d);
+        if is_some(x) {
+            let pr: Prepared = x!;
+            let ln = pr.lines[name];
+            if is_some(ln) {
+                let tg = pr.files[name];
+                let target = tg!;
+                let got = fs.read_file(target);
+                if is_some(got) {
+                    let ttext = got!;
+                    let tidx = scope.index_src(ttext, target);
+                    let hit = nav.find_decl_named(tidx, name);
+                    if (is_some(hit)) {
+                        let hd: IdxDecl = hit!;
+                        out = some({ path: target, line: hd.line, ch: hd.ch, dcl: hd, cross: true });
+                    };
+                };
+            };
+        };
+    };
+    out
 }
 
 // What hover shows for a declaration: its signature as written, then the
@@ -774,7 +893,6 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
     let answer = json.nul();
     if (h != none && u.text != "") {
         let w: Hit = h!;
-        let at = request_position(p);
         // A string method is answered FIRST, and returns: `"a,b".split` is
         // answered from the compiler's own table (strm.y), which knows the
         // signature, whereas the fallback below knows only what THIS file
@@ -788,9 +906,15 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
         if (after_dot(u.text, w.off) && strm.is_method(w.name)) {
             return hover_msg(id, w, "```y\n" + strm.sig(w.name) + "\n```\n\nstring method");
         };
-        let found = nav.find_decl(scope.index_src(u.text, ""), w.name, at.line, at.character);
+        let gd = doc_get(st, str_field(field_of(p, "textDocument"), "uri"));
+        let found: Where? = none;
+        if (is_some(gd)) {
+            let at2 = request_position(p);
+            found = resolve_name(st, gd!, w.name, after_dot(u.text, w.off), at2.line, at2.character);
+        };
         if (is_some(found)) {
-            let dcl: IdxDecl = found!;
+            let wh: Where = found!;
+            let dcl: IdxDecl = wh.dcl;
             let contents = json.obj();
             contents["kind"] = json.str("markdown");
             contents["value"] = json.str(hover_text(dcl));

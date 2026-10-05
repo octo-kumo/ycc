@@ -136,6 +136,34 @@ def find_decl(idx: FileIdx, name: str, line: long, ch: long) -> IdxDecl? {
     best
 };
 
+// The declaration of `name` ANYWHERE in the file, with no position to be in
+// scope of. For the target of a cross-file jump (LSP.md 11.4): the file is not
+// open, so there is no cursor in it, and the renamer already decided WHICH
+// declaration of that name the reference means -- the answer arrived as a line
+// number, and this turns it into a name position.
+//
+// Which one when a file declares a name twice? The one at the SHALLOWEST depth,
+// then the earliest, which is what `better` would choose for a reference at the
+// top level: a shadowing inner `let` named like an import is not what
+// `mod.NAME` means.
+def find_decl_named(idx: FileIdx, name: str) -> IdxDecl? {
+    let best: IdxDecl? = none;
+    let i = 0;
+    while (i < len(idx.decls)) {
+        let d = idx.decls[i];
+        if (d.name == name && d.kind != D_PARAM) {
+            if (best == none) {
+                best = some(d);
+            } else {
+                let b: IdxDecl = best!;
+                if (d.depth < b.depth || (d.depth == b.depth && d.line < b.line)) { best = some(d); };
+            };
+        };
+        i = i + 1;
+    };
+    best
+}
+
 // ── completion ───────────────────────────────────────────────────────────
 
 // Every name visible at (line, ch), each ONCE, innermost declaration first.
@@ -191,4 +219,4 @@ def with_prefix(ds: [IdxDecl], prefix: str) -> [IdxDecl] {
     out
 }
 
-export { Hit, ident_at, in_scope, better, find_decl, visible, with_prefix };
+export { Hit, ident_at, in_scope, better, find_decl, find_decl_named, visible, with_prefix };
