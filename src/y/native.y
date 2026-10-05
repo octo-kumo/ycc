@@ -1661,6 +1661,109 @@ def normtype(ty: Type) -> Type { ty };
 // strip_namespaces: dot(NAME, key) with NAME an import namespace -> id(key).
 // Full AST rebuild (only dot nodes change, but uniform rebuild is simplest).
 
+// `m.T` -> `T`, when `m` names a path import. Anything else unchanged: a
+// primitive name, a bare name, or a PACKAGE-qualified one, which `strip_ns`'s
+// own Dot arm keeps on purpose (pkg_ns) because a package is linked as a unit of
+// its own and its names stay qualified.
+def strip_ns_name(q: str, imports: [str]) -> str {
+    let out = q;
+    let dot = index_of(q, ".");
+    if (dot > 0) {
+        let ns = q[0:dot];
+        if (is_ns(ns, imports)) { out = q[dot + 1:len(q)]; };
+    };
+    out
+}
+
+// A type with a path-import namespace stripped.
+//
+// strip_ns has always done this for EXPRESSIONS -- `m.f(x)` is a call to `f` --
+// and the origin map documents the consequence: a file imported BY PATH
+// contributes no module name, because everything of its is already flat. That
+// was true of expressions and false of TYPES, and the asymmetry was a bug rather
+// than a decision.
+//
+// A `type` alias in a path-imported module is registered by rename under its
+// BARE name: rn_prepass_one qualifies a statement only when rn_stmt_mod names its
+// module, and rn_stmt_mod reads `mods`, which native_resolve fills with "" for
+// every path import (native.y 623, and the note above `type Origin` says so).
+// A reference to that alias is written `m.T`, which the parser keeps as a tname
+// spelled "m.T" (parser.y 1128) and which nothing had rewritten. So:
+//
+//     import m from "./mod.y";
+//     let p: m.Pair = m.mk(1, 2);      error: unknown type 'm.Pair'
+//     let p: Pair = m.mk(1, 2);        compiles
+//
+// Two spellings of one declaration in a language that documents a path import as
+// flattened. Stripping the prefix here makes a type behave like an expression,
+// which is what the ORIGIN MAP's own note already claimed.
+def strip_type(t: Type, imports: [str]) -> Type {
+    let k = t.k;
+    if (k == K.tname) {
+        let nm: TName = t;
+        let out: TName = { k: K.tname, name: strip_ns_name(nm.name, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tptr) {
+        let ptr: TPtr = t;
+        let out: TPtr = { k: K.tptr, to: strip_type(ptr.to, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarr) {
+        let arr: TOf = t;
+        let out: TOf = { k: K.tarr, of: strip_type(arr.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarrfix) {
+        let arr: TFix = t;
+        let out: TFix = { k: K.tarrfix, of: strip_type(arr.of, imports), n: arr.n };
+        let result: Type = out;
+        result
+    } else if (k == K.topt) {
+        let opt: TOf = t;
+        let out: TOf = { k: K.topt, of: strip_type(opt.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tmap) {
+        let map: TMap = t;
+        let out: TMap = { k: K.tmap, key: strip_type(map.key, imports), of: strip_type(map.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tparams) {
+        let list: TList = t;
+        let out: TList = { k: K.tparams, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tunion) {
+        let list: TList = t;
+        let out: TList = { k: K.tunion, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tfunc) {
+        let func: TFunc = t;
+        let out: TFunc = { k: K.tfunc, args: strip_type_list(func.args, imports), ret: strip_type(func.ret, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.trec) {
+        let rec: TRec = t;
+        let fs: [Field] = [];
+        foreach (f in rec.fields) { fs += { name: f.name, opt: f.opt, typ: strip_type(f.typ, imports) }; };
+        let out: TRec = { k: K.trec, fields: fs };
+        let result: Type = out;
+        result
+    } else { t }
+}
+
+def strip_type_list(ts: [Type], imports: [str]) -> [Type] {
+    let out: [Type] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        out += strip_type(ts[i], imports);
+        i = i + 1;
+    };
+    out
+}
+
 def strip_list(nodes: [Node], imports: [str]) -> [Node] {
     let out: [Node] = [];
     let i = 0;
@@ -1719,7 +1822,7 @@ def strip_ns(node: Node, imports: [str]) -> Node {
         strip_decl(decl, imports)
     } else if (k == K.func) {
         let func: Func = node;
-        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
+        normnode({ k: K.func, params: func.params, ptypes: strip_type_list(func.ptypes, imports), ret: strip_type(func.ret, imports), body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
     } else if (k == K.assign) {
         let assign: Assign = node;
         normnode({ k: K.assign, name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
@@ -1792,7 +1895,7 @@ def strip_decl(node: Decl, imports: [str]) -> Node {
     if (node.kind == "def") {
         normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col })
     } else {
-        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: node.typ, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: strip_type(node.typ, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
     }
 };
 
