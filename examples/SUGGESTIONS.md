@@ -2397,3 +2397,362 @@ stable.
 copied from a file that compiles with zero warnings, not designed on paper.
 `SUGGESTIONS.md` #1 (math) and #3 (`term`) already cover `fx` and `term`;
 those two are **not** repeated here.
+
+---
+
+## Revision — the same six proposals, combined into four modules, with the API as function headers only
+
+The six entries above are right about the evidence and wrong about the module
+boundaries. Three corrections, all of them from measuring rather than taste.
+
+### Correction 1: `time.y` is two thirds duplication, and the missing third is one function
+
+`rt.y` **already has the clock**:
+
+```
+def y_clock_us() -> long
+def y_time_us() -> long
+def y_sleep(ms: long) -> long
+```
+
+So `time.y`'s `now_us` and `now_ms` re-implement what the runtime unit
+already provides, in 19–20 folders. What `rt` does **not** have is
+sub-millisecond sleep: `y_sleep` takes whole **milliseconds** and splits them
+into `ts[0] = m / 1000; ts[1] = (m % 1000) * 1000000`. A microsecond-precision
+nap cannot be expressed, and `ORCHESTRATOR.md` §0d asks for "sub-millisecond
+pacing" by name. `badapple` re-implemented `nap_us` three separate times, once
+per pipeline, rather than share it.
+
+So: **one function is the whole gap.**
+
+```
+def y_nap_us(us: long) -> long
+```
+
+### Correction 2: `term`, `fb` and the pacer are one module, not three
+
+`term.y` sets the terminal up, `fb.y` draws the cell grid into it, and the
+`Pacer`/`Fps` types exist only to pace the frame loop that connects them. Folding
+them together gives **one module of 128 functions** and removes the question of
+which of the three a program needs. It is one module because the dependency is
+not optional: `fb.flush_diff` is the per-row diff, `term` is the tty it diffs
+into, and a frame loop needs the pacer to call them at a rate.
+
+**The measurement that justifies merging the other two:** exactly **one** folder
+(`perft`, a threaded chess move generator) uses the clock without a terminal.
+Everything else that vendors `time.y` also vendors `term.y` or `fb.y`. That
+one user is served by `rt`'s existing `y_clock_us` and `y_sleep`.
+
+### Correction 3: `args` and `test` stay separate, and here is the proof for `test`
+
+`args` has **six users with no `term.y` at all** (`audio`, `crypto-chat`,
+`perft`, `rest-client`, `toolkit-cli`, `weather`), so it shares nothing with a UI
+module.
+
+`test` earns its own module on stronger grounds than duplication. Across the
+corpus **`ck` has four mutually incompatible signatures**:
+
+```
+def ck(cond: bool, what: str) -> bool                 sandfall
+def ck(got: long, want: long, what: str) -> bool      hexview
+def ck(name: str, ok: bool, detail: str)              audio, x11
+def ck(name: str, ok: bool, detail: str) -> void      wavefunction
+```
+
+The third argument is a `bool` in one, a `str` in the next two, and a `long`
+in `hexview`'s — where `ck` is not a boolean assertion at all but an equality
+one, so `ck(a, b, "name")` reads as *pass* in `hexview` and as *assert a is
+truthy* anywhere else, with no type error to stop it. `ck_eq` has the same
+split, differing only in whether it returns `long` or `void`. A shared module
+has to pick one and reject the rest at compile time, which is the entire point.
+
+### The combined set
+
+| module | absorbs | folders it deletes from |
+|---|---|---|
+| **`std/tui`** | `term` + `fb` + `Pacer`/`Fps` + `sink`/`textout` | 18–20 |
+| **`rt` += `y_nap_us`** | the non-duplicated third of `time.y` | — (one function) |
+| **`std/args`** | `args` | 25 |
+| **`std/test`** | `ck`/`ck_eq`/`ck_near` + the report line | 8 |
+| **`std/json`** | 8 additions to the unit that exists | 4 hand-rolled parsers |
+| **`std/random`** | the delta to `TODO.md` #4 | 3 |
+
+Six proposals become four modules plus one function and two extensions.
+
+---
+
+# The API, as function headers only
+
+Every signature below was extracted by `grep`-equivalent over the vendored
+copies and over `src/y/std/`, not transcribed by hand. Line for line they are
+what already compiles with zero warnings.
+
+### tui / term: modes, size, keys   [term.y]
+def rd32(b: [byte], at: long) -> long
+def wr32(b: [byte], at: long, v: long)
+def rd16(b: [byte], at: long) -> long
+def is_tty(fd: long) -> bool
+def set_cc(vtime_ds: long, vmin: long)
+def blocking_mode()
+def timeout_mode(vtime_ds: long)
+def install_raw() -> bool
+def raw_mode() -> bool
+def active() -> bool
+def cooked_mode() -> void
+def restore() -> void
+def restore_exit(code: long)
+def arm_watchdog() -> bool
+def size() -> WinSize
+def set_size(rows: long, cols: long) -> bool
+def pb_pop() -> long
+def pb_push(n: long)
+def raw_read() -> long
+def classify() -> long
+def decode_esc() -> long
+def read_key() -> long
+def read_key_timeout(ms: long) -> long
+def buf_reset()
+def buf_len() -> long
+def buf_at(i: long) -> long
+def put_byte(b: long)
+def put_num(v: long)
+def put_str(s: str)
+def put_csi()
+def esc_fg(r: long, g: long, b: long) -> long
+def esc_bg(r: long, g: long, b: long) -> long
+def esc_rg(fr: long, fg: long, fb: long, br: long, bg: long, bb: long) -> long
+def esc_reset() -> long
+def esc_clear() -> long
+def esc_home() -> long
+def esc_cursor(row: long, col: long) -> long
+def clamp255(v: long) -> long
+def sgr_fg(r: long, g: long, b: long)
+def sgr_bg(r: long, g: long, b: long)
+def sgr_rg(fr: long, fg: long, fb: long, br: long, bg: long, bb: long)
+def sgr_reset()
+def flush() -> void
+def enter_alt_screen()
+def leave_alt_screen()
+def hide_cursor()
+def show_cursor()
+def clear_screen()
+def home()
+def cursor_to(row: long, col: long)
+def enter_screen()
+def leave_screen()
+def restore_all_exit(code: long)
+
+### tui / fb: surface, ANSI, capture   [fb.y]
+def rgb(r: long, g: long, b: long) -> long
+def r_of(c: long) -> long
+def g_of(c: long) -> long
+def b_of(c: long) -> long
+def clamp255(v: long) -> long
+def grey(v: long) -> long
+def lerp_rgb(a: long, b: long, t: long) -> long
+def utf8_len(cp: long) -> long
+def utf8_byte(cp: long, i: long) -> long
+def fd() -> long
+def set_fd(d: long)
+def spill()
+def emit_byte(b: long) -> long
+def emit_num(v: long)
+def emit_cup(r: long, c: long)
+def emit_sgr(fg: long, bg: long)
+def emit_codepoint(cp: long) -> long
+def emit_str(t: str) -> long
+def capture_on()
+def capture_off()
+def capture_reset()
+def capture_len() -> long
+def capture_byte(i: long) -> long
+def capture_checksum() -> long
+def capture_str(from: long, to: long) -> str
+def ramp_index(v: long, n: long, levels: long) -> long
+def shade_ascii(v: long, n: long) -> long
+def shade_blocks(v: long, n: long) -> long
+def shade_half(v: long, n: long) -> long
+def shade(v: long, n: long) -> long
+def shade_len(mode: long) -> long
+def braille_dot(px: long, py: long) -> long
+def braille_mask(level: long) -> long
+def braille_cp(mask: long) -> long
+def shade_braille(v: long, n: long) -> long
+def braille(vs: [long], thresh: long) -> long
+def braille_put(s: Surface, row: long, col: long, vs: [long], thresh: long, fg: long, bg: long) -> long
+def width_of(cp: long) -> long
+def clamp_dim(v: long, hi: long) -> long
+def new(rows: long, cols: long) -> Surface
+def resize(s: Surface, rows: long, cols: long) -> Surface
+def clear(s: Surface, bg: long) -> long
+def fill(s: Surface, cp: long, fg: long, bg: long) -> long
+def put_at(s: Surface, i: long, cp: long, fg: long, bg: long) -> long
+def put(s: Surface, row: long, col: long, cp: long, fg: long, bg: long) -> long
+def put_skip(s: Surface, row: long, col: long, fg: long, bg: long) -> long
+def get(s: Surface, row: long, col: long) -> long
+def key_at(s: Surface, row: long, col: long) -> long
+def text(s: Surface, row: long, col: long, t: str, fg: long, bg: long) -> long
+def hline(s: Surface, row: long, col: long, n: long, cp: long, fg: long, bg: long) -> long
+def vline(s: Surface, row: long, col: long, n: long, cp: long, fg: long, bg: long) -> long
+def rect(s: Surface, row: long, col: long, h: long, w: long, cp: long, fg: long, bg: long) -> long
+def fill_rect(s: Surface, row: long, col: long, h: long, w: long, cp: long, fg: long, bg: long) -> long
+def blit(dst: Surface, src: Surface, srow: long, scol: long, drow: long, dcol: long, h: long, w: long) -> long
+def frame_bytes() -> long
+def row_bytes() -> long
+def row_count() -> long
+def begin_frame()
+def cell_same(s: Surface, i: long) -> bool
+def cell_commit(s: Surface, i: long)
+def emit_cell(s: Surface, i: long)
+def flush(s: Surface) -> long
+def flush_diff(s: Surface) -> long
+def end_frame(s: Surface) -> long
+
+### tui / pacing   [time.y]
+def pacer_new(fps: long) -> Pacer
+def pacer_start(p: Pacer)
+def pacer_next(p: Pacer) -> long
+def pacer_period_us(p: Pacer) -> long
+def pacer_frames(p: Pacer) -> long
+def pacer_dropped(p: Pacer) -> long
+def pacer_lag_us(p: Pacer) -> long
+def fps_new(win_us: long = 500000) -> Fps
+def fps_tick(f: Fps)
+def fps_x100(f: Fps) -> long
+def fps_frames(f: Fps) -> long
+def fps_avg_x100(f: Fps) -> long
+def fps_line(f: Fps) -> str
+
+### rt: the clock (ALREADY IN STD -- this is why time.y's clock half is duplication)
+def y_clock_us() -> long
+def y_time_us() -> long
+def y_sleep(ms: long) -> long
+
+def y_nap_us(us: long) -> long          # PROPOSED: the one missing primitive
+
+### args   [args.y]
+def init(prog: str, desc: str, spec: [Opt], tail: str = "")
+def nopts() -> long
+def ar_find_long(name: str) -> long
+def ar_find_short(c: str) -> long
+def ar_flagish(t: str) -> bool
+def ar_fail(msg: str)
+def ar_bool_val(v: str) -> bool
+def ar_num_ok(s: str) -> bool
+def ar_store(k: long, v: str)
+def ar_take(k: long, as: str, v: str)
+def ar_long(t: str)
+def ar_short(t: str)
+def parse(toks: [str]) -> long
+def parse_or_exit(toks: [str])
+def get_str(name: str, dflt: str) -> str
+def get_long(name: str, dflt: long) -> long
+def has(name: str) -> bool
+def positional() -> [str]
+def errmsg() -> str
+def num_ok(s: str) -> bool
+def ar_left(k: long) -> str
+def ar_help(k: long) -> str
+def usage() -> str
+def print_usage()
+
+### test: the shared assertion helpers, headers only
+
+The four `ck` forms and the two `ck_eq` forms are shown in the correction above
+with the folder each came from. The listing is the union, deduplicated.
+
+def ck(cond: bool, what: str) -> bool
+def ck(got: long, want: long, what: str) -> bool
+def ck(name: str, ok: bool, detail: str)
+def ck(name: str, ok: bool, detail: str) -> void
+def ck_eq(name: str, got: long, want: long)
+def ck_eq(name: str, got: long, want: long) -> void
+def ck_near(name: str, got: long, want: long, tol: long)
+def ck_num(got: long, want: long, what: str) -> bool
+def failed() -> long
+
+### random: the union of the three folders that wrote one anyway
+def rnd_seed(seed: long) -> long
+def rng_seed(v: long) -> void
+def seed(v: long)
+def next() -> long
+def rnd_next() -> long
+def rng_next() -> long
+def below(n: long) -> long
+def rnd_below(n: long) -> long
+def rng_below(n: long) -> long
+def range(lo: long, hi: long) -> long
+def chance(pct: long) -> bool
+def rnd_set_state(v: long) -> long
+def rnd_state() -> long
+
+### json: std/json.y as it stands
+def obj()
+def arr() -> [Val]
+def jobj(o: { str => Val }) -> Val
+def jarr(a: [Val]) -> Val
+def num(n: long) -> Val
+def numtext(t: str) -> Val
+def str(s: str) -> Val
+def boolean(b: bool) -> Val
+def nul() -> Val
+def keys_of(o: { str => Val }) -> [str]
+def field(o: Val, k: str) -> Val?
+def index(a: Val, i: long) -> Val?
+def as_str(v: Val) -> str?
+def as_long(v: Val) -> long?
+def as_bool(v: Val) -> bool?
+def as_arr(v: Val) -> [Val]?
+def as_obj(v: Val)
+def is_null(v: Val) -> bool
+def hex2(c: long) -> str
+def utf8_put(b: [byte], cp: long) -> [byte]
+def escape(s: str) -> str
+def stringify_val(v: Val, depth: long) -> str
+def stringify(o: { str => Val }) -> str
+def stringify_obj(o: { str => Val }, depth: long) -> str
+def hexval(c: long) -> long
+def p_ws(p: P) -> long
+def at(p: P) -> long
+def lit(p: P, t: str) -> bool
+def p_hex4(p: P) -> long
+def p_uescape(p: P, out: [byte]) -> long
+def p_string(p: P) -> str?
+def p_number(p: P) -> str?
+def p_array(p: P, depth: long) -> Val?
+def p_object(p: P, depth: long) -> Val?
+def p_value(p: P, depth: long) -> Val?
+def parse_val(s: str) -> Val?
+def parse(s: str)
+def parse_err(s: str)
+def p_show(s: str, i: long) -> str
+
+
+### the eight additions `std/json` needs
+
+```
+def parse_bytes(b: [byte; N], len: long) -> Val?
+def get_long(o: Val, key: str, dflt: long) -> long
+def get_str(o: Val, key: str, dflt: str) -> str
+def get_arr(o: Val, key: str) -> [Val]?
+def pretty(v: Val, indent: long, sorted: bool) -> str
+def same(a: Val, b: Val) -> bool
+def node_count(v: Val) -> long
+def max_depth(v: Val) -> long
+```
+
+The first four are the zero-copy and accessor-with-a-default shapes that
+`httpsrv`, `rest-client` and `weather` each had to write; the last four are
+what any golden-diffing tool needs and `stringify_val(v, depth)` does not
+provide.
+
+### the two additions `std/random` needs beyond `TODO.md` #4
+
+```
+def state() -> long
+def set_state(v: long)
+```
+
+`below(n)` must reject rather than use `%`: `x % n` is biased for every `n`
+that is not a power of two, because 2^62 does not divide by `n`. All three
+vendored copies use splitmix64 and only `maze/rng.y` gets the rejection right.
