@@ -383,11 +383,19 @@ def longs_text(xs: [long]) -> str {
 // place among the units (its labels count from `base`), its resolved
 // text and where each line came from, and the interfaces of the
 // packages it imports (among `units`, unit_iface).
+// The cache key for one unit's object in build/obj. It hashes the resolved
+// text, the compiler id and the target: WITHOUT the target, `ycc build` reuses
+// an object compiled for the other target, and the "rebuild" that should have
+// happened silently does not -- a PE's cache entry served to an ELF build (or
+// the reverse), which no test catches because the bytes are only compared
+// within a run. `cid` is the compiler id, which a rebless changes, so this is
+// the same kind of input: anything that changes the OUTPUT belongs in the key.
 def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, units: [Unit]) -> str {
     let h = pkg.pk_hash_new();
     pkg.pk_hash_str(h, cid);
     pkg.pk_hash_str(h, name);
     pkg.pk_hash_str(h, tostring(base));
+    pkg.pk_hash_str(h, wintgt.target_os());
     let ex = "exec";
     if (!allow_exec) { ex = "no-exec"; }
     pkg.pk_hash_str(h, ex);
