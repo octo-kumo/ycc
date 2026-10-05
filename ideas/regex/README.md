@@ -18,9 +18,8 @@ the message, since a pattern is data rather than a caller bug.
     ideas/regex/gen.py                  the corpus generator (its provenance)
     ideas/regex/pdiff.py                the per-case diff, when the two disagree
     ideas/regex/run.sh                  drives the corpus half of the check
-    ideas/regex.md                      the proposal this was built from
 
-The five fixtures are ordinary ones now: `test_native.sh` runs them, `test_port.sh`
+The six fixtures are ordinary ones now: `test_native.sh` runs them, `test_port.sh`
 compiles them with both compilers. What `run.sh` adds is the *other* half of the
 corpus check — that the expected output still says what Python's `re` says about
 the same bytes — which needs Python, so it is not a suite:
