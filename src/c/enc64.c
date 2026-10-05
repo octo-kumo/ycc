@@ -58,6 +58,7 @@ static Yv *enc_alu_imm_go(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_body(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_shift(Yv *buf, long at, Yv *mn, Yv *dst, Yv *cnt);
 static Yv *enc_sse_arith(Yv *buf, long at, Yv *mn, Yv *dst, Yv *src);
+static Yv *enc_sqrtsd(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_ucomisd(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_cvtsi2sd(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_cvttsd2si(Yv *buf, long at, Yv *dst, Yv *src);
@@ -799,6 +800,19 @@ static Yv *enc_sse_arith(Yv *buf, long at, Yv *mn, Yv *dst, Yv *src) {
     }
 }
 
+static Yv *enc_sqrtsd(Yv *buf, long at, Yv *dst, Yv *src) {
+    /* F2 0F 51 /r  — sqrtsd %xmm, %xmm */
+    if (yv_l(yr_get(dst, "k")) != K_reg) {
+        return enc_err(at, ys("sqrtsd dst"));
+    } else if (yv_l(yr_get(src, "k")) != K_reg) {
+        return enc_err(at, ys("sqrtsd src"));
+    } else {
+        long n = put(buf, at, 242);
+        long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
+        return enc_ok(put3(buf, m, 15, 81, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+    }
+}
+
 static Yv *enc_ucomisd(Yv *buf, long at, Yv *dst, Yv *src) {
     /* 66 0F 2E /r */
     if (yv_l(yr_get(dst, "k")) != K_reg) {
@@ -1077,6 +1091,9 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
     } else if (ys_eq_lit(mn, "addsd") || ys_eq_lit(mn, "subsd") || ys_eq_lit(mn, "mulsd") || ys_eq_lit(mn, "divsd")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }
+    } else if (ys_eq_lit(mn, "sqrtsd")) {
+        Yv *e = need2(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_sqrtsd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }
     } else if (ys_eq_lit(mn, "ucomisd")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_ucomisd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }

@@ -721,6 +721,19 @@ def enc_ucomisd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     }
 };
 
+def enc_sqrtsd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
+    // F2 0F 51 /r  — sqrtsd %xmm, %xmm
+    if (dst.k != K.reg) {
+        enc_err(at, "sqrtsd dst")
+    } else if (src.k != K.reg) {
+        enc_err(at, "sqrtsd src")
+    } else {
+        let n = put(buf, at, 242);
+        let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 81, modrm(3, dst.n, src.n)), [])
+    }
+};
+
 def enc_cvtsi2sd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
     if (dst.k != K.reg) {
@@ -985,6 +998,9 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "addsd" || mn == "subsd" || mn == "mulsd" || mn == "divsd") {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }
+    } else if (mn == "sqrtsd") {
+        let e = need2(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_sqrtsd(buf, at, ops[1], ops[0]) }
     } else if (mn == "ucomisd") {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_ucomisd(buf, at, ops[1], ops[0]) }

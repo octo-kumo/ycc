@@ -206,6 +206,20 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   "what would a reasonable scoped functional language do" (TypeScript/Rust
   intuition): lexical scope, `self` for recursion, no implicit coercions
   (except `str`→`*T` and `none` unification), exhaustiveness where cheap.
+- **The float primitives (`src/y/arch/math.s`)** are the other half of the same
+  story: four functions (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`), each a
+  leaf reached through a `native def`, each written by hand because only the
+  machine can do it. `sqrtsd` is the hardware's own correctly-rounded root, so
+  sqrt is four instructions with no table and no tolerance; `cvttsd2si` is the
+  truncating conversion and returns the "integer indefinite" value for a NaN,
+  an infinity or an out-of-range magnitude, which the caller checks rather than
+  trusting; the two bit casts are moves. They live in `arch/*.s` like the rest
+  of the machine code (embedded by both copies, `make asm-check` reads them
+  with GNU `as`), and `native.y uses_math` looks at the program's references
+  before looking at them at all — a program that calls none of them pays
+  nothing, and one that does keeps the block through the ordinary shaking.
+  Their arguments come off the stack at `8(%rsp)` (leaf convention: the return
+  address is at `0(%rsp)`) and a float result goes back in `%rax` as its bits.
 - **`native def`: a declaration with no body.** `native def name(params) -> T
   [= "label"];` declares a function whose implementation is an assembly
   label. The parser makes a `Decl` with `kind: "native"` whose value is a

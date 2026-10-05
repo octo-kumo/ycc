@@ -55,6 +55,7 @@ Yv *arch_heap_cells(void);
 long arch_frame(long slots);
 Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);
+Yv *arch_math_lines(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *tstr(Yv *t);
@@ -187,7 +188,8 @@ Yv *prelude_blocks(Yv *lines);
 Yv *lines_refs(Yv *lines, long lo, long hi);
 int lines_fall(Yv *lines, long lo, long hi);
 Yv *shake_prelude(Yv *pb, Yv *roots);
-Yv *prelude_with(Yv *core, int threads);
+Yv *prelude_with(Yv *core, int threads, int mathasm);
+static Yv *lines_appended(Yv *a, Yv *b);
 Yv *unkept_refs(Yv *refs, Yv *bmap, Yv *keep);
 Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots);
 int is_all_digits(Yv *s);
@@ -217,6 +219,7 @@ Yv *uses_scan_node(Yv *node, Yv *out);
 Yv *collect_from_block(Yv *stmts, Yv *out);
 Yv *collect_from_node(Yv *node, Yv *out);
 int uses_threads(Yv *refs);
+int uses_math(Yv *refs);
 int name_in(Yv *xs, Yv *n);
 int is_intrinsic_name(Yv *n);
 Yv *fv_walk(Yv *node, Yv *out, int collect);
@@ -2082,19 +2085,37 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
 }
 
 /* The prelude's lines, the thread runtime's after them when it is used. */
-Yv *prelude_with(Yv *core, int threads) {
-    if (threads) {
-        Yv *out = ya_slice(core, 0, yv_len(core));
-        Yv *t = arch_prelude_threads_lines();
-        long i = 0;
-        while (i < yv_len(t)) {
-            out = ya_push(out, ya_get(t, i));
-            i = i + 1;
-        }
-        return out;
-    } else {
-        return core;
+/* a, then b: a NEW array (the Y `+` on arrays), which is the copy the loop
+ * needs anyway. */
+static Yv *lines_appended(Yv *a, Yv *b) {
+    Yv *out = ya_slice(a, 0, yv_len(a));
+    long i = 0;
+    while (i < yv_len(b)) {
+        out = ya_push(out, ya_get(b, i));
+        i = i + 1;
     }
+    return out;
+}
+
+Yv *prelude_with(Yv *core, int threads, int mathasm) {
+    /* The thread runtime's and the float primitives' lines only when a
+     * program's code calls into them (uses_threads / uses_math): a `native
+     * def` names one of those as its body, so the call is a reference like
+     * any other and the shaking keeps the block.
+     *
+     * Appending one at a time is not just tidier: `+` on an array makes a NEW
+     * one, so concatenating unconditionally copied the prelude's ~1500 lines
+     * for every compile that wanted neither -- 52K instructions on hello.y,
+     * which is 99.9% of what this module cost before the branches (callgrind,
+     * bench/compile_ir.sh). */
+    Yv *out = core;
+    if (threads) {
+        out = lines_appended(core, arch_prelude_threads_lines());
+    }
+    if (mathasm) {
+        out = lines_appended(out, arch_math_lines());
+    }
+    return out;
 }
 
 /* The references (a kept prelude's) that name a body not kept. */
@@ -3386,6 +3407,23 @@ int uses_threads(Yv *refs) {
         /* the entry points (an unlock comes with a lock or a try), by
          * length first: the self-compile has ~50K references */
         found = (n == 6 && ys_eq_lit(r, "y_fork")) || (n == 7 && ys_eq_lit(r, "y_spawn")) || (n == 10 && (ys_eq_lit(r, "y_sem_wait") || ys_eq_lit(r, "y_sem_post"))) || (n == 12 && ys_eq_lit(r, "y_mutex_lock")) || (n == 15 && ys_eq_lit(r, "y_mutex_trylock"));
+        i = i + 1;
+    }
+    return found;
+}
+
+/* The float primitives (src/y/arch/math.s), by the same rule as the thread
+ * runtime: a `native def` names one as its body, so the call is a reference
+ * like any other and the block stays. Looking first is what makes this cheap
+ * -- split()ing the lines for every compile measured +2.6% instructions on
+ * hello.y, against a few dozen lines (bench/compile_ir.sh). */
+int uses_math(Yv *refs) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(refs) && !found) {
+        Yv *r = ya_get(refs, i);
+        long n = yv_len(r);
+        found = (n == 7 && (ys_eq_lit(r, "y_sqrt") || ys_eq_lit(r, "y_fbits"))) || (n == 8 && ys_eq_lit(r, "y_bitsf")) || (n == 9 && ys_eq_lit(r, "y_to_int"));
         i = i + 1;
     }
     return found;
@@ -12180,7 +12218,8 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *body_refs = yr_get(shaken, "refs");
     Yv *core_lines = arch_prelude_lines();
     int thr = uses_threads(body_refs);
-    Yv *pb = prelude_blocks(prelude_with(core_lines, thr));
+    int mth = uses_math(body_refs);
+    Yv *pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     Yv *ps = shake_prelude(pb, body_refs);
     /* A kept prelude block may call a Y helper (none does today): the
      * helper is kept too, and everything shaken again from there. */
@@ -12195,9 +12234,10 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         shaken = prune_bodies(labels, refs, extra);
         keep = yr_get(shaken, "keep");
         body_refs = yr_get(shaken, "refs");
-        if (!thr && uses_threads(body_refs)) {
-            thr = 1;
-            pb = prelude_blocks(prelude_with(core_lines, thr));
+        if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
+            if (uses_threads(body_refs)) { thr = 1; }
+            if (uses_math(body_refs)) { mth = 1; }
+            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         }
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(yr_get(ps, "refs"), bmap, keep);

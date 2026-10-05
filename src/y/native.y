@@ -1314,9 +1314,18 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
     { text: join(pieces, ""), refs: out }
 };
 
-// The prelude's lines, the thread runtime's after them when it is used.
-def prelude_with(core: [str], threads: bool) -> [str] {
-    if (threads) { core + arch.arch_prelude_threads_lines() } else { core }
+// The prelude's lines, then the thread runtime's and the float primitives'
+// after them when a program's code calls into them.
+//
+// Appending one at a time is not just tidier: `+` on an array makes a NEW one,
+// so concatenating unconditionally copied the prelude's ~1500 lines for every
+// compile that wanted neither -- 52K instructions on hello.y, which is 99.9%
+// of what this module cost before the branches (callgrind, bench/compile_ir.sh).
+def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
+    let out: [str] = core;
+    if (threads) { out = out + arch.arch_prelude_threads_lines(); };
+    if (mathasm) { out = out + arch.arch_math_lines(); };
+    out
 };
 
 // The references (a kept prelude's) that name a body not kept.
@@ -2479,6 +2488,23 @@ def uses_threads(refs: [str]) -> bool {
         // the entry points (an unlock comes with a lock or a try), by
         // length first: the self-compile has ~50K references
         found = (n == 6 && r == "y_fork") || (n == 7 && r == "y_spawn") || (n == 10 && (r == "y_sem_wait" || r == "y_sem_post")) || (n == 12 && r == "y_mutex_lock") || (n == 15 && r == "y_mutex_trylock");
+        i = i + 1;
+    };
+    found
+};
+
+// The float primitives (src/y/arch/math.s), by the same rule as the thread
+// runtime: a `native def` names one as its body, so the call is a reference
+// like any other and the block stays. Looking first is what makes this cheap
+// -- split()ing the lines for every compile measured +2.6% instructions on
+// hello.y, against a few dozen lines (bench/compile_ir.sh).
+def uses_math(refs: [str]) -> bool {
+    let i = 0;
+    let found = false;
+    while ((i < len(refs)) && (!found)) {
+        let r: str = refs[i];
+        let n = len(r);
+        found = (n == 7 && (r == "y_sqrt" || r == "y_fbits")) || (n == 8 && r == "y_bitsf") || (n == 9 && r == "y_to_int");
         i = i + 1;
     };
     found
@@ -10156,7 +10182,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     let body_refs = shaken.refs;
     let core_lines = arch.arch_prelude_lines();
     let thr = uses_threads(body_refs);
-    let pb = prelude_blocks(prelude_with(core_lines, thr));
+    let mth = uses_math(body_refs);
+    let pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     let ps = shake_prelude(pb, body_refs);
     // A kept prelude block may call a Y helper (none does today): the
     // helper is kept too, and everything shaken again from there.
@@ -10167,9 +10194,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         shaken = prune_bodies(labels, refs, extra);
         keep = shaken.keep;
         body_refs = shaken.refs;
-        if (!thr && uses_threads(body_refs)) {
-            thr = true;
-            pb = prelude_blocks(prelude_with(core_lines, thr));
+        if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
+            if (uses_threads(body_refs)) { thr = true; };
+            if (uses_math(body_refs)) { mth = true; };
+            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);

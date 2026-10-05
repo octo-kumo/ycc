@@ -387,9 +387,11 @@ replaces the std one at link time).
 
 ## Layout
 
-- `src/y/arch/*.s` — the compiler's own assembly (the arch prelude:
-  allocator, traps, string/array cores, `y_fmod`, float formatting, the
-  thread runtime), embedded by both copies — see PORTING.md rule 11.
+- `src/y/arch/*.s` — the compiler's own assembly: the arch prelude
+  (`prelude.s`: allocator, traps, string/array cores, `y_fmod`, float
+  formatting), the float primitives `math.s` (`y_sqrt`, `y_to_int`, `y_fbits`,
+  `y_bitsf` — what a `native def` reaches for), and the thread runtime
+  (`threads.s`) — embedded by both copies, see PORTING.md rule 11.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`

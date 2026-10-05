@@ -371,8 +371,8 @@ documented as unfused.
 |---|---|---|
 | P0 | the asm moves to `src/y/arch/*.s` | **done**, merged (`0f24376`) |
 | — | the portable tier: integers/bits, float comparisons and constants, RNGs, `[float]` array work (`src/y/std/math.y`) | **done** (`85403df`) — no compiler change needed; tests `t300`–`t304` |
-| P1 | `native def` | next |
-| P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | |
+| P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
+| P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. The other five (`movsd`, `movapd`, `xorpd`, `andpd`, `unpcklpd`) arrive with P4, which is the first code that emits them |
 | P3 | the transcendentals in Y, gated by the ulp harness | |
 | P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | |
 | P5 | the bulk kernels | |
