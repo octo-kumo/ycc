@@ -139,12 +139,27 @@ ONE = {
               1e-8, 0.1, -0.1, 0.9, -0.9, 1e300, -1e-9, 1e-300, 1234.5678,
               -0.5, 0.5, float("inf"), float("nan")],
     # sinh/cosh/tanh: the cancellation the exponential form has near zero, and
-    # the overflow above it
+    # the overflow above it.
+    # The strip where the exponential form of sinh/cosh has already gone to inf
+    # but the answer is still a double: 709.78 (exp's ceiling) to 710.4758 (the
+    # true one). Those ten values per function are the cases that found the
+    # bug, so they are here rather than only at 710.0.
+    #
+    # Note on the last of them: 710.47586007394398 written as a decimal literal
+    # is a DIFFERENT double from the true bound 710.475860073943863... -- it
+    # rounds up, PAST it, so the answer is inf. That is correct and worth
+    # having: a boundary written as a literal is never on the boundary, and the
+    # row now says so instead of the comment above claiming they overflow at
+    # 709.78.
     "sinh": [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 0.1, -0.1, 1e-8, -1e-8, 1e-300,
-             -1e-300, 10.0, -10.0, 100.0, -100.0, 700.0, -700.0, 710.0, 0.001,
-             1234.5678, float("inf"), float("-inf"), float("nan")],
+             -1e-300, 10.0, -10.0, 100.0, -100.0, 700.0, -700.0, 0.001,
+             1234.5678, float("inf"), float("-inf"), float("nan"),
+             709.78, -709.78, 709.9, -709.9, 710.0, -710.0, 710.4, -710.4,
+             710.47, 710.47586007394398],
     "cosh": [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 1e-8, 1e-300, 10.0, -10.0, 100.0,
-             700.0, -700.0, 710.0, 0.001, float("inf"), float("nan")],
+             700.0, -700.0, 0.001, float("inf"), float("nan"),
+             709.78, -709.78, 709.9, -709.9, 710.0, -710.0, 710.4, -710.4,
+             710.47, 710.47586007394398],
     "tanh": [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 0.1, -0.1, 1e-8, -1e-8, 1e-300,
              -1e-300, 10.0, -10.0, 20.0, -20.0, 100.0, -100.0, 1e300,
              0.001, -0.001, float("inf"), float("-inf"), float("nan")],
@@ -322,15 +337,32 @@ REF1 = {
                          (float("inf") if x > 0 else -1.0))),
     "log1p": lambda x: (float("nan") if (math.isnan(x) or x < -1.0) else
                         (math.log1p(x) if x != -1.0 else float("-inf"))),
-    # sinh overflows at the same place exp does: |x| > ln(DBL_MAX)
+    # sinh and cosh overflow LATER than exp, by exactly ln(2), and the bound is
+    # 710.47586007394398 -- found by bisection against libm, not reasoned out.
+    # The old comment here said they overflow "at the same place exp does,
+    # |x| > ln(DBL_MAX)", i.e. at 709.78, and that was WRONG: it wrote inf as
+    # the reference for the whole strip from 709.78 to 710.47, so the table
+    # CERTIFIED a bug that was really there (a sinh written as
+    # (e^x - e^-x)/2 answers inf at 710, where the true answer is
+    # 1.1169973830808557e+308 -- the halving buys back one exponent). A
+    # reference table is only as good as its reference; this line was the
+    # reason the strip was never tested rather than a fact about sinh.
+    # Both use a real libm call, which raises OverflowError past the true
+    # bound, so the range test has to come first and the answer has to come
+    # from the call -- there is nothing to substitute.
+    # The bound is INCLUSIVE (>=, not >): 710.47586007394398 is itself the
+    # first argument with no answer, so >= is what libm agrees with. Both use a
+    # real libm call below it -- Python's math module raises OverflowError past
+    # the edge rather than returning inf, so the range test has to come first.
     "sinh": lambda x: (float("nan") if math.isnan(x) else
                        (math.inf if x == math.inf else
                         (-math.inf if x == -math.inf else
-                         (math.sinh(x) if abs(x) <= 709.78 else
-                          (math.inf if x > 0 else -math.inf))))),
+                         (float("inf") if abs(x) >= 710.47586007394398
+                          else math.sinh(x))))),
     "cosh": lambda x: (float("nan") if math.isnan(x) else
                        (math.inf if math.isinf(x) else
-                        (math.cosh(x) if abs(x) < 710.0 else math.inf))),
+                        (float("inf") if abs(x) >= 710.47586007394398
+                         else math.cosh(x)))),
     "tanh": lambda x: (float("nan") if math.isnan(x) else
                        (1.0 if x > 0 else (-1.0 if x < 0 else 0.0))
                        if math.isinf(x) else math.tanh(x)),

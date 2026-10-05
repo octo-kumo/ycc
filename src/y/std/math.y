@@ -937,6 +937,67 @@ def exp(x: float) -> float {
     exp_asm(x)
 };
 
+// exp_half(a) = e^a / 2, for the strip where e^a itself is out of range.
+//
+// cosh(a) = e^a/2 + e^-a/2 and sinh(a) = e^a/2 - e^-a/2, so both are e^a/2 up
+// to a term that is 0.0 to a double past a = 709. That makes their whole
+// upper strip the same problem, and the same fix: exp's argument split is
+// a = k*ln2 + r, and the answer is ldexp(e^r, k). cosh needs k one LARGER than
+// exp would give it -- because cosh's answer is a factor of two smaller than
+// exp's -- and ldexp applies the scale without ever forming 2^k, so k = 1024
+// is fine where exp(a) was inf.
+//
+// This is exp's own n > 1023 arm (see exp_y) run one step further, with the
+// factor of two moved out of f2 and into the exponent, which is the same
+// operation stated differently and the reason the two agree everywhere exp can
+// reach. NOT exp(a/2) squared: that squares exp's own 1-ulp error and lands 2
+// ulp out at the top, which is the bug this replaces.
+//
+// Not exported: only sinh and cosh have a use for it.
+def exp_half(x: float) -> float {
+    // The bound FIRST, before the reduction. It has to be: the reduction ends
+    // in to_int(floor(x*log2e + 0.5)), and at x = 1e300 that is a float with no
+    // integer part a long holds -- a trap, where the answer is plainly inf.
+    // Testing the bound after reducing means every overflowing argument traps
+    // instead of answering, which is the bug in a second costume.
+    //
+    // Tested on x and not on n, because n = round(x*log2e) steps at 1025 and
+    // 1026 -- far too coarse to place an edge that falls inside one of its
+    // steps: at x = 710.5 the answer is inf and n is still 1025. ldexp cannot
+    // be left to find the edge either, being exact on a kernel below 2, so it
+    // rounds the overflow into an answer instead of overflowing.
+    //
+    // So the edge is x itself. The exact value of e^x/2 = DBL_MAX is at
+    // x = ln(2*DBL_MAX) = 710.475860073943863..., and the answer SURVIVES one
+    // double past that, because it has to survive being rounded: the largest
+    // finite argument is 710.47586007394386 (libm answers
+    // 1.7976931348621744e+308 there, one ulp under DBL_MAX) and the first
+    // argument with no answer at all is 710.47586007394398. Hence the test is
+    // at the second of those two.
+    //
+    // Getting this wrong by one double is not a rounding curiosity: it is the
+    // difference between sinh answering the largest double there is and
+    // answering inf for an argument where an answer exists.
+    if (x >= 710.47586007394398) {
+        inf
+    } else {
+        let n: long = to_int(floor(x * log2e + 0.5));
+        let nf: float = n;
+        // r as two halves of ln2, exactly as exp does it, so the reduction keeps
+        // every bit of a large x -- the alternative, exp(x - ln2), throws away
+        // the low bits of 710 and lands about 250 ulp out.
+        //
+        // The kernel is evaluated at r and the answer scaled by n - 1, so a
+        // factor of two stays INSIDE, which is the whole of it: e^a/2 =
+        // 2^(n-1) * e^r, and ldexp applies the scale without ever forming 2^n,
+        // so the intermediate that overflows in exp is never formed here. Same
+        // kernel, same reduction, one step down -- which is why the two agree to
+        // the bit on every argument exp can also answer.
+        let r = (x - nf * ln2_hi) - nf * ln2_lo;
+        ldexp(1.0 + r * (1.0 + r * poly_split(exp_k, exp_kl, r)), n - 1)
+    }
+};
+
 // The Y exp, as `exp_asm` computes it: the oracle for the kernel, and the shape
 // to read to know what the assembly is doing. Not exported.
 def exp_y(x: float) -> float {
@@ -1061,8 +1122,29 @@ def sin_cos_k(x: float) -> [float] {
     [s, 1.0 - w * poly_split(cos_k, cos_kl, w)]
 };
 
-// sin(x), for |x| < 2^52 or so (see the note on the reduction). A NaN or an
-// infinity is a NaN, as C's is.
+// sin(x). A NaN or an infinity is a NaN, as C's is.
+//
+// THE RANGE, because the reduction behind this is the limit of all three of
+// sin, cos and tan and it is not obvious from the code: the quadrant is
+// n = round(x*2/pi) computed in ONE double, and that product wants about 106
+// bits and so rounds. The subtraction of n*(pi/2) that follows is compensated
+// in double-double and is exact for any n a long holds; the quotient is not.
+// Measured against this platform's libm:
+//
+//     x = 1e15    exact
+//     x = 1e16    33 ulp out
+//     x = 1e17    2.4e10 ulp out
+//     x = 1e18    the quadrant is wrong by one, so the answer is unrelated
+//     x >= 1e100  floor(x*2/pi) has left the range of a long, so this is inf
+//
+// So the promise is |x| <= 2^53 * (pi/2) = 1.41e16, and past it the answers are
+// not to be relied on. The cutoff cannot be rounded to a power of two, because
+// whether the rounded quotient is right depends on how near x*2/pi happens to
+// fall to a half-integer -- a property of x, not a bound on it. Closing the
+// gap needs libm's multi-precision reduction (a three-word quotient, the
+// do_pi2 stages), which is a piece of work in its own right and not a patch.
+// t320_sin_reduction_limit.y pins the present behaviour so that raising the
+// limit is a visible diff.
 def sin(x: float) -> float {
     sin_asm(x)
 };
@@ -1203,8 +1285,22 @@ def cosh(x: float) -> float {
             // of the answer, while a second exp() call would bring its whole
             // error along -- and exp is a ulp out at some arguments, which is
             // what had cosh(-1.88) sitting two ulps away.
-            let t = exp(a);
-            t * 0.5 + 0.5 / t
+            //
+            // Past 709 cosh has the same problem sinh had, and for the same
+            // reason with the SAME answer: cosh(a) = e^a/2 + e^-a/2 and e^a is
+            // inf from 709.78, yet cosh(710) is 1.1169973830808557e+308 -- the
+            // halving buys back the exponent, so cosh overflows at 710.4758,
+            // the same bound as sinh and for the same algebraic reason. The
+            // halved-argument square fixes both, and below 709 the form is
+            // kept because it is the more accurate of the two there: squaring
+            // doubles the relative error of exp, whereas t*0.5 + 0.5/t rounds
+            // once at the size of the answer.
+            if (a > 709.0) {
+                exp_half(a)
+            } else {
+                let t = exp(a);
+                t * 0.5 + 0.5 / t
+            }
         }
     }
 };
@@ -1240,6 +1336,27 @@ def sinh(x: float) -> float {
         x
     } else if (x >= -0.5 && x <= 0.5) {
         sinh_small(x)
+    } else if (x > 709.0 || x < -709.0) {
+        // The argument has outrun its own exponential. e^x is inf from 709.78
+        // on, so (e^x - e^-x)/2 is inf there -- yet sinh(710) is
+        // 1.1169973830808557e+308, a perfectly good double: the halving buys
+        // back a full exponent, so sinh overflows at 710.48, a third further
+        // out. This is the "rounded at the wrong SIZE" family of bug in its
+        // purest form -- the subtraction is fine, the thing being subtracted is
+        // simply not there.
+        //
+        // The fix is exp_half, not a square and not exp(x - ln2): e^a/2 asked for
+        // directly, by moving cosh's halving INTO exp's exponent rather than
+        // applying it to an infinity. Both rejected routes are recorded at
+        // exp_half; the short reason is that each of them multiplies an error
+        // that is already there (the square, by two) or invents one (the
+        // subtraction, by discarding the low bits of a large argument).
+        //
+        // The SIGN is carried out here rather than left inside: sinh is odd, so
+        // the negative half is computed from |x| and negated.
+        let a = if (x < 0.0) { 0.0 - x } else { x };
+        let v = exp_half(a);
+        if (x < 0.0) { 0.0 - v } else { v }
     } else {
         (exp(x) - exp(0.0 - x)) * 0.5
     }

@@ -290,7 +290,7 @@ $\pi$ is \num{1.2e-16} from it and a reduction good to \num{1e-26} is already a
 hundred thousand ulps of \ic{math.sin(math.pi)}.
 
 \emph{How close.} \ic{test/sh/test\_math.sh} is the gate: a checked-in table of
-IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{2695} cases, written
+IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{2713} cases, written
 by \ic{test/math/gen\_ulp\_table.py} from this platform's libm) and a program
 that reads it, calls this module, and measures the gap in ulps. Two NaNs count as
 the same answer however their signs differ --- a sign bit is not an ulp --- and any
@@ -303,6 +303,21 @@ inside [-1, 1] about one time in eight, so the general one left each of them wit
 eight interior arguments --- which is not a gate on a 24-term polynomial, and
 which was how \ic{acos} went on cancelling eight digits near \ic{x = 1} for a
 forty-ulp answer that nothing in the suite could see.
+
+\emph{One limit, stated rather than discovered.} \ic{sin}, \ic{cos} and \ic{tan}
+reduce their argument in one step: the quadrant is \ic{round(x*2/$\pi$)} as a
+single \ic{double}, and the subtraction of \ic{n*($\pi$/2)} that follows is
+compensated in double-double and is exact. The quotient is not. That product
+wants about \num{106} bits and rounds, which is harmless while the rounding
+cannot carry it across the half-integer boundary and is not harmless at all
+afterwards: at \ic{x = 1e15} the answer is exact, at \ic{1e16} it is
+\num{33} ulps out, at \ic{1e18} the quadrant itself is wrong, and from
+\ic{1e100} the quotient has left the range of a \ic{long} and the answer is
+\ic{inf}. The promise is therefore \ic{$|x| \le 2^{53}\cdot(\pi/2)$}, about
+\num{1.41e16}, and past it the answers are not to be relied on ---
+\ic{test/y/native/t320\_sin\_reduction\_limit.y} pins what they are, so that
+raising the limit is a visible diff. Closing it needs the multi-precision
+reduction \ic{libm} uses, a three-word quotient.
 
 A third gap of the same shape was still open after that: nine functions this
 module exports had \emph{no cases at all} --- \ic{ldexp}, \ic{fmin}, \ic{fmax},
