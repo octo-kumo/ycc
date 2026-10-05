@@ -2133,3 +2133,267 @@ that is the route the shipped player takes.
 · `examples/audio/pcm.y`, compiles with zero warnings and the same program with
 the ioctl issued from C writes normally (4 frames for 480 requested), so the
 ioctl and the struct are right and only the address cannot be expressed.
+
+---
+
+## 25. A `fb` module — a `Surface`, an ANSI writer, and a headless capture
+
+**Useful because** sixteen of the thirty-nine examples in this corpus draw
+into a cell grid and emit it as ANSI, and each one does so with its own
+buffer discipline. Measured across the corpus: `fb.y` is vendored into **16
+folders** and its two nearest relatives — `sink.y` (**5** folders) and
+`textout.y` (**4**) — are *the same module under two names*, and **not one of
+the nine copies is byte-identical to another** (5 distinct shas among the
+`sink.y` copies, 4 among the `textout.y` copies). Nine divergent forks of one
+"put a codepoint on a grid, then write the grid out as text and digest it"
+helper is the strongest duplication signal in the corpus, and the divergence
+is the cost: `out_capture` appears with two different signatures in the same
+file, so the copies had already drifted into disagreeing about what a capture
+is.
+
+Wanted — the type and the surface the vendored copies already agree on:
+
+```
+type Surface = {
+    rows: long, cols: long,
+    cells: [long],        // 0x00CC_FG_BG per cell, or four parallel planes
+    fg: [byte], bg: [byte], cp: [long]
+};
+
+// colour
+rgb(r, g, b) -> long            r_of(c) / g_of(c) / b_of(c) -> long
+clamp255(v) -> long            grey(v) -> long        lerp_rgb(a, b, t) -> long
+
+// the surface
+new(rows, cols) -> Surface     resize(s, rows, cols) -> Surface
+clear(s, bg) -> long           fill(s, cp, fg, bg) -> long
+put(s, row, col, cp, fg, bg) -> long
+put_skip(s, row, col, cp, fg, bg) -> long      // skip a wide glyph
+get(s, row, col) -> long       key_at(s, row, col) -> long
+text(s, row, col, t, fg, bg) -> long
+hline(s, row, col, n, cp, fg, bg) -> long
+vline(s, row, col, n, cp, fg, bg) -> long
+rect(s, row, col, h, w, cp, fg, bg) -> long
+fill_rect(s, row, col, h, w, cp, fg, bg) -> long
+blit(dst, src, srow, scol, drow, dcol, h, w) -> long
+
+// shading: one ramp, four renderings
+shade(v, n) -> long             shade_len(mode) -> long
+shade_ascii(v, n) -> long      shade_blocks(v, n) -> long
+shade_half(v, n) -> long       shade_braille(v, n) -> long
+braille(vs: [long], thresh: long) -> long
+
+// frames and diffing: the point of the whole thing
+begin_frame()                  cell_same(s, i) -> bool
+cell_commit(s, i)              emit_cell(s, i)
+flush(s) -> long               flush_diff(s) -> long
+end_frame(s) -> long
+
+// HEADLESS -- this is the half that makes a golden file possible
+capture_on()                   capture_off()          capture_reset()
+capture_len() -> long          capture_byte(i) -> long
+capture_checksum() -> long     capture_str(from, to) -> str
+```
+
+The last group is the one worth arguing for. Every example here is gated on a
+byte-exact golden, and *the reason that is possible at all* is that `fb.y` can
+be told to capture its own output instead of writing it to a terminal. The
+`sink.y`/`textout.y` forks exist only to add a digest and a row-count on top of
+that. Folding them into `fb` as `capture_checksum()` and a `grid_digest(s)`
+deletes nine files and one concept.
+
+**Costs** One std unit, Y source, no compiler change — the same shape as
+`str`, `regex` and `rt`, which are all layered on `rt.y`. The real design
+question is the cell representation: `Surface` currently stores four parallel
+planes *and* packs colour into one long, and a std unit should pick one and say
+why. `examples/_toolkit/fb.y` is the tested version (41 assertions).
+
+## 26. An `args` module — flag parsing, so no program writes one
+
+**Useful because** `args.y` is the **single most duplicated file in the
+corpus: 25 of 39 folders**, 19 KB each. Every one of those 25 wrote the same
+table, and the campaign filed a bug about it — `SUGGESTIONS.md` #23, "`--help`
+should be reserved the way `y_` is" — which is only a bug because there is no
+shared implementation to fix once.
+
+Wanted, as the vendored copy already has it:
+
+```
+type Opt = { long: str, short: str, kind: long, help: str };
+// kind: 0 = flag (no value), 1 = takes a value
+
+init(prog: str, desc: str, spec: [Opt], tail: str = "")
+parse(toks: [str]) -> long           parse_or_exit(toks: [str])
+get_str(name: str, dflt: str) -> str
+get_long(name: str, dflt: long) -> long
+has(name: str) -> bool
+positional() -> [str]                errmsg() -> str
+nopts() -> long                      usage() -> str
+print_usage()
+```
+
+`init` taking the whole table up front is the part that matters: it is what
+lets `--help` be generated from the same data the parser reads, which is
+exactly the invariant #23 says is unenforced.
+
+**Costs** One std unit. It has no dependencies, touches no syscall, and is
+already 24 functions with a test suite (`_toolkit/args_test.y`, 61
+assertions). This is the lowest-risk item on the list.
+
+## 27. A `time` module — the clock, a pacer, and an fps meter
+
+**Useful because** `time.y` is vendored into **19–20 of 39 folders**, and
+`term.y`'s own frame loop needs it, so it is the second-most-duplicated thing
+after `args`. Two types carry the whole thing:
+
+```
+type Pacer = { period_us: long, sched: long, frames: long,
+               dropped: long, last: long };
+type Fps   = { win_us: long, t_beg: long, t0: long, f0: long,
+               n: long, x100: long };
+
+now_us() -> long                  now_ms() -> long
+nap_us(us: long) -> long
+
+pacer_new(fps: long) -> Pacer     pacer_start(p: Pacer)
+pacer_next(p: Pacer) -> long      pacer_period_us(p: Pacer) -> long
+pacer_frames(p: Pacer) -> long    pacer_dropped(p: Pacer) -> long
+pacer_lag_us(p: Pacer) -> long
+
+fps_new(win_us: long = 500000) -> Fps
+fps_tick(f: Fps)                  fps_x100(f: Fps) -> long
+fps_frames(f: Fps) -> long        fps_avg_x100(f: Fps) -> long
+fps_line(f: Fps) -> str
+```
+
+Note `Pacer.dropped` and `Pacer.lag_us`: a pacer that only sleeps does not
+report that it missed. The gate for the wave-1 examples was "donut holds
+30 fps", and a meter that cannot say it dropped frames cannot be used to prove
+it.
+
+**Costs** One std unit, and it is the only proposal here that cannot be split:
+`clock_gettime` and `nanosleep` are raw syscalls (228 and 35), and three
+folders already carry the numbers inline.
+
+## 28. `random` — a module the roadmap has, and the two things its sketch lacks
+
+`TODO.md` #4 already proposes `std/random`, with `random.seed(n)` and
+`random.randint(lo, hi)`. This is **not** a restatement of it and should not be
+counted as a separate item. It is the measured delta, from the three folders
+that wrote one anyway (`maze/rng.y`, `mud/rnd.y`, `roguelike/rnd.y`, 3 KB
+each, and no two of them agree on the names):
+
+```
+seed(v: long)                     next() -> long
+below(n: long) -> long            range(lo: long, hi: long) -> long
+chance(pct: long) -> bool
+state() -> long                   set_state(v: long)      // <-- the delta
+```
+
+**`state()`/`set_state()` is the addition.** `TODO.md` #4 says "`random.seed`
+matters as much as the generator, because a failing case is worthless if it
+cannot be replayed" — and then its sketch has no way to capture a state
+*mid-stream*. `mud/rnd.y` has `rnd_state`/`rnd_set_state` because a MUD bug
+reproduces only from the exact point of divergence, not from the start of a
+3000-tick session. One `long` of state is the whole cost.
+
+**`below(n)` must not be `%`.** `maze/rng.y` documents why at length: `x % n`
+is biased for every `n` that is not a power of two, because 2^62 does not
+divide by `n`, so the low indices come up more often. A maze generator's
+character comes entirely out of that draw. The vendored version takes the low
+62 bits and **rejects** anything below the largest whole multiple of `n`, which
+makes the distribution exactly uniform at a rejection probability below 1e-13
+for any `n` a program uses.
+
+The algorithm in all three copies is **splitmix64** (Steele, Lea & Flood,
+2014) — three xor-shift-multiply rounds on a counter, constants written down.
+That is the right default for a std unit: fast, one `long` of state, and a
+published reference to point at. Seeding should come from `std/crypto.y`'s
+existing `getrandom(2)` (`syscall(318, …)`), which `TODO.md` #4 already
+identifies, rather than a second entropy source.
+
+## 29. A `test` module — assertions, so nine programs stop inventing them
+
+**Useful because** eight folders each define their own `ck`, three define
+`ck_eq`, and five print their own `"N of M checks passed"` line. The bodies are
+nearly identical and, worse, the *report formats* differ — so a reader cannot
+tell at a glance whether a green folder ran 40 assertions or 400. The corpus
+now ranges from 41 (`fb`) to 720 (`hexview`) with no common shape.
+
+Wanted:
+
+```
+ck(name: str, ok: bool, detail: str)          // prints ok/FAIL + detail
+ck_eq(name: str, got: long, want: long)
+ck_near(name: str, got: long, want: long, tol: long)
+ck_str(name: str, got: str, want: str)
+ck_bytes(name: str, a: [byte], b: [byte])
+
+group(name: str)                               // a labelled section header
+report() -> long                              // "N of M passed", 0 or 1
+checks() -> long    failures() -> long        // for the gate to read
+```
+
+Two things the vendored copies do that the module should keep, because both
+were learned the hard way here:
+
+- **`detail` is mandatory and printed on both outcomes.** `audio/check.y`
+  prints the measured and the expected value on a FAIL and the measured value
+  on an `ok`; that is why its failures were diagnosable without a rerun.
+- **`ck_eq` takes `long`, not a generic.** There are no generics, so a
+  `ck_eq` over `str` has to be a second function — hence `ck_str`.
+
+**Costs** One std unit, no dependencies, and it is pure output. It also makes
+the corpus's own numbers comparable, which is worth more to a future reader
+than any single example.
+
+## 30. `json` needs three more entry points — and four examples still hand-roll the whole parser
+
+**Useful because** `std/json.y` now exists (21.5 KB) and **four examples still
+carry their own JSON parser**, totalling **100 KB**:
+
+| folder | its parser | bytes |
+|---|---|---|
+| `toolkit-cli` | `jsonval.y` — a `JVal` DOM, pretty-printer, structural compare | 39 675 |
+| `rest-client` | `json.y` — parses **in place out of a `[byte; 65536]`** | 24 404 |
+| `weather` | `json.y` — a DOM with `int_of`/`str_of`/`arr_of` accessors | 21 775 |
+| `httpsrv` | `json.y` — validates and extracts **in place out of a `[byte; 65536]`** | 14 582 |
+
+Two of them are not accidental duplication and the module should say so. Both
+`httpsrv` and `rest-client` parse straight out of the socket's receive buffer
+because their document **is** the buffer: copying it into a `str` first would
+double the arena cost of every response on a server that holds connections
+open. `std/json.y` takes a `str`, so neither can adopt it as written.
+
+Three additions close that, and all three are already written and working in
+the folders that need them:
+
+```
+json.parse_bytes(b: [byte; N], len: long) -> Val?     // no str copy
+json.get_long(o: Val, key: str, dflt: long) -> long   // the accessor shape
+json.get_str(o: Val, key: str, dflt: str) -> str      //   weather/json.y's
+json.get_arr(o: Val, key: str) -> [Val]?             //   int_of/str_of/arr_of
+json.pretty(v: Val, indent: long, sorted: bool) -> str
+json.same(a: Val, b: Val) -> bool                     // jsonval.y's `same`
+json.node_count(v: Val) -> long
+json.max_depth(v: Val) -> long
+```
+
+`std/json.y` has `field`/`as_long`/`as_bool`/`stringify_val(v, depth)` but no
+**accessor-with-a-default**, no **canonical serialisation** and no **structural
+comparison** — and those three are what a golden-diffing tool needs. Every
+program in this corpus that round-trips JSON had to write them.
+
+**Costs** Additions to an existing unit, not a new one. `same` and `pretty`
+with sorted keys are also what `TODO.md` #3 (JSON literal syntax) will want,
+since a literal's canonical form has to be decidable for the golden file to be
+stable.
+
+### Environment
+
+`refs/ycc.ref` sha256 `31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`
+· measured by counting `.y` basenames across the 39 gated folders, and by
+`grep -oE '^def ...'` over the vendored copies — every signature above is
+copied from a file that compiles with zero warnings, not designed on paper.
+`SUGGESTIONS.md` #1 (math) and #3 (`term`) already cover `fx` and `term`;
+those two are **not** repeated here.
