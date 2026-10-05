@@ -384,12 +384,17 @@ the void value: nothing is computed, and using it as one is an error
 like any other (\ic{cannot bind a void value to 'x'}). \ic{[e; n]} is a
 fixed array of \ty{n} elements --- a \ic{[T; N]}, not a \ic{[T]}
 (Section~\ref{sec:type-arrays}).
+% The postfix row was one line 90pt overfull: an align* row is a box, so it
+% breaks only where the source puts a \\ there. Continuation rows carry no
+% left-hand side and line up under the first alternative, which is where a
+% reader looks for the rest of the rule.
 
 \begin{align*}
 \ty{postfix} ::={}& \ty{primary}
    ~\{~\ic{(}~[\ty{args}]~\ic{)} \mid \ic{[}~\ty{expr}~\ic{]}
-   \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name}
-   \mid \ic{?.}~\ty{name} \mid \ic{?.}~\ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]}
+   \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name} \\
+ &\quad \mid \ic{.}~\ty{name} \mid \ic{?.}~\ty{name} \\
+ &\quad \mid \ic{?.}~\ic{[}~\ty{expr}\,?\ic{:}~\ty{expr}\,?~\ic{]}
    \mid \ic{!} \mid \ic{++} \mid \ic{--}~\} \\
 \ty{unary} ::={}& [\ic{!} \mid \ic{-} \mid \ic{\textasciitilde{}} \mid \ic{*} \mid \ic{\&}
    \mid \ic{++} \mid \ic{--}]~\ty{postfix}
@@ -411,7 +416,6 @@ In a record literal a bare name is shorthand for the field of that
 name: \ic{\{x, y\}} is \ic{\{x: x, y: y\}} (but \ic{\{ x \}} alone is a
 block whose value is \ic{x}).
 
-\begin{sloppypar}
 The forms of threads and processes (Section~\ref{sec:builtin-threads})
 are contextual: \ic{spawn} and \ic{fork} start one only before a
 \ic{\{}, the other words only before a name, which begins their
@@ -419,7 +423,6 @@ are contextual: \ic{spawn} and \ic{fork} start one only before a
 \ic{\{ \ldots\ \}}); anywhere else each is an ordinary name. A form is a
 call of the builtin of the same name, the block passed as a function of
 no parameters: \ic{lock m \{ e \}} is \ic{lock(m,} \ic{def () \{ e \})}.
-\end{sloppypar}
 
 \subsection*{Operator precedence}
 

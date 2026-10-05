@@ -22,9 +22,9 @@ through the enclosing uses. Typical families:
 \begin{itemize}[nosep]
 \item name errors: \ic{undefined variable 'x'};
 \item shape errors: \ic{record has no field 'f'};
-\item operator typing: \ic{'+=' appended elements: expected [long], got
-  long}, \ic{arrays support only '+=' and '*=' (in place), not '-='},
-  \ic{'++' needs a number target};
+\item operator typing: \ic{'++' needs a number target};
+\item array operators: \ic{'+=' appended elements: expected [long], got long};
+\item in-place only: \ic{arrays support only '+=' and '*=' (in place), not '-='};
 \item call errors: \ic{call takes 2 args, got 1};
 \item non-value use: \ic{cannot index long (only arrays and maps)};
 \item void use: \ic{cannot bind a void value to 'x'}.
@@ -56,7 +56,6 @@ each, positioned like errors (an imported file's naming that file),
 byte for byte, with them or without, and \ic{ycc -w} turns them off. The
 std units never warn; a package warns when it compiles. What draws one:
 
-\begin{sloppypar}
 \begin{itemize}[nosep]
 \item a local binding nothing reads: \ic{unused variable 'x'} (or
   \ic{unused constant}, \ic{unused function}), or one only assigned to:
@@ -70,8 +69,8 @@ std units never warn; a package warns when it compiles. What draws one:
   nothing);
 \item \ic{division by zero}: \ic{/}, \ic{\%}, \ic{/=} or \ic{\%=} by a
   literal integer \ic{0};
-\item a key given twice in a record or map literal: \ic{duplicate field
-  'a' in a record literal} (or \ic{duplicate key}); the last one wins;
+\item a key given twice in a record or map literal --- \ic{duplicate field
+  'a' in a record literal}, or \ic{duplicate key}. The last one wins;
 \item a type that \ic{type} could name once: a record of two or more
   fields, or a union, written out in full more than once (\ic{the type
   \{...\} is written out 2 times}) or where an alias names it already
@@ -80,7 +79,6 @@ std units never warn; a package warns when it compiles. What draws one:
   twice (\ic{type 'Tag' is declared more than once}), where the last
   declaration counts.
 \end{itemize}
-\end{sloppypar}
 
 \noindent Parameters, loop variables, top-level bindings and names
 starting with \ic{\_} are never unused: \ic{let \_x = f();} keeps a
@@ -94,7 +92,6 @@ habit rather than a mistake: a getter call or a bare \ic{a[i]} as a
 statement reads fine. Raise the warning level to turn them on -- \ic{ycc
 -W 1} (a project: \ic{ycc build -W 1}), which adds
 
-\begin{sloppypar}
 \begin{itemize}[nosep]
 \item \ic{the value of 'f()' is not used}: a call to a function that
   hands a value back, whose result nobody reads. A function that returns
@@ -108,7 +105,6 @@ statement reads fine. Raise the warning level to turn them on -- \ic{ycc
   unnecessary, so it can go; an \ic{else} that runs anything, and an
   \ic{if} with no \ic{else}, draw nothing.
 \end{itemize}
-\end{sloppypar}
 
 \noindent Level \ic{0} (the default) is the set above. \ic{-W} with no
 level, or one that is not a number, is an error. The level changes which
@@ -120,7 +116,7 @@ The compiled program traps --- writes a one-line message to stdout and
 exits with status 1 --- on:
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.58\linewidth}@{}}
 \toprule
 condition & message \\
 \midrule
