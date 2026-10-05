@@ -838,6 +838,26 @@ over 1 ulp**, then 15, then 0.
 - Then `acos(1.0)` divided `0/0` for the square root's residual, which `asin`
   never reaches because it answers ±1 before arriving.
 
+**What it cost: nothing.** Both halves measured in one program, the same loop
+over the same arguments, the old implementation and the new one verbatim (two
+copies of `std/math.y` cannot both be imported — their `native def`s collide,
+which is that rule doing its job — so the arithmetic under test is a local copy
+fed by the module's own unchanged primitives):
+
+```
+acos OLD, |x| > 0.5    93.25 ns/call    1975 Ir/call
+acos NEW, |x| > 0.5    77.28 ns/call    1255 Ir/call
+```
+
+The new one is **16 ns a call FASTER** on the branch it changed, and 720
+instructions lighter. The old path paid `acos_old` (445 Ir), then `math.asin`'s
+own 765, then the kernel's 765; the new one pays `acos_new` (490 Ir) and the
+kernel's 765 and stops — it skips asin's sign and branch logic and the
+`pi/2 - asin(x)` subtraction entirely, which is most of what it was doing. So the
+commit that landed it quoted "+13 ns" and that was the wrong comparison: it
+compared the new implementation's two branches against each other instead of
+the old implementation's.
+
 Which is the third lesson, and it is the one about the *gate* rather than the
 arithmetic: a check that passes is not the same as a check that can fail. Eight
 arguments is a check that reads as one. The forty-ulp answer was sitting in a

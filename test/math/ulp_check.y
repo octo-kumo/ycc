@@ -118,6 +118,13 @@ def is_two_arg(name: str) -> bool {
 //     exponent. Written as a two_sum of 2*z and (z*w)*P it is 2.3 times more
 //     accurate, and both pow cases went with it.
 //
+//   * acos was `pi/2 - asin(x)`, and near x = 1 that answer is 3e-8 against a
+//     pi/2 -- eight digits cancel before the answer exists, and
+//     acos(1 - 4e-17) was FORTY ulps out. Its large half now takes the
+//     half-angle quantity asin's kernel already computes, which is also FASTER
+//     (77.3 ns/call against 93.3, and 1255 Ir against 1975) because it skips
+//     asin's sign handling and the subtraction.
+//
 //   * asin used to reach atan, whose own ulp lands inside the answer whole, and
 //     then needed `two = 2*asin(s)` to be a double before the pi/2 subtraction,
 //     whose half-ulp is a whole ulp of the answer. Its own 24-term kernel on the
