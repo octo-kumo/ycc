@@ -40,3 +40,5 @@ compiler-audit
 examples/**
 !examples/**/
 !examples/**/*.*
+__pycache__/
+*.pyc

@@ -95,6 +95,9 @@ awk '/\\begin\{description\}/ { on = 1 } on { print } /\\end\{description\}/ { o
     sed 's/^\\ic{//; s/($//; s/\\_/_/g; s/^[a-z]*\././' | sort -u > "$TMP/builtins"
 {
     cat "$ROOT"/test/y/native/t*.y
+    # the ulp harness's calls: it is what calls std/math.y's float layer, and it
+    # lives outside test/y/native (it reads a table, so it is not a fixture)
+    cat "$ROOT"/test/math/*.y
     for s in "$ROOT"/test/sh/test_*.sh; do
         [ "$(basename "$s")" = test_coverage.sh ] || cat "$s"
     done

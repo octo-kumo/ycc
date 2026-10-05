@@ -59,6 +59,8 @@ static Yv *parse_imm_num(Yv *s);
 static Yv *parse_mem(Yv *t);
 static Yv *parse_mem_head(Yv *t, Yv *head, Yv *parts);
 static Yv *parse_mem_rip(Yv *t, Yv *head, Yv *parts);
+static Yv *parse_mem_ripoff(Yv *t, Yv *head, Yv *off, Yv *parts);
+static Yv *parse_mem_ripdisp(Yv *t, Yv *lbl, long disp, Yv *parts);
 static Yv *parse_mem_disp(Yv *t, Yv *head, Yv *parts);
 static Yv *parse_mem_regs(Yv *t, Yv *parts, long disp);
 static Yv *mem_rest(Yv *t, Yv *parts, long disp, long bn);
@@ -73,6 +75,7 @@ Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
 Yv *labmap_get(Yv *m, Yv *name);
 static Yv *labmap_build(Yv *labels);
 static Yv *label_addr(Yv *lmap, long code_len, long pad, Yv *name);
+static Yv *label_addr_off(Yv *lmap, long code_len, long pad, Yv *name, long plus);
 static Yv *asm_assemble_line(Yv *lines, long li, long lbase, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err);
 static Yv *ir_enc_item(Yv *ir, long at, long sec, Yv *offs, Yv *where);
 static Yv *asm_ir_st(long sec, Yv *offs, Yv *items, Yv *labels, Yv *err, long lno);
@@ -433,16 +436,48 @@ static Yv *parse_mem(Yv *t) {
 }
 
 static Yv *parse_mem_head(Yv *t, Yv *head, Yv *parts) {
-    /* (split: non-empty head narrows; rip-label vs numeric displacement.) */
+    /* (split: non-empty head narrows; a numeric displacement, a rip-relative
+       label, or a label with a byte offset into a table.) */
     if (is_num_text(head)) {
         return parse_mem_disp(t, head, parts);
     } else {
-        return parse_mem_rip(t, head, parts);
+        long plus = ys_index_of(head, ys("+"));
+        if (plus < 0) {
+            return parse_mem_rip(t, head, parts);
+        } else {
+            return parse_mem_ripoff(t, head,
+                                    ys_trim(ys_slice(head, plus + 1, yv_len(head))), parts);
+        }
+    }
+}
+
+/* label+N(%rip): the N-th entry of a table. This is not a nicety -- a
+   transcendental's kernel is twelve `mulsd c7(%rip)`-shaped reads of one
+   coefficient table, and a label per coefficient costs the shaker ~2K
+   instructions of label-map fixpoint each, forever, on every compile.
+
+   The offset stays part of the LABEL (`tab+8` reaches label_addr whole), so the
+   fixup needs no field of its own -- see the note on Fixup in enc64.c. */
+static Yv *parse_mem_ripoff(Yv *t, Yv *head, Yv *off, Yv *parts) {
+    if (!is_num_text(off)) {
+        return yr(3, "ok", yv_bool(0),
+                  "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
+                            "a", ys(""), "b", ys(""), "name", ys(""),
+                            "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
+                            "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
+                  "error", ys_cat(ys_cat(ys_cat(ys("bad table offset '"), off), ys("'")), ys("")));
+    } else {
+        return parse_mem_ripdisp(t, head, 0, parts);
     }
 }
 
 static Yv *parse_mem_rip(Yv *t, Yv *head, Yv *parts) {
-    /* label(%rip) — mem-shape built ONLY here.
+    return parse_mem_ripdisp(t, head, 0, parts);
+}
+
+static Yv *parse_mem_ripdisp(Yv *t, Yv *lbl, long disp, Yv *parts) {
+    /* label(%rip), with disp the byte offset into the table -- mem-shape built
+       ONLY here.
        NOTE: nested ifs, not `||` (see is_digit_ch note). */
     if (yv_len(parts) != 1) {
         return yr(3, "ok", yv_bool(0),
@@ -463,7 +498,7 @@ static Yv *parse_mem_rip(Yv *t, Yv *head, Yv *parts) {
                   "op", yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(-1), "idx", yv_long(-1), "scale", yv_long(1),
-                            "disp", yv_long(0), "rip", yv_bool(1), "lbl", head),
+                            "disp", yv_long(disp), "rip", yv_bool(1), "lbl", lbl),
                   "error", ys(""));
     }
 }
@@ -817,11 +852,39 @@ static Yv *labmap_build(Yv *labels) {
 static Yv *label_addr(Yv *lmap, long code_len, long pad, Yv *name) {
     Yv *e = labmap_get(lmap, name);
     if (yv_l(yr_get(e, "sec")) < 0) {
-        return yr(2, "ok", yv_bool(0), "addr", yv_long(0));
+        /* `tab+8`: the eighth byte of a table, which is how one label serves a
+           whole coefficient table. Only on a miss, so the cost is nothing on
+           every jump and every ordinary rip reference. */
+        long plus = ys_index_of(name, ys("+"));
+        if (plus > 0) {
+            return label_addr_off(lmap, code_len, pad, name, plus);
+        } else {
+            return yr(2, "ok", yv_bool(0), "addr", yv_long(0));
+        }
     } else if (yv_l(yr_get(e, "sec")) == 0) {
         return yr(2, "ok", yv_bool(1), "addr", yr_get(e, "off"));
     } else {
         return yr(2, "ok", yv_bool(1), "addr", yv_long(code_len + pad + yv_l(yr_get(e, "off"))));
+    }
+}
+
+/* The `name+off` half of label_addr. It re-reads `name` rather than taking the
+   two halves, so the lookup key is the same string the label map holds. */
+static Yv *label_addr_off(Yv *lmap, long code_len, long pad, Yv *name, long plus) {
+    Yv *off = ys_trim(ys_slice_from(name, plus + 1));
+    if (!is_num_text(off)) {
+        return yr(2, "ok", yv_bool(0), "addr", yv_long(0));
+    } else {
+        Yv *e = labmap_get(lmap, ys_slice(name, 0, plus));
+        if (yv_l(yr_get(e, "sec")) < 0) {
+            return yr(2, "ok", yv_bool(0), "addr", yv_long(0));
+        } else if (yv_l(yr_get(e, "sec")) == 0) {
+            return yr(2, "ok", yv_bool(1), "addr",
+                      yv_long(yv_l(yr_get(e, "off")) + ys_tonum(off)));
+        } else {
+            return yr(2, "ok", yv_bool(1), "addr",
+                      yv_long(code_len + pad + yv_l(yr_get(e, "off")) + ys_tonum(off)));
+        }
     }
 }
 
@@ -1297,31 +1360,23 @@ static Yv *asm_quad(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
 
 static int asm_quad_bad(Yv *rest) {
     /* `!is_num_text(rest)` is fine — `!` (an `un` node) needs a bool operand
-       (types.y typeof_expr's "un" arm) and is_num_text returns one. The
-       range test below stays a separate arm because the two causes need
-       different messages (see asm_quad_err). */
+       (types.y typeof_expr's "un" arm) and is_num_text returns one.
+       A NEGATIVE value is allowed, and has to be: a .quad is a bit pattern, and
+       half of every double's pattern reads as a negative long (that is the sign
+       bit). Rejecting it made a table of IEEE-754 constants impossible to
+       write, which is what every transcendental's coefficient table is. */
     if (!is_num_text(rest)) { return 1; }
-    else if (ys_tonum(rest) < 0) { return 1; }
     else { return 0; }
 }
 
 static Yv *asm_quad_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
-    /* (split: error shape built ONLY here — one message per cause.)
-       NOTE: nested ifs (see is_digit_ch note); both arms share the key set. */
+    /* One cause, one message — see asm_quad_bad on why there is no second. */
     (void)line;
-    if (!is_num_text(rest)) {
-        return yr(4,
-                  "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad .quad value '")), rest), ys("'")),
-                  "sec", yv_long(sec), "offs", offs,
-                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
-    } else {
-        return yr(4,
-                  "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": negative .quad value")),
-                  "sec", yv_long(sec), "offs", offs,
-                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
-    }
+    return yr(4,
+              "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad .quad value '")), rest), ys("'")),
+              "sec", yv_long(sec), "offs", offs,
+              "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                         "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
 }
 
 static Yv *asm_quad_go(long sec, Yv *offs, Yv *rest) {
@@ -2079,6 +2134,8 @@ static Yv *patch_item_rel(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, 
         return yr(2, "bytes", bytes,
                   "err", ys_cat(ys_cat(ys("undefined label '"), yr_get(fx, "lbl")), ys("'")));
     } else {
+        /* label_addr has already added `tab+8(%rip)`'s 8, so this is the target
+           less the address past the instruction. */
         long v = yv_l(yr_get(t, "addr")) - (base + yv_l(yr_get(it, "len")));
         return yr(2, "bytes", patch32(bytes, at, v), "err", ys(""));
     }

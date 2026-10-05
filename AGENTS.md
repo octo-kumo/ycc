@@ -306,6 +306,12 @@ replaces the std one at link time).
 - `&&` / `||` short-circuit, in both forms. Operands need not be `bool` —
   any non-zero value is true (`typeof_logic` in `types.y`).
 - Recursion uses `self`, not the function's own name.
+- **`native def f(params) -> T [= "label"];`** is a declaration with no body
+  whose implementation is an assembly label (docs `03-grammar.tex`, NATIVE.md
+  "Backend"). It is the way std modules reach raw machine primitives: the
+  return type must be written, the label must start with `y_`, and the
+  declaration must be at the top level under its own name. `native` is a
+  reserved keyword.
 - A nested `def` captures the enclosing bindings **that are already in
   scope where it is written** (a name declared later is an
   undefined-variable error — `let`s do not hoist, `rename.y`). Captures
@@ -389,9 +395,11 @@ replaces the std one at link time).
 
 ## Layout
 
-- `src/y/arch/*.s` — the compiler's own assembly (the arch prelude:
-  allocator, traps, string/array cores, `y_fmod`, float formatting, the
-  thread runtime), embedded by both copies — see PORTING.md rule 11.
+- `src/y/arch/*.s` — the compiler's own assembly: the arch prelude
+  (`prelude.s`: allocator, traps, string/array cores, `y_fmod`, float
+  formatting), the float primitives `math.s` (`y_sqrt`, `y_to_int`, `y_fbits`,
+  `y_bitsf` — what a `native def` reaches for), and the thread runtime
+  (`threads.s`) — embedded by both copies, see PORTING.md rule 11.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`
@@ -401,7 +409,9 @@ replaces the std one at link time).
   in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string
   methods) — the four embedded into the compiler — and `fs.y` (files,
   paths, directories: `import fs;`), `net.y` (TCP, DNS), `struct.y`,
-  `crypto.y`, `x509.y`, `tls.y` (a TLS 1.3 client), `regex.y` (patterns:
+  `math.y` (integers, bits, float comparisons and constants, RNGs, `[float]`
+  array work: `import math;` -- no transcendentals yet, they need machine
+  primitives Y cannot reach), `crypto.y`, `x509.y`, `tls.y` (a TLS 1.3 client), `regex.y` (patterns:
   `import regex;` — a Pike VM over bytes, linear time, no
   backreferences)).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value

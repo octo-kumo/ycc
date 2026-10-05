@@ -236,6 +236,274 @@ print(struct.get_u8(hdr, 9));                  // 65 -- the fill's byte, by offs
 \end{lstlisting}
 \end{description}
 
+\subsection{Mathematics (the math module)}
+\label{sec:builtin-math}
+
+\ic{import math;} brings number helpers: integer and bit twiddling, the float
+comparisons and constants, random numbers, and whole-array arithmetic over
+\ic{[float]}. Every function is called through the \ic{math} namespace.
+
+Y has no overloading, so \ic{min}, \ic{max}, \ic{abs}, \ic{clamp} and \ic{sign}
+take \ty{long}s and their float counterparts carry an \ic{f}: \ic{fmin},
+\ic{fmax}, \ic{fabs}, \ic{fsign}.
+
+\ic{math.sqrt}, \ic{math.floor}, \ic{math.ceil}, \ic{math.trunc},
+\ic{math.round}, \ic{math.fract}, \ic{math.cbrt}, \ic{math.hypot},
+\ic{math.to\_int}, \ic{math.ldexp}, \ic{math.frexp}, \ic{math.nextafter},
+\ic{math.is\_signed\_zero} and the bit casts \ic{math.fbits} /
+\ic{math.bitsf} need a machine primitive Y has no spelling for: a truncating
+\ty{float}-to-\ty{long} cast, or a look at a float's bits. The module declares
+those with \ic{native def} (Section~\ref{sec:grammar}) and the four \ic{y\_}
+routines behind them live in \ic{src/y/arch/math.s}; everything else here,
+\emph{including every transcendental below}, is ordinary Y.
+
+The transcendentals are written the way the good libraries write them, and the
+two halves of that matter separately. Each polynomial is a \emph{correction} to a
+term already in hand --- $\ty{e}^r = 1 + r(1 + rQ(r))$,
+$\log m = z(2 + z^2P(z^2))$ with $z = (m-1)/(m+1)$, $\sin x = x(1 + x^2P(x^2))$,
+$\cos x = 1 - x^2P(x^2)$ --- so its error reaches the answer multiplied by the
+argument's square rather than standing on its own. And every coefficient is split
+in two with the low parts carried in a second accumulator, because Horner's rule
+rounds once a term and a degree-$n$ kernel otherwise sits $n$ ulps out for good;
+the split costs one multiply and one add a term and nothing at all in the
+constants. \ic{test/math/gen\_kernel.py} fits the coefficients, prints them as
+the literals in the module, and reports the error of the split evaluation in ulps
+of the answer --- so no coefficient set was ever pasted in unseen.
+
+Argument reduction is Cody--Waite, and \ic{$\pi/2$} gets four pieces (to about
+fifty decimal digits) where \ic{$\ln 2$} gets two, because the double nearest
+$\pi$ is \num{1.2e-16} from it and a reduction good to \num{1e-26} is already a
+hundred thousand ulps of \ic{math.sin(math.pi)}.
+
+\emph{How close.} \ic{test/sh/test\_math.sh} is the gate: a checked-in table of
+IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{1596} cases, written
+by \ic{test/math/gen\_ulp\_table.py} from this platform's libm) and a program
+that reads it, calls this module, and measures the gap in ulps. Two NaNs count as
+the same answer however their signs differ --- a sign bit is not an ulp --- and any
+other NaN is infinitely far away. Over that table every function here is within
+\emph{one} ulp of all its pinned edge cases (the overflows, the flushes, the
+poles, both sides of 1, the signed zeros) and of more than \num{99\%} of a
+\num{1500}-case spread; the four exceptions sit at two or three, all of them
+answers that are a sum of two accurately computed terms (\ic{cosh},
+\ic{asin}) or the logarithm's own error multiplied by an exponent (\ic{pow}),
+and those would need a fused multiply-add or a fully compensated Horner --- four
+times the arithmetic in every kernel, to move a handful of cases. \ic{pow} is the
+one to know about: its accuracy degrades with the \emph{exponent}, not the base,
+so \ic{math.pow(x, 0.5)} for a large \ic{x} is a few ulps out while
+\ic{math.pow(x, 3.0)} is exact (an integer exponent is computed by squaring).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{math.sqrt(x)}] The IEEE square root, and the one function here that
+  is a machine instruction: correctly rounded, so \ic{math.sqrt(2)} is the double
+  below and not a number computed to a few digits. A negative \ty{x} is the
+  NaN; $\pm\infty$ is itself.
+\item[\ic{math.floor(x)}, \ic{math.ceil(x)}, \ic{math.trunc(x)}] The
+  greatest integer $\leq x$, the least integer $\geq x$, and the integer part
+  alone. A zero keeps its sign (\ic{math.floor(-0.0)} is \ic{-0.0}), and so does an
+  input too large for a \ty{long}, which comes back unchanged.
+\item[\ic{math.round(x)}] The nearest integer, halves away from zero --- C's
+  \ic{round}, which is neither the current rounding mode nor \ic{rint}.
+\item[\ic{math.fract(x)}] The fractional part, $x-\ty{trunc}(x)$, with
+  $x$'s sign. An infinite \ty{x} gives a NaN, as C's does.
+\item[\ic{math.to\_int(x)}] The integer part as a \ty{long}, truncated toward
+  zero. A NaN, an infinity, or a magnitude past the largest \ty{long} has no
+  answer, and \emph{stops the program} (\ic{runtime error: a float with no
+  integer part a long holds}) rather than returning a value indistinguishable
+  from a real one.
+\item[\ic{math.cbrt(x)}] The cube root. The exponent is split into threes
+  first, so the Newton iteration that finishes the job always begins within
+  17\% of the answer: a cube root's iteration is only locally convergent, and
+  the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
+  is \num{1e27} for a subnormal.
+\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: the larger
+  magnitude divides both out first, and that is exact.
+\item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
+  is exact while the result stays normal, so this is the one scaling that never
+  rounds.
+\item[\ic{math.frexp(x)}] $[\,\ty{fraction\ bits}, \;\ty{exponent}\,]$: the
+  fraction's IEEE-754 pattern, a value in $[0.5, 1)$, and the exponent, such that
+  \ic{math.ldexp(math.bitsf(math.frexp(x)[0]), math.frexp(x)[1])} is $x$ exactly.
+  Bits rather than a float because this is the one conversion with no rounding
+  in it at all.
+\item[\ic{math.nextafter(x, y)}] The next double from \ty{x} toward \ty{y} (C's
+  \ic{nextafter}, also \ic{nexttoward} toward \ty{y}). The step is one unit in
+  the last place, and its \emph{direction flips with the sign}: the bit patterns
+  run the other way for a negative double.
+\item[\ic{math.fbits(x)}, \ic{math.bitsf(b)}] A double's 64-bit pattern as a
+  \ty{long}, and a \ty{long} read back as a double. The two casts Y cannot
+  spell, and the reason the names above can exist at all.
+\item[\ic{math.is\_signed\_zero(x)}] True for \ic{-0.0}, which no comparison
+  can see.
+  \item[\ic{math.exp(x)}, \ic{math.exp2(x)}, \ic{math.expm1(x)}] $e^x$, $2^x$
+    and $e^x-1$. The argument is split as $k\ln 2 + r$, the kernel computes
+    $e^r$ in $[0.707, 1.414)$, and $2^k$ goes back on by adding to the exponent
+    field --- which is exact, so the whole answer is as accurate as the kernel and
+    the reduction. The top of the range is the interesting part: $2^{1024}$ is an
+    overflow and $\round(x\log_2 e)$ reaches \num{1024} for every $x$ above
+    \num{709.4}, so the last whole $\ln 2$ stays in $r$ and its factor of two
+    goes in by hand. \ic{expm1} is not $e^x - 1$ with a cast: it is
+    $2^k\!\left(e^r-1\right) + \left(2^k-1\right)$, and the second term is
+    \emph{exact} ($2^k-1$ needs at most 53 bits), so nothing is ever subtracted
+    from something nearly equal to it --- which is the whole difficulty with
+    $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}, and at $x = -9$ it is
+    \num{1.23e-4} $- 1$ with the answer's last bits gone.
+    \ic{exp} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{native def}: \num{106} instructions with no calls at
+    all, against the ten Y functions it replaced and \num{1422} instructions a
+    call. It is \emph{bit-identical} to that loop --- same operations in the same
+    order --- and \texttt{test/y/native/t311\_math\_exp\_asm.y} says so over
+    \num{10420} arguments; \ic{exp\_y} is that loop, kept as the oracle, and
+    \texttt{test/math/gen\_exp.py} generates the routine from the module's own
+    constants so the two cannot drift apart.
+  \item[\ic{math.log(x)}, \ic{math.log2(x)}, \ic{math.log10(x)},
+    \ic{math.log1p(x)}] $\log x$ in the base given. \ic{frexp} splits
+    $x = f\,2^e$ and $f$ is doubled into $[1/\sqrt{2}, \sqrt{2})$ when it is
+    below $1/\sqrt{2}$, which keeps $|z| = |(m-1)/(m+1)|$ at $\sqrt{2}-1$ and the
+    kernel short; the two halves of the answer --- the small $z$ part and the
+    large $e\ln 2$ --- are each computed to their own scale and added last.
+    $m+1$ rounds as well as the division, and its half-ulp is a whole ulp of $z$,
+    so \ic{two\_sum} takes its residual out and one more divide turns it into the
+    low part of the quotient. \ic{log1p} is \ic{log}'s kernel with $m = 1+x$ and
+    $z = x/(2+x)$, so a tiny \ic{x} comes out as itself instead of as
+    \ic{log(1.0)} $-$ \ic{0}.
+    \ic{log} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t312\_math\_log\_asm.y} says so over
+    \num{10317} arguments --- \num{1335} instructions a call against \num{115},
+    as \num{115} in one routine with no calls at all against eight functions
+    and a hundred and thirty-odd calls between them. The module's \ic{nan} is
+    \ic{0.0}/\ic{0.0}, so the assembly's is a divide rather than a stored
+    constant: the default NaN carries the sign bit, and the one you would write
+    down is a different double from the one the Y returns.
+  \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
+    reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
+    round (the first piece's product needs more than 53 bits once $n$ passes
+    \num{2^21}, the first tail piece's once $n$ passes \num{2^10}; the other two
+    are \num{3.5e-27} and below, where the rounding is twenty orders under the
+    answer's last bit however large $n$ grows). The quadrant is $n \bmod 4$
+    normalized --- C's \% keeps the sign of the dividend, so a negative count
+    comes out negative. The range is $|x| \lesssim \num{2^52}$: like every library
+    without Payne--Hanek reduction, a larger argument reduces to something near
+    $x$ rather than to its own angle. \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
+    lets one routine answer both: \ic{sin} and \ic{cos} are two instructions
+    each that set a register and fall into the same body, and the quadrant picks
+    between the two halves at the end with two tests of the index rather than
+    eight cases. \ic{math.sin} and \ic{math.cos} are machine code
+    (\texttt{src/y/arch/math.s}), reached through \ic{native def} and
+    \emph{bit-identical} to the loops they replaced ---
+    \texttt{test/y/native/t313\_math\_sin\_asm.y} says so over \num{10410}
+    arguments each --- \num{190} instructions a call against \num{1775}, and one
+    routine for both rather than one for each. \ic{sin\_y} and \ic{cos\_y} are
+    the loops, kept as the oracle, and \texttt{test/math/gen\_sin.py} generates
+    the routine from the module's own constants. The negation is
+    \ic{0.0} $- x$ and not a sign-bit flip, which is the difference in
+    \ic{sin(-0.0)}.
+  \item[\ic{math.asin(x)}, \ic{math.acos(x)}, \ic{math.atan(x)},
+    \ic{math.atan2(y, x)}] The inverse trigonometry. \ic{atan} folds until its
+    argument is inside the kernel's range --- the reciprocal above 1, then the
+    tangent addition at $\pi/8$ --- and both folds are exact identities, so unlike
+    a division they cost nothing of their own. \ic{asin} above $0.5$ uses the
+    half-angle step $\asin x = \pi/2 - 2\asin\sqrt{(1-x)/2}$, one step, with the
+    square root computed from $1-x$ alone (which Sterbenz makes exact) so nothing
+    is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \asin x$ with the
+    subtraction corrected afterwards, because $\pi/2$ minus something an ulp off
+    is an ulp off. \ic{atan2} is the quadrant of $(y,x)$, with every zero and
+    infinity spelled out --- and the sign of a \emph{zero} is a direction:
+    \ic{math.atan2(-0.0, -1.0)} is $-\pi$.
+  \item[\ic{math.sinh(x)}, \ic{math.cosh(x)}, \ic{math.tanh(x)}] One formula
+    each, out of \ic{expm1}:
+    $\cosh x = 1 + (\expm1 x + \expm1(-x))/2$ and
+    $\tanh x = \expm1(2x)/(\expm1(2x) + 2)$. The plain forms ---
+    $(e^x+e^{-x})/2$ and $\sinh/\cosh$ --- are a rounding or two worse, because
+    each of their terms is computed to its own last bit and then added.
+    \ic{sinh} needs a polynomial of its own below \num{0.5}, where $(e^x-e^{-x})/2$
+    is a subtraction of nearly equal numbers.
+  \item[\ic{math.pow(x, y)}] $x^y$, with C's cases. An integer exponent is
+    computed by repeated squaring, which is exact --- so every integer exponent
+    below \num{1024} comes out exactly, and it is the only way a negative base
+    is defined at all. Past that, and for a fractional exponent, it is
+    $\expm1$-style: the logarithm in two parts, the exponent in two parts, and
+    the reduced argument in two parts, because the exponent multiplies the
+    logarithm's error --- one ulp of an exponent of \num{500} is
+    \num{5.7e-14} of the answer, which is 360 ulps of it. That is also why $1/\ln 2$
+    is a pair of constants here and not one. \ic{math.pow} is machine code
+    (\texttt{src/y/arch/math.s}) like \ic{exp}, \ic{log} and \ic{sin}, reached
+    through \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t315\_math\_pow\_asm.y} says so over \num{15137}
+    pairs, every arm of the dispatch and then the general path from a subnormal
+    base to an overflowing exponent --- \num{472} instructions a call against
+    \num{3004}. It is the only kernel in the file with a frame, because it is the
+    only one that \emph{calls}: the dispatch, the two-part logarithm, $\exp 2$ of
+    the pair and \ic{ldexp} are four routines, and every SSE register is
+    caller-saved, so what has to outlive a call lives in memory. \ic{pow\_y} is the
+    loop, kept as the oracle, and \texttt{test/math/gen\_pow.py} generates the
+    routine from the module's own constants --- the same generator shape as the
+    three before it, and its intermediate probes are what located the four bugs
+    listed in \texttt{ideas/math.md} \S8.
+\item[\ic{math.min(a, b)}, \ic{math.max(a, b)}] The smaller or larger of two
+  \ty{long}s.
+\item[\ic{math.abs(x)}] \ic{|x|}. The most negative \ty{long} has no positive
+  counterpart and comes back unchanged, as in C.
+\item[\ic{math.clamp(x, lo, hi)}, \ic{math.sign(x)}] \ty{x} moved into
+  \ic{[lo, hi]}; and \ic{-1}, \ic{0} or \ic{1}.
+\item[\ic{math.gcd(a, b)}, \ic{math.lcm(a, b)}] The greatest common divisor
+  and the least common multiple, both $\geq 0$; \ic{math.gcd(0, 0)} and
+  \ic{math.lcm(0, x)} are \ic{0}.
+\item[\ic{math.isqrt(n)}] $\lfloor\sqrt{n}\rfloor$ for $n \geq 0$, and \ic{0}
+  for a negative $n$.
+\item[\ic{math.popcount(x)}, \ic{math.ctz(x)}, \ic{math.clz(x)}] The number of
+  set bits, of trailing zeros and of leading zeros in the 64-bit word;
+  \ic{math.ctz(0)} and \ic{math.clz(0)} are \ic{64}, since \ic{0} has no other answer. A
+  negative \ty{x} is counted in its two's-complement form, so
+  \ic{math.popcount(-1)} is \ic{64} and \ic{math.clz(-1)} is \ic{0}.
+\item[\ic{math.next\_pow2(x)}] The smallest power of two $\geq$ \ty{x}; \ic{1}
+  for $x \leq 1$, and \ic{0} past \ic{2\^{}62}, where no such power fits.
+\item[\ic{math.mul\_mod(a, b, m)}, \ic{math.pow\_mod(b, e, m)}] \ic{a * b} and
+  \ic{b\^{}e} reduced modulo \ic{m}, for \ic{0 < m <= 2147483647}: the operands
+  are reduced first, so the product cannot overflow a \ty{long}. A larger
+  modulus would need a 128-bit product and would be silently wrong.
+  \ic{pow\_mod} gives \ic{0} for a negative exponent.
+\item[\ic{math.inv\_mod(a, m)}] The inverse of \ty{a} modulo \ic{m}, or \ic{0}
+  when there is none.
+\item[\ic{math.fmin(a, b)}, \ic{math.fmax(a, b)}] The smaller or larger float,
+  with C's rule that a NaN loses to the other operand.
+\item[\ic{math.fabs(x)}, \ic{math.fsign(x)}] \ic{|x|}, with \ic{-0.0} coming
+  back as \ic{+0.0}; and \ic{-1.0}, \ic{0.0} or \ic{1.0}.
+\item[\ic{math.lerp(a, b, t)}] \ic{a + (b - a) * t}.
+\item[\ic{math.is\_nan(x)}, \ic{math.is\_inf(x)}, \ic{math.is\_finite(x)}]
+  The three IEEE classifications, as \ty{bool}.
+\item[\ic{math.pi}, \ic{e}, \ic{tau}, \ic{ln2}, \ic{ln10}, \ic{sqrt2},
+  \ic{phi}, \ic{nan}, \ic{inf}] Constants, each the \ty{float} nearest the
+  mathematical value; \ic{math.nan} and \ic{math.inf} are values, not calls.
+\item[\ic{math.splitmix64(state)}, \ic{math.seed\_xoshiro256(state, seed)},
+  \ic{math.xoshiro256pp(state)}, \ic{math.xoshiro256ss(state)}] SplitMix64 and
+  xoshiro256** / xoshiro256+. The state is a \ic{[long]} the caller owns and
+  passes in, so a stream is reproducible from its seed: \ic{splitmix64} wants
+  one element, the xoshiro pair four, and a shorter array traps. Seed with
+  \ic{seed\_xoshiro256}, which fills four words from SplitMix64 --- xoshiro must
+  not start from all zeros.
+\item[\ic{math.rand\_unit(state)}, \ic{math.rand\_range(state, n)}] A
+  \ty{float} in \ic{[0, 1)} from 53 random bits, and a \ty{long} in \ic{[0, n)}
+  with no modulo bias, for \ic{0 < n <= 2\^{}62}. Both drive xoshiro, so they
+  want the four-element state.
+\item[\ic{math.fsum(a)}, \ic{math.fsum\_kahan(a)}] The sum of a \ic{[float]},
+  the second with Neumaier compensation, which keeps the error near one ulp of
+  the total however long the array is. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
+  \ic{fmax\_of}, \ic{fscale} and \ic{faxpy} are machine code
+  (\texttt{src/y/arch/math.s}), reached through \ic{native def}; each returns
+  exactly what the equivalent Y loop would, which is what makes it a
+  drop-in rather than a second opinion, and \ic{bench/y/fmath.y} measures them
+  at \num{0.37} ns an element against \num{1.26} for the loop.
+\item[\ic{math.fdot(a, b)}] The dot product of two equal-length arrays.
+\item[\ic{math.fmin\_of(a)}, \ic{math.fmax\_of(a)}] The smallest and largest
+  element, or NaN for an empty array.
+\item[\ic{math.fscale(a, k)}, \ic{math.faxpy(y, k, x)}] \ic{a *= k} and
+  \ic{y += k * x}, in place.
+\item[\ic{math.fmean(a)}, \ic{math.fvariance(a)}] The arithmetic mean and the
+  sample variance (dividing by $n-1$), the latter by the two-pass method; NaN
+  for an empty array, and NaN for a variance of fewer than two elements.
+\end{description}
+
 \subsection{Options}
 \label{sec:builtin-option-b}
 

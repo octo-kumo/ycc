@@ -344,7 +344,7 @@ Yv *parse_primary(Yv *toks, long p) {
             return parse_block(toks, p);
         }
     } else if (is_kw(toks, p, ys("def"))) {
-        return parse_func(toks, p);
+        return parse_func(toks, p, 0);
     } else if (is_kw(toks, p, ys("if"))) {
         return parse_if(toks, p);
     } else if (is_kw(toks, p, ys("while"))) {
@@ -384,8 +384,8 @@ Yv *sync_type(Yv *nm) {
 
 /* A block as a function of no parameters, its return type inferred. */
 Yv *block_func(Yv *body, long ln, long cl) {
-    return yr(8, "k", yv_long(K_func), "params", yav(0), "ptypes", yav(0), "ret", yr(1, "k", yv_long(K_tnone)),
-              "body", body, "defs", yav(0), "line", yv_long(ln), "col", yv_long(cl));
+    return yr(9, "k", yv_long(K_func), "params", yav(0), "ptypes", yav(0), "ret", yr(1, "k", yv_long(K_tnone)),
+              "body", body, "defs", yav(0), "label", ys(""), "line", yv_long(ln), "col", yv_long(cl));
 }
 
 Yv *parse_postfix(Yv *toks, long p) {
@@ -1427,16 +1427,33 @@ Yv *num_lit_type(Yv *s) {
     }
 }
 
-Yv *parse_func(Yv *toks, long p) {
-    // Named:    def name(params) -> ret { body }   (top-level declaration)
-    // Anonymous: def(params) -> ret { body }        (function expression)
+Yv *parse_func(Yv *toks, long p, int isnat) {
+    // Named:    def name(params) -> ret { body }      (top-level declaration)
+    // Anonymous: def(params) -> ret { body }           (function expression)
+    // Native:   native def name(params) -> ret [= "label"];
+    //           a declaration with no body -- the assembly label named after
+    //           `=` (or `y_<name>`) IS the body
     long ln = tline(toks, p);
     long cl = tcol(toks, p);
-    long pos = p + 1;  // skip 'def'
+    long pos = p + 1;  // skip 'def' (or 'native', handled just below)
     Yv *fname = ys("");
     // A malformed header plants its errors here; they run first in the body.
     Yv *derrs = yav(0);
-    // optional function name (present unless next token is '(')
+    if (isnat) {
+        // 'native' is a keyword, so `p` is on it and `def` must follow.
+        if (is_kw(toks, pos, ys("def"))) {
+            pos = pos + 1;
+            ;
+        } else {
+            derrs = ya_push(derrs,
+                            expect_err(toks, pos,
+                                       ys("'def' after 'native'")));
+            ;
+        }
+        ;
+    }
+    // optional function name (present unless next token is '(') -- a native
+    // declaration has no anonymous form, so there it is required.
     // Only the optional-name branch changes `fname` and `pos`; both are
     // consumed by the common parsing path below.
     if (!is_punct(toks, pos, ys("("))) {
@@ -1444,12 +1461,22 @@ Yv *parse_func(Yv *toks, long p) {
             fname = tv(toks, pos);
             pos = pos + 1;
             ;
+        } else if (isnat) {
+            derrs = ya_push(derrs,
+                            expect_err(toks, pos,
+                                       ys("a name after 'native def'")));
+            ;
         } else {
             derrs = ya_push(derrs,
                             expect_err(toks, pos,
                                        ys("a function name or '('")));
             ;
         }
+        ;
+    } else if (isnat) {
+        derrs = ya_push(derrs,
+                        expect_err(toks, pos,
+                                   ys("a name after 'native def'")));
         ;
     }
     int hbad = yv_len(derrs) > 0;
@@ -1618,20 +1645,56 @@ Yv *parse_func(Yv *toks, long p) {
         }
         ;
     }
-    Yv *body = parse_block(toks, pos);
-    Yv *bnode = yr_get(body, "node");
-    if (yv_len(derrs) > 0) {
-        Yv *bst = yr_get(bnode, "stmts");
-        Yv *nst = yav(0);
-        for (long di = 0; di < yv_len(derrs); di++) nst = ya_push(nst, ya_get(derrs, di));
-        for (long bi = 0; bi < yv_len(bst); bi++) nst = ya_push(nst, ya_get(bst, bi));
-        bnode = yr(4, "k", yv_long(K_block), "stmts", nst, "line", yr_get(bnode, "line"), "col", yr_get(bnode, "col"));
-    }
-    Yv *func = yr(8, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs);
-    if (ys_eq_lit(fname, "")) {
-        return res(func, yv_l(yr_get(body, "pos")));
+    if (isnat) {
+        // `= "label"` names the assembly entry point; leave it out and the
+        // declared name gives `y_<name>`.
+        Yv *label = ys_cat(ys("y_"), fname);
+        if (is_op(toks, pos, ys("="))) {
+            Yv *lr = parse_expr(toks, pos + 1);
+            pos = yv_l(yr_get(lr, "pos"));
+            Yv *lnode = yr_get(lr, "node");
+            if (yv_l(yr_get(lnode, "k")) == K_str) {
+                label = yr_get(lnode, "v");
+            } else {
+                derrs = ya_push(derrs,
+                                yr(4, "k", yv_long(K_err),
+                                   "msg",
+                                   ys("the label after '=' must be a string"),
+                                   "line", yv_long(tline(toks, pos)),
+                                   "col", yv_long(tcol(toks, pos))));
+                ;
+            }
+            ;
+        }
+        // no body: the declaration ends at the ';', which the statement loop
+        // consumes like any other statement's
+        if (!is_punct(toks, pos, ys(";"))) {
+            derrs = ya_push(derrs,
+                            expect_err(toks, pos,
+                                       ys("';' after a native declaration")));
+            ;
+        }
+        // the body holds only the header's errors, if any: a native has none
+        // of its own, and the checker reads them so they are reported once
+        Yv *bnode = yr(4, "k", yv_long(K_block), "stmts", derrs, "line", yv_long(ln), "col", yv_long(cl));
+        Yv *func = yr(9, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs, "label", label);
+        return res(yr(7, "k", yv_long(K_decl), "kind", ys("native"), "name", fname, "typ", yr(1, "k", yv_long(K_tnone)), "v", func, "line", yv_long(ln), "col", yv_long(cl)), pos);
     } else {
-        return res(yr(7, "k", yv_long(K_decl), "kind", ys("def"), "name", fname, "typ", yr(1, "k", yv_long(K_tnone)), "v", func, "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
+        Yv *body = parse_block(toks, pos);
+        Yv *bnode = yr_get(body, "node");
+        if (yv_len(derrs) > 0) {
+            Yv *bst = yr_get(bnode, "stmts");
+            Yv *nst = yav(0);
+            for (long di = 0; di < yv_len(derrs); di++) nst = ya_push(nst, ya_get(derrs, di));
+            for (long bi = 0; bi < yv_len(bst); bi++) nst = ya_push(nst, ya_get(bst, bi));
+            bnode = yr(4, "k", yv_long(K_block), "stmts", nst, "line", yr_get(bnode, "line"), "col", yr_get(bnode, "col"));
+        }
+        Yv *func = yr(9, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs, "label", ys(""));
+        if (ys_eq_lit(fname, "")) {
+            return res(func, yv_l(yr_get(body, "pos")));
+        } else {
+            return res(yr(7, "k", yv_long(K_decl), "kind", ys("def"), "name", fname, "typ", yr(1, "k", yv_long(K_tnone)), "v", func, "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
+        }
     }
 }
 
@@ -1760,6 +1823,11 @@ Yv *parse_stmt(Yv *toks, long p) {
         return parse_decl(toks, p);
     } else if (is_typedef_start(toks, p)) {
         return parse_typedef(toks, p);
+    } else if (is_kw(toks, p, ys("native"))) {
+        // `native def name(...) -> T [= "label"];` — a declaration with no
+        // body. parse_stmt sees it wherever it appears; the checker is what
+        // insists on the top level (a nested one has no assembly to land in).
+        return parse_func(toks, p, 1);
     } else if (is_kw(toks, p, ys("break")) || is_kw(toks, p, ys("continue"))) {
         /* `break;` and `continue;` -- see the same arm in src/y/parser.y,
            including why only the keyword is consumed and the `;` is left to
@@ -2565,7 +2633,49 @@ Yv *parse_program(Yv *toks) {
         }
         ;
     }
-    return yr(4, "k", yv_long(K_block), "stmts", stmts, "line", yv_long(1), "col", yv_long(1));
+    // A native def owns an assembly label, so it cannot share its name with
+    // another top-level declaration of the same unit. This is the only place
+    // that can see it: renaming makes every name unique, so by the time the
+    // checker runs the two would look like different names.
+    Yv *clash = yav(0);
+    long ci = 0;
+    while (ci < yv_len(stmts)) {
+        Yv *cs = ya_get(stmts, ci);
+        if (yv_l(yr_get(cs, "k")) == K_decl) {
+            Yv *ckind = yr_get(cs, "kind");
+            if (ys_eq_lit(ckind, "native")) {
+                Yv *cname = yr_get(cs, "name");
+                long co = 0;
+                while (co < yv_len(stmts)) {
+                    Yv *os = ya_get(stmts, co);
+                    if (co != ci && yv_l(yr_get(os, "k")) == K_decl &&
+                        ys_eq(yr_get(os, "name"), cname)) {
+                        clash = ya_push(
+                            clash,
+                            yr(4, "k", yv_long(K_err),
+                               "msg",
+                               ys_cat(ys_cat(ys("'"), cname),
+                                      ys("' is a native def and is declared again at the top level (a native def cannot share a name)")),
+                               "line", yr_get(cs, "line"),
+                               "col", yr_get(cs, "col")));
+                        ;
+                    }
+                    co = co + 1;
+                    ;
+                }
+                ;
+            }
+            ;
+        }
+        ci = ci + 1;
+        ;
+    }
+    Yv *all = yav(0);
+    for (long aci = 0; aci < yv_len(clash); aci++)
+        all = ya_push(all, ya_get(clash, aci));
+    for (long asi = 0; asi < yv_len(stmts); asi++)
+        all = ya_push(all, ya_get(stmts, asi));
+    return yr(4, "k", yv_long(K_block), "stmts", all, "line", yv_long(1), "col", yv_long(1));
 }
 
 // export { parse_program, parse_type_full, nameix_new, nameix_put,

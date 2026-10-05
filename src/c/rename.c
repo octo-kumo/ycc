@@ -1458,9 +1458,41 @@ Yv *rn_decl(Yv *node, Yv *st) {
      * its own shape's fields. */
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
         return rn_decl_def(node, st);
+    } else if (ys_eq_lit(yr_get(node, "kind"), "native")) {
+        return rn_decl_native(node, st);
     } else {
         return rn_decl_rest(node, st);
     }
+}
+
+/* A native def renames like a def, but there is no body to walk: it holds no
+ * code, only the header's errors, and the label it names is what the call
+ * sites resolve to -- so it rides through untouched. */
+Yv *rn_decl_native(Yv *node, Yv *st) {
+    return rn_decl_native_lookup(node, rn_lookup(st, yr_get(node, "name")), st);
+}
+
+Yv *rn_decl_native_lookup(Yv *node, Yv *u, Yv *st) {
+    if (ys_eq_lit(u, "")) {
+        Yv *b = rn_bind(st, yr_get(node, "name"));
+        return rn_decl_native_go(node, yr_get(b, "uniq"), yr_get(b, "st"));
+    } else {
+        return rn_decl_native_go(node, u, st);
+    }
+}
+
+Yv *rn_decl_native_go(Yv *node, Yv *u, Yv *st) {
+    Yv *f = yr_get(node, "v");
+    Yv *nf = yr(9, "k", yr_get(f, "k"), "params", yr_get(f, "params"),
+                "ptypes", rn_types(st, yr_get(f, "ptypes")),
+                "ret", rn_type(st, yr_get(f, "ret")),
+                "body", yr_get(f, "body"), "defs", yr_get(f, "defs"),
+                "label", yr_get(f, "label"), "line", yr_get(f, "line"),
+                "col", yr_get(f, "col"));
+    return yr(2, "st", st, "node",
+              yr(7, "k", yv_long(K_decl), "kind", ys("native"), "name", u,
+                 "typ", rn_type(st, yr_get(node, "typ")), "v", nf, "line",
+                 yr_get(node, "line"), "col", yr_get(node, "col")));
 }
 
 Yv *rn_decl_def(Yv *node, Yv *st) {
@@ -1632,10 +1664,11 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
         i = i + 1;
     }
     return yr(2, "st", st, "node",
-              yr(7, "k", yv_long(K_func), "params", params, "ptypes", rn_types(st, fptypes),
+              yr(9, "k", yv_long(K_func), "params", params, "ptypes", rn_types(st, fptypes),
                  "ret", rn_type(st, fret), "body",
                  yr(4, "k", yv_long(K_block), "stmts", body, "line",
                     yv_long(fline), "col", yv_long(fcol)),
+                 "defs", yav(0), "label", ys(""),
                  "line", yv_long(fline), "col", yv_long(fcol)));
 }
 

@@ -22,7 +22,8 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
 | `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
 | `src/y/pkg.y` | `ycc build`/`ycc vendor`: the `y.toml` reader (a TOML subset), the dependency graph, git fetching, `y.lock`, vendoring, and the hash behind the package objects' keys (*Packages* below) |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP, DNS, an HTTP server), `struct.y` (pack/unpack helpers), `crypto.y` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, RSA and ECDSA verification), `x509.y` (certificates, trust anchors, chain and name checks), `tls.y` (a TLS 1.3 client) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP, DNS, an HTTP server), `struct.y` (pack/unpack helpers), `math.y` (integers, bits, float
+comparisons and constants, RNGs, `[float]` array work), `crypto.y` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, RSA and ECDSA verification), `x509.y` (certificates, trust anchors, chain and name checks), `tls.y` (a TLS 1.3 client) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -210,6 +211,64 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   "what would a reasonable scoped functional language do" (TypeScript/Rust
   intuition): lexical scope, `self` for recursion, no implicit coercions
   (except `str`→`*T` and `none` unification), exhaustiveness where cheap.
+- **The float primitives (`src/y/arch/math.s`)** are the other half of the same
+  story: four functions (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`), each a
+  leaf reached through a `native def`, each written by hand because only the
+  machine can do it. `sqrtsd` is the hardware's own correctly-rounded root, so
+  sqrt is four instructions with no table and no tolerance; `cvttsd2si` is the
+  truncating conversion and returns the "integer indefinite" value for a NaN,
+  an infinity or an out-of-range magnitude, which the caller checks rather than
+  trusting; the two bit casts are moves. They live in `arch/*.s` like the rest
+  of the machine code (embedded by both copies, `make asm-check` reads them
+  with GNU `as`), and `native.y uses_math` looks at the program's references
+  before looking at them at all — a program that calls none of them pays
+  nothing, and one that does keeps the block through the ordinary shaking.
+  Their arguments come off the stack at `8(%rsp)` (leaf convention: the return
+  address is at `0(%rsp)`) and a float result goes back in `%rax` as its bits.
+- **The transcendental kernels (`src/y/arch/math.s`)** are a third kind of thing
+  in that file: not primitives, but whole functions that Y *can* write and the
+  machine writes several times faster. `y_exp`, `y_log`, `y_sin` and `y_cos` are
+  each generated from `std/math.y`'s own constants by a script under
+  `test/math/`, walk the same operations in the same order as the Y function
+  beside them, and are bit-identical to it — which is the whole promise, so each
+  is gated by a fixture that compares thousands of arguments bit for bit
+  (`t311`, `t312`, `t313`, `t315`). They are reached the same way, through a
+  `native def`, and each has its `*_y` oracle kept beside it in the module. The
+  generator exists because a retyped coefficient table would silently disagree
+  with the function it is meant to reproduce, and nothing else would notice.
+
+  `y_pow` is the fifth and the odd one out, because it is the first of them that
+  *calls*: the dispatch, the two-part logarithm, `exp2` of the pair and `ldexp`
+  are four routines rather than one leaf. Every SSE register is caller-saved, so
+  it is the only kernel with a frame, and two conventions fall out of that: a
+  routine that has to outlive a call keeps the value in its frame and reloads it,
+  and an internal helper answers a pair in *two registers* where the Y leaves it
+  in module-level cells. Its generator emits the same intermediate probes the
+  other three do (`l`, `lo`, `p`, `q`, `e1`, `e2`), each returning one
+  intermediate against the Y's own value at that point — which is what makes a
+  472-instruction routine debuggable at all, and `ideas/math.md` §8 has the
+  six bugs they found.
+- **`native def`: a declaration with no body.** `native def name(params) -> T
+  [= "label"];` declares a function whose implementation is an assembly
+  label. The parser makes a `Decl` with `kind: "native"` whose value is a
+  `Func` carrying the label in a new `label: str` field and an *empty* body —
+  the parser's own header errors, if any, live there, which is how they still
+  reach the diagnostics. The rules live in `types.y` (`typeof_def`'s `isnat`):
+  the return type must be written (nothing to infer it from), the label must
+  start with `y_`, and the declaration must be at the top level; the name
+  cannot be taken twice, which only `parser.y` can see, since renaming has
+  already made every name unique by then. `rename.y` passes the label through
+  untouched (`rn_decl_native`: there is no body to walk). In the emitter a
+  native is an ordinary hoisted `FnDef` that keeps the label it declared
+  (`native.y`, the hoisting loop) and gets **no body emitted** — the call
+  path already resolves through `env_find` → `e.label`, so `call y_label`
+  needs nothing new. A label with no assembly behind it surfaces as
+  `undefined label` from `asm_link`, which is the honest failure: the
+  declaration is a promise about the assembly, and nothing can check it (as
+  with an `extern` declaration in C). Because a native is called with the
+  ordinary convention — arguments pushed on the stack, result in `%rax` — it
+  can reach the runtime's string/array helpers but not one written for the
+  binary-float convention (`y_fmod`, which reads `%xmm0`/`%xmm1`).
 
 ## Output: our own executables
 
@@ -222,6 +281,29 @@ zero-fills: the `.bss` section (`.zero N` reserves space there; data or
 code in `.bss` is an assembler error). `-g` appends a symbol table, a DWARF
 line table and section headers past all of that (see "Debugging and
 profiling" below).
+### The asm dialect, in one paragraph
+
+`src/y/arch/*.s` is written in GNU as's **AT&T** spelling, which is what the
+encoder reads: source operand first, destination last (`movq %rax, %xmm0`,
+`mulsd tab+8(%rip), %xmm0`). Three things about it are worth knowing before
+writing a kernel.
+
+* **A comment is a whole line, or it is a bug.** The loader
+  (`arch_asm_lines`) drops a line only when its *first* byte is `#`, so a
+  comment trailing an instruction reaches the assembler, which reads it as an
+  operand: `L###: bad operand`, on a line whose opcode the prelude uses
+  everywhere. `make asm-check` passes such a line, because GNU as reads
+  trailing comments and this assembler does not.
+* **`label+N(%rip)` names the Nth eight-byte entry of a table.** One label per
+  table, not per entry: a label in `arch_consts` costs the shaker ~2K
+  instructions of label-map fixpoint on *every* compile, so sixty coefficients
+  as sixty labels would cost every program ~120K instructions forever.
+* **`.quad` is a 64-bit bit pattern**, so a negative value is a legitimate one
+  and half of every double's pattern is negative (that is the sign bit). A
+  range check cannot replace the old non-negativity rule either: `tonum` wraps
+  at 64 bits, so 2^63 comes back as -2^63 and the eight bytes stored are the
+  same ones.
+
 Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight
 out through `fs.write_bytes` (std/fs.y: raw `openat`/`write`/`fchmodat`
@@ -942,6 +1024,21 @@ truncated; a malformed answer is no addresses, never a crash), so
 (it imports `fs` for the two files). IPv4 only. A `ui` module would land
 the same way.
 
+`src/y/std/math.y` is the number module (`import math;`): integer and bit
+helpers (`min`/`max`/`abs`/`clamp`/`sign`, `gcd`/`lcm`, `isqrt`, `popcount`,
+`ctz`/`clz`, `next_pow2`, and `mul_mod`/`pow_mod`/`inv_mod` for a modulus up to
+2^31, where reducing the operands first keeps the product inside a `long`), the
+float comparisons and constants (`fmin`, `fmax`, `fabs`, `fsign`, `lerp`,
+`is_nan`/`is_inf`/`is_finite`, `pi` and friends, `nan`/`inf` as values), the
+SplitMix64 and xoshiro256**/+ generators over a caller-owned `[long]`, and
+whole-array work over `[float]` (`fsum`, the Neumaier-compensated `fsum_kahan`,
+`fdot`, `fmin_of`/`fmax_of`, in-place `fscale`/`faxpy`, `fmean`, `fvariance`).
+Y has no overloading, so the float flavours carry an `f`. There is deliberately
+**no** `sqrt`, `exp`, `log`, `pow` or `sin`: each needs a `float`→`long`
+conversion or a look at a float's bits, and Y has neither way to get at either
+(see the *Limits* note on `float` below), so they are not merely missing but
+unwritable until the machine primitives exist.
+
 `src/y/std/crypto.y`, `x509.y` and `tls.y` are a TLS 1.3 client in plain
 Y, each importing the one before it. crypto: SHA-256/384/512, HMAC, HKDF,
 ChaCha20-Poly1305 (RFC 8439), AES-128/256-GCM (T-tables, a bitwise
@@ -1115,6 +1212,19 @@ them starts compiling again, so the list can only shrink.
   2^63: `cvttsd2si` cannot take anything larger, and reproducing printf's
   exact expansion needs bignum arithmetic, so those print
   `<float magnitude >2^63>` rather than noise.
+- **There is no `float` → `long` conversion, and no way to read a float's
+  bits.** `cvttsd2si` exists (it is how `y_float_tostr` splits a double into
+  its integer and fractional parts) and `movq` moves a double between `%rax`
+  and an `%xmm` register, but nothing exposes either to a program: `long` →
+  `float` widens implicitly and that is the whole list. So a program cannot
+  take a `float`'s integer part, cannot pull an exponent out of one, and cannot
+  reinterpret one — which is exactly why `std/math.y` has no `sqrt`, `exp`,
+  `log`, `pow` or `sin` (see *Optional std modules*): each of those needs a
+  `float` → `long` conversion for its range reduction, and there is no
+  spelling of one. Three small machine primitives — a truncating conversion,
+  a bit cast each way, and `sqrtsd` — would unlock all of them, plus `floor`,
+  `ceil`, `round`, `ldexp` and `frexp`; that is the one thing standing between
+  this language and a numeric library.
 - `str` supports `<`, `>`, `<=`, `>=` (lexicographic, via `y_str_cmp`
   returning the sign), matching `strcmp` semantics.
 - **Embedded NUL bytes.** A `str` is length-prefixed (`{len, data..., NUL}`),
