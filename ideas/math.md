@@ -373,7 +373,7 @@ documented as unfused.
 | — | the portable tier: integers/bits, float comparisons and constants, RNGs, `[float]` array work (`src/y/std/math.y`) | **done** (`85403df`) — no compiler change needed; tests `t300`–`t304` |
 | P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
 | P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. `movsd` and SSE arithmetic with a memory source have since landed too (`f95398b`..this commit), with `movapd`/`xorpd`/`andpd`/`unpcklpd` still to come if P4 needs them |
-| P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **1596 cases** (the pinned edges plus a seeded 1500-case spread) and the worst gap is **2 ulps** (`asin`, at one argument, and a floor rather than a shortfall — §8); **every other function is within 1 ulp of every case**, including all five assembly kernels. It was four cases over 1 at three ulps; §8 has what closed three of them. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
+| P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **1596 cases** (the pinned edges plus a seeded 1500-case spread) and **every one of them is within 1 ulp**, worst gap 1 — the number the gate enforces and the number the manual quotes, including for all five assembly kernels. It was four cases over it, at up to three ulps; §8 has what closed them, and it is one lesson three times. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
 | P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work and `exp` are landed.** `y_exp` is **generated** by `test/math/gen_exp.py` from `math.y`'s own constants and walks the same operations in the same order, so it returns the same double: t311 checks **10,420 arguments bit for bit**, reaching every branch (the NaN test, both range edges, the reduction boundary at each end, the subnormal band, the top of the range). **1422 → 105.7 Ir/call** (ten Y functions collapse into one routine) and **69.6 → 31.9 ns/call** net of a 4.7 ns loop, on `bench/y/tmath.y`. `y_log` has landed the same way (`test/math/gen_log.py`, t312: **10,317 arguments, 0 differing**, **1335 → 115.2 Ir/call**, 71.8 → 34.9 ns/call). `y_sin`/`y_cos` have landed the same way (`test/math/gen_sin.py`, one body for both: two two-instruction entries and the choice in a register, t313: **10,410 arguments each, 0 differing**, **1775 → 190 Ir/call**, 75.4 → 40.4 ns/call). `y_pow` has landed the same way (`test/math/gen_pow.py`, t315: **15,137 pairs, 0 differing**, **3004 → 472 Ir/call**, 159.3 → 69.2 ns/call) — the first routine in the file that calls, and therefore the first with a frame. **P4 is complete.** §8 has what each attempt found |
 | P5 | the bulk kernels | **done** — `y_sum y_dot y_scale y_axpy y_min_of y_max_of` in `src/y/arch/math.s`, reached from `std/math.y` through `a.ptr` and `len(a)`, each **bit-identical** to the Y loop kept beside it as `*_y` (t310, over 64 corpora plus the edge values: ±0, both infinities, NaN in first/middle/last position, subnormals, one element, empty). The equal-length rule moved out of the loop, so `fdot`/`faxpy` stop on a mismatch (`y_len_stop`). `bench/y/fmath.y`: **0.37 ns/element against the Y loop's 1.26**, and the 1.27 baseline the plan quotes is the last row of that file |
 
@@ -792,21 +792,32 @@ was 0.018 ulps from the log's low half, 0.043 from `inv_ln2`, and **0.142 from
 The fix was not in `q` at all, which is where both the symptom and two hours of
 looking pointed.
 
-**The fourth case is `asin`, and it is a floor.** Its large branch is the
-half-angle identity `asin(a) = pi/2 - 2*asin(sqrt((1-a)/2))`, and `two = 2*asin(s)`
-has to be a double before `pi/2 - two` can happen: that half-ulp is a *whole* ulp
-of the answer, and the subtraction's is half more. A 26-term kernel with the
-exact Taylor coefficients (`C(2k,k)/(4^k(2k+1)`, which is what `sinh_k` is too)
-plus a compensated square root was measured, and it does not help: the error is
-2 ulps at the branch boundary whatever the degree, and a 22-term kernel is
-already enough for the kernel's own part. Getting under 2 means carrying `two`
-in two parts *through* the subtraction and having a kernel exact enough to be
-worth carrying — which is a fused multiply-add's job or an extended-precision
-evaluator's, and this machine has neither.
+**The fourth case is `asin`, and the floor argument for it was wrong — which is
+the second lesson, and the more useful one.** Its large branch is the half-angle
+identity `asin(a) = pi/2 - 2*asin(sqrt((1-a)/2))`, and `two = 2*asin(s)` has to
+be a double before `pi/2 - two` can happen: that half-ulp is a *whole* ulp of
+the answer, and the subtraction's is half more. Measured over the branch, a
+kernel of any degree on the exact Taylor coefficients (`C(2k,k)/(4^k(2k+1)`,
+which is what `sinh_k` is too) bottomed out at **2 ulps**, and it looked like a
+property of the reduction: no fused multiply-add, no extended-precision
+evaluator, nothing to carry `two` with. The tolerance was set to 2 on the
+strength of that, and the arithmetic behind it went into the harness's own
+header.
 
-So the gate became **2, measured, printed, and gated on regression**, with the
-arithmetic that explains it in the harness's own header rather than only in this
-file. That is a real weakening of the promise and it is the honest one: "every
-function except `asin` is within 1 ulp of 1596 checked cases" is true and
-checkable; "within 1 ulp" would have been a claim the arithmetic does not
-support.
+Then the measurement was re-checked, and the 2 ulps was a bug in the *probe*:
+it added `two`'s low part **after** the 2-sum instead of folding it into a
+compensated three-term subtraction. Done properly — `two_sum(pi/2, -two_hi)`,
+then subtract `two_lo` from the *result*, which is where a few 1e-17s do not
+cancel against an 0.8 and leave nothing — the same 24-term kernel with the
+square root's own residual put back gives **1 ulp**, and the floor was never
+there.
+
+That is the thing worth carrying out of the whole exercise: a measured floor is
+only as good as the measurement, and a floor is the one kind of finding that
+*looks* like a law. Two of the three fixes were found by asking *at what size* a
+rounding happens. The third was found by distrusting a number already written
+down.
+
+So the tolerance is back to **1**, which is what the harness's header claimed all
+along and what C promises, and all 1596 cases are inside it. The header now
+carries the three fixes rather than an excuse.

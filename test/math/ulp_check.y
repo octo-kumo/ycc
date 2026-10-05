@@ -100,32 +100,38 @@ def is_two_arg(name: str) -> bool {
     name == "hypot" || name == "nextafter" || name == "pow" || name == "atan2"
 };
 
-// The tolerance, and why it is not one.
+// The tolerance. One.
 //
-// Every function here is within ONE ulp of every case in this table -- the
-// overflows, the flushes, the poles, the signed zeros, both sides of 1, and the
-// 1500-case spread -- with ONE exception: asin, at two ulps, at one argument.
+// It was three, over four cases, and the harness's own header claimed one while
+// the code enforced three -- which is the worst kind of test: a comment that
+// says something the code does not check. All four are closed now, and what
+// closed them is the same lesson each time: the question is never WHICH line
+// rounds, it is AT WHAT SIZE.
 //
-// That exception is a floor and not a shortfall, and the arithmetic is worth
-// setting out because it says no amount of work moves it. asin's large branch
-// is the half-angle identity asin(a) = pi/2 - 2*asin(sqrt((1-a)/2)), and
-// `two = 2*asin(s)` has to be a double before pi/2 - two can happen: its own
-// half-ulp is a whole ulp of the answer, and the subtraction's half-ulp is half
-// more. Measured over the branch, that is 2 ulps at the boundary where the two
-// branches meet -- and 2 ulps is what this table sees at a = 0.7188. Getting
-// under it means carrying `two` in two parts through the subtraction AND the
-// kernel exact enough to be worth carrying, which is a fused multiply-add's job
-// or an extended-precision evaluator's. This machine has neither, so the bound
-// is measured, printed, and gated on regression rather than wished away.
+//   * cosh summed two exponentials. For a >= 0.5, e^-a is 1.2% of the answer,
+//     so its own rounding is a hundredth of an ulp, while a second exp() call
+//     brings a whole kernel's error along and exp is a ulp out at some
+//     arguments. One exponential and its reciprocal is enough.
 //
-// It used to be 3, over four cases: cosh was two ulps off because it summed two
-// exponentials (one exponential and its reciprocal is enough -- the second is a
-// hundredth of the answer at the point it is used), and pow was 3 and 2 because
-// its logarithm formed `z * (2 + w*P)`, whose brackets round at the size of 2.0
-// -- a whole ulp of the logarithm, multiplied by the exponent. Writing that term
-// as a two_sum of 2*z and (z*w)*P took the logarithm's own residual down 2.3
-// times and both pow cases with it.
-let tolerance: long = 2;
+//   * pow's logarithm formed z*(2.0 + w*P), whose brackets round AT THE SIZE OF
+//     2.0 -- a whole ulp of the logarithm, which pow then multiplies by the
+//     exponent. Written as a two_sum of 2*z and (z*w)*P it is 2.3 times more
+//     accurate, and both pow cases went with it.
+//
+//   * asin used to reach atan, whose own ulp lands inside the answer whole, and
+//     then needed `two = 2*asin(s)` to be a double before the pi/2 subtraction,
+//     whose half-ulp is a whole ulp of the answer. Its own 24-term kernel on the
+//     Taylor values C(2k,k)/(4^k(2k+1)) -- what sinh_k is too -- plus the
+//     square root's own residual put back, plus `two` carried in two parts
+//     THROUGH the subtraction, brings it inside. An earlier version of that
+//     measurement said it could not be done, and it could: the low part had
+//     been added after the 2-sum instead of folded into a compensated
+//     three-term subtraction.
+//
+// One is the number C promises and the number the manual quotes, so one is what
+// the gate is: a kernel that drifts past it fails here, and the printed worst
+// gap says by how much and from which function.
+let tolerance: long = 1;
 
 def main() -> long {
     let path = "";

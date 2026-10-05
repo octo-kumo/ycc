@@ -283,25 +283,26 @@ the same answer however their signs differ --- a sign bit is not an ulp --- and 
 other NaN is infinitely far away. Over that table every function here is within
 \emph{one} ulp of all its pinned edge cases (the overflows, the flushes, the
 poles, both sides of 1, the signed zeros) and of more than \num{99\%} of a
-\num{1500}-case spread; one case sits at two --- \ic{asin} at
-\num{-0.71875708011034689} --- and the rest are within one. That one is a floor
-rather than a shortfall, and the arithmetic is worth having: \ic{asin}'s large
-branch is \ic{asin(a) = pi/2 - 2*asin(sqrt((1-a)/2))}, and the \ic{two} has to
-be a double before that subtraction can happen, so its own half-ulp is a whole
-ulp of the answer and the subtraction's is half more. Beating it means carrying
-\ic{two} in two parts through the subtraction \emph{and} an exact kernel, which
-is a fused multiply-add's job or an extended-precision evaluator's; this machine
-has neither. The other three used to be exceptions and are not any more:
-\ic{cosh} summed two exponentials where one exponential and its reciprocal is
-enough (the second term is a hundredth of the answer where it is used), and
-\ic{pow} was three and two ulps out because its logarithm formed
-\ic{z*(2 + w*P)}, whose brackets round at the size of \num{2.0} --- a whole ulp
-of the logarithm, multiplied by the exponent. Writing that term as a
-\ic{two_sum} of \ic{2*z} and \ic{(z*w)*P} took the logarithm's own residual down
-by a factor of \num{2.3} and both \ic{pow} cases with it. \ic{pow} is still the
-one to know about: its accuracy degrades with the \emph{exponent}, not the base,
-so \ic{math.pow(x, 0.5)} for a large \ic{x} is a few ulps out while
-\ic{math.pow(x, 3.0)} is exact (an integer exponent is computed by squaring).
+\num{1500}-case spread. Getting all of them inside that took three one-rounding
+fixes, and all three were the same mistake in different clothes: the question is
+never \emph{which} line rounds, it is \emph{at what size}. \ic{cosh} summed two
+exponentials where one exponential and its reciprocal is enough (for
+\ic{a >= 0.5}, \ic{e^-a} is \num{1.2}\% of the answer, so its own rounding is a
+hundredth of an ulp, while a second \ic{exp()} call brings a whole kernel's
+error along). \ic{pow} was three and two ulps out because its logarithm formed
+\ic{z*(2 + w*P)}, whose brackets round \emph{at the size of \num{2.0}} --- a whole
+ulp of the logarithm, which \ic{pow} then multiplies by the exponent; as a
+\ic{two_sum} of \ic{2*z} and \ic{(z*w)*P} that term is \num{2.3} times more
+accurate and both cases went with it. \ic{asin} reached \ic{atan}, whose own ulp
+lands inside the answer whole, and then needed \ic{two = 2*asin(s)} to be a
+double before the \ic{pi/2} subtraction, whose half-ulp is a whole ulp of the
+answer; it has its own \num{24}-term kernel on the Taylor values
+\ic{C(2k,k)/(4^k(2k+1))} --- the same rationals \ic{sinh} uses --- with the square
+root's own residual put back and \ic{two} carried in two parts \emph{through} the
+subtraction. \ic{pow} is still the one to know about: its accuracy degrades with
+the \emph{exponent}, not the base, so \ic{math.pow(x, 0.5)} for a large \ic{x} is
+a few ulps out while \ic{math.pow(x, 3.0)} is exact (an integer exponent is
+computed by squaring).
 
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[\ic{math.sqrt(x)}] The IEEE square root, and the one function here that

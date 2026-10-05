@@ -5,13 +5,12 @@
 # test/math/ulp_table.txt holds one case per line — the function, its
 # argument(s) and the correctly-rounded answer, all as IEEE-754 bit patterns.
 # test/math/ulp_check.y reads it, calls std/math.y, and prints every case whose
-# answer is more than one ulp from the reference. "Within 1 ulp" is the whole
-# promise, and a table of cases is the only way to keep it honest as the functions
-# change -- so the gate is that nothing EXCEEDS the tolerance, which is 2, and
-# which exists for asin alone and is a floor rather than a shortfall: its
-# half-angle identity rounds `two = 2*asin(s)` to a double before the pi/2
-# subtraction, and that half-ulp is a whole ulp of the answer. Every other
-# function is within 1 ulp of every one of the 1596 cases.
+# answer is more than one ulp from the reference. The gate is that nothing does,
+# and the tolerance is 1: "within 1 ulp" is the whole promise, and a table of
+# cases is the only way to keep it honest as the functions change. It was 3, over
+# four cases, while this header already claimed 1 -- a comment that says
+# something the code does not check. All four are closed; test/math/ulp_check.y
+# says what each one was.
 #
 # Both compilers run it and their output must agree (the port is 1:1), and the
 # table's cases are the ones the harness dispatches on, so a function nobody
