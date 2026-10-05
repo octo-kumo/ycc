@@ -347,6 +347,15 @@ so \ic{math.pow(x, 0.5)} for a large \ic{x} is a few ulps out while
     from something nearly equal to it --- which is the whole difficulty with
     $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}, and at $x = -9$ it is
     \num{1.23e-4} $- 1$ with the answer's last bits gone.
+    \ic{exp} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{native def}: a routine of about 
+um{200} instructions with no calls at
+    all, against the ten Y functions it replaced and \num{1422} instructions a
+    call. It is \emph{bit-identical} to that loop --- same operations in the same
+    order --- and \texttt{test/y/native/t311\_math\_exp\_asm.y} says so over
+    \num{10420} arguments; \ic{exp\_y} is that loop, kept as the oracle, and
+    \texttt{test/math/gen\_exp.py} generates the routine from the module's own
+    constants so the two cannot drift apart.
   \item[\ic{math.log(x)}, \ic{math.log2(x)}, \ic{math.log10(x)},
     \ic{math.log1p(x)}] $\log x$ in the base given. \ic{frexp} splits
     $x = f\,2^e$ and $f$ is doubled into $[1/\sqrt{2}, \sqrt{2})$ when it is

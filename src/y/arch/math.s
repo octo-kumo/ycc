@@ -196,6 +196,310 @@ ysf_b_t:
     or $16, %rax
     ret
 
+# y_exp: exp(x). Generated from src/y/std/math.y's exp by
+# test/math/gen_kernel.py-style reading of its own constants -- do not retype
+# the table, because the whole constraint is that this returns the same double
+# as that function, and a table typed by hand can disagree with it silently.
+#
+# The operation sequence is the Y line for line, which is what makes the bits
+# match: the same multiplies and subtracts in the same order, the same two
+# Horner chains for the split kernel, the same ldexp including its big steps
+# and its doubling loop for a subnormal answer. `t310`-style: the oracle is
+# math.exp itself and every call site compares bits.
+#
+# Argument at 8(%rsp) (the last and only one), answer's bits in %rax.
+y_exp:
+    mov 8(%rsp), %rax
+# xmm2 = x, kept for the reduction
+    movq %rax, %xmm2                 
+    movq %xmm2, %xmm0
+# if (x != x) return x: the operand compared with itself is unordered exactly
+# when it is a NaN, and unordered is the only answer with PF set.
+    ucomisd %xmm2, %xmm2
+    jp yexp_ret
+# if (x > exp_hi) return +inf
+    ucomisd yexp_tab+0(%rip), %xmm2
+    ja yexp_inf
+# if (x < exp_lo) return +0.0
+    ucomisd yexp_tab+8(%rip), %xmm2
+    jb yexp_zero
+
+# n = to_int(floor(x*log2e + 0.5)). The truncating convert is a floor only
+# when the value it truncated was already at or below the integer; one less
+# when the truncation rounded UP, which is when the truncated value is
+# GREATER than what it came from -- a negative argument, or one in 1.0..1.5.
+    mulsd yexp_tab+16(%rip), %xmm0
+# t = x*log2e + 0.5
+    addsd yexp_tab+40(%rip), %xmm0  
+# trunc(t)
+    cvttsd2si %xmm0, %rax            
+    cvtsi2sd %rax, %xmm1
+# trunc(t) against t
+    ucomisd %xmm0, %xmm1            
+    jbe yexp_k_ok
+# it rounded up: one less
+    sub $1, %rax                     
+yexp_k_ok:
+# xmm1 = nf
+    cvtsi2sd %rax, %xmm1             
+
+# r = (x - nf*ln2_hi) - nf*ln2_lo: ln2 in two pieces so the reduction keeps
+# the low bits, which is what one rounding of nf*ln2 would have lost.
+    movsd %xmm1, %xmm3
+    mulsd yexp_tab+24(%rip), %xmm3
+    subsd %xmm3, %xmm2
+    movsd %xmm1, %xmm3
+    mulsd yexp_tab+32(%rip), %xmm3
+# xmm2 = r
+    subsd %xmm3, %xmm2              
+
+# k and f2: 2^1024 is an overflow and round(x*log2e) reaches 1024 for every x
+# above 709.4, so the last whole ln2 stays in r and its factor of two is put
+# in by hand -- which also keeps r inside the kernel's range.
+# rcx = k
+    mov %rax, %rcx                   
+# f2 = 1.0
+    movsd yexp_tab+48(%rip), %xmm6  
+    cmp $1023, %rcx
+    jle yexp_f2_ok
+    sub $1, %rcx
+# f2 = 2.0
+    movsd yexp_tab+56(%rip), %xmm6  
+yexp_f2_ok:
+
+# P = poly_split(exp_k, exp_kl, r): two Horner chains over the split table,
+# so a term whose low part would fall off the end of a double is kept, and
+# one add at the end brings the two halves together.
+    movsd yexp_tab+176(%rip), %xmm4
+    movsd yexp_tab+280(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+168(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+272(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+160(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+264(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+152(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+256(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+144(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+248(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+136(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+240(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+128(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+232(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+120(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+224(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+112(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+216(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+104(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+208(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+96(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+200(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+88(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+192(%rip), %xmm5
+    mulsd %xmm2, %xmm4
+    addsd yexp_tab+80(%rip), %xmm4
+    mulsd %xmm2, %xmm5
+    addsd yexp_tab+184(%rip), %xmm5
+    addsd %xmm5, %xmm4
+
+# v = f2 * (1 + r*(1 + r*P))
+    movsd %xmm2, %xmm3
+    mulsd %xmm4, %xmm3
+    addsd yexp_tab+48(%rip), %xmm3
+    mulsd %xmm2, %xmm3
+    addsd yexp_tab+48(%rip), %xmm3
+    mulsd %xmm6, %xmm3
+
+# ldexp(v, k), as written in std/math.y: the big steps first, so that after
+# them the answer may already be 0 or an infinity and there is nothing left
+# to do exactly. 2^1022 rather than 2^1023: one more step than the range
+# needs, so a step never overflows on its own.
+# ldexp(v, k), as written in std/math.y: the big steps first, so that after
+# them the answer may already be 0 or an infinity and there is nothing left
+# to do exactly. 2^1022 rather than 2^1023: one more step than the range
+# needs, so a step never overflows on its own.
+# rdx = the value
+    movq %xmm3, %rdx                 
+    cmp $1022, %rcx
+    jl yexp_ld_up_done
+    movq %rdx, %xmm4
+    mulsd yexp_tab+64(%rip), %xmm4
+    movq %xmm4, %rdx
+    sub $1022, %rcx
+yexp_ld_up_done:
+    cmp $-1022, %rcx
+    jg yexp_ld_dn_done
+    movq %rdx, %xmm4
+    mulsd yexp_tab+72(%rip), %xmm4
+    movq %xmm4, %rdx
+    add $1022, %rcx
+yexp_ld_dn_done:
+# f = exp_field(r) = the pattern's exponent field
+    mov %rdx, %rax
+    shr $52, %rax
+    and $2047, %rax
+# if (f == 0 || f + k < 1) the mantissa has to shift too, and one doubling at
+# a time is how that is exact -- which is also the subnormal case, where the
+# field is 0 and every step is a doubling.
+    test %rax, %rax
+    jz yexp_ld_shift
+    mov %rax, %r8
+    add %rcx, %r8
+    cmp $1, %r8
+    jl yexp_ld_shift
+# else if (k != 0): k * 2^52 added to the bits is k added to the field, so the
+# sign comes off first (a negative pattern would put a 1 at the top of the
+# field and scale the wrong way) and goes back on after.
+    test %rcx, %rcx
+    jz yexp_ld_done
+# The sign that matters is the VALUE's. `js` after the `shl` would be reading
+# k's -- the first version did exactly that, so every x below about zero
+# (half the range) took the negative path and had 2^63 added to a pattern
+# that was already positive.
+    test %rdx, %rdx
+    js yexp_ld_neg
+    mov %rcx, %r8
+    shl $52, %r8
+    add %r8, %rdx
+    jmp yexp_ld_done
+yexp_ld_neg:
+    mov %rcx, %r8
+    shl $52, %r8
+    add %r8, %rdx
+# shifted + sign_bit(). 2^63 is one past the largest long, so it is a movabs
+# rather than an immediate: `mov $4611686018427387904, %r8` cannot be spelled,
+# and `mov $-1, %r8; shl $63, %r8` would be one instruction longer for the
+# same bits.
+    mov $-9223372036854775808, %r8
+    add %r8, %rdx
+    jmp yexp_ld_done
+yexp_ld_shift:
+    test %rcx, %rcx
+    jz yexp_ld_done
+    cmp $0, %rcx
+    jg yexp_ld_up_loop
+# 0.5
+    movsd yexp_tab+40(%rip), %xmm7  
+    jmp yexp_ld_loop
+yexp_ld_up_loop:
+# 2.0
+    movsd yexp_tab+56(%rip), %xmm7  
+yexp_ld_loop:
+    movq %rdx, %xmm4
+    mulsd %xmm7, %xmm4
+    movq %xmm4, %rdx
+    add $1, %rcx
+    jnz yexp_ld_loop
+yexp_ld_done:
+    mov %rdx, %rax
+yexp_ret:
+    ret
+yexp_inf:
+# +inf
+    mov $9218868437227405312, %rax  
+    ret
+yexp_zero:
+# +0.0
+    xor %eax, %eax                   
+    ret
+
+# yexp_tab: exp's constants and its split kernel, one label for the lot (a
+# label per entry costs the shaker ~2K instructions of fixpoint each, on
+# every compile). Read as yexp_tab+N(%rip), N = 8*index.
+yexp_tab:
+# ehi
+    .quad 4649454530587146735  
+# elo
+    .quad -4573606559926636463  
+# l2e
+    .quad 4609176140021203710  
+# ln2h
+    .quad 4604418534311723008  
+# ln2l
+    .quad 4461442080421002358  
+# half
+    .quad 4602678819172646912  
+# one
+    .quad 4607182418800017408  
+# two
+    .quad 4611686018427387904  
+# p1022
+    .quad 9209861237972664320  
+# n1022
+    .quad 4503599627370496  
+# k0
+    .quad 4602678819172646912  
+# k1
+    .quad 4595172819793696085  
+# k2
+    .quad 4586165620538955093  
+# k3
+    .quad 4575957461383581969  
+# k4
+    .quad 4564047942368980032  
+# k5
+    .quad 4551452160554010291  
+# k6
+    .quad 4537941361672559128  
+# k7
+    .quad 4523617214241652872  
+# k8
+    .quad 4508805059821815664  
+# k9
+    .quad 4493156636345600448  
+# k10
+    .quad 4477124829796050474  
+# k11
+    .quad 4460198783048879773  
+# k12
+    .quad 4444300467281662528  
+# kl0
+    .quad 4224632360921249723  
+# kl1
+    .quad 4351978422624852795  
+# kl2
+    .quad 4342982412625320984  
+# kl3
+    .quad -4897883672244480899  
+# kl4
+    .quad 4318414372254905642  
+# kl5
+    .quad 4309670800024669605  
+# kl6
+    .quad 4292170439773447773  
+# kl7
+    .quad -4948112769179017817  
+# kl8
+    .quad -4959816150548831358  
+# kl9
+    .quad 4248733497338995685  
+# kl10
+    .quad -4989209265562316451  
+# kl11
+    .quad 4211823218516068692  
+# kl12
+    .quad 4194903912182756409  
+
 # ── the bulk kernels ──────────────────────────────────────────────────────
 #
 # Six loops over `[float]`, which is what std/math.y's array tier is: the plain

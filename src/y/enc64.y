@@ -53,6 +53,16 @@ def reg_num(name: str) -> long {
     else if (name == "%xmm3") { 3 }
     else if (name == "%xmm4") { 4 }
     else if (name == "%xmm5") { 5 }
+    else if (name == "%xmm6") { 6 }
+    else if (name == "%xmm7") { 7 }
+    else if (name == "%xmm8") { 8 }
+    else if (name == "%xmm9") { 9 }
+    else if (name == "%xmm10") { 10 }
+    else if (name == "%xmm11") { 11 }
+    else if (name == "%xmm12") { 12 }
+    else if (name == "%xmm13") { 13 }
+    else if (name == "%xmm14") { 14 }
+    else if (name == "%xmm15") { 15 }
     else { -1 }
 };
 
@@ -757,15 +767,23 @@ def enc_movsd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_ucomisd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
-    // 66 0F 2E /r
-    if (dst.k != K.reg) {
+    // 66 0F 2E /r, with the source an xmm or memory. The memory form is what a
+    // float kernel tests against -- `ucomisd tab+0(%rip), %xmm0` is "is the
+    // argument above exp_hi" -- and it is the comparison whose UNORDERED result
+    // (PF set) is how every float function first asks "was one of them a NaN".
+    if (dst.k != K.reg || op_size(dst) != 128) {
         enc_err(at, "ucomisd dst")
-    } else if (src.k != K.reg) {
-        enc_err(at, "ucomisd src")
-    } else {
+    } else if (src.k == K.reg) {
         let n = put(buf, at, 102);
         let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
         enc_ok(put3(buf, m, 15, 46, modrm(3, dst.n, src.n)), [])
+    } else if (src.k == K.mem) {
+        let t = mem_tail(src, dst.n);
+        let n = put_rex(buf, put(buf, at, 102), rex_rm(false, dst.n, src));
+        let m = put2(buf, n, 15, 46);
+        enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+    } else {
+        enc_err(at, "ucomisd src")
     }
 };
 
@@ -815,6 +833,17 @@ def enc_movq(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
         enc_err(at, "movq dst")
     } else if (src.k != K.reg) {
         enc_err(at, "movq src")
+    } else if (op_size(dst) == 128 && op_size(src) == 128) {
+        // xmm -> xmm: F3 0F 7E /r (MOVDQ2), destination in the reg field.
+        //
+        // This arm is not optional. Without it the gpr->xmm arm below took
+        // the pair and read the SOURCE'S NUMBER as a GPR, so `movq %xmm2,
+        // %xmm0` assembled to `movq %rdx, %xmm0` -- a silent miscompile, and
+        // the first one this encoder had that the "be loud instead" rule
+        // below is about.
+        let n = put(buf, at, 243);
+        let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 126, modrm(3, dst.n, src.n)), [])
     } else if (op_size(dst) == 128) {
         // into an xmm: the xmm is the reg field, the gpr the rm field
         let n = put(buf, at, 102);

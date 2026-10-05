@@ -114,6 +114,16 @@ long reg_num(Yv *name) {
     else if (ys_eq_lit(name, "%xmm3")) { return 3; }
     else if (ys_eq_lit(name, "%xmm4")) { return 4; }
     else if (ys_eq_lit(name, "%xmm5")) { return 5; }
+    else if (ys_eq_lit(name, "%xmm6")) { return 6; }
+    else if (ys_eq_lit(name, "%xmm7")) { return 7; }
+    else if (ys_eq_lit(name, "%xmm8")) { return 8; }
+    else if (ys_eq_lit(name, "%xmm9")) { return 9; }
+    else if (ys_eq_lit(name, "%xmm10")) { return 10; }
+    else if (ys_eq_lit(name, "%xmm11")) { return 11; }
+    else if (ys_eq_lit(name, "%xmm12")) { return 12; }
+    else if (ys_eq_lit(name, "%xmm13")) { return 13; }
+    else if (ys_eq_lit(name, "%xmm14")) { return 14; }
+    else if (ys_eq_lit(name, "%xmm15")) { return 15; }
     else { return -1; }
 }
 
@@ -865,15 +875,23 @@ static Yv *enc_sqrtsd(Yv *buf, long at, Yv *dst, Yv *src) {
 }
 
 static Yv *enc_ucomisd(Yv *buf, long at, Yv *dst, Yv *src) {
-    /* 66 0F 2E /r */
-    if (yv_l(yr_get(dst, "k")) != K_reg) {
+    /* 66 0F 2E /r, with the source an xmm or memory. The memory form is what a
+     * float kernel tests against -- `ucomisd tab+0(%rip), %xmm0` is "is the
+     * argument above exp_hi" -- and it is the comparison whose UNORDERED result
+     * (PF set) is how every float function first asks "was one of them a NaN". */
+    if (yv_l(yr_get(dst, "k")) != K_reg || op_size(dst) != 128) {
         return enc_err(at, ys("ucomisd dst"));
-    } else if (yv_l(yr_get(src, "k")) != K_reg) {
-        return enc_err(at, ys("ucomisd src"));
-    } else {
+    } else if (yv_l(yr_get(src, "k")) == K_reg) {
         long n = put(buf, at, 102);
         long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
         return enc_ok(put3(buf, m, 15, 46, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+    } else if (yv_l(yr_get(src, "k")) == K_mem) {
+        Yv *t = mem_tail(src, yv_l(yr_get(dst, "n")));
+        long n = put_rex(buf, put(buf, at, 102), rex_rm(0, yv_l(yr_get(dst, "n")), src));
+        long m = put2(buf, n, 15, 46);
+        return enc_mem_result(buf, mem_tail_put(buf, put(buf, m, yv_l(yr_get(t, "modrm"))), t), t);
+    } else {
+        return enc_err(at, ys("ucomisd src"));
     }
 }
 
@@ -910,6 +928,14 @@ static Yv *enc_movq(Yv *buf, long at, Yv *dst, Yv *src) {
         return enc_err(at, ys("movq dst"));
     } else if (yv_l(yr_get(src, "k")) != K_reg) {
         return enc_err(at, ys("movq src"));
+    } else if (op_size(dst) == 128 && op_size(src) == 128) {
+        /* xmm -> xmm: F3 0F 7E /r (MOVDQ2), destination in the reg field.
+           This arm is not optional. Without it the gpr->xmm arm below took the
+           pair and read the SOURCE'S NUMBER as a GPR, so `movq %xmm2, %xmm0`
+           assembled to `movq %rdx, %xmm0` -- a silent miscompile. */
+        long n = put(buf, at, 243);
+        long mm = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
+        return enc_ok(put3(buf, mm, 15, 126, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
     } else if (op_size(dst) == 128) {
         /* into an xmm: the xmm is the reg field, the gpr the rm field */
         long n = put(buf, at, 102);
