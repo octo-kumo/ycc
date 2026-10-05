@@ -1047,7 +1047,11 @@ def is_hash_key(t: Type) -> bool {
 // never tested: a nested def reading an enclosing local is a capture, and
 // captures are legal (native.y box_capture).
 
-type Binding = { name: str, typ: Type, kind: str, fdepth: long };
+// line/col are the NAME's, not the keyword's: a go-to-definition and a
+// semantic-token highlight both want the name, and every diagnostic position
+// wants the keyword. -1 means the binding has no position in the source at
+// all -- an intrinsic, or a name the program links against from another unit.
+type Binding = { name: str, typ: Type, kind: str, fdepth: long, line: long, col: long };
 type Lookup = { typ: Type, kind: str, fdepth: long };
 // The state the checker threads (ret: the def's return type, see
 // typeof_def; self: what `self` is in it), and what the typeof_* return:
@@ -1109,8 +1113,8 @@ def lookup(bindings: [Binding], name: str) -> Lookup {
     }
 };
 
-def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
-    st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth };
+def st_bind(st: TcSt, name: str, typ: Type, kind: str, line: long, col: long) -> TcSt {
+    st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth, line: line, col: col };
     let bindings = st.bindings;
     if (len(bindings) > 256) {
         if (tc_ixn == 0) { tc_ix = parser.nameix_new(1024); };
@@ -1568,13 +1572,114 @@ def arr_lit_adopts_go(got: Type, want: Type, n: long) -> bool {
 // (unfold): the checker looks into it.
 // The checker's walk counts its depth (tags.y MAX_NEST): a `+` chain is a
 // loop in the parser and a recursion here.
+// ── the expression type index (LSP.md 9.2 A2) ───────────────────────────
+//
+// The type the checker inferred for every EXPRESSION, keyed by position, for a
+// caller that has to show one: the language server's hover, and the record-field
+// lookup behind completion after a `.`. Both need exactly what `typeof_expr`
+// computed and then dropped, so it is kept -- behind a flag, because the
+// checker is the compiler's hottest loop and a normal compile has no use for it.
+//
+// The shape is inferred_ret's, deliberately: 1024 buckets of indices into
+// parallel key/type arrays, keyed `line * 65536 + col`. That table is read by
+// native.y on every compile, so the shape and the packing are proven at this
+// scale in this codebase; a second design would be a second thing to get wrong.
+//
+// OFF by default. A module-level `bool` cannot be hoisted, so this costs the
+// hot loop one predictable branch that is never taken in a real compile.
+// bench/compile_ir.sh is what says what that is worth.
+let tc_index: bool = false;
+let tci_keys: [long] = [];
+let tci_typs: [Type] = [];
+let tci_bkts: [[long]] = [];
+
+def tci_reset() {
+    let keys: [long] = [];
+    let typs: [Type] = [];
+    let bkts: [[long]] = [];
+    let i = 0;
+    while (i < 1024) {
+        let b: [long] = [];
+        bkts += b;
+        i = i + 1;
+    };
+    tci_keys = keys;
+    tci_typs = typs;
+    tci_bkts = bkts;
+};
+
+// Turn it on for one check_program, and start a fresh table. check_program
+// resets it again on the way out, so two calls cannot see each other's types.
+def type_index_on() -> void {
+    tc_index = true;
+    tci_reset();
+};
+
+def type_index_off() -> void { tc_index = false };
+
+// Only ever called when tc_index is set: the flag is tested at the call site in
+// typeof_expr rather than here, so the off path costs a load and a branch and
+// not a call. Measured: testing it inside made the call itself the cost, and
+// the call is per EXPRESSION, which is the checker's hottest path.
+def tci_note(node: Node, t: Type) {
+    if (len(tci_bkts) > 0) {
+        if (node.line > 0 && node.col >= 0) {
+            let key = node.line * 65536 + node.col;
+            let bkt: [long] = tci_bkts[key % 1024];
+            // FIRST wins. An expression is checked more than once when it is a
+            // function literal's value (the checker infers, then re-checks with
+            // the return type known), and the first type is the one the source
+            // says rather than the one the second pass settled on.
+            let seen = false;
+            let i = 0;
+            while (i < len(bkt)) {
+                if (tci_keys[bkt[i]] == key) { seen = true; i = len(bkt); }
+                else { i = i + 1; };
+            };
+            if (!seen) {
+                tci_keys += key;
+                tci_typs += t;
+                bkt += len(tci_keys) - 1;
+            };
+        };
+    };
+};
+
+// The type inferred for the expression at (line, col), or tunk() when nothing
+// was indexed there. tunk rather than tnone: tnone is a real type a program can
+// write, and a consumer must be able to tell "the checker says none" from "there
+// is nothing here", or it will print a type it did not get from the checker.
+def expr_type(line: long, col: long) -> Type {
+    let found: Type = t_unk();
+    if (len(tci_bkts) > 0) {
+        let key = line * 65536 + col;
+        let bkt: [long] = tci_bkts[key % 1024];
+        let i = 0;
+        while (i < len(bkt)) {
+            if (tci_keys[bkt[i]] == key) { found = tci_typs[bkt[i]]; i = len(bkt); }
+            else { i = i + 1; };
+        };
+    };
+    found
+};
+
 def typeof_expr(st: TcSt, node: Node) -> TcRes {
     nest = nest + 1;
     if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
     let r = typeof_expr_go(st, node);
     nest = nest - 1;
     let t: Type = r.typ;
-    if (t.k == K.tref) { tc_res(unfold(t), r.st) } else { r }
+    if (t.k == K.tref) {
+        let out = tc_res(unfold(t), r.st);
+        // the UNWRAPPED type: a tref is the checker's own recursive-alias
+        // placeholder, and a hover that printed one would be showing the
+        // implementation rather than the answer.
+        if (tc_index) { tci_note(node, out.typ); };
+        out
+    } else {
+        if (tc_index) { tci_note(node, t); };
+        r
+    }
 };
 
 def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
@@ -1859,7 +1964,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         else {
             st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), loop.line, loop.col);
         };
-        st = st_bind(st, loop.name, elt, "local");
+        st = st_bind(st, loop.name, elt, "local", loop.line, loop.col);
         let saved_loops = st.loops;
         let saved_fd = st.loop_fd;
         st = st_loop(st, saved_loops + 1, st.fdepth);
@@ -1873,7 +1978,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         st = expect_type(rl.st, rl.typ, type_node({ k: K.tlong }), "'for' range start", loop.line, loop.col);
         let rh = typeof_expr(st, loop.hi);
         st = expect_type(rh.st, rh.typ, type_node({ k: K.tlong }), "'for' range end", loop.line, loop.col);
-        st = st_bind(st, loop.name, type_node({ k: K.tlong }), "local");
+        st = st_bind(st, loop.name, type_node({ k: K.tlong }), "local", loop.line, loop.col);
         let saved_loops = st.loops;
         let saved_fd = st.loop_fd;
         st = st_loop(st, saved_loops + 1, st.fdepth);
@@ -2099,7 +2204,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         // Anonymous function literal in expression position. Check the body
         // like a named def would be, and give the expression its tfunc type;
         // the emitter closure-converts it with a generated label.
-        let ra = typeof_def(st, "", func, func.line, func.col, false);
+        let ra = typeof_def(st, "", func, func.line, func.col, func.line, func.col, false);
         tc_res(ra.typ, ra.st)
     } else if (k == K.arrrep) {
         let rep: ArrRep = node;
@@ -3963,10 +4068,10 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
 def typeof_decl(st: TcSt, node: Decl) -> TcRes {
     if (node.kind == "def") {
         // named function: full check (signature + body)
-        typeof_def(st, node.name, node.v, node.line, node.col, false)
+        typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, false)
     } else if (node.kind == "native") {
         // native def: the signature, and three rules of its own
-        typeof_def(st, node.name, node.v, node.line, node.col, true)
+        typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, true)
     } else {
         // let/const. A literal def on the right names a function WITHOUT
         // going through typeof_expr (a bare func value is only legal bound).
@@ -3975,18 +4080,18 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
         let bk = "local";
         if (node.kind == "const") { bk = "const"; };
         if (node.v.k == K.func) {
-            let fr = typeof_def(st, node.name, node.v, node.line, node.col, false);
+            let fr = typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, false);
             st = fr.st;
             if (node.typ.k != K.tnone) {
                 st = expect_type(st, fr.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
             }
-            st = st_bind(st, node.name, fr.typ, "func");
+            st = st_bind(st, node.name, fr.typ, "func", node.nline, node.ncol);
             { typ: fr.typ, st: st }
         } else if (node.v.k == K.arrrep) {
             let r = typeof_expr(st, node.v);
             st = r.st;
             if (r.typ.k == K.tunk) {
-                st = st_bind(st, node.name, t_unk(), bk);
+                st = st_bind(st, node.name, t_unk(), bk, node.nline, node.ncol);
                 { typ: t_unk(), st: st }
             } else {
                 let at = r.typ;
@@ -3998,7 +4103,7 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                     };
                     at = node.typ;
                 }
-                st = st_bind(st, node.name, at, bk);
+                st = st_bind(st, node.name, at, bk, node.nline, node.ncol);
                 { typ: at, st: st }
             }
         } else {
@@ -4052,7 +4157,7 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
             } else if (has_free(t)) {
                 st = fail(st, "the type of '" + disp(node.name) + "' is not fully known (annotate it)", node.line, node.col);
             }
-            st = st_bind(st, node.name, t, bk);
+            st = st_bind(st, node.name, t, bk, node.nline, node.ncol);
             { typ: t, st: st }
         }
     }
@@ -4118,7 +4223,10 @@ def inferred_ret(line: long, col: long) -> Type {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
-def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, isnat: bool) -> TcRes {
+// `line`/`col` are the KEYWORD's, for the diagnostics inside; `nline`/`ncol` are
+// the NAME's, and are what st_bind records. They differ by however much
+// whitespace `let`/`def` was followed by.
+def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: long, ncol: long, isnat: bool) -> TcRes {
     // `isnat` is a `native def`: the signature is checked exactly as a def's
     // is, but there is no body -- the return type must be written, the label
     // must be a `y_` one, and the declaration must be at the top level.
@@ -4181,7 +4289,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, isnat: bo
         }
         let ft: Type = type_node({ k: K.tfunc, args: args, ret: ret });
         // bind early so recursion via `self`/name works
-        st = st_bind(st, name, ft, "func");
+        st = st_bind(st, name, ft, "func", nline, ncol);
         // check the body one level deeper. Outer locals/params stay in the
         // flat map (one shape per name), so a nested def reading one is a
         // capture — legal, and closure-converted by the emitter.
@@ -4191,7 +4299,9 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, isnat: bo
         st = st_fdepth(st, saved_depth + 1);
         let j = 0;
         while (j < len(fparams)) {
-            st = st_bind(st, fparams[j], args[j], "param");
+            // A parameter has no node of its own -- the Func's is the nearest thing, and
+            // its name token is at the parameter list, which the parser does not keep.
+            st = st_bind(st, fparams[j], args[j], "param", nline, ncol);
             j = j + 1;
         };
         st = st_self(st, ft);
@@ -4242,7 +4352,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, isnat: bo
                 let kept: [Diag] = st.errors;
                 st = st_errors(st, kept[0:nerr]);
                 let ft2: Type = type_node({ k: K.tfunc, args: args, ret: br });
-                st = st_bind(st, name, ft2, "func");
+                st = st_bind(st, name, ft2, "func", nline, ncol);
                 st = st_self(st, ft2);
                 let rets2: [RetNote] = [];
                 st = st_ret(st, type_node({ k: K.tinfer, rets: rets2 }));
@@ -4259,7 +4369,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, isnat: bo
                 };
             }
             ft = type_node({ k: K.tfunc, args: args, ret: br });
-            st = st_bind(st, name, ft, "func");
+            st = st_bind(st, name, ft, "func", nline, ncol);
             if (br.k != K.tunk) {
                 set_inferred_ret(func, br);
             }
@@ -4280,7 +4390,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, isnat: bo
             tc_res(ft, st)
         } else {
             // poison the binding so follow-on errors don't cascade weirdly
-            st = st_bind(st, name, t_unk(), "func");
+            st = st_bind(st, name, t_unk(), "func", nline, ncol);
             tc_res(t_unk(), st)
         }
     }
@@ -4296,6 +4406,9 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // the inferred-return table is made when first written (inf_reset)
     let nobkts: [[long]] = [];
     inf_bkts = nobkts;
+    // Only when it is on: emptying 1024 buckets on every compile of every
+    // program would be a cost paid for a feature no compiler run uses.
+    if (tc_index) { tci_reset(); };
     tc_ixn = 0;
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
@@ -4323,8 +4436,11 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0, loops: 0, loop_fd: -1 };
     // top-level defs are visible at top level
     let print_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong })], ret: type_node({ k: K.tvoid }) });
-    st = st_bind(st, "print", print_type, "intrinsic");
-    st = st_bind(st, "syscall", type_node({ k: K.tlong }), "intrinsic");
+    // The intrinsics and the externs below have no position: the first two are the
+    // language's own, the rest are names the program links against from another
+    // unit. -1 is the honest answer and no consumer may read it as line 1.
+    st = st_bind(st, "print", print_type, "intrinsic", 0 - 1, 0 - 1);
+    st = st_bind(st, "syscall", type_node({ k: K.tlong }), "intrinsic", 0 - 1, 0 - 1);
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
@@ -4336,12 +4452,12 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
         // is read-only to its importers
         let xk = "func";
         if (xe.label.starts_with("yg_")) { xk = "const"; }
-        st = st_bind(st, xe.name, xe.typ, xk);
+        st = st_bind(st, xe.name, xe.typ, xk, 0 - 1, 0 - 1);
         x = x + 1;
     };
     let d = 0;
     while (d < len(defs)) {
-        st = st_bind(st, defs[d].name, defs[d].typ, "func");
+        st = st_bind(st, defs[d].name, defs[d].typ, "func", 0 - 1, 0 - 1);
         d = d + 1;
     };
     let r = typeof_block(st, ast);
@@ -4365,4 +4481,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind , expr_type, type_index_on, type_index_off};

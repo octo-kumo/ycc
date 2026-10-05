@@ -2592,12 +2592,12 @@ Yv *strip_ns(Yv *node, Yv *imports) {
                 return normnode(yr(4, "k", yv_long(K_id), "v", qname, "line",
                                   oline, "col", ocol));
             } else {
-                return normnode(yr(5, "k", yv_long(K_dot), "obj", obj, "key", okey,
-                                   "line", oline, "col", ocol));
+                return normnode(yr(7, "k", yv_long(K_dot), "obj", obj, "key", okey,
+                                   "line", oline, "col", ocol, "nline", ocol, "ncol", ocol));
             }
         } else {
-            return normnode(yr(5, "k", yv_long(K_dot), "obj", obj, "key", okey,
-                               "line", oline, "col", ocol));
+            return normnode(yr(7, "k", yv_long(K_dot), "obj", obj, "key", okey,
+                               "line", oline, "col", ocol, "nline", ocol, "ncol", ocol));
         }
     } else if (yv_l(k) == K_un) {
         return normnode(yr(5, "k", yv_long(K_un), "op", yr_get(node, "op"), "e",
@@ -2715,10 +2715,10 @@ Yv *strip_ns(Yv *node, Yv *imports) {
                                yr_get(node, "col")));
         } else {
             return normnode(
-                yr(6, "k", yv_long(K_dotassign), "obj", strip_ns(dao, imports),
+                yr(8, "k", yv_long(K_dotassign), "obj", strip_ns(dao, imports),
                    "key", yr_get(node, "key"), "v",
                    strip_ns(yr_get(node, "v"), imports), "line",
-                   yr_get(node, "line"), "col", yr_get(node, "col")));
+                   yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
         }
     } else if (yv_l(k) == K_kw_foreach) {
         return normnode(yr(6, "k", yv_long(K_kw_foreach), "name", yr_get(node, "name"),
@@ -2753,16 +2753,16 @@ Yv *strip_ns(Yv *node, Yv *imports) {
 
 Yv *strip_decl(Yv *node, Yv *imports) {
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
-        return normnode(yr(6, "k", yv_long(K_decl), "kind", ys("def"), "name",
+        return normnode(yr(8, "k", yv_long(K_decl), "kind", ys("def"), "name",
                            yr_get(node, "name"), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
-                           yr_get(node, "line"), "col", yr_get(node, "col")));
+                           yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
     } else {
-        return normnode(yr(7, "k", yv_long(K_decl), "kind", yr_get(node, "kind"),
+        return normnode(yr(9, "k", yv_long(K_decl), "kind", yr_get(node, "kind"),
                            "name", yr_get(node, "name"), "typ",
                            strip_type(yr_get(node, "typ"), imports), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
-                           yr_get(node, "line"), "col", yr_get(node, "col")));
+                           yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
     }
 }
 
@@ -6569,18 +6569,18 @@ Yv *gen_cat_conv(Yv *st, Yv *node, Yv *lt) {
     st = yr_get(r, "st");
     Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
     Yv *noelems = yav(0);
-    Yv *da = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+    Yv *da = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                 yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("l")),
-                "v", yr_get(node, "l"), "line", ln, "col", cl);
-    Yv *db = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                "v", yr_get(node, "l"), "line", ln, "col", cl, "nline", cl, "ncol", cl);
+    Yv *db = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                 yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("r")),
-                "v", yr_get(node, "r"), "line", ln, "col", cl);
-    Yv *dc = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                "v", yr_get(node, "r"), "line", ln, "col", cl, "nline", cl, "ncol", cl);
+    Yv *dc = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                 yr(2, "k", yv_long(K_tarr), "of", yr_get(lt, "of")),
                 "name", ys_cat(t1, ys("c")),
                 "v", yr(4, "k", yv_long(K_array), "elems", noelems,
                         "line", ln, "col", cl),
-                "line", ln, "col", cl);
+                "line", ln, "col", cl, "nline", cl, "ncol", cl);
     Yv *pa = yr(6, "k", yv_long(K_opassign), "tgt", n_id(ys_cat(t1, ys("c")),
                                                        yv_l(ln), yv_l(cl)),
                 "op", ys("+"), "v", n_id(ys_cat(t1, ys("l")),
@@ -9409,19 +9409,19 @@ Yv *gen_incdec_desugar(Yv *st, Yv *node, int dropped) {
         /* ++x -> { bind; let v = x + 1; x = v; v } */
         Yv *nv = yr(6, "k", yv_long(K_bin), "op", binop, "l", place, "r", one,
                     "line", yv_long(ln), "col", yv_long(cl));
-        Yv *d2 = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+        Yv *d2 = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                     place_value_type(infer(st, tgt)), "name",
                     ys_cat(t1, ys("v")), "v", nv, "line", yv_long(ln),
-                    "col", yv_long(cl));
+                    "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
         Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1,
                                    ln, cl);
         return gen_incdec_end(st, bind, d2, asg, dropped, ln, cl);
 
     } else {
         /* x++ -> { bind; let v = x; x = v + 1; v } */
-        Yv *d2 = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+        Yv *d2 = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                     yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("v")), "v",
-                    place, "line", yv_long(ln), "col", yv_long(cl));
+                    place, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
         Yv *nv = yr(6, "k", yv_long(K_bin), "op", binop, "l",
                     n_id(ys_cat(t1, ys("v")), ln, cl), "r", one, "line",
                     yv_long(ln), "col", yv_long(cl));
@@ -9552,9 +9552,9 @@ Yv *gen_opassign_desugar(Yv *st, Yv *node, int dropped) {
     Yv *rd = gen_place_read(tgt, t1, ln, cl);
     Yv *bin = yr(6, "k", yv_long(K_bin), "op", op, "l", rd, "r", yr_get(node, "v"),
                  "line", yv_long(ln), "col", yv_long(cl));
-    Yv *d2 = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+    Yv *d2 = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                 place_value_type(infer(st, tgt)), "name", ys_cat(t1, ys("v")),
-                "v", bin, "line", yv_long(ln), "col", yv_long(cl));
+                "v", bin, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
     Yv *asg = gen_place_assign(tgt, n_id(ys_cat(t1, ys("v")), ln, cl), t1, ln,
                                cl);
     Yv *rest = yav(0);
@@ -9598,8 +9598,8 @@ Yv *place_read_idx(Yv *tgt, Yv *t1, long ln, long cl) {
 }
 
 Yv *place_read_dot(Yv *tgt, Yv *t1, long ln, long cl) {
-    return yr(5, "k", yv_long(K_dot), "obj", n_id(t1, ln, cl), "key",
-              yr_get(tgt, "key"), "line", yv_long(ln), "col", yv_long(cl));
+    return yr(7, "k", yv_long(K_dot), "obj", n_id(t1, ln, cl), "key",
+              yr_get(tgt, "key"), "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
 Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl) {
@@ -9625,9 +9625,8 @@ Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
 }
 
 Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
-    return yr(6, "k", yv_long(K_dotassign), "obj", n_id(t1, ln, cl), "key",
-              yr_get(tgt, "key"), "v", valnode, "line", yv_long(ln), "col",
-              yv_long(cl));
+    return yr(8, "k", yv_long(K_dotassign), "obj", n_id(t1, ln, cl), "key",
+              yr_get(tgt, "key"), "v", valnode, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
 Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
@@ -9648,21 +9647,20 @@ Yv *place_bind_id(Yv *tgt, Yv *t1, long ln, long cl) {
 }
 
 Yv *place_bind_idx_id(Yv *tgt, Yv *t1, long ln, long cl) {
-    return yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+    return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
               yr(1, "k", yv_long(K_tnone)), "name", t1, "v", yr_get(tgt, "idx"),
-              "line", yv_long(ln), "col", yv_long(cl));
+              "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
 Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl) {
     /* nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
      * `t1 + "a"` as well, so the place evaluates it exactly once. */
-    Yv *tba = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+    Yv *tba = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                  yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("a")), "v",
-                 yr_get(tgt, "arr"), "line", yv_long(ln), "col", yv_long(cl));
-    Yv *tib = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                 yr_get(tgt, "arr"), "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
+    Yv *tib = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                  yr(1, "k", yv_long(K_tnone)), "name", t1, "v",
-                 yr_get(tgt, "idx"), "line", yv_long(ln), "col",
-                 yv_long(cl));
+                 yr_get(tgt, "idx"), "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
     return block2(tba, tib, ln, cl);
 }
 
@@ -9676,9 +9674,9 @@ Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl) {
 }
 
 Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl) {
-    return yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+    return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
               yr(1, "k", yv_long(K_tnone)), "name", t1, "v", yr_get(tgt, "obj"),
-              "line", yv_long(ln), "col", yv_long(cl));
+              "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
 /* The synthetic `let` that runs the target's index/base exactly once (a
@@ -9752,18 +9750,17 @@ Yv *gen_opassign_arr(Yv *st, Yv *node, int dropped) {
         /* { let tv = v; let ti = 0; let tn = len(tv);
          *   while (ti < tn) { place = push(place, tv[ti]); ti = ti + 1 }
          *   place } */
-        Yv *tv = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+        Yv *tv = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                     yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("v")), "v",
-                    v, "line", yv_long(ln), "col", yv_long(cl));
-        Yv *ti = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                    v, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
+        Yv *ti = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                     yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("i")), "v",
-                    n_num(ys("0"), ln, cl), "line", yv_long(ln), "col",
-                    yv_long(cl));
-        Yv *tn = yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ",
+                    n_num(ys("0"), ln, cl), "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
+        Yv *tn = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
                     yr(1, "k", yv_long(K_tnone)), "name", ys_cat(t1, ys("n")), "v",
                     n_call1(ys("len"), n_id(ys_cat(t1, ys("v")), ln, cl), ln,
                             cl),
-                    "line", yv_long(ln), "col", yv_long(cl));
+                    "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
         Yv *elem = yr(5, "k", yv_long(K_index), "arr",
                       n_id(ys_cat(t1, ys("v")), ln, cl), "idx",
                       n_id(ys_cat(t1, ys("i")), ln, cl), "line", yv_long(ln),
@@ -13865,7 +13862,7 @@ Yv *n_bool(Yv *v, long line, long col) {
 }
 
 Yv *n_dot(Yv *obj, Yv *key, long line, long col) {
-    return yr(5, "k", yv_long(K_dot), "obj", obj, "key", key, "line", yv_long(line), "col", yv_long(col));
+    return yr(7, "k", yv_long(K_dot), "obj", obj, "key", key, "line", yv_long(line), "col", yv_long(col), "nline", yv_long(col), "ncol", yv_long(col));
 }
 
 Yv *n_idx(Yv *arr, Yv *idx, long line, long col) {
@@ -13889,7 +13886,7 @@ Yv *n_while(Yv *c, Yv *b, long ln, long cl) {
 }
 
 Yv *n_decl(Yv *name, Yv *v, long ln, long cl) {
-    return yr(7, "k", yv_long(K_decl), "kind", ys("let"), "typ", yr(1, "k", yv_long(K_tnone)), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl));
+    return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ", yr(1, "k", yv_long(K_tnone)), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
 Yv *n_assign(Yv *name, Yv *v, long ln, long cl) {
