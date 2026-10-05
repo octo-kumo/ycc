@@ -810,6 +810,98 @@ deferred region is the sharing route, not a rewrite of block scoping.
 
 ---
 
+## Corrections found by building it (M1 and M2, measured)
+
+Written after the fact, so the design above can be read against what the code
+actually does. Each is a place this document was wrong, with the measurement.
+
+**1. The clone syscall does not transfer control, and the entry address is not
+in the stack.** [M1](#m1--run-an-image-in-a-child) says `sysretq` pops it. Under
+gdb the child comes back from `syscall(56, SIGCHLD, stack_top, 0, 0, 0)` with
+`%rax = 0`, `%rsp = stack_top`, RIP at the *next* instruction — still running
+ycc. So the transfer is one `jmp *%rax` later, which is why `jmp_at` exists
+(`ir.y` `F_JMP_IND`, `enc64.y`'s `enc_jmp` `K.ind`, `types.y`'s typeof arm): a
+`call` would push a return address onto the fabricated stack, and a process
+entry point reads its argv from there.
+
+**2. `MAP_FIXED` is unusable on this kernel.** `mmap(MAP_FIXED)` at a fresh
+address immediately above an existing mapping returns `EINVAL`. So the image is
+one `memfd` sized to the whole span (the ELF's bytes, then the `.bss` at its own
+offset, the gap page being part of the file's zeros), one `mmap` `PROT_RW`, then
+`mprotect(img, memsz, PROT_RX)`. The `.bss` is unusable until `ftruncate`, or
+`mmap` past the end of a file gives `SIGBUS` rather than zeros.
+
+**3. `split` drops ONE trailing empty element.** `split("a\n", "\n")` is `["a"]`.
+Two consequences this document did not see: `lit_end`'s `end = n` is ambiguous
+between "closed at the last byte" and "ran off the end" (hence the out-param, and
+the three copies collapsed onto the one in `lexer.y`); and anything that splits
+generated text to find its lines loses a trailing newline — the last line of
+every piece used to run into the next one.
+
+**4. An f-string is not `lit_end`.** A field holds one expression, and that
+expression may be a string literal, so `f"{d["k"]}"` has no `lit_end` answer:
+its closing quote is not the next quote in the source. The scanner calls the
+lexer's own `fstr_walk`, which already knows that (and falls back to `lit_end`
+when the f-string is broken, which is what the lexer does too).
+
+**5. "A keyword can only start after a newline, `;`, `{`, `}` or `#{`" is right
+about CODE, but a *word* inside a block is a position too.** `let t = spawn { … }`
+has `spawn` mid-expression, and refusing it is the whole value of the check. So
+the scanner stops at a word start as well — inside a block only, which is why a
+file with no blocks still costs one `index_of` per file.
+
+**6. `import` must not be tokenized, and the direction of the import graph is
+forced.** G's text is resolved before it is tokenized, so a hoisted import is
+spliced by the ordinary splicer with its dedup, its namespacing and its depth-32
+diagnostic. And `meta.y` must not import `native.y`: the splicer dedups only
+*downward*, so a cycle splices the file on the way back up a second time and
+every `def` collides. The compile and the run therefore live in `native.y` and
+take what they need through `mg_*` accessors (with `mg_setup` passing values,
+because `strip_ns` rewrites `K.dot` reads but not `K.dotassign`).
+
+**7. "The pass runs before the splicer's line loop, so `embed` is already
+expanded" is true but not for the reason given.** The reason it has to be before
+*that* loop is `std-unit selection`: `resolve_unit` picks the std units from the
+text after the loop, and a block's generated text must be able to mention
+`readline`. An embedded file's bytes land inside a string literal, and the
+scanner has already read that line, so nothing in them can be a block either way.
+
+**8. A block's slot must be its index in the block table, not a counter that
+keeps counting.** The two resolves of one unit (collecting, then splicing) rebuild
+the table, so a monotonic counter hands the second pass slots 4,5,6 for blocks
+that asked for 0,1,2 and the pieces are matched to nothing. The counter resets per
+pass (`mg_pass`), which is the one piece of state the second resolve has to reset.
+
+Corrected in `ideas/meta.y` itself, twice: the `let count` block wanted the number
+65 and got 65 as the *length* of the text the block generates (so it now yields
+the text), and a `str` value spliced as text needs `lit` — which escapes — not
+`quoted`, or it lands as bare code and the program's own parser sees
+`let count = let names = …`. The file says so.
+
+### What the measurements cost
+
+Base is the M1 commit's compiler, same machine, `bench/y/*` compiled with each:
+
+| | base | with the pass |
+|---|---|---|
+| `src/y/ycc.y` (self-compile) | 0.46 s / 1142080 KB | 0.47 s / 1157564 KB |
+| `bench/y/scan.y` | 0.00 s / ~17.2 MB | 0.00 s / ~19.4 MB |
+| `bench/y/hello.y` | 0.00 s / 2.25 MB | 0.00 s / 2.70 MB |
+| `resolve` phase of `src/y/ycc.y` | 19.5 ms | 24.6 ms |
+| `asm_bytes` of `src/y/ycc.y` | 5225719 | 5225719 |
+
+The `scan.y` row is an artefact, and worth naming rather than hiding: it is one
+benchmark crossing the 4 MiB heap-chunk boundary (five chunks instead of four,
+and RSS counts the half of the last one that was touched). The compiler's own
+`heap_used` for that file is 16326 KB before and 16334 KB after. Every benchmark
+takes the `index_of(src, "#") < 0` fast path — none of `bench/y/*.y` has a `#` in
+it at all — so the scanner itself is not in that number; the extra is the
+per-output-line `ogen` map and the resolve indirection, which is why the self-
+compile's resolve phase is the honest one to quote: **+5.1 ms and +15 MB on a
+1.3 MB self-compile**, and both are only paid by a program that *has* blocks.
+
+---
+
 ## Landing order
 
 ```
