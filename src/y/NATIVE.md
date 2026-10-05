@@ -288,7 +288,11 @@ written or its default's; return types and locals are inferred, and a
 call before the callee's body is checked needs its return type written
 -- there is no unknown type), captures resolved into closures, `if` cond must be
 `bool`, `if` arms that disagree make the `if` `void` (a statement; using it
-as a value errors), `while` is `void`-typed, and the only implicit
+as a value errors), `while` is `void`-typed, `break`/`continue` are
+`void`-typed and legal only inside a loop **and** in the same function
+(the closure-inside-a-loop case is a jump out of a function, which the
+checker refuses rather than the emitter, whose answer would be a jump to
+another function's label), and the only implicit
 conversions are `long`→`float`, `byte`→`long`/`float`, `long`→`byte` at an
 annotated site, `str`→`*T` and `none`-unification. There is no `null`:
 `none` is the empty option and postfix `x!` is `unwrap(x)`. Error messages
@@ -307,6 +311,30 @@ All of these are lowered early, so the checker and emitter see little new:
   an if/else that returns on every path) keeps its value. The emitter
   emits nothing for that `void`, and a tail call before it stays a tail
   call.
+- **`break` / `continue`** are a bare `jmp` to a label the enclosing loop
+  generator published (`brk_label` / `cont_label`, module state in
+  native.y; `emit_one_fn` clears both, so a closure body can never
+  inherit its creator's loop). All four loop kinds lower to the same
+  shape — head label, test, body, step, `jmp` back, exit label — so
+  `break` is the exit label everywhere. `continue` is the one place the
+  shapes differ, and the difference is a trap worth writing down: it
+  cannot be the head label for any loop with a step, because the step
+  sits at the *bottom*, after the body, so a `continue` that jumped to
+  the head would re-run the body on the same value and never end.
+  `for`, `for..in` and `foreach` therefore emit a third label between
+  the body and the step; only `while`, which has no step, continues to
+  the head. (For `for..in`/`foreach` the fresh per-turn `box_bound` cell
+  is made at the *top* of the next turn, which the `jmp` back after the
+  increment reaches — so the cell still refreshes.)
+
+  The third label is emitted for every counted loop, including the ones with
+  no `continue` in them: a label has to exist before the body that jumps to it
+  is generated, so deciding lazily would mean walking the body first (and
+  knowing which `continue`s belong to *this* loop, not a nested one or a
+  closure). Measured, the unconditional label costs 12 bytes of asm per
+  counted loop — 587 bytes, +0.01%, on ycc's own output, which has 49 of
+  them — against emitted code that is otherwise byte-identical. That is the
+  trade: 0.01% of asm for no extra walk and no extra state.
 - **`print(a, b, ...)`** is `print(tostring(a) + tostring(b) + ...)`.
 - **Default parameters** `def f(n: long, acc = 1)`: the default must be a
   literal, and gives an unannotated parameter its type; rename.y fills

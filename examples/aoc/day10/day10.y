@@ -20,6 +20,9 @@
 //        ./day10 --check    (property check, no reference file)
 //        ./day10 --help
 import fs;
+// std's seeded generator (splitmix64).  It replaced the glibc LCG this file
+// carried behind `rnd(n)`; see "the generated battery" below.
+import random;
 
 const CH_ZERO = 48;               // '0'
 const CH_HASH = 35;               // '#'
@@ -1615,20 +1618,29 @@ def memo_plant() -> long {
 // definition-faithful searches.  This is where the SUBJECT-LEVEL question is
 // settled: is pressing a button twice ever useful (the lemma part 1 rests
 // on)?  d1_presses allows repeated presses and does not care.
-let rng_s = 0;
-
-def rnd(n: long) -> long {
-    rng_s = (rng_s * 1103515245 + 12345) % 2147483648;
-    rng_s % n
-}
-
+//
+// THE GENERATOR IS STD'S.  This file used to carry its own: a module-level
+// `rng_s` stepped by `(s * 1103515245 + 12345) % 2147483648` behind a local
+// `rnd(n)`, which is the textbook glibc LCG -- the weakest sequence in the
+// example corpus, and biased for every n that is not a power of two.  Both are
+// gone; the draws come from `import random` (src/y/std/random.y, splitmix64)
+// via random.seed(20251210) and random.below(n) below.
+//
+// What that does to the battery: the same 240 machines are generated and
+// checked, from a different stream, so it is a different 240 machines -- each
+// still parsed by the real parser, solved by the real entry point, and compared
+// against both definition-faithful searches.  Nothing here asserts a particular
+// machine (that would be a golden file wearing a costume), so the battery's
+// strength is unchanged; the line the battery prints still says "seed
+// 20251210", which is still the seed, and --check is still byte-reproducible.
+// EXPECTED is unaffected: the generator is reached only from check_battery().
 def battery_line() -> str {
-    let nl = 1 + rnd(5);
-    let nb = 1 + rnd(5);
+    let nl = 1 + random.below(5);
+    let nb = 1 + random.below(5);
     let s = "[";
     let i = 0;
     while (i < nl) {
-        s = s + (if (rnd(2) == 0) { "." } else { "#" });
+        s = s + (if (random.below(2) == 0) { "." } else { "#" });
         i = i + 1
     };
     s = s + "]";
@@ -1637,7 +1649,7 @@ def battery_line() -> str {
         let m = 0;
         let k = 0;
         while (k < nl) {
-            if (rnd(2) == 1) { m = m | (1 << k) };
+            if (random.below(2) == 1) { m = m | (1 << k) };
             k = k + 1
         };
         if (m == 0) { m = 1 };
@@ -1657,14 +1669,14 @@ def battery_line() -> str {
     let j = 0;
     while (j < nl) {
         if (j > 0) { s = s + "," };
-        s = s + tostring(rnd(6));
+        s = s + tostring(random.below(6));
         j = j + 1
     };
     s + "}"
 }
 
 def check_battery() -> long {
-    rng_s = 20251210;              // fixed: the battery must be reproducible
+    random.seed(20251210);        // fixed: the battery must be reproducible
     let bad = 0;
     let b1bad = 0;
     let b2bad = 0;

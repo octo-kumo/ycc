@@ -148,7 +148,7 @@ property checks -- seven groups, no reference file involved
         fuzz: 100 edits, 100 undo entries, hash 64995.67
         bound: 400 edits, undo depth capped at 128
         the closing delimiter is what removes that ambiguity: s/hit/big/ -> "big big"
-        model: 500 edits, final 3 lines 10 bytes, hash 63980.2
+        model: 500 edits, final 2 lines 8 bytes, hash 47610.123
 
   (a) undo invariant                    115 checks
   (b) substitute correctness            453 checks

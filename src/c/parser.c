@@ -1760,6 +1760,13 @@ Yv *parse_stmt(Yv *toks, long p) {
         return parse_decl(toks, p);
     } else if (is_typedef_start(toks, p)) {
         return parse_typedef(toks, p);
+    } else if (is_kw(toks, p, ys("break")) || is_kw(toks, p, ys("continue"))) {
+        /* `break;` and `continue;` -- see the same arm in src/y/parser.y,
+           including why only the keyword is consumed and the `;` is left to
+           the caller. */
+        long kind = is_kw(toks, p, ys("break")) ? K_kw_break : K_kw_continue;
+        return res(yr(3, "k", yv_long(kind), "line", yv_long(tline(toks, p)),
+                              "col", yv_long(tcol(toks, p))), p + 1);
     } else if (is_kw(toks, p, ys("return"))) {
         if (is_punct(toks, p + 1, ys(";")) ||
             is_punct(toks, p + 1, ys("}")) ||

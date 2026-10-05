@@ -277,28 +277,54 @@ from something outside the code under test: a literal table, a hand-computed od
 line, a count taken from `fs.file_size` (i.e. from the operating system), or GNU
 `od` itself.
 
+Every assertion goes through **`std/test.y`**'s `test.ck` / `test.ck_eq` /
+`test.ck_str`, which `selftest.y` used to write for itself as `ok` / `ck` /
+`ckstr`. Two things changed and one did not:
+
+* the counts are **unchanged** — 720 assertions, 0 failed;
+* a **failure is now two lines** (the name, then the measurement) instead of one;
+* a **pass is now printed at all**. The local `ok` was silent unless it failed,
+  which is why this block used to be 19 lines; `std/test.y` prints a verdict and
+  a detail line on both outcomes, so a clean run is 1464. That is the module's
+  deliberate trade — "a check whose output only appears on failure is one nobody
+  can read" — and the detail on a pass is the measurement.
+
 ```
 $ ./hexview --check --od
 hexview property check
   toolkit-free model: hx.y holds a file as [byte]; the row format is
   GNU od -A d -t x1z -v, reproduced byte for byte
+
 [1 the ASCII gutter, all 256 byte values]
-[2 the hex digits, all 256 byte values]
-[3 one fixture's dump, against four hand-written lines]
-[4 round-tripped edits: write, save, re-read with a fresh reader]
-[5 struct's u32 readers against two hand compositions]
-[6 bounds: every hostile offset is a value, not a trap]
-[7 the histogram conserves the byte count]
-[8 the histogram hexview prints, cell by cell]
-[9 the row formatter is deterministic]
-[10 the summary line's own numbers, at eight --rows values]
+  ok    every one of 256 byte values renders right
+  ok    values that render as themselves
+          got 95, want 95
+  ok    values that render as the placeholder
+          got 161, want 161
+  ok    the two counts cover every byte value
+          got 256, want 256
+  ok    neither class is empty
+          nself=95 ndot=161
+  ok    0x20 is a space, not a placeholder
+          got 32, want 32
+  ...
+  ... 711 more, then:
+
 [11 the GNU od cross-check: od -A d -t x1z -v, byte for byte]
+  ok    the od cross-check compared something
+  ...
   15 of 15 dumps identical to od, 29458 bytes compared against 29458 bytes of od output
 [12 every flag's error path: non-zero exit, ITS OWN message, no trap]
+  ok    the check ran a real number of assertions
+          only 719
   720 assertions, 0 failed
   od cross-check: 15 files, 29458 bytes identical to od -A d -t x1z -v
 hexview --check: every property held
 ```
+
+The elision is real: `--check --od` prints one verdict line plus one detail line
+per assertion, so the whole thing is 1464 lines. `EXPECTED` is unaffected — it is
+the `run=` line's stdout (`--no-tty --hist`), not this.
 
 ### The oracles
 
@@ -372,6 +398,12 @@ defect neither oracle notices is a defect the example cannot find, and saying
 "the check passes" without doing this is the failure mode `day08` set the
 standard against.
 
+**Measured after the move to `std/test.y`: 26 injected, 26 caught, 0 missed, 0
+other** — unchanged. The last column is the first failing assertion and, after the
+`:`, the measurement it reported; the two are now on **two lines** in the output
+(`FAIL  <name>` then `<detail>`), joined here for width. Every cell below was
+re-measured rather than carried over.
+
 | # | injected defect | caught by | first assertion to fail |
 |---|---|---|---|
 | M1 | the gutter's low bound `32 → 33`: a space becomes a placeholder | `--check` | every one of 256 byte values renders right: first at 32: got 46, want 32 |
@@ -418,7 +450,8 @@ and fixing them is the reason the battery is worth more than a claim:
   writing to `path + ".tmp"` the fresh reader read the *old* file and every
   assertion passed. §4 now deletes the paths first and says they were absent. And
   the *first* time the fix was in place M10 was still reported as a trap rather
-  than as its own assertion: `ck(sz2!, FIXN)` unwrapped a `none` from
+  than as its own assertion: `ck(sz2!, FIXN)` — now `test.ck_eq("...", sz2!, FIXN)`
+  — unwrapped a `none` from
   `fs.file_size` before the assertion that names the defect could run, and
   `ok(...)` records a failure without stopping. Every `!` on a
   `file_size`/`read_bytes` answer is now behind a guard, so a check that finds a

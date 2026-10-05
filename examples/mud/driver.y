@@ -25,7 +25,6 @@
 // and why the workers are released with SHUTDOWN and left for exit_group to reap.
 // See README.md, "WORKAROUNDS".
 
-import rnd;
 import net;
 import sockio;
 import world;

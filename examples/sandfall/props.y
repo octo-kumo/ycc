@@ -77,12 +77,16 @@
 
 import grid;
 import scene;
+// std's assertion helper: it replaced this file's own `ck`/`ck_num`, which are
+// gone -- see the note under the reporting primitives below.
+import test;
 
 // The suite's own bookkeeping.  Module-level and fixed: a `+=` into an array
 // inside these loops would allocate, and there is no reason to be careless in
-// the file whose whole subject is that discipline.
-let CHECKS = 0;
-let BAD = 0;
+// the file whose whole subject is that discipline.  CHECKS and BAD are gone too:
+// the assertion tally is test.checks() and test.failures() now, so this file
+// keeps no counter of its own that could drift out of step with the assertions
+// it claims to have made.
 let CELLS_SEEN = 0;
 let GEN_SEEN = 0;
 const MIN_CHECKS = 90;      // the floor C11 enforces on the suite itself
@@ -97,24 +101,25 @@ def sub(t: str) {
     puts("    " + t + "\n")
 };
 
-// ck(cond, what) -> bool -- one assertion.  It prints whether it passed or
-// failed: a check whose output only appears on failure is one nobody can read.
-def ck(cond: bool, what: str) -> bool {
-    CHECKS = CHECKS + 1;
-    if (cond) {
-        puts("    ok   " + what + "\n")
-    } else {
-        BAD = BAD + 1;
-        puts("    FAIL " + what + "\n")
-    };
-    cond
-};
-
-// ck_num(got, want, what) -> bool -- the same, with the numbers in the line, so
-// a failure says what it got and not only that it was wrong.
-def ck_num(got: long, want: long, what: str) -> bool {
-    ck(got == want, what + " (got " + tostring(got) + ", want " + tostring(want) + ")")
-};
+// ck(cond, what) and ck_num(got, want, what) ARE GONE.  They were this file's
+// own assertion helpers; they are now std's `test.ck(name, ok, detail)` and
+// `test.ck_eq(want, got, name)` (src/y/std/test.y).  THE ARGUMENT ORDER MOVED,
+// so every call site below was reordered rather than only the definition: the
+// local helper read `ck(cond, what)` and std reads `ck(name, ok, detail)`.
+// Both return bool, so the call sites that branched on the result still branch
+// on it.
+//
+// What that does to this file's output: an assertion is indented two spaces and
+// marked "  ok  " instead of four and "    ok   ", and a ck_eq puts its numbers
+// on a second line under the assertion rather than in brackets at the end of
+// it.  The information is the same; CHECK.txt was regenerated to match.
+//
+// The suite's counters are std's as well -- test.checks() instead of CHECKS and
+// test.failures() instead of BAD -- which is why nothing here has to keep a
+// second tally in step with the first.  test.report() is deliberately NOT
+// called: the RESULT line at the bottom of check_all() carries the generation
+// count too, so report() alongside it would print the same run's summary
+// twice.
 
 // ===========================================================================
 // a closed box, described by literals of THIS file
@@ -187,12 +192,12 @@ def c0_nonvacuous() {
     // The gate on everything downstream: if any of these is zero, the
     // conservation checks that follow would be comparing 0 with 0 and passing
     // for the wrong reason.
-    ck(ok, "the test box's geometry fitted the constants");
-    ck(grid.CNT[grid.M_STONE] > 0, "the box has stone on it before anything is counted");
-    ck(grid.CNT[grid.M_SAND] > 0, "the box has sand on it before anything is counted");
-    ck(grid.CNT[grid.M_WATER] > 0, "the box has water on it before anything is counted");
-    ck(CELLS_SEEN == BW * BH, "the logical grid has BW*BH cells");
-    ck(grid.MATTER > 0, "MATTER is non-zero, so `matter` is a real quantity here")
+    test.ck("the test box's geometry fitted the constants", ok, "");
+    test.ck("the box has stone on it before anything is counted", grid.CNT[grid.M_STONE] > 0, "");
+    test.ck("the box has sand on it before anything is counted", grid.CNT[grid.M_SAND] > 0, "");
+    test.ck("the box has water on it before anything is counted", grid.CNT[grid.M_WATER] > 0, "");
+    test.ck("the logical grid has BW*BH cells", CELLS_SEEN == BW * BH, "");
+    test.ck("MATTER is non-zero, so `matter` is a real quantity here", grid.MATTER > 0, "")
 };
 
 // ===========================================================================
@@ -203,11 +208,11 @@ def c1_conservation() {
     head("C1  stone, sand and water are conserved at EVERY generation");
     let ok = box_plain();
     grid.tally();
-    ck(ok, "the test box's geometry fitted the constants above");
-    ck_num(grid.CNT[grid.M_STONE], EXP_STONE, "stone at generation 0");
-    ck_num(grid.CNT[grid.M_SAND], EXP_SAND, "sand at generation 0");
-    ck_num(grid.CNT[grid.M_WATER], EXP_WATER, "water at generation 0");
-    ck_num(grid.MATTER, EXP_MATTER, "matter at generation 0");
+    test.ck("the test box's geometry fitted the constants above", ok, "");
+    test.ck_eq("stone at generation 0", grid.CNT[grid.M_STONE], EXP_STONE);
+    test.ck_eq("sand at generation 0", grid.CNT[grid.M_SAND], EXP_SAND);
+    test.ck_eq("water at generation 0", grid.CNT[grid.M_WATER], EXP_WATER);
+    test.ck_eq("matter at generation 0", grid.MATTER, EXP_MATTER);
 
     let gens = 300;
     let bad_c = 0;
@@ -228,14 +233,14 @@ def c1_conservation() {
     };
     GEN_SEEN = GEN_SEEN + gens;
     sub("over " + tostring(gens) + " generations, checked at every one of them");
-    ck_num(bad_c, 0, "generations where the stone count was wrong");
-    ck_num(bad_s, 0, "generations where the sand count was wrong");
-    ck_num(bad_w, 0, "generations where the water count was wrong");
-    ck_num(bad_m, 0, "generations where the matter total was wrong");
-    ck_num(bad_i, 0, "generations where matter + empty != w*h");
-    ck_num(grid.CNT[grid.M_STONE], EXP_STONE, "stone at generation " + tostring(gens));
-    ck_num(grid.CNT[grid.M_SAND], EXP_SAND, "sand at generation " + tostring(gens));
-    ck_num(grid.CNT[grid.M_WATER], EXP_WATER, "water at generation " + tostring(gens));
+    test.ck_eq("generations where the stone count was wrong", bad_c, 0);
+    test.ck_eq("generations where the sand count was wrong", bad_s, 0);
+    test.ck_eq("generations where the water count was wrong", bad_w, 0);
+    test.ck_eq("generations where the matter total was wrong", bad_m, 0);
+    test.ck_eq("generations where matter + empty != w*h", bad_i, 0);
+    test.ck_eq("stone at generation " + tostring(gens), grid.CNT[grid.M_STONE], EXP_STONE);
+    test.ck_eq("sand at generation " + tostring(gens), grid.CNT[grid.M_SAND], EXP_SAND);
+    test.ck_eq("water at generation " + tostring(gens), grid.CNT[grid.M_WATER], EXP_WATER);
     // The expected side of every one of those is EXP_*, arithmetic over this
     // file's own literals.  Say so on stdout, because the difference between
     // that and reading grid.CNT[] is the whole difference between this check
@@ -286,8 +291,8 @@ def c2_order() {
     while (off <= drop + 3) {
         let want = sy0 + off;
         if (want > fy - 1) { want = fy - 1 };
-        ck_num(sand_row(sx), want, "  generation " + tostring(off) + ": it is on row "
-            + tostring(want));
+        test.ck_eq("  generation " + tostring(off) + ": it is on row "
+            + tostring(want), sand_row(sx), want);
         grid.step();
         off = off + 1
     };
@@ -297,7 +302,7 @@ def c2_order() {
     let k = 0;
     while (k < 10) { grid.step(); k = k + 1 };
     GEN_SEEN = GEN_SEEN + 10;
-    ck_num(sand_row(sx), settled_row, "C2a  and it is still on that row 10 generations later");
+    test.ck_eq("C2a  and it is still on that row 10 generations later", sand_row(sx), settled_row);
 
     // ---- C2b: a stack does not compact in one step ------------------------
     // Four grains stacked, `gap` empty rows below them, and a floor under that.
@@ -327,12 +332,12 @@ def c2_order() {
     sub("C2b  a stack of 4 grains on rows " + tostring(top0) + ".." + tostring(top0 + 3)
         + ", " + tostring(gap) + " empty rows below them, and the floor on row "
         + tostring(floor_row));
-    ck_num(sand_row(cx), top0, "  the top of the stack is on row " + tostring(top0));
+    test.ck_eq("  the top of the stack is on row " + tostring(top0), sand_row(cx), top0);
     let g = 1;
     while (g <= gap) {
         grid.step();
-        ck_num(sand_row(cx), top0 + g, "  generation " + tostring(g)
-            + ": the top of the stack is on row " + tostring(top0 + g));
+        test.ck_eq("  generation " + tostring(g)
+            + ": the top of the stack is on row " + tostring(top0 + g), sand_row(cx), top0 + g);
         g = g + 1
     };
     // The generation it lands on.  "Nothing moves after that" is NOT the right
@@ -342,10 +347,10 @@ def c2_order() {
     // on floor_row - 3 -- a four-grain pile on a floor cannot be higher -- and
     // that it never rises from there.
     grid.step();
-    ck_num(sand_row(cx), floor_row - 3, "C2b  landed: the top of the pile is on row "
-        + tostring(floor_row - 3) + ", which is as high as a four-grain pile on that floor can be");
+    test.ck_eq("C2b  landed: the top of the pile is on row "
+        + tostring(floor_row - 3) + ", which is as high as a four-grain pile on that floor can be", sand_row(cx), floor_row - 3);
     grid.tally();
-    ck_num(grid.CNT[grid.M_SAND], 4, "C2b  all four grains are still there");
+    test.ck_eq("C2b  all four grains are still there", grid.CNT[grid.M_SAND], 4);
     let landed = sand_row(cx);
     let k2 = 0;
     while (k2 < 20) {
@@ -353,10 +358,10 @@ def c2_order() {
         k2 = k2 + 1
     };
     GEN_SEEN = GEN_SEEN + gap + 2 + 20;
-    ck(sand_row(cx) >= landed, "C2b  and 20 generations later the top of the pile has not "
-        + "risen (row " + tostring(sand_row(cx)) + ")");
+    test.ck("C2b  and 20 generations later the top of the pile has not "
+        + "risen (row " + tostring(sand_row(cx)) + ")", sand_row(cx) >= landed, "");
     grid.tally();
-    ck_num(grid.CNT[grid.M_SAND], 4, "C2b  and no grain left the box");
+    test.ck_eq("C2b  and no grain left the box", grid.CNT[grid.M_SAND], 4);
 
     // ---- C2c: every grain arrives from a neighbour, by at most one cell ----
     // This is the general statement, and it is what answers the brief's
@@ -459,16 +464,16 @@ def c2_order() {
         + tostring(arrived) + " cells were arrived at, " + tostring(vacated)
         + " were vacated, and the largest single-generation displacement was "
         + tostring(maxdx) + " column(s) across and " + tostring(maxdy) + " row(s) down");
-    ck(arrived > 200, "C2c  the check saw real motion (" + tostring(arrived)
-        + " arrivals), so it is not vacuous");
-    ck(maxdx <= 1, "C2c  no grain crossed more than one column in a generation (max "
-        + tostring(maxdx) + ")");
-    ck(maxdy <= 1, "C2c  and no grain fell more than one row in a generation (max "
-        + tostring(maxdy) + ")");
-    ck(maxdx == 1, "C2c  and the column bound is TIGHT: some grain used all of it");
-    ck(maxdy == 1, "C2c  and the row bound is tight too");
-    ck_num(orphan, 0, "C2c  every cell a grain arrived at had that material beside "
-        + "it in the previous generation");
+    test.ck("C2c  the check saw real motion (" + tostring(arrived)
+        + " arrivals), so it is not vacuous", arrived > 200, "");
+    test.ck("C2c  no grain crossed more than one column in a generation (max "
+        + tostring(maxdx) + ")", maxdx <= 1, "");
+    test.ck("C2c  and no grain fell more than one row in a generation (max "
+        + tostring(maxdy) + ")", maxdy <= 1, "");
+    test.ck("C2c  and the column bound is TIGHT: some grain used all of it", maxdx == 1, "");
+    test.ck("C2c  and the row bound is tight too", maxdy == 1, "");
+    test.ck_eq("C2c  every cell a grain arrived at had that material beside "
+        + "it in the previous generation", orphan, 0);
     // EQUALITY, not an inequality: every move of an inert grain vacates exactly
     // one inert cell and arrives at exactly one stamped cell, so the two counts
     // must match exactly.  Nothing is created and nothing is destroyed.  This is
@@ -483,10 +488,10 @@ def c2_order() {
     // What is nonetheless true, and is the conservation claim, is that arrivals
     // cannot outnumber vacancies: a grain has to leave somewhere, and there are
     // never more grains in flight than there are holes to put them in.
-    ck(vacated > 0, "C2c  cells were vacated (" + tostring(vacated) + ")");
-    ck(arrived >= vacated, "C2c  no more grains moved than there were holes to move "
+    test.ck("C2c  cells were vacated (" + tostring(vacated) + ")", vacated > 0, "");
+    test.ck("C2c  no more grains moved than there were holes to move "
         + "into (" + tostring(arrived) + " moved, " + tostring(vacated)
-        + " vacated, the difference being vacancies refilled in the same generation)");
+        + " vacated, the difference being vacancies refilled in the same generation)", arrived >= vacated, "");
 
     // ---- C2e: a grain needs room to slip past its neighbour -----------------
     // This fixture exists because inject.py found a gap: deleting the
@@ -512,7 +517,7 @@ def c2_order() {
     grid.put_logical(4, 8, grid.M_STONE);
     grid.put_logical(4, 7, grid.M_SAND);
     grid.tally();
-    ck_num(grid.CNT[grid.M_SAND], 1, "  one grain in the pocket");
+    test.ck_eq("  one grain in the pocket", grid.CNT[grid.M_SAND], 1);
     let e = 0;
     while (e < 12) {
         grid.step();
@@ -520,11 +525,11 @@ def c2_order() {
     };
     GEN_SEEN = GEN_SEEN + 12;
     grid.tally();
-    ck_num(grid.at(4 + 1, 7 + 1), grid.M_SAND, "  after 12 generations it is still in "
-        + "the pocket at (4, 7)");
-    ck_num(grid.CNT[grid.M_SAND], 1, "  and no grain was left behind elsewhere");
-    ck_num(grid.at(3 + 1, 8 + 1), grid.M_EMPTY, "  and it did not drain into (3, 8)");
-    ck_num(grid.at(5 + 1, 8 + 1), grid.M_EMPTY, "  or into (5, 8)");
+    test.ck_eq("  after 12 generations it is still in "
+        + "the pocket at (4, 7)", grid.at(4 + 1, 7 + 1), grid.M_SAND);
+    test.ck_eq("  and no grain was left behind elsewhere", grid.CNT[grid.M_SAND], 1);
+    test.ck_eq("  and it did not drain into (3, 8)", grid.at(3 + 1, 8 + 1), grid.M_EMPTY);
+    test.ck_eq("  or into (5, 8)", grid.at(5 + 1, 8 + 1), grid.M_EMPTY);
 
     // Fire and smoke are created and destroyed by the chemistry rather than
     // moved, so they get the looser but still meaningful form: a cell holding
@@ -556,8 +561,8 @@ def c2_order() {
     GEN_SEEN = GEN_SEEN + 200;
     sub("over 200 generations of the burning scene (" + tostring(born)
         + " fire/smoke cells appeared)");
-    ck(born > 50, "C2d  the burning check saw fire and smoke appear");
-    ck_num(loose, 0, "C2d  every new fire or smoke puff had fire, smoke or oil beside it")
+    test.ck("C2d  the burning check saw fire and smoke appear", born > 50, "");
+    test.ck_eq("C2d  every new fire or smoke puff had fire, smoke or oil beside it", loose, 0)
 };
 
 
@@ -611,7 +616,7 @@ def had_neighbour(x: long, y: long, m: long) -> bool {
 def c3_fixed_point() {
     head("C3  a closed box reaches a FIXED POINT, and the fixed point is verified");
     let ok = box_fire();
-    ck(ok, "the burning test box built");
+    test.ck("the burning test box built", ok, "");
     grid.tally();
     sub("the box holds " + tostring(EXP_MATTER) + " cells of inert matter plus "
         + tostring(grid.vol_total()) + " volatile, in " + tostring(BW) + " x " + tostring(BH));
@@ -619,8 +624,8 @@ def c3_fixed_point() {
     let limit = 3000;
     let settled = grid.run_until_settled(limit);
     GEN_SEEN = GEN_SEEN + settled + 1;
-    ck(settled > 0, "the box reached a generation that changed nothing within "
-        + tostring(limit) + " generations");
+    test.ck("the box reached a generation that changed nothing within "
+        + tostring(limit) + " generations", settled > 0, "");
     sub("settled at generation " + tostring(settled) + ", of at most " + tostring(limit));
 
     // A real fixed point is generation n+1 == generation n, not "it stopped
@@ -634,10 +639,10 @@ def c3_fixed_point() {
         + tostring(grid.CNT[grid.M_FIRE]) + " fire, "
         + tostring(grid.CNT[grid.M_SMOKE]) + " smoke; checksum " + tostring(sum0));
     // Non-vacuity: a fixed point of an empty grid is a fixed point of nothing.
-    ck(sum0 != 0, "the fixed point's checksum is non-zero");
-    ck(grid.MATTER > 0, "the fixed point still has matter on it, so it is not a blank grid");
-    ck_num(grid.CNT[grid.M_FIRE], 0, "every fire has burned out");
-    ck_num(grid.CNT[grid.M_SMOKE], 0, "every smoke puff has vanished");
+    test.ck("the fixed point's checksum is non-zero", sum0 != 0, "");
+    test.ck("the fixed point still has matter on it, so it is not a blank grid", grid.MATTER > 0, "");
+    test.ck_eq("every fire has burned out", grid.CNT[grid.M_FIRE], 0);
+    test.ck_eq("every smoke puff has vanished", grid.CNT[grid.M_SMOKE], 0);
 
     let drift = 0;
     let i = 0;
@@ -647,7 +652,7 @@ def c3_fixed_point() {
         i = i + 1
     };
     GEN_SEEN = GEN_SEEN + 20;
-    ck_num(drift, 0, "generations in the next 20 that changed the grid at all")
+    test.ck_eq("generations in the next 20 that changed the grid at all", drift, 0)
 };
 
 // ===========================================================================
@@ -686,10 +691,10 @@ def c4_monotone() {
     };
     GEN_SEEN = GEN_SEEN + gens;
     sub("sand and water only ever move down, over " + tostring(gens) + " generations");
-    ck_num(bad_s, 0, "generations where sum(sand y) went DOWN");
-    ck_num(bad_w, 0, "generations where sum(water y) went DOWN");
-    ck_num(bad_t, 0, "generations where sum(stone y) moved at all");
-    ck_num(bad_top, 0, "generations where the topmost sand row went UP");
+    test.ck_eq("generations where sum(sand y) went DOWN", bad_s, 0);
+    test.ck_eq("generations where sum(water y) went DOWN", bad_w, 0);
+    test.ck_eq("generations where sum(stone y) moved at all", bad_t, 0);
+    test.ck_eq("generations where the topmost sand row went UP", bad_top, 0);
     sub("sum(sand y) rose by " + tostring(worst_s) + " over the run, and fell on none of them");
 
     // With fire in the box: the volatile total (oil + fire + smoke) must never
@@ -722,12 +727,12 @@ def c4_monotone() {
     GEN_SEEN = GEN_SEEN + 840;
     sub("with fire: the volatile total and the inert counts over 800 generations "
         + "(it started at " + tostring(v0) + ")");
-    ck(v0 > 0, "C4  there was a volatile total to protect in the first place ("
-        + tostring(v0) + ")");
-    ck_num(bad_vol, 0, "generations where the volatile total grew");
-    ck_num(bad_stone, 0, "generations where fire changed the stone count");
-    ck_num(bad_sand, 0, "generations where fire changed the sand count");
-    ck_num(grid.vol_total(), 0, "the volatile total is zero once the fire is out")
+    test.ck("C4  there was a volatile total to protect in the first place ("
+        + tostring(v0) + ")", v0 > 0, "");
+    test.ck_eq("generations where the volatile total grew", bad_vol, 0);
+    test.ck_eq("generations where fire changed the stone count", bad_stone, 0);
+    test.ck_eq("generations where fire changed the sand count", bad_sand, 0);
+    test.ck_eq("the volatile total is zero once the fire is out", grid.vol_total(), 0)
 };
 
 // ===========================================================================
@@ -758,16 +763,16 @@ def c5_down_only() {
         let row = sand_row(sx);
         if (row < last) { ups = ups + 1 };
         last = row;
-        ck_num(row, sy + k, "  generation " + tostring(k) + ": it is on row " + tostring(sy + k));
+        test.ck_eq("  generation " + tostring(k) + ": it is on row " + tostring(sy + k), row, sy + k);
         k = k + 1
     };
     GEN_SEEN = GEN_SEEN + floor_row - sy;
-    ck_num(ups, 0, "generations in which this grain moved UP");
-    ck_num(last, floor_row, "it came to rest on the floor");
+    test.ck_eq("generations in which this grain moved UP", ups, 0);
+    test.ck_eq("it came to rest on the floor", last, floor_row);
     let k2 = 0;
     while (k2 < 20) { grid.step(); k2 = k2 + 1 };
     GEN_SEEN = GEN_SEEN + 20;
-    ck_num(sand_row(sx), floor_row, "and it is still there 20 generations later");
+    test.ck_eq("and it is still there 20 generations later", sand_row(sx), floor_row);
 
     // A block dropped as a rectangle: the topmost sand row is non-decreasing for
     // the whole run, at every one of 200 generations.
@@ -785,7 +790,7 @@ def c5_down_only() {
         g = g + 1
     };
     GEN_SEEN = GEN_SEEN + 200;
-    ck_num(bad, 0, "generations of a 6x6 block in which the topmost sand row rose")
+    test.ck_eq("generations of a 6x6 block in which the topmost sand row rose", bad, 0)
 };
 
 // ===========================================================================
@@ -976,14 +981,14 @@ def c6_water_spreads() {
         y = y + 1
     };
     grid.tally();
-    ck_num(grid.CNT[grid.M_WATER], poured, "the pour landed: one column of "
-        + tostring(poured) + " cells, all of it water");
-    ck_num(water_columns(), 1, "and it starts in exactly one column");
+    test.ck_eq("the pour landed: one column of "
+        + tostring(poured) + " cells, all of it water", grid.CNT[grid.M_WATER], poured);
+    test.ck_eq("and it starts in exactly one column", water_columns(), 1);
     GEN_SEEN = GEN_SEEN + 1;
 
     let settled = grid.run_until_settled(4000);
     GEN_SEEN = GEN_SEEN + settled + 1;
-    ck(settled > 0, "the pour settled");
+    test.ck("the pour settled", settled > 0, "");
     sub("it settled at generation " + tostring(settled));
 
     let cols = water_columns();
@@ -1004,31 +1009,30 @@ def c6_water_spreads() {
     // of these assertions pass on nothing.  So each is checked for being
     // non-zero -- or, for the span, for spanning more than one column -- BEFORE
     // anything is compared with it.
-    ck(SPAN_HI > SPAN_LO, "C6  the settled pool spans more than one column (x="
-        + tostring(xl) + ".." + tostring(xh) + ")");
-    ck(SURF_HI > SURF_LO, "C6  the pool has a surface above its bottom row (rows "
-        + tostring(tl) + ".." + tostring(th) + ")");
-    ck(TALL > 0, "C6  the tallest column is non-zero (" + tostring(TALL) + ")");
-    ck(SHORT > 0, "C6  the shortest non-empty column is non-zero (" + tostring(SHORT) + ")");
-    ck(water_step() >= 0, "C6  there were adjacent columns to compare at all (otherwise "
-        + "the levelling measurement would have nothing to say)");
-    ck(cols > 1, "C6  the water SPREAD: it is no longer in one column (was 1, now "
-        + tostring(cols) + ")");
-    ck(cols >= 3, "C6  and it spread across at least 3 columns");
+    test.ck("C6  the settled pool spans more than one column (x="
+        + tostring(xl) + ".." + tostring(xh) + ")", SPAN_HI > SPAN_LO, "");
+    test.ck("C6  the pool has a surface above its bottom row (rows "
+        + tostring(tl) + ".." + tostring(th) + ")", SURF_HI > SURF_LO, "");
+    test.ck("C6  the tallest column is non-zero (" + tostring(TALL) + ")", TALL > 0, "");
+    test.ck("C6  the shortest non-empty column is non-zero (" + tostring(SHORT) + ")", SHORT > 0, "");
+    test.ck("C6  there were adjacent columns to compare at all (otherwise "
+        + "the levelling measurement would have nothing to say)", water_step() >= 0, "");
+    test.ck("C6  the water SPREAD: it is no longer in one column (was 1, now "
+        + tostring(cols) + ")", cols > 1, "");
+    test.ck("C6  and it spread across at least 3 columns", cols >= 3, "");
     // The pour went into column cx, and a pool that spread from a point is
     // centred on where it was poured: that is a statement about the SHAPE, and
     // it is what "spreads" means, rather than a restatement of the sideways rule.
-    ck(xl <= cx && cx <= xh, "C6  the pool still covers the column it was poured into ("
-        + tostring(cx) + ")");
+    test.ck("C6  the pool still covers the column it was poured into ("
+        + tostring(cx) + ")", xl <= cx && cx <= xh, "");
     let left = cx - xl;
     let right = xh - cx;
-    ck(left - right <= 2 && right - left <= 2,
-        "C6  and it is centred on it to within 2 columns (" + tostring(left) + " to the "
-        + "left, " + tostring(right) + " to the right)");
-    ck_num(water_step(), 1, "C6  every pair of adjacent columns differs by at most 1, "
-        + "so it levelled instead of staying a comb");
-    ck(water_maxgap() <= 1, "C6  and there is no run of more than 1 empty column "
-        + "inside it, so it stayed one body (longest run " + tostring(water_maxgap()) + ")");
+    test.ck("C6  and it is centred on it to within 2 columns (" + tostring(left) + " to the "
+        + "left, " + tostring(right) + " to the right)", left - right <= 2 && right - left <= 2, "");
+    test.ck_eq("C6  every pair of adjacent columns differs by at most 1, "
+        + "so it levelled instead of staying a comb", water_step(), 1);
+    test.ck("C6  and there is no run of more than 1 empty column "
+        + "inside it, so it stayed one body (longest run " + tostring(water_maxgap()) + ")", water_maxgap() <= 1, "");
     // The bounding box of a settled pool DOES have empty cells in it -- a point
     // pour makes a heap of column heights 1,2,3,3,2,1, whose box is 6x3 = 18 cells
     // holding 12.  The first version of this check asserted a full box and got 6
@@ -1038,11 +1042,11 @@ def c6_water_spreads() {
     sub("its bounding box is " + tostring(SPAN_HI - SPAN_LO + 1) + "x"
         + tostring(SURF_HI - SURF_LO + 1) + " with " + tostring(water_holes())
         + " empty cells in it, which is the staircase a point pour makes");
-    ck(flat <= 2, "C6  its surface is flat to within 2 rows (relief " + tostring(flat) + ")");
-    ck(TALL - SHORT <= 2, "C6  it did not PILE: no column is more than 2 taller than "
-        + "the shortest non-empty one");
+    test.ck("C6  its surface is flat to within 2 rows (relief " + tostring(flat) + ")", flat <= 2, "");
+    test.ck("C6  it did not PILE: no column is more than 2 taller than "
+        + "the shortest non-empty one", TALL - SHORT <= 2, "");
     grid.tally();
-    ck_num(grid.CNT[grid.M_WATER], poured, "no water was created or lost doing it")
+    test.ck_eq("no water was created or lost doing it", grid.CNT[grid.M_WATER], poured)
 };
 
 // ===========================================================================
@@ -1065,11 +1069,11 @@ def c7_deterministic() {
     sub("  seed 1: " + tostring(c1a) + ", then " + tostring(c1b));
     sub("  seed 7: " + tostring(c7a) + ", then " + tostring(c7b));
     // Non-vacuity first: two zero checksums would agree for free.
-    ck(c1a != 0, "the seed-1 grid's checksum is non-zero");
-    ck(c7a != 0, "the seed-7 grid's checksum is non-zero");
-    ck_num(c1a, c1b, "seed 1 twice gives the identical grid");
-    ck_num(c7a, c7b, "seed 7 twice gives the identical grid");
-    ck(c1a != c7a, "seed 1 and seed 7 give DIFFERENT grids, so --seed is not ignored");
+    test.ck("the seed-1 grid's checksum is non-zero", c1a != 0, "");
+    test.ck("the seed-7 grid's checksum is non-zero", c7a != 0, "");
+    test.ck_eq("seed 1 twice gives the identical grid", c1a, c1b);
+    test.ck_eq("seed 7 twice gives the identical grid", c7a, c7b);
+    test.ck("seed 1 and seed 7 give DIFFERENT grids, so --seed is not ignored", c1a != c7a, "");
 
     // And the trajectory, not only the starting point.
     scene.build("terrain", bw, bh, 3);
@@ -1083,9 +1087,9 @@ def c7_deterministic() {
     GEN_SEEN = GEN_SEEN + 100;
     sub("scene terrain, seed 3: generation 0 was " + tostring(g0) + " then " + tostring(g0b)
         + "; after 50 generations " + tostring(t1) + " then " + tostring(t2));
-    ck_num(g0, g0b, "generation 0 matches for the same seed");
-    ck_num(t1, t2, "generation 50 matches for the same seed");
-    ck(t1 != g0, "and 50 generations actually changed something");
+    test.ck_eq("generation 0 matches for the same seed", g0, g0b);
+    test.ck_eq("generation 50 matches for the same seed", t1, t2);
+    test.ck("and 50 generations actually changed something", t1 != g0, "");
     // Every scene must build, or --check would be testing less than the program
     // can do.
     let names: [str] = ["basin", "drip", "firestorm", "terrain", "empty"];
@@ -1097,7 +1101,7 @@ def c7_deterministic() {
         if (len(why) == 0) { built = built + 1 } else { sub("scene " + names[i] + ": " + why) };
         i = i + 1
     };
-    ck_num(built, 5, "all five built-in scenes build at " + tostring(bw) + "x" + tostring(bh))
+    test.ck_eq("all five built-in scenes build at " + tostring(bw) + "x" + tostring(bh), built, 5)
 };
 
 // ===========================================================================
@@ -1120,9 +1124,9 @@ def c8_no_alloc() {
     GEN_SEEN = GEN_SEEN + gens;
     sub("scene basin at " + tostring(bw) + " x " + tostring(bh) + ", " + tostring(gens)
         + " generations: heap " + tostring(h0) + " -> " + tostring(h1));
-    ck_num(grid.GEN - g0, gens, "the loop really ran " + tostring(gens)
-        + " generations, so a skipped loop cannot pass this");
-    ck_num(h1 - h0, 0, "heap growth over those generations, in bytes");
+    test.ck_eq("the loop really ran " + tostring(gens)
+        + " generations, so a skipped loop cannot pass this", grid.GEN - g0, gens);
+    test.ck_eq("heap growth over those generations, in bytes", h1 - h0, 0);
     // And again with tally() in the loop: C1 and C4 call it once a generation,
     // so a tally that allocated would be the same leak wearing a different hat.
     scene.build("basin", bw, bh, 1);
@@ -1136,11 +1140,11 @@ def c8_no_alloc() {
     };
     let h3 = heap_used();
     GEN_SEEN = GEN_SEEN + 2000;
-    ck_num(grid.GEN - g2, 2000, "the second loop really ran 2000 generations");
-    ck_num(h3 - h2, 0, "heap growth over 2000 step+tally pairs, in bytes");
+    test.ck_eq("the second loop really ran 2000 generations", grid.GEN - g2, 2000);
+    test.ck_eq("heap growth over 2000 step+tally pairs, in bytes", h3 - h2, 0);
     grid.tally();
-    ck(grid.MATTER > 0, "the grid still has matter on it, so the heap numbers above "
-        + "were not measured on a blank grid")
+    test.ck("the grid still has matter on it, so the heap numbers above "
+        + "were not measured on a blank grid", grid.MATTER > 0, "")
 };
 
 // ===========================================================================
@@ -1167,8 +1171,8 @@ def c9_border() {
     GEN_SEEN = GEN_SEEN + gens;
     sub("the border is " + tostring(want) + " cells of a " + tostring(grid.GWa) + " x "
         + tostring(grid.GHa) + " store");
-    ck_num(bad, 0, "generations in which a border cell was not stone");
-    ck_num(grid.BORDER_STONE, want, "and it is still exactly the border at the end");
+    test.ck_eq("generations in which a border cell was not stone", bad, 0);
+    test.ck_eq("and it is still exactly the border at the end", grid.BORDER_STONE, want);
     // The complementary statement, over a run where fire and smoke press hardest
     // against the top and the sides.
     scene.build("firestorm", 48, 24, 1);
@@ -1179,10 +1183,8 @@ def c9_border() {
     };
     GEN_SEEN = GEN_SEEN + 2000;
     grid.tally();
-    ck_num(grid.BORDER_STONE, 2 * grid.GWa + 2 * (grid.GHa - 2),
-        "2000 generations of firestorm later the border is still exactly the border");
-    ck_num(grid.MATTER + grid.EMPTY_N, grid.IW * grid.IH,
-        "every cell of the logical grid is accounted for after those 2000 generations")
+    test.ck_eq("2000 generations of firestorm later the border is still exactly the border", grid.BORDER_STONE, 2 * grid.GWa + 2 * (grid.GHa - 2));
+    test.ck_eq("every cell of the logical grid is accounted for after those 2000 generations", grid.MATTER + grid.EMPTY_N, grid.IW * grid.IH)
 };
 
 // ===========================================================================
@@ -1233,23 +1235,22 @@ def c10_two_counters() {
     head("C10  two independent counters agree on the same grid");
     box_plain();
     grid.tally();
-    ck_num(grid.CNT[grid.M_SAND], EXP_SAND, "the array tally's sand count");
-    ck_num(count_glyph(111), EXP_SAND, "the rendered-string count of 'o'");
-    ck_num(count_glyph(126), EXP_WATER, "the rendered-string count of '~'");
+    test.ck_eq("the array tally's sand count", grid.CNT[grid.M_SAND], EXP_SAND);
+    test.ck_eq("the rendered-string count of 'o'", count_glyph(111), EXP_SAND);
+    test.ck_eq("the rendered-string count of '~'", count_glyph(126), EXP_WATER);
     // '#' is STONE, and the ghost border is stone, so the string count sees the
     // border and grid.CNT[] does not -- CNT counts the LOGICAL grid only.  The
     // border's size is computed here rather than read from grid.BORDER_STONE, so
     // the expected value still comes from this file's own arithmetic.  Getting
     // this wrong is what the first run of C10 reported: 212 against 80.
-    ck_num(count_glyph(35), EXP_STONE + (2 * grid.GWa + 2 * (grid.GHa - 2)),
-        "the rendered-string count of '#' (interior floor plus the ghost border)");
+    test.ck_eq("the rendered-string count of '#' (interior floor plus the ghost border)", count_glyph(35), EXP_STONE + (2 * grid.GWa + 2 * (grid.GHa - 2)));
     grid.run(150);
     grid.tally();
     GEN_SEEN = GEN_SEEN + 150;
-    ck_num(count_glyph(111), EXP_SAND, "after 150 generations the string still sees "
-        + tostring(EXP_SAND) + " sand grains");
-    ck_num(count_glyph(126), EXP_WATER, "after 150 generations the string still sees "
-        + tostring(EXP_WATER) + " water cells");
+    test.ck_eq("after 150 generations the string still sees "
+        + tostring(EXP_SAND) + " sand grains", count_glyph(111), EXP_SAND);
+    test.ck_eq("after 150 generations the string still sees "
+        + tostring(EXP_WATER) + " water cells", count_glyph(126), EXP_WATER);
     // A third witness: every water cell is in a column whose level says so, and
     // the levels add up to the tally.
     let total = 0;
@@ -1258,7 +1259,7 @@ def c10_two_counters() {
         total = total + grid.col_level(grid.M_WATER, x);
         x = x + 1
     };
-    ck_num(total, grid.CNT[grid.M_WATER], "the per-column water levels sum to the water count")
+    test.ck_eq("the per-column water levels sum to the water count", total, grid.CNT[grid.M_WATER])
 };
 
 // ===========================================================================
@@ -1267,15 +1268,15 @@ def c10_two_counters() {
 
 def c11_meta() {
     head("C11  this suite is not vacuous");
-    sub("assertions made: " + tostring(CHECKS) + " (failures " + tostring(BAD)
+    sub("assertions made: " + tostring(test.checks()) + " (failures " + tostring(test.failures())
         + "); generations exercised: " + tostring(GEN_SEEN)
         + "; cells in the test boxes: " + tostring(CELLS_SEEN));
-    ck(CHECKS >= MIN_CHECKS, "the suite made at least " + tostring(MIN_CHECKS)
-        + " assertions (it made " + tostring(CHECKS) + ")");
-    ck(CELLS_SEEN > 0, "the suite examined cells (it examined " + tostring(CELLS_SEEN) + ")");
-    ck(GEN_SEEN > 1000, "the suite exercised more than 1000 generations (it exercised "
-        + tostring(GEN_SEEN) + ")");
-    ck(BAD == 0, "no assertion failed")
+    test.ck("the suite made at least " + tostring(MIN_CHECKS)
+        + " assertions (it made " + tostring(test.checks()) + ")", test.checks() >= MIN_CHECKS, "");
+    test.ck("the suite examined cells (it examined " + tostring(CELLS_SEEN) + ")", CELLS_SEEN > 0, "");
+    test.ck("the suite exercised more than 1000 generations (it exercised "
+        + tostring(GEN_SEEN) + ")", GEN_SEEN > 1000, "");
+    test.ck("no assertion failed", test.failures() == 0, "")
 };
 
 // ===========================================================================
@@ -1283,8 +1284,6 @@ def c11_meta() {
 // ===========================================================================
 
 def check_all() -> long {
-    CHECKS = 0;
-    BAD = 0;
     GEN_SEEN = 0;
     puts("sandfall --check: property check, no reference file involved\n");
     puts("  the physics under test: one generation is ONE scan of the interior,");
@@ -1304,13 +1303,16 @@ def check_all() -> long {
     c10_two_counters();
     c11_meta();
 
+    // One summary, printed here.  test.report() is NOT called as well: it would
+    // print a second "N of M checks passed" line for the same run, and this line
+    // carries the generation count that report() has no room for.
     puts("");
-    if (BAD == 0) {
-        puts("RESULT PASS -- " + tostring(CHECKS) + " assertions, 0 failed, "
+    if (test.failures() == 0) {
+        puts("RESULT PASS -- " + tostring(test.checks()) + " assertions, 0 failed, "
             + tostring(GEN_SEEN) + " generations, no reference file\n");
         return 0
     };
-    puts("RESULT FAIL -- " + tostring(BAD) + " of " + tostring(CHECKS)
+    puts("RESULT FAIL -- " + tostring(test.failures()) + " of " + tostring(test.checks())
         + " assertions failed\n");
     1
 };

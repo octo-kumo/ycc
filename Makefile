@@ -121,6 +121,63 @@ test-compile: cycc ycc
 	./cycc -o /tmp/hello_c test/y/examples/helloworld.y && /tmp/hello_c
 	./ycc -o /tmp/hello_y test/y/examples/helloworld.y && /tmp/hello_y
 
+# The language server (src/tools/lsp/, designed in src/tools/lsp/LSP.md). It is
+# a Y program like any other, so it builds with the compiler -- and it wants the
+# std pack, because a server that spent every request recompiling the std units
+# would be unusable. $(call PACK) attaches it exactly as for ./ycc.
+#
+# The two compilers must produce identical bytes. yserve imports the compiler's
+# own modules by path, so this is a real port check on top of a build: anything
+# that differed between the copies would show up here and nowhere else, since no
+# other program in the tree imports types.y, native.y and friends.
+#
+# $(YREF), not ./ycc: `make ycc` is the acceptance gate on the compiler itself
+# and rebuilds it, so depending on it would make building the server wait on --
+# and fail with -- whatever the compiler's own state happens to be.
+LSP_SRC := $(wildcard src/tools/lsp/*.y)
+# The reference compiler, as the suites call it: the last blessed build.
+YREF ?= $(CURDIR)/refs/ycc.ref
+yserve: $(LSP_SRC) src/y/std/json.y cycc
+	@rm -f yserve _yserve0 _yserve1 _yserve1p
+	ulimit -v $(CYCC_MEM_KB); ./cycc -o _yserve0 src/tools/lsp/yserve.y
+	$(call PACK,_yserve0,yserve)
+	ulimit -v $(CYCC_MEM_KB); $(YREF) -o _yserve1 src/tools/lsp/yserve.y
+	$(call PACK,_yserve1,_yserve1p)
+	@if cmp -s yserve _yserve1p; then \
+	  echo "verified: cycc output == $(YREF) output == yserve (byte-identical)"; \
+	else \
+	  echo "yserve: the two compilers DISAGREE (cycc vs $(YREF))"; \
+	  echo "  yserve is the only program that imports the compiler's own modules by"; \
+	  echo "  path -- types.y, native.y, parser.y, rename.y, lint.y -- so a C/Y"; \
+	  echo "  divergence shows up here first. It is the same failure as the"; \
+	  echo "  'cmp ycc refs/ycc.ref' in make ycc and the one test_port.sh reports,"; \
+	  echo "  NOT a bug in the server. Run 'make port-check' first."; \
+	  rm -f _yserve0 _yserve1 _yserve1p; exit 1; \
+	fi
+	rm -f _yserve0 _yserve1 _yserve1p
+
+# The extension's TypeScript. Separate from yserve because it needs node and npm,
+# which the compiler itself must never depend on. `npm ci` when a lockfile is
+# present so the build is reproducible, `npm install` otherwise.
+lsp-ext:
+	cd src/tools/lsp/vscode-y-lang && \
+	  { [ -f package-lock.json ] && npm ci || npm install; } && npm run compile
+
+# The installable .vsix. Depends on lsp-ext, and NOT on yserve: the extension
+# finds the server at runtime, so shipping one inside the package would bake in
+# the machine it was built on.
+lsp-vsix: lsp-ext
+	cd src/tools/lsp/vscode-y-lang && \
+	  npx -y @vscode/vsce package --no-git-tag-version --allow-missing-repository
+
+# The server driven as a process: framing, fork containment, state across
+# messages, and the extension's activation. Kept out of `make test` -- it needs a
+# process per case, so it is slow; test/sh/test_lsp.sh runs the fixtures and the
+# formatter instead. The two Node checks skip themselves when the extension's
+# node_modules are absent.
+lsp-e2e: yserve
+	sh src/tools/lsp/test/test-e2e.sh
+
 # ── The development loop (AGENTS.md, "Changing the compiler") ────────────
 # A change lands in src/y and, the same, in src/c. `make check` verifies it
 # and measures it against BASE in a few minutes; `make rebless` accepts it
@@ -214,4 +271,4 @@ clean:
 valgrind: cycc
 	valgrind --error-exitcode=1 --quiet ./cycc -o /tmp/cycc-vg test/y/examples/helloworld.y
 
-.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc check port-check corpus-diff bench bench-ir rebless
+.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc yserve lsp-ext lsp-vsix lsp-e2e check port-check corpus-diff bench bench-ir rebless

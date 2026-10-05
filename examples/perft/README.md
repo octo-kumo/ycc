@@ -83,6 +83,14 @@ is the number itself and a wrong generator fails an integer, not a diff.
    castles; `e1g1` is *not* legal through an attacked f1 while `e1c1` is; a
    pinned rook has no sideways move.
 
+The 14 rule checks go through **`std/test.y`**'s `test.ck(name, ok, detail)` —
+the assertion this file used to write for itself as
+`ck(ok, label, what) -> long`, which returned a *failure indicator* that every
+caller accumulated into the run's total. The counts are unchanged (47); the other
+two groups still print their own per-depth lines with their own tally, so the
+summary line adds `test.checks()` to it rather than calling `test.report()` —
+that would report only the rule group's 14 and silently drop the other 33.
+
 Actual output, verbatim tail:
 
 ```
@@ -93,16 +101,34 @@ property check: threaded count == single-threaded count
   ok   ep-pin       depth 1: both 5
   ...
 property check: the rules that perft counts depend on
-  ok   ep-pin          5 moves, the en passant excluded
-  ok   ep-pin          d4c3 (the illegal en passant) is NOT in the list
-  ok   ep-pin          d4d3 (the quiet push) IS in the list
-  ok   ep-ok           6 moves, the en passant included
-  ok   promotion       11 moves: 4 pushes + 4 captures + 3 king steps
-  ok   promotion       all four promotions on b8 are legal
-  ok   castling        kiwipete allows e1g1 and e1c1
-  ok   castle-through e1g1 is NOT legal through an attacked f1
-  ok   castle-through e1c1 is still legal (d1 and c1 are not attacked)
-  ok   pin             10 moves: the pinned rook has 6, the king 4
+  ok    ep-pin
+          5 moves, the en passant excluded
+  ok    ep-pin
+          d4c3 (the illegal en passant) is NOT in the list
+  ok    ep-pin
+          d4d3 (the quiet push) IS in the list
+  ok    ep-ok
+          6 moves, the en passant included
+  ok    ep-ok
+          d4c3 IS in the list here
+  ok    promotion
+          11 moves: 4 pushes + 4 captures + 3 king steps
+  ok    promotion
+          all four promotions on b8 are legal
+  ok    promotion
+          capturing promotions on a8 are legal
+  ok    castling
+          kiwipete allows e1g1 and e1c1
+  ok    castle-through
+          e1g1 is NOT legal through an attacked f1
+  ok    castle-through
+          e1c1 is still legal (d1 and c1 are not attacked)
+  ok    castle-through
+          23 moves in all
+  ok    pin
+          10 moves: the pinned rook has 6, the king 4
+  ok    pin
+          the pinned rook has no sideways move
   ...
 property check: 47 checks, 0 failed
 ```

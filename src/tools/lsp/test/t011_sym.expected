@@ -1,0 +1,37 @@
+SymbolKind: module=2 function=12 variable=13 constant=14 type=23
+== module ==
+  fs k=2 0:7..0:9 sel=0 d=[]
+  Pair k=23 2:5..2:9 sel=2 d=[]
+  LIMIT k=14 4:6..4:11 sel=4 d=[]
+  outer k=12 6:4..17:0 sel=6 d=[(a: long)]
+    b k=13 7:8..7:9 sel=7 d=[]
+    inner k=12 8:8..11:4 sel=8 d=[(c: long)]
+      d k=13 9:12..9:13 sel=9 d=[]
+top level: fs, Pair, LIMIT, outer
+every symbol: fs, Pair, LIMIT, outer, b, inner, d
+the import is a symbol: true
+no loop-local let: true
+a let directly in a def body IS one: true
+and one in a nested def too: true
+one def: true
+  range 0:4..3:0 (want 0:4..3:0)
+  selectionRange is the name: true
+  the body let is a child: true
+one-line def range: 0:4..0:20 (want 0:4..0:20)
+a bodyless def appears: true
+and does not take the next one as a child: true
+nested three deep: true
+  innermost is c: true
+detail: [(x: long, y: str = "a")]
+the default value's bracket does not truncate it: true
+above the error, symbols are found: true
+below it the file is one string, so nothing else appears: true
+with the string closed, the later def is found too: true
+a stray # does not stop the outline: true
+empty: 0
+no defs: 1
+only a def name, no body: 0
+unclosed def: 1
+src/y: 16 files, 0 with no symbols
+the corpus was really read: true (a file yielded over 200 symbols)
+done

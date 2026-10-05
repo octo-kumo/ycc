@@ -622,6 +622,8 @@ def tokenize(src: str) -> [Tok] {
             else if (word == "return") { ty = "kw"; }
             else if (word == "true") { ty = "kw"; }
             else if (word == "false") { ty = "kw"; }
+            else if (word == "break") { ty = "kw"; }
+            else if (word == "continue") { ty = "kw"; }
            ;
             if (word == "b") {
                 // b"..." / b'...' -- a byte-string literal: the same type

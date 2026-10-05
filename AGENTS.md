@@ -120,7 +120,7 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 
 ## Test suites (`test/sh/`)
 
-Sixteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
+Seventeen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, the same warnings, identical program behavior). `test_native.sh`,
@@ -214,6 +214,14 @@ very build was just compared (`make test`, `check`, `rebless` do);
   suite. New diagnostic → new `e*.y` marker (a new warning: an
   `expect-warning` marker in a `t*.y`); new manual section → new
   row.
+- `test_lsp.sh` [lsp] — the language server, `src/tools/lsp/` (built by
+  `make yserve`, designed in `src/tools/lsp/LSP.md`): its `t*.y` fixtures
+  under both compilers against their `.expected` (which includes `std/json.y`
+  and the diagnostics pipeline), `check-refs.py` over every symbol `LSP.md`
+  cites, and the formatter over the whole corpus for idempotence.
+  `test-e2e.sh` drives the built `yserve` as a real process — framing, fork
+  containment, state across messages — and is **not** in `make test` (it needs
+  a process per case); run it by hand or with `make lsp-e2e`.
 
 ### Fuzzing (`test/fuzz/`, not part of `make test`)
 
@@ -398,6 +406,15 @@ replaces the std one at link time).
   backreferences)).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
+- `src/tools/lsp/` — the Y language server, `yserve` (an all-in-Y daemon:
+  a `Content-Length` framer, `fork(2)` per message, the compiler's own
+  diagnostics on an unsaved buffer), its VS Code extension under
+  `vscode-y-lang/`, its own `test/` (fixtures + four shell harnesses +
+  two node drivers), and `LSP.md` (the design). `make yserve` builds it
+  and checks `cycc` and the reference agree byte for byte; `check-refs.py`
+  and `check-names.py` (both in `test_lsp.sh`) police the citations and
+  the shared namespace — the server path-imports the compiler, so every
+  name it defines lands in the compiler's vocabulary.
 - `refs/` — backed-up reference binaries for the port gate (see
   `PORTING.md` for where the current `ycc.ref` came from).
 - `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh` +
@@ -421,7 +438,10 @@ closures as `[code, caps...]` records; records laid out by field name
 (a member held in a union: the union's shared fields first),
 a pointer to their type's descriptor before the fields; `&x`, `*p`,
 `a[i]`, `a[lo:hi]`, `T?`, `x!`, `void`, `float`, `byte` types;
-`for`/`for..in`/`foreach`/`while`; block expressions; `type` aliases
+`for`/`for..in`/`foreach`/`while` with `break`/`continue` (a jump to a
+label the enclosing loop published; `continue` runs the step or increment
+first, and a jump out of a `def` nested in a loop is refused by the
+checker, not left to the emitter); block expressions; `type` aliases
 (recursive through a record field or a function type), record unions and
 `match`;
 threads (`spawn { }`, `join`, `mutex`/`lock`, `sem`/`post`/`wait`) as

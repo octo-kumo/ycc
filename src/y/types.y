@@ -1052,7 +1052,13 @@ type Lookup = { typ: Type, kind: str, fdepth: long };
 // The state the checker threads (ret: the def's return type, see
 // typeof_def; self: what `self` is in it), and what the typeof_* return:
 // a type and the state after it.
-type TcSt = { bindings: [Binding], errors: [Diag], ret: Type, self: Type, fdepth: long };
+// `loops` is how many loops enclose this point, and `loop_fd` the function
+// depth of the INNERMOST of them. Both are there for `break` and `continue`
+// (2025): a jump is only legal if a loop encloses it AND that loop is in the
+// same function, and `loop_fd` is what says so -- a `def` nested inside a loop
+// bumps fdepth without changing `loops`, so a `break` inside the `def` sees
+// loops > 0 and still knows it may not jump out of the function.
+type TcSt = { bindings: [Binding], errors: [Diag], ret: Type, self: Type, fdepth: long, loops: long, loop_fd: long };
 type TcRes = { typ: Type, st: TcSt };
 
 def tc_res(typ: Type, st: TcSt) -> TcRes {
@@ -1114,7 +1120,7 @@ def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
             tc_ixn = tc_ixn + 1;
         };
     };
-    { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth }
+    { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd }
 };
 
 // ── the checker ──────────────────────────────────────────────────────────
@@ -1125,13 +1131,26 @@ def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
 // caller's st (same style as the rest of ycc). `fail` is the one place that
 // writes through: `st.errors += ...` appends to the LIVE array in place,
 // because arrays are reference values, and hands the record back here.
-def st_errors(st: TcSt, errs: [Diag]) -> TcSt { { bindings: st.bindings, errors: errs, ret: st.ret, self: st.self, fdepth: st.fdepth } };
+def st_errors(st: TcSt, errs: [Diag]) -> TcSt { { bindings: st.bindings, errors: errs, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd } };
 // NOTE: the parameter is deliberately NOT named `self` — `self` is the
 // language's own name for the enclosing function (see the `id` and `call`
 // arms of typeof_expr/typeof_call), so the state field and the language's
 // reserved word must not read alike.
-def st_self(st: TcSt, selfv: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: selfv, fdepth: st.fdepth } };
-def st_ret(st: TcSt, ret: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth } };
+def st_self(st: TcSt, selfv: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: selfv, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd } };
+// Entering a loop: one deeper, and the innermost loop's function depth is
+// this one's. `loop_fd: -1` means "no loop", so a stale depth can never be
+// mistaken for a live one.
+def st_loop(st: TcSt, n: long, fd: long) -> TcSt {
+    { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: n, loop_fd: fd }
+};
+
+// Leaving one: back to whatever enclosed it. The caller's own `loops`/`loop_fd`
+// from before the loop are what it passes, so this is a plain restore.
+def st_unloop(st: TcSt, n: long, fd: long) -> TcSt {
+    { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: n, loop_fd: fd }
+};
+
+def st_ret(st: TcSt, ret: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd } };
 
 def fail(st: TcSt, msg: str, line: long, col: long) -> TcSt {
     st.errors += err_at(msg, line, col);
@@ -1803,8 +1822,16 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let loop: While = node;
         let c = typeof_expr(st, loop.cond);
         st = expect_type(c.st, c.typ, type_node({ k: K.tbool }), "'while' condition", loop.line, loop.col);
+        // The BODY is what `break` may leave. The condition is checked outside
+        // the loop context on purpose: `while break { }` is not a jump out of
+        // this loop, it is a jump out of an enclosing one, and treating it as
+        // this loop's would be a jump to a label that does not exist yet.
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let b = typeof_block(st, loop.body);
-        tc_res(type_node({ k: K.tvoid }), b.st)
+        st = st_unloop(b.st, saved_loops, saved_fd);
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.kw_for) {
         let loop: For = node;
         // for (init; cond; step) body — init/step are statements, and the
@@ -1813,8 +1840,11 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         st = fi.st;
         let fc = typeof_expr(st, loop.cond);
         st = expect_type(fc.st, fc.typ, type_node({ k: K.tbool }), "'for' condition", loop.line, loop.col);
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let fb = typeof_block(st, loop.body);
-        st = fb.st;
+        st = st_unloop(fb.st, saved_loops, saved_fd);
         let fs = typeof_expr(st, loop.step);
         tc_res(type_node({ k: K.tvoid }), fs.st)
     } else if (k == K.kw_foreach) {
@@ -1830,8 +1860,12 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), loop.line, loop.col);
         };
         st = st_bind(st, loop.name, elt, "local");
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let fbb = typeof_block(st, loop.body);
-        tc_res(type_node({ k: K.tvoid }), fbb.st)
+        st = st_unloop(fbb.st, saved_loops, saved_fd);
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.forrange) {
         let loop: ForRange = node;
         // for x in lo..hi { body } — x is a long.
@@ -1840,8 +1874,12 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let rh = typeof_expr(st, loop.hi);
         st = expect_type(rh.st, rh.typ, type_node({ k: K.tlong }), "'for' range end", loop.line, loop.col);
         st = st_bind(st, loop.name, type_node({ k: K.tlong }), "local");
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let rb = typeof_block(st, loop.body);
-        tc_res(type_node({ k: K.tvoid }), rb.st)
+        st = st_unloop(rb.st, saved_loops, saved_fd);
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.block) {
         let block: Block = node;
         typeof_block(st, block)
@@ -1912,6 +1950,20 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             st = fail(st, "store target must be *T, got " + tstr(p.typ), store.line, store.col);
             tc_res(t_unk(), st)
         }
+    } else if (k == K.kw_break || k == K.kw_continue) {
+        // `break` / `continue`: legal only inside a loop AND in the same
+        // function. Both are checked here rather than left to the emitter,
+        // because the emitter's answer would be a jump to a label that belongs
+        // to a different function -- which assembles, and then jumps into the
+        // middle of an unrelated body.
+        let word = "break";
+        if (k == K.kw_continue) { word = "continue"; };
+        if (st.loops <= 0) {
+            st = fail(st, "'" + word + "' outside of a loop", node.line, node.col);
+        } else if (st.loop_fd != st.fdepth) {
+            st = fail(st, "'" + word + "' cannot cross a function boundary", node.line, node.col);
+        };
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.ret) {
         let ret: Wrap = node;
         if (st.ret.k == K.tnone) {
@@ -4182,7 +4234,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
     }
 };
 
-def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: d } };
+def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: d, loops: st.loops, loop_fd: st.loop_fd } };
 
 // ── entry point ──────────────────────────────────────────────────────────
 
@@ -4216,7 +4268,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
         i = i + 1;
     };
     // pass 2: check everything in order (depth 0 = top level)
-    let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0 };
+    let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0, loops: 0, loop_fd: -1 };
     // top-level defs are visible at top level
     let print_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong })], ret: type_node({ k: K.tvoid }) });
     st = st_bind(st, "print", print_type, "intrinsic");

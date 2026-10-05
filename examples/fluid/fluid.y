@@ -686,11 +686,15 @@ DUMPEVERY = args.get_long("dump", 0);
 FLD = mode_of(args.get_str("field", "speed"), "--field", NAMES);
 GLY = mode_of(args.get_str("glyph", "blocks"), "--glyph", GLYPHS);
 
-// The seed's range is 2^32-1 and not "any long" because the generator is
-// xorshift32 (sim.y's rnd): its state is 32 bits, so seeds above 2^32-1 would be
-// aliases of seeds below it.  Saying so beats letting two different --seed
-// values quietly produce the same run.  args also refuses more than 18 digits
-// outright, which is a clean diagnostic and not a trap.
+// The seed's range is 2^32-1 and not "any long".  It was 2^32-1 because the
+// generator was xorshift32 (sim.y's old rnd) and its 32-bit state made every
+// larger seed an alias of one below; the generator is now std's splitmix64,
+// whose state is 64 bits, so the limit is conservative rather than necessary --
+// it is kept because it is already printed in the header and in --help, and a
+// range that silently widened would change what two different --seed values
+// mean.  Saying so beats letting two different --seed values quietly produce
+// the same run.  args also refuses more than 18 digits outright, which is a
+// clean diagnostic and not a trap.
 SEEDV = ranged("seed", args.get_long("seed", 1), 0, 4294967295);
 ITERS = ranged("iters", args.get_long("iters", 24), 0, 400);
 let diters = ranged("diters", args.get_long("diters", 4), 0, 64);

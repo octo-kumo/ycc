@@ -3,7 +3,7 @@
 //   import httpc;
 //
 //   if (httpc.get(port, "/api/stats") != 200) { ... };
-//   let p = json.get(httpc.buf(), 0, 65536, "served");
+//   let v = json.parse_bytes(httpc.buf()[0:httpc.body_len], httpc.body_len);
 //
 // One request per call, one connection, `Connection: close`: the whole
 // response lands in this module's own 64 KiB buffer and the results are
@@ -24,10 +24,15 @@
 //
 // ── the buffer convention ────────────────────────────────────────────
 //
-// `buf` is 65536 bytes and json.y's functions take `b: [byte; 65536]`, so
-// the two modules hand each other the same fixed-size type and the
-// compiler refuses a mismatch. It is the document buffer and the response
-// buffer in one: head at the front, body behind it.
+// `buf` is 65536 bytes, and the parser used to be a local json.y whose
+// functions took `b: [byte; 65536]` exactly, so the two modules handed
+// each other the same fixed-size type and the compiler refused a mismatch.
+// That json.y is gone -- std's is used now -- and a slice of a fixed array
+// is not a `[byte]`, so the body reaches it as `buf[off:end]`, whose type
+// is `[byte]`. The size is still checked here, just by `from_bytes` and the
+// slice bounds rather than by the parameter's declared type. The buffer is
+// the document buffer and the response buffer in one: head at the front,
+// body behind it.
 
 const BUFSZ = 65536;
 const REQSZ = 1024;          // the request we send, with room to spare

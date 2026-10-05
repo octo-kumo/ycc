@@ -33,7 +33,6 @@ static long rex_rm(int w, long reg, Yv *m);
 static long put(Yv *buf, long at, long v);
 static long put2(Yv *buf, long at, long a, long b);
 static long put3(Yv *buf, long at, long a, long b, long c);
-static long put_le16(Yv *buf, long at, long v);
 static long put_le32(Yv *buf, long at, long v);
 static long put_le64(Yv *buf, long at, long v);
 static long put_rex(Yv *buf, long at, long r);
@@ -156,8 +155,9 @@ static long sib(long scale, long index, long base) {
 
 /* A little-endian run as its own array, for the callers outside the encoders
    (asm.y's .quad and its patcher). Inside an encoder use
-   put_le16/put_le32/put_le64, which write the same bytes through the cursor
-   and allocate nothing. */
+   put_le32/put_le64, which write the same bytes through the cursor
+   and allocate nothing. There is no put_le16: no encoder here writes a 16-bit
+   field, so it had no caller. */
 Yv *le16(long v) {
     return yav(2, yv_long(byte_of(v, 0)), yv_long(byte_of(v, 1)));
 }
@@ -257,10 +257,6 @@ static long put3(Yv *buf, long at, long a, long b, long c) {
     long n = put2(buf, at, a, b);
     ya_set(buf, n, yv_long(c));
     return n + 1;
-}
-
-static long put_le16(Yv *buf, long at, long v) {
-    return put2(buf, at, byte_of(v, 0), byte_of(v, 1));
 }
 
 static long put_le32(Yv *buf, long at, long v) {

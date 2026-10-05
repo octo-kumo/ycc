@@ -136,6 +136,8 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col);
 static long ret_note(Yv *rl, Yv *typ, long line, long col);
 static long set_inferred_ret(Yv *func, Yv *ret);
 static Yv *st_fdepth(Yv *st, long d);
+static Yv *st_loop(Yv *st, long n, long fd);
+static Yv *st_unloop(Yv *st, long n, long fd);
 static Yv *def_sig(Yv *name, Yv *func);
 static Yv *tstr_union(Yv *ts, Yv *sep);
 static int rec_has_names(Yv *r, Yv *names);
@@ -1376,13 +1378,15 @@ static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind) {
             tc_ixn = tc_ixn + 1;
         }
     }
-    return yr(5, "bindings", bindings, "errors", yr_get(st, "errors"),
+    return yr(7, "bindings", bindings, "errors", yr_get(st, "errors"),
               "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
-              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))));
+              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
+              "loops", yv_long(yv_l(yr_get(st, "loops"))),
+              "loop_fd", yv_long(yv_l(yr_get(st, "loop_fd"))));
 }
 
 // ── the checker ──────────────────────────────────────────────────────────
-// Threaded state st = { bindings, errors, ret, self, fdepth }.
+// Threaded state st = { bindings, errors, ret, self, fdepth, loops, loop_fd }.
 // typeof_* returns { typ, st }.
 
 // State is threaded by rebuilding the record, so a helper never mutates its
@@ -1390,9 +1394,11 @@ static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind) {
 // writes through: `st.errors += ...` appends to the LIVE array in place,
 // because arrays are reference values, and hands the record back here.
 static Yv *st_errors(Yv *st, Yv *errs) {
-    return yr(5, "bindings", yr_get(st, "bindings"), "errors", errs,
+    return yr(7, "bindings", yr_get(st, "bindings"), "errors", errs,
               "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
-              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))));
+              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
+              "loops", yv_long(yv_l(yr_get(st, "loops"))),
+              "loop_fd", yv_long(yv_l(yr_get(st, "loop_fd"))));
 }
 
 // NOTE: the parameter is deliberately NOT named `self` — `self` is the
@@ -1400,15 +1406,38 @@ static Yv *st_errors(Yv *st, Yv *errs) {
 // arms of typeof_expr/typeof_call), so the state field and the language's
 // reserved word must not read alike.
 static Yv *st_self(Yv *st, Yv *selfv) {
-    return yr(5, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
+    return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
               "ret", yr_get(st, "ret"), "self", selfv,
-              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))));
+              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
+              "loops", yv_long(yv_l(yr_get(st, "loops"))),
+              "loop_fd", yv_long(yv_l(yr_get(st, "loop_fd"))));
+}
+
+/* Entering a loop: one deeper, and the innermost loop's function depth is
+ * this one's. `loop_fd: -1` means "no loop", so a stale depth can never be
+ * mistaken for a live one. 1:1 with st_loop in src/y/types.y. */
+static Yv *st_loop(Yv *st, long n, long fd) {
+    return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
+              "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
+              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
+              "loops", yv_long(n), "loop_fd", yv_long(fd));
+}
+
+/* Leaving one: back to whatever enclosed it. The caller's own `loops`/`loop_fd`
+ * from before the loop are what it passes, so this is a plain restore. */
+static Yv *st_unloop(Yv *st, long n, long fd) {
+    return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
+              "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
+              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
+              "loops", yv_long(n), "loop_fd", yv_long(fd));
 }
 
 static Yv *st_ret(Yv *st, Yv *ret) {
-    return yr(5, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
+    return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
               "ret", ret, "self", yr_get(st, "self"),
-              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))));
+              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
+              "loops", yv_long(yv_l(yr_get(st, "loops"))),
+              "loop_fd", yv_long(yv_l(yr_get(st, "loop_fd"))));
 }
 
 static Yv *fail(Yv *st, Yv *msg, long line, long col) {
@@ -2334,8 +2363,16 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         st = expect_type(yr_get(c, "st"), yr_get(c, "typ"), yr(1, "k", yv_long(K_tbool)),
                          ys("'while' condition"), yv_l(yr_get(node, "line")),
                          yv_l(yr_get(node, "col")));
+        /* The BODY is what `break` may leave. The condition is checked outside
+         * the loop context on purpose: `while break { }` is not a jump out of
+         * this loop, it is a jump out of an enclosing one, and treating it as
+         * this loop's would be a jump to a label that does not exist yet. */
+        long saved_loops = yv_l(yr_get(st, "loops"));
+        long saved_fd = yv_l(yr_get(st, "loop_fd"));
+        st = st_loop(st, saved_loops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *b = typeof_block(st, yr_get(node, "body"));
-        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(b, "st"));
+        st = st_unloop(yr_get(b, "st"), saved_loops, saved_fd);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
     } else if (yv_l(k) == K_kw_for) {
         // for (init; cond; step) body — init/step are statements, and the
         // loop variable stays visible afterwards (same scope rule as `let`).
@@ -2345,8 +2382,11 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         st = expect_type(yr_get(fc, "st"), yr_get(fc, "typ"),
                          yr(1, "k", yv_long(K_tbool)), ys("'for' condition"),
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        long floops = yv_l(yr_get(st, "loops"));
+        long ffd = yv_l(yr_get(st, "loop_fd"));
+        st = st_loop(st, floops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *fb = typeof_block(st, yr_get(node, "body"));
-        st = yr_get(fb, "st");
+        st = st_unloop(yr_get(fb, "st"), floops, ffd);
         Yv *fs = typeof_expr(st, yr_get(node, "step"));
         return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(fs, "st"));
     } else if (yv_l(k) == K_kw_foreach) {
@@ -2370,8 +2410,12 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             ;
         }
         st = st_bind(st, yr_get(node, "name"), elt, ys("local"));
+        long eloops = yv_l(yr_get(st, "loops"));
+        long efd = yv_l(yr_get(st, "loop_fd"));
+        st = st_loop(st, eloops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *fbb = typeof_block(st, yr_get(node, "body"));
-        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(fbb, "st"));
+        st = st_unloop(yr_get(fbb, "st"), eloops, efd);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
     } else if (yv_l(k) == K_forrange) {
         // for x in lo..hi { body } — x is a long.
         Yv *rl = typeof_expr(st, yr_get(node, "lo"));
@@ -2384,8 +2428,12 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         st = st_bind(st, yr_get(node, "name"), yr(1, "k", yv_long(K_tlong)),
                      ys("local"));
+        long rloops = yv_l(yr_get(st, "loops"));
+        long rfd = yv_l(yr_get(st, "loop_fd"));
+        st = st_loop(st, rloops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *rb = typeof_block(st, yr_get(node, "body"));
-        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", yr_get(rb, "st"));
+        st = st_unloop(yr_get(rb, "st"), rloops, rfd);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
     } else if (yv_l(k) == K_block) {
         return typeof_block(st, node);
     } else if (yv_l(k) == K_decl) {
@@ -2500,6 +2548,25 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", t_unk(), "st", st);
         }
+    } else if (yv_l(k) == K_kw_break || yv_l(k) == K_kw_continue) {
+        /* `break` / `continue`: legal only inside a loop AND in the same
+         * function. Both are checked here rather than left to the emitter,
+         * because the emitter's answer would be a jump to a label that belongs
+         * to a different function -- which assembles, and then jumps into the
+         * middle of an unrelated body. */
+        Yv *word = ys("break");
+        if (yv_l(k) == K_kw_continue) { word = ys("continue"); };
+        if (yv_l(yr_get(st, "loops")) <= 0) {
+            st = fail(st,
+                      ys_cat(ys("'"), ys_cat(word, ys("' outside of a loop"))),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        } else if (yv_l(yr_get(st, "loop_fd")) != yv_l(yr_get(st, "fdepth"))) {
+            st = fail(st,
+                      ys_cat(ys("'"),
+                             ys_cat(word, ys("' cannot cross a function boundary"))),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        };
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
     } else if (yv_l(k) == K_ret) {
         if (yv_l(yr_get(yr_get(st, "ret"), "k")) == K_tnone) {
             st = fail(st, ys("'return' outside of a function"),
@@ -5581,9 +5648,11 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col) {
 }
 
 static Yv *st_fdepth(Yv *st, long d) {
-    return yr(5, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
+    return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
               "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
-              "fdepth", yv_long(d));
+              "fdepth", yv_long(d),
+              "loops", yv_long(yv_l(yr_get(st, "loops"))),
+              "loop_fd", yv_long(yv_l(yr_get(st, "loop_fd"))));
 }
 
 // ── entry point ──────────────────────────────────────────────────────────
@@ -5615,9 +5684,9 @@ Yv *check_program(Yv *ast, Yv *ext) {
         i = i + 1;
     }
     // pass 2: check everything in order (depth 0 = top level)
-    Yv *st = yr(5, "bindings", yav(0), "errors", yav(0), "ret",
+    Yv *st = yr(7, "bindings", yav(0), "errors", yav(0), "ret",
                 yr(1, "k", yv_long(K_tnone)), "self", yr(1, "k", yv_long(K_tnone)),
-                "fdepth", yv_long(0));
+                "fdepth", yv_long(0), "loops", yv_long(0), "loop_fd", yv_long(-1));
     // top-level defs are visible at top level
     st = st_bind(st, ys("print"),
                  yr(3, "k", yv_long(K_tfunc), "args", yav(1, yr(1, "k", yv_long(K_tlong))),

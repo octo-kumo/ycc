@@ -12,7 +12,7 @@ embed THREADS_ASM from "./arch/threads.s";
 // `text` as prelude lines: one per line, indentation kept (the -S output
 // shows it). Dropped: a whole-line '#' comment (the in-tree assembler treats a
 // comment as a backend bug and must never see one — every comment line in
-// src/y/arch/*.s starts at column 0 for exactly this reason) and the empty
+// .s files under src/y/arch start at column 0 for exactly this reason) and the empty
 // tail a trailing newline leaves behind.
 // TWO COSTS, both measured, both paid once per compiler process (emit_program
 // calls arch_prelude_lines exactly once):

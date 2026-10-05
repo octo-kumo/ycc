@@ -425,8 +425,8 @@ Files written for this example:
 
 | file | lines | what it is |
 |---|---|---|
-| `mandelbrot.y` | 915 | entry: flags, the view builder, both frame loops, the status line, the deterministic output |
-| `mandel.y` | 577 | the set: `ln`, the iteration, the smooth term, cosine palettes, `parse_q30`, the named views, the seeded LCG |
+| `mandelbrot.y` | 923 | entry: flags, the view builder, both frame loops, the status line, the deterministic output |
+| `mandel.y` | 580 | the set: `ln`, the iteration, the smooth term, cosine palettes, `parse_q30`, the named views, `rnd_unit` (on `std/random.y`) |
 | `render.y` | 520 | the worker pool: the work queue, the hand-off, the grid, the digest |
 | `textout.y` | 165 | the deterministic byte sink behind `--no-tty` |
 | `pty_check.py` | 134 | the interactive harness under a real pty |
@@ -466,8 +466,9 @@ corrupt the capture this example is diffed on:
 --size 1x1               one cell
 --size 999x999           clamped to 256x128
 --seed=-1                normalised into [0, 2^31); the header prints 2147483647
---seed 0                 nudged to 1: 0 is a fixed point of an LCG with an even
-                         increment and would return one number forever
+--seed 0                 nudged to 1, so the header never prints a 0 seed
+                         (std/random.y has no fixed point to avoid: its seed()
+                         offsets the state before the first draw)
 --zoom 99                clamped to 48
 --maxit 1000001          clamped to 1000000
 --dump 99                a frame the run will not reach: dumped frames: none

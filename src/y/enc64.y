@@ -97,8 +97,9 @@ def sib(scale: long, index: long, base: long) -> long {
 };
 
 // A little-endian run as its own array, for the callers outside the encoders
-// (asm.y's .quad and its patcher). Inside an encoder use put_le16/32/64,
-// which write the same bytes through the cursor and allocate nothing.
+// (asm.y's .quad and its patcher). Inside an encoder use put_le32/put_le64,
+// which write the same bytes through the cursor and allocate nothing. There is
+// no put_le16: no encoder here writes a 16-bit field, so it had no caller.
 def le16(v: long) -> [byte] {
     let out: [byte] = [byte_of(v, 0), byte_of(v, 1)];
     out
@@ -198,10 +199,6 @@ def put3(buf: [byte], at: long, a: long, b: long, c: long) -> long {
     let n = put2(buf, at, a, b);
     buf[n] = c;
     n + 1
-};
-
-def put_le16(buf: [byte], at: long, v: long) -> long {
-    put2(buf, at, byte_of(v, 0), byte_of(v, 1))
 };
 
 def put_le32(buf: [byte], at: long, v: long) -> long {
