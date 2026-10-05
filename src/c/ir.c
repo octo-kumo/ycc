@@ -272,13 +272,16 @@ Yv *ir_render_op(long k, Yv *ir, long at) {
 
 /* The item at word `at`, as the text it replaces. `txt` holds the body's raw
  * lines (IR_TEXT). */
-Yv *ir_render(Yv *ir, Yv *txt, long at) {
+Yv *ir_render(Yv *ir, Yv *txt, long at, long fno) {
     long f = yv_l(ya_get(ir, at));
     if (f == IR_LABEL) {
         return ys_cat(lname(ya_get(ir, at + 1)), ys(":"));
     } else if (f == IR_LOC) {
+        /* the file number the unit's own table numbers from 1, moved by the
+           part's offset -- what asm_ir_loc does with it, so a `-g -S` listing
+           is the text the assembler consumed */
         return ys_cat(ys(".loc "),
-                      ys_cat(ys_long(yv_l(ya_get(ir, at + 1))),
+                      ys_cat(ys_long(yv_l(ya_get(ir, at + 1)) + fno),
                            ys_cat(ys(" "),
                                 ys_long(yv_l(ya_get(ir, at + 2))))));
     } else if (f == IR_TEXT) {
@@ -314,11 +317,16 @@ long ir_kind_words(long k) {
 
 /* A whole body as text, one item per line: what asm.y lexes until stage 2b,
  * and what -S prints. */
-Yv *ir_render_all(Yv *ir, Yv *txt) {
+/* `locs` says whether to print the `.loc` markers: a body compiled with line
+ * info carries them whatever the program asked for, and a link without -g
+ * drops them (asm_ir_items drops the item, link_text drops the line). */
+Yv *ir_render_all(Yv *ir, Yv *txt, int locs, long fno) {
     Yv *out = yav(0);
     long at = 0;
     while (at < yv_len(ir)) {
-        out = ya_push(out, ir_render(ir, txt, at));
+        if (locs || yv_l(ya_get(ir, at)) != IR_LOC) {
+            out = ya_push(out, ir_render(ir, txt, at, fno));
+        }
         at = at + IR_W;
     }
     return ys_join(out, ys("\n"));

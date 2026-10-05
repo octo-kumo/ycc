@@ -110,6 +110,12 @@ package even next to a \ic{json.y}; otherwise it looks next to the
 importing file, then in the \ic{src} roots of the importing file's
 project, then in the standard library.
 
+The packages of one step --- those that depend only on what is already
+compiled --- are compiled in parallel, several at a time; what each one
+writes is exactly the object the build would have written, so the
+programs a build produces and the packages it recompiles do not depend
+on it.
+
 Each bin is linked with the packages it imports, directly or through
 other packages, and each package's top-level code runs once, before its
 importers' (dependencies first). A package may depend on others; a

@@ -398,12 +398,15 @@ def ir_render_op(k: long, ir: [long], at: long) -> str {
 
 // The item at word `at`, as the text it replaces. `txt` holds the body's raw
 // lines (IR_TEXT).
-def ir_render(ir: [long], txt: [str], at: long) -> str {
+def ir_render(ir: [long], txt: [str], at: long, fno: long) -> str {
     let f = ir[at];
     if (f == IR_LABEL) {
         lname(ir[at + 1]) + ":"
     } else if (f == IR_LOC) {
-        ".loc " + tostring(ir[at + 1]) + " " + tostring(ir[at + 2])
+        // the file number the unit's own table numbers from 1, moved by the
+        // part's offset -- what asm_ir_loc does with it, so a `-g -S` listing
+        // is the text the assembler consumed
+        ".loc " + tostring(ir[at + 1] + fno) + " " + tostring(ir[at + 2])
     } else if (f == IR_TEXT) {
         let i = ir[at + 1];
         if (i >= 0 && i < len(txt)) { txt[i] } else { "# INTERNAL: bad text item" }
@@ -436,11 +439,16 @@ def ir_kind_words(k: long) -> long {
 
 // A whole body as text, one item per line: what asm.y lexes until stage 2b,
 // and what -S prints.
-def ir_render_all(ir: [long], txt: [str]) -> str {
+// `locs` says whether to print the `.loc` markers: a body compiled with line
+// info carries them whatever the program asked for, and a link without -g
+// drops them (asm_ir_items drops the item, link_text drops the line).
+def ir_render_all(ir: [long], txt: [str], locs: bool, fno: long) -> str {
     let out: [str] = [];
     let at = 0;
     while (at < len(ir)) {
-        out += ir_render(ir, txt, at);
+        if (locs || ir[at] != IR_LOC) {
+            out += ir_render(ir, txt, at, fno);
+        };
         at = at + IR_W;
     };
     join(out, "\n")

@@ -15,7 +15,8 @@
  * error from the assembler, never a silent miscompile.
  *
  * Mirrors `export { Operand, Fixup, Encoded, MemTail, r64, reg_num, reg_size,
- * enc_insn, fixup, byte_of, scratch, le16, le32, le64 };` from enc64.y. The
+ * enc_insn, enc_form, fixup, byte_of, scratch, le16, le32, le64 };` from
+ * enc64.y. The
  * three types have no C declaration of their own -- a record is a Yv* here --
  * so the export exists for the Y side's callers.
  */
@@ -28,6 +29,7 @@ Yv *r64(long n);
 long reg_num(Yv *name);
 long reg_size(Yv *name);
 Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng);
+Yv *enc_form(Yv *buf, long at, long f, Yv *mn, Yv *ops, int lng);
 Yv *enc_branch_long(Yv *buf, long at, long br, Yv *lbl);
 Yv *fixup(long at, Yv *kind, Yv *lbl, Yv *lbl2);
 Yv *scratch(void);

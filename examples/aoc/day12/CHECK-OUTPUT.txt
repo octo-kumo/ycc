@@ -1,0 +1,88 @@
+-- external anchors
+ok   statement example: 6 shapes, 3 regions   6 shapes, 3 regions
+ok   statement example: part 1 = 2 (tier 1 anchor)   2 of 3 regions fit, the statement says 2
+ok   statement example: 4x4 and 12x5 fit, the second 12x5 does not   4x4 fits, 12x5 fits, 12x5+1 does not fit (not proved: the complete search ran out of nodes)
+ok   statement example: both packings re-derive and turn   4x4: 14 cells in 2 presents; 12x5: 42 cells in 6 presents, both verified
+ok   statement example: area cannot explain region 3   49 cells asked for, 60 available, so the area bound says yes and the packing says no
+    4x4 (4x4, 2 presents, 14 cells)
+    AAA.
+    ABBB
+    AAAB
+    .BBB
+    12x5 (12x5, 6 presents, 42 cells)
+    AAABBCCCDDD.
+    AABBBC.CD.D.
+    AABBECECDFDF
+    ....EEE..FFF
+    ....E.E..F.F
+ok   statement witness.txt has 4 rows   4 rows
+ok   statement's 4x4 packing: 2 letters, both shape 4   2 letters, shapes 4,4, both orientations are in the table
+-- hand-worked micro-cases (micro.txt, worked out in README.md)
+ok   micro.txt parses   6 shapes, 14 regions
+ok   micro.txt has 14 regions   14 regions
+ok   micro.txt uses the real shapes   areas 7 6 7 5 7 7, orientations 8 4 4 4 2 8
+    case 1: 3x4 need 12 of 12 cells, complete search 1, greedy packs
+      greedy (3x4, 2 presents, 12 cells)
+    AAA
+    AAB
+    ABB
+    BBB
+    case 2: 4x3 need 12 of 12 cells, complete search 1, greedy packs
+      greedy (4x3, 2 presents, 12 cells)
+    AAAB
+    AABB
+    ABBB
+    case 3: 3x5 need 15 of 15 cells, complete search 0, greedy no packing found
+    case 4: 5x3 need 15 of 15 cells, complete search 0, greedy no packing found
+    case 5: 4x4 need 14 of 16 cells, complete search 0, greedy no packing found
+    case 6: 3x3 need 7 of 9 cells, complete search 1, greedy packs
+      greedy (3x3, 1 presents, 7 cells)
+    AAA
+    .A.
+    AAA
+    case 7: 3x3 need 14 of 9 cells, complete search 0, greedy no packing found
+    case 8: 3x6 need 18 of 18 cells, complete search 1, greedy no packing found  <- the greedy alone is incomplete here
+    case 9: 3x8 need 24 of 24 cells, complete search 1, greedy no packing found  <- the greedy alone is incomplete here
+    case 10: 2x3 need 7 of 6 cells, complete search 0, greedy no packing found
+    case 11: 1x1 need 5 of 1 cells, complete search 0, greedy no packing found
+    case 12: 3x3 need 0 of 9 cells, complete search 1, greedy packs
+      greedy (3x3, 0 presents, 0 cells)
+    ...
+    ...
+    ...
+    case 13: 4x4 need 21 of 16 cells, complete search 0, greedy no packing found
+    case 14: 6x6 need 39 of 36 cells, complete search 0, greedy no packing found
+ok   14 hand-worked micro-cases   14 of 14 agree with the exhaustive search and README.md
+-- the real input
+ok   input.txt: 6 shapes, 1000 regions (counted outside the program)   6 shapes, 1000 regions
+ok   every shape is 3x3 and its orientations are all distinct   areas 7 6 7 5 7 7
+ok   the two halves partition the regions: fits + over = 1000   546 + 454 = 1000
+ok   no region got both verdicts or neither   1000 regions decided, all of them once
+ok   every 'yes' carries a witness that re-derives   546 of 546 verified, 0 bad
+ok   every witness survives a quarter turn and a transposition   546 of 546 turned witnesses verify
+ok   every region was decided, none left undecided   0 regions pass the area bound but neither the greedy nor the complete search placed anything, so they are not counted either way
+ok   the reversed-orientation greedy agrees on the count   546 against 546, with 0 regions it could not decide
+ok   invariant: the area-ok regions are exactly those counted   546 area-ok, 454 over capacity
+ok   invariant: presents placed equals presents listed   103656 placed, 103656 listed
+ok   invariant: cells asked for fit in the cells available   673791 of 983393 cells (68%)
+ok   invariant: every rejected region really is over capacity   454 rejected, 546 accepted
+ok   region lines reversed: same answer   546 against 546
+ok   every diagram turned a half turn: same answer   546 against 546
+ok   every diagram mirrored: same answer   546 against 546
+-- injected defects
+  defect 1: CAUGHT (4 assertions broken)
+  defect 2: CAUGHT (4 assertions broken)
+  defect 3: not caught
+  defect 4: CAUGHT (1 assertions broken)
+  defect 5: not caught
+  defect 6: CAUGHT (6 assertions broken)
+  defect 7: not caught
+  defect 8: not caught
+  defect 9: CAUGHT (4 assertions broken)
+  defect 10: CAUGHT (8 assertions broken)
+  defect 11: CAUGHT (5 assertions broken)
+  defect 12: CAUGHT (5 assertions broken)
+  injected 12 defects: 8 caught, 4 missed
+ok   the injection battery is clean with no defect   0 broken assertions
+
+property check: 27 checks, all passed

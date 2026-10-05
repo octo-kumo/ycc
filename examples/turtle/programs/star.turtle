@@ -1,0 +1,15 @@
+# star.turtle -- a pentagram's cousin: eight points, then a stride across it.
+#
+# The `pen up` / `forward 10` / `pen down` in the middle is a pen-up MOVE: the
+# turtle travels 10 units and nothing is drawn, but the view is fitted to where
+# it went, so the stride still counts towards the bounding box.
+
+colour green
+repeat 8 [ forward 40  right 135  forward 40  right 135 ]
+
+pen up
+forward 10
+pen down
+
+colour cyan
+repeat 8 [ forward 20  right 90  forward 20  right 90 ]
