@@ -3595,6 +3595,30 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
                     tc_res(type_node({ k: K.tlong }), st)
                 }
             }
+        } else if (name == "os_write") {
+            // os_write(fd, s): the named-syscall-layer entry point for "put
+            // these bytes on that file descriptor". Exactly two arguments, a
+            // number and a str -- the two things write(2) and NtWriteFile
+            // agree a caller can supply. The call itself is the arch module's
+            // (y_os_write: write(2) on Linux, NtWriteFile on Windows), so the
+            // syscall number and the argument shape do not leak into shared
+            // std code.
+            if (len(cargs) != 2) {
+                st = fail(st, "os_write takes exactly 2 arguments (fd, string)", node.line, node.col);
+                tc_res(type_node({ k: K.tlong }), st)
+            } else {
+                let r0 = typeof_expr(st, cargs[0]);
+                st = r0.st;
+                if (r0.typ.k != K.tlong && r0.typ.k != K.tbyte && r0.typ.k != K.tunk) {
+                    st = fail(st, "os_write fd must be a number, got " + tstr(r0.typ), node.line, node.col);
+                };
+                let r1 = typeof_expr(st, cargs[1]);
+                st = r1.st;
+                if (r1.typ.k != K.tstr && r1.typ.k != K.tunk) {
+                    st = fail(st, "os_write needs a string, got " + tstr(r1.typ), node.line, node.col);
+                };
+                tc_res(type_node({ k: K.tlong }), st)
+            }
         } else if (name == "syscall") {
             // Up to six arguments on SysV (rdi..r9), up to NINE on Win64:
             // its `syscall` takes six in registers and the seventh and after
@@ -4229,6 +4253,10 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     let print_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong })], ret: type_node({ k: K.tvoid }) });
     st = st_bind(st, "print", print_type, "intrinsic");
     st = st_bind(st, "syscall", type_node({ k: K.tlong }), "intrinsic");
+    // (fd: long, s: str) -> long. The binding exists only so `os_write` reads
+    // as defined when it appears as a value; typeof_call matches it by name.
+    let osw_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong }), type_node({ k: K.tstr })], ret: type_node({ k: K.tlong }) });
+    st = st_bind(st, "os_write", osw_type, "intrinsic");
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as

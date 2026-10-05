@@ -2258,6 +2258,8 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: K.tstr })
         } else if (name == "ptr_addr") {
             normtype({ k: K.tlong })
+        } else if (name == "os_write") {
+            normtype({ k: K.tlong })
         } else if (name == "tonum" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
             normtype({ k: K.tlong })
         } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
@@ -2568,7 +2570,7 @@ def is_intrinsic_name(n: str) -> bool {
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
              "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
+             "from_bytes", "ptr_addr", "os_write", "self", "none", "#fmt"], n)
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -4931,6 +4933,42 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             // system lets the value cross into long territory.
             let paargs: [Node] = node.args;
             gen(st, paargs[0])
+        } else if (name == "os_write") {
+            // os_write(fd, s) -> bytes written, or -1. The first slice of the
+            // named syscall layer W5 asks for, and the one that makes print
+            // work on Windows: `syscall(1, fd, s, len(s))` in rt.y is write(2),
+            // and 1 on Windows is a different, real Nt function, so the call
+            // returned a status nobody read and the program printed nothing
+            // while still running to completion.
+            //
+            // NO target test here, and that is the design. rt.y is one of the
+            // four std units EMBEDDED in the compiler and serialized into the
+            // std pack, and the pack is written once by a compiler whose
+            // res_target is whatever that compiler was asked for -- `ycc
+            // --std-pack` never passes a target. A conditional in rt.y
+            // therefore bakes one target's write into the pack, and every
+            // program compiled from it gets that one whatever --target says.
+            // (Measured, both ways: with the conditional, a PE built from the
+            // pack carried the ELF inline write(2) and printed nothing, while
+            // --std-src -- which recompiles the units -- worked.) The named
+            // layer is exactly what lets shared std code be target-independent:
+            // rt.y names one label and the arch module decides which kernel
+            // call it is -- write(2) on Linux, NtWriteFile on Windows.
+            //
+            // The three values are pushed left to right, so inside the callee
+            // the count (pushed last) is at 8(%rsp) and the descriptor at 24.
+            let owargs: [Node] = node.args;
+            st = gen(st, owargs[0]);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, owargs[1]);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, n_call1("len", owargs[1], node.line, node.col));
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_os_write"), 0, 0, 0, 0, 0, 0);
+            // y_os_write leaves the stack alone; the caller pops, like every
+            // other call in the emitter.
+            emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
         } else {
             gen_direct(st, node, name)
         }

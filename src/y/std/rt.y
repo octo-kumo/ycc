@@ -31,12 +31,16 @@
 //     not allowed (the checker would call them undefined), so every
 //     bridge into the primitives goes through an intrinsic or an operator.
 
-// One write(2) of a string's bytes to fd 1 / fd 2 (no newline).
+// One write of a string's bytes to fd 1 / fd 2 (no newline). Through
+// os_write rather than a raw `syscall(1, fd, ...)`: 1 is write(2) on Linux and
+// some unrelated Nt function on Windows, so a raw Linux number here printed
+// nothing at all under --target=windows and the program still exited 0. The
+// number and the argument shape belong to the arch module (y_os_write).
 def y_put_hstr(s: str) -> long {
-    syscall(1, 1, s, len(s))
+    os_write(1, s)
 };
 def y_eput_hstr(s: str) -> long {
-    syscall(1, 2, s, len(s))
+    os_write(2, s)
 };
 def y_print_hstr(s: str) -> long {
     y_put_hstr(s);

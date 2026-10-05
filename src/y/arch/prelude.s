@@ -395,6 +395,31 @@ y_alloc_map:
     test %rax, %rax
     js y_alloc_fail
     ret
+# y_os_write(fd, buf, len) -> bytes written, or -1. The named-syscall-layer
+# entry point rt.y's y_put_hstr reaches (os_write in the checker): write(2)
+# here, NtWriteFile on Windows (src/y/arch/wsys.s). One label, one calling
+# convention, so shared std code does not have to know which target it is
+# compiled for -- which is the whole point, since the four embedded std units
+# are shared by both and serialized into one pack.
+#
+# It reads its three arguments off the stack -- 24(%rsp) for the descriptor,
+# 16 for the bytes, 8 for the count -- rather than out of %rdi/%rsi/%rdx.
+# Arguments are pushed left to right by gen_push_args, so the LAST one pushed
+# is the first parameter and sits lowest, just above the return address the
+# `call` pushed; that is the same rbp+16+8*(n-1-k) layout every Y function
+# uses, and the reason a `call` cannot leave them in registers.
+y_os_write:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    mov $1, %eax
+    syscall
+    test %rax, %rax
+    js yosw_fail
+    ret
+yosw_fail:
+    mov $-1, %rax
+    ret
 y_heap_used:
     lea y_heap(%rip), %rcx
     mov 24(%rcx), %rdx
