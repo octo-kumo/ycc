@@ -163,6 +163,20 @@ ONE = {
     "frexp": [0.0, -0.0, 1.0, -1.0, 2.0, 0.5, 5e-324, -5e-324, 1e300,
               -1e300, 1e-300, 3.0, 4503599627370496.0, float("inf"),
               float("nan")],
+    # The five below are EXACT -- a sign-bit test, a comparison, a negation --
+    # so their cases are not about ulps at all. They are here because a function
+    # with no cases is a function with no gate, and that is how fmin/fmax's
+    # zeros went on being decided by operand order for as long as they were.
+    "fabs": [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"), float("nan"),
+             5e-324, -5e-324, 1e308, -1e308, 0.1, -0.1],
+    "fsign": [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"), float("nan"),
+              5e-324, -5e-324, 1e308, -1e308, 0.1, -0.1],
+    "is_nan": [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"), float("nan"),
+               5e-324, -5e-324, 1e308, -1e308],
+    "is_inf": [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"), float("nan"),
+               5e-324, -5e-324, 1e308, -1e308],
+    "is_finite": [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"),
+                  float("nan"), 5e-324, -5e-324, 1e308, -1e308],
     # is_signed_zero: the answer is a float carrying 1.0 or 0.0
     "is_signed_zero": [0.0, -0.0, 1.0, -1.0, 5e-324, -5e-324,
                        float("nan"), float("inf")],
@@ -184,6 +198,16 @@ ONE = {
 }
 
 TWO = {
+    # fmin/fmax: the edges, which are the whole point -- the zeros' signs, both
+    # infinities, the smallest subnormal either side of zero, and a NaN in each
+    # position. TWO_EXTRA crosses the same list with itself and adds the
+    # ordinary arguments.
+    "fmin": [(0.0, -0.0), (-0.0, 0.0), (0.0, 0.0), (-0.0, -0.0),
+             (float("inf"), float("-inf")), (float("nan"), 2.0),
+             (2.0, float("nan")), (float("nan"), float("nan"))],
+    "fmax": [(0.0, -0.0), (-0.0, 0.0), (0.0, 0.0), (-0.0, -0.0),
+             (float("-inf"), float("inf")), (float("nan"), 2.0),
+             (2.0, float("nan")), (float("nan"), float("nan"))],
     # hypot: the overflow that a naive x*x + y*y hits, and the underflow
     # pow: the exact integer path, the log path, and every special case C has
     "pow": [(2.0, 10.0), (2.0, 0.5), (2.0, -1.0), (10.0, 3.0), (0.5, 0.5),
@@ -222,7 +246,61 @@ TWO = {
 # without the table noticing (test_math.sh checks the harness dispatches it).
 ONE_ARG_FNS = sorted(set(ONE))
 
+# The references for the functions whose ANSWER is a rule rather than a
+# rounding: stated here as the rule, not as the module's expression, because a
+# table generated from the implementation under test proves nothing.
+def fmin_ref(a, b):
+    """IEEE 754-2019 minNum, written out rather than borrowed.
+
+    C99 says either sign may come back for a +-0 pair; minNum does not, and
+    neither does this platform's libm. The module had the strict `<`, which made
+    the answer depend on which operand came LAST, and the table had no case that
+    could see it.
+    """
+    if math.isnan(a):
+        return b
+    if math.isnan(b):
+        return a
+    if a == 0.0 and b == 0.0:
+        return -0.0 if (math.copysign(1.0, a) < 0 or math.copysign(1.0, b) < 0) else 0.0
+    return a if a < b else b
+
+
+def fmax_ref(a, b):
+    """maxNum: the same rule with the other sign winning a tie."""
+    if math.isnan(a):
+        return b
+    if math.isnan(b):
+        return a
+    if a == 0.0 and b == 0.0:
+        return 0.0 if (math.copysign(1.0, a) > 0 or math.copysign(1.0, b) > 0) else -0.0
+    return a if a > b else b
+
+
+def fsign_ref(x):
+    """The module's convention: 1, -1, or 0 -- and 0 for a NaN, which is the
+    one place two libraries differ (Rust's f64::signum gives 1.0). Pinned here
+    because a convention nobody writes down is a convention nobody keeps."""
+    if math.isnan(x):
+        return 0.0
+    return 1.0 if x > 0.0 else (-1.0 if x < 0.0 else 0.0)
+
+
+def lerp_ref(a, b, t):
+    """The definition, and its two exact ends: t = 0 is a and t = 1 is b, both
+    exactly, which is what a program relies on when it interpolates a frame."""
+    return a + (b - a) * t
+
+
 REF1 = {
+    # The exact layer: no rounding anywhere, so these are the module's own
+    # definitions restated -- which is the point of a table for them, to catch a
+    # definition that CHANGES.
+    "fabs": abs,
+    "fsign": fsign_ref,
+    "is_nan": lambda x: 1.0 if math.isnan(x) else 0.0,
+    "is_inf": lambda x: 1.0 if math.isinf(x) else 0.0,
+    "is_finite": lambda x: 1.0 if math.isfinite(x) else 0.0,
     # Python raises OverflowError where C returns an infinity, so the two edges
     # are spelled out: an overflow IS the answer there, not an error
     "exp": lambda x: (float("nan") if math.isnan(x) else
@@ -358,6 +436,8 @@ REF2 = {
     "hypot": math.hypot,
     "nextafter": math.nextafter,
     "pow": pow_ref,
+    "fmin": fmin_ref,
+    "fmax": fmax_ref,
     # Python has no atan2 with C's zero cases (math.atan2 raises on (0, 0)),
     # and the table's zero and infinity rows are what make it worth spelling
     "atan2": atan2_ref,
@@ -414,6 +494,41 @@ EXTRA["cbrt"] = spread(4242, 80, 1.0, 8.0)
 EXTRA["asin"] = spread(1007, 60) + spread(1101, 240, -1.0, 1.0)
 EXTRA["acos"] = spread(1008, 60) + spread(1102, 240, -1.0, 1.0)
 
+# The eight the table had NO cases for. Every other function the module exports
+# was in it, and that gap is not tidiness: fmin and fmax decide a +-0 tie by
+# whichever operand comes last, so fmax(0.0, -0.0) answered -0.0 and
+# 1.0/fmax(0.0, -0.0) came out -inf -- with a comment in the module saying the
+# sign was "not specified", which C99 allows and IEEE 754-2019's maxNum, this
+# platform's libm and any caller dividing by the answer do not. Four of the
+# eight are exact, so their cases are cheap; two are a convention; one is a
+# definition with two exact ends.
+EXTRA["fabs"] = spread(1201, 40, -8.0, 8.0)
+EXTRA["fsign"] = spread(1202, 40, -8.0, 8.0)
+EXTRA["is_nan"] = spread(1203, 40, -8.0, 8.0)
+EXTRA["is_inf"] = spread(1204, 40, -8.0, 8.0)
+EXTRA["is_finite"] = spread(1205, 40, -8.0, 8.0)
+TWO_EXTRA = {
+    "fmin": [(a, b) for a in (0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"),
+                              5e-324, -5e-324, 1e308, -1e308)
+             for b in (0.0, -0.0, 2.0, -2.0, float("inf"), float("-inf"),
+                       -5e-324, 1e-308, 1e308, -1e308)],
+    "fmax": [(a, b) for a in (0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"),
+                              5e-324, -5e-324, 1e308, -1e308)
+             for b in (0.0, -0.0, 2.0, -2.0, float("inf"), float("-inf"),
+                       -5e-324, 1e-308, 1e308, -1e308)],
+}
+# the ordinary arguments, so the tables are not all edges
+TWO_EXTRA["fmin"] = TWO_EXTRA["fmin"] + pair_spread(1301, 60)
+TWO_EXTRA["fmax"] = TWO_EXTRA["fmax"] + pair_spread(1302, 60)
+THREE = {
+    # lerp: the two ends are EXACT, which is the property a caller interpolating
+    # a frame depends on, and neither is true of a formula that forgets them
+    "lerp": [(a, b, t)
+             for (a, b) in [(0.0, 1.0), (1.0, -1.0), (0.0, -0.0), (5.0, 5.0),
+                            (-3.0, 7.0), (2.5, -2.5), (1e300, -1e300),
+                            (1e-300, 1e-300)]
+             for t in (0.0, 1.0, 0.5)]}
+
 
 def main():
     out = []
@@ -435,9 +550,14 @@ def main():
                 want = bits(float(REF1[name](x)))
             out.append("%s %d %d" % (name, bits(x), want))
     for name in sorted(TWO):
-        for (x, y) in TWO[name] + (pair_spread(name) if name == "pow" else []):
+        cases = TWO[name] + (pair_spread(name) if name == "pow" else [])
+        for (x, y) in cases + TWO_EXTRA.get(name, []):
             want = bits(float(REF2[name](x, y)))
             out.append("%s %d %d %d" % (name, bits(x), bits(y), want))
+    for name in sorted(THREE):
+        for (x, y, t) in THREE[name]:
+            want = bits(float(lerp_ref(x, y, t)))
+            out.append("%s %d %d %d %d" % (name, bits(x), bits(y), bits(t), want))
     sys.stdout.write("\n".join(out) + "\n")
 
 

@@ -243,14 +243,46 @@ def inv_mod(a: long, m: long) -> long {
 // ── floats ──────────────────────────────────────────────────────────────────
 
 // The smaller of two, with C's rule that a NaN loses to the other operand:
-// fmin(NaN, 2.0) is 2.0. (Which of -0.0 and 0.0 wins is not specified;
-// IEEE says either is correct.)
+// fmin(NaN, 2.0) is 2.0.
+//
+// Which of -0.0 and 0.0 wins used to be "not specified", and the strict `<`
+// made it DEPEND ON THE ORDER: fmin(+0.0, -0.0) was -0.0 and fmin(-0.0, +0.0) was
+// +0.0. C99 does allow either, so the table said nothing -- and a table case
+// then said the opposite of what the module did. On a tie the negative-signed
+// operand wins, which is IEEE 754-2019's minNum and what this platform's libm
+// does: 1.0/fmin(-0.0, 0.0) has to be -inf.
 def fmin(a: float, b: float) -> float {
-    if (a != a) { b } else if (b != b) { a } else if (a < b) { a } else { b }
+    if (a != a) {
+        b
+    } else if (b != b) {
+        a
+    } else if (a < b) {
+        a
+    } else if (b < a) {
+        b
+    } else {
+        // a == b, so the only thing left undecided is the two zeros' signs --
+        // and for every other tie the two are the same number anyway.
+        if (fbits(a) < 0) { a } else if (fbits(b) < 0) { b } else { a }
+    }
 };
 
+// The same, the other way round: on a tie the POSITIVE-signed operand wins, so
+// fmax(0.0, -0.0) is 0.0. The strict `>` it used to have returned -0.0 here,
+// which is not a defensible answer from a maximum: 1.0/fmax(0.0, -0.0) came
+// out -inf.
 def fmax(a: float, b: float) -> float {
-    if (a != a) { b } else if (b != b) { a } else if (a > b) { a } else { b }
+    if (a != a) {
+        b
+    } else if (b != b) {
+        a
+    } else if (a > b) {
+        a
+    } else if (b > a) {
+        b
+    } else {
+        if (fbits(a) < 0) { b } else { a }
+    }
 };
 
 // |x| as a float. Written so that -0.0 comes back as +0.0 (0.0 - (-0.0) is

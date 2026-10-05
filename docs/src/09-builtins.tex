@@ -288,8 +288,21 @@ domain. That second spread is not tidiness: a uniform value in [-8, 8] lands
 inside [-1, 1] about one time in eight, so the general one left each of them with
 eight interior arguments --- which is not a gate on a 24-term polynomial, and
 which was how \ic{acos} went on cancelling eight digits near \ic{x = 1} for a
-forty-ulp answer that nothing in the suite could see. Getting every case inside
-one ulp took three one-rounding
+forty-ulp answer that nothing in the suite could see.
+
+A third gap of the same shape was still open after that: nine functions this
+module exports had \emph{no cases at all} --- \ic{ldexp}, \ic{fmin}, \ic{fmax},
+\ic{fabs}, \ic{fsign}, \ic{lerp}, and the three predicates --- because the table
+only ever carried the ones with rounding in them. \ic{fmin} and \ic{fmax} were
+the ones that mattered. Their zeros' signs were decided by whichever operand came
+last, so \ic{fmax(0.0, -0.0)} answered \ic{-0.0} and \ic{1.0/fmax(0.0, -0.0)}
+came out \ic{-inf}; C99 does allow either sign there, and IEEE~754-2019's
+\ic{maxNum}, this platform's libm and any caller dividing by the answer do not.
+The tie now goes to the positive-signed operand for \ic{fmax} and the
+negative-signed one for \ic{fmin}, which is \ic{minNum}/\ic{maxNum}, and all
+four orderings of the \ic{$\pm0$} pair are pinned.
+
+Getting every case inside one ulp took three one-rounding
 fixes, and all three were the same mistake in different clothes: the question is
 never \emph{which} line rounds, it is \emph{at what size}. \ic{cosh} summed two
 exponentials where one exponential and its reciprocal is enough (for

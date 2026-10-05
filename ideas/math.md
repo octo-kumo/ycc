@@ -373,7 +373,7 @@ documented as unfused.
 | — | the portable tier: integers/bits, float comparisons and constants, RNGs, `[float]` array work (`src/y/std/math.y`) | **done** (`85403df`) — no compiler change needed; tests `t300`–`t304` |
 | P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
 | P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. `movsd` and SSE arithmetic with a memory source have since landed too (`f95398b`..this commit), and **P4 finished without needing `movapd`/`xorpd`/`andpd`/`unpcklpd`**, so those four are still absent from both encoders and that is the finished state rather than a remainder: they were to arrive only if a kernel wanted them, and what a kernel actually wants is SSE-register residency, which `movsd` plus `mulsd`/`addsd`/`subsd` with register sources already gives. The one thing none of them would have saved is a sign flip, and no kernel has one to do — `y_pow` takes its sign off in a GPR (`shl`, then the bits are a biased exponent), and `y_fmod` shows the GPR-only style needs zero new encodings at all |
-| P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **2076 cases** (the pinned edges, a seeded 1500-case spread, and a seeded 240-case spread over [-1, 1] for the only two functions with a bounded domain) and **every one of them is within 1 ulp**, worst gap 1 — the number the gate enforces and the number the manual quotes, including for all five assembly kernels. It was four cases over it, at up to three ulps; §8 has what closed them, and it is one lesson three times. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
+| P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **2695 cases** (the pinned edges, a seeded 1500-case spread, a seeded 240-case spread over [-1, 1] for the only two functions with a bounded domain, and the exact layer's own 619) and **every one of them is within 1 ulp**, worst gap 1 — the number the gate enforces and the number the manual quotes, including for all five assembly kernels. It was four cases over it, at up to three ulps; §8 has what closed them, and it is one lesson three times. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
 | P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work and `exp` are landed.** `y_exp` is **generated** by `test/math/gen_exp.py` from `math.y`'s own constants and walks the same operations in the same order, so it returns the same double: t311 checks **10,420 arguments bit for bit**, reaching every branch (the NaN test, both range edges, the reduction boundary at each end, the subnormal band, the top of the range). **1422 → 105.7 Ir/call** (ten Y functions collapse into one routine) and **69.6 → 31.9 ns/call** net of a 4.7 ns loop, on `bench/y/tmath.y --full` (run bare it is a fast smoke test — 20,000 calls a row and 15 exact assertions — because `make check` profiles every `bench/y` program under callgrind and the deep setting took 107 s of it against 5 s for the next-slowest). `y_log` has landed the same way (`test/math/gen_log.py`, t312: **10,317 arguments, 0 differing**, **1335 → 115.2 Ir/call**, 71.8 → 34.9 ns/call). `y_sin`/`y_cos` have landed the same way (`test/math/gen_sin.py`, one body for both: two two-instruction entries and the choice in a register, t313: **10,410 arguments each, 0 differing**, **1775 → 190 Ir/call**, 75.4 → 40.4 ns/call). `y_pow` has landed the same way (`test/math/gen_pow.py`, t315: **15,137 pairs, 0 differing**, **3004 → 472 Ir/call**, 159.3 → 69.2 ns/call) — the first routine in the file that calls, and therefore the first with a frame. **P4 is complete.** §8 has what each attempt found |
 | P5 | the bulk kernels | **done** — `y_sum y_dot y_scale y_axpy y_min_of y_max_of` in `src/y/arch/math.s`, reached from `std/math.y` through `a.ptr` and `len(a)`, each **bit-identical** to the Y loop kept beside it as `*_y` (t310, over 64 corpora plus the edge values: ±0, both infinities, NaN in first/middle/last position, subnormals, one element, empty). The equal-length rule moved out of the loop, so `fdot`/`faxpy` stop on a mismatch (`y_len_stop`). `bench/y/fmath.y`: **0.37 ns/element against the Y loop's 1.26**, and the 1.27 baseline the plan quotes is the last row of that file |
 
@@ -858,11 +858,35 @@ commit that landed it quoted "+13 ns" and that was the wrong comparison: it
 compared the new implementation's two branches against each other instead of
 the old implementation's.
 
+**And the same audit, run again, found nine more functions with no cases at
+all** — `fmin`, `fmax`, `fabs`, `fsign`, `lerp` and the three predicates, plus
+`ldexp`, which is gated only as the other half of `frexp`'s identity. The table
+had only ever carried the functions with rounding in them, so the exact layer had
+no gate whatsoever.
+
+`fmin` and `fmax` were the ones that mattered, and their bug was not a rounding
+at all:
+
+```
+fmax(0.0, -0.0)  ->  -0.0        so 1.0/fmax(0.0, -0.0)  ->  -inf
+fmin(-0.0, 0.0)  ->  +0.0        so 1.0/fmin(-0.0, 0.0)  ->  +inf
+```
+
+A strict `<` and a strict `>` settle a tie by falling through to "return the
+second operand", so the two zeros' signs came out decided by **argument order**.
+The module's comment said the sign was "not specified", which C99 genuinely does
+allow — and IEEE 754-2019's `minNum`/`maxNum`, this platform's libm, and any
+caller that divides the answer all do not. A tie now goes to the
+negative-signed operand for `fmin` and the positive-signed one for `fmax`, and
+all four orderings are in the table. The cost is two comparisons on a path that
+was already a comparison.
+
 Which is the third lesson, and it is the one about the *gate* rather than the
 arithmetic: a check that passes is not the same as a check that can fail. Eight
-arguments is a check that reads as one. The forty-ulp answer was sitting in a
-committed table, computed from this platform's libm, waiting for a spread wide
-enough to look at it.
+arguments is a check that reads as one, and *no* arguments is not a check at all.
+The forty-ulp answer was sitting in a committed table waiting for a spread wide
+enough to look at it; the minus-infinity was sitting in the module waiting for a
+case to exist.
 
 So the tolerance is back to **1**, which is what the harness's header claimed all
 along and what C promises, and all 1596 cases are inside it — which is when the

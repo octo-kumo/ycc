@@ -85,6 +85,18 @@ def apply1(name: str, x: float) -> float {
     else if (name == "acos") { math.acos(x) }
     // a predicate, so the answer is a float carrying 1.0 or 0.0
     else if (name == "is_signed_zero") { if (math.is_signed_zero(x)) { 1.0 } else { 0.0 } }
+    // The five below had NO cases at all until the table grew to carry them,
+    // and fmin/fmax are why that mattered: their zeros' signs were decided by
+    // whichever operand came last, so fmax(0.0, -0.0) answered -0.0 and
+    // 1.0/fmax(0.0, -0.0) came out -inf. C99 allows either sign from fmin and
+    // fmax on a +-0 pair; IEEE 754-2019's minNum/maxNum does not, and neither
+    // does this platform's libm, which is the reference this table is written
+    // against. The pinned cases are the four orderings.
+    else if (name == "is_nan") { if (math.is_nan(x)) { 1.0 } else { 0.0 } }
+    else if (name == "is_inf") { if (math.is_inf(x)) { 1.0 } else { 0.0 } }
+    else if (name == "is_finite") { if (math.is_finite(x)) { 1.0 } else { 0.0 } }
+    else if (name == "fabs") { math.fabs(x) }
+    else if (name == "fsign") { math.fsign(x) }
     else { math.nan }
 };
 
@@ -93,11 +105,27 @@ def apply2(name: str, x: float, y: float) -> float {
     else if (name == "nextafter") { math.nextafter(x, y) }
     else if (name == "pow") { math.pow(x, y) }
     else if (name == "atan2") { math.atan2(x, y) }
+    else if (name == "fmin") { math.fmin(x, y) }
+    else if (name == "fmax") { math.fmax(x, y) }
     else { math.nan }
+};
+
+// lerp is the one function here with three arguments, so it gets its own
+// dispatcher rather than a third slot in apply2 -- the table's lines are
+// positional and a four-argument apply would have made every reader wonder
+// which of the two middle fields is the weight.
+def apply3(name: str, x: float, y: float, t: float) -> float {
+    if (name == "lerp") { math.lerp(x, y, t) }
+    else { math.nan }
+};
+
+def is_three_arg(name: str) -> bool {
+    name == "lerp"
 };
 
 def is_two_arg(name: str) -> bool {
     name == "hypot" || name == "nextafter" || name == "pow" || name == "atan2"
+        || name == "fmin" || name == "fmax"
 };
 
 // The tolerance. One.
@@ -135,6 +163,15 @@ def is_two_arg(name: str) -> bool {
 //     been added after the 2-sum instead of folded into a compensated
 //     three-term subtraction.
 //
+//   * and the table had nine of this module's functions missing from it entirely
+//     -- fmin, fmax, fabs, fsign, lerp and the three predicates, because it only
+//     ever carried the functions with rounding in them. fmin and fmax were the
+//     ones that mattered: the tie between the two zeros went to whichever
+//     operand came LAST, so fmax(0.0, -0.0) answered -0.0 and
+//     1.0/fmax(0.0, -0.0) came out -inf. C99 allows either sign there; minNum
+//     and maxNum, this platform's libm, and any caller dividing by the answer do
+//     not. The tie now goes by sign, and all four orderings are pinned.
+//
 // One is the number C promises and the number the manual quotes, so one is what
 // the gate is: a kernel that drifts past it fails here, and the printed worst
 // gap says by how much and from which function.
@@ -165,7 +202,12 @@ def main() -> long {
             let a = math.bitsf(f[1].tonum());
             let want: long = 0;
             let got: float = math.nan;
-            if (is_two_arg(name)) {
+            if (is_three_arg(name)) {
+                let b = math.bitsf(f[2].tonum());
+                let t = math.bitsf(f[3].tonum());
+                want = f[4].tonum();
+                got = apply3(name, a, b, t);
+            } else if (is_two_arg(name)) {
                 let b = math.bitsf(f[2].tonum());
                 want = f[3].tonum();
                 got = apply2(name, a, b);
