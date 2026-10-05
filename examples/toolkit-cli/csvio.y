@@ -367,7 +367,7 @@ def field_json(s: str, numbers: bool) -> JVal {
     if (numbers && num_token(s)) {
         let iv = 0;
         if (s.index_of(".") < 0 && s.index_of("e") < 0 && s.index_of("E") < 0 && len(s) <= 18) {
-            iv = tonum(s)
+            iv = tolong(s)
         };
         v = jsonval.j_num(s, iv)
     };

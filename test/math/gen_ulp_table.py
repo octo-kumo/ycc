@@ -6,7 +6,7 @@ Every line is
     function arg1_bits [arg2_bits] want_bits
 
 with the doubles as IEEE-754 bit patterns in decimal, because the harness
-(test/math/ulp_check.y) reads them with tonum, which is decimal. The reference
+(test/math/ulp_check.y) reads them with tolong, which is decimal. The reference
 is this platform's libm -- glibc's, which is the fdlibm algorithms -- so the
 table is "what C's math.h gives", and the harness measures how far
 std/math.y is from it in ulps.

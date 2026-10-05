@@ -1409,7 +1409,7 @@ def main() -> long {
                 return 1;
             };
             i = i + 1;
-            perm = tonum(args[i]);
+            perm = tolong(args[i]);
             if (perm < 1 || perm > 3) {
                 eputs("day11: --permute takes 1, 2 or 3, not " + args[i] + "\n");
                 return 1;

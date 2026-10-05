@@ -94,8 +94,8 @@ def all_digits(t: str) -> bool {
 };
 
 // parse_size(spec) -> Size -- "120x40", "120x", "120" (square) and "120X40" all
-// parse; anything else is a message.  The digits are checked BEFORE tonum(),
-// because tonum is deliberately forgiving (it reads a prefix and ignores the
+// parse; anything else is a message.  The digits are checked BEFORE tolong(),
+// because tolong is deliberately forgiving (it reads a prefix and ignores the
 // rest) and would turn "--size 40x9z" into a 9-row grid with no complaint.
 def parse_size(spec: str) -> Size {
     let bad: Size = { ok: false, msg: "", w: 0, h: 0 };
@@ -122,9 +122,9 @@ def parse_size(spec: str) -> Size {
         bad.msg = "--size '" + spec + "': the height '" + hs + "' is not a number";
         return bad
     };
-    let w = tonum(ws);
+    let w = tolong(ws);
     let h = w;
-    if (len(hs) > 0) { h = tonum(hs) };
+    if (len(hs) > 0) { h = tolong(hs) };
     if (w < 4 || h < 4) {
         bad.msg = "--size '" + spec + "': a grid must be at least 4x4 -- the ghost "
                 + "border takes one cell on every side and a scene needs somewhere to fall";

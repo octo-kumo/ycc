@@ -154,7 +154,7 @@ def spawn_server(port: long, cert: str, key: str, canned: str) -> long {
     if (is_some(txt) == false) { return 0 };
     let body = unwrap(txt).trim();
     let pid = 0;
-    if (digits(body)) { pid = tonum(body) };
+    if (digits(body)) { pid = tolong(body) };
     pid
 };
 
@@ -342,10 +342,10 @@ def dec0(t: str) -> long {
     let w = 0;
     let up = 0;
     if (dot < 0) {
-        if (digits(s)) { w = tonum(s) };
+        if (digits(s)) { w = tolong(s) };
     } else {
         let a = s[0:dot];
-        if (digits(a)) { w = tonum(a) };
+        if (digits(a)) { w = tolong(a) };
         let frac = s[dot + 1:s.length];
         if (frac.length > 0) {
             let c = ord(frac[0:1]);
@@ -371,10 +371,10 @@ def dec_e5(t: str) -> long {
     let whole = 0;
     let frac = "";
     if (dot < 0) {
-        if (digits(s)) { whole = tonum(s) };
+        if (digits(s)) { whole = tolong(s) };
     } else {
         let w = s[0:dot];
-        if (digits(w)) { whole = tonum(w) };
+        if (digits(w)) { whole = tolong(w) };
         frac = s[dot + 1:s.length];
     };
     let f = 0;

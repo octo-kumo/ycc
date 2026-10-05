@@ -164,7 +164,7 @@ def doc_int(v: json.Val) -> long {
         };
         if (ndig > 13) { num_err = "integer too large" }
         else if (!clean || ndig == 0) { num_err = "not an integer" }
-        else { out = tonum(t) }
+        else { out = tolong(t) }
     } else { num_err = "not a number" };
     out
 };

@@ -241,7 +241,7 @@ def ar_bool_val(v: str) -> bool {
 };
 
 // Whole decimal numbers only, at most 18 digits so the value cannot
-// overflow into a wrong long (tonum("999999999999999999999") wraps).
+// overflow into a wrong long (tolong("999999999999999999999") wraps).
 def ar_num_ok(s: str) -> bool {
     let n = len(s);
     let i = 0;
@@ -432,7 +432,7 @@ def get_str(name: str, dflt: str) -> str {
 def get_long(name: str, dflt: long) -> long {
     let k = ar_find_long(name);
     let r = dflt;
-    if (k >= 0 && ar_given[k] == 1) { r = tonum(ar_val[k]); };
+    if (k >= 0 && ar_given[k] == 1) { r = tolong(ar_val[k]); };
     r
 };
 

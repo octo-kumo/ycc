@@ -191,7 +191,7 @@ def store_field(hv: str, name: str) -> long {
     while (i < len(parts)) {
         let p = parts[i];
         let eq = index_of(p, "=");
-        if (eq > 0 && p[0:eq] == name) { out = tonum(p[eq + 1:len(p)]); };
+        if (eq > 0 && p[0:eq] == name) { out = tolong(p[eq + 1:len(p)]); };
         i = i + 1;
     };
     out
@@ -199,7 +199,7 @@ def store_field(hv: str, name: str) -> long {
 
 // the id a Location header carries: "/items/12" -> 12, -1 if it is not one
 def loc_id(loc: str) -> long {
-    if (!loc.starts_with("/items/")) { 0 - 1 } else { tonum(loc[7:len(loc)]) }
+    if (!loc.starts_with("/items/")) { 0 - 1 } else { tolong(loc[7:len(loc)]) }
 };
 
 // ── printing a response ───────────────────────────────────────────────
@@ -1672,13 +1672,13 @@ def main() -> long {
             eputs("rest-client: read needs an id\n");
             return 2;
         };
-        cmd_read(need_positive("read", tonum(files[1])))
+        cmd_read(need_positive("read", tolong(files[1])))
     } else if (cmd == "update" || cmd == "delete") {
         if (len(files) < 2) {
             eputs("rest-client: " + cmd + " needs an id\n");
             return 2;
         };
-        let id = need_positive(cmd, tonum(files[1]));
+        let id = need_positive(cmd, tolong(files[1]));
         if (cmd == "update") { cmd_update(id) } else { cmd_delete(id) }
     } else if (cmd == "create") {
         cmd_create()

@@ -59,7 +59,7 @@ a record still calls the field. \ic{s.length} is a property, so
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[Builtins as methods] \ic{s.split(sep)}, \ic{s.trim()} (also
   \ic{s.strip()}), \ic{s.index\_of(sub)}, \ic{s.last\_index\_of(sub)},
-  \ic{s.ord()}, \ic{s.byte\_at(i)}, \ic{s.tonum()} and \ic{s.bytes()} are
+  \ic{s.ord()}, \ic{s.byte\_at(i)}, \ic{s.tolong()} and \ic{s.bytes()} are
   the builtins of the same name with \ic{s} as the first argument.
 \item[\ic{sep.join(xs)}] \ic{join(xs, sep)}: the receiver is the
   separator.
@@ -97,11 +97,25 @@ a record still calls the field. \ic{s.length} is a property, so
   \ic{"\{k: v, ...\}"}, maps as \ic{"\{"k": v, ...\}"} (string keys
   quoted). A function is \emph{not} accepted here (only \ic{print} takes
   one, Section~\ref{sec:builtin-io}).
-\item[\ic{tonum(s)}] Parse a decimal integer. The scan takes an optional
+\item[\ic{tolong(x)}] A \ic{long} from either a \ic{str} or a \ic{float}.
+  On a \ic{str} it parses a decimal integer: the scan takes an optional
   \ic{-} and then digits, and \emph{stops} at the first byte that is
-  neither: a prefix is used and the rest ignored (\ic{tonum("12x")} is
-  \ic{12}, \ic{tonum("3.14")} is \ic{3}), and only a string with no such
-  prefix at all gives \ic{0}.
+  neither, so a prefix is used and the rest ignored (\ic{tolong("12x")} is
+  \ic{12}, \ic{tolong("3.14")} is \ic{3}), and only a string with no such
+  prefix at all gives \ic{0}. On a \ic{float} it \emph{truncates toward
+  zero} --- \ic{tolong(-3.99)} is \ic{-3}, not \ic{-4}, which is
+  \ic{floor} and not \ic{trunc}. A float with no long answer at all traps:
+  a NaN, or a magnitude at or past \ic{2\textasciicircum 63} (\ic{-2\textasciicircum 63}
+  \emph{is} a long, and comes back as such).
+\item[\ic{tofloat(x)}] A \ic{float} from either a \ic{str} or a \ic{long}.
+  On a \ic{str} it reads the same scan with a fraction, stopping where
+  \ic{tolong} stops, and accumulating in \ic{double} as it goes --- so
+  \ic{tofloat("3.14")} is the double nearest \ic{3.14}, the same answer the
+  literal \ic{3.14} has and the same one every other language's parser
+  gives. An exponent is not read (\ic{tofloat("1e9")} is \ic{1.0}). On a
+  \ic{long} it is the widening the language already does implicitly, made
+  explicit so that \ic{tolong} and \ic{tofloat} are a pair; a long beyond
+  \ic{2\textasciicircum 53} rounds to the nearest double, as widening always does.
 \item[\ic{typeof(v)}] The static type as a printable value
   (\ic{typeof(none)} is \ic{"none"}). The rendering is the one the
   compiler's own diagnostics use, character for character, so what

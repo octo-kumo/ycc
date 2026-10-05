@@ -3473,6 +3473,7 @@ Yv *str_method(Yv *m) {
     Yv *s = sm_t(yv_long(K_tstr));
     Yv *l = sm_t(yv_long(K_tlong));
     Yv *b = sm_t(yv_long(K_tbool));
+    Yv *f = sm_t(yv_long(K_tfloat));
     Yv *no = yav(0);
     if (ys_eq_lit(m, "split")) {
         return sm_mk(ys("split"), yav(1, s), 1, sm_arr(s), ys(""), 0);
@@ -3515,8 +3516,10 @@ Yv *str_method(Yv *m) {
     } else if (ys_eq_lit(m, "bytes")) {
         return sm_mk(ys("bytes"), no, 0,
                      sm_arr(sm_t(yv_long(K_tbyte))), ys(""), 0);
-    } else if (ys_eq_lit(m, "tonum")) {
-        return sm_mk(ys("tonum"), no, 0, l, ys(""), 0);
+    } else if (ys_eq_lit(m, "tolong")) {
+        return sm_mk(ys("tolong"), no, 0, l, ys(""), 0);
+    } else if (ys_eq_lit(m, "tofloat")) {
+        return sm_mk(ys("tofloat"), no, 0, f, ys(""), 0);
     } else if (ys_eq_lit(m, "ord")) {
         return sm_mk(ys("ord"), no, 0, l, ys(""), 0);
     } else if (ys_eq_lit(m, "byte_at")) {
@@ -4433,19 +4436,52 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             }
-        } else if (ys_eq_lit(name, "tonum")) {
+        } else if (ys_eq_lit(name, "tolong")) {
             if (yv_len(cargs) != 1) {
-                st = fail(st, ys("tonum takes exactly 1 argument"),
+                st = fail(st, ys("tolong takes exactly 1 argument"),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tstr)),
-                                 ys("tonum string"), yv_l(yr_get(node, "line")),
-                                 yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+                /* A str is parsed; a float is truncated. Two types rather than
+                 * one is what makes the name worth changing. */
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr
+                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tfloat) {
+                    st = fail(st, ys_cat(ys("tolong needs a str to parse or a "
+                                            "float to truncate, got "),
+                                         tstr(yr_get(r, "typ"))),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
+                } else {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+                }
+            }
+        } else if (ys_eq_lit(name, "tofloat")) {
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys("tofloat takes exactly 1 argument"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r, "st");
+                /* A str is parsed; a long is widened, which the language
+                 * already does implicitly -- so this arm exists for SYMMETRY
+                 * with tolong, not because it needs to. */
+                if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr
+                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong) {
+                    st = fail(st, ys_cat(ys("tofloat needs a str to parse or a "
+                                            "long to widen, got "),
+                                         tstr(yr_get(r, "typ"))),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
+                } else {
+                    return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
+                }
             }
         } else if (ys_eq_lit(name, "tostring")) {
             if (yv_len(cargs) != 1) {

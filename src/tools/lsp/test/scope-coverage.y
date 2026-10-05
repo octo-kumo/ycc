@@ -27,7 +27,7 @@ import nav from "../nav.y";
 
 // native.is_intrinsic_name's list, verbatim.
 const BUILTINS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
-    "opt$test", "opt$val", "trim", "ord", "byte_at", "chr", "tonum", "tostring",
+    "opt$test", "opt$val", "trim", "ord", "byte_at", "chr", "tolong", "tostring",
     "index_of", "prepend", "last_index_of", "join", "split", "puts", "eputs",
     "clock_us", "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
     "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range",

@@ -1194,8 +1194,8 @@ if (len(sz) > 0) {
         let a = sz[0:at];
         let b = sz[at + 1:];
         if (args.num_ok(a) && args.num_ok(b)) {
-            sr = tonum(a);
-            sc = tonum(b);
+            sr = tolong(a);
+            sc = tolong(b);
         } else {
             ok = false
         }

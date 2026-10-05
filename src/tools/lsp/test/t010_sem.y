@@ -63,7 +63,7 @@ let wi = 0;
 while (wi < len(WIRE)) {
     let pair = WIRE[wi];
     let colon = index_of(pair, "=");
-    let idx = tonum(pair[:colon]);
+    let idx = tolong(pair[:colon]);
     let want = pair[colon + 1:len(pair)];
     if (idx < len(legend) && legend[idx] == want) { wire_ok = wire_ok + 1; }
     else { wire_bad = wire_bad + 1; print("  MISMATCH at " + tostring(idx) + ": legend says " + legend[idx] + ", constant says " + want); };

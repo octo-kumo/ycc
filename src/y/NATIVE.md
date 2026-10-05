@@ -300,7 +300,7 @@ writing a kernel.
   as sixty labels would cost every program ~120K instructions forever.
 * **`.quad` is a 64-bit bit pattern**, so a negative value is a legitimate one
   and half of every double's pattern is negative (that is the sign bit). A
-  range check cannot replace the old non-negativity rule either: `tonum` wraps
+  range check cannot replace the old non-negativity rule either: `tolong` wraps
   at 64 bits, so 2^63 comes back as -2^63 and the eight bytes stored are the
   same ones.
 
@@ -490,7 +490,7 @@ All of these are lowered early, so the checker and emitter see little new:
   both the checker (`typeof_method`: arity, argument types, result) and
   the emitter (`gen_method`). Builtin-backed methods are the builtin with
   the receiver as its first argument: `split`, `trim`/`strip`,
-  `index_of`, `last_index_of`, `bytes`, `tonum`, `ord`, `byte_at`, and
+  `index_of`, `last_index_of`, `bytes`, `tolong`, `ord`, `byte_at`, and
   `join`, whose receiver is the separator and goes last
   (`", ".join(xs)`). The rest are Y helpers in `std/str.y`, called by
   fixed label (`y_str_pad_left`, …):
@@ -586,7 +586,7 @@ conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
 `y_arr_eq`/`y_arr_extend` — one implementation each, parameterized by element width,
 because Y has no generics), long and float formatting, and argv
 materialization. Everything else —
-the whole print/put/eput family, `ord`/`chr`/`tonum`/
+the whole print/put/eput family, `ord`/`chr`/`tolong`/
 `last_index_of`, `range`, time, files — is Y. (`join` went
 back to assembly: in Y it pushed one byte at a time through a `[byte]`
 accumulator, and the compiler joins megabytes of asm text per

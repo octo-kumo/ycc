@@ -498,7 +498,7 @@ def ex(line0: str) -> long {
     if (ch == ord("s")) { return ex_sub(rest, false) };
     if (ch == ord("%") && len(rest) > 1 && rest[0:1] == "s") { return ex_sub(rest[1:], true) };
     if (ch == ord("/") || ch == ord("?")) { return ex_search(s[1:], ch == ord("?")) };
-    if (all_digits(s)) { return ex_line(tonum(s)) };
+    if (all_digits(s)) { return ex_line(tolong(s)) };
     buf.msg("E492: Not an editor command: " + s);
     ACT_CONTINUE
 };

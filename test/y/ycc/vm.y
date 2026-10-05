@@ -36,7 +36,7 @@ def truthy(v) -> bool {
 def eval(node, scope) {
     let k = node.k;
     if (k == "num") {
-        tonum(node.v)
+        tolong(node.v)
     } else if (k == "str") {
         node.v
     } else if (k == "bool") {

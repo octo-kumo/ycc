@@ -115,7 +115,7 @@ def hexdig_of(c: long) -> long {
 };
 
 // A checked two-digit hex parse, both cases accepted, -1 for anything else.
-// `tonum` is decimal-only and answers 0 for text it does not understand
+// `tolong` is decimal-only and answers 0 for text it does not understand
 // (SUGGESTIONS.md #4), which for a byte value would be silent corruption: a
 // typo in --edit would write 0x00 and look like it worked.  So the parse here
 // is a value or -1, never a guess.

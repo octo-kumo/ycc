@@ -3,7 +3,7 @@
 //
 // The table is the reference: one line per case, the function's name, its
 // argument(s) and the correctly-rounded answer, all as IEEE-754 bit patterns
-// in decimal (tonum reads decimal, so the table reads in what the program can
+// in decimal (tolong reads decimal, so the table reads in what the program can
 // read). test/math/gen_ulp_table.py wrote it, from the platform libm.
 //
 // The measurement is the gap in ulps between what std/math.y returned and what
@@ -199,20 +199,20 @@ def main() -> long {
             let name = f[0];
             // a one-argument line is `name arg want`, a two-argument one
             // `name arg1 arg2 want`
-            let a = math.bitsf(f[1].tonum());
+            let a = math.bitsf(f[1].tolong());
             let want: long = 0;
             let got: float = math.nan;
             if (is_three_arg(name)) {
-                let b = math.bitsf(f[2].tonum());
-                let t = math.bitsf(f[3].tonum());
-                want = f[4].tonum();
+                let b = math.bitsf(f[2].tolong());
+                let t = math.bitsf(f[3].tolong());
+                want = f[4].tolong();
                 got = apply3(name, a, b, t);
             } else if (is_two_arg(name)) {
-                let b = math.bitsf(f[2].tonum());
-                want = f[3].tonum();
+                let b = math.bitsf(f[2].tolong());
+                want = f[3].tolong();
                 got = apply2(name, a, b);
             } else {
-                want = f[2].tonum();
+                want = f[2].tolong();
                 got = apply1(name, a);
             };
             let gap = two_nan_ok(got, want);

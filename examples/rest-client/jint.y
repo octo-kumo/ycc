@@ -10,7 +10,7 @@
 // replace.
 //
 // `json.as_long` TRUNCATES. It answers 1 for 1.5 and 1 for 1e3, because Y
-// has no float-to-long conversion and json.as_long reaches for `tonum`, which
+// has no float-to-long conversion and json.as_long reaches for `tolong`, which
 // reads the leading integer and stops. The old `json.int_at` refused both
 // instead ("not an integer"), and refusing is the point: a REST body that
 // says qty is 3.5 must not read back as 3, or a server and its client
@@ -50,7 +50,7 @@ def of(v: json.Val) -> long {
         };
         if (ndig > 13) { err = "integer too large" }
         else if (!clean || ndig == 0) { err = "not an integer" }
-        else { out = tonum(t) }
+        else { out = tolong(t) }
     } else {
         err = "not a number"
     };

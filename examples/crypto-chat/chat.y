@@ -442,20 +442,20 @@ def parse_report(txt: str) -> long {
         else if (key == "counter") {
             let k = 0;
             while (k < 10 && 1 + k < len(ln.split(" "))) {
-                R_CNT[k] = tonum(field(ln, 1 + k));
+                R_CNT[k] = tolong(field(ln, 1 + k));
                 k = k + 1;
             };
             R_OK = R_OK + 1;
         }
-        else if (key == "wire") { R_WIRE = tonum(field(ln, 1)); R_OK = R_OK + 1; }
+        else if (key == "wire") { R_WIRE = tolong(field(ln, 1)); R_OK = R_OK + 1; }
         else if (key == "scan") {
-            R_FOUND = tonum(field(ln, 1));
-            R_LEAKS = tonum(field(ln, 2));
-            R_FIRSTLEAK = tonum(field(ln, 3));
+            R_FOUND = tolong(field(ln, 1));
+            R_LEAKS = tolong(field(ln, 2));
+            R_FIRSTLEAK = tolong(field(ln, 3));
             R_OK = R_OK + 1;
         }
         else if (key == "recv") {
-            let s = tonum(field(ln, 1));
+            let s = tolong(field(ln, 1));
             let j = 0;
             let slot = -1;
             while (j < 5 && slot < 0) {
@@ -464,8 +464,8 @@ def parse_report(txt: str) -> long {
             };
             if (slot >= 0) {
                 R_OPENED[slot] = field(ln, 2) == "OPENED";
-                R_PTB[slot] = tonum(field(ln, 3));
-                R_ROUND[slot] = tonum(field(ln, 4));
+                R_PTB[slot] = tolong(field(ln, 3));
+                R_ROUND[slot] = tolong(field(ln, 4));
                 R_OK = R_OK + 1;
             };
         };

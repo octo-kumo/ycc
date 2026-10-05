@@ -346,11 +346,11 @@ def pnumber() -> Json? {
     };
     let text = src[start:pos];
     if (exact) {
-        // tonum() guesses -- it prints and exits on garbage -- but the text
+        // tolong() guesses -- it prints and exits on garbage -- but the text
         // here has already been validated as a plain integer literal, so it
         // is exact. Past 18 digits the value could overflow anyway, so the
         // literal text is kept and `n` reports 0 rather than a wrapped lie.
-        if (pos - start <= 19) { some(num_node(text, tonum(text))) } else { some(num_node(text, 0)) }
+        if (pos - start <= 19) { some(num_node(text, tolong(text))) } else { some(num_node(text, 0)) }
     } else {
         // No float -> long conversion exists (ORCHESTRATOR.md 2.4a), so a
         // fractional literal keeps its text and reports 0. Callers that want

@@ -175,7 +175,7 @@ Yv *self_pack(void) {
         ssize_t k = read(fd, tailbuf, 16);
         if (k == 16) {
             Yv *tail = ys_n(tailbuf, 16);
-            long n = ys_tonum(ys_slice(tail, 0, 8));
+            long n = ys_tolong(ys_slice(tail, 0, 8));
             if (ys_eq(ys_slice(tail, 8, 16), pack_magic()) &&
                 n > 0 && n <= size - 16) {
                 lseek(fd, (off_t)(size - 16 - n), SEEK_SET);

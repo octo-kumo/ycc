@@ -120,8 +120,8 @@ def parse_size(s: str) -> long {
     let a = s[0:at];
     let b = s[at + 1:];
     if (!args.num_ok(a) || !args.num_ok(b)) { return 0 - 1; };
-    let w = tonum(a);
-    let h = tonum(b);
+    let w = tolong(a);
+    let h = tolong(b);
     if (w < 1 || h < 1) { return 0 - 1; };
     if (w > grid.MAXW || h > grid.MAXH) { return 0 - 1; };
     w * 1000000 + h

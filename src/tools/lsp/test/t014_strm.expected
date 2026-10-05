@@ -7,7 +7,7 @@ range on split: line 1 char 16..21
 rec.k: true
 a local of the same name, no dot: ```y|split|```
 -- completion after a dot
-after `csv.`: 26 items
+after `csv.`: 27 items
 has split: true
 has pad_left: true
 has alias lstrip: true
@@ -18,7 +18,7 @@ after `csv.sp`: split
 no `print` after a dot: true
 no `csv` after a dot: true
 -- completion without a dot is still the names
-at an empty prefix: 43
+at an empty prefix: 44
 has print: true
 has csv (declared after this position): false
 no upper in the name list: true
@@ -26,7 +26,7 @@ no pad_left in the name list: true
 has split (a local of that name): true
 prefix `csv`: csv
 -- the mirror cannot rot silently
-mirror 26, accepted 26
+mirror 27, accepted 27
 dropped by the compiler: 0
 -- the set, so a change is visible
   split
@@ -52,7 +52,8 @@ dropped by the compiler: 0
   repeat
   lines
   bytes
-  tonum
+  tolong
+  tofloat
   ord
   byte_at
 -- the signatures

@@ -711,7 +711,7 @@ the module's:
   statements.
 
 Numbers in JSON-RPC are small integers (`id`, line, character, `newIndex`);
-`tonum` covers every one of them, and no LSP number exceeds 2^53.
+`tolong` covers every one of them, and no LSP number exceeds 2^53.
 
 ### 7.2 Framing
 
@@ -1537,7 +1537,7 @@ is not optional.
 `stringify(parse(s)) == s` after canonicalisation. Holding the number's literal
 text is what makes this exact for floats.
 
-**J4** Numbers: integers via `tonum`, validated against the grammar first
+**J4** Numbers: integers via `tolong`, validated against the grammar first
 (`-?(0|[1-9][0-9]*)`), so `01`, `1.`, `.5`, `+1` and `1e` are rejected rather
 than silently coerced. `as_long(v: Val) -> long?` gives the integer value.
 
@@ -1546,7 +1546,7 @@ pairs, and rejection of a raw newline or an unescaped control character, per
 RFC 8259.
 
 **J6** Floats are carried as text, not as `float`. **Y has no string→float
-conversion at all** — `tonum` returns `long` and there is no `tofloat` anywhere
+conversion at all** — `tolong` returns `long` and there is no `tofloat` anywhere
 in the tree. `{"x": 1.5}` therefore yields a `Num` holding `"1.5"`, which
 round-trips exactly and compares by text. `as_float` is **not** provided in v1.
 Producing a real `float` needs either a hand-written mantissa/exponent

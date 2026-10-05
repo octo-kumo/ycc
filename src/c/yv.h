@@ -118,10 +118,25 @@ long ys_byte_peek(const Yv *s, long i); /* byte i, or -1 past either end:
 Yv *ys_chr(long v);
 Yv *ys_tostring(const Yv *v);         /* the format the native tostring prints */
 Yv *ys_long(long v);                  /* tostring of a long */
-long ys_tonum(const Yv *s);           /* string -> long (0 on garbage) */
+long ys_tolong(const Yv *s);          /* string -> long (0 on garbage) */
 
 /* ── arrays (reference values) ───────────────────────────────────────── */
-Yv *yav(size_t n, ...);               /* [v0, v1, ...] from n values (no sentinel) */
+/* [v0, v1, ...] from n values (no sentinel). n is the count, and the values
+ * that follow are just arguments: yav stores exactly n of them and DROPS THE
+ * REST with no diagnostic. So a value added here without bumping n produces an
+ * array shorter than its author believed, and the name that goes missing is
+ * whichever happened to be last -- which is how an f-string's #fmt once
+ * vanished from native.c's INTRINSICS and every f-string in the corpus broke.
+ *
+ * The C twin states n by hand where Y counts itself, so for a list of values
+ * use yavs, which ends in a sentinel and has no count to get wrong:
+ *
+ *     INTRINSICS = yavs(ys("print"), ys("len"), ..., NULL);
+ *
+ * There is no limit on how many values, because nothing is counted.
+ */
+Yv *yav(size_t n, ...);
+Yv *yavs(Yv *first, ...);             /* NULL-terminated; no count to state */
 Yv *ya_rep(Yv *v, long n);            /* [v; n] */
 Yv *ya_get(const Yv *a, long i);      /* bounds-checked (exit on OOB) */
 void ya_set(Yv *a, long i, Yv *v);    /* bounds-checked */

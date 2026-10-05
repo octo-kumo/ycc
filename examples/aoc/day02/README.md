@@ -229,7 +229,7 @@ un-merged path as a defect to prove it (see *Sensitivity*).
 - Sums are plain `long`s. An input whose *answer* exceeds 2^63 is out of
   scope; this one's answers are ~7·10^10.
 - Numbers are parsed by a hand-written strict scanner: `"12a"` is an error,
-  not a 12. (`"12a".tonum()` returns **12** — the method form returns
+  not a 12. (`"12a".tolong()` returns **12** — the method form returns
   `long?` but the truncation is silent for trailing junk, which is what
   `examples/SUGGESTIONS.md` §4 asks to be fixed.)
 
@@ -508,7 +508,7 @@ silently.
   arm`). `some(x)`/`none` is the option pattern; a bare identifier in a
   pattern position is read as a type name. `checks.y` uses
   `is_some`/`unwrap` for `fs.read_file`.
-- **`"12a".tonum()` returns 12.** The string method returns `long?`, but it
+- **`"12a".tolong()` returns 12.** The string method returns `long?`, but it
   truncates trailing junk silently, so `ids.parse` has its own strict
   scanner that reports the offending byte. Filed as a missing feature:
   `examples/SUGGESTIONS.md` §4, *A checked integer parse*.

@@ -1078,7 +1078,7 @@ def completion_kind(kind: long) -> long {
     k
 }
 
-// A [long] as a JSON array of numbers. JSON has no integer type and `tonum`
+// A [long] as a JSON array of numbers. JSON has no integer type and `tolong`
 // covers every value a position or a length can take.
 def numbers(xs: [long]) -> [json.Val] {
     let out: [json.Val] = [];

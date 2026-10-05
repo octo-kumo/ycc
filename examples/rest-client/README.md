@@ -380,7 +380,7 @@ it. `import json;` resolves to `std/json.y`; the local `json.y` (626 lines,
 
 * **`json.as_long` truncates.** It answers 1 for `1.5` and 1 for `1e3`,
   because Y has no float-to-long conversion and `as_long` reaches for
-  `tonum`, which reads the leading integer and stops. The old `json.int_at`
+  `tolong`, which reads the leading integer and stops. The old `json.int_at`
   *refused* both, and refusing is the point here: a body that says
   `qty` is `3.5` must not read back as `3`, or the server and its client
   disagree about the data with nothing on the wire to show it. `jint.y` is

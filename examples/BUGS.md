@@ -1002,7 +1002,7 @@ def sum8(s: str) -> long {
 def main() {
     let a = argv();
     let n = 10000;
-    if (len(a) > 1) { n = tonum(a[1]); };
+    if (len(a) > 1) { n = tolong(a[1]); };
     let h = heap_used();
     let out = n1(n);
     print("heap=" + tostring(heap_used() - h) + " out=" + tostring(len(out)) +

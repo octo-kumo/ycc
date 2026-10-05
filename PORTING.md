@@ -59,6 +59,18 @@ requires byte-identical binaries).
    numbers are immutable values. The value model lives in `yv.c`; nothing
    else allocates Y values directly.
 
+   **A C array literal needs `yavs`, not `yav`.** `[a, b, c]` counts itself in
+   Y; in C the count is a separate argument, `yav(3, a, b, c)`, and `yav`
+   stores exactly `n` values and **discards the rest with no diagnostic**. A
+   value added without bumping the count yields an array shorter than its
+   author believed, and the name that vanishes is whichever sat last — which
+   is how `tonum`... `tolong`'s sibling `#fmt` once went missing from
+   `native.c`'s `INTRINSICS` and every f-string in the corpus broke at once.
+   `yavs(a, b, ..., NULL)` ends in a sentinel, so there is no count to get
+   wrong; use it for any list of values. (`native.c`'s `INTRINSICS` is the one
+   that matters, and `test/sh/test_lsp.sh`'s `t013_m4` checks the count
+   against the compiler's own list, so a regression there fails loudly.)
+
 2. **Type map**: `long` → `long`, `float` → `double`, `bool` → `int`,
    `str` → `Yv *`, every record/array/union/option type → `Yv *`.
    Boxing at the boundaries: `yv_long(x)` / `yv_l(v)`, `yv_bool(x)` /

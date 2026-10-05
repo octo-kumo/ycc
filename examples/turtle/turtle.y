@@ -508,8 +508,8 @@ if (sz == "") {
     if (args.num_ok(wpart) == false || args.num_ok(hpart) == false) {
         die("--size wants two numbers around the x, e.g. --size 80x24")
     };
-    let w = tonum(wpart);
-    let h = tonum(hpart);
+    let w = tolong(wpart);
+    let h = tolong(hpart);
     if (w < 1 || w > 256) { die("--size wants a width of 1..256") };
     if (h < 1 || h > 128) { die("--size wants a height of 1..128") };
     tcols = w;
@@ -560,7 +560,7 @@ if (dmp == "") {
             if (i > start) {
                 let piece = dmp[start:i];
                 if (args.num_ok(piece) == false) { die("--dump wants frame numbers") };
-                let fn = tonum(piece);
+                let fn = tolong(piece);
                 if (fn < 0 || fn >= FRAMES) { die("--dump frame is outside 0.." + tostring(FRAMES - 1)) };
                 if (NWANT < MAXDUMP) { WANT[NWANT] = fn; NWANT = NWANT + 1 }
             };

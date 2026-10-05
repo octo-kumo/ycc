@@ -149,11 +149,11 @@ What the input actually is, as the solver establishes it (all asserted in
 * Of the 122 760 tile-corner rectangles, **1807** are wholly inside the room,
   and the largest of them is part 2's answer.
 
-Parsing is strict on purpose. `tonum` is *lenient* — it stops at the first
+Parsing is strict on purpose. `tolong` is *lenient* — it stops at the first
 non-digit and ignores the rest — so every field is gated on a hand-written
 `all_digits` (optional `-`, then one or more digits, nothing else) before it
 is converted. A second, byte-at-a-time reader (`rescan_bytes`) that never
-calls `split()` or `tonum()` re-reads the same file and must agree.
+calls `split()` or `tolong()` re-reads the same file and must agree.
 
 ## The property battery
 
@@ -222,7 +222,7 @@ exactly 7 and 1), `-3,4` (giving exactly −3).
 | **A** `oracle_wall_filter` | reject a candidate if any wall line (a 1-tile-wide rectangle joining consecutive tiles) touches the candidate's **inner** area | stewSquared's intersection test. Edge-intersection geometry, not per-row accept intervals. |
 | **B** `oracle_scan_prefix` | paint a (W−1)x(H−1) compressed grid inside/outside by **scanline fill**, then answer each candidate with one **2-D prefix-sum** query | a completely different algorithm shape: a filled grid and O(1) range queries. |
 | **C** `shuffled` / `rotated` / `reversed` | 8 deterministic shuffles, 3 cyclic rotations, the reversal — all through the **real `solve_part1`/`solve_part2`** | **varies the input's order** instead of re-deriving the answer the same way twice. This is the check that exists because of `aoc/day05`, whose `sort_pairs` sorted the *values* of an interleaved `(lo,hi)` array, so it compared one pair's high against another pair's low: it compiled, it sorted, and every part-2 method still agreed with it. Only an oracle that permutes catches that class. |
-| **D** `rescan_bytes` | a byte-at-a-time scan of the file that never uses `split()`/`tonum()` | a second, unrelated *reader*. A parser defect cannot hide behind itself. |
+| **D** `rescan_bytes` | a byte-at-a-time scan of the file that never uses `split()`/`tolong()` | a second, unrelated *reader*. A parser defect cannot hide behind itself. |
 | **E** transposition / reflection / translation | part 1 under `x↔y`, under `x → −x`, and under `+100000,−20000` | the solver holds no absolute coordinate, and `(|dx|+1)(|dy|+1)` is symmetric and translation-invariant. |
 
 Note on **C** and part 2: a free shuffle *destroys* the room (it is defined by
@@ -378,7 +378,7 @@ silently instead.
 | 15 | `rect_inside`'s empty-slab guard dropped | **not caught** |
 | 16 | loop no longer closed (last → first edge dropped) | caught |
 | 17 | horizontal walls miss the closing last → first segment | **not caught** |
-| 18 | strict digit gate removed, `tonum`'s leniency leaks through | caught (4) |
+| 18 | strict digit gate removed, `tolong`'s leniency leaks through | caught (4) |
 | 19 | a line with three fields is accepted | caught (1) |
 | 20 | the y field is dropped, every tile lands on row 0 | caught (29) |
 | 21 | x and y transposed while parsing | caught (7) |
@@ -451,7 +451,7 @@ silently instead.
 `examples/SUGGESTIONS.md` for this day. The obstacles below are language facts,
 each worked around visibly in `day09.y` rather than silently:
 
-* **`tonum` is lenient.** `tonum("12ab")` is 12 — the scan stops at the first
+* **`tolong` is lenient.** `tolong("12ab")` is 12 — the scan stops at the first
   non-digit and the rest is ignored. A parser built on it would accept
   malformed rows. Hence `all_digits` gates every field, and
   `+1,2` is rejected (the statement uses no plus sign).

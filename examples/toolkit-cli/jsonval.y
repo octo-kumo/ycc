@@ -408,7 +408,7 @@ def p_number() -> JVal {
         let iv = 0;
         if (raw.index_of(".") < 0 && raw.index_of("e") < 0 && raw.index_of("E") < 0 &&
             len(raw) <= 18) {
-            iv = tonum(raw)
+            iv = tolong(raw)
         };
         r = j_num(raw, iv)
     };
@@ -1015,7 +1015,7 @@ def lookup(root: JVal, path: str) -> JVal? {
                 if (!all_digits(inner)) {
                     fail_q("'" + inner + "' is not an index");
                 } else {
-                    let idx = tonum(inner);
+                    let idx = tolong(inner);
                     if (cur.kind != 4) {
                         fail_q("cannot index " + kind_name(cur.kind) + " with [" + tostring(idx) + "]");
                     } else if (idx >= len(cur.items)) {

@@ -2074,7 +2074,7 @@ def group_num(re: Re, name: str) -> long {
         i = i + 1;
     };
     if (digits) {
-        let v = tonum(name);
+        let v = tolong(name);
         if (v <= re.groups) { v } else { 0 - 1 }
     } else {
         let got = re.names[name];

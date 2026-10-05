@@ -2616,8 +2616,10 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: K.tstr })
         } else if (name == "ptr_addr") {
             normtype({ k: K.tlong })
-        } else if (name == "tonum" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
+        } else if (name == "tolong" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
             normtype({ k: K.tlong })
+        } else if (name == "tofloat") {
+            normtype({ k: K.tfloat })
         } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
             normtype({ k: K.tlong })
         } else if (name == "keys") {
@@ -2957,7 +2959,7 @@ def name_in(xs: [str], n: str) -> bool {
 // is_intrinsic_name tests, so they are in the list.
 let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "opt$test", "opt$val",
-             "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
+             "trim", "ord", "byte_at", "chr", "tolong", "tofloat", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
@@ -3551,7 +3553,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             // the shared cell pointer — and deref it (see box_capture).
             // NOTE: the index rides in `label` — env entries have no spare
             // numeric field and adding one would touch every signature.
-            let idx = tonum(e.mark);
+            let idx = tolong(e.mark);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RAX, 64);
             emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
@@ -3582,7 +3584,7 @@ def gen_cap_ptr(st: EmitSt, name: str) -> EmitSt {
     let e = env_find(st, name);
     if (e.kind == "capture") {
         // NOTE: the index rides in `label` (see gen_id's capture arm).
-        let pidx = tonum(e.mark);
+        let pidx = tolong(e.mark);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
         emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (pidx + 1), -1, insn.R_RAX, 64)
     } else {
@@ -4218,7 +4220,7 @@ def gen_addr(st: EmitSt, node: Wrap) -> EmitSt {
         } else if (e.kind == "global") {
             emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, e.label, insn.R_RAX, 64)
         } else if (e.kind == "capture") {
-            let aidx = tonum(e.mark);
+            let aidx = tolong(e.mark);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (aidx + 1), -1, insn.R_RAX, 64)
         } else {
@@ -4900,7 +4902,7 @@ def shift_imm(r: Node) -> long {
         if (lit_is_float(num.v)) { -1 } else {
             let s = norm_num(num.v);
             if (len(s) > 2 || s[0:1] == "-") { -1 }
-            else if (tonum(s) < 64) { tonum(s) }
+            else if (tolong(s) < 64) { tolong(s) }
             else { -1 }
         }
     } else { -1 }
@@ -5190,8 +5192,10 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             gen_ord(st, node)
         } else if (name == "chr") {
             gen_chr(st, node)
-        } else if (name == "tonum") {
-            gen_tonum(st, node)
+        } else if (name == "tolong") {
+            gen_tolong(st, node)
+        } else if (name == "tofloat") {
+            gen_tofloat(st, node)
         } else if (name == "tostring") {
             gen_tostring(st, node)
         } else if (name == "#fmt") {
@@ -7058,7 +7062,7 @@ def gen_assign(st: EmitSt, node: Assign) -> EmitSt {
     // cell and is visible in the capturing scope too.
     st = gen_as(st, node.v, e.typ);
     if (e.kind == "capture") {
-        let idx = tonum(e.mark);
+        let idx = tolong(e.mark);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RDX, -1, 1, -1, -1);
@@ -7662,7 +7666,7 @@ def flit_bits(s: str) -> long {
 };
 
 // The low 64 bits of a decimal literal, as the compiler runs it: the same wrap
-// as the runtime's tonum (rt.y, which is where an out-of-range literal becomes
+// as the runtime's tolong (rt.y, which is where an out-of-range literal becomes
 // a value), spelled out so the two agree on it rather than on whatever a C
 // library's strtoll clamps to.
 //
@@ -7695,7 +7699,7 @@ def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
         // An integer literal is emitted as its VALUE, not its text: a literal
         // wider than 64 bits runs as its low 64 bits (which is what the
         // compiler has always done -- the checker accepts it and the runtime's
-        // tonum wraps), and `mov $18446744073709551616` is not an instruction
+        // tolong wraps), and `mov $18446744073709551616` is not an instruction
         // GNU as can read, so a -S listing of such a program did not assemble
         // at all. norm_num has already turned hex and binary into decimal, so
         // an in-range literal emits exactly the text it did before.
@@ -7906,7 +7910,7 @@ def int_imm(r: Node) -> AsmNum {
     if (r.k == K.num) {
         let num: Leaf = r;
         if (!lit_is_float(num.v)) {
-            let n = tonum(norm_num(num.v));
+            let n = tolong(norm_num(num.v));
             if (n >= -2147483648 && n <= 2147483647) {
                 ok = true;
                 v = n;
@@ -8999,10 +9003,37 @@ def gen_chr(st: EmitSt, node: Call) -> EmitSt {
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
-def gen_tonum(st: EmitSt, node: Call) -> EmitSt {
+// tolong(x): a str is parsed by the runtime, a float is truncated by the
+// runtime too -- y_f2l, which checks the range, because a float with no long
+// answer should say so rather than arrive as the machine's "integer indefinite"
+// value. The static type picks the arm, so neither costs a test at run time.
+def gen_tolong(st: EmitSt, node: Call) -> EmitSt {
+    let targs: [Node] = node.args;
+    let a0 = targs[0];
+    let t = infer(st, a0);
+    let lbl = if (t.k == K.tfloat) { "y_f2l" } else { "y_str_tolong" };
     st = gen_push_args(st, node.args);
-    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_tonum"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(lbl), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
+};
+
+// tofloat(x): a str is parsed; a long is widened, which is one instruction and
+// no call -- the emitter already knows how, because it is the only coercion the
+// language has. So this arm exists for the symmetry of the pair, not because it
+// needs to.
+def gen_tofloat(st: EmitSt, node: Call) -> EmitSt {
+    let targs: [Node] = node.args;
+    let a0 = targs[0];
+    let t = infer(st, a0);
+    if (t.k == K.tlong) {
+        st = gen(st, a0);
+        st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
+        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
+    } else {
+        st = gen_push_args(st, node.args);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_tofloat"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
+    }
 };
 
 def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
@@ -10547,7 +10578,7 @@ def link_locs(b: str, off: long) -> str {
             let p: str = parts[i];
             if (dbg_lines) {
                 let sp = index_of(p, " ");
-                out += "\n.loc " + tostring(tonum(p[:sp]) + off) + p[sp:];
+                out += "\n.loc " + tostring(tolong(p[:sp]) + off) + p[sp:];
             } else {
                 let nl = index_of(p, "\n");
                 if (nl >= 0) { out += p[nl:]; }
@@ -11505,7 +11536,7 @@ def pack_get(cur: Cursor) -> str {
 };
 
 def pack_num(cur: Cursor) -> long {
-    tonum(pack_get(cur))
+    tolong(pack_get(cur))
 };
 
 def pack_get_strs(cur: Cursor) -> [str] {

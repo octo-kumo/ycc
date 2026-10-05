@@ -1,0 +1,2 @@
+-9223372036854775808
+runtime error: tolong: this float has no long value

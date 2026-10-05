@@ -491,7 +491,8 @@ Yv *gen_prepend(Yv *st, Yv *node);
 Yv *gen_byte_at(Yv *st, Yv *node);
 Yv *gen_ord(Yv *st, Yv *node);
 Yv *gen_chr(Yv *st, Yv *node);
-Yv *gen_tonum(Yv *st, Yv *node);
+Yv *gen_tolong(Yv *st, Yv *node);
+Yv *gen_tofloat(Yv *st, Yv *node);
 Yv *gen_tostring(Yv *st, Yv *node);
 long fmt_code(Yv *f, long kind, long ty);
 Yv *fmt_push(Yv *st, long v);
@@ -3525,10 +3526,12 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", yv_long(K_tstr));
         } else if (ys_eq_lit(name, "ptr_addr")) {
             return yr(1, "k", yv_long(K_tlong));
-        } else if (ys_eq_lit(name, "tonum") || ys_eq_lit(name, "ord") ||
+        } else if (ys_eq_lit(name, "tolong") || ys_eq_lit(name, "ord") ||
                    ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
             return yr(1, "k", yv_long(K_tlong));
+        } else if (ys_eq_lit(name, "tofloat")) {
+            return yr(1, "k", yv_long(K_tfloat));
         } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "time_us") || ys_eq_lit(name, "heap_used")) {
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "keys")) {
@@ -3883,17 +3886,22 @@ static Yv *INTRINSICS;
 
 static Yv *intrinsics(void) {
     if (INTRINSICS == NULL) {
+        /* yavs, not yav: it ends in a sentinel, so the length comes from the
+         * values. See yv.h -- yav(n, ...) stores n values and discards the rest
+         * with no diagnostic, and that is how #fmt went missing from this list
+         * once already. The NULL below is what makes that mistake impossible. */
         INTRINSICS =
-            yav(46, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+            yavs(ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
                 ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
-                ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
+                ys("byte_at"), ys("chr"), ys("tolong"), ys("tofloat"),
+                ys("tostring"),
                 ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
                 ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
                 ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
                 ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
                 ys("exit"), ys("argv"), ys("range"), ys("typeof"),
                 ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
-                ys("none"), ys("#fmt"));
+                ys("none"), ys("#fmt"), NULL);
     }
     return INTRINSICS;
 }
@@ -4470,7 +4478,7 @@ Yv *gen_id(Yv *st, Yv *node) {
              * the shared cell pointer — and deref it (see box_capture).
              * NOTE: the index rides in `label` — env entries have no spare
              * numeric field and adding one would touch every signature. */
-            long idx = ys_tonum(yr_get(e, "mark"));
+            long idx = ys_tolong(yr_get(e, "mark"));
             st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
             st = emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (idx + 1), -1, R_RAX, 64);
             return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
@@ -4502,7 +4510,7 @@ Yv *gen_cap_ptr(Yv *st, Yv *name) {
     Yv *e = env_find(st, name);
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
         /* NOTE: the index rides in `label` (see gen_id's capture arm). */
-        long pidx = ys_tonum(yr_get(e, "mark"));
+        long pidx = ys_tolong(yr_get(e, "mark"));
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
         return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (pidx + 1), -1, R_RAX, 64);
     } else {
@@ -5205,7 +5213,7 @@ Yv *gen_addr(Yv *st, Yv *node) {
             return emit_insn(st, F_LEA_P_R, -1, -1, 1, 0,
                              yv_l(yr_get(e, "label")), R_RAX, 64);
         } else if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
-            long aidx = ys_tonum(yr_get(e, "mark"));
+            long aidx = ys_tolong(yr_get(e, "mark"));
             st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
             return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (aidx + 1), -1, R_RAX, 64);
         } else {
@@ -5958,8 +5966,8 @@ long shift_imm(Yv *r) {
             Yv *s = norm_num(yr_get(r, "v"));
             if (yv_len(s) > 2 || ys_eq_lit(ys_slice(s, 0, 1), "-")) {
                 return -1;
-            } else if (ys_tonum(s) < 64) {
-                return ys_tonum(s);
+            } else if (ys_tolong(s) < 64) {
+                return ys_tolong(s);
             } else {
                 return -1;
             }
@@ -6264,8 +6272,10 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_ord(st, node);
         } else if (ys_eq_lit(name, "chr")) {
             return gen_chr(st, node);
-        } else if (ys_eq_lit(name, "tonum")) {
-            return gen_tonum(st, node);
+        } else if (ys_eq_lit(name, "tolong")) {
+            return gen_tolong(st, node);
+        } else if (ys_eq_lit(name, "tofloat")) {
+            return gen_tofloat(st, node);
         } else if (ys_eq_lit(name, "tostring")) {
             return gen_tostring(st, node);
         } else if (ys_eq_lit(name, "#fmt")) {
@@ -8326,7 +8336,7 @@ Yv *gen_assign(Yv *st, Yv *node) {
      * cell and is visible in the capturing scope too. */
     st = gen_as(st, yr_get(node, "v"), yr_get(e, "typ"));
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
-        long idx = ys_tonum(yr_get(e, "mark"));
+        long idx = ys_tolong(yr_get(e, "mark"));
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
         st = emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (idx + 1), -1, R_RDX, 64);
         st = emit_insn(st, F_MOV_R_0, R_RAX, 64, R_RDX, -1, 1, -1, -1);
@@ -9053,10 +9063,10 @@ long flit_bits(Yv *s) {
 }
 
 /* The low 64 bits of a decimal literal, as the compiler runs it: the same wrap
- * as the runtime's tonum (rt.y, which is where an out-of-range literal becomes
+ * as the runtime's tolong (rt.y, which is where an out-of-range literal becomes
  * a value), spelled out so the two agree on it rather than on whatever a C
- * library's strtoll clamps to (ys_tonum clamps: it answered
- * 9223372036854775807 where the Y twin's tonum answers 0, so the copies
+ * library's strtoll clamps to (ys_tolong clamps: it answered
+ * 9223372036854775807 where the Y twin's tolong answers 0, so the copies
  * emitted different code for the same literal). Unsigned arithmetic, because a
  * signed overflow is undefined in C where the Y arithmetic is defined to wrap.
  *
@@ -9090,7 +9100,7 @@ Yv *gen_lit(Yv *st, Yv *node) {
         /* An integer literal is emitted as its VALUE, not its text: a literal
          * wider than 64 bits runs as its low 64 bits (which is what the
          * compiler has always done -- the checker accepts it and the runtime's
-         * tonum wraps), and `mov $18446744073709551616` is not an instruction
+         * tolong wraps), and `mov $18446744073709551616` is not an instruction
          * GNU as can read, so a -S listing of such a program did not assemble
          * at all. norm_num has already turned hex and binary into decimal, so
          * an in-range literal emits exactly the text it did before. */
@@ -9340,7 +9350,7 @@ Yv *int_imm(Yv *r) {
     if (yv_l(yr_get(r, "k")) == K_num) {
         Yv *num = r;
         if (!lit_is_float(yr_get(num, "v"))) {
-            long n = ys_tonum(norm_num(yr_get(num, "v")));
+            long n = ys_tolong(norm_num(yr_get(num, "v")));
             if (n >= -2147483648L && n <= 2147483647L) {
                 ok = 1;
                 v = n;
@@ -10529,10 +10539,37 @@ Yv *gen_chr(Yv *st, Yv *node) {
     return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
-Yv *gen_tonum(Yv *st, Yv *node) {
-    st = gen_push_args(st, yr_get(node, "args"));
-    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_tonum"))), 0, 0, 0, 0, 0, 0);
+Yv *gen_tolong(Yv *st, Yv *node) {
+    /* tolong(x): a str is parsed by the runtime, a float is truncated by the
+     * runtime too -- y_f2l, which checks the range, because a float with no
+     * long answer should say so rather than arrive as the machine's "integer
+     * indefinite" value. The static type picks the arm, so neither costs a test
+     * at run time. */
+    Yv *targs = yr_get(node, "args");
+    Yv *a0 = ya_get(targs, 0);
+    Yv *lbl = yv_l(yr_get(infer(st, a0), "k")) == K_tfloat ? ys("y_f2l")
+                                                              : ys("y_str_tolong");
+    st = gen_push_args(st, targs);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(lbl)), 0, 0, 0, 0, 0, 0);
     return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+}
+
+Yv *gen_tofloat(Yv *st, Yv *node) {
+    /* tofloat(x): a str is parsed; a long is widened, which is one instruction
+     * and no call -- the emitter already knows how, because it is the only
+     * coercion the language has. So this arm exists for the symmetry of the
+     * pair, not because it needs to. */
+    Yv *targs = yr_get(node, "args");
+    Yv *a0 = ya_get(targs, 0);
+    if (yv_l(yr_get(infer(st, a0), "k")) == K_tlong) {
+        st = gen(st, a0);
+        st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
+    } else {
+        st = gen_push_args(st, targs);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_tofloat"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+    }
 }
 
 Yv *gen_tostring(Yv *st, Yv *node) {
@@ -12380,7 +12417,7 @@ Yv *link_locs(Yv *body, long off) {
                 Yv *n = ys_slice(p, 0, sp);
                 Yv *tail = ys_slice_from(p, sp);
                 Yv *loc = ys_cat(ys_cat(ys("\n.loc "),
-                                        ys_long(ys_tonum(n) + off)),
+                                        ys_long(ys_tolong(n) + off)),
                                  tail);
                 out = ya_push(out, loc);
                 ;
@@ -13500,7 +13537,7 @@ Yv *pack_get(Yv *cur) {
 }
 
 long pack_num(Yv *cur) {
-    return ys_tonum(pack_get(cur));
+    return ys_tolong(pack_get(cur));
 }
 
 Yv *pack_get_strs(Yv *cur) {

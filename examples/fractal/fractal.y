@@ -431,8 +431,8 @@ def parse_size(s: str) -> long {
     let a = s[0:at];
     let b = s[at + 1:];
     if (!args.num_ok(a) || !args.num_ok(b)) { return 0; };
-    let w = tonum(a);
-    let h = tonum(b);
+    let w = tolong(a);
+    let h = tolong(b);
     if (w < 1 || h < 1) { return -1; };
     if (w > scene.MAXC) { w = scene.MAXC; };
     if (h > scene.MAXR) { h = scene.MAXR; };
@@ -460,7 +460,7 @@ def load_dumps(s: str, last: long) -> void {
     for k in 0..len(parts) {
         let p = parts[k];
         if (len(p) > 0 && args.num_ok(p)) {
-            let v = tonum(p);
+            let v = tolong(p);
             // a frame the run will not reach is not a frame it can dump, and
             // listing it in the header would promise something the output does
             // not contain
