@@ -224,11 +224,11 @@ option type its context expects. A plain \ty{T} does not widen to
 
 \ic{e?.f} reads the field \ic{f} of \ic{e} when \ic{e} is there, and is
 \ic{none} when it is not --- no unwrap, no trap, and no \ic{!}:
-\begin{quote}\tt
+\begin{lstlisting}
 let a: str? = some("yo hi");
-let parts = a?.split(" ");   \ic{// [str]? --- the method, or none}
-let part1 = parts?.[0];      \ic{// the first byte of the string, or none}
-\end{quote}
+let parts = a?.split(" ");   // [str]? --- the method, or none
+let part1 = parts?.[0];      // the first byte of the string, or none
+\end{lstlisting}
 The receiver is read \emph{once}, whatever it is, and \emph{every} link
 after the \ic{?.} propagates: \ic{obj?.inner.inneragain.inneragainn} is
 \ic{none} whenever \ic{obj} is, not just the first field. So a method
