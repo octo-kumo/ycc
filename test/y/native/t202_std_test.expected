@@ -103,7 +103,7 @@ group() names the section that follows
 
 report
   ok    the run has failures to report
-          this file fails checks on purpose so the FAIL path is visible
+          nine checks on purpose, so the FAIL path is visible
   ok    and more passes than failures
           and the rest passed
 
