@@ -1,0 +1,166 @@
+
+a document parses, and every shape reads back
+  ok    the top level of an object is the bare map
+          {"id":7,"name":"ada","ok":true,"nothing":null,"tags":["x","y"],"ratio":1.50,"sub":{"deep":1}}
+  ok    get_long on a number
+          got 7, want 7
+  ok    get_str on a string
+          3 chars
+  ok    get_long takes the default for a null
+          got -1, want -1
+  ok    and for an absent key
+          got -1, want -1
+  ok    and for a member of the wrong shape
+          got -1, want -1
+  ok    get_arr on an array
+          two tags
+  ok    of the length it has
+          got 2, want 2
+  ok    get_arr is still an option, so it has no default form
+          none, and nothing to fall back on
+  ok    as_long
+          got 7, want 7
+  ok    as_str
+          3 chars
+  ok    as_bool
+          true
+  ok    as_arr
+          got 2, want 2
+  ok    as_obj
+          got 1, want 1
+  ok    is_null on a null
+          true, and it is not an absence
+  ok    and not on a string
+          false
+  ok    every as_* answers none for the wrong shape, and traps for none
+          a number is not a string and none of them is a number
+  ok    keys come back in insertion order
+          41 chars
+  ok    an absent key, a non-object and a bad index are all none
+          an array read is total otherwise, so this is the bounds test
+  ok    and an index in range is the element
+          6 chars
+
+as_long is tonum over the text, and is not a conversion
+  ok    "3.9" is 3
+          got 3, want 3
+  ok    "-3.9" is -3
+          got -3, want -3
+  ok    "1e10" is 1 -- the exponent is never read
+          got 1, want 1
+  ok    "1.50" is 1
+          got 1, want 1
+  ok    and past 64 bits it wraps, to the wrong number
+          got 4807115922877859019, want 4807115922877859019
+  ok    while the text itself is preserved exactly
+          4 chars
+
+four edges a caller gets wrong
+  ok    trailing data is refused
+          so two documents in a row never parse as one
+  ok    an empty document is none
+          not an empty object
+  ok    parse_err says where, not just that
+          at 6, one past the value that was expected
+  ok    and it distinguishes trailing data from a bad value
+          trailing, at the first byte of the junk
+  ok    an empty document has its own message
+          14 chars
+  ok    and a good document reports ok with no message
+          ok, empty err, and the value
+  ok    but an empty object is a value
+          no members
+  ok    a duplicate key keeps the last value
+          got 3, want 3
+  ok    and the first position
+          6 chars
+  ok    and it prints as null
+          4 chars
+  ok    the limit is 200
+          got 200, want 200
+  ok    and the marker is that text
+          16 chars
+  ok    the parser refuses past it and accepts under it
+          101 accepted, 260 refused
+  ok    the printer does not refuse: the marker goes in
+          so that string, not an error, is the caller's only sign
+  ok    which means the printed tree does NOT parse back
+          the output is not valid JSON and nothing said so
+
+the printer
+  ok    stringify is compact: no space after : or ,
+          93 chars
+  ok    stringify_obj is the same at depth 0
+          93 chars
+  ok    stringify_val is the same for the wrapped value
+          93 chars
+  ok    pretty is one member per line
+          144 chars
+  ok    pretty_val is what pretty calls
+          144 chars
+  ok    pretty(sorted) reorders members, and only pretty does
+          stringify and keys_of never sort
+  ok    sort_keys is a new list in byte order
+          9 chars
+  ok    and it does not touch the list it was given
+          an insertion sort, and quadratic
+
+same, node_count and max_depth
+  ok    same compares numbers as TEXT
+          so two documents any other library calls equal compare unequal here
+  ok    but it is structural, and order-insensitive for members
+          member order does not matter
+  ok    node_count counts the containers too
+          got 11, want 11
+  ok    max_depth of that document
+          got 3, want 3
+  ok    and a scalar is depth 1
+          got 1, want 1
+
+escape, utf8_put and hex2
+  ok    escape quotes a body without its quotes
+          4 chars
+  ok    and a backslash
+          4 chars
+  ok    and the C0 controls by name
+          4 chars
+  ok    hex2 is two lowercase digits
+          2 chars
+  ok    hex2 of zero
+          2 chars
+  ok    utf8_put appends one code point as UTF-8
+          got 3, want 3
+
+the parser's own cursor
+  ok    at is the byte at the cursor
+          got 116, want 116
+  ok    lit matches and consumes
+          true
+  ok    having consumed it, at has moved
+          got 32, want 32
+  ok    lit does not consume what it does not match
+          false
+  ok    and leaves the cursor where it was
+          got 110, want 110
+  ok    p_show quotes a printable byte
+          3 chars
+  ok    and names an unprintable one
+          6 chars
+  ok    and says so past the end
+          12 chars
+  ok    hexval is one digit
+          got 15, want 15
+  ok    and -1 for anything else
+          got -1, want -1
+
+parse_bytes and the constructors
+  ok    parse_bytes over the first len bytes
+          7 chars
+  ok    and a len that cuts the document short is a refusal, not a partial
+          nothing partial comes back
+  ok    and it clamps len to what is there
+          no trap on a len past the end
+  ok    every constructor builds the shape it names
+          nul, boolean, str, num, numtext, jarr and jobj
+
+74 of 74 checks passed

@@ -438,3 +438,34 @@ raw mode on a descriptor that has no termios
           and restores nothing, having changed nothing
   ok    restore() likewise
           no termios was saved, so there is nothing to put back
+
+the tty, with stdout on a pipe
+  ok    is_tty(fd) answers without trapping
+          true or false
+  ok    is_tty on a closed descriptor is answered too
+          false, and no trap
+  ok    active is false before raw_mode
+          nothing entered raw mode
+  ok    size() answers a Size with non-negative fields
+          rows 24 cols 80
+  ok    key_pending is answerable
+          nothing is waiting on an empty pipe
+  ok    read_key_timeout(0) is a non-blocking poll
+          KEY_NONE is -1, no trap on a pipe
+  ok    read_key() with nothing waiting is KEY_NONE too
+          and it does not block on a pipe either
+  ok    the returning restore paths are safe with nothing to restore
+          and raw_mode was never entered, so neither has work to do
+  ok    and the tty is still not in raw mode
+          still not in raw mode
+  ok    arm_watchdog refuses without raw mode
+          false, not a stray child
+
+set_size, the call a program almost never makes
+  ok    set_size answers false on a pipe and does not trap
+          TIOCSWINSZ on a pipe is ENOTTY
+  ok    and the surface still has a usable size afterwards
+          whatever the ioctl left behind, size() still answers in range
+
+216 of 216 checks passed
+[?25h[?1049l

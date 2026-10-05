@@ -926,11 +926,14 @@ frame clock and the frame meter.
   was saved at the last \ic{tui.raw\_mode()}.
 \item[\ic{tui.active()}] \ty{bool}: whether raw mode is on now, so a cleanup path
   can be called from anywhere without checking first.
-\item[\ic{tui.restore\_exit()}] Install an \ic{atexit} handler that restores the
-  terminal; \ic{tui.restore\_all\_exit()} does the same for every
-  standard descriptor. This is what stops a crash from leaving a shell in raw mode.
+\item[\ic{tui.restore\_exit(code)},
+  \ic{tui.restore\_all\_exit(code)}] The call to make on every exit path:
+  restore, then \ic{exit(code)}. There is no \ic{atexit} handler in the
+  module, and there is nothing after this call either --- which is what makes it
+  impossible to forget half way. \ic{tui.restore\_all\_exit(code)} puts the
+  cursor back and leaves the alternate screen before the same exit.
 \item[\ic{tui.arm\_watchdog()}] \ic{fork} a child that waits for this process to
-  die and restores the terminal from the child --- the one path a handler cannot
+  die and restores the terminal from the child --- the one path a call cannot
   cover, since \ic{SIGKILL} runs nothing. The alt screen and the cursor are
   emulator state, so the watchdog can put the \emph{termios} back but not those.
 \item[\ic{tui.read\_key()}] The next key, decoded: arrows, function keys,
@@ -948,7 +951,10 @@ frame clock and the frame meter.
 \item[\ic{tui.key\_pending()}] \ty{bool}: whether a key is waiting, without
   blocking and without decoding one.
 \item[\ic{tui.enter\_screen()}, \ic{tui.leave\_screen()}] The alternate screen
-  buffer, so a full-screen program leaves the scrollback alone.
+  buffer, so a full-screen program leaves the scrollback alone. These are
+  \ic{tui.enter\_alt\_screen()} and \ic{tui.leave\_alt\_screen()} plus the
+  cursor, which is what a full-screen program wants; the plain alt-screen
+  forms move the buffer alone.
 \item[\ic{tui.hide\_cursor()}, \ic{tui.show\_cursor()}] Cursor visibility. \ic{tui.cursor\_to(row, col)} moves
   it, \ic{tui.home()} goes to the top left and \ic{tui.clear\_screen()}
   wipes the screen.
@@ -974,7 +980,7 @@ frame clock and the frame meter.
 \item[\ic{tui.blit(dst, src, dr, dc, sr, sc, rows, cols)}] A rectangle of one
   surface onto another.
 \item[\ic{tui.rgb(r, g, b)}, \ic{tui.grey(v)}, \ic{tui.lerp\_rgb(a, b, t)},
-  \ic{tui.clamp\_255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
+  \ic{tui.clamp255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
   \ic{tui.b\_of(c)} to take one apart. A colour is one integer, so a frame buffer
   of them is an array of integers.
 \item[\ic{tui.begin\_frame(s)}, \ic{tui.cell\_same(s, r, c, ch, fg, bg)},
@@ -988,15 +994,19 @@ frame clock and the frame meter.
   when one row's worth of output overflows the buffer: the cursor is positioned
   absolutely, so a spill is a row boundary, not a corruption.
 \item[\ic{tui.set\_fd(n)}, \ic{tui.fd()}] Draw to a descriptor other than 1, which
-  is how output goes to a file or a pipe for a test.
+  is how output goes to a file or a pipe for a test. \ic{tui.set\_size(rows,
+  cols)} tells the module a window size instead of asking the terminal, and says
+  whether it took it --- which is how a test draws a surface it can read back.
 \item[\ic{tui.put\_byte(b)}, \ic{tui.put\_num(n)}, \ic{tui.put\_str(s)},
   \ic{tui.put\_csi()}] The output buffer, below the grid: a byte, a decimal
   number, a string, and a control-sequence introducer.
 \item[\ic{tui.esc\_fg(r, g, b)}, \ic{tui.esc\_bg(...)}] One complete SGR sequence
   as a number, \ic{tui.esc\_clear()}, \ic{tui.esc\_home()}, \ic{tui.esc\_cursor(r, c)},
-  \ic{tui.esc\_reset()}, and \ic{tui.out\_flush()} to write the buffer out. The
-  \ic{sgr\_*} forms are the same sequences without the introducer, for a caller
-  assembling its own.
+  \ic{tui.esc\_reset()}, and \ic{tui.out\_flush()} to write the buffer out.
+  \ic{tui.esc\_rg(...)} is one sequence carrying both colours.
+  The \ic{tui.sgr\_fg(r, g, b)}, \ic{tui.sgr\_bg(r, g, b)},
+  \ic{tui.sgr\_rg(...)} and \ic{tui.sgr\_reset()} forms are the same sequences
+  without the introducer, for a caller assembling its own.
 \item[\ic{tui.buf\_len()}, \ic{tui.buf\_at(i)}, \ic{tui.buf\_reset()}] The output
   buffer read back and cleared, which is how a test checks what a draw would
   have written without a terminal.
@@ -1015,7 +1025,7 @@ frame clock and the frame meter.
 \item[\ic{tui.shade(c)}] A colour mapped to a glyph by luminance.
   \ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half} and \ic{shade\_braille}
   are the ramps for each, and \ic{tui.shade\_len(ramp)} with
-  \ic{tui.ramp\_index(v, n, k)} index one. \ic{tui.braille(cp)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
+  \ic{tui.ramp\_index(v, n, k)} index one. \ic{tui.braille(cp)}, \ic{tui.braille\_cp(mask)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
   mask)} address one braille dot pattern directly.
 \item[\ic{tui.utf8\_len(cp)}, \ic{tui.utf8\_byte(cp, i)}, \ic{tui.width\_of(cp)}] A
   code point's UTF-8 length and bytes, and how many terminal columns it occupies
@@ -1248,6 +1258,157 @@ count over 1000, a pattern over 4096 instructions, more than 200 capture groups,
 more than 32 lookarounds and more than 200 levels of \ic{(} nesting are each
 refused with a message from \ic{check}.
 
+
+
+\subsection{JSON (the json module)}
+\label{sec:builtin-json}
+
+\ic{import json;} reads and writes JSON. It exists because the language server
+needs it, and because every other reader in the tree turned out to be a worse
+one --- but its shape is not the usual one, and the shape is the point.
+
+A \ic{Val} is one of six shapes and \emph{a number is its literal text}.
+\ic{json.parse} of a document holding \ic{3.14} gives a \ic{json.Num} carrying
+\ic{"3.14"}, not a float, and it prints back byte for byte. That is deliberate:
+the language has no string-to-float conversion at all, so a reader that threw
+the text away would have nothing to hand back.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{json.Num}, \ic{json.Str}, \ic{json.Bool}, \ic{json.Null},
+  \ic{json.Arr}, \ic{json.JObj}] The six shapes, each a one-field record, and
+  \ic{json.Val} their union. Every member has its own field name because a
+  record type is exactly its set of fields: two shapes sharing \ic{v: str} would
+  be one type, and a \ic{match} could not tell them apart.
+\item[\ic{json.obj()}, \ic{json.arr()}] An empty \ic{{ str => Val }} to assign
+  into, and an empty \ic{[Val]} to \ic{+=}. Build the object with this, not with
+  a map literal: a literal pins its value type from its first entry and then
+  rejects every other member's shape.
+\item[\ic{json.jobj(o)}, \ic{json.jarr(a)}] The two wraps. A \emph{nested}
+  object and a nested array are values, so they need one --- and only those do.
+  A top-level object does not, and that asymmetry is worth remembering: it
+  indexes directly, while every member below it goes through \ic{json.field} or
+  a plain index.
+\item[\ic{json.num(n)}, \ic{json.numtext(t)}, \ic{json.str(s)},
+  \ic{json.boolean(b)}, \ic{json.nul()}] The constructors. \ic{num} takes a
+  \ic{long}, so a float goes in as \ic{json.numtext("1.5e-3")}. And
+  \ic{numtext} checks nothing at all:
+  text that is not a number comes back out as text that is not a number.
+\item[\ic{json.parse(s)}] A whole document that must be an object, returned as
+  the bare map so it indexes directly. A perfectly good array, number, string,
+  boolean or null document is \ic{none} here rather than an error ---
+  \ic{json.parse\_val(s)} is the one that takes those.
+\item[\ic{json.parse\_val(s)}] A whole document as any value.
+\item[\ic{json.parse\_err(s)}] The same, plus what went wrong and where:
+  \ic{ok}, \ic{value}, \ic{err} and \ic{at}, the byte offset. There are three
+  messages --- \ic{"empty document"}, \ic{"unexpected "} and \ic{"trailing "},
+  each followed by \ic{json.p\_show}'s rendering of the byte. This is the entry
+  to reach for when a document is refused and the question is why.
+\item[\ic{json.parse\_bytes(b, len)}] \ic{parse\_val} over the first \ic{len}
+  bytes of \ic{b}. It still copies into a string, so it is not the cheaper path.
+\item[\ic{json.field(o, k)}, \ic{json.index(a, i)}] One member, or one element,
+  as an option: \ic{none} for an absent key, for an index past the end, and for
+  the wrong shape entirely. An array read is otherwise total, so this is where
+  the bounds test lives.
+\item[\ic{json.as\_str(v)}, \ic{json.as\_long(v)}, \ic{json.as\_bool(v)},
+  \ic{json.as\_arr(v)}, \ic{json.as\_obj(v)}, \ic{json.is\_null(v)}] The shape
+  asked for, or \ic{none} if \ic{v} is another one. \ic{as\_long} is
+  \ic{tonum} over the literal text and is emphatically \emph{not} a numeric
+  conversion: it stops at the point, so \ic{"3.9"} is \ic{3} and \ic{"1e10"} is
+  \ic{1}, and it wraps past 64 bits.
+\item[\ic{json.get\_long(o, k, d)}, \ic{json.get\_str(o, k, d)},
+  \ic{json.get\_arr(o, k)}] That member as a number, a string or an array, or
+  the default. \ic{get\_long} takes the default for a missing key, a null and a
+  non-number alike. There is no \ic{get\_bool}, because a default for a bool is
+  a choice rather than a convenience.
+\item[\ic{json.keys\_of(o)}] The keys, in insertion order --- which is the order
+  the printer uses.
+\item[\ic{json.stringify(o)}] The compact form of a top-level object: no space
+  after \ic{:} or \ic{,}, members in insertion order, never sorted.
+\item[\ic{json.stringify\_val(v, d)}, \ic{json.stringify\_obj(o, d)}] The same
+  for a value, and for an object at a given depth. \ic{d} is the caller's own
+  recursion depth: pass \ic{0}.
+\item[\ic{json.pretty(v, indent, sorted)}] The multi-line form:
+  \ic{indent} spaces per level, a space after each \ic{:}, and empty containers
+  kept inline. This is also the only way to get sorted output, through
+  \ic{sorted} or \ic{json.sort\_keys(ks)}.
+\item[\ic{json.pretty\_val(v, d, w, s)}] What \ic{pretty} calls.
+\item[\ic{json.same(a, b)}] Structural equality, order-insensitive for members
+  --- but numbers compare as \emph{text}, so \ic{1.5} and \ic{1.50} are not the
+  same value. Two documents any other library would call equal can compare
+  unequal here.
+\item[\ic{json.node\_count(v)}, \ic{json.max\_depth(v)}] How many nodes a tree
+  holds, containers included, and how deep it is; a scalar is depth 1.
+\item[\ic{json.sort\_keys(ks)}] A new key list in byte order. An insertion
+  sort, and quadratic: the language has no \ic{sort}.
+\item[\ic{json.escape(s)}] A string \emph{body} without its quotes: \ic{"} and a
+  backslash escaped, the C0 controls as their two-letter forms, everything else
+  raw.
+\item[\ic{json.utf8\_put(b, cp)}, \ic{json.hex2(c)}] Append one code point to a
+  \ic{[byte]} as UTF-8 --- the two-, three- and four-byte forms are built here,
+  because \ic{chr} gives one byte --- and two lowercase hex digits of a byte
+  value.
+\item[\ic{json.at(p)}, \ic{json.lit(p, t)}, \ic{json.p\_show(s, i)},
+  \ic{json.hexval(c)}] The parser's own cursor, for a caller writing a parser
+  over the same primitives: the byte at the cursor, a literal matched and
+  consumed, the fragment the diagnostics quote, and one hex digit.
+\item[\ic{json.json\_depth\_max}, \ic{json.json\_depth\_error}] The nesting
+  limit, \textbf{200}, and the text that stands in for a subtree past it.
+\end{description}
+
+Four edges, all of which a reader would otherwise get wrong.
+
+\emph{Trailing data is an error}, for all three parsers, so \ic{parse\_val} of two
+objects in a row is \ic{none}. An empty document is \ic{none} too, not an empty
+object --- while an empty \emph{object} is a value, with no members.
+
+\emph{Duplicate keys are resolved silently}: the last one wins and it keeps the
+first one's position, so \ic{{"a": 1, "b": 2, "a": 3}} gives two members,
+\ic{a} and \ic{b}, in that order. Nothing is rejected and nothing is warned.
+
+\emph{\ic{null} is a value, not an absence.} A missing key is \ic{none}; a
+present null is a \ic{json.Null}, which is why \ic{get\_long} answers its
+default for one.
+
+\emph{The depth limit truncates on the way out.} Past \ic{json\_depth\_max} the
+parser refuses, so \ic{parse} and \ic{parse\_err} report it; the printer instead
+puts the literal \ic{<json: too deep>} where the subtree was and still emits the
+brackets around it. So printing a deep enough tree produces a document that is
+\textbf{not valid JSON}, and the sign that it happened is that string rather
+than an error.
+
+\begin{lstlisting}
+import json;
+
+// A document is built, not parsed: obj() gives the map the top level wants,
+// and only a NESTED object or array needs a wrap.
+let o = json.obj();
+o["name"] = json.str("widget");
+o["count"] = json.num(3);
+o["ratio"] = json.numtext("1.50");      // a long cannot hold 1.50, and this
+                                        // is the only way a float gets in
+let tags = json.arr();
+tags += json.str("a");
+tags += json.str("b");
+o["tags"] = json.jarr(tags);
+print(json.stringify(o));
+// {"name":"widget","count":3,"ratio":1.50,"tags":["a","b"]}
+print(json.pretty(json.jobj(o), 2, true));   // the same, one member per line
+
+// show(s) parses, and pays for a diagnostic only when it has to.
+def show(s: str) {
+    let doc = json.parse(s);
+    if (doc != none) {
+        print(json.get_long(json.jobj(doc!), "id", -1));
+    } else {
+        let r = json.parse_err(s);
+        print("refused at " + tostring(r.at) + ": " + r.err);
+    }
+};
+
+show("{\"id\": 7}");      // 7
+show("{\"id\": }");       // refused at 7: unexpected '}'
+show("{\"id\": 1} x");    // refused at 10: trailing 'x'
+\end{lstlisting}
 \subsection{Pointers}
 \label{sec:builtin-pointers}
 
