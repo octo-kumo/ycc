@@ -20,7 +20,11 @@ that: an import splices the imported file's text and drops every
 \ic{export} clause, so a clause anywhere in the file has the same
 effect. (A file's defs are spliced whole; namespaces are resolved by
 rewriting, not by the export list.) Paths resolve relative to the
-importing file's directory. A missing module is a fatal error. Without a
+importing file's directory, and \ic{.} and \ic{..} segments fold, so
+one file reached by two spellings --- \ic{"./m/sub/../m.y"} and
+\ic{"./m.y"} --- is spliced once. The fold is lexical: a \ic{..} that
+would leave the root is kept as written. A missing module is a fatal
+error. Without a
 path, \ic{import fs;} finds a module by name: \ic{fs.y} next to the
 importing file first, then the standard library's \ic{std/fs.y}. An
 import takes a line of its own: everything after \ic{import} on that

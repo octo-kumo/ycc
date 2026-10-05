@@ -998,15 +998,27 @@ int seen_any(Yv *seen, long lo, long hi, long level) {
 
 /* Collapse "/./" segments so the same file resolves to one key no matter
  * how deep the import nesting is (base dirs accumulate "/." per level:
- * "ycc/././enc64.y" vs "ycc/./././enc64.y"). Deterministic, so same-file
- * inputs always yield the same key (sufficient for seen-dedup). */
+ * "ycc/././enc64.y" vs "ycc/./././enc64.y"), and "/../" segments so one file
+ * reached by two spellings is one key: without the fold, a tool outside
+ * src/y/ that imports a std module by name and a sibling by a path with a
+ * ".." in it splices that module twice -- once per spelling -- and every
+ * name in it is reported as a duplicate definition against itself.
+ * Deterministic, so same-file inputs always yield the same key (sufficient
+ * for seen-dedup). Purely lexical, as the rest of it is: a ".." that would
+ * leave the root is kept, because whether it exists is the filesystem's
+ * answer and this runs before any file is read. */
 Yv *norm_path(Yv *p) {
     Yv *parts = ys_split(p, ys("/"));
     Yv *out = yav(0);
     long i = 0;
     while (i < yv_len(parts)) {
         Yv *seg = ya_get(parts, i);
+        long n = yv_len(out);
         if (ys_eq_lit(seg, ".")) {
+            ;
+        } else if (ys_eq_lit(seg, "..") && n > 0 &&
+                   !ys_eq(ya_get(out, n - 1), ys(".."))) {
+            out = ya_slice(out, 0, n - 1);
             ;
         } else {
             out = ya_push(out, seg);
