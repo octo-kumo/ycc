@@ -4036,6 +4036,20 @@ def inferred_ret(line: long, col: long) -> Type {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
+// The tail of the inferred-return diagnostic, for a `return` with no value.
+// The type the message quotes is one the reader never wrote -- it comes
+// from the body's tail -- so this case says what does resolve it: one word
+// on the def's head makes the inferred type a written one, and the void
+// return then is what the def says it does. Every other disagreement is an
+// ordinary type error and closes the parenthesis as before.
+def ret_inferred_hint(rt: Type) -> str {
+    if (rt.k == K.tvoid) {
+        "; write '-> void' on the def to return nothing)"
+    } else {
+        ")"
+    }
+};
+
 def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes {
     if (len(func.params) != len(func.ptypes)) {
         st = fail(st, "internal: params/ptypes length mismatch", line, col);
@@ -4124,7 +4138,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             while (ri < len(rets)) {
                 let rn = rets[ri];
                 if (!tcompat(rn.typ, br)) {
-                    st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ")", rn.line, rn.col);
+                    st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn.typ), rn.line, rn.col);
                 }
                 ri = ri + 1;
             };
@@ -4151,7 +4165,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 while (ri2 < len(rets2)) {
                     let rn2 = rets2[ri2];
                     if (!tcompat(rn2.typ, br)) {
-                        st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ")", rn2.line, rn2.col);
+                        st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn2.typ), rn2.line, rn2.col);
                     }
                     ri2 = ri2 + 1;
                 };
