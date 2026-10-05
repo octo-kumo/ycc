@@ -226,6 +226,9 @@ Yv *normnode(Yv *anode);
 Yv *strip_list(Yv *nodes, Yv *imports);
 Yv *strip_ns(Yv *node, Yv *imports);
 Yv *strip_decl(Yv *node, Yv *imports);
+Yv *strip_ns_name(Yv *q, Yv *imports);
+Yv *strip_type(Yv *t, Yv *imports);
+Yv *strip_type_list(Yv *ts, Yv *imports);
 Yv *st_new(void);
 Yv *emit(Yv *st, Yv *line);
 Yv *next_uid(Yv *st);
@@ -2470,6 +2473,93 @@ Yv *normnode(Yv *anode) { return anode; }
  * Full AST rebuild (only dot nodes change, but uniform rebuild is
  * simplest). */
 
+/* `m.T` -> `T`, when `m` names a path import. Anything else unchanged: a
+ * primitive name, a bare name, or a PACKAGE-qualified one, which strip_ns's own
+ * Dot arm keeps on purpose (pkg_ns) because a package is linked as a unit of its
+ * own and its names stay qualified. */
+Yv *strip_ns_name(Yv *q, Yv *imports) {
+    long dot = ys_index_of(q, ys("."));
+    if (dot > 0) {
+        Yv *ns = ys_slice(q, 0, dot);
+        if (is_ns(ns, imports)) { return ys_slice_from(q, dot + 1); }
+    }
+    return q;
+}
+
+/* A type with a path-import namespace stripped.
+ *
+ * strip_ns has always done this for EXPRESSIONS -- `m.f(x)` is a call to `f` --
+ * and the origin map documents the consequence: a file imported BY PATH
+ * contributes no module name, because everything of its is already flat. That
+ * was true of expressions and false of TYPES, and the asymmetry was a bug rather
+ * than a decision.
+ *
+ * A `type` alias in a path-imported module is registered by rename under its
+ * BARE name: rn_prepass_one qualifies a statement only when rn_stmt_mod names its
+ * module, and rn_stmt_mod reads `mods`, which native_resolve fills with "" for
+ * every path import (and the note above `type Origin` says so). A reference to
+ * that alias is written `m.T`, which the parser keeps as a tname spelled "m.T"
+ * and which nothing had rewritten. So `let p: m.Pair` was "unknown type" and
+ * `let p: Pair` worked -- two spellings of one declaration, in a language that
+ * documents a path import as flattened. */
+Yv *strip_type(Yv *t, Yv *imports) {
+    Yv *k = yr_get(t, "k");
+    if (yv_l(k) == K_tname) {
+        return yr(2, "k", yv_long(K_tname), "name",
+                  strip_ns_name(yr_get(t, "name"), imports));
+    } else if (yv_l(k) == K_tptr) {
+        return yr(2, "k", yv_long(K_tptr), "to",
+                  strip_type(yr_get(t, "to"), imports));
+    } else if (yv_l(k) == K_tarr) {
+        return yr(2, "k", yv_long(K_tarr), "of",
+                  strip_type(yr_get(t, "of"), imports));
+    } else if (yv_l(k) == K_tarrfix) {
+        return yr(3, "k", yv_long(K_tarrfix), "of",
+                  strip_type(yr_get(t, "of"), imports), "n", yr_get(t, "n"));
+    } else if (yv_l(k) == K_topt) {
+        return yr(2, "k", yv_long(K_topt), "of",
+                  strip_type(yr_get(t, "of"), imports));
+    } else if (yv_l(k) == K_tmap) {
+        return yr(3, "k", yv_long(K_tmap), "key",
+                  strip_type(yr_get(t, "key"), imports), "of",
+                  strip_type(yr_get(t, "of"), imports));
+    } else if (yv_l(k) == K_tparams) {
+        return yr(2, "k", yv_long(K_tparams), "ts",
+                  strip_type_list(yr_get(t, "ts"), imports));
+    } else if (yv_l(k) == K_tunion) {
+        return yr(2, "k", yv_long(K_tunion), "ts",
+                  strip_type_list(yr_get(t, "ts"), imports));
+    } else if (yv_l(k) == K_tfunc) {
+        return yr(3, "k", yv_long(K_tfunc), "args",
+                  strip_type_list(yr_get(t, "args"), imports), "ret",
+                  strip_type(yr_get(t, "ret"), imports));
+    } else if (yv_l(k) == K_trec) {
+        Yv *fs = yav(0);
+        Yv *fields = yr_get(t, "fields");
+        long j = 0;
+        while (j < yv_len(fields)) {
+            Yv *f = ya_get(fields, j);
+            fs = ya_push(fs,
+                         yr(3, "name", yr_get(f, "name"), "opt", yr_get(f, "opt"),
+                            "typ", strip_type(yr_get(f, "typ"), imports)));
+            j = j + 1;
+        }
+        return yr(2, "k", yv_long(K_trec), "fields", fs);
+    } else {
+        return t;
+    }
+}
+
+Yv *strip_type_list(Yv *ts, Yv *imports) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(ts)) {
+        out = ya_push(out, strip_type(ya_get(ts, i), imports));
+        i = i + 1;
+    }
+    return out;
+}
+
 Yv *strip_list(Yv *nodes, Yv *imports) {
     Yv *out = yav(0);
     long i = 0;
@@ -2547,8 +2637,8 @@ Yv *strip_ns(Yv *node, Yv *imports) {
         return strip_decl(node, imports);
     } else if (yv_l(k) == K_func) {
         return normnode(yr(9, "k", yv_long(K_func), "params", yr_get(node, "params"),
-                           "ptypes", yr_get(node, "ptypes"), "ret",
-                           yr_get(node, "ret"), "body",
+                           "ptypes", strip_type_list(yr_get(node, "ptypes"), imports),
+                           "ret", strip_type(yr_get(node, "ret"), imports), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col"),
                            "defs", yr_get(node, "defs"), "label",
@@ -2669,7 +2759,7 @@ Yv *strip_decl(Yv *node, Yv *imports) {
     } else {
         return normnode(yr(7, "k", yv_long(K_decl), "kind", yr_get(node, "kind"),
                            "name", yr_get(node, "name"), "typ",
-                           yr_get(node, "typ"), "v",
+                           strip_type(yr_get(node, "typ"), imports), "v",
                            strip_ns(yr_get(node, "v"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col")));
     }

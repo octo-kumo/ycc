@@ -296,7 +296,9 @@ Instruction counts are exact.
 
 splice imports, pick the std units → per unit (the program's, each
 package's under `ycc build` unless its object in `build/obj` is current,
-and each std unit unless the std pack has it): strip namespaces → rename
+and each std unit unless the std pack has it): strip namespaces (`strip_ns` for
+nodes, `strip_type` for the annotations on them — a path import flattens both,
+and a qualified `m.T` used to be rejected where the bare `T` compiled) → rename
 (uniquify) → typecheck (static, errors fatal) → lint (`lint.y`:
 warnings, to stderr; the program's unit and packages, never a std unit)
 → hoist → emit bodies →

@@ -987,7 +987,35 @@ names, then the program's. `fs.x` is resolved there too (`rn_qualified`):
 when `fs` is a module and no binding named `fs` is in scope, it is the
 name `fs.x`; a local `fs` keeps its field. find_dup qualifies the same
 way, so only files imported by path, which share the program's
-namespace (strip_ns rewrites `util.f` to `f`), can collide. A module's
+namespace (strip_ns rewrites `util.f` to `f`), can collide.
+
+**A path import flattens types as well as expressions.** `strip_ns` has two
+entry points and they used to disagree: `strip_ns` for nodes, and
+`strip_type` for the annotations on them (`Decl.typ`, `Func.ptypes`,
+`Func.ret`), reached from `strip_decl` and the `K.func` arm. A module
+imported by path contributes no name to the origin map's `mods` — its
+names are already flat — so `rn_stmt_mod` returns `""` for its
+statements and `rn_prepass_one` registers its type aliases under their
+BARE names. A reference written `m.T` arrives from the parser as a tname
+spelled `"m.T"` (`parse_type`, `m.T` branch), and before `strip_type`
+nothing rewrote it: `let p: m.Pair` was `unknown type 'm.Pair'` while
+`let p: Pair` compiled. Two spellings of one declaration in a language
+that documents a path import as flattened.
+
+So `strip_ns_name` drops the `m.` from `m.T` when `m` is in the import
+list, and `strip_type` applies it through every arm of the type union —
+`tname`, `tptr`, `tarr`, `tarrfix`, `topt`, `tmap`, `tparams`, `tunion`,
+`tfunc`, `trec` — so a nested annotation flattens at any depth. A
+PACKAGE-qualified name is left alone: a package is linked as a unit of
+its own, so `pkg_ns` keeps its qualification on purpose.
+
+Cost: one extra walk of every annotation the program writes, whether or
+not any of them is qualified. `bench/compile_ir.sh` on the fix:
++0.03% of the instructions `ycc.y` takes to compile itself, +0.05% at
+the most (std_struct.y), +0.01% at the least. `native/t216_strip_ns_types.y`
+checks every arm.
+
+A module's
 type aliases are scoped the same way: `rn_prepass_one` registers one as
 `m.T`, the names of the module's other top-level aliases in its type
 qualified too (`rn_qual_type`, from the list `rn_top` makes), and
