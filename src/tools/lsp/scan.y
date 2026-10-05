@@ -78,7 +78,7 @@ def is_single_op(c: byte) -> bool {
 def is_keyword(w: str) -> bool {
     w == "let" || w == "const" || w == "def" || w == "if" || w == "else" ||
     w == "while" || w == "for" || w == "foreach" || w == "in" || w == "return" ||
-    w == "break" || w == "continue" || w == "true" || w == "false"
+    w == "break" || w == "continue" || w == "native" || w == "true" || w == "false"
 }
 
 // Words the parser gives a meaning to in a particular shape. Not reserved: a

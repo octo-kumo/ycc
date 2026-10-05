@@ -154,7 +154,7 @@ def ys_self_pack() -> str {
 
 // --std-pack FILE: every std unit, compiled from source, framed for attaching.
 def ys_write_pack(path: str) -> long {
-    let pack = native.std_pack(native.std_units(native.std_unit_names(), ""));
+    let pack = std_pack(std_units(std_unit_names(), ""));
     let nd = tostring(len(pack));
     while (len(nd) < 8) { nd = "0" + nd; };
     if (len(nd) > 8) {

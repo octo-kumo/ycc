@@ -49,7 +49,7 @@ def externs_for(su: [Unit], snames: [str]) -> [Sym] {
 // this and is not exported; origin_at renders "path:line" and the line is
 // already known, so the path is everything up to the last colon.
 def file_of(o: Origin, ln: long) -> str {
-    let at = native.origin_at(o, ln, false);
+    let at = origin_at(o, ln, false);
     let cut = last_index_of(at, ":");
     if (cut < 0) { at } else { at[0:cut] }
 }
@@ -157,8 +157,8 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
         return out + gone
     }
 
-    let nr = native.native_resolve_x(src, dir, 0, true, path);
-    let su = native.std_units(nr.std, pack);
+    let nr = native_resolve_x(src, dir, 0, true, path);
+    let su = std_units(nr.std, pack);
 
     // nr.src is the SPLICED text: this document with every import inlined ahead
     // of it. That is what has to be parsed -- parsing the buffer on its own
@@ -173,7 +173,7 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
 
     // strip_ns + rename are the two passes compile_unit runs before the
     // checker; both are exported, so the pipeline can be driven directly.
-    let ast2: Block = native.strip_ns(ast, nr.imports);
+    let ast2: Block = strip_ns(ast, nr.imports);
     let ast3 = rename.rename_program_x(ast2, [], nr.origin.file, nr.origin.mods);
 
     let ext = externs_for(su, nr.std);

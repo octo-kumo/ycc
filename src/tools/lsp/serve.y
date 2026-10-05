@@ -795,7 +795,7 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
         // The builtins come from the compiler's own list (native.intrinsic_names),
         // not from a copy here, so a builtin added to the compiler appears here
         // without anything being updated on this side.
-        let bnames = native.intrinsic_names();
+        let bnames = intrinsic_names();
         foreach (b in bnames) {
             // Three of the list's entries are the compiler's own halves rather
             // than names a person writes: `opt$test`/`opt$val` back the option

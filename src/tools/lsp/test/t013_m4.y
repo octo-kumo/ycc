@@ -271,7 +271,7 @@ print("-- the builtins come from the compiler's own list");
 // typable one must be offered. The list is read from the compiler rather than
 // kept here, so this cannot drift by construction -- the assertion is that the
 // filter did not drop something typable.
-let bnames = native.intrinsic_names();
+let bnames = intrinsic_names();
 let bad = 0;
 let typable = 0;
 foreach (b in bnames) {
