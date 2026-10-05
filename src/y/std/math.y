@@ -1116,9 +1116,27 @@ def cosh(x: float) -> float {
         inf
     } else {
         let a = if (x < 0.0) { 0.0 - x } else { x };
-        // the sum, not the difference: the two expm1 terms cancel their
-        // leading parts and leave a^2, and what is left is what cosh is
-        1.0 + ((expm1(a) + expm1(0.0 - a)) * 0.5)
+        if (a < 0.5) {
+            // the sum, not the difference: the two expm1 terms cancel their
+            // leading parts and leave a^2, and what is left is what cosh is.
+            // Below half the two are small and near each other, so the absolute
+            // error of their sum is a fraction of an ulp of the answer.
+            1.0 + ((expm1(a) + expm1(0.0 - a)) * 0.5)
+        } else {
+            // HALF ON EACH TERM, not on the sum. e^a + e^-a is rounded at the
+            // size of e^a, which for a >= 0.5 is twice the size of cosh, so
+            // halving afterwards leaves an error of a whole ulp of the answer;
+            // halving each term first is exact and the sum is then rounded once
+            // at the size of the answer. One line, and cosh(-1.88) stopped
+            // being two ulps out.
+            // ONE exp and its reciprocal, not two exps: e^-a is 1.2% of the
+            // answer at a >= 0.5, so its own rounding is a hundredth of an ulp
+            // of the answer, while a second exp() call would bring its whole
+            // error along -- and exp is a ulp out at some arguments, which is
+            // what had cosh(-1.88) sitting two ulps away.
+            let t = exp(a);
+            t * 0.5 + 0.5 / t
+        }
     }
 };
 
@@ -1358,12 +1376,20 @@ def log2_dd(x: float) -> float {
         // the two terms are of very different sizes -- the small one is the
         // kernel's, the big one is e*ln2 -- and the rounding that matters is
         // the big one's, so that is the one two_sum keeps track of
-        let a = z * (2.0 + w * poly_split(log_k, log_kl, w));
+        //
+        // `a` is two_sum(2.0 * z, (z * w) * P) and NOT z * (2.0 + w * P). They
+        // are the same function, but the brackets in the second one round at
+        // the SIZE OF 2.0 -- a whole ulp of the logarithm -- and pow multiplies
+        // this logarithm by the exponent, so that one rounding was three ulps
+        // of pow(23.85, 5.6) and nothing else was. Scaling by two is exact and
+        // (z*w)*P is two orders smaller, so the two_sum carries it instead.
+        let a = two_sum(2.0 * z, (z * w) * poly_split(log_k, log_kl, w));
+        let a_lo = ts_lo;
         let b = two_sum(ef * ln2_hi, ef * ln2_lo);
         let bc_lo = ts_lo;
         let t = two_sum(a, b);
         log2_hi = t;
-        log2_lo = ts_lo + bc_lo;
+        log2_lo = ts_lo + a_lo + bc_lo;
         t
     }
 };

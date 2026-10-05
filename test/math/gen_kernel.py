@@ -294,6 +294,50 @@ def sexact(w):
     return sx / (r * w)
 
 
+# ── asin's kernel, for the half of the argument above 1/2 ──
+#
+# asin(a) = pi/2 - 2*asin(sqrt((1-a)/2)) and the inner asin is small, so with
+# z = (1-a)/2 in (0, 1/4] the whole of it is 2*asin(sqrt(z)) = 2*sqrt(z)*(1 +
+# z*P(z)) -- the same shape as every other kernel here, with `2*sqrt(z)` the
+# term already in hand. asin used to reach atan instead, and inherited atan's
+# whole ulp on top of the sqrt's and the divide's, which is why asin(-0.719) sat
+# two ulps out while nothing else in the module did.
+AZMAX = D("0.25")
+DEG_ASIN = 20
+
+
+def asin_series(r):
+    # asin r = sum_k C(2k,k)/(4^k (2k+1)) r^(2k+1). `term` below is
+    # C(2k,k)/4^k * r^(2k+1) and the summand is term/(2k+1); the ratio between
+    # terms is r^2 (2k+1)/(2k+2), because C(2k+2,k+1)/4^(k+1) over
+    # C(2k,k)/4^k is (2k+1)/(2k+2).
+    total = D(0)
+    term = r
+    k = 0
+    while True:
+        add = term / (2 * k + 1)
+        total += add
+        if k > 4 and abs(add) < D(10) ** -70:
+            return total
+        term = term * r * r * (2 * k + 1) / (2 * k + 2)
+        k = k + 1
+
+
+def asinexact(z):
+    """P(z) for asin(s) = s * (1 + z*P(z)) with s = sqrt(z).
+
+    NO leading two: the module gets 2*asin(s) by doubling, and the doubling is
+    exact, so the kernel that carries it would be twice this one -- which is how
+    the first version of this was wrong, and it made every degree look like a
+    disaster.
+    """
+    z = dec(z)
+    if z == 0:
+        return D(1) / 6
+    s = z.sqrt()
+    return (asin_series(s) / s - 1) / z
+
+
 # ── atan's kernel in w = x^2: atan x = x*(1 + w*P(w)), |x| <= tan(pi/8) ──
 TMAX = D("0.41421356237309504880168872420969807856967187537694807317668")
 
@@ -323,3 +367,7 @@ if __name__ == "__main__":
 
     report("atan kernel", atanexact, 12, dec_frac(TMAX * TMAX),
            lambda k, w: math.sqrt(w) * (1.0 + w * k))
+
+    report("asin kernel", asinexact, DEG_ASIN, AZMAX,
+           lambda k, z: math.pi / 2.0
+           - (2.0 * math.sqrt(z) + (2.0 * math.sqrt(z)) * z * k))

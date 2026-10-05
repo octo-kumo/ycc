@@ -102,19 +102,30 @@ def is_two_arg(name: str) -> bool {
 
 // The tolerance, and why it is not one.
 //
-// Every function here is within ONE ulp of the edge cases this table pins down
-// -- the overflows, the flushes, the poles, the signed zeros, both sides of 1
-// -- and of more than 99% of its 1500-case spread. Six cases out of that spread
-// sit at two or three, and all six are the same two reasons: an answer that is a
-// sum of two accurately computed terms (cosh, asin, tanh), or the logarithm's
-// own error multiplied by an exponent (pow). Those would need either a fused
-// multiply-add or a fully compensated Horner -- both of which cost four times
-// the arithmetic in every kernel to move a handful of cases -- so they are
-// measured and bounded instead.
+// Every function here is within ONE ulp of every case in this table -- the
+// overflows, the flushes, the poles, the signed zeros, both sides of 1, and the
+// 1500-case spread -- with ONE exception: asin, at two ulps, at one argument.
 //
-// The bound is a measured one, not a wish: the worst gap and the function it
-// came from are printed, so anything past this is a regression and says so.
-let tolerance: long = 3;
+// That exception is a floor and not a shortfall, and the arithmetic is worth
+// setting out because it says no amount of work moves it. asin's large branch
+// is the half-angle identity asin(a) = pi/2 - 2*asin(sqrt((1-a)/2)), and
+// `two = 2*asin(s)` has to be a double before pi/2 - two can happen: its own
+// half-ulp is a whole ulp of the answer, and the subtraction's half-ulp is half
+// more. Measured over the branch, that is 2 ulps at the boundary where the two
+// branches meet -- and 2 ulps is what this table sees at a = 0.7188. Getting
+// under it means carrying `two` in two parts through the subtraction AND the
+// kernel exact enough to be worth carrying, which is a fused multiply-add's job
+// or an extended-precision evaluator's. This machine has neither, so the bound
+// is measured, printed, and gated on regression rather than wished away.
+//
+// It used to be 3, over four cases: cosh was two ulps off because it summed two
+// exponentials (one exponential and its reciprocal is enough -- the second is a
+// hundredth of the answer at the point it is used), and pow was 3 and 2 because
+// its logarithm formed `z * (2 + w*P)`, whose brackets round at the size of 2.0
+// -- a whole ulp of the logarithm, multiplied by the exponent. Writing that term
+// as a two_sum of 2*z and (z*w)*P took the logarithm's own residual down 2.3
+// times and both pow cases with it.
+let tolerance: long = 2;
 
 def main() -> long {
     let path = "";
