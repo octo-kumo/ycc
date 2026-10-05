@@ -1,0 +1,2 @@
+# a file with no final newline must parse the same
+forward 12 right 90 forward 12

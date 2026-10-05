@@ -14,5 +14,7 @@ Yv *pk_hash_new(void);
 long pk_hash_str(Yv *h, Yv *s);
 Yv *pk_hash_text(Yv *h);
 Yv *pk_self_id(void);
+long pk_exec(Yv *cmd);       /* exec(cmd): fork, /bin/sh -c, wait4 */
+int pk_exists(Yv *path);     /* exists(path) */
 
 #endif /* PKG_H */

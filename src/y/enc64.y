@@ -1022,6 +1022,10 @@ def need2(mn: str, ops: [Operand]) -> str {
 // `lng` is the branch form: false asks for the short (rel8) encoding, true for
 // rel32. Only jmp and the jcc family read it; everything else ignores it. See
 // enc_jmp for why it is a parameter and not the encoder's own decision.
+//
+// This is the TEXT path: the mnemonic arrives as a string and the arm is a
+// string compare. The emitter's own instructions come in as IR items and take
+// enc_form below instead, which dispatches on the form id.
 def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encoded {
     if (mn == "push") {
         let e = need1(mn, ops);
@@ -1214,7 +1218,124 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     }
 };
 
-// The types are exported too: enc_insn takes [Operand] and returns
+
+// The same encoders, dispatched on the IR's form id (Part 4 stage 2c): an item
+// names a form, not a mnemonic, so the arm is an integer compare rather than a
+// string one. Every arm is what enc_insn does for that mnemonic and those
+// operand kinds -- the form says statically what enc_insn has to test -- and
+// the ladder is generated from the form table and those rules (see the audit
+// note in the commit), so the two cannot drift apart by hand. `mn` is the
+// form's mnemonic: the ALU family, the shifts, the SSE arithmetic and the
+// unary ops key on it. `ops` are the item's operands in enc_insn's order (the
+// source first, as the assembly text spells them).
+def enc_form(buf: [byte], at: long, f: long, mn: str, ops: [Operand], lng: bool) -> Encoded {
+    if (f == 0) { enc_push(buf, at, ops[0]) }  // push O_REG
+    else if (f == 1) { enc_pop(buf, at, ops[0]) }  // pop O_REG
+    else if (f == 2) { enc_call(buf, at, ops[0]) }  // call O_LBL
+    else if (f == 3) { enc_call(buf, at, ops[0]) }  // call O_IND
+    else if (f == 4) { enc_jmp(buf, at, ops[0], lng) }  // jmp O_LBL
+    else if (f == 5) { enc_ok(put(buf, at, 195), []) }  // ret 
+    else if (f == 6) { enc_jcc(buf, at, 132, ops[0], lng) }  // je O_LBL
+    else if (f == 7) { enc_jcc(buf, at, 133, ops[0], lng) }  // jne O_LBL
+    else if (f == 8) { enc_jcc(buf, at, 132, ops[0], lng) }  // jz O_LBL
+    else if (f == 9) { enc_jcc(buf, at, 133, ops[0], lng) }  // jnz O_LBL
+    else if (f == 10) { enc_jcc(buf, at, 136, ops[0], lng) }  // js O_LBL
+    else if (f == 11) { enc_jcc(buf, at, 141, ops[0], lng) }  // jge O_LBL
+    else if (f == 12) { enc_jcc(buf, at, 142, ops[0], lng) }  // jle O_LBL
+    else if (f == 13) { enc_jcc(buf, at, 140, ops[0], lng) }  // jl O_LBL
+    else if (f == 14) { enc_jcc(buf, at, 143, ops[0], lng) }  // jg O_LBL
+    else if (f == 15) { enc_jcc(buf, at, 130, ops[0], lng) }  // jb O_LBL
+    else if (f == 16) { enc_jcc(buf, at, 137, ops[0], lng) }  // jns O_LBL
+    else if (f == 17) { enc_setcc(buf, at, 148, ops[0]) }  // sete O_REG
+    else if (f == 18) { enc_setcc(buf, at, 149, ops[0]) }  // setne O_REG
+    else if (f == 19) { enc_setcc(buf, at, 156, ops[0]) }  // setl O_REG
+    else if (f == 20) { enc_setcc(buf, at, 159, ops[0]) }  // setg O_REG
+    else if (f == 21) { enc_setcc(buf, at, 157, ops[0]) }  // setge O_REG
+    else if (f == 22) { enc_setcc(buf, at, 158, ops[0]) }  // setle O_REG
+    else if (f == 23) { enc_setcc(buf, at, 151, ops[0]) }  // seta O_REG
+    else if (f == 24) { enc_setcc(buf, at, 147, ops[0]) }  // setae O_REG
+    else if (f == 25) { enc_setcc(buf, at, 155, ops[0]) }  // setnp O_REG
+    else if (f == 26) { enc_setcc(buf, at, 154, ops[0]) }  // setp O_REG
+    else if (f == 27) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_REG O_REG
+    else if (f == 28) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_REG O_MEM
+    else if (f == 29) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_REG O_MEM
+    else if (f == 30) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_REG O_MEM0
+    else if (f == 31) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_REG O_MEM
+    else if (f == 32) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_MEM O_REG
+    else if (f == 33) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_MEM O_REG
+    else if (f == 34) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_MEM0 O_REG
+    else if (f == 35) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_MEM O_REG
+    else if (f == 36) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_IMM O_REG
+    else if (f == 37) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_IMM O_MEM
+    else if (f == 38) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_IMM O_MEM0
+    else if (f == 39) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_IMM O_MEM
+    else if (f == 40) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_DIFF O_REG
+    else if (f == 41) { enc_movb_reg(buf, at, ops[1], ops[0]) }  // movb O_REG O_MEM
+    else if (f == 42) { enc_movb_reg(buf, at, ops[1], ops[0]) }  // movb O_REG O_MEM0
+    else if (f == 43) { enc_movb_reg(buf, at, ops[1], ops[0]) }  // movb O_REG O_MEM
+    else if (f == 44) { enc_movb(buf, at, ops[1], ops[0]) }  // movb O_IMM O_MEM
+    else if (f == 45) { enc_movb(buf, at, ops[1], ops[0]) }  // movb O_IMM O_MEM0
+    else if (f == 46) { enc_movb(buf, at, ops[1], ops[0]) }  // movb O_IMM O_MEM
+    else if (f == 47) { enc_movq(buf, at, ops[1], ops[0]) }  // movq O_REG O_REG
+    else if (f == 48) { enc_movzbq(buf, at, ops[1], ops[0]) }  // movzbq O_REG O_REG
+    else if (f == 49) { enc_movzbq(buf, at, ops[1], ops[0]) }  // movzbq O_MEM O_REG
+    else if (f == 50) { enc_movzbq(buf, at, ops[1], ops[0]) }  // movzbq O_MEM0 O_REG
+    else if (f == 51) { enc_movzbq(buf, at, ops[1], ops[0]) }  // movzbq O_MEM O_REG
+    else if (f == 52) { enc_lea(buf, at, ops[1], ops[0]) }  // lea O_MEM O_REG
+    else if (f == 53) { enc_lea(buf, at, ops[1], ops[0]) }  // lea O_MEM O_REG
+    else if (f == 54) { enc_lea(buf, at, ops[1], ops[0]) }  // lea O_MEM O_REG
+    else if (f == 55) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // add O_IMM O_REG
+    else if (f == 56) { enc_arith(buf, at, mn, ops[1], ops[0]) }  // add O_REG O_REG
+    else if (f == 57) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // add O_IMM O_MEM
+    else if (f == 58) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // sub O_IMM O_REG
+    else if (f == 59) { enc_arith(buf, at, mn, ops[1], ops[0]) }  // sub O_REG O_REG
+    else if (f == 60) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // sub O_IMM O_MEM
+    else if (f == 61) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // xor O_IMM O_REG
+    else if (f == 62) {  // xor O_REG O_REG
+        if (op_size(ops[1]) == 32 && op_size(ops[0]) == 32) {
+            enc_xor32(buf, at, ops[1], ops[0])
+        } else {
+            enc_arith(buf, at, mn, ops[1], ops[0])
+        }
+    }
+    else if (f == 63) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // xor O_IMM O_MEM
+    else if (f == 64) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // and O_IMM O_REG
+    else if (f == 65) { enc_arith(buf, at, mn, ops[1], ops[0]) }  // and O_REG O_REG
+    else if (f == 66) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // and O_IMM O_MEM
+    else if (f == 67) { enc_arith(buf, at, mn, ops[1], ops[0]) }  // or O_REG O_REG
+    else if (f == 68) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // or O_IMM O_MEM
+    else if (f == 69) { enc_shift(buf, at, mn, ops[1], ops[0]) }  // shl O_IMM O_REG
+    else if (f == 70) { enc_shift(buf, at, mn, ops[1], ops[0]) }  // shl O_REG O_REG
+    else if (f == 71) { enc_shift(buf, at, mn, ops[1], ops[0]) }  // sar O_IMM O_REG
+    else if (f == 72) { enc_shift(buf, at, mn, ops[1], ops[0]) }  // sar O_REG O_REG
+    else if (f == 73) { enc_shift(buf, at, mn, ops[1], ops[0]) }  // shr O_IMM O_REG
+    else if (f == 74) { enc_shift(buf, at, mn, ops[1], ops[0]) }  // shr O_REG O_REG
+    else if (f == 75) { enc_alu_imm(buf, at, mn, ops[1], ops[0].v) }  // cmp O_IMM O_REG
+    else if (f == 76) { enc_arith(buf, at, mn, ops[1], ops[0]) }  // cmp O_REG O_REG
+    else if (f == 77) { enc_arith(buf, at, mn, ops[1], ops[0]) }  // test O_REG O_REG
+    else if (f == 78) { enc_imul(buf, at, ops[1], ops[0]) }  // imul O_REG O_REG
+    else if (f == 79) { enc_unary(buf, at, mn, ops[0]) }  // idiv O_REG
+    else if (f == 80) { enc_unary(buf, at, mn, ops[0]) }  // div O_REG
+    else if (f == 81) { enc_unary(buf, at, mn, ops[0]) }  // neg O_REG
+    else if (f == 82) { enc_unary(buf, at, mn, ops[0]) }  // not O_REG
+    else if (f == 83) { enc_unary(buf, at, mn, ops[0]) }  // inc O_REG
+    else if (f == 84) { enc_unary(buf, at, mn, ops[0]) }  // inc O_MEM
+    else if (f == 85) { enc_unary(buf, at, mn, ops[0]) }  // dec O_REG
+    else if (f == 86) { enc_unary(buf, at, mn, ops[0]) }  // dec O_MEM
+    else if (f == 87) { enc_xchg(buf, at, ops[0], ops[1]) }  // xchg O_REG O_MEM
+    else if (f == 88) { enc_ok(put2(buf, at, 15, 5), []) }  // syscall 
+    else if (f == 89) { enc_ok(put2(buf, at, 72, 153), []) }  // cqo 
+    else if (f == 90) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_FS O_REG
+    else if (f == 91) { enc_cvtsi2sd(buf, at, ops[1], ops[0]) }  // cvtsi2sd O_REG O_REG
+    else if (f == 92) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // divsd O_REG O_REG
+    else if (f == 93) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // mulsd O_REG O_REG
+    else if (f == 94) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // addsd O_REG O_REG
+    else if (f == 95) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // subsd O_REG O_REG
+    else if (f == 96) { enc_ucomisd(buf, at, ops[1], ops[0]) }  // ucomisd O_REG O_REG
+    else { enc_err(at, "unknown form '" + mn + "'") }
+};
+
+// The types are exported too: enc_insn and enc_form take [Operand] and return
 // Encoded, so a caller that wants to name either needs the name.
 export { Operand, Fixup, Encoded, MemTail, r64, reg_num, reg_size, enc_insn,
-         enc_branch_long, fixup, byte_of, scratch, le16, le32, le64 };
+         enc_form, enc_branch_long, fixup, byte_of, scratch, le16, le32, le64 };

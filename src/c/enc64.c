@@ -1114,6 +1114,9 @@ static Yv *need2(Yv *mn, Yv *ops) {
 /* `lng` is the branch form: 0 asks for the short (rel8) encoding, 1 for
    rel32. Only jmp and the jcc family read it; everything else ignores it.
    See enc_jmp for why it is a parameter and not the encoder's own decision. */
+/* The TEXT path: the mnemonic arrives as a string and the arm is a string
+ * compare. The emitter's own instructions come in as IR items and take
+ * enc_form below instead, which dispatches on the form id. */
 Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
     if (ys_eq_lit(mn, "push")) {
         Yv *e = need1(mn, ops);
@@ -1299,5 +1302,123 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
         return enc_ok(put(buf, at, 195), yav(0));
     } else {
         return enc_err(at, ys_cat(ys_cat(ys("unknown mnemonic '"), mn), ys("'")));
+    }
+}
+
+/* The same encoders, dispatched on the IR's form id (Part 4 stage 2c): an item
+ * names a form, not a mnemonic, so the arm is an integer compare rather than
+ * a string one. Every arm is what enc_insn does for that mnemonic and those
+ * operand kinds -- the form says statically what enc_insn has to test -- and
+ * the ladder is generated from the form table and those rules (see the audit
+ * note in the commit), so the two cannot drift apart by hand. `mn` is the
+ * form's mnemonic: the ALU family, the shifts, the SSE arithmetic and the
+ * unary ops key on it. `ops` are the item's operands in enc_insn's order (the
+ * source first, as the assembly text spells them). */
+Yv *enc_form(Yv *buf, long at, long f, Yv *mn, Yv *ops, int lng) {
+    if (f == 0) { return enc_push(buf, at, ya_get(ops, 0)); }  // push O_REG
+    else if (f == 1) { return enc_pop(buf, at, ya_get(ops, 0)); }  // pop O_REG
+    else if (f == 2) { return enc_call(buf, at, ya_get(ops, 0)); }  // call O_LBL
+    else if (f == 3) { return enc_call(buf, at, ya_get(ops, 0)); }  // call O_IND
+    else if (f == 4) { return enc_jmp(buf, at, ya_get(ops, 0), lng); }  // jmp O_LBL
+    else if (f == 5) { return enc_ok(put(buf, at, 195), yav(0)); }  // ret
+    else if (f == 6) { return enc_jcc(buf, at, 132, ya_get(ops, 0), lng); }  // je O_LBL
+    else if (f == 7) { return enc_jcc(buf, at, 133, ya_get(ops, 0), lng); }  // jne O_LBL
+    else if (f == 8) { return enc_jcc(buf, at, 132, ya_get(ops, 0), lng); }  // jz O_LBL
+    else if (f == 9) { return enc_jcc(buf, at, 133, ya_get(ops, 0), lng); }  // jnz O_LBL
+    else if (f == 10) { return enc_jcc(buf, at, 136, ya_get(ops, 0), lng); }  // js O_LBL
+    else if (f == 11) { return enc_jcc(buf, at, 141, ya_get(ops, 0), lng); }  // jge O_LBL
+    else if (f == 12) { return enc_jcc(buf, at, 142, ya_get(ops, 0), lng); }  // jle O_LBL
+    else if (f == 13) { return enc_jcc(buf, at, 140, ya_get(ops, 0), lng); }  // jl O_LBL
+    else if (f == 14) { return enc_jcc(buf, at, 143, ya_get(ops, 0), lng); }  // jg O_LBL
+    else if (f == 15) { return enc_jcc(buf, at, 130, ya_get(ops, 0), lng); }  // jb O_LBL
+    else if (f == 16) { return enc_jcc(buf, at, 137, ya_get(ops, 0), lng); }  // jns O_LBL
+    else if (f == 17) { return enc_setcc(buf, at, 148, ya_get(ops, 0)); }  // sete O_REG
+    else if (f == 18) { return enc_setcc(buf, at, 149, ya_get(ops, 0)); }  // setne O_REG
+    else if (f == 19) { return enc_setcc(buf, at, 156, ya_get(ops, 0)); }  // setl O_REG
+    else if (f == 20) { return enc_setcc(buf, at, 159, ya_get(ops, 0)); }  // setg O_REG
+    else if (f == 21) { return enc_setcc(buf, at, 157, ya_get(ops, 0)); }  // setge O_REG
+    else if (f == 22) { return enc_setcc(buf, at, 158, ya_get(ops, 0)); }  // setle O_REG
+    else if (f == 23) { return enc_setcc(buf, at, 151, ya_get(ops, 0)); }  // seta O_REG
+    else if (f == 24) { return enc_setcc(buf, at, 147, ya_get(ops, 0)); }  // setae O_REG
+    else if (f == 25) { return enc_setcc(buf, at, 155, ya_get(ops, 0)); }  // setnp O_REG
+    else if (f == 26) { return enc_setcc(buf, at, 154, ya_get(ops, 0)); }  // setp O_REG
+    else if (f == 27) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_REG
+    else if (f == 28) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM
+    else if (f == 29) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM
+    else if (f == 30) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM0
+    else if (f == 31) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM
+    else if (f == 32) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM O_REG
+    else if (f == 33) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM O_REG
+    else if (f == 34) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM0 O_REG
+    else if (f == 35) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM O_REG
+    else if (f == 36) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_REG
+    else if (f == 37) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_MEM
+    else if (f == 38) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_MEM0
+    else if (f == 39) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_MEM
+    else if (f == 40) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_DIFF O_REG
+    else if (f == 41) { return enc_movb_reg(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_REG O_MEM
+    else if (f == 42) { return enc_movb_reg(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_REG O_MEM0
+    else if (f == 43) { return enc_movb_reg(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_REG O_MEM
+    else if (f == 44) { return enc_movb(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_IMM O_MEM
+    else if (f == 45) { return enc_movb(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_IMM O_MEM0
+    else if (f == 46) { return enc_movb(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_IMM O_MEM
+    else if (f == 47) { return enc_movq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movq O_REG O_REG
+    else if (f == 48) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_REG O_REG
+    else if (f == 49) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_MEM O_REG
+    else if (f == 50) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_MEM0 O_REG
+    else if (f == 51) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_MEM O_REG
+    else if (f == 52) { return enc_lea(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // lea O_MEM O_REG
+    else if (f == 53) { return enc_lea(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // lea O_MEM O_REG
+    else if (f == 54) { return enc_lea(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // lea O_MEM O_REG
+    else if (f == 55) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // add O_IMM O_REG
+    else if (f == 56) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // add O_REG O_REG
+    else if (f == 57) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // add O_IMM O_MEM
+    else if (f == 58) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // sub O_IMM O_REG
+    else if (f == 59) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // sub O_REG O_REG
+    else if (f == 60) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // sub O_IMM O_MEM
+    else if (f == 61) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // xor O_IMM O_REG
+    else if (f == 62) {  // xor O_REG O_REG
+        if (op_size(ya_get(ops, 1)) == 32 && op_size(ya_get(ops, 0)) == 32) {
+        return enc_xor32(buf, at, ya_get(ops, 1), ya_get(ops, 0));
+        } else {
+        return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0));
+        }
+    }
+    else if (f == 63) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // xor O_IMM O_MEM
+    else if (f == 64) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // and O_IMM O_REG
+    else if (f == 65) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // and O_REG O_REG
+    else if (f == 66) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // and O_IMM O_MEM
+    else if (f == 67) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // or O_REG O_REG
+    else if (f == 68) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // or O_IMM O_MEM
+    else if (f == 69) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shl O_IMM O_REG
+    else if (f == 70) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shl O_REG O_REG
+    else if (f == 71) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // sar O_IMM O_REG
+    else if (f == 72) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // sar O_REG O_REG
+    else if (f == 73) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shr O_IMM O_REG
+    else if (f == 74) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shr O_REG O_REG
+    else if (f == 75) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // cmp O_IMM O_REG
+    else if (f == 76) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // cmp O_REG O_REG
+    else if (f == 77) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // test O_REG O_REG
+    else if (f == 78) { return enc_imul(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // imul O_REG O_REG
+    else if (f == 79) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // idiv O_REG
+    else if (f == 80) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // div O_REG
+    else if (f == 81) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // neg O_REG
+    else if (f == 82) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // not O_REG
+    else if (f == 83) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // inc O_REG
+    else if (f == 84) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // inc O_MEM
+    else if (f == 85) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // dec O_REG
+    else if (f == 86) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // dec O_MEM
+    else if (f == 87) { return enc_xchg(buf, at, ya_get(ops, 0), ya_get(ops, 1)); }  // xchg O_REG O_MEM
+    else if (f == 88) { return enc_ok(put2(buf, at, 15, 5), yav(0)); }  // syscall
+    else if (f == 89) { return enc_ok(put2(buf, at, 72, 153), yav(0)); }  // cqo
+    else if (f == 90) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_FS O_REG
+    else if (f == 91) { return enc_cvtsi2sd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // cvtsi2sd O_REG O_REG
+    else if (f == 92) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // divsd O_REG O_REG
+    else if (f == 93) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // mulsd O_REG O_REG
+    else if (f == 94) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // addsd O_REG O_REG
+    else if (f == 95) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // subsd O_REG O_REG
+    else if (f == 96) { return enc_ucomisd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // ucomisd O_REG O_REG
+    else {
+        return enc_err(at, ys_cat(ys_cat(ys("unknown form '"), mn), ys("'")));
     }
 }

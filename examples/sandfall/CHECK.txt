@@ -1,0 +1,193 @@
+sandfall --check: property check, no reference file involved
+  the physics under test: one generation is ONE scan of the interior,  rows BOTTOM to TOP, left to right within a row, updating the grid IN  PLACE, with a per-generation stamp so that no grain moves twice.
+
+  C0  non-vacuity: the counters are counting something
+    the test box is 40 x 24 = 960 cells, and it built: true
+    observed at generation 0: stone 80  sand 50  water 42  oil 0  fire 0  smoke 0
+    ok   the test box's geometry fitted the constants
+    ok   the box has stone on it before anything is counted
+    ok   the box has sand on it before anything is counted
+    ok   the box has water on it before anything is counted
+    ok   the logical grid has BW*BH cells
+    ok   MATTER is non-zero, so `matter` is a real quantity here
+
+  C1  stone, sand and water are conserved at EVERY generation
+    ok   the test box's geometry fitted the constants above
+    ok   stone at generation 0 (got 80, want 80)
+    ok   sand at generation 0 (got 50, want 50)
+    ok   water at generation 0 (got 42, want 42)
+    ok   matter at generation 0 (got 172, want 172)
+    over 300 generations, checked at every one of them
+    ok   generations where the stone count was wrong (got 0, want 0)
+    ok   generations where the sand count was wrong (got 0, want 0)
+    ok   generations where the water count was wrong (got 0, want 0)
+    ok   generations where the matter total was wrong (got 0, want 0)
+    ok   generations where matter + empty != w*h (got 0, want 0)
+    ok   stone at generation 300 (got 80, want 80)
+    ok   sand at generation 300 (got 50, want 50)
+    ok   water at generation 300 (got 42, want 42)
+    every expected total above came from this file's geometry, never from grid.CNT[]: 80 stone, 50 sand, 42 water
+
+  C2  THE UPDATE ORDER: in place, bottom row first, one move per grain
+    C2a  one sand grain at (6, 2); the floor is 10 rows below it
+    ok     generation 0: it is on row 2 (got 2, want 2)
+    ok     generation 1: it is on row 3 (got 3, want 3)
+    ok     generation 2: it is on row 4 (got 4, want 4)
+    ok     generation 3: it is on row 5 (got 5, want 5)
+    ok     generation 4: it is on row 6 (got 6, want 6)
+    ok     generation 5: it is on row 7 (got 7, want 7)
+    ok     generation 6: it is on row 8 (got 8, want 8)
+    ok     generation 7: it is on row 9 (got 9, want 9)
+    ok     generation 8: it is on row 10 (got 10, want 10)
+    ok     generation 9: it is on row 11 (got 11, want 11)
+    ok     generation 10: it is on row 12 (got 12, want 12)
+    ok     generation 11: it is on row 13 (got 13, want 13)
+    ok     generation 12: it is on row 13 (got 13, want 13)
+    ok     generation 13: it is on row 13 (got 13, want 13)
+    ok   C2a  and it is still on that row 10 generations later (got 13, want 13)
+    C2b  a stack of 4 grains on rows 4..7, 3 empty rows below them, and the floor on row 11
+    ok     the top of the stack is on row 4 (got 4, want 4)
+    ok     generation 1: the top of the stack is on row 5 (got 5, want 5)
+    ok     generation 2: the top of the stack is on row 6 (got 6, want 6)
+    ok     generation 3: the top of the stack is on row 7 (got 7, want 7)
+    ok   C2b  landed: the top of the pile is on row 8, which is as high as a four-grain pile on that floor can be (got 8, want 8)
+    ok   C2b  all four grains are still there (got 4, want 4)
+    ok   C2b  and 20 generations later the top of the pile has not risen (row 9)
+    ok   C2b  and no grain left the box (got 4, want 4)
+    C2c  every cell a grain arrived at this generation, and how far it came
+    over 30 generations of a 60x30 drop: 2926 cells were arrived at, 735 were vacated, and the largest single-generation displacement was 1 column(s) across and 1 row(s) down
+    ok   C2c  the check saw real motion (2926 arrivals), so it is not vacuous
+    ok   C2c  no grain crossed more than one column in a generation (max 1)
+    ok   C2c  and no grain fell more than one row in a generation (max 1)
+    ok   C2c  and the column bound is TIGHT: some grain used all of it
+    ok   C2c  and the row bound is tight too
+    ok   C2c  every cell a grain arrived at had that material beside it in the previous generation (got 0, want 0)
+    ok   C2c  cells were vacated (735)
+    ok   C2c  no more grains moved than there were holes to move into (2926 moved, 735 vacated, the difference being vacancies refilled in the same generation)
+    C2e  a grain in a one-cell pocket, which it may not drain out of
+    ok     one grain in the pocket (got 1, want 1)
+    ok     after 12 generations it is still in the pocket at (4, 7) (got 2, want 2)
+    ok     and no grain was left behind elsewhere (got 1, want 1)
+    ok     and it did not drain into (3, 8) (got 0, want 0)
+    ok     or into (5, 8) (got 0, want 0)
+    over 200 generations of the burning scene (1909 fire/smoke cells appeared)
+    ok   C2d  the burning check saw fire and smoke appear
+    ok   C2d  every new fire or smoke puff had fire, smoke or oil beside it (got 0, want 0)
+
+  C3  a closed box reaches a FIXED POINT, and the fixed point is verified
+    ok   the burning test box built
+    the box holds 172 cells of inert matter plus 15 volatile, in 40 x 24
+    ok   the box reached a generation that changed nothing within 3000 generations
+    settled at generation 71, of at most 3000
+    at the fixed point: 50 sand, 42 water, 0 oil, 0 fire, 0 smoke; checksum -2195173838466551995
+    ok   the fixed point's checksum is non-zero
+    ok   the fixed point still has matter on it, so it is not a blank grid
+    ok   every fire has burned out (got 0, want 0)
+    ok   every smoke puff has vanished (got 0, want 0)
+    ok   generations in the next 20 that changed the grid at all (got 0, want 0)
+
+  C4  monotone invariants, checked at EVERY generation
+    sand and water only ever move down, over 400 generations
+    ok   generations where sum(sand y) went DOWN (got 0, want 0)
+    ok   generations where sum(water y) went DOWN (got 0, want 0)
+    ok   generations where sum(stone y) moved at all (got 0, want 0)
+    ok   generations where the topmost sand row went UP (got 0, want 0)
+    sum(sand y) rose by 370 over the run, and fell on none of them
+    with fire: the volatile total and the inert counts over 800 generations (it started at 9)
+    ok   C4  there was a volatile total to protect in the first place (9)
+    ok   generations where the volatile total grew (got 0, want 0)
+    ok   generations where fire changed the stone count (got 0, want 0)
+    ok   generations where fire changed the sand count (got 0, want 0)
+    ok   the volatile total is zero once the fire is out (got 0, want 0)
+
+  C5  sand falls DOWN and never up, absent a source
+    one grain at (7, 1), the floor is on row 17, and there is no source above it
+    ok     generation 1: it is on row 2 (got 2, want 2)
+    ok     generation 2: it is on row 3 (got 3, want 3)
+    ok     generation 3: it is on row 4 (got 4, want 4)
+    ok     generation 4: it is on row 5 (got 5, want 5)
+    ok     generation 5: it is on row 6 (got 6, want 6)
+    ok     generation 6: it is on row 7 (got 7, want 7)
+    ok     generation 7: it is on row 8 (got 8, want 8)
+    ok     generation 8: it is on row 9 (got 9, want 9)
+    ok     generation 9: it is on row 10 (got 10, want 10)
+    ok     generation 10: it is on row 11 (got 11, want 11)
+    ok     generation 11: it is on row 12 (got 12, want 12)
+    ok     generation 12: it is on row 13 (got 13, want 13)
+    ok     generation 13: it is on row 14 (got 14, want 14)
+    ok     generation 14: it is on row 15 (got 15, want 15)
+    ok     generation 15: it is on row 16 (got 16, want 16)
+    ok     generation 16: it is on row 17 (got 17, want 17)
+    ok   generations in which this grain moved UP (got 0, want 0)
+    ok   it came to rest on the floor (got 17, want 17)
+    ok   and it is still there 20 generations later (got 17, want 17)
+    ok   generations of a 6x6 block in which the topmost sand row rose (got 0, want 0)
+
+  C6  water spreads sideways and does not pile
+    ok   the pour landed: one column of 12 cells, all of it water (got 12, want 12)
+    ok   and it starts in exactly one column (got 1, want 1)
+    ok   the pour settled
+    it settled at generation 14
+    after settling: 6 columns of water from x=13 to x=18; surface rows 14..16 (2 row(s) of relief); tallest column 3, shortest non-empty 3
+    ok   C6  the settled pool spans more than one column (x=13..18)
+    ok   C6  the pool has a surface above its bottom row (rows 14..16)
+    ok   C6  the tallest column is non-zero (3)
+    ok   C6  the shortest non-empty column is non-zero (3)
+    ok   C6  there were adjacent columns to compare at all (otherwise the levelling measurement would have nothing to say)
+    ok   C6  the water SPREAD: it is no longer in one column (was 1, now 6)
+    ok   C6  and it spread across at least 3 columns
+    ok   C6  the pool still covers the column it was poured into (15)
+    ok   C6  and it is centred on it to within 2 columns (2 to the left, 3 to the right)
+    ok   C6  every pair of adjacent columns differs by at most 1, so it levelled instead of staying a comb (got 1, want 1)
+    ok   C6  and there is no run of more than 1 empty column inside it, so it stayed one body (longest run 0)
+    its bounding box is 6x3 with 6 empty cells in it, which is the staircase a point pour makes
+    ok   C6  its surface is flat to within 2 rows (relief 2)
+    ok   C6  it did not PILE: no column is more than 2 taller than the shortest non-empty one
+    ok   no water was created or lost doing it (got 12, want 12)
+
+  C7  the same seed gives the identical grid, and different seeds differ
+    scene terrain at 48 x 28, seed 1 twice and seed 7 twice
+      seed 1: 1690256502013328429, then 1690256502013328429
+      seed 7: 5588118030006729940, then 5588118030006729940
+    ok   the seed-1 grid's checksum is non-zero
+    ok   the seed-7 grid's checksum is non-zero
+    ok   seed 1 twice gives the identical grid (got 1690256502013328429, want 1690256502013328429)
+    ok   seed 7 twice gives the identical grid (got 5588118030006729940, want 5588118030006729940)
+    ok   seed 1 and seed 7 give DIFFERENT grids, so --seed is not ignored
+    scene terrain, seed 3: generation 0 was -1871860882215856251 then -1871860882215856251; after 50 generations 7815389373251961933 then 7815389373251961933
+    ok   generation 0 matches for the same seed (got -1871860882215856251, want -1871860882215856251)
+    ok   generation 50 matches for the same seed (got 7815389373251961933, want 7815389373251961933)
+    ok   and 50 generations actually changed something
+    ok   all five built-in scenes build at 48x28 (got 5, want 5)
+
+  C8  the generation loop allocates nothing
+    scene basin at 64 x 32, 20000 generations: heap 1100608 -> 1100608
+    ok   the loop really ran 20000 generations, so a skipped loop cannot pass this (got 20000, want 20000)
+    ok   heap growth over those generations, in bytes (got 0, want 0)
+    ok   the second loop really ran 2000 generations (got 2000, want 2000)
+    ok   heap growth over 2000 step+tally pairs, in bytes (got 0, want 0)
+    ok   the grid still has matter on it, so the heap numbers above were not measured on a blank grid
+
+  C9  the ghost border is stone on every side, at every generation
+    the border is 176 cells of a 62 x 28 store
+    ok   generations in which a border cell was not stone (got 0, want 0)
+    ok   and it is still exactly the border at the end (got 176, want 176)
+    ok   2000 generations of firestorm later the border is still exactly the border (got 148, want 148)
+    ok   every cell of the logical grid is accounted for after those 2000 generations (got 1152, want 1152)
+
+  C10  two independent counters agree on the same grid
+    ok   the array tally's sand count (got 50, want 50)
+    ok   the rendered-string count of 'o' (got 50, want 50)
+    ok   the rendered-string count of '~' (got 42, want 42)
+    ok   the rendered-string count of '#' (interior floor plus the ghost border) (got 212, want 212)
+    ok   after 150 generations the string still sees 50 sand grains (got 50, want 50)
+    ok   after 150 generations the string still sees 42 water cells (got 42, want 42)
+    ok   the per-column water levels sum to the water count (got 42, want 42)
+
+  C11  this suite is not vacuous
+    assertions made: 135 (failures 0); generations exercised: 26675; cells in the test boxes: 960
+    ok   the suite made at least 90 assertions (it made 135)
+    ok   the suite examined cells (it examined 960)
+    ok   the suite exercised more than 1000 generations (it exercised 26675)
+    ok   no assertion failed
+RESULT PASS -- 139 assertions, 0 failed, 26675 generations, no reference file

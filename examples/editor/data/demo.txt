@@ -1,0 +1,12 @@
+the quick brown fox jumps over the lazy dog
+alpha beta gamma delta epsilon zeta eta theta
+one two three four five six seven eight nine ten
+a line with repeated repeated repeated words in it
+short
+the end of the file
+indented with four spaces
+	tab indented line
+café naïve résumé coöperate
+alpha beta gamma delta epsilon zeta eta theta
+the quick brown fox jumps over the lazy dog
+a "quoted phrase" to change
