@@ -3,7 +3,8 @@
  * native.y's `export { emit_program, compile_package, std_units,
  * std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface,
  * native_resolve, native_resolve_x, native_resolve_pk, origin_at,
- * strip_ns, strip_list, strip_decl, phase_end, link_text };` — exactly those
+ * strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name,
+ * intrinsic_names };` — exactly those
  * names.
  */
 #ifndef NATIVE_H
@@ -34,5 +35,10 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std,
 /* The parts emit_program returned, rendered as assembly text: what -S
  * prints. The assembler takes the parts themselves. */
 Yv *link_text(Yv *parts);
+/* The builtins, tested and enumerated. Exported for the language server's
+ * completion list: it must offer exactly the compiler's set, so it reads this
+ * list rather than keeping its own copy (see native.c's intrinsics). */
+int is_intrinsic_name(Yv *n);
+Yv *intrinsic_names(void);
 
 #endif /* NATIVE_H */

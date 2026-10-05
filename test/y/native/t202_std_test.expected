@@ -1,0 +1,116 @@
+
+the counters
+  ok    nothing has failed yet
+          the baseline is the starting point
+  ok    a passing check
+          and it counts
+  ok    so exactly one more check has run
+          got 1, want 1
+  ok    and no more failures
+          got 0, want 0
+  ok    two longs
+          got 5, want 5
+  ok    ck_eq on equal longs passes
+          and it counts as a check
+  ok    so the pair counted twice
+          got 2, want 2
+  ok    and still no failures
+          got 0, want 0
+
+ck_near is ck_eq with a tolerance
+  ok    measured
+          got 100, want 103 +/- 5 (off by 3)
+  ok    inside the tolerance passes
+          3 off, 5 allowed
+  ok    and did not fail
+          got 0, want 0
+  FAIL  measured
+          got 100, want 110 +/- 5 (off by 10)
+  ok    outside it fails
+          10 off, 5 allowed
+  ok    and counted one failure
+          got 1, want 1
+  ok    exact
+          got 42, want 42 +/- 0 (off by 0)
+  ok    a tolerance of 0 is exactness
+          0 off, 0 allowed
+  FAIL  exact
+          got 42, want 43 +/- 0 (off by 1)
+  ok    and one off fails it
+          1 off, 0 allowed
+  ok    two failures so far in this group
+          got 2, want 2
+
+ck_str
+  ok    a string
+          3 chars
+  ok    equal strings pass
+          3 chars
+  FAIL  a string
+          got abc, want abd
+  ok    unequal strings fail
+          abc against abd
+  ok    empty
+          0 chars
+  ok    an empty string is a string
+          0 chars
+  FAIL  empty
+          got , want  
+  ok    and differs from a space
+          so it is not treated as absent
+  ok    two failures in this group too
+          got 2, want 2
+
+ck_bytes
+  ok    four ones
+          4 B, want 4 B
+  ok    equal byte arrays pass
+          byte for byte
+  FAIL  four ones
+          4 B, want 3 B; got is 1 byte(s) longer
+  ok    a different length fails
+          4 B against 3 B
+  FAIL  four ones
+          4 B, want 4 B; first difference at byte 3: got 1, want 2
+  ok    the same length with one byte changed fails
+          the last byte differs
+  ok    two failures in this group
+          got 2, want 2
+  ok    empties
+          0 B, want 0 B
+  ok    two empty arrays are equal
+          so an absent result can be compared
+  FAIL  four against two
+          4 B, want 2 B; got is 2 byte(s) longer
+  ok    ck_bytes on a shorter WANT does not trap
+          reports that want is longer
+  FAIL  two against four
+          2 B, want 4 B; want is 2 byte(s) longer
+  ok    nor on a shorter GOT
+          reports that got is longer
+  ok    and both were reported, not fatal
+          got 2, want 2
+
+ck's detail is printed either way
+  ok    a passing check still prints its detail
+          this line appears under an ok
+  FAIL  a failing one prints it too
+          and this line appears under a FAIL
+
+group() names the section that follows
+  ok    a check inside a named group
+          reported under that name
+
+report
+  ok    the run has failures to report
+          this file fails checks on purpose so the FAIL path is visible
+  ok    and more passes than failures
+          and the rest passed
+
+38 of 47 checks passed
+  ok    report() answers 1 when anything failed
+          not the count -- so a caller can hand it straight to exit()
+  ok    and the counts are unchanged by reporting
+          reporting reads, it does not reset
+
+40 of 49 checks passed

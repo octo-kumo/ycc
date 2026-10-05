@@ -1561,6 +1561,20 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
         // insists on the top level (a nested one has no assembly to land in).
         parse_func(toks, p, true)
     }
+    else if (is_kw(toks, p, "break") || is_kw(toks, p, "continue")) {
+        // `break;` and `continue;` -- a jump out of, or to the next turn of,
+        // the innermost enclosing loop. Bare nodes: there is nothing to carry,
+        // so they are a `Bare` and the shape needs no union member.
+        //
+        // Only the keyword is consumed, and the `;` is left to the caller --
+        // exactly what `return` does below, and the reason it must: the caller
+        // is the one that eats the `;` and tolerates its absence before a `}`.
+        // Consuming it here as well makes the caller report "expected ';', got
+        // <the next statement>", which is what a first attempt did.
+        let kind = 0;
+        if (is_kw(toks, p, "break")) { kind = K.kw_break; } else { kind = K.kw_continue; };
+        res({ k: kind, line: tline(toks, p), col: tcol(toks, p) }, p + 1)
+    }
     else if (is_kw(toks, p, "return")) {
         if (is_punct(toks, p + 1, ";") || is_punct(toks, p + 1, "}") || tt(toks, p + 1) == "eof") {
             res({ k: K.ret, e: { k: K.void, line: tline(toks, p), col: tcol(toks, p) }, line: tline(toks, p), col: tcol(toks, p) }, p + 1)

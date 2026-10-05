@@ -1531,7 +1531,7 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
     // elf_bss_from_ro), so the fixups below only know two sections.
     let labs: [AsmLabel] = labels;
     if (bss_len > 0) {
-        let bshift = elf.elf_bss_from_ro(code_len, ro_len, bss_len);
+        let bshift = elf.elf_bss_from_ro(code_len, ro_len);
         labs = [];
         foreach (lb in labels) {
             if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off, at_item: lb.at_item }; }

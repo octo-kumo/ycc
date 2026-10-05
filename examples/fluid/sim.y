@@ -121,6 +121,7 @@
 // GRADIENT of p, and the gradient of a constant is zero.
 
 import fx;
+import random;
 
 // The store size.  A type position takes an integer LITERAL only, not a const,
 // so the array types below spell 32768 out; the constants carry the same values
@@ -157,7 +158,6 @@ type Field = {
     p: [long; 32768],
     dv: [long; 32768],
     om: [long; 32768],
-    rng: long,
     steps: long
 };
 
@@ -196,7 +196,7 @@ def new(w: long, h: long) -> Field {
         w: w, h: h, sw: w + 2, sh: h + 2, n: (w + 2) * (h + 2),
         u: a, v: b, u0: c, v0: d, dye: e, dye0: g,
         p: k, dv: m, om: o,
-        rng: 1, steps: 0
+        steps: 0
     };
     f
 };
@@ -731,28 +731,25 @@ def emit(f: Field, cx: long, cy: long, kq: long, inkq: long, rad: long) {
 // the initial condition
 // ------------------------------------------------------------------------
 
-// rnd(f) -> long -- xorshift32, returning [0, 2^30) so a value comes out in
-// [0, fx.ONE) and can be halved and centred into [-0.5, 0.5) cells/step.
+// The noise below is std's generator (import random at the top of this file):
+// this was `rnd(f)`, an xorshift32 whose 32 bits lived in the Field's `rng`
+// field, drawn as `f.rng >>> 2` for a value in [0, fx.ONE).  One Field exists
+// per program and it is mutated in place, so the 32-bit per-field state bought
+// nothing that std's one module-level stream does not; the `rng` field is gone
+// with it.  Only the DISTRIBUTION had to survive, and it did: a draw is still
+// uniform over [0, fx.ONE), which is what `random.below(fx.ONE)` is for.  fx.ONE
+// is a power of two, so below()'s rejection loop cannot reject.
 //
 // This is the ONLY randomness in the program and it is entirely seeded: the
 // state is a pure function of --seed, so the same seed reproduces the same
 // run byte for byte.  There is no unseeded path, not even in the interactive
 // mode, where the emitter follows a Lissajous curve whose phase comes from the
 // seed too.  (ORCHESTRATOR.md 1-B7.)
-def rnd(f: Field) -> long {
-    let x = f.rng;
-    x = x ^ ((x << 13) & 4294967295);
-    x = x ^ ((x >>> 17) & 4294967295);
-    x = x ^ ((x << 5) & 4294967295);
-    f.rng = x & 4294967295;
-    (f.rng >>> 2)
-};
-
-def mix(sd: long) -> long {
-    let x = (sd * 2654435761 + 1013904223) & 4294967295;
-    if (x == 0) { return 1; };
-    x
-};
+//
+// The old `mix(sd)` seed scrambler went with the generator: its only job was to
+// keep a --seed of 0 off a degenerate stream, and std's `seed()` offsets the
+// state by the golden-ratio constant before the first draw for exactly that
+// reason.  So --seed 0 is still a usable seed and still a distinct run.
 
 // seed(f, sd, iters) -- the initial perturbation.  Two coherent counter-rotating
 // vortices so there is structure at step 0, plus seeded noise at +-0.5 cells
@@ -775,7 +772,10 @@ def seed(f: Field, sd: long, iters: long) {
         f.dye0[i] = 0;
         i = i + 1
     };
-    f.rng = mix(sd);
+    // Re-seed on EVERY seed() call, not once at start-up: `r` (reset) and
+    // `clear` both come back here, and the whole point of them is to lay down
+    // the same field again from the same --seed.
+    random.seed(sd);
     f.steps = 0;
 
     // seeded noise: the small scales the two big vortices cannot supply
@@ -786,8 +786,8 @@ def seed(f: Field, sd: long, iters: long) {
         let j = r;
         let end = r + f.w;
         while (j < end) {
-            f.u[j] = (rnd(f) - fx.ONE / 2) / 2;
-            f.v[j] = (rnd(f) - fx.ONE / 2) / 2;
+            f.u[j] = (random.below(fx.ONE) - fx.ONE / 2) / 2;
+            f.v[j] = (random.below(fx.ONE) - fx.ONE / 2) / 2;
             j = j + 1
         };
         y = y + 1

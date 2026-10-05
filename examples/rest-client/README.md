@@ -31,8 +31,9 @@ acceptance gate runs it and fails on a non-zero exit, on a
 |---|---|
 | `rest-client.y` | the client, the scripted demo, the property check (`--self-test`), the TLS stage (`--tls-selftest`) and `--live` |
 | `server.y` | the loopback server: request parsing, routing, the JSON bodies, the accept loop |
-| `json.y` | a hand-rolled JSON parser over a fixed `[byte; 65536]` — no allocations, one entry point per operation |
+| `jint.y` | one function: a JSON number that has to *be* an integer, because `json.as_long` truncates |
 | `store.y` | the item store (fixed `[long; 16]` table) and its own counters, which the property check reads back over `X-Store` |
+| `json` | from std — this folder's own 626-line hand-rolled parser is gone |
 | `audit-str-append.py` | the `-S` audit described below; run it, do not eyeball the quadratic |
 | `gate.conf` | `build=`, `run=`, `check=` |
 | `EXPECTED` | the exact stdout of `run=` (5242 bytes) |
@@ -276,9 +277,11 @@ That is an argument, so the property check **measures it instead**:
 straight through that ceiling. Both the parse and the display measurement
 pass with room to spare.
 
-The response body is parsed **in place** over a fixed `[byte; 65536]` and
+The response body is parsed with **std's `json`** into a `json.Val` and
 printed with `puts`, so no string is grown inside a loop anywhere in the
-client.
+client. The parse itself allocates a tree now, where the old in-place reader
+allocated nothing; the property check still measures it, and the ceiling
+still holds with room to spare (see the 96 KB measurement above).
 
 ## TLS (`--tls-selftest`, optional)
 
@@ -369,12 +372,48 @@ Every one of these is visible in the code at the point it applies.
 | **`exec()` is `/bin/sh -c` with `envp = NULL`**, so the parent's environment is not inherited and a `kill` to the child leaves the grandchild alive. | `setsid` in the child, `kill(-pgid, …)`, and a port probe as the assertion. See the TLS section. | a documented property of `std/exec.y` |
 | **Traps print to stdout**, so one corrupts `EXPECTED` instead of failing. | Every error and argument-validation path prints to stderr and exits non-zero. | known (§2.6 of `ORCHESTRATOR.md`) |
 | **No `float` → `long`, no casts, no math functions.** | All arithmetic is integer; nothing in this example needs a float. | `examples/SUGGESTIONS.md` §2 |
-| **`[byte; 65536]` does not unify with `[byte]`**, so every buffer-taking helper needs the exact fixed size written out. | `json.y` takes `[byte; 65536]` explicitly and every caller says so; `json.doc_at` exists so the server can parse a body at an offset inside one big read buffer instead of copying it out. | `examples/SUGGESTIONS.md` §12 |
+| **`[byte; 65536]` does not unify with `[byte]`**, so every buffer-taking helper needs the exact fixed size written out. | `server.y`'s own helpers (`def write(b: [byte; 65536], …)`) take the exact size and every caller says so. This used to be argued from the JSON parser's parameter type; std's `parse_bytes` takes a plain `[byte]`, which a slice of the fixed buffer is, so the exact size is now checked by the slice bounds rather than by a parameter's declared type. | `examples/SUGGESTIONS.md` §12 |
 
-There is **no `json` module in the std library**, so `json.y` here is
-hand-written (22 KB). That is a gap in the language, not a defect, and it
-is not filed because the std library simply has none and the campaign has
-no JSON entry on the roadmap to restate.
+There **is** a `json` module in the std library now, and this folder uses
+it. `import json;` resolves to `std/json.y`; the local `json.y` (626 lines,
+22 KB) has been deleted. Three things are worth knowing about the swap:
+
+* **`json.as_long` truncates.** It answers 1 for `1.5` and 1 for `1e3`,
+  because Y has no float-to-long conversion and `as_long` reaches for
+  `tonum`, which reads the leading integer and stops. The old `json.int_at`
+  *refused* both, and refusing is the point here: a body that says
+  `qty` is `3.5` must not read back as `3`, or the server and its client
+  disagree about the data with nothing on the wire to show it. `jint.y` is
+  that refusal, re-implemented on the number's literal text (which is what a
+  `json.Val` keeps), with the old 13-digit bound so a value that would wrap a
+  long is an error rather than a wrapped lie. Both `server.y`'s
+  `parse_body()` and the client's `field_int()` go through it.
+* **Member order.** The old reader walked members in source order because it
+  walked the bytes. std's object is a map, and a Y map's `keys()` come back
+  in insertion order — which is the order the parser assigned them in. So a
+  document still walks out the way it came in, and `check_roundtrip()`
+  asserts it (`and the walk visited them in that order`).
+* **`show_body` re-emits instead of slicing bytes.** It prints
+  `json.stringify_val` rather than the bytes between two offsets. For a
+  server that writes canonical JSON — and this one does, with `jstr`'s
+  escapes — the two are the same bytes, which is why `EXPECTED` did not move.
+
+Two behaviours were checked and are *not* the same, both recorded rather
+than worked around:
+
+* **A duplicate key resolves to the LAST occurrence, not the first.** The
+  old `member()` returned the offset of the first match; a map assignment
+  overwrites. Nothing in this example sends a duplicate key, and JSON's own
+  guidance is that names SHOULD be unique, so this is a difference rather
+  than a regression — but a document with `{"a":1,"a":2}` now reads `a` as
+  2 where it read 1 before.
+* **The refusal positions differ by a byte or two on two inputs.** `[1,]`
+  reported the `]` (byte 4) and now reports byte 3; `{"a":1` reported byte
+  0 (`object never closed`, anchored at the `{`) and now reports byte 6,
+  where the input actually ran out. The reason text is std's rather than
+  this folder's — `unexpected '}'` instead of `expected , or } in an
+  object` — and it always names both the reason and the byte, which is what
+  `check_parser()`'s malformed set asserts.
 
 ## Bugs found *in this example's own code* while finishing it
 
@@ -397,20 +436,26 @@ green gate would have hidden:
   and returned -1, which the caller's "a negative is really zero" guard
   turned back into an empty body.
 * `server.y` called `json.doc(rbuf, body_at + body_len)` — handing the
-  *request head* to a JSON parser. `json.doc_at(b, at, end)` now exists.
-* `json.y`'s `nmembers` / `nelems` / `elem` / `nth_member` did not clear
-  `err` on entry, so a *stale* message from an earlier legitimate failure
-  made a later successful parse report `-1`.
-* `json.y`'s `nth_member` never incremented its member counter, so it
+  *request head* to a JSON parser. `json.doc_at(b, at, end)` existed for
+  exactly that; std's `parse` takes a `str`, so `parse_body()` now slices
+  the body out of `rbuf` first, which is the same job one step earlier.
+* the local `json.y`'s `nmembers` / `nelems` / `elem` / `nth_member` did not
+  clear `err` on entry, so a *stale* message from an earlier legitimate
+  failure made a later successful parse report `-1`.
+* that `json.y`'s `nth_member` never incremented its member counter, so it
   compared the first member against every `want` and returned `-1` for
   anything past member 0.
-* `json.y` matched `done` with `text_is`, which only recognises a *quoted*
-  word, so a real JSON boolean was unreadable and a body carrying
-  `"done": true` was refused. `json.bool_at` matches the literal.
+* that `json.y` matched `done` with `text_is`, which only recognises a
+  *quoted* word, so a real JSON boolean was unreadable and a body carrying
+  `"done": true` was refused. `json.as_bool` matches the literal.
 * The check itself had three wrong expectations: a "consumed all of it"
   comparison that did not allow for trailing whitespace, a store counter
   asserted as an absolute when the store was not fresh, and a "last element"
   assertion that was reading element 0.
+
+The first two are recorded because the code they describe no longer exists —
+it was std's `json` that replaced it. `json.as_bool`, `json.parse_err` and
+`json.get_arr` are the shapes that answer those three cases.
 
 ## Frozen toolkit
 
@@ -422,7 +467,7 @@ cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28
 ```
 
 Toolkit revision frozen: `examples/_toolkit` at tree commit `a42992c`.
-`json.y`, `server.y` and `store.y` are this example's own.
+`jint.y`, `server.y` and `store.y` are this example's own.
 
 ## The pinned compiler
 

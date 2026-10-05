@@ -49,7 +49,7 @@ static long elf_memsz(long filesz) {
     if (trail != 0) { return filesz + 4096 - trail; } else { return filesz; }
 }
 
-long elf_bss_from_ro(long code_len, long ro_len, long bss_len) {
+long elf_bss_from_ro(long code_len, long ro_len) {
     return elf_mem_code(code_len, ro_len) + 4096 - code_len;
 }
 

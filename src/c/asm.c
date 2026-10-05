@@ -30,7 +30,7 @@ extern Yv *enc_branch_long(Yv *buf, long at, long br, Yv *lbl); /* enc64.c: enc.
 extern Yv *scratch(void);                    /* enc64.c: enc.scratch */
 extern Yv *le64(long v);                    /* enc64.c: enc.le64 */
 extern Yv *le32(long v);                    /* enc64.c: enc.le32 */
-extern long elf_bss_from_ro(long code_len, long ro_len, long bss_len); /* elf.c: elf.elf_bss_from_ro */
+extern long elf_bss_from_ro(long code_len, long ro_len); /* elf.c: elf.elf_bss_from_ro */
 extern long elf_code_off(long bss_len);      /* elf.c: elf.elf_code_off */
 extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
                      Yv *syms, Yv *dsecs); /* elf.c: elf.elf_build */
@@ -1962,7 +1962,7 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
        elf_bss_from_ro), so the fixups below only know two sections. */
     Yv *labs = labels;
     if (bss_len > 0) {
-        long bshift = elf_bss_from_ro(code_len, ro_len, bss_len);
+        long bshift = elf_bss_from_ro(code_len, ro_len);
         labs = yav(0);
         long j = 0;
         while (j < yv_len(labels)) {

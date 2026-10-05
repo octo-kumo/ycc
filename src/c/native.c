@@ -137,6 +137,22 @@ static Yv *ty_sig_bkts;
 /* union_shared's answers in this unit, by the union's node. */
 static Yv *ush_nodes;
 static Yv *ush_vals;
+/* The innermost enclosing loop's `break` and `continue` targets, -1 outside any
+ * loop (2025). Labels are ids from labels.c, so -1 is the "none" marker and 0
+ * would not do: it is a real id. Module state rather than an EmitSt field, for
+ * the same reason the globals above are: EmitSt is rebuilt field by field at a
+ * dozen sites and another pair would have to be threaded through all of them.
+ *
+ * Set by the four loop generators just before the body and restored after, so
+ * nesting works -- an inner loop's targets are in force while its body is
+ * generated and the outer loop's are back for whatever follows.
+ *
+ * types.c has already refused a `break` that would cross a function boundary,
+ * so these are only ever read inside the function that set them; emit_one_fn
+ * clears them regardless, because relying on a check in another file to keep
+ * these two consistent is how a jump ends up in an unrelated body. */
+static long brk_label = -1;
+static long cont_label = -1;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
@@ -233,6 +249,7 @@ int uses_threads(Yv *refs);
 int uses_math(Yv *refs);
 int name_in(Yv *xs, Yv *n);
 int is_intrinsic_name(Yv *n);
+Yv *intrinsic_names(void);
 Yv *fv_walk(Yv *node, Yv *out, int collect);
 Yv *fv_walk_list(Yv *nodes, Yv *out, int collect);
 Yv *fv_ids(Yv *node, Yv *out);
@@ -3311,6 +3328,8 @@ Yv *infer_go(Yv *st, Yv *node) {
         return infer(st, yr_get(node, "v"));
     } else if (yv_l(k) == K_kw_while) {
         return yr(1, "k", yv_long(K_tvoid));
+    } else if (yv_l(k) == K_kw_break || yv_l(k) == K_kw_continue) {
+        return yr(1, "k", yv_long(K_tvoid));
     } else if (yv_l(k) == K_ret) {
         return infer(st, yr_get(node, "e"));
     } else {
@@ -3763,20 +3782,38 @@ int name_in(Yv *xs, Yv *n) {
 }
 
 /* Builtins are resolved by name at the call site, never captured. */
-int is_intrinsic_name(Yv *n) {
-    return name_in(
-        yav(46, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
-            ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
-            ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
-            ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
-            ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
-            ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
-            ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
-            ys("exit"), ys("argv"), ys("range"), ys("typeof"),
-            ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
-            ys("none"), ys("#fmt")),
-        n);
+/* The builtins, as a list rather than an inline argument, so that the ONE copy
+ * can be handed out. 1:1 with INTRINSICS in src/y/native.y, whose comment says
+ * why: the language server's completion list used to be its own transcription
+ * of this, which is exactly the kind of copy that rots -- adding a builtin left
+ * the server offering the old set and nothing failed. Built on first use
+ * because C has no module-level initializer to hang a `let` on, and because
+ * is_intrinsic_name is reachable from paths that run before any reset. */
+static Yv *INTRINSICS;
+
+static Yv *intrinsics(void) {
+    if (INTRINSICS == NULL) {
+        INTRINSICS =
+            yav(46, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+                ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
+                ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
+                ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
+                ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
+                ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
+                ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
+                ys("exit"), ys("argv"), ys("range"), ys("typeof"),
+                ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
+                ys("none"), ys("#fmt"));
+    }
+    return INTRINSICS;
 }
+
+int is_intrinsic_name(Yv *n) { return name_in(intrinsics(), n); }
+
+/* The same list, for a caller that needs to enumerate it rather than test one
+ * name (the language server's completion list -- see LSP.md R5.3). Returns the
+ * live array, so a caller must not modify it. */
+Yv *intrinsic_names(void) { return intrinsics(); }
 
 /* Every identifier READ in a subtree (callee names included: calling a
  * captured closure needs the name captured too). With `collect` false,
@@ -4226,6 +4263,14 @@ Yv *gen_go(Yv *st, Yv *node) {
         return gen_func_literal(st, node);
     } else if (yv_l(k) == K_store) {
         return gen_store(st, node);
+    } else if (yv_l(k) == K_kw_break) {
+        /* types.c has already refused a `break` with no loop to leave and one
+         * that would cross a function boundary, so `brk_label` is a live label
+         * here. Nothing is left in %rax: the merge label that follows needs no
+         * value (the same reason a loop's own does not -- see gen_while). */
+        return emit_insn(st, F_JMP_L, brk_label, 0, 0, 0, 0, 0, 0);
+    } else if (yv_l(k) == K_kw_continue) {
+        return emit_insn(st, F_JMP_L, cont_label, 0, 0, 0, 0, 0, 0);
     } else if (yv_l(k) == K_ret) {
         st = gen_as(st, yr_get(node, "e"), cur_fn_ret(st));
         return emit_insn(st, F_JMP_L, yv_l(yr_get(st, "end_label")), 0, 0, 0, 0, 0, 0);
@@ -6777,7 +6822,15 @@ Yv *gen_while(Yv *st, Yv *node) {
         st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, F_JZ_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     }
+    /* A `while` has no step, so "the next turn" IS the head: continue goes to
+     * r1 and nothing else is needed. */
+    long saved_brk = brk_label;
+    long saved_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r1, "label"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = saved_brk;
+    cont_label = saved_cont;
     st = gen_loc_loop(st, node);
     st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
     return emit_label(st, yv_l(yr_get(r2, "label")));
@@ -6813,7 +6866,20 @@ Yv *gen_for(Yv *st, Yv *node) {
         st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, F_JZ_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     }
+    /* `for` is the one loop where `continue` cannot go to the head: the step is
+     * between the body and the head, and skipping it would leave the loop
+     * variable where it was -- `for (i = 0; i < n; i++) { continue; }` would
+     * never end. So a third label sits between the body and the step. */
+    Yv *r3 = next_loc(st);
+    st = yr_get(r3, "st");
+    long f_brk = brk_label;
+    long f_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r3, "label"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = f_brk;
+    cont_label = f_cont;
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
     st = gen_loc_loop(st, node);
     st = gen(st, yr_get(node, "step"));
     st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
@@ -6854,10 +6920,31 @@ Yv *gen_forrange(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, loff, -1, R_RCX, 64);
     st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
-    /* a captured loop variable gets a fresh cell per iteration (the
-     * counter itself stays in its raw slot) */
+    /* `continue` goes to a label just BEFORE the increment, not to the head.
+     *
+     * Two mistakes are available here and both were made before this was right.
+     * Jumping to the head looks right -- "the next turn" -- but the counter is
+     * incremented at the BOTTOM of the loop, after the body, so a `continue`
+     * that jumps to the head never advances it and the loop spins forever on one
+     * value. (`for x in 0..10 { if x < 5 { continue; } ... }` hung.) Jumping to
+     * the increment itself is correct, and the fresh per-turn cell is still
+     * made: box_bound runs at the TOP of the next turn, which the `jmp r1` after
+     * the increment reaches. So the label goes before the `inc`, and the reason
+     * it is not simply the `inc` is that nothing may run between them.
+     *
+     * The cell itself: a captured loop variable gets a fresh one per iteration
+     * (the counter itself stays in its raw slot). */
+    Yv *r3 = next_loc(st);
+    st = yr_get(r3, "st");
+    long r_brk = brk_label;
+    long r_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r3, "label"));
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = r_brk;
+    cont_label = r_cont;
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit_insn(st, F_INC_D, R_RBP, -1, 1, voff, -1, 0, 0);
@@ -6919,8 +7006,18 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     /* x = arr[i] */
     st = elem_load(st, arr_elem_bytes(elt), R_RDX, R_RAX, R_RCX);
     st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RBP, -1, 1, voff, -1);
+    /* continue -> just before the increment, for the reason in gen_forrange */
+    Yv *r3 = next_loc(st);
+    st = yr_get(r3, "st");
+    long e_brk = brk_label;
+    long e_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r3, "label"));
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = e_brk;
+    cont_label = e_cont;
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
@@ -9683,13 +9780,13 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
  * compiled it. */
 static Yv *path_push(Yv *path, Yv *t) {
     Yv *p = yav(0);
-    for (size_t i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
+    for (long i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
     return ya_push(p, t);
 }
 
 static int type_on_path(Yv *t, Yv *path) {
     int found = 0;
-    for (size_t i = 0; i < yv_len(path); i++) {
+    for (long i = 0; i < yv_len(path); i++) {
         /* the same node: a recursive alias is one shared node (teq) */
         if (ya_get(path, i) == t) found = 1;
     }
@@ -10807,6 +10904,14 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
      * closure literal), so the caller's mark is put back on the way out. */
     long prev_max = frame_max;
     frame_max = 0;
+    /* No loop encloses this body: any loop the closure was made inside is in
+     * the CALLER's function, and a jump out of one into another is what the
+     * checker's function-boundary rule refuses. Clearing here makes the emitter
+     * right on its own terms rather than relying on that check in another file. */
+    long prev_brk = brk_label;
+    long prev_cont = cont_label;
+    brk_label = -1;
+    cont_label = -1;
     Yv *f = yr(15, "ir", yav(0), "txt", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(fuid), "loc", yv_long(1),
                "env", yav(0), "slots", yv_long(0), "temp", yv_long(0), "self_label", label,
@@ -10916,6 +11021,8 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     if (peak > frame_max) { frame_max = peak; }
     long frame = arch_frame(frame_max);
     frame_max = prev_max;
+    brk_label = prev_brk;
+    cont_label = prev_cont;
     /* The body is one IR stream: the prologue, what the body emitted, the
      * epilogue (see ir.h). The text the linker and -S read is rendered from
      * it, so nothing here is spelled twice. */

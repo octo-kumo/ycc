@@ -15,7 +15,8 @@ Y_EMBED(MATH_ASM, "src/y/arch/math.s")
 /* the twin of arch_x64.y's arch_asm_lines: the embedded text as prelude
    lines, one per line, indentation kept. Dropped: a whole-line '#' comment
    (the in-tree assembler treats a comment as a backend bug and must never see
-   one — every comment line in src/y/arch/*.s starts at column 0 for exactly
+   one — every comment line in the .s files under src/y/arch starts at column 0
+   for exactly
    this reason) and the empty tail a trailing newline leaves behind. The two
    costs are accounted for in the Y comment: split() materialising the lines
    (+374K instructions once per process, the price of one copy of the asm), and

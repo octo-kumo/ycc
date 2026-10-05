@@ -33,6 +33,9 @@
 // each phase can stop.
 
 import tiles;
+// std's seeded generator (splitmix64).  It replaced the xorshift64 this file
+// carried; see "the PRNG" below.
+import random;
 
 const MAXW: long = 64;
 const MAXH: long = 64;
@@ -138,30 +141,33 @@ let INITBAD: long = 0;
 
 // ───────────────────────────────────────────────────────────────── the PRNG ───
 //
-// xorshift64, three shifts.  Deterministic given the seed and identical on
-// every run, which is the whole requirement; there is no float anywhere in the
-// solver.  `RS >>> 33` keeps 31 non-negative bits so `% n` is never handed a
-// negative dividend (Y's `%` follows C's sign rules).
+// THE GENERATOR IS NOW STD'S.  This block used to be a xorshift64 of its own --
+// a module-level `RS`, an `rs_next` and an `rnd(n)` doing `(RS >>> 33) % n` --
+// and all three are gone.  A collapse now draws its tile index from
+// `import random` (src/y/std/random.y, splitmix64): setup() calls
+// random.seed(), and choose() calls random.below(WSUM[c]).
 //
-// >>> is a LOGICAL shift (ORCHESTRATOR.md, "also verified"): the state is a
-// signed long whose top bit comes and goes, and a logical shift is what makes
-// this portable to a negative state.  It is the one >>> in the program, and it
-// is deliberately one whose input is a long rather than a byte.
-
-let RS: long = 1;
-
-def rs_next() -> long {
-    RS = RS ^ (RS << 13);
-    RS = RS ^ (RS >>> 7);
-    RS = RS ^ (RS << 17);
-    RS
-};
-
-def rnd(n: long) -> long {
-    if (n < 1) { return 0 };
-    rs_next();
-    (RS >>> 33) % n
-};
+// What is unchanged is the contract, which is all the solver ever asked of it:
+// deterministic given the seed, identical on every run, no float anywhere, and a
+// value in 0..n-1 for a frontier of n cells (n < 1 answers 0 here as it did
+// before -- `random.below` answers 0 for n < 1 too, so choose() is safe on a
+// zero-weight mask, which only an unweighted range can produce).
+//
+// What changes is the STREAM, and this example is unusually exposed to that
+// because the draw picks WHICH TILE each cell collapses to: same seed, different
+// picture.  Three pinned numbers in check.y and one instance in gate.conf were
+// chosen by searching for a seed under the OLD stream, and all four were
+// re-found under the new one; each is named where it is used and README.md
+// carries the table.  The properties they stand for -- that an instance exists
+// which needs a rewind at all, that one exists which exhausts the budget, and
+// that same seed gives same picture -- are properties of the solver and survive;
+// the specific (size, seed) pairs are not, and are re-pinned rather than
+// asserted from memory.  See check.y's t_backtrack() and t_giveup().
+//
+// The `>>> 33` note in the old block was about THIS generator and no longer
+// applies to the solver; the `>>>` uses that remain in the program are sink.y's
+// hex and fixed-point writers, which are about non-negative values by
+// construction.
 
 // ────────────────────────────────────────────────────────────── log2 in Q30 ───
 //
@@ -318,7 +324,12 @@ def setup(w: long, h: long, avail: long, seed: long) -> long {
     NC = w * h;
     AVAIL = avail;
     tiles.build(avail);
-    RS = if (seed == 0) { 0 - 7046029254386353131 } else { seed };
+    // std's generator, seeded here: every solve restarts the stream, which is
+    // why --frames (which calls setup once per frame) still prints the same
+    // picture three times.  `--seed 0` is a legal seed and needs no special
+    // case: random.seed(0) offsets the state by the golden-ratio constant
+    // before the first draw, which is exactly why splitmix64's author says so.
+    random.seed(seed);
     STATUS = R_OK;
     STEPS = 0;
     COLLAPSES = 0;
@@ -511,7 +522,7 @@ def last_tile(m: long) -> long {
 
 // choose(c) -> long -- collapse cell c: one seeded draw over its own weights.
 def choose(c: long) -> long {
-    choose_r(MASK[c], rnd(WSUM[c]))
+    choose_r(MASK[c], random.below(WSUM[c]))
 };
 
 // first_bit(m) -> long -- the lowest tile index in a mask; 0 for an empty mask.
@@ -745,5 +756,5 @@ export {
     set_inject, setup, propagate, pick, choose, choose_r, out_uniform, backtrack,
     next_event, solve, entropy, popcount, recompute, setmask, neighbour, audit,
     last_tile,
-    undecided, mean_entropy, first_bit, rs_next, rnd
+    undecided, mean_entropy, first_bit
 };

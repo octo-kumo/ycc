@@ -1,65 +1,142 @@
 # Y Language Support (VS Code)
 
-Syntax highlighting for the Y programming language (the `ycc` / `ysh`
-language in this repo).
+Language support for the Y programming language (the `ycc` language in this
+repo), by way of `yserve`, the language server in `src/tools/lsp/`. The design
+is `../LSP.md`.
 
-Covers:
+## What it does today (milestones M1–M3)
 
-- declarations and control flow: `let`, `const`, `def`, `type`, `match`,
-  `if`/`else`, `while`, `for` (both forms), `foreach`, `in`, `return`;
-- modules: `import`, `from`, `embed`, `export`;
-- types: `str`, `long`, `int`, `bool`, `float`, `byte`, `void`, `mutex`,
-  `sem`;
-- the predeclared builtins — `print`, `puts`, `eputs`, `tostring`,
-  `tonum`, `typeof`, `range`, `keys`, `len`, `trim`, `split`, `join`,
-  `ord`, `chr`, `byte_at`, `index_of`, `last_index_of`, `bytes`,
-  `from_bytes`, `some`, `is_some`, `unwrap`, `argv`, `exit`, `readline`,
-  `clear_eof`, `clock_us`, `time_us`, `heap_used`, `sleep`, `ptr_addr`,
-  `syscall`, and the thread/process words `spawn`, `fork`, `mutex`, `sem`,
-  `lock`, `try_lock`, `post`, `wait`, `wait_pid`;
-- `self`, `true`, `false`, `none`;
-- every string form: `"..."`, `b"..."`, `b'...'`, `f"..."` (f-strings),
-  `c'a'`, with the Y escapes (`\n`, `\t`, `\x41`, `\{`, and a backslash
-  before any other byte);
-- numbers: decimal, `0x`/`0X` hexadecimal, `0b`/`0B` binary, `_` digit
-  grouping, floats with a point and/or an exponent;
-- the whole operator set, longest match first: `>>>=`, `<<=`, `>>=`,
-  `>>>`, `&&`, `||`, `==`, `!=`, `<=`, `>=`, `::`, `..`, `->`, `=>`,
-  `?.`, `++`, `--`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`,
-  `<<`, `>>` and the single characters;
-- comments: `//` to end of line and non-nesting `/* ... */`.
+- **Errors and warnings, together.** `yserve` runs the checker and the linter
+  side by side, so one buffer can show both kinds of squiggle at once. The
+  command line cannot do this: `compile_unit` returns before `lint_unit` when the
+  checker found anything.
+- **Diagnostics in imports.** A warning in an imported file is published against
+  *that* file, not the one you are editing — one `publishDiagnostics` per file,
+  as the protocol requires.
+- **A missing import is a squiggle, not a crash.** The compiler handles an
+  unresolvable `import` by printing and exiting; `yserve` finds it first.
+- **Formatting.** *Format Document* (or **Y: Format Document**) rewrites the
+  whole file with `src/tools/lsp/fmt.y`.
+- **Syntax highlighting**, from the server's semantic tokens. The TextMate
+  grammar is **unregistered** — it was the highlighter until M2 landed, and
+  `scan.y` now does that job from the real lexer's rules rather than a
+  hand-kept copy.
+- **An outline**: `def`, `const`, `let`, `type`, `import` and `export`, nested,
+  in the breadcrumb bar and the symbol picker. A `let` inside a loop is
+  deliberately not an entry.
+- **It does not die on a typo.** The server forks a handler per message, so the
+  unterminated string literal you get halfway through typing a `"` is a
+  diagnostic rather than a dead server.
 
-Not builtins, so not highlighted as such: `exec` (needs `import exec;`)
-and the file functions (`fs.read_file`, `fs.write_file`,
-`fs.write_bytes` — `import fs;`). There is no `substr`; slice with
-`s[lo:hi]`.
+Hover, go-to-definition and completion are **not** here yet. The server does not
+advertise them, so the extension does not ask for them — see `src/extension.ts`.
+Almost everything above needs **no code in this extension**: the client library
+registers each feature from the capability the server advertises.
+
+## Requirements
+
+`yserve` must be built:
+
+```sh
+make yserve          # at the repository root
+```
+
+That produces `./yserve` at the root with the std units compiled and attached.
+The extension looks for it, in this order:
+
+1. `y.lsp.serverPath`, if you have set it. This is used **alone** — if it is
+   wrong you get an error naming it, rather than a silent fallback to a
+   different binary.
+2. Next to the extension, then one and two directories up (so an unpacked
+   extension inside the repo finds the repository's binary).
+3. In the workspace root, and in `yserve/` under it.
+
+`PATH` is deliberately **not** searched: `spawn` resolving a bare name works in a
+shell and fails in VS Code, or picks up something unrelated. If it is on your
+`PATH`, set `y.lsp.serverPath`.
+
+## Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| `y.lsp.serverPath` | `""` | The `yserve` binary. Empty means search as above. |
+| `y.lsp.rootPath` | `""` | Passed as `--root`. Imports in an open file resolve against **that file's own directory** first, so this only matters for files outside the workspace. Empty uses the first workspace folder. |
+| `y.lsp.trace.server` | `"off"` | `messages` or `verbose` logs the JSON-RPC traffic to the **Y** output channel. |
+
+## Commands
+
+- **Y: Restart Language Server** — also on the status bar item.
+- **Y: Show Server Output** — the **Y** output channel. This is where the
+  server's own messages go, including a compiler message the user otherwise
+  never sees.
 
 ## Install (user level)
 
 ```sh
-code --install-extension y-lang-0.1.0.vsix
+code --install-extension src/tools/lsp/vscode-y-lang/y-lang-0.2.0.vsix
 ```
 
-Then reload VS Code. `.y` files will be highlighted automatically.
+Then reload VS Code. `.y` files are handled automatically.
 
-## Rebuild the .vsix
+To develop it, open `src/tools/lsp/vscode-y-lang` in VS Code and press <kbd>F5</kbd>
+— that launches an Extension Development Host with the extension loaded from
+source.
+
+## Build
 
 ```sh
-npx -y @vscode/vsce package --allow-missing-repository && code --install-extension y-lang-0.1.0.vsix
+cd src/tools/lsp/vscode-y-lang
+npm ci            # or npm install
+npm run compile   # tsc -> out/
 ```
+
+From the repository root, `make lsp-ext` does both and `make lsp-vsix` packages
+the `.vsix`.
+
+`vscode-languageclient` is in `dependencies`, not `devDependencies`, and
+`.vscodeignore` does not list `node_modules`. Both matter: together they are what
+makes `vsce` bundle the runtime dependency into the package. Get either wrong and
+you get a 10 KB `.vsix` that fails on activation with a module-not-found — which
+is why `src/tools/lsp/test/activation-check.js` asserts on the manifest before it
+loads anything.
 
 ## Files
 
-- `package.json` — extension manifest (contributes the `y` language + grammar)
-- `language-configuration.json` — comment/bracket/auto-close behavior
-- `syntaxes/y.tmLanguage.json` — TextMate grammar
+- `package.json` — the manifest: `main`, `onLanguage:y`, the language, the three
+  settings.
+- `src/extension.ts` — activation: find the server, start it, report its death,
+  and gate the not-yet-implemented features on what the server advertises.
+- `src/client.ts` — where to find `yserve`, and the argument list. Pure logic,
+  so it can be tested without spawning anything.
+- `language-configuration.json` — comments, brackets, auto-close, indentation.
+- `syntaxes/y.tmLanguage.json` — the TextMate grammar. **Unregistered** from
+  `contributes` in this version, per R2.1: semantic tokens from the server
+  become the only highlighter in M2. The file stays in the tree, so
+  re-enabling it is a one-line revert.
+- `tsconfig.json` — strict, `commonjs`, `out/`.
 
-## Note
+## Tests
 
-This TextMate grammar is the highlighting that ships today. The design in
-`LSP.md` (at the repository root) retires it: semantic tokens from the
-language server become the only highlighter (R2.1, milestone M2), and
-this grammar is then unregistered from `contributes` — the file stays in
-the tree, so re-enabling it is a one-line revert. Until that lands, the
-grammar is the highlighter, and it is kept in step with the language by
-hand.
+Both need `npm ci` first, and both run from the repository root:
+
+```sh
+make lsp-e2e
+```
+
+- `src/tools/lsp/test/activation-check.js` — runs `activate()` against a stub of
+  the `vscode` module and asserts that the extension registers its commands,
+  spawns the server, reaches `Running`, and says something useful when it cannot
+  start. The stub answers unknown names with a *class*, so a call the library
+  makes on something unmodelled fails loudly instead of returning `undefined`.
+- `src/tools/lsp/test/client-check.js` — drives `yserve` with `vscode-jsonrpc`,
+  the JSON-RPC library VS Code itself uses, through the exact message sequence an
+  editor sends. This is what proved the server agrees with a real LSP
+  implementation rather than only with the hand-written driver in `test-e2e.sh`.
+  40 checks, and it **behaves like the editor**: when the server advertises the
+  pull-diagnostics capability it pulls, because a server that claims pull and
+  answers only push makes VS Code ignore the push notifications and show no
+  diagnostics at all — which is what happened, and what this driver now catches.
+- `src/tools/lsp/check-names.py` — no two path-imported modules may define the
+  same name. A Y path import *flattens* into the caller's namespace, so a shared
+  name is either a duplicate-definition error pointing at the wrong file or one
+  definition silently shadowing the other.

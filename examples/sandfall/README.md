@@ -3,7 +3,13 @@
 Sand, water, oil, fire, smoke and stone on a grid with a ghost border of stone
 on every side, stepped one generation at a time, drawn through a framebuffer
 with per-material colour, and dumped as text under `--no-tty`. Deterministic by
-default; `--seed` (default 1) drives the one scene that uses randomness.
+default; `--seed` (default 1) drives the one scene that uses randomness — and
+that randomness now comes from **`import random`** (`src/y/std/random.y`,
+splitmix64) rather than from the 63-bit LCG this folder used to carry in
+`grid.y`. Same seed ⇒ byte-identical grid, exactly as before; the *bit stream*
+is different, so `terrain` is a different (equally ragged) cavern under every
+seed. No other scene draws at all, which is why `EXPECTED` — the `basin` run —
+does not move.
 
 **The rule that decides the physics is stated up front, because in a falling-sand
 automaton it is not an implementation detail:**
@@ -271,6 +277,17 @@ RESULT PASS -- 139 assertions, 0 failed, 26675 generations, no reference file
 The whole transcript is kept in **`CHECK.txt`**, so a reader does not have to run
 anything to see what it claims.
 
+The assertions come from `import test` (`src/y/std/test.y`), not from this
+folder: `props.y` used to define its own `ck(cond, what)` and `ck_num(got, want,
+what)`, and they are gone — std's `test.ck(name, ok, detail)` and
+`test.ck_eq(name, got, want)` took their place, with every call site reordered
+to match, the tally now read from `test.checks()` / `test.failures()` instead of
+two module-level counters, and one deliberate asymmetry: `test.report()` is *not*
+called, because the `RESULT PASS` line above already summarises the run and it
+carries the generation count as well. `CHECK.txt` was regenerated, so the
+indentation of every assertion line and the position of every `ck_eq`'s numbers
+moved; the assertions themselves are identical and the count is the same.
+
 | group | what it asserts |
 |---|---|
 | **C0** | non-vacuity: the box really has stone, sand and water on it *before* anything is counted, and the counts are printed |
@@ -531,9 +548,9 @@ asked for, and the code says so where it applies.
 | file | what |
 |---|---|
 | `sandfall.y` | the entry point: flags, `--size` parsing, the headless report, the live view, `winsize()`, the status line |
-| `grid.y` | the store, the materials, **the physics**, `step()`, the tally, the checksum, the generator |
+| `grid.y` | the store, the materials, **the physics**, `step()`, the tally, the checksum; `srand`/`rnd_below` are now two-line wrappers over `import random` |
 | `scene.y` | the five built-in scenes, shared with `props.y` |
-| `props.y` | the property check: C0…C11, no reference file |
+| `props.y` | the property check: C0…C11, no reference file, assertions from `import test` |
 | `gate.conf` | `build=`, `run=`, `check=` — the deterministic invocation whose stdout is `EXPECTED` |
 | `capture.sh` | regenerates `EXPECTED` and `CHECK.txt` from the pinned compiler |
 | `pty_check.py` | seven pty sessions, 26 checks |

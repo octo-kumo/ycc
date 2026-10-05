@@ -97,6 +97,22 @@ let ty_sig_bkts: [[long]] = [];
 // union_shared's answers in this unit, by the union's node.
 let ush_nodes: [Type] = [];
 let ush_vals: [[str]] = [];
+// The innermost enclosing loop's `break` and `continue` targets, -1 outside any
+// loop (2025). Labels are ids from labels.y, so -1 is the "none" marker and 0
+// would not do: it is a real id. Module state rather than an EmitSt field, for the same reason
+// the globals above are: EmitSt is rebuilt field by field at a dozen sites and
+// another pair would have to be threaded through all of them.
+//
+// Set by the four loop generators just before the body and restored after, so
+// nesting works -- an inner loop's targets are in force while its body is
+// generated and the outer loop's are back for whatever follows.
+//
+// types.y has already refused a `break` that would cross a function boundary,
+// so these are only ever read inside the function that set them; gen_func clears
+// them regardless, because relying on a check in another file to keep these two
+// consistent is how a jump ends up in an unrelated body.
+let brk_label: long = 0 - 1;
+let cont_label: long = 0 - 1;
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -2393,6 +2409,8 @@ def infer_go(st: EmitSt, node: Node) -> Type {
         infer(st, store.v)
     } else if (k == K.kw_while) {
         normtype({ k: K.tvoid })
+    } else if (k == K.kw_break || k == K.kw_continue) {
+        normtype({ k: K.tvoid })
     } else if (k == K.ret) {
         let ret: Wrap = node;
         infer(st, ret.e)
@@ -2827,16 +2845,32 @@ def name_in(xs: [str], n: str) -> bool {
     found
 };
 
-// Builtins are resolved by name at the call site, never captured.
-def is_intrinsic_name(n: str) -> bool {
-    name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
+// The builtins, as a list rather than an inline argument, so that the ONE copy
+// can be handed out. The language server's completion list used to be its own
+// transcription of this, which is exactly the kind of copy that rots: adding a
+// builtin here would leave the server offering the old set, and nothing would
+// fail. `opt$test`/`opt$val` and `#fmt` are the compiler's own halves of the
+// option operators and the `#fmt` builtin -- internal, but they are what
+// is_intrinsic_name tests, so they are in the list.
+let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "opt$test", "opt$val",
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
              "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
+             "from_bytes", "ptr_addr", "self", "none", "#fmt"];
+
+// Builtins are resolved by name at the call site, never captured.
+def is_intrinsic_name(n: str) -> bool {
+    name_in(INTRINSICS, n)
+};
+
+// The same list, for a caller that needs to enumerate it rather than test one
+// name (the language server's completion list -- see LSP.md R5.3). Returns the
+// live array, so a caller must not modify it.
+def intrinsic_names() -> [str] {
+    INTRINSICS
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -3308,6 +3342,14 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.store) {
         let store: Store = node;
         gen_store(st, store)
+    } else if (k == K.kw_break) {
+        // types.y has already refused a `break` with no loop to leave and one
+        // that would cross a function boundary, so `brk_label` is a live label
+        // here. Nothing is left in %rax: the merge label that follows needs no
+        // value (the same reason a loop's own does not -- see gen_while).
+        emit_insn(st, insn.F_JMP_L, brk_label, 0, 0, 0, 0, 0, 0)
+    } else if (k == K.kw_continue) {
+        emit_insn(st, insn.F_JMP_L, cont_label, 0, 0, 0, 0, 0, 0)
     } else if (k == K.ret) {
         let ret: Wrap = node;
         st = gen_as(st, ret.e, cur_fn_ret(st));
@@ -5640,7 +5682,15 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // A `while` has no step, so "the next turn" IS the head: continue goes to
+    // r1 and nothing else is needed.
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r1.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
     st = gen_loc_loop(st, node);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
     emit_label(st, r2.label)
@@ -5677,7 +5727,20 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // `for` is the one loop where `continue` cannot go to the head: the step is
+    // between the body and the head, and skipping it would leave the loop
+    // variable where it was -- `for (i = 0; i < n; i++) { continue; }` would
+    // never end. So a third label sits between the body and the step.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     st = gen(st, node.step);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
@@ -5715,10 +5778,28 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, loff, -1, insn.R_RCX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
-    // a captured loop variable gets a fresh cell per iteration (the
-    // counter itself stays in its raw slot)
+    // `continue` goes to a label just BEFORE the increment, not to the head.
+    //
+    // Two mistakes are available here and both were made before this was right.
+    // Jumping to the head looks right -- "the next turn" -- but the counter is
+    // incremented at the BOTTOM of the loop, after the body, so a `continue`
+    // that jumps to the head never advances it and the loop spins forever on one
+    // value. (`for x in 0..10 { if x < 5 { continue; } ... }` hung.) Jumping to
+    // the increment itself is correct, and the fresh per-turn cell is still
+    // made: box_bound runs at the TOP of the next turn, which the `jmp r1` after
+    // the increment reaches. So the label goes before the `inc`, and the reason
+    // it is not simply the `inc` is that nothing may run between them.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, voff, -1, 0, 0);
@@ -5776,8 +5857,18 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     // x = arr[i]
     st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
+    // continue -> just before the increment, for the reason in gen_forrange
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
@@ -9229,6 +9320,14 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // closure literal), so the caller's mark is put back on the way out.
     let prev_max = frame_max;
     frame_max = 0;
+    // No loop encloses this body: any loop the closure was made inside is in
+    // the CALLER's function, and a jump out of one into another is what the
+    // checker's function-boundary rule refuses. Clearing here makes the emitter
+    // right on its own terms rather than relying on that check in another file.
+    let prev_brk = brk_label;
+    let prev_cont = cont_label;
+    brk_label = 0 - 1;
+    cont_label = 0 - 1;
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
       self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
@@ -9322,6 +9421,8 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     if (f.slots + f.temp > frame_max) { frame_max = f.slots + f.temp; };
     let frame = arch.arch_frame(frame_max);
     frame_max = prev_max;
+    brk_label = prev_brk;
+    cont_label = prev_cont;
     // The body is one IR stream: the prologue, what the body emitted, the
     // epilogue (see ir.y). The text the linker and -S read is rendered from
     // it, so nothing here is spelled twice.
@@ -11578,7 +11679,11 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
     }
 };
 
-export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text };
+// is_intrinsic_name is exported for the language server's completion list: it
+// needs to KNOW whether a word is a builtin, and the list it keeps of them is
+// the one this predicate tests. Inert like the rest of the names here -- the
+// splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
+export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and

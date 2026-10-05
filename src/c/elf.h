@@ -9,7 +9,7 @@
 #include "yv.h"
 
 long elf_code_off(long bss_len);
-long elf_bss_from_ro(long code_len, long ro_len, long bss_len);
+long elf_bss_from_ro(long code_len, long ro_len);
 Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len, Yv *syms,
               Yv *dsecs);
                      /* ([long], [long], long, long, [symbol], [section]) -> [long] */

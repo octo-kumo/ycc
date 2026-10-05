@@ -1828,6 +1828,13 @@ Yv *parse_stmt(Yv *toks, long p) {
         // body. parse_stmt sees it wherever it appears; the checker is what
         // insists on the top level (a nested one has no assembly to land in).
         return parse_func(toks, p, 1);
+    } else if (is_kw(toks, p, ys("break")) || is_kw(toks, p, ys("continue"))) {
+        /* `break;` and `continue;` -- see the same arm in src/y/parser.y,
+           including why only the keyword is consumed and the `;` is left to
+           the caller. */
+        long kind = is_kw(toks, p, ys("break")) ? K_kw_break : K_kw_continue;
+        return res(yr(3, "k", yv_long(kind), "line", yv_long(tline(toks, p)),
+                              "col", yv_long(tcol(toks, p))), p + 1);
     } else if (is_kw(toks, p, ys("return"))) {
         if (is_punct(toks, p + 1, ys(";")) ||
             is_punct(toks, p + 1, ys("}")) ||

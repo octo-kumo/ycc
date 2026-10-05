@@ -27,7 +27,6 @@
 // (b) is the one a golden file cannot help with at all: "both players hold the
 // torch" is a claim about a race, and a recorded race is a recorded coin toss.
 
-import rnd;
 import net;
 import sockio;
 import world;

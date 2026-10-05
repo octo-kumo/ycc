@@ -731,6 +731,8 @@ Yv *tokenize(Yv *src) {
             else if (ys_eq_lit(word, "return")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "true")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "false")) { ty = ys("kw"); ; }
+            else if (ys_eq_lit(word, "break")) { ty = ys("kw"); ; }
+            else if (ys_eq_lit(word, "continue")) { ty = ys("kw"); ; }
 
             if (ys_eq_lit(word, "b")) {
                 // b"..." / b'...' -- a byte-string literal: the same type

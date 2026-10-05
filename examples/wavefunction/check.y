@@ -41,6 +41,9 @@
 import tiles;
 import wfc;
 import sink;
+// std's seeded generator, which the solver now draws from: one assertion below
+// (t_draw) checks that its stream is not constant.
+import random;
 
 // ─────────────────────────────────────────────────────── the check scaffolding ───
 
@@ -624,11 +627,18 @@ def t_draw() -> void {
           wfc.choose_r(65535, 999), 15);
     // And the stream is not constant: "the same seed gives the same answer" is
     // also true of a program that ignores the seed, so the stream must move.
+    //
+    // The draw is std's (`import random`, splitmix64).  It used to be
+    // `wfc.rnd(37)`, this example's own xorshift64 behind `wfc.rs_next`, both
+    // of which are gone -- so this is now a statement about the generator the
+    // SOLVER draws from, which is the point: a solver that had stopped drawing
+    // from std's stream (or had begun drawing from a constant) would fail here.
+    random.seed(20251005);
     let seen = 0;
     let distinct = 0;
     let i = 0;
     while (i < 40) {
-        let v = wfc.rnd(37);
+        let v = random.below(37);
         if ((seen & (1 << v)) == 0) { seen = seen | (1 << v); distinct = distinct + 1 };
         i = i + 1
     };
@@ -1320,37 +1330,48 @@ def own_hash(skip: long) -> long {
 // pass with backtrack() deleted.  So: an instance where the search really does
 // contradict itself and recover, requiring the recovery to succeed and the
 // counters to say it happened.
-// The backtracking instance is `elbows` on 16x12, seed 1: exactly two
+// The backtracking instance is `elbows` on 16x12, seed 2: exactly two
 // contradictions, both recovered, both invisible in the answer.  It is not a big
 // grid of ordinary tiles, because a sweep of every size from 2x2 to 20x20 and
-// every seed from 1 to 7 found NO instance that needed a rewind at all -- the
-// sixteen-tile set propagates hard enough that the first choice is nearly always
-// extendable.  A battery that quietly asserted "backtracks > 0" on such an
-// instance would have been asserting nothing; this one is real, and the search
-// needs the undo log to get there.
+// every seed from 1 to 7 found only a handful of instances that needed a rewind
+// at all -- the sixteen-tile set propagates hard enough that the first choice is
+// nearly always extendable.  A battery that quietly asserted "backtracks > 0" on
+// such an instance would have been asserting nothing; this one is real, and the
+// search needs the undo log to get there.
+//
+// THE SEED IS 2, AND IT WAS 1.  This instance was FOUND by sweeping sizes and
+// seeds under the xorshift64 this file used to carry, so it is a property of
+// (generator, size, seed) and not of the solver: with std's splitmix64 in place
+// (see wfc.y, "the PRNG") 16x12 seed 1 propagates to a single solution and needs
+// no rewind at all, which would have left t_backtrack and t_rewind asserting
+// nothing.  The sweep was re-run over 10x10..20x18 and seeds 1..7, and 16x12
+// seed 2 is the instance that still contradicts itself exactly twice and
+// recovers -- 69 collapses, 2 contradictions, 2 backtracks, 783 steps.  The two
+// pinned counts are unchanged, which is the point: what the battery claims is
+// "this instance needs a rewind and gets it", and it still does.
 let BT_W: long = 16;
 let BT_H: long = 12;
-let BT_SEED: long = 1;
+let BT_SEED: long = 2;
 
 def t_backtrack() -> void {
     wfc.setup(BT_W, BT_H, tiles.SUB_ELBOWS, BT_SEED);
     let rc = wfc.solve();
-    ck_eq("16x12 elbows seed 1: the search succeeds", rc, wfc.R_OK);
-    ck("16x12 elbows seed 1: it really did backtrack", wfc.BACKTRACKS > 0,
+    ck_eq("16x12 elbows seed 2: the search succeeds", rc, wfc.R_OK);
+    ck("16x12 elbows seed 2: it really did backtrack", wfc.BACKTRACKS > 0,
        "BACKTRACKS is " + tostring(wfc.BACKTRACKS));
     // Pinned exactly, so an instance that stopped needing a rewind would fail
     // loudly instead of quietly ceasing to test the undo log.  (It also cannot be
     // "more collapses than cells" the way an ordinary all-tiles grid would be:
     // propagation decides most cells there, so 16x12 elbows needs 71 decisions for
     // 192 cells.)
-    ck_eq("16x12 elbows seed 1: exactly two contradictions", wfc.CONTRA, 2);
-    ck_eq("16x12 elbows seed 1: exactly two backtracks", wfc.BACKTRACKS, 2);
-    ck("16x12 elbows seed 1: no more surviving decisions than cells",
+    ck_eq("16x12 elbows seed 2: exactly two contradictions", wfc.CONTRA, 2);
+    ck_eq("16x12 elbows seed 2: exactly two backtracks", wfc.BACKTRACKS, 2);
+    ck("16x12 elbows seed 2: no more surviving decisions than cells",
        wfc.COLLAPSES - wfc.BACKTRACKS <= wfc.NC,
        tostring(wfc.COLLAPSES) + " collapses minus " + tostring(wfc.BACKTRACKS) +
        " undone for " + tostring(wfc.NC) + " cells");
-    ok_grid("16x12 elbows seed 1", 4);
-    ck("16x12 elbows seed 1: the undo log never approached its array bound",
+    ok_grid("16x12 elbows seed 2", 4);
+    ck("16x12 elbows seed 2: the undo log never approached its array bound",
        wfc.UNDOMAX > 0 && wfc.UNDOMAX < 131072,
        "peak undo depth " + tostring(wfc.UNDOMAX))
 };
@@ -1442,7 +1463,7 @@ def t_rewind() -> void {
             finished = 1
         }
     };
-    ck("16x12 elbows seed 1: at least one rewind to check", REWINDS > 0,
+    ck("16x12 elbows seed 2: at least one rewind to check", REWINDS > 0,
        "no rewind happened, so the undo path was not exercised");
     ck_eq("every rewind restored EVERY cell's mask exactly", RBADD, 0);
     // The counter that explains the two invisible versions of the rewind defect:
@@ -1461,22 +1482,31 @@ def t_rewind() -> void {
 
 // t_giveup() -- the step budget, on an instance that provokes it.
 //
-// 16x16 `elbows`, seed 1: the search contradicts itself 100 442 times, gets
+// 16x16 `elbows`, seed 37: the search contradicts itself 88 473 times, gets
 // nowhere, and STOPS at the budget with R_BUDGET.  This is the "must never hang"
 // property made testable: the return value says it gave up rather than found an
 // answer, the step count is inside the budget, and no trap is printed.  (The
 // half-finished grid it leaves behind is deliberately NOT audited: there is no
 // answer to audit.)
+//
+// THE SEED IS 37, AND IT WAS 1 -- the same reason as BT_SEED above, and the same
+// consequence: the old stream's 16x16 seed 1 now solves outright in 912 steps,
+// so t_giveup would have stopped testing the budget at all, and gate.conf's
+// `check=` line (which asserts exit 4 through a real process) would have been
+// asserting an exit status the program no longer produces.  A sweep of 16x16
+// seeds 1..37 found seed 37: 88 559 collapses, 88 473 contradictions,
+// 88 473 backtracks, 4 000 002 steps, and exit 4.  gate.conf names the same
+// instance, and the numbers above are that run's.
 def t_giveup() -> void {
-    wfc.setup(16, 16, tiles.SUB_ELBOWS, 1);
+    wfc.setup(16, 16, tiles.SUB_ELBOWS, 37);
     let rc = wfc.solve();
-    ck_eq("16x16 elbows seed 1: the search gives up with R_BUDGET", rc, wfc.R_BUDGET);
-    ck("16x16 elbows seed 1: it stopped AT the budget, not before",
+    ck_eq("16x16 elbows seed 37: the search gives up with R_BUDGET", rc, wfc.R_BUDGET);
+    ck("16x16 elbows seed 37: it stopped AT the budget, not before",
        wfc.STEPS >= wfc.BUDGET && wfc.STEPS <= wfc.BUDGET + 64,
        tostring(wfc.STEPS) + " steps against a budget of " + tostring(wfc.BUDGET));
-    ck("16x16 elbows seed 1: it contradicted itself many times on the way",
+    ck("16x16 elbows seed 37: it contradicted itself many times on the way",
        wfc.CONTRA > 1000, "CONTRA is " + tostring(wfc.CONTRA));
-    ck("16x16 elbows seed 1: the decision stack stayed inside its array",
+    ck("16x16 elbows seed 37: the decision stack stayed inside its array",
        wfc.DN < 16384, "DN is " + tostring(wfc.DN))
 };
 

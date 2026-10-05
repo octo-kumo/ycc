@@ -23,6 +23,9 @@
 //        ./day08 --check    (property battery; no reference file involved)
 //        ./day08 --help
 import fs;
+// std's assertion helper: it replaced this file's own `ck`/`eq`, which are gone
+// -- see "--check scaffolding" below.
+import test;
 
 // ── constants ───────────────────────────────────────────────────────────────
 
@@ -78,9 +81,10 @@ let dec_b: long = 0;
 let parse_err: str = "";
 let last_parse_ok: bool = false;
 
-// --check bookkeeping: globals, so every assert group can tally.
-let checks_run: long = 0;
-let checks_failed: long = 0;
+// --check bookkeeping.  `first_failure` is the NAME of the first assertion that
+// failed, which std's counter does not keep; the tally itself is std's
+// (test.checks() / test.failures()) -- the two globals this file used to carry
+// for it are gone with the local assertion helper.
 let first_failure: str = "";
 
 // What one solve of one input produced.  Every field is a long, and the record
@@ -581,20 +585,57 @@ def walk_components(n: long, order: [long], k: long) -> long {
 }
 
 // ── --check scaffolding ─────────────────────────────────────────────────────
-
-def ck(name: str, ok: bool, detail: str) -> void {
-    checks_run = checks_run + 1;
-    if (ok) {
-        print("ok    " + name);
-    } else {
-        checks_failed = checks_failed + 1;
-        if (first_failure == "") { first_failure = name };
-        print("FAIL  " + name + " -- " + detail)
-    }
+//
+// THE ASSERTION HELPER IS STD'S.  This file used to define its own
+// `ck(name, ok, detail)` and `eq(name, got, want)` and to keep two counters
+// beside them; all four are gone.  Every call below now reads
+// `test.ck(name, ok, detail)` or `test.ck_eq(name, got, want)`
+// (src/y/std/test.y), the tallies come from `test.checks()` and
+// `test.failures()`, and the only thing this file still owns is the NAME of THE
+// FIRST FAILURE -- std reports a count, not which one, and the FAIL line at the
+// bottom of run_check() says which.
+//
+// The argument order did not move: the local `ck` already read (name, ok,
+// detail), which is the order std reads, so no call site had to be reordered.
+// The ARGUMENT that did move is `eq`: the local one built its own detail string
+// out of got and want, and std's ck_eq builds that string itself.
+//
+// The two functions below are NOT assertions any more: they print nothing and
+// count nothing.  They are the two-line remainder of this file's old helper --
+// the one thing std does not keep, which is the NAME of the first failure --
+// and they exist so that seventy-odd call sites did not each have to grow it.
+//
+// What changed in the output: a passing assertion is printed as "  ok    name"
+// with the detail on a second line under it (std always shows the detail, on
+// both outcomes -- a FAIL states what was measured and what was wanted), where
+// the local helper printed the name alone on a pass.  `EXPECTED` does not move:
+// --check output is not a golden here.
+def ck(name: str, ok: bool, detail: str) -> bool {
+    let passed = test.ck(name, ok, detail);
+    if (!passed && first_failure == "") { first_failure = name };
+    passed
 }
 
-def eq(name: str, got: long, want: long) -> void {
-    ck(name, got == want, "got " + tostring(got) + ", want " + tostring(want))
+def eq(name: str, got: long, want: long) -> bool {
+    let passed = test.ck_eq(name, got, want);
+    if (!passed && first_failure == "") { first_failure = name };
+    passed
+}
+
+// refusal(what) -> str -- the detail line for a check of the shape "this input
+// must NOT parse".
+//
+// It exists because std's `ck` prints the detail on BOTH outcomes, and eight of
+// this file's details were phrased as the failure they described ("an empty
+// file parsed").  Under an `ok    empty file is refused` line that reads as a
+// contradiction.  With this, the line says what happened either way, and when
+// the parser took something it should not have it names what got in.
+//
+// It reads `parse_err` rather than the return value on purpose: parse_boxes
+// leaves parse_err describing its LAST attempt, so this is correct whichever
+// order the two arguments of the ck() call are evaluated in.
+def refusal(what: str) -> str {
+    if (parse_err == "") { "PARSED ANYWAY: " + what } else { "refused, as required: " + parse_err }
 }
 
 // Parse a literal input and solve it the way the binary solves a file, so a
@@ -682,7 +723,8 @@ let MICRO_PAIRS: [long] = [0, 2, 1, 2, 0, 1, 1, 3, 3, 4, 2, 3, 0, 3, 1, 4, 2, 4,
 
 def t_input() -> void {
     let lines: [str]? = fs.read_lines("input.txt");
-    ck("input.txt reads", lines != none, "fs.read_lines returned none");
+    ck("input.txt reads", lines != none,
+       if (lines == none) { "fs.read_lines returned none" } else { tostring(lines!.length) + " lines read" });
     if (lines == none) { return };
     let ls = lines!;
     eq("input.txt line count", ls.length, 1000);
@@ -743,7 +785,8 @@ def t_micro_pairs() -> void {
         prev = key;
         kk = kk + 1
     };
-    ck("micro keys nondecreasing along the order", mono == 1, "a key went backwards");
+    ck("micro keys nondecreasing along the order", mono == 1,
+       if (mono == 1) { "10 keys in order" } else { "a key went backwards" });
 }
 
 def t_micro_answers() -> void {
@@ -801,14 +844,14 @@ def t_edge_cases() -> void {
     // A single line, and one with a trailing comma: the trailing comma must be
     // REJECTED, because split() would have quietly dropped the empty field and
     // made "1,2,3," look like a valid three-field line.
-    ck("one line is refused", !parse_boxes(["1,2,3"]), "a lone line parsed");
-    ck("trailing comma is refused", !parse_boxes(["1,2,3", "4,5,6,"]), "a trailing comma parsed");
-    ck("two fields is refused", !parse_boxes(["1,2,3", "4,5"]), "a two-field line parsed");
-    ck("four fields is refused", !parse_boxes(["1,2,3", "4,5,6,7"]), "a four-field line parsed");
-    ck("blank line is refused", !parse_boxes(["1,2,3", "", "4,5,6"]), "a blank line parsed");
-    ck("words are refused", !parse_boxes(["1,2,3", "4,five,6"]), "a word parsed as a number");
-    ck("a lone minus is refused", !parse_boxes(["1,2,3", "-,-,4"]), "'-' parsed as a number");
-    ck("empty file is refused", !parse_boxes([]), "an empty file parsed");
+    ck("one line is refused", !parse_boxes(["1,2,3"]), refusal("a lone line"));
+    ck("trailing comma is refused", !parse_boxes(["1,2,3", "4,5,6,"]), refusal("a trailing comma"));
+    ck("two fields is refused", !parse_boxes(["1,2,3", "4,5"]), refusal("a two-field line"));
+    ck("four fields is refused", !parse_boxes(["1,2,3", "4,5,6,7"]), refusal("a four-field line"));
+    ck("blank line is refused", !parse_boxes(["1,2,3", "", "4,5,6"]), refusal("a blank line"));
+    ck("words are refused", !parse_boxes(["1,2,3", "4,five,6"]), refusal("a word"));
+    ck("a lone minus is refused", !parse_boxes(["1,2,3", "-,-,4"]), refusal("a bare '-'"));
+    ck("empty file is refused", !parse_boxes([]), refusal("an empty file"));
     // CRLF input is accepted: the CR is not part of a coordinate.
     ck("CRLF line is accepted", parse_boxes(["1,2,3\r", "4,5,6"]), parse_err);
     eq("CRLF boxes parsed", boxes_n, 2);
@@ -820,7 +863,7 @@ def t_edge_cases() -> void {
     let many: [str] = [];
     let i = 0;
     while (i < MAXN + 2) { many += tostring(i) + ",0,0"; i = i + 1 };
-    ck("over-long input is refused", !parse_boxes(many), "too many boxes parsed");
+    ck("over-long input is refused", !parse_boxes(many), refusal(tostring(many.length) + " boxes"));
 }
 
 def t_example() -> void {
@@ -891,12 +934,13 @@ def t_walk_agrees() -> void {
     // are exactly two components and its two boxes are in different ones, and
     // after it there is exactly one.
     let t2 = rs.last_pair;
-    ck("real part 2 has a final connection", t2 >= 0, "last_pair = -1");
+    ck("real part 2 has a final connection", t2 >= 0, "last_pair = " + tostring(t2));
     if (t2 >= 0) {
         eq("real: two circuits before the last connection", walk_components(1000, ord_radix, t2), 2);
         let ca = walk_comp[rs.last_a];
         let cb = walk_comp[rs.last_b];
-        ck("real: its two boxes were in different circuits", ca != cb, "both in component " + tostring(ca));
+        ck("real: its two boxes were in different circuits", ca != cb,
+           "components " + tostring(ca) + " and " + tostring(cb));
         eq("real: one circuit after it", walk_components(1000, ord_radix, t2 + 1), 1);
     }
 }
@@ -925,7 +969,8 @@ def t_orderings_agree() -> void {
         prev = key;
         i = i + 1
     };
-    ck("heap keys nondecreasing", mono == 1, "a key went backwards");
+    ck("heap keys nondecreasing", mono == 1,
+       if (mono == 1) { tostring(m) + " keys in order" } else { "a key went backwards" });
     eq("heap and radix agree on all " + tostring(m) + " keys", bad, 0);
     let hs = solve(b, ord_heap, PART1_PAIRS);
     eq("part 1 under the heap ordering", hs.product, rs.product);
@@ -989,8 +1034,6 @@ def t_real_invariants() -> void {
 }
 
 def run_check() -> long {
-    checks_run = 0;
-    checks_failed = 0;
     first_failure = "";
     print("day08 --check: property battery (no reference file is read)");
     print("");
@@ -1002,9 +1045,11 @@ def run_check() -> long {
     t_walk_agrees();
     t_orderings_agree();
     t_real_invariants();
+    // One summary, printed here.  test.report() is NOT called as well: it
+    // would print a second "N of M checks passed" line for the same run.
     print("");
-    print(tostring(checks_run) + " checks, " + tostring(checks_failed) + " failed");
-    if (checks_failed == 0) {
+    print(tostring(test.checks()) + " checks, " + tostring(test.failures()) + " failed");
+    if (test.failures() == 0) {
         print("day08 --check: PASS");
         0
     } else {

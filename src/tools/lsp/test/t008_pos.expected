@@ -1,0 +1,30 @@
+ascii 1:1 -> 0:0
+ascii 1:5 -> 0:4
+ascii 2:1 -> 1:0
+2-byte at 1:1 -> 0:0
+2-byte at 1:12 (before e) -> 0:11
+2-byte at 1:13 (on e) -> 0:12
+2-byte at 1:14 (2nd byte of e) -> 0:13
+2-byte at 1:16 (the semicolon) -> 0:14
+3-byte at 1:11 (before) -> 0:10
+3-byte at 1:14 (after) -> 0:11
+4-byte at 1:11 (before) -> 0:11
+4-byte at 1:15 (on it) -> 0:12
+4-byte at 1:18 (after) -> 0:13
+mixed 1:1 -> 0:0
+mixed 1:5 (on e-acute) -> 0:4
+mixed 1:15 -> 0:13
+src_line(0) = 1  src_line(9) = 10  src_line(-1) = 1
+back ascii 0:4 -> col 5
+back 2byte 0:12 -> col 13
+back 4byte 0:14 -> col 16
+bytes 8  chars 5
+round trip at every character start: 1
+every character index reachable: 1
+line 99 -> 98:0
+col 999 -> 0:10
+line_bytes(2) = [print(x);]
+line_bytes(9) = []
+crlf 1:1 -> 0:0
+crlf 1:11 (the CR) -> 0:10
+crlf 2:1 -> 1:0

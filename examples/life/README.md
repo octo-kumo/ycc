@@ -339,7 +339,7 @@ are fixed-size with a stated cap (`TRACE_CAP`/`HIST_CAP`, both reported in
 | file | what |
 |---|---|
 | `life.y` | the entry point: flags, the headless report, the live view |
-| `sim.y` | the grid, the step function, the built-in patterns, the seeded PRNG |
+| `sim.y` | the grid, the step function, the built-in patterns, the random pattern (`std/random.y`) |
 | `rle.y` | the RLE parser (`{ ok, msg }`, never exits) |
 | `fx.y` | `4b47a9bfef0c1e30` | 694 | |
 | `capture.sh` | regenerates `EXPECTED` and `golden/` from the pinned compiler |

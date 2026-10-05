@@ -1,0 +1,40 @@
+legend: 9 types: comment, string, number, keyword, selfNone, operator, punctuation, variable, error
+small: 20 tokens, 100 numbers
+round trip exact: true
+round trip position-by-position: true
+five numbers per token: true
+  'def' is a keyword:    keyword
+  'f' is variable:       variable
+  '(' is punctuation:    punctuation
+  'x' is variable:       variable
+  ':' is punctuation:    punctuation
+  'long' is variable:    variable  (M4 splits this)
+  '->' is an operator:   operator
+  '1' is a number:       number
+  '//' is a comment:     comment
+  the string is a string:string
+sorted, disjoint, positive length: true
+block comment spans: 3 lines
+comment tokens: 3 (want 3)
+each starts at column 0: 1
+block comment round trip: true
+unicode: 11 tokens
+every token fits its line in characters: 1
+unicode round trip: true
+the name after the emoji: character 18, back to 0-based byte 20
+which is the byte of the n itself: true (want 20)
+and the character column is not the byte column: true
+and the round trip still holds: true
+a stray # is an error token: true
+and the rest still highlights: true
+broken round trip: true
+unterminated string still yields tokens: true
+unterminated round trip: true
+empty: 0
+blank (real newlines): 0
+a literal backslash-n:  10
+one char: 5
+no trailing newline: 25
+src/y: 16 files checked, 0 failed
+the corpus was really read: true (a file yielded over 10000 tokens)
+done

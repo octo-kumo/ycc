@@ -1,0 +1,80 @@
+
+the seeded stream
+  ok    two draws from one seed differ
+          a stream, not a constant
+  ok    and the same seed gives the same first draw
+          got -4689498862643123097, want -4689498862643123097
+  ok    and the same second
+          got -534904783426661026, want -534904783426661026
+  ok    a different seed gives a different stream
+          seed 2 against seed 1
+  ok    seed 0 is not a fixed point
+          got 7960286522194355700, want 7960286522194355700
+  ok    and it still moves
+          the second draw differs too
+  ok    a negative seed is accepted and reproducible
+          got -8161798454662654712, want -8161798454662654712
+
+below(n) stays inside its bound
+  ok    below(0) is 0, not a division by zero
+          got 0, want 0
+  ok    below(1) is 0
+          got 0, want 0
+  ok    below(-5) is 0
+          got 0, want 0
+  ok    2000 draws from below(10) all land in 0..9
+          got 0, want 0
+  ok    and 2000 from below(1000000) in 0..999999
+          got 0, want 0
+
+below(n) is unbiased, which % n is not
+  ok    all three outcomes are reached
+          none is unreachable
+  ok    and the counts are within 100 of each other
+          each near 1000
+
+range(lo, hi) is INCLUSIVE on both ends
+  ok    4000 draws from range(5, 7) stay inside 5..7
+          inclusive
+  ok    and both ends are reachable
+          so 5 and 7 are IN, not just tolerated
+  ok    a one-wide range is that one value
+          got 9, want 9
+  ok    an inverted range answers lo, not a trap
+          got 9, want 9
+
+chance(pct)
+  ok    chance(0) is never true
+          0 percent
+  ok    chance(100) is always true
+          100 percent
+  ok    2000 draws at 50% are near half
+          loose enough to pass every run, tight enough to catch a stuck stream
+  ok    chance is reproducible under a seed
+          the same two answers
+
+the state handle: two independent streams
+  ok    a state captured after seeding replays the first draw
+          got 269152572843532260, want 269152572843532260
+  ok    and one captured after a draw replays the next
+          got 4491231873834608077, want 4491231873834608077
+  ok    the two states are not equal
+          so the distinction is real and not an accident of the values
+  ok    stream A resumes at its second draw
+          got 5226149892359602778, want 5226149892359602778
+  ok    stream B resumes at its second draw
+          got -2970797378538660612, want -2970797378538660612
+  ok    and the two streams are not the same
+          different seeds, different streams
+  ok    A did not move while B was being drawn
+          got 5226149892359602778, want 5226149892359602778
+
+a whole sequence is reproducible
+  ok    50 draws from one seed match exactly
+          the golden-file property
+  ok    and there are 50 of them
+          got 50, want 50
+  ok    a different seed gives a different sequence
+          not one draw in fifty the same
+
+32 of 32 checks passed
