@@ -6530,11 +6530,8 @@ Yv *gen_forrange(Yv *st, Yv *node) {
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(voff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    inc %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(voff)),
-                         ys("(%rbp)")));
+    /* the counter in place: one instruction, not a load, an inc and a store */
+    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(voff), ys("(%rbp)"))));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
 }
@@ -6582,7 +6579,11 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     st = emit(st, ys_cat(yr_get(r1, "lbl"), ys(":")));
-    /* i < len(arr) — the heap header keeps the length in slot 0. */
+    /* i < len(arr) — the heap header keeps the length in slot 0. The length
+     * is re-read on every iteration, not hoisted into a fourth slot: a body
+     * that appends to the array it walks goes on seeing what it appended
+     * (`foreach (x in a) { a += x }` never ends), which hoisting would
+     * change. */
     st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(aoff)),
                          ys("(%rbp), %rdx")));
     st = emit(st, ys("    mov (%rdx), %rcx"));
@@ -6598,11 +6599,8 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
     st = gen_loc_loop(st, node);
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    inc %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
-                         ys("(%rbp)")));
+    /* the counter in place: one instruction, not a load, an inc and a store */
+    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     return emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
 }
@@ -9468,11 +9466,8 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
                             ys("%rax")));
     st = gen_val_tostr_rax(st, yr_get(t, "of"), path_push(path, t));
     st = gen_acc_cat_rax(st, aoff);
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    inc %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
-                         ys("(%rbp)")));
+    /* the counter in place: one instruction, not a load, an inc and a store */
+    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
     st = gen_acc_cat_slot(st, aoff, ys("}"));
@@ -9534,11 +9529,8 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
     st = emit(st, ys("    add $16, %rsp"));
     st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(aoff)),
                          ys("(%rbp)")));
-    st = emit(st, ys_cat(ys_cat(ys("    mov "), ys_long(ioff)),
-                         ys("(%rbp), %rax")));
-    st = emit(st, ys("    inc %rax"));
-    st = emit(st, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(ioff)),
-                         ys("(%rbp)")));
+    /* the counter in place: one instruction, not a load, an inc and a store */
+    st = emit(st, ys_cat(ys("    inc "), ys_cat(ys_long(ioff), ys("(%rbp)"))));
     st = emit(st, ys_cat(ys("    jmp "), yr_get(r1, "lbl")));
     st = emit(st, ys_cat(yr_get(r2, "lbl"), ys(":")));
     st = gen_acc_cat_slot(st, aoff, ys("]"));

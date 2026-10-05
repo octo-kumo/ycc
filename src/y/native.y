@@ -5373,9 +5373,8 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
-    st = emit(st, "    mov " + tostring(voff) + "(%rbp), %rax");
-    st = emit(st, "    inc %rax");
-    st = emit(st, "    mov %rax, " + tostring(voff) + "(%rbp)");
+    // the counter in place: one instruction, not a load, an inc and a store
+    st = emit(st, "    inc " + tostring(voff) + "(%rbp)");
     st = emit(st, "    jmp " + r1.lbl);
     emit(st, r2.lbl + ":")
 };
@@ -5418,7 +5417,10 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let r2 = next_loc(st);
     st = r2.st;
     st = emit(st, r1.lbl + ":");
-    // i < len(arr) — the heap header keeps the length in slot 0.
+    // i < len(arr) — the heap header keeps the length in slot 0. The length
+    // is re-read on every iteration, not hoisted into a fourth slot: a body
+    // that appends to the array it walks goes on seeing what it appended
+    // (`foreach (x in a) { a += x }` never ends), which hoisting would change.
     st = emit(st, "    mov " + tostring(aoff) + "(%rbp), %rdx");
     st = emit(st, "    mov (%rdx), %rcx");
     st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
@@ -5430,9 +5432,8 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
     st = gen_loc_loop(st, node);
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
-    st = emit(st, "    inc %rax");
-    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    // the counter in place: one instruction, not a load, an inc and a store
+    st = emit(st, "    inc " + tostring(ioff) + "(%rbp)");
     st = emit(st, "    jmp " + r1.lbl);
     emit(st, r2.lbl + ":")
 };
@@ -7875,9 +7876,8 @@ def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     st = emit(st, elem_load(elem_bytes(map.of), "%rdx", "%rcx", "%rax"));
     st = gen_val_tostr_rax(st, map.of, path + t);
     st = gen_acc_cat_rax(st, aoff);
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
-    st = emit(st, "    inc %rax");
-    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    // the counter in place: one instruction, not a load, an inc and a store
+    st = emit(st, "    inc " + tostring(ioff) + "(%rbp)");
     st = emit(st, "    jmp " + r1.lbl);
     st = emit(st, r2.lbl + ":");
     st = gen_acc_cat_slot(st, aoff, "}");
@@ -7926,9 +7926,8 @@ def gen_arr_tostr_rax(st: EmitSt, elty: Type, path: [Type]) -> EmitSt {
     st = emit(st, "    call y_str_cat");
     st = emit(st, "    add $16, %rsp");
     st = emit(st, "    mov %rax, " + tostring(aoff) + "(%rbp)");
-    st = emit(st, "    mov " + tostring(ioff) + "(%rbp), %rax");
-    st = emit(st, "    inc %rax");
-    st = emit(st, "    mov %rax, " + tostring(ioff) + "(%rbp)");
+    // the counter in place: one instruction, not a load, an inc and a store
+    st = emit(st, "    inc " + tostring(ioff) + "(%rbp)");
     st = emit(st, "    jmp " + r1.lbl);
     st = emit(st, r2.lbl + ":");
     st = gen_acc_cat_slot(st, aoff, "]");
