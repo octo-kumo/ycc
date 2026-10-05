@@ -50,7 +50,7 @@ strings either, so \ic{join([1, 2, 3], ",")} is \ic{"1,2,3"}.
 \label{sec:string-methods}
 
 A \ic{str} value takes methods: \ic{"str 1 2 3".split(" ")} is
-\ic{["str", "1", "2", "3"]}. A method call is checked like a function
+\ic{["str", "1", "2", "3"]}, and the call is checked like a function
 call (argument count and types). Method names are not reserved: a
 function, a variable or a record field may share one, and \ic{r.f(x)} on
 a record still calls the field. \ic{s.length} is a property, so
@@ -357,7 +357,11 @@ computed by squaring).
   rounds.
 \item[\ic{math.frexp(x)}] $[\,\ty{fraction\ bits}, \;\ty{exponent}\,]$: the
   fraction's IEEE-754 pattern, a value in $[0.5, 1)$, and the exponent, such that
-  \ic{math.ldexp(math.bitsf(math.frexp(x)[0]), math.frexp(x)[1])} is $x$ exactly.
+  %
+  % \ic breaks at spaces and at \_, and \allowbreak was tried at every
+  % bracket here as well: the expression is 328pt and the body measure 393pt,
+  % so what is left after any break cannot fill the line. It wants a display.
+  \[\ic{math.ldexp(math.bitsf(math.frexp(x)[0]), math.frexp(x)[1])} = x\]
   Bits rather than a float because this is the one conversion with no rounding
   in it at all.
 \item[\ic{math.nextafter(x, y)}] The next double from \ty{x} toward \ty{y} (C's
@@ -481,8 +485,8 @@ computed by squaring).
   counterpart and comes back unchanged, as in C.
 \item[\ic{math.clamp(x, lo, hi)}, \ic{math.sign(x)}] \ty{x} moved into
   \ic{[lo, hi]}; and \ic{-1}, \ic{0} or \ic{1}.
-\item[\ic{math.gcd(a, b)}, \ic{math.lcm(a, b)}] The greatest common divisor
-  and the least common multiple, both $\geq 0$; \ic{math.gcd(0, 0)} and
+\item[\ic{math.gcd(a, b)}, \ic{math.lcm(a, b)}] Greatest common divisor and
+  least common multiple, both $\geq 0$; \ic{math.gcd(0, 0)} and
   \ic{math.lcm(0, x)} are \ic{0}.
 \item[\ic{math.isqrt(n)}] $\lfloor\sqrt{n}\rfloor$ for $n \geq 0$, and \ic{0}
   for a negative $n$.
@@ -754,7 +758,6 @@ let made = http.post("https://api.example.com/items", "{\"a\": 1}",
                      { headers: {"Content-Type": "application/json"} });
 \end{lstlisting}
 
-\begin{sloppypar}
 \noindent \ic{get}, \ic{head} and \ic{delete} take the URL, \ic{post},
 \ic{put} and \ic{patch} the URL and a body, \ic{request} a method and
 the URL; each then the options: \ic{headers} (a map; they replace the
@@ -767,12 +770,11 @@ says why), \ic{reason}, \ic{headers} (names in lower case; a repeated
 header's values joined by \ic{", "}, \ic{set-cookie}'s by newlines),
 \ic{size} (the Content-Length, or $-1$), \ic{url} (after redirects), and
 the body, which is kept rather than drained: \ic{res.read(n)} gives the
-first \ty{n} bytes of it (all of it for $n \leq 0$ or an \ty{n} past its
-end), \ic{res.text()} all of it as a \ic{str}. A read after the body has
-ended is answered from what already came, so \ic{read(n)} twice gives the
-same bytes twice and \ic{text()} twice the same text; \ic{[]} is only ever
-a body that was empty (a \ic{204}, a \ic{HEAD}).
-\end{sloppypar}
+first \ty{n} bytes of it (all of it for $n \leq 0$ or an \ty{n} past
+its end), \ic{res.text()} all of it as a \ic{str}. A read after the body
+has ended is answered from what already came, so \ic{read(n)} twice
+gives the same bytes twice and \ic{text()} twice the same text;
+\ic{[]} is only ever a body that was empty (a \ic{204}, a \ic{HEAD}).
 
 Many requests that look alike go through a session: a base URL their
 paths resolve against, headers for every request (\ic{s.header(name,
@@ -788,34 +790,34 @@ let gone = s.request("DELETE", "/users/7", { timeout: 5 });
 s.close();
 \end{lstlisting}
 
-\begin{sloppypar}
 \ic{import tls;} is the TLS 1.3 client underneath:
-\ic{tls.connect(host, port)} (or \ic{tls.connect\_with(host, port,
-opts)}, with \ic{anchors}, \ic{alpn}, \ic{insecure} and \ic{timeout})
-gives a connection whose \ic{err} is \ic{""} when the handshake held;
-\ic{tls.send(c, bytes)}, \ic{tls.recv(c)} (the next data, \ic{none} at
-the end) and \ic{tls.close(c)} use it. The server's chain must reach a
+\ic{tls.connect(host, port)} gives a
+connection whose \ic{err} is \ic{""} when the handshake held, and
+\ic{tls.send(c, bytes)}, \ic{tls.recv(c)} (the next data, \ic{none} at the
+end) and \ic{tls.close(c)} work on it. \ic{tls.connect\_with(host, port,
+opts)} is the same with \ic{anchors}, \ic{alpn}, \ic{insecure} and
+\ic{timeout} to choose instead. The server's chain must reach a
 trust anchor and name the host; X25519 and three suites are offered;
 there is no TLS 1.2.
-\end{sloppypar}
 
-\begin{sloppypar}
-\ic{import net;} has the sockets: \ic{net.resolve(name)}
-(the IPv4 addresses, from \ic{/etc/hosts} and DNS),
-\ic{net.resolve\_with(name, server, port)} (asking that resolver
-instead), \ic{net.connect\_tcp(host, port)}, \ic{net.send\_str(fd,
-data)}, \ic{net.recv\_str(fd, max)} (the next \ic{str}, \ic{none} at the
-end) and \ic{net.close\_fd(fd)}. Under them are the pieces a server is
-built from: \ic{net.socket\_tcp()}, \ic{net.addr\_set(addr, host,
-port)} (\ic{net.is\_quad(addr)} is whether that address is four decimal
-octets, which is what \ic{resolve} reads \ic{/etc/hosts} and a resolver's
-answers for), \ic{net.bind\_tcp(fd, port)}, \ic{net.listen\_fd(fd, backlog)},
-\ic{net.accept\_tcp(fd)}, \ic{net.local\_port(fd)} (the port a socket
-took, which is how port 0 is used) and \ic{net.set\_timeouts(fd, secs)}.
-A descriptor that fails is negative, never a value to close.
-\end{sloppypar}
+\ic{import net;} has the sockets. \ic{net.resolve(name)} gives IPv4
+addresses from \ic{/etc/hosts} and DNS; \ic{net.resolve\_with(name,
+server, port)} asks that resolver instead.
 
-\begin{sloppypar}
+\ic{net.connect\_tcp(host, port)}, \ic{net.send\_str(fd, data)}
+and \ic{net.recv\_str(fd, max)} (the next \ic{str}, \ic{none} at the end)
+work on one, as does \ic{net.close\_fd(fd)}. A descriptor that fails is
+negative, never a value to close.
+
+Under them are the pieces a server is built from: \ic{net.socket\_tcp()},
+\ic{net.bind\_tcp(fd, port)},
+\ic{net.listen\_fd(fd, backlog)} and \ic{net.accept\_tcp(fd)} take and
+give them, and \ic{net.set\_timeouts(fd, secs)} sets the timeouts.
+\ic{net.addr\_set(addr, host, port)} names one, and \ic{net.is\_quad(addr)}
+is whether that address is four decimal octets --- which is what \ic{resolve}
+reads \ic{/etc/hosts} and a resolver's answers for. \ic{net.local\_port(fd)}
+is the port a socket took, which is how port 0 is used.
+
 Two accept loops sit on that. \ic{net.listen\_tcp(port, handler)} calls
 \ic{handler} --- a \ic{(long) -> long} --- with each connection's
 descriptor until an accept fails. \ic{net.listen\_http(port, handler)} is
@@ -830,19 +832,15 @@ program (\ic{net: cannot listen on port 34567: errno -98 (address in
 use)}) rather than leaving \ic{accept} to wait on a socket bound to
 nothing. The socket itself is not checked --- it fails only when the
 process is out of descriptors.
-\end{sloppypar}
 
-\begin{sloppypar}
 Two URL helpers stand apart from the requests, since a redirect or a
 \ic{<base>} path is often already split: \ic{http.parse\_url(s)} gives
 the parts of a URL, and \ic{http.resolve\_ref(base, ref)} resolves a
 reference against a base URL the way a browser would.
-\end{sloppypar}
 
 \subsection{Cryptography (the crypto and x509 modules)}
 \label{sec:builtin-crypto}
 
-\begin{sloppypar}
 \ic{import crypto;} has what TLS uses, in plain Y over \ic{[byte]}:
 \ic{sha256}, \ic{sha384}, \ic{sha512}; \ic{hmac} and \ic{hkdf\_extract}/\ic{hkdf\_expand}
 over \ic{crypto.hash\_sha256()} or \ic{hash\_sha384()};
@@ -863,21 +861,18 @@ use are exported too, for building something the above does not cover:
 \ic{bytes\_eq} (a constant-time compare of two \ic{[byte]}), the
 endianness helpers \ic{be\_bytes}/\ic{le\_bytes}, \ic{poly1305}, and the
 raw ciphers \ic{chacha20} and \ic{aes\_encrypt} under \ic{aes\_key}.
-\end{sloppypar}
 
-\begin{sloppypar}
 \ic{import x509;} reads certificates: \ic{x509.verify\_chain(chain,
 host, now)} is \ic{""} when the DER certificates \ty{chain} (the
 server's first) reach a system trust anchor and name \ty{host} at
-\ty{now} (Unix seconds), else why not; \ic{verify\_chain\_with} takes
-the anchors (\ic{x509.anchors\_pem(text)}), \ic{x509.pem\_certs(text)}
-splits a PEM file, and \ic{x509.system\_roots()} gives the system's own
+\ty{now} (Unix seconds), else why not. \ic{verify\_chain\_with} takes
+the anchors (\ic{x509.anchors\_pem(text)}), and \ic{x509.pem\_certs(text)}
+splits a PEM file while \ic{x509.system\_roots()} gives the system's own
 as PEM. A single certificate is \ic{parse\_cert(der)}, checked with
 \ic{verify\_signed(cert, signature, key)} and matched to a name with
 \ic{name\_matches(cert, host)}; \ic{days\_from\_civil(y, m, d)} is the
 date arithmetic \ic{verify\_chain} uses, and \ic{b64\_decode} the
 Base64 one.
-\end{sloppypar}
 
 \subsection{The terminal (the tui module)}
 \label{sec:builtin-tui}
@@ -906,8 +901,8 @@ frame clock and the frame meter.
 \item[\ic{tui.active()}] \ty{bool}: whether raw mode is on now, so a cleanup path
   can be called from anywhere without checking first.
 \item[\ic{tui.restore\_exit()}] Install an \ic{atexit} handler that restores the
-  terminal, and \ic{tui.restore\_all\_exit()} the same for every standard descriptor.
-  This is what stops a crash from leaving a shell in raw mode.
+  terminal; \ic{tui.restore\_all\_exit()} does the same for every
+  standard descriptor. This is what stops a crash from leaving a shell in raw mode.
 \item[\ic{tui.arm\_watchdog()}] \ic{fork} a child that waits for this process to
   die and restores the terminal from the child --- the one path a handler cannot
   cover, since \ic{SIGKILL} runs nothing. The alt screen and the cursor are
@@ -928,9 +923,9 @@ frame clock and the frame meter.
   blocking and without decoding one.
 \item[\ic{tui.enter\_screen()}, \ic{tui.leave\_screen()}] The alternate screen
   buffer, so a full-screen program leaves the scrollback alone.
-\item[\ic{tui.hide\_cursor()}, \ic{tui.show\_cursor()}] Cursor visibility, and
-  \ic{tui.cursor\_to(row, col)}, \ic{tui.home()}, \ic{tui.clear\_screen()} to move
-  it.
+\item[\ic{tui.hide\_cursor()}, \ic{tui.show\_cursor()}] Cursor visibility. \ic{tui.cursor\_to(row, col)} moves
+  it, \ic{tui.home()} goes to the top left and \ic{tui.clear\_screen()}
+  wipes the screen.
 \item[\ic{tui.new(rows, cols)}] A \ic{Surface}. It allocates six
   \ic{[long; 32768]} arrays --- 1.5 MiB --- \emph{once}, whatever size it is asked
   for, and the surface is capped at 32768 cells: a 128x256 screen. A larger one
@@ -982,19 +977,19 @@ frame clock and the frame meter.
 \item[\ic{tui.rd16(b, i)}, \ic{tui.rd32(b, i)}] Little-endian reads from a
   \ic{[byte]}, for a protocol that arrives in that order.
 \item[\ic{tui.capture\_on()}, \ic{tui.capture\_off()}, \ic{tui.capture\_reset()}] Record
-  everything drawn, so a test can compare it; \ic{tui.capture\_len()},
-  \ic{tui.capture\_byte(i)}, \ic{tui.capture\_str(from, to)} and
-  \ic{tui.capture\_checksum()} read it back. The checksum is FNV-1a over the bytes,
+  everything drawn, so a test can compare it. Four accessors read it back:
+  \ic{tui.capture\_len()}, \ic{tui.capture\_byte(i)},
+  \ic{tui.capture\_str(from, to)} and \ic{tui.capture\_checksum()}. The checksum is FNV-1a over the bytes,
   which makes a frame comparable without being readable.
-\item[\ic{tui.grid\_digest(s)}] FNV-1a over the surface's \emph{cells} --- a
-  different number from \ic{tui.capture\_checksum()}, which is over the bytes
-  written, so a colour change moves one and not the other.
+\item[\ic{tui.grid\_digest(s)}] FNV-1a over the surface's \emph{cells}, a different number
+  from \ic{tui.capture\_checksum()} (which is over the bytes written): a
+  colour change moves one and not the other.
 \item[\ic{tui.grid\_text(s)}] The grid as plain text, no escapes. This is what a
   golden file holds.
-\item[\ic{tui.shade(c)}] A colour mapped to a glyph by luminance, and
-  \ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half}, \ic{shade\_braille} the
-  ramps for each; \ic{tui.shade\_len(ramp)} and \ic{tui.ramp\_index(v, n, k)} to index
-  one. \ic{tui.braille(cp)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
+\item[\ic{tui.shade(c)}] A colour mapped to a glyph by luminance.
+  \ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half} and \ic{shade\_braille}
+  are the ramps for each, and \ic{tui.shade\_len(ramp)} with
+  \ic{tui.ramp\_index(v, n, k)} index one. \ic{tui.braille(cp)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
   mask)} address one braille dot pattern directly.
 \item[\ic{tui.utf8\_len(cp)}, \ic{tui.utf8\_byte(cp, i)}, \ic{tui.width\_of(cp)}] A
   code point's UTF-8 length and bytes, and how many terminal columns it occupies

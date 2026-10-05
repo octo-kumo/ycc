@@ -47,14 +47,12 @@ let bad = [[1], 2];            // error: array element: expected [long], got lon
 \subsection{Records}
 \label{sec:type-records}
 
-\begin{sloppypar}
 A record literal \ic{\{ a: 1, b: "x" \}} has the record type
 \ic{\{ a: long, b: str \}}. A record type is the set of its fields: the
 order they are written in is not part of it, so
 \ic{\{ b: str, a: long \}} is the same type (and prints its fields in
 that order). A field read or write is legal when the static type has
 the field.
-\end{sloppypar}
 
 Records are \textbf{exact}: a record goes only where its own type is
 expected, or a union that has it as a member
@@ -75,7 +73,6 @@ against its field's type, converting as any store does
 likewise. Where a union is declared, the literal is the member with its
 field names.
 
-\begin{sloppypar}
 A field written \ic{name?: T} is \emph{optional}: its type is \ic{T?},
 and such a literal may leave it out (it is then \ic{none}) or give a
 plain \ic{T}, which is wrapped as \ic{some} would --- or a \ic{T?}, or
@@ -86,7 +83,6 @@ otherwise none. The mark is not part of the type:
 \ic{\{ a?: long \}} and \ic{\{ a: long? \}} are one type, and only a
 literal sees the difference. A literal given to an optional parameter
 of such a type is created as it too:
-\end{sloppypar}
 
 \begin{lstlisting}
 type Opts = { url: str, timeout?: long, tag?: str };
@@ -120,14 +116,12 @@ let s: Shape = { name: "box", w: 2.0, h: 3.0 };   // a Rect
 print(s.name, " ", area(s));                       // box 6.000000
 \end{lstlisting}
 
-\begin{sloppypar}
 \noindent In a \ic{match}, a type pattern such as \ic{Circle c} must
 name a member exactly. A record pattern such as
 \ic{(\{name: "box"\}) b} matches the members with those fields, and
 binds the one member with them, or the union of those members. Without
 \ic{\_}, every member needs a type arm. A union prints as the member it
 holds.
-\end{sloppypar}
 
 A union value also goes where one of its members is declared --- an
 annotated \ic{let}, an argument or a \ic{return} --- or a union of some of
@@ -147,7 +141,6 @@ field or an element: reading \ic{r} out of a field of union type, or out of
 \ic{shapes[0]}, is an error --- nothing there states which member is meant.
 Bind or match one first (\ic{let c: Circle = ...;} and then \ic{c.r}).
 
-\begin{sloppypar}
 A union value keeps the fields its members share at one place, whatever
 member it holds, so reading one is a single load: each member is laid
 out for the union it is held in. Going between a union and a member,
@@ -158,7 +151,6 @@ names, so a program should not count on either. A \ic{match} arm's
 binding (\ic{Circle c}) is such a cast; a destructuring pattern
 (\ic{Rect \{ w, h \}}) reads the fields in place. To change a field only
 some members have, cast, write and store the record back:
-\end{sloppypar}
 
 \begin{lstlisting}
 let r: Rect = s;
@@ -182,12 +174,10 @@ type Add = { l: Expr, r: Expr };
 let e: Expr = { l: { n: 1 }, r: { l: { n: 2 }, r: { n: 3 } } };
 \end{lstlisting}
 
-\begin{sloppypar}
 \noindent A cycle with no record field or function type in it, as in
 \ic{type T = [T];} or \ic{type U = U | \{ a: long \};}, names no type,
 and is an error at its declaration: \ic{type 'T' refers to itself}
 \ic{outside any record field or function type}.
-\end{sloppypar}
 
 \subsection{Maps}
 
@@ -229,17 +219,22 @@ let a: str? = some("yo hi");
 let parts = a?.split(" ");   // [str]? --- the method, or none
 let part1 = parts?.[0];      // the first byte of the string, or none
 \end{lstlisting}
+% These four chains have no space and no underscore in them, so unlike every
+% other long code span in the manual (\ic breaks at \_ and at the spaces) they
+% are one unbreakable box: 33 to 38 characters, and a line carrying one of them
+% went 115pt over the measure. \allowbreak after a dot of the chain is a
+% discretionary, so nothing shows unless TeX needs it.
 The receiver is read \emph{once}, whatever it is, and \emph{every} link
-after the \ic{?.} propagates: \ic{obj?.inner.inneragain.inneragainn} is
+after the \ic{?.} propagates: \ic{obj?.inner.\allowbreak inneragain.inneragainn} is
 \ic{none} whenever \ic{obj} is, not just the first field. So a method
 call, a \ic{.length}, a slice or an index may all follow it:
 \ic{here()?.name.length}. A link whose own type is an option ends the
 propagating chain --- \ic{inneragain} is \ic{X?} here, so reading a field
 of \emph{it} needs a \ic{?.} of its own, and \ic{obj?.inner.inneragain.name}
-is a type error. Write \ic{obj?.inner.inneragain?.inneragainn} instead, or
-\ic{obj?.inner.inneragain?.name}. Further down, the same applies to a
-subscript or a method: \ic{a?.xs?.[0]?.f} reaches through two subscripts
-and a field.
+is a type error. Write \ic{obj?.inner.inneragain?.\allowbreak inneragainn}
+instead, or \ic{obj?.inner.inneragain?.name}. Further down, the same applies
+to a subscript or a method: \ic{a?.xs?.[0]?.f} reaches through two
+subscripts and a field.
 
 The type is the option of the field's --- of the subscript's, or of the
 method's return --- and it is \emph{flat}: a field that is itself an
@@ -290,10 +285,9 @@ called); see Section~\ref{sec:functions}.
 Every value has a type the program states or the checker can see; there
 is no unknown type. Where the type cannot be inferred, annotate:
 
-\begin{sloppypar}
 \begin{itemize}[nosep]
-\item \ic{def} parameters are annotated (or have a default):
-  \ic{parameter 'x' has no type (annotate it)}.
+\item \ic{def} parameters are annotated, or have a default.
+  The error is \ic{parameter 'x' has no type (annotate it)}.
 \item Return types are inferred from the body when omitted: the type of
   its trailing value, or \ic{void} when it ends in a statement. Written or
   inferred, every \ic{return} and the body's trailing value must conform,
@@ -338,7 +332,6 @@ def spin(n: long) { self(n) };
   \ic{\{\}} is the empty record; under a map annotation it is the empty
   map: \ic{let m: \{str => long\} = \{\};}.
 \end{itemize}
-\end{sloppypar}
 
 \subsection{Conversions}
 \label{sec:conversions}
