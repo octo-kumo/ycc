@@ -14,23 +14,41 @@
 #
 # THE CONVENTION, once, for every block below:
 #   mov  $number, %eax          the syscall's index
-#   arg1 %r10  arg2 %r9  arg3 %r8  arg4 %rdx
+#   arg1 %r10  arg2 %rdx  arg3 %r8  arg4 %r9   arg5+ on the stack at 40(%rsp),
+#   48(%rsp), 56(%rsp)...
 #   the result is an NTSTATUS in %rax, and FAILURE IS THE POSITIVE SIGN BIT
 #   of its low 32 bits: `test %eax,%eax; js` is the failure test. Carrying a
 #   SysV `js`/`>= 0` over would read failure as success, and testing %rax
 #   instead of %eax would too -- writing EAX clears the high half, so a
 #   failure status arrives as a POSITIVE 64-bit value.
 #
-# ARGUMENTS FIVE AND UP ARE A COMPATIBILITY SHIM, and this is the one place
-# where wine and a real Windows are MEASURED to differ. The Windows kernel
-# takes arg5 in %rcx, arg6 in %r11 and arg7 and after at 32(%rsp), 40(%rsp),
-# 48(%rsp)... . Wine (11.17, measured here by calling NtAllocateVirtualMemory
-# and reading the raw NTSTATUS) additionally takes arg5 from 32(%rsp) and
-# arg6 from 40(%rsp), and reports STATUS_INVALID_PARAMETER (0xC000000D) when
-# only the registers are set. So every call here sets the registers AND the
-# stack slots, which is harmless on Windows (it ignores the slots) and what
-# wine needs. Arguments one to four are identical on both, which is why only
-# the calls with five or more arguments need the duplication.
+# WHY THOSE REGISTERS, since "r10/r9/r8/rdx then rcx/r11" is a natural
+# mistake and an earlier revision of this file made it: the caller of a
+# syscall is ntdll, and ntdll is a Win64 function.  Its own generated stubs
+# expand to exactly
+#       mov $number, %eax
+#       mov %rcx, %r10
+#       syscall
+# ONE shuffle, because `syscall` destroys %rcx (so argument one must move out
+# of it) and leaves everything else alone.  Arguments two, three and four are
+# already in %rdx, %r8, %r9, and argument five onwards are already in ntdll's
+# shadow space at 40(%rsp) and up -- which is where the kernel reads them,
+# because they are the same slots ntdll's caller wrote them into.  Any other
+# register set would mean shuffling arguments ntdll has already placed
+# correctly, which is the test: if a layout needs more than one instruction in
+# ntdll's stub, it is not the layout ntdll uses.
+#
+# ARGUMENTS FIVE AND UP are on the stack at 40(%rsp), 48(%rsp), ... (see the
+# convention above), which is this runtime's own frame -- the 32 bytes below
+# that are the shadow space a Win64 callee may read its register arguments
+# out of, and nothing here is a real Win64 callee, so nothing has to reserve
+# that part for a callee to read.
+#
+# There is no second opinion encoded here. An earlier revision of this file
+# duplicated every argument into both a register and a stack slot "because
+# wine needs it"; that is contorting Windows code around a runtime that is
+# not the target, and it cannot even be self-consistent (it would put arg5 at
+# arg7's slot). It is gone. If a call here is wrong, the call is wrong.
 #
 # The numbers are the Windows 10 1607 / 11 x64 table, pinned in
 # arch_x64.y w_sysno (one arm per call, so a future Windows is a small diff).
@@ -60,14 +78,13 @@ yosh_out:
     mov 0x28(%rax), %rax
     ret
 # y_os_write(fd, buf, len) -> bytes written, or -1.
-# NtWriteFile takes NINE arguments: handle, event, ApcRoutine, ApcContext,
-# IoStatusBlock, buffer, length, offset, key. The first four go in the NT
-# registers and the last five at 32(%rsp) onwards -- the six bytes of room
-# reserved below %rsp here, which is our own frame (the shadow space the ABI
-# reserves for register arguments sits ABOVE %rsp and is unused here). Offset
-# and key are NULL, which is what a console or a pipe wants; the byte count
-# comes back in the IO_STATUS_BLOCK's Information field, not in the status.
-# The IO_STATUS_BLOCK lives at -16(%rbp), with Information at -8(%rbp).
+# NtWriteFile takes NINE arguments, which is why it is the call that needs the
+# stack slots: handle, event, ApcRoutine, ApcContext, IoStatusBlock, buffer,
+# length, offset, key. Four go in registers and the last five at 40(%rsp)
+# upwards -- which is why the frame reserves 128 bytes below %rsp here.
+# Offset and key are NULL, which is what a console or a pipe wants; the byte
+# count comes back in the IO_STATUS_BLOCK's Information field, not in the
+# status.  The IO_STATUS_BLOCK lives at -16(%rbp), Information at -8(%rbp).
 #=== add: y_os_write ===
 y_os_write:
     push %rbp
@@ -79,14 +96,15 @@ y_os_write:
     mov %rsi, %rbx
     call y_os_handle
     mov %rax, %r10
-    xor %r9d, %r9d
-    xor %r8d, %r8d
     xor %edx, %edx
-    lea -16(%rbp), %rcx
-    mov %rbx, %r11
-    mov %r12, 32(%rsp)
-    mov $0, 40(%rsp)
-    mov $0, 48(%rsp)
+    xor %r8d, %r8d
+    xor %r9d, %r9d
+    lea -16(%rbp), %rax
+    mov %rax, 40(%rsp)
+    mov %rbx, 48(%rsp)
+    mov %r12, 56(%rsp)
+    mov $0, 64(%rsp)
+    mov $0, 72(%rsp)
     mov $8, %eax
     syscall
     test %eax, %eax
@@ -109,7 +127,7 @@ yow_out:
 #=== add: y_os_exit ===
 y_os_exit:
     mov $-1, %r10
-    mov %rdi, %r9
+    mov %rdi, %rdx
     mov $44, %eax
     syscall
     xor %eax, %eax
@@ -159,9 +177,9 @@ y_opt_unwrap:
     call y_os_exit
 # y_alloc_map: the allocator's mapping request. The size arrives in %rsi,
 # the same register the SysV mmap call it replaces takes it in (y_alloc_more
-# sets it). NtAllocateVirtualMemory takes six arguments -- the first four in
-# registers, then allocation type and protection (both set in the registers
-# AND at 32/40(%rsp), see the file header):
+# sets it). NtAllocateVirtualMemory takes six arguments: four in registers,
+# the last two at 40(%rsp) and 48(%rsp) (see the file header), which is what
+# the 128-byte frame is for:
 #   NtAllocateVirtualMemory(-1, &BaseAddress, 0, &RegionSize,
 #                          MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
 # with MEM_COMMIT|MEM_RESERVE = 0x3000 and PAGE_READWRITE = 0x04. The address
@@ -177,13 +195,11 @@ y_alloc_map:
     mov $0, -8(%rbp)
     mov %rsi, -16(%rbp)
     mov $-1, %r10
-    lea -8(%rbp), %r9
+    lea -8(%rbp), %rdx
     xor %r8d, %r8d
-    lea -16(%rbp), %rdx
-    mov $12288, %rcx
-    mov $4, %r11
-    mov $12288, 32(%rsp)
-    mov $4, 40(%rsp)
+    lea -16(%rbp), %r9
+    mov $12288, 40(%rsp)
+    mov $4, 48(%rsp)
     mov $24, %eax
     syscall
     test %eax, %eax

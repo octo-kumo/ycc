@@ -4513,14 +4513,42 @@ def l_syscall_reg(i: long) -> long {
     else { insn.R_R9 }
 };
 
+// The Win64 `syscall` argument registers.  TWO of the values the previous
+// revision had here were wrong, and the two wrong ones are the reason a PE
+// could not allocate a single byte:
+//
+//   arg1 %r10   arg2 %rdx   arg3 %r8   arg4 %r9    arg5+ on the stack
+//
+// It is NOT r10/r9/r8/rdx (that is the Intel manual's syscall ordering for a
+// *different* reason and costs a four-way shuffle), and NOT r10/r9/r8/rdx/
+// rcx/r11 (which is what this used to say, and which is what the previous
+// agent's wine measurements appeared to support).  The proof that it is the
+// layout above is that ntdll's own generated stubs -- which is where the
+// convention has to be honoured, because ntdll *is* the caller -- need
+// exactly ONE instruction to prepare it.  Both a real Windows ntdll and
+// ReactOS's build of the same stubs expand to
+//
+//     mov $number, %eax
+//     mov %rcx, %r10
+//     syscall
+//
+// i.e. arg2 in %rdx, arg3 in %r8, arg4 in %r9 are already in place and the
+// fifth and later arguments are already in ntdll's own shadow space.  Only
+// arg1 has to move, because `syscall` destroys %rcx.  Any other register set
+// would require shuffling arguments ntdll has already placed correctly.
+//
+// So there are FOUR argument registers, not six, and gen_syscall puts the
+// fifth and later on the stack itself.
 def w_syscall_reg(i: long) -> long {
     if (i == 0) { insn.R_R10 }
-    else if (i == 1) { insn.R_R9 }
+    else if (i == 1) { insn.R_RDX }
     else if (i == 2) { insn.R_R8 }
-    else if (i == 3) { insn.R_RDX }
-    else if (i == 4) { insn.R_RCX }
-    else { insn.R_R11 }
+    else { insn.R_R9 }
 };
+
+// How many arguments the Windows target passes in registers.  The rest go on
+// the stack (gen_syscall).
+def w_syscall_regargs() -> long { 4 };
 
 // The same, for `_start`'s tail, which is built straight into the body's IR
 // (emit_one_fn) rather than through an EmitSt. The status is 0: the Linux
@@ -4528,7 +4556,7 @@ def w_syscall_reg(i: long) -> long {
 def ir_terminate(body: [long]) -> [long] {
     if (target_is_windows()) {
         body = insn.ir_push(body, insn.F_MOV_I_R, 0 - 1, insn.R_R10, 64, 0, 0, 0, 0);
-        body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_R9, 32, insn.R_R9, 32, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_RDX, 32, insn.R_RDX, 32, 0, 0, 0);
         body = insn.ir_push(body, insn.F_MOV_I_R, 44, 0, 64, 0, 0, 0, 0);
     } else {
         body = insn.ir_push(body, insn.F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
@@ -4543,7 +4571,9 @@ def ir_terminate(body: [long]) -> [long] {
 // register the status travels in all move.
 def gen_terminate(st: EmitSt) -> EmitSt {
     if (target_is_windows()) {
-        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_R9, 64, 0, 0, 0);
+        // NtTerminateProcess(-1, status): argument one in %r10, argument two
+        // in %rdx (w_syscall_reg).
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_I_R, 0 - 1, insn.R_R10, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_I_R, 44, insn.R_RAX, 64, 0, 0, 0, 0);
     } else {
@@ -5228,54 +5258,77 @@ def gen_rec_field_str(st: EmitSt, idx: long, ft: Type, path: [Type]) -> EmitSt {
     emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RSP, -1, 1, -1, -1)
 };
 
-def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
-    let args: [Node] = node.args;
-    // args[0] is the number; the rest are the call's arguments. Push all, pop
-    // into registers.
-    st = gen_push_args(st, args);
-    let n = len(args) - 1;
-    let i = n;
-    while (i >= 1) {
-        st = emit_insn(st, insn.F_POP_R, syscall_reg(i - 1), 64, 0, 0, 0, 0, 0);
-        // a str flows in as its header; the kernel wants the data bytes.
-        let at = infer(st, args[i]);
-        if (at.k == K.tstr) {
-            st = emit_insn(st, insn.F_ADD_I_R, 8, syscall_reg(i - 1), 64, 0, 0, 0, 0);
-        }
-        i = i - 1;
-    };
-    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    let tail = target_is_windows() && len(args) - 1 > 6;
-    if (tail) { st = gen_syscall_tail(st, args); };
-    st = emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
-    if (tail) { st = emit_insn(st, insn.F_ADD_I_R, 64, insn.R_RSP, 64, 0, 0, 0, 0); };
-    st
+// The number of bytes gen_syscall reserves below %rsp on the Windows target
+// when the call has a fifth argument or more.  The kernel reads those from
+// 40(%rsp).. up (see w_syscall_reg), and the largest call the checker accepts
+// is NtWriteFile's nine arguments, so the last slot is at 40 + 4*8 = 72 and
+// the area has to reach 80.  96 covers it and keeps %rsp 16-aligned.
+def w_arg_space() -> long { 96 };
+
+// The offset of argument `i` (1-based, five or more) on the stack, measured
+// from %rsp at the `syscall`.  Argument five is at 40: Win64 reserves 32
+// bytes of shadow space at 0(%rsp)..32(%rsp) and a Win64 *call* passes its
+// fifth argument at 40(%rsp), which is where a callee reads it -- and the
+// kernel reads its arguments from exactly the place ntdll's own stub has
+// them, which is that same shadow space.
+def w_stack_arg_off(i: long) -> long {
+    40 + 8 * (i - 5)
 };
 
-// Win64's seventh argument and after live on the stack, at 32(%rsp),
-// 40(%rsp), 48(%rsp) -- the caller's own frame, since the shadow space the
-// ABI reserves for register arguments sits at 8(%rsp)..32(%rsp) and our
-// frames do not reserve one. So the room is reserved HERE, immediately below
-// the current %rsp, which is exactly where the kernel reads: 64 bytes is
-// more than the three slots need and keeps the frame 16-aligned.
-//
-// NtWriteFile is why this exists at all: it takes nine arguments, and it is
-// the only way to put a byte on the standard output (the emitter's no-libc,
-// no-import-table rule leaves the Win32 API unreachable by address).
-def gen_syscall_tail(st: EmitSt, args: [Node]) -> EmitSt {
+def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
+    // args[0] is the number; the rest are the call's arguments.
     let n = len(args) - 1;
-    if (n > 6) {
-        st = emit_insn(st, insn.F_SUB_I_R, 64, insn.R_RSP, 64, 0, 0, 0, 0);
-        let i = 6;
-        while (i < n) {
-            st = gen(st, args[i + 1]);
-            let at = infer(st, args[i + 1]);
+    let regs = target_is_windows() ? w_syscall_regargs() : 6;
+    // The stack arguments' room is reserved FIRST, because their slots are
+    // ABOVE %rsp and every step of the argument sequence moves %rsp: reserved
+    // afterwards, it would sit below the pushes rather than where the kernel
+    // reads.  Nothing is reserved on Linux, whose six arguments are all
+    // registers -- which is what keeps the ELF path byte-identical.
+    let room = (target_is_windows() && n > regs) ? w_arg_space() : 0;
+    let nreg = if (n < regs) { n } else { regs };
+    if (room > 0) {
+        st = emit_insn(st, insn.F_SUB_I_R, room, insn.R_RSP, 64, 0, 0, 0, 0);
+        // The stack arguments go straight to their slots, evaluated here and
+        // never pushed: a pushed one would have to be popped before %rsp could
+        // be right for the next, and the registers the kernel wants them in are
+        // the ones the register arguments are about to take.  Reverse order,
+        // like the pops below.
+        let i = n;
+        while (i > regs) {
+            st = gen(st, args[i]);
+            let at = infer(st, args[i]);
             if (at.k == K.tstr) {
                 st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
             };
-            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8 * i, -1, insn.R_RAX, 64);
-            i = i + 1;
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RSP, -1, 1, w_stack_arg_off(i), -1);
+            i = i - 1;
         };
+    };
+    // The number and the register arguments: push them all, pop them off the
+    // top in reverse.
+    st = gen(st, args[0]);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    let k = 1;
+    while (k <= nreg) {
+        st = gen(st, args[k]);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        k = k + 1;
+    };
+    let j = nreg;
+    while (j >= 1) {
+        st = emit_insn(st, insn.F_POP_R, syscall_reg(j - 1), 64, 0, 0, 0, 0, 0);
+        // a str flows in as its header; the kernel wants the data bytes.
+        let at = infer(st, args[j]);
+        if (at.k == K.tstr) {
+            st = emit_insn(st, insn.F_ADD_I_R, 8, syscall_reg(j - 1), 64, 0, 0, 0, 0);
+        }
+        j = j - 1;
+    };
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+    if (room > 0) {
+        st = emit_insn(st, insn.F_ADD_I_R, room, insn.R_RSP, 64, 0, 0, 0, 0);
     };
     st
 };
