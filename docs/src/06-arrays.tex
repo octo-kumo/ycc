@@ -78,13 +78,11 @@ expression & result & effect on operands & value types \\
 \end{center}
 \endgroup
 
-\begin{sloppypar}
 \noindent The two \ic{rows} rows are the array-as-an-element case, and
 they say what \ic{[[T]]} plus a \ic{[T]} does: the array goes in
 \emph{whole}, as one element, because a \ic{[T]} is what that array
 holds. \ic{rows + rows} (both \ic{[[T]]}) concatenates as usual, and so
 does \ic{rows += row}, which appends the row in place.
-\end{sloppypar}
 
 \noindent In prose, matching the design intent exactly:
 
@@ -178,7 +176,6 @@ are legal: \ic{a[:]}, \ic{a[lo:]}, \ic{a[:hi]}, \ic{a[lo:hi]}. Strings
 slice the same way: \ic{s[lo:hi]} is a new \ic{str} of the bytes in that
 range, clamped alike. There is no \ic{substr}.
 
-\begin{sloppypar}
 \paragraph{Slice assignment.} \ic{a[lo:hi] = b} writes \ic{b} into \ic{a}
 in place, over the range \ic{[lo, hi)} --- the same clamped range a read
 would take, on either kind of array. It is a statement, so as the last
@@ -195,7 +192,7 @@ bounds}. The static failures name themselves:
 \begingroup
 \setlength{\tabcolsep}{4pt}
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.60\linewidth}@{}}
 \toprule
 mistake & message \\
 \midrule
@@ -209,7 +206,6 @@ a \ic{str} target &
 \end{tabular}
 \end{center}
 \endgroup
-\end{sloppypar}
 
 \begin{lstlisting}
 let a = [1, 2, 3, 4, 5];
