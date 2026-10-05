@@ -29,9 +29,12 @@ type ArrRep = { k: long, v: Node, n: long, line: long, col: long };
 type Assign = { k: long, name: str, v: Node, line: long, col: long };
 type Block = { k: long, stmts: [Node], line: long, col: long };
 type Call = { k: long, callee: Node, args: [Node], line: long, col: long };
-type Decl = { k: long, kind: str, name: str, typ: Type, v: Node, line: long, col: long };
-type Dot = { k: long, obj: Node, key: str, line: long, col: long };
-type DotAssign = { k: long, obj: Node, key: str, v: Node, line: long, col: long };
+type Decl = { k: long, kind: str, name: str, typ: Type, v: Node, line: long, col: long, nline: long, ncol: long };
+type Dot = { k: long, obj: Node, key: str, line: long, col: long, nline: long, ncol: long };
+//   The key's position, as on Decl: `a.b` is an expression whose node starts
+//   at `a`, so line/col is where the whole thing begins, not where the member
+//   name is. An editor highlighting `b` needs the second.
+type DotAssign = { k: long, obj: Node, key: str, v: Node, line: long, col: long, nline: long, ncol: long };
 type Err = { k: long, msg: str, line: long, col: long };
 type For = { k: long, init: Node, cond: Node, step: Node, body: Node, line: long, col: long };
 type Foreach = { k: long, name: str, iter: Node, body: Node, line: long, col: long };
@@ -448,7 +451,7 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
         } else if (is_op(toks, pos, ".")) {
             if (is_name_tok(toks, pos + 1)) {
                 let name = tv(toks, pos + 1);
-                node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos) };
+                node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
             } else {
                 node = expect_err(toks, pos + 1, "a field name after '.'");
@@ -488,7 +491,7 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             if (is_name_tok(toks, pos + 1)) {
                 // The name belongs to the `?.`, not to the loop's own `.`
                 // branch: `x?.y` is one operator, like `x[y]`.
-                node = { k: K.dot, obj: node, key: tv(toks, pos + 1), line: pln, col: pcl };
+                node = { k: K.dot, obj: node, key: tv(toks, pos + 1), line: pln, col: pcl, nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
             } else {
                 pos = pos + 1;  // the loop's `[` branch takes the subscript
@@ -1284,6 +1287,8 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
     //           `=` (or `y_<name>`) IS the body
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
+    let nln = ln;   // the name's position; an anonymous def has none of its own
+    let ncl = cl;
     let pos = p + 1;  // skip 'def' (or 'native', handled just below)
     let fname = "";
     // A malformed header plants its errors here; they run first in the body.
@@ -1303,6 +1308,8 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
     if (!is_punct(toks, pos, "(")) {
         if (tt(toks, pos) == "id") {
             fname = tv(toks, pos);
+            nln = tline(toks, pos);
+            ncl = tcol(toks, pos);
             pos = pos + 1;
         } else if (isnat) {
             derrs += expect_err(toks, pos, "a name after 'native def'");
@@ -1432,7 +1439,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         // of its own, and the checker reads them so they are reported once
         let bnode: Block = { k: K.block, stmts: derrs, line: ln, col: cl };
         let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label };
-        res({ k: K.decl, kind: "native", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl }, pos)
+        res({ k: K.decl, kind: "native", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl, nline: nln, ncol: ncl }, pos)
     } else {
         let body = parse_block(toks, pos);
         let bnode: Block = body.node;
@@ -1447,7 +1454,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         if (fname == "") {
             res(func, body.pos)
         } else {
-            res({ k: K.decl, kind: "def", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl }, body.pos)
+            res({ k: K.decl, kind: "def", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl, nline: nln, ncol: ncl }, body.pos)
         }
     }
 };
@@ -1689,7 +1696,7 @@ def parse_stmt_dotassign(toks: [Tok], p: long, tgt: Dot, epos: long) -> Parsed {
 
 def parse_stmt_dotassign_go(toks: [Tok], p: long, dtgt: Dot, epos: long) -> Parsed {
     let rhs = parse_expr(toks, epos + 1);
-    res({ k: K.dotassign, obj: dtgt.obj, key: dtgt.key, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
+    res({ k: K.dotassign, obj: dtgt.obj, key: dtgt.key, v: rhs.node, line: tline(toks, p), col: tcol(toks, p), nline: dtgt.nline, ncol: dtgt.ncol }, rhs.pos)
 };
 
 
@@ -1742,6 +1749,12 @@ def parse_decl(toks: [Tok], p: long) -> Parsed {
     let name = tv(toks, p + 1);
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
+    // The NAME's position, which is not the keyword's. A diagnostic wants the
+    // keyword -- that is where the reader looks -- but a go-to-definition or a
+    // highlight wants the name, and `line`/`col` cannot be both. So the name's
+    // is carried alongside rather than instead (LSP.md R5.4, 9.2 A5).
+    let nln = tline(toks, p + 1);
+    let ncl = tcol(toks, p + 1);
     if (tt(toks, p + 1) != "id") {
         return res(expect_err(toks, p + 1, "a name after '" + kind + "'"), sync_stmt(toks, p + 1));
     };
@@ -1757,14 +1770,14 @@ def parse_decl(toks: [Tok], p: long) -> Parsed {
         if (te.k == K.err) {
             // The name stays bound (untyped), so its later uses do not
             // pile up "undefined" errors behind this one.
-            return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: te, line: ln, col: cl }, sync_stmt(toks, pos));
+            return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: te, line: ln, col: cl, nline: nln, ncol: ncl }, sync_stmt(toks, pos));
         };
     };
     if (!is_op(toks, pos, "=")) {
-        return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: expect_err(toks, pos, "'='"), line: ln, col: cl }, sync_stmt(toks, pos));
+        return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: expect_err(toks, pos, "'='"), line: ln, col: cl, nline: nln, ncol: ncl }, sync_stmt(toks, pos));
     };
     let e = parse_expr(toks, pos + 1);
-    res({ k: K.decl, kind: kind, name: name, typ: typ, v: e.node, line: ln, col: cl }, e.pos)
+    res({ k: K.decl, kind: kind, name: name, typ: typ, v: e.node, line: ln, col: cl, nline: nln, ncol: ncl }, e.pos)
 };
 
 // Past a broken statement: to the next `;` or the `}` closing the
@@ -2067,7 +2080,7 @@ def parse_match(toks: [Tok], subj: Node, bpos: long, ln: long, cl: long) -> Pars
         i = i - 1;
     };
     let stmts: [Node] = [];
-    stmts += { k: K.decl, kind: "let", name: tmp, typ: { k: K.tnone }, v: subj, line: ln, col: cl };
+    stmts += { k: K.decl, kind: "let", name: tmp, typ: { k: K.tnone }, v: subj, line: ln, col: cl, nline: ln, ncol: cl };
     stmts += chain;
     let endp = pos;
     if (is_punct(toks, pos, "}")) { endp = pos + 1; };
@@ -2090,7 +2103,7 @@ def pat_res(test: Node, binds: [Node], cover: Type, wild: bool, pos: long) -> Pa
 };
 
 def let_node(name: str, v: Node, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", name: name, typ: { k: K.tnone }, v: v, line: ln, col: cl }
+    { k: K.decl, kind: "let", name: name, typ: { k: K.tnone }, v: v, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def parse_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
@@ -2182,7 +2195,7 @@ def parse_type_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
                 bname = tv(toks, pos + 1);
                 pos = pos + 2;
             };
-            let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: fname, line: ln, col: cl };
+            let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: fname, line: ln, col: cl, nline: ln, ncol: cl };
             binds += let_node(bname, fread, ln, cl);
             if (is_punct(toks, pos, ",")) { pos = pos + 1; go = !is_punct(toks, pos, "}"); } else { go = false; };
         };
@@ -2214,7 +2227,7 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
             if (key == "...") {
                 test = { k: K.err, msg: "'...' is not allowed in a match pattern", line: ln, col: cl };
             } else {
-                let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: key, line: ln, col: cl };
+                let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: key, line: ln, col: cl, nline: ln, ncol: cl };
                 test = { k: K.bin, op: "&&", l: test, r: { k: K.bin, op: "==", l: fread, r: vals[i], line: ln, col: cl }, line: ln, col: cl };
             };
             i = i + 1;
