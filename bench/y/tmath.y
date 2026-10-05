@@ -61,8 +61,6 @@ t = best5(def () -> long {
 });
 row("exp (y)", t);
 
-// The rest of the module, so a change to one kernel is visible against the
-// others. These are all still the Y versions except where a name says otherwise.
 t = best5(def () -> long {
     let s = 0.0;
     let j = 0;
@@ -70,7 +68,18 @@ t = best5(def () -> long {
     sink = s;
     0
 });
-row("log", t);
+row("log (asm)", t);
+t = best5(def () -> long {
+    let s = 0.0;
+    let j = 0;
+    while (j < n) { s = s + math.log_y(1.0 + (j % 997) * 0.001); j = j + 1; };
+    sink = s;
+    0
+});
+row("log (y)", t);
+
+// The rest of the module, so a change to one kernel is visible against the
+// others. These are all still the Y versions.
 t = best5(def () -> long {
     let s = 0.0;
     let j = 0;

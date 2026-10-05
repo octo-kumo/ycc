@@ -367,6 +367,15 @@ um{200} instructions with no calls at
     low part of the quotient. \ic{log1p} is \ic{log}'s kernel with $m = 1+x$ and
     $z = x/(2+x)$, so a tiny \ic{x} comes out as itself instead of as
     \ic{log(1.0)} $-$ \ic{0}.
+    \ic{log} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t312\_math\_log\_asm.y} says so over
+    \num{10317} arguments --- \num{1335} instructions a call against \num{115},
+    as \num{115} in one routine with no calls at all against eight functions
+    and a hundred and thirty-odd calls between them. The module's \ic{nan} is
+    \ic{0.0}/\ic{0.0}, so the assembly's is a divide rather than a stored
+    constant: the default NaN carries the sign bit, and the one you would write
+    down is a different double from the one the Y returns.
   \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
     reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
     round (the first piece's product needs more than 53 bits once $n$ passes
