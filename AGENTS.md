@@ -424,7 +424,16 @@ replaces the std one at link time).
   and checks `cycc` and the reference agree byte for byte; `check-refs.py`
   and `check-names.py` (both in `test_lsp.sh`) police the citations and
   the shared namespace — the server path-imports the compiler, so every
-  name it defines lands in the compiler's vocabulary.
+  name it defines lands in the compiler's vocabulary. `check-names.py`
+  also tests each module's **basename**, because `strip_ns` rewrites any
+  `name.field` program-wide as a module reference (that is why `scope.y`
+  is not `index.y`; §5 of `LSP.md` has the 42 reads it broke).
+  `src/tools/lsp/test/` holds two **measurement programs** as well as the
+  fixtures: `scope-coverage.y` reports what share of a corpus's
+  identifier tokens the M4 index resolves, and `request-cost.y` what one
+  request costs per phase. Neither has an expectation — they print, so
+  the number can be quoted rather than remembered; run them by hand, as
+  the fixtures are for shapes and these are for sizes.
 - `refs/` — backed-up reference binaries for the port gate (see
   `PORTING.md` for where the current `ycc.ref` came from).
 - `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh` +
