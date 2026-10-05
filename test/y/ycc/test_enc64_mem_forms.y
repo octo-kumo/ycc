@@ -54,10 +54,13 @@ def reg(n: long) -> Operand {
       scale: 1, disp: 0, rip: false, lbl: "" }
 };
 
-// `mnemonic, operand...` is the assembler's own order (source order).
+// `mnemonic, operand...` is the assembler's own order (source order). The
+// encoder writes into a scratch it fills through a cursor (enc64.y "the byte
+// sink"), so the instruction is scratch[0:at].
 def enc(mn: str, ops: [Operand]) -> str {
-    let e = enc64.enc_insn(mn, ops);
-    if (e.err != "") { "ERR " + e.err } else { hex_of(e.bytes) }
+    let buf = enc64.scratch();
+    let e = enc64.enc_insn(buf, 0, mn, ops);
+    if (e.err != "") { "ERR " + e.err } else { hex_of(buf[0:e.at]) }
 };
 
 def check(what: str, got: str, want: str) {
@@ -112,8 +115,9 @@ check("dec %r13", enc("dec", [reg(13)]), "49 ff cd");   // REX.B, rm = 101
 // point. It used to point at 4, the byte *after* the field, which is the
 // immediate: the patch landed one byte late and the instruction addressed the
 // wrong four bytes while still assembling and linking cleanly.
-let rip = enc64.enc_insn("add", [imm(1), rip_mem("yref")]);
-check("add $1, yref(%rip)", hex_of(rip.bytes), "48 83 05 00 00 00 00 01");
+let ripbuf = enc64.scratch();
+let rip = enc64.enc_insn(ripbuf, 0, "add", [imm(1), rip_mem("yref")]);
+check("add $1, yref(%rip)", hex_of(ripbuf[0:rip.at]), "48 83 05 00 00 00 00 01");
 if (len(rip.fix) != 1) {
     print("MISMATCH: add $1, yref(%rip) wants one fixup, got " + tostring(len(rip.fix)));
     exit(1);

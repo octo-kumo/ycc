@@ -1003,12 +1003,16 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
 };
 
 def asm_encode(mn: str, ops: [Operand], lno: long, sec: long, offs: [long]) -> AsmContent {
-    let r = enc.enc_insn(mn, ops);
+    // The encoder writes the instruction into a scratch it fills through a
+    // cursor (enc64.y "the byte sink"): one array for the line, instead of
+    // the two or three little ones each concat step allocated.
+    let buf = enc.scratch();
+    let r = enc.enc_insn(buf, 0, mn, ops);
     if (r.err != "") {
         { err: "L" + tostring(lno) + ": " + r.err + " in '" + mn + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
     } else {
-        let blen = len(r.bytes);
-        let item = { sec: sec, off: offs[sec], len: blen, kind: "insn", bytes: r.bytes, fix: r.fix };
+        let blen = r.at;
+        let item = { sec: sec, off: offs[sec], len: blen, kind: "insn", bytes: buf[0:blen], fix: r.fix };
         offs[sec] = offs[sec] + blen;
         { err: "", sec: sec, offs: offs, item: item }
     }

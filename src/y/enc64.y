@@ -7,8 +7,10 @@
 //   {k:K.lbl, name}         code label (jumps/calls)
 //   {k:K.ind, n, size}      call *%reg — an indirect target (closure code)
 //   {k:K.diff, a, b}        a-b as imm32 (rodata lengths)
-// Every enc_* returns {bytes: [byte] (values 0-255), fix: [...], err: str};
-// le16/le32/le64/byte_of return the [byte] buffer itself.
+// An encoder writes the instruction's bytes FORWARD into a caller-owned
+// scratch through a cursor (see "the byte sink" below) and returns
+// {at: the cursor past the instruction, fix: [...], err: str}; the
+// instruction is scratch[0:at].
 // Only the forms our backend emits exist here — anything else is a loud
 // error from the assembler, never a silent miscompile.
 //
@@ -94,6 +96,9 @@ def sib(scale: long, index: long, base: long) -> long {
     s * 64 + (index % 8) * 8 + base % 8
 };
 
+// A little-endian run as its own array, for the callers outside the encoders
+// (asm.y's .quad and its patcher). Inside an encoder use put_le16/32/64,
+// which write the same bytes through the cursor and allocate nothing.
 def le16(v: long) -> [byte] {
     let out: [byte] = [byte_of(v, 0), byte_of(v, 1)];
     out
@@ -152,13 +157,79 @@ def fits8(v: long) -> bool {
     v >= -128 && v <= 127
 };
 
-// Encode a memory operand tail (ModRM + optional SIB + displacement).
-// Returns {modrm, extra: [byte], rip_lbl/"", disp32: bool} — the caller
-// supplies the reg field and any label fixup.
-type MemTail = { modrm: long, extra: [byte], rip_lbl: str, disp32: bool };
+// ── the byte sink ───────────────────────────────────────────────────────
+// An instruction is written byte by byte into a scratch the caller owns,
+// through a cursor `at`, and read back as scratch[0:at]. It used to be
+// assembled by concatenating little arrays instead — `concat(prefix, tail)`,
+// `concat(prefix, le32(v))`, `with_rex(r, b)` prepending one more — which
+// allocated two or three `[byte]`s per step, for a three-byte instruction,
+// and that is where the assembler spent its memory: 368 MB of an 838 MB
+// compile of ycc.y, in `concat` alone 512,082 allocations and 1,057,134
+// single-byte pushes.
+//
+// x86 orders a form opcode, ModRM, SIB, displacement, immediate — which is
+// exactly the order the encoders below write them — so `at` only ever moves
+// forward and no encoder needs to backfill. That is what makes the shape
+// possible: the old model prepended a REX prefix after the fact, which is
+// why with_rex existed and why enc_mem_result had to add 1 to a fixup
+// offset to account for a prefix it had not written yet.
+def scratch() -> [byte] {
+    // 16 slots; the longest form below is 12 bytes (`mov $imm32, mem(%rip)`:
+    // REX, opcode, ModRM, SIB, disp32, imm32). Writing past the end traps
+    // ("index out of bounds"), so an encoder that overruns is loud.
+    // NOTE: annotated `[byte]`, not a bare hole (elf.y push_bytes note): a
+    // hole would take its element type from the call site.
+    let out: [byte] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    out
+};
+
+def put(buf: [byte], at: long, v: long) -> long {
+    buf[at] = v;
+    at + 1
+};
+
+def put2(buf: [byte], at: long, a: long, b: long) -> long {
+    buf[at] = a;
+    buf[at + 1] = b;
+    at + 2
+};
+
+def put3(buf: [byte], at: long, a: long, b: long, c: long) -> long {
+    let n = put2(buf, at, a, b);
+    buf[n] = c;
+    n + 1
+};
+
+def put_le16(buf: [byte], at: long, v: long) -> long {
+    put2(buf, at, byte_of(v, 0), byte_of(v, 1))
+};
+
+def put_le32(buf: [byte], at: long, v: long) -> long {
+    let n = put2(buf, at, byte_of(v, 0), byte_of(v, 1));
+    put2(buf, n, byte_of(v, 2), byte_of(v, 3))
+};
+
+def put_le64(buf: [byte], at: long, v: long) -> long {
+    let n = put_le32(buf, at, v);
+    put_le32(buf, n, div_floor(v, 4294967296))
+};
+
+// The REX prefix, or nothing: -1 means the form needs no prefix, and the
+// cursor does not move.
+def put_rex(buf: [byte], at: long, r: long) -> long {
+    if (r < 0) { at } else { put(buf, at, r) }
+};
+
+// Encode a memory operand's tail (ModRM + optional SIB + displacement).
+// Returns {modrm, sib, ne, disp, rip_lbl}: the caller writes the opcode and
+// the ModRM, then mem_tail_put writes `sib` (or -1 for none) and the `ne`
+// displacement bytes at `disp`, then any immediate — x86's own order.
+// `rip_lbl` non-empty says a label-relative disp32 follows the tail, which
+// enc_mem_result / enc_mem_imm_result write as a placeholder with a fixup.
+type MemTail = { modrm: long, sib: long, ne: long, disp: long, rip_lbl: str };
 def mem_tail(m: Operand, reg: long) -> MemTail {
     if (m.rip) {
-        { modrm: modrm(0, reg, 5), extra: [], rip_lbl: m.lbl, disp32: true }
+        { modrm: modrm(0, reg, 5), sib: -1, ne: 0, disp: 0, rip_lbl: m.lbl }
     } else if (m.idx < 0) {
         // no index: [base+disp]. Low 101 (rbp/r13) needs at least disp8
         // (mod=00 would mean disp32-only); low 100 (rsp/r12) needs a SIB
@@ -166,55 +237,53 @@ def mem_tail(m: Operand, reg: long) -> MemTail {
         // widens it (rex_rm sets that from m.base).
         if (m.base % 8 == 5) {
             if (fits8(m.disp)) {
-                let extra: [byte] = [u8(m.disp)];
-                { modrm: modrm(1, reg, 5), extra: extra, rip_lbl: "", disp32: false }
+                { modrm: modrm(1, reg, 5), sib: -1, ne: 1, disp: m.disp, rip_lbl: "" }
             } else {
-                { modrm: modrm(2, reg, 5), extra: le32(m.disp), rip_lbl: "", disp32: false }
+                { modrm: modrm(2, reg, 5), sib: -1, ne: 4, disp: m.disp, rip_lbl: "" }
             }
         } else if (m.base % 8 == 4) {
             // rsp/r12 as base: SIB byte required (index=none, base=rsp).
             // sib(1, 4, 4) = scale 00, index 100 (none), base 100 (rsp).
-            let s = sib(1, 4, 4);
             if (m.disp == 0) {
-                let extra: [byte] = [s];
-                { modrm: modrm(0, reg, 4), extra: extra, rip_lbl: "", disp32: false }
+                { modrm: modrm(0, reg, 4), sib: sib(1, 4, 4), ne: 0, disp: 0, rip_lbl: "" }
             } else if (fits8(m.disp)) {
-                let extra: [byte] = [s, u8(m.disp)];
-                { modrm: modrm(1, reg, 4), extra: extra, rip_lbl: "", disp32: false }
+                { modrm: modrm(1, reg, 4), sib: sib(1, 4, 4), ne: 1, disp: m.disp, rip_lbl: "" }
             } else {
-                let prefix: [byte] = [s];
-                { modrm: modrm(2, reg, 4), extra: concat(prefix, le32(m.disp)), rip_lbl: "", disp32: false }
+                { modrm: modrm(2, reg, 4), sib: sib(1, 4, 4), ne: 4, disp: m.disp, rip_lbl: "" }
             }
         } else if (m.disp == 0) {
-            { modrm: modrm(0, reg, m.base), extra: [], rip_lbl: "", disp32: false }
+            { modrm: modrm(0, reg, m.base), sib: -1, ne: 0, disp: 0, rip_lbl: "" }
         } else if (fits8(m.disp)) {
-            let extra: [byte] = [u8(m.disp)];
-            { modrm: modrm(1, reg, m.base), extra: extra, rip_lbl: "", disp32: false }
+            { modrm: modrm(1, reg, m.base), sib: -1, ne: 1, disp: m.disp, rip_lbl: "" }
         } else {
-            { modrm: modrm(2, reg, m.base), extra: le32(m.disp), rip_lbl: "", disp32: false }
+            { modrm: modrm(2, reg, m.base), sib: -1, ne: 4, disp: m.disp, rip_lbl: "" }
         }
     } else {
         // SIB: [base + idx*scale + disp]. Low 101 needs explicit disp.
         let s = sib(m.scale, m.idx, m.base);
         if (m.base % 8 == 5) {
             if (fits8(m.disp)) {
-                let extra: [byte] = [s, u8(m.disp)];
-                { modrm: modrm(1, reg, 4), extra: extra, rip_lbl: "", disp32: false }
+                { modrm: modrm(1, reg, 4), sib: s, ne: 1, disp: m.disp, rip_lbl: "" }
             } else {
-                let prefix: [byte] = [s];
-                { modrm: modrm(2, reg, 4), extra: concat(prefix, le32(m.disp)), rip_lbl: "", disp32: false }
+                { modrm: modrm(2, reg, 4), sib: s, ne: 4, disp: m.disp, rip_lbl: "" }
             }
         } else if (m.disp == 0) {
-            let extra: [byte] = [s];
-            { modrm: modrm(0, reg, 4), extra: extra, rip_lbl: "", disp32: false }
+            { modrm: modrm(0, reg, 4), sib: s, ne: 0, disp: 0, rip_lbl: "" }
         } else if (fits8(m.disp)) {
-            let extra: [byte] = [s, u8(m.disp)];
-            { modrm: modrm(1, reg, 4), extra: extra, rip_lbl: "", disp32: false }
+            { modrm: modrm(1, reg, 4), sib: s, ne: 1, disp: m.disp, rip_lbl: "" }
         } else {
-            let prefix: [byte] = [s];
-            { modrm: modrm(2, reg, 4), extra: concat(prefix, le32(m.disp)), rip_lbl: "", disp32: false }
+            { modrm: modrm(2, reg, 4), sib: s, ne: 4, disp: m.disp, rip_lbl: "" }
         }
     }
+};
+
+// The tail's own bytes, after the ModRM the caller wrote.
+def mem_tail_put(buf: [byte], at: long, t: MemTail) -> long {
+    let n = at;
+    if (t.sib >= 0) { n = put(buf, n, t.sib); };
+    if (t.ne == 1) { n = put(buf, n, u8(t.disp)); }
+    else if (t.ne == 4) { n = put_le32(buf, n, t.disp); };
+    n
 };
 
 // REX for r/m operands: W + extensions from reg field and mem SIB/base.
@@ -228,21 +297,6 @@ def rex_rm(w: bool, reg: long, m: Operand) -> long {
     }
 };
 
-def concat(a: [byte], b: [byte]) -> [byte] {
-    let out: [byte] = [];
-    let i = 0;
-    while (i < len(a)) {
-        out += a[i];
-        i = i + 1;
-    };
-    let j = 0;
-    while (j < len(b)) {
-        out += b[j];
-        j = j + 1;
-    };
-    out
-};
-
 // Fixup record for label-relative fields, resolved in pass 2:
 // {off, kind, lbl, lbl2} (off relative to instruction start).
 // kind: "rel32" (call/jmp/jcc), "rip32", "imm32diff".
@@ -252,125 +306,120 @@ def fixup(at: long, kind: str, lbl: str, lbl2: str) -> Fixup {
 };
 
 // ── instruction encoders ───────────────────────────────────────────────
-// Each returns {bytes, fix: [{off, kind, lbl, lbl2}], err} with off relative
-// to the instruction start. Only forms our backend emits exist.
-type Encoded = { bytes: [byte], fix: [Fixup], err: str };
+// Each writes its bytes into `buf` from `at` and returns {at, fix, err},
+// with every fixup offset relative to the instruction's first byte (which is
+// where the caller started). Only forms our backend emits exist.
+type Encoded = { at: long, fix: [Fixup], err: str };
 
-def with_rex(r: long, bytes: [byte]) -> [byte] {
-    if (r < 0) {
-        bytes
-    } else {
-        let prefix: [byte] = [r];
-        concat(prefix, bytes)
-    }
+def enc_err(at: long, msg: str) -> Encoded {
+    { at: at, fix: [], err: msg }
 };
 
-def enc_push(o: Operand) -> Encoded {
+def enc_ok(at: long, fx: [Fixup]) -> Encoded {
+    { at: at, fix: fx, err: "" }
+};
+
+def enc_push(buf: [byte], at: long, o: Operand) -> Encoded {
     if (o.k != K.reg) {
-        { bytes: [], fix: [], err: "push needs r64" }
+        enc_err(at, "push needs r64")
     } else if (op_size(o) != 64) {
-        { bytes: [], fix: [], err: "push needs r64" }
+        enc_err(at, "push needs r64")
     } else {
-        let r = rex(false, -1, -1, o.n);
-        let b: [byte] = [80 + (o.n % 8)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(false, -1, -1, o.n));
+        enc_ok(put(buf, n, 80 + (o.n % 8)), [])
     }
 };
 
-def enc_pop(o: Operand) -> Encoded {
+def enc_pop(buf: [byte], at: long, o: Operand) -> Encoded {
     if (o.k != K.reg) {
-        { bytes: [], fix: [], err: "pop needs r64" }
+        enc_err(at, "pop needs r64")
     } else if (op_size(o) != 64) {
-        { bytes: [], fix: [], err: "pop needs r64" }
+        enc_err(at, "pop needs r64")
     } else {
-        let r = rex(false, -1, -1, o.n);
-        let b: [byte] = [88 + (o.n % 8)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(false, -1, -1, o.n));
+        enc_ok(put(buf, n, 88 + (o.n % 8)), [])
     }
 };
 
-def enc_mov(dst: Operand, src: Operand) -> Encoded {
+def enc_mov(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     if (dst.k == K.reg && src.k == K.reg) {
         if (op_size(dst) == 64 && op_size(src) == 64) {
-            let r = rex(true, src.n, -1, dst.n);
-            let b: [byte] = [137, modrm(3, src.n, dst.n)];
-            { bytes: with_rex(r, b), fix: [], err: "" }
+            let n = put_rex(buf, at, rex(true, src.n, -1, dst.n));
+            enc_ok(put2(buf, n, 137, modrm(3, src.n, dst.n)), [])
         } else {
-            { bytes: [], fix: [], err: "mov reg,reg size mix" }
+            enc_err(at, "mov reg,reg size mix")
         }
     } else if (dst.k == K.reg && src.k == K.imm) {
         if (op_size(dst) == 64) {
             if (src.v >= -2147483648 && src.v <= 2147483647) {
-                let r = rex(true, -1, -1, dst.n);
-                let prefix: [byte] = [199, modrm(3, 0, dst.n)];
-                let b = concat(prefix, le32(src.v));
-                { bytes: with_rex(r, b), fix: [], err: "" }
+                let n = put_rex(buf, at, rex(true, -1, -1, dst.n));
+                let m = put2(buf, n, 199, modrm(3, 0, dst.n));
+                enc_ok(put_le32(buf, m, src.v), [])
             } else {
-                let r = rex(true, -1, -1, dst.n);
-                let prefix: [byte] = [184 + (dst.n % 8)];
-                let b = concat(prefix, le64(src.v));
-                { bytes: with_rex(r, b), fix: [], err: "" }
+                let n = put_rex(buf, at, rex(true, -1, -1, dst.n));
+                let m = put(buf, n, 184 + (dst.n % 8));
+                enc_ok(put_le64(buf, m, src.v), [])
             }
         } else if (op_size(dst) == 32) {
-            let r = rex(false, -1, -1, dst.n);
-            let prefix: [byte] = [199, modrm(3, 0, dst.n)];
-            let b = concat(prefix, le32(src.v));
-            { bytes: with_rex(r, b), fix: [], err: "" }
+            let n = put_rex(buf, at, rex(false, -1, -1, dst.n));
+            let m = put2(buf, n, 199, modrm(3, 0, dst.n));
+            enc_ok(put_le32(buf, m, src.v), [])
         } else {
-            { bytes: [], fix: [], err: "mov imm size" }
+            enc_err(at, "mov imm size")
         }
     } else if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.diff) {
         let r = rex(true, -1, -1, dst.n);
-        let prefix: [byte] = [199, modrm(3, 0, dst.n)];
-        let zeros: [byte] = [0, 0, 0, 0];
-        let b = concat(prefix, zeros);
+        let n = put_rex(buf, at, r);
+        let m = put2(buf, n, 199, modrm(3, 0, dst.n));
+        // the four bytes are placeholders; pass 2 writes src.a - src.b
+        let q = put_le32(buf, m, 0);
         let off = 3;
         if (r < 0) { off = 2; };
-        { bytes: with_rex(r, b), fix: [fixup(off, "imm32diff", src.a, src.b)], err: "" }
+        enc_ok(q, [fixup(at + off, "imm32diff", src.a, src.b)])
     } else if (dst.k == K.reg && src.k == K.fs && op_size(dst) == 64) {
         // mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
         // base and no index (an absolute disp32)
-        let b: [byte] = [100, rex(true, dst.n, -1, -1), 139, modrm(0, dst.n, 4), 37];
-        { bytes: concat(b, le32(src.disp)), fix: [], err: "" }
+        let n = put(buf, at, 100);
+        let m = put(buf, n, rex(true, dst.n, -1, -1));
+        let q = put2(buf, m, 139, modrm(0, dst.n, 4));
+        let p = put(buf, q, 37);
+        enc_ok(put_le32(buf, p, src.disp), [])
     } else if (dst.k == K.reg && src.k == K.mem) {
         if (op_size(dst) == 64) {
             let t = mem_tail(src, dst.n);
-            let r = rex_rm(true, dst.n, src);
-            let prefix: [byte] = [139, t.modrm];
-            let b = concat(prefix, t.extra);
-            enc_mem_result(r, b, t)
+            let n = put_rex(buf, at, rex_rm(true, dst.n, src));
+            let m = put2(buf, n, 139, t.modrm);
+            enc_mem_result(buf, mem_tail_put(buf, m, t), t)
         } else {
-            { bytes: [], fix: [], err: "mov r,mem size" }
+            enc_err(at, "mov r,mem size")
         }
     } else if (dst.k == K.mem && src.k == K.imm) {
         // mov $imm32, mem (length/cap stores)
         let t = mem_tail(dst, 0);
-        let r = rex_rm(true, 0, dst);
-        let prefix: [byte] = [199, t.modrm];
-        enc_mem_imm_result(r, prefix, t, le32(src.v))
+        let n = put_rex(buf, at, rex_rm(true, 0, dst));
+        let m = put2(buf, n, 199, t.modrm);
+        enc_mem_imm_result(buf, mem_tail_put(buf, m, t), t, src.v, true)
     } else if (dst.k == K.mem && src.k == K.reg) {
         if (op_size(src) == 64) {
             let t = mem_tail(dst, src.n);
-            let r = rex_rm(true, src.n, dst);
-            let prefix: [byte] = [137, t.modrm];
-            let b = concat(prefix, t.extra);
-            enc_mem_result(r, b, t)
+            let n = put_rex(buf, at, rex_rm(true, src.n, dst));
+            let m = put2(buf, n, 137, t.modrm);
+            enc_mem_result(buf, mem_tail_put(buf, m, t), t)
         } else if (op_size(src) == 8) {
             let t = mem_tail(dst, src.n);
-            let r = rex_rm(false, src.n, dst);
-            let prefix: [byte] = [136, t.modrm];
-            let b = concat(prefix, t.extra);
-            enc_mem_result(r, b, t)
+            let n = put_rex(buf, at, rex_rm(false, src.n, dst));
+            let m = put2(buf, n, 136, t.modrm);
+            enc_mem_result(buf, mem_tail_put(buf, m, t), t)
         } else {
-            { bytes: [], fix: [], err: "mov mem,reg size" }
+            enc_err(at, "mov mem,reg size")
         }
     } else {
-        { bytes: [], fix: [], err: "mov form" }
+        enc_err(at, "mov form")
     }
 };
 // xchg r64, mem (either order): REX.W 87 /r, locked by the processor
 // (the threads' mutexes).
-def enc_xchg(a: Operand, b: Operand) -> Encoded {
+def enc_xchg(buf: [byte], at: long, a: Operand, b: Operand) -> Encoded {
     let reg = a;
     let mem = b;
     if (a.k == K.mem) {
@@ -378,119 +427,104 @@ def enc_xchg(a: Operand, b: Operand) -> Encoded {
         mem = a;
     };
     if (reg.k != K.reg || mem.k != K.mem || op_size(reg) != 64) {
-        { bytes: [], fix: [], err: "xchg form" }
+        enc_err(at, "xchg form")
     } else {
         let t = mem_tail(mem, reg.n);
-        let r = rex_rm(true, reg.n, mem);
-        let prefix: [byte] = [135, t.modrm];
-        enc_mem_result(r, concat(prefix, t.extra), t)
+        let n = put_rex(buf, at, rex_rm(true, reg.n, mem));
+        let m = put2(buf, n, 135, t.modrm);
+        enc_mem_result(buf, mem_tail_put(buf, m, t), t)
+    }
+};
+
+// The tail's label-relative disp32 for a form with no immediate after it:
+// four placeholder bytes the linker fills in, with the fixup pointing at
+// them — the cursor, which is where they start. (The old model appended the
+// placeholders to an array and added 1 to the offset when a REX prefix was
+// about to be prepended; writing forward, the prefix is already written.)
+def enc_mem_result(buf: [byte], at: long, t: MemTail) -> Encoded {
+    if (t.modrm < 0) {
+        enc_err(at, "bad memory form")
+    } else if (t.rip_lbl == "") {
+        enc_ok(at, [])
+    } else {
+        enc_ok(put_le32(buf, at, 0), [fixup(at, "rip32", t.rip_lbl, "")])
     }
 };
 
 // Like enc_mem_result, but for the forms whose immediate comes AFTER the
 // memory operand (C7 /0 id, C6 /0 ib, 83 /ext ib, 81 /ext id). x86 orders a
-// form ModRM, SIB, displacement, immediate, while enc_mem_result appends the
-// rip disp32 placeholder last -- so the forms with an immediate need this
-// order. It matters for `mov $imm32, sym(%rip)`: with the placeholder after
-// the immediate the instruction silently addresses the wrong 4 bytes.
-def enc_mem_imm_result(r: long, head: [byte], t: MemTail, imm: [byte]) -> Encoded {
+// form ModRM, SIB, displacement, immediate, while enc_mem_result's
+// placeholder would come after the immediate -- so the forms with an
+// immediate need this order. It matters for `mov $imm32, sym(%rip)`: with the
+// placeholder after the immediate the instruction silently addresses the
+// wrong 4 bytes.
+def enc_mem_imm_result(buf: [byte], at: long, t: MemTail, v: long, wide: bool) -> Encoded {
     if (t.modrm < 0) {
-        { bytes: [], fix: [], err: "bad memory form" }
+        enc_err(at, "bad memory form")
     } else {
+        let n = at;
         let fx: [Fixup] = [];
-        // head is the opcode and ModRM; the SIB byte and the displacement in
-        // `extra` come after both and still before the immediate.
-        let bb = concat(head, t.extra);
-        if (t.disp32) {
-            let off = len(bb);
-            if (r >= 0) { off = off + 1; };
-            if (t.rip_lbl != "") {
-                fx += fixup(off, "rip32", t.rip_lbl, "");
-                let zeros: [byte] = [0, 0, 0, 0];
-                bb = concat(bb, zeros);
-            };
+        if (t.rip_lbl != "") {
+            fx += fixup(at, "rip32", t.rip_lbl, "");
+            n = put_le32(buf, n, 0);
         };
-        { bytes: with_rex(r, concat(bb, imm)), fix: fx, err: "" }
+        if (wide) { enc_ok(put_le32(buf, n, v), fx) }
+        else { enc_ok(put(buf, n, u8(v)), fx) }
     }
 };
 
-def enc_mem_result(r: long, b: [byte], t: MemTail) -> Encoded {
-    if (t.modrm < 0) {
-        { bytes: [], fix: [], err: "bad memory form" }
-    } else {
-        let fx: [Fixup] = [];
-        let bb = b;
-        if (t.disp32) {
-            if (t.rip_lbl != "") {
-            // fixup offset counts the REX prefix with_rex is about to add;
-            // the disp32 placeholder bytes must exist for the patch to land.
-                let off = len(b);
-                if (r >= 0) { off = off + 1; };
-                fx += fixup(off, "rip32", t.rip_lbl, "");
-                let zeros: [byte] = [0, 0, 0, 0];
-                bb = concat(b, zeros);
-            };
-        };
-        { bytes: with_rex(r, bb), fix: fx, err: "" }
-    }
-};
-
-def enc_movb(dst: Operand, src: Operand) -> Encoded {
+def enc_movb(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // movb $imm8, mem
     if (dst.k != K.mem) {
-        { bytes: [], fix: [], err: "movb form" }
+        enc_err(at, "movb form")
     } else if (src.k != K.imm) {
-        { bytes: [], fix: [], err: "movb form" }
+        enc_err(at, "movb form")
     } else {
-        enc_movb_imm(dst, src)
+        enc_movb_imm(buf, at, dst, src)
     }
 };
 
-def enc_movb_imm(dst: Operand, src: Operand) -> Encoded {
+def enc_movb_imm(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // (split: shape gate above narrows; this body sees mem/imm only.)
     if (src.v < -128) {
-        { bytes: [], fix: [], err: "movb imm range" }
+        enc_err(at, "movb imm range")
     } else if (src.v > 127) {
-        { bytes: [], fix: [], err: "movb imm range" }
+        enc_err(at, "movb imm range")
     } else {
         let t = mem_tail(dst, 0);
-        let r = rex_rm(false, 0, dst);
-        let prefix: [byte] = [198, t.modrm];
-        let imm: [byte] = [u8(src.v)];
-        enc_mem_imm_result(r, prefix, t, imm)
+        let n = put_rex(buf, at, rex_rm(false, 0, dst));
+        let m = put2(buf, n, 198, t.modrm);
+        enc_mem_imm_result(buf, mem_tail_put(buf, m, t), t, src.v, false)
     }
 };
 
-def enc_movzbq(dst: Operand, src: Operand) -> Encoded {
+def enc_movzbq(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.reg && op_size(src) == 8) {
-        let r = rex(true, dst.n, -1, src.n);
-        let b: [byte] = [15, 182, modrm(3, dst.n, src.n)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(true, dst.n, -1, src.n));
+        enc_ok(put3(buf, n, 15, 182, modrm(3, dst.n, src.n)), [])
     } else if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.mem) {
         // movzbq mem8 -> r64 (single-byte loads for string data)
         let t = mem_tail(src, dst.n);
-        let r = rex_rm(true, dst.n, src);
-        let prefix: [byte] = [15, 182, t.modrm];
-        let b = concat(prefix, t.extra);
-        enc_mem_result(r, b, t)
+        let n = put_rex(buf, at, rex_rm(true, dst.n, src));
+        let m = put3(buf, n, 15, 182, t.modrm);
+        enc_mem_result(buf, mem_tail_put(buf, m, t), t)
     } else {
-        { bytes: [], fix: [], err: "movzbq form" }
+        enc_err(at, "movzbq form")
     }
 };
 
-def enc_lea(dst: Operand, src: Operand) -> Encoded {
+def enc_lea(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.mem) {
         let t = mem_tail(src, dst.n);
-        let r = rex_rm(true, dst.n, src);
-        let prefix: [byte] = [141, t.modrm];
-        let b = concat(prefix, t.extra);
-        enc_mem_result(r, b, t)
+        let n = put_rex(buf, at, rex_rm(true, dst.n, src));
+        let m = put2(buf, n, 141, t.modrm);
+        enc_mem_result(buf, mem_tail_put(buf, m, t), t)
     } else {
-        { bytes: [], fix: [], err: "lea form" }
+        enc_err(at, "lea form")
     }
 };
 
-def enc_arith(op: str, dst: Operand, src: Operand) -> Encoded {
+def enc_arith(buf: [byte], at: long, op: str, dst: Operand, src: Operand) -> Encoded {
     // op: add/sub/xor/and/or/cmp/test; r64,r64 only here
     if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.reg && op_size(src) == 64) {
         let base = 1;
@@ -500,21 +534,19 @@ def enc_arith(op: str, dst: Operand, src: Operand) -> Encoded {
         else if (op == "or") { base = 9; }
         else if (op == "cmp") { base = 57; }
         else if (op == "test") { base = 133; }
-        let r = rex(true, src.n, -1, dst.n);
-        let b: [byte] = [base, modrm(3, src.n, dst.n)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(true, src.n, -1, dst.n));
+        enc_ok(put2(buf, n, base, modrm(3, src.n, dst.n)), [])
     } else {
-        { bytes: [], fix: [], err: "arith reg form" }
+        enc_err(at, "arith reg form")
     }
 };
 
-def enc_xor32(dst: Operand, src: Operand) -> Encoded {
+def enc_xor32(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     if (dst.k == K.reg && op_size(dst) == 32 && src.k == K.reg && op_size(src) == 32) {
-        let r = rex(false, src.n, -1, dst.n);
-        let b: [byte] = [49, modrm(3, src.n, dst.n)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(false, src.n, -1, dst.n));
+        enc_ok(put2(buf, n, 49, modrm(3, src.n, dst.n)), [])
     } else {
-        { bytes: [], fix: [], err: "xor32 form" }
+        enc_err(at, "xor32 form")
     }
 };
 
@@ -529,24 +561,24 @@ def alu_ext(op: str) -> long {
     else { 0 }
 };
 
-def enc_alu_imm(op: str, dst: Operand, v: long) -> Encoded {
+def enc_alu_imm(buf: [byte], at: long, op: str, dst: Operand, v: long) -> Encoded {
     // add/sub/cmp/xor/and/or $imm, %r64; cmp $imm, %r32; and $imm, mem
     if (dst.k == K.mem) {
-        enc_alu_imm_mem(op, dst, v)
+        enc_alu_imm_mem(buf, at, op, dst, v)
     } else if (dst.k != K.reg) {
-        { bytes: [], fix: [], err: "alu-imm dst" }
+        enc_err(at, "alu-imm dst")
     } else if (op_size(dst) != 64) {
         if (op_size(dst) != 32) {
-            { bytes: [], fix: [], err: "alu-imm dst" }
+            enc_err(at, "alu-imm dst")
         } else {
-            enc_alu_imm_go(op, dst, v)
+            enc_alu_imm_go(buf, at, op, dst, v)
         }
     } else {
-        enc_alu_imm_go(op, dst, v)
+        enc_alu_imm_go(buf, at, op, dst, v)
     }
 };
 
-def enc_alu_imm_mem(op: str, dst: Operand, v: long) -> Encoded {
+def enc_alu_imm_mem(buf: [byte], at: long, op: str, dst: Operand, v: long) -> Encoded {
     // (split from enc_alu_imm: the shape gate above narrows; this body sees a
     // memory destination, and no size -- a memory operand carries none, so this
     // is the 64-bit form, which is what a Y long is. GNU as guesses 32-bit for
@@ -555,37 +587,37 @@ def enc_alu_imm_mem(op: str, dst: Operand, v: long) -> Encoded {
     let ext = alu_ext(op);
     if (fits8(v)) {
         let t = mem_tail(dst, ext);
-        let prefix: [byte] = [131, t.modrm];
-        let imm: [byte] = [u8(v)];
-        enc_mem_imm_result(rex_rm(true, ext, dst), prefix, t, imm)
+        let n = put_rex(buf, at, rex_rm(true, ext, dst));
+        let m = put2(buf, n, 131, t.modrm);
+        enc_mem_imm_result(buf, mem_tail_put(buf, m, t), t, v, false)
     } else if (v < -2147483648 || v > 2147483647) {
         // the same door the register form has (see enc_alu_imm_body)
-        { bytes: [], fix: [], err: "an immediate does not fit in 32 bits" }
+        enc_err(at, "an immediate does not fit in 32 bits")
     } else {
         let t = mem_tail(dst, ext);
-        let prefix: [byte] = [129, t.modrm];
-        enc_mem_imm_result(rex_rm(true, ext, dst), prefix, t, le32(v))
+        let n = put_rex(buf, at, rex_rm(true, ext, dst));
+        let m = put2(buf, n, 129, t.modrm);
+        enc_mem_imm_result(buf, mem_tail_put(buf, m, t), t, v, true)
     }
 };
 
-def enc_alu_imm_go(op: str, dst: Operand, v: long) -> Encoded {
+def enc_alu_imm_go(buf: [byte], at: long, op: str, dst: Operand, v: long) -> Encoded {
     // (split from enc_alu_imm: the size gate above narrows; this body sees
     // only r64/r32 regs — no merged-shape reads.)
-    enc_alu_imm_body(op, dst, v)
+    enc_alu_imm_body(buf, at, op, dst, v)
 };
 
-def enc_alu_imm_body(op: str, dst: Operand, v: long) -> Encoded {
+def enc_alu_imm_body(buf: [byte], at: long, op: str, dst: Operand, v: long) -> Encoded {
     // (the size gate lives in enc_alu_imm; this one is on the value)
     let ext = alu_ext(op);
     let wide = op_size(dst) == 64;
     let r = rex(wide, -1, -1, dst.n);
     if (fits8(v)) {
-        let prefix: [byte] = [131, modrm(3, ext, dst.n)];
-        let imm: [byte] = [u8(v)];
-        let b = concat(prefix, imm);
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, r);
+        let m = put2(buf, n, 131, modrm(3, ext, dst.n));
+        enc_ok(put(buf, m, u8(v)), [])
     } else if (v < -2147483648 || v > 2147483647) {
-        // 81 /n id takes a sign-extended imm32 and nothing else, and le32
+        // 81 /n id takes a sign-extended imm32 and nothing else, and put_le32
         // would quietly keep the low four bytes: `cmp $4294967366, %rcx` (a
         // fixed array of 4 billion elements) would encode as `cmp $10` and
         // the bounds check would pass for every index under ten. No emitter
@@ -594,44 +626,41 @@ def enc_alu_imm_body(op: str, dst: Operand, v: long) -> Encoded {
         // other immediate here is a frame offset or a small constant -- but
         // an encoder that would quietly encode a different instruction is
         // worth a door, and this is that door.
-        { bytes: [], fix: [], err: "an immediate does not fit in 32 bits" }
+        enc_err(at, "an immediate does not fit in 32 bits")
     } else {
-        let prefix: [byte] = [129, modrm(3, ext, dst.n)];
-        let b = concat(prefix, le32(v));
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, r);
+        let m = put2(buf, n, 129, modrm(3, ext, dst.n));
+        enc_ok(put_le32(buf, m, v), [])
     }
 };
 
-def enc_shift(mn: str, dst: Operand, cnt: Operand) -> Encoded {
+def enc_shift(buf: [byte], at: long, mn: str, dst: Operand, cnt: Operand) -> Encoded {
     // shl/shr/sar $imm8 (0-63) or %cl, %r64: C1 /ext ib and D3 /ext, where
     // ext is shl 4, shr 5 (logical), sar 7 (arithmetic)
     let ext = 4;
     if (mn == "shr") { ext = 5; }
     else if (mn == "sar") { ext = 7; }
     if (dst.k != K.reg) {
-        { bytes: [], fix: [], err: mn + " dst" }
+        enc_err(at, mn + " dst")
     } else if (op_size(dst) != 64) {
-        { bytes: [], fix: [], err: mn + " dst" }
+        enc_err(at, mn + " dst")
     } else if (cnt.k == K.reg) {
         if (cnt.n == 1 && op_size(cnt) == 8) {
-            let r = rex(true, -1, -1, dst.n);
-            let b: [byte] = [211, modrm(3, ext, dst.n)];
-            { bytes: with_rex(r, b), fix: [], err: "" }
+            let n = put_rex(buf, at, rex(true, -1, -1, dst.n));
+            enc_ok(put2(buf, n, 211, modrm(3, ext, dst.n)), [])
         } else {
-            { bytes: [], fix: [], err: mn + " count register is %cl" }
+            enc_err(at, mn + " count register is %cl")
         }
     } else if (cnt.k == K.imm) {
         if (cnt.v < 0 || cnt.v > 63) {
-            { bytes: [], fix: [], err: mn + " count range" }
+            enc_err(at, mn + " count range")
         } else {
-            let r = rex(true, -1, -1, dst.n);
-            let prefix: [byte] = [193, modrm(3, ext, dst.n)];
-            let imm: [byte] = [u8(cnt.v)];
-            let b = concat(prefix, imm);
-            { bytes: with_rex(r, b), fix: [], err: "" }
+            let n = put_rex(buf, at, rex(true, -1, -1, dst.n));
+            let m = put2(buf, n, 193, modrm(3, ext, dst.n));
+            enc_ok(put(buf, m, u8(cnt.v)), [])
         }
     } else {
-        { bytes: [], fix: [], err: mn + " count" }
+        enc_err(at, mn + " count")
     }
 };
 
@@ -640,121 +669,104 @@ def enc_shift(mn: str, dst: Operand, cnt: Operand) -> Encoded {
 // comparison move them into %xmmN, so the rest of the backend (slots,
 // pushes, calls) is unchanged.
 
-def enc_sse_arith(mn: str, dst: Operand, src: Operand) -> Encoded {
+def enc_sse_arith(buf: [byte], at: long, mn: str, dst: Operand, src: Operand) -> Encoded {
     // F2 0F <op> /r  — addsd 58, subsd 5C, mulsd 59, divsd 5E
     if (dst.k != K.reg) {
-        { bytes: [], fix: [], err: "sse dst" }
+        enc_err(at, "sse dst")
     } else if (src.k != K.reg) {
-        { bytes: [], fix: [], err: "sse src" }
+        enc_err(at, "sse src")
     } else {
         let op = 88;
         if (mn == "subsd") { op = 92; }
         if (mn == "mulsd") { op = 89; }
         if (mn == "divsd") { op = 94; }
-        let r = rex(false, dst.n, -1, src.n);
-        let tail: [byte] = [15, op, modrm(3, dst.n, src.n)];
-        if (r < 0) {
-            let prefix: [byte] = [242];
-            { bytes: concat(prefix, tail), fix: [], err: "" }
-        } else {
-            let prefix: [byte] = [242, r];
-            { bytes: concat(prefix, tail), fix: [], err: "" }
-        }
+        let n = put(buf, at, 242);
+        let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, op, modrm(3, dst.n, src.n)), [])
     }
 };
 
-def enc_ucomisd(dst: Operand, src: Operand) -> Encoded {
+def enc_ucomisd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // 66 0F 2E /r
     if (dst.k != K.reg) {
-        { bytes: [], fix: [], err: "ucomisd dst" }
+        enc_err(at, "ucomisd dst")
     } else if (src.k != K.reg) {
-        { bytes: [], fix: [], err: "ucomisd src" }
+        enc_err(at, "ucomisd src")
     } else {
-        let r = rex(false, dst.n, -1, src.n);
-        let tail: [byte] = [15, 46, modrm(3, dst.n, src.n)];
-        if (r < 0) {
-            let prefix: [byte] = [102];
-            { bytes: concat(prefix, tail), fix: [], err: "" }
-        } else {
-            let prefix: [byte] = [102, r];
-            { bytes: concat(prefix, tail), fix: [], err: "" }
-        }
+        let n = put(buf, at, 102);
+        let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 46, modrm(3, dst.n, src.n)), [])
     }
 };
 
-def enc_cvtsi2sd(dst: Operand, src: Operand) -> Encoded {
+def enc_cvtsi2sd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
     if (dst.k != K.reg) {
-        { bytes: [], fix: [], err: "cvtsi2sd dst" }
+        enc_err(at, "cvtsi2sd dst")
     } else if (src.k != K.reg) {
-        { bytes: [], fix: [], err: "cvtsi2sd src" }
+        enc_err(at, "cvtsi2sd src")
     } else {
-        let r = rex(true, dst.n, -1, src.n);
-        let prefix: [byte] = [242, r];
-        let tail: [byte] = [15, 42, modrm(3, dst.n, src.n)];
-        { bytes: concat(prefix, tail), fix: [], err: "" }
+        let n = put(buf, at, 242);
+        let m = put(buf, n, rex(true, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 42, modrm(3, dst.n, src.n)), [])
     }
 };
 
-def enc_cvttsd2si(dst: Operand, src: Operand) -> Encoded {
+def enc_cvttsd2si(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating)
     if (dst.k != K.reg) {
-        { bytes: [], fix: [], err: "cvttsd2si dst" }
+        enc_err(at, "cvttsd2si dst")
     } else if (src.k != K.reg) {
-        { bytes: [], fix: [], err: "cvttsd2si src" }
+        enc_err(at, "cvttsd2si src")
     } else {
-        let r = rex(true, dst.n, -1, src.n);
-        let prefix: [byte] = [242, r];
-        let tail: [byte] = [15, 44, modrm(3, dst.n, src.n)];
-        { bytes: concat(prefix, tail), fix: [], err: "" }
+        let n = put(buf, at, 242);
+        let m = put(buf, n, rex(true, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 44, modrm(3, dst.n, src.n)), [])
     }
 };
 
-def enc_movq(dst: Operand, src: Operand) -> Encoded {
+def enc_movq(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // 66 REX.W 0F 6E /r  — movq %gpr, %xmm   (gpr -> xmm)
     // 66 REX.W 0F 7E /r  — movq %xmm, %gpr   (xmm -> gpr)
     if (dst.k != K.reg) {
-        { bytes: [], fix: [], err: "movq dst" }
+        enc_err(at, "movq dst")
     } else if (src.k != K.reg) {
-        { bytes: [], fix: [], err: "movq src" }
+        enc_err(at, "movq src")
     } else if (op_size(dst) == 128) {
         // into an xmm: the xmm is the reg field, the gpr the rm field
-        let r = rex(true, dst.n, -1, src.n);
-        let prefix: [byte] = [102, r];
-        let tail: [byte] = [15, 110, modrm(3, dst.n, src.n)];
-        { bytes: concat(prefix, tail), fix: [], err: "" }
+        let n = put(buf, at, 102);
+        let m = put(buf, n, rex(true, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 110, modrm(3, dst.n, src.n)), [])
     } else if (op_size(src) != 128) {
         // Neither side is an xmm, so this is not a float move at all. Taking
         // it as one would quietly read an SSE register and write a GPR (or the
         // other way round) where the source said a register move -- a silent
         // miscompile, and this assembler's one rule is to be loud instead.
-        { bytes: [], fix: [], err: "movq needs an xmm register" }
+        enc_err(at, "movq needs an xmm register")
     } else {
         // out of an xmm: 66 REX.W 0F 7E /r is reg=xmm, rm=r/m64
-        let r = rex(true, src.n, -1, dst.n);
-        let prefix: [byte] = [102, r];
-        let tail: [byte] = [15, 126, modrm(3, src.n, dst.n)];
-        { bytes: concat(prefix, tail), fix: [], err: "" }
+        let n = put(buf, at, 102);
+        let m = put(buf, n, rex(true, src.n, -1, dst.n));
+        enc_ok(put3(buf, m, 15, 126, modrm(3, src.n, dst.n)), [])
     }
 };
 
-def enc_imul(dst: Operand, src: Operand) -> Encoded {
+def enc_imul(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.reg && op_size(src) == 64) {
-        let r = rex(true, dst.n, -1, src.n);
-        let b: [byte] = [15, 175, modrm(3, dst.n, src.n)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(true, dst.n, -1, src.n));
+        enc_ok(put3(buf, n, 15, 175, modrm(3, dst.n, src.n)), [])
     } else {
-        { bytes: [], fix: [], err: "imul form" }
+        enc_err(at, "imul form")
     }
 };
 
-def enc_unary(op: str, o: Operand) -> Encoded {
+def enc_unary(buf: [byte], at: long, op: str, o: Operand) -> Encoded {
     if (o.k == K.mem) {
-        enc_unary_mem(op, o)
+        enc_unary_mem(buf, at, op, o)
     } else if (o.k != K.reg) {
-        { bytes: [], fix: [], err: "unary form" }
+        enc_err(at, "unary form")
     } else if (op_size(o) != 64) {
-        { bytes: [], fix: [], err: "unary form" }
+        enc_err(at, "unary form")
     } else {
         let ext = 3;
         let opc = 247;
@@ -763,13 +775,12 @@ def enc_unary(op: str, o: Operand) -> Encoded {
         else if (op == "not") { ext = 2; }
         else if (op == "dec") { ext = 1; opc = 255; }
         else if (op == "inc") { ext = 0; opc = 255; }
-        let r = rex(true, -1, -1, o.n);
-        let b: [byte] = [opc, modrm(3, ext, o.n)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(true, -1, -1, o.n));
+        enc_ok(put2(buf, n, opc, modrm(3, ext, o.n)), [])
     }
 };
 
-def enc_unary_mem(op: str, o: Operand) -> Encoded {
+def enc_unary_mem(buf: [byte], at: long, op: str, o: Operand) -> Encoded {
     // (split from enc_unary: the shape gate above narrows; this body sees a
     // memory operand, hence a ModRM that is not mod=11.) inc/dec/not have
     // memory forms -- FF /0, FF /1, F7 /2 -- and are 64-bit here for the same
@@ -781,82 +792,97 @@ def enc_unary_mem(op: str, o: Operand) -> Encoded {
     else if (op == "not") { ext = 2; opc = 247; };
     if (op == "inc" || op == "dec" || op == "not") {
         let t = mem_tail(o, ext);
-        let prefix: [byte] = [opc, t.modrm];
-        enc_mem_result(rex_rm(true, ext, o), concat(prefix, t.extra), t)
+        let n = put_rex(buf, at, rex_rm(true, ext, o));
+        let m = put2(buf, n, opc, t.modrm);
+        enc_mem_result(buf, mem_tail_put(buf, m, t), t)
     } else {
-        { bytes: [], fix: [], err: "unary form" }
+        enc_err(at, "unary form")
     }
 };
 
-def enc_jmp(o: Operand) -> Encoded {
+def enc_jmp(buf: [byte], at: long, o: Operand) -> Encoded {
     if (o.k != K.lbl) {
-        { bytes: [], fix: [], err: "jmp target" }
+        enc_err(at, "jmp target")
     } else {
-        let bytes: [byte] = [233, 0, 0, 0, 0];
-        { bytes: bytes, fix: [fixup(1, "rel32", o.name, "")], err: "" }
+        let n = put(buf, at, 233);
+        let m = put_le32(buf, n, 0);
+        enc_ok(m, [fixup(at + 1, "rel32", o.name, "")])
     }
 };
 
-def enc_call(o: Operand) -> Encoded {
+def enc_call(buf: [byte], at: long, o: Operand) -> Encoded {
     if (o.k == K.ind) {
         // call *%reg — FF /2, used for closure code pointers.
-        let r = rex(false, 0, -1, o.n);
-        let b: [byte] = [255, modrm(3, 2, o.n)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(false, 0, -1, o.n));
+        enc_ok(put2(buf, n, 255, modrm(3, 2, o.n)), [])
     } else if (o.k != K.lbl) {
-        { bytes: [], fix: [], err: "call target" }
+        enc_err(at, "call target")
     } else {
-        let bytes: [byte] = [232, 0, 0, 0, 0];
-        { bytes: bytes, fix: [fixup(1, "rel32", o.name, "")], err: "" }
+        let n = put(buf, at, 232);
+        let m = put_le32(buf, n, 0);
+        enc_ok(m, [fixup(at + 1, "rel32", o.name, "")])
     }
 };
 
-def enc_jcc(code: long, o: Operand) -> Encoded {
+def enc_jcc(buf: [byte], at: long, code: long, o: Operand) -> Encoded {
     if (o.k != K.lbl) {
-        { bytes: [], fix: [], err: "jcc target" }
+        enc_err(at, "jcc target")
     } else {
-        let bytes: [byte] = [15, code, 0, 0, 0, 0];
-        { bytes: bytes, fix: [fixup(2, "rel32", o.name, "")], err: "" }
+        let n = put2(buf, at, 15, code);
+        let m = put_le32(buf, n, 0);
+        enc_ok(m, [fixup(at + 2, "rel32", o.name, "")])
     }
 };
 
-def enc_setcc(code: long, o: Operand) -> Encoded {
+def enc_setcc(buf: [byte], at: long, code: long, o: Operand) -> Encoded {
     if (o.k != K.reg || op_size(o) != 8) {
-        { bytes: [], fix: [], err: "setcc form" }
+        enc_err(at, "setcc form")
     } else {
-        let r = rex(false, -1, -1, o.n);
-        let b: [byte] = [15, code, modrm(3, 0, o.n)];
-        { bytes: with_rex(r, b), fix: [], err: "" }
+        let n = put_rex(buf, at, rex(false, -1, -1, o.n));
+        enc_ok(put3(buf, n, 15, code, modrm(3, 0, o.n)), [])
     }
 };
 
-def enc_cmpb(v: long, m: Operand) -> Encoded {
+// cmpb $imm8, mem8. No emitter produces this form (the byte comparisons the
+// backend needs all go through movzbq), but the assembler accepts it, so it
+// goes through enc_mem_imm_result like the other immediate forms: the rip
+// placeholder belongs between the ModRM and the immediate, not after it.
+def enc_cmpb(buf: [byte], at: long, v: long, m: Operand) -> Encoded {
     if (m.k != K.mem) {
-        { bytes: [], fix: [], err: "cmpb form" }
+        enc_err(at, "cmpb form")
     } else {
         let t = mem_tail(m, 7);
-        let r = rex_rm(false, 7, m);
-        let prefix: [byte] = [128, t.modrm];
-        let imm: [byte] = [u8(v)];
-        let b = concat(concat(prefix, t.extra), imm);
-        enc_mem_result(r, b, t)
+        let n = put_rex(buf, at, rex_rm(false, 7, m));
+        let q = put2(buf, n, 128, t.modrm);
+        enc_mem_imm_result(buf, mem_tail_put(buf, q, t), t, v, false)
     }
 };
 
-def enc_movb_reg(dst: Operand, src: Operand) -> Encoded {
+def enc_movb_reg(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // movb %r8 -> mem8 (single-byte stores for string data)
     if (dst.k == K.mem && src.k == K.reg && op_size(src) == 8) {
         let t = mem_tail(dst, src.n);
-        let r = rex_rm(false, src.n, dst);
-        let prefix: [byte] = [136, t.modrm];
-        let b = concat(prefix, t.extra);
-        enc_mem_result(r, b, t)
+        let n = put_rex(buf, at, rex_rm(false, src.n, dst));
+        let m = put2(buf, n, 136, t.modrm);
+        enc_mem_result(buf, mem_tail_put(buf, m, t), t)
     } else {
-        { bytes: [], fix: [], err: "movb reg form" }
+        enc_err(at, "movb reg form")
     }
 };
 
 // ── mnemonic dispatch ──────────────────────────────────────────────────
+// A ladder of string comparisons, and it stays one: the plan wanted a
+// mnemonic id ("dispatch on a mnemonic id rather than a string"), and the id
+// version is measurably SLOWER on this tree. Encoding ycc.y walks this ladder
+// 6.69 arms deep per instruction; a whole-string comparison costs 29
+// instructions (measured), and a *character* read — what a hash walk needs —
+// costs 35 (measured), so hashing a 3-character name costs about what six
+// ladder arms do, and the id table came out +0.62% on every benchmark. The
+// whole dispatch is 194 instructions per emitted instruction, 0.85% of a
+// compile; an ordering that only reorders it by this workload's frequencies
+// would buy 0.30% and make the ladder's order a function of the corpus. The
+// id is worth having when the emitter stops producing text (Part 4 stage 2);
+// until then this ladder is the cheapest dispatch the primitives allow.
 
 def need1(mn: str, ops: [Operand]) -> str {
     if (len(ops) != 1) { mn + " takes 1 operand" } else { "" }
@@ -866,173 +892,170 @@ def need2(mn: str, ops: [Operand]) -> str {
     if (len(ops) != 2) { mn + " takes 2 operands" } else { "" }
 };
 
-def enc_insn(mn: str, ops: [Operand]) -> Encoded {
+def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand]) -> Encoded {
     if (mn == "push") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_push(ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_push(buf, at, ops[0]) }
     } else if (mn == "pop") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_pop(ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_pop(buf, at, ops[0]) }
     } else if (mn == "mov") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_mov(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_mov(buf, at, ops[1], ops[0]) }
     } else if (mn == "movb") {
         let e = need2(mn, ops);
         if (e != "") {
-            { bytes: [], fix: [], err: e }
+            enc_err(at, e)
         } else if (ops[0].k == K.imm) {
-            enc_movb(ops[1], ops[0])
+            enc_movb(buf, at, ops[1], ops[0])
         } else {
-            enc_movb_reg(ops[1], ops[0])
+            enc_movb_reg(buf, at, ops[1], ops[0])
         }
     } else if (mn == "movzbq") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_movzbq(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_movzbq(buf, at, ops[1], ops[0]) }
     } else if (mn == "lea") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_lea(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_lea(buf, at, ops[1], ops[0]) }
     } else if (mn == "xchg") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_xchg(ops[0], ops[1]) }
+        if (e != "") { enc_err(at, e) } else { enc_xchg(buf, at, ops[0], ops[1]) }
     } else if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or" || mn == "test") {
         let e = need2(mn, ops);
         if (e != "") {
-            { bytes: [], fix: [], err: e }
+            enc_err(at, e)
         } else {
             let dst = ops[1];
             let src = ops[0];
             if (src.k == K.imm) {
                 if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or") {
-                    enc_alu_imm(mn, dst, src.v)
+                    enc_alu_imm(buf, at, mn, dst, src.v)
                 } else {
-                    { bytes: [], fix: [], err: mn + " imm form" }
+                    enc_err(at, mn + " imm form")
                 }
             } else if (dst.k == K.reg && src.k == K.reg && mn == "xor" && op_size(dst) == 32 && op_size(src) == 32) {
-                enc_xor32(dst, src)
+                enc_xor32(buf, at, dst, src)
             } else {
-                enc_arith(mn, dst, src)
+                enc_arith(buf, at, mn, dst, src)
             }
         }
     } else if (mn == "shl" || mn == "shr" || mn == "sar") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_shift(mn, ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_shift(buf, at, mn, ops[1], ops[0]) }
     } else if (mn == "addsd" || mn == "subsd" || mn == "mulsd" || mn == "divsd") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_sse_arith(mn, ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }
     } else if (mn == "ucomisd") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_ucomisd(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_ucomisd(buf, at, ops[1], ops[0]) }
     } else if (mn == "cvtsi2sd") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_cvtsi2sd(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_cvtsi2sd(buf, at, ops[1], ops[0]) }
     } else if (mn == "cvttsd2si") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_cvttsd2si(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_cvttsd2si(buf, at, ops[1], ops[0]) }
     } else if (mn == "movq") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_movq(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_movq(buf, at, ops[1], ops[0]) }
     } else if (mn == "imul") {
         let e = need2(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_imul(ops[1], ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_imul(buf, at, ops[1], ops[0]) }
     } else if (mn == "neg" || mn == "not" || mn == "idiv" || mn == "div" || mn == "dec" || mn == "inc") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_unary(mn, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_unary(buf, at, mn, ops[0]) }
     } else if (mn == "jmp") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jmp(ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jmp(buf, at, ops[0]) }
     } else if (mn == "call") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_call(ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_call(buf, at, ops[0]) }
     } else if (mn == "jz" || mn == "je") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(132, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 132, ops[0]) }
     } else if (mn == "jnz" || mn == "jne") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(133, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 133, ops[0]) }
     } else if (mn == "js") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(136, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 136, ops[0]) }
     } else if (mn == "jns") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(137, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 137, ops[0]) }
     } else if (mn == "jge") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(141, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 141, ops[0]) }
     } else if (mn == "jl") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(140, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 140, ops[0]) }
     } else if (mn == "jle") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(142, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 142, ops[0]) }
     } else if (mn == "jg") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(143, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 143, ops[0]) }
     } else if (mn == "jb") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_jcc(130, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 130, ops[0]) }
     } else if (mn == "setl") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(156, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 156, ops[0]) }
     } else if (mn == "setg") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(159, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 159, ops[0]) }
     } else if (mn == "setle") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(158, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 158, ops[0]) }
     } else if (mn == "setge") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(157, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 157, ops[0]) }
     } else if (mn == "sete") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(148, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 148, ops[0]) }
     } else if (mn == "setne") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(149, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 149, ops[0]) }
     } else if (mn == "seta") {
         // unsigned >: the correct condition after ucomisd (floats)
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(151, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 151, ops[0]) }
     } else if (mn == "setae") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(147, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 147, ops[0]) }
     } else if (mn == "setb") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(146, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 146, ops[0]) }
     } else if (mn == "setbe") {
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(150, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 150, ops[0]) }
     } else if (mn == "setp") {
         // parity set: after ucomisd, unordered
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(154, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 154, ops[0]) }
     } else if (mn == "setnp") {
         // parity clear: after ucomisd, ordered
         let e = need1(mn, ops);
-        if (e != "") { { bytes: [], fix: [], err: e } } else { enc_setcc(155, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 155, ops[0]) }
     } else if (mn == "cmpb") {
         let e = need2(mn, ops);
         if (e != "") {
-            { bytes: [], fix: [], err: e }
+            enc_err(at, e)
         } else if (ops[0].k != K.imm) {
-            { bytes: [], fix: [], err: "cmpb needs imm" }
+            enc_err(at, "cmpb needs imm")
         } else {
-            enc_cmpb(ops[0].v, ops[1])
+            enc_cmpb(buf, at, ops[0].v, ops[1])
         }
     } else if (mn == "cqo") {
-        let bytes: [byte] = [72, 153];
-        { bytes: bytes, fix: [], err: "" }
+        enc_ok(put2(buf, at, 72, 153), [])
     } else if (mn == "syscall") {
-        let bytes: [byte] = [15, 5];
-        { bytes: bytes, fix: [], err: "" }
+        enc_ok(put2(buf, at, 15, 5), [])
     } else if (mn == "ret") {
-        let bytes: [byte] = [195];
-        { bytes: bytes, fix: [], err: "" }
+        enc_ok(put(buf, at, 195), [])
     } else {
-        { bytes: [], fix: [], err: "unknown mnemonic '" + mn + "'" }
+        enc_err(at, "unknown mnemonic '" + mn + "'")
     }
 };
 
 // The types are exported too: enc_insn takes [Operand] and returns
 // Encoded, so a caller that wants to name either needs the name.
-export { Operand, Fixup, Encoded, r64, reg_num, reg_size, enc_insn, concat, fixup,
-         byte_of, le16, le32, le64 };
+export { Operand, Fixup, Encoded, MemTail, r64, reg_num, reg_size, enc_insn, fixup,
+         byte_of, scratch, le16, le32, le64 };

@@ -22,7 +22,8 @@
 /* imported (module calls from asm.y, names flattened) */
 extern long reg_num(Yv *name);              /* enc64.c: enc.reg_num */
 extern long reg_size(Yv *name);             /* enc64.c: enc.reg_size */
-extern Yv *enc_insn(Yv *mn, Yv *ops);       /* enc64.c: enc.enc_insn */
+extern Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops); /* enc64.c: enc.enc_insn */
+extern Yv *scratch(void);                    /* enc64.c: enc.scratch */
 extern Yv *le64(long v);                    /* enc64.c: enc.le64 */
 extern Yv *le32(long v);                    /* enc64.c: enc.le32 */
 extern long elf_bss_from_ro(long code_len, long ro_len, long bss_len); /* elf.c: elf.elf_bss_from_ro */
@@ -1360,8 +1361,12 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
     }
 }
 
+/* The encoder writes the instruction into a scratch it fills through a
+   cursor (enc64.c "the byte sink"): one array for the line, instead of the two
+   or three little ones each concat step allocated. */
 static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
-    Yv *r = enc_insn(mn, ops);
+    Yv *buf = scratch();
+    Yv *r = enc_insn(buf, 0, mn, ops);
     if (!ys_eq_lit(yr_get(r, "err"), "")) {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), yr_get(r, "err")), ys(" in '")), mn), ys("'")),
@@ -1369,9 +1374,9 @@ static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
     } else {
-        long blen = yv_len(yr_get(r, "bytes"));
+        long blen = yv_l(yr_get(r, "at"));
         Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(blen),
-                      "kind", ys("insn"), "bytes", yr_get(r, "bytes"), "fix", yr_get(r, "fix"));
+                      "kind", ys("insn"), "bytes", ya_slice(buf, 0, blen), "fix", yr_get(r, "fix"));
         ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + blen));
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
     }
