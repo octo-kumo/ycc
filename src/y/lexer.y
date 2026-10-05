@@ -75,43 +75,43 @@ def ispunct(c: byte) -> bool {
 };
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
-// decoded text and the position just past the closing quote. Escapes:
-// \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
-def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: long, line: long, col: long } {
-    let q = src[i:i + 1];
-    let n = len(src);
-    i = i + 1;
+// decoded text and the position just past the closing quote, the line and
+// column there, and `closed` (0 when the quote never came, which is fatal
+// below). Escapes: \n \t \r, \xHH, and `\<c>` drops the backslash (the Y
+// literal rules). The scan itself is lit_end's; this only counts lines and
+// columns and decodes, so the two copies of it (this and words_scan in
+// native.y) cannot drift from the one lit_end.
+def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: long, line: long, col: long, closed: long } {
     col = col + 1;
-    let start = i;
-    let open = true;
-    let closed = false;
+    let start = i + 1;
+    let cl: [long] = [0];
+    let end = lit_end(src, i, cl);
+    // Walk lit_end's span to advance line/col and find whether an escape
+    // occurred; lit_end has already fixed where the literal ends.
+    let raw_end = end - 1;
     let hasesc = false;
-    while (open) {
-        if (i < n) {
-            let ch = src[i:i + 1];
-            if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; }
-            else if (ch == q) { open = false; closed = true; }
-            else {
-                if (ch == "\n") { line = line + 1; col = 1; }
-                else { col = col + 1; };
-                i = i + 1;
-            };
-        } else { open = false; };
+    let j = start;
+    while (j < raw_end) {
+        let ch = src[j:j + 1];
+        if (ch == "\\") { hasesc = true; j = j + 2; col = col + 2; }
+        else {
+            if (ch == "\n") { line = line + 1; col = 1; }
+            else { col = col + 1; };
+            j = j + 1;
+        };
     };
-    if (closed) {
-    } else {
+    if (cl[0] == 0) {
         // ran off the end with the quote still open
         puts("error: unterminated string literal\n");
         exit(1);
     };
-    let raw = src[start:i];
-    i = i + 1;  // skip closing quote
     col = col + 1;
+    let raw = src[start:raw_end];
     let buf = raw;
     if (hasesc) {
         buf = unescape(raw, false);
     };
-    { text: buf, end: i, line: line, col: col }
+    { text: buf, end: end, line: line, col: col, closed: 1 }
 };
 
 // A literal's text from its raw source: \n \t \r, \xHH, and `\<c>` drops
@@ -168,19 +168,27 @@ def wordbyte(c: long) -> bool {
 };
 
 // Just past the literal whose opening quote is src[q] (a backslash escapes
-// the byte after it); len(src) when it never closes.
-def lit_end(src: str, q: long) -> long {
+// the byte after it); len(src) when it never closes. `closed[0]` says which:
+// 0 when the literal ran off the end without its closing quote, 1 when it
+// closed -- the two cases this used to report as one, which a caller that
+// only wanted the end did not care about and the meta pass does (an
+// unterminated string is its own diagnostic, not a scan that runs to EOF).
+// THE one literal scanner in the tree: lex_quoted below and words_scan in
+// native.y both call it.
+def lit_end(src: str, q: long, closed: [long]) -> long {
     let n = len(src);
     let qc = byte_at(src, q);
     let i = q + 1;
     let end = n;
     let open = true;
+    let was = false;
     while (open && i < n) {
         let c = byte_at(src, i);
         if (c == c'\\') { i = i + 2; }
-        else if (c == qc) { end = i + 1; open = false; }
+        else if (c == qc) { end = i + 1; open = false; was = true; }
         else { i = i + 1; };
     };
+    closed[0] = if (was) { 1 } else { 0 };
     end
 };
 
@@ -202,7 +210,7 @@ def fstr_expr_end(src: str, lo: long) -> long {
                 // a nested f"..."
                 i = fstr_walk(src, i).end;
             } else {
-                i = lit_end(src, i);
+                i = lit_end(src, i, [0]);
             };
         } else if (c == c'(' || c == c'[' || c == c'{') {
             depth = depth + 1;
@@ -327,7 +335,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
         };
     };
     let end = i;
-    if (err != "") { end = lit_end(src, q); }
+    if (err != "") { end = lit_end(src, q, [0]); }
     { end: end, err: err, at: at, fields: fields }
 };
 
@@ -761,4 +769,4 @@ def tokenize(src: str) -> [Tok] {
     toks
 };
 
-export { tokenize, fstr_walk };
+export { tokenize, fstr_walk, lit_end };

@@ -332,15 +332,10 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                 pend = 0 - 1;
             }
             if (c == c'\"' || c == c'\'') {
-                // a string literal: past its closing quote
-                i = i + 1;
-                let open = true;
-                while (open && i < n) {
-                    let d = byte_at(code, i);
-                    if (d == c'\\') { i = i + 2; }
-                    else if (d == c) { open = false; i = i + 1; }
-                    else { i = i + 1; };
-                };
+                // a string literal: past its closing quote (lit_end, the
+                // lexer.y scanner -- one scanner, so the lexer and this
+                // cannot disagree about where a literal ends)
+                i = lexer.lit_end(code, i, [0]);
             } else if (word_byte(c)) {
                 let j = i + 1;
                 while (j < n && word_byte(byte_at(code, j))) {
