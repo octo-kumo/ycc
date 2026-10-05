@@ -3,7 +3,8 @@
  * native.y's `export { emit_program, compile_package, std_units,
  * std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface,
  * native_resolve, native_resolve_x, native_resolve_pk, origin_at,
- * strip_ns, strip_list, strip_decl, phase_end };` — exactly those names.
+ * strip_ns, strip_list, strip_decl, phase_end, link_text };` — exactly those
+ * names.
  */
 #ifndef NATIVE_H
 #define NATIVE_H
@@ -30,5 +31,8 @@ Yv *strip_decl(Yv *node, Yv *imports);
 Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
 Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std,
                     Yv *deps);
+/* The parts emit_program returned, rendered as assembly text: what -S
+ * prints. The assembler takes the parts themselves. */
+Yv *link_text(Yv *parts);
 
 #endif /* NATIVE_H */

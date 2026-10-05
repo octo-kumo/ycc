@@ -20,10 +20,14 @@ import tags from "./tags.y";
 import enc from "./enc64.y";
 import elf from "./elf.y";
 import dwarf from "./dwarf.y";
+import insn from "./ir.y";
+import lbl from "./labels.y";
 
 // A per-phase row of `ycc --time`, and what asm_assemble returns.
 type Timing = { name: str, us: long, heap: long };
 type AsmOut = { ok: bool, bytes: [byte], error: str, times: [Timing] };
+// asm_assemble's own return: AsmOut plus the item count (see ycc_assemble).
+type AsmOutI = { ok: bool, bytes: [byte], error: str, times: [Timing], items: long };
 // A parsed number, and parse_operand's result (an Operand: enc64.y).
 type AsmNum = { ok: bool, v: long };
 type OpRes = { ok: bool, op: Operand, error: str };
@@ -40,6 +44,24 @@ type AsmLabel = { name: str, sec: long, off: long, at_item: long };
 type AsmItem = { sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [Fixup], br: long };
 type AsmContent = { err: str, sec: long, offs: [long], item: AsmItem };
 type AsmSt = { sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str };
+// A part of the assembly to assemble: a body's items (`ir`, with the raw lines
+// its IR_TEXT items index in `txt`), or a piece of assembly text -- the
+// header, the arch prelude, the rodata, the .bss cells, and a body read from
+// the std pack (text until stage 3).
+//
+// `fno` moves this part's `.loc` markers' file numbers: a unit's body numbers
+// its own files from 1, and the linker gives it its place in the program's
+// file table (0 when there is nothing to move). `loc` says the markers are
+// wanted at all: a std unit's bodies are compiled with line info whatever the
+// program asked for, so without -g the markers are dropped (which is what
+// link_locs does to the pack's text).
+type LinkPart = { ir: [long], txt: [str], text: str, fno: long, loc: bool };
+// A part after its text has been split into lines: exactly one of `lines` and
+// `ir` is set.
+type Seg = { lines: [str], ir: [long], txt: [str], fno: long, loc: bool };
+// The state the IR path threads: asm_st widened with the line counter, which
+// is per part now.
+type IrSt = { sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str, lno: long };
 type AsmBytes = { bytes: [byte], err: str };
 
 // NOTE: the master note for every "nested ifs, not `&&`/`||`" comment in
@@ -564,40 +586,59 @@ def label_addr(lmap: [AsmLabel], code_len: long, pad: long, name: str) -> {ok: b
 
 // ── pass 1: parse lines into items ─────────────────────────────────────
 
-def asm_assemble(text: str, debug: bool) -> AsmOut {
+def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
     let t0 = clock_us();
     let h0 = heap_used();
-    let lines = split(text, "\n");
+    // The text parts' lines, up front: the split is its own phase (a:split),
+    // as it was when the whole assembly was one string.
+    let segs: [Seg] = [];
+    let pi = 0;
+    while (pi < len(parts)) {
+        let p = parts[pi];
+        if (len(p.text) > 0) {
+            segs += { lines: split(p.text, "\n"), ir: [], txt: [], fno: 0,
+                      loc: false };
+        } else {
+            segs += { lines: [], ir: p.ir, txt: p.txt, fno: p.fno,
+                      loc: p.loc };
+        };
+        pi = pi + 1;
+    };
     let t1 = clock_us();
     let h1 = heap_used();
-    let items: [AsmItem] = [];
-    let labels: [AsmLabel] = [];
-    let sec = 0;
-    let offs = [0, 0, 0];
-    let li = 0;
+    // Pass 1: every piece turned into items, in order -- the text parts a line
+    // at a time, an IR part item by item.
+    let st = asm_ir_st(0, [0, 0, 0], [], [], "", 0);
     let err = "";
-    // NOTE: threaded STATE record (see note below): sec/offs/items/labels/err
-    // rebound across 6+ arms merge through the flow-insensitive env. Threading
-    // one {sec,offs,items,labels,err} value through per-line callees keeps a
-    // single key set everywhere.
-    // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails.
-    while (li < len(lines)) {
+    pi = 0;
+    while (pi < len(segs)) {
         if (err != "") {
-            li = len(lines);
+            pi = len(segs);
         } else {
-            let st = asm_assemble_line(lines, li, sec, offs, items, labels, err);
-            sec = st.sec;
-            offs = st.offs;
-            items = st.items;
-            labels = st.labels;
-            err = st.err;
+            let sg = segs[pi];
+            if (len(sg.ir) > 0) {
+                let r = asm_ir_items(sg.ir, sg.txt, sg.fno, sg.loc, st.sec,
+                                     st.offs, st.items, st.labels, st.err,
+                                     st.lno + 1);
+                st = asm_ir_st(r.sec, r.offs, r.items, r.labels, r.err, r.lno);
+            } else {
+                let lines = sg.lines;
+                let li = 0;
+                while (li < len(lines) && st.err == "") {
+                    st = asm_st_seg(st, lines, li);
+                    li = li + 1;
+                };
+            };
+            pi = pi + 1;
         };
-        li = li + 1;
     };
+    let items = st.items;
+    let labels = st.labels;
+    err = st.err;
     let tr0 = clock_us();
     let hr0 = heap_used();
     if (err != "") {
-        { ok: false, bytes: [], error: err,
+        { ok: false, bytes: [], error: err, items: 0,
           times: [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
                    { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 } ] }
     } else {
@@ -619,17 +660,25 @@ def asm_assemble(text: str, debug: bool) -> AsmOut {
             tl += le;
             k = k + 1;
         };
-        { ok: lk.ok, bytes: lk.bytes, error: lk.error, times: tl }
+        { ok: lk.ok, bytes: lk.bytes, error: lk.error, items: len(items),
+          times: tl }
     }
 };
 
+// One text line through the text path, on the IR path's state (the line
+// counter it advances is what an IR_TEXT item's error names).
+def asm_st_seg(st: IrSt, lines: [str], li: long) -> IrSt {
+    let r = asm_assemble_line(lines, li, st.lno, st.sec, st.offs, st.items,
+                              st.labels, st.err);
+    asm_ir_st(r.sec, r.offs, r.items, r.labels, r.err, st.lno + 1)
+};
 // Per-line state threading for asm_assemble (see note above): one STATE
 // record {sec,offs,items,labels,err} threaded through per-class callees.
 // Each callee reads ONLY its inputs and returns the full STATE — single key
 // set everywhere, no merged-shape rebinds.
-def asm_assemble_line(lines: [str], li: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
+def asm_assemble_line(lines: [str], li: long, lbase: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     let line = trim(lines[li]);
-    let lno = li + 1;
+    let lno = lbase + li + 1;
     if (line == "") {
         asm_state(sec, offs, items, labels, err)
     } else if (line[0:1] == "#") {
@@ -1031,6 +1080,178 @@ def asm_encode(mn: str, ops: [Operand], lno: long, sec: long, offs: [long]) -> A
         offs[sec] = offs[sec] + blen;
         { err: "", sec: sec, offs: offs, item: item }
     }
+};
+
+// ── the IR path: the emitter's items ─────────────────────────────────────
+// A body the emitter wrote is a list of IR items (ir.y): the form and its
+// field words, IR_W (8) of them per item. asm.y assembles an item through the
+// same encoders as the text path -- enc_form instead of enc_insn, so the
+// dispatch is on the form id rather than a mnemonic string -- and everything
+// after pass 1 (asm_relax, asm_link, the ELF) works on the AsmItems either
+// way, so nothing else in this file changes.
+//
+// What is still text, and still lexed here: the header, the arch prelude
+// (~1.7k lines), the rodata and the .bss cells, and a body read from the std
+// pack, which carries bodies as text until stage 3.
+
+// One operand of kind `k` at word `wp`, as the encoder's Operand: the same
+// shape parse_operand builds for the same instruction, so enc64 is unchanged.
+def ir_operand(ir: [long], wp: long, k: long) -> Operand {
+    if (k == insn.O_REG) {
+        { k: K.reg, n: ir[wp], size: ir[wp + 1], v: 0, a: "", b: "", name: "",
+          base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
+    } else if (k == insn.O_IND) {
+        { k: K.ind, n: ir[wp], size: ir[wp + 1], v: 0, a: "", b: "", name: "",
+          base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
+    } else if (k == insn.O_IMM) {
+        { k: K.imm, n: 0, size: 0, v: ir[wp], a: "", b: "", name: "", base: 0,
+          idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
+    } else if (k == insn.O_LBL) {
+        { k: K.lbl, n: 0, size: 0, v: 0, a: "", b: "",
+          name: lbl.lname(ir[wp]), base: 0, idx: 0, scale: 0, disp: 0,
+          rip: false, lbl: "" }
+    } else if (k == insn.O_DIFF) {
+        { k: K.diff, n: 0, size: 0, v: 0, a: lbl.lname(ir[wp]),
+          b: lbl.lname(ir[wp + 1]), name: "", base: 0, idx: 0, scale: 0,
+          disp: 0, rip: false, lbl: "" }
+    } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+        // Five words: base, index, scale, disp, label. A label is a symbol at
+        // (%rip) -- what parse_mem_rip builds.
+        //
+        // O_MEM0 is `(%base)`, no displacement written: its disp word says
+        // nothing (the emitter leaves -1 there), and the encoder's convention
+        // for "no displacement byte" is a zero, not a -1 -- so O_MEM0 gets 0
+        // and O_MEM its own word, negative displacements and all.
+        let ml = ir[wp + 4];
+        if (ml >= 0) {
+            { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "",
+              base: -1, idx: -1, scale: 1, disp: 0, rip: true,
+              lbl: lbl.lname(ml) }
+        } else {
+            let disp = ir[wp + 3];
+            if (k == insn.O_MEM0) { disp = 0; };
+            { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "",
+              base: ir[wp], idx: ir[wp + 1], scale: ir[wp + 2],
+              disp: disp, rip: false, lbl: "" }
+        }
+    } else {
+        // O_FS: the %fs:N word (a thread's own heap block)
+        { k: K.fs, n: 0, size: 64, v: 0, a: "", b: "", name: "", base: 0,
+          idx: 0, scale: 0, disp: ir[wp], rip: false, lbl: "" }
+    }
+};
+
+// Where an error in an item is reported: an item has no line of assembly text
+// to name, so it is the body's label and the item's number in it.
+def ir_where(lblname: str, n: long) -> str {
+    if (lblname == "") { "item " + tostring(n) } else { lblname + "+" + tostring(n) }
+};
+
+def ir_enc_item(ir: [long], at: long, sec: long, offs: [long], where: str) -> AsmContent {
+    let f = ir[at];
+    let fo = insn.ir_form(f);
+    let kinds = fo.kinds;
+    let ops: [Operand] = [];
+    let wp = at + 1;
+    let i = 0;
+    while (i < len(kinds)) {
+        ops += ir_operand(ir, wp, kinds[i]);
+        wp = wp + insn.ir_kind_words(kinds[i]);
+        i = i + 1;
+    };
+    // The encoder writes into the same scratch the text path uses, and a
+    // branch is asked for in the short form: asm_relax grows the ones that
+    // turn out to be out of range.
+    let buf = enc.scratch();
+    let r = enc.enc_form(buf, 0, f, fo.mn, ops, false);
+    if (r.err != "") {
+        { err: where + ": " + r.err + " in '" + fo.mn + "'", sec: sec,
+          offs: offs,
+          item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
+    } else {
+        let blen = r.at;
+        let item = { sec: sec, off: offs[sec], len: blen, kind: "insn",
+                     bytes: buf[0:blen], fix: r.fix, br: r.br };
+        offs[sec] = offs[sec] + blen;
+        { err: "", sec: sec, offs: offs, item: item }
+    }
+};
+
+// A label definition (IR_LABEL): the AsmLabel asm_labdef_go builds, with the
+// name from the label table rather than from the line.
+def asm_ir_label(id: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel]) -> [AsmLabel] {
+    labels += { name: lbl.lname(id), sec: sec, off: offs[sec],
+                at_item: len(items) };
+    labels
+};
+
+// A .loc marker (IR_LOC): the item asm_loc builds, with the numbers read from
+// the item instead of from a line. No sec check: a body is all .text.
+def asm_ir_loc(file: long, line: long, sec: long, offs: [long], fno: long) -> AsmContent {
+    let fx = [{ off: file + fno, kind: "file", lbl: "", lbl2: "" },
+              { off: line, kind: "line", lbl: "", lbl2: "" }];
+    { err: "", sec: 0, offs: offs,
+      item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx, br: -1 } }
+};
+
+// One part's items. `txt` holds the raw lines the IR_TEXT items index (the
+// emitter's comment lines), `lno` the assembly line counter, which an
+// IR_TEXT item's line error names as before.
+def asm_ir_items(ir: [long], txt: [str], fno: long, loc: bool, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str, lno: long) -> IrSt {
+    let at = 0;
+    let n = 0;
+    let cur = "";
+    while (at < len(ir)) {
+        let f = ir[at];
+        if (f == insn.IR_LABEL) {
+            labels = asm_ir_label(ir[at + 1], sec, offs, items, labels);
+            cur = lbl.lname(ir[at + 1]);
+        } else if (f == insn.IR_LOC) {
+            // A marker nobody asked for is no item at all (see LinkPart.loc)
+            if (loc) {
+                let r = asm_ir_loc(ir[at + 1], ir[at + 2], sec, offs, fno);
+                offs = r.offs;
+                items += r.item;
+            };
+        } else if (f == insn.IR_TEXT) {
+            // A line of assembly text (the emitter's comment lines): the text
+            // path, so it is read -- and refused -- exactly as it was.
+            let i = ir[at + 1];
+            let line = "";
+            if (i >= 0 && i < len(txt)) { line = txt[i]; };
+            let st = asm_assemble_line([line], 0, lno, sec, offs, items,
+                                       labels, err);
+            sec = st.sec;
+            offs = st.offs;
+            items = st.items;
+            labels = st.labels;
+            err = st.err;
+            lno = lno + 1;
+        } else {
+            let r = ir_enc_item(ir, at, sec, offs, ir_where(cur, n));
+            offs = r.offs;
+            if (r.err != "") {
+                err = r.err;
+            } else {
+                items += r.item;
+            };
+        };
+        at = at + insn.IR_W;
+        n = n + 1;
+    };
+    { sec: sec, offs: offs, items: items, labels: labels, err: err, lno: lno }
+};
+
+def part_ir(ir: [long], txt: [str], fno: long, loc: bool) -> LinkPart {
+    { ir: ir, txt: txt, text: "", fno: fno, loc: loc }
+};
+
+def part_text(text: str) -> LinkPart {
+    { ir: [], txt: [], text: text, fno: 0, loc: false }
+};
+
+def asm_ir_st(sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str, lno: long) -> IrSt {
+    { sec: sec, offs: offs, items: items, labels: labels, err: err, lno: lno }
 };
 
 // ── branch relaxation ──────────────────────────────────────────────────
@@ -1592,13 +1813,17 @@ def asm_cwd() -> str {
 // RENDERING was removed: it cost O(n^2) string building (one malloc+copy
 // per byte) and nothing read it — it dominated -o time. The field itself
 // stays in the record shape (always "") so the shape does not change.
-def ycc_assemble(asm_text: str, debug: bool) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [Timing]} {
-    let r = asm_assemble(asm_text, debug);
+// `items` is how many items pass 1 built: the assembly text is not built at
+// all on this path (the emitter hands over its items), so that is the size
+// counter ycc --time can still report here.
+def ycc_assemble(parts: [LinkPart], debug: bool) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [Timing], items: long} {
+    let r = asm_assemble(parts, debug);
     if (!r.ok) {
-        { ok: false, bytes: [], octal: "", error: r.error, times: r.times }
+        { ok: false, bytes: [], octal: "", error: r.error, times: r.times, items: 0 }
     } else {
-        { ok: true, bytes: r.bytes, octal: "", error: "", times: r.times }
+        { ok: true, bytes: r.bytes, octal: "", error: "", times: r.times, items: r.items }
     }
 };
 
-export { asm_assemble, ycc_assemble, labmap_new, labmap_put, labmap_get, hash_str };
+export { asm_assemble, ycc_assemble, part_ir, part_text, LinkPart,
+         labmap_new, labmap_put, labmap_get, hash_str };

@@ -431,11 +431,16 @@ def ir_kind_words(k: long) -> long {
 
 // A whole body as text, one item per line: what asm.y lexes until stage 2b,
 // and what -S prints.
-def ir_render_all(ir: [long], txt: [str]) -> str {
+// `locs` says whether to print the `.loc` markers: a body compiled with line
+// info carries them whatever the program asked for, and a link without -g
+// drops them (asm_ir_items drops the item, link_text drops the line).
+def ir_render_all(ir: [long], txt: [str], locs: bool) -> str {
     let out: [str] = [];
     let at = 0;
     while (at < len(ir)) {
-        out += ir_render(ir, txt, at);
+        if (locs || ir[at] != IR_LOC) {
+            out += ir_render(ir, txt, at);
+        };
         at = at + IR_W;
     };
     join(out, "\n")

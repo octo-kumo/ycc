@@ -838,7 +838,7 @@ long y_main(Yv *cmdline) {
                 exit_(1);
                 return 1;
             } else if (yv_b(yr_get(pargs, "asm_only"))) {
-                Yv *rasm = yr_get(r, "asm");
+                Yv *rasm = link_text(yr_get(r, "asm"));
                 int wrote = 1;
                 if (yv_len(out) == 0) {
                     puts_(rasm);
@@ -878,9 +878,12 @@ long y_main(Yv *cmdline) {
                  * executable DIRECTLY with the write_bytes builtin
                  * (binary-safe open/write/chmod, tinycc-style — NULs pass
                  * through as array elements, no shell, no exec/printf). */
-                Yv *rasm2 = yr_get(r, "asm");
-                Yv *ab = ycc_assemble(rasm2,
+                Yv *ab = ycc_assemble(yr_get(r, "asm"),
                                       yv_b(yr_get(pargs, "debug")));
+                /* The assembly text itself is not built on this path any more
+                 * (the assembler reads the emitter's items), so the size
+                 * counter here is the item count; -S still reports asm_bytes. */
+                Yv *abitems = yr_get(ab, "items");
                 ph = phase_end(dt, ys("assemble"), t0, h0);
                 dt = yr_get(ph, "times");
                 t0 = yv_l(yr_get(ph, "t"));
@@ -923,7 +926,7 @@ long y_main(Yv *cmdline) {
                                               ys_cat(ys(" KB"), ys("\n")))))));
                         print_counter(ys("src_bytes"), yv_len(nrsrc));
                         print_counter(ys("tokens"), yv_len(toks));
-                        print_counter(ys("asm_bytes"), yv_len(rasm2));
+                        print_counter(ys("asm_items"), yv_l(abitems));
                         print_counter(ys("out_bytes"), yv_len(abbytes));
                         ;
                     }

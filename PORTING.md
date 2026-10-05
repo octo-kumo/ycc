@@ -36,6 +36,8 @@ requires byte-identical binaries).
 | `src/y/types.y`         | `src/c/types.c`       | the checker                       |
 | `src/y/lint.y`          | `src/c/lint.c`        | warnings                          |
 | `src/y/native.y`        | `src/c/native.c`      | the emitter                       |
+| `src/y/labels.y`        | `src/c/labels.c`/`labels.h` | the label identity table: a label is a long (one id per name) |
+| `src/y/ir.y`            | `src/c/ir.c`/`ir.h`   | the instruction IR: a body is a flat `[long]` of items, one form and its field words per item (ir_render prints an item back as the text it replaces, which is what `-S` shows) |
 | `src/y/arch_x64.y`      | `src/c/arch_x64.c`    | asm strings + helpers             |
 | `src/y/enc64.y`         | `src/c/enc64.c`       | base64/enc helpers                |
 | `src/y/asm.y`           | `src/c/asm.c`         | the assembler                     |

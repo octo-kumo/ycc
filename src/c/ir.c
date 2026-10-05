@@ -313,11 +313,16 @@ long ir_kind_words(long k) {
 
 /* A whole body as text, one item per line: what asm.y lexes until stage 2b,
  * and what -S prints. */
-Yv *ir_render_all(Yv *ir, Yv *txt) {
+/* `locs` says whether to print the `.loc` markers: a body compiled with line
+ * info carries them whatever the program asked for, and a link without -g
+ * drops them (asm_ir_items drops the item, link_text drops the line). */
+Yv *ir_render_all(Yv *ir, Yv *txt, int locs) {
     Yv *out = yav(0);
     long at = 0;
     while (at < yv_len(ir)) {
-        out = ya_push(out, ir_render(ir, txt, at));
+        if (locs || yv_l(ya_get(ir, at)) != IR_LOC) {
+            out = ya_push(out, ir_render(ir, txt, at));
+        }
         at = at + IR_W;
     }
     return ys_join(out, ys("\n"));

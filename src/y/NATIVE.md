@@ -15,7 +15,7 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/types.y` | static checker: AST → `[errors]` with line/col; the law |
 | `src/y/lint.y` | warnings: `lint_unit` reads a unit that typechecked (the renamed tree for unused or write-only locals, dropped values, unreachable code, `x = x`, `x < x`, a division by a literal zero, a key given twice; the parse tree for record and union types written out instead of named) → `[{msg,line,col}]`. Only the program's unit and packages' (never a std unit's); the driver prints them on stderr (`ycc.y` `print_native_warnings`) unless `-w`. Never fatal, and the output is the same bytes with or without them |
 | `src/y/arch_x64.y` | x86_64 behind the arch interface: `arch_id/word/sysno`, `arch_fn_label/loc_label/str_label`, `arch_header/rodata/text`, `arch_prelude`, `arch_consts`, `arch_frame` (16-align), `arch_exit`. The prelude is only the **primitives** that need raw machine state (allocator, traps, record lookup, the byte-moving string/array cores, float formatting, argv) |
-| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports, pick the std units) → per compilation unit: strip namespaces → rename → check → lint (warnings) → hoist → frame layout → arch emit; then link the units (tree shake across them) |
+| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports, pick the std units) → per compilation unit: strip namespaces → rename → check → lint (warnings) → hoist → frame layout → arch emit; then link the units (tree shake across them) into parts the assembler takes: the bodies as instruction items (`ir.y`), the header, the arch prelude, the rodata and the `.bss` cells as text (what `asm.y` still lexes) |
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect |
@@ -615,11 +615,18 @@ shared without a lock: one thread at a time may read stdin.
 A program is **linked from units**: its own — the program file and the
 files it imports, spliced into one text — and the std units it needs, in
 link order `prelude`, `exec`, `str`, `rt` (`native_resolve_x` picks
-them, see above). `compile_unit` takes one unit from AST to assembly
-text — strip namespaces, rename, check, emit, one body per function —
-and `link_units` joins all the units' bodies and shakes them together
-(*Tree shaking* below), then appends the arch prelude, every unit's
-rodata and every unit's `.bss` cells.
+them, see above). `compile_unit` takes one unit from AST to its bodies as
+instruction **items** — strip namespaces, rename, check, emit, one body
+per function, each a flat `[long]` (`ir.y`: the form, then its field
+words) — and `link_units` shakes the units' bodies together (*Tree
+shaking* below) and hands the assembler the kept ones as parts: the
+header, the arch prelude and every unit's rodata and `.bss` cells are
+text (what `asm.y` still lexes), the bodies are items (`asm_assemble`
+walks both; `enc_form` encodes an item by its form's id rather than by a
+mnemonic string). Nothing is spelled as assembly text and lexed back on
+that path, which is what the items are for; `-S` is the one place a body
+becomes text again (`link_text` renders each item back to the line it
+replaces, byte for byte, so a `-S` listing still assembles with `as`).
 
 - **Labels** cannot collide: a unit numbers its uids (function, string
   and local labels) and its global cells from its own base
@@ -662,7 +669,10 @@ produces, unions and the unknown type included), decoded only for the
 library units the program binds.
 What is precompiled is everything up to the assembler — the std units
 are stored as **assembly text**, not machine code: the assembler still
-encodes the std bodies a program keeps, along with the program's own.
+encodes the std bodies a program keeps, along with the program's own
+(the pack renders a body to text when it writes one, and a program
+linking it assembles that text; the units it compiles itself hand over
+items).
 
 `--std-src` ignores the pack and compiles the std units from the
 embedded sources, as does a ycc whose pack is missing (cycc, or a ycc
@@ -797,9 +807,12 @@ allocator. `print(42)` adds `y_long_tostr` and `y_alloc` (232 lines); the
 splitter, the file layer and the float formatter are not there because the
 program does not use them.
 
-The scanners walk a `bytes()` copy of the emitted text and materialize only
-the symbols they reference; a per-character slice would cost an allocation
-per character.
+A body's own references come out of its items (`ir_refs`: every label
+operand, the label of a `lea lbl(%rip)`, both labels of a `mov $A-B` --
+the same set the text scan found). The scanners below walk the *text*
+parts -- the arch prelude and the rodata constants -- through a
+`bytes()` copy and materialize only the symbols they reference; a
+per-character slice would cost an allocation per character.
 
 ## Optional std modules
 

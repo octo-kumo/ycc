@@ -672,7 +672,7 @@ def main(cmdline: [str]) -> long {
                 exit(1);
                 1
             } else if (pargs.asm_only) {
-                let rasm = r.asm;
+                let rasm = nativelib.link_text(r.asm);
                 let wrote = true;
                 if (len(out) == 0) {
                     puts(rasm);
@@ -706,8 +706,11 @@ def main(cmdline: [str]) -> long {
                 // executable DIRECTLY with fs.write_bytes
                 // (binary-safe open/write/chmod, tinycc-style — NULs pass
                 // through as array elements, no shell, no exec/printf).
-                let rasm2 = r.asm;
-                let ab = nasm.ycc_assemble(rasm2, pargs.debug);
+                let ab = nasm.ycc_assemble(r.asm, pargs.debug);
+                // The assembly text itself is not built on this path any more
+                // (the assembler reads the emitter's items), so the size
+                // counter here is the item count; -S still reports asm_bytes.
+                let abitems = ab.items;
                 ph = nativelib.phase_end(dt, "assemble", t0, h0);
                 dt = ph.times; t0 = ph.t; h0 = ph.h;
                 // ycc_assemble reports its own sub-phases: a:split,
@@ -738,7 +741,7 @@ def main(cmdline: [str]) -> long {
                         eputs("  " + padr("TOTAL", 12) + padl(fmt_ms(clock_us() - tstart), 12) + " ms" + padl(fmt_kb(heap_used() - hstart), 12) + " KB\n");
                         print_counter("src_bytes", len(nrsrc));
                         print_counter("tokens", len(toks));
-                        print_counter("asm_bytes", len(rasm2));
+                        print_counter("asm_items", abitems);
                         print_counter("out_bytes", len(abbytes));
                         0
                     }

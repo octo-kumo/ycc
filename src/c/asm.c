@@ -15,6 +15,9 @@
 #include "asm.h"
 #include "tags.h"
 #include "dwarf.h"
+#include "ir.h"
+#include "labels.h"
+#include "enc64.h"
 
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -70,7 +73,13 @@ Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
 Yv *labmap_get(Yv *m, Yv *name);
 static Yv *labmap_build(Yv *labels);
 static Yv *label_addr(Yv *lmap, long code_len, long pad, Yv *name);
-static Yv *asm_assemble_line(Yv *lines, long li, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err);
+static Yv *asm_assemble_line(Yv *lines, long li, long lbase, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err);
+static Yv *ir_enc_item(Yv *ir, long at, long sec, Yv *offs, Yv *where);
+static Yv *asm_ir_st(long sec, Yv *offs, Yv *items, Yv *labels, Yv *err, long lno);
+static Yv *asm_st_seg(Yv *st, Yv *lines, long li);
+static Yv *asm_ir_loc(long file, long line, long sec, Yv *offs, long fno);
+static Yv *asm_ir_items(Yv *ir, Yv *txt, long fno, int loc, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err, long lno);
+static Yv *ir_operand(Yv *ir, long wp, long k);
 static Yv *asm_state(long sec, Yv *offs, Yv *items, Yv *labels, Yv *err);
 static Yv *asm_state_err(long sec, Yv *offs, Yv *items, Yv *labels, long lno, Yv *msg);
 static Yv *asm_labdef(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err);
@@ -818,43 +827,71 @@ static Yv *label_addr(Yv *lmap, long code_len, long pad, Yv *name) {
 
 /* ── pass 1: parse lines into items ───────────────────────────────────── */
 
-Yv *asm_assemble(Yv *text, int debug) {
+Yv *asm_assemble(Yv *parts, int debug) {
     long t0 = clock_us();
     long h0 = heap_used();
-    Yv *lines = ys_split(text, ys("\n"));
-    long t1 = clock_us();
-    long h1 = heap_used();
-    Yv *items = yav(0);
-    Yv *labels = yav(0);
-    long sec = 0;
-    Yv *offs = yav(3, yv_long(0), yv_long(0), yv_long(0));
-    long li = 0;
-    Yv *err = ys("");
-    /* NOTE: threaded STATE record (see note below): sec/offs/items/labels/err
-       rebound across 6+ arms merge through the flow-insensitive env. Threading
-       one {sec,offs,items,labels,err} value through per-line callees keeps a
-       single key set everywhere.
-       NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;` tails. */
-    while (li < yv_len(lines)) {
-        if (!ys_eq_lit(err, "")) {
-            li = yv_len(lines);
-            ;
+    /* The text parts' lines, up front: the split is its own phase (a:split),
+       as it was when the whole assembly was one string. */
+    Yv *segs = yav(0);
+    long pi = 0;
+    while (pi < yv_len(parts)) {
+        Yv *p = ya_get(parts, pi);
+        if (yv_len(yr_get(p, "text")) > 0) {
+            segs = ya_push(segs, yr(5, "lines", ys_split(yr_get(p, "text"), ys("\n")),
+                                    "ir", yav(0), "txt", yav(0), "fno", yv_long(0),
+                                    "loc", yv_bool(0)));
         } else {
-            Yv *st = asm_assemble_line(lines, li, sec, offs, items, labels, err);
-            sec = yv_l(yr_get(st, "sec"));
-            offs = yr_get(st, "offs");
-            items = yr_get(st, "items");
-            labels = yr_get(st, "labels");
-            err = yr_get(st, "err");
-            ;
+            segs = ya_push(segs, yr(5, "lines", yav(0), "ir", yr_get(p, "ir"),
+                                    "txt", yr_get(p, "txt"), "fno", yr_get(p, "fno"),
+                                    "loc", yr_get(p, "loc")));
         };
-        li = li + 1;
+        pi = pi + 1;
         ;
     };
+    long t1 = clock_us();
+    long h1 = heap_used();
+    /* Pass 1: every piece turned into items, in order -- the text parts a line
+       at a time, an IR part item by item. */
+    Yv *st = asm_ir_st(0, yav(3, yv_long(0), yv_long(0), yv_long(0)), yav(0), yav(0),
+                       ys(""), 0);
+    Yv *err = ys("");
+    pi = 0;
+    while (pi < yv_len(segs)) {
+        if (!ys_eq_lit(err, "")) {
+            pi = yv_len(segs);
+            ;
+        } else {
+            Yv *sg = ya_get(segs, pi);
+            if (yv_len(yr_get(sg, "ir")) > 0) {
+                Yv *r = asm_ir_items(yr_get(sg, "ir"), yr_get(sg, "txt"),
+                                     yv_l(yr_get(sg, "fno")), yv_b(yr_get(sg, "loc")),
+                                     yv_l(yr_get(st, "sec")), yr_get(st, "offs"),
+                                     yr_get(st, "items"), yr_get(st, "labels"),
+                                     yr_get(st, "err"), yv_l(yr_get(st, "lno")) + 1);
+                st = asm_ir_st(yv_l(yr_get(r, "sec")), yr_get(r, "offs"),
+                               yr_get(r, "items"), yr_get(r, "labels"),
+                               yr_get(r, "err"), yv_l(yr_get(r, "lno")));
+            } else {
+                Yv *lines = yr_get(sg, "lines");
+                long li = 0;
+                while (li < yv_len(lines) && ys_eq_lit(yr_get(st, "err"), "")) {
+                    st = asm_st_seg(st, lines, li);
+                    li = li + 1;
+                    ;
+                };
+            };
+            pi = pi + 1;
+            ;
+        };
+    };
+    Yv *items = yr_get(st, "items");
+    Yv *labels = yr_get(st, "labels");
+    err = yr_get(st, "err");
     long tr0 = clock_us();
     long hr0 = heap_used();
     if (!ys_eq_lit(err, "")) {
-        return yr(4, "ok", yv_bool(0), "bytes", yav(0), "error", err,
+        return yr(5, "ok", yv_bool(0), "bytes", yav(0), "error", err,
+                  "items", yv_long(0),
                   "times", yav(2,
                                yr(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
                                yr(3, "name", ys("a:encode"), "us", yv_long(tr0 - t1), "heap", yv_long(hr0 - h1))));
@@ -877,8 +914,9 @@ Yv *asm_assemble(Yv *text, int debug) {
             tl = ya_push(tl, le);
             k = k + 1;
         }
-        return yr(4, "ok", yr_get(lk, "ok"), "bytes", yr_get(lk, "bytes"),
-                  "error", yr_get(lk, "error"), "times", tl);
+        return yr(5, "ok", yr_get(lk, "ok"), "bytes", yr_get(lk, "bytes"),
+                  "error", yr_get(lk, "error"), "items", yv_long(yv_len(items)),
+                  "times", tl);
     }
 }
 
@@ -886,9 +924,9 @@ Yv *asm_assemble(Yv *text, int debug) {
    record {sec,offs,items,labels,err} threaded through per-class callees.
    Each callee reads ONLY its inputs and returns the full STATE — single key
    set everywhere, no merged-shape rebinds. */
-static Yv *asm_assemble_line(Yv *lines, long li, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
+static Yv *asm_assemble_line(Yv *lines, long li, long lbase, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
     Yv *line = ys_trim(ya_get(lines, li));
-    long lno = li + 1;
+    long lno = lbase + li + 1;
     if (ys_eq_lit(line, "")) {
         return asm_state(sec, offs, items, labels, err);
     } else if (ys_eq_lit(ys_slice(line, 0, 1), "#")) {
@@ -1400,6 +1438,224 @@ static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
     }
 }
 
+
+/* ── the IR path: the emitter's items ────────────────────────────────────
+ * A body the emitter wrote is a list of IR items (ir.y): the form and its
+ * field words, IR_W (8) of them per item. asm.y assembles an item through the
+ * same encoders as the text path -- enc_form instead of enc_insn, so the
+ * dispatch is on the form id rather than a mnemonic string -- and everything
+ * after pass 1 (asm_relax, asm_link, the ELF) works on the AsmItems either
+ * way, so nothing else in this file changes.
+ *
+ * What is still text, and still lexed here: the header, the arch prelude
+ * (~1.7k lines), the rodata and the .bss cells, and a body read from the std
+ * pack, which carries bodies as text until stage 3. */
+
+/* One operand of kind `k` at word `wp`, as the encoder's Operand: the same
+   shape parse_operand builds for the same instruction, so enc64 is unchanged. */
+static Yv *ir_operand(Yv *ir, long wp, long k) {
+    if (k == O_REG) {
+        return yr(13, "k", yv_long(K_reg), "n", ya_get(ir, wp), "size", ya_get(ir, wp + 1),
+                  "v", yv_long(0), "a", ys(""), "b", ys(""), "name", ys(""), "base",
+                  yv_long(0), "idx", yv_long(0), "scale", yv_long(0), "disp",
+                  yv_long(0), "rip", yv_bool(0), "lbl", ys(""));
+    } else if (k == O_IND) {
+        return yr(13, "k", yv_long(K_ind), "n", ya_get(ir, wp), "size", ya_get(ir, wp + 1),
+                  "v", yv_long(0), "a", ys(""), "b", ys(""), "name", ys(""), "base",
+                  yv_long(0), "idx", yv_long(0), "scale", yv_long(0), "disp",
+                  yv_long(0), "rip", yv_bool(0), "lbl", ys(""));
+    } else if (k == O_IMM) {
+        return yr(13, "k", yv_long(K_imm), "n", yv_long(0), "size", yv_long(0), "v",
+                  ya_get(ir, wp), "a", ys(""), "b", ys(""), "name", ys(""), "base",
+                  yv_long(0), "idx", yv_long(0), "scale", yv_long(0), "disp",
+                  yv_long(0), "rip", yv_bool(0), "lbl", ys(""));
+    } else if (k == O_LBL) {
+        return yr(13, "k", yv_long(K_lbl), "n", yv_long(0), "size", yv_long(0), "v",
+                  yv_long(0), "a", ys(""), "b", ys(""), "name", lname(ya_get(ir, wp)),
+                  "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0), "disp",
+                  yv_long(0), "rip", yv_bool(0), "lbl", ys(""));
+    } else if (k == O_DIFF) {
+        return yr(13, "k", yv_long(K_diff), "n", yv_long(0), "size", yv_long(0), "v",
+                  yv_long(0), "a", lname(ya_get(ir, wp)), "b", lname(ya_get(ir, wp + 1)),
+                  "name", ys(""), "base", yv_long(0), "idx", yv_long(0), "scale",
+                  yv_long(0), "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys(""));
+    } else if (k == O_MEM || k == O_MEM0) {
+        /* Five words: base, index, scale, disp, label. A label is a symbol at
+           (%rip) -- what parse_mem_rip builds.
+           O_MEM0 is `(%base)`, no displacement written: its disp word says
+           nothing (the emitter leaves -1 there), and the encoder's convention
+           for "no displacement byte" is a zero, not a -1 -- so O_MEM0 gets 0
+           and O_MEM its own word, negative displacements and all. */
+        long ml = yv_l(ya_get(ir, wp + 4));
+        if (ml >= 0) {
+            return yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v",
+                      yv_long(0), "a", ys(""), "b", ys(""), "name", ys(""), "base",
+                      yv_long(-1), "idx", yv_long(-1), "scale", yv_long(1), "disp",
+                      yv_long(0), "rip", yv_bool(1), "lbl", lname(ya_get(ir, wp + 4)));
+        } else {
+            long disp = yv_l(ya_get(ir, wp + 3));
+            if (k == O_MEM0) { disp = 0; };
+            return yr(13, "k", yv_long(K_mem), "n", yv_long(0), "size", yv_long(0), "v",
+                      yv_long(0), "a", ys(""), "b", ys(""), "name", ys(""), "base",
+                      ya_get(ir, wp), "idx", ya_get(ir, wp + 1), "scale",
+                      ya_get(ir, wp + 2), "disp", yv_long(disp), "rip", yv_bool(0),
+                      "lbl", ys(""));
+        }
+    } else {
+        /* O_FS: the %fs:N word (a thread's own heap block) */
+        return yr(13, "k", yv_long(K_fs), "n", yv_long(0), "size", yv_long(64), "v",
+                  yv_long(0), "a", ys(""), "b", ys(""), "name", ys(""), "base",
+                  yv_long(0), "idx", yv_long(0), "scale", yv_long(0), "disp",
+                  ya_get(ir, wp), "rip", yv_bool(0), "lbl", ys(""));
+    }
+}
+
+/* Where an error in an item is reported: an item has no line of assembly text
+   to name, so it is the body's label and the item's number in it. */
+static Yv *ir_where(Yv *lblname, long n) {
+    if (ys_eq_lit(lblname, "")) {
+        return ys_cat(ys("item "), ys_long(n));
+    } else {
+        return ys_cat(ys_cat(lblname, ys("+")), ys_long(n));
+    }
+}
+
+static Yv *ir_enc_item(Yv *ir, long at, long sec, Yv *offs, Yv *where) {
+    long f = yv_l(ya_get(ir, at));
+    Yv *fo = ir_form(f);
+    Yv *kinds = yr_get(fo, "kinds");
+    Yv *ops = yav(0);
+    long wp = at + 1;
+    long i = 0;
+    while (i < yv_len(kinds)) {
+        ops = ya_push(ops, ir_operand(ir, wp, yv_l(ya_get(kinds, i))));
+        wp = wp + ir_kind_words(yv_l(ya_get(kinds, i)));
+        i = i + 1;
+        ;
+    };
+    /* The encoder writes into the same scratch the text path uses, and a
+       branch is asked for in the short form: asm_relax grows the ones that
+       turn out to be out of range. */
+    Yv *buf = scratch();
+    Yv *r = enc_form(buf, 0, f, yr_get(fo, "mn"), ops, 0);
+    if (!ys_eq_lit(yr_get(r, "err"), "")) {
+        return yr(4, "err",
+                  ys_cat(ys_cat(ys_cat(where, ys(": ")), yr_get(r, "err")),
+                         ys_cat(ys_cat(ys(" in '"), yr_get(fo, "mn")), ys("'"))),
+                  "sec", yv_long(sec), "offs", offs,
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
+    } else {
+        long blen = yv_l(yr_get(r, "at"));
+        Yv *item = yr(7, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(blen),
+                      "kind", ys("insn"), "bytes", ya_slice(buf, 0, blen), "fix",
+                      yr_get(r, "fix"), "br", yr_get(r, "br"));
+        ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + blen));
+        return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
+    }
+}
+
+/* A label definition (IR_LABEL): the AsmLabel asm_labdef_go builds, with the
+   name from the label table rather than from the line. */
+static Yv *asm_ir_label(long id, long sec, Yv *offs, Yv *items, Yv *labels) {
+    return ya_push(labels, yr(4, "name", lname(yv_long(id)), "sec", yv_long(sec), "off",
+                              ya_get(offs, sec), "at_item", yv_long(yv_len(items))));
+}
+
+/* A .loc marker (IR_LOC): the item asm_loc builds, with the numbers read from
+   the item instead of from a line. No sec check: a body is all .text. */
+static Yv *asm_ir_loc(long file, long line, long sec, Yv *offs, long fno) {
+    (void)sec; /* a body is all .text, so the marker goes in .text */
+    Yv *fx = yav(2, yr(4, "off", yv_long(file + fno), "kind", ys("file"), "lbl", ys(""), "lbl2", ys("")),
+                 yr(4, "off", yv_long(line), "kind", ys("line"), "lbl", ys(""), "lbl2", ys("")));
+    return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
+              "item", yr(7, "sec", yv_long(0), "off", ya_get(offs, 0), "len", yv_long(0),
+                         "kind", ys("loc"), "bytes", yav(0), "fix", fx, "br", yv_long(-1)));
+}
+
+/* One part's items. `txt` holds the raw lines the IR_TEXT items index (the
+   emitter's comment lines), `lno` the assembly line counter, which an
+   IR_TEXT item's line error names as before. */
+static Yv *asm_ir_items(Yv *ir, Yv *txt, long fno, int loc, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err, long lno) {
+    long at = 0;
+    long n = 0;
+    Yv *cur = ys("");
+    while (at < yv_len(ir)) {
+        long f = yv_l(ya_get(ir, at));
+        if (f == IR_LABEL) {
+            labels = asm_ir_label(yv_l(ya_get(ir, at + 1)), sec, offs, items, labels);
+            cur = lname(ya_get(ir, at + 1));
+        } else if (f == IR_LOC) {
+            /* A marker nobody asked for is no item at all (see LinkPart.loc) */
+            if (loc) {
+                Yv *r = asm_ir_loc(yv_l(ya_get(ir, at + 1)), yv_l(ya_get(ir, at + 2)), sec,
+                                   offs, fno);
+                offs = yr_get(r, "offs");
+                items = ya_push(items, yr_get(r, "item"));
+            };
+        } else if (f == IR_TEXT) {
+            /* A line of assembly text (the emitter's comment lines): the text
+               path, so it is read -- and refused -- exactly as it was. */
+            long i = yv_l(ya_get(ir, at + 1));
+            Yv *line = ys("");
+            if (i >= 0 && i < yv_len(txt)) { line = ya_get(txt, i); };
+            Yv *st = asm_assemble_line(yav(1, line), 0, lno, sec, offs, items, labels, err);
+            sec = yv_l(yr_get(st, "sec"));
+            offs = yr_get(st, "offs");
+            items = yr_get(st, "items");
+            labels = yr_get(st, "labels");
+            err = yr_get(st, "err");
+            lno = lno + 1;
+        } else {
+            Yv *r = ir_enc_item(ir, at, sec, offs, ir_where(cur, n));
+            offs = yr_get(r, "offs");
+            if (!ys_eq_lit(yr_get(r, "err"), "")) {
+                err = yr_get(r, "err");
+            } else {
+                items = ya_push(items, yr_get(r, "item"));
+            };
+        };
+        at = at + IR_W;
+        n = n + 1;
+        ;
+    };
+    return asm_ir_st(sec, offs, items, labels, err, lno);
+}
+
+/* A part of the assembly to assemble: a body's items (`ir`, with the raw lines
+   its IR_TEXT items index in `txt`), or a piece of assembly text -- the
+   header, the arch prelude, the rodata, the .bss cells, and a body read from
+   the std pack (text until stage 3).
+   `fno` moves this part's `.loc` markers' file numbers: a unit's body numbers
+   its own files from 1, and the linker gives it its place in the program's
+   file table (0 when there is nothing to move). `loc` says the markers are
+   wanted at all: a std unit's bodies are compiled with line info whatever the
+   program asked for, so without -g the markers are dropped (which is what
+   link_locs does to the pack's text). */
+Yv *part_ir(Yv *ir, Yv *txt, long fno, int loc) {
+    return yr(5, "ir", ir, "txt", txt, "text", ys(""), "fno", yv_long(fno), "loc",
+              yv_bool(loc));
+}
+
+Yv *part_text(Yv *text) {
+    return yr(5, "ir", yav(0), "txt", yav(0), "text", text, "fno", yv_long(0), "loc",
+              yv_bool(0));
+}
+
+static Yv *asm_ir_st(long sec, Yv *offs, Yv *items, Yv *labels, Yv *err, long lno) {
+    return yr(6, "sec", yv_long(sec), "offs", offs, "items", items, "labels", labels,
+              "err", err, "lno", yv_long(lno));
+}
+
+/* One text line through the text path, on the IR path's state (the line
+   counter it advances is what an IR_TEXT item's error names). */
+static Yv *asm_st_seg(Yv *st, Yv *lines, long li) {
+    Yv *r = asm_assemble_line(lines, li, yv_l(yr_get(st, "lno")), yv_l(yr_get(st, "sec")),
+                              yr_get(st, "offs"), yr_get(st, "items"),
+                              yr_get(st, "labels"), yr_get(st, "err"));
+    return asm_ir_st(yv_l(yr_get(r, "sec")), yr_get(r, "offs"), yr_get(r, "items"),
+                     yr_get(r, "labels"), yr_get(r, "err"), yv_l(yr_get(st, "lno")) + 1);
+}
 
 /* ── branch relaxation ───────────────────────────────────────────────────
    A branch within rel8 of its target is two bytes instead of five or six, and
@@ -2058,13 +2314,15 @@ static Yv *concat_bytes(Yv *a, Yv *b) {
    RENDERING was removed: it cost O(n^2) string building (one malloc+copy
    per byte) and nothing read it — it dominated -o time. The field itself
    stays in the record shape (always "") so the shape does not change. */
-Yv *ycc_assemble(Yv *asm_text, int debug) {
-    Yv *r = asm_assemble(asm_text, debug);
+Yv *ycc_assemble(Yv *parts, int debug) {
+    Yv *r = asm_assemble(parts, debug);
     if (!(yv_b(yr_get(r, "ok")))) {
-        return yr(5, "ok", yv_bool(0), "bytes", yav(0), "octal", ys(""),
-                  "error", yr_get(r, "error"), "times", yr_get(r, "times"));
+        return yr(6, "ok", yv_bool(0), "bytes", yav(0), "octal", ys(""),
+                  "error", yr_get(r, "error"), "times", yr_get(r, "times"),
+                  "items", yv_long(0));
     } else {
-        return yr(5, "ok", yv_bool(1), "bytes", yr_get(r, "bytes"), "octal", ys(""),
-                  "error", ys(""), "times", yr_get(r, "times"));
+        return yr(6, "ok", yv_bool(1), "bytes", yr_get(r, "bytes"), "octal", ys(""),
+                  "error", ys(""), "times", yr_get(r, "times"), "items",
+                  yr_get(r, "items"));
     }
 }
