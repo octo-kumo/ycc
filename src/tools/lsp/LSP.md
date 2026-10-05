@@ -1079,7 +1079,7 @@ Each ends green on `make test`.
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
 | **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
 | **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over 487 files; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), a record's own fields after a `.`, the std/package globals `native.unit_iface` would give, and the semantic token legend's semantic classes. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), a record's own fields after a `.`, the std/package globals `native.unit_iface` would give, and the semantic token legend's semantic classes. |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
 ### 11.1 Two bugs the work found in the compiler
@@ -1130,6 +1130,23 @@ than a limit.**
    the 3.5 GB cap, and so no definition, hover or completion on any file that
    size. `doc_to_lsp` takes the caller's `SrcDoc`; `to_lsp` delegates to it.
    **32.6 MB**, and `sym.y` (the outline) had the same three call sites.
+
+   It was worse than the memory. Every request re-derives the index from scratch
+   — the protocol gives no notice that only a few lines changed — so this was
+   paid per keystroke. `request-cost.y` measures it per phase
+   (`./ycc src/tools/lsp/test/request-cost.y -o /tmp/rc && /tmp/rc`):
+
+   | file | size | `scan` | `index` before | `index` after | heap before → after |
+   |---|---|---|---|---|---|
+   | `tags.y` | 8 KB | 0 ms | 0 ms | 0 ms | 0.5 → 0.4 MB |
+   | `lint.y` | 42 KB | 1 ms | 65 ms | **2 ms** | 43 → 3.2 MB |
+   | `types.y` | 191 KB | 5 ms | 973 ms | **7 ms** | 584 → 12.7 MB |
+   | `native.y` | 497 KB | 13 ms | **5,499 ms** | **20 ms** | 2,541 → 31.8 MB |
+
+   **275x on the largest file in the tree.** Not because 20 ms is fast, but
+   because 5.5 s is not a slow feature, it is a frozen editor — and R1.1 and R6.4
+   say the server must not block. The tolerant tokeniser was never the problem;
+   `scan` is 13 ms on the same file throughout.
 
 46% → **61%** of 80,949 identifier tokens, and the corpus now indexes in 232 MB
 instead of dying.
