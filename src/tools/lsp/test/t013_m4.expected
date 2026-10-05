@@ -45,6 +45,9 @@ at top level: twice,base,use,print,syscall,len,push,some,is_some,unwrap,trim,ord
 typable builtins 43, missing from the list 0
 no `opt$test` in the list: true
 no `#fmt` in the list: true
+-- and the PREDICATE agrees with the list
+names 46, accepted by is_intrinsic_name 46, disagreed 0
+non-builtins wrongly accepted: 0
 -- the index the requests agree on
 definition and hover agree: true
 done

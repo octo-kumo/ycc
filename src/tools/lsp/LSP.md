@@ -1,7 +1,27 @@
 # LSP.md — a language server for Y, and the VS Code extension
 
-**Status: proposed, not implemented.** This document is the design and the
-requirement list. Nothing here has been built yet.
+**Status: built and running; §11's milestone table is the authority.** `yserve`
+exists, is driven by a VS Code extension in `vscode-y-lang/`, and is tested as a
+real process. M1 (R1, errors and warnings), M2 (R2, semantic tokens) and M3 (R3,
+formatting) are done; **M4's Stage A is done** (R4, R5, R6 — hover, go-to-
+definition, completion, from the open buffer's own declarations), measured at §11.3
+and costed at §9.2.
+
+This line used to read "proposed, not implemented … nothing here has been built
+yet", which was wrong from the moment M1 shipped and stayed wrong through four
+milestones. A design document that understates its own state is worse than one
+that has none: a reader checks whether it is real before reading it.
+
+What is **not** built, precisely:
+
+- **M4 Stage B / §9.2, the C2 compiler change** — cross-file navigation (a name
+  from an import answers `null`), inferred types in a hover, a record's own
+  fields after a `.`, and the semantic token classes that say what a name
+  *denotes*. Decided as worth doing, with the cost counted: §11.3.
+- **M5's packaging**, beyond the documentation rows: no `vsce` package, no
+  marketplace entry.
+- The requirement text below is unchanged and still the target; where a
+  requirement is partly delivered the status note at its head says which part.
 
 **On citations.** Compiler internals are named by **symbol** — `types.check_program`,
 `native.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
@@ -18,8 +38,9 @@ prints what it finds there:
 python3 src/tools/lsp/check-refs.py -v
 ```
 
-Run it after touching `src/y`. It is not wired into `make test`, because that is
-the compiler agent's file; §12 lists it as a follow-up.
+Run it after touching `src/y`. It used to say it was not wired into `make test`
+because that is the compiler agent's file; it is wired now, into
+`test/sh/test_lsp.sh` alongside `check-names.py`, so `make test` runs it.
 
 It supersedes the sketch at the end of `future.y`:
 
@@ -476,7 +497,7 @@ outliers against 1651 padded ones: the formatter writes the house style.
 continuations of R3.6a, ~46 the tight-brace outliers of R3.6b, and the rest
 blank-line collapsing and a trailing-newline normalisation (`labels.y` and
 `tags.y` ship without a final newline; R3.6 adds one). Idempotence -- the actual
-requirement of R3.5 -- holds over all 487 files that lex.
+requirement of R3.5 -- holds over every file in the tree that lexes.
 
 **R3.7** Rules live in one table, overridable per `y.lsp.format.*` settings:
 indent width, column limit, operator spacing.
@@ -791,7 +812,15 @@ in **`BUGS.md`**, under *"`import fs;` twice resolves to two files"*. The fix is
 about five lines in `norm_path` and is worth doing before any other tool lands in
 `src/tools/`.
 
-### 9.2 C2 — an index of what the compiler already computes (M4)
+### 9.2 C2 — the checker's TYPES (M4)
+
+> **Rescoped by §11.4.** This section was written as "an index of what the
+> compiler already computes", on the belief that cross-file navigation needed it.
+> It does not: `diag.y` already runs the renamer over the spliced program and
+> already holds the per-line origin map, which is the whole of what
+> go-to-definition needs (§11.4 has the measurement). What is left here is the
+> part the renamer does not carry — **types**. Cross-file navigation is LSP work
+> and is not blocked on this.
 
 The checker computes the type of every expression and the checker and renamer
 both know where every binding was defined. All of it is discarded:
@@ -1078,8 +1107,12 @@ Each ends green on `make test`.
 | ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
 | **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
-| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over 487 files; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), a record's own fields after a `.`, the std/package globals `native.unit_iface` would give, and the semantic token legend's semantic classes. |
+| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over every `.y` file in
+the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
+which must be zero, and only *prints* the total, so the total moves as `src/y`
+moves without anything failing; this row used to quote 487, a number nothing
+checks; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. **Not done:** inferred types in a hover and a record's own fields after a `.` (both §9.2 / C2, which §11.4 rescoped to types alone), and the semantic token legend's semantic classes. Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
 ### 11.1 Two bugs the work found in the compiler
@@ -1131,10 +1164,91 @@ than a limit.**
    size. `doc_to_lsp` takes the caller's `SrcDoc`; `to_lsp` delegates to it.
    **32.6 MB**, and `sym.y` (the outline) had the same three call sites.
 
+   It was worse than the memory. Every request re-derives the index from scratch
+   — the protocol gives no notice that only a few lines changed — so this was
+   paid per keystroke. `request-cost.y` measures it per phase
+   (`./ycc src/tools/lsp/test/request-cost.y -o /tmp/rc && /tmp/rc`):
+
+   | file | size | `scan` | `index` before | `index` after | heap before → after |
+   |---|---|---|---|---|---|
+   | `tags.y` | 8 KB | 0 ms | 0 ms | 0 ms | 0.5 → 0.4 MB |
+   | `lint.y` | 42 KB | 1 ms | 65 ms | **2 ms** | 43 → 3.2 MB |
+   | `types.y` | 191 KB | 5 ms | 973 ms | **7 ms** | 584 → 12.7 MB |
+   | `native.y` | 497 KB | 13 ms | **5,499 ms** | **20 ms** | 2,541 → 31.8 MB |
+
+   **275x on the largest file in the tree.** Not because 20 ms is fast, but
+   because 5.5 s is not a slow feature, it is a frozen editor — and R1.1 and R6.4
+   say the server must not block. The tolerant tokeniser was never the problem;
+   `scan` is 13 ms on the same file throughout.
+
 46% → **61%** of 80,949 identifier tokens, and the corpus now indexes in 232 MB
 instead of dying.
 
-**The decision: Stage B is worth doing, and now it is affordable.** Of the 832
+### 11.4 The premise was wrong: cross-file navigation needs no compiler change
+
+The measurement above says 84% of what Stage A misses is "declared in another
+file", and the obvious reading is that closing it needs the compiler's scope —
+which is what §9.2 and the Stage B decision assumed. **That reading is wrong,
+and the reason is in `diag.y`, which had been read past twice.**
+
+`diag.diagnose` already does, on every buffer it is asked about:
+
+1. `native_resolve_x` — splice the imports in, giving the whole program's text
+   (`nr.src`) **and `nr.origin.file`, a per-line map saying which file each
+   spliced line came from**;
+2. `strip_ns` — drop the module qualifiers;
+3. `rename.rename_program_x` — the compiler's own uniquifying pass;
+4. `types.check_program` and `lint.lint_unit`.
+
+So the LSP is already holding, per request, the whole program as one text, the
+map from every line of it back to a file, and — this is the part that matters —
+**an AST in which a definition and all its uses share one name.**
+
+Measured, on `main.y` importing `mod.y`, after step 3 alone:
+
+```
+top-level statements after rename: 4
+  line 1 kind decl     decl name helper$1      <- mod.y
+  line 4 kind decl     decl name TOP$3         <- mod.y
+  line 6 kind decl     decl name v$4           <- main.y
+  line 7 kind call     callee print @7 args v$4 @7 + TOP$3 @7    <- main.y
+origin map:  lines 1-4 -> file 1 (mod.y),  lines 5-7 -> file 0 (main.y)
+```
+
+`TOP$3` is *declared* on spliced line 4 and *read* on spliced line 7. One name,
+two files, and `origin.file` says which file each line belongs to. **That is
+exactly the pairing go-to-definition needs**, and it is produced by a pass the
+server already runs and discards.
+
+So the 84% is not behind a compiler change at all. It is behind:
+
+- indexing the **spliced** text rather than the buffer, so the imported
+  declarations are in the index;
+- the inverse of `origin.file` — a buffer line to its spliced line — to turn a
+  request position into an AST position;
+- `origin_file` on the declaration's line, to turn the answer back into a file
+  and a line in *that* file, and then reading that file to put the name in it.
+
+None of that touches `src/y`. It is all in `scope.y` / `nav.y` / `serve.y`.
+
+**What this does change.** §9.2 keeps its first half and loses its reason for
+existing: `types.Binding` line/col and a `(line, col) -> Type` table are still
+the only way to get a *type* — an inferred `long` under the cursor, a record's
+own fields after a `.` — and neither the renamer nor the splicer carries types.
+But "cross-file navigation is Stage B" was wrong, and it was wrong because the
+gap was measured on Stage A's index while the data was sitting in the next
+function. §9.2 is now scoped to types alone, and its measured cost (§9.2's own
+site counts, and the `bench/compile_ir.sh` baseline) stands for that much.
+
+**The lesson, since it cost a milestone's worth of work to get wrong:** a
+"missing capability" measured against one implementation is a statement about
+that implementation, not about the system. `scope-coverage.y` compares what
+`nav.find_decl` resolves; it cannot see what `diag.y` already resolved and threw
+away. The next version of that tool should measure the *served* answer — what a
+request returns — and not the index underneath it, because the index is not the
+product.
+
+**The original measurement stands, with the correction:** of the 832
 distinct names Stage A cannot resolve:
 
 | | count | |
@@ -1144,16 +1258,15 @@ distinct names Stage A cannot resolve:
 | declared nowhere in the corpus | 128 | not visible to a correct resolver either |
 
 Stage A reads one buffer, so a name from an import is invisible to it by
-construction. That 84% is the ceiling, and it is high enough that cross-file
-navigation is the difference between a toy and a usable server — every program
-in this tree imports something.
+construction. That 84% is Stage A's ceiling — and it is **not** the system's
+ceiling, which is the subject of §11.4, and much smaller.
 
-The order matters, and the measurement is what set it: Stage B is a compiler
-change, so it is `src/y` + the `src/c` twin + `make check` + `make rebless`, and
-it is only worth that if the thing it fixes is measured. Fixing Stage A's two
-bugs first was free by comparison and moved 15 points; Stage B is what remains,
-and it should be measured with `bench/compile_ir.sh` before the rebless, because
-`rename_program_x2` runs over the whole program on every compile.
+The order mattered, and the measurement is what set it: fix Stage A's two bugs
+first, because that was free by comparison and moved 15 points. **Then check
+where the remaining gap actually lives before paying for it** — which is what
+§11.4 does, and what this decision got wrong. `bench/compile_ir.sh` is still the
+instrument for it, and it says what it says: +0.00% on all thirteen benchmarks,
+`ycc.y` at 4,705,071,230 instructions.
 
 ### 11.2 Four bugs M4 found in the server
 
