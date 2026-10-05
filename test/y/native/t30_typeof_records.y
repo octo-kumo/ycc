@@ -23,5 +23,5 @@ print("via field = " + ((rec.f)(3, 4)));
 
 // a later definition shadows an earlier one, exactly as in the VM
 def dup(x: long) -> long { x + 1 };
-def dup(x: long) -> long { x + 100 };
+def dup(x: long) -> long { x + 100 }; // expect-warning: 'dup' is declared more than once; the last declaration counts (the earlier one at line 25)
 print(dup(1));

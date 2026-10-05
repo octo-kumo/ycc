@@ -293,7 +293,12 @@ is no unknown type. Where the type cannot be inferred, annotate:
   inferred, every \ic{return} and the body's trailing value must conform,
   converting as any store does (Section~\ref{sec:conversions}): \ic{half}
   below returns \ic{1.0} for \ic{true}, and a \ic{return 1.5} in a body
-  that ends in a \ic{long} is an error.
+  that ends in a \ic{long} is an error. A bare \ic{return;} in a body
+  that ends in a value is one too, and its diagnostic names the type the
+  tail gave --- which the source never wrote --- so it also says what does
+  not: \ic{write '-> void' on the def to return nothing}. Writing it makes
+  the inferred type a written one and the \ic{return;} what the def says
+  it does.
 
 \begin{lstlisting}
 def half(c: bool) { if (c) { return 1; }; 2.5 };

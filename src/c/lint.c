@@ -42,7 +42,13 @@ static Yv *lint_disp(Yv *name);
 static long lint_num(Yv *name);
 static long lint_mark(LintSt st, Yv *name, long bit);
 static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
-                      int scal, int fresh);
+                      int scal, int fresh, int strf);
+static long lint_note_top(LintSt st, Yv *node);
+static long lint_top_first(LintSt st, Yv *d, long fid);
+static long lint_file_of(long ln);
+static int lint_strheld(Yv *typ, Yv *v);
+static int lint_var_str(LintSt st, Yv *name);
+static long lint_loop_body(LintSt st, Yv *body);
 static long lint_stmts(LintSt st, Yv *stmts, int used, int top);
 static long lint_warn_at(LintSt st, Yv *msg, Yv *node);
 static long lint_warn_start(LintSt st, Yv *msg, Yv *node);
@@ -141,9 +147,11 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel) {
     Yv *vars = yav(0);
     Yv *flags = yav(0);
     Yv *rets = yav(0);
-    LintSt st = yr(7, "warns", warns, "vars", vars, "flags", flags, "rets",
+    LintSt st = yr(11, "warns", warns, "vars", vars, "tops",
+                   nameix_new(256), "flags", flags, "rets",
                    rets, "ridx", nameix_new(64), "self", ys(""), "wlevel",
-                   yv_long(wlevel));
+                   yv_long(wlevel), "dropnext", yv_bool(0), "vused",
+                   yv_bool(0), "loops", yv_long(0));
     if (wlevel >= 1) {
         (void)lint_rets(st, yr_get(ast3, "stmts"));
     }
@@ -215,15 +223,123 @@ static long lint_mark(LintSt st, Yv *name, long bit) {
  * `scal`: it holds a number, string or bool, whose `+=` makes a new value
  * only it sees. `fresh`: it starts as an array literal no one else holds. */
 static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
-                      int scal, int fresh) {
+                      int scal, int fresh, int strf) {
     Yv *d = lint_disp(name);
     if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95 &&
         ys_index_of(name, ys("$shadow")) < 0) {
         (void)ya_push(yr_get(st, "vars"),
-                      yr(7, "name", d, "kind", kind, "num",
+                      yr(9, "name", d, "kind", kind, "num",
                          yv_long(lint_num(name)), "line", yv_long(line),
                          "col", yv_long(col), "scal", yv_bool(scal),
-                         "fresh", yv_bool(fresh)));
+                         "fresh", yv_bool(fresh), "strf", yv_bool(strf),
+                         "top", yv_bool(0)));
+    }
+    return 0;
+}
+
+/* A top-level binding: a global. Recorded, because the value-used append
+ * check needs to know whether the name holds a string, and marked `top` so
+ * lint_vars leaves it alone -- a global that nothing in this unit reads is
+ * not an unused variable (another unit of the program may read it). */
+static long lint_note_top(LintSt st, Yv *node) {
+    Yv *name = yr_get(node, "name");
+    Yv *v = yr_get(node, "v");
+    Yv *d = lint_disp(name);
+    long line = yv_l(yr_get(node, "line"));
+    long col = yv_l(yr_get(node, "col"));
+    if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95) {
+        /* A name bound twice at the top level is legal -- the later
+         * declaration shadows the earlier one, which t14_shadow, t30 and
+         * t53 all pin -- and rename.y keeps the earlier one under its
+         * `$shadow` name so a self call inside it still binds to itself.
+         * What is not legal is not knowing which copy is running: a
+         * copy-paste that leaves an old definition behind shadows the new
+         * one silently, and every read of the source shows the copy that is
+         * not the one called. A warning is the whole of it (the same shape
+         * the duplicate type alias gets); find_dup still rejects the
+         * cross-file case outright, where there is no shadowing to mean. */
+        long fid = lint_file_of(line);
+        long first = lint_top_first(st, d, fid);
+        if (first > 0) {
+            Yv *m1 = ys_cat(ys_cat(ys("'"), d),
+                            ys("' is declared more than once; the last declaration counts (the earlier one at line "));
+            Yv *m2 = ys_cat(m1, ys_fmt("%ld", first));
+            (void)lint_warn(st, ys_cat(m2, ys(")")), line, col);
+        }
+        /* recorded either way: the map holds where each name was declared
+         * LAST, so a third declaration names the second */
+        nameix_put(yr_get(st, "tops"), d, line);
+        if (first == 0) {
+            (void)ya_push(yr_get(st, "vars"),
+                          yr(9, "name", d, "kind", yr_get(node, "kind"), "num",
+                             yv_long(lint_num(name)), "line", yv_long(line),
+                             "col", yv_long(col), "scal",
+                             yv_bool(lint_scal(yr_get(node, "typ"), v)), "fresh",
+                             yv_bool(lint_fresh(v)), "strf",
+                             yv_bool(lint_strheld(yr_get(node, "typ"), v)),
+                             "top", yv_bool(1)));
+        }
+    }
+    return 0;
+}
+
+/* Where a top-level name was declared last, if that was in this file (0
+ * otherwise). Only the names this check records count, so a local of the
+ * same name never shadows a global's warning (different scopes, and lint
+ * has no scope). The file matters: a path-imported unit shares the
+ * program's namespace -- t134 pins that a module global may share the
+ * program's name -- so only two declarations of one file are the
+ * copy-paste this names. */
+static long lint_top_first(LintSt st, Yv *d, long fid) {
+    long prev = nameix_get(yr_get(st, "tops"), d);
+    if (prev > 0 && lint_file_of(prev) == fid) {
+        return prev;
+    }
+    return 0;
+}
+
+/* The file the line ln is in, 0 for the program's own text and for a line
+ * past the origin table. */
+static long lint_file_of(long ln) {
+    if (ln >= 1 && ln <= yv_len(lint_ofile)) {
+        return yv_l(ya_get(lint_ofile, ln - 1));
+    }
+    return 0;
+}
+
+/* A binding that holds a string, as far as the syntax shows: annotated
+ * `str`, or initialised with a string literal. Deliberately a syntactic
+ * question, not a type one -- lint never runs the checker -- so a binding
+ * whose string-ness is only visible from a call's return is simply not
+ * flagged. The check it feeds is advice, so a miss is a miss and never a
+ * wrong warning. */
+static int lint_strheld(Yv *typ, Yv *v) {
+    if (yv_l(yr_get(typ, "k")) == K_tstr) {
+        return 1;
+    }
+    return yv_l(yr_get(v, "k")) == K_str;
+}
+
+/* Whether the binding a name refers to was noted as holding a string (see
+ * lint_strheld). A renamed binding is matched on rename.y's number, which
+ * identifies the binding itself -- two locals spelled the same in two defs
+ * are two bindings, and a match on the written name would let one of them
+ * vouch for the other. A top-level binding is renamed to nothing (its name
+ * is unique in the unit already, and lint_mark leaves globals alone for the
+ * same reason: see the number), so those are matched on the name. */
+static int lint_var_str(LintSt st, Yv *name) {
+    long n = lint_num(name);
+    Yv *d = lint_disp(name);
+    Yv *vars = yr_get(st, "vars");
+    long i = 0;
+    while (i < yv_len(vars)) {
+        Yv *v = ya_get(vars, i);
+        if (yv_b(yr_get(v, "strf")) &&
+            ((n > 0 && yv_l(yr_get(v, "num")) == n) ||
+             (n == 0 && yv_l(yr_get(v, "num")) == 0 && ys_eq(yr_get(v, "name"), d)))) {
+            return 1;
+        }
+        i = i + 1;
     }
     return 0;
 }
@@ -234,6 +350,9 @@ static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
  * does: defs hoist). */
 static long lint_stmts(LintSt st, Yv *stmts, int used, int top) {
     long n = yv_len(stmts);
+    /* a flag for this list, if lint_loop_body marked it a dropped one */
+    int drop = yv_b(yr_get(st, "dropnext"));
+    (void)yr_set(st, "dropnext", yv_bool(0));
     int dead = 0;
     int told = 0;
     long i = 0;
@@ -243,6 +362,7 @@ static long lint_stmts(LintSt st, Yv *stmts, int used, int top) {
             (void)lint_warn_start(st, ys("unreachable code"), s);
             told = 1;
         }
+        (void)yr_set(st, "vused", yv_bool(!drop && i == n - 1));
         (void)lint_stmt(st, s, used && i == n - 1, top);
         if (!dead && lint_diverges(s)) {
             dead = 1;
@@ -282,6 +402,7 @@ static long lint_stmt(LintSt st, Yv *s, int used, int top) {
     if (top && yv_l(yr_get(s, "k")) == K_decl) {
         /* a top-level binding is a global: its value is walked, not its
          * use, but a def's body still reaches itself through `self` */
+        (void)lint_note_top(st, s);
         if (ys_eq_lit(yr_get(s, "kind"), "def")) {
             return lint_def_body(st, yr_get(s, "name"), yr_get(s, "v"));
         } else {
@@ -374,7 +495,7 @@ static long lint_node(LintSt st, Yv *node, int used) {
         return lint_opassign(st, node, used);
     } else if (yv_l(k) == K_kw_while) {
         (void)lint_node(st, yr_get(node, "cond"), 1);
-        return lint_node(st, yr_get(node, "body"), 0);
+        return lint_loop_body(st, yr_get(node, "body"));
     } else if (yv_l(k) == K_func) {
         (void)lint_func(st, node);
         return lint_unused_expr(st, node, used);
@@ -393,10 +514,10 @@ static long lint_node(LintSt st, Yv *node, int used) {
         return lint_for(st, node);
     } else if (yv_l(k) == K_kw_foreach) {
         (void)lint_node(st, yr_get(node, "iter"), 1);
-        return lint_node(st, yr_get(node, "body"), 0);
+        return lint_loop_body(st, yr_get(node, "body"));
     } else if (yv_l(k) == K_forrange) {
         (void)lint_two(st, yr_get(node, "lo"), yr_get(node, "hi"));
-        return lint_node(st, yr_get(node, "body"), 0);
+        return lint_loop_body(st, yr_get(node, "body"));
     } else if (yv_l(k) == K_map) {
         (void)lint_lit(st, node, ys("key"), ys("map"));
         return lint_unused_expr(st, node, used);
@@ -737,7 +858,26 @@ static long lint_for(LintSt st, Yv *node) {
     (void)lint_node(st, yr_get(node, "init"), 0);
     (void)lint_node(st, yr_get(node, "cond"), 1);
     (void)lint_node(st, yr_get(node, "step"), 0);
-    return lint_node(st, yr_get(node, "body"), 0);
+    return lint_loop_body(st, yr_get(node, "body"));
+}
+
+/* A loop body: its value is dropped, so a block body's last statement is a
+ * statement like the ones before it. Only a block -- gen_discard sends a
+ * bare statement through gen_stmt anyway -- and only that block's own list:
+ * a block nested inside it (an if arm, say) is generated through gen, so
+ * its last statement does produce a value. */
+static long lint_loop_body(LintSt st, Yv *body) {
+    Yv *was = yr_get(st, "dropnext");
+    Yv *wv = yr_get(st, "vused");
+    Yv *wl = yr_get(st, "loops");
+    (void)yr_set(st, "dropnext", yv_bool(yv_l(yr_get(body, "k")) == K_block));
+    (void)yr_set(st, "vused", yv_bool(0));
+    (void)yr_set(st, "loops", yv_long(yv_l(wl) + 1));
+    (void)lint_node(st, body, 0);
+    (void)yr_set(st, "dropnext", was);
+    (void)yr_set(st, "vused", wv);
+    (void)yr_set(st, "loops", wl);
+    return 0;
 }
 
 static long lint_func(LintSt st, Yv *node) {
@@ -750,12 +890,14 @@ static long lint_decl(LintSt st, Yv *node) {
     long line = yv_l(yr_get(node, "line"));
     long col = yv_l(yr_get(node, "col"));
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
-        (void)lint_note(st, yr_get(node, "name"), ys("def"), line, col, 0, 0);
+        (void)lint_note(st, yr_get(node, "name"), ys("def"), line, col, 0, 0,
+                        0);
         return lint_def_body(st, yr_get(node, "name"), v);
     } else {
         (void)lint_note(st, yr_get(node, "name"), yr_get(node, "kind"), line,
                         col, lint_scal(yr_get(node, "typ"), v),
-                        lint_fresh(v));
+                        lint_fresh(v),
+                        lint_strheld(yr_get(node, "typ"), v));
         return lint_node(st, v, 1);
     }
 }
@@ -825,6 +967,24 @@ static long lint_opassign(LintSt st, Yv *node, int used) {
     if ((ys_eq_lit(op, "/") || ys_eq_lit(op, "%")) && lint_zero(v)) {
         (void)lint_warn_at(st, ys("division by zero"), node);
     }
+    /* A value-used `+=` on a string is `s = s + t`: the ownership cell is
+     * dropped, so the buffer is exactly as long as the result and nothing
+     * can append to it in place again. That is what keeps a string already
+     * read from `s` stable -- but it also means the whole string is copied
+     * here, and a loop of these copies it once per iteration: 10,000 of
+     * them building 120 KB allocate 1.2 GB. An append statement is O(1)
+     * amortised instead (see gen_sappend), so the one-character difference
+     * is worth naming. It is advice rather than an error because the value
+     * may well be wanted. */
+    if (yv_l(yr_get(st, "loops")) > 0 &&
+        (used || yv_b(yr_get(st, "vused"))) && ys_eq_lit(op, "+") && yv_l(yr_get(t, "k")) == K_id &&
+        lint_var_str(st, yr_get(t, "v"))) {
+        (void)lint_warn_at(
+            st,
+            ys("this `+=` on a string copies the whole string, so a loop of "
+               "them is quadratic -- add a `;` if nothing reads the value"),
+            node);
+    }
     return 0;
 }
 
@@ -869,13 +1029,21 @@ static long lint_vars(LintSt st) {
         LintVar v = ya_get(vars, i);
         long num = yv_l(yr_get(v, "num"));
         long f = 0;
+        Yv *word;
+        Yv *name;
+        long line;
+        long col;
+        if (yv_b(yr_get(v, "top"))) {
+            i = i + 1;
+            continue;
+        }
         if (num < yv_len(flags)) {
             f = yv_l(ya_get(flags, num));
         }
-        Yv *word = lint_word(yr_get(v, "kind"));
-        Yv *name = yr_get(v, "name");
-        long line = yv_l(yr_get(v, "line"));
-        long col = yv_l(yr_get(v, "col"));
+        word = lint_word(yr_get(v, "kind"));
+        name = yr_get(v, "name");
+        line = yv_l(yr_get(v, "line"));
+        col = yv_l(yr_get(v, "col"));
         if ((f & 1) != 0) {
             ;
         } else if ((f & 4) != 0 &&

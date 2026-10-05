@@ -132,6 +132,7 @@ static int field_opt(Yv *t, Yv *key);
 static Yv *typeof_lit(Yv *st, Yv *node, Yv *target);
 static Yv *typeof_expr_go(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
+static Yv *ret_inferred_hint(Yv *rt);
 static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline, Yv *ncol,
                        int isnat);
 static long ret_note(Yv *rl, Yv *typ, long line, long col);
@@ -2992,6 +2993,20 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
                 return yr(2, "typ", t_unk(), "st", st);
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tvoid &&
+                       (yv_l(yr_get(barr, "k")) == K_kw_if ||
+                        yv_l(yr_get(barr, "k")) == K_block)) {
+                /* An `if` or a block in expression position, with no value:
+                 * `if (c) { A }["k"]` indexes the `if`, and A's arms are
+                 * statements (or disagree, so the `if` is void), so there is
+                 * nothing there to index. As the ordinary message it names
+                 * neither the base nor the fix, and nothing near it in the
+                 * source shows an index of an `if` — the `[` reads as a
+                 * literal. Name the base and the `;`. */
+                Yv *m1 = ys_cat(ys("cannot index this '"), ktag(yv_l(yr_get(barr, "k"))));
+                Yv *m2 = ys_cat(m1, ys("', which has no value: add a ';' after it to make it a statement"));
+                st = fail(st, m2, yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot index "),
@@ -5603,6 +5618,19 @@ Yv *inferred_ret(long line, long col) {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
+/* The tail of the inferred-return diagnostic, for a `return` with no value.
+ * The type the message quotes is one the reader never wrote -- it comes
+ * from the body's tail -- so this case says what does resolve it: one word
+ * on the def's head makes the inferred type a written one, and the void
+ * return then is what the def says it does. Every other disagreement is an
+ * ordinary type error and closes the parenthesis as before. */
+static Yv *ret_inferred_hint(Yv *rt) {
+    if (yv_l(yr_get(rt, "k")) == K_tvoid) {
+        return ys("; write '-> void' on the def to return nothing)");
+    }
+    return ys(")");
+}
+
 /* `isnat` is a `native def`: the signature is checked exactly as a def's,
  * but there is no body -- the return type must be written, the label must be
  * a `y_` one, and the declaration must be at the top level. */
@@ -5740,13 +5768,12 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
             while (ri < yv_len(rets)) {
                 Yv *rn = ya_get(rets, ri);
                 if (!tcompat(yr_get(rn, "typ"), br)) {
-                    st = fail(st,
-                              ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'return': expected "), tstr(br)),
-                                                                 ys(", got ")),
-                                                          tstr(yr_get(rn, "typ"))),
-                                                   ys(" (the return type is inferred from ")),
-                                            rsrc),
-                                     ys(")")),
+                    Yv *m1 = ys_cat(ys("'return': expected "), tstr(br));
+                    Yv *m2 = ys_cat(m1, ys(", got "));
+                    Yv *m3 = ys_cat(m2, tstr(yr_get(rn, "typ")));
+                    Yv *m4 = ys_cat(m3, ys(" (the return type is inferred from "));
+                    Yv *m5 = ys_cat(m4, rsrc);
+                    st = fail(st, ys_cat(m5, ret_inferred_hint(yr_get(rn, "typ"))),
                               yv_l(yr_get(rn, "line")), yv_l(yr_get(rn, "col")));
                     ;
                 }
@@ -5782,13 +5809,12 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
                 while (ri2 < yv_len(rets2)) {
                     Yv *rn2 = ya_get(rets2, ri2);
                     if (!tcompat(yr_get(rn2, "typ"), br)) {
-                        st = fail(st,
-                                  ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'return': expected "), tstr(br)),
-                                                                     ys(", got ")),
-                                                              tstr(yr_get(rn2, "typ"))),
-                                                       ys(" (the return type is inferred from ")),
-                                                rsrc),
-                                         ys(")")),
+                        Yv *n1 = ys_cat(ys("'return': expected "), tstr(br));
+                        Yv *n2 = ys_cat(n1, ys(", got "));
+                        Yv *n3 = ys_cat(n2, tstr(yr_get(rn2, "typ")));
+                        Yv *n4 = ys_cat(n3, ys(" (the return type is inferred from "));
+                        Yv *n5 = ys_cat(n4, rsrc);
+                        st = fail(st, ys_cat(n5, ret_inferred_hint(yr_get(rn2, "typ"))),
                                   yv_l(yr_get(rn2, "line")), yv_l(yr_get(rn2, "col")));
                         ;
                     }

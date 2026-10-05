@@ -49,7 +49,7 @@ print(call_fnv());
 
 // re-declared (shadowed) globals
 let x = 1;
-let x = x + 1;
+let x = x + 1; // expect-warning: 'x' is declared more than once; the last declaration counts (the earlier one at line 51)
 def getx() -> long { x };
 print(getx());
 

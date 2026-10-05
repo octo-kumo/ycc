@@ -20,7 +20,11 @@ that: an import splices the imported file's text and drops every
 \ic{export} clause, so a clause anywhere in the file has the same
 effect. (A file's defs are spliced whole; namespaces are resolved by
 rewriting, not by the export list.) Paths resolve relative to the
-importing file's directory. A missing module is a fatal error. Without a
+importing file's directory, and \ic{.} and \ic{..} segments fold, so
+one file reached by two spellings --- \ic{"./m/sub/../m.y"} and
+\ic{"./m.y"} --- is spliced once. The fold is lexical: a \ic{..} that
+would leave the root is kept as written. A missing module is a fatal
+error. Without a
 path, \ic{import fs;} finds a module by name: \ic{fs.y} next to the
 importing file first, then the standard library's \ic{std/fs.y}. An
 import takes a line of its own: everything after \ic{import} on that
@@ -42,11 +46,16 @@ The files imported by path share one namespace with the program:
 \ic{util.f} is rewritten to plain \ic{f}, and the alias only says which
 file a name comes from.
 A later top-level \ic{def} replaces an earlier one of the same name.
-Within one file that is deliberate (the last definition wins). Across
-files it would silently hand one file's callers another file's function,
-so a \ic{def} that replaces one from another file is an error, reported
-at the later definition and naming the other (\ic{duplicate definition
-'helper': m.y:4 defines it too}). The standard-library code the compiler
+Within one file that is deliberate (the last definition wins), and it is
+\emph{not} silent: declaring a name twice in one file is a warning that
+names the line the earlier declaration is on, because the case that
+matters is the one nobody notices --- an edit that left an old copy
+behind, shadowing the new one, where every read of the file shows the
+copy that is not the one called (\ic{'f' is declared more than once; the
+last declaration counts}). Across files it would silently hand one file's
+callers another file's function, so a \ic{def} that replaces one from
+another file is an error, reported at the later definition and naming the
+other (\ic{duplicate definition 'helper': m.y:4 defines it too}). The standard-library code the compiler
 splices in itself is the exception: a program's own \ic{readline}
 replaces the prelude's. Nested \ic{def}s and top-level \ic{let}s follow
 the usual scoping, as if the files were one text.
@@ -307,7 +316,12 @@ def area(s: Shape) -> float { ... };
 \noindent \ty{block} is \ic{\{}~\ty{statement}\(^*\)~[\ty{expr}]~\ic{\}}:
 a block is an \emph{expression} whose value is its trailing expression
 (if any). An empty block \ic{\{\}} is legal and void; a trailing \ic{;}
-makes the block void. Statements are separated by \ic{;}, which may be
+makes the block void. A statement-form \ic{if} is an expression too, and a
+\ic{[} after it indexes that value --- \ic{if (c) \{ A \}["k"]} is
+\ic{A["k"]} --- so a \ic{;} after the block is what keeps the two apart.
+Indexing one that has no value (its arms are statements, or disagree) says
+so and names the \ic{;} rather than reporting the \ic{[}: \ic{cannot index
+this 'if', which has no value: add a ';' after it to make it a statement}. Statements are separated by \ic{;}, which may be
 left out only after a statement that ends in \ic{\}} (an \ic{if},
 loop, \ic{def} or block) or before the \ic{\}} closing the block:
 \ic{f() g()} is an error, and so is any token the grammar does not

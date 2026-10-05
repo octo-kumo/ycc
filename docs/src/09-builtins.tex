@@ -769,9 +769,12 @@ response is a record: \ic{status} (0 when none came, and then \ic{err}
 says why), \ic{reason}, \ic{headers} (names in lower case; a repeated
 header's values joined by \ic{", "}, \ic{set-cookie}'s by newlines),
 \ic{size} (the Content-Length, or $-1$), \ic{url} (after redirects), and
-the body, read as it arrives: \ic{res.read(n)} gives up to \ty{n} bytes
-(all the rest for $n \leq 0$, \ic{[]} at its end), \ic{res.text()} the
-rest as a \ic{str}.
+the body, which is kept rather than drained: \ic{res.read(n)} gives the
+first \ty{n} bytes of it (all of it for $n \leq 0$ or an \ty{n} past
+its end), \ic{res.text()} all of it as a \ic{str}. A read after the body
+has ended is answered from what already came, so \ic{read(n)} twice
+gives the same bytes twice and \ic{text()} twice the same text;
+\ic{[]} is only ever a body that was empty (a \ic{204}, a \ic{HEAD}).
 
 Many requests that look alike go through a session: a base URL their
 paths resolve against, headers for every request (\ic{s.header(name,

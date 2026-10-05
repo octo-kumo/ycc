@@ -19,6 +19,11 @@ let r = http.get(base + "/hello");
 print(r.status, " ", r.reason, " ", r.size, " ", r.text());
 let c = http.get(base + "/chunked");
 print(c.status, " ", c.headers["transfer-encoding"], " ", c.read(2), " ", c.text(), " ", c.text().length);
+// the body is a value, not a stream: a read after the body has ended is
+// answered from what came, so text() twice is the same text and read(4)
+// twice is the same four bytes
+let rr = http.get(base + "/hello");
+print("twice ", rr.text(), " ", rr.read(0), " ", len(rr.read(4)), " ", len(rr.read(4)));
 let d = http.get(base + "/redirect");
 print(d.status, " ", d.url == base + "/hello", " ", d.text());
 let e = http.post(base + "/echo", "posted body");

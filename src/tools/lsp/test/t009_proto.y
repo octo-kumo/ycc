@@ -216,7 +216,7 @@ print("second source: " + sfield(items_own(items)[1], "source"));
 const WS = fs.cwd() + "/src/tools/lsp/test";
 let impst = serve.server_state(WS, "", 0);
 deliver(impst, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":" + jlit("file://" + WS) + "}}");
-let imp: [str] = [];
+let imp_scratch: [str] = [];
 // An absolute path, because a real URI has a root and a test that uses a
 // relative one stops noticing when uri_path mishandles it.
 let imp = frames_of(impst, did_open("file://" + WS + "/main2.y", "import helper from \"./mod.y\";\nprint(helper.f());\n", 1));
