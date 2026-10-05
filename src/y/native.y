@@ -2568,7 +2568,7 @@ def is_intrinsic_name(n: str) -> bool {
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
              "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
+             "from_bytes", "ptr_addr", "jmp_at", "self", "none", "#fmt"], n)
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -4798,6 +4798,13 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             let sa: [Node] = node.args;
             st = gen(st, sa[0]);
             emit_insn(st, insn.F_CALL_L, lbl_new("y_" + name), 0, 0, 0, 0, 0, 0)
+        } else if (name == "jmp_at") {
+            // jmp_at(addr): `jmp *%rax`, so the stack is exactly as it was --
+            // which is what a process entry point needs, since it reads argc
+            // from [rsp] (see meta.y run_image).
+            let ja: [Node] = node.args;
+            st = gen(st, ja[0]);
+            emit_insn(st, insn.F_JMP_IND, insn.R_RAX, 64, 0, 0, 0, 0, 0)
         } else if (name == "wait_pid") {
             let wa: [Node] = node.args;
             st = gen(st, wa[0]);

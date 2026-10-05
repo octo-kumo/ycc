@@ -39,9 +39,9 @@ const O_FS = 7;    // 1: the %fs:N offset (a thread's heap block)
 const O_MEM0 = 8;  // 5, like O_MEM, but `(%base)`: no displacement written
 
 // Not instructions (see the header).
-const IR_LABEL = 97;  // 1: a label id -- `yfn_3_foo:`
-const IR_LOC = 98;    // 2: file, line -- `.loc 1 42` (-g)
-const IR_TEXT = 99;   // 1: index into the body's raw lines
+const IR_LABEL = 98;  // 1: a label id -- `yfn_3_foo:`
+const IR_LOC = 99;    // 2: file, line -- `.loc 1 42` (-g)
+const IR_TEXT = 100;  // 1: index into the body's raw lines
 
 // The forms. The table below is in this order and ir_init checks it, so a
 // form added in the wrong place is a startup error and not a wrong encoding.
@@ -142,6 +142,10 @@ const F_MULSD_R_R = 93;
 const F_ADDSD_R_R = 94;
 const F_SUBSD_R_R = 95;
 const F_UCOMISD_R_R = 96;
+// jmp *%reg: a jump through a register. Only the `jmp_at` builtin's, which a
+// forked child uses to enter a compiled image it mapped at a scratch address
+// (meta.y run_image) -- Y cannot spell a jump to an address it computed.
+const F_JMP_IND = 97;
 
 // Register numbers, x86 encoding order (enc64's reg_num is the same table:
 // %rax %rcx %rdx %rbx %rsp %rbp %rsi %rdi %r8..%r15, and %xmm0..).
@@ -271,6 +275,7 @@ def ir_init() {
     t += { id: F_ADDSD_R_R, mn: "addsd", kinds: [O_REG, O_REG] };
     t += { id: F_SUBSD_R_R, mn: "subsd", kinds: [O_REG, O_REG] };
     t += { id: F_UCOMISD_R_R, mn: "ucomisd", kinds: [O_REG, O_REG] };
+    t += { id: F_JMP_IND, mn: "jmp", kinds: [O_IND] };
     // The ids above are positions in this list; a form added in the wrong
     // place would decode and print as a different instruction, so check it.
     let i = 0;

@@ -20,12 +20,13 @@ import lexer from "./lexer.y";
 import parser from "./parser.y";
 import nasm from "./asm.y";
 import nativelib from "./native.y";
+import meta from "./meta.y";
 import pkg from "./pkg.y";
 import fs;
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool } {
     let out = "";
     let files: [str] = [];
     let asm_only = false;
@@ -36,6 +37,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
     let wlevel = 0;
     let std_src = false;
     let std_pack = "";
+    let run = false;
+    let dump = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -57,6 +60,12 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             };
         } else if (a == "-S") {
             asm_only = true;
+        } else if (a == "-E") {
+            // dump the source the lexer would see, with origin markers, and
+            // stop: no tokens, no check, no output file.
+            dump = true;
+        } else if (a == "run") {
+            run = true;
         } else if (a == "--time" || a == "-t") {
             timing = true;
         } else if (a == "--no-exec") {
@@ -79,12 +88,19 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
                 exit(1);
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-E] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n");
+            puts("       ycc run [-g] [--no-exec] FILE     compile FILE and run it in a\n");
+            puts("                                           child; ycc's exit status is\n");
+            puts("                                           the program's\n");
             puts("       ycc build [-g] [-w] [-W N] [--no-exec] [--std-src] [DIR]\n");
             puts("       ycc vendor [DIR]\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
             puts("  -o OUTPUT    output path (executable, or .s file with -S)\n");
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
+            puts("  -E           dump the source the lexer sees, each line tagged with\n");
+            puts("               the file and line it came from, and stop\n");
+            puts("  run FILE     compile FILE and run it in a forked child: no output\n");
+            puts("               file, and ycc exits with the program's status\n");
             puts("  -t, --time   print per-phase time and heap use to stderr\n");
             puts("  -g           add section headers, a symbol table (functions,\n");
             puts("               globals) and DWARF line info, so perf, gdb,\n");
@@ -117,7 +133,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump }
 };
 
 // ── the std pack ─────────────────────────────────────────────────────────
@@ -635,6 +651,11 @@ def main(cmdline: [str]) -> long {
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let nrsrc = nr.src;
             let nrorigin = nr.origin;
+            if (pargs.dump) {
+                meta.meta_dump(nrsrc, nrorigin);
+                exit(0);
+                0
+            };
             let toks = lexer.tokenize(nrsrc);
             ph = nativelib.phase_end(dt, "tokenize", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
@@ -725,6 +746,18 @@ def main(cmdline: [str]) -> long {
                     exit(1);
                     1
                 } else {
+                    if (pargs.run) {
+                        let av: [str] = [file];
+                        let rr = meta.run_image(ab.bytes, av, false);
+                        if (!rr.ok) {
+                            puts("error: " + rr.err + "\n");
+                            exit(1);
+                            1
+                        } else {
+                            if (rr.sig > 0) { exit(128 + rr.sig); } else { exit(rr.status); };
+                            0
+                        }
+                    };
                     let out_path = out;
                     if (len(out_path) == 0) { out_path = "a.out"; 0; }
                     let abbytes = ab.bytes;

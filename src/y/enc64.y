@@ -831,7 +831,15 @@ def enc_unary_mem(buf: [byte], at: long, op: str, o: Operand) -> Encoded {
 // asm_relax). `code` is the long form's condition byte (0x84 for je, 0x85 for
 // jne, ...), which setcc shares.
 def enc_jmp(buf: [byte], at: long, o: Operand, lng: bool) -> Encoded {
-    if (o.k != K.lbl) {
+    if (o.k == K.ind) {
+        // jmp *%reg -- FF /4. The one jump through a register the backend
+        // emits: the `jmp_at` builtin's, which a forked child uses to enter a
+        // compiled image it mapped at a scratch address (meta.y run_image).
+        // enc_ok's `br: -1` keeps asm_relax off it: a jump through a register
+        // has no label to shorten to.
+        let n = put_rex(buf, at, rex(false, 0, -1, o.n));
+        enc_ok(put2(buf, n, 255, modrm(3, 4, o.n)), [])
+    } else if (o.k != K.lbl) {
         enc_err(at, "jmp target")
     } else if (lng) {
         let n = put(buf, at, 233);
