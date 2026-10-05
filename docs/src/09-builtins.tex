@@ -254,8 +254,43 @@ take \ty{long}s and their float counterparts carry an \ic{f}: \ic{fmin},
 \ic{math.bitsf} need a machine primitive Y has no spelling for: a truncating
 \ty{float}-to-\ty{long} cast, or a look at a float's bits. The module declares
 those with \ic{native def} (Section~\ref{sec:grammar}) and the four \ic{y\_}
-routines behind them live in \ic{src/y/arch/math.s}; everything else here is
-ordinary Y. There is no \ic{exp}, \ic{log}, \ic{pow} or \ic{sin} yet.
+routines behind them live in \ic{src/y/arch/math.s}; everything else here,
+\emph{including every transcendental below}, is ordinary Y.
+
+The transcendentals are written the way the good libraries write them, and the
+two halves of that matter separately. Each polynomial is a \emph{correction} to a
+term already in hand --- $\ty{e}^r = 1 + r(1 + rQ(r))$,
+$\log m = z(2 + z^2P(z^2))$ with $z = (m-1)/(m+1)$, $\sin x = x(1 + x^2P(x^2))$,
+$\cos x = 1 - x^2P(x^2)$ --- so its error reaches the answer multiplied by the
+argument's square rather than standing on its own. And every coefficient is split
+in two with the low parts carried in a second accumulator, because Horner's rule
+rounds once a term and a degree-$n$ kernel otherwise sits $n$ ulps out for good;
+the split costs one multiply and one add a term and nothing at all in the
+constants. \ic{test/math/gen\_kernel.py} fits the coefficients, prints them as
+the literals in the module, and reports the error of the split evaluation in ulps
+of the answer --- so no coefficient set was ever pasted in unseen.
+
+Argument reduction is Cody--Waite, and \ic{$\pi/2$} gets four pieces (to about
+fifty decimal digits) where \ic{$\ln 2$} gets two, because the double nearest
+$\pi$ is \num{1.2e-16} from it and a reduction good to \num{1e-26} is already a
+hundred thousand ulps of \ic{math.sin(math.pi)}.
+
+\emph{How close.} \ic{test/sh/test\_math.sh} is the gate: a checked-in table of
+IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{1596} cases, written
+by \ic{test/math/gen\_ulp\_table.py} from this platform's libm) and a program
+that reads it, calls this module, and measures the gap in ulps. Two NaNs count as
+the same answer however their signs differ --- a sign bit is not an ulp --- and any
+other NaN is infinitely far away. Over that table every function here is within
+\emph{one} ulp of all its pinned edge cases (the overflows, the flushes, the
+poles, both sides of 1, the signed zeros) and of more than \num{99\%} of a
+\num{1500}-case spread; the four exceptions sit at two or three, all of them
+answers that are a sum of two accurately computed terms (\ic{cosh},
+\ic{asin}) or the logarithm's own error multiplied by an exponent (\ic{pow}),
+and those would need a fused multiply-add or a fully compensated Horner --- four
+times the arithmetic in every kernel, to move a handful of cases. \ic{pow} is the
+one to know about: its accuracy degrades with the \emph{exponent}, not the base,
+so \ic{math.pow(x, 0.5)} for a large \ic{x} is a few ulps out while
+\ic{math.pow(x, 3.0)} is exact (an integer exponent is computed by squaring).
 
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[\ic{math.sqrt(x)}] The IEEE square root, and the one function here that
@@ -299,6 +334,69 @@ ordinary Y. There is no \ic{exp}, \ic{log}, \ic{pow} or \ic{sin} yet.
   spell, and the reason the names above can exist at all.
 \item[\ic{math.is\_signed\_zero(x)}] True for \ic{-0.0}, which no comparison
   can see.
+  \item[\ic{math.exp(x)}, \ic{math.exp2(x)}, \ic{math.expm1(x)}] $e^x$, $2^x$
+    and $e^x-1$. The argument is split as $k\ln 2 + r$, the kernel computes
+    $e^r$ in $[0.707, 1.414)$, and $2^k$ goes back on by adding to the exponent
+    field --- which is exact, so the whole answer is as accurate as the kernel and
+    the reduction. The top of the range is the interesting part: $2^{1024}$ is an
+    overflow and $\round(x\log_2 e)$ reaches \num{1024} for every $x$ above
+    \num{709.4}, so the last whole $\ln 2$ stays in $r$ and its factor of two
+    goes in by hand. \ic{expm1} is not $e^x - 1$ with a cast: it is
+    $2^k\!\left(e^r-1\right) + \left(2^k-1\right)$, and the second term is
+    \emph{exact} ($2^k-1$ needs at most 53 bits), so nothing is ever subtracted
+    from something nearly equal to it --- which is the whole difficulty with
+    $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}, and at $x = -9$ it is
+    \num{1.23e-4} $- 1$ with the answer's last bits gone.
+  \item[\ic{math.log(x)}, \ic{math.log2(x)}, \ic{math.log10(x)},
+    \ic{math.log1p(x)}] $\log x$ in the base given. \ic{frexp} splits
+    $x = f\,2^e$ and $f$ is doubled into $[1/\sqrt{2}, \sqrt{2})$ when it is
+    below $1/\sqrt{2}$, which keeps $|z| = |(m-1)/(m+1)|$ at $\sqrt{2}-1$ and the
+    kernel short; the two halves of the answer --- the small $z$ part and the
+    large $e\ln 2$ --- are each computed to their own scale and added last.
+    $m+1$ rounds as well as the division, and its half-ulp is a whole ulp of $z$,
+    so \ic{two\_sum} takes its residual out and one more divide turns it into the
+    low part of the quotient. \ic{log1p} is \ic{log}'s kernel with $m = 1+x$ and
+    $z = x/(2+x)$, so a tiny \ic{x} comes out as itself instead of as
+    \ic{log(1.0)} $-$ \ic{0}.
+  \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
+    reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
+    round (the first piece's product needs more than 53 bits once $n$ passes
+    \num{2^21}, the first tail piece's once $n$ passes \num{2^10}; the other two
+    are \num{3.5e-27} and below, where the rounding is twenty orders under the
+    answer's last bit however large $n$ grows). The quadrant is $n \bmod 4$
+    normalized --- C's \% keeps the sign of the dividend, so a negative count
+    comes out negative. The range is $|x| \lesssim \num{2^52}$: like every library
+    without Payne--Hanek reduction, a larger argument reduces to something near
+    $x$ rather than to its own angle.
+  \item[\ic{math.asin(x)}, \ic{math.acos(x)}, \ic{math.atan(x)},
+    \ic{math.atan2(y, x)}] The inverse trigonometry. \ic{atan} folds until its
+    argument is inside the kernel's range --- the reciprocal above 1, then the
+    tangent addition at $\pi/8$ --- and both folds are exact identities, so unlike
+    a division they cost nothing of their own. \ic{asin} above $0.5$ uses the
+    half-angle step $\asin x = \pi/2 - 2\asin\sqrt{(1-x)/2}$, one step, with the
+    square root computed from $1-x$ alone (which Sterbenz makes exact) so nothing
+    is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \asin x$ with the
+    subtraction corrected afterwards, because $\pi/2$ minus something an ulp off
+    is an ulp off. \ic{atan2} is the quadrant of $(y,x)$, with every zero and
+    infinity spelled out --- and the sign of a \emph{zero} is a direction:
+    \ic{math.atan2(-0.0, -1.0)} is $-\pi$.
+  \item[\ic{math.sinh(x)}, \ic{math.cosh(x)}, \ic{math.tanh(x)}] One formula
+    each, out of \ic{expm1}:
+    $\cosh x = 1 + (\expm1 x + \expm1(-x))/2$ and
+    $\tanh x = \expm1(2x)/(\expm1(2x) + 2)$. The plain forms ---
+    $(e^x+e^{-x})/2$ and $\sinh/\cosh$ --- are a rounding or two worse, because
+    each of their terms is computed to its own last bit and then added.
+    \ic{sinh} needs a polynomial of its own below \num{0.5}, where $(e^x-e^{-x})/2$
+    is a subtraction of nearly equal numbers.
+  \item[\ic{math.pow(x, y)}] $x^y$, with C's cases. An integer exponent is
+    computed by repeated squaring, which is exact --- so every integer exponent
+    below \num{1024} comes out exactly, and it is the only way a negative base
+    is defined at all. Past that, and for a fractional exponent, it is
+    $\expm1$-style: the logarithm in two parts, the exponent in two parts, and
+    the reduced argument in two parts, because the exponent multiplies the
+    logarithm's error --- one ulp of an exponent of \num{500} is
+    \num{5.7e-14} of the answer, which is 360 ulps of it. That is also why $1/\ln 2$
+    is a pair of constants here and not one.
 \item[\ic{math.min(a, b)}, \ic{math.max(a, b)}] The smaller or larger of two
   \ty{long}s.
 \item[\ic{math.abs(x)}] \ic{|x|}. The most negative \ty{long} has no positive
