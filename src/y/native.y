@@ -985,19 +985,14 @@ def ir_relabel_one(id: long, m: [AsmLabel], dup_new: [str]) -> long {
     if (g.sec > 0) { lbl_new(dup_new[g.off]) } else { id }
 };
 
-// A unit's bodies as the pack carries them: text, rendered from the items.
-// What the emitter wrote is items; a pack is a netstring list (stage 3 makes
-// it the items themselves), and a unit read back from one has `btext`.
-def unit_body_text(u: Unit) -> [str] {
+// A unit's bodies as the pack carries them: the items (pack_body), one
+// blob each.
+def pack_bodies(u: Unit) -> [str] {
     let out: [str] = [];
-    if (len(u.bodies) > 0) {
-        let i = 0;
-        while (i < len(u.bodies)) {
-            out += insn.ir_render_all(u.bodies[i], u.btext[i], true);
-            i = i + 1;
-        };
-    } else {
-        out += u.tpack;
+    let b = 0;
+    while (b < len(u.bodies)) {
+        out += pack_body(u, b);
+        b = b + 1;
     };
     out
 };
@@ -9559,11 +9554,10 @@ def phase_end(times: [Timing], name: str, t0: long, h0: long) -> { times: [Timin
 // rename.y's list of them (one lit_code per parameter, see lit_code).
 type DflCode = { name: str, vals: [str] };
 // `bodies` is each body's IR items and `btext` the raw lines its IR_TEXT
-// items index. A unit read from the std pack or an object cache carries its
-// bodies as TEXT in `tpack` instead -- the pack is text until stage 3 -- and
-// `bodies` is empty for it. Exactly one of the two is set; link_units asks
-// which and hands the assembler a part either way.
-type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [[long]], btext: [[str]], tpack: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode] };
+// items index. A unit read from the std pack or an object cache carries them
+// PACKED instead: `blob` one blob per body (pack_body) and `btext` the lines,
+// and link_units decodes the bodies it keeps (unpack_body).
+type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [[long]], btext: [[str]], blob: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode] };
 // What compile_unit binds besides the unit's own names: the externs
 // (`ext`) and their parameter defaults (`dfl`, as rename.y takes them),
 // the package namespaces the unit imports (`pkgs`, see pkg_ns), the
@@ -9576,14 +9570,13 @@ def unit_empty(name: str) -> Unit {
     let xs: [Sym] = [];
     let bs: [[long]] = [];
     let bt: [[str]] = [];
-    let lc: [str] = [];
     let ls: [str] = [];
     let fr: [[str]] = [];
     let rs: [[str]] = [];
     let gs: [str] = [];
     let ds: [DflCode] = [];
     { name: name, files: fs, exports: xs, init: "", bodies: bs, btext: bt,
-      tpack: lc, labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
+      blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
 };
 
 // No externs at all (a std unit compiled on its own).
@@ -9986,7 +9979,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             bk = bk + 1;
         };
         let unit: Unit = { name: name, files: origin.files, exports: exports,
-          init: init, bodies: ubodies, btext: ubtext, tpack: [],
+          init: init, bodies: ubodies, btext: ubtext, blob: [],
           labels: blabels, refs: brefs, rodata: st.rodata, globals: glabels,
           dfl: udfl };
         { ok: true, errors: errors, warnings: warnings, times: times, unit: unit }
@@ -10353,7 +10346,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // or the TEXT a pack carries, in `btext`.
     let all: [[long]] = [];
     let alltxt: [[str]] = [];
-    let allb: [str] = [];
+    // A pack unit's body, still packed (empty items); decoded in the parts
+    // loop below, once the shake has said it is kept.
+    let allblob: [str] = [];
     let labels: [str] = [];
     let refs: [[str]] = [];
     let fno: [long] = [];
@@ -10362,7 +10357,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         let u = units[j];
         let f = offs[j];
         let ub = u.bodies;
-        let ubt = u.tpack;
+        let ubl = u.blob;
         let ul = u.labels;
         let ur = u.refs;
         let b = 0;
@@ -10375,13 +10370,12 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
             if (!drop) {
                 if (len(ub) > 0) {
                     all += [ub[b]];
-                    alltxt += [u.btext[b]];
-                    allb += "";
+                    allblob += "";
                 } else {
                     all += [[]];
-                    alltxt += [[]];
-                    allb += ubt[b];
+                    allblob += ubl[b];
                 };
+                alltxt += [u.btext[b]];
                 labels += lb;
                 refs += [ur[b]];
                 fno += f;
@@ -10396,8 +10390,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let pb2 = 0;
     while (pb2 < len(pbodies)) {
         all += [pbodies[pb2]];
+        allblob += "";
         alltxt += [prog.btext[pb2]];
-        allb += "";
         labels += plab[pb2];
         refs += [prefs[pb2]];
         fno += -1;
@@ -10469,9 +10463,6 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // Piece-list + single join: `asm = asm + piece` per iteration is
     // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
     // the arena never frees), which OOMs on self-compilation.
-    // The bodies, kept, as parts: the items where there are items (with the
-    // `.loc` markers moved to the unit's place in the program's file table),
-    // the pack's text where there are not.
     // The header, then the prelude: the `.section .text` the bodies go in and
     // the blocks they call. The bodies follow this part and precede the
     // rodata, which is where they were in the text.
@@ -10481,26 +10472,21 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         head = file_dirs(files) + head;
     }
     parts += [part_text(head + arch.arch_text() + ps.text)];
+    // The bodies, kept, as parts: their items, with the `.loc` markers moved
+    // to the unit's place in the program's file table. Every body is items
+    // now -- a unit read from a pack came with them (pack_body).
     let ab = 0;
     while (ab < len(all)) {
         if (keep[ab]) {
-            let kf = fno[ab];
             let kb: [long] = all[ab];
-            if (len(kb) > 0) {
-                if (len(dup_old) > 0) {
-                    kb = ir_relabel(kb, dupmap, interned.dup_new);
-                };
-                let off = 0;
-                if (kf >= 0) { off = kf; };
-                parts += [part_ir(kb, alltxt[ab], off, dbg_lines)];
-            } else {
-                // A body the std pack carried as text (stage 3 makes the pack
-                // carry the items, and this arm goes with it).
-                let tb: str = allb[ab];
-                if (kf >= 0) { tb = link_locs(tb, kf); };
-                if (len(dup_old) > 0) { tb = relabel_dups(tb, dupmap, interned.dup_new); };
-                parts += [part_text(tb)];
+            if (len(kb) == 0) { kb = unpack_body(allblob[ab]); };
+            let kf = fno[ab];
+            if (len(dup_old) > 0) {
+                kb = ir_relabel(kb, dupmap, interned.dup_new);
             };
+            let off = 0;
+            if (kf >= 0) { off = kf; };
+            parts += [part_ir(kb, alltxt[ab], off, dbg_lines)];
         }
         ab = ab + 1;
     };
@@ -10534,7 +10520,7 @@ def link_text(parts: [LinkPart]) -> str {
         let p = parts[i];
         if (len(p.ir) > 0) {
             // the render has no newline of its own, so the line is closed here
-            pieces += insn.ir_render_all(p.ir, p.txt, p.loc);
+            pieces += insn.ir_render_all(p.ir, p.txt, p.loc, p.fno);
             pieces += "\n";
         } else {
             // a text part already ends its lines (the arch text does; a body
@@ -10556,17 +10542,17 @@ def link_text(parts: [LinkPart]) -> str {
 // itself (`ycc --std-pack FILE` writes them; the build appends that file
 // to the ycc that wrote it, see ycc.y self_pack): a program then links
 // them as they are instead of compiling the runtime from source every
-// time. A pack is text: a version line, the number of units, then each
-// unit as its name and its fields -- every field a netstring
-// (`<len>:<bytes>`), every list its count followed by its items, and a
-// unit's fields one netstring together, so a reader steps over a unit it
-// does not want. An export's type travels as its tcode, decoded only for
+// time. A pack is netstrings: a version line, the number of units, then each
+// unit as its name and its fields. A body's fields are its ITEMS (the codec
+// below), not the assembly text they render to: the pack used to carry the
+// text, 146,681 bytes of it, and a program that linked one lexed it back.
+// An export's type travels as its tcode, decoded only for
 // the units a program binds (std_unit_bound): nobody reads the types of
 // rt's or str's. A package's object (`ycc build`, unit_obj) holds one
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 5\n"
+    "ycc-std-pack 6\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -10584,6 +10570,242 @@ def pack_strs(out: [str], xs: [str]) -> [str] {
         i = i + 1;
     };
     out
+};
+
+// A list of lists (a unit's bodies' raw lines): each item a count and its
+// own items, so a reader walks one body's lines without another's.
+def pack_strss(out: [str], xss: [[str]]) -> [str] {
+    out = pack_put(out, tostring(len(xss)));
+    let i = 0;
+    while (i < len(xss)) {
+        out = pack_strs(out, xss[i]);
+        i = i + 1;
+    };
+    out
+};
+
+// ── a body's ITEMS, as a pack or an object carries them ──────────────────
+// A body used to travel as the assembly text it renders to (unit_body_text):
+// the pack was 146,681 bytes of it, and a program that linked one lexed it
+// back. Since stage 2c the emitter's items are what the assembler wants, so
+// the pack carries those. Two things cannot travel as they are:
+//
+//   a label id. Ids are minted per run (labels.y's counter), and a pack is
+//   written by one build and read by the next, so an id means nothing to the
+//   reader. A label field travels as its NAME and the reader mints the id for
+//   it -- what the text path did with `call y_alloc`, and the only thing both
+//   builds agree on.
+//   a raw-line index. IR_TEXT items index a body's own lines (emit_one_fn
+//   emits each function with a fresh `txt`), and those lines are the unit's
+//   `btext`, which travels beside the items.
+//
+// The encoding: per item a byte for the form, then each operand's field words
+// in the order the form table lists them -- a register's two, a memory
+// operand's five, a label's, an immediate's one. So the reader needs no width
+// of its own. A word is one byte when it is 0..125, three when it is a small
+// negative or a 126..65535 positive (a 126 or 127 tag, then two bytes little
+// endian), and nine for anything wider (a 255 tag, then eight). Registers,
+// sizes, scales and the small displacements of a frame are one byte each.
+// (125, not 126: 126 and 127 are the tags, and a 126 written as its own byte
+// would read back as one -- the `.loc 1 126` of a std body, which desynced
+// the whole body by two bytes when it did.)
+def pack_word(out: [str], v: long) -> [str] {
+    if (v >= 0 && v < 126) {
+        out += chr(v);
+    } else if (v < 0 && v > -65536) {
+        let u = 65536 + v;
+        out += chr(127);
+        out += chr(u & 255);
+        out += chr((u >> 8) & 255);
+    } else if (v <= 65535) {
+        out += chr(126);
+        out += chr(v & 255);
+        out += chr((v >> 8) & 255);
+    } else {
+        out += chr(255);
+        let sh = 0;
+        let i = 0;
+        while (i < 8) {
+            out += chr((v >> sh) & 255);
+            sh = sh + 8;
+            i = i + 1;
+        };
+    };
+    out
+};
+
+def pack_lbl(out: [str], id: long) -> [str] {
+    if (id < 0) {
+        out += chr(0);
+    } else {
+        let nm = lname(id);
+        out += chr(1);
+        out = pack_word(out, len(nm));
+        out += nm;
+    };
+    out
+};
+
+// One body as the pack carries it: the items above, item by item.
+def pack_body(u: Unit, b: long) -> str {
+    let ir = u.bodies[b];
+    let out: [str] = [];
+    let at = 0;
+    while (at < len(ir)) {
+        let f = ir[at];
+        out += chr(f & 255);
+        if (f == insn.IR_LABEL) {
+            out = pack_lbl(out, ir[at + 1]);
+        } else if (f == insn.IR_LOC) {
+            out = pack_word(out, ir[at + 1]);
+            out = pack_word(out, ir[at + 2]);
+        } else if (f == insn.IR_TEXT) {
+            out = pack_word(out, ir[at + 1]);
+        } else {
+            let kinds = insn.ir_form(f).kinds;
+            let ki = 0;
+            let wp = at + 1;
+            while (ki < len(kinds)) {
+                let k = kinds[ki];
+                if (k == insn.O_LBL) {
+                    out = pack_lbl(out, ir[wp]);
+                } else if (k == insn.O_DIFF) {
+                    out = pack_lbl(out, ir[wp]);
+                    out = pack_lbl(out, ir[wp + 1]);
+                } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    out = pack_word(out, ir[wp]);
+                    out = pack_word(out, ir[wp + 1]);
+                    out = pack_word(out, ir[wp + 2]);
+                    out = pack_word(out, ir[wp + 3]);
+                    out = pack_lbl(out, ir[wp + 4]);
+                } else {
+                    out = pack_word(out, ir[wp]);
+                    if (insn.ir_kind_words(k) > 1) { out = pack_word(out, ir[wp + 1]); };
+                };
+                wp = wp + insn.ir_kind_words(k);
+                ki = ki + 1;
+            };
+        };
+        at = at + insn.IR_W;
+    };
+    join(out, "")
+};
+
+// One body read back (unit_read): the same items, with a label name minted to
+// an id of this run and every field word the item does not use left 0, which
+// is what the emitter wrote in it.
+def unpack_body(blob: str) -> [long] {
+    let b = bytes(blob);
+    let n = len(b);
+    let ir: [long] = [];
+    let at = 0;
+    while (at < n) {
+        let f = b[at];
+        at = at + 1;
+        let w: [long] = [0, 0, 0, 0, 0, 0, 0];
+        if (f == insn.IR_LABEL) {
+            w[0] = unpack_lbl(b, at);
+            at = at + lbl_w(b, at);
+        } else if (f == insn.IR_LOC) {
+            w[0] = unpack_word(b, at);
+            at = at + word_w(b, at);
+            w[1] = unpack_word(b, at);
+            at = at + word_w(b, at);
+        } else if (f == insn.IR_TEXT) {
+            w[0] = unpack_word(b, at);
+            at = at + word_w(b, at);
+        } else {
+            let kinds = insn.ir_form(f).kinds;
+            let ki = 0;
+            let wp = 0;
+            while (ki < len(kinds)) {
+                let k = kinds[ki];
+                let nw = insn.ir_kind_words(k);
+                if (k == insn.O_LBL) {
+                    w[wp] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else if (k == insn.O_DIFF) {
+                    w[wp] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                    w[wp + 1] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    w[wp] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 1] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 2] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 3] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 4] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else {
+                    w[wp] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    if (nw > 1) {
+                        w[wp + 1] = unpack_word(b, at);
+                        at = at + word_w(b, at);
+                    };
+                };
+                wp = wp + nw;
+                ki = ki + 1;
+            };
+        };
+        // word by word into `ir`: ir_push would hand back a whole new array
+        // per item, which for a pack's 7,713 items is 1.9GB of copying
+        ir += f;
+        ir += w[0];
+        ir += w[1];
+        ir += w[2];
+        ir += w[3];
+        ir += w[4];
+        ir += w[5];
+        ir += w[6];
+    };
+    ir
+};
+
+// How many bytes the word at `at` takes: its tag byte says (see pack_word).
+def word_w(b: [byte], at: long) -> long {
+    let t = b[at];
+    if (t < 126) { 1 } else if (t == 255) { 9 } else { 3 }
+};
+
+def unpack_word(b: [byte], at: long) -> long {
+    let t = b[at];
+    let v = 0;
+    if (t < 126) {
+        v = t;
+    } else if (t == 255) {
+        let sh = 0;
+        let i = 0;
+        while (i < 8) {
+            v = v + b[at + 1 + i] * (1 << sh);
+            sh = sh + 8;
+            i = i + 1;
+        };
+    } else {
+        v = b[at + 1] + b[at + 2] * 256;
+        if (t == 127) { v = v - 65536; };
+    };
+    v
+};
+
+// A label field: none (tag 0) or a name -- an id of this run, interned as the
+// text path interned `call y_alloc`'s operand.
+def unpack_lbl(b: [byte], at: long) -> long {
+    if (b[at] == 0) {
+        -1
+    } else {
+        let n = unpack_word(b, at + 1);
+        lbl_new(from_bytes(b[at + 1 + word_w(b, at + 1):at + 1 + word_w(b, at + 1) + n]))
+    }
+};
+
+// How many bytes the label field at `at` takes.
+def lbl_w(b: [byte], at: long) -> long {
+    if (b[at] == 0) { 1 } else { 1 + word_w(b, at + 1) + unpack_word(b, at + 1) }
 };
 
 // A type as text (for a pack or an object): a letter per kind, then its
@@ -10798,7 +11020,8 @@ def pack_unit_fields(u: Unit) -> str {
     out = pack_strs(out, u.files);
     out = pack_iface(out, u);
     out = pack_put(out, u.init);
-    out = pack_strs(out, unit_body_text(u));
+    out = pack_strs(out, pack_bodies(u));
+    out = pack_strss(out, u.btext);
     out = pack_strs(out, u.labels);
     let rf = u.refs;
     out = pack_put(out, tostring(len(rf)));
@@ -10897,7 +11120,17 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         j = j + 1;
     };
     let init = pack_get(cur);
-    let tpack = pack_get_strs(cur);
+    // The bodies stay packed: a link decodes only the ones the shake keeps
+    // (they are the only ones it assembles), which is what the text path did
+    // by reading a body's text only when it kept it.
+    let blob = pack_get_strs(cur);
+    let nb = pack_num(cur);
+    let btext: [[str]] = [];
+    let bi = 0;
+    while (bi < nb) {
+        btext += [pack_get_strs(cur)];
+        bi = bi + 1;
+    };
     let labels = pack_get_strs(cur);
     let refs: [[str]] = [];
     let nr = pack_num(cur);
@@ -10915,7 +11148,7 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
     };
     let globals = pack_get_strs(cur);
     { name: name, files: files, exports: xs, init: init, bodies: [],
-      btext: [], tpack: tpack, labels: labels, refs: refs, rodata: rodata,
+      btext: btext, blob: blob, labels: labels, refs: refs, rodata: rodata,
       globals: globals, dfl: dfl }
 };
 
@@ -10957,7 +11190,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
 // fields, after a version line and the key it was compiled under (ycc.y
 // build_key) -- an object of another key, or a cut-off one, is no hit.
 def obj_version() -> str {
-    "ycc-unit 4\n"
+    "ycc-unit 5\n"
 };
 
 // An object carries a checksum over its own bytes, after them.

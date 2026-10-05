@@ -660,19 +660,26 @@ and writes them to FILE, and the build appends that file to the `ycc`
 that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
-straight from it. The pack is text: a version line (`ycc-std-pack 5`),
-then each unit's name and fields as netstrings — its bodies, each
-body's label and the labels it references (so linking never rescans std
-code), rodata, globals, init label, and its exports with their types in
-a prefix code (`tcode`/`tdecode`: total over every type the checker
-produces, unions and the unknown type included), decoded only for the
-library units the program binds.
-What is precompiled is everything up to the assembler — the std units
-are stored as **assembly text**, not machine code: the assembler still
-encodes the std bodies a program keeps, along with the program's own
-(the pack renders a body to text when it writes one, and a program
-linking it assembles that text; the units it compiles itself hand over
-items).
+straight from it. The pack is netstrings: a version line
+(`ycc-std-pack 6`), then each unit's name and fields as netstrings —
+its bodies, each body's label and the labels it references (so linking
+never rescans std code), rodata, globals, init label, and its exports
+with their types in a prefix code (`tcode`/`tdecode`: total over every
+type the checker produces, unions and the unknown type included),
+decoded only for the library units the program binds.
+A body's field is its **instruction items**, the same ones the emitter
+writes for a unit it compiles itself (`pack_body`/`unpack_body` in
+native.y): one byte per item's form, then each operand's field words as
+they come — a register's two, a memory operand's five, an immediate's
+one — each word in one byte when it is small and a few more when it is
+not, and a label field as its *name* (ids are minted per run, and the
+pack is written by one build and read by the next). A body's raw lines,
+which its comment items index, travel beside them. A link decodes only
+the bodies the tree shaker keeps, and the assembler encodes items and
+text parts alike (see the emitter and linker below).
+What is precompiled is therefore everything up to the encoder: the std
+units are stored as items, not machine code, and the assembler still
+encodes the std bodies a program keeps along with the program's own.
 
 `--std-src` ignores the pack and compiles the std units from the
 embedded sources, as does a ycc whose pack is missing (cycc, or a ycc
@@ -681,8 +688,8 @@ same bytes either way (`test/sh/test_link.sh` checks it over programs
 that link every unit; `make ycc`, `ynew` and the fixpoint suite each
 compile the compiler with the pack and compare with a build from source).
 A hello world compiles in 5.1 ms instead of 13.8 ms from source (the
-spliced build before units took 14.1 ms). The pack adds 186 KB to
-`ycc`.
+spliced build before units took 14.1 ms). The pack adds 81 KB to `ycc`
+(it held 162 KB of assembly text before).
 
 ## Packages
 
@@ -968,8 +975,11 @@ if` test and per loop step (the back edge), each at the file and line
 the code was written on: an import keeps its own file name and lines, and
 the embedded std modules show as `std/rt.y`, `std/str.y`, …. native.y
 writes GNU as's own `.file N "path"` and `.loc FILE LINE` directives into
-the asm text — so `ycc -g -S` output still assembles with `as`, which
-builds the same table — asm.y records each marker's code offset, and
+the asm text — renumbered into the program's file table (a linked unit's
+own file numbers move by that unit's offset, in the assembler and in the
+`-S` listing alike, so the two agree) — so `ycc -g -S` output still
+assembles with `as`, which builds the same table — asm.y records each
+marker's code offset, and
 dwarf.y encodes `.debug_line` plus a minimal `.debug_info`/
 `.debug_abbrev` (one compile unit; relative paths are relative to its
 `DW_AT_comp_dir`, the directory `ycc` ran in). There are no types,

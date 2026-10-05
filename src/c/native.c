@@ -180,7 +180,6 @@ static Yv *ir_refs_item(Yv *ir, long at, Yv *out);
 static Yv *ir_refs_push(Yv *out, Yv *nm);
 static Yv *ir_relabel(Yv *ir, Yv *m, Yv *dup_new);
 static long ir_relabel_one(long id, Yv *m, Yv *dup_new);
-static Yv *unit_body_text(Yv *u);
 Yv *label_at(Yv *text, Yv *b, long lo, long hi);
 int is_data_line_b(Yv *text, Yv *b, long lo, long hi);
 int block_falls_b(Yv *text, Yv *b, long lo, long hi);
@@ -535,6 +534,7 @@ Yv *pack_version(void);
 Yv *obj_version(void);
 Yv *pack_put(Yv *out, Yv *s);
 Yv *pack_strs(Yv *out, Yv *xs);
+static Yv *unpack_body(Yv *blob);   /* a pack body's items, decoded when kept */
 Yv *tcode(Yv *t);
 Yv *tcode_go(Yv *out, Yv *t);
 Yv *tcode_list(Yv *out, Yv *ts);
@@ -1795,30 +1795,6 @@ static long ir_relabel_one(long id, Yv *m, Yv *dup_new) {
     } else {
         return id;
     }
-}
-
-/* A unit's bodies as the pack carries them: text, rendered from the items.
-   What the emitter wrote is items; a pack is a netstring list (stage 3 makes
-   it the items themselves), and a unit read back from one has `btext`. */
-static Yv *unit_body_text(Yv *u) {
-    Yv *out = yav(0);
-    Yv *bodies = yr_get(u, "bodies");
-    if (yv_len(bodies) > 0) {
-        Yv *btext = yr_get(u, "btext");
-        long i = 0;
-        while (i < yv_len(bodies)) {
-            out = ya_push(out, ir_render_all(ya_get(bodies, i), ya_get(btext, i), 1));
-            i = i + 1;
-        };
-    } else {
-        Yv *tpack = yr_get(u, "tpack");
-        long i = 0;
-        while (i < yv_len(tpack)) {
-            out = ya_push(out, ya_get(tpack, i));
-            i = i + 1;
-        };
-    };
-    return out;
 }
 
 /* ── name -> index, for the tree shaker ───────────────────────────────────
@@ -11214,14 +11190,13 @@ Yv *unit_empty(Yv *name) {
     Yv *xs = yav(0);
     Yv *bs = yav(0);
     Yv *bt = yav(0);
-    Yv *lc = yav(0);
     Yv *ls = yav(0);
     Yv *fr = yav(0);
     Yv *rs = yav(0);
     Yv *gs = yav(0);
     Yv *ds = yav(0);
-    return yr(14, "name", name, "files", fs, "exports", xs, "init", ys(""),
-              "bodies", bs, "btext", bt, "tpack", lc, "labels", ls, "refs",
+    return yr(12, "name", name, "files", fs, "exports", xs, "init", ys(""),
+              "bodies", bs, "btext", bt, "blob", yav(0), "labels", ls, "refs",
               fr, "rodata", rs, "globals", gs, "dfl", ds);
 }
 
@@ -11772,11 +11747,12 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             brefs = ya_push(brefs, ir_refs(ya_get(ubodies, bk)));
             bk = bk + 1;
         }
-        Yv *unit = yr(14, "name", name, "files", yr_get(origin, "files"),
+        Yv *unit = yr(12, "name", name, "files", yr_get(origin, "files"),
                       "exports", exports, "init", init, "bodies", ubodies,
-                      "btext", ubtext, "tpack", yav(0), "labels", blabels,
-                      "refs", brefs, "rodata", yr_get(st, "rodata"), "globals",
-                      glabels, "dfl", udfl);
+                      "btext", ubtext, "blob", yav(0), "labels", blabels,
+                      "refs", brefs,
+                      "rodata", yr_get(st, "rodata"), "globals", glabels, "dfl",
+                      udfl);
         return yr(5, "ok", yv_bool(1), "errors", errors, "warnings",
                   warnings, "times", times, "unit", unit);
     }
@@ -12249,7 +12225,9 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     }
     Yv *all = yav(0);
     Yv *alltxt = yav(0);
-    Yv *allb = yav(0);
+    /* A pack unit's body, still packed (empty items); decoded in the parts
+     * loop below, once the shake has said it is kept. */
+    Yv *allblob = yav(0);
     Yv *labels = yav(0);
     Yv *refs = yav(0);
     Yv *fno = yav(0);
@@ -12258,7 +12236,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         Yv *u = ya_get(units, j);
         long f = yv_l(ya_get(offs, j));
         Yv *ub = yr_get(u, "bodies");
-        Yv *ubt = yr_get(u, "tpack");
+        Yv *ubl = yr_get(u, "blob");
         Yv *ul = yr_get(u, "labels");
         Yv *ur = yr_get(u, "refs");
         long b = 0;
@@ -12275,13 +12253,12 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
             if (!drop) {
                 if (yv_len(ub) > 0) {
                     all = ya_push(all, ya_get(ub, b));
-                    alltxt = ya_push(alltxt, ya_get(yr_get(u, "btext"), b));
-                    allb = ya_push(allb, ys(""));
+                    allblob = ya_push(allblob, ys(""));
                 } else {
                     all = ya_push(all, yav(0));
-                    alltxt = ya_push(alltxt, yav(0));
-                    allb = ya_push(allb, ya_get(ubt, b));
-                };
+                    allblob = ya_push(allblob, ya_get(ubl, b));
+                }
+                alltxt = ya_push(alltxt, ya_get(yr_get(u, "btext"), b));
                 labels = ya_push(labels, lb);
                 refs = ya_push(refs, ya_get(ur, b));
                 fno = ya_push(fno, yv_long(f));
@@ -12297,8 +12274,8 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     long pb2 = 0;
     while (pb2 < yv_len(pbodies)) {
         all = ya_push(all, ya_get(pbodies, pb2));
+        allblob = ya_push(allblob, ys(""));
         alltxt = ya_push(alltxt, ya_get(yr_get(prog, "btext"), pb2));
-        allb = ya_push(allb, ys(""));
         labels = ya_push(labels, ya_get(plab, pb2));
         refs = ya_push(refs, ya_get(prefs, pb2));
         fno = ya_push(fno, yv_long(-1));
@@ -12409,38 +12386,22 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     }
     parts = ya_push(parts, part_text(ys_cat(ys_cat(head, arch_text()),
                                            yr_get(ps, "text"))));
-    /* The bodies, kept, as parts: the items where there are items (with the
-       `.loc` markers moved to the unit's place in the program's file table),
-       the pack's text where there are not. */
+    /* The bodies, kept, as parts: their items, with the `.loc` markers moved
+       to the unit's place in the program's file table. Every body is items
+       now -- a unit read from a pack came with them (pack_body). */
     long ab = 0;
     while (ab < yv_len(all)) {
         if (yv_b(ya_get(keep, ab))) {
             long kf = yv_l(ya_get(fno, ab));
             Yv *kb = ya_get(all, ab);
-            if (yv_len(kb) > 0) {
-                if (yv_len(dup_old) > 0) {
-                    kb = ir_relabel(kb, dupmap, yr_get(interned, "dup_new"));
-                    ;
-                }
-                long off = 0;
-                if (kf >= 0) { off = kf; };
-                parts = ya_push(parts, part_ir(kb, ya_get(alltxt, ab), off,
-                                               dbg_lines));
-            } else {
-                /* A body the std pack carried as text (stage 3 makes the pack
-                   carry the items, and this arm goes with it). */
-                Yv *tb = ya_get(allb, ab);
-                if (kf >= 0) {
-                    tb = link_locs(tb, kf);
-                    ;
-                }
-                if (yv_len(dup_old) > 0) {
-                    tb = relabel_dups(tb, dupmap, yr_get(interned, "dup_new"));
-                    ;
-                }
-                parts = ya_push(parts, part_text(tb));
-            };
-            ;
+            if (yv_len(kb) == 0) { kb = unpack_body(ya_get(allblob, ab)); }
+            if (yv_len(dup_old) > 0) {
+                kb = ir_relabel(kb, dupmap, yr_get(interned, "dup_new"));
+            }
+            long off = 0;
+            if (kf >= 0) { off = kf; }
+            parts = ya_push(parts, part_ir(kb, ya_get(alltxt, ab), off,
+                                           dbg_lines));
         }
         ab = ab + 1;
     }
@@ -12476,7 +12437,8 @@ Yv *link_text(Yv *parts) {
                here */
             pieces = ya_push(pieces, ir_render_all(yr_get(p, "ir"),
                                                    yr_get(p, "txt"),
-                                                   yv_b(yr_get(p, "loc"))));
+                                                   yv_b(yr_get(p, "loc")),
+                                                   yv_l(yr_get(p, "fno"))));
             pieces = ya_push(pieces, ys("\n"));
             ;
         } else {
@@ -12509,11 +12471,11 @@ Yv *link_text(Yv *parts) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 5\n");
+    return ys("ycc-std-pack 6\n");
 }
 
 Yv *obj_version(void) {
-    return ys("ycc-unit 4\n");
+    return ys("ycc-unit 5\n");
 }
 
 Yv *pack_put(Yv *out, Yv *s) {
@@ -12531,6 +12493,267 @@ Yv *pack_strs(Yv *out, Yv *xs) {
         i = i + 1;
     }
     return out;
+}
+
+/* A list of lists (a unit's bodies' raw lines): each item a count and its
+ * own items, so a reader walks one body's lines without another's. */
+Yv *pack_strss(Yv *out, Yv *xss) {
+    out = pack_put(out, ys_long(yv_len(xss)));
+    long i = 0;
+    while (i < yv_len(xss)) {
+        out = pack_strs(out, ya_get(xss, i));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* ── a body's ITEMS, as a pack or an object carries them ──────────────────
+ * A body used to travel as the assembly text it renders to (unit_body_text):
+ * the pack was 146,681 bytes of it, and a program that linked one lexed it
+ * back. Since stage 2c the emitter's items are what the assembler wants, so
+ * the pack carries those. Two things cannot travel as they are:
+ *
+ *   a label id. Ids are minted per run (labels.y's counter), and a pack is
+ *   written by one build and read by the next, so an id means nothing to the
+ *   reader. A label field travels as its NAME and the reader mints the id for
+ *   it -- what the text path did with `call y_alloc`, and the only thing both
+ *   builds agree on.
+ *   a raw-line index. IR_TEXT items index a body's own lines (emit_one_fn
+ *   emits each function with a fresh `txt`), and those lines are the unit's
+ *   `btext`, which travels beside the items.
+ *
+ * The encoding: per item a byte for the form, then each operand's field words
+ * in the order the form table lists them -- a register's two, a memory
+ * operand's five, a label's, an immediate's one. So the reader needs no width
+ * of its own. A word is one byte when it is 0..125, three when it is a small
+ * negative or a 126..65535 positive (a 126 or 127 tag, then two bytes little
+ * endian), and nine for anything wider (a 255 tag, then eight). Registers,
+ * sizes, scales and the small displacements of a frame are one byte each.
+ * (125, not 126: 126 and 127 are the tags, and a 126 written as its own byte
+ * would read back as one -- the `.loc 1 126` of a std body, which desynced
+ * the whole body by two bytes when it did.) */
+static Yv *pack_word(Yv *out, long v) {
+    if (v >= 0 && v < 126) {
+        out = ya_push(out, ys_chr(v));
+    } else if (v < 0 && v > -65536) {
+        long u = 65536 + v;
+        out = ya_push(out, ys_chr(127));
+        out = ya_push(out, ys_chr(u & 255));
+        out = ya_push(out, ys_chr((u >> 8) & 255));
+    } else if (v <= 65535) {
+        out = ya_push(out, ys_chr(126));
+        out = ya_push(out, ys_chr(v & 255));
+        out = ya_push(out, ys_chr((v >> 8) & 255));
+    } else {
+        out = ya_push(out, ys_chr(255));
+        long sh = 0;
+        long i = 0;
+        while (i < 8) {
+            out = ya_push(out, ys_chr((v >> sh) & 255));
+            sh = sh + 8;
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+static Yv *pack_lbl(Yv *out, long id) {
+    if (id < 0) {
+        out = ya_push(out, ys_chr(0));
+    } else {
+        Yv *nm = lname(yv_long(id));
+        out = ya_push(out, ys_chr(1));
+        out = pack_word(out, yv_len(nm));
+        out = ya_push(out, nm);
+    }
+    return out;
+}
+
+/* One body as the pack carries it: the items above, item by item. */
+static Yv *pack_body(Yv *u, long b) {
+    Yv *ir = ya_get(yr_get(u, "bodies"), b);
+    Yv *out = yav(0);
+    long at = 0;
+    while (at < yv_len(ir)) {
+        long f = yv_l(ya_get(ir, at));
+        out = ya_push(out, ys_chr(f & 255));
+        if (f == IR_LABEL) {
+            out = pack_lbl(out, yv_l(ya_get(ir, at + 1)));
+        } else if (f == IR_LOC) {
+            out = pack_word(out, yv_l(ya_get(ir, at + 1)));
+            out = pack_word(out, yv_l(ya_get(ir, at + 2)));
+        } else if (f == IR_TEXT) {
+            out = pack_word(out, yv_l(ya_get(ir, at + 1)));
+        } else {
+            Yv *kinds = yr_get(ir_form(f), "kinds");
+            long ki = 0;
+            long wp = at + 1;
+            while (ki < yv_len(kinds)) {
+                long k = yv_l(ya_get(kinds, ki));
+                if (k == O_LBL) {
+                    out = pack_lbl(out, yv_l(ya_get(ir, wp)));
+                } else if (k == O_DIFF) {
+                    out = pack_lbl(out, yv_l(ya_get(ir, wp)));
+                    out = pack_lbl(out, yv_l(ya_get(ir, wp + 1)));
+                } else if (k == O_MEM || k == O_MEM0) {
+                    out = pack_word(out, yv_l(ya_get(ir, wp)));
+                    out = pack_word(out, yv_l(ya_get(ir, wp + 1)));
+                    out = pack_word(out, yv_l(ya_get(ir, wp + 2)));
+                    out = pack_word(out, yv_l(ya_get(ir, wp + 3)));
+                    out = pack_lbl(out, yv_l(ya_get(ir, wp + 4)));
+                } else {
+                    out = pack_word(out, yv_l(ya_get(ir, wp)));
+                    if (ir_kind_words(k) > 1) {
+                        out = pack_word(out, yv_l(ya_get(ir, wp + 1)));
+                    }
+                }
+                wp = wp + ir_kind_words(k);
+                ki = ki + 1;
+            }
+        }
+        at = at + IR_W;
+    }
+    return ys_join(out, ys(""));
+}
+
+/* A unit's bodies as the pack carries them: the items (pack_body), one blob
+ * each. */
+static Yv *pack_bodies(Yv *u) {
+    Yv *bodies = yr_get(u, "bodies");
+    Yv *out = yav(0);
+    long b = 0;
+    while (b < yv_len(bodies)) {
+        out = ya_push(out, pack_body(u, b));
+        b = b + 1;
+    }
+    return out;
+}
+
+static long word_w(Yv *b, long at);
+static long unpack_word(Yv *b, long at);
+static long unpack_lbl(Yv *b, long at);
+static long lbl_w(Yv *b, long at);
+
+/* One body read back (unit_read): the same items, with a label name minted to
+ * an id of this run and every field word the item does not use left 0, which
+ * is what the emitter wrote in it. */
+static Yv *unpack_body(Yv *blob) {
+    Yv *b = bytes_of(blob);
+    long n = yv_len(b);
+    Yv *ir = yav(0);
+    long at = 0;
+    while (at < n) {
+        long f = yv_l(ya_get(b, at));
+        at = at + 1;
+        long w[7] = {0, 0, 0, 0, 0, 0, 0};
+        if (f == IR_LABEL) {
+            w[0] = unpack_lbl(b, at);
+            at = at + lbl_w(b, at);
+        } else if (f == IR_LOC) {
+            w[0] = unpack_word(b, at);
+            at = at + word_w(b, at);
+            w[1] = unpack_word(b, at);
+            at = at + word_w(b, at);
+        } else if (f == IR_TEXT) {
+            w[0] = unpack_word(b, at);
+            at = at + word_w(b, at);
+        } else {
+            Yv *kinds = yr_get(ir_form(f), "kinds");
+            long ki = 0;
+            long wp = 0;
+            while (ki < yv_len(kinds)) {
+                long k = yv_l(ya_get(kinds, ki));
+                long nw = ir_kind_words(k);
+                if (k == O_LBL) {
+                    w[wp] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else if (k == O_DIFF) {
+                    w[wp] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                    w[wp + 1] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else if (k == O_MEM || k == O_MEM0) {
+                    w[wp] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 1] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 2] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 3] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 4] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else {
+                    w[wp] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    if (nw > 1) {
+                        w[wp + 1] = unpack_word(b, at);
+                        at = at + word_w(b, at);
+                    }
+                }
+                wp = wp + nw;
+                ki = ki + 1;
+            }
+        }
+        /* word by word into `ir`: ir_push would hand back a whole new array
+         * per item, which for a pack's 7,713 items is 1.9GB of copying */
+        ir = ya_push(ir, yv_long(f));
+        ir = ya_push(ir, yv_long(w[0]));
+        ir = ya_push(ir, yv_long(w[1]));
+        ir = ya_push(ir, yv_long(w[2]));
+        ir = ya_push(ir, yv_long(w[3]));
+        ir = ya_push(ir, yv_long(w[4]));
+        ir = ya_push(ir, yv_long(w[5]));
+        ir = ya_push(ir, yv_long(w[6]));
+    }
+    return ir;
+}
+
+/* How many bytes the word at `at` takes: its tag byte says (see pack_word). */
+static long word_w(Yv *b, long at) {
+    long t = yv_l(ya_get(b, at));
+    if (t < 126) { return 1; } else if (t == 255) { return 9; } else { return 3; }
+}
+
+static long unpack_word(Yv *b, long at) {
+    long t = yv_l(ya_get(b, at));
+    long v = 0;
+    if (t < 126) {
+        v = t;
+    } else if (t == 255) {
+        long sh = 0;
+        long i = 0;
+        while (i < 8) {
+            v = v + yv_l(ya_get(b, at + 1 + i)) * (1 << sh);
+            sh = sh + 8;
+            i = i + 1;
+        }
+    } else {
+        v = yv_l(ya_get(b, at + 1)) + yv_l(ya_get(b, at + 2)) * 256;
+        if (t == 127) { v = v - 65536; }
+    }
+    return v;
+}
+
+/* A label field: none (tag 0) or a name -- an id of this run, interned as the
+ * text path interned `call y_alloc`'s operand. */
+static long unpack_lbl(Yv *b, long at) {
+    if (yv_l(ya_get(b, at)) == 0) {
+        return -1;
+    } else {
+        long n = unpack_word(b, at + 1);
+        long p = at + 1 + word_w(b, at + 1);
+        return yv_l(lbl_new(from_bytes(ya_slice(b, p, p + n))));
+    }
+}
+
+/* How many bytes the label field at `at` takes. */
+static long lbl_w(Yv *b, long at) {
+    if (yv_l(ya_get(b, at)) == 0) {
+        return 1;
+    } else {
+        return 1 + word_w(b, at + 1) + unpack_word(b, at + 1);
+    }
 }
 
 /* A complete type encoding for std packs and package objects. It keeps
@@ -12781,7 +13004,8 @@ Yv *pack_unit_fields(Yv *unit) {
     out = pack_strs(out, yr_get(unit, "files"));
     out = pack_iface(out, unit);
     out = pack_put(out, yr_get(unit, "init"));
-    out = pack_strs(out, unit_body_text(unit));
+    out = pack_strs(out, pack_bodies(unit));
+    out = pack_strss(out, yr_get(unit, "btext"));
     out = pack_strs(out, yr_get(unit, "labels"));
     Yv *rf = yr_get(unit, "refs");
     out = pack_put(out, ys_long(yv_len(rf)));
@@ -12883,7 +13107,17 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         j = j + 1;
     }
     Yv *init = pack_get(cur);
-    Yv *tpack = pack_get_strs(cur);
+    /* The bodies stay packed: a link decodes only the ones the shake keeps
+     * (they are the only ones it assembles), which is what the text path did
+     * by reading a body's text only when it kept it. */
+    Yv *blob = pack_get_strs(cur);
+    long nb = pack_num(cur);
+    Yv *btext = yav(0);
+    long bi = 0;
+    while (bi < nb) {
+        btext = ya_push(btext, pack_get_strs(cur));
+        bi = bi + 1;
+    }
     Yv *labels = pack_get_strs(cur);
     Yv *refs = yav(0);
     long nr = pack_num(cur);
@@ -12900,10 +13134,9 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         j = j + 1;
     }
     Yv *globals = pack_get_strs(cur);
-    return yr(14, "name", name, "files", files, "exports", xs, "init", init,
-              "bodies", yav(0), "btext", yav(0), "tpack", tpack, "labels",
-              labels, "refs", refs, "rodata", rodata, "globals", globals, "dfl",
-              dfl);
+    return yr(12, "name", name, "files", files, "exports", xs, "init", init,
+              "bodies", yav(0), "btext", btext, "blob", blob, "labels", labels,
+              "refs", refs, "rodata", rodata, "globals", globals, "dfl", dfl);
 }
 
 /* The units `names` from a pack, in that order; [] for a pack of another

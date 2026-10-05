@@ -46,15 +46,17 @@ type AsmContent = { err: str, sec: long, offs: [long], item: AsmItem };
 type AsmSt = { sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str };
 // A part of the assembly to assemble: a body's items (`ir`, with the raw lines
 // its IR_TEXT items index in `txt`), or a piece of assembly text -- the
-// header, the arch prelude, the rodata, the .bss cells, and a body read from
-// the std pack (text until stage 3).
+// header, the arch prelude, the rodata and the .bss cells. Every body is
+// items, whichever compiler wrote it: a unit read from the std pack or an
+// object cache arrives packed (native.y's unpack_body).
 //
 // `fno` moves this part's `.loc` markers' file numbers: a unit's body numbers
 // its own files from 1, and the linker gives it its place in the program's
-// file table (0 when there is nothing to move). `loc` says the markers are
-// wanted at all: a std unit's bodies are compiled with line info whatever the
-// program asked for, so without -g the markers are dropped (which is what
-// link_locs does to the pack's text).
+// file table (0 when there is nothing to move) -- which is also what
+// ir_render does with them, so a `-g -S` listing is the text assembled here.
+// `loc` says the markers are wanted at all: a std unit's bodies are compiled
+// with line info whatever the program asked for, so without -g they are
+// dropped.
 type LinkPart = { ir: [long], txt: [str], text: str, fno: long, loc: bool };
 // A part after its text has been split into lines: exactly one of `lines` and
 // `ir` is set.
@@ -1091,8 +1093,8 @@ def asm_encode(mn: str, ops: [Operand], lno: long, sec: long, offs: [long]) -> A
 // way, so nothing else in this file changes.
 //
 // What is still text, and still lexed here: the header, the arch prelude
-// (~1.7k lines), the rodata and the .bss cells, and a body read from the std
-// pack, which carries bodies as text until stage 3.
+// (~1.7k lines), the rodata and the .bss cells -- the blocks the emitter does
+// not write items for.
 
 // One operand of kind `k` at word `wp`, as the encoder's Operand: the same
 // shape parse_operand builds for the same instruction, so enc64 is unchanged.

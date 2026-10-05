@@ -1079,7 +1079,7 @@ static Yv *asm_strdata_err(Yv *line, long lno, long sec, Yv *offs) {
     return yr(4,
               "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad string literal")),
               "sec", yv_long(sec), "offs", offs,
-              "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+              "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                          "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
 }
 
@@ -1090,7 +1090,7 @@ static Yv *asm_strdata_go(Yv *line, long lno, long sec, Yv *offs, Yv *payload, i
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), yr_get(d, "error")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         return asm_strdata_emit(sec, offs, yr_get(d, "bytes"), nul);
@@ -1126,11 +1126,11 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
     }
     if (ys_eq_lit(dir, ".text")) {
         return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else if (ys_eq_lit(dir, ".globl")) {
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else if (ys_eq_lit(dir, ".string")) {
         return asm_strdata(line, lno, sec, offs, rest, 1);
@@ -1150,7 +1150,7 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported directive '")), dir), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     }
 }
@@ -1233,7 +1233,7 @@ static Yv *asm_file(long lno, long sec, Yv *offs, Yv *rest) {
                            "lbl", from_bytes(yr_get(d, "bytes")),
                            "lbl2", ys("")));
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off",
+                  "item", yr(7, "sec", yv_long(-1), "off",
                              yv_long(ys_tonum(ns)), "len", yv_long(0),
                              "kind", ys("file"), "bytes", yav(0), "fix", fx, "br", yv_long(-1)));
     }
@@ -1262,7 +1262,7 @@ static Yv *asm_section_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
     return yr(4,
               "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported section '")), rest), ys("'")),
               "sec", yv_long(sec), "offs", offs,
-              "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+              "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                          "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
 }
 
@@ -1272,15 +1272,15 @@ static Yv *asm_section_go(long sec, Yv *offs, Yv *rest) {
     (void)sec;
     if (ys_eq_lit(rest, ".rodata")) {
         return yr(4, "err", ys(""), "sec", yv_long(1), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else if (ys_eq_lit(rest, ".bss")) {
         return yr(4, "err", ys(""), "sec", yv_long(2), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     }
 }
@@ -1313,13 +1313,13 @@ static Yv *asm_quad_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad .quad value '")), rest), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         return yr(4,
                   "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": negative .quad value")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     }
 }
@@ -1343,7 +1343,7 @@ static Yv *asm_zero(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
                                        rest),
                                 ys("'")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         (void)line;
@@ -1406,7 +1406,7 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
             return yr(4,
                       "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad operand")),
                       "sec", yv_long(sec), "offs", offs,
-                      "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                      "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                                  "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
         } else {
             return asm_encode(mn, ops, lno, sec, offs);
@@ -1426,7 +1426,7 @@ static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), yr_get(r, "err")), ys(" in '")), mn), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         long blen = yv_l(yr_get(r, "at"));
@@ -1448,8 +1448,8 @@ static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
  * way, so nothing else in this file changes.
  *
  * What is still text, and still lexed here: the header, the arch prelude
- * (~1.7k lines), the rodata and the .bss cells, and a body read from the std
- * pack, which carries bodies as text until stage 3. */
+ * (~1.7k lines), the rodata and the .bss cells -- the blocks the emitter does
+ * not write items for. */
 
 /* One operand of kind `k` at word `wp`, as the encoder's Operand: the same
    shape parse_operand builds for the same instruction, so enc64 is unchanged. */
@@ -1625,13 +1625,14 @@ static Yv *asm_ir_items(Yv *ir, Yv *txt, long fno, int loc, long sec, Yv *offs, 
 /* A part of the assembly to assemble: a body's items (`ir`, with the raw lines
    its IR_TEXT items index in `txt`), or a piece of assembly text -- the
    header, the arch prelude, the rodata, the .bss cells, and a body read from
-   the std pack (text until stage 3).
+   the std pack or an object cache (packed, native.y's unpack_body).
    `fno` moves this part's `.loc` markers' file numbers: a unit's body numbers
    its own files from 1, and the linker gives it its place in the program's
-   file table (0 when there is nothing to move). `loc` says the markers are
-   wanted at all: a std unit's bodies are compiled with line info whatever the
-   program asked for, so without -g the markers are dropped (which is what
-   link_locs does to the pack's text). */
+   file table (0 when there is nothing to move) -- which is also what
+   ir_render does with them, so a `-g -S` listing is the text assembled here.
+   `loc` says the markers are wanted at all: a std unit's bodies are compiled
+   with line info whatever the program asked for, so without -g they are
+   dropped. */
 Yv *part_ir(Yv *ir, Yv *txt, long fno, int loc) {
     return yr(5, "ir", ir, "txt", txt, "text", ys(""), "fno", yv_long(fno), "loc",
               yv_bool(loc));
