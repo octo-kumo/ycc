@@ -166,7 +166,7 @@ requires byte-identical binaries).
     so the in-tree assembler never sees one. `make asm-check` reads them with
     GNU `as`.
 
-12. **`syscall` is an instruction in Y and a function call in C.** The Y
+13. **`syscall` is an instruction in Y and a function call in C.** The Y
     builtin compiles to a bare `syscall` instruction; libc's `syscall()` is a
     *call*. That is fine for everything rule 8's table describes — `openat`,
     `mkdir`, a write that returns a value — and wrong for any ported code that
