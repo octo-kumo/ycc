@@ -828,6 +828,7 @@ Yv *words_seen(Yv *code, Yv *names) {
  * an f-string are code: lexer.y fstr_walk finds them as the lexer does,
  * and each is scanned on its own. */
 long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
+    long ignored = 0;
     long i = lo;
     /* the first byte of the last token of code (blanks and comments skip),
      * and a name just seen after a `.`, waiting for its `(` */
@@ -871,25 +872,10 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                 ;
             }
             if (c == 34 || c == 39) {
-                /* A string literal: past its closing quote */
-                i = i + 1;
-                int open = 1;
-                while (open && i < n) {
-                    long d = ys_byte_at(code, i);
-                    if (d == 92) {
-                        i = i + 2;
-                        ;
-                    } else if (d == c) {
-                        open = 0;
-                        i = i + 1;
-                        ;
-                    } else {
-                        i = i + 1;
-                        ;
-                    }
-                    ;
-                }
-                ;
+                /* a string literal: past its closing quote (lit_end, the
+                 * lexer.c scanner -- one scanner, so the lexer and this
+                 * cannot disagree about where a literal ends) */
+                i = lit_end(code, i, &ignored);
             } else if (word_byte(c)) {
                 long j = i + 1;
                 while (j < n && word_byte(ys_byte_at(code, j))) {

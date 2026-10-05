@@ -77,50 +77,49 @@ int ispunct(long c) {
 }
 
 static Yv *unescape(Yv *raw, int braces);
+long lit_end(Yv *src, long q, long *closed);
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
-// decoded text and the position just past the closing quote. Escapes:
-// \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
+// decoded text and the position just past the closing quote, the line and
+// column there, and `closed` (0 when the quote never came, which is fatal
+// below). Escapes: \n \t \r, \xHH, and `\<c>` drops the backslash (the Y
+// literal rules). The scan itself is lit_end's; this only counts lines and
+// columns and decodes, so the two copies of it (this and words_scan in
+// native.c) cannot drift from the one lit_end.
 Yv *lex_quoted(Yv *src, long i, long line, long col) {
-    Yv *q = ys_slice(src, i, i + 1);
-    long n = yv_len(src);
-    i = i + 1;
     col = col + 1;
-    long start = i;
-    int open = 1;
-    int closed = 0;
+    long start = i + 1;
+    long cl = 0;
+    long end = lit_end(src, i, &cl);
+    /* Walk lit_end's span to advance line/col and find whether an escape
+     * occurred; lit_end has already fixed where the literal ends. */
+    long raw_end = end - 1;
     int hasesc = 0;
-    while (open) {
-        if (i < n) {
-            Yv *ch = ys_slice(src, i, i + 1);
-            if (ys_eq_lit(ch, "\\")) { hasesc = 1; i = i + 2; col = col + 2; ; }
-            else if (ys_eq(ch, q)) { open = 0; closed = 1; ; }
-            else {
-                if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
-                else { col = col + 1; ; };
-                i = i + 1;
-                ;
-            };
-            ;
-        } else { open = 0; ; }
+    long j = start;
+    while (j < raw_end) {
+        Yv *ch = ys_slice(src, j, j + 1);
+        if (ys_eq_lit(ch, "\\")) { hasesc = 1; j = j + 2; col = col + 2; ; }
+        else {
+            if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
+            else { col = col + 1; ; };
+            j = j + 1;
+        };
     };
-    if (closed) {
-        ;
-    } else {
+    if (cl == 0) {
         /* ran off the end with the quote still open */
         puts_(ys("error: unterminated string literal\n"));
         exit_(1);
         ;
     }
-    Yv *raw = ys_slice(src, start, i);
-    i = i + 1;  // skip closing quote
     col = col + 1;
+    Yv *raw = ys_slice(src, start, raw_end);
     Yv *buf = raw;
     if (hasesc) {
         buf = unescape(raw, 0);
         ;
     }
-    return yr(4, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col));
+    return yr(5, "text", buf, "end", yv_long(end), "line", yv_long(line),
+              "col", yv_long(col), "closed", yv_long(1));
 }
 
 /* A literal's text from its raw source: \n \t \r, \xHH, and `\<c>` drops
@@ -184,19 +183,27 @@ static int wordbyte(long c) {
 }
 
 /* Just past the literal whose opening quote is src[q] (a backslash escapes
- * the byte after it); len(src) when it never closes. */
-static long lit_end(Yv *src, long q) {
+ * the byte after it); len(src) when it never closes. *closed says which:
+ * 0 when the literal ran off the end without its closing quote, 1 when it
+ * closed -- the two cases this used to report as one, which a caller that
+ * only wanted the end did not care about and the meta pass does (an
+ * unterminated string is its own diagnostic, not a scan that runs to EOF).
+ * THE one literal scanner in the tree: lex_quoted above and words_scan in
+ * native.c both call it. */
+long lit_end(Yv *src, long q, long *closed) {
     long n = yv_len(src);
     long qc = ys_byte_at(src, q);
     long i = q + 1;
     long end = n;
     int open = 1;
+    int was = 0;
     while (open && i < n) {
         long c = ys_byte_at(src, i);
         if (c == 92) { i = i + 2; ; }
-        else if (c == qc) { end = i + 1; open = 0; ; }
+        else if (c == qc) { end = i + 1; open = 0; was = 1; ; }
         else { i = i + 1; ; };
     };
+    *closed = was ? 1 : 0;
     return end;
 }
 
@@ -205,6 +212,7 @@ static long lit_end(Yv *src, long q) {
  * `?`), or a `,` `;` or unmatched `)` `]` there, which fstr_walk rejects;
  * len(src) when the source runs out first. */
 static long fstr_expr_end(Yv *src, long lo) {
+    long ignored = 0;
     long n = yv_len(src);
     long depth = 0;
     long tern = 0;
@@ -220,7 +228,7 @@ static long fstr_expr_end(Yv *src, long lo) {
                 i = yv_l(yr_get(fstr_walk(src, i), "end"));
                 ;
             } else {
-                i = lit_end(src, i);
+                i = lit_end(src, i, &ignored);
                 ;
             };
             ;
@@ -279,6 +287,7 @@ static int fstr_blank(Yv *src, long lo, long hi) {
  * (words_scan), so the two always agree. A broken f-string ends where a
  * plain literal would. */
 Yv *fstr_walk(Yv *src, long q) {
+    long ignored = 0;
     long n = yv_len(src);
     Yv *fields = yav(0);
     Yv *err = ys("");
@@ -381,7 +390,7 @@ Yv *fstr_walk(Yv *src, long q) {
         ;
     };
     long end = i;
-    if (!ys_eq_lit(err, "")) { end = lit_end(src, q); ; }
+    if (!ys_eq_lit(err, "")) { end = lit_end(src, q, &ignored); ; }
     return yr(4, "end", yv_long(end), "err", err, "at", yv_long(at), "fields", fields);
 }
 
