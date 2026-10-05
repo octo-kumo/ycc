@@ -56,6 +56,8 @@ static Yv *enc_alu_imm(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_mem(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_go(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_body(Yv *buf, long at, Yv *op, Yv *dst, long v);
+static Yv *enc_test_imm(Yv *buf, long at, Yv *dst, long v);
+static Yv *enc_test_imm_body(Yv *buf, long at, Yv *dst, long v);
 static Yv *enc_shift(Yv *buf, long at, Yv *mn, Yv *dst, Yv *cnt);
 static Yv *enc_sse_arith(Yv *buf, long at, Yv *mn, Yv *dst, Yv *src);
 static long sse_op(Yv *mn);
@@ -766,6 +768,49 @@ static Yv *enc_alu_imm_body(Yv *buf, long at, Yv *op, Yv *dst, long v) {
     }
 }
 
+/* test $imm, %r32/%r64: F7 /0 id, always. The ALU group's other six mnemonics
+   have 83 and 81 to lean on -- one opcode for "an immediate that sign-extends
+   from a byte" and one for the 32-bit case -- and test has neither: its
+   immediate form is F6/F7, where the pair is the OPERAND's width rather than the
+   immediate's. F6 is the 8-bit-operand form, and x86 ignores REX.W on it, so
+   `test $1, %rax` written as F6 tests %al: the flag test of a value under 256
+   still agrees, which is how it stayed wrong through a whole kernel. F7 is the
+   32-or-64-bit form and takes the immediate as an imm32 whether or not it fits
+   in a byte. It is the one form that sets flags from a value without writing it
+   back, which is what a kernel wants when it is asking "which of these four"
+   rather than computing.
+
+   Registers only. F7 can name a memory operand, but a sizeless one carries no
+   width to encode, and guessing 64 bits (what enc_alu_imm_mem does, for the
+   reason it gives) would be right by luck rather than by reading. Nothing
+   reaches it: a kernel asks this of a value it computed. */
+static Yv *enc_test_imm(Yv *buf, long at, Yv *dst, long v) {
+    /* (split: this is the shape gate; the body sees a 32- or 64-bit register
+       and no merged-shape read, so it reads dst.n straight.) */
+    if (yv_l(yr_get(dst, "k")) != K_reg) {
+        return enc_err(at, ys("test imm dst"));
+    } else if (op_size(dst) != 64 && op_size(dst) != 32) {
+        return enc_err(at, ys("test imm dst"));
+    } else {
+        return enc_test_imm_body(buf, at, dst, v);
+    }
+}
+
+static Yv *enc_test_imm_body(Yv *buf, long at, Yv *dst, long v) {
+    /* (the shape gate lives in enc_test_imm; this one is on the value) */
+    long dn = yv_l(yr_get(dst, "n"));
+    long r = rex(op_size(dst) == 64, -1, -1, dn);
+    if (v < -2147483648L || v > 2147483647L) {
+        /* the same door enc_alu_imm_body has, and for the same reason: F7 takes
+           a sign-extended imm32 and put_le32 would keep the low four bytes. */
+        return enc_err(at, ys("an immediate does not fit in 32 bits"));
+    } else {
+        long n = put_rex(buf, at, r);
+        long m = put2(buf, n, 247, modrm(3, 0, dn));
+        return enc_ok(put_le32(buf, m, v), yav(0));
+    }
+}
+
 static Yv *enc_shift(Yv *buf, long at, Yv *mn, Yv *dst, Yv *cnt) {
     /* shl/shr/sar $imm8 (0-63) or %cl, %r64: C1 /ext ib and D3 /ext, where
        ext is shl 4, shr 5 (logical), sar 7 (arithmetic) */
@@ -896,7 +941,13 @@ static Yv *enc_ucomisd(Yv *buf, long at, Yv *dst, Yv *src) {
 }
 
 static Yv *enc_cvtsi2sd(Yv *buf, long at, Yv *dst, Yv *src) {
-    /* F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm */
+    /* F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
+       F2 and not 66: on 0F 2A the mandatory prefix IS the choice of width, F2
+       for the double and F3 for the single, so the 66 belongs to the packed
+       form and adding it here would be a prefix this encoding does not have.
+       (Measured the other way round first — objdump takes `F2 66` for a
+       cvtsi2sd and the CPU runs it, but it is not the documented encoding, and
+       a kernel that wants a double conversion should ask for one.) */
     if (yv_l(yr_get(dst, "k")) != K_reg) {
         return enc_err(at, ys("cvtsi2sd dst"));
     } else if (yv_l(yr_get(src, "k")) != K_reg) {
@@ -909,7 +960,8 @@ static Yv *enc_cvtsi2sd(Yv *buf, long at, Yv *dst, Yv *src) {
 }
 
 static Yv *enc_cvttsd2si(Yv *buf, long at, Yv *dst, Yv *src) {
-    /* F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating) */
+    /* F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating). F2 for the
+       reason above: F3 here would be CVTTSS2SI. */
     if (yv_l(yr_get(dst, "k")) != K_reg) {
         return enc_err(at, ys("cvttsd2si dst"));
     } else if (yv_l(yr_get(src, "k")) != K_reg) {
@@ -1156,7 +1208,9 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
                 if (ys_eq_lit(mn, "add") || ys_eq_lit(mn, "sub") || ys_eq_lit(mn, "cmp") || ys_eq_lit(mn, "xor") || ys_eq_lit(mn, "and") || ys_eq_lit(mn, "or")) {
                     return enc_alu_imm(buf, at, mn, dst, yv_l(yr_get(src, "v")));
                 } else {
-                    return enc_err(at, ys_cat(mn, ys(" imm form")));
+                    /* test is the only mnemonic left in this arm, and its
+                       immediate form is the one that has no 81/83 to share. */
+                    return enc_test_imm(buf, at, dst, yv_l(yr_get(src, "v")));
                 }
             } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_reg
                        && ys_eq_lit(mn, "xor") && op_size(dst) == 32 && op_size(src) == 32) {

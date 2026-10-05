@@ -348,8 +348,7 @@ so \ic{math.pow(x, 0.5)} for a large \ic{x} is a few ulps out while
     $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}, and at $x = -9$ it is
     \num{1.23e-4} $- 1$ with the answer's last bits gone.
     \ic{exp} is machine code (\texttt{src/y/arch/math.s}), reached through
-    \ic{native def}: a routine of about 
-um{200} instructions with no calls at
+    \ic{native def}: \num{106} instructions with no calls at
     all, against the ten Y functions it replaced and \num{1422} instructions a
     call. It is \emph{bit-identical} to that loop --- same operations in the same
     order --- and \texttt{test/y/native/t311\_math\_exp\_asm.y} says so over
@@ -385,7 +384,20 @@ um{200} instructions with no calls at
     normalized --- C's \% keeps the sign of the dividend, so a negative count
     comes out negative. The range is $|x| \lesssim \num{2^52}$: like every library
     without Payne--Hanek reduction, a larger argument reduces to something near
-    $x$ rather than to its own angle.
+    $x$ rather than to its own angle. \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
+    lets one routine answer both: \ic{sin} and \ic{cos} are two instructions
+    each that set a register and fall into the same body, and the quadrant picks
+    between the two halves at the end with two tests of the index rather than
+    eight cases. \ic{math.sin} and \ic{math.cos} are machine code
+    (\texttt{src/y/arch/math.s}), reached through \ic{native def} and
+    \emph{bit-identical} to the loops they replaced ---
+    \texttt{test/y/native/t313\_math\_sin\_asm.y} says so over \num{10410}
+    arguments each --- \num{190} instructions a call against \num{1775}, and one
+    routine for both rather than one for each. \ic{sin\_y} and \ic{cos\_y} are
+    the loops, kept as the oracle, and \texttt{test/math/gen\_sin.py} generates
+    the routine from the module's own constants. The negation is
+    \ic{0.0} $- x$ and not a sign-bit flip, which is the difference in
+    \ic{sin(-0.0)}.
   \item[\ic{math.asin(x)}, \ic{math.acos(x)}, \ic{math.atan(x)},
     \ic{math.atan2(y, x)}] The inverse trigonometry. \ic{atan} folds until its
     argument is inside the kernel's range --- the reciprocal above 1, then the

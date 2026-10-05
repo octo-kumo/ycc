@@ -225,6 +225,17 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   nothing, and one that does keeps the block through the ordinary shaking.
   Their arguments come off the stack at `8(%rsp)` (leaf convention: the return
   address is at `0(%rsp)`) and a float result goes back in `%rax` as its bits.
+- **The transcendental kernels (`src/y/arch/math.s`)** are a third kind of thing
+  in that file: not primitives, but whole functions that Y *can* write and the
+  machine writes several times faster. `y_exp`, `y_log`, `y_sin` and `y_cos` are
+  each generated from `std/math.y`'s own constants by a script under
+  `test/math/`, walk the same operations in the same order as the Y function
+  beside them, and are bit-identical to it — which is the whole promise, so each
+  is gated by a fixture that compares thousands of arguments bit for bit
+  (`t311`, `t312`, `t313`). They are reached the same way, through a
+  `native def`, and each has its `*_y` oracle kept beside it in the module. The
+  generator exists because a retyped coefficient table would silently disagree
+  with the function it is meant to reproduce, and nothing else would notice.
 - **`native def`: a declaration with no body.** `native def name(params) -> T
   [= "label"];` declares a function whose implementation is an assembly
   label. The parser makes a `Decl` with `kind: "native"` whose value is a

@@ -2805,8 +2805,10 @@ def uses_math(refs: [str]) -> bool {
             || (n == 8 && (r == "y_to_int" || r == "y_min_of" || r == "y_max_of"
                            || r == "y_scale" || r == "y_axpy"))
             || (n == 10 && (r == "y_int_trap" || r == "y_len_stop"))
-            // the encoder's own form probes: y_sse_forms, y_sse_flags
-            || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"));
+            // the encoder's own form probes: y_sse_forms, y_sse_flags,
+            // y_test_imm
+            || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"))
+            || (n == 10 && r == "y_test_imm");
         i = i + 1;
     };
     found

@@ -374,7 +374,7 @@ documented as unfused.
 | P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
 | P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. `movsd` and SSE arithmetic with a memory source have since landed too (`f95398b`..this commit), with `movapd`/`xorpd`/`andpd`/`unpcklpd` still to come if P4 needs them |
 | P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **1596 cases** (the pinned edges plus a seeded 1500-case spread) and the worst gap is **3 ulps** (`pow`), with 4 cases over 1. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
-| P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work and `exp` are landed.** `y_exp` is **generated** by `test/math/gen_exp.py` from `math.y`'s own constants and walks the same operations in the same order, so it returns the same double: t311 checks **10,420 arguments bit for bit**, reaching every branch (the NaN test, both range edges, the reduction boundary at each end, the subnormal band, the top of the range). **1422 → 105.7 Ir/call** (ten Y functions collapse into one routine) and **69.6 → 31.9 ns/call** net of a 4.7 ns loop, on `bench/y/tmath.y`. `y_log` has landed the same way (`test/math/gen_log.py`, t312: **10,317 arguments, 0 differing**, **1335 → 115.2 Ir/call**, 71.8 → 34.9 ns/call). `pow`, `sin`, `cos` are to come, one at a time, each the same shape. §8 has what the first attempt found and what this one added |
+| P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work and `exp` are landed.** `y_exp` is **generated** by `test/math/gen_exp.py` from `math.y`'s own constants and walks the same operations in the same order, so it returns the same double: t311 checks **10,420 arguments bit for bit**, reaching every branch (the NaN test, both range edges, the reduction boundary at each end, the subnormal band, the top of the range). **1422 → 105.7 Ir/call** (ten Y functions collapse into one routine) and **69.6 → 31.9 ns/call** net of a 4.7 ns loop, on `bench/y/tmath.y`. `y_log` has landed the same way (`test/math/gen_log.py`, t312: **10,317 arguments, 0 differing**, **1335 → 115.2 Ir/call**, 71.8 → 34.9 ns/call). `y_sin`/`y_cos` have landed the same way (`test/math/gen_sin.py`, one body for both: two two-instruction entries and the choice in a register, t313: **10,410 arguments each, 0 differing**, **1775 → 190 Ir/call**, 75.4 → 40.4 ns/call). `pow` is to come, the same shape. §8 has what each attempt found |
 | P5 | the bulk kernels | **done** — `y_sum y_dot y_scale y_axpy y_min_of y_max_of` in `src/y/arch/math.s`, reached from `std/math.y` through `a.ptr` and `len(a)`, each **bit-identical** to the Y loop kept beside it as `*_y` (t310, over 64 corpora plus the edge values: ±0, both infinities, NaN in first/middle/last position, subnormals, one element, empty). The equal-length rule moved out of the loop, so `fdot`/`faxpy` stop on a mismatch (`y_len_stop`). `bench/y/fmath.y`: **0.37 ns/element against the Y loop's 1.26**, and the 1.27 baseline the plan quotes is the last row of that file |
 
 ## 6. Sequencing
@@ -591,3 +591,77 @@ records straight through and Y does something to them. So the offset rides in
 `lbl` instead (`tab+8` reaches `label_addr` whole) and `Fixup` keeps four fields,
 with a note on the type saying why. **Do not add a field to `Fixup`**: the
 port gate will not catch it and nothing else will.
+
+### What the trigonometry attempt found (2026-10-05)
+
+`y_sin` and `y_cos` are one body: `y_sin` is two instructions that clear `%r11`,
+`y_cos` two that set it, and both jump into `ysincos_go`, which computes `s` and
+`c` together and picks by the quadrant at the end. cos's coefficient table is
+sin's rotated left by one, so the selection is an index `(q + which) & 3`, a test
+of bit 0 and a test of bit 1 — and `n & 3` is exactly the Y's `quadrant(n)` for
+every n including the negative ones, which is why the sign handling costs
+nothing. It is bit-identical to the Y over 10,410 arguments each (t313).
+
+**Four bugs, and the shape of the last one is the useful part.**
+
+**A label is global across the arch files, and `ysc_` was taken.** The prelude's
+`y_str_cat` helper is `ysc_copy`/`ysc_skip2`, and the new kernel wanted `ysc_go`
+and `ysc_done`; the assembler's answer is `duplicate label 'ysc_done'`, which
+reads like a mistake in the *new* file and is really a collision with a file that
+has nothing to do with trigonometry. Everything is `ysincos_*` now. Nothing in
+the tree reserves a prefix per file, so this is a naming convention rather than a
+check — and `y_` is the only prefix the language enforces.
+
+**Folding `r` in early is not the same function.** `s = r*(1 + w*P)` and
+`r*(1 + r*w*P)` agree to a mathematician and not to a bit. The generated sequence
+multiplied by `r` first because it wanted `r*w` to hand to something, and
+`sin(0.5)` came out at 0.48971277 against the Y's 0.47942554 — 2%, which no
+6-term kernel can produce and which therefore says *the sequence*, not *the
+coefficients*. The multiply by `r` is the last instruction now, and the comment
+says why it looks harmless.
+
+**Four values live at once in `prod_err`, and the register plan had three.** The
+Y's expression is `((ah*bh - p) + ah*bl + al*bh) + al*bl`, so `ah`, `al`, `bh` and
+`bl` are all live after the two splits — and the generator gave the b split the
+register `ah` was in. It then computed `bh*bl` where the Y computes `ah*bh`, so
+with `a = 0` (which is every argument below pi/4, where `n` is 0 and every
+product is 0) the routine returned `bh*bl` instead of 0.
+
+That one took the longest, and the reason is worth keeping: **the symptom was a
+constant additive offset in `r`** — 4.388754271e-8, the same for `x = 0.5` and
+for `x = 1.0`, and `sin(0.0)` returning exactly that. A constant offset in an
+argument that was read correctly at `mov 8(%rsp), %rax` (verified in gdb) says
+something *adds* to it, and the only additions after that point are the
+reduction's four subtractions and `err`. Everything else had already been ruled
+out by then: the table's 42 entries decode to their names, the fixups resolve to
+`tab+N`, the listing is byte-identical to the source modulo comments, and `err`
+is the only term that can be non-zero when every product is zero. "The offset is
+constant" was the clue; "the offset is a plausible float" was a dead end.
+
+**`test $imm, %reg` had to be added, and it has a trap in the obvious
+direction.** The kernel asks which of four it has, so it needs to set flags from
+a value without writing it back. The first version chose F6 (`test r/m8, imm8`)
+whenever the immediate fit in a byte, on the assumption that the 83/81 rule the
+other six ALU mnemonics follow would follow here. **F6 tests `%al`, and x86
+ignores REX.W on it** — so `test $1, %rax` tested the low byte of the register.
+Every reachable index is under 256, so it *worked*, and the bytes were wrong in a
+way no test of `test $1` could ever see. The form now follows the operand's
+width, and `t314` pins it with an immediate the 8-bit encoding cannot even hold.
+
+The measurement that decided it is the one worth repeating, because the reasoning
+was wrong first: `F2 48 0F 2A` reads as `CVTSI2SS` in objdump and looks exactly
+like a missing mandatory prefix, and "add 0x66" is what the SDM's other opcodes
+lead you to. It is **F2 that is the double form and F3 the single** on 0F 2A and
+0F 2C, so the encoding was already right; objdump takes `F2 66` for a `cvtsi2sd`
+and the CPU runs it, but it is not an encoding the instruction has. The change
+was reverted, and the note on both encoders now says which way round it is and
+why it looked the other way.
+
+**`uses_math` is a gate, and a new arch entry point is invisible without it.**
+`native.y` decides whether `math.s` is in the binary at all from a *length-first*
+name list (it is a hot loop: ~50K references on the self-compile), and a name
+that is not in the list does not reach the shaker as a root — so the answer is
+not a missing block but `undefined label 'y_test_imm'`, from a probe whose own
+text is right there in the file. Any new `y_` label in `src/y/arch/*.s` has to
+be added to that list, and the list is the only place the tree records which
+labels are entry points.

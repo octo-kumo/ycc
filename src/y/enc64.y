@@ -672,6 +672,48 @@ def enc_alu_imm_body(buf: [byte], at: long, op: str, dst: Operand, v: long) -> E
     }
 };
 
+// test $imm, %r32/%r64: F7 /0 id, always. The ALU group's other six mnemonics
+// have 83 and 81 to lean on -- one opcode for "an immediate that sign-extends
+// from a byte" and one for the 32-bit case -- and test has neither: its
+// immediate form is F6/F7, where the pair is the OPERAND's width rather than the
+// immediate's. F6 is the 8-bit-operand form, and x86 ignores REX.W on it, so
+// `test $1, %rax` written as F6 tests %al: the flag test of a value under 256
+// still agrees, which is how it stayed wrong through a whole kernel. F7 is the
+// 32-or-64-bit form and takes the immediate as an imm32 whether or not it fits
+// in a byte. It is the one form that sets flags from a value without writing it
+// back, which is what a kernel wants when it is asking "which of these four"
+// rather than computing.
+//
+// Registers only. F7 can name a memory operand, but a sizeless one carries no
+// width to encode, and guessing 64 bits (what enc_alu_imm_mem does, for the
+// reason it gives) would be right by luck rather than by reading. Nothing
+// reaches it: a kernel asks this of a value it computed.
+def enc_test_imm(buf: [byte], at: long, dst: Operand, v: long) -> Encoded {
+    // (split: this is the shape gate; the body sees a 32- or 64-bit register
+    // and no merged-shape read, so it reads dst.n straight.)
+    if (dst.k != K.reg) {
+        enc_err(at, "test imm dst")
+    } else if (op_size(dst) != 64 && op_size(dst) != 32) {
+        enc_err(at, "test imm dst")
+    } else {
+        enc_test_imm_body(buf, at, dst, v)
+    }
+};
+
+def enc_test_imm_body(buf: [byte], at: long, dst: Operand, v: long) -> Encoded {
+    // (the shape gate lives in enc_test_imm; this one is on the value)
+    let r = rex(op_size(dst) == 64, -1, -1, dst.n);
+    if (v < -2147483648 || v > 2147483647) {
+        // the same door enc_alu_imm_body has, and for the same reason: F7 takes
+        // a sign-extended imm32 and put_le32 would keep the low four bytes.
+        enc_err(at, "an immediate does not fit in 32 bits")
+    } else {
+        let n = put_rex(buf, at, r);
+        let m = put2(buf, n, 247, modrm(3, 0, dst.n));
+        enc_ok(put_le32(buf, m, v), [])
+    }
+};
+
 def enc_shift(buf: [byte], at: long, mn: str, dst: Operand, cnt: Operand) -> Encoded {
     // shl/shr/sar $imm8 (0-63) or %cl, %r64: C1 /ext ib and D3 /ext, where
     // ext is shl 4, shr 5 (logical), sar 7 (arithmetic)
@@ -802,6 +844,12 @@ def enc_sqrtsd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
 
 def enc_cvtsi2sd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
+    // F2 and not 66: on 0F 2A the mandatory prefix IS the choice of width, F2
+    // for the double and F3 for the single, so the 66 belongs to the packed
+    // form and adding it here would be a prefix this encoding does not have.
+    // (Measured the other way round first — objdump takes `F2 66` for a
+    // cvtsi2sd and the CPU runs it, but it is not the documented encoding, and
+    // a kernel that wants a double conversion should ask for one.)
     if (dst.k != K.reg) {
         enc_err(at, "cvtsi2sd dst")
     } else if (src.k != K.reg) {
@@ -814,7 +862,8 @@ def enc_cvtsi2sd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_cvttsd2si(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
-    // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating)
+    // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating). F2 for the
+    // reason above: F3 here would be CVTTSS2SI.
     if (dst.k != K.reg) {
         enc_err(at, "cvttsd2si dst")
     } else if (src.k != K.reg) {
@@ -1065,7 +1114,9 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
                 if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or") {
                     enc_alu_imm(buf, at, mn, dst, src.v)
                 } else {
-                    enc_err(at, mn + " imm form")
+                    // test is the only mnemonic left in this arm, and its
+                    // immediate form is the one that has no 81/83 to share.
+                    enc_test_imm(buf, at, dst, src.v)
                 }
             } else if (dst.k == K.reg && src.k == K.reg && mn == "xor" && op_size(dst) == 32 && op_size(src) == 32) {
                 enc_xor32(buf, at, dst, src)
