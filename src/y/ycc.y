@@ -13,6 +13,7 @@
 //   -h, --help   show this text and exit
 // A project (a directory with a y.toml manifest, see pkg.y):
 //   ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]   build its programs
+//                (a ready level of packages compiles in parallel: build_dispatch)
 //   ycc vendor [DIR]   copy its git dependencies into DIR/vendor
 
 import tags from "./tags.y";
@@ -267,25 +268,36 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
 // What lint.y found in a unit that compiled, as `at: warning: msg` on
 // stderr (a -S listing on stdout stays clean), each position as
 // print_native_errors gives it. lint_unit sorted them and dropped repeats.
-def print_native_warnings(warnings: [Diag], origin: Origin, bare: bool) -> long {
+// The warnings as the one string print_native_warnings used to write in
+// pieces: a dispatched child carries it in a file and the parent prints it
+// where the serial loop would have, so the bytes on stderr do not depend on
+// which child finished first.
+def warning_text(warnings: [Diag], origin: Origin, bare: bool) -> str {
+    let out = "";
     let i = 0;
     while (i < len(warnings)) {
         let w = warnings[i];
-        eputs(nativelib.origin_at(origin, w.line, bare) + ":" + tostring(w.col) + ": warning: " + w.msg + "\n");
+        out = out + nativelib.origin_at(origin, w.line, bare) + ":" + tostring(w.col) + ": warning: " + w.msg + "\n";
         i = i + 1;
     };
+    out
+};
+
+def print_native_warnings(warnings: [Diag], origin: Origin, bare: bool) -> long {
+    eputs(warning_text(warnings, origin, bare));
     0
 };
 
 // ── ycc build / ycc vendor (see pkg.y) ───────────────────────────────────
 
-def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool } {
+def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool, one: str } {
     let dir = "";
     let debug = false;
     let nowarn = false;
     let wlevel = 0;
     let allow_exec = true;
     let std_src = false;
+    let one = "";
     let i = 2;  // skip the program and the command
     while (i < len(cl)) {
         let a = cl[i];
@@ -300,6 +312,14 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
             allow_exec = false;
         } else if (a == "--std-src") {
             std_src = true;
+        } else if (a == "--one") {
+            // build_dispatch's child: one package, then exit
+            if (i + 1 >= len(cl)) {
+                puts("ycc: --one needs a package name\n");
+                exit(1);
+            };
+            one = cl[i + 1];
+            i = i + 1;
         } else if (a[0:1] == "-") {
             puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
             exit(1);
@@ -312,7 +332,7 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
         i = i + 1;
     };
     if (len(dir) == 0) { dir = "."; }
-    { dir: dir, debug: debug, nowarn: nowarn, wlevel: wlevel, allow_exec: allow_exec, std_src: std_src }
+    { dir: dir, debug: debug, nowarn: nowarn, wlevel: wlevel, allow_exec: allow_exec, std_src: std_src, one: one }
 };
 
 // One unit's text, resolved: its bare imports may name the packages
@@ -432,6 +452,196 @@ def wlevel_arg(argv: [str], i: long, n: long) -> long {
     }
 };
 
+// ── `ycc build`: compiling a ready level of packages in parallel ─────────
+//
+// pk_load hands the packages back in topological order, so every dependency
+// has a lower index than its importer. The loop below walks them in that
+// order; a *level* is a run of packages that depend only on what is already
+// compiled (all of their dependencies sit before the run), and a level's
+// packages are independent of each other -- so it is where the time is.
+//
+// A level compiles out of process: one `ycc build --one NAME` child per
+// package, through a single shell (exec() takes one command string, and `&`
+// plus `wait` is all the parallelism that needs). Each child writes the
+// object the loop would have written, build/obj/NAME.yo, keyed by build_key
+// (this compiler, the package's place among the units, its text, and the
+// *interfaces* of the packages it imports), and the loop then reads it back
+// exactly as on a warm build. Nothing here is needed for a correct build: a
+// child that fails leaves no object, and the loop compiles that package
+// itself and reports the error as if nothing had been dispatched -- the
+// diagnostics and the bytes are the same either way. Warnings ride along in a
+// sidecar named for the object they belong to (the key), so they print in
+// package order and a sidecar left by another key is never read. What does
+// change is the order of the *lines*: a level's "compiling" lines all come
+// from the dispatch, before the loop prints the warnings it collected.
+//
+// Deliberately not spawn/join. A thread shares the address space (CLONE_VM)
+// and the compiler keeps 51 module-level lets -- the label table every
+// body's label ids index, rename.y's and types.y's name caches, native.y's
+// dbg_file and pkg_ns -- so two packages compiling at once would race on all
+// of them, and every later allocation would take y_alloc's %fs detour (+14
+// instructions each, measured: +2.7% of a package's compile, since a 3.5k
+// line unit allocates 615,000 times). Two processes race on nothing, and
+// each one's arena holds one package instead of the whole project: 799 MB
+// for eight 3.5k-line packages compiled in one process, 106 MB for the same
+// build with children.
+//
+// The waves are capped so peak memory stays bounded: a package compile is
+// ~30 ms, so even a wide graph does not want twenty of them at once. And
+// nothing is dispatched for a level of one (a chain, or a project with a
+// single package), for a package whose object is already there (a rebuild
+// that compiles nothing spawns nothing), or under --std-src (a child would
+// compile the std units from source before its own package).
+let BUILD_JOBS = 4;
+// `s` quoted for sh (pkg.y's pk_q, which is not exported, does the same).
+def build_q(s: str) -> str {
+    "'" + join(split(s, "'"), "'\\''") + "'"
+};
+
+// Where a dispatched child's warnings wait: one file per object, so a
+// leftover from another key is never read.
+def warn_path(odir: str, name: str, key: str) -> str {
+    odir + "/" + name + "." + key + ".warn"
+};
+
+// This compiler's own path, which is what the children run: /proc/self/exe is
+// absolute and resolved, where argv[0] need not be. readlink(2), not read:
+// opening that path gives the binary itself, a megabyte of it.
+def self_exe() -> str {
+    let buf: [byte; 4096] = [0; 4096];
+    let n = syscall(89, "/proc/self/exe", &buf[0], 4096);
+    if (n <= 0) { "" } else { from_bytes(buf[0:n]) }
+};
+
+// The flags a child needs to compile its package exactly as this run would.
+def build_child_flags(debug: bool, nowarn: bool, wlevel: long, allow_exec: bool) -> str {
+    let out = "";
+    if (debug) { out = out + " -g"; };
+    if (nowarn) { out = out + " -w"; };
+    if (wlevel > 0) { out = out + " -W " + tostring(wlevel); };
+    if (!allow_exec) { out = out + " --no-exec"; };
+    out
+};
+
+// Where `name` sits in the package order, or -1.
+def pkg_index(pkgs: [PkNode], name: str) -> long {
+    let at = -1;
+    let i = 0;
+    while (i < len(pkgs)) {
+        if (pkgs[i].name == name) { at = i; };
+        i = i + 1;
+    };
+    at
+};
+
+// `ycc build --one NAME`: compile exactly this one package of DIR and write
+// its object. Only its dependencies' objects are read -- the loop hands out a
+// package whose dependencies are all done, and this same compiler wrote them,
+// so those units are the ones the loop would have compiled. The unit order is
+// the topological one, so each dependency's own key hashes the same
+// interfaces the loop gave it.
+def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> long {
+    let g = pkg.pk_load(dir);
+    let pkgs = g.pkgs;
+    let odir = pkg.pk_join(pkg.pk_join(dir, "build"), "obj");
+    let target = pkg_index(pkgs, one);
+    if (target < 0) {
+        puts("error: no package '" + one + "' in " + dir + "\n");
+        exit(1);
+    };
+    let cid = pkg.pk_self_id();
+    let pack = "";
+    if (!std_src) { pack = self_pack(); };
+    let want: [str] = [];
+    want += pkgs[target].deps;
+    let units: [Unit] = [];
+    let k = 0;
+    while (k < target) {
+        let p = pkgs[k];
+        if (pkg.pk_has(want, p.name)) {
+            let nr = build_resolve(p.lib, allow_exec, p.deps, p.roots);
+            let base = 5000000000 + k * 1000000000;
+            let key = build_key(cid, p.name, base, allow_exec, nr, units);
+            let ot = fs.read_file(odir + "/" + p.name + ".yo");
+            if (ot == none) {
+                puts("error: package '" + p.name + "' was not compiled first\n");
+                exit(1);
+            };
+            let uo = nativelib.unit_unobj(unwrap(ot), key);
+            if (!uo.ok) {
+                puts("error: package '" + p.name + "' has no current object\n");
+                exit(1);
+            };
+            units += uo.unit;
+            want += p.deps;
+        };
+        k = k + 1;
+    };
+    let p = pkgs[target];
+    let nr = build_resolve(p.lib, allow_exec, p.deps, p.roots);
+    let base = 5000000000 + target * 1000000000;
+    let key = build_key(cid, p.name, base, allow_exec, nr, units);
+    let su = nativelib.std_units(std_order(nr.std), pack);
+    let ast = parser.parse_program(lexer.tokenize(nr.src));
+    let r = nativelib.compile_package(ast, nr, p.name, base, wlevel, su, units);
+    if (!r.ok) {
+        print_native_errors(r.errors, nr.origin, false);
+        exit(1);
+    };
+    let wp = warn_path(odir, p.name, key);
+    if (!fs.write_file(wp, warning_text(r.warnings, nr.origin, false))) { exit(1); };
+    let op = odir + "/" + p.name + ".yo";
+    if (!fs.write_file(op, nativelib.unit_obj(r.unit, key))) {
+        puts("error: writing '" + op + "' failed\n");
+        exit(1);
+    };
+    0
+};
+
+// Hand the level pkgs[lo..hi) out to child compilers, in waves of at most
+// BUILD_JOBS; how many went out comes back (the callers here want the objects
+// more than the count).
+// A package whose object file is already there is left to the loop, so a
+// rebuild that compiles nothing spawns nothing either.
+def build_dispatch_level(dir: str, pkgs: [PkNode], odir: str, lo: long, hi: long, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> long {
+    let n = 0;
+    // --std-src has no pack, so a child would compile the std units from
+    // source before its own package: far more than the package costs.
+    if (!std_src && hi - lo > 1) {
+        let exe = self_exe();
+        if (len(exe) > 0) {
+            let flags = build_child_flags(debug, nowarn, wlevel, allow_exec);
+            let dirarg = "";
+            if (dir != ".") { dirarg = " " + build_q(dir); };
+            let wave: [str] = [];
+            let k = lo;
+            while (k < hi) {
+                let name = pkgs[k].name;
+                if (!fs.exists(odir + "/" + name + ".yo")) { wave += name; };
+                k = k + 1;
+            };
+            let w = 0;
+            while (w < len(wave)) {
+                let take = len(wave) - w;
+                if (take > BUILD_JOBS) { take = BUILD_JOBS; };
+                let cmd = "";
+                let c = 0;
+                while (c < take) {
+                    let nm = wave[w + c];
+                    eputs("compiling " + nm + "\n");
+                    // quote the two paths, not the whole command: the flags and
+                    // the directory are already quoted
+                    cmd = cmd + build_q(exe) + " build --one " + build_q(nm) + flags + dirarg + " & ";
+                    n = n + 1;
+                    c = c + 1;
+                };
+                exec(cmd + "wait");
+                w = w + take;
+            };
+        };
+    };
+    n
+};
 // `ycc build`: every package the project depends on (and its own lib),
 // each from its object in DIR/build/obj when that is current, else
 // compiled and its object written; then each [bin], linked with the
@@ -481,35 +691,62 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
     let units: [Unit] = [];
     k = 0;
     while (k < len(pkgs)) {
-        let p = pkgs[k];
-        let nr = nrs[k];
-        let base = 5000000000 + k * 1000000000;
-        let key = build_key(cid, p.name, base, allow_exec, nr, units);
-        let opath = odir + "/" + p.name + ".yo";
-        let hit = false;
-        let ot = fs.read_file(opath);
-        if (ot != none) {
-            let uo = nativelib.unit_unobj(unwrap(ot), key);
-            if (uo.ok) { units += uo.unit; hit = true; }
-        }
-        if (!hit) {
-            eputs("compiling " + p.name + "\n");
-            let ast = parser.parse_program(lexer.tokenize(nr.src));
-            let r = nativelib.compile_package(ast, nr, p.name, base, wlevel, su, units);
-            if (!r.ok) {
-                print_native_errors(r.errors, nr.origin, false);
-                exit(1);
-            }
-            if (!nowarn) {
-                print_native_warnings(r.warnings, nr.origin, false);
+        // A level: the longest run of packages from k that depend only on what
+        // is already compiled (every dependency has the lower index). A level
+        // wider than one package goes out to child compilers, and the loop
+        // below then reads their objects (build_dispatch_level).
+        let hi = k;
+        let scanning = true;
+        while (scanning && hi < len(pkgs)) {
+            let deps = pkgs[hi].deps;
+            let d = 0;
+            let ready = true;
+            while (d < len(deps)) {
+                if (pkg_index(pkgs, deps[d]) >= k) { ready = false; };
+                d = d + 1;
             };
-            if (!fs.write_file(opath, nativelib.unit_obj(r.unit, key))) {
-                puts("error: writing '" + opath + "' failed\n");
-                exit(1);
-            }
-            units += r.unit;
-        }
-        k = k + 1;
+            if (ready) { hi = hi + 1; } else { scanning = false; };
+        };
+        build_dispatch_level(dir, pkgs, odir, k, hi, debug, nowarn, wlevel, allow_exec, std_src);
+        while (k < hi) {
+            let p = pkgs[k];
+            let nr = nrs[k];
+            let base = 5000000000 + k * 1000000000;
+            let key = build_key(cid, p.name, base, allow_exec, nr, units);
+            let opath = odir + "/" + p.name + ".yo";
+            let hit = false;
+            let ot = fs.read_file(opath);
+            if (ot != none) {
+                let uo = nativelib.unit_unobj(unwrap(ot), key);
+                if (uo.ok) { units += uo.unit; hit = true; };
+            };
+            if (hit) {
+                // a dispatched child's warnings, in package order like the rest
+                let wp = warn_path(odir, p.name, key);
+                let wt = fs.read_file(wp);
+                if (wt != none) {
+                    if (!nowarn) { eputs(unwrap(wt)); };
+                    fs.remove_file(wp);
+                };
+            } else {
+                eputs("compiling " + p.name + "\n");
+                let ast = parser.parse_program(lexer.tokenize(nr.src));
+                let r = nativelib.compile_package(ast, nr, p.name, base, wlevel, su, units);
+                if (!r.ok) {
+                    print_native_errors(r.errors, nr.origin, false);
+                    exit(1);
+                };
+                if (!nowarn) {
+                    print_native_warnings(r.warnings, nr.origin, false);
+                };
+                if (!fs.write_file(opath, nativelib.unit_obj(r.unit, key))) {
+                    puts("error: writing '" + opath + "' failed\n");
+                    exit(1);
+                };
+                units += r.unit;
+            };
+            k = k + 1;
+        };
     };
     b = 0;
     while (b < len(bins)) {
@@ -577,8 +814,11 @@ def main(cmdline: [str]) -> long {
     }
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
-        if (cmdline[1] == "build") {
+        if (cmdline[1] == "build" && len(ba.one) == 0) {
             build_project(ba.dir, ba.debug, ba.nowarn, ba.wlevel, ba.allow_exec, ba.std_src);
+            0
+        } else if (cmdline[1] == "build") {
+            build_one(ba.dir, ba.one, ba.debug, ba.nowarn, ba.wlevel, ba.allow_exec, ba.std_src);
             0
         } else {
             pkg.pk_vendor(ba.dir);

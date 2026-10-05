@@ -738,6 +738,21 @@ cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
   (`lint.y`) come back from `compile_package` and print when it
   compiles (its files named as in its errors); one loaded from its
   object prints none. Bins warn on every build.
+- **Parallel levels**: the package order is topological, so every
+  dependency has a lower index than its importer and a run of packages
+  that depend only on what is already compiled is a *level* — the
+  packages in it are independent of each other, which is where a
+  project's build time is. `build_dispatch_level` hands each one to a
+  child compiler (`ycc build --one NAME`, through a single `exec` of a
+  shell line with `&` and `wait`, `BUILD_JOBS` at a time), and the loop
+  then reads the objects they wrote exactly as on a warm build. A child
+  that fails leaves no object and the loop compiles that package
+  itself, so the bytes and the diagnostics do not depend on the
+  dispatch; warnings come back in a sidecar named for the object's key
+  and print where the serial loop would have printed them. Not
+  `spawn`/`join`: a thread shares the address space and 51 module-level
+  lets with it. Nothing goes out for a level of one, for a package
+  whose object is there, or under `--std-src`.
 - **Linking**: each `[bin]` is resolved and compiled by `emit_program`
   with the units it reaches (`build_reach`: the packages it imports,
   through other packages too) and the std units all of them need.

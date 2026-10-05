@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 static long g_heap_used = 0;
 
@@ -785,6 +786,11 @@ int write_file(const Yv *path, const Yv *content) {
     size_t wr = fwrite(content->u.s.p, 1, n, f);
     fclose(f);
     return wr == n;
+}
+
+int remove_file(const Yv *path) {
+    if (!path || path->tag != Y_STR) return 0;
+    return unlink(path->u.s.p) == 0;
 }
 
 int write_bytes(const Yv *path, const Yv *bytearr, long mode) {

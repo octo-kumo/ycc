@@ -146,6 +146,7 @@ void exit_(long code);                /* exit(code) */
 Yv *read_file(const Yv *path);        /* str contents, or none (str?) */
 int write_file(const Yv *path, const Yv *data);
 int write_bytes(const Yv *path, const Yv *bytearr, long mode);
+int remove_file(const Yv *path);        /* remove_file(path): unlink(2) */
 void yv_set_argv(int argc, char **argv); /* the driver feeds argv() */
 Yv *argv_(void);                      /* [str] program arguments */
 long clock_us(void);

@@ -510,6 +510,136 @@ compiling app
 built build/app" "$TMPD/out"
 agree "warnings" "$Q/app"
 
+# ── 4b. a wide level: its packages compile in parallel ───────────────────
+# The diamond's second level is two packages, so one wave covers it. A wider
+# level exercises the wave cap (BUILD_JOBS), the child mode a wave spawns
+# (`ycc build --one`), and the sidecar a dispatched package's warnings ride
+# back in -- all of which the bytes must not depend on.
+WIDE="$TMPD/wide"
+mkdir -p "$WIDE/app"
+# p0 is the base; p1..p5 all depend on it, so they form one wide level above
+# it -- the shape a parallel build is for.
+mk "$WIDE/p0/y.toml" <<'EOF'
+[package]
+name = "p0"
+lib = "lib.y"
+EOF
+mk "$WIDE/p0/lib.y" <<'EOF'
+let base = 1;
+def b0(a: long) -> long { a + base };
+def w0() -> long { b0(0) };
+EOF
+WNAMES="p1 p2 p3 p4 p5"
+for nm in $WNAMES; do
+    i=${nm#p}
+    mk "$WIDE/$nm/y.toml" <<EOF
+[package]
+name = "$nm"
+lib = "lib.y"
+
+[dependencies]
+p0 = { path = "../p0" }
+EOF
+    mk "$WIDE/$nm/lib.y" <<EOF
+import p0;
+def v$i(a: long) -> long { let x = a + $i; x * 2 };
+def w$i() -> long { v$i($i) + p0.b0(0) };
+EOF
+done
+{
+    printf '[package]\nname = "app"\n\n[bin]\napp = "main.y"\n\n[dependencies]\n'
+    printf 'p0 = { path = "../p0" }\n'
+    for nm in $WNAMES; do
+        printf '%s = { path = "../%s" }\n' "$nm" "$nm"
+    done
+} >"$WIDE/app/y.toml"
+{
+    printf 'import p0;\n'
+    for nm in $WNAMES; do printf 'import %s;\n' "$nm"; done
+    printf 'puts(tostring(p0.w0()'
+    sep=" + "
+    for nm in $WNAMES; do
+        printf '%s%s.w%s()' "$sep" "$nm" "${nm#p}"
+        sep=" + "
+    done
+    printf ') + "\\n");\n'
+} >"$WIDE/app/main.y"
+
+WIDE_OUT="compiling p0
+compiling p1
+compiling p2
+compiling p3
+compiling p4
+compiling p5
+built build/app"
+rm -rf "$WIDE/app/build"
+yb "$YCC" "$WIDE/app"
+same_text "a wide level compiles, in waves of four" "$WIDE_OUT" "$TMPD/out"
+# w0() is 0 + base = 1, and w$i() is (i + i) * 2 + b0(0) = 4i + 1
+runs "and the program is right" "66" "$WIDE/app/build/app"
+yb "$YCC" "$WIDE/app"
+same_text "its rebuild spawns nothing" "built build/app" "$TMPD/out"
+rm -f "$WIDE/app/build/obj/p3.yo"
+yb "$YCC" "$WIDE/app" --one p3
+same_text "ycc build --one compiles one package and says nothing" "" "$TMPD/out"
+yb "$YCC" "$WIDE/app"
+same_text "and the object it wrote is current" "built build/app" "$TMPD/out"
+fails "ycc build --one with no such package" "error: no package 'zz' in ." "$WIDE/app" --one zz
+# a dispatched package's warnings come back in a sidecar and print where the
+# serial loop would have printed them: in package order, once
+echo 'def extra2() -> long { let w = 9; 2 };' >>"$WIDE/p2/lib.y"
+rm -rf "$WIDE/app/build"
+yb "$YCC" "$WIDE/app"
+# The level's "compiling" lines come from the dispatch, so they are all
+# together: the warnings follow, in package order, where the serial loop would
+# have printed them (one per level is all it can interleave).
+same_text "a dispatched package's warnings print in package order" "compiling p0
+compiling p1
+compiling p2
+compiling p3
+compiling p4
+compiling p5
+../p2/lib.y:4:24: warning: unused variable 'w'
+built build/app" "$TMPD/out"
+rm -rf "$WIDE/app/build"
+yb "$YCC" "$WIDE/app" -w
+same_text "-w reaches the children too" "compiling p0
+compiling p1
+compiling p2
+compiling p3
+compiling p4
+compiling p5
+built build/app" "$TMPD/out"
+# --std-src has no pack, so a child would compile the std units from source
+# before its own package: the level goes out to nobody and the loop does it,
+# one package at a time -- which is also what a serial build's lines look like
+# (a dispatched level prints all its "compiling" lines first, then the
+# warnings; see the warning case above).
+rm -rf "$WIDE/app/build"
+yb "$YCC" "$WIDE/app" --std-src
+same_text "--std-src builds the level in one process" "compiling p0
+compiling p1
+compiling p2
+../p2/lib.y:4:24: warning: unused variable 'w'
+compiling p3
+compiling p4
+compiling p5
+built build/app" "$TMPD/out"
+runs "and the program is still right" "66" "$WIDE/app/build/app"
+agree "a wide level" "$WIDE/app"
+fails "ycc build --one with no name" "ycc: --one needs a package name" "$WIDE/app" --one
+# the child's own failures: asked for before its dependencies are objects, and
+# with a dependency's object another compiler wrote (the key covers the
+# compiler, so that object is not current for this one)
+rm -rf "$WIDE/app/build"
+fails "ycc build --one before its dependency" "error: package 'p0' was not compiled first" "$WIDE/app" --one p3
+yb "$YCC" "$WIDE/app"
+if [ "$CYCC" -ef "$YCC" ]; then
+    skip "ycc build --one with a dependency's foreign object" "\$CYCC is \$YSELF"
+else
+    yb "$CYCC" "$WIDE/app" --one p3
+    same_text "ycc build --one with a dependency's foreign object" "error: package 'p0' has no current object" "$TMPD/out"
+fi
 # ── 5. errors: the manifest ──────────────────────────────────────────────
 M="$TMPD/m"
 mkdir -p "$M"
