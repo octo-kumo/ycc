@@ -59,7 +59,8 @@ def reg(n: long) -> Operand {
 // sink"), so the instruction is scratch[0:at].
 def enc(mn: str, ops: [Operand]) -> str {
     let buf = enc64.scratch();
-    let e = enc64.enc_insn(buf, 0, mn, ops);
+    // no branch here, so the long-form flag (E1) is never read
+    let e = enc64.enc_insn(buf, 0, mn, ops, false);
     if (e.err != "") { "ERR " + e.err } else { hex_of(buf[0:e.at]) }
 };
 
@@ -116,7 +117,7 @@ check("dec %r13", enc("dec", [reg(13)]), "49 ff cd");   // REX.B, rm = 101
 // immediate: the patch landed one byte late and the instruction addressed the
 // wrong four bytes while still assembling and linking cleanly.
 let ripbuf = enc64.scratch();
-let rip = enc64.enc_insn(ripbuf, 0, "add", [imm(1), rip_mem("yref")]);
+let rip = enc64.enc_insn(ripbuf, 0, "add", [imm(1), rip_mem("yref")], false);
 check("add $1, yref(%rip)", hex_of(ripbuf[0:rip.at]), "48 83 05 00 00 00 00 01");
 if (len(rip.fix) != 1) {
     print("MISMATCH: add $1, yref(%rip) wants one fixup, got " + tostring(len(rip.fix)));

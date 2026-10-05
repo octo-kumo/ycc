@@ -6,9 +6,10 @@
 // ycc_assemble(text, debug) -> the driver's wrapper (see its note at the bottom).
 // Only what native.y/arch_x64.y emit is accepted; anything else is a loud
 // error with a line number — never a silent miscompile.
-// Two passes: (1) parse + encode with zeroed label fields, recording fixups;
-// (2) resolve labels and patch. All jumps/calls use rel32 (fixed size), so
-// instruction lengths are known in pass 1.
+// Two passes: (1) parse + encode, recording fixups and label positions;
+// (1b) relax the branches to their shortest form that reaches (asm_relax);
+// (2) resolve labels and patch. All jumps/calls use rel32 unless a branch
+// relaxes to rel8, so instruction lengths are known by the end of (1b).
 //
 // The only constraint on this file is the twin: every def here has a
 // statement-for-statement twin in src/c/asm.c (see PORTING.md), and both
@@ -26,12 +27,17 @@ type AsmOut = { ok: bool, bytes: [byte], error: str, times: [Timing] };
 // A parsed number, and parse_operand's result (an Operand: enc64.y).
 type AsmNum = { ok: bool, v: long };
 type OpRes = { ok: bool, op: Operand, error: str };
-// A label: its section (0 .text, 1 .rodata, 2 .bss) and offset there.
-type AsmLabel = { name: str, sec: long, off: long };
+// A label: its section (0 .text, 1 .rodata, 2 .bss), offset there, and the
+// number of items emitted before it (asm_relax recomputes the offset from
+// that, since relaxing a branch moves everything after it).
+type AsmLabel = { name: str, sec: long, off: long, at_item: long };
 // Pass 1: a line's bytes, where they go and the fixups pass 2 patches
 // in; what a content line yields; the state threaded from line to line
-// (asm_assemble_line). Pass 2: an item's patched bytes.
-type AsmItem = { sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [Fixup] };
+// (asm_assemble_line). `br` is the branch this instruction is — 0 for jmp, the
+// long form's condition byte for a jcc, -1 for everything else — so
+// asm_relax can re-encode a grower without re-parsing its line. Pass 2: an
+// item's patched bytes.
+type AsmItem = { sec: long, off: long, len: long, kind: str, bytes: [byte], fix: [Fixup], br: long };
 type AsmContent = { err: str, sec: long, offs: [long], item: AsmItem };
 type AsmSt = { sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str };
 type AsmBytes = { bytes: [byte], err: str };
@@ -472,7 +478,7 @@ def labmap_new(cap: long) -> [AsmLabel] {
     let m: [AsmLabel] = [];
     let i = 0;
     while (i < cap) {
-        m += { name: "", sec: 0, off: 0 };
+        m += { name: "", sec: 0, off: 0, at_item: 0 };
         i = i + 1;
     };
     m
@@ -487,7 +493,7 @@ def labmap_put(m: [AsmLabel], name: str, sec: long, off: long) -> { map: [AsmLab
     while (done == false) {
         let e = m[i];
         if (e.name == "") {
-            m[i] = { name: name, sec: sec, off: off };
+            m[i] = { name: name, sec: sec, off: off, at_item: 0 };
             done = true;
         } else if (e.name == name) {
             dup = true;
@@ -588,20 +594,24 @@ def asm_assemble(text: str, debug: bool) -> AsmOut {
         };
         li = li + 1;
     };
-    let t2 = clock_us();
-    let h2 = heap_used();
+    let tr0 = clock_us();
+    let hr0 = heap_used();
     if (err != "") {
         { ok: false, bytes: [], error: err,
           times: [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
-                   { name: "a:encode", us: t2 - t1, heap: h2 - h1 } ] }
+                   { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 } ] }
     } else {
+        asm_relax(items, labels, debug);
+        let tr1 = clock_us();
+        let hr1 = heap_used();
         let lk = asm_link(items, labels, debug);
         let t3 = clock_us();
         let h3 = heap_used();
         let tl: [Timing] =
             [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
-              { name: "a:encode", us: t2 - t1, heap: h2 - h1 },
-              { name: "a:link", us: t3 - t2, heap: h3 - h2 } ];
+              { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 },
+              { name: "a:relax", us: tr1 - tr0, heap: hr1 - hr0 },
+              { name: "a:link", us: t3 - tr1, heap: h3 - hr1 } ];
         let lsub = lk.times;
         let k = 0;
         while (k < len(lsub)) {
@@ -657,7 +667,7 @@ def asm_labdef(line: str, lno: long, sec: long, offs: [long], items: [AsmItem], 
 def asm_labdef_go(nm: str, lno: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err: str) -> AsmSt {
     // NOTE: no definition-site duplicate scan (was O(L^2)): duplicates are
     // detected once at index build (labmap_build reports the name).
-    labels += { name: nm, sec: sec, off: offs[sec] };
+    labels += { name: nm, sec: sec, off: offs[sec], at_item: len(items) };
     asm_state(sec, offs, items, labels, err)
 };
 
@@ -720,14 +730,17 @@ def asm_labline_content(nm: str, rest: str, lno: long, sec: long, offs: [long], 
     // mutate the shared array; see AGENTS.md), so offs[sec] read AFTER
     // asm_content is the POST-item offset: the label would land on its own
     // item's bytes (ystr_nl -> 't' of "true"). Bind the pre-item offset
-    // FIRST.
+    // FIRST. `at_item` is the same position in the item list -- asm_relax
+    // re-derives the offset from it, so it must count the items *before* this
+    // line's, not after.
     let lab_off = offs[sec];
+    let lab_at = len(items);
     let r = asm_content(rest, lno, sec, offs);
     if (r.err != "") {
         asm_state(r.sec, r.offs, items, labels, r.err)
     } else {
         items += r.item;
-        labels += { name: nm, sec: sec, off: lab_off };
+        labels += { name: nm, sec: sec, off: lab_off, at_item: lab_at };
         asm_state(r.sec, r.offs, items, labels, err)
     }
 };
@@ -762,13 +775,13 @@ def asm_strdata_bad(rest: str) -> bool {
 
 def asm_strdata_err(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     // (split: error shape `{err,sec,offs,item:{}}` built ONLY here.)
-    { err: "L" + tostring(lno) + ": bad string literal", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    { err: "L" + tostring(lno) + ": bad string literal", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
 };
 
 def asm_strdata_go(line: str, lno: long, sec: long, offs: [long], payload: str, nul: bool) -> AsmContent {
     let d = decode_str(payload);
     if (!(d.ok)) {
-        { err: "L" + tostring(lno) + ": " + d.error, sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": " + d.error, sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
         asm_strdata_emit(sec, offs, d.bytes, nul)
     }
@@ -784,7 +797,7 @@ def asm_strdata_emit(sec: long, offs: [long], bytes: [byte], nul: bool) -> AsmCo
 };
 
 def asm_strdata_item(sec: long, offs: [long], bb: [byte]) -> AsmContent {
-    let item: AsmItem = { sec: sec, off: offs[sec], len: len(bb), kind: "data", bytes: bb, fix: [] };
+    let item: AsmItem = { sec: sec, off: offs[sec], len: len(bb), kind: "data", bytes: bb, fix: [], br: -1 };
     offs[sec] = offs[sec] + len(bb);
     { err: "", sec: sec, offs: offs, item: item }
 };
@@ -799,9 +812,9 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
         rest = trim(line[sp + 1:]);
     };
     if (dir == ".text") {
-        { err: "", sec: 0, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "", sec: 0, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else if (dir == ".globl") {
-        { err: "", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else if (dir == ".string") {
         asm_strdata(line, lno, sec, offs, rest, true)
     } else if (dir == ".ascii") {
@@ -817,7 +830,7 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
     } else if (dir == ".file") {
         asm_file(lno, sec, offs, rest)
     } else {
-        { err: "L" + tostring(lno) + ": unsupported directive '" + dir + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": unsupported directive '" + dir + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     }
 };
 
@@ -838,13 +851,13 @@ def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
         ls = trim(rest[sp + 1:]);
     }
     if (!is_num_text(fs) || !is_num_text(ls) || tonum(fs) < 1 || tonum(ls) < 0) {
-        { err: "L" + tostring(lno) + ": bad .loc '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": bad .loc '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else if (sec != 0) {
-        { err: "L" + tostring(lno) + ": .loc outside .text", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": .loc outside .text", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
         let fx = [{ off: tonum(fs), kind: "file", lbl: "", lbl2: "" },
                   { off: tonum(ls), kind: "line", lbl: "", lbl2: "" }];
-        { err: "", sec: sec, offs: offs, item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx } }
+        { err: "", sec: sec, offs: offs, item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx, br: -1 } }
     }
 };
 
@@ -861,10 +874,10 @@ def asm_file(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
         d = decode_str(q[1:len(q) - 1]);
     }
     if (!is_num_text(ns) || tonum(ns) < 1 || asm_strdata_bad(q) || !d.ok) {
-        { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
         let fx = [{ off: 0, kind: "file", lbl: from_bytes(d.bytes), lbl2: "" }];
-        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tonum(ns), len: 0, kind: "file", bytes: [], fix: fx } }
+        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tonum(ns), len: 0, kind: "file", bytes: [], fix: fx, br: -1 } }
     }
 };
 
@@ -887,18 +900,18 @@ def asm_section_bad(rest: str) -> bool {
 
 def asm_section_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: error shape built ONLY here.)
-    { err: "L" + tostring(lno) + ": unsupported section '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+    { err: "L" + tostring(lno) + ": unsupported section '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
 };
 
 def asm_section_go(sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: marker shape `{err,sec,offs,item:{sec}}` built ONLY here.)
     // NOTE: both arms share the key set — teq holds.
     if (rest == ".rodata") {
-        { err: "", sec: 1, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "", sec: 1, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else if (rest == ".bss") {
-        { err: "", sec: 2, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "", sec: 2, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        { err: "", sec: 0, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "", sec: 0, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     }
 };
 
@@ -926,16 +939,16 @@ def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> As
     // (split: error shape built ONLY here — one message per cause.)
     // NOTE: nested ifs (see is_digit_ch note); both arms share the key set.
     if (!is_num_text(rest)) {
-        { err: "L" + tostring(lno) + ": bad .quad value '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": bad .quad value '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        { err: "L" + tostring(lno) + ": negative .quad value", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": negative .quad value", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     }
 };
 
 def asm_quad_go(sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: data-item shape built ONLY here.)
     let bytes = enc.le64(tonum(rest));
-    let item: AsmItem = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [] };
+    let item: AsmItem = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [], br: -1 };
     offs[sec] = offs[sec] + len(bytes);
     { err: "", sec: sec, offs: offs, item: item }
 };
@@ -943,7 +956,7 @@ def asm_quad_go(sec: long, offs: [long], rest: str) -> AsmContent {
 // .zero N: N zero bytes. In .bss they only reserve space (no file bytes).
 def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (asm_quad_bad(rest)) {
-        { err: "L" + tostring(lno) + ": bad .zero size '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": bad .zero size '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
         let n = tonum(rest);
         let zb: [byte] = [];
@@ -954,7 +967,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
                 i = i + 1;
             };
         }
-        let item: AsmItem = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [] };
+        let item: AsmItem = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [], br: -1 };
         offs[sec] = offs[sec] + n;
         { err: "", sec: sec, offs: offs, item: item }
     }
@@ -993,7 +1006,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
             i = i + 1;
         };
         if (!ok) {
-            { err: "L" + tostring(lno) + ": bad operand", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+            { err: "L" + tostring(lno) + ": bad operand", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
         } else {
             asm_encode(mn, ops, lno, sec, offs)
         }
@@ -1005,17 +1018,214 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
 def asm_encode(mn: str, ops: [Operand], lno: long, sec: long, offs: [long]) -> AsmContent {
     // The encoder writes the instruction into a scratch it fills through a
     // cursor (enc64.y "the byte sink"): one array for the line, instead of
-    // the two or three little ones each concat step allocated.
+    // the two or three little ones each concat step allocated. Branches are
+    // asked for in the short (rel8) form; asm_relax grows the ones that turn
+    // out to be out of range.
     let buf = enc.scratch();
-    let r = enc.enc_insn(buf, 0, mn, ops);
+    let r = enc.enc_insn(buf, 0, mn, ops, false);
     if (r.err != "") {
-        { err: "L" + tostring(lno) + ": " + r.err + " in '" + mn + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [] } }
+        { err: "L" + tostring(lno) + ": " + r.err + " in '" + mn + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
         let blen = r.at;
-        let item = { sec: sec, off: offs[sec], len: blen, kind: "insn", bytes: buf[0:blen], fix: r.fix };
+        let item = { sec: sec, off: offs[sec], len: blen, kind: "insn", bytes: buf[0:blen], fix: r.fix, br: r.br };
         offs[sec] = offs[sec] + blen;
         { err: "", sec: sec, offs: offs, item: item }
     }
+};
+
+// ── branch relaxation ──────────────────────────────────────────────────
+// A branch within rel8 of its target is two bytes instead of five or six, and
+// 54% of the branches in ycc.y are (measured on ycc.y compiled by this
+// compiler: 8,053 of 14,832, and the short form is 53,661 bytes of branch
+// against 83,596 for the long form of every one of them). Which ones is not
+// known while encoding — an instruction's length has to be settled before the
+// addresses are, and a branch's target is usually not where it is yet — so
+// pass 1 asks for the short form everywhere
+// and this pass grows what does not reach: a grower is three or four bytes
+// longer, which moves everything after it, so the distances are recomputed
+// and the rest retested. Growth is monotone, so the rounds end at a fixpoint;
+// measured on ycc.y it takes 4 rounds and 6,780 grows, and a round is one
+// sweep of the items plus a re-encode per grower.
+//
+// RELAX_ROUNDS bounds the work. Hitting it is not a wrong answer — every branch
+// still gets re-encoded long, which is exactly what the assembler emitted
+// before — so the bound costs size, never correctness.
+let RELAX_ROUNDS = 8;
+
+def asm_relax(items: [AsmItem], labels: [AsmLabel], debug: bool) -> long {
+    // The rounds walk two compact arrays of the items' lengths and sections
+    // rather than the records: an AsmItem is seven words, and streaming 13 MB
+    // of them four times over was most of this pass (measured 47 ms for ycc.y
+    // before this, against 9 ms after). One sweep builds the arrays; a branch
+    // index list (there are 15k branches to 234k items) keeps the rounds off
+    // the records entirely, and `cum` holds the round's frozen offsets.
+    let lens: [long] = [];
+    let secs: [long] = [];
+    let brs: [long] = [];
+    let i = 0;
+    while (i < len(items)) {
+        lens += items[i].len;
+        secs += items[i].sec;
+        if (items[i].br >= 0 && items[i].sec == 0) { brs += i; };
+        i = i + 1;
+    };
+    let cum: [long] = [];
+    let rlmap = relax_map(labels);
+    let rounds = 0;
+    let again = true;
+    while (again && rounds < RELAX_ROUNDS) {
+        rounds = rounds + 1;
+        // Round 1 has nothing to place: pass 1 laid the items and the labels
+        // out with every branch short, which is exactly this round's frozen
+        // layout.
+        again = relax_round(items, labels, rlmap, lens, secs, brs, cum, rounds == 1);
+    };
+    if (again) { relax_all_long(items, labels, lens); };
+    // One last placement, at the final lengths: the rounds place the labels
+    // from the lengths they started with, so the last round's growers leave
+    // every label stale by what they added -- and every label-relative fixup
+    // (rel32, rip32, imm32diff) is measured against these.
+    relax_place(items, labels, lens, secs, debug);
+    rounds
+};
+
+// The relaxation's own name -> label map, built once. It is the assembler's
+// labmap with `off` carrying the label's INDEX in `labels` rather than an
+// address: an address moves every round (that is the whole point) while an
+// index does not, so one build serves every round instead of one per round.
+def relax_map(labels: [AsmLabel]) -> [AsmLabel] {
+    let cap = len(labels) * 2 + 16;
+    let m = labmap_new(cap);
+    let i = 0;
+    while (i < len(labels)) {
+        let r = labmap_put(m, labels[i].name, 0, i);
+        m = r.map;
+        i = i + 1;
+    };
+    m
+};
+
+// One round: place the .text labels (unless `first`, when pass 1's offsets
+// are already this round's), then grow every short branch whose target is out
+// of range. Returns true if anything grew.
+def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [long], secs: [long], brs: [long], cum: [long], first: bool) -> bool {
+    if (!first) {
+        // cum[k] is where item k starts in .text at the current lengths; the
+        // label before item `at_item` is therefore at cum[at_item].
+        let at = 0;
+        let i = 0;
+        while (i < len(lens)) {
+            if (i < len(cum)) { cum[i] = at; } else { cum += at; };
+            if (secs[i] == 0) { at = at + lens[i]; };
+            i = i + 1;
+        };
+        let j = 0;
+        while (j < len(labels)) {
+            let lb = labels[j];
+            if (lb.sec == 0) {
+                labels[j] = { name: lb.name, sec: 0, off: cum[lb.at_item], at_item: lb.at_item };
+            };
+            j = j + 1;
+        };
+    };
+    // The branches, against the FROZEN offsets: growth is permanent, so a
+    // branch that fits in this round's layout but is pushed out of range by a
+    // grower earlier in the same sweep must wait for the next round, or the
+    // sweep cascades and every branch ends up long (measured: 14,680 grown in
+    // one round that way, against 6,673 with the frozen layout, and 140 short
+    // branches at the end instead of 8,047).
+    let grew = false;
+    let k = 0;
+    while (k < len(brs)) {
+        let i = brs[k];
+        // len 2 is the short form; a grower is already long.
+        if (lens[i] == 2) {
+            let it = items[i];
+            let fx = it.fix[0];
+            let li = relax_target(rlmap, fx.lbl);
+            let here = 0;
+            if (first) { here = it.off; } else { here = cum[i]; };
+            // An unknown target is pass 2's error to report, and a target
+            // outside .text has no address to measure yet: grow both, so
+            // nothing here can be wrong in a way pass 2 would not catch.
+            if (li >= 0 && labels[li].sec == 0) {
+                let d = labels[li].off - (here + 2);
+                if (d < -128 || d > 127) {
+                    relax_grow(items, i, lens, fx.lbl);
+                    grew = true;
+                };
+            } else {
+                relax_grow(items, i, lens, fx.lbl);
+                grew = true;
+            };
+        };
+        k = k + 1;
+    };
+    grew
+};
+
+// The label a branch names, or -1 when the map does not have it.
+def relax_target(rlmap: [AsmLabel], lbl: str) -> long {
+    let e = labmap_get(rlmap, lbl);
+    if (e.sec < 0) { -1 } else { e.off }
+};
+
+// Re-encode item `i` in the long form, from what it recorded (`br`) and what
+// its fixup names. Returns the new length.
+def relax_grow(items: [AsmItem], i: long, lens: [long], lbl: str) -> long {
+    let it = items[i];
+    let buf = enc.scratch();
+    let r = enc.enc_branch_long(buf, 0, it.br, lbl);
+    items[i] = { sec: it.sec, off: it.off, len: r.at, kind: it.kind, bytes: buf[0:r.at], fix: r.fix, br: it.br };
+    lens[i] = r.at;
+    r.at
+};
+
+// The bound case: every branch long, which is the pre-relaxation encoding.
+def relax_all_long(items: [AsmItem], labels: [AsmLabel], lens: [long]) -> long {
+    let n = 0;
+    let i = 0;
+    while (i < len(lens)) {
+        let it = items[i];
+        if (it.sec == 0 && it.br >= 0 && lens[i] != 2) {
+            relax_grow(items, i, lens, it.fix[0].lbl);
+            n = n + 1;
+        };
+        i = i + 1;
+    };
+    n
+};
+
+// The final placement: the labels at the final lengths (always -- pass 2
+// measures every fixup against them), and the item offsets too, but only for
+// -g: they are one record rebuild per item, and the line table is their only
+// reader.
+def relax_place(items: [AsmItem], labels: [AsmLabel], lens: [long], secs: [long], debug: bool) -> long {
+    let offs: [long] = [0, 0, 0];
+    let i = 0;
+    let j = 0;
+    while (i < len(lens)) {
+        while (j < len(labels) && labels[j].at_item <= i) {
+            let lb = labels[j];
+            labels[j] = { name: lb.name, sec: lb.sec, off: offs[lb.sec], at_item: lb.at_item };
+            j = j + 1;
+        };
+        let s = secs[i];
+        if (s >= 0) {
+            if (debug) {
+                let it = items[i];
+                items[i] = { sec: it.sec, off: offs[s], len: it.len, kind: it.kind, bytes: it.bytes, fix: it.fix, br: it.br };
+            };
+            offs[s] = offs[s] + lens[i];
+        };
+        i = i + 1;
+    };
+    while (j < len(labels)) {
+        let lb = labels[j];
+        labels[j] = { name: lb.name, sec: lb.sec, off: offs[lb.sec], at_item: lb.at_item };
+        j = j + 1;
+    };
+    offs[0]
 };
 
 // ── pass 2: layout, fixups, ELF ────────────────────────────────────────
@@ -1047,7 +1257,7 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
         let bshift = elf.elf_bss_from_ro(code_len, ro_len, bss_len);
         labs = [];
         foreach (lb in labels) {
-            if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off }; }
+            if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off, at_item: lb.at_item }; }
             else { labs += lb; };
         };
     };
@@ -1148,10 +1358,14 @@ def patch_item_loop(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long,
             // NOTE: thread callee results (see note above): the callee's
             // {bytes,err} is the only path the patched bytes take to the
             // caller, so both arms must rebind `bytes` (and `err`).
-            if (fx.kind == "rel32") {
+            if (fx.kind == "rel32" || fx.kind == "rip32") {
                 let rr = patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
                 bytes = rr.bytes;
                 if (rr.err != "") { err = rr.err; }
+            } else if (fx.kind == "rel8") {
+                let r8 = patch_item_rel8(lmap, code_len, pad, fx, bytes, base, it, at);
+                bytes = r8.bytes;
+                if (r8.err != "") { err = r8.err; }
             } else {
                 let rk = patch_item_kind2(lmap, code_len, pad, fx, bytes, base, it, at);
                 bytes = rk.bytes;
@@ -1182,6 +1396,21 @@ def patch_item_rel(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes
     } else {
         let v = t.addr - (base + it.len);
         { bytes: patch32(bytes, at, v), err: "" }
+    }
+};
+
+def patch_item_rel8(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes: [byte], base: long, it: AsmItem, at: long) -> AsmBytes {
+    // rel8: the same displacement in one byte, for a branch that relaxed.
+    // asm_relax only leaves one of these in range, so the value fits by
+    // construction (it grew the item otherwise); the truncation is still a
+    // byte store, not a silent 32-bit write past the instruction.
+    // NOTE: fx/it stay BARE holes (see types.y typeof_def note).
+    let t = label_addr(lmap, code_len, pad, fx.lbl);
+    if (!t.ok) {
+        { bytes: bytes, err: "undefined label '" + fx.lbl + "'" }
+    } else {
+        let v = t.addr - (base + it.len);
+        { bytes: patch8(bytes, at, v), err: "" }
     }
 };
 
@@ -1220,6 +1449,14 @@ def patch32(bytes: [byte], at: long, v: long) -> [byte] {
     bytes[at + 1] = b[1];
     bytes[at + 2] = b[2];
     bytes[at + 3] = b[3];
+    bytes
+};
+
+def patch8(bytes: [byte], at: long, v: long) -> [byte] {
+    // The low byte of a rel8 displacement, which is two's complement: v + 256
+    // before the modulo because Y's % truncates toward zero and a negative
+    // displacement must land on its high byte (v - 128 stores 128, not -128).
+    bytes[at] = (v + 256) % 256;
     bytes
 };
 

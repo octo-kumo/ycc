@@ -27,7 +27,8 @@
 Yv *r64(long n);
 long reg_num(Yv *name);
 long reg_size(Yv *name);
-Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops);
+Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng);
+Yv *enc_branch_long(Yv *buf, long at, long br, Yv *lbl);
 Yv *fixup(long at, Yv *kind, Yv *lbl, Yv *lbl2);
 Yv *scratch(void);
 long byte_of(long v, long i);

@@ -22,7 +22,8 @@
 /* imported (module calls from asm.y, names flattened) */
 extern long reg_num(Yv *name);              /* enc64.c: enc.reg_num */
 extern long reg_size(Yv *name);             /* enc64.c: enc.reg_size */
-extern Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops); /* enc64.c: enc.enc_insn */
+extern Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng); /* enc64.c: enc.enc_insn */
+extern Yv *enc_branch_long(Yv *buf, long at, long br, Yv *lbl); /* enc64.c: enc.enc_branch_long */
 extern Yv *scratch(void);                    /* enc64.c: enc.scratch */
 extern Yv *le64(long v);                    /* enc64.c: enc.le64 */
 extern Yv *le32(long v);                    /* enc64.c: enc.le32 */
@@ -110,6 +111,15 @@ static Yv *patch_item_diff(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes,
 static Yv *patch_item_diff2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long ta);
 static Yv *patch_item_finish(Yv *code, Yv *bytes, Yv *err);
 static Yv *patch32(Yv *bytes, long at, long v);
+static Yv *patch8(Yv *bytes, long at, long v);
+static Yv *patch_item_rel8(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at);
+static long asm_relax(Yv *items, Yv *labels, int debug);
+static Yv *relax_map(Yv *labels);
+static int relax_round(Yv *items, Yv *labels, Yv *rlmap, Yv *lens, Yv *secs, Yv *brs, Yv *cum, int first);
+static long relax_target(Yv *rlmap, Yv *lbl);
+static long relax_grow(Yv *items, long i, Yv *lens, Yv *lbl);
+static long relax_all_long(Yv *items, Yv *labels, Yv *lens);
+static long relax_place(Yv *items, Yv *labels, Yv *lens, Yv *secs, int debug);
 static Yv *debug_syms(Yv *labels, long code_len, long bss_len);
 static Yv *debug_syms_sec(Yv *out, Yv *labels, long sec, long end);
 static int is_sym_label(Yv *name, long sec);
@@ -716,7 +726,7 @@ Yv *labmap_new(long cap) {
     Yv *m = yav(0);
     long i = 0;
     while (i < cap) {
-        m = ya_push(m, yr(3, "name", ys(""), "sec", yv_long(0), "off", yv_long(0)));
+        m = ya_push(m, yr(4, "name", ys(""), "sec", yv_long(0), "off", yv_long(0), "at_item", yv_long(0)));
         i = i + 1;
     }
     return m;
@@ -731,7 +741,7 @@ Yv *labmap_put(Yv *m, Yv *name, long sec, long off) {
     while (done == 0) {
         Yv *e = ya_get(m, i);
         if (ys_eq_lit(yr_get(e, "name"), "")) {
-            ya_set(m, i, yr(3, "name", name, "sec", yv_long(sec), "off", yv_long(off)));
+            ya_set(m, i, yr(4, "name", name, "sec", yv_long(sec), "off", yv_long(off), "at_item", yv_long(0)));
             done = 1;
             ;
         } else if (ys_eq(yr_get(e, "name"), name)) {
@@ -841,21 +851,25 @@ Yv *asm_assemble(Yv *text, int debug) {
         li = li + 1;
         ;
     };
-    long t2 = clock_us();
-    long h2 = heap_used();
+    long tr0 = clock_us();
+    long hr0 = heap_used();
     if (!ys_eq_lit(err, "")) {
         return yr(4, "ok", yv_bool(0), "bytes", yav(0), "error", err,
                   "times", yav(2,
                                yr(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
-                               yr(3, "name", ys("a:encode"), "us", yv_long(t2 - t1), "heap", yv_long(h2 - h1))));
+                               yr(3, "name", ys("a:encode"), "us", yv_long(tr0 - t1), "heap", yv_long(hr0 - h1))));
     } else {
+        asm_relax(items, labels, debug);
+        long tr1 = clock_us();
+        long hr1 = heap_used();
         Yv *lk = asm_link(items, labels, debug);
         long t3 = clock_us();
         long h3 = heap_used();
-        Yv *tl = yav(3,
+        Yv *tl = yav(4,
                      yr(3, "name", ys("a:split"), "us", yv_long(t1 - t0), "heap", yv_long(h1 - h0)),
-                     yr(3, "name", ys("a:encode"), "us", yv_long(t2 - t1), "heap", yv_long(h2 - h1)),
-                     yr(3, "name", ys("a:link"), "us", yv_long(t3 - t2), "heap", yv_long(h3 - h2)));
+                     yr(3, "name", ys("a:encode"), "us", yv_long(tr0 - t1), "heap", yv_long(hr0 - h1)),
+                     yr(3, "name", ys("a:relax"), "us", yv_long(tr1 - tr0), "heap", yv_long(hr1 - hr0)),
+                     yr(3, "name", ys("a:link"), "us", yv_long(t3 - tr1), "heap", yv_long(h3 - hr1)));
         Yv *lsub = yr_get(lk, "times");
         long k = 0;
         while (k < yv_len(lsub)) {
@@ -915,7 +929,8 @@ static Yv *asm_labdef_go(Yv *nm, long lno, long sec, Yv *offs, Yv *items, Yv *la
        detected once at index build (labmap_build reports the name). */
     (void)lno; /* carried only for the asm_* line-handler shape */
     return asm_state(sec, offs, items,
-                     ya_push(labels, yr(3, "name", nm, "sec", yv_long(sec), "off", ya_get(offs, sec))), err);
+                     ya_push(labels, yr(4, "name", nm, "sec", yv_long(sec), "off", ya_get(offs, sec),
+                                        "at_item", yv_long(yv_len(items)))), err);
 }
 
 static Yv *asm_dirline(Yv *line, long lno, long sec, Yv *offs, Yv *items, Yv *labels, Yv *err) {
@@ -979,13 +994,15 @@ static Yv *asm_labline_content(Yv *nm, Yv *rest, long lno, long sec, Yv *offs, Y
        item's bytes (ystr_nl -> 't' of "true"). Bind the pre-item offset
        FIRST. */
     long lab_off = yv_l(ya_get(offs, sec));
+    long lab_at = yv_len(items);
     Yv *r = asm_content(rest, lno, sec, offs);
     if (!ys_eq_lit(yr_get(r, "err"), "")) {
         return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"), items, labels, yr_get(r, "err"));
     } else {
         return asm_state(yv_l(yr_get(r, "sec")), yr_get(r, "offs"),
                          ya_push(items, yr_get(r, "item")),
-                         ya_push(labels, yr(3, "name", nm, "sec", yv_long(sec), "off", yv_long(lab_off))),
+                         ya_push(labels, yr(4, "name", nm, "sec", yv_long(sec), "off", yv_long(lab_off),
+                                            "at_item", yv_long(lab_at))),
                          err);
     }
 }
@@ -1025,7 +1042,7 @@ static Yv *asm_strdata_err(Yv *line, long lno, long sec, Yv *offs) {
               "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad string literal")),
               "sec", yv_long(sec), "offs", offs,
               "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                         "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                         "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
 }
 
 static Yv *asm_strdata_go(Yv *line, long lno, long sec, Yv *offs, Yv *payload, int nul) {
@@ -1036,7 +1053,7 @@ static Yv *asm_strdata_go(Yv *line, long lno, long sec, Yv *offs, Yv *payload, i
                   "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), yr_get(d, "error")),
                   "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         return asm_strdata_emit(sec, offs, yr_get(d, "bytes"), nul);
     }
@@ -1053,8 +1070,8 @@ static Yv *asm_strdata_emit(long sec, Yv *offs, Yv *bytes, int nul) {
 }
 
 static Yv *asm_strdata_item(long sec, Yv *offs, Yv *bb) {
-    Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bb)),
-                  "kind", ys("data"), "bytes", bb, "fix", yav(0));
+    Yv *item = yr(7, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bb)),
+                  "kind", ys("data"), "bytes", bb, "fix", yav(0), "br", yv_long(-1));
     ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + yv_len(bb)));
     return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
 }
@@ -1072,11 +1089,11 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
     if (ys_eq_lit(dir, ".text")) {
         return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else if (ys_eq_lit(dir, ".globl")) {
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else if (ys_eq_lit(dir, ".string")) {
         return asm_strdata(line, lno, sec, offs, rest, 1);
     } else if (ys_eq_lit(dir, ".ascii")) {
@@ -1096,7 +1113,7 @@ static Yv *asm_directive(Yv *line, long lno, long sec, Yv *offs) {
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported directive '")), dir), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     }
 }
 
@@ -1143,9 +1160,9 @@ static Yv *asm_loc(long lno, long sec, Yv *offs, Yv *rest) {
             yr(4, "off", yv_long(ys_tonum(ls)), "kind", ys("line"),
                "lbl", ys(""), "lbl2", ys("")));
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
-                  "item", yr(6, "sec", yv_long(0), "off", ya_get(offs, 0),
+                  "item", yr(7, "sec", yv_long(0), "off", ya_get(offs, 0),
                              "len", yv_long(0), "kind", ys("loc"),
-                             "bytes", yav(0), "fix", fx));
+                             "bytes", yav(0), "fix", fx, "br", yv_long(-1)));
     }
 }
 
@@ -1180,7 +1197,7 @@ static Yv *asm_file(long lno, long sec, Yv *offs, Yv *rest) {
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off",
                              yv_long(ys_tonum(ns)), "len", yv_long(0),
-                             "kind", ys("file"), "bytes", yav(0), "fix", fx));
+                             "kind", ys("file"), "bytes", yav(0), "fix", fx, "br", yv_long(-1)));
     }
 }
 
@@ -1208,7 +1225,7 @@ static Yv *asm_section_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
               "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": unsupported section '")), rest), ys("'")),
               "sec", yv_long(sec), "offs", offs,
               "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                         "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                         "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
 }
 
 static Yv *asm_section_go(long sec, Yv *offs, Yv *rest) {
@@ -1218,15 +1235,15 @@ static Yv *asm_section_go(long sec, Yv *offs, Yv *rest) {
     if (ys_eq_lit(rest, ".rodata")) {
         return yr(4, "err", ys(""), "sec", yv_long(1), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else if (ys_eq_lit(rest, ".bss")) {
         return yr(4, "err", ys(""), "sec", yv_long(2), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         return yr(4, "err", ys(""), "sec", yv_long(0), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     }
 }
 
@@ -1259,21 +1276,21 @@ static Yv *asm_quad_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad .quad value '")), rest), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         return yr(4,
                   "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": negative .quad value")),
                   "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     }
 }
 
 static Yv *asm_quad_go(long sec, Yv *offs, Yv *rest) {
     /* (split: data-item shape built ONLY here.) */
     Yv *bytes = le64(ys_tonum(rest));
-    Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bytes)),
-                  "kind", ys("data"), "bytes", bytes, "fix", yav(0));
+    Yv *item = yr(7, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bytes)),
+                  "kind", ys("data"), "bytes", bytes, "fix", yav(0), "br", yv_long(-1));
     ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + yv_len(bytes)));
     return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
 }
@@ -1289,7 +1306,7 @@ static Yv *asm_zero(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
                                 ys("'")),
                   "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         (void)line;
         long n = ys_tonum(rest);
@@ -1352,7 +1369,7 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
                       "err", ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": bad operand")),
                       "sec", yv_long(sec), "offs", offs,
                       "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                                 "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                                 "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
         } else {
             return asm_encode(mn, ops, lno, sec, offs);
         }
@@ -1366,22 +1383,236 @@ static Yv *asm_insn(Yv *line, long lno, long sec, Yv *offs) {
    or three little ones each concat step allocated. */
 static Yv *asm_encode(Yv *mn, Yv *ops, long lno, long sec, Yv *offs) {
     Yv *buf = scratch();
-    Yv *r = enc_insn(buf, 0, mn, ops);
+    Yv *r = enc_insn(buf, 0, mn, ops, 0);
     if (!ys_eq_lit(yr_get(r, "err"), "")) {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)), ys(": ")), yr_get(r, "err")), ys(" in '")), mn), ys("'")),
                   "sec", yv_long(sec), "offs", offs,
                   "item", yr(6, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
-                             "kind", ys(""), "bytes", yav(0), "fix", yav(0)));
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         long blen = yv_l(yr_get(r, "at"));
-        Yv *item = yr(6, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(blen),
-                      "kind", ys("insn"), "bytes", ya_slice(buf, 0, blen), "fix", yr_get(r, "fix"));
+        Yv *item = yr(7, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(blen),
+                      "kind", ys("insn"), "bytes", ya_slice(buf, 0, blen), "fix", yr_get(r, "fix"),
+                      "br", yr_get(r, "br"));
         ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + blen));
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs, "item", item);
     }
 }
 
+
+/* ── branch relaxation ───────────────────────────────────────────────────
+   A branch within rel8 of its target is two bytes instead of five or six, and
+   54% of the branches in ycc.y are (measured on ycc.y compiled by this
+   compiler: 8,053 of 14,832, and the short form is 53,661 bytes of branch
+   against 83,596 for the long form of every one of them). Which ones is not
+   known while encoding — an instruction's length has to be settled before the
+   addresses are, and a branch's target is usually not where it is yet — so
+   pass 1 asks for the short form everywhere
+   and this pass grows what does not reach: a grower is three or four bytes
+   longer, which moves everything after it, so the distances are recomputed
+   and the rest retested. Growth is monotone, so the rounds end at a fixpoint;
+   measured on ycc.y it takes 4 rounds and 6,780 grows, and a round is one
+   sweep of the items plus a re-encode per grower.
+
+   RELAX_ROUNDS bounds the work. Hitting it is not a wrong answer — every branch
+   still gets re-encoded long, which is exactly what the assembler emitted
+   before — so the bound costs size, never correctness. */
+#define RELAX_ROUNDS 8
+
+static long asm_relax(Yv *items, Yv *labels, int debug) {
+    /* The rounds walk two compact arrays of the items' lengths and sections
+       rather than the records: an AsmItem is seven words, and streaming 13 MB
+       of them four times over was most of this pass (measured 47 ms for ycc.y
+       before this, against 9 ms after). One sweep builds the arrays; a branch
+       index list (there are 15k branches to 234k items) keeps the rounds off
+       the records entirely, and `cum` holds the round's frozen offsets. */
+    Yv *lens = yav(0);
+    Yv *secs = yav(0);
+    Yv *brs = yav(0);
+    long i = 0;
+    while (i < yv_len(items)) {
+        Yv *it = ya_get(items, i);
+        lens = ya_push(lens, yr_get(it, "len"));
+        secs = ya_push(secs, yr_get(it, "sec"));
+        if (yv_l(yr_get(it, "br")) >= 0 && yv_l(yr_get(it, "sec")) == 0) {
+            brs = ya_push(brs, yv_long(i));
+        }
+        i = i + 1;
+    }
+    Yv *cum = yav(0);
+    Yv *rlmap = relax_map(labels);
+    long rounds = 0;
+    int again = 1;
+    while (again && rounds < RELAX_ROUNDS) {
+        rounds = rounds + 1;
+        /* Round 1 has nothing to place: pass 1 laid the items and the labels
+           out with every branch short, which is exactly this round's frozen
+           layout. */
+        again = relax_round(items, labels, rlmap, lens, secs, brs, cum, rounds == 1);
+    }
+    if (again) { relax_all_long(items, labels, lens); }
+    /* One last placement, at the final lengths: the rounds place the labels
+       from the lengths they started with, so the last round's growers leave
+       every label stale by what they added -- and every label-relative fixup
+       (rel32, rip32, imm32diff) is measured against these. */
+    relax_place(items, labels, lens, secs, debug);
+    return rounds;
+}
+
+/* The relaxation's own name -> label map, built once. It is the assembler's
+   labmap with `off` carrying the label's INDEX in `labels` rather than an
+   address: an address moves every round (that is the whole point) while an
+   index does not, so one build serves every round instead of one per round. */
+static Yv *relax_map(Yv *labels) {
+    long cap = yv_len(labels) * 2 + 16;
+    Yv *m = labmap_new(cap);
+    long i = 0;
+    while (i < yv_len(labels)) {
+        Yv *r = labmap_put(m, yr_get(ya_get(labels, i), "name"), 0, i);
+        m = yr_get(r, "map");
+        i = i + 1;
+    }
+    return m;
+}
+
+/* One round: place the .text labels (unless `first`, when pass 1's offsets
+   are already this round's), then grow every short branch whose target is out
+   of range. Returns true if anything grew. */
+static int relax_round(Yv *items, Yv *labels, Yv *rlmap, Yv *lens, Yv *secs, Yv *brs, Yv *cum, int first) {
+    if (!first) {
+        /* cum[k] is where item k starts in .text at the current lengths; the
+           label before item `at_item` is therefore at cum[at_item]. */
+        long at = 0;
+        long i = 0;
+        while (i < yv_len(lens)) {
+            if (i < yv_len(cum)) { ya_set(cum, i, yv_long(at)); }
+            else { cum = ya_push(cum, yv_long(at)); }
+            if (yv_l(ya_get(secs, i)) == 0) { at = at + yv_l(ya_get(lens, i)); }
+            i = i + 1;
+        }
+        long j = 0;
+        while (j < yv_len(labels)) {
+            Yv *lb = ya_get(labels, j);
+            if (yv_l(yr_get(lb, "sec")) == 0) {
+                ya_set(labels, j, yr(4, "name", yr_get(lb, "name"), "sec", yv_long(0),
+                                      "off", ya_get(cum, yv_l(yr_get(lb, "at_item"))),
+                                      "at_item", yr_get(lb, "at_item")));
+            }
+            j = j + 1;
+        }
+    }
+    /* The branches, against the FROZEN offsets: growth is permanent, so a
+       branch that fits in this round's layout but is pushed out of range by a
+       grower earlier in the same sweep must wait for the next round, or the
+       sweep cascades and every branch ends up long (measured: 14,680 grown in
+       one round that way, against 6,673 with the frozen layout, and 140 short
+       branches at the end instead of 8,047). */
+    int grew = 0;
+    long k = 0;
+    while (k < yv_len(brs)) {
+        long i = yv_l(ya_get(brs, k));
+        /* len 2 is the short form; a grower is already long. */
+        if (yv_l(ya_get(lens, i)) == 2) {
+            Yv *it = ya_get(items, i);
+            Yv *fx = ya_get(yr_get(it, "fix"), 0);
+            long li = relax_target(rlmap, yr_get(fx, "lbl"));
+            long here = first ? yv_l(yr_get(it, "off")) : yv_l(ya_get(cum, i));
+            /* An unknown target is pass 2's error to report, and a target
+               outside .text has no address to measure yet: grow both, so
+               nothing here can be wrong in a way pass 2 would not catch. */
+            if (li >= 0 && yv_l(yr_get(ya_get(labels, li), "sec")) == 0) {
+                long d = yv_l(yr_get(ya_get(labels, li), "off")) - (here + 2);
+                if (d < -128 || d > 127) {
+                    relax_grow(items, i, lens, yr_get(fx, "lbl"));
+                    grew = 1;
+                }
+            } else {
+                relax_grow(items, i, lens, yr_get(fx, "lbl"));
+                grew = 1;
+            }
+        }
+        k = k + 1;
+    }
+    return grew;
+}
+
+/* The label a branch names, or -1 when the map does not have it. */
+static long relax_target(Yv *rlmap, Yv *lbl) {
+    Yv *e = labmap_get(rlmap, lbl);
+    if (yv_l(yr_get(e, "sec")) < 0) { return -1; }
+    return yv_l(yr_get(e, "off"));
+}
+
+/* Re-encode item `i` in the long form, from what it recorded (`br`) and what
+   its fixup names. Returns the new length. */
+static long relax_grow(Yv *items, long i, Yv *lens, Yv *lbl) {
+    Yv *it = ya_get(items, i);
+    Yv *buf = scratch();
+    Yv *r = enc_branch_long(buf, 0, yv_l(yr_get(it, "br")), lbl);
+    long alen = yv_l(yr_get(r, "at"));
+    ya_set(items, i, yr(7, "sec", yr_get(it, "sec"), "off", yr_get(it, "off"),
+                        "len", yv_long(alen), "kind", yr_get(it, "kind"),
+                        "bytes", ya_slice(buf, 0, alen), "fix", yr_get(r, "fix"),
+                        "br", yr_get(it, "br")));
+    ya_set(lens, i, yv_long(alen));
+    return alen;
+}
+
+/* The bound case: every branch long, which is the pre-relaxation encoding. */
+static long relax_all_long(Yv *items, Yv *labels, Yv *lens) {
+    (void)labels;
+    long n = 0;
+    long i = 0;
+    while (i < yv_len(lens)) {
+        Yv *it = ya_get(items, i);
+        if (yv_l(yr_get(it, "sec")) == 0 && yv_l(yr_get(it, "br")) >= 0 && yv_l(ya_get(lens, i)) != 2) {
+            relax_grow(items, i, lens, yr_get(ya_get(yr_get(it, "fix"), 0), "lbl"));
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+/* The final placement: the labels at the final lengths (always -- pass 2
+   measures every fixup against them), and the item offsets too, but only for
+   -g: they are one record rebuild per item, and the line table is their only
+   reader. */
+static long relax_place(Yv *items, Yv *labels, Yv *lens, Yv *secs, int debug) {
+    Yv *offs = yav(3, yv_long(0), yv_long(0), yv_long(0));
+    long i = 0;
+    long j = 0;
+    while (i < yv_len(lens)) {
+        while (j < yv_len(labels) && yv_l(yr_get(ya_get(labels, j), "at_item")) <= i) {
+            Yv *lb = ya_get(labels, j);
+            ya_set(labels, j, yr(4, "name", yr_get(lb, "name"), "sec", yr_get(lb, "sec"),
+                                  "off", ya_get(offs, yv_l(yr_get(lb, "sec"))),
+                                  "at_item", yr_get(lb, "at_item")));
+            j = j + 1;
+        }
+        long s = yv_l(ya_get(secs, i));
+        if (s >= 0) {
+            if (debug) {
+                Yv *it = ya_get(items, i);
+                ya_set(items, i, yr(7, "sec", yr_get(it, "sec"), "off", ya_get(offs, s),
+                                    "len", yr_get(it, "len"), "kind", yr_get(it, "kind"),
+                                    "bytes", yr_get(it, "bytes"), "fix", yr_get(it, "fix"),
+                                    "br", yr_get(it, "br")));
+            }
+            ya_set(offs, s, yv_long(yv_l(ya_get(offs, s)) + yv_l(ya_get(lens, i))));
+        }
+        i = i + 1;
+    }
+    while (j < yv_len(labels)) {
+        Yv *lb = ya_get(labels, j);
+        ya_set(labels, j, yr(4, "name", yr_get(lb, "name"), "sec", yr_get(lb, "sec"),
+                              "off", ya_get(offs, yv_l(yr_get(lb, "sec"))),
+                              "at_item", yr_get(lb, "at_item")));
+        j = j + 1;
+    }
+    return yv_l(ya_get(offs, 0));
+}
 
 /* ── pass 2: layout, fixups, ELF ──────────────────────────────────────── */
 
@@ -1550,10 +1781,15 @@ static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, 
            NOTE: thread callee results (see note above): the callee's
            {bytes,err} is the only path the patched bytes take to the
            caller, so both arms must rebind `bytes` (and `err`). */
-        if (ys_eq_lit(yr_get(fx, "kind"), "rel32")) {
+        if (ys_eq_lit(yr_get(fx, "kind"), "rel32") || ys_eq_lit(yr_get(fx, "kind"), "rip32")) {
             Yv *rr = patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
             bytes = yr_get(rr, "bytes");
             if (!ys_eq_lit(yr_get(rr, "err"), "")) { err = yr_get(rr, "err"); ; }
+            ;
+        } else if (ys_eq_lit(yr_get(fx, "kind"), "rel8")) {
+            Yv *r8 = patch_item_rel8(lmap, code_len, pad, fx, bytes, base, it, at);
+            bytes = yr_get(r8, "bytes");
+            if (!ys_eq_lit(yr_get(r8, "err"), "")) { err = yr_get(r8, "err"); ; }
             ;
         } else {
             Yv *rk = patch_item_kind2(lmap, code_len, pad, fx, bytes, base, it, at);
@@ -1588,6 +1824,21 @@ static Yv *patch_item_rel(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, 
     } else {
         long v = yv_l(yr_get(t, "addr")) - (base + yv_l(yr_get(it, "len")));
         return yr(2, "bytes", patch32(bytes, at, v), "err", ys(""));
+    }
+}
+
+static Yv *patch_item_rel8(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at) {
+    /* rel8: the same displacement in one byte, for a branch that relaxed.
+       asm_relax only leaves one of these in range, so the value fits by
+       construction (it grew the item otherwise); the truncation is still a
+       byte store, not a silent 32-bit write past the instruction.
+       NOTE: fx/it stay BARE holes (see types.y typeof_def note). */
+    Yv *t = label_addr(lmap, code_len, pad, yr_get(fx, "lbl"));
+    if (!yv_b(yr_get(t, "ok"))) {
+        return yr(2, "bytes", bytes, "err", ys_cat(ys_cat(ys("undefined label '"), yr_get(fx, "lbl")), ys("'")));
+    } else {
+        long v = yv_l(yr_get(t, "addr")) - (base + yv_l(yr_get(it, "len")));
+        return yr(2, "bytes", patch8(bytes, at, v), "err", ys(""));
     }
 }
 
@@ -1630,6 +1881,14 @@ static Yv *patch32(Yv *bytes, long at, long v) {
     ya_set(bytes, at + 1, ya_get(b, 1));
     ya_set(bytes, at + 2, ya_get(b, 2));
     ya_set(bytes, at + 3, ya_get(b, 3));
+    return bytes;
+}
+
+static Yv *patch8(Yv *bytes, long at, long v) {
+    /* The low byte of a rel8 displacement, which is two's complement: v + 256
+       before the modulo because Y's % truncates toward zero and a negative
+       displacement must land on its high byte (v - 128 stores 128, not -128). */
+    ya_set(bytes, at, yv_long((v + 256) % 256));
     return bytes;
 }
 

@@ -306,17 +306,39 @@ def fixup(at: long, kind: str, lbl: str, lbl2: str) -> Fixup {
 };
 
 // ── instruction encoders ───────────────────────────────────────────────
-// Each writes its bytes into `buf` from `at` and returns {at, fix, err},
+// Each writes its bytes into `buf` from `at` and returns {at, fix, err, br},
 // with every fixup offset relative to the instruction's first byte (which is
-// where the caller started). Only forms our backend emits exist.
-type Encoded = { at: long, fix: [Fixup], err: str };
+// where the caller started), and `br` the branch this instruction is (0 for
+// jmp, the long form's condition byte for a jcc, -1 for everything else) so
+// the assembler's relaxation pass can re-encode one without re-parsing its
+// line. Only forms our backend emits exist.
+type Encoded = { at: long, fix: [Fixup], err: str, br: long };
 
 def enc_err(at: long, msg: str) -> Encoded {
-    { at: at, fix: [], err: msg }
+    { at: at, fix: [], err: msg, br: -1 }
 };
 
 def enc_ok(at: long, fx: [Fixup]) -> Encoded {
-    { at: at, fix: fx, err: "" }
+    { at: at, fix: fx, err: "", br: -1 }
+};
+
+// A branch, which is what `br` names.
+def enc_br(at: long, fx: [Fixup], br: long) -> Encoded {
+    { at: at, fix: fx, err: "", br: br }
+};
+
+// A label operand, for re-encoding a branch whose target is already known (the
+// item's fixup carries the name).
+def lbl_op(name: str) -> Operand {
+    { k: K.lbl, n: 0, size: 0, v: 0, a: "", b: "", name: name, base: -1, idx: -1,
+      scale: 1, disp: 0, rip: false, lbl: "" }
+};
+
+// The long (rel32) form of a branch, for asm_relax's grower pass: `br` is what
+// the item recorded, `lbl` what its fixup names.
+def enc_branch_long(buf: [byte], at: long, br: long, lbl: str) -> Encoded {
+    if (br == 0) { enc_jmp(buf, at, lbl_op(lbl), true) }
+    else { enc_jcc(buf, at, br, lbl_op(lbl), true) }
 };
 
 def enc_push(buf: [byte], at: long, o: Operand) -> Encoded {
@@ -800,13 +822,24 @@ def enc_unary_mem(buf: [byte], at: long, op: str, o: Operand) -> Encoded {
     }
 };
 
-def enc_jmp(buf: [byte], at: long, o: Operand) -> Encoded {
+// A branch is encoded in the short (rel8) or long (rel32) form on request:
+// `EB rel8` / `E9 rel32`, and `70+cc rel8` / `0F 80+cc rel32` for a
+// conditional. Which form an instruction gets is not the encoder's to decide —
+// an instruction's length has to be known before the addresses are, and a
+// branch's target is usually not where it is yet — so the assembler asks for
+// short first and grows the ones that turn out to be out of range (asm.y's
+// asm_relax). `code` is the long form's condition byte (0x84 for je, 0x85 for
+// jne, ...), which setcc shares.
+def enc_jmp(buf: [byte], at: long, o: Operand, lng: bool) -> Encoded {
     if (o.k != K.lbl) {
         enc_err(at, "jmp target")
-    } else {
+    } else if (lng) {
         let n = put(buf, at, 233);
         let m = put_le32(buf, n, 0);
-        enc_ok(m, [fixup(at + 1, "rel32", o.name, "")])
+        enc_br(m, [fixup(at + 1, "rel32", o.name, "")], 0)
+    } else {
+        let n = put(buf, at, 235);
+        enc_br(put(buf, n, 0), [fixup(at + 1, "rel8", o.name, "")], 0)
     }
 };
 
@@ -824,13 +857,17 @@ def enc_call(buf: [byte], at: long, o: Operand) -> Encoded {
     }
 };
 
-def enc_jcc(buf: [byte], at: long, code: long, o: Operand) -> Encoded {
+def enc_jcc(buf: [byte], at: long, code: long, o: Operand, lng: bool) -> Encoded {
     if (o.k != K.lbl) {
         enc_err(at, "jcc target")
-    } else {
+    } else if (lng) {
         let n = put2(buf, at, 15, code);
         let m = put_le32(buf, n, 0);
-        enc_ok(m, [fixup(at + 2, "rel32", o.name, "")])
+        enc_br(m, [fixup(at + 2, "rel32", o.name, "")], code)
+    } else {
+        // the short form's opcode is the long form's 16 bytes lower
+        let n = put(buf, at, code - 16);
+        enc_br(put(buf, n, 0), [fixup(at + 1, "rel8", o.name, "")], code)
     }
 };
 
@@ -892,7 +929,10 @@ def need2(mn: str, ops: [Operand]) -> str {
     if (len(ops) != 2) { mn + " takes 2 operands" } else { "" }
 };
 
-def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand]) -> Encoded {
+// `lng` is the branch form: false asks for the short (rel8) encoding, true for
+// rel32. Only jmp and the jcc family read it; everything else ignores it. See
+// enc_jmp for why it is a parameter and not the encoder's own decision.
+def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encoded {
     if (mn == "push") {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_push(buf, at, ops[0]) }
@@ -965,37 +1005,37 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand]) -> Encoded {
         if (e != "") { enc_err(at, e) } else { enc_unary(buf, at, mn, ops[0]) }
     } else if (mn == "jmp") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jmp(buf, at, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jmp(buf, at, ops[0], lng) }
     } else if (mn == "call") {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_call(buf, at, ops[0]) }
     } else if (mn == "jz" || mn == "je") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 132, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 132, ops[0], lng) }
     } else if (mn == "jnz" || mn == "jne") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 133, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 133, ops[0], lng) }
     } else if (mn == "js") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 136, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 136, ops[0], lng) }
     } else if (mn == "jns") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 137, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 137, ops[0], lng) }
     } else if (mn == "jge") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 141, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 141, ops[0], lng) }
     } else if (mn == "jl") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 140, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 140, ops[0], lng) }
     } else if (mn == "jle") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 142, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 142, ops[0], lng) }
     } else if (mn == "jg") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 143, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 143, ops[0], lng) }
     } else if (mn == "jb") {
         let e = need1(mn, ops);
-        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 130, ops[0]) }
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 130, ops[0], lng) }
     } else if (mn == "setl") {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_setcc(buf, at, 156, ops[0]) }
@@ -1057,5 +1097,5 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand]) -> Encoded {
 
 // The types are exported too: enc_insn takes [Operand] and returns
 // Encoded, so a caller that wants to name either needs the name.
-export { Operand, Fixup, Encoded, MemTail, r64, reg_num, reg_size, enc_insn, fixup,
-         byte_of, scratch, le16, le32, le64 };
+export { Operand, Fixup, Encoded, MemTail, r64, reg_num, reg_size, enc_insn,
+         enc_branch_long, fixup, byte_of, scratch, le16, le32, le64 };

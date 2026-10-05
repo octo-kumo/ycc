@@ -39,6 +39,7 @@ static long put_le64(Yv *buf, long at, long v);
 static long put_rex(Yv *buf, long at, long r);
 static Yv *enc_err(long at, Yv *msg);
 static Yv *enc_ok(long at, Yv *fx);
+static Yv *enc_br(long at, Yv *fx, long br);
 static Yv *enc_mem_result(Yv *buf, long at, Yv *t);
 static Yv *enc_mem_imm_result(Yv *buf, long at, Yv *t, long v, int wide);
 static Yv *enc_xchg(Yv *buf, long at, Yv *a, Yv *b);
@@ -64,9 +65,9 @@ static Yv *enc_movq(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_imul(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_unary(Yv *buf, long at, Yv *op, Yv *o);
 static Yv *enc_unary_mem(Yv *buf, long at, Yv *op, Yv *o);
-static Yv *enc_jmp(Yv *buf, long at, Yv *o);
+static Yv *enc_jmp(Yv *buf, long at, Yv *o, int lng);
 static Yv *enc_call(Yv *buf, long at, Yv *o);
-static Yv *enc_jcc(Yv *buf, long at, long code, Yv *o);
+static Yv *enc_jcc(Yv *buf, long at, long code, Yv *o, int lng);
 static Yv *enc_setcc(Yv *buf, long at, long code, Yv *o);
 static Yv *enc_cmpb(Yv *buf, long at, long v, Yv *m);
 static Yv *enc_movb_reg(Yv *buf, long at, Yv *dst, Yv *src);
@@ -391,15 +392,39 @@ Yv *fixup(long at, Yv *kind, Yv *lbl, Yv *lbl2) {
 }
 
 /* ── instruction encoders ───────────────────────────────────────────────
-   Each writes its bytes into `buf` from `at` and returns {at, fix, err},
+   Each writes its bytes into `buf` from `at` and returns {at, fix, err, br},
    with every fixup offset relative to the instruction's first byte (which is
-   where the caller started). Only forms our backend emits exist. */
+   where the caller started), and `br` the branch this instruction is (0 for
+   jmp, the long form's condition byte for a jcc, -1 for everything else) so
+   the assembler's relaxation pass can re-encode one without re-parsing its
+   line. Only forms our backend emits exist. */
 static Yv *enc_err(long at, Yv *msg) {
-    return yr(3, "at", yv_long(at), "fix", yav(0), "err", msg);
+    return yr(4, "at", yv_long(at), "fix", yav(0), "err", msg, "br", yv_long(-1));
 }
 
 static Yv *enc_ok(long at, Yv *fx) {
-    return yr(3, "at", yv_long(at), "fix", fx, "err", ys(""));
+    return yr(4, "at", yv_long(at), "fix", fx, "err", ys(""), "br", yv_long(-1));
+}
+
+/* A branch, which is what `br` names. */
+static Yv *enc_br(long at, Yv *fx, long br) {
+    return yr(4, "at", yv_long(at), "fix", fx, "err", ys(""), "br", yv_long(br));
+}
+
+/* A label operand, for re-encoding a branch whose target is already known (the
+   item's fixup carries the name). */
+static Yv *lbl_op(Yv *name) {
+    return yr(13, "k", yv_long(K_lbl), "n", yv_long(0), "size", yv_long(0),
+              "v", yv_long(0), "a", ys(""), "b", ys(""), "name", name,
+              "base", yv_long(-1), "idx", yv_long(-1), "scale", yv_long(1),
+              "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys(""));
+}
+
+/* The long (rel32) form of a branch, for asm_relax's grower pass: `br` is what
+   the item recorded, `lbl` what its fixup names. */
+Yv *enc_branch_long(Yv *buf, long at, long br, Yv *lbl) {
+    if (br == 0) { return enc_jmp(buf, at, lbl_op(lbl), 1); }
+    else { return enc_jcc(buf, at, br, lbl_op(lbl), 1); }
 }
 
 static Yv *enc_push(Yv *buf, long at, Yv *o) {
@@ -889,13 +914,24 @@ static Yv *enc_unary_mem(Yv *buf, long at, Yv *op, Yv *o) {
     }
 }
 
-static Yv *enc_jmp(Yv *buf, long at, Yv *o) {
+/* A branch is encoded in the short (rel8) or long (rel32) form on request:
+   `EB rel8` / `E9 rel32`, and `70+cc rel8` / `0F 80+cc rel32` for a
+   conditional. Which form an instruction gets is not the encoder's to decide —
+   an instruction's length has to be known before the addresses are, and a
+   branch's target is usually not where it is yet — so the assembler asks for
+   short first and grows the ones that turn out to be out of range (asm.y's
+   asm_relax). `code` is the long form's condition byte (0x84 for je, 0x85 for
+   jne, ...), which setcc shares. */
+static Yv *enc_jmp(Yv *buf, long at, Yv *o, int lng) {
     if (yv_l(yr_get(o, "k")) != K_lbl) {
         return enc_err(at, ys("jmp target"));
-    } else {
+    } else if (lng) {
         long n = put(buf, at, 233);
         long m = put_le32(buf, n, 0);
-        return enc_ok(m, yav(1, fixup(at + 1, ys("rel32"), yr_get(o, "name"), ys(""))));
+        return enc_br(m, yav(1, fixup(at + 1, ys("rel32"), yr_get(o, "name"), ys(""))), 0);
+    } else {
+        long n = put(buf, at, 235);
+        return enc_br(put(buf, n, 0), yav(1, fixup(at + 1, ys("rel8"), yr_get(o, "name"), ys(""))), 0);
     }
 }
 
@@ -913,13 +949,17 @@ static Yv *enc_call(Yv *buf, long at, Yv *o) {
     }
 }
 
-static Yv *enc_jcc(Yv *buf, long at, long code, Yv *o) {
+static Yv *enc_jcc(Yv *buf, long at, long code, Yv *o, int lng) {
     if (yv_l(yr_get(o, "k")) != K_lbl) {
         return enc_err(at, ys("jcc target"));
-    } else {
+    } else if (lng) {
         long n = put2(buf, at, 15, code);
         long m = put_le32(buf, n, 0);
-        return enc_ok(m, yav(1, fixup(at + 2, ys("rel32"), yr_get(o, "name"), ys(""))));
+        return enc_br(m, yav(1, fixup(at + 2, ys("rel32"), yr_get(o, "name"), ys(""))), code);
+    } else {
+        /* the short form's opcode is the long form's 16 bytes lower */
+        long n = put(buf, at, code - 16);
+        return enc_br(put(buf, n, 0), yav(1, fixup(at + 1, ys("rel8"), yr_get(o, "name"), ys(""))), code);
     }
 }
 
@@ -980,7 +1020,10 @@ static Yv *need2(Yv *mn, Yv *ops) {
     if (yv_len(ops) != 2) { return ys_cat(mn, ys(" takes 2 operands")); } else { return ys(""); }
 }
 
-Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops) {
+/* `lng` is the branch form: 0 asks for the short (rel8) encoding, 1 for
+   rel32. Only jmp and the jcc family read it; everything else ignores it.
+   See enc_jmp for why it is a parameter and not the encoder's own decision. */
+Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
     if (ys_eq_lit(mn, "push")) {
         Yv *e = need1(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_push(buf, at, ya_get(ops, 0)); }
@@ -1054,37 +1097,37 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops) {
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_unary(buf, at, mn, ya_get(ops, 0)); }
     } else if (ys_eq_lit(mn, "jmp")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jmp(buf, at, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jmp(buf, at, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "call")) {
         Yv *e = need1(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_call(buf, at, ya_get(ops, 0)); }
     } else if (ys_eq_lit(mn, "jz") || ys_eq_lit(mn, "je")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 132, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 132, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jnz") || ys_eq_lit(mn, "jne")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 133, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 133, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "js")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 136, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 136, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jns")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 137, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 137, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jge")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 141, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 141, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jl")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 140, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 140, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jle")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 142, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 142, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jg")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 143, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 143, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jb")) {
         Yv *e = need1(mn, ops);
-        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 130, ya_get(ops, 0)); }
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 130, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "setl")) {
         Yv *e = need1(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_setcc(buf, at, 156, ya_get(ops, 0)); }
