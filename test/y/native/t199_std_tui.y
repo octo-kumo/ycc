@@ -723,14 +723,6 @@ def main() -> long {
         tui.restore();
         true
     }, "no termios was saved, so there is nothing to put back");
-    test.ck("restore_exit(code) installs a handler and returns", {
-        tui.restore_exit(0);
-        true
-    }, "so an ordinary exit still restores");
-    test.ck("restore_all_exit(code) likewise", {
-        tui.restore_all_exit(0);
-        true
-    }, "for every standard descriptor");
 
     // ─────────────────────────────────────────── asking the terminal about itself
     test.group("the tty, with stdout on a pipe");
@@ -754,13 +746,13 @@ def main() -> long {
         tui.read_key_timeout(0) == -1, "KEY_NONE is -1, no trap on a pipe");
     test.ck("read_key() with nothing waiting is KEY_NONE too",
         tui.read_key() == -1, "and it does not block on a pipe either");
-    test.ck("the restore paths are callable with nothing to restore", {
+    // cooked_mode() and restore() RETURN, and are safe with nothing saved. The
+    // two that exit are not here: see the last check in this file.
+    test.ck("the returning restore paths are safe with nothing to restore", {
         tui.cooked_mode();
         tui.restore();
-        tui.restore_exit(0);
-        tui.restore_all_exit(0);
         true
-    }, "and raw_mode was never entered, so none of them has work to do");
+    }, "and raw_mode was never entered, so neither has work to do");
     test.ck("and the tty is still not in raw mode", !tui.active(), "still not in raw mode");
     // arm_watchdog forks a child that outlives this process and restores the
     // terminal when it dies. It refuses unless raw mode is on with a saved
@@ -770,6 +762,32 @@ def main() -> long {
     test.ck("arm_watchdog refuses without raw mode", !tui.arm_watchdog(),
         "false, not a stray child");
 
+    // set_size asks the emulator to resize the window: a TIOCSWINSZ ioctl on
+    // descriptor 1, which a pipe has no answer for. So the answer here is
+    // deterministically false and, more to the point, it is answerable at all.
+    // Nothing is asserted about the numbers it asked for: what a real terminal
+    // would do with them is not this file's business.
+    test.group("set_size, the call a program almost never makes");
+    let took = tui.set_size(30, 90);
+    test.ck("set_size answers false on a pipe and does not trap", !took,
+        "TIOCSWINSZ on a pipe is ENOTTY");
+    let after = tui.size();
+    test.ck("and the surface still has a usable size afterwards",
+        after.rows >= 1 && after.rows <= 1000 && after.cols >= 1 && after.cols <= 1000,
+        "whatever the ioctl left behind, size() still answers in range");
+
     return test.report();
 };
-exit(main());
+// The calls that exit leave through one of them, which is the way the module says
+// a program should. There is nothing to assert about either: restore_exit(code) is
+// restore(); exit(code), so a check whose block calls it never prints. This file
+// leaves through restore_all_exit; t203_std_tui_exit.y leaves through
+// restore_exit, because no single program can call both -- the first one to run
+// ends it.
+//
+// This was also a real defect in this fixture. restore_exit and restore_all_exit
+// used to be called from the middle of main, where they ended the run: the sixty
+// odd assertions after them -- the whole "the tty, with stdout on a pipe" group,
+// arm_watchdog, and everything since -- never executed, and the .expected file was
+// the shorter one, so the suite stayed green over a test that had stopped testing.
+tui.restore_all_exit(main());

@@ -897,11 +897,14 @@ frame clock and the frame meter.
   was saved at the last \ic{tui.raw\_mode()}.
 \item[\ic{tui.active()}] \ty{bool}: whether raw mode is on now, so a cleanup path
   can be called from anywhere without checking first.
-\item[\ic{tui.restore\_exit()}] Install an \ic{atexit} handler that restores the
-  terminal; \ic{tui.restore\_all\_exit()} does the same for every
-  standard descriptor. This is what stops a crash from leaving a shell in raw mode.
+\item[\ic{tui.restore\_exit(code)},
+  \ic{tui.restore\_all\_exit(code)}] The call to make on every exit path:
+  restore, then \ic{exit(code)}. There is no \ic{atexit} handler in the
+  module, and there is nothing after this call either --- which is what makes it
+  impossible to forget half way. \ic{tui.restore\_all\_exit(code)} puts the
+  cursor back and leaves the alternate screen before the same exit.
 \item[\ic{tui.arm\_watchdog()}] \ic{fork} a child that waits for this process to
-  die and restores the terminal from the child --- the one path a handler cannot
+  die and restores the terminal from the child --- the one path a call cannot
   cover, since \ic{SIGKILL} runs nothing. The alt screen and the cursor are
   emulator state, so the watchdog can put the \emph{termios} back but not those.
 \item[\ic{tui.read\_key()}] The next key, decoded: arrows, function keys,
@@ -919,7 +922,10 @@ frame clock and the frame meter.
 \item[\ic{tui.key\_pending()}] \ty{bool}: whether a key is waiting, without
   blocking and without decoding one.
 \item[\ic{tui.enter\_screen()}, \ic{tui.leave\_screen()}] The alternate screen
-  buffer, so a full-screen program leaves the scrollback alone.
+  buffer, so a full-screen program leaves the scrollback alone. These are
+  \ic{tui.enter\_alt\_screen()} and \ic{tui.leave\_alt\_screen()} plus the
+  cursor, which is what a full-screen program wants; the plain alt-screen
+  forms move the buffer alone.
 \item[\ic{tui.hide\_cursor()}, \ic{tui.show\_cursor()}] Cursor visibility. \ic{tui.cursor\_to(row, col)} moves
   it, \ic{tui.home()} goes to the top left and \ic{tui.clear\_screen()}
   wipes the screen.
@@ -945,7 +951,7 @@ frame clock and the frame meter.
 \item[\ic{tui.blit(dst, src, dr, dc, sr, sc, rows, cols)}] A rectangle of one
   surface onto another.
 \item[\ic{tui.rgb(r, g, b)}, \ic{tui.grey(v)}, \ic{tui.lerp\_rgb(a, b, t)},
-  \ic{tui.clamp\_255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
+  \ic{tui.clamp255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
   \ic{tui.b\_of(c)} to take one apart. A colour is one integer, so a frame buffer
   of them is an array of integers.
 \item[\ic{tui.begin\_frame(s)}, \ic{tui.cell\_same(s, r, c, ch, fg, bg)},
@@ -959,15 +965,19 @@ frame clock and the frame meter.
   when one row's worth of output overflows the buffer: the cursor is positioned
   absolutely, so a spill is a row boundary, not a corruption.
 \item[\ic{tui.set\_fd(n)}, \ic{tui.fd()}] Draw to a descriptor other than 1, which
-  is how output goes to a file or a pipe for a test.
+  is how output goes to a file or a pipe for a test. \ic{tui.set\_size(rows,
+  cols)} tells the module a window size instead of asking the terminal, and says
+  whether it took it --- which is how a test draws a surface it can read back.
 \item[\ic{tui.put\_byte(b)}, \ic{tui.put\_num(n)}, \ic{tui.put\_str(s)},
   \ic{tui.put\_csi()}] The output buffer, below the grid: a byte, a decimal
   number, a string, and a control-sequence introducer.
 \item[\ic{tui.esc\_fg(r, g, b)}, \ic{tui.esc\_bg(...)}] One complete SGR sequence
   as a number, \ic{tui.esc\_clear()}, \ic{tui.esc\_home()}, \ic{tui.esc\_cursor(r, c)},
-  \ic{tui.esc\_reset()}, and \ic{tui.out\_flush()} to write the buffer out. The
-  \ic{sgr\_*} forms are the same sequences without the introducer, for a caller
-  assembling its own.
+  \ic{tui.esc\_reset()}, and \ic{tui.out\_flush()} to write the buffer out.
+  \ic{tui.esc\_rg(...)} is one sequence carrying both colours.
+  The \ic{tui.sgr\_fg(r, g, b)}, \ic{tui.sgr\_bg(r, g, b)},
+  \ic{tui.sgr\_rg(...)} and \ic{tui.sgr\_reset()} forms are the same sequences
+  without the introducer, for a caller assembling its own.
 \item[\ic{tui.buf\_len()}, \ic{tui.buf\_at(i)}, \ic{tui.buf\_reset()}] The output
   buffer read back and cleared, which is how a test checks what a draw would
   have written without a terminal.
@@ -986,7 +996,7 @@ frame clock and the frame meter.
 \item[\ic{tui.shade(c)}] A colour mapped to a glyph by luminance.
   \ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half} and \ic{shade\_braille}
   are the ramps for each, and \ic{tui.shade\_len(ramp)} with
-  \ic{tui.ramp\_index(v, n, k)} index one. \ic{tui.braille(cp)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
+  \ic{tui.ramp\_index(v, n, k)} index one. \ic{tui.braille(cp)}, \ic{tui.braille\_cp(mask)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
   mask)} address one braille dot pattern directly.
 \item[\ic{tui.utf8\_len(cp)}, \ic{tui.utf8\_byte(cp, i)}, \ic{tui.width\_of(cp)}] A
   code point's UTF-8 length and bytes, and how many terminal columns it occupies
