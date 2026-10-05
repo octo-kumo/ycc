@@ -4838,6 +4838,29 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                 }
                 return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
+        } else if (ys_eq_lit(name, "jmp_at")) {
+            /* jmp_at(addr): jump to the code at that address, leaving %rsp
+             * alone (a `call` would push a return address where a process
+             * entry point reads its argc). Nothing after it in the enclosing
+             * function runs, and it only returns if the target does. */
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys("jmp_at needs 1 argument (the address)"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r, "st");
+                long ak = yv_l(yr_get(yr_get(r, "typ"), "k"));
+                if (ak != K_tlong && ak != K_tunk && ak != K_tptr) {
+                    st = fail(st,
+                              ys_cat(ys("jmp_at needs an address, got "),
+                                     tstr(yr_get(r, "typ"))),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                };
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
+            }
         } else {
             // resolve the callee to a function type: `self`, then scope
             Yv *fterr = ys("");

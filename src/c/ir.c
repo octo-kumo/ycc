@@ -113,10 +113,11 @@ static void ir_init(void) {
     t = ya_push(t, yr(3, "id", yv_long(F_ADDSD_R_R), "mn", ys("addsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_SUBSD_R_R), "mn", ys("subsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_UCOMISD_R_R), "mn", ys("ucomisd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_JMP_IND), "mn", ys("jmp"), "kinds", yav(1, yv_long(O_IND))));
     /* The ids above are positions in this list; a form added in the wrong
        place would decode and print as a different instruction, so check it. */
     long i = 0;
-    while (i < 97) {
+    while (i < 98) {
         if (yv_l(yr_get(ya_get(t, i), "id")) != i) {
             eputs_(ys_cat(ys("INTERNAL: ir form table: "),
                           ys_long(yv_l(yr_get(ya_get(t, i), "id")))));

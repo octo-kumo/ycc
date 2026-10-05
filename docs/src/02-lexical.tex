@@ -39,11 +39,14 @@ The block's body is ordinary \textsf{Y}, compiled and run while the compiler
 runs; what it returns is a \ty{str}, and that text is spliced into the program's
 source \emph{as text}. A value therefore has to be spelled as a literal before it
 lands --- \ic{\#\{ quoted(name) \}\#}, not \ic{\#\{ name \}\#} --- and a body
-whose value is not a \ty{str} is an ordinary type error. A block may be in a
-\ic{def} or \ic{type} body, or nested inside another block, is not: in a body
-in-place emission would give compile-time-fixed values and a silent ``never
-ran'' mode, and a nested block's text is a \emph{value} the enclosing block
-uses rather than code injected into it.
+whose value is not a \ty{str} is an ordinary type error.
+
+A block may \emph{not} be in a \ic{def} or \ic{type} \emph{body}: in a body,
+in-place emission would give compile-time-fixed values --- one call site for
+every runtime caller --- and a silent ``never ran'' mode when nothing calls it
+during generation. A block \emph{nested inside another block} is fine, and is
+the one place nesting is allowed: the inner block's text is a \emph{value} the
+enclosing block uses, not code injected into it.
 
 A block with no operand position at its own byte offset ---
 \ic{def helper\#\{nm\}\#()}, \ic{obj\#\{i\}\#.field} --- is a \emph{mid-token}

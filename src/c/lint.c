@@ -46,6 +46,8 @@ static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
 static long lint_stmts(LintSt st, Yv *stmts, int used, int top);
 static long lint_warn_at(LintSt st, Yv *msg, Yv *node);
 static long lint_warn_start(LintSt st, Yv *msg, Yv *node);
+static long lint_meta_top(LintSt st, Yv *stmts, Yv *ogen);
+static int meta_gen(Yv *s, Yv *ogen);
 static long lint_stmt(LintSt st, Yv *s, int used, int top);
 static int lint_code(Yv *s);
 static int lint_diverges(Yv *s);
@@ -134,7 +136,11 @@ static Yv *lint_fmods;
 /* The warnings for one unit: `ast` as parsed, `ast3` renamed (and
  * checked), sorted by position; ofile and fmods say which lines are a
  * module's. */
-Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel) {
+/* The warnings for one unit: `ast` as parsed, `ast3` renamed (and
+ * checked), sorted by position; ofile and fmods say which lines are a
+ * module's. `ogen` says which lines a meta block generated (see
+ * lint_meta_top); it is empty when the unit has no blocks. */
+Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel, Yv *ogen) {
     lint_ofile = ofile;
     lint_fmods = fmods;
     Yv *warns = yav(0);
@@ -148,9 +154,47 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel) {
         (void)lint_rets(st, yr_get(ast3, "stmts"));
     }
     (void)lint_stmts(st, yr_get(ast3, "stmts"), 0, 1);
+    if (yv_len(ogen) > 0) {
+        (void)lint_meta_top(st, yr_get(ast3, "stmts"), ogen);
+    };
     (void)lint_vars(st);
     (void)lint_types(st, yr_get(ast, "stmts"));
     return lint_sorted(yr_get(st, "warns"));
+}
+
+/* A statement starting on a line a meta block generated. Its line is the
+ * `#{` line (every generated line carries it, see mg_splice), and the ORIGIN
+ * map is what turns a program line back into a source line -- so `ogen` is
+ * indexed by the source line, and lint's own map says which source line a
+ * statement sits on. */
+static int meta_gen(Yv *s, Yv *ogen) {
+    long ln = yv_l(yr_get(s, "line")) - 1;
+    if (ln < 0 || ln >= yv_len(ogen)) { return 0; }
+    else { return yv_truth(ya_get(ogen, ln)); }
+}
+
+/* `ogen` is EMPTY for a unit with no meta blocks (see resolve_unit), so its
+ * length is the answer to "is this file's top level also a generator's?", and
+ * its entries say which lines a block generated. */
+
+/* With blocks in the file, the top level IS the generator's program, so every
+ * top-level statement there runs once in the generator and once in the program.
+ * That is fine for a declaration -- a `def` hoists, and a `let` a block reads
+ * should be pure (the manual says so) -- and for the text a block GENERATED,
+ * which the program runs once and the generator never ran at all: `ogen`
+ * (indexed by the statement's line) says which lines those are. Anything else
+ * is a statement with side effects the reader cannot see running twice. */
+static long lint_meta_top(LintSt st, Yv *stmts, Yv *ogen) {
+    long i = 0;
+    while (i < yv_len(stmts)) {
+        Yv *s = ya_get(stmts, i);
+        if (yv_l(yr_get(s, "k")) != K_decl && yv_l(yr_get(s, "k")) != K_void &&
+            !meta_gen(s, ogen)) {
+            (void)lint_warn_start(st, ys("a top-level statement runs once in the meta generator and once in the program, so with a meta block in the file it must be a declaration (a def, type, const or let) -- keep a top-level let initializer pure"), s);
+        };
+        i = i + 1;
+    };
+    return 0;
 }
 
 static long lint_warn(LintSt st, Yv *msg, long line, long col) {

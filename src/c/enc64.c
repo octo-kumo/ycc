@@ -923,7 +923,15 @@ static Yv *enc_unary_mem(Yv *buf, long at, Yv *op, Yv *o) {
    asm_relax). `code` is the long form's condition byte (0x84 for je, 0x85 for
    jne, ...), which setcc shares. */
 static Yv *enc_jmp(Yv *buf, long at, Yv *o, int lng) {
-    if (yv_l(yr_get(o, "k")) != K_lbl) {
+    if (yv_l(yr_get(o, "k")) == K_ind) {
+        /* jmp *%reg -- FF /4. The one jump through a register the backend
+         * emits: the `jmp_at` builtin's, which a forked child uses to enter a
+         * compiled image it mapped at a scratch address (meta.c run_image).
+         * enc_ok's empty fixups keep asm_relax off it: a jump through a
+         * register has no label to shorten to. */
+        long n = put_rex(buf, at, rex(0, 0, -1, yv_l(yr_get(o, "n"))));
+        return enc_ok(put2(buf, n, 255, modrm(3, 4, yv_l(yr_get(o, "n")))), yav(0));
+    } else if (yv_l(yr_get(o, "k")) != K_lbl) {
         return enc_err(at, ys("jmp target"));
     } else if (lng) {
         long n = put(buf, at, 233);
