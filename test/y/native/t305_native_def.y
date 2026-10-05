@@ -27,3 +27,17 @@ print(f("a", "b") < 0);
 // and with no `=`, the label is `y_<name>`
 native def str_eq(a: str, b: str) -> long;
 print(str_eq("x", "x"));
+
+// lint has nothing to say about any of them, and that is checked rather than
+// assumed: there is no expect-warning marker in this file, and the native suite
+// fails a fixture on any warning no marker claims -- at the default level or at
+// `-W 1`. A native has no body for the dropped-value, dead-code and
+// unused-local rules to fire on, and the unused-binding rules exempt top-level
+// names, which is what lets std/math.y declare twenty-odd natives that most
+// programs calling one of them never mention.
+//
+// The unused parameter is here for the same reason: it is the case a
+// body-walking rule would get wrong.
+native def spare(a: str, b: str, unused_param: str) -> long = "y_str_cmp";
+native def nobody_calls_this(a: str) -> long = "y_str_eq";
+print(spare("a", "b", "third") < 0);
