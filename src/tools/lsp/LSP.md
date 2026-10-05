@@ -14,10 +14,11 @@ that has none: a reader checks whether it is real before reading it.
 
 What is **not** built, precisely:
 
-- **M4 Stage B / §9.2, the C2 compiler change** — cross-file navigation (a name
-  from an import answers `null`), inferred types in a hover, a record's own
-  fields after a `.`, and the semantic token classes that say what a name
-  *denotes*. Decided as worth doing, with the cost counted: §11.3.
+- **M4 Stage B / §9.2, the C2 compiler change** — for TYPES only: an inferred
+  type in a hover, and a record's own fields after a `.`. Cross-file navigation
+  used to be on this list and is **not**: §11.4 found it needs no compiler change
+  at all, and `xref.y` now does it. What remains is the semantic token classes
+  that say what a name *denotes*, which are the same missing thing.
 - **M5's packaging**, beyond the documentation rows: no `vsce` package, no
   marketplace entry.
 - The requirement text below is unchanged and still the target; where a
@@ -538,8 +539,11 @@ shows the declaration instead, and says which.
 
 ### R5 — Go-to-definition (M4)
 
-> **Status: delivered for one file; cross-file (R5.1's "including imported
-> files") is not, and answers `null` rather than guessing.** Resolution is
+> **Status: delivered, including cross-file** (R5.1's "including imported
+> files"). The single-file index answers for the buffer's own declarations; a
+> name from an import is resolved through the SPLICED program the server already
+> builds for diagnostics, which is not the compiler's scope but the renamer's
+> (§11.4), and the answer can name a file the client does not have open. Resolution is
 > `nav.find_decl` over `scope.index_src`'s declarations, with the visibility
 > rules that matter: a `let` is visible only after its own line (Y does not
 > hoist one), a `def` is visible before it (mutual recursion depends on it), the
@@ -1112,7 +1116,7 @@ the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
 which must be zero, and only *prints* the total, so the total moves as `src/y`
 moves without anything failing; this row used to quote 487, a number nothing
 checks; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. **Not done:** inferred types in a hover and a record's own fields after a `.` (both §9.2 / C2, which §11.4 rescoped to types alone), and the semantic token legend's semantic classes. Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. `xref.y` + `nav.find_decl_named` close the cross-file half: `helper.helper` jumps to `mod.y` at the name, with its signature and doc comment, and `helper.TOP` to the `let` that declares it. `t015_xref` pins the three compiler facts it rests on. **Not done:** inferred types in a hover and a record's own fields after a `.` (both §9.2 / C2, which §11.4 rescoped to types alone), and the semantic token legend's semantic classes. Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
 ### 11.1 Two bugs the work found in the compiler
