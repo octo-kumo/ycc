@@ -471,20 +471,30 @@ so it will report `expected an expression, got '#'` for every meta file unless i
 reach the same pass. One module, two callers, one implementation.
 
 **Both halves of that are now done rather than intended.** `meta.y` is in the scanned
-list, and `test_coverage.sh` passes with **all 409 diagnostic sites tested or excused**,
-113 builtins called, 12 keywords used, 84 manual sections with rows and 454 test
+list, and `test_coverage.sh` passes with **all 488 diagnostic sites tested or excused**,
+175 builtins called, 15 keywords used, 85 manual sections with rows and 497 test
 references resolving — so the R11 chain (code → fixture → `COVERAGE.md` row) holds for
-the 19 new fixtures.
+the 19 new fixtures. (Those counts moved when master merged: it brought diagnostics,
+std modules and a language server of its own. At this branch's own tip, before the
+merge, they were 409 / 113 / 12 / 84 / 454.)
 
-The list is still not complete, and the gap is **pre-existing rather than ours**:
-`elf.y`, `asm.y`, `enc64.y` and `dwarf.y` are not scanned either, so every existing
-*writer* is invisible to the coverage suite on the same terms a new file is. Worth fixing
-in the same commit as the next new module rather than as a separate chore.
+The gap this paragraph used to call pre-existing is **closed**.
+`test_coverage.sh:70-73` scans `ir.y`, `asm.y`, `enc64.y`, `elf.y` and `dwarf.y`
+alongside everything else. Adding a file to that list was **not sufficient on its
+own**: `coverage_diag.awk` matches **per file**, so `asm.y` (`asm_state_err`) and
+`enc64.y` (`enc_err`) each needed a rule of their own before those files contributed
+anything at all. `elf.y` and `dwarf.y` print no diagnostics of their own, and `ir.y`'s
+are the trap strings the `anywhere` rule already covered.
 
-The LSP half is **not** done: at this branch's base the language server lives at
-`tools/lsp/`, not `src/tools/lsp/`, and nothing there has been taught about blocks. So a
-meta file still draws `expected an expression, got '#'` there. That is the one part of
-this section that remains open.
+The LSP half is **not** done. This paragraph used to place the server at `tools/lsp/`,
+which is where it was at the branch's base; master has since moved it, and the path
+above (`src/tools/lsp/check.y`) is now the correct one. Nothing there has been taught
+about blocks, and **no fixture under `src/tools/lsp/test/` contains a meta block**, so
+the server's behaviour on one is untested rather than known-good. The mechanism is
+visible in `diag.y:135-142`: the tolerant scanner reports `unterminated <kind>` in place
+of the `exit(1)` that `lexer.tokenize` would take, and on `#{` the `{` is exactly such an
+unterminated something. Teaching the server the pass is a feature, not a merge — it is
+the one part of this section that remains open.
 
 Pieces accumulate across files; `G` is built after the last resolve. `ycc build` keeps
 its shape — all units are resolved (`ycc.y:456-469`) before any is compiled — but a
