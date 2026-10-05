@@ -253,6 +253,29 @@ zero-fills: the `.bss` section (`.zero N` reserves space there; data or
 code in `.bss` is an assembler error). `-g` appends a symbol table, a DWARF
 line table and section headers past all of that (see "Debugging and
 profiling" below).
+### The asm dialect, in one paragraph
+
+`src/y/arch/*.s` is written in GNU as's **AT&T** spelling, which is what the
+encoder reads: source operand first, destination last (`movq %rax, %xmm0`,
+`mulsd tab+8(%rip), %xmm0`). Three things about it are worth knowing before
+writing a kernel.
+
+* **A comment is a whole line, or it is a bug.** The loader
+  (`arch_asm_lines`) drops a line only when its *first* byte is `#`, so a
+  comment trailing an instruction reaches the assembler, which reads it as an
+  operand: `L###: bad operand`, on a line whose opcode the prelude uses
+  everywhere. `make asm-check` passes such a line, because GNU as reads
+  trailing comments and this assembler does not.
+* **`label+N(%rip)` names the Nth eight-byte entry of a table.** One label per
+  table, not per entry: a label in `arch_consts` costs the shaker ~2K
+  instructions of label-map fixpoint on *every* compile, so sixty coefficients
+  as sixty labels would cost every program ~120K instructions forever.
+* **`.quad` is a 64-bit bit pattern**, so a negative value is a legitimate one
+  and half of every double's pattern is negative (that is the sign bit). A
+  range check cannot replace the old non-negativity rule either: `tonum` wraps
+  at 64 bits, so 2^63 comes back as -2^63 and the eight bytes stored are the
+  same ones.
+
 Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight
 out through `fs.write_bytes` (std/fs.y: raw `openat`/`write`/`fchmodat`

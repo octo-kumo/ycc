@@ -821,6 +821,28 @@ def tok_push(out: [str], t: str) -> [str] {
     if (len(t) == 0) { out } else { out += t }
 };
 
+// Is this mnemonic one whose operands may name a label, other than `mov`? The
+// answer is every SSE form -- `mulsd c7(%rip), %xmm0` is the only mention of a
+// coefficient-table entry a kernel has, and without it the shaker drops the
+// table and the label comes back undefined at link time.
+//
+// Naming the ten forms instead costs a dozen string comparisons on EVERY line
+// of the emitted text, which measured +1.3% of compile instructions on its own.
+// They all end in "sd" or "ss" and nothing else in the language does, so two
+// byte reads replace those comparisons. A false match would be harmless in any
+// case -- the two tokens this pushes match no label -- so it is a speed gate,
+// not a correctness one.
+def sse_mnemonic(w: str) -> bool {
+    let n = len(w);
+    if (n < 5) {
+        false
+    } else {
+        let a = byte_at(w, n - 2);
+        let b = byte_at(w, n - 1);
+        (a == 115 && b == 100) || (a == 100 && b == 115)
+    }
+};
+
 // Every symbol one line [lo, hi) references: call/lea/jump operands and
 // both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
 // mnemonic — this walks every line of the emitted text, so no searching.
@@ -836,7 +858,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
             out = tok_push(out, tok_at_b(text, b, op, hi));
         } else if (w == "lea") {
             out = tok_push(out, tok_at_b(text, b, op, hi));
-        } else if (w == "mov") {
+        } else if (w == "mov" || sse_mnemonic(w)) {
             let q = p;
             let go = true;
             while (go) {
@@ -859,6 +881,33 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
                     }
                 }
+            };
+            // The `mov` scan above only looks at a `$`-immediate, so an SSE
+            // form's operand was invisible here and the coefficient table was
+            // shaken away. Both operands are pushed: the syntax is AT&T, so the
+            // source is the FIRST one and `movsd`'s store form puts the memory
+            // SECOND, and a register name matches no label, so the extra token
+            // costs nothing.
+            if (w != "mov") {
+                let t1 = tok_at_b(text, b, op, hi);
+                if (t1 != "") {
+                    out = tok_push(out, t1);
+                };
+                let q2 = op;
+                let seen = false;
+                while (q2 < hi && !seen) {
+                    if (b[q2] == c',' || b[q2] == c'$') {
+                        seen = true;
+                    } else {
+                        q2 = q2 + 1;
+                    };
+                };
+                if (seen && b[q2] == c',') {
+                    let t2 = tok_at_b(text, b, skip_sp(b, q2 + 1, hi), hi);
+                    if (t2 != "") {
+                        out = tok_push(out, t2);
+                    }
+                }
             }
         } else {
             if (want_jumps) {
@@ -878,15 +927,33 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
     let res = out;
     while (i < hi) {
         if (b[i] == c'\n') {
-            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            if (!directive_line_b(b, ls)) {
+                res = line_refs_b(text, b, ls, i, res, want_jumps);
+            };
             ls = i + 1;
         }
         i = i + 1;
     };
     if (ls < hi) {
-        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        if (!directive_line_b(b, ls)) {
+            res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        };
     }
     res
+};
+
+// A line that opens with `.` is a directive, and no directive this assembler
+// has names a label: `.text`/`.data`/`.bss`/`.section`/`.globl` take a section,
+// `.quad`/`.zero` a number, `.string`/`.ascii` text, and `.file`/`.loc` a DWARF
+// file and line -- the path in a `.file` goes in a fixup's label FIELD, which is
+// not a code reference and matches no label. Scanning them was pure cost, and
+// arch_consts is nearly all directives: a `.quad` of a float constant costs ~27
+// instructions per byte to scan, which is ~33K instructions on every compile of
+// a program that does not use math at all. The coefficient tables are the reason
+// that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
+// measured 0.85% rather than a guess.
+def directive_line_b(b: [byte], ls: long) -> bool {
+    if (ls < len(b)) { b[ls] == c'.' } else { false }
 };
 
 // Every symbol a whole asm text references.
@@ -2504,8 +2571,19 @@ def uses_math(refs: [str]) -> bool {
     while ((i < len(refs)) && (!found)) {
         let r: str = refs[i];
         let n = len(r);
-        // y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10
-        found = (n == 6 && r == "y_sqrt") || (n == 7 && (r == "y_fbits" || r == "y_bitsf")) || (n == 8 && r == "y_to_int") || (n == 10 && r == "y_int_trap");
+        // y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10, and the
+        // length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
+        // y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8
+        found = (n == 5 && (r == "y_exp" || r == "y_log" || r == "y_pow"
+                            || r == "y_sin" || r == "y_cos" || r == "y_dot"
+                            || r == "y_sum"))
+            || (n == 6 && r == "y_sqrt")
+            || (n == 7 && (r == "y_fbits" || r == "y_bitsf"))
+            || (n == 8 && (r == "y_to_int" || r == "y_min_of" || r == "y_max_of"
+                           || r == "y_scale" || r == "y_axpy"))
+            || (n == 10 && r == "y_int_trap")
+            // the encoder's own form probes: y_sse_forms, y_sse_flags
+            || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"));
         i = i + 1;
     };
     found

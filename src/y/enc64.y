@@ -300,6 +300,12 @@ def rex_rm(w: bool, reg: long, m: Operand) -> long {
 // Fixup record for label-relative fields, resolved in pass 2:
 // {off, kind, lbl, lbl2} (off relative to instruction start).
 // kind: "rel32" (call/jmp/jcc), "rip32", "imm32diff".
+// NOTE: do not add a field here. `asm_loc`/`asm_file` build four-field records
+// for the DWARF markers and hand them back where a Fixup is expected; the C
+// twin passes records straight through, and the port gate builds ycc.y WITHOUT
+// -g, so nothing compares the two shapes until test_debug.sh sees that cycc and
+// ycc write different .debug_line tables. The table offset for `tab+8(%rip)`
+// rides in `lbl` instead, and asm.y's label_addr evaluates it.
 type Fixup = { off: long, kind: str, lbl: str, lbl2: str };
 def fixup(at: long, kind: str, lbl: str, lbl2: str) -> Fixup {
     { off: at, kind: kind, lbl: lbl, lbl2: lbl2 }
@@ -691,20 +697,62 @@ def enc_shift(buf: [byte], at: long, mn: str, dst: Operand, cnt: Operand) -> Enc
 // comparison move them into %xmmN, so the rest of the backend (slots,
 // pushes, calls) is unchanged.
 
+def sse_op(mn: str) -> long {
+    // addsd 58, subsd 5C, mulsd 59, divsd 5E
+    let op = 88;
+    if (mn == "subsd") { op = 92; }
+    if (mn == "mulsd") { op = 89; }
+    if (mn == "divsd") { op = 94; }
+    op
+};
+
 def enc_sse_arith(buf: [byte], at: long, mn: str, dst: Operand, src: Operand) -> Encoded {
-    // F2 0F <op> /r  — addsd 58, subsd 5C, mulsd 59, divsd 5E
-    if (dst.k != K.reg) {
+    // F2 0F <op> /r, with the destination an xmm and the source either an xmm
+    // or memory.
+    //
+    // The memory form is the point. A transcendental's kernel is
+    // `mulsd %xmm0, c7(%rip)` over a table of coefficients, and the F2 is what
+    // makes it the SCALAR form: without it the same bytes are the packed mulps,
+    // which multiplies sixteen bytes at once -- and they assemble.
+    if (dst.k != K.reg || op_size(dst) != 128) {
         enc_err(at, "sse dst")
-    } else if (src.k != K.reg) {
-        enc_err(at, "sse src")
-    } else {
-        let op = 88;
-        if (mn == "subsd") { op = 92; }
-        if (mn == "mulsd") { op = 89; }
-        if (mn == "divsd") { op = 94; }
+    } else if (src.k == K.reg) {
         let n = put(buf, at, 242);
         let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
-        enc_ok(put3(buf, m, 15, op, modrm(3, dst.n, src.n)), [])
+        enc_ok(put3(buf, m, 15, sse_op(mn), modrm(3, dst.n, src.n)), [])
+    } else if (src.k == K.mem) {
+        let t = mem_tail(src, dst.n);
+        let n = put_rex(buf, put(buf, at, 242), rex_rm(false, dst.n, src));
+        let m = put2(buf, n, 15, sse_op(mn));
+        enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+    } else {
+        enc_err(at, "sse src")
+    }
+};
+
+// F2 0F 10 /r loads into an xmm (or moves xmm to xmm); F2 0F 11 /r stores.
+// There is no REX.W: the value is eight bytes wide either way.
+def enc_movsd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
+    if (dst.k == K.reg && op_size(dst) == 128) {
+        if (src.k == K.reg && op_size(src) == 128) {
+            let n = put(buf, at, 242);
+            let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+            enc_ok(put3(buf, m, 15, 16, modrm(3, dst.n, src.n)), [])
+        } else if (src.k == K.mem) {
+            let t = mem_tail(src, dst.n);
+            let n = put_rex(buf, put(buf, at, 242), rex_rm(false, dst.n, src));
+            let m = put2(buf, n, 15, 16);
+            enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+        } else {
+            enc_err(at, "movsd src")
+        }
+    } else if (dst.k == K.mem && src.k == K.reg && op_size(src) == 128) {
+        let t = mem_tail(dst, src.n);
+        let n = put_rex(buf, put(buf, at, 242), rex_rm(false, src.n, dst));
+        let m = put2(buf, n, 15, 17);
+        enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+    } else {
+        enc_err(at, "movsd form")
     }
 };
 
@@ -1106,6 +1154,32 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
         enc_ok(put2(buf, at, 15, 5), [])
     } else if (mn == "ret") {
         enc_ok(put(buf, at, 195), [])
+        // The five jumps and movsd below sit LAST in the chain on purpose. An
+        // arm costs every line below it one or more comparisons, and this runs
+        // once per line of emitted text: beside the other jumps they measured
+        // +1.1% of compile instructions, almost all of it on the `ret` and
+        // `syscall` lines that now stop before ever reaching them.
+    } else if (mn == "movsd") {
+        let e = need2(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_movsd(buf, at, ops[1], ops[0]) }
+    } else if (mn == "jp" || mn == "jpe") {
+        // parity set: how an SSE comparison says "unordered", which is to say
+        // that one operand was a NaN -- the first test of every float function
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 138, ops[0], lng) }
+    } else if (mn == "jnp" || mn == "jpo") {
+        // parity clear: the same test, for the other side of the branch
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 139, ops[0], lng) }
+    } else if (mn == "ja" || mn == "jnbe") {
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 135, ops[0], lng) }
+    } else if (mn == "jae" || mn == "jnb" || mn == "jnc") {
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 131, ops[0], lng) }
+    } else if (mn == "jbe" || mn == "jna") {
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 134, ops[0], lng) }
     } else {
         enc_err(at, "unknown mnemonic '" + mn + "'")
     }

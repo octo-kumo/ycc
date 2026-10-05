@@ -372,9 +372,9 @@ documented as unfused.
 | P0 | the asm moves to `src/y/arch/*.s` | **done**, merged (`0f24376`) |
 | — | the portable tier: integers/bits, float comparisons and constants, RNGs, `[float]` array work (`src/y/std/math.y`) | **done** (`85403df`) — no compiler change needed; tests `t300`–`t304` |
 | P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
-| P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. The other five (`movsd`, `movapd`, `xorpd`, `andpd`, `unpcklpd`) arrive with P4, which is the first code that emits them |
+| P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. `movsd` and SSE arithmetic with a memory source have since landed too (`f95398b`..this commit), with `movapd`/`xorpd`/`andpd`/`unpcklpd` still to come if P4 needs them |
 | P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **1596 cases** (the pinned edges plus a seeded 1500-case spread) and the worst gap is **3 ulps** (`pow`), with 4 cases over 1. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
-| P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **started, not landed.** The instruction work is done and thrown away unlanded; what it cost and what it found is in §8 below, so the next attempt starts from measurements instead of from the beginning |
+| P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work is landed** (this commit): `movsd`, SSE arithmetic from memory, `jp`/`jnp`/`ja`/`jae`/`jbe`, `.quad` bit patterns, `label+N(%rip)`, and a fixture that runs all of them. `y_exp` itself is still to write; §8 has what the first attempt found and what this one added |
 | P5 | the bulk kernels | |
 
 ## 6. Sequencing
@@ -533,3 +533,61 @@ that point. Four probes localised it from "the routine returns 0.0" to "k is 0
 for every input". Single-stepping was a dead end, because the REX byte that
 `put_rex` emits for every memory operand makes gdb misalign, and its subsequent
 "rip jumped somewhere impossible" readings were an artifact of that.
+
+### What the second attempt added (2026-10-05)
+
+The instruction work is landed. Four things it cost that the first attempt did
+not find, in the order they cost them.
+
+**`src/y/arch/math.s` is EMBEDDED.** `ARCH_EMBEDS` in the Makefile lists it, so
+editing it needs `make ynew`, not just a re-run. Half an hour went into
+debugging a stale compiler that reported an error on a line I had already
+fixed. The same is true of `arch_x64.y`, and `make check` had to be re-run
+from a *clean* build before any of its verdicts could be believed: a `make
+ynew` that fails its fixpoint check leaves the OLD binary in place, silently,
+because `mv` is the last step.
+
+**A trailing `#` comment in a `.s` file is an assembler error.** `arch_asm_lines`
+drops a line only when its *first* byte is `#`, so `movq %rax, %xmm0  # xmm0 = a`
+reaches the assembler, which reads `#` as an operand: `L501: bad operand`, on a
+line whose opcode the prelude uses everywhere. `make asm-check` **passes** such a
+file, because GNU as reads trailing comments and this assembler does not. Every
+comment in the three arch `.s` files is now flush left, which is what the other
+two already did (neither had a single indented `#`).
+
+**The shaker's cost is per BYTE of rodata, and a label is not free either.**
+`shake_refs` scans the whole `arch_consts` text on every compile whether or not
+the program uses one byte of it, at ~27 instructions per byte — measured, by
+bisecting the file. The four constants the form probes need cost +27.8K
+instructions on hello.y as a fifth label, and +36.5K as four more. So:
+
+* a coefficient table is **one label**, read as `tab+0`, `tab+8`, … — which is
+  why `label+N(%rip)` exists at all (`asm.y`'s `label_addr` splits on `+`, and
+  only on a miss, so the common path pays nothing);
+* and the probes' table lives in **`math.s`, not `arch_consts`**: math.s is
+  shaken block by block, so a program that calls no probe drops the table with
+  the probes, where a table in arch_consts is carried by every program that
+  reaches it. Measured: with the table in arch_consts, `t308` carried 32 dead
+  bytes; in math.s it carries none.
+
+Skipping directive lines in `refs_range` — no directive this assembler has names
+a label, and the `.file` path that lives in a fixup's label *field* is not a code
+reference — pays for the tables P4 is about to add: it took hello.y from +1.1%
+back to +0.47%, against a base of 3.893M instructions.
+
+**And one trap worth its own paragraph, because it cost the longest.** The
+obvious way to carry a table offset is a fifth field on `Fixup`. Doing that makes
+Y and C silently disagree about the `.debug_line` table — `cycc` and `ycc` emit
+byte-identical binaries for every program except under `-g`, where the C
+compiler's line table is 27 bytes of CU where the Y compiler's has the file
+table and every `std/rt.y` row. **`make check` does not see it**: the port gate
+builds `ycc.y` *without* `-g`, so the two copies agree on every byte it looks
+at. Only `test_debug.sh`'s "cycc -g and ycc -g emit identical binaries" caught it,
+which is a point in that suite's favour.
+
+The cause is that `asm_loc`/`asm_file` build **four**-field records for the DWARF
+markers and hand them back where a `Fixup` is expected; the C twin passes
+records straight through and Y does something to them. So the offset rides in
+`lbl` instead (`tab+8` reaches `label_addr` whole) and `Fixup` keeps four fields,
+with a note on the type saying why. **Do not add a field to `Fixup`**: the
+port gate will not catch it and nothing else will.

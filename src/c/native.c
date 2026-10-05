@@ -174,6 +174,7 @@ Yv *tok_at_b(Yv *text, Yv *b, long i, long hi);
 Yv *tok_push(Yv *out, Yv *t);
 Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
 Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
+int directive_line_b(Yv *b, long ls);
 Yv *text_refs(Yv *text, int want_jumps);
 Yv *label_at(Yv *text, Yv *b, long lo, long hi);
 Yv *body_label(Yv *body);
@@ -1523,7 +1524,10 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
         } else if (ys_eq_lit(w, "lea")) {
             out = tok_push(out, tok_at_b(text, b, op, hi));
             ;
-        } else if (ys_eq_lit(w, "mov")) {
+        } else if (ys_eq_lit(w, "mov") || ys_eq_lit(w, "movsd") || ys_eq_lit(w, "movss")
+                   || ys_eq_lit(w, "movapd") || ys_eq_lit(w, "addsd") || ys_eq_lit(w, "subsd")
+                   || ys_eq_lit(w, "mulsd") || ys_eq_lit(w, "divsd") || ys_eq_lit(w, "addss")
+                   || ys_eq_lit(w, "subss") || ys_eq_lit(w, "mulss") || ys_eq_lit(w, "divss")) {
             long q = p;
             int go = 1;
             while (go) {
@@ -1554,6 +1558,42 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
                 }
                 ;
             }
+            /* An SSE form can name a label, and the `mov`-scan above only looks
+             * at a `$`-immediate -- so a kernel's `mulsd c7(%rip), %xmm0`, which
+             * is the one mention of a coefficient-table entry in the whole
+             * program, was invisible to the shaker and the table was dropped (an
+             * undefined label at link time). Both operands are pushed here: the
+             * syntax is AT&T, so the source is the FIRST one and `movsd`'s store
+             * form puts the memory SECOND, and a register name matches no label,
+             * so the extra token costs nothing. */
+            if (!ys_eq_lit(w, "mov")) {
+                Yv *t1 = tok_at_b(text, b, op, hi);
+                if (yv_len(t1) > 0) {
+                    out = tok_push(out, t1);
+                    ;
+                }
+                long q2 = op;
+                int seen = 0;
+                while (q2 < hi && !seen) {
+                    if (yv_l(ya_get(b, q2)) == 44 || yv_l(ya_get(b, q2)) == 36) {
+                        seen = 1;
+                        ;
+                    } else {
+                        q2 = q2 + 1;
+                        ;
+                    }
+                    ;
+                }
+                if (seen && yv_l(ya_get(b, q2)) == 44) {
+                    Yv *t2 = tok_at_b(text, b, skip_sp(b, q2 + 1, hi), hi);
+                    if (yv_len(t2) > 0) {
+                        out = tok_push(out, t2);
+                        ;
+                    }
+                    ;
+                }
+                ;
+            }
             ;
         } else {
             if (want_jumps) {
@@ -1576,17 +1616,41 @@ Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
     Yv *res = out;
     while (i < hi) {
         if (yv_l(ya_get(b, i)) == 10) {
-            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            if (!directive_line_b(b, ls)) {
+                res = line_refs_b(text, b, ls, i, res, want_jumps);
+                ;
+            }
             ls = i + 1;
             ;
         }
         i = i + 1;
     }
     if (ls < hi) {
-        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        if (!directive_line_b(b, ls)) {
+            res = line_refs_b(text, b, ls, hi, res, want_jumps);
+            ;
+        }
         ;
     }
     return res;
+}
+
+/* A line that opens with `.` is a directive, and no directive this assembler has
+   names a label: `.text`/`.data`/`.bss`/`.section`/`.globl` take a section,
+   `.quad`/`.zero` a number, `.string`/`.ascii` text, and `.file`/`.loc` a DWARF
+   file and line -- the path in a `.file` goes in a fixup's label FIELD, which is
+   not a code reference and matches no label. Scanning them was pure cost, and
+   arch_consts is nearly all directives: a `.quad` of a float constant costs ~27
+   instructions per byte to scan, which is ~33K instructions on every compile of
+   a program that does not use math at all. The coefficient tables are the reason
+   that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
+   measured 0.85% rather than a guess. */
+int directive_line_b(Yv *b, long ls) {
+    if (ls < yv_len(b)) {
+        return yv_l(ya_get(b, ls)) == 46;
+        ;
+    }
+    return 0;
 }
 
 /* Every symbol a whole asm text references. */
@@ -3423,8 +3487,19 @@ int uses_math(Yv *refs) {
     while (i < yv_len(refs) && !found) {
         Yv *r = ya_get(refs, i);
         long n = yv_len(r);
-        /* y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10 */
-        found = (n == 6 && ys_eq_lit(r, "y_sqrt")) || (n == 7 && (ys_eq_lit(r, "y_fbits") || ys_eq_lit(r, "y_bitsf"))) || (n == 8 && ys_eq_lit(r, "y_to_int")) || (n == 10 && ys_eq_lit(r, "y_int_trap"));
+        /* y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10, and the
+           length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
+           y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8 */
+        found = (n == 5 && (ys_eq_lit(r, "y_exp") || ys_eq_lit(r, "y_log") || ys_eq_lit(r, "y_pow")
+                            || ys_eq_lit(r, "y_sin") || ys_eq_lit(r, "y_cos") || ys_eq_lit(r, "y_dot")
+                            || ys_eq_lit(r, "y_sum")))
+            || (n == 6 && ys_eq_lit(r, "y_sqrt"))
+            || (n == 7 && (ys_eq_lit(r, "y_fbits") || ys_eq_lit(r, "y_bitsf")))
+            || (n == 8 && (ys_eq_lit(r, "y_to_int") || ys_eq_lit(r, "y_min_of") || ys_eq_lit(r, "y_max_of")
+                           || ys_eq_lit(r, "y_scale") || ys_eq_lit(r, "y_axpy")))
+            || (n == 10 && ys_eq_lit(r, "y_int_trap"))
+            /* the encoder's own form probes: y_sse_forms, y_sse_flags */
+            || (n == 11 && (ys_eq_lit(r, "y_sse_forms") || ys_eq_lit(r, "y_sse_flags")));
         i = i + 1;
     }
     return found;

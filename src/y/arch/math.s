@@ -65,3 +65,124 @@ y_int_trap:
     mov $231, %rax
     mov $1, %rdi
     syscall
+
+# ── the two form probes ─────────────────────────────────
+#
+# Neither of these is used by std/math.y. They exist because there is no other
+# way to check the encoder's SSE forms: every one of them assembles whether or
+# not it means what the mnemonic says, and the one that does not still produces
+# a plausible number. That is the trap the F2 prefix is -- `movsd` without it is
+# `movups` (sixteen bytes, two lanes) and `mulsd` without it is `mulps`, so a
+# kernel written with the packed form multiplies two doubles at once and returns
+# something plausible and wrong. `make asm-check` cannot see it, because GNU as
+# accepts the packed spelling as an alias; so the gate has to run the thing.
+# The shaker drops both blocks from a binary that does not call them.
+#
+# A NOTE ON COMMENT STYLE, because it cost real time: arch_asm_lines drops a
+# line only when its FIRST byte is `#`, so a comment trailing an instruction
+# reaches the assembler and is read as an operand. The symptom is `L###: bad
+# operand` on a line whose opcode the prelude uses everywhere, which sends the
+# reader looking for a fault in the new form rather than in the comment.
+# `make asm-check` passes such a line, because GNU as reads trailing comments
+# and ycc's assembler does not. So every comment here is flush left and on its
+# own line, which is what the other two arch .s files already do -- neither has
+# a single indented `#`.
+#
+# ysf_tab: the four constants, as ONE block under ONE label. A kernel reads them
+# as ysf_tab+0, +8, +16 and +24, and a label per constant would cost the shaker
+# ~2K instructions of label-map fixpoint each, forever, on every compile (the
+# same reason `label+N(%rip)` exists at all). The block lives HERE rather than in
+# arch_consts because math.s is shaken block by block: a program that calls no
+# probe drops these 32 bytes along with the probes, whereas a table in
+# arch_consts is kept by every program that reaches it at all.
+#
+# 2.0, 0.5, 0.25 and 4.0 -- all exactly representable, which is what lets the
+# fixture state its expected value as arithmetic instead of as a table.
+ysf_tab:
+    .quad 4611686018427387904
+    .quad 4602678819172646912
+    .quad 4598175219545276416
+    .quad 4616189618054758400
+#
+# y_sse_forms(a, b): (a*b)*c0 + c1 - c2, all over c3 -- with the last three
+# steps applied to the value that has been through a stack slot, so the store
+# and the load are on the critical path and a broken one changes the answer
+# instead of going unnoticed. With a=3, b=5 and the four constants in
+# arch_consts that is (15*2 + 0.5 - 0.25)/4 = 30.25/4 = 7.5625 exactly: every
+# step is a binary fraction, so the expected value is arithmetic rather than a
+# table. The notes below name the operand shape each instruction is here to
+# exercise.
+y_sse_forms:
+    mov 16(%rsp), %rax
+    mov 8(%rsp), %rcx
+# xmm0 = a, xmm1 = b
+    movq %rax, %xmm0
+    movq %rcx, %xmm1
+# xmm2 = b, then a*b: the register-to-register forms
+    movsd %xmm1, %xmm2
+    mulsd %xmm0, %xmm2
+# the register-with-a-memory-source forms, which is how a kernel reads its
+# coefficient table without spending a separate load on every term
+    mulsd ysf_tab+0(%rip), %xmm2
+# a store and a load through a stack slot: the two remaining movsd forms
+    sub $16, %rsp
+    movsd %xmm2, 8(%rsp)
+    movsd 8(%rsp), %xmm3
+    add $16, %rsp
+# the rest of the arithmetic, on what came back
+    addsd ysf_tab+8(%rip), %xmm3
+    subsd ysf_tab+16(%rip), %xmm3
+    divsd ysf_tab+24(%rip), %xmm3
+    movq %xmm3, %rax
+    ret
+#
+# y_sse_flags(a, b): the conditions a float kernel tests, one bit each, so one
+# call checks all five. ucomisd compares the SOURCE against the destination, so
+# `ucomisd %xmm0, %xmm1` asks whether b is above a. What it leaves in the flags
+# (Intel SDM): unordered -- an operand was a NaN -- sets ZF, PF and CF; above
+# sets none of them; below sets CF; equal sets ZF. So `jbe` also catches
+# unordered, because CF is set there: one branch says "too small, or NaN", which
+# is the first test every float function makes and the reason a kernel cannot
+# use `jb` there. Each test is a two-instruction pair -- the branch skips its own
+# `or`, so a taken condition falls into it and an untaken one does not -- rather
+# than one `or` under a shared tail, because the conditions overlap (above
+# implies above-or-equal) and a shared tail would leave the second bit unset.
+# The overflow pair is deliberately absent: an SSE comparison clears OF whatever
+# it found, so `jo` after one could never fire, and a fixture gating it would be
+# gating nothing.
+y_sse_flags:
+    mov 16(%rsp), %rax
+    mov 8(%rsp), %rcx
+    movq %rax, %xmm0
+    movq %rcx, %xmm1
+    xor %eax, %eax
+    ucomisd %xmm0, %xmm1
+# bit 0: parity set, unordered, so a NaN was one of the two operands
+    jp ysf_p
+    jnp ysf_np
+    jmp ysf_x
+ysf_p:
+    or $1, %rax
+    jmp ysf_x
+ysf_np:
+# bit 1: parity clear, the other side of the same question
+    or $2, %rax
+ysf_x:
+# bit 2: CF=0, ZF=0, so b above a
+    ja ysf_a
+    jmp ysf_ae
+ysf_a:
+    or $4, %rax
+ysf_ae:
+# bit 3: CF=0, so b above a, b equal to a, or unordered
+    jae ysf_ae_t
+    jmp ysf_b
+ysf_ae_t:
+    or $8, %rax
+ysf_b:
+# bit 4: CF=1 or ZF=1, so b below a, b equal to a, or unordered
+    jbe ysf_b_t
+    ret
+ysf_b_t:
+    or $16, %rax
+    ret
