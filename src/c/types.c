@@ -2784,6 +2784,20 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
                 return yr(2, "typ", t_unk(), "st", st);
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tvoid &&
+                       (yv_l(yr_get(barr, "k")) == K_kw_if ||
+                        yv_l(yr_get(barr, "k")) == K_block)) {
+                /* An `if` or a block in expression position, with no value:
+                 * `if (c) { A }["k"]` indexes the `if`, and A's arms are
+                 * statements (or disagree, so the `if` is void), so there is
+                 * nothing there to index. As the ordinary message it names
+                 * neither the base nor the fix, and nothing near it in the
+                 * source shows an index of an `if` — the `[` reads as a
+                 * literal. Name the base and the `;`. */
+                Yv *m1 = ys_cat(ys("cannot index this '"), ktag(yv_l(yr_get(barr, "k"))));
+                Yv *m2 = ys_cat(m1, ys("', which has no value: add a ';' after it to make it a statement"));
+                st = fail(st, m2, yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot index "),

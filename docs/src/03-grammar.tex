@@ -270,7 +270,12 @@ def area(s: Shape) -> float { ... };
 \noindent \ty{block} is \ic{\{}~\ty{statement}\(^*\)~[\ty{expr}]~\ic{\}}:
 a block is an \emph{expression} whose value is its trailing expression
 (if any). An empty block \ic{\{\}} is legal and void; a trailing \ic{;}
-makes the block void. Statements are separated by \ic{;}, which may be
+makes the block void. A statement-form \ic{if} is an expression too, and a
+\ic{[} after it indexes that value --- \ic{if (c) \{ A \}["k"]} is
+\ic{A["k"]} --- so a \ic{;} after the block is what keeps the two apart.
+Indexing one that has no value (its arms are statements, or disagree) says
+so and names the \ic{;} rather than reporting the \ic{[}: \ic{cannot index
+this 'if', which has no value: add a ';' after it to make it a statement}. Statements are separated by \ic{;}, which may be
 left out only after a statement that ends in \ic{\}} (an \ic{if},
 loop, \ic{def} or block) or before the \ic{\}} closing the block:
 \ic{f() g()} is an error, and so is any token the grammar does not

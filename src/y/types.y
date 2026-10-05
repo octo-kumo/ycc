@@ -2141,6 +2141,16 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 let ri = typeof_expr(st, index.idx);
                 st = ri.st;
                 tc_res(t_unk(), st)
+            } else if (br.typ.k == K.tvoid && (barr.k == K.kw_if || barr.k == K.block)) {
+                // An `if` or a block in expression position, with no value:
+                // `if (c) { A }["k"]` indexes the `if`, and A's arms are
+                // statements (or disagree, so the `if` is void), so there is
+                // nothing there to index. As the ordinary message it names
+                // neither the base nor the fix, and nothing near it in the
+                // source shows an index of an `if` — the `[` reads as a
+                // literal. Name the base and the `;`.
+                st = fail(st, "cannot index this '" + ktag(barr.k) + "', which has no value: add a ';' after it to make it a statement", index.line, index.col);
+                tc_res(t_unk(), st)
             } else {
                 st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", index.line, index.col);
                 tc_res(t_unk(), st)
