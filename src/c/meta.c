@@ -441,10 +441,15 @@ static long fab_stack(char *stk, Yv *av) {
 /* `jmp_at(addr)`: a jump through a register, leaving %rsp alone (a `call`
  * would push a return address where a process entry point reads its argc).
  * The Y twin gets this from the `jmp_at` builtin, emitted as ir.h F_JMP_IND;
- * here it is one line of asm, the same instruction. */
-static void mg_jmp_at(long addr) {
-    __asm__ volatile ("jmp *%0" : : "r"(addr) : "memory");
-}
+ * here it is one line of asm, the same instruction.
+ *
+ * It is spelled INLINE in run_image_fork rather than in a function of its own,
+ * for the same reason the clone syscall is: %rsp must still be `sp` -- the
+ * fabricated argv starts there and the image's entry reads argc from it -- and
+ * a `call` (which is what a helper is, at -O0) pushes a return address and
+ * drops %rsp by eight. That alone made every program using argv() read a
+ * garbage argc. */
+#define mg_jmp_at(addr) __asm__ volatile ("jmp *%0" : : "r"(addr) : "memory")
 
 static long page_up(long n) {
     return (n + 4095) / 4096 * 4096;
