@@ -240,6 +240,7 @@ src/tools/lsp/sem.y           semantic tokens (M2)                R2
 src/tools/lsp/sym.y           documentSymbol / the outline        R2
 src/tools/lsp/scope.y         declarations, visibility            R4, R5, R6
 src/tools/lsp/nav.y           the word at the cursor, and its declaration  R4-R6
+src/tools/lsp/strm.y          the string methods, from types.str_method    R6
 src/tools/lsp/fmt.y           the formatter                       R3
 src/tools/lsp/diag.y          diagnostics: errors and warnings    R1
 src/tools/lsp/dispatch.y      the parent/child split              §4.2
@@ -550,25 +551,65 @@ the `.`, a `Call` at the `(` (the parser's `Call` site, `407-408`, `447`, `1649-
 
 ### R6 — Auto-complete (M4)
 
-> **Status: delivered for this file's declarations and the builtins; R6.1's
-> "record fields of the expression before the dot" and R6.2's std/package
-> members are not, and the list says so** with `isIncomplete: true`, which is
-> the protocol's way of saying "ask me again as the user types". The builtins
-> are `native.intrinsic_names()` — read from the compiler, not copied here, so a
-> builtin added to the compiler appears without anything updated on this side.
-> Three entries in that list (`opt$test`, `opt$val`, `#fmt`) are the compiler's
-> own halves and are filtered out, because a `$` cannot appear in an identifier
-> and `#` starts a comment.
+> **Status: delivered for this file's declarations, the builtins, and the string
+> methods after a `.`; R6.1's record fields and R6.2's std/package members are
+> not, and the list says so** with `isIncomplete: true`, which is the protocol's
+> way of saying "ask me again as the user types".
+>
+> The builtins are `native.intrinsic_names()` — read from the compiler, not
+> copied here, so a builtin added to the compiler appears without anything
+> updated on this side. Three entries in that list (`opt$test`, `opt$val`,
+> `#fmt`) are the compiler's own halves and are filtered out, because a `$`
+> cannot appear in an identifier and `#` starts a comment.
+>
+> The string methods are the second of R6.2's three tables, and they are the one
+> that is genuinely answerable without §9.2: `types.str_method(m)` returns the
+> method's parameters, arity and result type, and `fn == ""` for a name it does
+> not know — a hover after a `.` reads the signature from the compiler's own
+> table, and completion offers the whole set. It cannot *enumerate*, because
+> `str_method` is a chain of comparisons, so `strm.y` mirrors the names and
+> filters them through `str_method` on every use; `t014_strm` is the ratchet.
+> The member list is the string methods and ONLY those: a record's own fields
+> are the other half of R6.1 and are not claimed. Mixing the two would be worse
+> than offering neither, since the user reads the list as "these go here".
+>
+> `native.unit_iface` is the third table and is still not offered, and reading
+> what it actually is is what settles it. It does not enumerate anything:
+> `pack_iface` (native.y 11315) packs `len(exports)`, then per export a
+> name / label / type-code triple, then the parameter defaults — an
+> order-dependent blob built to be COMPARED for equality, which is what the std
+> pack and `build/obj` staleness use it for. Asking it for "the std unit exports"
+> would mean parsing a fingerprint built for comparison to recover the one thing
+> it was derived from: `u.exports`, a `[Sym]` the compiler already has. So the
+> honest route is `u.exports` directly, and *that* is Stage B's cross-file work —
+> which is the same 84% the coverage measurement puts on Stage B (§11.3), reached
+> from the other end. The two are not two tasks: delivering either the index or
+> the externs delivers both.
 
 **R6.1** `textDocument/completion` offers, in scope at the cursor: locals,
 parameters, `self`, top-level bindings, `type` aliases, and record fields of
 the expression before the dot.
 
+Delivered except the record fields, and the `.` is what gates them: a cursor
+after a dot is answered from `strm` and nothing else, which is why a hover on
+`rec.k` is `null` rather than a guess. There is a test for that specific
+non-answer (`t014_strm`, and `client-check.js`'s "a record field after a dot is
+null, not a guess"), because a member branch that answers everything after a dot
+would look like M4 working while being wrong.
+
 **R6.2** Global items need no compiler change and come from the compiler's own
-tables: `native.is_intrinsic_name` (`native.is_intrinsic_name`) for builtins,
-`types.str_method` (`types.str_method`) for the 23 string methods,
-`native.unit_iface` (`native.unit_iface`) for std unit exports, and `nr.pkgs` for
-package-qualified names. Local scope is the only part needing §9.2.
+tables: `native.is_intrinsic_name` (`native.is_intrinsic_name`) for builtins —
+**delivered**, as `intrinsic_names()`; `types.str_method` (`types.str_method`)
+for the string methods — **delivered**, as `strm.y`; `native.unit_iface`
+(`native.unit_iface`) for std unit exports — **not**, see the status note above;
+and `nr.pkgs` for package-qualified names — **not**, same reason. Local scope is
+the only part needing §9.2.
+
+The count was 23 in an earlier draft of this line and is 26 now: `str_method`
+lists `lstrip`/`trim_start` and `rstrip`/`trim_end` as separate spellings of the
+same two helpers, and all four are names a program may write, so all four belong
+in a completion list. `length` is *not* among them — `s.length` is a property,
+not a method, and `str_method` does not list it.
 
 **R6.3** The list is filtered by prefix, and each item carries `sortText`,
 `detail` (the type) and `documentation` (the doc comment above the definition).
@@ -772,6 +813,15 @@ Three edits:
 1. **`types.Binding` gains `line` and `col`.** Every `st_bind` site has the
    node in hand. On `src/y/ycc.y` the binding list runs to several thousand
    entries, so this is a real but small memory cost — `make bench` will say.
+
+   Counted, so the shape of the work is known rather than guessed: `Binding` is
+   *constructed* in one place (`st_bind`, line 1112) and `st_bind` is called at
+   **15 sites** in `src/y/types.y`, all of which have the node in hand except
+   `check_program`'s intrinsic bindings, which have no position and would pass
+   −1. In the C twin `Binding` is a record literal, so the eight
+   `yr(7, "bindings", …)` state rebuilds (all eight `yr(7, …)` in the file) become
+   `yr(9, …)`, and the 17 `st_bind` calls gain the two arguments. That is the
+   whole of it — no call site is more than a line or two.
 2. **An expression type table behind a flag.** `let tc_index: bool = false;`
    in `types.y`, following the existing `lint_ofile` / `dbg_lines` /
    `rn_ofile` module-global pattern. When set, `typeof_expr` also records
@@ -783,6 +833,24 @@ Three edits:
    `uniq -> (line, col)`. The new entry returns `{ ast, defs }`;
    `rename_program_x` (`rename.rename_program_x`) becomes a thin wrapper returning
    `ast`, so `ycc.y`, `native.y` and `pkg.y` do not change.
+
+**The index shape already exists and should be reused.** `parser.NameIx`
+(`nameix_new` / `nameix_put` / `nameix_get`, parser.y 2324) is a string→long open
+hash map, and the checker already keeps one over its bindings: `types.tc_ix`,
+added with `ab5d529` ("Checker: a name index for lookup; lint shares it") so that
+`st_lookup` is O(1) instead of O(bindings) past 256 entries, and `lint.y` reads
+the same one. So edit 3 is a *second* `NameIx` mapping `uniq -> line * 65536 +
+col` beside the existing one, not a new structure — and whoever writes it should
+look at `tc_ix` first rather than inventing a container, which is the mistake that
+costs the most to unpick later.
+
+**The baseline to measure against.** `bench/compile_ir.sh refs/ycc.ref ./ynew`,
+run with nothing changed, is **+0.00%** on all thirteen benchmarks: `ycc.y`
+compiles itself in **4,705,071,230** instructions. Edit 1 adds two words per
+binding and edit 3 adds one map per program; the number to watch is `ycc.y`'s,
+because that is where the binding list is longest, and the number to watch for
+*not* moving is the eleven benchmarks that do not use the checker much. Measure
+before `make rebless`, as every other compiler change does.
 
 Plus **name positions** where they are missing, for R5.4: `Decl` needs the
 name token's line/col, and `Dot` the key's. The parser has the token at both
@@ -1011,7 +1079,7 @@ Each ends green on `make test`.
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
 | **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
 | **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over 487 files; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `client-check.js` drives all three through the JSON-RPC library VS Code uses (53/53). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), string methods and record fields after a `.`, and the semantic token legend's semantic classes. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), a record's own fields after a `.`, the std/package globals `native.unit_iface` would give, and the semantic token legend's semantic classes. |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
 ### 11.1 Two bugs the work found in the compiler

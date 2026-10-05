@@ -191,6 +191,7 @@ reason.
 | 10-errors | Language server | The outline: every `.y` file in the tree yields symbols, hierarchically, with `selectionRange` on the name | `lsp/test/t011_sym.y` |
 | 10-errors | Language server | Which declaration a name resolves to, and which names are visible where: a `let` is not visible before its own line, a `def` is, the innermost visible declaration wins, and at one depth the later wins | `lsp/test/t012_scope.y` |
 | 10-errors | Language server | Hover, go-to-definition and completion as the protocol shapes them: a location on the name, `null` where there is nothing, markdown contents, and `isIncomplete` | `lsp/test/t013_m4.y` |
+| 10-errors | Language server | The member position: a hover on a string method shows the signature the checker would use, completion after a `.` offers the methods and only the methods, a record field after a `.` answers `null` rather than a guess, and the mirrored name list cannot rot silently | `lsp/test/t014_strm.y` |
 | 10-errors | Language server | The formatter is idempotent over the whole tree, and leaves `src/y/` alone as far as it can | `lsp/test/test-fmt.sh` |
 | 10-errors | Language server | The same server driven by the JSON-RPC library VS Code itself uses, and the extension activating and reaching Running against a real process | `lsp/test/test-e2e.sh` (by hand: it needs a process) |
 

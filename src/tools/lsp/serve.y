@@ -51,6 +51,7 @@ import sym from "./sym.y";
 import scan from "./scan.y";
 import scope from "./scope.y";
 import nav from "./nav.y";
+import strm from "./strm.y";
 
 // ── the open documents ──────────────────────────────────────────────────
 
@@ -723,6 +724,45 @@ def hover_text(dcl: IdxDecl) -> str {
     md
 }
 
+// A hover for something that is not a declaration: the same shape, over a
+// signature string.
+def hover_msg(id: json.Val, w: Hit, md: str) -> str {
+    let contents = json.obj();
+    contents["kind"] = json.str("markdown");
+    contents["value"] = json.str(md);
+    let r = json.obj();
+    r["contents"] = json.jobj(contents);
+    let wr = json.obj();
+    wr["start"] = lsp_pos(w.line, w.ch);
+    wr["end"] = lsp_pos(w.line, w.ch + len(w.name));
+    r["range"] = json.jobj(wr);
+    result_msg(id, json.jobj(r))
+}
+
+// Is `off` (a byte offset) sitting just after a `.`?
+//
+// The signal a member position gives without a type checker: `s.split` and
+// `x.len` are the same shape. It cannot say WHICH members belong -- a record's
+// fields and a string's methods are indistinguishable from the text -- so the
+// callers use it only to offer the members they CAN answer for, and both say in
+// their result what the answer is. Spaces and tabs are skipped so `s . trim`
+// works; a newline stops the walk, because `.` at the end of one line and a
+// name at the start of the next is not a member access in any language anyone
+// writes.
+def after_dot(text: str, off: long) -> bool {
+    let out = false;
+    let i = off;
+    while (i > 0) {
+        let c = byte_at(text, i - 1);
+        if (c == 32 || c == 9) { i = i - 1; }
+        else {
+            if (c == 46) { out = true; };
+            i = 0;
+        };
+    };
+    out
+}
+
 // textDocument/hover: the declaration under the cursor, as text.
 //
 // `null` when the cursor is not on a name this file declares. Stage A does not
@@ -735,8 +775,21 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
     if (h != none && u.text != "") {
         let w: Hit = h!;
         let at = request_position(p);
+        // A string method is answered FIRST, and returns: `"a,b".split` is
+        // answered from the compiler's own table (strm.y), which knows the
+        // signature, whereas the fallback below knows only what THIS file
+        // declares -- and a name after a dot is rarely one of those. Without
+        // this the hover on `"x".split` was empty, which reads as "no such
+        // method" rather than "the index cannot see it".
+        //
+        // It has to be first rather than a tie-break, because a file may well
+        // declare its own `split`, and here the member position means the
+        // receiver's method.
+        if (after_dot(u.text, w.off) && strm.is_method(w.name)) {
+            return hover_msg(id, w, "```y\n" + strm.sig(w.name) + "\n```\n\nstring method");
+        };
         let found = nav.find_decl(scope.index_src(u.text, ""), w.name, at.line, at.character);
-        if (found != none) {
+        if (is_some(found)) {
             let dcl: IdxDecl = found!;
             let contents = json.obj();
             contents["kind"] = json.str("markdown");
@@ -777,6 +830,7 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
         let col = pos.from_lsp(d.text, at.line, at.character);
         let off = scan.off_at(d.text, pos.src_line(at.line), col);
         let prefix = "";
+        let word_start = off;
         if (off >= 0) {
             // The word being typed, so the list can be filtered by what is
             // already there. Read from the BUFFER rather than from the word
@@ -786,9 +840,23 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
             let w = nav.ident_at(sps, d.text, off);
             if (w != none) {
                 let h: Hit = w!;
+                word_start = h.off;
                 if (off >= h.off) { prefix = d.text[h.off:off]; };
             };
         };
+        // After a `.` the answer is MEMBERS, not names, and the two lists are not
+        // mixed: a completion list that offers `print` after a dot is worse than
+        // one that offers nothing, because the user reads it as "these are the
+        // things you can put here".
+        //
+        // Stage A cannot type the expression, so what it can answer for is the
+        // string methods -- the compiler's own table, filtered (strm.matching).
+        // A record's own fields, and an import's members, are the 84% that Stage
+        // B closes (LSP.md 11.3); until then the member list is the str methods
+        // and `isIncomplete` says so.
+        if (after_dot(d.text, word_start)) {
+            foreach (m in strm.matching(prefix)) { items += str_method_item(m); };
+        } else {
         let idx = scope.index_src(d.text, "");
         let here = nav.with_prefix(nav.visible(idx, at.line, at.character), prefix);
         foreach (dcl in here) { items += completion_item(dcl); };
@@ -809,6 +877,7 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
             if (typable && (prefix == "" || (len(b) >= len(prefix) && b[:len(prefix)] == prefix))) {
                 items += builtin_item(b);
             };
+        };
         };
     };
     let r = json.obj();
@@ -834,6 +903,25 @@ def completion_item(dcl: IdxDecl) -> json.Val {
     // user did not ask for one.
     let te = json.obj();
     te["newText"] = json.str(dcl.name);
+    o["textEdit"] = json.jobj(te);
+    json.jobj(o)
+}
+
+// A string method as a completion item: kind 2, Method, which is what an editor
+// draws the little `f`-in-a-circle icon for -- the same icon a record's field
+// would get, since the two are indistinguishable here. `detail` is the
+// signature, so the list is readable without the user taking the item.
+//
+// This is the one completion kind that DOES have a signature: the builtins below
+// do not (Stage A has no types.Binding), and a string method's is the compiler's
+// own answer rather than a guess.
+def str_method_item(name: str) -> json.Val {
+    let o = json.obj();
+    o["label"] = json.str(name);
+    o["kind"] = json.num(2);
+    o["detail"] = json.str(strm.sig(name));
+    let te = json.obj();
+    te["newText"] = json.str(name);
     o["textEdit"] = json.jobj(te);
     json.jobj(o)
 }
