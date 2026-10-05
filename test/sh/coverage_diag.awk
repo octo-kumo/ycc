@@ -186,6 +186,8 @@ f == "ycc.y" && /puts\("(error|ycc): / { site(tmpl($0, index($0, "puts(") + 5));
 f == "pkg.y" && /pk_die\(/ && !/^def / { site(tmpl($0, index($0, "pk_die(") + 7)); next }
 f == "lint.y" && /lint_warn(_at|_start)?\(st, [^,]*"/ { site(tmpl($0, index($0, "(st, ") + 5)); next }
 f == "lint.y" && /msg = .*"/ { site(tmpl($0, index($0, "msg = ") + 6)); next }
+f == "asm.y" && /state_err\(.*"/ { site(tmpl($0, match($0, /"/))); next }
+f == "enc64.y" && /enc_err\(at, "/ { site(tmpl($0, index($0, "enc_err(at, \"") + 13)); next }
 
 END {
     for (k = 1; k <= nexc; k++)

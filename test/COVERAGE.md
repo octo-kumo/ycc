@@ -51,6 +51,8 @@ reason.
 | 02-lexical | Meta blocks | A piece may not hold a NUL byte, and the whole generator's output is capped | `native/e183_meta_emits_nul.y`, `native/e184_meta_emits_too_much.y` |
 | 02-lexical | Meta blocks | A generator that traps or exits is a diagnostic naming the block, not a failure of ycc | `native/e185_meta_gen_dies.y` |
 | 02-lexical | Meta blocks | A block cannot be emitted by another block, and cannot sit in a module the generator imported | `native/e186_meta_emits_block.y` |
+| 02-lexical | Meta blocks | Every line a block generates carries the `#{` line, so a diagnostic in generated text names the block's line | `native/e186_meta_emits_block.y`, `native/t198_meta_basic.y` |
+| 02-lexical | Meta blocks | A generated name and its call sites must be generated together (the generator holds the def under the short name), and two fragments of one name need literal text between them: `}##{` is two blocks but `}#{` is one and a brace | `native/t200_meta_mid_token.y` |
 | 02-lexical | Meta blocks | `ycc -E` dumps the source the lexer sees, with origin markers; re-compiling the dump gives the same bytes | `sh/test_ycc.sh` |
 | 02-lexical | Identifiers and keywords | Underscored identifiers and contextual names | `native/t47_none_void.y`, `native/t50_unions_match.y`, `native/t55_parse_forms.y`, `native/t67_str_methods.y` |
 | 02-lexical | Identifiers and keywords | Reserved y_ generated-code prefix | none: y_ is reserved for compiler-generated labels, not user-program behavior |
@@ -194,6 +196,9 @@ so the list cannot rot.
 
 | Source | Code | Why |
 |---|---|---|
+| `src/y/asm.y` | `asm_state_err(sec, offs, items, labels, lno, "unexpected comment` | The assembler reading text ycc itself wrote and finding a comment line in the middle of an instruction stream. An internal consistency check: a test can only produce one by making the emitter emit something the assembler cannot read. |
+| `src/y/asm.y` | `asm_state_err(sec, offs, items, labels, lno, "bad label` | Likewise, a label line the assembler cannot split. These two are all the messages `asm_state_err` has. |
+| `src/y/enc64.y` | `enc_err(at,` | Every message `enc_err` prints: the encoder rejecting an IR item whose shape it does not implement. All are internal checks on what the emitter wrote, so no test reaches one by giving ycc a program. The fragment is deliberately the whole function -- 38 distinct messages, all the same kind. |
 | `src/y/parser.y` | `msg: v, line: ln` | Re-raises a lexer error token as a parse error; the lexer's messages are checked at their own sites. |
 | `src/y/parser.y` | `msg: e.msg` | Re-raises a type-syntax error (`terr`) as an expression error; the `terr` site is checked. |
 | `src/y/types.y` | `fail(st, err.msg` | The checker reporting a parser error node; the parser's sites are checked. |

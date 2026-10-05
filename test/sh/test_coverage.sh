@@ -69,6 +69,7 @@ awk -v EXCF="$TMP/excused" -v EXPF="$TMP/expect" -f "$ROOT/test/sh/coverage_diag
     "$TMP/excused" "$TMP/expect" \
     "$SRC/lexer.y" "$SRC/parser.y" "$SRC/rename.y" "$SRC/types.y" "$SRC/native.y" \
     "$SRC/ycc.y" "$SRC/pkg.y" "$SRC/lint.y" "$SRC/meta.y" "$SRC/arch_x64.y" \
+    "$SRC/ir.y" "$SRC/asm.y" "$SRC/enc64.y" "$SRC/elf.y" "$SRC/dwarf.y" \
     "$SRC"/std/*.y > "$TMP/sites"
 nsites=$(grep -c -v '^stale' "$TMP/sites")
 nmiss=0

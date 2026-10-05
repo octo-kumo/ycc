@@ -10,17 +10,22 @@
 // block's value is spliced in as TEXT.
 def nothing() -> str { "" };
 def lit(s: str) -> str { "\"" + s + "\"" };
-// mid-token in a def's NAME: a function name with a generated fragment. A
+// mid-token in a def's NAME: a function name in two generated fragments. A
 // block at the START of a name is not mid-token (no token ends there) and would
 // leave `def () -> long` behind if its bytes were dropped, so it is refused --
 // a name fragment needs a character of the name on one side.
+//
+// The literal `mid` between the two fragments is not decoration: `}##{` would
+// be two blocks but `}#{` is one block and then a brace, so two fragments of
+// one name need something of the name between them.
 //
 // The generator program holds the def under the SHORT name (`as`), so nothing
 // in the SOURCE may call it: the call is generated too. That is the shape --
 // generate the name and its call sites together -- and it is what makes this
 // usable at all.
 const NAME = "sembled";
-def as#{NAME}#() -> long { 7 };
+const NAME2 = "";
+def as#{NAME}#mid#{NAME2}#() -> long { 7 };
 // mid-token in the middle of an identifier
 let tag#{nothing()}# = 5;
 // mid-token between an object and a field: the two tokens just join
@@ -35,4 +40,4 @@ let r = { let q = #{ lit("99") }#; q.length };
 let b = [10, 20, 30];
 // the generated call has to come after the lets it uses, and after the def
 // whose name the mid-token block generated
-#{ "print(assembled(), tag, v, tailend, a, b[1], r);\n" }#
+#{ "print(assembledmid(), tag, v, tailend, a, b[1], r);\n" }#
