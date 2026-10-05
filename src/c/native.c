@@ -5017,6 +5017,22 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+        } else if (yv_l(yr_get(rt, "k")) == K_tbyte) {
+            /* A byte stringifies as the number it holds: `s[i]` is a byte, so
+             * this is the shape a glyph ramp or a lookup table builds a string
+             * with. Without the arm a byte fell through to the unknown-
+             * operand arm below, which pushes the VALUE where y_str_cat wants
+             * a pointer -- a dereference of 65, and SIGSEGV. gen leaves a byte
+             * zero-extended in %rax, so y_long_tostr takes it as it is. */
+            st = gen(st, yr_get(node, "l"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, yr_get(node, "r"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else if (yv_l(yr_get(rt, "k")) == K_tfloat) {
             st = gen(st, yr_get(node, "l"));
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -5055,6 +5071,17 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = gen(st, yr_get(node, "l"));
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, yr_get(node, "r"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+        } else if (yv_l(yr_get(lt, "k")) == K_tbyte) {
+            /* the mirror of the right-operand byte arm */
+            st = gen(st, yr_get(node, "l"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
