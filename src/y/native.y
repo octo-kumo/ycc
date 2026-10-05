@@ -4497,10 +4497,12 @@ def shift_imm(r: Node) -> long {
 
 // ── calls ──────────────────────────────────────────────────────────────
 // Syscall arg registers. SysV: rdi, rsi, rdx, r10, r8, r9. Win64 `syscall`:
-// r10, r9, r8, rdx, rcx, r11 -- and it is the SEVENTH argument that lives at
-// 32(%rsp), not the sixth, so an intrinsic of at most six arguments (the
-// number plus six) needs nothing on the stack. That is the whole ABI delta
-// for the `syscall` intrinsic: one ladder, the number still in %rax.
+// arg1 %r10, arg2 %rdx, arg3 %r8, arg4 %r9, and the FIFTH onward on the
+// stack -- FOUR argument registers, not six, and the fifth argument (not the
+// sixth or seventh) is the first that needs a slot.  `w_syscall_reg` below
+// carries the proof and the two layouts this used to get wrong; read that
+// before changing either arm.  That is the whole ABI delta for the `syscall`
+// intrinsic: one ladder, the number still in %rax.
 
 def syscall_reg(i: long) -> long {
     if (target_is_windows()) { w_syscall_reg(i) } else { l_syscall_reg(i) }
@@ -4567,23 +4569,13 @@ def ir_terminate(body: [long]) -> [long] {
     insn.ir_push(body, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0)
 };
 
-// End the process with the status in %rax: exit_group(status) on Linux,
-// NtTerminateProcess(-1, status) on Windows. The two share the syscall
-// instruction and nothing else -- the number, the handle argument and the
-// register the status travels in all move.
-def gen_terminate(st: EmitSt) -> EmitSt {
-    if (target_is_windows()) {
-        // NtTerminateProcess(-1, status): argument one in %r10, argument two
-        // in %rdx (w_syscall_reg).
-        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_MOV_I_R, 0 - 1, insn.R_R10, 64, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_MOV_I_R, 44, insn.R_RAX, 64, 0, 0, 0, 0);
-    } else {
-        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDI, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_MOV_I_R, 231, insn.R_RAX, 64, 0, 0, 0, 0);
-    };
-    emit_insn(st, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0)
-};
+// There is deliberately no EmitSt twin of ir_terminate here. `exit` reaches
+// the kernel through the arch module's `y_os_exit` (gen_exit), because rt.y
+// calls exit() and rt.y is serialized into the std pack, which is written for
+// ONE target (see gen_exit's note); and `_start`'s tail, the one other place a
+// process ends, builds its instructions straight into the body's IR and so has
+// always wanted the IR-shaped ir_terminate. An EmitSt version would have had no
+// caller: an earlier draft of this file carried one and it was never reachable.
 
 def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
     let i = 0;

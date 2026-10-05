@@ -26,6 +26,7 @@
 #include "parser.h"
 #include "lint.h"
 #include "asm.h"
+#include "target.h"
 #include "labels.h"
 #include "yv.h"
 #include "tags.h"
@@ -300,6 +301,12 @@ Yv *gen_bin_rest(Yv *st, Yv *node);
 Yv *gen_shift(Yv *st, Yv *node, Yv *op);
 long shift_imm(Yv *r);
 long syscall_reg(long i);
+static long l_syscall_reg(long i);
+static long w_syscall_reg(long i);
+static long w_syscall_regargs(void);
+static long w_arg_space(void);
+static long w_stack_arg_off(long i);
+static Yv *ir_terminate(Yv *body);
 Yv *gen_push_args(Yv *st, Yv *args);
 Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes);
 Yv *gen_conv(Yv *st, Yv *got, Yv *want);
@@ -3164,6 +3171,8 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", yv_long(K_tstr));
         } else if (ys_eq_lit(name, "ptr_addr")) {
             return yr(1, "k", yv_long(K_tlong));
+        } else if (ys_eq_lit(name, "os_write")) {
+            return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "tonum") || ys_eq_lit(name, "ord") ||
                    ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
@@ -3481,8 +3490,18 @@ int name_in(Yv *xs, Yv *n) {
 
 /* Builtins are resolved by name at the call site, never captured. */
 int is_intrinsic_name(Yv *n) {
+    /* The COUNT is yv.h's variadic contract: yav(n, ...) reads exactly n
+       values, so adding a name without bumping it silently DROPS the tail --
+       which is what happened when `os_write` was added here and the count left
+       at 46: `#fmt` vanished from the list, every f-string's `#fmt` call was
+       hoisted as an ordinary def, and the emitter reached "INTERNAL:
+       undefined #fmt" and wrote a COMMENT into the assembly, which the
+       in-tree assembler reports as "unexpected comment (backend bug)". Keep
+       the count and the list in step; the Y twin's `name_in([...], n)` has no
+       such hazard, which is exactly why PORTING.md's rule is that the two
+       must stay in step by hand. */
     return name_in(
-        yav(46, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+        yav(47, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
             ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
             ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
             ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
@@ -3490,7 +3509,8 @@ int is_intrinsic_name(Yv *n) {
             ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
             ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
             ys("exit"), ys("argv"), ys("range"), ys("typeof"),
-            ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("self"),
+            ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("os_write"),
+            ys("self"),
             ys("none"), ys("#fmt")),
         n);
 }
@@ -5562,7 +5582,14 @@ long shift_imm(Yv *r) {
 /* ── calls ──────────────────────────────────────────────────────────────
  * Linux syscall arg regs (in order): rdi, rsi, rdx, r10, r8, r9. */
 
+/* The `syscall` intrinsic's argument registers, per target. Linux is SysV
+   (rdi..r9); Windows is the NT layout, below. */
 long syscall_reg(long i) {
+    if (target_is_windows()) { return w_syscall_reg(i); }
+    else { return l_syscall_reg(i); }
+}
+
+static long l_syscall_reg(long i) {
     if (i == 0) {
         return R_RDI;
     } else if (i == 1) {
@@ -5577,6 +5604,66 @@ long syscall_reg(long i) {
         return R_R9;
     }
 }
+
+/* The Win64 `syscall` argument registers. TWO of the values the previous
+   revision had here were wrong, and the two wrong ones are the reason a PE
+   could not allocate a single byte:
+
+       arg1 %r10   arg2 %rdx   arg3 %r8   arg4 %r9   arg5+ on the stack
+
+   which is not the r10/r9/r8/rdx shape that "the syscall instruction takes
+   its first four arguments in the order the Intel manual lists them" suggests,
+   and not the r10/r9/r8/rdx/rcx/r11 shape the previous revision used. The
+   proof that this is the layout is that ntdll: it is the caller of every
+   syscall and it is an ordinary Win64 function, so its own generated stubs
+   expand to exactly
+
+       mov $number, %eax
+       mov %rcx, %r10
+       syscall
+
+   ONE shuffle. Arguments 2, 3 and 4 are already in %rdx, %r8 and %r9 and
+   arguments 5 onwards are already in ntdll's shadow space, because the
+   kernel reads them from the slots ntdll's own caller wrote them into -- that
+   is why there is nothing to move. Only argument 1 has to move, out of %rcx,
+   which `syscall` destroys. So a layout needing more than one instruction in
+   ntdll's stub is not the layout ntdll uses. ReactOS's x64 stub macro
+   (sdk/include/asm/syscalls.inc, STUBCODE_U) is the same one instruction, and
+   its KiSystemCallEntry64 documents "rdx,r8,r9 -- Parameters 2-4, r10 --
+   Parameter 1".
+
+   So there are FOUR argument registers, not six, and gen_syscall puts the
+   fifth and later on the stack itself. */
+static long w_syscall_reg(long i) {
+    if (i == 0) {
+        return R_R10;
+    } else if (i == 1) {
+        return R_RDX;
+    } else if (i == 2) {
+        return R_R8;
+    } else {
+        return R_R9;
+    }
+}
+
+/* How many arguments the Windows target passes in registers. The rest go on
+   the stack (gen_syscall). */
+static long w_syscall_regargs(void) { return 4; }
+
+/* The number of bytes gen_syscall reserves below %rsp on the Windows target
+   when the call has a fifth argument or more. The kernel reads those from
+   40(%rsp).. up (see w_syscall_reg), and the largest call the checker accepts
+   is NtWriteFile's nine arguments, so the last slot is at 40 + 4*8 = 72 and
+   the area has to reach 80. 96 covers it and keeps %rsp 16-aligned. */
+static long w_arg_space(void) { return 96; }
+
+/* The offset of argument `i` (1-based, five or more) on the stack, measured
+   from %rsp at the `syscall`. Argument five is at 40: Win64 reserves 32
+   bytes of shadow space at 0(%rsp)..32(%rsp) and a Win64 *call* passes its
+   fifth argument at 40(%rsp), which is where a callee reads it -- and the
+   kernel reads its arguments from exactly the place ntdll's own stub has
+   them, which is that same shadow space. */
+static long w_stack_arg_off(long i) { return 40 + 8 * (i - 5); }
 
 Yv *gen_push_args(Yv *st, Yv *args) {
     long i = 0;
@@ -5933,6 +6020,46 @@ Yv *gen_call(Yv *st, Yv *node) {
              * system lets the value cross into long territory. */
             Yv *paargs = yr_get(node, "args");
             return gen(st, ya_get(paargs, 0));
+        } else if (ys_eq_lit(name, "os_write")) {
+            /* os_write(fd, s) -> bytes written, or -1. The first slice of the
+             * named syscall layer W5 asks for, and the one that makes print
+             * work on Windows: `syscall(1, fd, s, len(s))` in rt.y is
+             * write(2), and 1 on Windows is a different, real Nt function, so
+             * the call returned a status nobody read and the program printed
+             * nothing while still running to completion.
+
+               NO target test here, and that is the design. rt.y is one of the
+               four std units EMBEDDED in the compiler and serialized into the
+               std pack, and the pack is written once by a compiler whose
+               res_target is whatever that compiler was asked for -- `ycc
+               --std-pack` never passes a target. A conditional in rt.y
+               therefore bakes ONE target's write into the pack, and every
+               program compiled from it gets that one whatever --target says.
+               (Measured, both ways: with the conditional, a PE built from the
+               pack carried the ELF inline write(2) and printed nothing, while
+               --std-src -- which recompiles the units -- worked.) The named
+               layer is exactly what lets shared std code be
+               target-independent: rt.y names one label and the arch module
+               decides which kernel call it is -- write(2) on Linux,
+               NtWriteFile on Windows.
+
+               The three values are pushed left to right, so inside the callee
+               the count (pushed last) is at 8(%rsp) and the descriptor at 24. */
+            Yv *owargs = yr_get(node, "args");
+            st = gen(st, ya_get(owargs, 0));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, ya_get(owargs, 1));
+            st = emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, n_call1(ys("len"), ya_get(owargs, 1),
+                                 yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col"))));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_os_write"))), 0, 0,
+                           0, 0, 0, 0);
+            /* y_os_write leaves the stack alone; the caller pops, like every
+               other call in the emitter. */
+            return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
         } else {
             return gen_direct(st, node, name);
         }
@@ -6306,23 +6433,63 @@ Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path) {
 
 Yv *gen_syscall(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
-    /* args[0] is the number; rest are a1..a6. Push all, pop into regs. */
-    st = gen_push_args(st, args);
+    /* args[0] is the number; rest are the call's arguments. */
     long n = yv_len(args) - 1;
-    long i = n;
-    while (i >= 1) {
-        st = emit_insn(st, F_POP_R, syscall_reg(i - 1), 64, 0, 0, 0, 0, 0);
+    long regs = target_is_windows() ? w_syscall_regargs() : 6;
+    /* The stack arguments' room is reserved FIRST, because their slots are
+       ABOVE %rsp and every step of the argument sequence moves %rsp: reserved
+       afterwards, it would sit below the pushes rather than where the kernel
+       reads. Nothing is reserved on Linux, whose six arguments are all
+       registers -- which is what keeps the ELF path byte-identical. */
+    long room = (target_is_windows() && n > regs) ? w_arg_space() : 0;
+    long nreg = (n < regs) ? n : regs;
+    if (room > 0) {
+        st = emit_insn(st, F_SUB_I_R, room, R_RSP, 64, 0, 0, 0, 0);
+        /* The stack arguments go straight to their slots, evaluated here and
+           never pushed: a pushed one would have to be popped before %rsp
+           could be right for the next, and the registers the kernel wants them
+           in are the ones the register arguments are about to take. Reverse
+           order, like the pops below. */
+        long i = n;
+        while (i > regs) {
+            st = gen(st, ya_get(args, i));
+            Yv *at = infer(st, ya_get(args, i));
+            if (yv_l(yr_get(at, "k")) == K_tstr) {
+                st = emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
+            }
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RSP, -1, 1,
+                           w_stack_arg_off(i), -1);
+            i = i - 1;
+        }
+    }
+    /* The number and the register arguments: push them all, pop them off the
+       top in reverse. */
+    st = gen(st, ya_get(args, 0));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    long k = 1;
+    while (k <= nreg) {
+        st = gen(st, ya_get(args, k));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        k = k + 1;
+    }
+    long j = nreg;
+    while (j >= 1) {
+        st = emit_insn(st, F_POP_R, syscall_reg(j - 1), 64, 0, 0, 0, 0, 0);
         /* a str flows in as its header; the kernel wants the data bytes. */
-        Yv *at = infer(st, ya_get(args, i));
+        Yv *at = infer(st, ya_get(args, j));
         if (yv_l(yr_get(at, "k")) == K_tstr) {
-            st = emit_insn(st, F_ADD_I_R, 8, syscall_reg(i - 1), 64, 0, 0, 0,
+            st = emit_insn(st, F_ADD_I_R, 8, syscall_reg(j - 1), 64, 0, 0, 0,
                            0);
             ;
         }
-        i = i - 1;
+        j = j - 1;
     }
     st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+    if (room > 0) {
+        st = emit_insn(st, F_ADD_I_R, room, R_RSP, 64, 0, 0, 0, 0);
+    }
+    return st;
 }
 
 /* The frame offset of the closure record of the body being emitted, or -1
@@ -10435,17 +10602,58 @@ Yv *gen_sleep(Yv *st, Yv *node) {
 }
 
 Yv *gen_exit(Yv *st, Yv *node) {
-    /* exit(code): terminate the process with the exit-code syscall. */
+    /* exit(code): terminate the process with the exit-code syscall, THROUGH
+       the arch module's y_os_exit rather than inlined.
+
+       A `call` and not an inline `mov $231,%rax; syscall`, and that is the
+       whole point. `exit` reaches std code: rt.y's own runtime-error paths call
+       it (y_setslice_check, y_match_fail, the shift check), and rt.y is one of
+       the four units serialized into the std pack. The pack is written by ONE
+       compiler with ONE res_target -- `ycc --std-pack` never passes a target --
+       so a target test made while COMPILING rt.y is baked into every program
+       built from that pack. Measured: with exit inlined, a PE's rt.y carried
+       Linux's exit_group (syscall 231, whose NT counterpart is some unrelated
+       function), so every runtime error in every program printed its message
+       and then fell through into whatever followed -- t80_slice_bounds printed
+       "index out of bounds" as well, and three tests exited 0 where they must
+       exit 1. Naming a label defers the choice to the arch module and makes
+       rt.y's compiled body the same bytes for both targets.
+
+       The argument goes on the stack like every other call, and y_os_exit reads
+       it at 16(%rbp) -- pushed last, so lowest -- and the caller pops. */
     Yv *eargs = yr_get(node, "args");
     Yv *ea = ya_get(eargs, 0);
     st = gen(st, ea);
-    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDI, 64, 0, 0, 0);
-    st = emit_insn(st, F_MOV_I_R, 231, R_RAX, 64, 0, 0, 0, 0);
-    st = emit_insn(st, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_os_exit"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     /* exit() terminates the process; the epilogue (ret / exit(0)) is
      * unreachable. Emit a jump to the function end so the backend never
      * falls through into dead code (and exit codes are never masked). */
     return emit_insn(st, F_JMP_L, yv_l(yr_get(st, "end_label")), 0, 0, 0, 0, 0, 0);
+}
+
+/* There is deliberately no EmitSt twin of ir_terminate here. `exit` reaches the
+   kernel through the arch module's `y_os_exit` (gen_exit), because rt.y calls
+   exit() and rt.y is serialized into the std pack, which is written for ONE
+   target (see gen_exit's note); and `_start`'s tail, the one other place a
+   process ends, builds its instructions straight into the body's IR and so has
+   always wanted the IR-shaped ir_terminate. An EmitSt version would have had no
+   caller: an earlier draft of this file carried one and it was never reachable. */
+
+/* The same, for _start's tail, which is built straight into the body's IR
+   (emit_one_fn) rather than through an EmitSt. The status is 0: the Linux
+   side zeroed %edi and the Windows side zeroes %rax before this. */
+static Yv *ir_terminate(Yv *body) {
+    if (target_is_windows()) {
+        body = ir_push(body, F_MOV_I_R, 0 - 1, R_R10, 64, 0, 0, 0, 0);
+        body = ir_push(body, F_XOR_R_R, R_RDX, 32, R_RDX, 32, 0, 0, 0);
+        body = ir_push(body, F_MOV_I_R, 44, 0, 64, 0, 0, 0, 0);
+    } else {
+        body = ir_push(body, F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
+        body = ir_push(body, F_XOR_R_R, R_RDI, 32, R_RDI, 32, 0, 0, 0);
+    }
+    return ir_push(body, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
 }
 
 /* ── process I/O (argv) ──────────────────────────────────────────────
@@ -10642,9 +10850,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     body = ir_push(body, IR_LABEL, yv_l(yr_get(f, "end_label")), 0, 0, 0, 0, 0,
                    0);
     if (is_main) {
-        body = ir_push(body, F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
-        body = ir_push(body, F_XOR_R_R, R_RDI, 32, R_RDI, 32, 0, 0, 0);
-        body = ir_push(body, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+        body = ir_terminate(body);
     } else {
         body = ir_push(body, F_MOV_R_R, R_RBP, 64, R_RSP, 64, 0, 0, 0);
         body = ir_push(body, F_POP_R, R_RBP, 64, 0, 0, 0, 0, 0);

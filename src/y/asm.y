@@ -1957,7 +1957,16 @@ def after_uid(s: str, k: long) -> str {
 // sections. Rows are flat (offset, file, line) triples in text order; a
 // `.file N` fills slot N-1 of the table ("?" stands in for a number never
 // named). No row -- a text without markers -- means no sections at all.
-def debug_lines(items: [AsmItem], code_len: long, code_off: long) -> [ElfSec] {
+// `code_addr` is the ABSOLUTE address the first code byte is loaded at --
+// asm_image_base's answer, which is the ELF base plus the header size or the
+// PE's ImageBase plus .text's RVA. It was a segment OFFSET and this function
+// added 4194304 to it, which is right for exactly one target and wrong by
+// 4194304 for the other -- and since asm_image_base returns an absolute
+// address, even the ELF side got it twice: every .debug_line address under -g
+// read 0x800000-something where the code actually sits at 0x401000. The port
+// gate is what surfaced it: the C twin's shape (an offset, +4194304 here)
+// produced 0x401xxx and the two copies disagreed on every -g binary.
+def debug_lines(items: [AsmItem], code_len: long, code_addr: long) -> [ElfSec] {
     let files: [str] = [];
     let rows: [long] = [];
     foreach (it in items) {
@@ -1977,7 +1986,7 @@ def debug_lines(items: [AsmItem], code_len: long, code_off: long) -> [ElfSec] {
         let none_s: [ElfSec] = [];
         none_s
     } else {
-        dwarf.dwarf_sections(files, rows, 4194304 + code_off, code_len, asm_cwd())
+        dwarf.dwarf_sections(files, rows, code_addr, code_len, asm_cwd())
     }
 };
 

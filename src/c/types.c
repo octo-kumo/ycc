@@ -33,6 +33,7 @@
  * `0;` value-tails of Y if-arms are `;` here; tail values of blocks in
  * return position are `return`. */
 #include "types.h"
+#include "target.h"
 #include "yv.h"
 #include "tags.h"
 
@@ -4793,11 +4794,63 @@ static Yv *typeof_call(Yv *st, Yv *node) {
                     return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
                 }
             }
-        } else if (ys_eq_lit(name, "syscall")) {
-            if (yv_len(yr_get(node, "args")) < 1 ||
-                yv_len(yr_get(node, "args")) > 7) {
+        } else if (ys_eq_lit(name, "os_write")) {
+            /* os_write(fd, s): the named-syscall-layer entry point for "put
+               these bytes on that file descriptor". Exactly two arguments, a
+               number and a str -- the two things write(2) and NtWriteFile
+               agree a caller can supply. The call itself is the arch module's
+               (y_os_write: write(2) on Linux, NtWriteFile on Windows), so the
+               syscall number and the argument shape do not leak into shared
+               std code. */
+            if (yv_len(cargs) != 2) {
                 st = fail(st,
-                          ys("syscall needs 1-7 arguments (number + up to 6 args)"),
+                          ys("os_write takes exactly 2 arguments (fd, string)"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+            } else {
+                Yv *r0 = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r0, "st");
+                if (yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tlong &&
+                    yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tbyte &&
+                    yv_l(yr_get(yr_get(r0, "typ"), "k")) != K_tunk) {
+                    st = fail(st,
+                              ys_cat(ys("os_write fd must be a number, got "),
+                                     tstr(yr_get(r0, "typ"))),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                }
+                Yv *r1 = typeof_expr(st, ya_get(cargs, 1));
+                st = yr_get(r1, "st");
+                if (yv_l(yr_get(yr_get(r1, "typ"), "k")) != K_tstr &&
+                    yv_l(yr_get(yr_get(r1, "typ"), "k")) != K_tunk) {
+                    st = fail(st,
+                              ys_cat(ys("os_write needs a string, got "),
+                                     tstr(yr_get(r1, "typ"))),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                }
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+            }
+        } else if (ys_eq_lit(name, "syscall")) {
+            /* Up to six arguments on SysV (rdi..r9), up to NINE on Win64:
+               its `syscall` takes FOUR in registers (r10, rdx, r8, r9) and
+               the fifth and after at 40(%rsp), 48(%rsp), ... -- and
+               NtWriteFile, the only way to put a byte on the standard output,
+               takes nine. gen_syscall reserves that room itself on the
+               Windows side. (The old comment here said six in registers and
+               32(%rsp); both wrong, and see w_syscall_reg in native.c for the
+               proof that four registers at 40(%rsp) is the real layout.) */
+            long maxargs = 7;
+            if (target_is_windows()) { maxargs = 10; }
+            if (yv_len(yr_get(node, "args")) < 1 ||
+                yv_len(yr_get(node, "args")) > maxargs) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys_cat(ys_cat(ys("syscall needs 1-"),
+                                                    ys_long(maxargs)),
+                                             ys(" arguments (number + up to ")),
+                                          ys_long(maxargs - 1)),
+                                       ys(" args)")),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
@@ -5624,6 +5677,13 @@ Yv *check_program(Yv *ast, Yv *ext) {
                     "ret", yr(1, "k", yv_long(K_tvoid))),
                  ys("intrinsic"));
     st = st_bind(st, ys("syscall"), yr(1, "k", yv_long(K_tlong)), ys("intrinsic"));
+    /* (fd: long, s: str) -> long. The binding exists only so `os_write` reads
+       as defined when it appears as a value; typeof_call matches it by name. */
+    Yv *osw_type = yr(3, "k", yv_long(K_tfunc),
+                      "args", yav(2, yr(1, "k", yv_long(K_tlong)),
+                                  yr(1, "k", yv_long(K_tstr))),
+                      "ret", yr(1, "k", yv_long(K_tlong)));
+    st = st_bind(st, ys("os_write"), osw_type, ys("intrinsic"));
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as

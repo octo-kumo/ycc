@@ -3621,10 +3621,14 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
             }
         } else if (name == "syscall") {
             // Up to six arguments on SysV (rdi..r9), up to NINE on Win64:
-            // its `syscall` takes six in registers and the seventh and after
-            // at 32(%rsp), 40(%rsp), ... -- and NtWriteFile, the only way to
-            // put a byte on the standard output, takes nine. gen_syscall
-            // reserves that room itself on the Windows side.
+            // its `syscall` takes FOUR in registers (r10, rdx, r8, r9) and
+            // the fifth and after at 40(%rsp), 48(%rsp), ... -- and
+            // NtWriteFile, the only way to put a byte on the standard output,
+            // takes nine. gen_syscall reserves that room itself on the
+            // Windows side. (An earlier version of this comment said six in
+            // registers and 32(%rsp); both were wrong -- see w_syscall_reg in
+            // native.y for the proof that four registers at 40(%rsp) is the
+            // real layout.)
             let maxargs = 7;
             if (target_is_windows()) { maxargs = 10; };
             if (len(cargs) < 1 || len(cargs) > maxargs) {

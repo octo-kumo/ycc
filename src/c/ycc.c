@@ -19,6 +19,7 @@
  *   ycc vendor [DIR]   copy its git dependencies into vendor/
  */
 #include "ycc.h"
+#include "target.h"
 #include "tags.h"
 
 #include "asm.h"
@@ -36,6 +37,7 @@
 /* ── argument parsing ────────────────────────────────────────────────── */
 
 static long wlevel_arg(Yv *argv, long i, long n);
+static long parse_target(Yv *name);
 
 Yv *parse_cli_args(Yv *argv) {
     Yv *out = ys("");
@@ -91,6 +93,19 @@ Yv *parse_cli_args(Yv *argv) {
         } else if (ys_eq_lit(a, "--std-src")) {
             std_src = 1;
             ;
+        } else if (ys_eq_lit(a, "--target")) {
+            if (i + 1 < n) {
+                i = i + 1;
+                parse_target(ya_get(argv, i));
+                ;
+            } else {
+                puts_(ys("ycc: --target needs a name (linux, windows)\n"));
+                exit_(1);
+            }
+            ;
+        } else if (ys_eq_lit(ys_slice(a, 0, 9), "--target=")) {
+            parse_target(ys_slice_from(a, 9));
+            ;
         } else if (ys_eq_lit(a, "--std-pack")) {
             if (i + 1 < n) {
                 i = i + 1;
@@ -109,6 +124,8 @@ Yv *parse_cli_args(Yv *argv) {
                      "a.out)\n"));
             puts_(ys("  -o OUTPUT    output path (executable, or .s file with -S)\n"));
             puts_(ys("  -S           emit assembly only (stdout, or the -o file)\n"));
+            puts_(ys("  --target=NAME  emit for NAME: linux (the default, an ELF)\n"));
+            puts_(ys("               or windows (a PE32+ executable, x64)\n"));
             puts_(ys("  -t, --time   print per-phase time and heap use to stderr\n"));
             puts_(ys("  -g           add section headers, a symbol table (functions,\n"));
             puts_(ys("               globals) and DWARF line info, so perf, gdb,\n"));
@@ -150,6 +167,24 @@ Yv *parse_cli_args(Yv *argv) {
               "debug", yv_bool(debug), "nowarn", yv_bool(nowarn), "wlevel",
               yv_long(wlevel), "std_src", yv_bool(std_src), "std_pack",
               std_pack_path);
+}
+
+/* --target=NAME: object format and OS. One global (target.c's res_target),
+ * written before anything reads it, so parse_cli_args is the first thing main
+ * does with the command line. `target_set` is the C spelling of the Y twin's
+ * `res_target = "..."`; the value is a Yv * because every comparison in the
+ * Y code is a string compare, and NULL here means the default (linux), which
+ * is what the Y top-level initialiser says. */
+static long parse_target(Yv *name) {
+    if (ys_eq_lit(name, "linux")) {
+        target_set(ys("linux"));
+    } else if (ys_eq_lit(name, "windows")) {
+        target_set(ys("windows"));
+    } else {
+        puts_(ys_cat(ys_cat(ys("ycc: unknown target '"), name), ys("' (linux, windows)\n")));
+        exit_(1);
+    }
+    return 0;
 }
 
 /* ── the std pack ───────────────────────────────────────────────────────
@@ -476,6 +511,16 @@ Yv *build_key(Yv *cid, Yv *name, long base, int allow_exec, Yv *nr,
     pk_hash_str(h, cid);
     pk_hash_str(h, name);
     pk_hash_str(h, ys_long(base));
+    /* The target, and it is the load-bearing one: WITHOUT it, `ycc build`
+       reuses an object compiled for the other target, and the "rebuild" that
+       should have happened silently does not -- a PE's cache entry served to
+       an ELF build (or the reverse), which no test catches because the bytes
+       are only compared within a run. `cid` is the compiler id, which a
+       rebless changes, so this is the same kind of input: anything that
+       changes the OUTPUT belongs in the key. target_os() rather than
+       res_target directly, so the name a flag accepts and the name hashed
+       cannot drift apart. */
+    pk_hash_str(h, target_os());
     Yv *ex = ys("exec");
     if (!allow_exec) {
         ex = ys("no-exec");

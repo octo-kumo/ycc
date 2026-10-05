@@ -485,9 +485,10 @@ static Yv *enc_mov(Yv *buf, long at, Yv *dst, Yv *src) {
         if (r < 0) { off = 2; }
         return enc_ok(q, yav(1, fixup(at + off, ys("imm32diff"), yr_get(src, "a"), yr_get(src, "b"))));
     } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_fs && op_size(dst) == 64) {
-        /* mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
-           base and no index (an absolute disp32) */
-        long n = put(buf, at, 100);
+        /* mov %seg:disp32, r64: the segment prefix (0x64 %fs, 0x65 %gs --
+           the operand's `n`), REX.W, 8B, a SIB with no base and no index (an
+           absolute disp32) */
+        long n = put(buf, at, 100 + yv_l(yr_get(src, "n")));
         long m = put(buf, n, rex(1, yv_l(yr_get(dst, "n")), -1, -1));
         long q = put2(buf, m, 139, modrm(0, yv_l(yr_get(dst, "n")), 4));
         long p = put(buf, q, 37);
@@ -635,6 +636,7 @@ static Yv *enc_lea(Yv *buf, long at, Yv *dst, Yv *src) {
     }
 }
 
+static Yv *enc_test32(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_arith(Yv *buf, long at, Yv *op, Yv *dst, Yv *src) {
     /* op: add/sub/xor/and/or/cmp/test; r64,r64 only here */
     if (yv_l(yr_get(dst, "k")) == K_reg && op_size(dst) == 64
@@ -660,6 +662,21 @@ static Yv *enc_xor32(Yv *buf, long at, Yv *dst, Yv *src) {
         return enc_ok(put2(buf, n, 49, modrm(3, yv_l(yr_get(src, "n")), yv_l(yr_get(dst, "n")))), yav(0));
     } else {
         return enc_err(at, ys("xor32 form"));
+    }
+}
+
+/* 32-bit `test r32, r32` -- base 0x85 with NO REX.W. 32-bit registers are r32
+   names (%eax not %rax), so the size is in the name rather than a prefix, and
+   `test %eax, %eax` on an NTSTATUS is exactly this. The Windows prelude
+   branches on NTSTATUS that way: `test %eax, %eax; js` is the failure test
+   (NTSTATUS is signed and negative means failure), and carrying a SysV
+   `js` over would read failure as success. */
+static Yv *enc_test32(Yv *buf, long at, Yv *dst, Yv *src) {
+    if (op_size(dst) == 32 && op_size(src) == 32) {
+        long n = put_rex(buf, at, rex(0, yv_l(yr_get(src, "n")), -1, yv_l(yr_get(dst, "n"))));
+        return enc_ok(put2(buf, n, 133, modrm(3, yv_l(yr_get(src, "n")), yv_l(yr_get(dst, "n")))), yav(0));
+    } else {
+        return enc_err(at, ys("test32 form"));
     }
 }
 
@@ -1067,6 +1084,9 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
             } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_reg
                        && ys_eq_lit(mn, "xor") && op_size(dst) == 32 && op_size(src) == 32) {
                 return enc_xor32(buf, at, dst, src);
+            } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_reg
+                       && ys_eq_lit(mn, "test") && op_size(dst) == 32 && op_size(src) == 32) {
+                return enc_test32(buf, at, dst, src);
             } else {
                 return enc_arith(buf, at, mn, dst, src);
             }

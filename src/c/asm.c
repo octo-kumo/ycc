@@ -15,6 +15,9 @@
 #include "asm.h"
 #include "tags.h"
 #include "dwarf.h"
+#include "pe.h"
+#include "target.h"
+#include "elf.h"
 
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -31,6 +34,18 @@ extern long elf_bss_from_ro(long code_len, long ro_len, long bss_len); /* elf.c:
 extern long elf_code_off(long bss_len);      /* elf.c: elf.elf_code_off */
 extern Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
                      Yv *syms, Yv *dsecs); /* elf.c: elf.elf_build */
+/* pe.c's exports (pe.y): pe_build, pe_text_base, pe_bss_from_ro, pe_sec. Both
+   writers are linked in and the one used is chosen at link time; see
+   asm_image's note. */
+extern Yv *pe_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
+                    Yv *pdata, Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab);
+extern long pe_text_base(void);
+extern long pe_bss_from_ro(long code_len, long ro_len, long bss_len);
+extern Yv *pe_sec(Yv *name, long vsz, long rva, long rawptr, long chars);
+/* elf.c's byte pushers, the ones pe_unwind_bytes writes .pdata with. */
+extern Yv *push_bytes(Yv *out, Yv *bytes);
+extern Yv *push_le16(Yv *out, long v);
+extern Yv *push_le32(Yv *out, long v);
 
 /* ── module-local defs (forward) ─────────────────────────────────────── */
 static int is_digit_ch(long c);
@@ -46,6 +61,7 @@ static Yv *parse_operand_nonempty(Yv *t);
 static Yv *parse_operand_ind(Yv *t);
 static Yv *parse_operand_reg(Yv *t);
 static Yv *parse_operand_fs(Yv *t);
+static Yv *parse_operand_seg(Yv *t, long seg);
 static Yv *parse_operand_noreg(Yv *t);
 static Yv *parse_operand_imm(Yv *t);
 static Yv *parse_operand_memlbl(Yv *t);
@@ -123,6 +139,31 @@ static long relax_place(Yv *items, Yv *labels, Yv *lens, Yv *secs, int debug);
 static Yv *debug_syms(Yv *labels, long code_len, long bss_len);
 static Yv *debug_syms_sec(Yv *out, Yv *labels, long sec, long end);
 static int is_sym_label(Yv *name, long sec);
+static long asm_image_base(long bss_len);
+static long asm_bss_shift(long code_len, long ro_len, long bss_len);
+static Yv *asm_link_row(void);
+static Yv *asm_image(Yv *code, Yv *ro, long entry_off, long bss_len, Yv *syms,
+                     Yv *dsecs, Yv *items, Yv *labels);
+static Yv *pe_image(Yv *code, Yv *ro, long entry_off, long bss_len, Yv *syms,
+                    Yv *dsecs, Yv *items, Yv *labels);
+static Yv *pe_unwind(Yv *items, Yv *labels);
+static Yv *pe_coff_syms(Yv *syms);
+static Yv *pe_unwind_bytes(Yv *frames, long xbase);
+static Yv *pe_frames(Yv *items, Yv *labels);
+static Yv *pe_frame_prologues(Yv *items, Yv *frames);
+static Yv *pe_prologue(Yv *items, Yv *f, long stop, long last);
+static Yv *pe_prologue_insn(Yv *it, long off, int fp, long fp_off, long alloc,
+                            long alloc_off, Yv *pushes, long prolog);
+static Yv *pe_prologue_push(long reg, long done, int fp, long fp_off, long alloc,
+                            long alloc_off, Yv *pushes, long prolog);
+static int pe_nonvol(long reg);
+static Yv *pe_codes(Yv *f);
+static Yv *pe_alloc(long size, long off);
+static Yv *concat_arrays(Yv *a, Yv *b);
+static Yv *pe_codes_sorted(Yv *g, long i);
+static Yv *pe_unwind_info(Yv *xdata, Yv *f);
+static long pe_coff_secnum(long sec);
+static Yv *pe_coff_sym(Yv *out, Yv *nm, long val, long secnum);
 static Yv *sym_name(Yv *lbl);
 static Yv *after_uid(Yv *s, long k);
 static Yv *debug_lines(Yv *items, long code_len, long code_off);
@@ -282,9 +323,22 @@ static Yv *parse_operand_ind(Yv *t) {
     }
 }
 
-/* `%fs:N`: the thread-local word at N (a thread's heap block, its word 3
- * its own address; arch_x64.c). Tried only once no register matches. */
+/* `%fs:N` and `%gs:N`: the segment-relative word at N. `%fs:24` is a thread's
+ * heap block (its own address, in word 3; arch_x64.c); `%gs:0x60` is the PEB
+ * on x64 Windows, which is where the standard I/O handles live. The segment
+ * rides in `n` (0 = %fs, 1 = %gs) because the operand has no other use for
+ * it -- enc64.c turns that into the 0x64/0x65 prefix byte. Tried only once no
+ * register matches.
+ *
+ * DECIMAL, and that is deliberate rather than an omission: parse_num is the
+ * assembler's decimal reader, so `%gs:0x60` -- the natural spelling -- is a
+ * "bad segment operand" whose diagnostic names the instruction rather than the
+ * literal. src/y/arch/wsys.s writes 96/32/40 for the same reason. */
 static Yv *parse_operand_fs(Yv *t) {
+    return parse_operand_seg(t, 0);
+}
+
+static Yv *parse_operand_seg(Yv *t, long seg) {
     Yv *r = parse_num(ys_slice_from(t, 4));
     if (!yv_b(yr_get(r, "ok"))) {
         return yr(3, "ok", yv_bool(0),
@@ -292,10 +346,10 @@ static Yv *parse_operand_fs(Yv *t) {
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yv_long(0), "rip", yv_bool(0), "lbl", ys("")),
-                  "error", ys_cat(ys_cat(ys("bad fs operand '"), t), ys("'")));
+                  "error", ys_cat(ys_cat(ys("bad segment operand '"), t), ys("'")));
     } else {
         return yr(3, "ok", yv_bool(1),
-                  "op", yr(13, "k", yv_long(K_fs), "n", yv_long(0), "size", yv_long(64), "v", yv_long(0),
+                  "op", yr(13, "k", yv_long(K_fs), "n", yv_long(seg), "size", yv_long(64), "v", yv_long(0),
                             "a", ys(""), "b", ys(""), "name", ys(""),
                             "base", yv_long(0), "idx", yv_long(0), "scale", yv_long(0),
                             "disp", yr_get(r, "v"), "rip", yv_bool(0), "lbl", ys("")),
@@ -310,6 +364,8 @@ static Yv *parse_operand_reg(Yv *t) {
     if (n < 0) {
         if (ys_eq_lit(ys_slice(t, 0, 4), "%fs:")) {
             return parse_operand_fs(t);
+        } else if (ys_eq_lit(ys_slice(t, 0, 4), "%gs:")) {
+            return parse_operand_seg(t, 1);
         }
         return yr(3, "ok", yv_bool(0),
                   "op", yr(13, "k", yv_long(K_bad), "n", yv_long(0), "size", yv_long(0), "v", yv_long(0),
@@ -948,7 +1004,7 @@ static Yv *asm_maybe_labline(Yv *line, long lno, long sec, Yv *offs, Yv *items, 
        plain instruction. NOTE: misnomer fixed: the else-arm assembles an
        INSTRUCTION (asm_insnline), not a directive. */
     long ci = ys_index_of(line, ys(":"));
-    /* a `%` before it: an operand's `%fs:N`, not a label */
+    /* a `%` before it: an operand's `%fs:N` / `%gs:N`, not a label */
     if (ci > 0 && ys_index_of(ys_slice(line, 0, ci), ys("%")) < 0) {
         return asm_labline(line, lno, sec, offs, items, labels, err, ci);
     } else {
@@ -1647,10 +1703,10 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
         ;
     };
     /* A .bss label resolves like a rodata one, past the mapped image (see
-       elf_bss_from_ro), so the fixups below only know two sections. */
+       asm_bss_shift), so the fixups below only know two sections. */
     Yv *labs = labels;
     if (bss_len > 0) {
-        long bshift = elf_bss_from_ro(code_len, ro_len, bss_len);
+        long bshift = asm_bss_shift(code_len, ro_len, bss_len);
         labs = yav(0);
         long j = 0;
         while (j < yv_len(labels)) {
@@ -1736,17 +1792,17 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
             Yv *dsecs = yav(0);
             if (debug) {
                 syms = debug_syms(labels, code_len, bss_len);
-                dsecs = debug_lines(items, code_len, elf_code_off(bss_len));
+                dsecs = debug_lines(items, code_len, asm_image_base(bss_len));
             }
-            Yv *eb = elf_build(code, ro, yv_l(yr_get(start, "off")),
-                               bss_len, syms, dsecs);
+            Yv *eb = asm_image(code, ro, yv_l(yr_get(start, "off")),
+                               bss_len, syms, dsecs, items, labels);
             long lt3 = clock_us();
             long lh3 = heap_used();
             return yr(4, "ok", yv_bool(1), "bytes", eb, "error", ys(""),
                       "times", yav(3,
                                    yr(3, "name", ys("l:labmap"), "us", yv_long(lt1 - lt0), "heap", yv_long(lh1 - lh0)),
                                    yr(3, "name", ys("l:patch"), "us", yv_long(lt2 - lt1), "heap", yv_long(lh2 - lh1)),
-                                   yr(3, "name", ys("l:elf"), "us", yv_long(lt3 - lt2), "heap", yv_long(lh3 - lh2))));
+                                   yr(3, "name", asm_link_row(), "us", yv_long(lt3 - lt2), "heap", yv_long(lh3 - lh2))));
         }
     }
 }
@@ -1996,6 +2052,14 @@ static Yv *after_uid(Yv *s, long k) {
  * sections. Rows are flat (offset, file, line) triples in text order; a
  * `.file N` fills slot N-1 of the table ("?" stands in for a number never
  * named). No row -- a text without markers -- means no sections at all. */
+/* `code_off` is the ABSOLUTE address the first code byte is loaded at --
+   asm_image_base's answer, which is the ELF base plus the header size or the
+   PE's ImageBase plus .text's RVA. See the Y twin's note: this used to be a
+   segment offset with 4194304 added here, which is right for exactly one
+   target, and the caller already passed an absolute address, so every
+   .debug_line address under -g read 0x800000-something for code that sits at
+   0x401000. The port gate surfaced it: this side's shape produced the correct
+   0x401xxx and the two copies disagreed on every -g binary. */
 static Yv *debug_lines(Yv *items, long code_len, long code_off) {
     Yv *files = yav(0);
     Yv *rows = yav(0);
@@ -2024,8 +2088,7 @@ static Yv *debug_lines(Yv *items, long code_len, long code_off) {
     if (yv_len(rows) == 0) {
         return yav(0);
     } else {
-        return dwarf_sections(files, rows, 4194304 + code_off, code_len,
-                              asm_cwd());
+        return dwarf_sections(files, rows, code_off, code_len, asm_cwd());
     }
 }
 
@@ -2067,4 +2130,445 @@ Yv *ycc_assemble(Yv *asm_text, int debug) {
         return yr(5, "ok", yv_bool(1), "bytes", yr_get(r, "bytes"), "octal", ys(""),
                   "error", ys(""), "times", yr_get(r, "times"));
     }
+}
+
+/* ── the object writer ───────────────────────────────────────────────────
+   One assembler, two object formats, chosen at link time (ideas/WINDOWS.md,
+   "The target reaches three places", item 1): elf_build and pe_build have
+   distinct names and distinct types, so both are linked in and nothing in
+   the splicer has to know a target exists. Everything above them is
+   format-agnostic: parse, labels, relax, fixups, and the segment-offset
+   label_addr that is why a PE needs no .reloc. */
+
+/* Where the code sits in the image, which the DWARF line table hangs off: on
+   ELF the base plus the header size the ELF writer chose (the code's file
+   offset, since the first segment is mapped at the base), on PE the image
+   base plus the .text section's RVA. */
+static long asm_image_base(long bss_len) {
+    if (target_is_windows()) { return pe_text_base(); }
+    else { return 4194304 + elf_code_off(bss_len); }
+}
+
+/* Where the .bss section starts, as an offset from the rodata's start. The
+   two writers round it differently (a page plus a page on ELF, the section
+   alignment on PE), so the fixups must measure against the one that will
+   place the bytes. */
+static long asm_bss_shift(long code_len, long ro_len, long bss_len) {
+    if (target_is_windows()) { return pe_bss_from_ro(code_len, ro_len, bss_len); }
+    else { return elf_bss_from_ro(code_len, ro_len, bss_len); }
+}
+
+/* The `ycc --time` row name for the writer, so the table names the format it
+   actually ran. */
+static Yv *asm_link_row(void) {
+    if (target_is_windows()) { return ys("l:pe"); }
+    else { return ys("l:elf"); }
+}
+
+static Yv *asm_image(Yv *code, Yv *ro, long entry_off, long bss_len, Yv *syms,
+                     Yv *dsecs, Yv *items, Yv *labels) {
+    if (target_is_windows()) {
+        return pe_image(code, ro, entry_off, bss_len, syms, dsecs, items, labels);
+    } else {
+        return elf_build(code, ro, entry_off, bss_len, syms, dsecs);
+    }
+}
+
+/* The PE writer, fed what it needs in its own shapes. `syms`/`dsecs` are the
+   ELF-shaped records the -g pass above builds (debug_syms, dwarf.c's
+   dwarf_sections): the same facts re-typed, because Y records are exact and a
+   record goes only where its own type is expected -- and because the C copy
+   SHARES records (yv.h), the fields are read through yr_get on the record the
+   value lives in, never through a copy. */
+static Yv *pe_image(Yv *code, Yv *ro, long entry_off, long bss_len, Yv *syms,
+                    Yv *dsecs, Yv *items, Yv *labels) {
+    Yv *un = pe_unwind(items, labels);
+    Yv *dsecs2 = yav(0);
+    Yv *ddata = yav(0);
+    long i = 0;
+    while (i < yv_len(dsecs)) {
+        Yv *ds = ya_get(dsecs, i);
+        dsecs2 = ya_push(dsecs2, pe_sec(yr_get(ds, "name"),
+                                        yv_len(yr_get(ds, "data")), 0, 0, 1073741888));
+        ddata = ya_push(ddata, yr_get(ds, "data"));
+        i = i + 1;
+    }
+    Yv *coff = pe_coff_syms(syms);
+    return pe_build(code, ro, entry_off, bss_len, yr_get(un, "pdata"),
+                    yr_get(un, "xdata"), dsecs2, ddata, coff);
+}
+
+/* ── PE unwind data ─────────────────────────────────────────────────────
+   RUNTIME_FUNCTION (12 bytes: BeginAddress, EndAddress, UnwindInfoAddress)
+   and UNWIND_INFO (Version:Flags, SizeOfProlog, CountOfCodes, FrameRegister,
+   then the codes). The bitfield pack a C struct would use is wrong here:
+   `UBYTE UnwindOp : 4; UBYTE OpInfo : 4;` and a little-endian bitfield pack
+   puts the first declared field in the low bits. Verified against a real
+   ntdll's .xdata rather than taken from memory, because the other order
+   decodes every record into nonsense. */
+
+/* What one function's prologue turned out to be: its extent, whether it
+   establishes a frame pointer, the total bytes it takes off the stack and
+   where that is in effect from, and one (prolog offset, register number) per
+   callee-saved register it pushed. */
+static Yv *pe_frame0(long start, long first) {
+    return yr(10, "start", yv_long(start), "end", yv_long(0),
+              "first", yv_long(first), "last", yv_long(0),
+              "fp", yv_bool(0), "fp_off", yv_long(0),
+              "alloc", yv_long(0), "alloc_off", yv_long(0),
+              "pushes", yav(0), "prolog", yv_long(0));
+}
+
+/* The two unwind sections, or two empty arrays when there is nothing to say. */
+static Yv *pe_unwind(Yv *items, Yv *labels) {
+    return pe_unwind_bytes(pe_frames(items, labels), 0);
+}
+
+/* Every function's extent, from the labels: a function starts at a label
+   debug_syms would give a symbol to (`_start`, a `y_*` runtime helper, a
+   `yfn_*` compiled def) and runs to the next such label, or to the end of
+   .text. Jump targets (yL_*) and the arch prelude's internal labels belong
+   to the function before them. */
+static Yv *pe_frames(Yv *items, Yv *labels) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(labels)) {
+        Yv *lb = ya_get(labels, i);
+        if (yv_l(yr_get(lb, "sec")) == 0 && is_sym_label(yr_get(lb, "name"), 0)) {
+            out = ya_push(out, pe_frame0(yv_l(yr_get(lb, "off")),
+                                         yv_l(yr_get(lb, "at_item"))));
+        }
+        i = i + 1;
+    }
+    return pe_frame_prologues(items, out);
+}
+
+/* Win64 nonvolatile integer registers (RBX, RBP, RSI, RDI, R12..R15 -- RSI
+   and RDI are volatile on SysV, which is one of the two ABI deltas that is
+   vacuous here: no live value ever crosses a call, so the emitted code is
+   free to treat them as scratch, and only the unwind record has to say they
+   were saved). */
+static int pe_nonvol(long reg) {
+    return reg == 3 || reg == 5 || reg == 6 || reg == 7
+           || (reg >= 12 && reg <= 15);
+}
+
+/* Read one function's prologue off its items: a run of pushes, an optional
+   `mov %rsp,%rbp`, and an optional `sub $N,%rsp`. Any other instruction ends
+   it -- so a routine whose prologue this file has never seen records only the
+   prefix it did recognise, which is exactly right for that prefix, rather
+   than a guess. (A wrong unwind record makes a debugger walk into the middle
+   of a frame; a short one makes it stop unwinding early, which is visible and
+   harmless.)
+   A frame's extent is its label to the next one's, and its ITEMS run from the
+   item index its label sits at to the next one's. Item offsets cannot be used
+   for this: relax_place only rewrites an item's `off` under -g, so without it
+   `off` is still pass 1's, before the branch relaxation that moved everything
+   (relax_place's own note). Counting items from `at_item` and adding lengths
+   is the one position that is right either way. */
+static Yv *pe_frame_prologues(Yv *items, Yv *frames) {
+    long n = yv_len(frames);
+    long i = 0;
+    while (i < n) {
+        long stop = 0;
+        long last = yv_len(items);
+        if (i + 1 < n) {
+            stop = yv_l(yr_get(ya_get(frames, i + 1), "start"));
+            last = yv_l(yr_get(ya_get(frames, i + 1), "first"));
+        }
+        ya_set(frames, i, pe_prologue(items, ya_get(frames, i), stop, last));
+        i = i + 1;
+    }
+    return frames;
+}
+
+/* The Y twin mutates the frame record's fields in place and returns it; here
+   yr_set does the same on the shared record (yv.h), so the caller below
+   writes `ya_set(frames, i, ...)` exactly as the twin writes
+   `frames[i] = pe_prologue(...)`. */
+static Yv *pe_prologue(Yv *items, Yv *f, long stop, long last) {
+    long alloc = 0;
+    long alloc_off = 0;
+    Yv *pushes = yav(0);
+    long prolog = 0;
+    int fp = 0;
+    long fp_off = 0;
+    long at = 0;
+    long k = yv_l(yr_get(f, "first"));
+    int open = 1;
+    while (open && k < last) {
+        Yv *it = ya_get(items, k);
+        k = k + 1;
+        if (yv_l(yr_get(it, "sec")) == 0) {
+            Yv *r = pe_prologue_insn(it, at, fp, fp_off, alloc, alloc_off, pushes, prolog);
+            if (yv_b(yr_get(r, "go"))) {
+                fp = yv_b(yr_get(r, "fp"));
+                fp_off = yv_l(yr_get(r, "fp_off"));
+                alloc = yv_l(yr_get(r, "alloc"));
+                alloc_off = yv_l(yr_get(r, "alloc_off"));
+                pushes = yr_get(r, "pushes");
+                prolog = yv_l(yr_get(r, "prolog"));
+                at = prolog;
+            } else {
+                open = 0;
+            }
+        }
+    }
+    yr_set(f, "end", yv_long(stop));
+    yr_set(f, "fp", yv_bool(fp));
+    yr_set(f, "fp_off", yv_long(fp_off));
+    yr_set(f, "alloc", yv_long(alloc));
+    yr_set(f, "alloc_off", yv_long(alloc_off));
+    yr_set(f, "pushes", pushes);
+    yr_set(f, "prolog", yv_long(prolog));
+    return f;
+}
+
+/* One prologue instruction, as {go} (it belonged to the prologue) or {go:
+   false, ...} (it did not). `off` is the instruction's offset within the
+   function; the CodeOffset a code carries is that instruction's last byte
+   plus one, which is where the effect is in force. */
+static Yv *pe_prologue_insn(Yv *it, long off, int fp, long fp_off, long alloc,
+                            long alloc_off, Yv *pushes, long prolog) {
+    Yv *b = yr_get(it, "bytes");
+    long n = yv_len(b);
+    long done = off + yv_l(yr_get(it, "len"));
+    Yv *no = yr(7, "go", yv_bool(0), "fp", yv_bool(fp), "fp_off", yv_long(fp_off),
+                "alloc", yv_long(alloc), "alloc_off", yv_long(alloc_off),
+                "pushes", pushes, "prolog", yv_long(prolog));
+    long b0 = yv_l(ya_get(b, 0));
+    if (n < 1) {
+        return no;
+    } else if (b0 == 0x55 || (b0 >= 0x50 && b0 <= 0x57)) {
+        /* push %reg (no REX: rax..rdi) */
+        return pe_prologue_push(b0 - 0x50, done, fp, fp_off, alloc, done, pushes, prolog);
+    } else if (b0 == 0x41 && n >= 2 && yv_l(ya_get(b, 1)) >= 0x50 && yv_l(ya_get(b, 1)) <= 0x57) {
+        /* push %r8..%r15 */
+        return pe_prologue_push(yv_l(ya_get(b, 1)) - 0x50 + 8, done, fp, fp_off, alloc, done, pushes, prolog);
+    } else if (n >= 3 && b0 == 0x48 && yv_l(ya_get(b, 1)) == 0x89 && yv_l(ya_get(b, 2)) == 0xe5) {
+        /* mov %rsp,%rbp: the frame register, established HERE -- so its code
+           carries this instruction's offset, not the prologue's end, which
+           may be several pushes and a `sub` later. */
+        return yr(7, "go", yv_bool(1), "fp", yv_bool(1), "fp_off", yv_long(done),
+                   "alloc", yv_long(alloc), "alloc_off", yv_long(alloc_off),
+                   "pushes", pushes, "prolog", yv_long(done));
+    } else if (n == 4 && b0 == 0x48 && yv_l(ya_get(b, 1)) == 0x83 && yv_l(ya_get(b, 2)) == 0xec) {
+        /* sub $imm8,%rsp */
+        return yr(7, "go", yv_bool(1), "fp", yv_bool(fp), "fp_off", yv_long(fp_off),
+                   "alloc", yv_long(alloc + yv_l(ya_get(b, 3))),
+                   "alloc_off", yv_long(done), "pushes", pushes, "prolog", yv_long(done));
+    } else if (n == 7 && b0 == 0x48 && yv_l(ya_get(b, 1)) == 0x81 && yv_l(ya_get(b, 2)) == 0xec) {
+        /* sub $imm32,%rsp */
+        Yv *sz = le32(yv_l(ya_get(b, 3)));
+        long v = yv_l(ya_get(sz, 0)) + 256 * yv_l(ya_get(sz, 1))
+                 + 65536 * yv_l(ya_get(sz, 2)) + 16777216 * yv_l(ya_get(sz, 3));
+        if (v < 0) { return no; }
+        else {
+            return yr(7, "go", yv_bool(1), "fp", yv_bool(fp), "fp_off", yv_long(fp_off),
+                       "alloc", yv_long(alloc + v), "alloc_off", yv_long(done),
+                       "pushes", pushes, "prolog", yv_long(done));
+        }
+    } else {
+        return no;
+    }
+}
+
+/* A push: 8 bytes off the stack either way, and -- for a register Win64
+   considers nonvolatile -- a UWOP_PUSH_NONVOL whose CodeOffset is where that
+   register becomes unreadable. The pack is offset * 16 + register, which
+   keeps a frame's whole code list flat. */
+static Yv *pe_prologue_push(long reg, long done, int fp, long fp_off, long alloc,
+                            long alloc_off, Yv *pushes, long prolog) {
+    Yv *np = pushes;
+    long na = alloc;
+    if (pe_nonvol(reg)) {
+        /* A nonvolatile push gets UWOP_PUSH_NONVOL, which ALREADY says RSP
+           went down by eight; counting it in the allocation as well would
+           describe the same eight bytes twice and unwind 8 bytes too far. */
+        np = ya_push(pushes, yv_long((done + 1) * 16 + reg));
+    } else {
+        /* A volatile push has no code of its own (that is what MASM's
+           .allocstack 8 is for), so the allocation is what covers it. */
+        na = alloc + 8;
+    }
+    return yr(7, "go", yv_bool(1), "fp", yv_bool(fp), "fp_off", yv_long(fp_off),
+               "alloc", yv_long(na), "alloc_off", yv_long(done),
+               "pushes", np, "prolog", yv_long(done));
+}
+
+/* One RUNTIME_FUNCTION per frame and one UNWIND_INFO per frame, the .pdata
+   entry naming the .xdata offset. With no frames both sections are empty and
+   pe_build leaves them out. */
+static Yv *pe_unwind_bytes(Yv *frames, long xbase) {
+    Yv *pdata = yav(0);
+    Yv *xdata = yav(0);
+    long i = 0;
+    while (i < yv_len(frames)) {
+        Yv *f = ya_get(frames, i);
+        pdata = push_le32(pdata, yv_l(yr_get(f, "start")));
+        pdata = push_le32(pdata, yv_l(yr_get(f, "end")));
+        pdata = push_le32(pdata, xbase + yv_len(xdata));
+        xdata = pe_unwind_info(xdata, f);
+        i = i + 1;
+    }
+    return yr(2, "pdata", pdata, "xdata", xdata);
+}
+
+/* The codes of one frame, each a two-slot group packed into one long per
+   slot, SORTED BY DESCENDING PROLOG OFFSET -- the order the epilog undoes
+   them, and the order the unwinder scans (it walks the array for the first
+   entry whose offset is <= the RIP offset, then undoes the rest).
+
+   The packing: byte 0 of a slot is its CodeOffset, byte 1 is UnwindOp in the
+   LOW nibble and OpInfo in the HIGH one. So a slot is
+       offset + (op + info * 16) * 256
+   and the writer below splits it back into two bytes. Note that the groups
+   are sorted as UNITS, not slot by slot: UWOP_ALLOC_LARGE's second slot holds
+   the allocation size, not an offset, and it must stay glued to its first. */
+static Yv *pe_codes(Yv *f) {
+    Yv *g = yav(0);
+    Yv *ps = yr_get(f, "pushes");
+    long i = 0;
+    while (i < yv_len(ps)) {
+        /* the push is packed as offset*16 + register (pe_prologue_push), and
+           the register is OpInfo, i.e. the HIGH nibble: multiply by 16. */
+        long packed = yv_l(ya_get(ps, i));
+        g = ya_push(g, yav(1, yv_long(packed / 16 + (packed % 16) * 4096)));
+        i = i + 1;
+    }
+    if (yv_b(yr_get(f, "fp"))) {
+        g = ya_push(g, yav(1, yv_long(yv_l(yr_get(f, "fp_off")) + 1 + 3 * 256)));
+    }
+    if (yv_l(yr_get(f, "alloc")) > 0) {
+        g = concat_arrays(g, pe_alloc(yv_l(yr_get(f, "alloc")), yv_l(yr_get(f, "alloc_off"))));
+    }
+    return pe_codes_sorted(g, 0);
+}
+
+/* One allocation's group. CodeOffset is "the end of the instruction that did
+   it, plus one" -- the start of the next one -- which is what makes the
+   unwinder's scan for the first code with offset <= rip-offset work.
+   UWOP_ALLOC_SMALL covers 8..128 bytes (info = size/8 - 1); above that it is
+   UWOP_ALLOC_LARGE with info 0 and size/8 in the next slot. */
+static Yv *pe_alloc(long size, long off) {
+    if (size >= 8 && size <= 128) {
+        return yav(1, yav(1, yv_long(off + 1 + (2 + (size / 8 - 1) * 16) * 256)));
+    } else if (size > 128) {
+        return yav(1, yav(2, yv_long(off + 1 + 1 * 256), yv_long(size / 8)));
+    } else {
+        return yav(0);
+    }
+}
+
+/* `a += b` for an array-of-arrays operand: yv.h has no `+=` helper for an
+   array, so the in-place append is spelled out. */
+static Yv *concat_arrays(Yv *a, Yv *b) {
+    long i = 0;
+    while (i < yv_len(b)) {
+        a = ya_push(a, ya_get(b, i));
+        i = i + 1;
+    }
+    return a;
+}
+
+/* Insertion sort by descending CodeOffset (the low byte of a group's first
+   slot). A frame has at most nine groups. */
+static Yv *pe_codes_sorted(Yv *g, long i) {
+    Yv *out = yav(0);
+    long at = i;
+    while (at < yv_len(g)) {
+        Yv *cur = ya_get(g, at);
+        long j = yv_len(out);
+        out = ya_push(out, cur);                 /* the slot to insert into */
+        while (j > 0
+               && yv_l(ya_get(ya_get(out, j - 1), 0)) % 256
+                    < yv_l(ya_get(cur, 0)) % 256) {
+            ya_set(out, j, ya_get(out, j - 1));
+            j = j - 1;
+        }
+        ya_set(out, j, cur);
+        at = at + 1;
+    }
+    Yv *slots = yav(0);
+    long k = 0;
+    while (k < yv_len(out)) {
+        Yv *grp = ya_get(out, k);
+        long q = 0;
+        while (q < yv_len(grp)) { slots = ya_push(slots, ya_get(grp, q)); q = q + 1; }
+        k = k + 1;
+    }
+    return slots;
+}
+
+/* One UNWIND_INFO: the 4-byte header, the codes, then the padding to an even
+   slot count. With no flags there is no trailing handler or chained-info
+   DWORD, so a function with no codes is exactly 4 bytes. */
+static Yv *pe_unwind_info(Yv *xdata, Yv *f) {
+    Yv *c = pe_codes(f);
+    long n = yv_len(c);
+    xdata = ya_push(xdata, yv_long(1));                       /* Version 1, no flags */
+    xdata = ya_push(xdata, yv_long(yv_l(yr_get(f, "prolog")) % 256));
+    xdata = ya_push(xdata, yv_long(n % 256));
+    /* FrameRegister RBP (5) in the low nibble, the scaled offset (0 for
+       `mov %rsp,%rbp`) in the high one. */
+    if (yv_b(yr_get(f, "fp"))) { xdata = ya_push(xdata, yv_long(5)); }
+    else { xdata = ya_push(xdata, yv_long(0)); }
+    long i = 0;
+    while (i < n) {
+        xdata = ya_push(xdata, yv_long(yv_l(ya_get(c, i)) % 256));
+        xdata = ya_push(xdata, yv_long(yv_l(ya_get(c, i)) / 256 % 256));
+        i = i + 1;
+    }
+    if (n % 2 == 1) {
+        xdata = ya_push(xdata, yv_long(0));
+        xdata = ya_push(xdata, yv_long(0));
+    }
+    return xdata;
+}
+
+/* ── PE -g: the COFF symbol table ────────────────────────────────────────
+   debug_syms already knows every function and global and its size; PE wants
+   the same facts as 18-byte COFF records (section numbers 1-based, Value an
+   RVA, no st_info byte as ELF has). The table and its string table are
+   appended to the file by pe_build and mapped by nothing. */
+static Yv *pe_coff_syms(Yv *syms) {
+    Yv *out = yav(0);
+    Yv *strtab = yav(0);
+    long i = 0;
+    while (i < yv_len(syms)) {
+        Yv *s = ya_get(syms, i);
+        out = pe_coff_sym(out, yr_get(s, "name"), yv_l(yr_get(s, "off")),
+                          pe_coff_secnum(yv_l(yr_get(s, "sec"))));
+        i = i + 1;
+    }
+    Yv *tail = yav(0);
+    tail = push_le32(tail, yv_len(strtab) + yv_len(out));
+    tail = push_bytes(tail, strtab);
+    return push_bytes(out, tail);
+}
+
+static long pe_coff_secnum(long sec) {
+    if (sec == 2) { return 2; } else { return 1; }
+}
+
+/* The 8-byte name field, zero-padded. A name of 8 bytes or more goes in the
+   string table behind a zero field, and none of ours is that long -- the
+   renamed `yfn_<uid>_<name>` symbols are shortened by sym_name first, which
+   is what keeps them short. */
+static Yv *pe_coff_sym(Yv *out, Yv *nm, long val, long secnum) {
+    long i = 0;
+    long n = yv_len(nm);
+    /* ys_byte_at, not ya_get: `nm` is a str and a str is not an array (the
+       Y twin's `nm[0:8]` is a byte slice of it). See pe_shdr's note in pe.c. */
+    while (i < 8) {
+        if (i < n) { out = ya_push(out, yv_long(ys_byte_at(nm, i))); }
+        else { out = ya_push(out, yv_long(0)); }
+        i = i + 1;
+    }
+    out = push_le32(out, val);
+    out = push_le16(out, secnum);
+    out = push_le16(out, 32);            /* Type: IMAGE_SYM_DTYPE_FUNCTION << 4 */
+    out = ya_push(out, yv_long(3));      /* StorageClass: STATIC */
+    out = ya_push(out, yv_long(0));      /* NumberOfAuxSymbols */
+    return out;
 }
