@@ -27,25 +27,18 @@
 
 import gfx;
 import scene;
+import test;
 
-let checks = 0;
-let failed = 0;
-
-def ck(name: str, ok: bool, detail: str) {
-    checks = checks + 1;
-    if (ok) {
-        print("  ok    " + name);
-        if (detail != "") { print("          " + detail); };
-    } else {
-        failed = failed + 1;
-        print("  FAIL  " + name);
-        print("          " + detail);
-    }
-};
-
-def ck_eq(name: str, got: long, want: long) {
-    ck(name, got == want, "got " + tostring(got) + ", want " + tostring(want))
-};
+// This battery used to define its own `ck` and `ck_eq` here, with the counters
+// `checks`/`failed` beside them and its own "N of M checks passed" line.  Both
+// are std/test.y's now.  Nothing observable moved: the local `ck` already
+// printed "  ok    "/"  FAIL  " plus the detail line and the summary already read
+// "N of M checks passed", which is exactly std/test.y's wording -- and exactly
+// what ../inject-defects.py greps for (`^  FAIL  (\S+)` and
+// `(\d+) of (\d+) checks passed`), so the injected-defect table in README.md is
+// still a measurement of the same thing.  Every assertion NAME below is
+// unchanged, so the labels that table cites (C01, D05, H07, ...) still mean the
+// same assertions.
 
 // ─────────────────────────────────────────────────────────────── group A --
 //
@@ -55,9 +48,9 @@ def ck_eq(name: str, got: long, want: long) {
 // first and only then measures against it.
 
 def check_layout() {
-    print("A layout: the table is self-consistent and nothing overlaps");
+    test.group("A layout: the table is self-consistent and nothing overlaps");
 
-    ck_eq("A01 frame size is 320x240",
+    test.ck_eq("A01 frame size is 320x240",
           scene.W * scene.H, 76800);
 
     // Every element's bounding box must lie inside the frame.  A box that
@@ -68,7 +61,7 @@ def check_layout() {
         && scene.CHK_X0 + scene.CHK_W - 1 < scene.W
         && scene.FR_Y1 < scene.H && scene.CHK_Y0 + scene.CHK_H - 1 < scene.H
         && scene.DY + scene.DR < scene.H && scene.DX - scene.DX >= 0;
-    ck("A02 every element box lies inside the frame", inside,
+    test.ck("A02 every element box lies inside the frame", inside,
        "plate x1=" + tostring(scene.PL_X1) + " frame x1=" + tostring(scene.FR_X1)
        + " checker x1=" + tostring(scene.CHK_X0 + scene.CHK_W - 1)
        + " disc bottom=" + tostring(scene.DY + scene.DR)
@@ -78,14 +71,14 @@ def check_layout() {
     // left, the disc lower left, and everything else is right of x=200.
     let line_disc = !(scene.LN_X1 >= scene.DX - scene.DR
                       && scene.LN_Y1 >= scene.DY - scene.DR);
-    ck("A03 line and disc bounding boxes are disjoint", line_disc,
+    test.ck("A03 line and disc bounding boxes are disjoint", line_disc,
        "line ends (" + tostring(scene.LN_X1) + "," + tostring(scene.LN_Y1)
        + "), disc starts (" + tostring(scene.DX - scene.DR) + ","
        + tostring(scene.DY - scene.DR) + ")");
 
     let left_right = scene.LN_X1 < scene.PL_X0
         && scene.DX + scene.DR < scene.PL_X0;
-    ck("A04 the two left-hand elements clear the right-hand column",
+    test.ck("A04 the two left-hand elements clear the right-hand column",
        left_right,
        "right column starts at x=" + tostring(scene.PL_X0)
        + "; line ends " + tostring(scene.LN_X1)
@@ -93,19 +86,19 @@ def check_layout() {
 
     // The three right-hand elements stack vertically, so they must not share a
     // row either.  plate 20..80, frame 100..200, checker 210..239.
-    ck("A05 plate, frame and checker occupy disjoint row bands",
+    test.ck("A05 plate, frame and checker occupy disjoint row bands",
        scene.PL_Y1 < scene.FR_Y0 && scene.FR_Y1 < scene.CHK_Y0,
        "plate " + tostring(scene.PL_Y0) + ".." + tostring(scene.PL_Y1)
        + ", frame " + tostring(scene.FR_Y0) + ".." + tostring(scene.FR_Y1)
        + ", checker " + tostring(scene.CHK_Y0) + ".."
        + tostring(scene.CHK_Y0 + scene.CHK_H - 1));
 
-    ck_eq("A06 the disc does not touch the frame's bottom edge",
+    test.ck_eq("A06 the disc does not touch the frame's bottom edge",
           scene.DY + scene.DR, 227);
 
     // The disc must also not touch the left edge: a disc at the edge would be
     // clamped and its area would silently change.
-    ck("A07 the disc is clear of the left edge",
+    test.ck("A07 the disc is clear of the left edge",
        scene.DX - scene.DR > 0,
        "disc spans x=" + tostring(scene.DX - scene.DR) + ".."
        + tostring(scene.DX + scene.DR));
@@ -113,9 +106,9 @@ def check_layout() {
     // Cell grid: 111x30 over 3-pixel cells is 37x10 exactly, with no partial
     // cell on the right or the bottom.  A partial cell would make the
     // on-cell count depend on rounding rather than on the grid.
-    ck_eq("A08 the checker divides evenly across", scene.CHK_W % scene.CHK_CELL, 0);
-    ck_eq("A09 the checker divides evenly down", scene.CHK_H % scene.CHK_CELL, 0);
-    ck_eq("A10 checker grid is 37x10 cells", scene.CHK_CELLS, 370);
+    test.ck_eq("A08 the checker divides evenly across", scene.CHK_W % scene.CHK_CELL, 0);
+    test.ck_eq("A09 the checker divides evenly down", scene.CHK_H % scene.CHK_CELL, 0);
+    test.ck_eq("A10 checker grid is 37x10 cells", scene.CHK_CELLS, 370);
 }
 
 // ─────────────────────────────────────────────────────────────── group B --
@@ -124,7 +117,7 @@ def check_layout() {
 // whatever `gfx.gradient` happened to produce.
 
 def check_gradient() {
-    print("B gradient: closed forms and exact corners");
+    test.group("B gradient: closed forms and exact corners");
 
     // Measure the ramp ALONE.  The five scene elements overwrite part of the
     // frame with dark colours, so the full image's channel sums are not the
@@ -136,32 +129,32 @@ def check_gradient() {
     gfx.stats_scan(scene.W, scene.H);
 
     // The four corners are exact by construction: floor(255(w-1)/(w-1)) = 255.
-    ck_eq("B01 near corner (0,0) is pure black", gfx.get(0, 0), 0);
-    ck_eq("B02 far corner (319,239) is pure white",
+    test.ck_eq("B01 near corner (0,0) is pure black", gfx.get(0, 0), 0);
+    test.ck_eq("B02 far corner (319,239) is pure white",
           gfx.get(scene.W - 1, scene.H - 1), 16777215);
     // The far corner is the only pixel that is 255 in all three channels.  The
     // other two corners are NOT pure: at (319,0) blue is floor(255*319/558)=145
     // and at (0,239) it is floor(255*239/558)=109, so calling either of them
     // "pure red" or "pure green" is a claim about a formula, not about the
     // image.  Asserting the closed form is what makes these worth having.
-    ck_eq("B03 top-right is the closed form, blue included",
+    test.ck_eq("B03 top-right is the closed form, blue included",
           gfx.get(scene.W - 1, 0),
           scene.corner_expect(scene.W - 1, 0, scene.W, scene.H));
-    ck_eq("B04 bottom-left is the closed form, blue included",
+    test.ck_eq("B04 bottom-left is the closed form, blue included",
           gfx.get(0, scene.H - 1),
           scene.corner_expect(0, scene.H - 1, scene.W, scene.H));
-    ck_eq("B05 the blue channel at (319,0) is 145, not 0",
+    test.ck_eq("B05 the blue channel at (319,0) is 145, not 0",
           gfx.get(scene.W - 1, 0) % 256, 145);
-    ck_eq("B06 the blue channel at (0,239) is 109, not 0",
+    test.ck_eq("B06 the blue channel at (0,239) is 109, not 0",
           gfx.get(0, scene.H - 1) % 256, 109);
 
     // Spots where the closed form has an exact value, so integer division
     // cannot be off by one.  At x=255 the red channel is 255*255/319 = 203 and
     // at y=127 the green is 255*127/239 = 135; both are read back and compared
     // against the formula, not against a stored constant.
-    ck_eq("B07 column x=255 has the predicted red",
+    test.ck_eq("B07 column x=255 has the predicted red",
           gfx.get(255, 0) / 65536, (255 * 255) / (scene.W - 1));
-    ck_eq("B08 row y=127 has the predicted green",
+    test.ck_eq("B08 row y=127 has the predicted green",
           gfx.get(0, 127) / 256 % 256, (255 * 127) / (scene.H - 1));
 
     // The gradient is monotone in r along x and in g along y.  A gradient that
@@ -174,7 +167,7 @@ def check_gradient() {
         if (b < a) { bad_r = bad_r + 1 };
         x = x + 1;
     };
-    ck_eq("B09 red is non-decreasing along the top row", bad_r, 0);
+    test.ck_eq("B09 red is non-decreasing along the top row", bad_r, 0);
 
     let bad_g = 0;
     let y = 1;
@@ -184,7 +177,7 @@ def check_gradient() {
         if (b < a) { bad_g = bad_g + 1 };
         y = y + 1;
     };
-    ck_eq("B10 green is non-decreasing down the left column", bad_g, 0);
+    test.ck_eq("B10 green is non-decreasing down the left column", bad_g, 0);
 
     // Blue is monotone along the anti-diagonal, which is the axis it runs on.
     let bad_b = 0;
@@ -195,7 +188,7 @@ def check_gradient() {
         if (b < a) { bad_b = bad_b + 1 };
         d = d + 1;
     };
-    ck_eq("B11 blue is non-decreasing along the top row", bad_b, 0);
+    test.ck_eq("B11 blue is non-decreasing along the top row", bad_b, 0);
 
     // THE CLOSED FORMS, and this is the strongest statement in the group: each
     // channel's total over the whole frame is a sum that can be written down
@@ -214,9 +207,9 @@ def check_gradient() {
     let wg = 0;
     let y = 0;
     while (y < scene.H) { wg = wg + (255 * y) / (scene.H - 1); y = y + 1 };
-    ck_eq("B12 red total = h * SUM_x floor(255x/(w-1))",
+    test.ck_eq("B12 red total = h * SUM_x floor(255x/(w-1))",
           gfx.st.sum_r, scene.H * wr);
-    ck_eq("B13 green total = w * SUM_y floor(255y/(h-1))",
+    test.ck_eq("B13 green total = w * SUM_y floor(255y/(h-1))",
           gfx.st.sum_g, scene.W * wg);
 
     let wb = 0;
@@ -229,12 +222,12 @@ def check_gradient() {
         };
         by = by + 1;
     };
-    ck_eq("B14 blue total = SUM over every pixel of floor(255(x+y)/(w+h-2))",
+    test.ck_eq("B14 blue total = SUM over every pixel of floor(255(x+y)/(w+h-2))",
           gfx.st.sum_b, wb);
 
     // The black count on the ramp alone, where nothing has been painted over it
     // -- which is exactly the case scene.y derives.
-    ck_eq("B15 the ramp alone has exactly the predicted black pixels",
+    test.ck_eq("B15 the ramp alone has exactly the predicted black pixels",
           scene.W * scene.H - gfx.st.nonzero,
           scene.background_black_expect(scene.W, scene.H));
 }
@@ -244,48 +237,48 @@ def check_gradient() {
 // Each primitive's pixel count against its closed form.
 
 def check_primitives() {
-    print("C primitives: returned counts against closed forms");
+    test.group("C primitives: returned counts against closed forms");
 
     // Group B wiped the buffer to measure the ramp on its own, so the scene has
     // to be drawn again here.  Doing it HERE rather than in the driver means
     // each group is self-contained and cannot be broken by reordering.
     scene.scene_draw(scene.W, scene.H);
 
-    ck_eq("C01 Bresenham line count = max(|dx|,|dy|)+1",
+    test.ck_eq("C01 Bresenham line count = max(|dx|,|dy|)+1",
           scene.elems[0].px,
           scene.line_expect(scene.LN_X0, scene.LN_Y0, scene.LN_X1, scene.LN_Y1));
-    ck_eq("C02 the line count for this layout is 141",
+    test.ck_eq("C02 the line count for this layout is 141",
           scene.elems[0].px, 141);
     // A line whose count were right by luck would still have to end where it
     // was asked to.  Read the endpoints back out of the framebuffer.
-    ck_eq("C03 the line starts at its first endpoint",
+    test.ck_eq("C03 the line starts at its first endpoint",
           gfx.get(scene.LN_X0, scene.LN_Y0), scene.COL_LINE);
-    ck_eq("C04 the line ends at its last endpoint",
+    test.ck_eq("C04 the line ends at its last endpoint",
           gfx.get(scene.LN_X1, scene.LN_Y1), scene.COL_LINE);
 
-    ck_eq("C05 filled rectangle area = w*h",
+    test.ck_eq("C05 filled rectangle area = w*h",
           scene.elems[2].px,
           scene.plate_expect(scene.PL_X0, scene.PL_Y0, scene.PL_X1, scene.PL_Y1));
-    ck_eq("C06 the plate is 101x61 = 6161", scene.elems[2].px, 6161);
+    test.ck_eq("C06 the plate is 101x61 = 6161", scene.elems[2].px, 6161);
 
-    ck_eq("C07 one-pixel frame = 2(w+h)-4",
+    test.ck_eq("C07 one-pixel frame = 2(w+h)-4",
           scene.elems[3].px,
           scene.frame_expect(scene.FR_X0, scene.FR_Y0, scene.FR_X1, scene.FR_Y1));
-    ck_eq("C08 the frame is 111x101 -> 420", scene.elems[3].px, 420);
+    test.ck_eq("C08 the frame is 111x101 -> 420", scene.elems[3].px, 420);
     // The corners of a one-pixel frame are drawn once each, so they are the
     // frame's colour; the interior is not.
-    ck_eq("C09 frame corner is frame-coloured",
+    test.ck_eq("C09 frame corner is frame-coloured",
           gfx.get(scene.FR_X0, scene.FR_Y0), scene.COL_FRAME);
-    ck("A10b frame interior is NOT frame-coloured",
+    test.ck("A10b frame interior is NOT frame-coloured",
        gfx.get((scene.FR_X0 + scene.FR_X1) / 2, (scene.FR_Y0 + scene.FR_Y1) / 2)
        != scene.COL_FRAME,
        "interior must show the gradient, proving the frame is one pixel thick");
 
-    ck_eq("C10 checker on-cells matches the closed form",
+    test.ck_eq("C10 checker on-cells matches the closed form",
           scene.elems[4].px,
           scene.checker_on_expect(scene.CHK_COLS, scene.CHK_ROWS));
-    ck_eq("C11 the checker lights 185 of 370 cells", scene.elems[4].px, 185);
-    ck("C12 on-cells never exceed the total cell count",
+    test.ck_eq("C11 the checker lights 185 of 370 cells", scene.elems[4].px, 185);
+    test.ck("C12 on-cells never exceed the total cell count",
        scene.elems[4].px
            <= scene.checker_cells_expect(scene.CHK_COLS, scene.CHK_ROWS),
        "on " + tostring(scene.elems[4].px) + " of "
@@ -299,13 +292,13 @@ def check_primitives() {
 // dx*dx+dy*dy <= r*r.  Two different computations of one number.
 
 def check_disc() {
-    print("D disc: box-walk area against summed exact columns");
+    test.group("D disc: box-walk area against summed exact columns");
 
     scene.scene_draw(scene.W, scene.H);
 
     let want = scene.disc_area_expect(scene.DR);
-    ck_eq("D01 disc area from summed columns", scene.elems[1].px, want);
-    ck_eq("D02 that area is 8497 for r=52", want, 8497);
+    test.ck_eq("D01 disc area from summed columns", scene.elems[1].px, want);
+    test.ck_eq("D02 that area is 8497 for r=52", want, 8497);
 
     // Gauss's circle bound: the lattice disc differs from pi*r^2 by at most
     // the perimeter 2*pi*r.  Checked in integer arithmetic, in thousandths.
@@ -313,12 +306,12 @@ def check_disc() {
     let perim = scene.disc_perimeter_milli(scene.DR);
     let lo = (scene.DR * scene.DR * 3141593 - 2 * scene.DR * 3141593) / 1000000;
     let hi = (scene.DR * scene.DR * 3141593 + 2 * scene.DR * 3141593) / 1000000;
-    ck("D03 area lies within Gauss's perimeter bound",
+    test.ck("D03 area lies within Gauss's perimeter bound",
        scene.elems[1].px >= lo && scene.elems[1].px <= hi,
        "area " + tostring(scene.elems[1].px) + ", pi*r^2/1000 = "
        + tostring(approx) + ", bound 2*pi*r/1000 = " + tostring(perim)
        + ", so " + tostring(lo) + ".." + tostring(hi));
-    ck("D04 the perimeter bound is not vacuous (it has width)",
+    test.ck("D04 the perimeter bound is not vacuous (it has width)",
        hi > lo, "bound spans " + tostring(hi - lo) + " pixels");
 
     // Per-column heights, read out of the finished image by counting the disc's
@@ -337,7 +330,7 @@ def check_disc() {
         if (seen != scene.disc_col_expect(scene.DR, dx)) { mism = mism + 1 };
         dx = dx + 1;
     };
-    ck_eq("D05 every disc column has the height the integer test predicts",
+    test.ck_eq("D05 every disc column has the height the integer test predicts",
           mism, 0);
 
     // The disc's extremes: the widest row is the centre row and is 2r+1 wide.
@@ -353,8 +346,8 @@ def check_disc() {
         if (n > widest) { widest = n };
         y = y + 1;
     };
-    ck_eq("D06 the disc's widest row is 2r+1", widest, 2 * scene.DR + 1);
-    ck_eq("D07 the disc is vertically centred on its row",
+    test.ck_eq("D06 the disc's widest row is 2r+1", widest, 2 * scene.DR + 1);
+    test.ck_eq("D07 the disc is vertically centred on its row",
           widest, 105);
 }
 
@@ -399,29 +392,29 @@ def count_colour_box(c: long, x0: long, y0: long, x1: long, y1: long) -> long {
 };
 
 def check_image() {
-    print("E the finished image, measured by colour and counted by hand");
+    test.group("E the finished image, measured by colour and counted by hand");
 
     let w = scene.W;
     let h = scene.H;
 
-    ck_eq("E01 line pixels, counted inside its bounding box",
+    test.ck_eq("E01 line pixels, counted inside its bounding box",
           count_colour_box(scene.COL_LINE, scene.LN_X0, scene.LN_Y0,
                            scene.LN_X1, scene.LN_Y1), 141);
-    ck_eq("E02 disc pixels, counted inside its bounding box",
+    test.ck_eq("E02 disc pixels, counted inside its bounding box",
           count_colour_box(scene.COL_DISC, scene.DX - scene.DR,
                            scene.DY - scene.DR, scene.DX + scene.DR,
                            scene.DY + scene.DR), 8497);
-    ck_eq("E03 plate pixels, counted inside its bounding box",
+    test.ck_eq("E03 plate pixels, counted inside its bounding box",
           count_colour_box(scene.COL_PLATE, scene.PL_X0, scene.PL_Y0,
                            scene.PL_X1, scene.PL_Y1), 6161);
-    ck_eq("E04 frame pixels, counted inside its bounding box",
+    test.ck_eq("E04 frame pixels, counted inside its bounding box",
           count_colour_box(scene.COL_FRAME, scene.FR_X0, scene.FR_Y0,
                            scene.FR_X1, scene.FR_Y1), 420);
     // The same count over the WHOLE frame must now agree too, because the
     // palette is now chosen so the background cannot imitate any element colour.
-    ck_eq("E04b and over the whole frame too, for the line",
+    test.ck_eq("E04b and over the whole frame too, for the line",
           count_colour(scene.COL_LINE, w, h), 141);
-    ck_eq("E04c and for the disc", count_colour(scene.COL_DISC, w, h), 8497);
+    test.ck_eq("E04c and for the disc", count_colour(scene.COL_DISC, w, h), 8497);
 
     // The checker's two colours, counted separately, must add up to its area:
     // 37x10 cells of 3x3 pixels = 111x30 = 3330 pixels.
@@ -430,34 +423,34 @@ def check_image() {
     let on = count_colour_box(scene.COL_ON, scene.CHK_X0, scene.CHK_Y0, cx1, cy1);
     let off = count_colour_box(scene.COL_OFF, scene.CHK_X0, scene.CHK_Y0,
                                cx1, cy1);
-    ck_eq("E05 checker on-colour pixels = 185 cells x 9",
+    test.ck_eq("E05 checker on-colour pixels = 185 cells x 9",
           on, 185 * scene.CHK_CELL * scene.CHK_CELL);
-    ck_eq("E06 checker covers its whole 111x30 box",
+    test.ck_eq("E06 checker covers its whole 111x30 box",
           on + off, scene.CHK_W * scene.CHK_H);
-    ck("E07 on-cells and off-cells are within one cell of each other",
+    test.ck("E07 on-cells and off-cells are within one cell of each other",
        (on - off) * (on - off) <= 81,
        "on " + tostring(on) + ", off " + tostring(off)
        + ", differ by " + tostring((on - off) / 9) + " cells");
 
     // Nothing was clipped: the primitives write outside the buffer only if the
     // caller asked for it, and the layout provably does not.
-    ck_eq("E08 no pixel write fell outside the frame", gfx.clipped, 0);
+    test.ck_eq("E08 no pixel write fell outside the frame", gfx.clipped, 0);
 
     // The black-pixel count is the one the derivation in scene.y predicts.
     let black = w * h - gfx.st.nonzero;
-    ck_eq("E09 black pixels = the predicted 2",
+    test.ck_eq("E09 black pixels = the predicted 2",
           black, scene.background_black_expect(w, h));
-    ck_eq("E10 that is 2, at (0,0) and (1,0)", black, 2);
-    ck_eq("E11 pixel (0,0) really is black", gfx.get(0, 0), 0);
-    ck_eq("E12 pixel (1,0) really is black", gfx.get(1, 0), 0);
-    ck("E13 pixel (2,0) is NOT black", gfx.get(2, 0) != 0,
+    test.ck_eq("E10 that is 2, at (0,0) and (1,0)", black, 2);
+    test.ck_eq("E11 pixel (0,0) really is black", gfx.get(0, 0), 0);
+    test.ck_eq("E12 pixel (1,0) really is black", gfx.get(1, 0), 0);
+    test.ck("E13 pixel (2,0) is NOT black", gfx.get(2, 0) != 0,
        "x=2 gives r = 255*2/319 = 1, so it is the first non-black pixel");
 
     // Every pixel is either black or non-black, and the tally adds up.  This
     // is the anti-vacuity anchor: a `nonzero` of 0 would satisfy nothing else.
-    ck_eq("E14 nonzero + black = the whole frame",
+    test.ck_eq("E14 nonzero + black = the whole frame",
           gfx.st.nonzero + black, w * h);
-    ck("E15 the image is not blank", gfx.st.nonzero > 0,
+    test.ck("E15 the image is not blank", gfx.st.nonzero > 0,
        "nonzero " + tostring(gfx.st.nonzero) + " of " + tostring(w * h));
 
     // The channel sums must agree with each other.  The gradient alone puts
@@ -470,20 +463,20 @@ def check_image() {
     // was wrong by about 5%, and it was my TEST that was wrong, not the image.
     // The real check is in group B, on a wiped buffer, against a sum computed
     // there from the formula alone.
-    ck_eq("E16 sum_all is the three sums added",
+    test.ck_eq("E16 sum_all is the three sums added",
           gfx.st.sum_all, gfx.st.sum_r + gfx.st.sum_g + gfx.st.sum_b);
-    ck("E17 the scene's red total is below the pure gradient's",
+    test.ck("E17 the scene's red total is below the pure gradient's",
        gfx.st.sum_r < 255 * w * h / 2,
        "sum_r " + tostring(gfx.st.sum_r) + " < "
        + tostring(255 * w * h / 2));
-    ck("E18 the scene's green total is below the pure gradient's",
+    test.ck("E18 the scene's green total is below the pure gradient's",
        gfx.st.sum_g < 255 * w * h / 2, "sum_g " + tostring(gfx.st.sum_g));
     // No direction is claimed for blue.  An earlier version of this check
     // asserted the same "below" as red and green and was wrong: the checker's
     // lit cells are 0x00FFFF, whose blue channel is 255 -- the maximum -- so
     // they push the total UP, not down.  "The elements changed it" is the true
     // and useful statement.
-    ck("E19 the scene's blue total differs from the pure gradient's",
+    test.ck("E19 the scene's blue total differs from the pure gradient's",
        gfx.st.sum_b != 255 * w * h / 2,
        "sum_b " + tostring(gfx.st.sum_b) + " against a gradient total of "
        + tostring(255 * w * h / 2) + " -- raised, because the checker's lit "
@@ -504,17 +497,17 @@ def check_image() {
 let FNV_ZEROS = 3633849893760430885;      // 0x326e0739b4ae7325
 
 def check_digest() {
-    print("F digest: deterministic, and able to distinguish an image from nothing");
+    test.group("F digest: deterministic, and able to distinguish an image from nothing");
 
     let d1 = gfx.digest(scene.W, scene.H);
     let d2 = gfx.digest(scene.W, scene.H);
-    ck_eq("F01 digesting the same bytes twice agrees", d1, d2);
+    test.ck_eq("F01 digesting the same bytes twice agrees", d1, d2);
 
     // Redraw from scratch.  If any of the render depended on uninitialised
     // memory, map order, or the clock, the two digests would differ.
     let _re = scene.scene_draw(scene.W, scene.H);
     let d3 = gfx.digest(scene.W, scene.H);
-    ck_eq("F02 a full redraw gives a byte-identical image", d3, d1);
+    test.ck_eq("F02 a full redraw gives a byte-identical image", d3, d1);
 
     // Streaming in bands must equal hashing in one pass.  This is what the
     // GetImage read-back relies on, so it is tested here rather than only on a
@@ -532,7 +525,7 @@ def check_digest() {
         if (nh == 0 - 1) { h_band = 0 - 1 } else { h_band = nh };
         band = band + 4096;
     };
-    ck_eq("F03 banded digest equals whole-image digest", h_band, d1);
+    test.ck_eq("F03 banded digest equals whole-image digest", h_band, d1);
 
     // THE ANTI-VACUITY ANCHOR.  An all-zero framebuffer must hash to the
     // externally computed constant, and the rendered scene must NOT hash to
@@ -540,18 +533,18 @@ def check_digest() {
     // that was never drawn into.
     gfx.wipe(scene.W, scene.H);
     let dz = gfx.digest(scene.W, scene.H);
-    ck_eq("F04 an all-zero framebuffer hashes to the external constant",
+    test.ck_eq("F04 an all-zero framebuffer hashes to the external constant",
           dz, FNV_ZEROS);
-    ck("F05 the rendered image does NOT hash to that constant",
+    test.ck("F05 the rendered image does NOT hash to that constant",
        d1 != FNV_ZEROS,
        "rendered digest " + gfx.digest_hex(d1) + " vs zeroed "
        + gfx.digest_hex(FNV_ZEROS));
 
     // And the round trip: redraw and confirm we are back where we started.
     scene.scene_draw(scene.W, scene.H);
-    ck_eq("F06 redrawing after a wipe restores the digest exactly",
+    test.ck_eq("F06 redrawing after a wipe restores the digest exactly",
           gfx.digest(scene.W, scene.H), d1);
-    ck_eq("F07 and the nonzero count with it", gfx.stats_scan(scene.W, scene.H),
+    test.ck_eq("F07 and the nonzero count with it", gfx.stats_scan(scene.W, scene.H),
           76798);
 
     // A one-byte change must change the digest.  Otherwise the digest is not
@@ -563,20 +556,20 @@ def check_digest() {
     let before = gfx.digest(scene.W, scene.H);
     gfx.put(160, 120, 255, 0, 255);
     let after = gfx.digest(scene.W, scene.H);
-    ck("F08 flipping one pixel changes the digest", before != after,
+    test.ck("F08 flipping one pixel changes the digest", before != after,
        gfx.digest_hex(before) + " -> " + gfx.digest_hex(after));
     gfx.put(160, 120, (saved >> 16) & 255, (saved >> 8) & 255, saved & 255);
-    ck_eq("F09 and restoring the pixel restores the digest",
+    test.ck_eq("F09 and restoring the pixel restores the digest",
           gfx.digest(scene.W, scene.H), before);
-    ck_eq("F09b and the restored pixel is the one that was there",
+    test.ck_eq("F09b and the restored pixel is the one that was there",
           gfx.get(160, 120), saved);
 
     // digest_add must refuse to read outside the buffer instead of trapping.
-    ck_eq("F10 digest_add rejects an overrun", gfx.digest_add(gfx.FNV_OFF,
+    test.ck_eq("F10 digest_add rejects an overrun", gfx.digest_add(gfx.FNV_OFF,
           gfx.PX_MAX - 3, 8), 0 - 1);
-    ck_eq("F11 digest_add rejects a negative offset", gfx.digest_add(gfx.FNV_OFF,
+    test.ck_eq("F11 digest_add rejects a negative offset", gfx.digest_add(gfx.FNV_OFF,
           0 - 1, 4), 0 - 1);
-    ck_eq("F12 and a zero-length hash at the very end is legal",
+    test.ck_eq("F12 and a zero-length hash at the very end is legal",
           gfx.digest_add(gfx.FNV_OFF, gfx.PX_MAX, 0), gfx.FNV_OFF);
 }
 
@@ -587,49 +580,49 @@ def check_digest() {
 // rather than a formality: it must terminate and must not write out of bounds.
 
 def check_edges() {
-    print("G degenerate geometry: terminates, clamps, never clips");
+    test.group("G degenerate geometry: terminates, clamps, never clips");
 
     // Inverted rectangles.  ax > bx, so nothing may be drawn and 0 returned.
-    ck_eq("G01 an inverted rectangle writes nothing",
+    test.ck_eq("G01 an inverted rectangle writes nothing",
           gfx.fill_rect(50, 50, 10, 10, 0xFF00FF), 0);
-    ck_eq("G02 a zero-area rectangle writes one pixel",
+    test.ck_eq("G02 a zero-area rectangle writes one pixel",
           gfx.fill_rect(7, 7, 7, 7, 0xFF00FF), 1);
 
     // A line whose endpoints coincide is one pixel, not zero and not a loop.
-    ck_eq("G03 a zero-length line is one pixel", gfx.line(20, 20, 20, 20, 0xFF00FF),
+    test.ck_eq("G03 a zero-length line is one pixel", gfx.line(20, 20, 20, 20, 0xFF00FF),
           1);
 
     // A horizontal and a vertical line have the same closed form as any other:
     // max(|dx|,|dy|)+1.
-    ck_eq("G04 horizontal line count = width+1",
+    test.ck_eq("G04 horizontal line count = width+1",
           gfx.line(0, 5, 100, 5, 0xFF00FF), 101);
-    ck_eq("G05 vertical line count = height+1",
+    test.ck_eq("G05 vertical line count = height+1",
           gfx.line(5, 0, 5, 100, 0xFF00FF), 101);
 
     // A disc of radius 0 is one pixel; radius 1 is the 5-pixel plus shape.
-    ck_eq("G06 a zero-radius disc is one pixel", gfx.disc(30, 30, 0, 0xFF00FF), 1);
-    ck_eq("G07 a unit disc is the 5-pixel plus", gfx.disc(30, 30, 1, 0xFF00FF), 5);
+    test.ck_eq("G06 a zero-radius disc is one pixel", gfx.disc(30, 30, 0, 0xFF00FF), 1);
+    test.ck_eq("G07 a unit disc is the 5-pixel plus", gfx.disc(30, 30, 1, 0xFF00FF), 5);
     // Three columns, not two: dx = -1, 0, +1.  Summing only the centre and one
     // side column gave 2, and that was this test's bug.
-    ck_eq("G08 and that matches the closed form over all 3 columns", 5,
+    test.ck_eq("G08 and that matches the closed form over all 3 columns", 5,
           scene.disc_col_expect(1, 0 - 1) + scene.disc_col_expect(1, 0)
               + scene.disc_col_expect(1, 1));
 
     // A negative radius is clamped to 0, not made into a huge disc.
-    ck_eq("G09 a negative radius is clamped to zero",
+    test.ck_eq("G09 a negative radius is clamped to zero",
           gfx.disc(30, 30, 0 - 5, 0xFF00FF), 1);
 
     // A frame smaller than 2x2 degenerates but must still terminate.
-    ck("G10 a 1x1 frame draws one pixel", gfx.stroke_rect(9, 9, 9, 9, 0xFF00FF) == 1,
+    test.ck("G10 a 1x1 frame draws one pixel", gfx.stroke_rect(9, 9, 9, 9, 0xFF00FF) == 1,
        "got " + tostring(gfx.stroke_rect(9, 9, 9, 9, 0xFF00FF)));
-    ck("G11 a 2x2 frame draws 4 pixels", gfx.stroke_rect(11, 11, 12, 12, 0xFF00FF) == 4,
+    test.ck("G11 a 2x2 frame draws 4 pixels", gfx.stroke_rect(11, 11, 12, 12, 0xFF00FF) == 4,
        "got " + tostring(gfx.stroke_rect(11, 11, 12, 12, 0xFF00FF)));
 
     // Out-of-bounds reads return the sentinel rather than trapping.
-    ck_eq("G12 reading outside the buffer returns -1", gfx.get(-1, 0), 0 - 1);
-    ck_eq("G13 reading past the right edge returns -1",
+    test.ck_eq("G12 reading outside the buffer returns -1", gfx.get(-1, 0), 0 - 1);
+    test.ck_eq("G13 reading past the right edge returns -1",
           gfx.get(gfx.W_MAX, 0), 0 - 1);
-    ck_eq("G14 reading past the bottom returns -1",
+    test.ck_eq("G14 reading past the bottom returns -1",
           gfx.get(0, gfx.H_MAX), 0 - 1);
 
     // Out-of-bounds writes are dropped AND counted, which is what lets the
@@ -638,16 +631,16 @@ def check_edges() {
     gfx.putn(gfx.W_MAX + 5, 5, 0xFF00FF);
     gfx.putn(0 - 5, 5, 0xFF00FF);
     gfx.putn(5, gfx.H_MAX + 5, 0xFF00FF);
-    ck_eq("G15 three out-of-bounds writes were each counted",
+    test.ck_eq("G15 three out-of-bounds writes were each counted",
           gfx.clipped - c0, 3);
     gfx.clipped = c0;
 
     // isqrt, which the disc's closed form depends on.  Checked against squares
     // whose roots are exact, and against the defining inequality.
-    ck_eq("G16 isqrt(0)", gfx.isqrt(0), 0);
-    ck_eq("G17 isqrt(1)", gfx.isqrt(1), 1);
-    ck_eq("G18 isqrt(52*52)", gfx.isqrt(52 * 52), 52);
-    ck_eq("G19 isqrt(320*240)", gfx.isqrt(320 * 240), 277);
+    test.ck_eq("G16 isqrt(0)", gfx.isqrt(0), 0);
+    test.ck_eq("G17 isqrt(1)", gfx.isqrt(1), 1);
+    test.ck_eq("G18 isqrt(52*52)", gfx.isqrt(52 * 52), 52);
+    test.ck_eq("G19 isqrt(320*240)", gfx.isqrt(320 * 240), 277);
     let bad = 0;
     let v = 0;
     while (v < 3000) {
@@ -655,12 +648,12 @@ def check_edges() {
         if (r * r > v || (r + 1) * (r + 1) <= v) { bad = bad + 1 };
         v = v + 1;
     };
-    ck_eq("G20 isqrt is floor(sqrt) for all 3000 values tried", bad, 0);
+    test.ck_eq("G20 isqrt is floor(sqrt) for all 3000 values tried", bad, 0);
 
     // clamp helpers
-    ck_eq("G21 iclamp clamps low", gfx.iclamp(0 - 5, 0, 10), 0);
-    ck_eq("G22 iclamp clamps high", gfx.iclamp(99, 0, 10), 10);
-    ck_eq("G23 iclamp passes the middle through", gfx.iclamp(5, 0, 10), 5);
+    test.ck_eq("G21 iclamp clamps low", gfx.iclamp(0 - 5, 0, 10), 0);
+    test.ck_eq("G22 iclamp clamps high", gfx.iclamp(99, 0, 10), 10);
+    test.ck_eq("G23 iclamp passes the middle through", gfx.iclamp(5, 0, 10), 5);
 }
 
 // ─────────────────────────────────────────────────────────────── group H --
@@ -756,14 +749,14 @@ def check_line_shape(tag: str, x0: long, y0: long, x1: long, y1: long) {
         };
         y = y + 1
     };
-    ck(tag, bad == 0 && extra == 0,
+    test.ck(tag, bad == 0 && extra == 0,
        tostring(bad) + " predicted pixel(s) missing" + bad_list + ", "
        + tostring(extra) + " unexpected pixel(s), over " + tostring(mx + 1)
        + " steps");
 };
 
 def check_shapes() {
-    print("H shapes: which pixels, against a closed form independent of the loop");
+    test.group("H shapes: which pixels, against a closed form independent of the loop");
 
     // Slopes chosen because the tie case is REACHED on them.  dx=4 dy=1 puts
     // the error term exactly on dx/2 at step 2, which is where `e2 <= dx` and
@@ -808,20 +801,20 @@ def check_shapes() {
     let cs = scene.CHK_CELL;
     // Cell (0,0): cx+cy = 0, even, so lit.  Row 2 of it is the row an off-by-one
     // cell origin moves, which is the whole point of looking at THIS row.
-    ck_eq("H07 first cell, its third row is still the ON colour",
+    test.ck_eq("H07 first cell, its third row is still the ON colour",
           gfx.get(scene.CHK_X0 + 1, scene.CHK_Y0 + 2), scene.COL_ON);
-    ck_eq("H08 first cell, its first row is the ON colour",
+    test.ck_eq("H08 first cell, its first row is the ON colour",
           gfx.get(scene.CHK_X0 + 1, scene.CHK_Y0 + 0), scene.COL_ON);
-    ck_eq("H09 second cell across is the OFF colour",
+    test.ck_eq("H09 second cell across is the OFF colour",
           gfx.get(scene.CHK_X0 + cs + 1, scene.CHK_Y0 + 0), scene.COL_OFF);
-    ck_eq("H10 second cell down is the OFF colour",
+    test.ck_eq("H10 second cell down is the OFF colour",
           gfx.get(scene.CHK_X0 + 0, scene.CHK_Y0 + cs), scene.COL_OFF);
-    ck_eq("H11 the cell diagonally across is the ON colour",
+    test.ck_eq("H11 the cell diagonally across is the ON colour",
           gfx.get(scene.CHK_X0 + cs, scene.CHK_Y0 + cs), scene.COL_ON);
     // And the boundary between two cell rows, which is where a shift shows.
-    ck_eq("H12 the last row of cell row 0 is still cell row 0",
+    test.ck_eq("H12 the last row of cell row 0 is still cell row 0",
           gfx.get(scene.CHK_X0 + 1, scene.CHK_Y0 + cs - 1), scene.COL_ON);
-    ck_eq("H13 and the first row of cell row 1 belongs to cell row 1",
+    test.ck_eq("H13 and the first row of cell row 1 belongs to cell row 1",
           gfx.get(scene.CHK_X0 + 1, scene.CHK_Y0 + cs), scene.COL_OFF);
 };
 
@@ -832,37 +825,30 @@ def do_check() -> long {
     print("");
     scene.scene_draw(scene.W, scene.H);
     gfx.stats_scan(scene.W, scene.H);
-    print("");
 
+    // Every group below names itself with test.group(), which prints the blank
+    // line and the heading; the separators used to be hand-written print("")
+    // calls between the calls, and keeping both would have doubled every gap.
     check_layout();
-    print("");
     check_gradient();
-    print("");
     check_primitives();
-    print("");
     check_disc();
-    print("");
     // Re-draw before counting the image: groups B..G scribble test colours over
     // the scene, so the picture must be restored before it is measured by
     // colour.  Restoring is itself worth asserting, so it is not silent.
     scene.scene_draw(scene.W, scene.H);
     gfx.stats_scan(scene.W, scene.H);
     check_image();
-    print("");
     check_digest();
-    print("");
     check_edges();
-    print("");
     scene.scene_draw(scene.W, scene.H);
     check_shapes();
-    print("");
     print("  note: groups B..G overwrite pixels with test colours; the image");
     print("        was redrawn before group E so its counts are of the scene.");
-    print("");
-    print(tostring(checks - failed) + " of " + tostring(checks)
-          + " checks passed");
-    if (failed > 0) { return 1 };
-    0
+    // std/test.y's summary and its 0-or-1, in the same words this battery
+    // always printed by hand.  It prints its own leading blank line, which is
+    // why there is no print("") in front of it.
+    test.report()
 };
 
-export { do_check, checks, failed };
+export { do_check };

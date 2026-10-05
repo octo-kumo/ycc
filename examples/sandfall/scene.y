@@ -21,6 +21,9 @@
 // same picture" would be true because the seed is ignored.
 
 import grid;
+// std's seeded generator (splitmix64).  The seeded `terrain` scene draws from it
+// directly; it used to draw from grid.rnd_below(), behind grid's own 63-bit LCG.
+import random;
 
 // build(name, w, h, seed) -> str -- put the scene on a cleared grid.  "" when
 // it worked; otherwise the message to print before exiting 1.
@@ -31,7 +34,7 @@ import grid;
 // prints on stdout -- ORCHESTRATOR.md 2.6).
 def build(name: str, w: long, h: long, seed: long) -> str {
     grid.clear(w, h);
-    grid.srand(seed);
+    grid.set_seed(seed);
 
     if (name == "empty") { return "" };
 
@@ -124,7 +127,10 @@ def build(name: str, w: long, h: long, seed: long) -> str {
 
     if (name == "terrain") {
         // The seeded scene: a stone floor, a ragged stone cavern and a seeded
-        // shower of sand and water above it.
+        // shower of sand and water above it.  The four draws below are std's
+        // `random.below` (splitmix64); they were `grid.rnd_below` calls over a
+        // 63-bit LCG grid.y used to carry.  Same --seed, same grid; a different
+        // grid under every seed than before, which is the only thing that moved.
         let fy = h - 2;
         if (fy < 10) { return "--scene terrain needs a grid at least 12 rows tall" };
         if (!grid.rect_logical(0, fy, w - 1, h - 1, grid.M_STONE)) {
@@ -132,7 +138,7 @@ def build(name: str, w: long, h: long, seed: long) -> str {
         };
         let x = 0;
         while (x < w) {
-            let d = grid.rnd_below(4);
+            let d = random.below(4);
             let hh = fy - 2 - d;
             if (hh > 0) {
                 if (!grid.rect_logical(x, hh, x, fy - 1, grid.M_STONE)) {
@@ -144,10 +150,10 @@ def build(name: str, w: long, h: long, seed: long) -> str {
         let k = 0;
         let n = (w * (h / 2)) / 10;
         while (k < n) {
-            let px = grid.rnd_below(w);
-            let py = grid.rnd_below(h / 2);
+            let px = random.below(w);
+            let py = random.below(h / 2);
             let m = grid.M_SAND;
-            if (grid.rnd_below(2) == 0) { m = grid.M_WATER };
+            if (random.below(2) == 0) { m = grid.M_WATER };
             grid.put_logical(px, py, m);
             k = k + 1
         };

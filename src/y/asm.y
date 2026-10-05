@@ -30,6 +30,7 @@ type AsmOut = { ok: bool, bytes: [byte], error: str, times: [Timing] };
 type AsmOutI = { ok: bool, bytes: [byte], error: str, times: [Timing], items: long };
 // A parsed number, and parse_operand's result (an Operand: enc64.y).
 type AsmNum = { ok: bool, v: long };
+type AsmAddr = { ok: bool, addr: long };
 type OpRes = { ok: bool, op: Operand, error: str };
 // A label: its section (0 .text, 1 .rodata, 2 .bss), offset there, and the
 // number of items emitted before it (asm_relax recomputes the offset from
@@ -292,23 +293,51 @@ def parse_mem(t: str) -> OpRes {
 };
 
 def parse_mem_head(t: str, head: str, parts: [str]) -> OpRes {
-    // (split: non-empty head narrows; rip-label vs numeric displacement.)
+    // (split: non-empty head narrows; a numeric displacement, a rip-relative
+    // label, or a label with a byte offset into a table.)
     if (is_num_text(head)) {
         parse_mem_disp(t, head, parts)
     } else {
-        parse_mem_rip(t, head, parts)
+        let plus = index_of(head, "+");
+        if (plus < 0) {
+            parse_mem_rip(t, head, parts)
+        } else {
+            parse_mem_ripoff(t, head, trim(head[plus + 1:]), parts)
+        }
+    }
+};
+
+// label+N(%rip): the N-th entry of a table. This is not a nicety -- a
+// transcendental's kernel is twelve `mulsd c7(%rip)`-shaped reads of one
+// coefficient table, and a label per coefficient costs the shaker ~2K
+// instructions of label-map fixpoint each, forever, on every compile.
+//
+// The offset stays part of the LABEL (`tab+8` reaches label_addr whole), so the
+// fixup needs no field of its own -- see the note on Fixup in enc64.y.
+def parse_mem_ripoff(t: str, head: str, off: str, parts: [str]) -> OpRes {
+    if (!is_num_text(off)) {
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad table offset '" + off + "'" }
+    } else {
+        parse_mem_ripdisp(t, head, 0, parts)
     }
 };
 
 def parse_mem_rip(t: str, head: str, parts: [str]) -> OpRes {
-    // label(%rip) — mem-shape built ONLY here.
+    parse_mem_ripdisp(t, head, 0, parts)
+};
+
+// placeholder
+
+def parse_mem_ripdisp(t: str, lbl: str, disp: long, parts: [str]) -> OpRes {
+    // label(%rip), with disp the byte offset into the table -- mem-shape built
+    // ONLY here.
     // NOTE: nested ifs, not `||` (see is_digit_ch note).
     if (len(parts) != 1) {
         { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad rip-relative '" + t + "'" }
     } else if (parts[0] != "%rip") {
         { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad rip-relative '" + t + "'" }
     } else {
-        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: -1, idx: -1, scale: 1, disp: 0, rip: true, lbl: head }, error: "" }
+        { ok: true, op: { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: -1, idx: -1, scale: 1, disp: disp, rip: true, lbl: lbl }, error: "" }
     }
 };
 
@@ -575,14 +604,40 @@ def labmap_build(labels: [AsmLabel]) -> { map: [AsmLabel], dup: str } {
     { map: m, dup: dup }
 };
 
-def label_addr(lmap: [AsmLabel], code_len: long, pad: long, name: str) -> {ok: bool, addr: long} {
+def label_addr(lmap: [AsmLabel], code_len: long, pad: long, name: str) -> AsmAddr {
     let e = labmap_get(lmap, name);
     if (e.sec < 0) {
-        { ok: false, addr: 0 }
+        // `tab+8`: the eighth byte of a table, which is how one label serves a
+        // whole coefficient table. Only on a miss, so the cost is nothing on
+        // every jump and every ordinary rip reference.
+        let plus = index_of(name, "+");
+        if (plus > 0) {
+            label_addr_off(lmap, code_len, pad, name, plus)
+        } else {
+            { ok: false, addr: 0 }
+        }
     } else if (e.sec == 0) {
         { ok: true, addr: e.off }
     } else {
         { ok: true, addr: code_len + pad + e.off }
+    }
+};
+
+// The `name+off` half of label_addr. It re-reads `name` rather than taking the
+// two halves, so the lookup key is the same string the label map holds.
+def label_addr_off(lmap: [AsmLabel], code_len: long, pad: long, name: str, plus: long) -> AsmAddr {
+    let off = trim(name[plus + 1:]);
+    if (!is_num_text(off)) {
+        { ok: false, addr: 0 }
+    } else {
+        let e = labmap_get(lmap, name[0:plus]);
+        if (e.sec < 0) {
+            { ok: false, addr: 0 }
+        } else if (e.sec == 0) {
+            { ok: true, addr: e.off + tonum(off) }
+        } else {
+            { ok: true, addr: code_len + pad + e.off + tonum(off) }
+        }
     }
 };
 
@@ -979,21 +1034,20 @@ def asm_quad(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
 def asm_quad_bad(rest: str) -> bool {
     // NOTE: `!is_num_text(rest)` is fine — `!` (an `un` node) needs a bool
     // operand (types.y typeof_expr's "un" arm) and is_num_text returns one.
-    // The range test below stays a separate arm because the two causes need
-    // different messages (see asm_quad_err).
-    if (!is_num_text(rest)) { true }
-    else if (tonum(rest) < 0) { true }
-    else { false }
+    //
+    // Only "is it a number" is left, and that is all there can be: a .quad is a
+    // 64-bit bit pattern, so every integer is one, negatives included -- half of
+    // every double's pattern reads as a negative long, because that is the sign
+    // bit. The old check rejected those, which made a table of IEEE-754
+    // constants impossible to write, and a range check cannot replace it either
+    // because tonum wraps at 64 bits (2^63 comes back as -2^63) and the eight
+    // bytes stored are the same ones.
+    if (!is_num_text(rest)) { true } else { false }
 };
 
 def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
-    // (split: error shape built ONLY here — one message per cause.)
-    // NOTE: nested ifs (see is_digit_ch note); both arms share the key set.
-    if (!is_num_text(rest)) {
-        { err: "L" + tostring(lno) + ": bad .quad value '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
-    } else {
-        { err: "L" + tostring(lno) + ": negative .quad value", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
-    }
+    // One cause, one message — see asm_quad_bad on why there is no second.
+    { err: "L" + tostring(lno) + ": bad .quad value '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
 };
 
 def asm_quad_go(sec: long, offs: [long], rest: str) -> AsmContent {
@@ -1477,7 +1531,7 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
     // elf_bss_from_ro), so the fixups below only know two sections.
     let labs: [AsmLabel] = labels;
     if (bss_len > 0) {
-        let bshift = elf.elf_bss_from_ro(code_len, ro_len, bss_len);
+        let bshift = elf.elf_bss_from_ro(code_len, ro_len);
         labs = [];
         foreach (lb in labels) {
             if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off, at_item: lb.at_item }; }
@@ -1617,6 +1671,8 @@ def patch_item_rel(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes
     if (!t.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl + "'" }
     } else {
+        // label_addr has already added `tab+8(%rip)`'s 8, so this is the
+        // target less the address past the instruction.
         let v = t.addr - (base + it.len);
         { bytes: patch32(bytes, at, v), err: "" }
     }

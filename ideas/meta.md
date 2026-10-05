@@ -14,7 +14,7 @@ having on its own: it is the "can we do computation during compilation" question
 
 Everything below was read off this tree and audited against it three times; corrections
 from those audits are folded in. Two of them were fatal and are recorded under
-[Corrections](#corrections-two-fatal-and-they-changed-the-design).
+[Corrections](#corrections).
 
 **On citations.** `src/y/native.y` is in flux (there is an uncommitted refactor in the
 tree), and its line numbers have drifted from this document even against `HEAD`. So
@@ -401,11 +401,18 @@ belongs to.
 | a block inside a `def`/`type` body | — | **a diagnostic**; it is not in `G` at all |
 | everything else | verbatim | verbatim, shifted by the line map |
 
-**Two helpers, and the split is forced.** `ycc_meta_expr` returns `str` because
-expression position needs a value. `ycc_meta_stmt` is **void** because statement
-position must not warn: a statement whose value nobody reads warns at `-W 1` (*"the
-value of 'f()' is not used"*, measured). Both take the block's value as a `str`, so a
-non-`str` block is an existing type error, not a new diagnostic.
+**Three injected helpers, and the top-level split is forced.** `ycc_meta_expr` returns
+`str` because expression position needs a value. `ycc_meta_stmt` is **void** because
+statement position must not warn: a statement whose value nobody reads warns at `-W 1`
+(*"the value of 'f()' is not used"*, measured). Both take the block's value as a `str`, so
+a non-`str` block is an existing type error, not a new diagnostic.
+
+The third, `ycc_meta_emit(slot, body)`, is **void** and is what the other two call — it
+is the one place a piece is written, so the two forms cannot drift apart in how a piece is
+recorded. This doc said "two helpers" until the code was read: `ycc_meta_emit` was added
+during M2 and is invisible from the call sites, which is exactly the kind of helper a
+counting-the-call-sites approach misses. All three are in the reserved-name set, so a
+program that defines one is a diagnostic rather than a silent shadow.
 
 **`SLOT` is load-bearing.** An append-only accumulator cannot insert text at a source
 position, and generated text is unconstrained — it may be half a statement, a whole
@@ -462,6 +469,22 @@ file is invisible unless the list is edited (cheap, but it must be *remembered*)
 `src/tools/lsp/check.y` is a **second checker** that runs the lexer and types itself,
 so it will report `expected an expression, got '#'` for every meta file unless it can
 reach the same pass. One module, two callers, one implementation.
+
+**Both halves of that are now done rather than intended.** `meta.y` is in the scanned
+list, and `test_coverage.sh` passes with **all 409 diagnostic sites tested or excused**,
+113 builtins called, 12 keywords used, 84 manual sections with rows and 454 test
+references resolving — so the R11 chain (code → fixture → `COVERAGE.md` row) holds for
+the 19 new fixtures.
+
+The list is still not complete, and the gap is **pre-existing rather than ours**:
+`elf.y`, `asm.y`, `enc64.y` and `dwarf.y` are not scanned either, so every existing
+*writer* is invisible to the coverage suite on the same terms a new file is. Worth fixing
+in the same commit as the next new module rather than as a separate chore.
+
+The LSP half is **not** done: at this branch's base the language server lives at
+`tools/lsp/`, not `src/tools/lsp/`, and nothing there has been taught about blocks. So a
+meta file still draws `expected an expression, got '#'` there. That is the one part of
+this section that remains open.
 
 Pieces accumulate across files; `G` is built after the last resolve. `ycc build` keeps
 its shape — all units are resolved (`ycc.y:456-469`) before any is compiled — but a
@@ -707,7 +730,7 @@ it is load-bearing for all of M2.
 
 `src/y/meta.y`, exporting `lit_end` with the unterminated out-param first and collapsing
 the three copies onto it. Then the per-file scan at the top of `native_resolve_seen`,
-pieces accumulating across files, the two injected helpers, slot indices in source order,
+pieces accumulating across files, the three injected helpers, slot indices in source order,
 the line map. Then: build `G`, compile it for the host with the pass off, run it in a
 forked child via M1, splice the pieces into `P`, rebuild origins, hand `P` to the
 existing lexer — unchanged.
@@ -774,10 +797,14 @@ inside a string, and re-compiling that dump gives the same bytes.
 
 ---
 
-## Corrections: two fatal, and they changed the design
+## Corrections
 
-Recorded because both were load-bearing enough to invalidate worked examples, including
-`ideas/meta.y`'s.
+This document was wrong twice while being written, and eight more times while being
+built. All ten are recorded, because a design that hides its corrections is a design you
+cannot check. The first two are [found by designing it](#found-by-designing-it-two-that-changed-the-design);
+the other eight are [found by building it](#found-by-building-it-eight-measured).
+
+### Found by designing it: two that changed the design
 
 **1. The generator program's layer order was self-contradictory.** An earlier draft said
 both "`G` = the text at depths *d* and *d+1*" (shallower first) and, in its own trace
@@ -875,7 +902,7 @@ deferred region is the sharing route, not a rewrite of block scoping.
 
 ---
 
-## Corrections found by building it (M1 and M2, measured)
+### Found by building it: eight, measured
 
 Written after the fact, so the design above can be read against what the code
 actually does. Each is a place this document was wrong, with the measurement.
@@ -972,6 +999,21 @@ compile's resolve phase is the honest one to quote: **+5.1 ms and +15 MB on a
 ```
 M1   run an image in a child + ycc run     (no dependencies, useful alone)
 M2   the meta pass                          (needs M1)
+M3   the C twin, per PORTING.md             (needs M2; this is not optional)
+M4   the manual section in docs/src         (R11; COVERAGE.md already points at it)
 ```
 
-Then nothing. Windows does not wait on this — see [`WINDOWS.md`](WINDOWS.md).
+**M3 is not optional and is not a follow-on.** R1 makes the C twin 1:1, so a `src/y`
+change without its `src/c` mirror is an unbuildable compiler — `make cycc` would compile
+against a `native.c` that no longer matches the emitter's shapes. The gate is
+`make port-check`, which aims the port suite at `./ynew`: the C copy and the Y build must
+agree **byte for byte** on every `test/y/**.y` plus `src/y/ycc.y`, with identical
+warnings, and a program both reject must get identical diagnostics. With N new
+diagnostics that is N new two-compiler assertions, so every message is a byte-for-byte
+contract rather than a wording preference.
+
+**M4 exists because `test/COVERAGE.md` already carries rows pointing at `02-lexical` →
+"Meta blocks"** and no such section exists. The coverage suite cross-checks the manual's
+sections against `COVERAGE.md`, so the rows and the prose have to arrive together.
+
+Windows does not wait on any of this — see [`WINDOWS.md`](WINDOWS.md).

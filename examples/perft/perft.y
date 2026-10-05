@@ -73,6 +73,7 @@
 
 import chess;
 import args;
+import test;
 
 // ===========================================================================
 // STATE
@@ -146,23 +147,19 @@ const PIN_FEN: str = "4r2k/8/8/8/8/8/4R3/4K3 w - - 0 1";
 // A Pos of the rule checks' own, so they cannot disturb a search in progress.
 let SCRATCH: chess.Pos = chess.new_pos();
 
-// How many rule checks have been made.  Counted rather than declared: a
-// hand-written constant beside a hand-written list is one more thing to be wrong
-// about, and the summary line would then claim a total the run never reached.
-let rule_run: long = 0;
-
-// ck(ok, label, what) -> 0 or 1, and prints the verdict.  Every rule check goes
-// through this, so the output names each one and the total cannot drift.
-def ck(ok: bool, label: str, what: str) -> long {
-    rule_run = rule_run + 1;
-    if (ok) {
-        print("  ok   ", pad(label, 16), what);
-        0
-    } else {
-        print("  FAIL ", pad(label, 16), what);
-        1
-    }
-}
+// This file used to define its own
+//
+//     def ck(ok: bool, label: str, what: str) -> long
+//
+// which counted itself in `rule_run`, printed "  ok   "/"  FAIL " padded to 16
+// columns, and returned 0 or 1 -- a FAILURE INDICATOR, not a verdict: every
+// caller wrote `fails += ck(...)`, so the long it returned was accumulated into
+// the run's failure count.  It is std/test.y's test.ck now, whose arguments are
+// (name, ok, detail) rather than (ok, label, what), whose return is the verdict
+// (true = passed) rather than a failure count, and whose tally is
+// test.checks()/test.failures().  The argument order changed at all 14 call
+// sites below and the accumulation is gone; the counts are unchanged, and
+// `pad` survives only because the other two groups still print with it.
 
 // rule_checks() -> failures among the hand-written rule checks.
 //
@@ -170,54 +167,53 @@ def ck(ok: bool, label: str, what: str) -> long {
 // says something is broken, "the en-passant capture is in the move list" says
 // what.  Each of the four positions below exists to break one rule, and the
 // published counts above exist to break everything else.
+//
+// It returns the failures THIS group added, measured as test.failures() either
+// side of the group, so the answer does not depend on what ran before it.
 def rule_checks() -> long {
-    let fails = 0;
+    let was = test.failures();
     // 1. the en-passant pin.  d4xc3 e.p. would vacate both c4 and d4 and open
     //    the fourth rank on the black king, so it is not a legal move -- while
     //    the quiet push on the same rank is.
-    fails += ck(gen_count(TRAP) == 5, "ep-pin",
-        "5 moves, the en passant excluded");
-    fails += ck(!has_move(TRAP, "d4c3"), "ep-pin",
+    test.ck("ep-pin", gen_count(TRAP) == 5, "5 moves, the en passant excluded");
+    test.ck("ep-pin", !has_move(TRAP, "d4c3"),
         "d4c3 (the illegal en passant) is NOT in the list");
-    fails += ck(has_move(TRAP, "d4d3"), "ep-pin",
+    test.ck("ep-pin", has_move(TRAP, "d4d3"),
         "d4d3 (the quiet push) IS in the list");
     // 2. the same position with the rook off the fourth rank: now the very same
     //    capture is legal, and the count is exactly one higher.  If these two
     //    positions did not differ by exactly the capture, the ep rule would be
     //    being ignored in one direction or the other.
-    fails += ck(gen_count(EP_OK) == 6, "ep-ok",
-        "6 moves, the en passant included");
-    fails += ck(has_move(EP_OK, "d4c3"), "ep-ok",
-        "d4c3 IS in the list here");
+    test.ck("ep-ok", gen_count(EP_OK) == 6, "6 moves, the en passant included");
+    test.ck("ep-ok", has_move(EP_OK, "d4c3"), "d4c3 IS in the list here");
     // 3. promotion: four pieces on the push, four on the capture, all legal.
-    fails += ck(gen_count(PROMO_FEN) == 11, "promotion",
+    test.ck("promotion", gen_count(PROMO_FEN) == 11,
         "11 moves: 4 pushes + 4 captures + 3 king steps");
-    fails += ck(has_move(PROMO_FEN, "b7b8q") && has_move(PROMO_FEN, "b7b8r")
-        && has_move(PROMO_FEN, "b7b8b") && has_move(PROMO_FEN, "b7b8n"), "promotion",
+    test.ck("promotion", has_move(PROMO_FEN, "b7b8q") && has_move(PROMO_FEN, "b7b8r")
+        && has_move(PROMO_FEN, "b7b8b") && has_move(PROMO_FEN, "b7b8n"),
         "all four promotions on b8 are legal");
-    fails += ck(has_move(PROMO_FEN, "b7a8q") && has_move(PROMO_FEN, "b7a8n"),
-        "promotion", "capturing promotions on a8 are legal");
+    test.ck("promotion", has_move(PROMO_FEN, "b7a8q") && has_move(PROMO_FEN, "b7a8n"),
+        "capturing promotions on a8 are legal");
     // 4. castling, allowed: Kiwipete may do both, and both are in the list.
-    fails += ck(has_move(KIWIPETE, "e1g1") && has_move(KIWIPETE, "e1c1"),
-        "castling", "kiwipete allows e1g1 and e1c1");
+    test.ck("castling", has_move(KIWIPETE, "e1g1") && has_move(KIWIPETE, "e1c1"),
+        "kiwipete allows e1g1 and e1c1");
     // 5. castling refused through an attacked square: the black rook on f8 hits
     //    the f-file and nothing else, so the white king is not in check and
     //    could start -- it may not step onto g1 over f1.  The queenside castle,
     //    whose squares are all unattacked, is still there.
-    fails += ck(!has_move(CASTLE_THROUGH, "e1g1"), "castle-through",
+    test.ck("castle-through", !has_move(CASTLE_THROUGH, "e1g1"),
         "e1g1 is NOT legal through an attacked f1");
-    fails += ck(has_move(CASTLE_THROUGH, "e1c1"), "castle-through",
+    test.ck("castle-through", has_move(CASTLE_THROUGH, "e1c1"),
         "e1c1 is still legal (d1 and c1 are not attacked)");
-    fails += ck(gen_count(CASTLE_THROUGH) == 23, "castle-through",
-        "23 moves in all");
+    test.ck("castle-through", gen_count(CASTLE_THROUGH) == 23, "23 moves in all");
     // 6. a pin: the white rook on e2 is pinned to the king on e1 by the rook on
     //    e8, so it may only move along the file -- a sideways move would leave
     //    the king in check, and a count at depth 2 is where that shows up.
-    fails += ck(gen_count(PIN_FEN) == 10, "pin",
+    test.ck("pin", gen_count(PIN_FEN) == 10,
         "10 moves: the pinned rook has 6, the king 4");
-    fails += ck(!has_move(PIN_FEN, "e2d2") && !has_move(PIN_FEN, "e2f2"), "pin",
+    test.ck("pin", !has_move(PIN_FEN, "e2d2") && !has_move(PIN_FEN, "e2f2"),
         "the pinned rook has no sideways move");
-    fails
+    test.failures() - was
 }
 
 // ── the pool ──────────────────────────────────────────────────────────────
@@ -659,8 +655,13 @@ def self_test() -> long {
     print("property check: the rules that perft counts depend on");
     fails += rule_checks();
     print("");
-    print("property check: ", tostring(checks + rule_run), " checks, ", tostring(fails),
-        " failed");
+    // `checks` counts the two groups above, which print their own per-depth
+    // lines and keep their own tally; test.checks() counts the rule group, which
+    // goes through std/test.y.  The summary therefore still counts every
+    // assertion the run made, which is why it is NOT test.report() -- that would
+    // report only the rule group's 14 and silently drop the other 33.
+    print("property check: ", tostring(checks + test.checks()), " checks, ",
+        tostring(fails), " failed");
     fails
 }
 

@@ -142,9 +142,14 @@ whole program (Section~\ref{sec:builtin-pointers}).
 
 The keywords are:
 \begin{center}
-\ic{let} \ic{const} \ic{def} \ic{if} \ic{else} \ic{while} \ic{for}
-\ic{foreach} \ic{in} \ic{return} \ic{true} \ic{false}
+\ic{let} \ic{const} \ic{def} \ic{native} \ic{if} \ic{else} \ic{while} \ic{for}
+\ic{foreach} \ic{in} \ic{return} \ic{break} \ic{continue} \ic{true}
+\ic{false}
 \end{center}
+
+\ic{native} is a whole word, so \ic{native\_io} and \ic{natives} are
+ordinary names; it is not a \emph{contextual} keyword (the list below),
+because the declaration it introduces has no other spelling.
 
 \subsection{Literals}
 \label{sec:literals}

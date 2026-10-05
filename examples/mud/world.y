@@ -45,6 +45,20 @@
 // The arrays are built ONCE, in generate(), with `+=`.  Nothing here allocates
 // after that: a room lookup is always arithmetic.
 
+// The world is built from std/random.y (splitmix64), seeded by generate() below.
+// This used to be the program's own rnd.y, a 64-bit LCG with the
+// numerical-recipes constants behind `rnd.rnd_seed`/`rnd.rnd_below`; it is
+// gone, along with the file.  What this module needs from a generator is
+// "uniform over a modulus" and nothing else -- how many rooms, which lattice
+// cell, which direction, which item kind -- and that is all `random.below` is.
+//
+// Both streams of the program are separate and both are seeded: this one lays
+// down the world on the MAIN thread (mud.y and props.y call generate() before
+// any worker exists), and server.y's per-SESSION one draws combat rolls on a
+// worker.  See server.y, "the session's own generator", for why the second one
+// cannot be std's.
+import random;
+
 // ---- the limits, all compile-time (a fixed array size must be a literal) ---
 const MAXR = 24;          // rooms in the world
 const MAXI = 72;          // item instances (3 per room)
@@ -149,7 +163,7 @@ def room_text(i: long, adj: long, noun: long, light: long) -> long {
 
 def place_room(x: long, y: long) -> long {
     let i = len(R_NAME);
-    room_text(i, rnd.rnd_below(8), rnd.rnd_below(8), rnd.rnd_below(4));
+    room_text(i, random.below(8), random.below(8), random.below(4));
     R_LX[i] = x;
     R_LY[i] = y;
     NROOMS[0] = NROOMS[0] + 1;
@@ -191,9 +205,9 @@ def linked(a: long, b: long) -> bool {
 def generate(seed: long) -> long {
     clear_all();
     SEED[0] = seed;
-    rnd.rnd_seed(seed);
+    random.seed(seed);
     let occ: [long; 35] = [0; 35];         // lattice cell -> room + 1, else 0
-    let target = 16 + rnd.rnd_below(9);               // 16..24 rooms
+    let target = 16 + random.below(9);               // 16..24 rooms
 
     let start = place_room(0, 0);
     occ[0] = start + 1;
@@ -205,8 +219,8 @@ def generate(seed: long) -> long {
     let live = true;
     while (live && len(R_NAME) < target && attempts < 900) {
         attempts = attempts + 1;
-        let r = rnd.rnd_below(len(R_NAME));
-        let d = rnd.rnd_below(4);
+        let r = random.below(len(R_NAME));
+        let d = random.below(4);
         let nx = R_LX[r] + DX[d];
         let ny = R_LY[r] + DY[d];
         let ok = nx >= 0 && nx < LATW && ny >= 0 && ny < LATH;
@@ -235,7 +249,7 @@ def generate(seed: long) -> long {
             if (near) {
                 let b = occ[ny * LATW + nx] - 1;
                 if (b >= 0 && b != a && !linked(a, b)) {
-                    if (rnd.rnd_below(4) == 0) { add_edge_pair(a, d, b); };
+                    if (random.below(4) == 0) { add_edge_pair(a, d, b); };
                 };
             };
             d = d + 1;
@@ -249,10 +263,10 @@ def generate(seed: long) -> long {
     let i = 0;
     while (i < len(R_NAME)) {
         let k = 0;
-        let want = rnd.rnd_below(4);                       // 0..3 items
+        let want = random.below(4);                       // 0..3 items
         while (k < want && len(I_ROOM) < MAXI) {
-            let id = rnd.rnd_below(MAXK);
-            let qty = 1 + rnd.rnd_below(3);
+            let id = random.below(MAXK);
+            let qty = 1 + random.below(3);
             I_ROOM += i;
             I_ID += id;
             I_QTY += qty;
@@ -272,10 +286,10 @@ def generate(seed: long) -> long {
 
     let m = 0;
     while (m < len(R_NAME)) {
-        if (m == 0 || rnd.rnd_below(4) == 0) {
-            let kind = rnd.rnd_below(MAXM);
+        if (m == 0 || random.below(4) == 0) {
+            let kind = random.below(MAXM);
             M_KIND[m] = kind;
-            M_HP[m] = MO_HP0[kind] + rnd.rnd_below(4);
+            M_HP[m] = MO_HP0[kind] + random.below(4);
         } else {
             M_KIND[m] = 0 - 1;
             M_HP[m] = 0;

@@ -120,21 +120,83 @@ def put_frame(k: long) {
 };
 
 // ── reading the server ─────────────────────────────────────────────────
+//
+// The parser is std's now. This folder used to carry its own json.y: an
+// extractive, offset-returning reader over httpc's fixed [byte; 65536]
+// buffer that allocated nothing (validate/get/int_at/alen/elem). It is
+// gone -- `import json;` resolves to std/json.y, which builds a json.Val
+// instead, and these three lines are all the adaptation that needs:
+// parse_bytes over the same bytes, then the accessors.
+//
+// Two things the old module did that std does not, kept here deliberately:
+//
+//   * `int_at` REFUSED a fraction or an exponent ("not an integer")
+//     rather than truncating it. std's json.as_long truncates -- as_long on
+//     1.5 is 1, on 1e3 is 1 -- so `doc_int` below re-implements the
+//     refusal on the number's literal text, bounds and all. Reading 1 for
+//     3.5 is the mistake int_at existed to prevent.
+//   * `json.err` and `json.at` named the offending byte. std's parse_err
+//     does too, and better: a reason, the byte, and a position relative to
+//     the BODY rather than to a 64 KiB buffer the reader cannot see.
+
+// the last response, parsed once by pull(). none when it would not parse.
+let doc: json.Val? = none;
+let num_err = "";            // why doc_int refused, "" when it did not
+
+// The integer payload of a json number, 0 with `num_err` naming the
+// problem. json.as_long alone would NOT do: it truncates, so 3.5 would come
+// back as 3 and 1e3 as 1. The old json.int_at refused both, and refused a
+// value past 13 digits rather than let it wrap -- a bound kept here so a
+// server reporting something enormous is an error, not a wrapped lie.
+def doc_int(v: json.Val) -> long {
+    num_err = "";
+    let out = 0;
+    if let json.Num n = v {
+        let t = n.num;
+        let ndig = 0;
+        let clean = true;
+        let i = 0;
+        while (i < len(t)) {
+            let c = byte_at(t, i);
+            if (c >= 48 && c <= 57) { ndig = ndig + 1 }
+            else if (!(c == 45 && i == 0)) { clean = false };
+            i = i + 1
+        };
+        if (ndig > 13) { num_err = "integer too large" }
+        else if (!clean || ndig == 0) { num_err = "not an integer" }
+        else { out = tonum(t) }
+    } else { num_err = "not a number" };
+    out
+};
 
 // one integer field of the object that was just fetched, into the return
 // value; `why` says what was wrong when there is nothing to return.
-def num_field(off: long, end: long, key: str) -> long {
-    let p = json.get(httpc.buf, off, end, key);
-    if (p < 0) {
-        why = "no field " + key + " (" + json.err + ")";
+def num_field(key: str) -> long {
+    let f = json.field(doc!, key);
+    if (f == none) {
+        why = "no field " + key + " in the JSON";
         return 0;
     };
-    let v = json.int_at(httpc.buf, p, end);
-    if (!json.ok) {
-        why = "field " + key + ": " + json.err;
+    let v = doc_int(f!);
+    if (num_err != "") {
+        why = "field " + key + ": " + num_err;
         return 0;
     };
     v
+};
+
+// One integer member of the response pull() last parsed, into the return
+// value, with num_err saying what was wrong. Same reading as num_field, but
+// it does not touch `why`: these two reads feed an assertion, not a fetch,
+// and the checks below want the reason rather than a rewritten `why`.
+def num_of(key: str) -> long {
+    num_err = "no such field";
+    let out = 0;
+    if (doc != none) {
+        let f = json.field(doc!, key);
+        if (f != none) { out = doc_int(f!) }
+    };
+    out
 };
 
 // GET path -> the status, with the whole response parsed into st. 0 means
@@ -148,18 +210,24 @@ def pull(port: long, path: str) -> long {
     };
     let off = httpc.body_off;
     let end = off + httpc.body_len;
-    let stop = json.validate(httpc.buf, off, end);
-    if (stop < 0) {
-        why = path + ": " + json.err + " at byte " + tostring(json.at);
+    let body = from_bytes(httpc.buf[off:end]);
+    let pe = json.parse_err(body);
+    if (!pe.ok) {
+        // parse_err names trailing bytes separately; the old validate(),
+        // and the stop != end test that went with it, gave them their own
+        // sentence, and that sentence is what `why` reads.
+        if (len(pe.err) >= 8 && pe.err[0:8] == "trailing") {
+            why = path + ": trailing bytes after the JSON value";
+        } else {
+            why = path + ": " + pe.err + " at byte " + tostring(pe.at);
+        };
+        doc = none;
         return 0;
     };
-    if (stop != end) {
-        why = path + ": trailing bytes after the JSON value";
-        return 0;
-    };
-    let w = json.get(httpc.buf, off, end, "window");
+    doc = pe.value;
+    let w = json.get_arr(doc!, "window");
     let nw = 0;
-    if (w >= 0) { nw = json.alen(httpc.buf, w, end); };
+    if (w != none) { nw = w!.length };
     if (nw != WIN) {
         why = path + ": the window holds " + tostring(nw) + " samples, not " + tostring(WIN);
         return 0;
@@ -167,35 +235,35 @@ def pull(port: long, path: str) -> long {
     let i = 0;
     let bad = 0;
     while (i < WIN) {
-        let e = json.elem(httpc.buf, w, end, i);
-        if (e < 0) { bad = 1; } else {
-            let v = json.int_at(httpc.buf, e, end);
-            if (!json.ok) { bad = 1; } else { st.win[i] = v; };
-        };
+        // doc_int, not json.as_long: a sample that is not a plain integer
+        // is a failed poll, and as_long would hand back a truncated 1 for
+        // a 1.5 and call the poll good.
+        let v = doc_int(w![i]);
+        if (num_err != "") { bad = 1 } else { st.win[i] = v };
         i = i + 1;
     };
     if (bad > 0) {
         why = path + ": a window sample is not an integer";
         return 0;
     };
-    st.served = num_field(off, end, "served");
-    st.ticks = num_field(off, end, "ticks");
-    st.arrived = num_field(off, end, "arrived");
-    st.rate = num_field(off, end, "rate");
-    st.peak = num_field(off, end, "peak");
-    st.trough = num_field(off, end, "trough");
-    st.errors = num_field(off, end, "errors");
-    st.bytes = num_field(off, end, "bytes");
-    st.up_ms = num_field(off, end, "uptime_ms");
+    st.served = num_field("served");
+    st.ticks = num_field("ticks");
+    st.arrived = num_field("arrived");
+    st.rate = num_field("rate");
+    st.peak = num_field("peak");
+    st.trough = num_field("trough");
+    st.errors = num_field("errors");
+    st.bytes = num_field("bytes");
+    st.up_ms = num_field("uptime_ms");
     if (why != "") { return 0; };
     // the server's own view of avg/peak/trough/arrived, kept apart so the
     // check can compare them with what the client computed from `window`
-    srv_avg = num_field(off, end, "avg");
-    srv_load = num_field(off, end, "load");
-    srv_peak = num_field(off, end, "peak");
-    srv_trough = num_field(off, end, "trough");
-    srv_arrived = num_field(off, end, "arrived");
-    srv_ticks = num_field(off, end, "ticks");
+    srv_avg = num_field("avg");
+    srv_load = num_field("load");
+    srv_peak = num_field("peak");
+    srv_trough = num_field("trough");
+    srv_arrived = num_field("arrived");
+    srv_ticks = num_field("ticks");
     if (why != "") { return 0; };
     st.nwin = WIN;
     // and the client's, derived from the samples: peak, trough, mean
@@ -463,14 +531,16 @@ def selftest(port: long, seed: long) -> long {
     let sh0 = 0;
     let shb0 = 0;
     let pulled = pull(port, "/api/stats?heap=1");
-    let bend = httpc.body_off + httpc.body_len;
-    let got_heap = json.get(httpc.buf, httpc.body_off, bend, "heap");
-    let got_base = json.get(httpc.buf, httpc.body_off, bend, "base_heap");
-    if (got_heap >= 0) { sh0 = json.int_at(httpc.buf, got_heap, bend); };
-    if (got_base >= 0) { shb0 = json.int_at(httpc.buf, got_base, bend); };
+    // the same response, already parsed: num_of reads out of `doc` rather
+    // than re-scanning httpc.buf, and num_err says whether the field was
+    // there and an integer at all
+    sh0 = num_of("heap");
+    let got_heap = num_err == "";
+    shb0 = num_of("base_heap");
+    let got_base = num_err == "";
     // a missing field would make this comparison read 0 == 0 and pass, so
     // the presence of the numbers is itself a check
-    ok(pulled == 200 && got_heap >= 0 && got_base >= 0 && sh0 > 0,
+    ok(pulled == 200 && got_heap && got_base && sh0 > 0,
        "?heap=1 makes the server report its own heap",
        "status " + tostring(pulled) + ", heap_used() " + tostring(sh0) + " with boot " + tostring(shb0) +
        " -- a missing field would have made the delta below read 0 == 0");
@@ -493,9 +563,7 @@ def selftest(port: long, seed: long) -> long {
     let h1 = heap_used();
     let sh1 = 0;
     if (pull(port, "/api/stats?heap=1") == 200) {
-        let e2 = httpc.body_off + httpc.body_len;
-        let g2 = json.get(httpc.buf, httpc.body_off, e2, "heap");
-        if (g2 >= 0) { sh1 = json.int_at(httpc.buf, g2, e2); };
+        sh1 = num_of("heap");
     };
     ok(sh1 - sh0 == 0, "the server does not grow serving",
        tostring(n) + " requests: heap_used() " + tostring(sh0) + " -> " + tostring(sh1) +

@@ -1,0 +1,6 @@
+# Build output and dependencies: `npm install && npm run compile` regenerates
+# both, and neither belongs in the tree. The .vsix IS tracked, because it is the
+# installable artefact people download.
+node_modules/
+out/
+*.vsix.tgz

@@ -134,11 +134,32 @@ callee is allowed to read its register arguments out of — and the callee then 
 all of them from its own frame, so args 1–4 never move either. The only calls whose
 arguments move are those with 5 or more, and of `native.y`'s 90 `F_CALL_L`/
 `F_CALL_IND` sites (88 direct, 2 indirect) the set of 5+-argument calls is **exactly
-`gen_syscall`**: it alone pops arguments back into registers, and only the first four
-(args 5 and 6 are left on the stack for the kernel). Linux passes syscall args 1–6 in
-`rdi`/`rsi`/`rdx`/`r10`/`r8`/`r9` (`syscall_reg`, whose comment already lists them)
-and Win64 `syscall` takes them in `r10`/`r9`/`r8`/`rdx`/`rcx` with the 6th on the
-stack at `rsp+32`: the >4-argument delta lands entirely in the syscall emitter.
+`gen_syscall`**: it alone pops arguments back into registers. Linux passes syscall args
+1–6 in `rdi`/`rsi`/`rdx`/`r10`/`r8`/`r9` (`syscall_reg`, whose comment already lists
+them).
+
+**Win64 takes them in `r10`/`rdx`/`r8`/`r9`, and the fifth onward on the stack at
+`rsp+0x28`.** That is *one* shuffle, not five: ntdll's stub moves only argument 1, out
+of `%rcx` (which `syscall` destroys) into `%r10`, because arguments 2–4 are already in
+`rdx`/`r8`/`r9` and arguments 5+ are already in ntdll's own shadow space. Two
+independent sources say so, and a layout needing more than one instruction in ntdll's
+stub is not the layout ntdll uses:
+
+- ReactOS `sdk/include/asm/syscalls.inc`, `STUBCODE_U`: `mov eax, SyscallId; mov r10,
+  rcx; syscall`.
+- wine `dlls/ntdll/unix/signal_x86_64.c`, in its source comments: `mov %r10,%rdi /* 1st
+  */`, `mov %r11,%rsi`, `mov %r8,%rdx`, `mov %r9,%rcx`, `mov (%r15),%r8 /* 5th */`
+  with `r15 = rsp+0x28`.
+
+**Two earlier drafts of this line were wrong** — this one, and the one before it, which
+said `r10`/`r9`/`r8`/`rdx`/`rcx` with the sixth on the stack. Both were written from
+memory. The register set is load-bearing enough that it is worth reading off a real
+`ntdll` stub rather than recalling it, and the cost of getting it wrong is a debugging
+session, not a compile error.
+
+So the >4-argument delta lands entirely in the syscall emitter: one `mov` to `%r10`, and
+the stack slots 16 bytes lower than a first reading suggests (`rsp+0x28`, not
+`rsp+0x20`).
 
 Two items an earlier draft listed here do not survive the measurement. "Pad odd-arg
 calls so `rsp ≡ 0 mod 16`" is **not a Windows delta** — SysV and Win64 agree on it —
@@ -146,8 +167,42 @@ and the emitter does not honour it today either (`_start` calls leave
 `rsp ≡ 8 mod 16`, safe only because no argument is ever passed in an SSE register).
 And the emitter's refusal of bare `(%rsp)`/`(%r12)` bases (`emit_one_fn` says so in a
 comment) is **policy, not an encoder limit**: `enc64.y:245-255` accepts both, with
-the SIB byte they need. That matters here, because Win64's 6th syscall argument
-*must* go on the stack, so the restriction is one of the things W4 has to lift.
+the SIB byte they need. That matters here, because Win64's 5th syscall argument
+*must* go on the stack at `rsp+0x28`, so the restriction is one of the things W4 has to
+lift.
+
+**The std pack is written by one compiler for one target, so nothing baked into a std
+unit may depend on the target.** This was a risk row here; it is now a **demonstrated
+constraint**, and it is the strongest argument for the per-target-module design this
+document already specifies. `ycc --std-pack` never passes a target, so a conditional
+compiled while building `rt.y` is baked into every program made from that pack, and
+`--target=windows` on the *consuming* compiler cannot undo it. Measured both ways: with
+a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and
+printed nothing, while `--std-src` (which recompiles) worked.
+
+The consequence is a rule with no exceptions: **a std entry point names a label, it does
+not branch.** `os_write` calls `y_os_write`; `y_os_exit` calls `y_os_exit`; the Windows
+bodies live in the arch module and the ELF bodies in the arch prelude. Any W5 entry point
+that tests `os` inside `rt.y`/`fs.y`/… reintroduces the bug, and the failure mode is a PE
+that prints nothing.
+
+**Naming a label is also what makes the rule work, and the pack's representation decides
+how.** At the base commit (`bf8c20d`) the pack carried each body as **assembly text**, so
+a call was the text `call y_os_write` and the linker matched it against whatever arch half
+was linked in. Master has since moved the pack to carry the emitter's **items**
+(`9e1128d`, "the std pack carries items, not assembly text"; the assembler reads items
+since `7b7aa43`), and there a call is an item whose label field **travels as its name** —
+the ids are minted per run, so the reader mints them, exactly as the text path did with
+`call y_alloc`. Both representations resolve a label by name at link time, so the rule is
+the same shape either way.
+
+What the item pack changes is how much target-specific structure is frozen in: a body's
+**register choices, frame offsets and syscall numbers are all resolved items**, where the
+text pack froze them as text. So the constraint gets *stronger* with that change, not
+weaker — a pack built by a Linux-targeted `ycc` carries Linux decisions as items and no
+consumer can undo them. It also means the label-naming rule is not merely permitted but
+necessary: a *branch* on `os` would be a decided edge inside a frozen item, where a *label*
+is resolved at link time.
 
 **Do not branch on the target in `native.y` for any of this** — it all goes behind
 `arch_*` predicates.
@@ -189,21 +244,32 @@ compiler can be produced before any Windows machine is involved.
   (`y_cast_trap`, `src/y/arch/prelude.s:309`, reached by two `jmp`s from `native.y`),
   not faults — so there is no trampoline to port. The one "guard page" is an
   `mprotect(PROT_NONE)`, not a signal handler.
-- **The std pack is target-independent, and nothing enforces it.** `std_pack`
+- **The std pack carries no addresses — but it is NOT target-independent, and an earlier
+  draft here said it was.** The first half is still true and worth keeping: `std_pack`
   serializes `pack_version()` + per-unit `name` + `pack_unit_fields(u)` (renamed
-  globals, rodata, externs, iface, init) — **no machine code, no addresses, no
-  section layout**, because the pack stores assembly *text*. So one pack serves both
-  targets, *provided* the 4 embedded units are target-independent, which is what the
-  named syscall layer buys. That "provided" is load-bearing and **unenforced**: one
-  inline-assembly string, one hardcoded `/proc` path or one Linux syscall number
-  inside `rt.y`/`prelude.y`/`exec.y`/`str.y` is serialized into the Windows pack
-  just as happily as the ELF one, and nothing notices until a PE links it. Three
-  things follow, none of them a change to `--std-pack` itself: `make ycc` must append
-  a **second pack to `ycc.exe`** (the Makefile's `PACK` at `Makefile:71` does this
-  once, for one binary); `test_link.sh` needs a **cross-target pack fixture** that
-  diffs a PE's std bodies against the ELF's and fails on any difference outside the
-  units declared per-target (W5's `std/win/*` overrides); and `test_coverage.sh`'s
-  hard-coded file list (R11) does not see the new `std/win/*.y` until it is edited.
+  globals, rodata, externs, iface, init) — no addresses, no section layout, no relocations,
+  so nothing needs rebasing when the image moves. The second half was wrong, and it was
+  wrong in the direction that mattered: *"no machine code, because the pack stores
+  assembly text. So one pack serves both targets."* **One pack does not serve both
+  targets.** A body is a *compiled* artefact either way — text on `bf8c20d`, the
+  emitter's items after `9e1128d` — and it has the target's decisions baked into it:
+  its syscall numbers, its register choices, its frame offsets, whether a body is a
+  branch or a call. Measured, not argued: with a conditional in `rt.y`, a PE built from
+  an ELF pack carried the inline Linux `write(2)` and **printed nothing**, while
+  `--std-src` (which recompiles) worked, and `--target=windows` on the consuming compiler
+  could not undo it.
+
+  So this is no longer a risk row — it is the **hard design rule** in the syscall section
+  above: a std entry point **names a label, it does not branch**. That is what the named
+  syscall layer buys, and it is the only thing that makes a shared pack legitimate.
+
+  Two consequences remain, neither a change to `--std-pack` itself: `make ycc` must append
+  a **second pack to `ycc.exe`** (the Makefile's `PACK` at `Makefile:71` does this once,
+  for one binary), and `test_link.sh` needs a **cross-target pack fixture** that diffs a
+  PE's std bodies against the ELF's and fails on any difference outside the units declared
+  per-target (W5's `std/win/*` overrides) — which is the test that would have caught this.
+  `test_coverage.sh`'s hard-coded file list (R11) also does not see the new `std/win/*.y`
+  until it is edited.
 - **`exec` is not a builtin** — a std unit spliced in only when mentioned and
   `--no-exec` permits (`resolve_unit`'s std-unit selection; `std/exec.y:1-5`). The
   call then fails with *"undefined function 'exec'"*. **This is the existing
@@ -503,8 +569,7 @@ Wine.
 `res_target` through the five signatures above; `build_key` gains the target; the
 `syscall` intrinsic's second register convention; the caller-side shadow-space change
 in `gen_syscall` (finding 2's first row — args 5+ move from `rsp+0` to `rsp+32` at the
-`call`, and the 6th syscall argument is the only argument in the whole emitter that
-does); the PE entry point taking `lpCmdLine` out of `r8`; `xt.os`; the capability
+`call`, and the 5th syscall argument is the first of them); the PE entry point taking `lpCmdLine` out of `r8`; `xt.os`; the capability
 list.
 *Gate:* **the ELF path stays byte-identical** — `make check`'s compare step.
 *No dependency.* The `fork` diagnostic names the checker's `os` builtin.
@@ -585,6 +650,10 @@ of which an earlier draft called unsolvable and is not:
   new pass — but two things are not bookkeeping: every emitted function needs a
   `RUNTIME_FUNCTION` entry and the table must cover `.text`, and `RELOCS_STRIPPED`
   does not exempt it.
+- **`w_self_test_lines()`'s doc comment describes a function that does not exist.** The
+  startup self-test was specified (W3) and the numbers are in `arch_x64.y`'s
+  `w_sysno`, but the body is empty. Either implement it or delete the claim — a comment
+  that promises a probe nobody runs is worse than no comment.
 - **An encoder guard against absolute addresses.** The "no `.reloc`" claim rests on
   nothing ever emitting one, and `enc64.y` has **no `movabs`** — so a 64-bit absolute
   address would be *silently truncated*, not diagnosed. A cheap assertion in `pe.y`
@@ -625,7 +694,16 @@ of which an earlier draft called unsolvable and is not:
 4. Does the emitted program ever need to hand a thread id to foreign code? If a
    callback from Win32 is ever wanted, `rdi`/`rsi` stop being scratch and
    `xmm6`–`xmm15` join the callee-saved set.
-5. Which Windows version is the pinned syscall-number target?
+5. ~~Which Windows version is the pinned syscall-number target?~~ **Half answered by
+   implementation.** The numbers are no longer guesses: every one in `arch_x64.y`'s
+   `w_sysno` was read out of a real `ntdll`'s stub rather than written from memory, so
+   the pin is "whatever that `ntdll` was". What is still open — and it is the half that
+   matters — is the **guard**: `w_self_test_lines()` returns `[]` while its comment
+   claims it probes one call per class, so a `ycc` built against a Windows version whose
+   numbers have drifted would fail silently rather than at startup. Until the self-test
+   exists, "pinned" means "pinned to one unverified sample", and the number-drift risk
+   below is the only thing standing between a wrong number and silently wrong memory or
+   I/O.
 
 ## Landing order
 

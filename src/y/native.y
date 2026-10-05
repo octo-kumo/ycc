@@ -105,6 +105,22 @@ let ty_sig_bkts: [[long]] = [];
 // union_shared's answers in this unit, by the union's node.
 let ush_nodes: [Type] = [];
 let ush_vals: [[str]] = [];
+// The innermost enclosing loop's `break` and `continue` targets, -1 outside any
+// loop (2025). Labels are ids from labels.y, so -1 is the "none" marker and 0
+// would not do: it is a real id. Module state rather than an EmitSt field, for the same reason
+// the globals above are: EmitSt is rebuilt field by field at a dozen sites and
+// another pair would have to be threaded through all of them.
+//
+// Set by the four loop generators just before the body and restored after, so
+// nesting works -- an inner loop's targets are in force while its body is
+// generated and the outer loop's are back for whatever follows.
+//
+// types.y has already refused a `break` that would cross a function boundary,
+// so these are only ever read inside the function that set them; gen_func clears
+// them regardless, because relying on a check in another file to keep these two
+// consistent is how a jump ends up in an unrelated body.
+let brk_label: long = 0 - 1;
+let cont_label: long = 0 - 1;
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -1051,6 +1067,28 @@ def tok_push(out: [str], t: str) -> [str] {
     if (len(t) == 0) { out } else { out += t }
 };
 
+// Is this mnemonic one whose operands may name a label, other than `mov`? The
+// answer is every SSE form -- `mulsd c7(%rip), %xmm0` is the only mention of a
+// coefficient-table entry a kernel has, and without it the shaker drops the
+// table and the label comes back undefined at link time.
+//
+// Naming the ten forms instead costs a dozen string comparisons on EVERY line
+// of the emitted text, which measured +1.3% of compile instructions on its own.
+// They all end in "sd" or "ss" and nothing else in the language does, so two
+// byte reads replace those comparisons. A false match would be harmless in any
+// case -- the two tokens this pushes match no label -- so it is a speed gate,
+// not a correctness one.
+def sse_mnemonic(w: str) -> bool {
+    let n = len(w);
+    if (n < 5) {
+        false
+    } else {
+        let a = byte_at(w, n - 2);
+        let b = byte_at(w, n - 1);
+        (a == 115 && b == 100) || (a == 100 && b == 115)
+    }
+};
+
 // Every symbol one line [lo, hi) references: call/lea/jump operands and
 // both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
 // mnemonic — this walks every line of the emitted text, so no searching.
@@ -1066,7 +1104,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
             out = tok_push(out, tok_at_b(text, b, op, hi));
         } else if (w == "lea") {
             out = tok_push(out, tok_at_b(text, b, op, hi));
-        } else if (w == "mov") {
+        } else if (w == "mov" || sse_mnemonic(w)) {
             let q = p;
             let go = true;
             while (go) {
@@ -1089,6 +1127,33 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
                     }
                 }
+            };
+            // The `mov` scan above only looks at a `$`-immediate, so an SSE
+            // form's operand was invisible here and the coefficient table was
+            // shaken away. Both operands are pushed: the syntax is AT&T, so the
+            // source is the FIRST one and `movsd`'s store form puts the memory
+            // SECOND, and a register name matches no label, so the extra token
+            // costs nothing.
+            if (w != "mov") {
+                let t1 = tok_at_b(text, b, op, hi);
+                if (t1 != "") {
+                    out = tok_push(out, t1);
+                };
+                let q2 = op;
+                let seen = false;
+                while (q2 < hi && !seen) {
+                    if (b[q2] == c',' || b[q2] == c'$') {
+                        seen = true;
+                    } else {
+                        q2 = q2 + 1;
+                    };
+                };
+                if (seen && b[q2] == c',') {
+                    let t2 = tok_at_b(text, b, skip_sp(b, q2 + 1, hi), hi);
+                    if (t2 != "") {
+                        out = tok_push(out, t2);
+                    }
+                }
             }
         } else {
             if (want_jumps) {
@@ -1108,16 +1173,39 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
     let res = out;
     while (i < hi) {
         if (b[i] == c'\n') {
-            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            if (!directive_line_b(b, ls)) {
+                res = line_refs_b(text, b, ls, i, res, want_jumps);
+            };
             ls = i + 1;
         }
         i = i + 1;
     };
     if (ls < hi) {
-        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        if (!directive_line_b(b, ls)) {
+            res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        };
     }
     res
 };
+
+
+// A line that opens with `.` is a directive, and no directive this assembler
+// has names a label: `.text`/`.data`/`.bss`/`.section`/`.globl` take a section,
+// `.quad`/`.zero` a number, `.string`/`.ascii` text, and `.file`/`.loc` a DWARF
+// file and line -- the path in a `.file` goes in a fixup's label FIELD, which is
+// not a code reference and matches no label. Scanning them was pure cost, and
+// arch_consts is nearly all directives: a `.quad` of a float constant costs ~27
+// instructions per byte to scan, which is ~33K instructions on every compile of
+// a program that does not use math at all. The coefficient tables are the reason
+// that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
+// measured 0.85% rather than a guess.
+def directive_line_b(b: [byte], ls: long) -> bool {
+    if (ls < len(b)) { b[ls] == c'.' } else { false }
+};
+
+// `text_refs` (the text scan that answered this over a body's text) is gone:
+// the items say all of it, and asking twice was the same answer twice. The
+// text scans below stay, because arch_consts and the arch asm are still text.
 
 // ── the same three questions, asked of a body's ITEMS ────────────────────
 // A body is a list of IR items, and everything the text scans answered is in
@@ -1657,9 +1745,18 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
     { text: join(pieces, ""), refs: out }
 };
 
-// The prelude's lines, the thread runtime's after them when it is used.
-def prelude_with(core: [str], threads: bool) -> [str] {
-    if (threads) { core + arch.arch_prelude_threads_lines() } else { core }
+// The prelude's lines, then the thread runtime's and the float primitives'
+// after them when a program's code calls into them.
+//
+// Appending one at a time is not just tidier: `+` on an array makes a NEW one,
+// so concatenating unconditionally copied the prelude's ~1500 lines for every
+// compile that wanted neither -- 52K instructions on hello.y, which is 99.9%
+// of what this module cost before the branches (callgrind, bench/compile_ir.sh).
+def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
+    let out: [str] = core;
+    if (threads) { out = out + arch.arch_prelude_threads_lines(); };
+    if (mathasm) { out = out + arch.arch_math_lines(); };
+    out
 };
 
 // The references (a kept prelude's) that name a body not kept.
@@ -1850,7 +1947,7 @@ def strip_ns(node: Node, imports: [str]) -> Node {
         strip_decl(decl, imports)
     } else if (k == K.func) {
         let func: Func = node;
-        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs })
+        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
     } else if (k == K.assign) {
         let assign: Assign = node;
         normnode({ k: K.assign, name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
@@ -2540,6 +2637,8 @@ def infer_go(st: EmitSt, node: Node) -> Type {
         infer(st, store.v)
     } else if (k == K.kw_while) {
         normtype({ k: K.tvoid })
+    } else if (k == K.kw_break || k == K.kw_continue) {
+        normtype({ k: K.tvoid })
     } else if (k == K.ret) {
         let ret: Wrap = node;
         infer(st, ret.e)
@@ -2930,6 +3029,37 @@ def uses_threads(refs: [str]) -> bool {
     found
 };
 
+// The float primitives (src/y/arch/math.s), by the same rule as the thread
+// runtime: a `native def` names one as its body, so the call is a reference
+// like any other and the block stays. Looking first is what makes this cheap
+// -- split()ing the lines for every compile measured +2.6% instructions on
+// hello.y, against a few dozen lines (bench/compile_ir.sh).
+def uses_math(refs: [str]) -> bool {
+    let i = 0;
+    let found = false;
+    while ((i < len(refs)) && (!found)) {
+        let r: str = refs[i];
+        let n = len(r);
+        // y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10, and the
+        // length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
+        // y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8
+        found = (n == 5 && (r == "y_exp" || r == "y_log" || r == "y_pow"
+                            || r == "y_sin" || r == "y_cos" || r == "y_dot"
+                            || r == "y_sum"))
+            || (n == 6 && r == "y_sqrt")
+            || (n == 7 && (r == "y_fbits" || r == "y_bitsf"))
+            || (n == 8 && (r == "y_to_int" || r == "y_min_of" || r == "y_max_of"
+                           || r == "y_scale" || r == "y_axpy"))
+            || (n == 10 && (r == "y_int_trap" || r == "y_len_stop"))
+            // the encoder's own form probes: y_sse_forms, y_sse_flags,
+            // y_test_imm
+            || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"))
+            || (n == 10 && r == "y_test_imm");
+        i = i + 1;
+    };
+    found
+};
+
 def name_in(xs: [str], n: str) -> bool {
     let i = 0;
     let found = false;
@@ -2943,16 +3073,32 @@ def name_in(xs: [str], n: str) -> bool {
     found
 };
 
-// Builtins are resolved by name at the call site, never captured.
-def is_intrinsic_name(n: str) -> bool {
-    name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
+// The builtins, as a list rather than an inline argument, so that the ONE copy
+// can be handed out. The language server's completion list used to be its own
+// transcription of this, which is exactly the kind of copy that rots: adding a
+// builtin here would leave the server offering the old set, and nothing would
+// fail. `opt$test`/`opt$val` and `#fmt` are the compiler's own halves of the
+// option operators and the `#fmt` builtin -- internal, but they are what
+// is_intrinsic_name tests, so they are in the list.
+let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "opt$test", "opt$val",
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
              "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "jmp_at", "self", "none", "#fmt"], n)
+"from_bytes", "ptr_addr", "jmp_at", "self", "none", "#fmt"];
+
+// Builtins are resolved by name at the call site, never captured.
+def is_intrinsic_name(n: str) -> bool {
+    name_in(INTRINSICS, n)
+};
+
+// The same list, for a caller that needs to enumerate it rather than test one
+// name (the language server's completion list -- see LSP.md R5.3). Returns the
+// live array, so a caller must not modify it.
+def intrinsic_names() -> [str] {
+    INTRINSICS
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -3424,6 +3570,14 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.store) {
         let store: Store = node;
         gen_store(st, store)
+    } else if (k == K.kw_break) {
+        // types.y has already refused a `break` with no loop to leave and one
+        // that would cross a function boundary, so `brk_label` is a live label
+        // here. Nothing is left in %rax: the merge label that follows needs no
+        // value (the same reason a loop's own does not -- see gen_while).
+        emit_insn(st, insn.F_JMP_L, brk_label, 0, 0, 0, 0, 0, 0)
+    } else if (k == K.kw_continue) {
+        emit_insn(st, insn.F_JMP_L, cont_label, 0, 0, 0, 0, 0, 0)
     } else if (k == K.ret) {
         let ret: Wrap = node;
         st = gen_as(st, ret.e, cur_fn_ret(st));
@@ -5763,7 +5917,15 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // A `while` has no step, so "the next turn" IS the head: continue goes to
+    // r1 and nothing else is needed.
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r1.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
     st = gen_loc_loop(st, node);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
     emit_label(st, r2.label)
@@ -5800,7 +5962,20 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // `for` is the one loop where `continue` cannot go to the head: the step is
+    // between the body and the head, and skipping it would leave the loop
+    // variable where it was -- `for (i = 0; i < n; i++) { continue; }` would
+    // never end. So a third label sits between the body and the step.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     st = gen(st, node.step);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
@@ -5838,10 +6013,28 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, loff, -1, insn.R_RCX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
-    // a captured loop variable gets a fresh cell per iteration (the
-    // counter itself stays in its raw slot)
+    // `continue` goes to a label just BEFORE the increment, not to the head.
+    //
+    // Two mistakes are available here and both were made before this was right.
+    // Jumping to the head looks right -- "the next turn" -- but the counter is
+    // incremented at the BOTTOM of the loop, after the body, so a `continue`
+    // that jumps to the head never advances it and the loop spins forever on one
+    // value. (`for x in 0..10 { if x < 5 { continue; } ... }` hung.) Jumping to
+    // the increment itself is correct, and the fresh per-turn cell is still
+    // made: box_bound runs at the TOP of the next turn, which the `jmp r1` after
+    // the increment reaches. So the label goes before the `inc`, and the reason
+    // it is not simply the `inc` is that nothing may run between them.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, voff, -1, 0, 0);
@@ -5899,8 +6092,18 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     // x = arr[i]
     st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
+    // continue -> just before the increment, for the reason in gen_forrange
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
@@ -9352,6 +9555,14 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // closure literal), so the caller's mark is put back on the way out.
     let prev_max = frame_max;
     frame_max = 0;
+    // No loop encloses this body: any loop the closure was made inside is in
+    // the CALLER's function, and a jump out of one into another is what the
+    // checker's function-boundary rule refuses. Clearing here makes the emitter
+    // right on its own terms rather than relying on that check in another file.
+    let prev_brk = brk_label;
+    let prev_cont = cont_label;
+    brk_label = 0 - 1;
+    cont_label = 0 - 1;
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
       self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
@@ -9445,6 +9656,8 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     if (f.slots + f.temp > frame_max) { frame_max = f.slots + f.temp; };
     let frame = arch.arch_frame(frame_max);
     frame_max = prev_max;
+    brk_label = prev_brk;
+    cont_label = prev_cont;
     // The body is one IR stream: the prologue, what the body emitted, the
     // epilogue (see ir.y). The text the linker and -S read is rendered from
     // it, so nothing here is spelled twice.
@@ -10171,7 +10384,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 hdefs += d;
                 let rl = next_uid(st);
                 st = rl.st;
-                let label = fn_label_of(rl.uid, d.name);
+                // A native def's label is the one it named -- the assembly it
+                // calls into. Everything else gets a generated label.
+                let label = "";
+                if (len(d.func.label) > 0) { label = d.func.label; } else { label = fn_label_of(rl.uid, d.name); };
                 let lid = lbl_new(label);
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 hids += lid;
@@ -10229,13 +10445,17 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
           btext: st.btext, blabels: st.blabels };
-        // emit each hoisted body
+        // emit each hoisted body. A native def has none: its label names
+        // assembly that is already in the output, so emitting anything under
+        // that label would duplicate it.
         i = 0;
         while (i < len(hdefs)) {
             let d = hdefs[i];
-            let rf = next_uid(st);
-            st = rf.st;
-            st = emit_one_fn(st, st.fns.ids[i], rf.uid, d.func, false, false, [], "");
+            if (len(d.func.label) == 0) {
+                let rf = next_uid(st);
+                st = rf.st;
+                st = emit_one_fn(st, st.fns.ids[i], rf.uid, d.func, false, false, [], "");
+            };
             i = i + 1;
         };
         pr = phase_end(times, "emit_fns", pt, ph);
@@ -10750,7 +10970,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let body_refs = shaken.refs;
     let core_lines = arch.arch_prelude_lines();
     let thr = uses_threads(body_refs);
-    let pb = prelude_blocks(prelude_with(core_lines, thr));
+    let mth = uses_math(body_refs);
+    let pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     let ps = shake_prelude(pb, body_refs);
     // A kept prelude block may call a Y helper (none does today): the
     // helper is kept too, and everything shaken again from there.
@@ -10761,9 +10982,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         shaken = prune_bodies(labels, refs, extra);
         keep = shaken.keep;
         body_refs = shaken.refs;
-        if (!thr && uses_threads(body_refs)) {
-            thr = true;
-            pb = prelude_blocks(prelude_with(core_lines, thr));
+        if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
+            if (uses_threads(body_refs)) { thr = true; };
+            if (uses_math(body_refs)) { mth = true; };
+            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
@@ -11702,7 +11924,11 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
     }
 };
 
-export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text };
+// is_intrinsic_name is exported for the language server's completion list: it
+// needs to KNOW whether a word is a builtin, and the list it keeps of them is
+// the one this predicate tests. Inert like the rest of the names here -- the
+// splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
+export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and

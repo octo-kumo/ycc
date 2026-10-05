@@ -1,0 +1,50 @@
+-- capabilities
+definitionProvider true
+hoverProvider true
+completionProvider is an object: true
+  triggerCharacters . _
+-- definition
+twice at 10:7 -> 1:4
+base at 10:13 -> 3:4
+local at 7:12 -> 6:8
+uri echoed: true
+range end char 9 (name is 5 long, starts at 4)
+-- definition with nothing to point at
+on `print` (a builtin, not a declaration here): true
+on whitespace: true
+on a line past the end: true
+a document that is not open: true
+-- hover
+kind markdown
+value ```y
+twice(x: long) -> long
+```
+
+doubles a number
+range start line 10 char 6
+range end char 11
+return type present: true
+base, no annotation: ```y
+base
+```
+hover on nothing: true
+-- completion
+isIncomplete true
+every label: twice,base,use,print,syscall,len,push,some,is_some,unwrap,trim,ord,byte_at,chr,tonum,tostring,index_of,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,jmp_at,self,none
+prefix `tw`: twice
+inside use(): twice,base,use,local,print,syscall,len,push,some,is_some,unwrap,trim,ord,byte_at,chr,tonum,tostring,index_of,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,jmp_at,self,none
+at use()'s closing brace: twice,base,use,print,syscall,len,push,some,is_some,unwrap,trim,ord,byte_at,chr,tonum,tostring,index_of,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,jmp_at,self,none
+at top level: twice,base,use,print,syscall,len,push,some,is_some,unwrap,trim,ord,byte_at,chr,tonum,tostring,index_of,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,jmp_at,self,none
+-- completion items carry the declaration's own detail
+  twice detail: (x: long) -> long
+  twice detail has the return type too: true
+  twice documentation: doubles a number
+  twice textEdit: twice
+  found: 1
+-- the builtins come from the compiler's own list
+typable builtins 44, missing from the list 0
+no `opt$test` in the list: true
+no `#fmt` in the list: true
+-- the index the requests agree on
+definition and hover agree: true
+done

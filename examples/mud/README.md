@@ -23,7 +23,7 @@ c53cc41524a7baa2de88d0f56faf5e2c9d006845ab5fa7a1b70edc53f9df6631
 beside it, sha256
 
 ```
-3bcf646f92a8ace87da10c708c0f127df9ec116a67cec7cdaf371e5643224009  mud
+3a854b1552505053da7d1cf2d23b38fa6b9367779613073d156db27ab996f4be  mud
 ```
 
 `refs/` moves on every rebless. If that first sha no longer matches, rebuild,
@@ -70,7 +70,7 @@ from the toolkit.
 
 ## What to look at
 
-* `EXPECTED` — 6 249 bytes: two transcripts, 13 steps each, and a summary.
+* `EXPECTED` — 6 511 bytes: two transcripts, 13 steps each, and a summary.
 * `golden/check.txt` — the five property checks.
 * `golden/bench-1000.txt` — 1 000 connections: heap growth **zero**.
 * `golden/live-frame.txt` — the raw bytes `--live` drew into a 30×100 pty.
@@ -255,9 +255,9 @@ than filing a duplicate.
 | `client.y` | the parsed view, the renderers, the transcripts |
 | `driver.y` | `serve`, the step table, the scripted clients, `run_pair`, `run_chat_pair` |
 | `props.y` | the five property checks and the tally |
-| `world.y` | the seeded generator and the graph soundness predicates |
+| `world.y` | the seeded world (on `std/random.y`) and the graph soundness predicates |
 | `sockio.y` | the listener, the dial, the line reader, the byte appends |
-| `rnd.y` | a seeded LCG, and a per-session one |
+| — | the per-session combat stream lives in `server.y` (`srng`), and is the one generator in the campaign that is NOT std's: a thread shares the address space, so one module-level state cannot be one stream per session. `server.y`, "the session's own generator", says why at length |
 | `tui`, `args` | from std, unedited |
 | `pty_check.py` | drives `--live` through a pseudo-terminal |
 | `gate.conf` | build / run / check lines for `examples/gate.py` |

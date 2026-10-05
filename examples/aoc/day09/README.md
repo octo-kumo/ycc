@@ -231,6 +231,17 @@ reversal. Each permutation is asserted to **actually reorder** the tiles — an
 oracle that is secretly the identity cannot see an order bug, which is the
 "two absent values compare equal" trap in permutation form.
 
+`shuffled`'s draw comes from **`import random`** (`src/y/std/random.y`,
+splitmix64): `random.seed(seed)` then `random.below(k + 1)` inside the
+Fisher-Yates walk. It used to inline an LCG in the loop body
+(`s = (s * 1103515245 + 12345) % 2147483648`) — the same generator day10
+carried — which is biased for every `(k + 1)` that is not a power of two.
+`random.seed` is called inside `shuffled` rather than by the caller so that
+`shuffled(flat, s)` stays a pure function of `(flat, s)` even though std's
+stream is module-level; that is what the eight-seed sweep above relies on, and
+it is also why `EXPECTED` does not move (the shuffle is reached only from
+`--check`).
+
 Two more answers were obtained outside this program and are pinned, not merely
 bounded: part 1's maximum is attained by **exactly 1** pair and part 2's by
 **exactly 1** legal pair (an independent exhaustive enumeration). Pinning a

@@ -43,6 +43,7 @@ import exec;
 import fs;
 import http;
 import json;
+import jint;
 import net;
 import server;
 
@@ -79,10 +80,26 @@ let n2xx = 0;                 // the run's tally, counted by show()
 let n4xx = 0;
 let noth = 0;
 
-let buf: [byte; 65536] = [0; 65536];   // scratch: whatever is being read
-let keep: [byte; 65536] = [0; 65536];  // a copy the check compares against
-let keybuf: [byte; 64] = [0; 64];
-let valbuf: [byte; 256] = [0; 256];
+// This folder used to carry its own json.y (626 lines): an extractive reader
+// that returned OFFSETS into a [byte; 65536] buffer -- doc/member/nmembers/
+// nth_member/nelems/elem/int_at/text_into/bool_at -- and allocated nothing.
+// It is gone; `import json;` resolves to std/json.y, which builds a
+// json.Val, and the fixed buffers it needed (`buf`, `keep`, `keybuf`,
+// `valbuf`) went with it. What the old reader did that std's accessors do
+// not is refuse a fractional number rather than truncate it, and that is
+// jint.y -- see its header.
+//
+// Two consequences of losing the offsets, both deliberate:
+//
+//   * member order. The old reader walked members in SOURCE order because it
+//     walked the bytes. std's object is a map, and a Y map's keys() come back
+//     in insertion order -- which is the order the parser assigned them in, so
+//     a document still walks out the way it came in. check_roundtrip asserts
+//     it, on the four fields this server writes.
+//   * `show_body` prints a re-emission (json.stringify_val) rather than the
+//     bytes between two offsets. For a server that writes canonical JSON --
+//     and this one does, with `jstr`'s escapes -- the two are the same bytes,
+//     which is why EXPECTED did not move.
 let line: [byte; 256] = [0; 256];
 
 // the four fields of an item, in the order the server writes them
@@ -162,25 +179,7 @@ def note(status: long) -> void {
 
 // ── the response body in place ────────────────────────────────────────
 
-// A str into a fixed buffer: json.y's functions take [byte; 65536]
-// exactly, so the compiler then refuses a buffer nobody checked. Returns
-// how many bytes.
-def load_into(dst: [byte; 65536], s: str) -> long {
-    let n = len(s);
-    if (n > CAP) { n = CAP; };
-    let i = 0;
-    while (i < n) { dst[i] = s[i]; i = i + 1; };
-    n
-};
-
-def load(s: str) -> long { load_into(buf, s) };
-
-// the NUL-terminated key nth_member() left, as a str
-def key_of(k: [byte; 64]) -> str {
-    let n = 0;
-    while (n < 64 && k[n] != 0) { n = n + 1; };
-    from_bytes(k[0:n])
-};
+// ── the response body in place ────────────────────────────────────────
 
 // the value a number names in an X-Store header, -1 when it is not there.
 // -1 is deliberately not a number a caller is likely to expect, so a
@@ -236,66 +235,73 @@ def show(r: Reply) {
 // the body's own words, parsed: a field per line, an array element per
 // line. This is the parser doing visible work in the default run, not a
 // debug dump -- if it stopped parsing, the output would change shape.
+//
+// The refusal path is unchanged in shape: the reason, the byte it stopped
+// at, then the raw text so a human can look at what arrived. The reason is
+// std's now ("unexpected '}' at byte 12" rather than "expected , or } in an
+// object at byte 12") -- same information, and it names the byte as well.
 def show_body(s: str, pad: str) -> void {
     if (len(s) == 0) {
         puts(pad + "(no body)\n");
         return;
     };
-    let n = load(s);
-    if (!json.doc(buf, n)) {
-        puts(pad + "not JSON: " + json.err + " at byte " + tostring(json.errpos) + "\n");
+    let pe = json.parse_err(s);
+    if (!pe.ok) {
+        puts(pad + "not JSON: " + pe.err + " at byte " + tostring(pe.at) + "\n");
         puts(pad + "raw: " + s + "\n");
         return;
     };
-    let p = json.ws(buf, 0, n);
-    if (buf[p] == 123) {
-        show_fields(p, n, pad);
+    let v = pe.value!;
+    if (json.as_obj(v) == none) {
+        // not an object: the document's own text. The old reader printed
+        // the bytes from the first non-space to the end; this re-emits, and
+        // for the canonical JSON a server produces the two agree.
+        puts(pad + json.stringify_val(v, 0) + "\n");
     } else {
-        puts(pad + from_bytes(buf[p:n]) + "\n");
+        show_fields(v, pad);
     }
 };
 
-def show_fields(at: long, end: long, pad: str) -> void {
-    let n = json.nmembers(buf, at, end);
-    if (n < 0) { return; };
+// One object, a field per line, in the order the document holds its members.
+// keys() is insertion-ordered in Y, and std's parser inserts in source order,
+// so this walks out the way the document came in -- which is what the old
+// byte-walking reader did and what check_roundtrip asserts.
+def show_fields(v: json.Val, pad: str) -> void {
+    let ks = json.keys_of(json.as_obj(v)!);
     let i = 0;
-    while (i < n) {
-        let v = json.nth_member(buf, at, end, i, keybuf);
-        if (v < 0) {
-            i = n;
+    while (i < len(ks)) {
+        let f = json.field(v, ks[i]);
+        if (f == none) {
+            i = len(ks);
         } else {
-            let name = key_of(keybuf);
-            let vend = json.value(buf, v, end, 0);
-            if (vend < 0) {
-                i = n;
-            } else {
-                if (vend > v && buf[v] == 91) {
-                    let k = json.nelems(buf, v, end);
-                    puts(pad + name + ": " + tostring(k) + " items\n");
-                    let j = 0;
-                    while (j < k) {
-                        let e = json.elem(buf, v, end, j);
-                        if (e < 0) {
-                            j = k;
-                        } else {
-                            puts(pad + "  [" + tostring(j) + "]\n");
-                            if (buf[e] == 123) {
-                                show_fields(e, end, pad + "    ");
-                            } else {
-                                let e2 = json.value(buf, e, end, 0);
-                                if (e2 > e) { puts(pad + "    " + from_bytes(buf[e:e2]) + "\n"); };
-                            };
-                            j = j + 1;
-                        }
-                    }
-                } else {
-                    puts(pad + name + ": " + from_bytes(buf[v:vend]) + "\n");
-                }
-            }
+            show_field(ks[i], f!, pad);
+            i = i + 1;
         };
-        i = i + 1;
     }
 };
+
+// One member: an array gets a count and an element per line, anything else
+// the value's own text on one line after the name.
+def show_field(name: str, v: json.Val, pad: str) -> void {
+    let a = json.as_arr(v);
+    if (a == none) {
+        puts(pad + name + ": " + json.stringify_val(v, 0) + "\n");
+    } else {
+        let items = a!;
+        puts(pad + name + ": " + tostring(items.length) + " items\n");
+        let j = 0;
+        while (j < items.length) {
+            puts(pad + "  [" + tostring(j) + "]\n");
+            if (json.as_obj(items[j]) == none) {
+                puts(pad + "    " + json.stringify_val(items[j], 0) + "\n");
+            } else {
+                show_fields(items[j], pad + "    ");
+            };
+            j = j + 1;
+        };
+    }
+};
+
 
 // ── building a request body ───────────────────────────────────────────
 
@@ -701,45 +707,47 @@ def ask(base: str, method: str, path: str, body: str) -> Reply {
 };
 
 // ── the parser, on documents no server produced ───────────────────────
+//
+// The parser is std's json, so what is checked here is std's accept set and
+// its refusal set, on the same documents as before. Two of the old
+// assertions were about OFFSETS -- "element 1 of [7,8,9] starts at byte 3",
+// and "consumed N of M" -- and an offset is not a thing a json.Val has.
+// They are restated as what they were actually for: the element walk finds
+// element 1, and the parse consumed the whole document. Everything else is
+// byte-for-byte the same check.
 
 def doc_ok(text: str, what: str, want_members: long) {
-    let n = load_into(buf, text);
-    let parsed = json.doc(buf, n);
-    if (!parsed) {
-        ok(false, "accepts " + what, json.err + " at byte " + tostring(json.errpos));
-        return;
-    };
-    // accepted *and* consumed exactly: a parser that stopped early would
-    // otherwise pass this. The comparison has to allow for trailing
-    // whitespace, which doc() allows too -- the value ends at `after` and
-    // the document ends at whatever follows only whitespace.
-    let p = json.ws(buf, 0, n);
-    let after = json.value(buf, p, n, 0);
-    let whole = after >= 0 && json.ws(buf, after, n) == n;
-    ok(whole, "accepts " + what + ", all of it",
-       json.err + " at byte " + tostring(json.errpos) + "; consumed " + tostring(after) +
-       " of " + tostring(n));
-    if (want_members > 0 && whole) {
-        eq_int(json.nmembers(buf, p, n), want_members, what + " has " + tostring(want_members) +
-               " member(s)");
+    let pe = json.parse_err(text);
+    // parse_err answers ok only when the value ran to the end of the
+    // document and nothing but whitespace follows, so THIS ONE assertion is
+    // both "accepts it" and "consumed all of it". The old reader needed two,
+    // because it reported "accepts" and "consumed N of M" separately.
+    ok(pe.ok, "accepts " + what + ", all of it",
+       if (pe.ok) { "accepted; the value ends at byte " + tostring(pe.at) +
+                    " of " + tostring(len(text)) }
+       else { pe.err + " at byte " + tostring(pe.at) });
+    if (want_members > 0 && pe.ok) {
+        let m = json.as_obj(pe.value!);
+        let got = 0 - 1;
+        if (m != none) { got = json.keys_of(m!).length };
+        eq_int(got, want_members, what + " has " + tostring(want_members) + " member(s)")
     }
 };
 
 // A refusal has to name a reason and a position inside the document, so
 // "rejected" cannot quietly mean "gave up in silence".
 def doc_bad(text: str, what: str) {
-    let n = load_into(buf, text);
-    let parsed = json.doc(buf, n);
-    let said = !parsed && json.err != "" && json.errpos >= 0 && json.errpos <= n;
+    let pe = json.parse_err(text);
+    let said = !pe.ok && pe.err != "" && pe.at >= 0 && pe.at <= len(text);
     ok(said, "rejects " + what,
-       if (parsed) { "the parser accepted it" } else {
-           "refused without a usable reason: err [" + json.err + "] at " + tostring(json.errpos) +
-           " of " + tostring(n)
+       if (pe.ok) { "the parser accepted it" } else {
+           "refused with: " + pe.err + " at byte " + tostring(pe.at) +
+           " of " + tostring(len(text))
        })
 };
 
 def check_parser() {
-    puts("\n-- the hand-rolled parser: what it must accept --\n");
+    puts("\n-- the parser (std json): what it must accept --\n");
     doc_ok("{}", "an empty object", 0);
     doc_ok("[]", "an empty array", 0);
     doc_ok("{\"a\":1}", "one member", 1);
@@ -759,29 +767,42 @@ def check_parser() {
     doc_ok("{\"a\":\"back\\\\slash\"}", "an escaped backslash", 1);
     doc_ok("{\"a\":3.5e2}", "a number with a fraction and an exponent", 1);
     // and the values come back out, not just the shape
-    let n = load_into(buf, "{\"qty\":41,\"title\":\"milk\"}");
-    ok(json.doc(buf, n), "accepts an object of mixed types", json.err);
-    let q = json.member(buf, 0, n, "qty");
-    eq_int(json.int_at(buf, q, n), 41, "qty reads back as 41");
-    ok(json.iok, "and the integer read is an integer", "iok was false");
-    let t = json.member(buf, 0, n, "title");
-    eq_int(json.text_into(buf, t, n, valbuf), 4, "the title decoded to 4 bytes");
-    eq_str(from_bytes(valbuf[0:4]), "milk", "the title decoded to milk");
+    let mixed = json.parse_err("{\"qty\":41,\"title\":\"milk\"}");
+    ok(mixed.ok, "accepts an object of mixed types", mixed.err);
+    eq_int(field_int(mixed.value!, "qty"), 41, "qty reads back as 41");
+    ok(jint.err == "", "and the integer read is an integer", "jint.err was " + jint.err);
+    let ts = json.field(mixed.value!, "title");
+    let t = "";
+    if (ts != none) {
+        let sv = json.as_str(ts!);
+        if (sv != none) { t = sv! }
+    };
+    eq_int(len(t), 4, "the title decoded to 4 bytes");
+    eq_str(t, "milk", "the title decoded to milk");
     // a fraction is refused rather than truncated, so 3.5 can never be read
     // as 3 by a caller that forgot to look
-    let n2 = load_into(buf, "{\"qty\":3.5}");
-    ok(json.doc(buf, n2), "3.5 is a legal number", json.err);
-    let q2 = json.member(buf, 0, n2, "qty");
-    json.int_at(buf, q2, n2);
-    ok(!json.iok, "a fraction is refused where an integer is wanted",
-       "iok was true, ival " + tostring(json.ival));
-    // and the element walk finds element 1 of [7,8,9] where it must be
-    let n3 = load_into(buf, "[7,8,9]");
-    eq_int(json.elem(buf, json.ws(buf, 0, n3), n3, 1), 3, "element 1 of [7,8,9] starts at byte 3");
-    eq_int(json.nelems(buf, json.ws(buf, 0, n3), n3), 3, "[7,8,9] holds three elements");
-    eq_int(json.elem(buf, json.ws(buf, 0, n3), n3, 3), 0 - 1, "and there is no element 3");
+    let frac = json.parse_err("{\"qty\":3.5}");
+    ok(frac.ok, "3.5 is a legal number", frac.err);
+    eq_int(field_int(frac.value!, "qty"), 0 - 999998,
+           "a fraction is refused where an integer is wanted");
+    // and the element walk finds element 1 of [7,8,9] where it must be.
+    // The old check asserted the OFFSET it started at (byte 3); a json.Val
+    // has no offsets, so what is asserted now is what that was for -- the
+    // walk reaches element 1, reads 8, and stops at the end of the array.
+    let arr = json.parse_err("[7,8,9]");
+    let items = json.as_arr(arr.value!);
+    let one = 0 - 1;
+    let e1 = json.index(arr.value!, 1);
+    if (e1 != none) {
+        let n1 = jint.of(e1!);
+        if (jint.err == "") { one = n1 }
+    };
+    eq_int(one, 8, "element 1 of [7,8,9] is 8");
+    eq_int(len(items!), 3, "[7,8,9] holds three elements");
+    let e3 = json.index(arr.value!, 3);
+    eq_int(if (e3 == none) { 0 } else { 1 }, 0, "and there is no element 3");
 
-    puts("\n-- the hand-rolled parser: the malformed set --\n");
+    puts("\n-- the parser (std json): the malformed set --\n");
     doc_bad("{\"a\":1", "a truncated object");
     doc_bad("{\"a\":1,}", "a trailing comma in an object");
     doc_bad("{a:1}", "an unquoted key");
@@ -803,6 +824,7 @@ def check_parser() {
     doc_bad("{\"a\":.5}", "a bare fraction");
     doc_bad("[1 2]", "a missing comma in an array");
 };
+
 
 // ── the CRUD state machine ────────────────────────────────────────────
 
@@ -982,53 +1004,52 @@ def check_roundtrip(base: str) {
     let sent = loc_id(c.loc);
     present(sent, "the fixture's id, from its Location header");
     let body = c.body;
-    let n = load_into(keep, body);
-    if (!json.doc(keep, n)) {
-        ok(false, "the created item is a document the parser accepts", json.err);
+    let pe = json.parse_err(body);
+    if (!pe.ok) {
+        ok(false, "the created item is a document the parser accepts", pe.err);
         return;
     };
-    ok(true, "the created item is a document the parser accepts", "json.err was left over");
-    present(n, "the item body's byte length");
+    ok(true, "the created item is a document the parser accepts", "parse_err was left over");
+    present(len(body), "the item body's byte length");
+    let doc = pe.value!;
 
     // exactly the keys the server sent, in the order it sent them, none
-    // extra and none missing
-    let members = json.nmembers(keep, 0, n);
+    // extra and none missing. keys() is insertion-ordered in Y and std's
+    // parser inserts in source order, so this walks the document the way the
+    // old byte-walking reader did.
+    let ks = json.keys_of(json.as_obj(doc)!);
+    let members = len(ks);
     eq_int(members, 4, "the item carries four fields");
     let i = 0;
     let keys_ok = true;
     let seen = "";
     while (i < members) {
-        let v = json.nth_member(keep, 0, n, i, keybuf);
-        if (v < 0) {
-            keys_ok = false;
-        } else {
-            let name = key_of(keybuf);
-            // `+=` twice, never `seen = seen + name + " "`: this one really does
-            // accumulate across the loop, and the `+` chain was two
-            // value-used y_str_cat sites on the loop's cycle. The -S audit
-            // in README.md found them; they are y_str_app now.
-            seen += name;
-            seen += " ";
-            if (i >= 4 || name != KEYS[i]) { keys_ok = false; };
-        };
+        let name = ks[i];
+        // `+=` twice, never `seen = seen + name + " "`: this one really does
+        // accumulate across the loop, and the `+` chain was two
+        // value-used y_str_cat sites on the loop's cycle. The -S audit
+        // in README.md found them; they are y_str_app now.
+        seen += name;
+        seen += " ";
+        if (i >= 4 || name != KEYS[i]) { keys_ok = false };
         i = i + 1;
     };
     ok(keys_ok, "the fields are id, title, qty, done in that order", "saw [" + seen + "]");
     eq_str(seen, "id title qty done ", "and the walk visited them in that order");
 
     // the values, read back one field at a time, against what was sent
-    eq_int(field_int(keep, n, "id"), sent, "id reads back as the id the Location named");
-    eq_str(field_str(keep, n, "title"), "jam", "title reads back as jam");
-    eq_int(field_int(keep, n, "qty"), 3, "qty reads back as 3");
-    ok(!field_is_true(keep, n, "done"), "done reads back as false", "done read as true");
+    eq_int(field_int(doc, "id"), sent, "id reads back as the id the Location named");
+    eq_str(field_str(doc, "title"), "jam", "title reads back as jam");
+    eq_int(field_int(doc, "qty"), 3, "qty reads back as 3");
+    ok(!field_is_true(doc, "done"), "done reads back as false", "done read as true");
 
     // re-emitting the parsed values must reproduce the bytes that arrived:
     // parse, rebuild, compare -- the strongest statement available
     // without a second implementation to disagree with
-    let rebuilt = "{\"id\":" + tostring(field_int(keep, n, "id")) +
-                  ",\"title\":" + jstr(field_str(keep, n, "title")) +
-                  ",\"qty\":" + tostring(field_int(keep, n, "qty")) +
-                  ",\"done\":" + (if (field_is_true(keep, n, "done")) { "true" } else { "false" }) +
+    let rebuilt = "{\"id\":" + tostring(field_int(doc, "id")) +
+                  ",\"title\":" + jstr(field_str(doc, "title")) +
+                  ",\"qty\":" + tostring(field_int(doc, "qty")) +
+                  ",\"done\":" + (if (field_is_true(doc, "done")) { "true" } else { "false" }) +
                   "}";
     eq_str(rebuilt, body, "re-emitting the parsed values reproduces the bytes exactly");
 
@@ -1036,24 +1057,28 @@ def check_roundtrip(base: str) {
     // field agrees with the array it sits beside
     let l = ask(base, "GET", "/items", "");
     eq_int(l.status, 200, "the listing is 200");
-    let ln = load_into(buf, l.body);
-    ok(json.doc(buf, ln), "the listing is a document the parser accepts", json.err);
-    let items_at = json.member(buf, 0, ln, "items");
-    ok(items_at > 0, "the listing holds an items array", "no items field at all");
-    let count = json.nelems(buf, items_at, ln);
+    let lp = json.parse_err(l.body);
+    ok(lp.ok, "the listing is a document the parser accepts", lp.err);
+    let rows: [json.Val] = [];
+    let items = json.get_arr(lp.value!, "items");
+    if (items != none) { rows = items! };
+    ok(items != none, "the listing holds an items array", "no items field at all");
+    let count = rows.length;
     present(count, "the listing's element count");
     eq_int(json_int(l.body, "count"), count, "the listing's count field equals its element count");
     // the fixture was just created, so it is the LAST element -- element
     // count-1. Reading element 0 instead would pass for any listing that
     // happens to start with the right id, which is not this check.
     let last_i = count - 1;
-    let last = json.elem(buf, items_at, ln, last_i);
-    ok(last > 0, "the listing's last element is inside the array", "at " + tostring(last));
-    eq_int(field_int_at(buf, ln, last, "id"), sent,
+    let lastv = json.nul();
+    if (last_i >= 0 && last_i < count) { lastv = rows[last_i] };
+    ok(last_i >= 0 && last_i < count, "the listing's last element is inside the array",
+       "at " + tostring(last_i));
+    eq_int(field_int(lastv, "id"), sent,
            "the listing's last element is the fixture just created");
-    eq_str(field_str_at(buf, ln, last, "title"), "jam",
+    eq_str(field_str(lastv, "title"), "jam",
            "and its title is the one just sent");
-    eq_int(field_int_at(buf, ln, last, "qty"), 3, "and its qty too");
+    eq_int(field_int(lastv, "qty"), 3, "and its qty too");
 
     // a title with a quote in it: the server escapes it, the escape is
     // really on the wire, and decoding gives the original back
@@ -1069,16 +1094,17 @@ def check_roundtrip(base: str) {
     // undone by the server's own re-emission on the way out
     let l2 = ask(base, "GET", "/items", "");
     eq_int(l2.status, 200, "the listing still answers 200 after a title with an escape");
-    let ln2 = load_into(keep, l2.body);
-    ok(json.doc(keep, ln2), "and is still a document the parser accepts", json.err);
-    let items2 = json.member(keep, 0, ln2, "items");
-    let n2 = json.nelems(keep, items2, ln2);
+    let lp2 = json.parse_err(l2.body);
+    ok(lp2.ok, "and is still a document the parser accepts", lp2.err);
+    let rows2: [json.Val] = [];
+    let items2 = json.get_arr(lp2.value!, "items");
+    if (items2 != none) { rows2 = items2! };
+    let n2 = rows2.length;
     present(n2, "the second listing's element count");
     let found = false;
     let j = 0;
     while (j < n2 && !found) {
-        let e = json.elem(keep, items2, ln2, j);
-        if (field_str_at(keep, ln2, e, "title") == tricky) { found = true; };
+        if (field_str(rows2[j], "title") == tricky) { found = true };
         j = j + 1;
     };
     ok(found, "the escaped title survives a round trip through the listing",
@@ -1163,10 +1189,12 @@ def check_full(base: str) {
     let l = ask(base, "GET", "/items", "");
     eq_int(l.status, 200, "the full collection lists 200");
     let grew = heap_used() - before;
-    let ln = load_into(keep, l.body);
-    ok(json.doc(keep, ln), "and the full listing is a document the parser accepts", json.err);
-    let items_at = json.member(keep, 0, ln, "items");
-    let count = json.nelems(keep, items_at, ln);
+    let lp = json.parse_err(l.body);
+    ok(lp.ok, "and the full listing is a document the parser accepts", lp.err);
+    let rows: [json.Val] = [];
+    let items = json.get_arr(lp.value!, "items");
+    if (items != none) { rows = items! };
+    let count = rows.length;
     present(count, "the full listing's element count");
     eq_int(count, FULL, "the listing holds every item the store accepted");
     eq_int(json_int(l.body, "count"), count, "and its count field agrees");
@@ -1179,15 +1207,17 @@ def check_full(base: str) {
     let bad = 0;
     let first_bad = "";
     while (j < count) {
-        let e = json.elem(keep, items_at, ln, j);
-        if (e < 0) {
+        // json.index, not a bare rows[j]: an element that is not there has to
+        // be reported as one, which is what the old json.elem answered -1 for
+        let e = json.index(json.jarr(rows), j);
+        if (e == none) {
             bad = bad + 1;
             if (first_bad == "") { first_bad = "element " + tostring(j) + " is not in the array" };
         } else {
             let want_title = "item-" + tostring(j);
-            if (field_int_at(keep, ln, e, "id") != made_ids[j] ||
-                field_str_at(keep, ln, e, "title") != want_title ||
-                field_int_at(keep, ln, e, "qty") != j) {
+            if (field_int(e!, "id") != made_ids[j] ||
+                field_str(e!, "title") != want_title ||
+                field_int(e!, "qty") != j) {
                 bad = bad + 1;
                 if (first_bad == "") { first_bad = "element " + tostring(j) +
                     " should be id " + tostring(made_ids[j]) + " title [" + want_title + "]" };
@@ -1229,61 +1259,60 @@ def check_full(base: str) {
     eq_int(json_int(l2.body, "count"), FULL - 1, "and the listing loses exactly that one");
 };
 
-// field readers that take the document already in `b`, so a round trip
-// never has to reload the buffer under itself
-def field_int(b: [byte; 65536], end: long, key: str) -> long {
-    let at = json.member(b, 0, end, key);
-    if (at < 0) { 0 - 999997 } else {
-        json.int_at(b, at, end);
-        if (json.iok) { json.ival } else { 0 - 999998 }
+// Field readers over a document the caller has ALREADY parsed, so a round
+// trip never has to re-parse the body it is checking. The old shapes took
+// `(b: [byte; 65536], end, key)` and, for a nested member, an offset for the
+// object to look inside; with a json.Val the nested case is just another
+// json.Val, so `field_int_at`/`field_str_at` are gone and their callers pass
+// the element instead of its offset.
+//
+// jint.of, not json.as_long, for the same reason server.y uses it: 3.5 must
+// read as "not an integer", not as 3. The sentinels are not numbers a caller
+// is likely to expect, so a field that never arrived cannot compare equal to
+// a real one.
+def field_int(v: json.Val, key: str) -> long {
+    let f = json.field(v, key);
+    if (f == none) { 0 - 999997 } else {
+        let n = jint.of(f!);
+        if (jint.err != "") { 0 - 999998 } else { n }
     }
 };
 
-def field_str(b: [byte; 65536], end: long, key: str) -> str {
-    let at = json.member(b, 0, end, key);
-    if (at < 0) { "" } else {
-        let k = json.text_into(b, at, end, valbuf);
-        if (k < 0) { "" } else { from_bytes(valbuf[0:k]) }
-    }
+def field_str(v: json.Val, key: str) -> str {
+    let f = json.field(v, key);
+    let out = "";
+    if (f != none) {
+        let s = json.as_str(f!);
+        if (s != none) { out = s! };
+    };
+    out
 };
 
-def field_is_true(b: [byte; 65536], end: long, key: str) -> bool {
-    let at = json.member(b, 0, end, key);
-    if (at < 0) { return false; };
-    // bool_at, not text_is: `done` is a bare JSON literal on the wire, and
-    // text_is only ever matches the *quoted* word, so it would answer
-    // "false" for every document including the ones that say true
-    json.bool_at(b, at, end) == 1
+def field_is_true(v: json.Val, key: str) -> bool {
+    let f = json.field(v, key);
+    if (f == none) { return false };
+    // json.as_bool, not a string compare: `done` is a bare JSON literal on
+    // the wire, and the old json.text_is only ever matched the *quoted*
+    // word, so it answered "false" for every document including the ones
+    // that say true
+    let b = json.as_bool(f!);
+    if (b == none) { return false };
+    b!
 };
 
-def field_int_at(b: [byte; 65536], end: long, at: long, key: str) -> long {
-    let v = json.member(b, at, end, key);
-    if (v < 0) { 0 - 999997 } else {
-        json.int_at(b, v, end);
-        if (json.iok) { json.ival } else { 0 - 999998 }
-    }
-};
-
-def field_str_at(b: [byte; 65536], end: long, at: long, key: str) -> str {
-    let v = json.member(b, at, end, key);
-    if (v < 0) { "" } else {
-        let k = json.text_into(b, v, end, valbuf);
-        if (k < 0) { "" } else { from_bytes(valbuf[0:k]) }
-    }
-};
-
-// document-level readers, for the checks that only want a value: the
-// sentinels are not numbers a caller is likely to expect, so a field that
-// never arrived cannot compare equal to a real one.
+// document-level readers, for the checks that only want a value out of a
+// body they have not parsed yet. The sentinels are not numbers a caller is
+// likely to expect, so a field that never arrived cannot compare equal to a
+// real one.
 def json_int(doc_text: str, key: str) -> long {
-    let n = load_into(keep, doc_text);
-    if (!json.doc(keep, n)) { 0 - 999999 } else {
-        let at = json.member(keep, 0, n, key);
-        if (at < 0) {
+    let pe = json.parse_err(doc_text);
+    if (!pe.ok) { 0 - 999999 } else {
+        let f = json.field(pe.value!, key);
+        if (f == none) {
             0 - 999998
         } else {
-            json.int_at(keep, at, n);
-            if (json.iok) { json.ival } else { 0 - 999997 }
+            let n = jint.of(f!);
+            if (jint.err != "") { 0 - 999997 } else { n }
         }
     }
 };
@@ -1291,21 +1320,24 @@ def json_int(doc_text: str, key: str) -> long {
 // does the document hold that key at all? A field that is absent has to be
 // provable, not inferred from a value that happens to look like zero.
 def json_has(doc_text: str, key: str) -> bool {
-    let n = load_into(keep, doc_text);
-    if (!json.doc(keep, n)) { return false; };
-    json.member(keep, 0, n, key) >= 0
+    let pe = json.parse_err(doc_text);
+    if (!pe.ok) { return false };
+    json.field(pe.value!, key) != none
 };
 
 def json_str(doc_text: str, key: str) -> str {
-    let n = load_into(keep, doc_text);
-    if (!json.doc(keep, n)) { "" } else {
-        let at = json.member(keep, 0, n, key);
-        if (at < 0) { "" } else {
-            let k = json.text_into(keep, at, n, valbuf);
-            if (k < 0) { "" } else { from_bytes(valbuf[0:k]) }
-        }
-    }
+    let pe = json.parse_err(doc_text);
+    let out = "";
+    if (pe.ok) {
+        let f = json.field(pe.value!, key);
+        if (f != none) {
+            let s = json.as_str(f!);
+            if (s != none) { out = s! };
+        };
+    };
+    out
 };
+
 
 // ── the read-once property, and the bug it works around ───────────────
 

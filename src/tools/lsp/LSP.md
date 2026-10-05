@@ -1,0 +1,1551 @@
+# LSP.md — a language server for Y, and the VS Code extension
+
+**Status: proposed, not implemented.** This document is the design and the
+requirement list. Nothing here has been built yet.
+
+**On citations.** Compiler internals are named by **symbol** — `types.check_program`,
+`native.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
+moves: a single refactor shifts hundreds of lines, and during this document's
+life `native.y` moved twice (the wide-environment index, then the extraction of
+the prelude into `src/y/arch/*.s`) for a cumulative drift of over 600 lines on
+some references. A line citation is stale the day it is written, and a stale one
+is worse than none: it reads as authoritative and points at unrelated code.
+Where a line number remains — a handful, mostly into the LaTeX manual, which
+changes rarely — `check-refs.py` next to this file resolves every citation and
+prints what it finds there:
+
+```sh
+python3 src/tools/lsp/check-refs.py -v
+```
+
+Run it after touching `src/y`. It is not wired into `make test`, because that is
+the compiler agent's file; §12 lists it as a follow-up.
+
+It supersedes the sketch at the end of `future.y`:
+
+```
+// some kind of full featured LSP, which can be used by vs code etc
+// will provide features like autocompletion, go-to-definition, and real-time error checking
+// will also support formatting code
+// a new entrypoint in src/y/lsp.y, which will make a seperate binary, but it can share code with ycc
+```
+
+The sketch's filename (`src/y/lsp.y`) is the one part we deliberately do not
+follow — see §4.
+
+---
+
+## 1. What this is
+
+A Language Server Protocol server, `yserve`, that makes the Y compiler's
+existing knowledge available to an editor, plus a VS Code client that speaks to
+it. It is not a separate analysis: every diagnostic, every type and every
+definition it reports is produced by the same `src/y/` code that `ycc` itself
+runs, so the editor and the command line can never disagree.
+
+Six features, in the order they are built:
+
+| | Feature | Milestone |
+|---|---|---|
+| 0 | `std/json.y`, a JSON module for Y programs | M-json |
+| 0b | JSON **literal syntax** in the language, so the module needs no `json.num` / `json.obj()` | M-sugar |
+| 1 | Errors and warnings | M1 |
+| 2 | Highlighting (LSP semantic tokens) | M2 |
+| 3 | Formatting | M3 |
+| 4 | Type information (hover) | M4 |
+| 5 | Go-to-definition | M4 |
+| 6 | Auto-complete | M4 |
+
+M-json lands first and blocks nothing else in the tree — it is an ordinary std
+module — but M1 imports it, so it is built first. It is specified in full in
+**§15**, including four language constraints that shape its API and that were
+established by measurement, not assumption. The sugar that would remove the
+explicit constructors is specified in **§16**.
+
+M1–M3 need **no change to the compiler at all**. M4 needs one, described in §9.
+
+## 2. Goals
+
+- **One source of truth.** Diagnostics come from `types.check_program` and
+  `lint.lint_unit`. Hover comes from the checker's own inferred types. Nothing
+  is re-implemented, approximated, or pattern-matched.
+- **No compiler fork.** `yserve` is a *program* that imports the compiler's
+  modules the way `ycc.y` does. It never re-parses or re-checks anything
+  `ycc` already knows.
+- **Trust the checker.** Where the checker reports all its errors at once, the
+  server publishes all of them. Where it stops at the first (the lexer), the
+  server does too, and says so.
+- **Safe on broken input.** An editor is fed half-typed programs constantly.
+  No input may kill the server, hang it, or produce a wrong answer silently.
+
+## 3. Non-goals
+
+- Code actions, refactorings, rename-symbol, and folding. All are natural
+  once §9.2 exists, and all are out of scope for v1.
+- `ycc build` packages (`y.toml`, the object cache, git vendoring). A package
+  graph has its own driver (`pkg.y`) and its own lifecycle; v1 treats a package
+  as a whole-program import boundary.
+- Multiple workspace folders, or any multi-root notion.
+- Language Server Protocol 3.18 optional requests beyond the six above.
+
+---
+
+## 4. Architecture
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│  VS Code                                                          │
+│  src/tools/lsp/vscode-y-lang/   the EXISTING extension, extended   │
+│    src/extension.ts             client: spawns ./yserve, speaks LSP│
+└────────────────────────────┬──────────────────────────────────────┘
+                             │  JSON-RPC 2.0 over stdio
+                             │  Content-Length framed
+┌────────────────────────────┴──────────────────────────────────────┐
+│  yserve            parent process: framing, and the document       │
+│                      store, and NOTHING else                      │
+│                      read a frame → update the store → fork() →   │
+│                      wait_pid()                                   │
+│                           │                                        │
+│                           └── child process, per message:         │
+│                                 import tags, lexer, parser,       │
+│                                 types, rename, lint, native       │
+│                                 resolve → tokenize → parse →      │
+│                                 strip_ns → rename → check → lint  │
+│                                 → map positions → JSON            │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+### 4.1 Why fork per request
+
+Three properties of the compiler make a long-lived in-process server
+incorrect or unsafe. For each, forking is the whole fix.
+
+1. **`exit(1)` in the lexer.** Two `exit(1)`s in `lexer.y` print
+   to stdout and `exit(1)` on an unterminated string literal or block comment.
+   `arch_x64.y`'s `exit` is `exit_group`, so this kills every thread and the
+   whole server. In a child it kills one request. §5.1 adds a pre-flight pass
+   so the case is *diagnosed* rather than merely survived.
+   `native_resolve_x` has the same shape for an unresolvable `import`
+   (five in `native_resolve_x`, for an `import` that cannot be resolved).
+
+2. **Module-level state that is never reset between compiles.** The compiler
+   is a one-shot batch tool; roughly twenty module globals accumulate across
+   runs, and some are only reset on the paths `ycc` happens to take:
+
+   | Module | Globals |
+   |---|---|
+   | `types.y` | `teq_unfolds` (`:368`), `tcanon_named` (`:447`), `inf_keys`/`inf_typs` (`:3996-3997`) |
+   | `rename.y` | `rn_tref_ids`, `rn_tref_nodes`, `rn_reach_memo`, `rn_reach_n` (`:316-324`) |
+   | `native.y` | `tcode_refs`, `tdec_encs`, `tdec_refs`, `tdec_n` (`:75-78`), `ty_sig_*` (`:91-93`), `ush_nodes`/`ush_vals` (`:95-96`) |
+
+   Whether each is a harmless cache or a real cross-document leak is not
+   established, and the emitter's record-hashing check (*two record types hash
+   to*) suggests at
+   least one is not harmless. A fresh process per request makes the question
+   moot.
+
+3. **Nothing is ever freed.** `src/c/yv.h` allocates every value once and
+   keeps it for the process lifetime; `src/y` has the same model. A server
+   that compiled documents in-process would grow without bound —
+   `ycc.y` itself needs ~390 MB. The parent process here never runs the
+   pipeline, so its heap stays small and `fork()` is cheap.
+
+`fork {}` and `wait_pid(pid)` are builtins (documented in the manual under *Builtins*;
+emitted by the `spawn`/`fork` arm in `native.y`). `pipe(2)` is syscall number 22; the raw
+`syscall` builtin reaches it, as `std/fs.y` already does for every other fd
+operation.
+
+### 4.2 The parent owns the state; the child owns the work
+
+This is the part that is easy to get wrong, and the first implementation got it
+wrong. `fork {}` gives the child a **copy**: every write the child makes dies
+with it. So a document store kept in the child is empty again for the next
+message — and the symptom is quiet and convincing, because a formatting request
+for an unknown document answers `{"edits": []}`, which is exactly what "already
+formatted" also answers.
+
+So the two halves of a message are handled by two processes:
+
+| | runs in | what it does |
+|---|---|---|
+| `dispatch.apply_state` | **parent** | records which documents are open, their text and version; sets `initialized`, `shutting`, `exiting` |
+| `yserve.handle_one` | **child** | everything else: the checker, the linter, the formatter, building the reply |
+
+The parent calls `apply_state` **before** the fork, so the child inherits an
+up-to-date view. The split is safe because the parent's half cannot exit:
+`json.parse` is tolerant (it returns `none`, it does not raise) and the rest is
+field reads and map assignments. That property is what makes fork-per-request
+work at all — the parent has to be unkillable, because it is the only process
+that survives.
+
+`test-e2e.sh` pins this: it formats a document in one message, then formats it
+again in the next, and requires both to answer identically. A child-local store
+fails that.
+
+### 4.3 The child may not write to stdout
+
+The client reads fd 1 and *nothing else on fd 1 is a message* — that is the
+protocol. But the compiler prints to stdout on its way to dying:
+
+```
+error: cannot open import './nope.y' (resolved to 'nope.y')
+```
+
+One line like that in the middle of the stream and the client reads a malformed
+frame, loses its place, and drops the connection. So before forking, the parent
+`dup`s stdout to fd 200 (`syscall` 32), and the child `dup2`s **stderr onto fd 1**
+(`syscall` 33) before doing any work. Anything the compiler prints goes to the
+client's log, where it belongs, and the reply goes to fd 200. 200 is high because
+the runtime hands out low fds for files.
+
+`test-e2e.sh` asserts that every frame the server emits parses as JSON, which is
+what catches this class of bug: an unframed line fails immediately.
+
+### 4.4 A missing import is diagnosed, not survived
+
+`native_resolve_x` handles an unresolvable `import` by printing to stdout and
+`exit(1)`. Forking contains that, but the user still gets nothing: no squiggle,
+just a line in a log. So `diag.check` resolves the buffer's imports **itself**
+first (`diag.missing_imports`, using `scan` spans — `import` is a *contextual*
+word, not one of the twelve keywords, which is the kind of detail that makes this
+silently return nothing) and reports a diagnostic on the line of the import.
+
+It then returns those diagnostics *alone*. With a file missing there is no
+program to check, so anything else would be a cascade off the same cause, and a
+wall of red for one typo is how a user learns to ignore the panel. They come back
+as soon as the import resolves, because the editor re-checks on every keystroke.
+
+### 4.5 What the server does *not* do
+
+It does not run the emitter, the assembler or the ELF writer. `yserve` never
+imports `asm.y`, `elf.y`, `arch_x64.y`, `enc64.y` or `dwarf.y` — and it could not
+pull in the prelude by accident either, since the compiler's own assembly now
+lives in `src/y/arch/*.s` (`prelude.s`, `threads.s`) embedded by both copies
+(`PORTING.md` rule 11), rather than being written inline in `arch_x64.y`.
+Diagnostics stop at `lint_unit`, which is the last thing `compile_unit` does
+before codegen (`compile_unit`'s error short-circuit). A smaller binary, and no way to
+accidentally write a file.
+
+---
+
+## 5. Repository layout
+
+```
+src/tools/lsp/yserve.y        entry point, framing, fork, pack
+src/tools/lsp/json.y          JSON value, parser, emitter       §7
+src/tools/lsp/rpc.y           Content-Length framing, dispatch    §7
+src/tools/lsp/pos.y           line tables, byte ↔ UTF-16, ranges  §8
+src/tools/lsp/scan.y          tolerant span scanner              §5.1, R2, R3
+src/tools/lsp/sem.y           semantic tokens (M2)                R2
+src/tools/lsp/sym.y           documentSymbol / the outline        R2
+src/tools/lsp/scope.y         declarations, visibility            R4, R5, R6
+src/tools/lsp/nav.y           the word at the cursor, and its declaration  R4-R6
+src/tools/lsp/fmt.y           the formatter                       R3
+src/tools/lsp/diag.y          diagnostics: errors and warnings    R1
+src/tools/lsp/dispatch.y      the parent/child split              §4.2
+src/tools/lsp/serve.y         the server: methods, pipeline       §7
+
+# `scope.y` was `index.y` until M4. An `import` binds the module's BASENAME as
+# a name in the shared namespace, and native.strip_ns rewrites every `name.field`
+# in the WHOLE program as a qualified module reference -- so a module called
+# `index` turned the compiler's own 42 `index.idx` / `index.arr` reads in
+# src/y/types.y into module-qualified names that do not exist, and every one came
+# back as "undefined variable" from inside types.y with nothing pointing at the
+# server. `check-names.py` now tests each module's basename for this.
+
+src/tools/lsp/vscode-y-lang/  the VS Code extension (existing)
+
+src/y/std/json.y             the JSON module (M-json, §15)
+```
+
+`src/tools/` is where tools live — the dead `lsp` and `as` prototypes already
+sit there, and this plan takes over `src/tools/lsp/` rather than adding a
+parallel directory.
+
+### 5.0 Why not `src/y/lsp.y`
+
+`PORTING.md` requires `src/c/` to be a **1:1 copy** of `src/y/`, enforced by
+`test_port.sh`, which compiles every `test/y/**.y` with both compilers and
+requires byte-identical binaries. A module in `src/y/` therefore implies a
+`src/c/` twin — and, per `AGENTS.md`, a twin written under the C value model
+(`yv.h`: `none|bool|long|float|str|array|record`) which has **no function
+value**, so every callback-shaped structure would have to be avoided.
+
+`src/tools/` modules are modules of a *program*, exactly like
+`src/y/std/*.y`, which `PORTING.md` records as "stay Y". There is no twin and
+none is wanted. `yv.c`/`yv.h` (see `PORTING.md`'s module map) is the existing precedent for
+"no Y twin".
+
+**`PORTING.md` and the layout section of `AGENTS.md` need a line saying so**,
+or a later reader will try to port `src/tools/`. That is a follow-up, listed
+in §12.
+
+### 5.1 `scan.y` — the tolerant span scanner
+
+One byte-level pass over the buffer that produces a classified span list:
+
+```
+{ off: long, end: long, kind: long, line: long, col: long }
+```
+
+with `kind` covering at least: line comment, block comment, string, byte
+string, char, f-string (with its interior fields delimited separately),
+number (int / float / radix), identifier, keyword, contextual keyword,
+operator, punctuation, and `error`.
+
+It has three jobs, and two of them exist because the lexer cannot do them:
+
+- **Comments.** `tokenize` discards them entirely. Nothing downstream of the
+  lexer can recover them; the AST has no comment representation.
+- **Unterminated literals.** `scan.y` reports them as a diagnostic *and*
+  returns a **repaired buffer** — the closing quote, or `*/` — so `tokenize`
+  is never reached with input that would hit either `exit(1)` in `lexer.y`. The
+  repair is for the child process only; the buffer the editor holds is never
+  modified.
+- **Source spans.** See R2 for why these cannot come from `tokenize`.
+
+`scan.y` and `tokenize` are two classifiers over the same bytes and must agree
+on where every token begins. §11 makes that a test, not a hope.
+
+**It is not a formality: the test found two real bugs in `scan.y` on its first
+run over the corpus**, both in numbers. A `.` only joins a number when a digit
+follows it, so `in 0..1000` is three tokens (`num 0`, `op ..`, `num 1000`) —
+without that rule the scanner read `0.` as one number and the range operator
+lost its start, in 13 corpus files. And a radix prefix with no digit of its own
+radix (`0x`, `0x_`, `0b2`) is not a number: the lexer takes the following word
+characters into the bad literal and reports it once, and so must the scanner.
+
+The corpus is 493 `.y` files — `src/y`, `src/tools`, `bench`, `test/y`. Two
+regions are excluded from the comparison, and both exclusions are *reasons scan.y
+exists* rather than concessions: comments, which `tokenize` discards, and
+f-strings, which it desugars. The current result is 0 mismatches over ~407 000
+spans and ~423 000 tokens. A ninth file class -- text `tokenize` cannot lex at
+all, because an unterminated literal is `exit(1)` -- is checked separately: all 9
+such corpus files must be *repaired* into text that lexes, which is what stops
+the server dying on the first `"` a user types.
+
+The scanner has no `break` and no `continue` either -- written before Y had
+them, so every early exit is still a flag. That is now a choice rather than a
+constraint: `scan.y` could use `break`/`continue` (TODO.md §5 is only the
+*labelled* form). It has not been converted, because the flags are already
+tested against the lexer by `test-agree.sh` and a rewrite would put that
+agreement at risk for no gain in speed or size. An unclosed block comment needs
+its own `ran_out` state either way: left to the loop condition, `bump` takes
+the cursor to the end of the buffer and then takes nothing, and it spins.
+
+---
+
+## 6. Requirements
+
+Severity for diagnostics follows `code`: 1 = error, 2 = warning. VS Code's
+`DiagnosticSeverity` numbering is used unchanged.
+
+### R1 — Errors and warnings (M1)
+
+**R1.1** On `textDocument/didOpen`, `didChange` and `didSave`, publish
+diagnostics for the document within 300 ms of the last keystroke.
+
+**R1.2** Diagnostics come from `types.check_program` and `lint.lint_unit`, in
+that order, with **no code path in between**. `yserve` must not use
+`native.emit_program` or `native.compile_unit`, because `compile_unit`
+short-circuits: when `len(errors) > 0` it returns before lint ever runs
+(`compile_unit`'s error short-circuit). An editor must show both an error and the warnings
+around it; the command line never has to.
+
+**R1.3** All diagnostics are reported, not just the first. The checker
+guarantees this through its error-poison type: every error site yields
+`t_unk()` (`types.t_unk`), and `teq` (`types.teq`) matches `tunk` against
+everything, so one root cause produces one message and no cascade. The
+server must not deduplicate, and must not apply the same-position filter
+the same-position filter in `ycc.y` applies when printing.
+
+**R1.4** A diagnostic is positioned by `(origin_file(line) → path, line,
+column)`. The compiler's positions are 1-based with the **column counted in
+bytes** (stated in the manual under *Integers*), always in *spliced-line*
+space; the
+origin map (`native.y`'s `Origin` comment) maps a spliced line back to its file and its
+line there. Conversion to LSP positions is §8.
+
+**R1.5** A diagnostic covers a real range, not a point. The end is the end of
+the token beginning at the diagnostic's position, looked up in the token list
+the server already holds; 1 character when no token starts there (a synthetic
+or operator position).
+
+**R1.6** `-w` equivalent: a `y.lsp.warnings` setting maps to `wlevel` 0 or 1.
+Level 1 adds the two dropped-value checks and the empty-`else` check, all gated
+on `wlevel` in `lint.y`. Off means `wlevel` 0, never "no warnings".
+
+**R1.7** Diagnostics are published per document. A diagnostic whose origin is
+an imported file is published against that file's URI, so a typo in an
+imported module is visible without opening it. Publishing for the root
+document also publishes empty arrays for files whose diagnostics went away.
+
+**R1.8** `y.lsp.checkOnChange` (default on). With it off, only `didSave`
+publishes. Compilation is skipped entirely for unopened changes.
+
+**R1.9** Unsaved buffer contents are what gets checked. `native_resolve_x`
+takes source text, not a path (`native.native_resolve_x`); the `native_resolve_x` call in `ycc.y` is the only
+`fs.read_file` in the pipeline. The document arrives from `didChange`.
+
+**R1.10** Non-parsing input is a diagnostic, not a crash. A `ferr` token
+(the lexer's `ferr` sites) becomes a parse error (the parser's `ferr` re-raise) and is reported
+like any other.
+
+### R2 — Highlighting (M2)
+
+**R2.1** Semantic tokens are the **only** highlighter. The TextMate grammar
+is removed from `package.json`'s `contributes`. The grammar file stays in the
+repository, unregistered, so re-enabling it is a one-line revert.
+
+**R2.2** Spans come from `scan.y`, never from `tokenize`. f-strings are
+desugared *inside the lexer* (`lexer.lex_fstring`): `f"a{x}b"` is emitted as
+`(" " + #fmt(x, "") + "b")`, with positions rebased onto the original text
+(the position rebasing inside `lex_fstring`) so they stay in range — but several synthesized tokens
+share one position and none has an extent. The token stream cannot yield
+source spans for an f-string.
+
+**R2.3** The legend covers, at minimum: comment, string, number, keyword,
+`self`/`none`, variable, parameter, function, method, type, builtin,
+operator, punctuation. The last six are **semantic** and require §9.2; until
+M4 they are omitted and those bytes are classified syntactically only. A
+`y.lsp.semantic` setting turns the semantic layer off for users who do not
+want two colours for the same identifier.
+
+**R2.4** Tokens are emitted as an LSP delta against the previous document
+state, and must survive the round trip: for every fixture, re-deriving
+absolute positions from the delta must reproduce the server's own token list
+byte for byte.
+
+**R2.5** A buffer that does not tokenize still highlights. `scan.y` is
+tolerant, so an unterminated string highlights as a string with an error
+marker rather than blanking the file.
+
+### R3 — Formatting (M3)
+
+**R3.1** `textDocument/formatting` returns **one** `TextEdit` replacing the
+whole document. Minimal diffs are not attempted; VS Code handles a full
+replacement well and it removes the need for a diff algorithm in Y.
+
+**R3.2** The target style is **derived from `src/y/`** — the compiler's own
+~20 000 lines. Four-space indent, brace on the same line, spaces around binary
+operators, none inside parentheses. The tree staying diff-clean against
+itself is the strongest available signal that the formatter is correct.
+
+**R3.3** Formatting never consults the AST. It walks the token stream and the
+comment spans from `scan.y`, merged by offset. Consequences, all intended:
+
+- it works on a file that does not parse;
+- comments survive, because `scan.y` finds them;
+- the f-string spelling survives, because it is never desugared;
+- `x!`, `?:` and implicit-return blocks are left as written.
+
+**R3.4** If the buffer does not tokenize, return **no edits**. Never rewrite a
+broken buffer.
+
+**R3.5** Idempotent: `format(format(x)) == format(x)`, byte for byte, over
+every `.y` file in `test/y/` and `bench/y/`.
+
+**R3.6** At most one blank line is preserved between items, and only where the
+input had one. Trailing whitespace is removed -- except the run of spaces
+*before a trailing comment*, which is the author's alignment column and is kept.
+The file ends with exactly one newline.
+
+**R3.6a** **Author layout is copied through, not normalised.** Two cases:
+
+- *Inside a bracket that spans lines*, every gap is emitted verbatim. src/y/
+  lays record literals out in columns --
+  `times: [{ name:"a:split", us:t1 - t0, heap:h1 - h0 },` -- and normalising
+  that destroys a table. The formatter normalises the spacing of a single line
+  and leaves a layout the author built across lines alone.
+- *A trailing comment* keeps its column.
+
+This is the difference between a formatter people leave switched on and one they
+turn off. It also means the formatter is conservative rather than canonical,
+which is the right trade for a language whose own source is hand-aligned.
+
+**R3.6b** What the formatter deliberately does NOT reproduce: src/y/ closes
+nested **blocks** tight (`{ ... }};`) but pads nested **records**
+(`{ k: v } }`). Telling them apart needs to know what each brace opened, which
+is parser knowledge this does not have (R3.3), so the padded form wins -- it
+never runs two constructs together. The same goes for the 46 tight-brace
+outliers against 1651 padded ones: the formatter writes the house style.
+
+**R3.6c** The measured residue on `src/y/` (29 files, both compilers):
+5 byte-identical, 1184 differing lines, of which ~285 are the column-aligned
+continuations of R3.6a, ~46 the tight-brace outliers of R3.6b, and the rest
+blank-line collapsing and a trailing-newline normalisation (`labels.y` and
+`tags.y` ship without a final newline; R3.6 adds one). Idempotence -- the actual
+requirement of R3.5 -- holds over all 487 files that lex.
+
+**R3.7** Rules live in one table, overridable per `y.lsp.format.*` settings:
+indent width, column limit, operator spacing.
+
+**R3.8** Also reachable as `yserve --fmt FILE`, so it is testable and
+fuzzable from the shell without a client.
+
+### R4 — Type information / hover (M4)
+
+> **Status: partly delivered, deliberately.** What shipped is the *declaration*
+> half — hover shows the declaration under the cursor (its signature as written,
+> plus the comment above it), resolved from this file's own declarations. The
+> *type* half (R4.1's `x + y` hovering as `long`) needs the checker's inference
+> recorded as it runs, which is §9.2 / C2 and a compiler change. It was left out
+> rather than approximated: a guessed type is worse than no type, because the
+> user cannot tell it from a real one. R4.4 is the case that decides it — a name
+> with no type shows the declaration and says so, which is what shipped.
+>
+> The requirement text below is unchanged and still the target.
+
+**R4.1** `textDocument/hover` returns the type of the expression under the
+cursor, rendered with `types.tstr` — the one spelling of a type, the same one
+diagnostics print and `typeof` returns, so a hover and an error message read
+alike. `x + y` hovers as `long`; `a[i]` as the element type of `a`; `p.field` as
+the field's declared type.
+
+**R4.2** Function hover shows the full signature: parameter names, parameter
+types, return type. The return type comes from `types.inferred_ret(line, col)`
+(`types.inferred_ret`), which is **already exported** and needs no compiler change.
+
+**R4.3** Types come from the checker's own inference, recorded as it runs
+(§9.2). The server never re-derives a type. A re-implemented resolver would be
+strictly worse than the real checker — the mistake `src/tools/lsp/check.y` already
+made.
+
+**R4.4** Hover on a name with no type (a package, a builtin used as a value)
+shows the declaration instead, and says which.
+
+### R5 — Go-to-definition (M4)
+
+> **Status: delivered for one file; cross-file (R5.1's "including imported
+> files") is not, and answers `null` rather than guessing.** Resolution is
+> `nav.find_decl` over `scope.index_src`'s declarations, with the visibility
+> rules that matter: a `let` is visible only after its own line (Y does not
+> hoist one), a `def` is visible before it (mutual recursion depends on it), the
+> innermost of several visible declarations wins, and at one depth the LATER
+> declaration wins — which is what the compiler does with a repeated top-level
+> `def` (BUGS.md 3), so a jump cannot land on a definition the compiler
+> discarded. `scope` records where each block opens *and* closes; without the
+> close a name from one function stayed visible for the rest of the file, and
+> because the inner declaration is the deeper one it won.
+
+**R5.1** `textDocument/definition` resolves to the `def`, `let`, `const`,
+parameter or `type` alias a name was bound to, anywhere in the compiled
+program — **including imported files**.
+
+**R5.2** Cross-file resolution is free once §9.2 exists. `rename_program_x`
+(`rename.rename_program_x`) runs over the whole *spliced* program and gives every binding
+a unique name `orig$N`, so a use in `main.y` of a `def` in `m133/m.y` already
+shares one unique name with its definition. The binding's position is in
+spliced space; `origin_file` turns it into a file URI and a
+line. No separate cross-file index is needed.
+
+**R5.3** `ycc build` packages are out of scope (see §3). A qualified package
+name resolves to its own unit if the package is in `nr.pkgs`, and otherwise
+returns nothing rather than guessing.
+
+**R5.4** Definition positions point at the **name**, not the keyword.
+Positions today are start-of-construct: a `let` reports at `let`, a `Dot` at
+the `.`, a `Call` at the `(` (the parser's `Call` site, `407-408`, `447`, `1649-1650`).
+§9.2 adds name positions where they are missing.
+
+### R6 — Auto-complete (M4)
+
+> **Status: delivered for this file's declarations and the builtins; R6.1's
+> "record fields of the expression before the dot" and R6.2's std/package
+> members are not, and the list says so** with `isIncomplete: true`, which is
+> the protocol's way of saying "ask me again as the user types". The builtins
+> are `native.intrinsic_names()` — read from the compiler, not copied here, so a
+> builtin added to the compiler appears without anything updated on this side.
+> Three entries in that list (`opt$test`, `opt$val`, `#fmt`) are the compiler's
+> own halves and are filtered out, because a `$` cannot appear in an identifier
+> and `#` starts a comment.
+
+**R6.1** `textDocument/completion` offers, in scope at the cursor: locals,
+parameters, `self`, top-level bindings, `type` aliases, and record fields of
+the expression before the dot.
+
+**R6.2** Global items need no compiler change and come from the compiler's own
+tables: `native.is_intrinsic_name` (`native.is_intrinsic_name`) for builtins,
+`types.str_method` (`types.str_method`) for the 23 string methods,
+`native.unit_iface` (`native.unit_iface`) for std unit exports, and `nr.pkgs` for
+package-qualified names. Local scope is the only part needing §9.2.
+
+**R6.3** The list is filtered by prefix, and each item carries `sortText`,
+`detail` (the type) and `documentation` (the doc comment above the definition).
+
+**R6.4** Completion must not block. It runs in the same forked child as
+everything else and is debounced identically to R1.1.
+
+---
+
+## 7. Protocol surface
+
+| Method | Direction | Milestone | Notes |
+|---|---|---|---|
+| `initialize`, `initialized` | ↔ | M1 | advertise `textDocumentSync` (full) and `documentFormattingProvider`; full sync for `textDocument/didChange` |
+| `shutdown`, `exit` | ↔ | M1 | |
+| `textDocument/didOpen` / `didChange` / `didSave` / `didClose` | → | M1 | full-document sync |
+| `textDocument/publishDiagnostics` | ← | M1 | **one per file**, so an import's findings land on the import |
+
+### 7.0 Advertise only what you answer
+
+The capability set is a promise, and VS Code keeps it. The first `initialize`
+advertised `diagnosticProvider`, which means **pull** diagnostics — the client
+asks, via `textDocument/diagnostic`. This server pushes, and push needs no
+capability at all.
+
+The result was worse than a log line. VS Code switched to pulling, got `-32601`
+for every document, and — having switched — **ignored the `publishDiagnostics`
+it was still being sent**. Every file had no diagnostics, while the
+hand-written test driver (which never pulled) passed. The advertisement is
+removed; the capability set is now exactly `textDocumentSync` and
+`documentFormattingProvider`.
+
+`client-check.js` now *behaves like the editor*: if `diagnosticProvider` appears
+in the capabilities it issues `textDocument/diagnostic` and fails if that does
+not answer, and it separately asserts the advertised set is exactly the two
+capabilities the server implements. Restoring the old advertisement was tried,
+and the test failed with the same `-32601` the editor reported — which is the
+only reason to believe the test would catch it again.
+
+Pull diagnostics are still worth having eventually: a pull report is
+version-tagged, so a client can discard a stale one rather than showing it. Until
+they exist, do not claim them.
+| `textDocument/semanticTokens/full` | ← | M2 | delta-encoded; `semanticTokensProvider` advertised only when it answers |
+| `textDocument/diagnostic`, `workspace/diagnostic` | ↔ | not planned yet | **not advertised** — see §7.0. Everything unimplemented is refused with `-32601`, never silence: a client blocked on an unanswered request is a hung editor. |
+| `textDocument/formatting` | ↔ | M3 | one full-document edit |
+| `textDocument/hover` | ↔ | M4 | |
+| `textDocument/definition` | ↔ | M4 | |
+| `textDocument/completion` | ↔ | M4 | |
+
+### 7.1 JSON
+
+`yserve` does not have its own JSON. It imports `json` like any other Y
+program, from **`src/y/std/json.y`**, specified in **§15**. There is no second
+implementation to keep in sync.
+
+Two things §15 does not cover, because they are the *server's* problem and not
+the module's:
+
+- **LSP-specific escaping.** `json.emit` escapes `"` `\` and the C0 range,
+  which is what a correct JSON emitter must do. Compiler diagnostics are
+  routinely multi-line, so if §15's emitter ever omits the control escapes this
+  is where it shows up. `yserve` additionally escapes `/` and the U+2028/9
+  line separators, which `JSON.parse` accepts but some JavaScript hosts treat as
+  line terminators inside string literals.
+- **The union trap is paid once, in `json.y`.** Every parse function there uses
+  the `let out: Json = …; out` shape, because the VOID law
+  (the manual's *Disagreeing `if` arms*; `AGENTS.md`'s "VOID law") means
+  the expected type does not propagate into an `if`'s arms, so *no expression in
+  Y produces a union value* — only a cast into a position that already declares
+  one. Callers narrow with `if let`, which is a normal cast and is fine. Note
+  `if let some(x) = o` — lowercase `some`, the constructor; `Some(x)` is not a
+  pattern and the parser reads `Some(x) = o` as an assignment. And `else if let`
+  is not a form: an `if let` chain is written as consecutive `if let`
+  statements.
+
+Numbers in JSON-RPC are small integers (`id`, line, character, `newIndex`);
+`tonum` covers every one of them, and no LSP number exceeds 2^53.
+
+### 7.2 Framing
+
+`Content-Length: N\r\n\r\n` then exactly N bytes. Reading is a loop over
+`fs.read_some(0, 65536)` (`std/fs.y`'s `read_some`) into a buffer: one `read(2)` can
+return a partial frame, and the header must be scanned byte-wise for the
+blank line. An empty result is EOF and ends the loop. Writing is one
+`syscall(1, 1, msg, len(msg))` per message — `y_put_hstr` (`std/rt.y`'s `y_put_hstr`)
+already does exactly this, unbuffered, which is the right shape for a framed
+protocol.
+
+Nothing is ever written to stdout that is not a frame. The compiler's own
+`puts("error: …")` calls write to **stdout** (the error printer in `ycc.y`), which is why
+process isolation matters and why `scan.y` must intercept the unterminated
+literal cases before they are reached.
+
+---
+
+## 8. Positions and encoding
+
+LSP positions are **UTF-16 code units**. The compiler's are **1-based bytes**
+(stated in the manual under *Integers*), with no UTF-8 awareness anywhere in
+the tree.
+
+### 8.1 Byte offsets without touching the lexer
+
+`lexer`'s `Tok` has `{ t, v, line, col }` — **no byte offset and no end
+position**. This looks fatal for ranges, token merging and edit construction.
+It is not, because the splice is line-preserving (the splicer keeps
+whole lines) and the column is a byte offset within the line. So:
+
+```
+line_starts(src) -> [long]     // line_starts[i] = byte offset of line i+1
+                              // split(src, "\n"), accumulate len(line)+1
+off(line, col) = line_starts[line-1] + (col-1)
+```
+
+Exact, and it means **M1–M3 require no change to `lexer.y`, `parser.y` or
+`types.y`.** The same table converts the other way.
+
+### 8.2 UTF-16 conversion
+
+Server-side, not client-side, because the server has the file text for every
+document including imported ones the client may not have open. For a byte
+column, walk the line's bytes from its start and count UTF-16 units: a 4-byte
+sequence is 2 units, a 2- or 3-byte sequence is 1, ASCII is 1. A file with
+non-ASCII source is the case that makes this necessary, and it must have a
+test.
+
+CRLF: `\r` is whitespace to the lexer (`lexer.isspace`) and only `\n` advances
+the line, so a `\r` counts toward the byte column and must be handled in the
+line table.
+
+### 8.3 Per-file text
+
+The spliced text is all `native_resolve_x` returns, and the origin map gives a
+path per spliced line. UTF-16 conversion needs each file's own bytes, so the
+child keeps `path -> { text, line_starts }`, populated from disk on first need
+and from the editor for the root document. Imported files are read from disk;
+only the root buffer is live. That is the normal LSP model, and
+`workspace/didChangeWatchedFiles` is how it improves.
+
+---
+
+## 9. Compiler changes
+
+**None so far.** M1, M2 and M3 are done with zero edits to `src/y` or `src/c`.
+One planned change was found to be unnecessary and one is recorded as a bug.
+
+### 9.1 C1 — two exports: NOT NEEDED
+
+The plan was to export `native.unit_externs` (to build the `ext` symbol list the
+checker binds) and `native.origin_file` (to map a diagnostic to its file), and
+M0 existed to prove the edit byte-free before building on it.
+
+**M1 does not need either, and so M0 has nothing to prove.** Both were
+reconstructed in `diag.y` instead:
+
+* `diag.externs_for` rebuilds `ext` from `std_units(...)`: a unit's exports are
+  bound when `std_unit_bound(u.name)` *and* the program named it. Both are read
+  off `Unit`, which is reachable through the flattened namespace.
+* `diag.file_of` renders `native.origin_at(o, ln, false)` — exported — and takes
+  everything before the last `:` as the path.
+
+The cost of the reconstruction is drift, so it is **pinned behaviourally rather
+than trusted**: `t007_diag.y` checks that a program calling `readline()` produces
+*no* undefined-variable error, which is exactly what a wrong `ext` would break.
+The prelude is the only bound unit besides `exec`, so the filter is two cases.
+
+`origin_file` remains the right API and C1 remains the right cleanup, but it is
+now a refactor rather than a blocker. Do it when `refs/ycc.ref` is next
+reblessed anyway; do not do it to unblock the server.
+
+### 9.1a A compiler bug this work found
+
+`native.norm_path` drops `.` from a path but never collapses `..`, so the same
+file reached two ways compares as two files and the import splicer splices
+`std/fs.y` twice — 97 duplicate-definition errors. It only bites when a module
+is reached by a path containing `..`, which is to say only for code outside
+`src/y/`. Full reproduction, cause, suspected fix and the workaround in use are
+in **`BUGS.md`**, under *"`import fs;` twice resolves to two files"*. The fix is
+about five lines in `norm_path` and is worth doing before any other tool lands in
+`src/tools/`.
+
+### 9.2 C2 — an index of what the compiler already computes (M4)
+
+The checker computes the type of every expression and the checker and renamer
+both know where every binding was defined. All of it is discarded:
+
+```
+types.Binding     = { name: str, typ: Type, kind: str, fdepth: long };   ← no line, no col
+types.TcSt        = { bindings: [Binding], errors: [Diag], ret, self, fdepth };
+types.check_program(ast, ext) -> [Diag]                              ← bindings not returned
+types.typeof_expr  (st, node) -> TcRes                                 ← the type flows out, then drops
+rename.rn_bind     (st, orig) -> { st, uniq }                               ← the def site drops
+```
+
+`Node` has no `typ` field, so there is no hover data, no go-to-definition data
+and no scope chain to complete from. The one exception is already free:
+`inferred_ret(line, col)` (`types.inferred_ret`) is exported.
+
+Three edits:
+
+1. **`types.Binding` gains `line` and `col`.** Every `st_bind` site has the
+   node in hand. On `src/y/ycc.y` the binding list runs to several thousand
+   entries, so this is a real but small memory cost — `make bench` will say.
+2. **An expression type table behind a flag.** `let tc_index: bool = false;`
+   in `types.y`, following the existing `lint_ofile` / `dbg_lines` /
+   `rn_ofile` module-global pattern. When set, `typeof_expr` also records
+   `(line, col) -> Type` in a bucketed table shaped exactly like the one
+   `inferred_ret` already reads (`types.inferred_ret`, keyed
+   `line * 65536 + col`) — a pattern already proven at this scale in this
+   codebase. Reset it in `check_program` beside `inf_bkts`/`tc_ixn`.
+3. **`rename_program_x2` returns the def sites.** `rn_bind` records
+   `uniq -> (line, col)`. The new entry returns `{ ast, defs }`;
+   `rename_program_x` (`rename.rename_program_x`) becomes a thin wrapper returning
+   `ast`, so `ycc.y`, `native.y` and `pkg.y` do not change.
+
+Plus **name positions** where they are missing, for R5.4: `Decl` needs the
+name token's line/col, and `Dot` the key's. The parser has the token at both
+sites.
+
+**The honest cost:** a module-level `bool` cannot be hoisted, so the
+checker's hottest loop gains a predictable branch. This is the one change in
+the plan that is not free, and it is why M4 is a separate milestone behind a
+measured M1–M3. `make bench-ir` gives the exact instruction delta per
+benchmark and for `ycc.y` itself; if it is material, that is a conversation
+before `make rebless`, not after.
+
+---
+
+## 10. Build and packaging
+
+**Done**, in the `Makefile`:
+
+```make
+yserve: $(LSP_SRC) src/y/std/json.y cycc
+	@rm -f yserve _yserve0 _yserve1 _yserve1p
+	./cycc -o _yserve0 src/tools/lsp/yserve.y
+	$(call PACK,_yserve0,yserve)
+	$(YREF) -o _yserve1 src/tools/lsp/yserve.y
+	$(call PACK,_yserve1,_yserve1p)
+	cmp yserve _yserve1p
+```
+
+`PACK` is the existing recipe: build, then append the std pack. `yserve` reads it
+back from `/proc/self/exe` with its own `ys_self_pack`, framed exactly as
+`ycc.y`'s `self_pack` does — `[pack][length, 8 digits][YCCPACK1]`. It is **not**
+added to `YCC_SRCS` and never becomes a dependency of `ycc`: it is a program, not
+a compiler module.
+
+The `cmp` is the point. `yserve` imports `types.y`, `native.y`, `parser.y`,
+`rename.y` and `lint.y` **by path**, so it is the only program in the tree that
+exercises the C copy's version of all of them at once. Any divergence between
+the copies that no other program reaches shows up here.
+
+### 10.1 The pack, and why the server needs one
+
+Without a pack, `std_units(names, "")` compiles the std units **from source** —
+and that happens in *every child*, on *every request*. So the pack is not a
+packaging nicety; it is most of the latency.
+
+`yserve --std-pack FILE` compiles the units and writes the frame, then exits
+without serving (it is a build step, so no frame is written and stdout stays
+empty). `--std-src` ignores an attached pack. Measured on a 400-line buffer with
+an import, over three runs:
+
+| | wall clock |
+|---|---|
+| `--std-src` | 9 ms |
+| attached pack | 5 ms |
+
+And the two produce **byte-identical** output, which is the check that matters:
+the pack is an optimisation, never a behaviour change.
+
+### 10.2 Std module resolution
+
+`std_resolve` anchors its search on `argv()[0]`'s directory, and one of its
+candidates is `<exe dir>/src/y/std/`. So a `yserve` run from the repo root
+resolves `import fs;` with no packaging at all; an installed one needs a `std/`
+beside it. That is a packaging requirement, not a bug, and it belongs in the
+extension's README.
+
+### 10.3 `make test-fast`
+
+`run_all.sh` skips the seven suites that need a built `./ycc`. The `lsp` suite
+does **not**: its fixtures compile under `./cycc` and `$(YREF)`, neither of which
+needs a build. So `lsp` runs under `make test-fast`, which is intended — it is
+the same shape as every other fixture suite.
+
+`make lsp-e2e` builds `yserve` and runs `test-e2e.sh`. It is a separate target
+because it needs a process per case.
+
+### 10.3a What "no syntax highlighting" turned out to be
+
+The grammar was unregistered from `package.json` on the strength of R2.1, which
+assumes M2 lands next. It did not, so between the two the extension had **no
+highlighter at all** and VS Code fell back to bracket matching — which is exactly
+what was reported. The sequencing was wrong, not the decision: R2.1 is right, and
+`sem.y` now exists, so semantic tokens are the only highlighter as specified. Had
+M2 not been reachable, the honest move would have been to put the one-line
+revert back rather than leave the user with nothing.
+
+### 10.4 The extension — **done**
+
+`src/tools/lsp/vscode-y-lang/`, extended rather than replaced:
+
+| | |
+|---|---|
+| `package.json` | `main`, `activationEvents: ["onLanguage:y"]`, the three `y.lsp.*` settings, and **no grammar** (R2.1) |
+| `src/extension.ts` | activation: find the server, start it, report its death, gate the unimplemented features on the server's advertised capabilities |
+| `package.json` → `contributes.commands` | `y.formatDocument`, `y.restartLanguageServer`, `y.showServerOutput` |
+
+**Almost none of the extension is code.** Diagnostics, formatting, semantic tokens
+and the outline are all registered by `vscode-languageclient` from the
+capabilities the server advertises, so four of the six features cost **no
+TypeScript at all**. The one thing that looks like it must be kept in sync and is
+not: the semantic token legend. The library builds the VS Code legend *from the
+server's* (`asSemanticTokensLegend(options.legend)`), so the two cannot disagree —
+a client-side copy would be wrong, not merely redundant.
+
+`y.formatDocument` exists because "Format Document" is registered automatically
+and can still be undiscoverable. A command registered in code but **not declared**
+in `contributes` does not appear in the palette and shows no title anywhere: it
+works when invoked by id and is invisible to the user. `activation-check.js`
+compares the two lists.
+| `src/client.ts` | where to find `yserve` and with what arguments — pure logic, so it is testable with no process |
+| `README.md` | rewritten for a server-backed extension |
+| `y-lang-0.2.0.vsix` | the installable artefact (301 KB) |
+
+Diagnostics and formatting need **no code**: `vscode-languageclient` registers
+them from the capabilities the server advertises. Semantic tokens, hover,
+definition and completion are gated on the same advertisement, and deliberately
+so — registering a provider the server does not implement sends the request on
+every hover and fills the log with `MethodNotFound`.
+
+#### Two packaging traps, both caught by a test rather than by a user
+
+1. **`vscode-languageclient` must be in `dependencies`, not
+   `devDependencies`,** and `.vscodeignore` must NOT list `node_modules`. Either
+   one alone makes `vsce` ship a `.vsix` that cannot `require` anything. The
+   first `.vsix` built here was 9.95 KB with no runtime dependency in it — it
+   would have failed on activation for every user.
+2. **`main` and `activationEvents` were absent.** The extension contributed a
+   grammar and never ran.
+
+`activation-check.js` asserts the manifest *before* loading anything, so both
+are caught by a test.
+
+#### `yserve` is not shipped inside the `.vsix`
+
+The extension finds the binary at runtime (§10.2, and the search order in
+`client.ts`). Baking it in would tie every install to the machine it was built
+on, and `std_resolve` already finds `src/y/std/` relative to the executable.
+
+#### Two Node tests, and why a hand-written driver is not enough
+
+`test-e2e.sh`'s python driver speaks the protocol by hand. That proves the server
+does what *its author* thinks the protocol says — and it was perfectly happy
+with a missing URI slash and a `version: 0` the spec does not allow. So:
+
+- **`client-check.js`** drives `yserve` with **`vscode-jsonrpc`**, the JSON-RPC
+  library VS Code itself uses, through the exact sequence an editor sends
+  (initialize → didOpen → didChange → formatting → didSave → didClose →
+  shutdown → exit). 20 checks.
+- **`activation-check.js`** runs the extension's `activate()` against a stub of
+  the `vscode` module and asserts it registers its commands, spawns the server,
+  reaches `Running`, and says something *useful* when it cannot start. 21
+  checks. The stub answers unknown names with a **class**, so a call the library
+  makes on something the stub did not model fails loudly instead of returning
+  `undefined`; every entry in it exists because `vscode-languageclient`'s feature
+  registration really needed it.
+
+Both skip themselves when `node_modules` is absent, so `make lsp-e2e` works in a
+checkout that has never run `npm install`.
+
+#### A bug the activation test found
+
+`onDidChangeState` reported `Stopped` as an error. The client passes through
+`Stopped` on the way *up*, so every successful start flashed a red status bar for
+a moment. It now only reports a stop after a start.
+
+## 11. Testing
+
+### 11.1 Diagnostics sweep — registered in `make test`
+
+`test/sh/test_lsp.sh`, added to `run_all.sh`'s `ALL` and sharded with
+`next_case`. For every fixture, drive `yserve` with scripted frames and assert
+it reports **every** marker in the file:
+
+- all **144** `test/y/native/e*.y` against their `// expect-error:` lines;
+- all **145** `test/y/native/t*.y` against their `// expect-warning:` lines.
+
+The marker syntax is what `test/sh/test_native.sh` already parses: `grep -o`
+for `// expect-error: `, a trailing-`LINE:`-anchored `// expect-warning: `, both
+substring-matched, with the warning side requiring the count of markers to
+equal the count of warnings.
+
+This is ~3 s of CPU — the existing `test_native.sh` takes 3.7 s for the same
+289 fixtures across both compilers — and `run_all.sh` runs suites with `-j`
+and shards the long ones, so `make test`'s wall clock barely moves. It is a
+legitimate gate because it asserts a real compiler property: that the checker
+and the linter still report all their diagnostics.
+
+`test/COVERAGE.md` needs a row, or `test_coverage.sh` fails on a manual
+section with no coverage.
+
+### 11.2 Formatter — deliberately **not** in `make test`
+
+Idempotence over `test/y/**.y` and `bench/y/*.y` lives in its own
+`make test-fmt`. A formatter bug is not a compiler bug and must not block a
+rebless of `ycc`. Registering it in `run_all.sh` would couple the two.
+
+### 11.3 Scanner, encoding, tokens
+
+- `scan.y` and `tokenize` must agree on every token start, over the whole
+  corpus. A disagreement is a highlighting bug and a parsing bug.
+- UTF-16 conversion: fixtures with non-ASCII identifiers, strings and comments
+  at known columns.
+- Semantic token delta round-trip (R2.4).
+- Unterminated `"`, `'` and `/*` in every context — including inside an
+  f-string field — must produce a diagnostic and never kill the child.
+
+### 11.4 Fuzzing
+
+`test/fuzz/fuzz.sh` gains the LSP entry points. A crash, timeout,
+`runtime error:` trap, `INTERNAL`, or divergence between `yserve` and the
+reference becomes a saved finding, as it already does for `ycc`. The
+formatter's crash/hang surface is much larger than the compiler's — it runs on
+arbitrary bytes — so it gets its own mutations first.
+
+---
+
+## 12. Milestones
+
+Each ends green on `make test`.
+
+| | | Acceptance |
+|---|---|---|
+| **M-sugar** | C3 then C5: recursive aliases through `[T]`/`T?`/`{K=>T}`, then `json{ }` / `json[ ]` literal syntax (§16) | Literals parse, typecheck as `json.Val`, and agree with `parse`/`stringify` of themselves; **no existing program changes meaning** (`make corpus-diff`); manual + `COVERAGE.md` + fixtures. Independent of M-json. |
+| **M-json** | `src/y/std/json.y` (§15) | Parses and emits every case in `test/y/native/tNNN_json.y`; round-trips losslessly; compiles warning-free; a manual section, a `COVERAGE.md` row and a checked fixture all exist. **Blocks M1.** |
+| ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
+| **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
+| **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
+| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over 487 files; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done, Stage B not started.** `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `client-check.js` drives all three through the JSON-RPC library VS Code uses (53/53). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), string methods and record fields after a `.`, and the semantic token legend's semantic classes. |
+| **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
+
+### 11.1 Two bugs the work found in the compiler
+
+Both are in `BUGS.md` with reproductions; the second is the expensive one.
+
+1. **`norm_path` does not collapse `..`** (§9.1a), so a module reached through a
+   path with `..` in it resolves a by-name std import to a *different string* than
+   the program's own, the splicer's dedupe misses, and `std/fs.y` is spliced
+   twice — 97 duplicate-definition errors.
+2. **A duplicate `def` in the SAME file is not an error; the last one silently
+   wins.** `find_dup` only compares across files. A `python` edit that rewrote a
+   region of `sym.y` left **two** copies of `symbols` and **three** of
+   `add_child`; the compiler said nothing; the stale `symbols` — the version
+   *without* the fix — shadowed the new one on every call. Every read of the source
+   showed the correct code and every run used the other one.
+
+The second one is why `check-names.py` exists, and why it checks names rather than
+just definitions.
+
+### 11.2 Four bugs M4 found in the server
+
+None of these is in the compiler; all four produced answers that were wrong in a
+way a reader would believe. Recorded because each one has a shape worth
+recognising.
+
+1. **`header_text` dropped every single-word return type.** The span range that
+   collects the type after `->` was tested with `last > r + 2`, one token too
+   far, so `def f() -> long {` — the common case — contributed nothing and the
+   signature read `f()`. Since the language has return types everywhere, every
+   hover in the server looked like it was showing a language with none. It was
+   not caught for a while because `def f() -> long {` reads plausibly as a
+   signature.
+2. **`in_params` classified every call argument as a parameter.** The test was
+   "the token after the `(` is an identifier", which is true of every call in the
+   program — walking back from an argument reaches the call's own `(`. So
+   `print(shared)` indexed `shared` as a *parameter* of the enclosing def, and a
+   jump on it landed on the use instead of on the `let` a line away. What tells
+   a parameter list apart is what comes *before* the `(`: `def`, then the name.
+3. **Two position conventions in one field.** `scope_start` was packed from a
+   span's 1-based `(line, col)` while every other position in `IdxDecl` is 0-based
+   LSP, so a scope's start sat one line below the declaration it belonged to.
+   Related: only the *open* of a block was recorded, so a `let` inside one
+   function stayed visible for the rest of the file — and since the inner
+   declaration is the deeper one, it won. Fixed by recording where each block
+   closes as well (`FileIdx.closed`, `scope_end`).
+4. **A duplicate key in the test stub.** `vscode-stub.js` listed
+   `registerHoverProvider` and `registerCompletionItemProvider` twice, the second
+   time as bare no-ops. A duplicate key in one object literal is not a merge: the
+   later one wins silently. The recording versions were dead code, so
+   `activation-check.js` saw exactly one provider registration for a server that
+   registers six, and reported it as "the extension cannot start".
+
+### 12.1 What needed the compiler agent
+
+All four landed, and are part of the working tree:
+
+1. **`import json;` in `test/sh/test_fixpoint.sh`** — so `std/json.y` is compiled
+   by the suite that exists to keep std warning-free.
+2. **`test/sh/test_lsp.sh` [lsp]**, registered in `run_all.sh`, so `make test`
+   runs the fixtures, `check-refs.py` and the formatter.
+3. **`test/COVERAGE.md`** rows for the LSP, and `test_coverage.sh` taught to
+   recognise `lsp/test/t*.y` as a checked test (it requires the fixture **and**
+   its `.expected`, exactly as it does for a native fixture).
+
+`test_lsp.sh` also runs two static checks of its own, because both were once
+sources of silent breakage:
+
+- **`check-refs.py`** resolves every symbol `LSP.md` cites, so the design's
+  references survive the line-number drift in `src/y`.
+- **`check-names.py`** asserts that no two path-imported modules define the same
+  name, across the LSP's own modules *and* the compiler's 1 947. A path import
+  flattens, so a shared name is either a duplicate-definition error pointing at
+  the wrong file or — worse — one definition silently shadowing the other. Five
+  times while building the server; the worst shadowed `src/y/lexer.y`'s own token
+  type and produced **60 errors inside the compiler**, none in the file that
+  caused them.
+4. **`make yserve` / `lsp-ext` / `lsp-vsix` / `lsp-e2e`** (§10).
+
+`make yserve` does NOT depend on `make ycc`: the latter is the acceptance gate on
+the compiler and rebuilds it, so depending on it would make building the server
+fail with whatever the compiler's own state happened to be. It compares against
+`$(YREF)` instead.
+
+## 13. Risks
+
+1. **C2's branch in the checker's hot loop.** The one genuinely expensive
+   requirement. Measured with `make bench-ir` before anything is blessed.
+2. **Two classifiers over the same bytes.** `scan.y` and `tokenize` must
+   agree. A fixture sweep over the whole corpus is the mitigation; a
+   divergence is a parsing bug, not just a colour bug.
+3. **Semantic token cost.** A whole-document token array is re-sent on every
+   change as a delta. Large files will need the delta implemented correctly
+   rather than approximately.
+4. **Server down means no colours.** R2.1 replaces the grammar, so a server
+   that fails to start leaves the buffer uncoloured. The grammar file stays in
+   the repository precisely so this is a one-line revert.
+5. **Imported files are read from disk**, so go-to-definition is only as
+   fresh as the filesystem until `workspace/didChangeWatchedFiles` is handled.
+   Named as out of scope for v1 rather than discovered later.
+6. **`yserve`'s size.** It imports six compiler modules plus `json`; the binary
+   will be comparable to `ycc`. If that matters it can be cut by dropping the
+   std pack and compiling the std units from the embedded sources instead.
+7. **Compiler internals are cited by symbol, not by line** (see the note at the
+   top). This is the single biggest ongoing coordination cost between this work
+   and anyone else changing the compiler: a document that cites `native.y:NNNN`
+   needs reconciling after every refactor, and the reconciliation is always
+   somebody's afternoon. `check-refs.py` catches the residue.
+
+## 14. Reference — what exists today
+
+Reusable as-is, no compiler change:
+
+| | |
+|---|---|
+| `lexer.tokenize(src) -> [Tok]` (its export list) | the parser's lexer. Not usable for spans (R2.2). |
+| `parser.parse_program(toks) -> Block` (`parser.parse_program`'s export list) | error-recovering; plants `err` nodes, syncs at `;` and `}` (`parser.sync_stmt`). |
+| `types.check_program(ast, ext) -> [Diag]` (`types.check_program`) | all errors at once, via the `tunk` poison (`types.t_unk`, `teq` `:209`). |
+| `lint.lint_unit(ast, ast3, ofile, fmods, wlevel) -> [Diag]` | all warnings, sorted and deduped. |
+| `types.inferred_ret(line, col)` (`types.inferred_ret`) | exported already; function return types free. |
+| `native.native_resolve_x(src, base_dir, …)` (`native.native_resolve_x`) | takes **text**; the unsaved-buffer seam. |
+| `native.origin_file` / `origin_at` | spliced line → file + line. |
+| `native.strip_ns` (`native.strip_ns`), `rename.rename_program_x` (`rename.rename_program_x`) | the pipeline, in order. |
+| `native.std_units` (`:9489`), `unit_iface` (`:10805`), `unit_externs` (`:10817`) | std units and the checker's externs. |
+| `native.is_intrinsic_name` (`:2553`), `types.str_method` (`types.str_method`) | the completion item sources. |
+| `fork {}`, `wait_pid`, `mutex`, `sem`, raw `syscall` | the isolation and framing primitives. |
+| 289 diagnostic fixtures in `test/y/native/` | a ready-made regression corpus. |
+
+Must be built, all under `src/tools/lsp/`: `scan.y`, `json.y`, `rpc.y`,
+`pos.y`, `fmt.y`, `sym.y`, `serve.y`, `yserve.y`, the VS Code client, the
+Makefile target, `test_lsp.sh`.
+
+The old `check.y` / `check_main.y` / `test_check.y` / `build.sh` that used to sit
+here are **gone** (removed 2026-10-04; they targeted `./yboot`,
+`src/c/runtime.c` and `../../ycc/lexer.y`, none of which existed, used untyped
+parameters the checker rejects, and emitted JSON with no escaping). Their one
+sound idea — `check(src) -> [{line, col, severity, message}]` — is just the
+shape of `PublishDiagnosticsParams`, which the real pipeline already satisfies,
+so nothing is lost. Nothing in this directory is a compiler module: the only
+files here are this document and the extension.
+---
+
+## 15. `std/json.y` — a JSON module for Y
+
+M-json. `yserve` needs a JSON parser and emitter; Y programs at large need the
+same thing, and there is none. So it is a std module, not LSP-private.
+
+### 15.1 Module shape
+
+| | |
+|---|---|
+| Path | `src/y/std/json.y` — resolved from disk by `std_resolve` (`native.std_resolve`), like `fs`, `net`, `struct`. **Not embedded**, so unlike `str.y` it may use string literals freely (all seven existing disk-resolved modules do). |
+| Twin | **none.** A std module stays Y (`PORTING.md`, module map). |
+| Sibling precedent | `struct.y` — a pure encode/decode module over `[byte]`, no I/O, no platform. The closest existing thing. |
+| Also available | `regex.y` (a Pike VM over bytes) is a peer std module and a good model for a self-contained pure module; `fs`, `net`, `struct`, `crypto`, `x509`, `tls`, `http` and `regex` are the eight importable units. Only `fs` matters to `yserve` beyond the embedded four (`rt`, `str`, `prelude`, `exec`). |
+| Warning-free | `test_fixpoint.sh` compiles every `src/y/std` file with no warning. Compiled as a program its unit has no name, so `lint_unit` **does** run on it (`compile_unit`'s lint guard). Unused locals are errors here. |
+
+### 15.2 The value type, and why objects are bare maps
+
+The shape is dictated by one language rule. A union member may not be a bare
+map or array, because then the type refers to itself outside a record field:
+
+```y
+type Json = { str => Json } | JN;
+// error: type 'Json' refers to itself outside any record field or function type
+```
+
+Recursion **must** pass through a record field (`parser.y`'s `Node` union `type Node = …`
+and `parser.y`'s `Type` union `type Type = …` are both recursive unions over record
+members). So `Json` is a union of *records*, and an object needs a wrapper
+record inside it.
+
+But a wrapper record is not indexable, and **`o["thing"] = v` on a JSON object
+is the whole point**. So the object is kept *outside* the union, as a bare map:
+
+```y
+type Num  = { num: str };              // the literal text -- see J6
+type Str  = { s: str };
+type Bool = { b: bool };
+type Null = { nil: long };
+type Arr  = { items: [Val] };
+type JObj = { members: { str => Val } };  // wrapper: only for objects STORED in a tree
+type Val  = Num | Str | Bool | Null | Arr | JObj;
+
+// An object is { str => Val } -- a plain map. Index it directly.
+```
+
+**Every member needs its own field name.** This is not a style preference; it is
+what makes `if let` able to tell the members apart. A record type *is* its set
+of fields, so the obvious `Num = { v: str }` and `Str = { v: str }` are one
+type: `if let Str` matches a number, the arms overwrite each other, and
+`stringify` prints `{"a":"1"}` for `{"a":1}`. There is no discriminant on a
+union and no `typeof` that reveals one — distinct shapes are the only mechanism.
+Found by building it; see `src/y/std/json.y`.
+
+Recursion goes through `Arr`'s `[Val]` field and `JObj`'s `{str => Val}` field —
+both record fields, so the rule is satisfied. And the object you actually hold is
+a map, so this is the whole API:
+
+```y
+let o = json.obj();
+o["thing"] = json.num(1);          // direct index assignment -- no set()
+o["name"]  = json.str("x");
+o["flag"]  = json.boolean(true);
+o["void"]  = json.nul();
+
+let inner = json.obj();
+inner["deep"] = json.num(42);
+o["sub"] = json.jobj(inner);      // the one wrap (see below)
+
+let a = json.arr();
+a += json.num(1);
+a += json.str("two");
+o["list"] = json.jarr(a);
+
+json.stringify(o);
+// {"thing":1, "name":"x", "flag":true, "void":null, "sub":{"deep":42}, "list":[1, "two"]}
+```
+
+Verified to compile and run as written.
+
+**The one unavoidable wrap.** A map's value type is `{ str => Val }`, and `Val`
+contains the `JObj` wrapper (that is what makes recursion legal), so a nested
+object has to be wrapped by `jobj(map)` on its way into a tree, and `jarr(list)`
+for an array. A **top-level** object needs no wrap at all — `json.stringify(o)`
+takes the bare map directly. This is the irreducible price of the recursion
+rule; there is no encoding that avoids it. §16's C3 would remove it by allowing
+the alias to recurse through the map directly.
+
+**Maps pin their value type, so build with `obj()`, never with a literal.**
+`let m: {str => Val} = {};` then `m["a"] = …` accepts anything (verified), but
+a literal infers from its **first** entry and is then fixed:
+
+```y
+let m = {"a": { n: 1 }};
+m["b"] = { s: "x" };        // error: map value: expected { n: long }, got { s: str }
+```
+
+and the annotation is only *checked against* the literal, never propagated into
+it — `let o: {str => Val} = {"a": {v: 1}, "b": {v: "x"}}` still fails. This is
+the same rule `e25_map_value_type.y` documents (*"map values are homogeneous"*).
+So `obj()` is required, not sugar.
+
+**Keys are ordered.** A map is `{keys: [K], vals: [V]}` — two parallel arrays —
+so insertion order survives: `{}` then `"zebra"`, `"apple"`, `"mango"` gives
+`keys()` of `[zebra, apple, mango]` (verified). `stringify(parse(s))` therefore
+preserves key order, which a hashed map would not.
+
+`JNum` holds the **literal text**, not a number — see J6.
+
+### 15.2.1 Two entry points, not one
+
+`stringify` and `parse` handle the object case, because that is what JSON-RPC
+messages and most configuration files are, and because it is the case that can
+be a bare map:
+
+| | |
+|---|---|
+| `parse(s) -> {str => Val}?` | a top-level **object**; the result indexes directly |
+| `parse_val(s) -> Val?` | any value, including a top-level array or scalar |
+| `stringify(o: {str => Val}) -> str` | an object map |
+| `stringify_val(v: Val) -> str` | a scalar or an array |
+
+One function covering all three shapes is not available: a bare map cannot be a
+union member (that is the rule this whole section is about), so there is no
+single parameter type that accepts an object, an array and a scalar.
+
+### 15.3 Requirements
+
+**J1** `parse(s: str) -> {str => Val}?` — a top-level object, which the caller
+then indexes directly. `parse_val(s: str) -> Val?` for any value. Both return
+`none` on malformed input, never a trap, never a partial value.
+`parse_err(s) -> { ok: bool, value: Val?, err: str, at: long }` carries the
+message and the byte offset for callers that want them.
+
+**J2** `stringify(o: {str => Val}) -> str` and `stringify_val(v: Val) -> str`.
+Escapes `"` `\` and **the whole C0 range** as
+`\n \r \t \b \f \uXXXX`; `\b` and `\f` for 8 and 12. A raw control character in
+a string produces invalid JSON, and compiler diagnostics are multi-line, so this
+is not optional.
+
+**J3** Round-trip: for every input the fixture accepts,
+`stringify(parse(s)) == s` after canonicalisation. Holding the number's literal
+text is what makes this exact for floats.
+
+**J4** Numbers: integers via `tonum`, validated against the grammar first
+(`-?(0|[1-9][0-9]*)`), so `01`, `1.`, `.5`, `+1` and `1e` are rejected rather
+than silently coerced. `as_long(v: Val) -> long?` gives the integer value.
+
+**J5** Strings: `"` and `\` escapes, `\/\b\f\n\r\t`, `\uXXXX` with surrogate
+pairs, and rejection of a raw newline or an unescaped control character, per
+RFC 8259.
+
+**J6** Floats are carried as text, not as `float`. **Y has no string→float
+conversion at all** — `tonum` returns `long` and there is no `tofloat` anywhere
+in the tree. `{"x": 1.5}` therefore yields a `Num` holding `"1.5"`, which
+round-trips exactly and compares by text. `as_float` is **not** provided in v1.
+Producing a real `float` needs either a hand-written mantissa/exponent
+reconstruction (imprecise at the edges, and there is no `pow` to lean on) or a
+new `tofloat` builtin — a compiler change with a C twin and a rebless. That is a
+decision to take on its own merits, not inside M-json. For the LSP nothing is
+lost: JSON-RPC numbers here are small integers.
+
+**J7** `\uXXXX` needs a hand-written UTF-8 encoder, because **`chr` is
+byte-only**. Measured: `chr(v)` emits exactly one byte, `v mod 256` — `chr(256)`
+is `\x00`, `chr(300)` is `,`, `chr(8364)` is `\xac`. There is no codepoint
+semantics, so `chr(0xe9)` yields a Latin-1 byte, not the two-byte UTF-8 `é`.
+`json.y` encodes U+0080–U+07FF, U+0800–U+FFFF and U+10000–U+10FFFF itself, by
+pushing bytes into a `[byte]` and closing with `from_bytes` rather than `chr`.
+A lone surrogate is an error; a valid pair becomes one 4-byte sequence.
+
+**J8** Reads are the language's own: `o["k"]` on a map is `Val?`, and `!` or
+`is_some` take it. No accessor is needed for an object field, and no `set` is
+needed for a write — both are the point of §15.2. For the union members:
+`as_str(v)`, `as_long(v)`, `as_bool(v)`, each `-> T?`, which is what
+distinguishes "absent" from "present and empty"; and defaulted variants
+`get_str(o, k, d)`, `get_long(o, k, d)`, `get_bool(o, k, d)` for the common
+one-line read. Unwrapping a nested object costs one narrowing:
+`if let JObj sub = o["sub"] { sub.v["k"] }`.
+
+**J9** Names avoid `str`, `long`, `bool`, `float`. A def *may* shadow a
+primitive type name (verified — `def str(x: long) -> long` compiles), so this is
+not about the type system: an import splices names **flat**
+(`native.y`'s header), so `json.str` becomes a bare `str` in the user's program
+and then collides with the user's own `def str`, which `find_dup`
+(`native.find_dup`) reports as an error. `as_str` is unambiguous where `str` is
+not. This bit for real: a first draft of `json.y` defined `keys`, which
+shadowed the `keys` **builtin** inside the module itself and produced
+`'json.keys' arg 0: expected Json, got {str => Json}` on every call.
+
+**J10** Builders, kept to the minimum the language forces: `obj() -> {str =>
+Val}`, `arr() -> [Val]`, the two wraps `jobj(map)` / `jarr(list)`, and the
+scalar constructors `num`, `str`, `boolean`, `nul`. `obj()` and `arr()` exist
+because of §15.2's inference trap; `jobj`/`jarr` because of the recursion rule.
+There is deliberately **no `set`** — object writes are `o["k"] = v`.
+
+**J11** A depth limit, defaulting to 200 (`json_depth_max`), honoured by both
+`parse` and `stringify`. Both are recursive, so a document nested a few thousand
+deep would otherwise run either off the stack.
+The parser is recursive, and a deeply nested document is a stack overflow
+otherwise. `stringify_val` is likewise recursive and needs the same bound. This is the
+one place where "malformed input must never take the server down" needs an
+explicit knob rather than trust.
+
+**J12** Duplicate keys: **last wins**, matching how Y itself reports a duplicate
+record field — the warning is templated in `lint.y`: *duplicate `<what>`
+`<key>` in a `<kind>` literal; the last one wins*. Consistency with the language beats cleverness.
+
+**J13** A duplicate key must not silently corrupt the order guarantee: the
+second `o["k"] = v` overwrites the value in place, keeping the key's original
+position.
+
+**J15** `stringify` is **compact** — no space after a colon or a comma. That is
+what every JSON producer emits, and it is what makes `stringify(parse(s))`
+byte-identical to a canonically written `s` (J3). Verified in
+`t002_json_parse.y`.
+
+**J16** A helper that accumulates bytes and can fail must return a status, not
+the accumulator. `p_uescape` returned the byte buffer unchanged on a bad escape
+and the caller read that as success, so every malformed `\u` escape and every
+lone surrogate was silently accepted. Arrays are references and `+=` is in
+place, so the buffer can grow in place while the return value carries the
+success or the failure.
+
+**J14** Obligations, all enforced:
+- a section in `docs/src/09-builtins.tex` beside *The web* and *Cryptography*;
+- a row in `test/COVERAGE.md` — the gate fails on a manual section with no row,
+  and on a row naming a test that does not exist or does not check output;
+- `test/y/native/tNNN_json.y` with a checked `.expected`, covering: every
+  scalar type, nesting, empty containers, key order, each escape, each
+  `\uXXXX` class, surrogate pairs, a lone surrogate, duplicate keys, every
+  rejection case, the depth limit, and a `parse` → mutate → `stringify` round
+  trip that proves `o["k"] = v` needs no `set`.
+
+### 15.4 What this saves the LSP
+
+`json.y` replaces the LSP's own encoder and parser outright. `yserve`'s JSON
+surface is then `parse`, `parse_val`, `parse_err`, `stringify`, `stringify_val`,
+`escape`, `obj`, `arr`, `jobj`, `jarr`, `num`, `str`, `boolean`, `nul`,
+`as_str`, `as_long`, `as_bool` and the `get_*` variants — shared with every
+other Y program, none of them LSP-specific. Object reads and writes are the
+language's own `o["k"]` and `o["k"] = v`, so the LSP payload code reads like
+the JSON it is. The only JSON concern that stays in `yserve` is the extra
+escaping noted in §7.1.
+
+With M-sugar (§16) the surface shrinks again: `num`, `str`, `boolean`, `nul`,
+`jobj` and `jarr` become internal to the desugaring, and `yserve` writes
+`json{ "jsonrpc": "2.0", … }` instead.
+
+---
+
+## 16. M-sugar — JSON literal syntax in the compiler
+
+`json.num(1)` and `json.obj()` are the module compensating for the language.
+This milestone removes the compensation by changing the compiler, so JSON is
+written as literals.
+
+### 16.1 Why the module has to compensate: two independent blocks
+
+**Block 1 — recursion may not pass through an array or map.**
+
+```y
+type Json = { n: long } | { str => Json };
+// error: type 'Json' refers to itself outside any record field or function type
+```
+
+`rename.rn_reaches_go` walks an alias looking for a
+self-reference, and in `bare` mode only a **record field** or a **function type**
+stops the walk — its record and function arms. Array, fixed-array, option,
+map and pointer members all continue it (the array/option/map arms of `rn_reaches_go`), so any of those
+makes the alias "recursive on the nose". the `Node` and `Type` unions in `parser.y` get away with it
+because their recursion is genuinely through a record field.
+
+**Block 2 — a union may not contain a primitive.**
+
+```y
+type V = long | str;
+def f(v: V) -> long { … }
+// error: parameter 'v' has unpassable type long | str
+//        (a void value has no representation, and a type pattern cannot be passed by value)
+```
+
+This one is not about recursion at all. It is the **value model**: a union is
+passed as one of its record members, so a `long` arm has no representation
+besides the value itself, and the void arm has none at all. Putting `long`,
+`str` or `bool` directly in a union needs unions to become a tagged,
+heap-boxed runtime value — a backend change, and a change to `src/c/yv.h`'s
+value model with it.
+
+Block 1 is a rename-layer rule. Block 2 is the language's memory model. They
+are not the same size of work and must not be bundled.
+
+### 16.2 Three tiers, in increasing cost
+
+| | Change | Cost | Buys |
+|---|---|---|---|
+| **C3** | Let a recursive alias pass through an **array, option or map** member. In `rn_reaches_go`, make its `tarr`/`tarrfix`/`topt`/`tmap` arms respect `bare` the way its record and function arms already do. | **Small.** A few lines in `rename.y` plus the 1:1 `src/c/rename.c`. | `type Ids = [Id]` and `type M = {str => M}` become writable. Independent of JSON, and it removes the `jobj` wrap from §15.2 if a union member is ever allowed to be a map. |
+| **C4** | Let a union contain **primitives**. | **Language-scale.** Tag words, boxing, `yv.h`, the emitter, the C twin, `make bench`, fuzz. | `type Json = long \| str \| bool \| [Json] \| {str => Json}` — no wrapper records at all. |
+| **C5** | **JSON literal syntax** in the parser. | **Medium**, and it is the one that actually removes the noise. | `json{ … }` and `json[ … ]`, so `json.num` / `json.str` / `json.boolean` / `json.nul` / `json.jobj` / `json.jarr` all become internal. |
+
+C3 and C5 are independent. **C5 does not need C3 or C4**, which is the point:
+the sugar is syntax, and syntax can desugar to the representation that already
+works.
+
+### 16.3 C5 — the syntax
+
+A **sigil**, not a type-directed feature. That is what keeps it unambiguous:
+`json{ … }` is a JSON object and `{ … }` stays a record literal, with no type
+inference involved and nothing for the checker to disambiguate.
+
+```
+json{ "method": "textDocument/hover", "id": 1, "params": json[1, 2, 3] }
+```
+
+Inside `json{ … }` the nesting needs no repeated sigil — `{ … }` is an object,
+`[ … ]` is an array, and a bare literal is wrapped:
+
+```
+json{ "a": { "b": [1, true, null, 2.5] }, "c": json{} }
+```
+
+The parser desugars all of it, in the same spirit as `x!` → `unwrap(x)` and
+`?:` → an if-chain over synthetic temps (`AGENTS.md`):
+
+```
+json{ "a": 1 }        →   tmp = json_obj();  tmp["a"] = json_num(1);  tmp
+```
+
+so the generated code is ordinary Y that the existing checker, renamer and
+emitter handle with no new cases. `json.num` and friends stay in `json.y` as the
+runtime the desugaring targets — they just stop being something a human writes.
+
+### 16.4 C5 requirements
+
+**S1** `json{ … }` and `json[ … ]`, recognised by the lexer as one token each so
+a nested `{` is never ambiguous with a record literal.
+
+**S2** Inside a `json` literal, a nested `{ … }` is an object, `[ … ]` is an
+array, and `str`, `num`, `bool`, `null` and another `json` literal are the five
+element forms. Nothing else is allowed there, and anything else is a parse error
+at the offending token — never a silent reinterpretation.
+
+**S3** Keys are `str` literals only, as JSON requires. A key that is not a
+literal is an error, not an expression.
+
+**S4** The desugaring targets `json.obj()`, `json.arr()`, `json.num`,
+`json.str`, `json.boolean`, `json.nul`, `json.jobj`, `json.jarr`. If `json` is
+not imported, the sigil is an error naming it — no implicit import.
+
+**S5** The result of a `json` literal has type `json.Val`, so it can be passed
+to `stringify`, stored in an object, and returned. The desugaring is written so
+this holds by construction (each step is an ordinary call returning `Val`).
+
+**S6** Trailing commas are accepted, matching JSON practice and the language's
+own tolerance elsewhere. A missing value (`json{ "a": }`) is an error.
+
+**S7** Round-trip is unaffected: a literal is exactly what `parse` produces, so
+`stringify` of a literal and of its parse are the same bytes.
+
+**S8** Obligations, in full: a `docs/src/02-lexical.tex` and
+`docs/src/03-grammar.tex` section; new entries in `tags.y` and `KTAGS` (and the
+1:1 `src/c/tags.c`) because this is new syntax; `// expect-error:` fixtures for
+every rejection in S2/S3; a `test/COVERAGE.md` row; and `test/y/native/tNNN_*.y`
+covering every element form, nesting, empty containers, trailing commas, each
+rejection, and agreement between a literal and the equivalent `parse` of its own
+`stringify`.
+
+**S9** No existing program may change meaning. A `json{` that used to be a
+record literal followed by a block would be a syntax error today, so the sigil
+is safe to claim; `make corpus-diff` over `test/y/**.y` and `bench/y/*.y` is
+still the gate.
+
+### 16.5 What it costs, honestly
+
+New syntax is not a small change to the compiler even when the semantics are
+free. It touches the lexer, the parser, `tags.y` and its C twin, the manual,
+and the coverage gates; it needs `make check`, `make bench`, `make bench-ir` and
+`make rebless`; and the fuzzer gains a new syntax family to mutate. The
+desugaring itself is the easy part — the process is the cost.
+
+**M-json does not wait for this.** §15's design stands on its own with the
+explicit constructors, and §15.2's `obj()`-not-a-literal rule and `jobj` wrap
+remain true either way. If C5 lands first, `json.y` gets *smaller* (the
+constructors become internal) and nothing else changes.
+
+### 16.6 C3 and C4 are separable, and C3 is the one worth doing first
+
+C3 is a real language improvement with a small diff: a recursive alias through
+`[T]`, `T?` or `{K => T}` is structurally exactly as sound as one through a
+record field, because arrays and options are heap objects with headers just as
+records are. It needs validating against the type-level code that consumes
+recursive aliases — `teq`'s 64-level unfold limit (`types.teq`),
+`tcanon`, `unfold`, and the emitter's record-type hashing
+(the emitter's record-hashing check) — plus bench and fuzz numbers.
+
+C4 is a different project. It changes what a union *is* at runtime, and it
+should be argued for on its own merits rather than as LSP support.

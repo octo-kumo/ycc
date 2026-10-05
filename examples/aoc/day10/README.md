@@ -384,11 +384,20 @@ caught it.
    middle agrees; and **exactly** the two machines built to be unsolvable are
    unsolvable — no machine of the real input may report −1.
 9. **The generated battery** (240 machines, seed 20251210). Machines built
-   from a fixed LCG (1–5 lamps, 1–5 buttons, random wirings, targets 0–5),
+   from a fixed seed (1–5 lamps, 1–5 buttons, random wirings, targets 0–5),
    each solved **through the same `solve_machine` the real run uses** — so a
    defect injected into the solver is injected for the check — and compared
    against *both* definition-faithful searches. 240 machines × 2 oracles × 2
    parts = 960 comparisons in 0.2 s.
+
+   The generator is **`import random`** (`src/y/std/random.y`, splitmix64) —
+   `random.seed(20251210)` then `random.below(n)`. It used to be a module-level
+   `rng_s` stepped by `(s * 1103515245 + 12345) % 2147483648` behind a local
+   `rnd(n)`: the textbook glibc LCG, which is biased for every `n` that is not
+   a power of two. The battery is unchanged in strength — it asserts nothing
+   about a *particular* machine, so a different stream is a different 240
+   machines rather than a different set of expectations — and `EXPECTED` does not
+   move at all, because the generator is reached only from `--check`.
 
 **Route through one entry point.** Everything goes through `solve_machine(idx)`
 and the `--check` synthetic machines are parsed by the *same* `parse_machine`

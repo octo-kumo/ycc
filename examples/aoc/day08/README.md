@@ -127,6 +127,21 @@ own copy of the input.
 never correctness — and an AoC answer is a single integer that a wrong algorithm
 reproduces perfectly — so the interesting assertions are these.
 
+The assertions come from **`import test`** (`src/y/std/test.y`): `day08.y` used
+to define its own `ck(name, ok, detail)` and `eq(name, got, want)` with two
+tallies beside them, and both are gone — std's `test.ck` / `test.ck_eq` print and
+count, the tallies are `test.checks()` / `test.failures()`, and the argument
+order did not have to change because the local `ck` already read
+`(name, ok, detail)`. What std does not keep is *which* assertion failed first,
+so the two-line remainder of the old helper survives for that alone (and the
+`FAIL, first failure:` line at the bottom still names it). `test.report()` is
+deliberately not called: this file prints its own one-line summary. One visible
+consequence of std printing the detail on both outcomes is the `refusal()`
+helper — the eight "this input must not parse" assertions used to carry a
+detail phrased as their own failure ("an empty file parsed"), which under an
+`ok` line reads as a contradiction; they now say what the parser did and why.
+`EXPECTED` does not move: it is the answer run, not the check.
+
 ### 1. A hand-computed micro-case, worked out in full
 
 Five boxes on a line, so every distance is an integer (`day08.y`'s
@@ -254,7 +269,7 @@ check caught something the answers alone did not.)
 | M11 | part 2 records the connection *before* the one that finishes | yes | micro part 2 — got 18, want 60 |
 | M12 | product of only the two largest circuits | yes | example part 1 — got 20, want 40 |
 | M13 | squared distance forgets the Z axis | yes | example part 1 — got 24, want 40 |
-| M14 | parse stops checking the field count | yes | "trailing comma is refused" — a trailing comma parsed |
+| M14 | parse stops checking the field count | yes | "trailing comma is refused" — PARSED ANYWAY: a trailing comma |
 | M15 | `merged` counts every pair, not just part 1's cut | yes | micro part 1 merges — got 4, want 3 |
 | M16 | k clamped to one pair too few | yes | micro k>m clamps to all pairs — got 9, want 10 |
 

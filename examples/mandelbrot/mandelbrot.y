@@ -22,6 +22,7 @@
 import fx;
 import args;
 import mandel;
+import random;
 import render;
 import textout;
 import tui;
@@ -448,8 +449,10 @@ def build_view() -> void {
     let last = mandel.place_count() - 1;
     if (PLACE == last) {
         // `random`: a centre drawn from the seed, so --seed 42 is the same
-        // picture on every machine and every run.
-        mandel.rnd_seed(SEED * 31 + 17);
+        // picture on every machine and every run.  std/random.y's stream,
+        // seeded with an offset from the flag's own value so it does not march
+        // in step with --palette random's twelve draws (see mandel.set_palette).
+        random.seed(SEED * 31 + 17);
         cx = mandel.rnd_unit() / 3 - 1;
         cy = mandel.rnd_unit() / 3 - 1;
         sp = mandel.place_span(last);
@@ -517,9 +520,16 @@ if (MAXIT < 0) { MAXIT = 0; };
 if (MAXIT > 1000000) { MAXIT = 1000000; };
 
 // --seed, normalised into [0, 2^31) so that --seed -1 is a seed and not a
-// complaint.  mandel.rnd_seed() does the same normalisation for the palettes;
-// doing it here as well means the value printed in the header is the value
-// the generator actually starts from.
+// complaint.  Doing it here means the value printed in the header is the value
+// both randomness consumers are seeded from -- the palette (--palette random,
+// via mandel.set_palette) and the random view centre (--at random) -- so there
+// is one seed to read rather than one per flag.
+//
+// The 0 -> 1 nudge is now only about the printed value, not about the stream:
+// it used to keep 0 off a fixed point of the LCG this file carried (mandel.y's
+// old `rnd_seed` said so too), and std/random.y has no such trap -- its seed()
+// offsets the state before the first draw -- but --seed 0 still prints as 1, so
+// the README's edge-case table and this program agree.
 let RAW_SEED = args.get_long("seed", 1);
 SEED = RAW_SEED % 2147483648;
 if (SEED < 0) { SEED = SEED + 2147483648; };

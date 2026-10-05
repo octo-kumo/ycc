@@ -34,6 +34,9 @@
 // every field is gated on `all_digits` before it is converted.
 
 import fs;
+// std's seeded generator (splitmix64).  It replaced the LCG that was inlined in
+// shuffled()'s loop body; see the note above def shuffled.
+import random;
 
 const BIG = 1000000000;
 
@@ -788,16 +791,27 @@ def oracle_scan_prefix(flat: [long]) -> long {
 // CYCLIC order, so the order permutations that must leave it alone are the
 // rotations and the reversal.  Both go through solve_part1/solve_part2, so a
 // defect injected in the solver really is injected here.
+// The shuffle's random draw is std's: `random.seed(seed)` then
+// `random.below(k + 1)`.  This used to be an LCG inlined in the loop body --
+// `s = (s * 1103515245 + 12345) % 2147483648; let j = s % (k + 1)` -- which is
+// both a second copy of a generator (day10 carried the same one) and a biased
+// draw for every (k + 1) that is not a power of two.  A Fisher-Yates only needs
+// `j` uniform on 0..k, which random.below gives it by rejection sampling.
+//
+// `random.seed(seed)` is called HERE rather than by the caller so that
+// `shuffled(flat, s)` stays a pure function of (flat, s) exactly as it was when
+// the state was a local: two calls with the same seed shuffle identically
+// whichever order they are made in, and the eight-seed sweep in oracle C does
+// not have to know that std's stream is module-level.
 def shuffled(flat: [long], seed: long) -> [long] {
   let n = flat.length / 2;
   let a: [long] = [];
   let i = 0;
   while (i < n) { a += flat[i * 2]; a += flat[i * 2 + 1]; i = i + 1 };
-  let s = seed;
+  random.seed(seed);
   let k = n - 1;
   while (k > 0) {
-    s = (s * 1103515245 + 12345) % 2147483648;
-    let j = s % (k + 1);
+    let j = random.below(k + 1);
     let tx = a[k * 2];
     let tyv = a[k * 2 + 1];
     let jx = a[j * 2];

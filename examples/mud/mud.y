@@ -16,7 +16,7 @@
 //                          and heap numbers
 //
 //   build: refs/ycc.ref mud.y -o mud
-//          (rnd.y world.y sockio.y server.y client.y driver.y props.y
+//          (world.y sockio.y server.y client.y driver.y props.y
 //           tui tui args must sit beside it)
 //   run:   ./mud --frames 20 --seed 1
 //
@@ -24,9 +24,8 @@
 // THE MODULES
 // ---------------------------------------------------------------------------
 //
-//   rnd.y      the seeded LCG, the only randomness in the program
-//   world.y    rooms, exits, items, monsters; and the BFS that proves the
-//              generated graph is connected and two-way
+//   world.y    rooms, exits, items, monsters (built from std/random.y); and
+//              the BFS that proves the generated graph is connected and two-way
 //   sockio.y   sockets, a fixed-buffer line reader, and the byte appends every
 //              reply is built through
 //   server.y   the accept loop, the worker pool, sessions, the verbs, the
@@ -53,7 +52,6 @@
 // headless run); it is the number of commands each client sends, which is what
 // bounds the transcript and keeps the gate's diff small.
 
-import rnd;
 import net;
 import sockio;
 import world;

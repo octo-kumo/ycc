@@ -476,13 +476,13 @@ lengths, longest that fits.
 
 | file | lines | |
 |---|---|---|
-| `fluid.y` | 1122 | entry: command line, validation, colour ramps, glyph ramps, the display gamma, the status line, the two frame loops |
+| `fluid.y` | 1125 | entry: command line, validation, colour ramps, glyph ramps, the display gamma, the status line, the two frame loops |
 | `sim.y` | 1026 | the solver: borders, `project` (the pressure solve), `diffuse`, `advect`, `confine`, `emit`, `seed`, `step`, and the five measurements — with the overflow analysis in its header |
 | `textout.y` | 231 | the allocation-free deterministic sink; vendored from `examples/donut/textout.y` **plus `out_q()`** |
 | `pty_check.py` | 137 | drives `./fluid` through a real pty and checks the alt screen, `q`, the restored termios and that frames were painted |
 | `gate.sh` | | re-runnable acceptance gate: all seven items of §7 plus the 55-invocation error-path sweep |
 | `gate.conf` | | `build=` and `run=` for `../gate.py` |
-| `EXPECTED` | | the exact stdout of `run=`, 11 757 bytes |
+| `EXPECTED` | | the exact stdout of `run=`, 11 963 bytes |
 | `golden/*.txt` | 19 | captured states as text, diffable |
 
 ## Verification
@@ -493,7 +493,7 @@ Every item below was run, with every process under `ulimit -S -v 3670016` and
 | gate item | result |
 |---|---|
 | 1. clean compile, **zero warnings** | `../../refs/ycc.ref fluid.y -o fluid` → exit 0, **0 bytes on stderr** |
-| 2. deterministic output | `./fluid --frames 10 --no-tty` three times → sha256 `7d1b2aec…` every time, `cmp` against `EXPECTED` clean (11 757 B), **and the same bytes by absolute path** (see "The heap figure in the golden is a DELTA" above) |
+| 2. deterministic output | `./fluid --frames 10 --no-tty` three times → sha256 `c214b2e8…` every time, `cmp` against `EXPECTED` clean (11 963 B), **and the same bytes by absolute path** (see "The heap figure in the golden is a DELTA" above) |
 | 3. no trap on any path | **55 invocations, 0 traps** (`gate.sh` item 3, `sh gate.sh`): `--help`, unknown flag, missing value, every flag out of range on both sides, `--size 0x0`/`1x1`/`1x120`/`250x1`/`250x120`/`axb`/`251x10`, `--iters 0`/`-1`/`401`, `--viscosity 10001`, `--vort 1000`, `--damping 1000`, `--swirl 4000`, `--radius 1`/`64`, `--gamma 8`, `--no-tty` with no `--frames`, a stray operand, `--`, four seeds, three fields, five glyphs, and every extreme at once for 400 steps at 250×120 |
 | 4. inside the cap, no per-frame allocation | cap enforced on every run; `heap_used()` delta **0** over **10 000** steps |
 | 5. self-contained | the folder alone in a fresh temp dir builds **byte-identically** and its stdout `cmp`s clean against `EXPECTED` |
@@ -527,8 +527,8 @@ before typing `q` — 14 918 171 bytes, 495 395 CSI sequences, `RESULT: PASS`.
 ## Determinism
 
 The default path has **no unseeded randomness anywhere**. The only randomness is
-`sim.rnd()`, an xorshift32 whose 32-bit state is a pure function of `--seed`,
-and the emitter's orbit is a Lissajous curve whose phase also comes from
+`std/random.y` (splitmix64), seeded by `sim.seed()` from `--seed`, and the
+emitter's orbit is a Lissajous curve whose phase also comes from
 `--seed`. `--fps` is the only clock-driven flag and it is live-view only; the
 headless path never paces and never reads the clock except to time itself, which
 goes to stderr under `--stats`. The colour scale is a decaying maximum, so even

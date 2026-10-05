@@ -97,6 +97,7 @@
 // per-thread scratch array and therefore shared mutable state.
 
 import fx;
+import random;
 
 // ln(2) * 2^30, rounded.  The one constant this file needs that fx does not
 // have; fx.PI is there because pi is a length, not a ratio.
@@ -318,29 +319,29 @@ def chan(k: long, v: long) -> long {
 
 // ─────────────────────────────────────────────────────── the seed and rng ───
 //
-// A 31-bit LCG, s' = (s*1103515245 + 12345) mod 2^31.  Chosen over xorshift
-// because it needs no shift and no wrap: s < 2^31 and 2^31 * 1103515245 is
-// 2.4e18, comfortably inside a signed 64-bit long, so there is no overflow to
-// reason about and the same seed gives the same stream on any compiler build.
-// rnd_unit() answers a Q30 value in [0, 1): s >>> 1 is already 30 bits.
-let rng_state: long = 1;
-
-def rnd_seed(s: long) -> void {
-    let v = s % 2147483648;
-    if (v < 0) { v = v + 2147483648; };
-    // 0 is a fixed point of an LCG with an even increment, so seed 0 would
-    // return the same number forever.  Nudging it keeps `--seed 0` usable.
-    if (v == 0) { v = 1; };
-    rng_state = v
-};
-
-def rnd() -> long {
-    rng_state = (rng_state * 1103515245 + 12345) % 2147483648;
-    rng_state
-};
+// The randomness is std's (import random at the top of this file): this was a
+// 31-bit LCG, s' = (s*1103515245 + 12345) mod 2^31, in a module-level
+// `rng_state`, drawn as `s >>> 1`.  What the two consumers here need is
+// "a uniform number in [0, 1)", for a cosine palette's amplitude and for a
+// random view centre -- nothing more -- and `random.below(fx.ONE)` is that.
+// fx.ONE is a power of two, so below()'s rejection loop cannot reject.
+//
+// rnd_unit() stays because "a Q30 value in [0, 1)" is this file's own unit and
+// both call sites want that name, not a bare modulus; it is one line now.  The
+// old `rnd_seed()` normalisation is gone with the generator: it existed to fold
+// a seed into [0, 2^31) and to keep 0 off a fixed point, and mandelbrot.y
+// already normalises --seed into [0, 2^31) before it reaches here (see the note
+// there), which is where the printed-header agreement lives.
+//
+// Both consumers run on the MAIN thread -- set_palette() at start-up before any
+// worker exists, and the random view centre in build_view() -- so the one
+// module-level state std keeps is touched by one thread, exactly as rng_state
+// was.  A thread shares the address space and the module-level lets with its
+// spawner (NATIVE.md, "Threads and processes"), so this is worth saying rather
+// than leaving to be rediscovered.
 
 // A Q30 value in [0, fx.ONE).
-def rnd_unit() -> long { rnd() >>> 1 };
+def rnd_unit() -> long { random.below(fx.ONE) };
 
 // ─────────────────────────────────────────────────────────── named places ───
 //
@@ -489,16 +490,18 @@ def md_palette_at(i: long) -> long { PAL[i] };
 
 // set_palette(kind, seed) -> void
 //
-// Build PAL from PP's row (or, for `random`, from the seed's LCG stream) and
-// derive IN_BG as a quarter of band 0, so the interior is visibly the same
-// family as the exterior rather than an unrelated black.
+// Build PAL from PP's row (or, for `random`, from the seed's stream in
+// std/random.y) and derive IN_BG as a quarter of band 0, so the interior is
+// visibly the same family as the exterior rather than an unrelated black.
 //
 // CALLED ONCE, at start-up, from the main thread -- before any worker exists.
 def set_palette(kind: long, seed: long) -> void {
     if (kind == P_RANDOM) {
         // Two streams off one seed so the two flags that ask for randomness
-        // do not march in step: the palette and a random start point.
-        rnd_seed(seed + 7919);
+        // do not march in step: the palette and a random start point.  Both
+        // RE-SEED before drawing, which is what keeps them apart now that they
+        // share std's one module-level state.
+        random.seed(seed + 7919);
         let k: long = 0;
         while (k < 12) {
             // Amplitude and frequency stay in a range that makes a ramp worth
@@ -572,7 +575,7 @@ export {
     ln, log2p, md_shade, md_cell, md_iters, lum, PLACES,
     md_glyph, md_colour, md_inside_bg, md_palette_at,
     md_set, md_cx, md_cy, md_span, md_maxit,
-    rnd_seed, rnd, rnd_unit,
+    rnd_unit,
     parse_q30, load_places, places_ok, place_count, place_name,
     place_cx, place_cy, place_span, set_palette
 };

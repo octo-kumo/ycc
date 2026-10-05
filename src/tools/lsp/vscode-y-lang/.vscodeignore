@@ -1,0 +1,17 @@
+# What goes into the .vsix.
+#
+# node_modules is NOT listed here, and that is deliberate. vsce bundles the
+# `dependencies` from package.json and prunes the devDependencies itself; naming
+# node_modules here overrides that and ships an extension that cannot
+# require('vscode-languageclient'). The first version of this file did exactly
+# that: a 10 KB vsix with no runtime dependency in it, which fails on activation
+# with a module-not-found.
+#
+# `dependencies` and not devDependencies is the half that matters: vscode-
+# languageclient is needed when the extension RUNS.
+src/**
+tsconfig.json
+**/*.map
+**/*.ts
+.gitignore
+.vscodeignore

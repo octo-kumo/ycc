@@ -42,6 +42,7 @@
 import buf;
 import fs;
 import modes;
+import random;
 import screen;
 
 // ===========================================================================
@@ -228,18 +229,13 @@ def hash16(s: str) -> str {
     tostring(h1) + "." + tostring(h0)
 };
 
-// Park-Miller: the smallest generator with no wide multiply, so no overflow
-// question arises at all.  Deterministic in --seed, and --seed defaults to 1.
-let RS = 1;
-def seed_rng(v: long) -> void {
-    let x = v % 2147483647;
-    if (x < 1) { x = 1 };
-    RS = x
-};
-def rnd(n: long) -> long {
-    RS = (RS * 16807) % 2147483647;
-    RS % n
-};
+// The fuzz stream is std's (import random above): this was a hand-rolled
+// Park-Miller, `RS = (RS * 16807) % 2147483647`, seeded by `seed_rng` with
+// `v % 2147483647` (a negative or zero seed folded up to 1).  Nothing else
+// changes: the three fuzzes below still seed explicitly and deterministically,
+// and they ask for UNIFORMITY under a modulus, which is what they get -- the
+// particular bit stream was never part of any assertion here.  --check does not
+// read --seed at all; it names its own three (1, 7, 20261004).
 
 // ===========================================================================
 // one scripted edit, in the editor AND in the model
@@ -403,15 +399,15 @@ def p_undo() -> long {
     // undo and not about the bound.  The bound gets its own assertion below,
     // because "the stack is capped" is a property worth holding too.
     reset("fuzz me\nplease\nnow");
-    seed_rng(1);
+    random.seed(1);
     let steps = 100;
     let i2 = 0;
     while (i2 < steps) {
         let n1 = md_lines();
-        let ln = rnd(n1);
+        let ln = random.below(n1);
         let c1 = buf.line_at(ln);
-        let col = rnd(len(c1) + 1);
-        let op = rnd(8);
+        let col = random.below(len(c1) + 1);
+        let op = random.below(8);
         if (op == 0) { do_insert(ln, col, "x") }
         else if (op == 1) {
             let nx = buf.adv(c1, col);
@@ -419,11 +415,11 @@ def p_undo() -> long {
         } else if (op == 2) { do_split(ln, col) }
         else if (op == 3 && n1 > 1) { do_join(ln) }
         else if (op == 4 && n1 > 1) {
-            let a = rnd(n1);
-            let b = a + rnd(n1 - a);
+            let a = random.below(n1);
+            let b = a + random.below(n1 - a);
             do_del_lines(a, b)
         } else if (op == 5) { do_insert(ln, col, "ab") }
-        else if (op == 6 && len(c1) > 0) { do_sub(ln, "a", "Z", rnd(2) == 0) }
+        else if (op == 6 && len(c1) > 0) { do_sub(ln, "a", "Z", random.below(2) == 0) }
         else { do_insert(ln, col, " ") };
         eq_str(buf.text(), md_get(), "fuzz step " + tostring(i2) + " (op " + tostring(op) + ")");
         i2 = i2 + 1
@@ -440,11 +436,11 @@ def p_undo() -> long {
 
     // --- and the bound itself -------------------------------------------
     reset("bound\nit");
-    seed_rng(7);
+    random.seed(7);
     let many = 0;
     while (many < 400) {
-        let ln3 = rnd(md_lines());
-        do_insert(ln3, rnd(len(buf.line_at(ln3)) + 1), "Q");
+        let ln3 = random.below(md_lines());
+        do_insert(ln3, random.below(len(buf.line_at(ln3)) + 1), "Q");
         many = many + 1
     };
     eq_long(buf.undo_depth(), buf.undo_max(), "400 edits leave exactly the capped number of undo entries");
@@ -863,40 +859,40 @@ def p_model() -> long {
     reset("alpha\nbeta\ngamma\ndelta\nepsilon");
     buf.viewport(3, 16);
     buf.scroll_fix();
-    seed_rng(20261004);
+    random.seed(20261004);
     let steps = 500;
     let i = 0;
     let mismatches = 0;
     while (i < steps) {
         let n1 = md_lines();
-        let ln = rnd(n1);
+        let ln = random.below(n1);
         let s = buf.line_at(ln);
-        let col = rnd(len(s) + 1);
-        let op = rnd(11);
+        let col = random.below(len(s) + 1);
+        let op = random.below(11);
         if (op == 0) { do_insert(ln, col, "w") }
         else if (op == 1) {
             let nx = buf.adv(s, col);
             if (nx > col) { do_delete(ln, col, ln, nx) } else { do_insert(ln, col, "v") }
         } else if (op == 2) {
-            let l2 = rnd(n1);
+            let l2 = random.below(n1);
             if (l2 < ln) {
                 do_delete(l2, 0, ln, col)
             } else {
-                let c2 = rnd(len(buf.line_at(l2)) + 1);
+                let c2 = random.below(len(buf.line_at(l2)) + 1);
                 do_delete(ln, col, l2, c2)
             }
         } else if (op == 3) { do_split(ln, col) }
         else if (op == 4 && n1 > 1) { do_join(ln) }
         else if (op == 5 && n1 > 1) {
-            let a = rnd(n1);
-            do_del_lines(a, a + rnd(n1 - a))
+            let a = random.below(n1);
+            do_del_lines(a, a + random.below(n1 - a))
         } else if (op == 6) { do_insert(ln, col, "qrs") }
         else if (op == 7) { do_sub(ln, "a", "A", false) }
         else if (op == 8) { do_sub(ln, "a", "A", true) }
         else if (op == 9) { do_insert(ln, col, " ") }
         else { do_delete(ln, col, ln, col) };
-        let cl = rnd(md_lines());
-        let cc2 = rnd(len(buf.line_at(cl)) + 1);
+        let cl = random.below(md_lines());
+        let cc2 = random.below(len(buf.line_at(cl)) + 1);
         buf.goto(cl, cc2, false);
         invariants("model fuzz step " + tostring(i) + " (op " + tostring(op) + ")");
         if (buf.text() != md_get()) { mismatches = mismatches + 1 };

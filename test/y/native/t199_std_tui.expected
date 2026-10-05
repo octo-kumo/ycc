@@ -1,0 +1,414 @@
+
+a surface and its cells
+  ok    new(6, 12) has 6 rows
+          got 6, want 6
+  ok    new(6, 12) has 12 cols
+          got 12, want 12
+  ok    a cleared cell reads as a space
+          got 32, want 32
+  ok    fill writes the code point
+          got 65, want 65
+  ok    key_at packs fg in the high 24 bits
+          got 66051, want 66051
+  ok    and bg in the low 24
+          got 263430, want 263430
+  ok    key_at of a DEFAULT-background cell is -1, fg and all
+          so it cannot read such a cell back
+  ok    put_at(s, 0) is cell (0, 0)
+          got 67, want 67
+  ok    and an out-of-range index is refused, not fatal
+          got -1, want -1
+  ok    key_at of an out-of-range cell too
+          got -1, want -1
+  ok    put writes one cell
+          got 88, want 88
+  ok    a skipped cell reads as SKIP
+          got -1, want -1
+  ok    and put_skip left the cell to its left alone
+          got 65, want 65
+  ok    text drew the first character
+          got 72, want 72
+  ok    and the second
+          got 105, want 105
+  ok    a wide code point takes two cells
+          got 20013, want 20013
+  ok    and the second is a skip
+          got -1, want -1
+  ok    a newline moves to the next row
+          got 97, want 97
+  ok    malformed UTF-8 draws U+FFFD and does not trap
+          a lone continuation byte
+  ok    a truncated three-byte sequence does not trap either
+          got U+65533
+
+colour is one integer
+  ok    rgb packs the channels
+          got 20, want 20
+  ok    r_of reads the red back
+          got 10, want 10
+  ok    b_of reads the blue back
+          got 30, want 30
+  ok    grey is r=g=b
+          got 77, want 77
+  ok    clamp255 holds 300
+          got 255, want 255
+  ok    clamp255 holds -5
+          got 0, want 0
+  ok    clamp255 passes 128
+          got 128, want 128
+  ok    lerp at 0 is the first end
+          got 65793, want 65793
+  ok    lerp at 255 is the second
+          got 592137, want 592137
+  ok    lerp past 255 is clamped, not a wrap
+          got 592137, want 592137
+  ok    lerp at the midpoint of 0..200
+          got 100, want 100
+
+runs and boxes
+  ok    hline wrote 4 cells
+          got 45, want 45
+  ok    and stopped at 4
+          got 32, want 32
+  ok    vline wrote 3 cells
+          got 124, want 124
+  ok    and stopped at 3
+          got 32, want 32
+  ok    fill_rect filled a cell
+          got 35, want 35
+  ok    and one at the far corner
+          got 35, want 35
+  ok    but not past the rectangle
+          got 32, want 32
+  ok    rect drew its top-left corner
+          got 43, want 43
+  ok    and its bottom-right at (row+h-1, col+w-1)
+          got 43, want 43
+  ok    but not one past it
+          got 32, want 32
+  ok    and not the interior
+          got 32, want 32
+  ok    a one-row box still draws its row
+          got 43, want 43
+  ok    blit copied a cell
+          got 64, want 64
+  ok    and stopped at the rectangle
+          got 32, want 32
+  ok    blit copied a foreground
+          got 328965, want 328965
+  ok    and a background
+          got 394758, want 394758
+
+luminance ramps
+  ok    shade_blocks(white) is a full block
+          got 9608, want 9608
+  ok    shade_blocks(black) is a space
+          got 32, want 32
+  ok    shade with n <= 0 is the full glyph, not a division by zero
+          got 9608, want 9608
+  ok    ramp_index is monotone in v
+          brighter never picks an earlier position
+  ok    and the block ramp really does step down at the end
+          position 3 is U+2583 and position 4 is U+2588, so code-point order is NOT ramp order
+  ok    and the top of the ramp is U+2588
+          got 9608, want 9608
+  ok    shade_ascii at the bottom
+          got 32, want 32
+  ok    shade_ascii at the top is not a space
+          got 64
+  ok    the four ramps differ at mid luminance
+          blocks, half and braille are three ramps
+  ok    shade_len(0) ascii
+          got 10, want 10
+  ok    shade_len(1) blocks
+          got 5, want 5
+  ok    shade_len(2) half
+          got 4, want 4
+  ok    shade_len(3) braille
+          got 16, want 16
+  ok    ramp_index(0, 256, 8) is the first
+          got 0, want 0
+  ok    ramp_index(255, 256, 8) is not the last
+          got 7, want 7
+  ok    ramp_index clamps above n
+          got 7, want 7
+  ok    ramp_index clamps below 0
+          got 0, want 0
+  ok    ramp_index with n <= 0 is the last, not a division by zero
+          got 7, want 7
+  ok    ramp_index with levels <= 1 is 0
+          got 0, want 0
+
+braille dot patterns
+  ok    level 0 fills nothing
+          got 0, want 0
+  ok    level 1 fills the first dot
+          got 1, want 1
+  ok    level 8 fills all of them
+          got 255, want 255
+  ok    a level above 8 is clamped, not a trap
+          got 255, want 255
+  ok    a negative level fills nothing
+          got 0, want 0
+  ok    the fill is progressive
+          each step only adds dots
+  ok    braille_cp is U+2800 + the mask
+          got 10241, want 10241
+  ok    and of the empty pattern
+          got 10240, want 10240
+  ok    braille_put wrote a non-empty pattern
+          got U+10495
+  ok    the all-below-threshold column leaves the cell clear
+          no dot above the threshold, so U+2800
+
+code points and columns
+  ok    'A' is one byte
+          got 1, want 1
+  ok    U+00E9 is two
+          got 2, want 2
+  ok    U+4E2D is three
+          got 3, want 3
+  ok    U+1F600 is four
+          got 4, want 4
+  ok    U+4E2D byte 0
+          got 228, want 228
+  ok    U+4E2D byte 1
+          got 184, want 184
+  ok    U+4E2D byte 2
+          got 173, want 173
+  ok    'A' occupies one column
+          got 1, want 1
+  ok    U+4E2D occupies two
+          got 2, want 2
+  ok    U+1F600 occupies two
+          got 2, want 2
+  ok    a combining mark occupies none
+          got 0, want 0
+
+the frame diff
+  ok    a freshly cleared cell is not yet committed
+          the shadow starts empty, so the first frame writes
+  ok    after committing once it is
+          and the second frame can skip it
+  ok    and a different cell is still different
+          one commit does not settle the whole surface
+  ok    after committing, cell_same agrees
+          no second write needed
+[1;1H[0;39;49m        [2;1H        [3;1H          ok    the capture saw the draw
+          52 bytes
+  ok    and they are escape sequences
+          ESC first
+  ok    capture_checksum is stable across two reads
+          got -5935236076737067735, want -5935236076737067735
+  ok    capture_str reads a range back
+          non-empty
+[1;1H[0;39;49m        [2;1H        [3;1H          ok    flush_diff of an unchanged surface emits no bytes
+          got 0, want 0
+[2;3H[0;38;2;5;5;5;49mA  ok    one changed cell does emit
+          so the zero above is not vacuous
+  ok    but far less than a full repaint
+          a CUP and a cell or two, not 24 cells
+[1;1H[0;39;49m        [2;1H  [0;38;2;5;5;5;49mA[0;39;49m     [3;1H          ok    flush() repaints in full even with nothing changed
+          which is what it is for: after a resize
+[3;4H[0;38;2;9;9;9;49mX  ok    flush_diff wrote something
+          one cell changed
+
+row sizing, measured from the last flush
+[1;1H[0;39;49m        [2;1H        [3;1H          ok    row_count is the rows the last flush wrote
+          got 3, want 3
+  ok    frame_bytes counts every byte of that flush
+          the CUPs and the cells
+  ok    frame_bytes covers at least one CUP per row
+          each row is positioned before it is written
+  ok    row_bytes is the last row written
+          a positive size
+  ok    begin_frame zeroes the accounting
+          got 0, want 0
+  ok    and the row count
+          got 0, want 0
+[1;1H[0;39;49m        [2;1H        [3;1H   [0;38;2;9;9;9;49mX[0;39;49m      ok    a later flush counts again
+          so the accounting is per frame, not cumulative
+  ok    spill is callable
+          a full buffer spills at a row boundary, not mid-sequence
+
+the output buffer, with no terminal on it
+  ok    a reset buffer is empty
+          got 0, want 0
+  ok    the buffer took every write
+          got 9, want 9
+  ok    buf_at(0) is the first byte
+          got 65, want 65
+  ok    buf_at(1) starts the string
+          got 98, want 98
+  ok    the digits are ASCII, not codes
+          got 49, want 49
+  ok    put_csi wrote ESC
+          got 27, want 27
+  ok    and then the bracket
+          got 91, want 91
+  ok    and the length is 9
+          got 9, want 9
+  ok    buf_reset empties it
+          got 0, want 0
+  ok    esc_fg builds an SGR
+          a byte count
+  ok    esc_bg builds one too
+          a byte count
+  ok    esc_fg wrote a sequence
+          a byte count
+  ok    ESC[38;2;1;2;3m is 15 bytes
+          got 15, want 15
+  ok    and ESC[48;2;1;2;3m is the same 15
+          got 15, want 15
+  ok    esc_rg carries both ends, so it is longer
+          two colours in one sequence
+  ok    esc_reset is ESC[0m, four bytes
+          got 4, want 4
+  ok    esc_clear is ESC[2J, four bytes
+          got 4, want 4
+  ok    and it is not the reset sequence
+          same length, different bytes -- which is checked by content below
+  ok    esc_clear and esc_reset are the same length but not the same bytes
+          ESC[2J against ESC[0M
+  ok    esc_home is a short sequence
+          ESC[H
+  ok    esc_cursor is a CUP
+          ESC[3;4H
+  ok    esc_clear is non-empty
+          a byte count
+  ok    esc_home is non-empty
+          a byte count
+  ok    esc_cursor is non-empty
+          a byte count
+  ok    esc_reset is non-empty
+          a byte count
+
+the sgr_* forms write to the descriptor
+  ok    set_fd moved the descriptor
+          got 3, want 3
+[0;38;2;1;2;3m[0;48;2;1;2;3m[0;38;2;1;2;3;48;2;4;5;6m[0m  ok    sgr_fg wrote a sequence
+          to the descriptor
+  ok    and it is 15 bytes
+          got 15, want 15
+  ok    sgr_bg is the same length
+          got 15, want 15
+  ok    sgr_rg carries two colours, so it is longer
+          one sequence, both ends
+  ok    sgr_reset is a short sequence
+          ESC[0m
+[0;38;2;1;2;3m  ok    the file holds an SGR
+          ESC then [
+  ok    which carries the fg selector 38
+          '38' means set-foreground
+  ok    after the truecolour introducer 2
+          ESC[0;38;2;...
+  ok    and it ends the sequence with m
+          the terminating m
+  ok    carrying all three channels
+          38;2;r;g;b has three semicolons
+  ok    set_fd(1) is the default
+          got 1, want 1
+  ok    out_flush emptied the buffer
+          got 0, want 0
+
+little-endian reads from a byte array
+  ok    rd32 is little-endian
+          got 16843009, want 16843009
+  ok    rd16 reads the low two bytes
+          got 257, want 257
+  ok    rd16 of zeros
+          got 0, want 0
+  ok    rd32 of zeros
+          got 0, want 0
+  ok    rd32 puts the high byte in the high place
+          got 16777216, want 16777216
+
+a surface read back as text
+  ok    grid_text is one line per row
+          got 12, want 12
+  ok    grid_text holds the cells as text
+          'Hi' is in there
+  ok    grid_text has no escape sequences
+          plain text only
+  ok    grid_digest is stable
+          got -1338351556488496112, want -1338351556488496112
+  ok    grid_digest moves when a cell does
+          two different surfaces differ
+  ok    and moves when only the CHARACTER does
+          digest changed
+  ok    and moves when only the COLOUR does
+          the foreground is hashed too
+
+resize and the pushed-key stack
+  ok    before resize
+          got 404, want 404
+  ok    resize answers the new surface
+          got 608, want 608
+  ok    an empty pop is -1
+          got -1, want -1
+  ok    two bytes come back in arrival order
+          pushed 2, so two pops answer
+  ok    a push past the stack capacity is clamped
+          17 popped of at most 64
+  ok    and the stack ends empty
+          got -1, want -1
+
+the pacer and the meter
+  ok    pacer_new(60) has a period
+          about 16666us
+  ok    near 1e6/fps
+          got 16666
+  ok    a rate below 1 is clamped, not a division by zero
+          clamped to 1 fps
+  ok    a rate above a million is clamped too
+          the period would round to 0
+  ok    pacer_frames starts at 0
+          got 0, want 0
+  ok    pacer_dropped starts at 0
+          got 0, want 0
+  ok    a frame in step counts as drawn
+          got 1, want 1
+  ok    and nothing was dropped
+          got 0, want 0
+  ok    and the wait was at most a frame
+          slept no more than one frame period
+  ok    a frame more than a period late counts as a drop
+          five periods late at 1000fps
+  ok    and the answer is negative, which is how a caller sees it
+          a negative wait is how a drop shows up
+  ok    and it did not count as drawn
+          got 0, want 0
+  ok    and the schedule did not try to catch up
+          a drop is one skipped frame, not a burst of them
+  ok    pacer_start re-bases the schedule
+          frames 0
+  ok    pacer_lag_us is a number
+          may be negative when late, got 0
+  ok    a new meter has no frames
+          got 0, want 0
+  ok    and reads zero
+          got 0, want 0
+  ok    two ticks are counted
+          at least one frame
+  ok    fps_line is a string
+          e.g. '0.00 fps'
+  ok    fps_avg_x100 is a number
+          hundredths
+  ok    fps_new's default window is 500000us
+          the documented default
+
+the tty, with stdout on a pipe
+  ok    is_tty(fd) answers without trapping
+          true or false
+  ok    is_tty on a closed descriptor is answered too
+          false, and no trap
+  ok    active is false before raw_mode
+          nothing entered raw mode
+  ok    size() answers a Size with non-negative fields
+          rows 24 cols 80
+  ok    key_pending is answerable
+          nothing is waiting on an empty pipe
+  ok    read_key_timeout(0) is a non-blocking poll
+          KEY_NONE is -1, no trap on a pipe
+  ok    read_key() with nothing waiting is KEY_NONE too
+          and it does not block on a pipe either

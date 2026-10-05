@@ -42,6 +42,7 @@
 import fs;
 import hx;
 import struct;
+import test;
 
 // The shipped sample again, so section 11 can plan a row count for the same
 // bytes the child process is about to dump.  `embed` is a statement of its own
@@ -51,12 +52,36 @@ embed SAMPLE from "data/sample.bin";
 
 // ───────────────────────────────────────────────────────── the bookkeeping ───
 
-let CHECKS: long = 0;
-let FAILS: long = 0;
+// This file used to carry its own assertion helpers -- `ok(cond, what, got)`,
+// `ck(got, want, what)` and `ckstr(got, want, what)`, with the counters
+// CHECKS/FAILS beside them -- and they are `std/test.y`'s now:
+//
+//   ok(cond, what, got)  ->  test.ck(what, cond, got)     name, ok, detail
+//   ck(got, want, what)  ->  test.ck_eq(what, got, want)
+//   ckstr(got, want, w)  ->  test.ck_str(what, got, want)
+//
+// Every call site below was reordered by hand; none of them had the same order.
+// Two visible consequences, both intended and neither a loss:
+//
+//   * the old `ok` printed ONLY on failure, so a clean run was 19 lines; every
+//     assertion in std/test.y prints a verdict line and a detail line on BOTH
+//     outcomes, so a clean run is now 1464.  That is the module's deliberate
+//     trade ("a check whose output only appears on failure is one nobody can
+//     read"), and the detail on a pass is the measurement.
+//   * the old failure line was one line, "  FAIL <what>: <got>"; it is now
+//     "  FAIL  <what>" and "          <got>".  inject.py's oracle greps for
+//     the substring "FAIL" and hexview/README.md's defect table quotes the
+//     first failing line, so both were re-measured rather than assumed.
+//
+// The counts are unchanged -- 720 assertions, measured before and after -- and
+// CHECKS/FAILS are now test.checks()/test.failures().
 
 // One line to stdout, with no doubled blank lines: `print` already ends a line,
 // so appending another "\n" to every message puts a blank between all of them.
-// This writes the bytes and one newline with a single write(2).
+// This writes the bytes and one newline with a single write(2).  std/test.y's
+// `print` reaches fd 1 the same unbuffered way -- y_print_hstr is two
+// syscall(1, 1, ...) calls, the text and then the newline (std/rt.y) -- so its
+// lines and these interleave in the order they are made.
 let SB: [byte; 1024] = [0; 1024];
 
 def say(s: str) -> void {
@@ -73,24 +98,10 @@ def say(s: str) -> void {
     0
 };
 
+// A section heading.  std/test.y's test.group(), which prints the blank line
+// first, so the sections read as sections.
 def sec(s: str) {
-    say("[" + s + "]")
-};
-
-def ok(cond: bool, what: str, got: str) -> bool {
-    CHECKS = CHECKS + 1;
-    if (cond) { return true };
-    FAILS = FAILS + 1;
-    say("  FAIL " + what + ": " + got);
-    false
-};
-
-def ck(got: long, want: long, what: str) -> bool {
-    ok(got == want, what, "got " + tostring(got) + ", want " + tostring(want))
-};
-
-def ckstr(got: str, want: str, what: str) -> bool {
-    ok(got == want, what, "got [" + got + "], want [" + want + "]")
+    test.group("[" + s + "]")
 };
 
 // ───────────────────────────────────────────── the fixture, byte for byte ───
@@ -277,22 +288,24 @@ def sec_gutter() {
         if (printable) { nself = nself + 1; } else { ndot = ndot + 1; };
         v = v + 1;
     };
-    ok(bad == 0, "every one of 256 byte values renders right", firstbad);
+    test.ck("every one of 256 byte values renders right", bad == 0, firstbad);
     // The counts, from the definition rather than from the loop above.
-    ck(nself, 95, "values that render as themselves");
-    ck(ndot, 161, "values that render as the placeholder");
-    ck(nself + ndot, 256, "the two counts cover every byte value");
-    ok(nself > 0 && ndot > 0, "neither class is empty", "nself=" + tostring(nself)
+    test.ck_eq("values that render as themselves", nself, 95);
+    test.ck_eq("values that render as the placeholder", ndot, 161);
+    test.ck_eq("the two counts cover every byte value", nself + ndot, 256);
+    test.ck("neither class is empty",
+        nself > 0 && ndot > 0,
+        "nself=" + tostring(nself)
        + " ndot=" + tostring(ndot));
     // The four values the off-by-one lives on, named.
-    ck(hx.glyph(32), 32, "0x20 is a space, not a placeholder");
-    ck(hx.glyph(126), 126, "0x7e is '~'");
-    ck(hx.glyph(31), hx.DOT, "0x1f is a placeholder");
-    ck(hx.glyph(127), hx.DOT, "0x7f (DEL) is a placeholder");
-    ck(hx.glyph(255), hx.DOT, "0xff is a placeholder");
-    ck(hx.DOT, 46, "the placeholder is '.'");
+    test.ck_eq("0x20 is a space, not a placeholder", hx.glyph(32), 32);
+    test.ck_eq("0x7e is '~'", hx.glyph(126), 126);
+    test.ck_eq("0x1f is a placeholder", hx.glyph(31), hx.DOT);
+    test.ck_eq("0x7f (DEL) is a placeholder", hx.glyph(127), hx.DOT);
+    test.ck_eq("0xff is a placeholder", hx.glyph(255), hx.DOT);
+    test.ck_eq("the placeholder is '.'", hx.DOT, 46);
     // 0x00 is the byte a hex editor shows most, and it is not a space.
-    ck(hx.glyph(0), hx.DOT, "0x00 is a placeholder");
+    test.ck_eq("0x00 is a placeholder", hx.glyph(0), hx.DOT);
     0
 };
 
@@ -325,32 +338,34 @@ def sec_hexdigits() {
         } else {
             upper = upper + HEXD[v % 16];
         };
-        ck(hx.hexval(upper), v, "hexval parses the table's spelling of a byte");
-        ck(hx.hexval(HEXD[v / 16] + HEXD[v % 16]), v,
-           "hexval parses the lower-case spelling of a byte");
+        test.ck_eq("hexval parses the table's spelling of a byte", hx.hexval(upper), v);
+        test.ck_eq("hexval parses the lower-case spelling of a byte",
+            hx.hexval(HEXD[v / 16] + HEXD[v % 16]),
+            v);
         v = v + 1;
     };
-    ok(bad == 0, "both digits of every byte value match the literal table",
-       badv == 0 ? "clean" : "first wrong at " + tostring(badv));
+    test.ck("both digits of every byte value match the literal table",
+        bad == 0,
+        badv == 0 ? "clean" : "first wrong at " + tostring(badv));
     // The parser refuses what it does not understand -- `tonum` would answer 0.
-    ck(hx.hexval("zz"), 0 - 1, "hexval refuses 'zz'");
-    ck(hx.hexval("0z"), 0 - 1, "hexval refuses '0z'");
-    ck(hx.hexval("z0"), 0 - 1, "hexval refuses 'z0'");
-    ck(hx.hexval("f"), 0 - 1, "hexval refuses a single digit");
-    ck(hx.hexval(""), 0 - 1, "hexval refuses the empty string");
-    ck(hx.hexval("fff"), 0 - 1, "hexval refuses three digits");
-    ck(hx.hexval("00"), 0, "hexval accepts '00'");
-    ck(hx.hexval("FF"), 255, "hexval accepts upper case");
-    ck(hx.hexdig_of(47), 0 - 1, "hexdig_of refuses '/'");
-    ck(hx.hexdig_of(96), 0 - 1, "hexdig_of refuses a backtick");
-    ck(hx.hexdig_of(103), 0 - 1, "hexdig_of refuses 'g'");
+    test.ck_eq("hexval refuses 'zz'", hx.hexval("zz"), 0 - 1);
+    test.ck_eq("hexval refuses '0z'", hx.hexval("0z"), 0 - 1);
+    test.ck_eq("hexval refuses 'z0'", hx.hexval("z0"), 0 - 1);
+    test.ck_eq("hexval refuses a single digit", hx.hexval("f"), 0 - 1);
+    test.ck_eq("hexval refuses the empty string", hx.hexval(""), 0 - 1);
+    test.ck_eq("hexval refuses three digits", hx.hexval("fff"), 0 - 1);
+    test.ck_eq("hexval accepts '00'", hx.hexval("00"), 0);
+    test.ck_eq("hexval accepts upper case", hx.hexval("FF"), 255);
+    test.ck_eq("hexdig_of refuses '/'", hx.hexdig_of(47), 0 - 1);
+    test.ck_eq("hexdig_of refuses a backtick", hx.hexdig_of(96), 0 - 1);
+    test.ck_eq("hexdig_of refuses 'g'", hx.hexdig_of(103), 0 - 1);
     // The decimal parser used by --offset and --rows.
-    ck(hx.decval("0"), 0, "decval parses 0");
-    ck(hx.decval("4096"), 4096, "decval parses 4096");
-    ck(hx.decval(""), 0 - 1, "decval refuses the empty string");
-    ck(hx.decval("-1"), 0 - 1, "decval refuses a minus sign");
-    ck(hx.decval("1x"), 0 - 1, "decval refuses '1x'");
-    ck(hx.decval("99999999999999999999"), 0 - 1, "decval refuses 20 digits");
+    test.ck_eq("decval parses 0", hx.decval("0"), 0);
+    test.ck_eq("decval parses 4096", hx.decval("4096"), 4096);
+    test.ck_eq("decval refuses the empty string", hx.decval(""), 0 - 1);
+    test.ck_eq("decval refuses a minus sign", hx.decval("-1"), 0 - 1);
+    test.ck_eq("decval refuses '1x'", hx.decval("1x"), 0 - 1);
+    test.ck_eq("decval refuses 20 digits", hx.decval("99999999999999999999"), 0 - 1);
     0
 };
 
@@ -363,22 +378,23 @@ def sec_hexdigits() {
 def sec_handwritten() {
     sec("3 one fixture's dump, against four hand-written lines");
     fix_build();
-    ok(len(hx.DATA) != FIXN || hx.SIZE != FIXN,
-       "hx is not holding this fixture yet (sanity: the sizes differ or it is empty)", "held");
+    test.ck("hx is not holding this fixture yet (sanity: the sizes differ or it is empty)",
+        len(hx.DATA) != FIXN || hx.SIZE != FIXN,
+        "held");
     hx.adopt(fixb());
     // Non-vacuity, before anything is compared: the buffer really is the fixture.
-    ck(hx.SIZE, FIXN, "the adopted buffer is 48 bytes");
-    ck(len(hx.DATA), FIXN, "the adopted array is 48 elements");
+    test.ck_eq("the adopted buffer is 48 bytes", hx.SIZE, FIXN);
+    test.ck_eq("the adopted array is 48 elements", len(hx.DATA), FIXN);
     let mism = 0;
     let i = 0;
     while (i < FIXN) {
         if (hx.byte_at(i) != fix(i)) { mism = mism + 1; };
         i = i + 1;
     };
-    ck(mism, 0, "every byte of the buffer matches the literal layout");
+    test.ck_eq("every byte of the buffer matches the literal layout", mism, 0);
 
     let rows = hx.plan_rows(0, 16, 0);
-    ck(rows, 3, "plan_rows says three rows for 48 bytes at width 16");
+    test.ck_eq("plan_rows says three rows for 48 bytes at width 16", rows, 3);
     let line = "";
     let r = 0;
     while (r < rows) {
@@ -390,24 +406,25 @@ def sec_handwritten() {
     line = line + outs_n(hx.LINEN) + "\n";
     // Compare line by line against the literals, and name the first that differs.
     let gotl = line.split("\n");
-    ck(len(gotl), 4, "the dump is three rows plus the size line");
+    test.ck_eq("the dump is three rows plus the size line", len(gotl), 4);
     let k = 0;
     while (k < 4 && k < len(gotl)) {
-        ckstr(gotl[k], FIXWANT[k], "dump line " + tostring(k));
+        test.ck_str("dump line " + tostring(k), gotl[k], FIXWANT[k]);
         k = k + 1;
     };
     // The plan and the dump must agree, and the size line must be the size.
-    ck(hx.digits(hx.SIZE), 2, "the file length is two digits");
+    test.ck_eq("the file length is two digits", hx.digits(hx.SIZE), 2);
     hx.end_line();
-    ckstr(outs_n(hx.LINEN), "0000048", "the trailing line is the length");
+    test.ck_str("the trailing line is the length", outs_n(hx.LINEN), "0000048");
     // A partial last row: 48 is exact, so ask for width 32 and check the pad.
-    ck(hx.plan_rows(0, 32, 0), 2, "48 bytes at width 32 is two rows");
+    test.ck_eq("48 bytes at width 32 is two rows", hx.plan_rows(0, 32, 0), 2);
     hx.row(32, 32);
-    ckstr(outs_n(hx.LINEN), "0000032 20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f                                                  > !\"#$%&'()*+,-./<",
-         "a 16-of-32 row pads the hex field to width 32 and the gutter to 16 -- this literal is od's own line for `od -w32` on the same bytes");
-    ck(hx.plan_rows(48, 16, 0), 0, "an offset at the end plans no rows");
-    ck(hx.plan_rows(0, 16, 2), 2, "--rows 2 caps the plan at two");
-    ck(hx.plan_rows(1, 16, 0), 3, "an offset one byte in still needs three rows");
+    test.ck_str("a 16-of-32 row pads the hex field to width 32 and the gutter to 16 -- this literal is od's own line for `od -w32` on the same bytes",
+        outs_n(hx.LINEN),
+        "0000032 20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f                                                  > !\"#$%&'()*+,-./<");
+    test.ck_eq("an offset at the end plans no rows", hx.plan_rows(48, 16, 0), 0);
+    test.ck_eq("--rows 2 caps the plan at two", hx.plan_rows(0, 16, 2), 2);
+    test.ck_eq("an offset one byte in still needs three rows", hx.plan_rows(1, 16, 0), 3);
     0
 };
 
@@ -515,12 +532,13 @@ def cross_bytes(n: long) -> [byte] {
 def sec_od() {
     sec("11 the GNU od cross-check: od -A d -t x1z -v, byte for byte");
     if (!fs.make_dirs(TDIR)) {
-        ok(fs.is_dir(TDIR), "the scratch directory " + TDIR + " is usable",
-           "make_dirs failed and it is not there");
+        test.ck("the scratch directory " + TDIR + " is usable",
+            fs.is_dir(TDIR),
+            "make_dirs failed and it is not there");
         return 0
     };
     let odv = run_self("--help", tpath("ver.txt"));
-    ok(true, "the program under test runs", "status " + tostring(odv));
+    test.ck("the program under test runs", true, "status " + tostring(odv));
     // Is od itself there?  Ask it for nothing and see.
     // If od is not installed the section is SKIPPED, loudly, rather than
     // silently: a check that quietly stops comparing anything is the vacuous
@@ -533,7 +551,7 @@ def sec_od() {
         return 0
     };
     let ver = slurp(tpath("odver.txt"));
-    ok(ver.length > 0, "GNU od answered", "empty --version output");
+    test.ck("GNU od answered", ver.length > 0, "empty --version output");
 
     // The family of fixtures.  0..2 are the shipped files, so the bytes that
     // ship with the example are the bytes od is asked about.
@@ -550,7 +568,7 @@ def sec_od() {
         let b = cross_bytes(n);
         let p = tpath("x" + tostring(i) + ".bin");
         if (!fs.write_bytes(p, b, -1)) {
-            ok(false, "wrote the " + tostring(n) + "-byte fixture", "write refused");
+            test.ck("wrote the " + tostring(n) + "-byte fixture", false, "write refused");
         } else {
             one_cross(p, tostring(n) + " generated bytes");
         };
@@ -558,14 +576,16 @@ def sec_od() {
     };
     // The empty file is the one od and everyone else handles worst: no rows, and
     // a size line of "0000000".  It is fixture 0 in CROSSN.
-    ck(cross_bytes(0).length, 0, "the zero-length fixture really is empty");
+    test.ck_eq("the zero-length fixture really is empty", cross_bytes(0).length, 0);
     say("  " + tostring(CROSSOK) + " of " + tostring(NCROSS + 3)
         + " dumps identical to od, " + tostring(CROSSBYTES) + " bytes compared against "
         + tostring(CROSSODBYTES) + " bytes of od output");
-    ok(CROSSOK > 0, "the cross-check compared something",
-       "0 files agreed -- a vacuous pass");
-    ok(CROSSOK == NCROSS + 3, "every cross-checked file matched od",
-       tostring(CROSSOK) + " of " + tostring(NCROSS + 3));
+    test.ck("the cross-check compared something",
+        CROSSOK > 0,
+        "0 files agreed -- a vacuous pass");
+    test.ck("every cross-checked file matched od",
+        CROSSOK == NCROSS + 3,
+        tostring(CROSSOK) + " of " + tostring(NCROSS + 3));
     0
 };
 
@@ -576,12 +596,14 @@ def one_cross(p: str, label: str) -> void {
     let mineout = tpath("mine.txt");
     let st = exec("od -A d -t x1z -v " + p + " > " + odout + " 2>/dev/null");
     if (st != 0) {
-        ok(false, label + ": od ran", "exit " + tostring(st));
+        test.ck(label + ": od ran", false, "exit " + tostring(st));
         return;
     };
     let rc = run_self("--no-tty --file " + p, mineout);
     if (rc != 0) {
-        ok(false, label + ": hexview ran", "exit " + tostring(rc)
+        test.ck(label + ": hexview ran",
+            false,
+            "exit " + tostring(rc)
            + " " + slurp(mineout));
         return;
     };
@@ -620,7 +642,7 @@ def one_cross(p: str, label: str) -> void {
         CROSSBYTES = CROSSBYTES + len(body);
         CROSSODBYTES = CROSSODBYTES + odlen;
     };
-    ok(len(bad) < 1, label + ": hexview's dump is byte-identical to od's", bad);
+    test.ck(label + ": hexview's dump is byte-identical to od's", len(bad) < 1, bad);
     0
 };
 
@@ -641,7 +663,7 @@ def one_cross(p: str, label: str) -> void {
 def sec_roundtrip() {
     sec("4 round-tripped edits: write, save, re-read with a fresh reader");
     if (!fs.make_dirs(TDIR)) {
-        ok(fs.is_dir(TDIR), "the scratch directory is usable", "cannot make " + TDIR);
+        test.ck("the scratch directory is usable", fs.is_dir(TDIR), "cannot make " + TDIR);
         return 0
     };
     fix_build();
@@ -659,38 +681,42 @@ def sec_roundtrip() {
     fs.remove_file(saved2);
     fs.remove_file(saved + ".tmp");
     fs.remove_file(saved2 + ".tmp");
-    ok(!fs.exists(saved), "the round trip's output file does not exist yet",
-       "a previous run left " + saved + " behind");
-    ok(!fs.exists(saved2), "nor the second one", "a previous run left it behind");
-    ok(fs.write_bytes(orig, fixb(), -1), "wrote the original fixture", "write refused");
+    test.ck("the round trip's output file does not exist yet",
+        !fs.exists(saved),
+        "a previous run left " + saved + " behind");
+    test.ck("nor the second one", !fs.exists(saved2), "a previous run left it behind");
+    test.ck("wrote the original fixture", fs.write_bytes(orig, fixb(), -1), "write refused");
     // Non-vacuity from OUTSIDE the program: the OS says how big it is.
     let sz = fs.file_size(orig);
-    ok(sz != none, "the OS can stat the original", "stat failed");
-    ck(osz_or(sz, 0 - 1), FIXN, "the OS says the original is 48 bytes");
+    test.ck("the OS can stat the original", sz != none, "stat failed");
+    test.ck_eq("the OS says the original is 48 bytes", osz_or(sz, 0 - 1), FIXN);
 
-    ok(hx.open_path(orig), "opened the original", hx.ERRS);
-    ck(hx.SIZE, FIXN, "the open buffer is 48 bytes");
+    test.ck("opened the original", hx.open_path(orig), hx.ERRS);
+    test.ck_eq("the open buffer is 48 bytes", hx.SIZE, FIXN);
     let ecount = 0;
     let k = 0;
     while (k < NEO) {
         let e = hx.set(EDOFS[k], EDVAL[k]);
         if (e != 0) {
-            ok(false, "set at offset " + tostring(EDOFS[k]),
-               hx.set_errname(e));
+            test.ck("set at offset " + tostring(EDOFS[k]),
+                false,
+                hx.set_errname(e));
         };
         ecount = ecount + 1;
         k = k + 1;
     };
-    ck(ecount, NEO, "every edit was accepted");
-    ck(hx.DIRTY, 1, "the buffer knows it is dirty");
-    ok(hx.save(saved), "saved the edited buffer", hx.ERRS);
-    ck(hx.DIRTY, 0, "saving cleared the dirty flag");
+    test.ck_eq("every edit was accepted", ecount, NEO);
+    test.ck_eq("the buffer knows it is dirty", hx.DIRTY, 1);
+    test.ck("saved the edited buffer", hx.save(saved), hx.ERRS);
+    test.ck_eq("saving cleared the dirty flag", hx.DIRTY, 0);
     // hx.save must have created THAT path and no other.  M10 wrote to
     // `saved + ".tmp"`; this is the assertion that notices.
-    ok(fs.file_size(saved) != none, "the save created the file it was told to",
-       saved + " does not exist");
-    ok(!fs.exists(saved + ".tmp"), "and it did not write the bytes beside it",
-       saved + ".tmp exists, so the bytes went somewhere else");
+    test.ck("the save created the file it was told to",
+        fs.file_size(saved) != none,
+        saved + " does not exist");
+    test.ck("and it did not write the bytes beside it",
+        !fs.exists(saved + ".tmp"),
+        saved + ".tmp exists, so the bytes went somewhere else");
 
     // THE FRESH READER.  A new fs.read_bytes, a new array, nothing shared with
     // the buffer that was edited.
@@ -701,19 +727,20 @@ def sec_roundtrip() {
     // named assertion.  (That is exactly what happened: M10 was first reported
     // as a trap because of this line.)
     let sz2 = fs.file_size(saved);
-    ok(sz2 != none, "the OS can stat the saved file", "stat failed");
-    ck(osz_or(sz2, 0 - 1), FIXN,
-       "the saved file is 48 bytes -- an edit did not change the length");
+    test.ck("the OS can stat the saved file", sz2 != none, "stat failed");
+    test.ck_eq("the saved file is 48 bytes -- an edit did not change the length",
+        osz_or(sz2, 0 - 1),
+        FIXN);
     // Again no `!` without a guard: a read of a file that is not there answers
     // `none`, and unwrapping it traps.  The check has to be able to REPORT a
     // mutant that stops `save` writing; it must not die on one.
     let r = fs.read_bytes(saved);
     let got = r != none;
-    ok(got, "a fresh reader can read the saved file", "read refused");
+    test.ck("a fresh reader can read the saved file", got, "read refused");
     let fresh: [byte] = [];
     if (got) { fresh = r!; };
     if (!got) { return 0 };
-    ck(len(fresh), FIXN, "the re-read array is 48 bytes");
+    test.ck_eq("the re-read array is 48 bytes", len(fresh), FIXN);
     let wrong = 0;
     let first = "";
     let changed = 0;
@@ -729,26 +756,29 @@ def sec_roundtrip() {
         };
         if (fresh[i] != fix(i)) { changed = changed + 1; };
         if (fresh[i] != hx.DATA[i]) {
-            ok(false, "the buffer and the file agree at " + tostring(i),
-               "buffer " + tostring(hx.DATA[i]) + ", file " + tostring(fresh[i]));
+            test.ck("the buffer and the file agree at " + tostring(i),
+                false,
+                "buffer " + tostring(hx.DATA[i]) + ", file " + tostring(fresh[i]));
         };
         i = i + 1;
     };
-    ok(wrong == 0, "every byte on disk is the byte that was written", first);
-    ck(changed, NEO, "the pattern differs from the original at exactly "
-       + tostring(NEO) + " offsets -- a save that wrote nothing cannot pass");
+    test.ck("every byte on disk is the byte that was written", wrong == 0, first);
+    test.ck_eq("the pattern differs from the original at exactly "
+       + tostring(NEO) + " offsets -- a save that wrote nothing cannot pass",
+        changed,
+        NEO);
     // The offset-0 edit is the one a truncating writer loses.
-    ck(fresh[0], 255, "the edit at offset 0 is on disk");
+    test.ck_eq("the edit at offset 0 is on disk", fresh[0], 255);
     // The last byte, which a short write loses.
-    ck(fresh[FIXN - 1], 85, "the edit at the last byte is on disk");
+    test.ck_eq("the edit at the last byte is on disk", fresh[FIXN - 1], 85);
     // A row boundary, which an off-by-one row size loses.
-    ck(fresh[16], 128, "the edit at offset 16 is on disk");
+    test.ck_eq("the edit at offset 16 is on disk", fresh[16], 128);
 
     // The file we did NOT save to must still be the original: if the check ever
     // compared the buffer with itself instead of with the disk, this is what
     // catches it.
     let r0 = fs.read_bytes(orig);
-    ok(r0 != none, "a fresh reader can still read the original", "read refused");
+    test.ck("a fresh reader can still read the original", r0 != none, "read refused");
     let untouched: [byte] = [];
     if (r0 != none) { untouched = r0!; };
     let drift = 0;
@@ -757,24 +787,24 @@ def sec_roundtrip() {
         if (untouched[j] != fix(j)) { drift = drift + 1; };
         j = j + 1;
     };
-    ck(drift, 0, "the file that was not written to is untouched");
+    test.ck_eq("the file that was not written to is untouched", drift, 0);
 
     // A second round trip, over a DIFFERENT pattern, so a save path that works
     // the first time by accident is not enough.
-    ok(hx.open_path(saved), "re-opened the saved file", hx.ERRS);
-    ck(hx.SIZE, FIXN, "the re-opened file is 48 bytes");
+    test.ck("re-opened the saved file", hx.open_path(saved), hx.ERRS);
+    test.ck_eq("the re-opened file is 48 bytes", hx.SIZE, FIXN);
     let k2 = 0;
     while (k2 < NEO) {
         let v2 = 255 - EDVAL[k2];
         hx.set(FIXN - 1 - EDOFS[k2], v2);
         k2 = k2 + 1;
     };
-    ok(hx.save(saved2), "saved the second pattern", hx.ERRS);
+    test.ck("saved the second pattern", hx.save(saved2), hx.ERRS);
     let sz3 = fs.file_size(saved2);
-    ck(osz_or(sz3, 0 - 1), FIXN, "the second saved file is 48 bytes");
+    test.ck_eq("the second saved file is 48 bytes", osz_or(sz3, 0 - 1), FIXN);
     let r2 = fs.read_bytes(saved2);
     let got2 = r2 != none;
-    ok(got2, "a fresh reader can read the second save", "read refused");
+    test.ck("a fresh reader can read the second save", got2, "read refused");
     let f2: [byte] = [];
     if (got2) { f2 = r2!; };
     if (!got2) { return 0 };
@@ -792,7 +822,7 @@ def sec_roundtrip() {
         };
         i2 = i2 + 1;
     };
-    ok(wrong2 == 0, "the second round trip landed too", first2);
+    test.ck("the second round trip landed too", wrong2 == 0, first2);
     0
 };
 
@@ -813,8 +843,9 @@ def sec_struct() {
         if (a != b || b != c) { bad = bad + 1; if (badat == 0) { badat = at; } };
         w = w + 1;
     };
-    ok(bad == 0, "struct.get_u32le agrees with multiplication and with shifts",
-       badat == 0 ? "all twelve words agree" : "first disagreement at " + tostring(badat));
+    test.ck("struct.get_u32le agrees with multiplication and with shifts",
+        bad == 0,
+        badat == 0 ? "all twelve words agree" : "first disagreement at " + tostring(badat));
     // And the same three on all 256 byte values, one word at a time, so a reader
     // that is right on this fixture and wrong on a high byte cannot pass.
     let big: [byte; 256] = [0; 256];
@@ -831,12 +862,13 @@ def sec_struct() {
         if (struct.get_u32le(bb, at) != u32_shift(bb, at)) { bad2 = bad2 + 1; };
         w2 = w2 + 1;
     };
-    ck(bad2, 0, "all 256 byte values, read as 64 words, agree three ways");
-    ck(struct.get_u32le(bb, 0), 50462976, "the word at 0 of 0,1,2,...,255 is 03020100");
-    ck(struct.get_u32le(bb, 252), 4294901244,
-       "the word at 252 is fc fd fe ff, little-endian");
-    ck(struct.get_u16le(bb, 0), 0x0100, "the u16 at 0 is 0x0100");
-    ck(struct.get_u8(bb, 255), 255, "the byte at 255 is 255");
+    test.ck_eq("all 256 byte values, read as 64 words, agree three ways", bad2, 0);
+    test.ck_eq("the word at 0 of 0,1,2,...,255 is 03020100", struct.get_u32le(bb, 0), 50462976);
+    test.ck_eq("the word at 252 is fc fd fe ff, little-endian",
+        struct.get_u32le(bb, 252),
+        4294901244);
+    test.ck_eq("the u16 at 0 is 0x0100", struct.get_u16le(bb, 0), 0x0100);
+    test.ck_eq("the byte at 255 is 255", struct.get_u8(bb, 255), 255);
     0
 };
 
@@ -850,74 +882,74 @@ def sec_bounds() {
     sec("6 bounds: every hostile offset is a value, not a trap");
     fix_build();
     hx.adopt(fixb());
-    ck(hx.byte_at(0), 0, "the first byte");
-    ck(hx.byte_at(FIXN - 1), 47, "the last byte");
-    ck(hx.byte_at(0 - 1), 0 - 1, "one byte before the start");
-    ck(hx.byte_at(0 - 1000), 0 - 1, "a long way before the start");
-    ck(hx.byte_at(FIXN), 0 - 1, "one byte past the end");
-    ck(hx.byte_at(FIXN + 1000), 0 - 1, "a long way past the end");
-    ck(hx.byte_at(0 - 9223372036854775807), 0 - 1, "the most negative long");
-    ck(hx.set(0 - 1, 0), hx.E_NEG, "a negative offset is refused");
-    ck(hx.set(FIXN, 0), hx.E_PAST, "an offset at the end is refused");
-    ck(hx.set(FIXN + 1000, 0), hx.E_PAST, "an offset past the end is refused");
-    ck(hx.set(0, 256), hx.E_RANGE, "the value 256 is refused");
-    ck(hx.set(0, 0 - 1), hx.E_RANGE, "the value -1 is refused");
+    test.ck_eq("the first byte", hx.byte_at(0), 0);
+    test.ck_eq("the last byte", hx.byte_at(FIXN - 1), 47);
+    test.ck_eq("one byte before the start", hx.byte_at(0 - 1), 0 - 1);
+    test.ck_eq("a long way before the start", hx.byte_at(0 - 1000), 0 - 1);
+    test.ck_eq("one byte past the end", hx.byte_at(FIXN), 0 - 1);
+    test.ck_eq("a long way past the end", hx.byte_at(FIXN + 1000), 0 - 1);
+    test.ck_eq("the most negative long", hx.byte_at(0 - 9223372036854775807), 0 - 1);
+    test.ck_eq("a negative offset is refused", hx.set(0 - 1, 0), hx.E_NEG);
+    test.ck_eq("an offset at the end is refused", hx.set(FIXN, 0), hx.E_PAST);
+    test.ck_eq("an offset past the end is refused", hx.set(FIXN + 1000, 0), hx.E_PAST);
+    test.ck_eq("the value 256 is refused", hx.set(0, 256), hx.E_RANGE);
+    test.ck_eq("the value -1 is refused", hx.set(0, 0 - 1), hx.E_RANGE);
     // The refusals left the byte alone...
-    ck(hx.byte_at(0), 0, "the refused edits did not land");
+    test.ck_eq("the refused edits did not land", hx.byte_at(0), 0);
     // ... and these two are accepted.
-    ck(hx.set(0, 0), hx.E_OK, "the value 0 is accepted");
-    ck(hx.set(0, 255), hx.E_OK, "the value 255 is accepted");
-    ck(hx.byte_at(0), 255, "the accepted edit landed");
-    ck(hx.DIRTY, 1, "an accepted edit marks the buffer dirty");
+    test.ck_eq("the value 0 is accepted", hx.set(0, 0), hx.E_OK);
+    test.ck_eq("the value 255 is accepted", hx.set(0, 255), hx.E_OK);
+    test.ck_eq("the accepted edit landed", hx.byte_at(0), 255);
+    test.ck_eq("an accepted edit marks the buffer dirty", hx.DIRTY, 1);
     // Every error code has a name that is not "no error".
-    ckstr(hx.set_errname(hx.E_OK), "no error", "the success code's name");
-    ok(hx.set_errname(hx.E_NEG) != "no error", "the negative-offset code is named", "unnamed");
-    ok(hx.set_errname(hx.E_PAST) != "no error", "the past-the-end code is named", "unnamed");
-    ok(hx.set_errname(hx.E_RANGE) != "no error", "the out-of-range code is named", "unnamed");
+    test.ck_str("the success code's name", hx.set_errname(hx.E_OK), "no error");
+    test.ck("the negative-offset code is named", hx.set_errname(hx.E_NEG) != "no error", "unnamed");
+    test.ck("the past-the-end code is named", hx.set_errname(hx.E_PAST) != "no error", "unnamed");
+    test.ck("the out-of-range code is named", hx.set_errname(hx.E_RANGE) != "no error", "unnamed");
 
     // The zero-length file: no rows, and a size line and nothing else.
     let empty: [byte; 0] = [0; 0];
     hx.adopt(empty[0:0]);
-    ck(hx.SIZE, 0, "the empty buffer is 0 bytes");
-    ck(len(hx.DATA), 0, "the empty array is 0 elements");
-    ck(hx.byte_at(0), 0 - 1, "no byte at 0 of an empty file");
-    ck(hx.set(0, 1), hx.E_PAST, "no edit at 0 of an empty file");
-    ck(hx.plan_rows(0, 16, 0), 0, "an empty file plans no rows");
+    test.ck_eq("the empty buffer is 0 bytes", hx.SIZE, 0);
+    test.ck_eq("the empty array is 0 elements", len(hx.DATA), 0);
+    test.ck_eq("no byte at 0 of an empty file", hx.byte_at(0), 0 - 1);
+    test.ck_eq("no edit at 0 of an empty file", hx.set(0, 1), hx.E_PAST);
+    test.ck_eq("an empty file plans no rows", hx.plan_rows(0, 16, 0), 0);
     hx.row(0, 16);
     // 7 offset digits, the separator space, then the hex field -- 3*16+2 = 50
     // columns, 49 of them padding here because the first is the separator -- then
     // '>' and '<' with no gutter between them.
-    ck(hx.LINEN, 7 + 1 + 49 + 1 + 1, "a row of an empty file is offset, padding and the two delimiters");
+    test.ck_eq("a row of an empty file is offset, padding and the two delimiters", hx.LINEN, 7 + 1 + 49 + 1 + 1);
     hx.end_line();
-    ckstr(outs_n(hx.LINEN), "0000000", "an empty file's size line is 0000000");
-    ok(hx.find_byte(0, 0) == 0 - 1, "find_byte on an empty file finds nothing", "found one");
-    ok(hx.find_text("a", 0) == 0 - 1, "find_text on an empty file finds nothing", "found one");
-    ok(hx.find_text("", 0) == 0 - 1, "find_text of the empty string finds nothing", "found one");
+    test.ck_str("an empty file's size line is 0000000", outs_n(hx.LINEN), "0000000");
+    test.ck("find_byte on an empty file finds nothing", hx.find_byte(0, 0) == 0 - 1, "found one");
+    test.ck("find_text on an empty file finds nothing", hx.find_text("a", 0) == 0 - 1, "found one");
+    test.ck("find_text of the empty string finds nothing", hx.find_text("", 0) == 0 - 1, "found one");
 
     // Search: a hit, a miss, and a boundary.
     hx.adopt(fixb());
-    ck(hx.find_byte(240, 0), 16, "the byte 0xf0 is first at offset 16");
-    ck(hx.find_byte(240, 17), 0 - 1, "there is no 0xf0 after offset 16");
-    ck(hx.find_byte(0xff, 0), 31, "the byte 0xff is at offset 31");
-    ck(hx.find_byte(0x99, 0), 0 - 1, "the byte 0x99 is not in the fixture");
-    ck(hx.find_byte(0, 9999), 0 - 1, "a search from past the end finds nothing");
-    ck(hx.find_byte(0x20, 0), 32, "the byte 0x20 is at offset 32");
+    test.ck_eq("the byte 0xf0 is first at offset 16", hx.find_byte(240, 0), 16);
+    test.ck_eq("there is no 0xf0 after offset 16", hx.find_byte(240, 17), 0 - 1);
+    test.ck_eq("the byte 0xff is at offset 31", hx.find_byte(0xff, 0), 31);
+    test.ck_eq("the byte 0x99 is not in the fixture", hx.find_byte(0x99, 0), 0 - 1);
+    test.ck_eq("a search from past the end finds nothing", hx.find_byte(0, 9999), 0 - 1);
+    test.ck_eq("the byte 0x20 is at offset 32", hx.find_byte(0x20, 0), 32);
     // A pattern longer than the file, and one at the very end.  FIX[45..47] is
     // 0x2d 0x2e 0x2f, i.e. "-./" -- the three bytes the fixture's last row ends
     // with, and a '.' among them, so a gutter bug could not hide it.
-    ck(hx.find_text("-./", 45), 45, "the last three bytes match at offset 45");
-    ok(hx.find_text("-./", 46) == 0 - 1, "no three-byte match starts at 46", "found one");
-    ck(hx.find_text("-./", 0), 45, "the same pattern is found from the start");
+    test.ck_eq("the last three bytes match at offset 45", hx.find_text("-./", 45), 45);
+    test.ck("no three-byte match starts at 46", hx.find_text("-./", 46) == 0 - 1, "found one");
+    test.ck_eq("the same pattern is found from the start", hx.find_text("-./", 0), 45);
     let longpat = "0123456789012345678901234567890123456789012345678901234567890123456789";
-    ok(hx.find_text(longpat, 0) == 0 - 1, "a pattern longer than the file never matches", "matched");
+    test.ck("a pattern longer than the file never matches", hx.find_text(longpat, 0) == 0 - 1, "matched");
 
     // Opening something that is not a readable regular file.
-    ok(!hx.open_path("/nonexistent/hexview/nope"), "a missing path is refused", "accepted");
-    ok(len(hx.ERRS) > 0, "a missing path says so", "the message was empty");
-    ok(!hx.open_path("/tmp"), "a directory is refused", "accepted");
-    ok(len(hx.ERRS) > 0, "a directory says so", "the message was empty");
-    ok(!hx.open_path(""), "an empty path is refused", "accepted");
-    ok(len(hx.ERRS) > 0, "an empty path says so", "the message was empty");
+    test.ck("a missing path is refused", !hx.open_path("/nonexistent/hexview/nope"), "accepted");
+    test.ck("a missing path says so", len(hx.ERRS) > 0, "the message was empty");
+    test.ck("a directory is refused", !hx.open_path("/tmp"), "accepted");
+    test.ck("a directory says so", len(hx.ERRS) > 0, "the message was empty");
+    test.ck("an empty path is refused", !hx.open_path(""), "accepted");
+    test.ck("an empty path says so", len(hx.ERRS) > 0, "the message was empty");
     0
 };
 
@@ -1038,11 +1070,11 @@ let PATHOK: long = 0;
 def sec_paths() {
     sec("12 every flag's error path: non-zero exit, ITS OWN message, no trap");
     if (len(SELF) < 1) {
-        ok(false, "the path of this program is known", "SELF is empty");
+        test.ck("the path of this program is known", false, "SELF is empty");
         return 0
     };
     if (!fs.make_dirs(TDIR)) {
-        ok(fs.is_dir(TDIR), "the scratch directory is usable", "cannot make " + TDIR);
+        test.ck("the scratch directory is usable", fs.is_dir(TDIR), "cannot make " + TDIR);
         return 0
     };
     let outp = tpath("case.txt");
@@ -1069,14 +1101,16 @@ def sec_paths() {
             bad = "the message does not mention '" + want + "': " + txt;
         };
         if (len(bad) > 0) {
-            ok(false, "'" + a + "'", bad);
+            test.ck("'" + a + "'", false, bad);
         } else {
             PATHOK = PATHOK + 1;
         };
         i = i + 1;
     };
-    ck(PATHOK, NCASE, "all " + tostring(NCASE)
-       + " error paths exit non-zero with their OWN message and no trap");
+    test.ck_eq("all " + tostring(NCASE)
+       + " error paths exit non-zero with their OWN message and no trap",
+        PATHOK,
+        NCASE);
     // Every message names the program, so a caller can tell whose complaint it
     // is.  The captures are overwritten in the loop above, so this is a second
     // pass; eight execs is worth it.
@@ -1087,7 +1121,7 @@ def sec_paths() {
         if (st2 != 0 && slurp(outp).index_of("hexview") >= 0) { named = named + 1; };
         q = q + 1;
     };
-    ck(named, NCASE, "and every one of them names the program in its message");
+    test.ck_eq("and every one of them names the program in its message", named, NCASE);
     // And the other side of the table: seven invocations that must SUCCEED, so a
     // table that passes because everything fails cannot pass.  --offset 96 is
     // here because an offset equal to the length is a legitimate "seek to the
@@ -1106,13 +1140,13 @@ def sec_paths() {
     let j = 0;
     while (j < 8) {
         let st3 = run_self(good[j], outp);
-        ck(st3, 0, "'" + good[j] + "' succeeds");
+        test.ck_eq("'" + good[j] + "' succeeds", st3, 0);
         j = j + 1;
     };
     // The --save case really wrote, so that row is not passing vacuously.
     let gs = fs.file_size(gp);
-    ok(gs != none, "the --save case wrote a file", "nothing was written");
-    ck(osz_or(gs, 0 - 1), 96, "and it is the sample's 96 bytes");
+    test.ck("the --save case wrote a file", gs != none, "nothing was written");
+    test.ck_eq("and it is the sample's 96 bytes", osz_or(gs, 0 - 1), 96);
     0
 };
 
@@ -1127,17 +1161,17 @@ def sec_hist() {
     sec("7 the histogram conserves the byte count");
     fix_build();
     let p = tpath("hist.bin");
-    ok(fs.write_bytes(p, fixb(), -1), "wrote the histogram fixture", "write refused");
-    ok(hx.open_path(p), "opened it", hx.ERRS);
+    test.ck("wrote the histogram fixture", fs.write_bytes(p, fixb(), -1), "write refused");
+    test.ck("opened it", hx.open_path(p), hx.ERRS);
     let osz = fs.file_size(p);
-    ok(osz != none, "the OS can stat it", "stat failed");
+    test.ck("the OS can stat it", osz != none, "stat failed");
     let i = 0;
     while (i < 256) { HB[i] = 0; i = i + 1; };
     let counted = 0;
     let j = 0;
     while (j < hx.SIZE) { HB[hx.byte_at(j)] = HB[hx.byte_at(j)] + 1; counted = counted + 1; j = j + 1; };
-    ck(counted, osz_or(osz, 0 - 1), "the histogram visited exactly as many bytes as the OS says are there");
-    ck(counted, 48, "and that is 48");
+    test.ck_eq("the histogram visited exactly as many bytes as the OS says are there", counted, osz_or(osz, 0 - 1));
+    test.ck_eq("and that is 48", counted, 48);
     // The counts themselves, from the literal layout: 0x00..0x0f once each,
     // 0xf0..0xff once each, 0x20..0x2f once each, and nothing else.
     let wrong = 0;
@@ -1148,11 +1182,11 @@ def sec_hist() {
         if (HB[v] != want) { wrong = wrong + 1; };
         v = v + 1;
     };
-    ck(wrong, 0, "every byte value's count matches the literal layout");
-    ck(HB[0], 1, "0x00 occurs once");
-    ck(HB[255], 1, "0xff occurs once");
-    ck(HB[32], 1, "0x20 occurs once");
-    ck(HB[64], 0, "0x40 ('@') does not occur");
+    test.ck_eq("every byte value's count matches the literal layout", wrong, 0);
+    test.ck_eq("0x00 occurs once", HB[0], 1);
+    test.ck_eq("0xff occurs once", HB[255], 1);
+    test.ck_eq("0x20 occurs once", HB[32], 1);
+    test.ck_eq("0x40 ('@') does not occur", HB[64], 0);
     0
 };
 
@@ -1170,17 +1204,18 @@ def sec_determinism() {
     let an = collect(a);
     let b: [byte; 4096] = [0; 4096];
     let bn = collect(b);
-    ckstr(from_bytes(b[0:bn]), from_bytes(a[0:an]),
-          "two passes over the same bytes produce the same text");
+    test.ck_str("two passes over the same bytes produce the same text",
+        from_bytes(b[0:bn]),
+        from_bytes(a[0:an]));
     // 7 offset digits + 1 space + 50 hex field + '>' + 16 gutter + '<' = 77, and
     // the size line is 7 digits, so three rows and a size line.
     // 7 offset digits + 1 space + 50 hex field + '>' + 16 gutter + '<' = 75,
     // and the size line is 7 digits.
-    ck(an, 75 * 3 + 7, "the dump is three 75-byte rows and a 7-byte size line");
-    ok(an > 0, "the formatter produced something to compare", "empty");
+    test.ck_eq("the dump is three 75-byte rows and a 7-byte size line", an, 75 * 3 + 7);
+    test.ck("the formatter produced something to compare", an > 0, "empty");
     // A row width of 0 must produce nothing rather than spin.
-    ck(hx.row(0, 0), 0, "a width of 0 formats nothing");
-    ck(hx.row(0, 0 - 1), 0, "a negative width formats nothing");
+    test.ck_eq("a width of 0 formats nothing", hx.row(0, 0), 0);
+    test.ck_eq("a negative width formats nothing", hx.row(0, 0 - 1), 0);
     0
 };
 
@@ -1215,11 +1250,11 @@ def collect(dst: [byte; 4096]) -> long {
 def sec_summary() {
     sec("10 the summary line's own numbers, at eight --rows values");
     if (!fs.make_dirs(TDIR)) {
-        ok(fs.is_dir(TDIR), "the scratch directory is usable", "cannot make " + TDIR);
+        test.ck("the scratch directory is usable", fs.is_dir(TDIR), "cannot make " + TDIR);
         return 0
     };
     hx.adopt(bytes(SAMPLE));
-    ck(hx.SIZE, 96, "the embedded sample is 96 bytes");
+    test.ck_eq("the embedded sample is 96 bytes", hx.SIZE, 96);
     let outp = tpath("sum.txt");
     let pre = "  96 bytes, width 16, from 0, ";
     // No `continue` in this language (ORCHESTRATOR.md §2.10): a guard flag with an explicit
@@ -1232,25 +1267,29 @@ def sec_summary() {
         let lines = txt.split("\n");
         let want = hx.plan_rows(0, 16, r);
         if (st != 0) {
-            ok(false, "--rows " + tostring(r) + " ran", txt);
+            test.ck("--rows " + tostring(r) + " ran", false, txt);
             skip = 1;
         };
         if (skip == 0 && len(lines) < 2) {
-            ok(false, "--rows " + tostring(r) + ": the output has a summary",
-               "one line only");
+            test.ck("--rows " + tostring(r) + ": the output has a summary",
+                false,
+                "one line only");
             skip = 1;
         };
         if (skip == 0) {
             let head = lines[1];
             let a2 = head.index_of(pre);
             if (a2 < 0) {
-                ok(false, "--rows " + tostring(r)
-                   + ": the summary names the file size and the width", head);
+                test.ck("--rows " + tostring(r)
+                   + ": the summary names the file size and the width",
+                    false,
+                    head);
                 skip = 1;
             } else {
                 let b2 = head.index_of(" row");
-                ck(hx.decval(head[a2 + len(pre):b2]), want,
-                   "--rows " + tostring(r) + ": the summary's row count");
+                test.ck_eq("--rows " + tostring(r) + ": the summary's row count",
+                    hx.decval(head[a2 + len(pre):b2]),
+                    want);
             };
         };
         if (skip == 0) {
@@ -1267,8 +1306,10 @@ def sec_summary() {
                 };
                 q = q + 1;
             };
-            ck(dump, want + 1, "--rows " + tostring(r)
-               + ": the dump has that many rows plus the size line");
+            test.ck_eq("--rows " + tostring(r)
+               + ": the dump has that many rows plus the size line",
+                dump,
+                want + 1);
         };
         r = r + 1;
     };
@@ -1276,18 +1317,18 @@ def sec_summary() {
     // empty view -- no rows, and the size line alone.  Pinned from the output
     // side as well as the exit-status side.
     let st3 = run_self("--no-tty --offset 96", outp);
-    ck(st3, 0, "--offset 96 (the length) is accepted");
+    test.ck_eq("--offset 96 (the length) is accepted", st3, 0);
     let t3 = slurp(outp);
-    ok(t3.index_of("0000096\n") >= 0 && t3.index_of("0000000 ") < 0,
-       "--offset 96 prints the size line and no rows at all",
-       "output was " + tostring(len(t3)) + " bytes, first 40 [" + t3[0:40] + "]");
+    test.ck("--offset 96 prints the size line and no rows at all",
+        t3.index_of("0000096\n") >= 0 && t3.index_of("0000000 ") < 0,
+        "output was " + tostring(len(t3)) + " bytes, first 40 [" + t3[0:40] + "]");
     // The width, too: three widths, each with its own row count.
     let ws: [long; 3] = [8, 16, 32];
     let w = 0;
     while (w < 3) {
         let wid = ws[w];
         let st4 = run_self("--no-tty --width " + tostring(wid) + " --rows 2", outp);
-        ok(st4 == 0, "--width " + tostring(wid) + " --rows 2 ran", slurp(outp));
+        test.ck("--width " + tostring(wid) + " --rows 2 ran", st4 == 0, slurp(outp));
         w = w + 1;
     };
     0
@@ -1326,29 +1367,29 @@ let WANT: [long; 256] = [0; 256];
 def sec_hist_printed() {
     sec("8 the histogram hexview prints, cell by cell");
     if (!fs.make_dirs(TDIR)) {
-        ok(fs.is_dir(TDIR), "the scratch directory is usable", "cannot make " + TDIR);
+        test.ck("the scratch directory is usable", fs.is_dir(TDIR), "cannot make " + TDIR);
         return 0
     };
     let outp = tpath("hist.txt");
     let st = run_self("--no-tty --hist", outp);
-    ck(st, 0, "--no-tty --hist ran");
+    test.ck_eq("--no-tty --hist ran", st, 0);
     let txt = slurp(outp);
     let lines = txt.split("\n");
     // The expected counts, from the bytes on disk -- and the total from the OS.
     let raw = fs.read_bytes("data/sample.bin");
     let gotraw = raw != none;
-    ok(gotraw, "a fresh reader can read the shipped sample", "read refused");
+    test.ck("a fresh reader can read the shipped sample", gotraw, "read refused");
     let rb: [byte] = [];
     if (gotraw) { rb = raw!; };
     if (!gotraw) { return 0 };
     let osz = fs.file_size("data/sample.bin");
-    ok(osz != none, "the OS can stat the shipped sample", "stat failed");
+    test.ck("the OS can stat the shipped sample", osz != none, "stat failed");
     let i = 0;
     while (i < 256) { WANT[i] = 0; i = i + 1; };
     let seen = 0;
     i = 0;
     while (i < len(rb)) { WANT[rb[i]] = WANT[rb[i]] + 1; seen = seen + 1; i = i + 1; };
-    ck(seen, osz_or(osz, 0 - 1), "the fresh reader saw as many bytes as the OS says");
+    test.ck_eq("the fresh reader saw as many bytes as the OS says", seen, osz_or(osz, 0 - 1));
     // Non-vacuity: both classes are non-empty in the shipped sample, so a
     // histogram that answered zero everywhere cannot pass.
     let nonzero = 0;
@@ -1358,8 +1399,9 @@ def sec_hist_printed() {
         if (WANT[i] > 0) { nonzero = nonzero + 1; } else { zeros = zeros + 1; };
         i = i + 1;
     };
-    ok(nonzero > 0 && zeros > 0, "the expected histogram has both classes",
-       "nonzero=" + tostring(nonzero) + " zeros=" + tostring(zeros));
+    test.ck("the expected histogram has both classes",
+        nonzero > 0 && zeros > 0,
+        "nonzero=" + tostring(nonzero) + " zeros=" + tostring(zeros));
 
     let gotrows = 0;
     let row = 0;
@@ -1397,10 +1439,11 @@ def sec_hist_printed() {
         };
         i = i + 1;
     };
-    ck(gotrows, 16, "the histogram has sixteen rows");
-    ok(bad == 0, "every one of the 256 printed counts matches the file",
-       len(firstbad) > 0 ? firstbad : "clean");
-    ck(total, osz_or(osz, 0 - 1), "the printed total is the file's length, as the OS reports it");
+    test.ck_eq("the histogram has sixteen rows", gotrows, 16);
+    test.ck("every one of the 256 printed counts matches the file",
+        bad == 0,
+        len(firstbad) > 0 ? firstbad : "clean");
+    test.ck_eq("the printed total is the file's length, as the OS reports it", total, osz_or(osz, 0 - 1));
     0
 };
 
@@ -1411,9 +1454,12 @@ def run(with_od: bool, self: str) -> long {
     say("hexview property check");
     say("  toolkit-free model: hx.y holds a file as [byte]; the row format is");
     say("  GNU od -A d -t x1z -v, reproduced byte for byte");
-    // Non-vacuity, first, before anything is compared anywhere.
-    CHECKS = 0;
-    FAILS = 0;
+    // Non-vacuity, first, before anything is compared anywhere.  CHECKS and
+    // FAILS were this file's own counters and this line used to zero them; they
+    // are std/test.y's now, and std/test.y has no reset(), so the tally is the
+    // whole process.  That is safe because `run()` is reached once per process
+    // (hexview.y's run_check, from --check), and it is a gap worth naming: a
+    // battery run twice in one process would report twice the assertions.
     CROSSOK = 0;
     PATHOK = 0;
     sec_gutter();
@@ -1431,10 +1477,11 @@ def run(with_od: bool, self: str) -> long {
         sec_paths();
     };
     // The count must be real.  A check that ran nothing reports nothing.
-    ok(CHECKS > 200, "the check ran a real number of assertions",
-       "only " + tostring(CHECKS));
-    say("  " + tostring(CHECKS) + " assertions, " + tostring(FAILS)
-        + " failed");
+    test.ck("the check ran a real number of assertions",
+        test.checks() > 200,
+        "only " + tostring(test.checks()));
+    say("  " + tostring(test.checks()) + " assertions, "
+        + tostring(test.failures()) + " failed");
     if (with_od) {
         if (ODSKIP == 1) {
             say("  od cross-check: SKIPPED (no od on this machine) -- the "
@@ -1447,9 +1494,9 @@ def run(with_od: bool, self: str) -> long {
     } else {
         say("  od cross-check: not asked for (--od)");
     };
-    if (FAILS > 0) {
-        say("hexview --check: " + tostring(FAILS) + " of " + tostring(CHECKS)
-            + " assertions FAILED");
+    if (test.failures() > 0) {
+        say("hexview --check: " + tostring(test.failures()) + " of "
+            + tostring(test.checks()) + " assertions FAILED");
         return 1
     };
     say("hexview --check: every property held");

@@ -58,6 +58,7 @@ Yv *arch_heap_cells(void);
 long arch_frame(long slots);
 Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);
+Yv *arch_math_lines(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *tstr(Yv *t);
@@ -137,6 +138,22 @@ static Yv *ty_sig_bkts;
 /* union_shared's answers in this unit, by the union's node. */
 static Yv *ush_nodes;
 static Yv *ush_vals;
+/* The innermost enclosing loop's `break` and `continue` targets, -1 outside any
+ * loop (2025). Labels are ids from labels.c, so -1 is the "none" marker and 0
+ * would not do: it is a real id. Module state rather than an EmitSt field, for
+ * the same reason the globals above are: EmitSt is rebuilt field by field at a
+ * dozen sites and another pair would have to be threaded through all of them.
+ *
+ * Set by the four loop generators just before the body and restored after, so
+ * nesting works -- an inner loop's targets are in force while its body is
+ * generated and the outer loop's are back for whatever follows.
+ *
+ * types.c has already refused a `break` that would cross a function boundary,
+ * so these are only ever read inside the function that set them; emit_one_fn
+ * clears them regardless, because relying on a check in another file to keep
+ * these two consistent is how a jump ends up in an unrelated body. */
+static long brk_label = -1;
+static long cont_label = -1;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
@@ -184,6 +201,7 @@ Yv *tok_at_b(Yv *text, Yv *b, long i, long hi);
 Yv *tok_push(Yv *out, Yv *t);
 Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
 Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
+int directive_line_b(Yv *b, long ls);
 static Yv *ir_refs(Yv *ir);
 static Yv *ir_refs_item(Yv *ir, long at, Yv *out);
 static Yv *ir_refs_push(Yv *out, Yv *nm);
@@ -205,7 +223,8 @@ Yv *prelude_blocks(Yv *lines);
 Yv *lines_refs(Yv *lines, long lo, long hi);
 int lines_fall(Yv *lines, long lo, long hi);
 Yv *shake_prelude(Yv *pb, Yv *roots);
-Yv *prelude_with(Yv *core, int threads);
+Yv *prelude_with(Yv *core, int threads, int mathasm);
+static Yv *lines_appended(Yv *a, Yv *b);
 Yv *unkept_refs(Yv *refs, Yv *bmap, Yv *keep);
 Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots);
 int is_all_digits(Yv *s);
@@ -236,8 +255,10 @@ Yv *uses_scan_node(Yv *node, Yv *out);
 Yv *collect_from_block(Yv *stmts, Yv *out);
 Yv *collect_from_node(Yv *node, Yv *out);
 int uses_threads(Yv *refs);
+int uses_math(Yv *refs);
 int name_in(Yv *xs, Yv *n);
 int is_intrinsic_name(Yv *n);
+Yv *intrinsic_names(void);
 Yv *fv_walk(Yv *node, Yv *out, int collect);
 Yv *fv_walk_list(Yv *nodes, Yv *out, int collect);
 Yv *fv_ids(Yv *node, Yv *out);
@@ -1783,7 +1804,10 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
         } else if (ys_eq_lit(w, "lea")) {
             out = tok_push(out, tok_at_b(text, b, op, hi));
             ;
-        } else if (ys_eq_lit(w, "mov")) {
+        } else if (ys_eq_lit(w, "mov") || ys_eq_lit(w, "movsd") || ys_eq_lit(w, "movss")
+                   || ys_eq_lit(w, "movapd") || ys_eq_lit(w, "addsd") || ys_eq_lit(w, "subsd")
+                   || ys_eq_lit(w, "mulsd") || ys_eq_lit(w, "divsd") || ys_eq_lit(w, "addss")
+                   || ys_eq_lit(w, "subss") || ys_eq_lit(w, "mulss") || ys_eq_lit(w, "divss")) {
             long q = p;
             int go = 1;
             while (go) {
@@ -1814,6 +1838,42 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
                 }
                 ;
             }
+            /* An SSE form can name a label, and the `mov`-scan above only looks
+             * at a `$`-immediate -- so a kernel's `mulsd c7(%rip), %xmm0`, which
+             * is the one mention of a coefficient-table entry in the whole
+             * program, was invisible to the shaker and the table was dropped (an
+             * undefined label at link time). Both operands are pushed here: the
+             * syntax is AT&T, so the source is the FIRST one and `movsd`'s store
+             * form puts the memory SECOND, and a register name matches no label,
+             * so the extra token costs nothing. */
+            if (!ys_eq_lit(w, "mov")) {
+                Yv *t1 = tok_at_b(text, b, op, hi);
+                if (yv_len(t1) > 0) {
+                    out = tok_push(out, t1);
+                    ;
+                }
+                long q2 = op;
+                int seen = 0;
+                while (q2 < hi && !seen) {
+                    if (yv_l(ya_get(b, q2)) == 44 || yv_l(ya_get(b, q2)) == 36) {
+                        seen = 1;
+                        ;
+                    } else {
+                        q2 = q2 + 1;
+                        ;
+                    }
+                    ;
+                }
+                if (seen && yv_l(ya_get(b, q2)) == 44) {
+                    Yv *t2 = tok_at_b(text, b, skip_sp(b, q2 + 1, hi), hi);
+                    if (yv_len(t2) > 0) {
+                        out = tok_push(out, t2);
+                        ;
+                    }
+                    ;
+                }
+                ;
+            }
             ;
         } else {
             if (want_jumps) {
@@ -1836,18 +1896,46 @@ Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
     Yv *res = out;
     while (i < hi) {
         if (yv_l(ya_get(b, i)) == 10) {
-            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            if (!directive_line_b(b, ls)) {
+                res = line_refs_b(text, b, ls, i, res, want_jumps);
+                ;
+            }
             ls = i + 1;
             ;
         }
         i = i + 1;
     }
     if (ls < hi) {
-        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        if (!directive_line_b(b, ls)) {
+            res = line_refs_b(text, b, ls, hi, res, want_jumps);
+            ;
+        }
         ;
     }
     return res;
 }
+
+/* A line that opens with `.` is a directive, and no directive this assembler has
+   names a label: `.text`/`.data`/`.bss`/`.section`/`.globl` take a section,
+   `.quad`/`.zero` a number, `.string`/`.ascii` text, and `.file`/`.loc` a DWARF
+   file and line -- the path in a `.file` goes in a fixup's label FIELD, which is
+   not a code reference and matches no label. Scanning them was pure cost, and
+   arch_consts is nearly all directives: a `.quad` of a float constant costs ~27
+   instructions per byte to scan, which is ~33K instructions on every compile of
+   a program that does not use math at all. The coefficient tables are the reason
+   that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
+   measured 0.85% rather than a guess. */
+int directive_line_b(Yv *b, long ls) {
+    if (ls < yv_len(b)) {
+        return yv_l(ya_get(b, ls)) == 46;
+        ;
+    }
+    return 0;
+}
+
+/* text_refs (the text scan that answered this over a body's text) is gone: the
+   items say all of it, and asking twice was the same answer twice. The text
+   scans below stay, because arch_consts and the arch asm are still text. */
 
 /* The label a line [lo, hi) defines, or "". */
 Yv *label_at(Yv *text, Yv *b, long lo, long hi) {
@@ -2461,19 +2549,37 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
 }
 
 /* The prelude's lines, the thread runtime's after them when it is used. */
-Yv *prelude_with(Yv *core, int threads) {
-    if (threads) {
-        Yv *out = ya_slice(core, 0, yv_len(core));
-        Yv *t = arch_prelude_threads_lines();
-        long i = 0;
-        while (i < yv_len(t)) {
-            out = ya_push(out, ya_get(t, i));
-            i = i + 1;
-        }
-        return out;
-    } else {
-        return core;
+/* a, then b: a NEW array (the Y `+` on arrays), which is the copy the loop
+ * needs anyway. */
+static Yv *lines_appended(Yv *a, Yv *b) {
+    Yv *out = ya_slice(a, 0, yv_len(a));
+    long i = 0;
+    while (i < yv_len(b)) {
+        out = ya_push(out, ya_get(b, i));
+        i = i + 1;
     }
+    return out;
+}
+
+Yv *prelude_with(Yv *core, int threads, int mathasm) {
+    /* The thread runtime's and the float primitives' lines only when a
+     * program's code calls into them (uses_threads / uses_math): a `native
+     * def` names one of those as its body, so the call is a reference like
+     * any other and the shaking keeps the block.
+     *
+     * Appending one at a time is not just tidier: `+` on an array makes a NEW
+     * one, so concatenating unconditionally copied the prelude's ~1500 lines
+     * for every compile that wanted neither -- 52K instructions on hello.y,
+     * which is 99.9% of what this module cost before the branches (callgrind,
+     * bench/compile_ir.sh). */
+    Yv *out = core;
+    if (threads) {
+        out = lines_appended(core, arch_prelude_threads_lines());
+    }
+    if (mathasm) {
+        out = lines_appended(out, arch_math_lines());
+    }
+    return out;
 }
 
 /* The references (a kept prelude's) that name a body not kept. */
@@ -2688,12 +2794,13 @@ Yv *strip_ns(Yv *node, Yv *imports) {
     } else if (yv_l(k) == K_decl) {
         return strip_decl(node, imports);
     } else if (yv_l(k) == K_func) {
-        return normnode(yr(8, "k", yv_long(K_func), "params", yr_get(node, "params"),
+        return normnode(yr(9, "k", yv_long(K_func), "params", yr_get(node, "params"),
                            "ptypes", yr_get(node, "ptypes"), "ret",
                            yr_get(node, "ret"), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col"),
-                           "defs", yr_get(node, "defs")));
+                           "defs", yr_get(node, "defs"), "label",
+                           yr_get(node, "label")));
     } else if (yv_l(k) == K_assign) {
         return normnode(yr(5, "k", yv_long(K_assign), "name", yr_get(node, "name"),
                            "v", strip_ns(yr_get(node, "v"), imports), "line",
@@ -3469,6 +3576,8 @@ Yv *infer_go(Yv *st, Yv *node) {
         return infer(st, yr_get(node, "v"));
     } else if (yv_l(k) == K_kw_while) {
         return yr(1, "k", yv_long(K_tvoid));
+    } else if (yv_l(k) == K_kw_break || yv_l(k) == K_kw_continue) {
+        return yr(1, "k", yv_long(K_tvoid));
     } else if (yv_l(k) == K_ret) {
         return infer(st, yr_get(node, "e"));
     } else {
@@ -3873,6 +3982,37 @@ int uses_threads(Yv *refs) {
     return found;
 }
 
+/* The float primitives (src/y/arch/math.s), by the same rule as the thread
+ * runtime: a `native def` names one as its body, so the call is a reference
+ * like any other and the block stays. Looking first is what makes this cheap
+ * -- split()ing the lines for every compile measured +2.6% instructions on
+ * hello.y, against a few dozen lines (bench/compile_ir.sh). */
+int uses_math(Yv *refs) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(refs) && !found) {
+        Yv *r = ya_get(refs, i);
+        long n = yv_len(r);
+        /* y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10, and the
+           length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
+           y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8 */
+        found = (n == 5 && (ys_eq_lit(r, "y_exp") || ys_eq_lit(r, "y_log") || ys_eq_lit(r, "y_pow")
+                            || ys_eq_lit(r, "y_sin") || ys_eq_lit(r, "y_cos") || ys_eq_lit(r, "y_dot")
+                            || ys_eq_lit(r, "y_sum")))
+            || (n == 6 && ys_eq_lit(r, "y_sqrt"))
+            || (n == 7 && (ys_eq_lit(r, "y_fbits") || ys_eq_lit(r, "y_bitsf")))
+            || (n == 8 && (ys_eq_lit(r, "y_to_int") || ys_eq_lit(r, "y_min_of") || ys_eq_lit(r, "y_max_of")
+                           || ys_eq_lit(r, "y_scale") || ys_eq_lit(r, "y_axpy")))
+            || (n == 10 && (ys_eq_lit(r, "y_int_trap") || ys_eq_lit(r, "y_len_stop")))
+            /* the encoder's own form probes: y_sse_forms, y_sse_flags,
+               y_test_imm */
+            || (n == 11 && (ys_eq_lit(r, "y_sse_forms") || ys_eq_lit(r, "y_sse_flags")))
+            || (n == 10 && ys_eq_lit(r, "y_test_imm"));
+        i = i + 1;
+    }
+    return found;
+}
+
 int name_in(Yv *xs, Yv *n) {
     long i = 0;
     int found = 0;
@@ -3890,20 +4030,38 @@ int name_in(Yv *xs, Yv *n) {
 }
 
 /* Builtins are resolved by name at the call site, never captured. */
-int is_intrinsic_name(Yv *n) {
-    return name_in(
-        yav(47, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
-            ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
-            ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
-            ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
-            ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
-            ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
-            ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
-            ys("exit"), ys("argv"), ys("range"), ys("typeof"),
-            ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("jmp_at"),
-            ys("self"), ys("none"), ys("#fmt")),
-        n);
+/* The builtins, as a list rather than an inline argument, so that the ONE copy
+ * can be handed out. 1:1 with INTRINSICS in src/y/native.y, whose comment says
+ * why: the language server's completion list used to be its own transcription
+ * of this, which is exactly the kind of copy that rots -- adding a builtin left
+ * the server offering the old set and nothing failed. Built on first use
+ * because C has no module-level initializer to hang a `let` on, and because
+ * is_intrinsic_name is reachable from paths that run before any reset. */
+static Yv *INTRINSICS;
+
+static Yv *intrinsics(void) {
+    if (INTRINSICS == NULL) {
+        INTRINSICS =
+            yav(47, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+                ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
+                ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
+                ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
+                ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
+                ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
+                ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
+                ys("exit"), ys("argv"), ys("range"), ys("typeof"),
+                ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("jmp_at"),
+                ys("self"), ys("none"), ys("#fmt"));
+    }
+    return INTRINSICS;
 }
+
+int is_intrinsic_name(Yv *n) { return name_in(intrinsics(), n); }
+
+/* The same list, for a caller that needs to enumerate it rather than test one
+ * name (the language server's completion list -- see LSP.md R5.3). Returns the
+ * live array, so a caller must not modify it. */
+Yv *intrinsic_names(void) { return intrinsics(); }
 
 /* Every identifier READ in a subtree (callee names included: calling a
  * captured closure needs the name captured too). With `collect` false,
@@ -4353,6 +4511,14 @@ Yv *gen_go(Yv *st, Yv *node) {
         return gen_func_literal(st, node);
     } else if (yv_l(k) == K_store) {
         return gen_store(st, node);
+    } else if (yv_l(k) == K_kw_break) {
+        /* types.c has already refused a `break` with no loop to leave and one
+         * that would cross a function boundary, so `brk_label` is a live label
+         * here. Nothing is left in %rax: the merge label that follows needs no
+         * value (the same reason a loop's own does not -- see gen_while). */
+        return emit_insn(st, F_JMP_L, brk_label, 0, 0, 0, 0, 0, 0);
+    } else if (yv_l(k) == K_kw_continue) {
+        return emit_insn(st, F_JMP_L, cont_label, 0, 0, 0, 0, 0, 0);
     } else if (yv_l(k) == K_ret) {
         st = gen_as(st, yr_get(node, "e"), cur_fn_ret(st));
         return emit_insn(st, F_JMP_L, yv_l(yr_get(st, "end_label")), 0, 0, 0, 0, 0, 0);
@@ -6910,7 +7076,15 @@ Yv *gen_while(Yv *st, Yv *node) {
         st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, F_JZ_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     }
+    /* A `while` has no step, so "the next turn" IS the head: continue goes to
+     * r1 and nothing else is needed. */
+    long saved_brk = brk_label;
+    long saved_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r1, "label"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = saved_brk;
+    cont_label = saved_cont;
     st = gen_loc_loop(st, node);
     st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
     return emit_label(st, yv_l(yr_get(r2, "label")));
@@ -6946,7 +7120,20 @@ Yv *gen_for(Yv *st, Yv *node) {
         st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, F_JZ_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
     }
+    /* `for` is the one loop where `continue` cannot go to the head: the step is
+     * between the body and the head, and skipping it would leave the loop
+     * variable where it was -- `for (i = 0; i < n; i++) { continue; }` would
+     * never end. So a third label sits between the body and the step. */
+    Yv *r3 = next_loc(st);
+    st = yr_get(r3, "st");
+    long f_brk = brk_label;
+    long f_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r3, "label"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = f_brk;
+    cont_label = f_cont;
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
     st = gen_loc_loop(st, node);
     st = gen(st, yr_get(node, "step"));
     st = emit_insn(st, F_JMP_L, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
@@ -6987,10 +7174,31 @@ Yv *gen_forrange(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, loff, -1, R_RCX, 64);
     st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
-    /* a captured loop variable gets a fresh cell per iteration (the
-     * counter itself stays in its raw slot) */
+    /* `continue` goes to a label just BEFORE the increment, not to the head.
+     *
+     * Two mistakes are available here and both were made before this was right.
+     * Jumping to the head looks right -- "the next turn" -- but the counter is
+     * incremented at the BOTTOM of the loop, after the body, so a `continue`
+     * that jumps to the head never advances it and the loop spins forever on one
+     * value. (`for x in 0..10 { if x < 5 { continue; } ... }` hung.) Jumping to
+     * the increment itself is correct, and the fresh per-turn cell is still
+     * made: box_bound runs at the TOP of the next turn, which the `jmp r1` after
+     * the increment reaches. So the label goes before the `inc`, and the reason
+     * it is not simply the `inc` is that nothing may run between them.
+     *
+     * The cell itself: a captured loop variable gets a fresh one per iteration
+     * (the counter itself stays in its raw slot). */
+    Yv *r3 = next_loc(st);
+    st = yr_get(r3, "st");
+    long r_brk = brk_label;
+    long r_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r3, "label"));
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = r_brk;
+    cont_label = r_cont;
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit_insn(st, F_INC_D, R_RBP, -1, 1, voff, -1, 0, 0);
@@ -7052,8 +7260,18 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     /* x = arr[i] */
     st = elem_load(st, arr_elem_bytes(elt), R_RDX, R_RAX, R_RCX);
     st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RBP, -1, 1, voff, -1);
+    /* continue -> just before the increment, for the reason in gen_forrange */
+    Yv *r3 = next_loc(st);
+    st = yr_get(r3, "st");
+    long e_brk = brk_label;
+    long e_cont = cont_label;
+    brk_label = yv_l(yr_get(r2, "label"));
+    cont_label = yv_l(yr_get(r3, "label"));
     st = box_bound(st, yr_get(node, "name"));
     st = gen_discard(st, yr_get(node, "body"));
+    brk_label = e_brk;
+    cont_label = e_cont;
+    st = emit_label(st, yv_l(yr_get(r3, "label")));
     st = gen_loc_loop(st, node);
     /* the counter in place: one instruction, not a load, an inc and a store */
     st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
@@ -9816,13 +10034,13 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
  * compiled it. */
 static Yv *path_push(Yv *path, Yv *t) {
     Yv *p = yav(0);
-    for (size_t i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
+    for (long i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
     return ya_push(p, t);
 }
 
 static int type_on_path(Yv *t, Yv *path) {
     int found = 0;
-    for (size_t i = 0; i < yv_len(path); i++) {
+    for (long i = 0; i < yv_len(path); i++) {
         /* the same node: a recursive alias is one shared node (teq) */
         if (ya_get(path, i) == t) found = 1;
     }
@@ -10940,6 +11158,14 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
      * closure literal), so the caller's mark is put back on the way out. */
     long prev_max = frame_max;
     frame_max = 0;
+    /* No loop encloses this body: any loop the closure was made inside is in
+     * the CALLER's function, and a jump out of one into another is what the
+     * checker's function-boundary rule refuses. Clearing here makes the emitter
+     * right on its own terms rather than relying on that check in another file. */
+    long prev_brk = brk_label;
+    long prev_cont = cont_label;
+    brk_label = -1;
+    cont_label = -1;
     Yv *f = yr(15, "ir", yav(0), "txt", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(fuid), "loc", yv_long(1),
                "env", yav(0), "slots", yv_long(0), "temp", yv_long(0), "self_label", label,
@@ -11049,6 +11275,8 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     if (peak > frame_max) { frame_max = peak; }
     long frame = arch_frame(frame_max);
     frame_max = prev_max;
+    brk_label = prev_brk;
+    cont_label = prev_cont;
     /* The body is one IR stream: the prologue, what the body emitted, the
      * epilogue (see ir.h). The text the linker and -S read is rendered from
      * it, so nothing here is spelled twice. */
@@ -11867,8 +12095,15 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                 hdefs = ya_push(hdefs, d);
                 Yv *rl = next_uid(st);
                 st = yr_get(rl, "st");
-                Yv *label = fn_label_of(yv_l(yr_get(rl, "uid")),
+                /* A native def's label is the one it named -- the assembly
+                 * it calls into. Everything else gets a generated label. */
+                Yv *label;
+                if (yv_len(yr_get(yr_get(d, "func"), "label")) > 0) {
+                    label = yr_get(yr_get(d, "func"), "label");
+                } else {
+                    label = fn_label_of(yv_l(yr_get(rl, "uid")),
                                         yr_get(d, "name"));
+                }
                 Yv *lid = lbl_new(label);
                 hsyms = ya_push(
                     hsyms,
@@ -11992,15 +12227,19 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                 "end_label", yr_get(st, "end_label"),
                 "fns", fntab_of(fixedfns, idsA), "bodies",
                 yr_get(st, "bodies"), "btext", yr_get(st, "btext"), "blabels", yr_get(st, "blabels"));
-        /* emit each hoisted body */
+        /* emit each hoisted body. A native def has none: its label names
+         * assembly that is already in the output, so emitting anything under
+         * that label would duplicate it. */
         i = 0;
         while (i < yv_len(hdefs)) {
             Yv *d = ya_get(hdefs, i);
-            Yv *fids = yr_get(yr_get(st, "fns"), "ids");
-            Yv *rf = next_uid(st);
-            st = yr_get(rf, "st");
-            st = emit_one_fn(st, ya_get(fids, i), yv_l(yr_get(rf, "uid")),
-                             yr_get(d, "func"), 0, 0, yav(0), ys(""));
+            if (yv_len(yr_get(yr_get(d, "func"), "label")) == 0) {
+                Yv *fids = yr_get(yr_get(st, "fns"), "ids");
+                Yv *rf = next_uid(st);
+                st = yr_get(rf, "st");
+                st = emit_one_fn(st, ya_get(fids, i), yv_l(yr_get(rf, "uid")),
+                                 yr_get(d, "func"), 0, 0, yav(0), ys(""));
+            }
             i = i + 1;
         }
         pr = phase_end(times, ys("emit_fns"), pt, ph);
@@ -12659,7 +12898,8 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *body_refs = yr_get(shaken, "refs");
     Yv *core_lines = arch_prelude_lines();
     int thr = uses_threads(body_refs);
-    Yv *pb = prelude_blocks(prelude_with(core_lines, thr));
+    int mth = uses_math(body_refs);
+    Yv *pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     Yv *ps = shake_prelude(pb, body_refs);
     /* A kept prelude block may call a Y helper (none does today): the
      * helper is kept too, and everything shaken again from there. */
@@ -12674,9 +12914,10 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         shaken = prune_bodies(labels, refs, extra);
         keep = yr_get(shaken, "keep");
         body_refs = yr_get(shaken, "refs");
-        if (!thr && uses_threads(body_refs)) {
-            thr = 1;
-            pb = prelude_blocks(prelude_with(core_lines, thr));
+        if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
+            if (uses_threads(body_refs)) { thr = 1; }
+            if (uses_math(body_refs)) { mth = 1; }
+            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         }
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
