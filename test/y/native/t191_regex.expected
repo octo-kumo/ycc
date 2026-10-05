@@ -88,7 +88,7 @@
 [(?i)(?:AB)+] on [abAB] -> [abAB] at 0
 [(?i)a(?i)b] on [AB] -> [AB] at 0
 [(?i)(a)] on [A] -> [A] at 0
-[(?i)(?-i:a)b] on [Ab] -> does not compile
+[(?i)(?-i:a)b] on [Ab] -> does not compile: a flag cannot be turned off at byte 6
 [(?s).+] on [a\nb] -> [a\nb] at 0
 [(?im)^a$] on [A\nb] -> [A] at 0
 [foo(?=bar)] on [foobar] -> [foo] at 0
@@ -101,40 +101,45 @@
 [(?<=ab)c] on [abc] -> [c] at 2
 [\d+(?=%)] on [50%] -> [50] at 0
 [(?!b)(?!c)a] on [ad] -> [a] at 0
-[(?<=a|ab)c] on [abc] -> does not compile
+[(?<=a|ab)c] on [abc] -> does not compile: lookbehind must be a fixed width at byte 9
 search_at: 123 123 none none
 match_at:  12 none none
 anchored:  none none some
 escape: a\.b\*c\ d
 escape: x\x09y
-[[a] on [a] -> does not compile
-[(ab] on [ab] -> does not compile
-[ab)] on [ab] -> does not compile
-[*a] on [a] -> does not compile
-[a**] on [a] -> does not compile
-[a*+] on [a] -> does not compile
-[a\] on [a] -> does not compile
-[a\q] on [aq] -> does not compile
-[a{2,x}] on [a] -> does not compile
-[a{5,2}] on [a] -> does not compile
-[a{1,2000}] on [a] -> does not compile
-[(?<=a+)b] on [aab] -> does not compile
-[(?=(a))a] on [a] -> does not compile
-[(?P<n>a)] on [a] -> does not compile
-[(?<n>a)(?<n>b)] on [ab] -> does not compile
-[(?<1n>a)] on [a] -> does not compile
-[(?<>a)] on [a] -> does not compile
-[(?q)a] on [a] -> does not compile
-[(?i)(?-i:a)] on [a] -> does not compile
-[[[:foo:]]] on [a] -> does not compile
-[[z-a]] on [a] -> does not compile
+[[a] on [a] -> does not compile: unterminated character class at byte 2
+[(ab] on [ab] -> does not compile: unterminated group at byte 3
+[ab)] on [ab] -> does not compile: unbalanced ) at byte 2
+[*a] on [a] -> does not compile: nothing to repeat at byte 0
+[a**] on [a] -> does not compile: two repetitions in a row at byte 2
+[a*+] on [a] -> does not compile: a repetition cannot be possessive at byte 2
+[a\] on [a] -> does not compile: pattern ends with a backslash at byte 2
+[a\q] on [aq] -> does not compile: unknown escape \q at byte 2
+[a{2,x}] on [a] -> does not compile: bad repetition count at byte 4
+[a{5,2}] on [a] -> does not compile: a repetition count is out of order at byte 6
+[a{1,2000}] on [a] -> does not compile: a repetition count must be at most 1000 at byte 9
+[(?<=a+)b] on [aab] -> does not compile: lookbehind must be a fixed width at byte 7
+[(?=(a))a] on [a] -> does not compile: a group cannot be inside a lookaround at byte 7
+[(?P<n>a)] on [a] -> does not compile: unknown flag 'P' at byte 2
+[(?<n>a)(?<n>b)] on [ab] -> does not compile: duplicate group name 'n' at byte 12
+[(?<1n>a)] on [a] -> does not compile: a group name must start with a letter or _ at byte 3
+[(?<>a)] on [a] -> does not compile: a group name must start with a letter or _ at byte 3
+[(?<n] on [a] -> does not compile: a group name must end with > at byte 4
+[(?i] on [a] -> does not compile: pattern ends inside a (? flag at byte 3
+[(?)] on [a] -> does not compile: unknown (? construct at byte 1
+[(?q)] on [a] -> does not compile: unknown flag 'q' at byte 2
+[(?q)a] on [a] -> does not compile: unknown flag 'q' at byte 2
+[(?i)(?-i:a)] on [a] -> does not compile: a flag cannot be turned off at byte 6
+[[[:foo:]]] on [a] -> does not compile: unknown class [:foo:] at byte 1
+[[z-a]] on [a] -> does not compile: a range is out of order at byte 4
 [[a-]] on [a] -> [a] at 0
-[\x{110000}] on [a] -> does not compile
-[\x{ d}] on [a] -> does not compile
-[\x{41] on [a] -> does not compile
-[\xZZ] on [a] -> does not compile
-[\1] on [a] -> does not compile
-[(a)\1] on [aa] -> does not compile
+[[a-\d]] on [a] -> does not compile: a range needs two bytes at byte 5
+[\x{110000}] on [a] -> does not compile: a \x{} value must be at most 0x10ffff at byte 10
+[\x{ d}] on [a] -> does not compile: a \x{} needs at least one hex digit at byte 3
+[\x{41] on [a] -> does not compile: a \x{ is not closed at byte 5
+[\xZZ] on [a] -> does not compile: a \x needs two hex digits at byte 2
+[\1] on [a] -> does not compile: a backreference is not supported at byte 1
+[(a)\1] on [aa] -> does not compile: a backreference is not supported at byte 4
 1000 reps: 
 1001 reps: a repetition count must be at most 1000 at byte 7
 too many instructions: the pattern needs more than 4096 instructions

@@ -28,7 +28,9 @@ def hex2(v: long) -> str {
 def line(pat: str, subj: str) -> long {
     let re = regex.compile(pat);
     if (re == none) {
-        print(show(pat), " on ", show(subj), " -> does not compile");
+        // the message too, not just the refusal: this is what puts every one of
+        // them in the expected output, so a reworded or broken message is a diff
+        print(show(pat), " on ", show(subj), " -> does not compile: ", regex.check(pat));
         return 0;
     };
     let r = re!;
@@ -204,11 +206,16 @@ line("(?P<n>a)", "a");
 line("(?<n>a)(?<n>b)", "ab");
 line("(?<1n>a)", "a");
 line("(?<>a)", "a");
+line("(?<n", "a");
+line("(?i", "a");
+line("(?)", "a");
+line("(?q)", "a");
 line("(?q)a", "a");
 line("(?i)(?-i:a)", "a");
 line("[[:foo:]]", "a");
 line("[z-a]", "a");
 line("[a-]", "a");
+line("[a-\\d]", "a");
 line("\\x{110000}", "a");
 line("\\x{ d}", "a");
 line("\\x{41", "a");
