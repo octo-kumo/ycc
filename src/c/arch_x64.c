@@ -174,5 +174,7 @@ Yv *arch_consts(void) {
     lines = ya_push(lines, ys("ystr_oom_end:"));
     lines = ya_push(lines, ys("ystr_opt: .ascii \"runtime error: unwrap of none\\n\""));
     lines = ya_push(lines, ys("ystr_opt_end:"));
+    lines = ya_push(lines, ys("ystr_int: .ascii \"runtime error: a float with no integer part a long holds\\n\""));
+    lines = ya_push(lines, ys("ystr_int_end:"));
     return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
 }

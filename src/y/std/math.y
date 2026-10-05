@@ -298,6 +298,312 @@ let phi: float = 1.618033988749895;
 let nan: float = 0.0 / 0.0;
 let inf: float = 1.0 / 0.0;
 
+// ── the machine primitives, and the exact layer built on them ────────────────
+//
+// Everything below this point needs a float's bits or a double-to-long cast,
+// which Y has no spelling for: `native def` names the assembly that does it
+// (src/y/arch/math.s, the four functions) and the rest is ordinary Y. A
+// `native def` is a promise about a label that nothing here can check, so
+// these four are the whole trust boundary -- the shapes below are exact.
+
+native def sqrt(x: float) -> float = "y_sqrt";
+native def raw_to_int(x: float) -> long = "y_to_int";
+native def fbits(x: float) -> long = "y_fbits";
+native def bitsf(b: long) -> float = "y_bitsf";
+// The trap the checked cast stops at (a message and an exit; the machine cast
+// itself cannot report the case, it answers with LONG_MIN).
+native def int_trap() -> long = "y_int_trap";
+
+// 2^63, the smallest double no long holds: the boundary every truncating cast
+// below checks against. It cannot be written as a literal -- its integer part
+// does not fit a long, and Y builds a float literal from one -- so it is the
+// product that is exact anyway.
+let two63: float = 4611686018427387904.0 * 2.0;
+
+// The sign bit of a double's bit pattern, as a long: 2^63, which is one past
+// the largest long and so cannot be spelled. The minimum long added to a
+// pattern does not have it carries into the top bit, which SETS the sign;
+// clearing it again is a subtraction, so the two helpers below are one each and
+// nothing depends on writing 2^63.
+def sign_bit() -> long {
+    0 - 9223372036854775807 - 1
+};
+
+// The sign bit CLEARED: a pattern that has it comes back to its magnitude.
+def without_sign(b: long) -> long {
+    if (b < 0) { b + sign_bit() } else { b }
+};
+
+// 2^52: adding k of these to a double's bits adds k to its exponent FIELD.
+// This is the whole of ldexp and one step of exp's range reduction, and it has
+// to be a long, because a float times a long is a float and there is no way
+// back.
+//
+// The field carries a BIAS of 1023, so adding k to it scales by 2^k exactly --
+// 1.0's pattern 0x3FF0000000000000 + 2^52 is 0x4000000000000000, which is 2.0.
+let two52: long = 4503599627370496;
+
+// The 11-bit exponent field of a double, as a long.
+def exp_field(x: float) -> long {
+    (fbits(x) >>> 52) & 2047
+};
+
+// C's (float) -> long: the integer part, truncated toward zero. A NaN, an
+// infinity, or a magnitude past the largest long has no answer, and the cast
+// cannot say so -- it gives back LONG_MIN for all three, which is a perfectly
+// good number and would sail on as one. So they are checked here and stop the
+// program with a message that says what happened.
+def to_int(x: float) -> long {
+    if (x != x) {
+        int_trap()
+    } else if (x >= two63 || x < 0.0 - two63) {
+        int_trap()
+    } else {
+        raw_to_int(x)
+    }
+};
+
+// floor(x): the greatest integer <= x. to_int truncates, so a negative x is one
+// too high exactly when it had a fractional part; the zero case returns x
+// itself so that floor(-0.0) is -0.0 and not +0.0 (C preserves the sign).
+def floor(x: float) -> float {
+    if (x != x || x >= two63 || x < 0.0 - two63) {
+        x
+    } else if (x == 0.0) {
+        x
+    } else {
+        // a long widens to a float implicitly (one cvtsi2sd), which is the
+        // conversion bitsf is NOT: that one reinterprets the bits
+        let t: float = raw_to_int(x);
+        if (t > x) { t - 1.0 } else { t }
+    }
+};
+
+// ceil(x): the least integer >= x, with the same zero rule.
+def ceil(x: float) -> float {
+    if (x != x || x >= two63 || x < 0.0 - two63) {
+        x
+    } else if (x == 0.0) {
+        x
+    } else {
+        let t: float = raw_to_int(x);
+        if (t < x) { t + 1.0 } else { t }
+    }
+};
+
+// trunc(x): the integer part with the fractional part dropped -- what to_int
+// gives, as a float, keeping the sign of a zero.
+def trunc(x: float) -> float {
+    if (x != x || x >= two63 || x < 0.0 - two63) {
+        x
+    } else if (x == 0.0) {
+        x
+    } else {
+        let t: float = raw_to_int(x);
+        t
+    }
+};
+
+// round(x): the nearest integer, halves away from zero (C's round, not the
+// current rounding mode and not rint).
+def round(x: float) -> float {
+    let t = trunc(x);
+    if (x != x || x >= two63 || x < 0.0 - two63) {
+        x
+    } else {
+        let d = x - t;
+        if (d >= 0.5) { t + 1.0 } else if (d <= -0.5) { t - 1.0 } else { t }
+    }
+};
+
+// fract(x): the fractional part, with x's sign (C's fract).
+def fract(x: float) -> float {
+    x - trunc(x)
+};
+
+// is_signed_zero(x): true for -0.0, which no comparison can see.
+def is_signed_zero(x: float) -> bool {
+    x == 0.0 && (fbits(x) >>> 63) == 1
+};
+
+// frexp(x) -> [long]: x as a pair, the fraction's BITS and the exponent, with
+// the fraction in [0.5, 1) (and 0 for a zero or a subnormal input, so the pair
+// always satisfies ldexp(bitsf(frexp(x)[0]), frexp(x)[1]) == x exactly). Bits
+// rather than a float because the fraction is a dyadic rational: this is the
+// one conversion with no rounding in it at all.
+def frexp(x: float) -> [long] {
+    if (x != x || x == 0.0 || is_inf(x)) {
+        [fbits(x), 0]
+    } else {
+        // a subnormal has no implicit leading bit, so it needs normalizing
+        // before the exponent field can be read off
+        let r = x;
+        let guard = 0;
+        while (guard < 60 && exp_field(r) == 0 && r != 0.0) {
+            r = r * 2.0;
+            guard = guard + 1;
+        };
+        let e = exp_field(r);
+        if (e == 0) {
+            [fbits(0.0), 0]
+        } else {
+            // The fraction in [0.5, 1) is this mantissa at exponent 1022 --
+            // in bits, because there is no float-to-long conversion here. The
+            // SIGN COMES OFF as well and goes back on as the exponent's sign:
+            // the field is an 11-bit magnitude, so a negative x's bit pattern
+            // would otherwise put a 1 in the top of it and answer with a
+            // positive fraction. (C's frexp keeps the sign on the fraction.)
+            let frac = ((fbits(r) & 4503599627370495) | 4602678819172646912);
+            // the sign bit set: 2^63, which is not a long, so it is the
+            // minimum long added to a pattern that does not have it -- which
+            // carries into the top bit
+            let signed = frac;
+            if (x < 0.0) { signed = frac + sign_bit(); };
+            [signed, e - 1022 - guard]
+        }
+    }
+};
+
+// ldexp(x, e): x scaled by 2^e, exactly. Scaling by a power of two is exact
+// while the result stays normal, and then the exponent field can simply be
+// added to; a result that would land in the subnormal range is scaled by halves
+// instead, so its mantissa shifts and the answer is the correctly-rounded one.
+def ldexp(x: float, e: long) -> float {
+    if (x != x || x == 0.0 || is_inf(x)) {
+        x
+    } else {
+        // r is x moved by whole steps, k what is left
+        let r = x;
+        let k = e;
+        // The big steps first, since after them the answer may already be 0 or
+        // an infinity and there is nothing left to do exactly. 2^1022 rather
+        // than 2^1023: one more step than the range needs, so a step never
+        // overflows on its own.
+        let up = 1022;
+        let down = 0 - 1022;
+        while (k >= up) { r = r * 8.98846567431158e307; k = k - up; };
+        while (k <= down) { r = r * 2.2250738585072014e-308; k = k - down; };
+        // What is left fits the exponent field as long as the answer stays
+        // NORMAL; otherwise the mantissa has to shift too, and one doubling at a
+        // time is how that is exact (this is also the subnormal-input case: a
+        // subnormal has field 0, so every step of it is a doubling).
+        let f = exp_field(r);
+        if (f == 0 || f + k < 1) {
+            let step = if (k < 0) { 0 - 1 } else { 1 };
+            let rest = k;
+            while (rest != 0) {
+                r = r * if (step < 0) { 0.5 } else { 2.0 };
+                rest = rest - step;
+            }
+        } else if (k != 0) {
+            // k * 2^52 added to the bits is k added to the exponent FIELD, so
+            // the sign comes off first (a negative pattern would put a 1 at the
+            // top of the field and scale the wrong way) and goes back on after.
+            let b = fbits(r);
+            let neg = b < 0;
+            let u = without_sign(b);
+            let shifted = u + k * 4503599627370496;
+            r = bitsf(if (neg) { shifted + sign_bit() } else { shifted });
+        };
+        r
+    }
+};
+
+// nextafter(x, y): the next double from x toward y (C's nextafter, which is
+// also nexttoward with y as the direction). Equal inputs give y; a NaN gives a
+// NaN. The step is one unit in the last place in whichever direction the bits
+// move, and the sign is where it crosses zero -- which is why the zero case
+// needs the signed-zero test: from +0.0 toward -1.0 the answer is the most
+// negative subnormal, not +0.0's neighbour the other way.
+def nextafter(x: float, y: float) -> float {
+    if (x != x || y != y) {
+        nan
+    } else if (x == y) {
+        y
+    } else if (x == 0.0) {
+        // from a zero the step is out of the subnormal range: 1 ulp is the
+        // smallest double there is, one side or the other
+        if (y > x) { bitsf(1) } else { bitsf(0 - 9223372036854775807) }
+    } else {
+        // One unit in the last place, toward y -- and the direction flips with
+        // the sign, because the patterns run the other way for a negative
+        // double: -1.0 is 0xBFF0...000 and the next double TOWARD ZERO is
+        // 0xBFEFFFFFFFFFFFFF, one SMALLER. So a step toward a larger value is
+        // +1 when x is positive and -1 when x is negative.
+        let bx = fbits(x);
+        let step = 0 - 1;
+        if ((bx > 0) == (y > x)) { step = 1; };
+        bitsf(bx + step)
+    }
+};
+
+// cbrt(x): the cube root, by Newton's method on x = y^3 -- three multiplies
+// and a divide a step, quadratic convergence, so a seed within a factor of two
+// reaches the last bit in a handful of steps.
+//
+// The reduction is what makes such a seed possible. Newton's iteration on a
+// cube root is only locally convergent: from a relative error R it takes
+// roughly log2(R) steps to get near, so a seed off by a factor of a^(1/12)
+// (the fourth root, which is all sqrt(sqrt(a)) gives) is hopeless for a
+// subnormal, where that is 1e27. So the exponent is split into threes first:
+// a = m * 2^e with m in [1,2), e = 3q + r, and cbrt(a) = 2^q * cbrt(m * 2^r)
+// with the part that needs the iteration inside [1, 8) -- within 17% of the
+// answer, which is inside the basin.
+def cbrt(x: float) -> float {
+    if (x != x || x == 0.0 || is_inf(x)) {
+        x
+    } else {
+        let neg = x < 0.0;
+        let a = if (neg) { 0.0 - x } else { x };
+        // a subnormal carries no exponent of its own, and 2^54 normalizes even
+        // the smallest (2^-1074 * 2^54 = 2^-1020)
+        let b = a;
+        let sh: long = 0;
+        while (exp_field(b) == 0) {
+            b = b * 18014398509481984.0;
+            sh = sh + 54;
+        };
+        let e = exp_field(b) - 1023 - sh;
+        let q = e / 3;
+        let r = e - 3 * q;
+        // the mantissa back to [1, 2), in bits: there is no float-to-long cast
+        let m = bitsf((fbits(b) & 4503599627370495) | 4607182418800017408);
+        let s = ldexp(m, r);
+        let y = 1.0 + (s - 1.0) / 3.0;
+        let i = 0;
+        while (i < 4) {
+            y = (2.0 * y + s / (y * y)) / 3.0;
+            i = i + 1;
+        };
+        // The last step in its residual form. A Newton step rebuilds the whole
+        // iterate -- three roundings, which do not cancel -- and after four of
+        // them the answer sits a few ulps out and stays there. This one
+        // corrects the value already in hand by the error the residual
+        // measures, and the correction is ~1 ulp, so its own rounding is
+        // negligible: the answer lands within an ulp of the true root.
+        let y2 = y * y;
+        y = y - ((y2 * y - s) / (3.0 * y2));
+        let out = ldexp(y, q);
+        if (neg) { 0.0 - out } else { out }
+    }
+};
+
+// hypot(x, y): sqrt(x^2 + y^2) without the overflow. Scaling by the larger
+// magnitude first keeps both squares inside the double range (a square overflows
+// from 1.3e154), and dividing it back is exact.
+def hypot(x: float, y: float) -> float {
+    let a = fabs(x);
+    let b = fabs(y);
+    let m = if (a > b) { a } else { b };
+    if (m == 0.0 || m != m || is_inf(m)) {
+        if (is_inf(m)) { inf } else { m }
+    } else {
+        let p = x / m;
+        let q = y / m;
+        m * sqrt(p * p + q * q)
+    }
+};
+
 // ── random numbers ──────────────────────────────────────────────────────────
 //
 // The state is a `[long]` the CALLER owns, so two streams cannot collide by

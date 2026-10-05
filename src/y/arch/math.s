@@ -52,3 +52,16 @@ y_bitsf:
     movq %rax, %xmm0
     movq %xmm0, %rax
     ret
+# y_int_trap: a double that has no integer part a long can hold. The cast
+# cannot report it (cvttsd2si answers with the "integer indefinite" value and
+# raises nothing), so the Y layer checks and comes here to stop with a message
+# that says what happened.
+y_int_trap:
+    mov $1, %rax
+    mov $1, %rdi
+    lea ystr_int(%rip), %rsi
+    mov $ystr_int_end-ystr_int, %rdx
+    syscall
+    mov $231, %rax
+    mov $1, %rdi
+    syscall

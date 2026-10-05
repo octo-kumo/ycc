@@ -3423,7 +3423,8 @@ int uses_math(Yv *refs) {
     while (i < yv_len(refs) && !found) {
         Yv *r = ya_get(refs, i);
         long n = yv_len(r);
-        found = (n == 7 && (ys_eq_lit(r, "y_sqrt") || ys_eq_lit(r, "y_fbits"))) || (n == 8 && ys_eq_lit(r, "y_bitsf")) || (n == 9 && ys_eq_lit(r, "y_to_int"));
+        /* y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10 */
+        found = (n == 6 && ys_eq_lit(r, "y_sqrt")) || (n == 7 && (ys_eq_lit(r, "y_fbits") || ys_eq_lit(r, "y_bitsf"))) || (n == 8 && ys_eq_lit(r, "y_to_int")) || (n == 10 && ys_eq_lit(r, "y_int_trap"));
         i = i + 1;
     }
     return found;

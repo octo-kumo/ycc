@@ -373,7 +373,7 @@ documented as unfused.
 | — | the portable tier: integers/bits, float comparisons and constants, RNGs, `[float]` array work (`src/y/std/math.y`) | **done** (`85403df`) — no compiler change needed; tests `t300`–`t304` |
 | P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
 | P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. The other five (`movsd`, `movapd`, `xorpd`, `andpd`, `unpcklpd`) arrive with P4, which is the first code that emits them |
-| P3 | the transcendentals in Y, gated by the ulp harness | |
+| **done** — the exact layer (sqrt, floor, ceil, trunc, round, fract, to_int, cbrt, hypot, ldexp, frexp, nextafter, is_signed_zero, fbits, bitsf) with the ulp harness `test/sh/test_math.sh` and its checked-in table: 239 cases, worst gap **0 ulp**. The transcendentals (exp, log, pow, sin, cos, ...) are the next commit | P3 | the transcendentals in Y, gated by the ulp harness | |
 | P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | |
 | P5 | the bulk kernels | |
 

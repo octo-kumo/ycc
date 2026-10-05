@@ -245,12 +245,60 @@ comparisons and constants, random numbers, and whole-array arithmetic over
 
 Y has no overloading, so \ic{min}, \ic{max}, \ic{abs}, \ic{clamp} and \ic{sign}
 take \ty{long}s and their float counterparts carry an \ic{f}: \ic{fmin},
-\ic{fmax}, \ic{fabs}, \ic{fsign}. There is no \ic{sqrt} here, and no \ic{exp},
-\ic{log}, \ic{pow} or \ic{sin}: those need a \ty{float}-to-\ty{long} conversion
-or a look at a float's bits, and Y has neither, so they are not merely
-unimplemented --- they cannot be written.
+\ic{fmax}, \ic{fabs}, \ic{fsign}.
+
+\ic{math.sqrt}, \ic{math.floor}, \ic{math.ceil}, \ic{math.trunc},
+\ic{math.round}, \ic{math.fract}, \ic{math.cbrt}, \ic{math.hypot},
+\ic{math.to\_int}, \ic{math.ldexp}, \ic{math.frexp}, \ic{math.nextafter},
+\ic{math.is\_signed\_zero} and the bit casts \ic{math.fbits} /
+\ic{math.bitsf} need a machine primitive Y has no spelling for: a truncating
+\ty{float}-to-\ty{long} cast, or a look at a float's bits. The module declares
+those with \ic{native def} (Section~\ref{sec:grammar}) and the four \ic{y\_}
+routines behind them live in \ic{src/y/arch/math.s}; everything else here is
+ordinary Y. There is no \ic{exp}, \ic{log}, \ic{pow} or \ic{sin} yet.
 
 \begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{math.sqrt(x)}] The IEEE square root, and the one function here that
+  is a machine instruction: correctly rounded, so \ic{math.sqrt(2)} is the double
+  below and not a number computed to a few digits. A negative \ty{x} is the
+  NaN; $\pm\infty$ is itself.
+\item[\ic{math.floor(x)}, \ic{math.ceil(x)}, \ic{math.trunc(x)}] The
+  greatest integer $\leq x$, the least integer $\geq x$, and the integer part
+  alone. A zero keeps its sign (\ic{math.floor(-0.0)} is \ic{-0.0}), and so does an
+  input too large for a \ty{long}, which comes back unchanged.
+\item[\ic{math.round(x)}] The nearest integer, halves away from zero --- C's
+  \ic{round}, which is neither the current rounding mode nor \ic{rint}.
+\item[\ic{math.fract(x)}] The fractional part, $x-\ty{trunc}(x)$, with
+  $x$'s sign. An infinite \ty{x} gives a NaN, as C's does.
+\item[\ic{math.to\_int(x)}] The integer part as a \ty{long}, truncated toward
+  zero. A NaN, an infinity, or a magnitude past the largest \ty{long} has no
+  answer, and \emph{stops the program} (\ic{runtime error: a float with no
+  integer part a long holds}) rather than returning a value indistinguishable
+  from a real one.
+\item[\ic{math.cbrt(x)}] The cube root. The exponent is split into threes
+  first, so the Newton iteration that finishes the job always begins within
+  17\% of the answer: a cube root's iteration is only locally convergent, and
+  the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
+  is \num{1e27} for a subnormal.
+\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: the larger
+  magnitude divides both out first, and that is exact.
+\item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
+  is exact while the result stays normal, so this is the one scaling that never
+  rounds.
+\item[\ic{math.frexp(x)}] $[\,\ty{fraction\ bits}, \;\ty{exponent}\,]$: the
+  fraction's IEEE-754 pattern, a value in $[0.5, 1)$, and the exponent, such that
+  \ic{math.ldexp(math.bitsf(math.frexp(x)[0]), math.frexp(x)[1])} is $x$ exactly.
+  Bits rather than a float because this is the one conversion with no rounding
+  in it at all.
+\item[\ic{math.nextafter(x, y)}] The next double from \ty{x} toward \ty{y} (C's
+  \ic{nextafter}, also \ic{nexttoward} toward \ty{y}). The step is one unit in
+  the last place, and its \emph{direction flips with the sign}: the bit patterns
+  run the other way for a negative double.
+\item[\ic{math.fbits(x)}, \ic{math.bitsf(b)}] A double's 64-bit pattern as a
+  \ty{long}, and a \ty{long} read back as a double. The two casts Y cannot
+  spell, and the reason the names above can exist at all.
+\item[\ic{math.is\_signed\_zero(x)}] True for \ic{-0.0}, which no comparison
+  can see.
 \item[\ic{math.min(a, b)}, \ic{math.max(a, b)}] The smaller or larger of two
   \ty{long}s.
 \item[\ic{math.abs(x)}] \ic{|x|}. The most negative \ty{long} has no positive

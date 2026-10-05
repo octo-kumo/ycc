@@ -177,6 +177,8 @@ def arch_consts() -> str {
         "ystr_oom_end:",
         "ystr_opt: .ascii \"runtime error: unwrap of none\\n\"",
         "ystr_opt_end:",
+        "ystr_int: .ascii \"runtime error: a float with no integer part a long holds\\n\"",
+        "ystr_int_end:",
     ], "\n") + "\n"
 };
 

@@ -31,7 +31,7 @@ if [ ! -x "${YREF:-$ROOT/refs/ycc.ref}" ]; then
 fi
 YSELF_BIN="${YSELF:-$ROOT/ycc}"
 
-ALL="port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net coverage"
+ALL="port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net coverage math"
 SUITES="${*:-$ALL}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
@@ -50,6 +50,7 @@ declare -A SCRIPT_FOR=(
     [stdin-eof]="test_stdin_eof.sh"
     [net]="test_net.sh"
     [coverage]="test_coverage.sh"
+    [math]="test_math.sh"
 )
 # Under -j these run as this many shards at once: alone they take ~80, ~40
 # and ~16 s, the others 13 s at most.
@@ -65,7 +66,7 @@ done
 # these suites exercise the built ycc binary itself.
 skipped() {
     case "$1" in
-        ycc | fixpoint | native | native-examples | debug | link | pkg) [ ! -x "$YSELF_BIN" ] ;;
+        ycc | fixpoint | native | native-examples | debug | link | pkg | math) [ ! -x "$YSELF_BIN" ] ;;
         *) return 1 ;;
     esac
 }

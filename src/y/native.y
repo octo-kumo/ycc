@@ -2504,7 +2504,8 @@ def uses_math(refs: [str]) -> bool {
     while ((i < len(refs)) && (!found)) {
         let r: str = refs[i];
         let n = len(r);
-        found = (n == 7 && (r == "y_sqrt" || r == "y_fbits")) || (n == 8 && r == "y_bitsf") || (n == 9 && r == "y_to_int");
+        // y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10
+        found = (n == 6 && r == "y_sqrt") || (n == 7 && (r == "y_fbits" || r == "y_bitsf")) || (n == 8 && r == "y_to_int") || (n == 10 && r == "y_int_trap");
         i = i + 1;
     };
     found
