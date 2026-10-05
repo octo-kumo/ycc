@@ -206,10 +206,12 @@ very build was just compared (`make test`, `check`, `rebless` do);
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
 - `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
-  `test/math/ulp_table.txt` (1596 cases — the pinned edges, the overflow and
-  flush points, both sides of 1, the poles, the signed zeros, and a seeded
-  1500-case spread — each line the function, its argument(s) and the reference
-  answer as IEEE-754 bit patterns), evaluates every case with both compilers and
+  `test/math/ulp_table.txt` (2076 cases — the pinned edges, the overflow and
+  flush points, both sides of 1, the poles, the signed zeros, a seeded
+  1500-case spread, and a seeded 240-case spread over [-1, 1] for `asin` and
+  `acos`, the only two with a bounded domain — each line the function, its
+  argument(s) and the reference answer as IEEE-754 bit patterns), evaluates
+  every case with both compilers and
   **fails on anything more than 1 ulp from the reference**. The gap is counted
   through the monotone key of a double's bits, so it is exact at zero, across a
   sign change, for a subnormal, and infinite for a NaN. The worst gap and the
