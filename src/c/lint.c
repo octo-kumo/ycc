@@ -44,6 +44,8 @@ static long lint_mark(LintSt st, Yv *name, long bit);
 static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
                       int scal, int fresh, int strf);
 static long lint_note_top(LintSt st, Yv *node);
+static long lint_top_first(LintSt st, Yv *d, long fid);
+static long lint_file_of(long ln);
 static int lint_strheld(Yv *typ, Yv *v);
 static int lint_var_str(LintSt st, Yv *name);
 static long lint_loop_body(LintSt st, Yv *body);
@@ -145,7 +147,8 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel) {
     Yv *vars = yav(0);
     Yv *flags = yav(0);
     Yv *rets = yav(0);
-    LintSt st = yr(10, "warns", warns, "vars", vars, "flags", flags, "rets",
+    LintSt st = yr(11, "warns", warns, "vars", vars, "tops",
+                   nameix_new(256), "flags", flags, "rets",
                    rets, "ridx", nameix_new(64), "self", ys(""), "wlevel",
                    yv_long(wlevel), "dropnext", yv_bool(0), "vused",
                    yv_bool(0), "loops", yv_long(0));
@@ -244,16 +247,62 @@ static long lint_note_top(LintSt st, Yv *node) {
     Yv *d = lint_disp(name);
     long line = yv_l(yr_get(node, "line"));
     long col = yv_l(yr_get(node, "col"));
-    if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95 &&
-        ys_index_of(name, ys("$shadow")) < 0) {
-        (void)ya_push(yr_get(st, "vars"),
-                      yr(9, "name", d, "kind", yr_get(node, "kind"), "num",
-                         yv_long(lint_num(name)), "line", yv_long(line),
-                         "col", yv_long(col), "scal",
-                         yv_bool(lint_scal(yr_get(node, "typ"), v)), "fresh",
-                         yv_bool(lint_fresh(v)), "strf",
-                         yv_bool(lint_strheld(yr_get(node, "typ"), v)), "top",
-                         yv_bool(1)));
+    if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95) {
+        /* A name bound twice at the top level is legal -- the later
+         * declaration shadows the earlier one, which t14_shadow, t30 and
+         * t53 all pin -- and rename.y keeps the earlier one under its
+         * `$shadow` name so a self call inside it still binds to itself.
+         * What is not legal is not knowing which copy is running: a
+         * copy-paste that leaves an old definition behind shadows the new
+         * one silently, and every read of the source shows the copy that is
+         * not the one called. A warning is the whole of it (the same shape
+         * the duplicate type alias gets); find_dup still rejects the
+         * cross-file case outright, where there is no shadowing to mean. */
+        long fid = lint_file_of(line);
+        long first = lint_top_first(st, d, fid);
+        if (first > 0) {
+            Yv *m1 = ys_cat(ys_cat(ys("'"), d),
+                            ys("' is declared more than once; the last declaration counts (the earlier one at line "));
+            Yv *m2 = ys_cat(m1, ys_fmt("%ld", first));
+            (void)lint_warn(st, ys_cat(m2, ys(")")), line, col);
+        }
+        /* recorded either way: the map holds where each name was declared
+         * LAST, so a third declaration names the second */
+        nameix_put(yr_get(st, "tops"), d, line);
+        if (first == 0) {
+            (void)ya_push(yr_get(st, "vars"),
+                          yr(9, "name", d, "kind", yr_get(node, "kind"), "num",
+                             yv_long(lint_num(name)), "line", yv_long(line),
+                             "col", yv_long(col), "scal",
+                             yv_bool(lint_scal(yr_get(node, "typ"), v)), "fresh",
+                             yv_bool(lint_fresh(v)), "strf",
+                             yv_bool(lint_strheld(yr_get(node, "typ"), v)),
+                             "top", yv_bool(1)));
+        }
+    }
+    return 0;
+}
+
+/* Where a top-level name was declared last, if that was in this file (0
+ * otherwise). Only the names this check records count, so a local of the
+ * same name never shadows a global's warning (different scopes, and lint
+ * has no scope). The file matters: a path-imported unit shares the
+ * program's namespace -- t134 pins that a module global may share the
+ * program's name -- so only two declarations of one file are the
+ * copy-paste this names. */
+static long lint_top_first(LintSt st, Yv *d, long fid) {
+    long prev = nameix_get(yr_get(st, "tops"), d);
+    if (prev > 0 && lint_file_of(prev) == fid) {
+        return prev;
+    }
+    return 0;
+}
+
+/* The file the line ln is in, 0 for the program's own text and for a line
+ * past the origin table. */
+static long lint_file_of(long ln) {
+    if (ln >= 1 && ln <= yv_len(lint_ofile)) {
+        return yv_l(ya_get(lint_ofile, ln - 1));
     }
     return 0;
 }
@@ -353,10 +402,10 @@ static long lint_stmt(LintSt st, Yv *s, int used, int top) {
     if (top && yv_l(yr_get(s, "k")) == K_decl) {
         /* a top-level binding is a global: its value is walked, not its
          * use, but a def's body still reaches itself through `self` */
+        (void)lint_note_top(st, s);
         if (ys_eq_lit(yr_get(s, "kind"), "def")) {
             return lint_def_body(st, yr_get(s, "name"), yr_get(s, "v"));
         } else {
-            (void)lint_note_top(st, s);
             return lint_node(st, yr_get(s, "v"), 1);
         }
     } else {

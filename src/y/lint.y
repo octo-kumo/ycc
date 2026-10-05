@@ -32,6 +32,12 @@ import types from "./types.y";
 import parser from "./parser.y";
 
 type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool, strf: bool, top: bool };
+// Where each top-level name was declared last: a name -> line map (the
+// parser's NameIx, which lint already keeps one of). A walk of `vars` would
+// do it too, but that list holds every local -- measured at +4.4% of a
+// self-compile -- and a list of the top-level names in order is quadratic in
+// them (+1.4%). The line says which file too (lint_file_of), so a module's
+// name and the program's do not shadow each other's warning.
 type LintRet = { name: str, ret: Type, line: long, col: long };
 // Three fields say, in the emitter's terms, whether the statement being
 // walked is generated through `gen` (a value is produced) or through
@@ -44,7 +50,7 @@ type LintRet = { name: str, ret: Type, line: long, col: long };
 // on a single copy, which costs what any `+` costs. Which of the first two
 // an expression sees decides whether a `+=` on a string appends in place or
 // copies; see lint_opassign.
-type LintSt = { warns: [Diag], vars: [LintVar], flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long };
+type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long };
 type LintRoot = { typ: Type, line: long, col: long, alias: str, mod: str };
 type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
 type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: NameIx, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
@@ -64,7 +70,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     let vars: [LintVar] = [];
     let flags: [long] = [];
     let rets: [LintRet] = [];
-    let st = { warns: warns, vars: vars, flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0 };
+    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0 };
     if (wlevel >= 1) {
         lint_rets(st, ast3.stmts)
     };
@@ -245,10 +251,48 @@ def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: boo
 def lint_note_top(st: LintSt, node: Decl) -> long {
     let name = node.name;
     let d = lint_disp(name);
-    if (d != "" && byte_at(d, 0) != 95 && index_of(name, "$shadow") < 0) {
-        st.vars += { name: d, kind: node.kind, num: lint_num(name), line: node.line, col: node.col, scal: lint_scal(node.typ, node.v), fresh: lint_fresh(node.v), strf: lint_strheld(node.typ, node.v), top: true };
+    if (d != "" && byte_at(d, 0) != 95) {
+        // A name bound twice at the top level is legal -- the later
+        // declaration shadows the earlier one, which t14_shadow, t30 and
+        // t53 all pin -- and rename.y keeps the earlier one under its
+        // `$shadow` name so a self call inside it still binds to itself.
+        // What is not legal is not knowing which copy is running: a
+        // copy-paste that leaves an old definition behind shadows the new
+        // one silently, and every read of the source shows the copy that is
+        // not the one called. A warning is the whole of it (the same shape
+        // the duplicate type alias gets); find_dup still rejects the
+        // cross-file case outright, where there is no shadowing to mean.
+        let fid = lint_file_of(node.line);
+        let first = lint_top_first(st, d, fid);
+        if (first > 0) {
+            lint_warn(st, "'" + d + "' is declared more than once; the last declaration counts (the earlier one at line " + tostring(first) + ")", node.line, node.col);
+        };
+        // recorded either way: the map holds where each name was declared
+        // LAST, so a third declaration names the second
+        parser.nameix_put(st.tops, d, node.line);
+        if (first == 0) {
+            st.vars += { name: d, kind: node.kind, num: lint_num(name), line: node.line, col: node.col, scal: lint_scal(node.typ, node.v), fresh: lint_fresh(node.v), strf: lint_strheld(node.typ, node.v), top: true };
+        };
     };
     0
+};
+
+// Where a top-level name was declared last, if that was in this file (0
+// otherwise). Only the names this check records count, so a local of the
+// same name never shadows a global's warning (different scopes, and lint
+// has no scope). The file matters: a path-imported unit shares the
+// program's namespace -- t134 pins that a module global may share the
+// program's name -- so only two declarations of one file are the
+// copy-paste this names.
+def lint_top_first(st: LintSt, d: str, fid: long) -> long {
+    let prev = parser.nameix_get(st.tops, d);
+    if (prev > 0 && lint_file_of(prev) == fid) { prev } else { 0 }
+};
+
+// The file the line ln is in, 0 for the program's own text and for a line
+// past the origin table.
+def lint_file_of(ln: long) -> long {
+    if (ln >= 1 && ln <= len(lint_ofile)) { lint_ofile[ln - 1] } else { 0 }
 };
 
 // A binding that holds a string, as far as the syntax shows: annotated
@@ -355,10 +399,10 @@ def lint_stmt(st: LintSt, s: Node, used: bool, top: bool) -> long {
         let decl: Decl = s;
         // a top-level binding is a global: its value is walked, not its
         // use, but a def's body still reaches itself through `self`
+        lint_note_top(st, decl);
         if (decl.kind == "def") {
             lint_def_body(st, decl.name, decl.v)
         } else {
-            lint_note_top(st, decl);
             lint_node(st, decl.v, true)
         }
     } else {

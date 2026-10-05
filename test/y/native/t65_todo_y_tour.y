@@ -52,7 +52,7 @@ match c2 {
 let text = "hello world";
 print(text[2:5]);
 print(text[1]);
-let c = c'a';
+let c = c'a'; // expect-warning: 'c' is declared more than once; the last declaration counts (the earlier one at line 27)
 print(c);
 let buf:[byte] = [1, 2, 3, 4, 5];
 let buf2:[byte] = [6, 7, 8];
