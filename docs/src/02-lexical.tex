@@ -17,6 +17,44 @@ in diagnostics are 1-based line and column, the column counted in bytes.
 
 \noindent Comments are whitespace: they separate tokens and nothing more.
 
+\subsection{Meta blocks}
+
+A \emph{meta block} is compile-time code whose value becomes source text:
+
+\begin{lstlisting}
+#{ body }#          // in expression position: the text goes where the block was
+#{ body }#          // alone on a line: the text goes there as statements
+import m;            // inside a block: hoisted to the top of the generator
+\end{lstlisting}
+
+\noindent A block is \emph{not} a token and \ic{\#} is \emph{not} an escape
+character. It is read before the lexer runs, in one pass over the file's bytes,
+and only in \emph{code} position --- so inside a string literal, an f-string, a
+byte string, a character literal, a line comment or a block comment, a
+\ic{\#\{} is plain text and needs no escaping anywhere. A \ic{\#} in code
+position that is not followed by \ic{\{} is an error, as is a \ic{\}\#} with no
+block open, and a block that never closes is an error naming its line.
+
+The block's body is ordinary \textsf{Y}, compiled and run while the compiler
+runs; what it returns is a \ty{str}, and that text is spliced into the program's
+source \emph{as text}. A value therefore has to be spelled as a literal before it
+lands --- \ic{\#\{ quoted(name) \}\#}, not \ic{\#\{ name \}\#} --- and a body
+whose value is not a \ty{str} is an ordinary type error. A block may be in a
+\ic{def} or \ic{type} body, between two tokens of an expression, or nested
+inside another block, is not: a block's text has no position to occupy there, and
+a nested block's text is a \emph{value} the enclosing block uses rather than code
+injected into it.
+
+Because a block's body runs while the compiler runs, and the generator program
+is the file's own top level with each block replaced by a call, a file with
+blocks has its top level run twice: once to build the generator and once in the
+program. Keep top-level \ic{let} initializers pure, and prefer a declaration ---
+\ic{def}, \ic{type}, \ic{const}, \ic{let} --- to any other top-level statement
+when the file holds a block. A thread or process primitive (\ic{spawn},
+\ic{fork}, \ic{join}, \ic{mutex}, \ic{lock}, \ic{try\_lock}, \ic{sem},
+\ic{post}, \ic{wait}) cannot be used in a block, and neither can a name the pass
+injects (\ic{ycc\_meta\_expr}, \ic{ycc\_meta\_stmt}, \ic{ycc\_meta\_emit}).
+
 \subsection{Identifiers and keywords}
 
 A \emph{word character} is a letter (\ic{A}--\ic{Z}, \ic{a}--\ic{z}), a

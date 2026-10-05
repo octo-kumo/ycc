@@ -20,6 +20,15 @@ for d in $dirs; do
     if ! (ulimit -v $K; $YNEW "$f" -o "$bin") >"$T/c.err" 2>&1; then
       echo "SKIP (does not compile) $f"; continue
     fi
+    # A file with a meta block is NOT comparable: compiling it already runs
+    # the generator, whose top level is the program's own, so its prints land
+    # on ycc's stdout -- the "top level runs twice" the warning in lint.y
+    # names. Those fixtures are checked by test_native.sh (their .expected is
+    # the program's own output) and by test_coverage.sh.
+    case "$(basename "$f")" in
+      t198_meta_basic.y|t199_meta_top_twice.y)
+        echo "skip (meta block: the top level runs twice) $f"; continue;;
+    esac
     (ulimit -v $K; "$bin" </dev/null >"$T/a.out" 2>"$T/a.err"); a=$?
     (ulimit -v $K; $YNEW run "$f" </dev/null >"$T/b.out" 2>"$T/b.err"); b=$?
     ok=1

@@ -64,7 +64,161 @@
 // accumulator, no slot array in the image and no return value to read: the
 // pipe, the child's exit status and its byte count are the whole protocol.
 
+// Only the lexer: lit_end is the literal scanner, and the pass must not
+// import native.y (native.y imports this file -- see the driver note).
+import lexer from "./lexer.y";
+
 // ── little-endian reads and writes ──────────────────────────────────────
+
+// ── M2: the pass ────────────────────────────────────────────────────────
+// Read `ideas/meta.md`. This is the second half of it, and the shape is:
+//
+//     G = T with every block replaced by a call
+//     P = T with every block replaced by that call's text
+//
+// G is compiled for the host with THE PASS OFF and run in a forked child
+// (run_image, above); its output is the piece table; the pass splices the
+// pieces into P; P is handed to the existing lexer unchanged. There is exactly
+// one layer, so `#{ … }#` is the whole surface: no `#if`, no `#meta`, no
+// escaping (only CODE position is scanned, and there is no valid Y text with a
+// `#` in code position -- the corpus has none), and no re-scan, so a
+// generator may emit a string literal holding `#{` freely.
+//
+// A few facts about Y that the whole design rests on, all measured:
+//
+//   - a block's value is its last statement WITHOUT a trailing `;`, and void
+//     does not coerce, so a void block is an existing type error rather than a
+//     new diagnostic;
+//   - `import` never reaches the lexer or the parser -- the splicer consumes
+//     whole lines at file scope -- so an import inside a block is hoisted into
+//     text the splicer already understands, and cycle detection, dedup,
+//     namespacing and the depth-32 diagnostic all come free;
+//   - the scanner needs a literal scanner, and lexer.y's lit_end is now
+//     exported with an out-param that says whether the literal closed.
+//
+// Why the scan is per file, at the top of native_resolve_seen and before its
+// line loop: `embed` is expanded INSIDE that loop, so scanning first leaves an
+// embedded file's bytes inert; each file's own base_dir is in scope, so a
+// hoisted import path normalizes against the file the block came from; and the
+// scan runs before words_seen, so std-unit selection sees the GENERATED text.
+
+// Whether the pass runs at all. Off while G is compiled, on for the program.
+let mg_on = false;
+// The next slot index. Slots are global and in RESOLVE order (the program's
+// own file first, then its modules as the splicer visits them), which is the
+// order the generator runs them in.
+let mg_next = 0;
+// G's body: the files' lines with each block as a call, and the source line
+// each of those lines came from.
+let mg_g: [str] = [];
+let mg_gol: [long] = [];
+// Each block: its slot, the file and line of its `#{`, and -- for a block at
+// file scope, whose text P really does drop -- the line of P and the byte
+// offset in that line the piece goes at. A nested block's text lives inside
+// its parent's call, so it has no P position.
+let mg_bslot: [long] = [];
+let mg_bfile: [long] = [];
+let mg_bline: [long] = [];
+let mg_bp: [long] = [];
+let mg_bpo: [long] = [];
+// The imports hoisted out of blocks, and the line each is reported at.
+let mg_imp: [str] = [];
+let mg_iol: [long] = [];
+// How many blocks the whole resolve found, and whether any.
+let mg_n = 0;
+// The emitted-text size cap (R8 is not negotiable). The piece table is read
+// into memory, so this is what bounds it.
+const MG_MAX = 33554432;
+// The pass's own nesting cap, well below the parser's ~333 effective limit
+// (tags.y MAX_NEST is 1000 and each nested block costs ~3 nest units), so a
+// runaway nest is a diagnostic naming the block rather than `too_deep` firing
+// inside a file that does not exist.
+const MG_NEST = 100;
+
+// One file's scan: P's lines with their origins, G's lines for this file, and
+// the imports hoisted out of its blocks.
+// gen[i] says line i of p is wholly GENERATED (a block's piece), not the
+// user's own text. It is what tells lint which top-level statements the pass
+// put there, so "a top-level statement runs twice" does not fire on them.
+type Scan = { ok: bool, err: str, eline: long, ecol: long,
+              p: [str], pf: [long], pol: [long], gen: [bool],
+              g: [str], gf: [long], gol: [long] };
+
+def scan_bad(err: str, line: long, col: long) -> Scan {
+    { ok: false, err: err, eline: line, ecol: col, p: [], pf: [], pol: [],
+      gen: [], g: [], gf: [], gol: [] }
+};
+
+// A file with no blocks: P is the file's own lines, G the same, and nothing
+// else changes. The common case costs one index_of per line.
+//
+// split() drops ONE trailing empty element, so a source ending in "\n" loses
+// that newline on the way back out -- which is what the splicer has always
+// done with a file's lines, and what its origins are sized for. The scanner
+// below breaks on every newline INCLUDING the last, so its line count is one
+// more and its output rejoins to the source; scan_none does not, and must not,
+// or the two paths would disagree on a file with no blocks in it.
+def scan_none(src: str, fid: long) -> Scan {
+    let lines = split(src, "\n");
+    let f: [long] = [];
+    let l: [long] = [];
+    let i = 0;
+    let gn: [bool] = [];
+    while (i < len(lines)) {
+        f += fid;
+        l += i + 1;
+        gn += false;
+        i = i + 1;
+    };
+    { ok: true, err: "", eline: 0, ecol: 0, p: lines, pf: f, pol: l, gen: gn,
+      g: lines, gf: f, gol: l }
+};
+
+// ── byte classes (the lexer's own predicates, spelled here because they are
+// not exported, and they must agree with lexer.y's wordbyte/isspace) ──────
+
+def m_word(c: long) -> bool {
+    c == c'_' || (c >= c'a' && c <= c'z') || (c >= c'A' && c <= c'Z') ||
+    (c >= c'0' && c <= c'9')
+};
+
+def m_blank(c: long) -> bool {
+    c == c' ' || c == c'\t' || c == c'\n' || c == c'\r'
+};
+
+// The word at src[i], i known to be a word byte.
+def m_word_at(src: str, i: long, n: long) -> str {
+    let j = i + 1;
+    while (j < n && m_word(byte_at(src, j))) { j = j + 1; };
+    src[i:j]
+};
+
+// Whether every byte of s is a blank.
+def m_all_blank(s: str) -> bool {
+    let ok = true;
+    let i = 0;
+    while (ok && i < len(s)) {
+        if (!m_blank(byte_at(s, i))) { ok = false; };
+        i = i + 1;
+    };
+    ok
+};
+
+// The byte before src[i] (i > 0), or 0.
+def m_prev(src: str, i: long) -> long {
+    if (i <= 0) { 0 } else { byte_at(src, i - 1) }
+};
+
+// Whether the byte before a `#{` ends a token -- a name, a number, a literal
+// or a closing bracket. Then the block sits between two tokens of one
+// expression, where a call cannot go (`def helper#{x++}#()`), and it is an
+// error rather than a feature: generating a NAME has no expression position
+// for the call to occupy.
+def m_token_end(c: long) -> bool {
+    if (c == 0) { false }
+    else if (c == c')' || c == c']' || c == c'}' || c == c'.' || c == c'\'' || c == c'\"') { true }
+    else { m_word(c) }
+};
 
 def rd16(b: [byte], at: long) -> long {
     b[at] + b[at + 1] * 256
@@ -239,6 +393,8 @@ const SYS_MUNMAP = 11;
 const SYS_PIPE = 22;
 const SYS_DUP = 32;
 const SYS_DUP2 = 33;
+const SYS_FCNTL = 72;
+const F_DUPFD = 0;
 const SYS_MEMFD = 319;
 const SYS_FTRUNCATE = 77;
 const SYS_CLONE = 56;
@@ -265,12 +421,31 @@ def run_image(b: [byte], av: [str], want_out: bool) -> RunRes {
 
 // pipe(): the two fds land as two 32-bit ints, so the buffer is 8 bytes of
 // `[byte]` and not a `[long; 2]` -- a long would read the pair as one word.
+//
+// BOTH ends are moved above GUEST_FD first. A pipe lands on the lowest free fd,
+// and with nothing open that is 3 -- the fd the generator writes its pieces
+// to -- so the child's dup2 would land the write end on the read end and the
+// parent would read from a write-only fd (EBADF, measured). F_DUPFD with a
+// minimum of 4 does it without closing 3 first, which dup(2) could not: it
+// hands out the lowest free number again.
 def pipe_fds() -> { ok: bool, rfd: long, wfd: long } {
     let pf: [byte; 8] = [0; 8];
     if (syscall(SYS_PIPE, &pf[0], ptr_addr(&pf[0]) + 4, 0, 0, 0) != 0) {
         { ok: false, rfd: 0 - 1, wfd: 0 - 1 }
     } else {
-        { ok: true, rfd: rd32(pf[0:8], 0), wfd: rd32(pf[0:8], 4) }
+        let r = rd32(pf[0:8], 0);
+        let w = rd32(pf[0:8], 4);
+        let r2 = syscall(SYS_FCNTL, r, F_DUPFD, GUEST_FD + 1, 0, 0);
+        let w2 = syscall(SYS_FCNTL, w, F_DUPFD, GUEST_FD + 1, 0, 0);
+        syscall(SYS_CLOSE, r, 0, 0, 0, 0);
+        syscall(SYS_CLOSE, w, 0, 0, 0, 0);
+        if (r2 < 0 || w2 < 0) {
+            if (r2 >= 0) { syscall(SYS_CLOSE, r2, 0, 0, 0, 0); };
+            if (w2 >= 0) { syscall(SYS_CLOSE, w2, 0, 0, 0, 0); };
+            { ok: false, rfd: 0 - 1, wfd: 0 - 1 }
+        } else {
+            { ok: true, rfd: r2, wfd: w2 }
+        }
     }
 };
 
@@ -375,7 +550,7 @@ def run_image_clone(av: [str], want_out: bool, m: Mapd, wfd: long) -> RunRes {
         syscall(SYS_DUP2, wfd, GUEST_FD, 0, 0, 0);
         syscall(SYS_CLOSE, wfd, 0, 0, 0, 0);
     };
-    run_image_fork(stk[0:131072], sp, m2)
+    run_image_fork(stk[0:131072], sp, m2, wfd)
 };
 
 // SIGCHLD, no CLONE_VM: a separate process with a copy-on-write copy of our
@@ -383,7 +558,7 @@ def run_image_clone(av: [str], want_out: bool, m: Mapd, wfd: long) -> RunRes {
 // child comes back from the syscall with %rax = 0 and %rsp = `sp`, still
 // running THIS code, one instruction later; `jmp_at` then hands it to the
 // image with %rsp exactly where fab_stack put it.
-def run_image_fork(stk: [byte], sp: long, m: Mapd) -> RunRes {
+def run_image_fork(stk: [byte], sp: long, m: Mapd, wfd: long) -> RunRes {
     let pid = syscall(SYS_CLONE, SIGCHLD, sp, 0, 0, 0);
     if (pid <= 0) {
         // The child: never returns.
@@ -391,6 +566,10 @@ def run_image_fork(stk: [byte], sp: long, m: Mapd) -> RunRes {
         map_release(m);
         run_fail("the image's entry point returned")
     } else {
+        // The parent must not hold the write end: it is the only reader, and
+        // the read below waits for end-of-file, which a pipe gives when EVERY
+        // writer has closed. map_release puts the compiler's own fd 3 back.
+        if (wfd >= 0) { syscall(SYS_CLOSE, GUEST_FD, 0, 0, 0, 0); };
         run_image_read(stk, m, pid)
     }
 };
@@ -439,27 +618,1184 @@ def map_release(m: Mapd) -> long {
     0
 };
 
-// `ycc -E`: the resolved text, each line tagged with the file and line it
-// came from. The tag is a trailing comment on the FIRST line of each run of
-// lines from one file, so line numbers survive the round trip and the markers
-// do not move anything: comments never reach the lexer, so compiling a dump
-// gives the same bytes as compiling the file it came from.
-def meta_dump(src: str, origin: Origin) -> long {
-    let lines = split(src, "\n");
-    let prev = "\x01none";
-    let i = 0;
-    while (i < len(lines)) {
-        let l = lines[i];
-        let at = nativelib.origin_at(origin, i + 1, false);
-        if (at == prev) {
-            puts(l + "\n");
-        } else {
-            puts(l + "\t// " + at + "\n");
-            prev = at;
+
+// ── the scanner ─────────────────────────────────────────────────────────
+// The scanner's state is module-level, the way native.y's import bookkeeping
+// is: one file at a time, reset by meta_scan, and the defs below take no
+// state arguments. See `ideas/meta.md` for why this exists at all; the short
+// version is that only CODE position is scanned, so a `#{` inside any literal
+// or comment is plain text, there is no escape character anywhere, and a
+// generator may emit string literals holding `#{` freely.
+//
+// The shape of the loop: one pass over the file's bytes, with the interesting
+// bytes being a quote, a slash (a comment opener), a brace, a `;` and a
+// newline. Everything between two of them is one slice, so the scan costs one
+// allocation per interesting byte rather than one per byte -- which matters,
+// because this runs over every byte of every file of a self-compile.
+//
+// The line map is built BY CONSTRUCTION and never repaired: every byte reaches
+// the two buffers through sg_put (which counts it) or sg_break (which ends a
+// line and starts the next), so a literal spanning four lines costs four lines
+// of P and four of G, and a P line that spans several source lines carries the
+// one it STARTED at -- the honest origin for generated text.
+
+let sg_src = "";
+let sg_fid = 0;
+// The dir of the file being scanned: a hoisted import path normalizes against
+// it, not against G's own dir.
+let sg_dir = "";
+// P: the program's text, each block's bytes dropped. G: the generator's, each
+// block's bytes replaced by the call. Both as (line, file, source line).
+let sg_p: [str] = [];
+let sg_pf: [long] = [];
+let sg_pol: [long] = [];
+// Which P lines a block's piece is: filled by mg_splice, read back as
+// sc.gen. All false until the pieces arrive (the collecting pass).
+let sg_gen: [bool] = [];
+let sg_g: [str] = [];
+let sg_gf: [long] = [];
+let sg_gol: [long] = [];
+// The lines being built, and the source line each started at. A P line can
+// span several source lines -- a block covering lines 4-7 makes P's line 4
+// hold all four -- so sg_pline is where the line STARTED, not where it ended.
+let sg_pbuf = "";
+let sg_gbuf = "";
+let sg_pline = 1;
+let sg_gline = 1;
+// Where the current G line starts inside sg_gbuf: what is between it and the
+// end is the code since the last newline, and that decides statement position.
+let sg_gat = 0;
+let sg_line = 1;
+let sg_col = 1;
+// 0 code, 1 a `//` comment, 2 a `/* */` comment, 3 a literal.
+let sg_state = 0;
+// True when the next byte of code position may start a `def`, a `type`, an
+// `import` or a refused name: after a newline, a `;`, a `{`, a `}` or a `#{`.
+// Those are the only places a keyword can be, so the word is only read there --
+// which is what keeps this a byte scan and not a parse.
+let sg_bound = false;
+// The brace stack: 0 an ordinary brace, 1 a `def`/`type` body. A block may
+// not open while any 1 is on the stack, nor while sg_pending is set (the `def`
+// keyword itself, so the header's parameter list counts as the body too).
+let sg_bkind: [long] = [];
+let sg_pending = false;
+// Per open block: whether only blanks have been seen since its `#{` (an
+// import is only hoistable then), the brace depth at its `#{`, and whether it
+// is in statement position.
+let sg_bclean: [bool] = [];
+let sg_bbrace: [long] = [];
+let sg_bstmt: [bool] = [];
+let sg_depth = 0;
+// The block array index this file's first block takes, and the P line a block
+// being opened sits on (-1 for a nested one, whose text P does not hold).
+let mg_first = 0;
+let mg_p_at = 0 - 1;
+// The first diagnostic, and where. The rest of the text is not scanned.
+let sg_err = "";
+let sg_eline = 0;
+let sg_ecol = 0;
+
+def sg_reset(src: str, fid: long, dir: str) -> long {
+    sg_src = src;
+    sg_fid = fid;
+    sg_dir = dir;
+    sg_p = [];
+    sg_pf = [];
+    sg_pol = [];
+    sg_gen = [];
+    sg_g = [];
+    sg_gf = [];
+    sg_gol = [];
+    sg_pbuf = "";
+    sg_gbuf = "";
+    sg_pline = 1;
+    sg_gline = 1;
+    sg_gat = 0;
+    sg_line = 1;
+    sg_col = 1;
+    sg_state = 0;
+    // true, not false: line 1's first word is a keyword position like any
+    // other, so a file whose first line is `def`/`import` is seen
+    sg_bound = true;
+    sg_bkind = [];
+    sg_pending = false;
+    sg_bclean = [];
+    sg_bbrace = [];
+    sg_bstmt = [];
+    sg_depth = 0;
+    sg_err = "";
+    sg_eline = 0;
+    sg_ecol = 0;
+    0
+};
+
+// One piece of text, into both buffers. A byte inside a block reaches G only:
+// P has to drop the block whole. Blanks do not count towards the enclosing
+// block's "nothing but blanks yet" flag, which is what decides whether an
+// `import` there is at the block's top level.
+def sg_put(t: str) -> long {
+    if (len(t) > 0) {
+        sg_gbuf += t;
+        if (sg_depth == 0) {
+            sg_pbuf += t;
+        } else if (!m_all_blank(t)) {
+            sg_bclean[sg_depth - 1] = false;
         };
-        i = i + 1;
+        sg_col = sg_col + len(t);
     };
     0
 };
 
-export { run_image, RunRes, Img, elf_img, meta_dump };
+// One byte that is never a blank: a delimiter, or a word's first byte.
+def sg_put1(c: str) -> long {
+    sg_gbuf += c;
+    if (sg_depth == 0) {
+        sg_pbuf += c;
+    } else {
+        sg_bclean[sg_depth - 1] = false;
+    };
+    sg_col = sg_col + 1;
+    0
+};
+
+// End the current line in both texts. G always breaks (its line count tracks
+// the source's, so a diagnostic in G has a line); P breaks only outside a
+// block, because a block's own newlines belong to the call in G and not to a
+// line of P. A line is a line: neither text keeps the newline, so the two
+// join back to their sources.
+def sg_break() -> long {
+    sg_g += sg_gbuf;
+    sg_gf += sg_fid;
+    sg_gol += sg_gline;
+    sg_gbuf = "";
+    sg_gline = sg_line + 1;
+    sg_gat = 0;
+    if (sg_depth == 0) {
+        sg_p += sg_pbuf;
+        sg_pf += sg_fid;
+        sg_pol += sg_pline;
+        sg_pbuf = "";
+        sg_pline = sg_line + 1;
+    };
+    sg_line = sg_line + 1;
+    sg_col = 1;
+    0
+};
+
+// sg_src[a:b] into both buffers, breaking lines on the newlines it holds. So
+// a literal or a comment that spans lines costs the lines it really has, and
+// the two texts stay in step with the source without either counting.
+def sg_out(a: long, b: long) -> long {
+    let i = a;
+    while (i < b) {
+        let nl = 0 - 1;
+        let j = i;
+        let go = true;
+        while (go && j < b) {
+            if (byte_at(sg_src, j) == 10) { nl = j; go = false; } else { j = j + 1; };
+        };
+        if (nl < 0) {
+            sg_put(sg_src[i:b]);
+            i = b;
+        } else {
+            sg_put(sg_src[i:nl]);
+            sg_break();
+            i = nl + 1;
+        };
+    };
+    0
+};
+
+// Set while `mg_probe` scans: the probe is asking "is there a block in this
+// text", not "is this text a legal file", so it must read PAST a diagnostic
+// (the text it is given is G's own, whose `ycc_meta_stmt` calls the program's
+// own pass would refuse) instead of stopping at the first one.
+let sg_quiet = false;
+
+def sg_fail(msg: str, line: long, col: long) -> long {
+    if (sg_err == "" && !sg_quiet) {
+        sg_err = msg;
+        sg_eline = line;
+        sg_ecol = col;
+    };
+    0
+};
+
+// Any brace on the stack a `def`/`type` body opened?
+def sg_in_def() -> bool {
+    if (sg_pending) { true }
+    else {
+        let hit = false;
+        let i = 0;
+        while (i < len(sg_bkind)) {
+            if (sg_bkind[i] == 1) { hit = true; };
+            i = i + 1;
+        };
+        hit
+    }
+};
+
+// The names a block may not use: the thread and process primitives. Under the
+// fork they are harmless -- a guest spawn's damage lands in the child and dies
+// with it -- but they are refused anyway, because a generator that spawns is
+// always a mistake and naming it is the whole value of the check. Only a CALL
+// (`name(`) or a DEF (`def name`) is refused, so a generator may still use the
+// word as a variable or a field.
+def mg_thread(w: str) -> bool {
+    w == "spawn" || w == "fork" || w == "join" || w == "mutex" || w == "lock" ||
+    w == "try_lock" || w == "sem" || w == "post" || w == "wait"
+};
+
+// The names the pass injects into G. `y_`-prefixed, so a module imported into
+// the generator namespaces its own names and cannot collide -- but the
+// program's OWN top level is flat, so a def there is the collision.
+def mg_reserved(w: str) -> bool {
+    w == "ycc_meta_expr" || w == "ycc_meta_stmt" || w == "ycc_meta_emit"
+};
+
+// The next byte at or after i the scanner must stop at, or n. Only meaningful
+// in code position: inside a comment or a literal everything is text.
+//
+// Outside a block the interesting bytes are all it needs, and a word is text
+// between two of them. INSIDE a block a word start is interesting too, because
+// that is where a refused name and an injected helper's name have to be caught,
+// and they can sit anywhere in an expression (`let t = spawn { … }` is not at
+// a statement boundary). So a block costs a check per word, and a file with no
+// blocks costs nothing.
+def sg_next(i: long, n: long) -> long {
+    let j = i;
+    let found = false;
+    while (j < n && !found) {
+        let c = byte_at(sg_src, j);
+        if (c == 35 || c == 34 || c == 39 || c == 47 || c == 123 || c == 125 || c == 59 || c == 10) {
+            found = true;
+        } else if (sg_depth > 0 && m_word(c)) {
+            found = true;
+        } else {
+            j = j + 1;
+        };
+    };
+    j
+};
+
+// At a statement boundary: the word there, if any. Handles `def`, `type`,
+// `import` and the refused and reserved names; an ordinary name is nothing to
+// do. Returns where to carry on from -- which is past the word, and past an
+// `import` the caller must then not emit again.
+def sg_word(i: long, n: long) -> long {
+    let k = i;
+    let go = true;
+    while (go && k < n && (byte_at(sg_src, k) == 32 || byte_at(sg_src, k) == 9 || byte_at(sg_src, k) == 13)) {
+        k = k + 1;
+    };
+    if (k < n && m_word(byte_at(sg_src, k))) {
+        let w = m_word_at(sg_src, k, n);
+        let after = k + len(w);
+        if (w == "import" && sg_depth > 0) {
+            // hoisted to the top of G, so it is not part of G's block text:
+            // the blanks before it are, or the block's own column drifts
+            sg_put(sg_src[i:k]);
+            sg_import(after, n)
+        } else {
+            sg_out(i, after);
+            sg_word_go(w, after, n)
+        }
+    } else {
+        i
+    }
+};
+
+def sg_word_go(w: str, after: long, n: long) -> long {
+    let j = after;
+    let go = true;
+    while (go && j < n && (byte_at(sg_src, j) == 32 || byte_at(sg_src, j) == 9)) {
+        j = j + 1;
+    };
+    let called = j < n && (byte_at(sg_src, j) == 40 || byte_at(sg_src, j) == 123);
+    if (w == "def" || w == "type") {
+        // the NAME it defines, not the keyword: a collision with an injected
+        // helper is a duplicate top-level def, and it is silent in the
+        // generator the same way it would be in the program
+        if (j < n && m_word(byte_at(sg_src, j))) {
+            sg_check_name(m_word_at(sg_src, j, n), true);
+        };
+        sg_pending = true;
+        after
+    } else {
+        sg_check_name(w, called);
+        after
+    }
+};
+
+// A name the pass has an opinion about, in a block: one of the injected
+// helpers, or a thread/process primitive being CALLED or DEFINED (a variable or
+// a field of that name is fine, and so is the bare word).
+def sg_check_name(w: str, called: bool) -> long {
+    if (mg_reserved(w)) {
+        sg_fail("'" + w + "' is reserved: the meta pass injects it into the generator", sg_line, sg_col);
+    } else if (sg_depth > 0 && mg_thread(w) && called) {
+        sg_fail("'" + w + "' cannot be used in a meta block: the generator runs in a forked child, and a thread or process primitive there is never what was meant", sg_line, sg_col);
+    };
+    0
+};
+
+// An `import` inside a block, hoisted to the top of G so the existing splicer
+// resolves it: its dedup, its namespacing, its cycle detection and its
+// depth-32 diagnostic all come free. `after` is past the `import` keyword.
+def sg_import(after: long, n: long) -> long {
+    let top = false;
+    let k = sg_depth - 1;
+    if (sg_depth > 0 && sg_bclean[k] && len(sg_bkind) == sg_bbrace[k]) { top = true; };
+    if (!top) {
+        sg_fail("an import inside a meta block must come first in the block", sg_line, sg_col);
+        after
+    } else {
+        let j = after;
+        let go = true;
+        let semi = 0;
+        while (go && j < n) {
+            let c = byte_at(sg_src, j);
+            if (c == 34 || c == 39) {
+                j = lit_end(sg_src, j, [0]);
+            } else if (c == 59) {
+                semi = j + 1;
+                go = false;
+            } else {
+                j = j + 1;
+            };
+        };
+        if (semi == 0) {
+            sg_fail("an import inside a meta block must end with ';'", sg_line, sg_col);
+            after
+        } else {
+            mg_imp += mg_import_line(trim(sg_src[after:semi]), sg_dir);
+            mg_iol += sg_line;
+            sg_bound = true;
+            sg_pending = false;
+            semi
+        }
+    }
+};
+
+// `import <rest>` with a path normalized the way native.y's norm_path does:
+// the splicer normalizes again on its own side, but this one decides WHICH file
+// the path means, so it has to collapse the "/./" a nested base dir carries.
+def mg_import_line(rest: str, dir: str) -> str {
+    let k = index_of(rest, " from ");
+    if (k < 0) {
+        "import " + rest
+    } else {
+        let name = rest[:k];
+        let tail = rest[k + 6:];
+        let path = tail;
+        if (len(path) >= 2 && path[0:1] == "\"" && path[len(path) - 1:] == "\"") {
+            let p = path[1:len(path) - 1];
+            let full = p;
+            if (p[:1] != "/") { full = dir + "/" + p; };
+            path = "\"" + mg_norm_path(full) + "\"";
+        };
+        "import " + name + " from " + path
+    }
+};
+
+// Whether the byte before src[i] ends a token -- a name, a number, a literal
+// or a closing bracket. Then a block sits between two tokens of one
+// expression, where a call cannot go (`def helper#{x++}#()`), and it is an
+// error rather than a feature: generating a NAME has no expression position
+// for the call to occupy. "Immediately before" -- a space is enough to make it
+// a separate token, which is why `return #{ … }#` is fine.
+def m_token_end(c: long) -> bool {
+    if (c == 0) { false }
+    else if (c == c')' || c == c']' || c == c'}' || c == c'.' || c == c'\'' || c == c'\"') { true }
+    else { m_word(c) }
+};
+
+// `#{` at i in code position: check it, record the block, open it, and read the
+// word after it (which may be an `import`). Returns where to carry on from, or
+// n when the block is refused.
+def sg_open(i: long, n: long) -> long {
+    let prev = 0;
+    if (i > 0) { prev = byte_at(sg_src, i - 1); };
+    if (sg_col > 1 && m_token_end(prev)) {
+        sg_fail("a meta block cannot sit between two tokens of an expression: a block generates text, and there is no position for the call between 'a' and '('", sg_line, sg_col);
+        n
+    } else if (sg_in_def()) {
+        sg_fail("a meta block cannot be inside a def or type body: only the top level and other blocks", sg_line, sg_col);
+        n
+    } else if (sg_depth + 1 > MG_NEST) {
+        sg_fail("meta blocks nest deeper than " + tostring(MG_NEST) + ", the pass's limit", sg_line, sg_col);
+        n
+    } else {
+        let slot = mg_next;
+        mg_next = slot + 1;
+        mg_bfile += sg_fid;
+        mg_bline += sg_line;
+        mg_p_at = 0 - 1;
+        if (sg_depth == 0) { mg_p_at = len(sg_p); };
+        mg_bslot += slot;
+        mg_bp += mg_p_at;
+        mg_bpo += len(sg_pbuf);
+        mg_n = mg_n + 1;
+        let stmt = m_all_blank(sg_gbuf[sg_gat:]);
+        sg_bstmt += stmt;
+        sg_bclean += true;
+        sg_bbrace += len(sg_bkind);
+        sg_depth = sg_depth + 1;
+        let helper = "ycc_meta_expr";
+        if (stmt) { helper = "ycc_meta_stmt" };
+        sg_gbuf += helper + "(" + tostring(slot) + ", {";
+        sg_col = sg_col + 2;
+        sg_bound = true;
+        let k = sg_word(i + 2, n);
+        sg_col = sg_col + (k - (i + 2));
+        k
+    }
+};
+
+// `}#` with sg_depth == 0: nothing opened it.
+def sg_stray(i: long) -> long {
+    sg_fail("'}#' in code position with no open meta block", sg_line, sg_col);
+    i
+};
+
+// The scan. One pass over the file's bytes: P and G come out of it as (line,
+// file, source line) triples, and the block table and hoisted imports go into
+// the module-level lists.
+def meta_scan(src: str, fid: long, dir: str) -> Scan {
+    if (index_of(src, "#") < 0) {
+        scan_none(src, fid)
+    } else {
+        sg_reset(src, fid, dir);
+        mg_first = mg_next;
+        let n = len(src);
+        let i = 0;
+        while (i < n && sg_err == "") {
+            if (sg_state == 0) {
+                i = sg_code(i, n);
+            } else if (sg_state == 1) {
+                i = sg_line_comment(i, n);
+            } else if (sg_state == 2) {
+                i = sg_block_comment(i, n);
+            } else {
+                i = sg_literal(i, n);
+            };
+        };
+        meta_scan_end()
+    }
+};
+
+def meta_scan_end() -> Scan {
+    if (sg_err == "" && sg_depth > 0) {
+        let ln = 1;
+        if (mg_first < len(mg_bline)) { ln = mg_bline[mg_first]; };
+        sg_fail("unterminated #{ block: no }# before the end of the file", ln, 1);
+    };
+    if (sg_err == "") {
+        sg_p += sg_pbuf;
+        sg_pf += sg_fid;
+        sg_pol += sg_pline;
+        sg_g += sg_gbuf;
+        // this file's G lines go onto the whole program's G, then the scanner
+        // starts the next file clean. The Scan still carries this file's own
+        // lines: `mg_probe` reads the result, and a caller may too.
+        let mine = sg_g;
+        let minef = sg_gf;
+        let mineol = sg_gol;
+        mg_g += sg_g;
+        mg_gol += sg_gol;
+        mg_splice(mg_first, mg_next);
+        sg_g = [];
+        sg_gf = [];
+        sg_gol = [];
+        { ok: true, err: "", eline: 0, ecol: 0, p: sg_p, pf: sg_pf, pol: sg_pol,
+          gen: sg_gen,
+          g: mine, gf: minef, gol: mineol }
+    } else {
+        scan_bad(sg_err, sg_eline, sg_ecol)
+    }
+};
+
+// Code position. `sg_bound` says a keyword may start at i.
+def sg_code(i: long, n: long) -> long {
+    if (sg_bound) {
+        sg_bound = false;
+        let k = sg_word(i, n);
+        if (k > i) { return k };
+    };
+    let j = sg_next(i, n);
+    sg_out(i, j);
+    let c = 0;
+    if (j < n) { c = byte_at(sg_src, j) };
+    if (sg_depth > 0 && m_word(c)) {
+        // sg_next stops at a word start inside a block, so this is where a
+        // name mid-expression gets read (sg_word emits the word as it goes)
+        sg_word(j, n)
+    } else if (c == 10) {
+        sg_bound = true;
+        sg_break();
+        j + 1
+    } else if (c == 34 || c == 39) {
+        // a literal, taken whole: lit_end has the closing quote, so nothing
+        // inside one is a block -- the f-string lowering's `#fmt` is inside a
+        // literal in the source too
+        sg_state = 3;
+        j
+    } else if (c == 47) {
+        sg_slash(j, n)
+    } else if (c == 123) {
+        sg_open_brace(j, n)
+    } else if (c == 125) {
+        sg_close_brace(j, n)
+    } else if (c == 35) {
+        sg_hash(j, n)
+    } else if (c == 59) {
+        sg_pending = false;
+        sg_bound = true;
+        sg_put1(";");
+        j + 1
+    } else {
+        j
+    }
+};
+
+// A `/`: `//`, `/*`, or division.
+def sg_slash(j: long, n: long) -> long {
+    if (j + 1 < n && byte_at(sg_src, j + 1) == 47) {
+        sg_state = 1;
+        sg_put1("/");
+        sg_put1("/");
+        j + 2
+    } else if (j + 1 < n && byte_at(sg_src, j + 1) == 42) {
+        sg_state = 2;
+        sg_put1("/");
+        sg_put1("*");
+        j + 2
+    } else {
+        sg_put1("/");
+        j + 1
+    }
+};
+
+// `{`: remember whether this is a `def`/`type` body.
+def sg_open_brace(j: long, n: long) -> long {
+    if (sg_pending) {
+        sg_bkind += 1;
+        sg_pending = false;
+    } else {
+        sg_bkind += 0;
+    };
+    sg_bound = true;
+    sg_put1("{");
+    sg_word(j + 1, n)
+};
+
+// `}`: the block's own close when it is followed by `#`, else an ordinary
+// brace. The block's `}` closes no Y brace -- its `{` was never pushed.
+def sg_close_brace(j: long, n: long) -> long {
+    if (j + 1 < n && byte_at(sg_src, j + 1) == 35) {
+        if (sg_depth == 0) {
+            sg_stray(j);
+            n
+        } else {
+            // a statement-position call is a statement, and a statement wants
+            // its ';'; in expression position the call is the expression and a
+            // ';' there would be a syntax error
+            sg_gbuf += "})";
+            sg_col = sg_col + 2;
+            if (sg_bstmt[sg_depth - 1]) { sg_gbuf += ";"; sg_col = sg_col + 1; };
+            // the per-block stacks are popped here, so `sg_depth - 1` is always
+            // this block's entry and never one left over from a block that has
+            // already closed
+            sg_bstmt = sg_bstmt[0:len(sg_bstmt) - 1];
+            sg_bclean = sg_bclean[0:len(sg_bclean) - 1];
+            sg_bbrace = sg_bbrace[0:len(sg_bbrace) - 1];
+            sg_depth = sg_depth - 1;
+            j + 2
+        }
+    } else {
+        if (len(sg_bkind) > 0) {
+            sg_bkind = sg_bkind[0:len(sg_bkind) - 1];
+        };
+        sg_bound = true;
+        sg_put1("}");
+        j + 1
+    }
+};
+
+// `#` in code position: `#{` opens a block, anything else is an error. A stray
+// `#` already reaches the lexer as "expected an expression, got '#'"; this is
+// the same refusal with a message that names the construct.
+def sg_hash(j: long, n: long) -> long {
+    if (j + 1 < n && byte_at(sg_src, j + 1) == 123) {
+        sg_open(j, n)
+    } else {
+        sg_fail("'#' in code position: a meta block is #{ … }#", sg_line, sg_col);
+        n
+    }
+};
+
+// A `//` comment: EVERYTHING to the newline is text, so the interesting bytes
+// in it are not interesting.
+def sg_line_comment(i: long, n: long) -> long {
+    let j = i;
+    let go = true;
+    while (go && j < n) {
+        if (byte_at(sg_src, j) == 10) { go = false; } else { j = j + 1; };
+    };
+    sg_out(i, j);
+    sg_state = 0;
+    if (j < n) {
+        sg_out(j, j + 1);
+        sg_bound = true;
+        j + 1
+    } else {
+        n
+    }
+};
+
+// A `/* */` comment: verbatim, comments do not nest, and one that never closes
+// is fatal (the lexer treats it the same way -- the rest of the file would
+// silently disappear).
+def sg_block_comment(i: long, n: long) -> long {
+    let j = i;
+    let go = true;
+    let found = false;
+    while (go && j + 1 < n) {
+        if (byte_at(sg_src, j) == 42 && byte_at(sg_src, j + 1) == 47) {
+            found = true;
+            go = false;
+        } else {
+            j = j + 1;
+        };
+    };
+    if (found) {
+        sg_out(i, j);
+        sg_put1("*");
+        sg_put1("/");
+        sg_state = 0;
+        j + 2
+    } else {
+        sg_out(i, n);
+        sg_fail("unterminated /* comment", sg_line, sg_col);
+        n
+    }
+};
+
+// A literal: lit_end finds where it ends and whether it closed, so the one
+// scanner both the lexer and this pass agree on. A literal is not
+// newline-terminated (lexer.y), so it may hold newlines.
+//
+// An f-string is the one form lit_end cannot be asked about: a field holds an
+// expression, and that expression may be a string literal, so its closing
+// quote is not the next quote in the source. The lexer's own fstr_walk finds
+// it, and it falls back to lit_end itself when the f-string is broken.
+def sg_literal(i: long, n: long) -> long {
+    if (sg_fstring(i)) {
+        let w = fstr_walk(sg_src, i);
+        sg_out(i, w.end);
+        sg_state = 0;
+        w.end
+    } else {
+        let cl: [long] = [0];
+        let end = lit_end(sg_src, i, cl);
+        if (cl[0] == 0) {
+            sg_fail("unterminated string literal", sg_line, sg_col);
+            n
+        } else {
+            sg_out(i, end);
+            sg_state = 0;
+            end
+        }
+    }
+};
+
+// Whether the quote at i opens an f-string: `f` before it, standing alone.
+def sg_fstring(i: long) -> bool {
+    byte_at(sg_src, i) == 34 && i > 0 && byte_at(sg_src, i - 1) == 102 &&
+        (i == 1 || !m_word(byte_at(sg_src, i - 2)))
+};
+// ── the driver ──────────────────────────────────────────────────────────
+// `meta_begin`/`mg_*` accumulate across a whole resolve; `meta_run_gen` builds
+// G and hands back its text, and `mg_take_pieces` reads the pieces out of a
+// run. The COMPILE and the RUN are in native.y (`meta_run_generator`): they
+// need emit_program and std_units, which live there, and meta.y must not
+// import native.y -- the two import each other (native.y owns the pass's
+// position, meta.y the pass itself) and Y's splicer does not survive a cycle:
+// it dedups on the way down, so the file on the way back up is spliced a second
+// time and every def collides.
+//
+// The pieces come back over the pipe framed as `<slot> <len>\n<body>`, so a
+// piece is matched to its block by SLOT and not by the order the generator
+// happened to evaluate blocks in. That matters: a nested block's text is
+// produced BEFORE its parent's, so source order and execution order differ.
+
+// One piece per slot, and whether it arrived.
+let mg_piece: [str] = [];
+let mg_have: [bool] = [];
+// Whether the pieces are known: false while scanning to collect the blocks,
+// true on the second pass, when the scanner can splice.
+let mg_ready = false;
+// The program file's path and the origin map's file list, so a diagnostic can
+// name the file and line a block came from. native.y fills these in after the
+// recursion and before the generator runs.
+let mg_root = "";
+let mg_files: [str] = [];
+// G's own resolution: its dir, whether exec() is allowed in it, and the
+// package names and source roots the splicer should resolve G's bare imports
+// against.
+let mg_gbase = "";
+let mg_gexec = true;
+let mg_pkgs: [str] = [];
+let mg_roots: [str] = [];
+
+def meta_begin() -> long {
+    mg_on = true;
+    mg_ready = false;
+    mg_root = "";
+    mg_files = [];
+    mg_piece = [];
+    mg_have = [];
+    mg_gbase = "";
+    mg_gexec = true;
+    mg_pkgs = [];
+    mg_roots = [];
+    mg_pass()
+};
+
+// A new PASS over the same files -- and the block table, G's body and the
+// hoisted imports are all per-pass. A block's SLOT is its index in the block
+// table, and the table is rebuilt from scratch each pass, so the second pass
+// over the same files in the same order hands out the SAME slots: that is how
+// a piece the generator wrote is matched to the block that asked for it. The
+// pieces themselves survive -- they are what the second pass splices.
+def mg_pass() -> long {
+    sg_quiet = false;
+    mg_next = 0;
+    mg_g = [];
+    mg_gol = [];
+    mg_bslot = [];
+    mg_bfile = [];
+    mg_bline = [];
+    mg_bp = [];
+    mg_bpo = [];
+    mg_imp = [];
+    mg_iol = [];
+    mg_n = 0;
+    0
+};
+
+// native.y hands the generator its resolution over this, because
+// `meta.<field> = v` is a namespaced field ASSIGNMENT and strip_ns rewrites
+// only namespaced dot READS (it handles K.dot, not K.dotassign -- see
+// strip_ns), so a module cannot set another module's global by name.
+def mg_setup(root: str, files: [str], base: str, exec: bool, pkgs: [str], roots: [str]) -> long {
+    mg_root = root;
+    mg_files = files;
+    mg_gbase = base;
+    mg_gexec = exec;
+    mg_pkgs = pkgs;
+    mg_roots = roots;
+    0
+};
+
+// The pass is off for the generator's own compile: G is ordinary Y, and
+// anything a generator emits is never re-scanned, so nothing in it can open a
+// block. This is what makes "a block's output may not contain a block" true by
+// construction rather than by checking.
+def mg_set(on: bool) -> long {
+    mg_on = on;
+    0
+};
+
+def mg_in(xs: [str], s: str) -> bool {
+    let hit = false;
+    let i = 0;
+    while (i < len(xs)) {
+        if (xs[i] == s) { hit = true; };
+        i = i + 1;
+    };
+    hit
+};
+
+// A fatal pass-level diagnostic. Every leak path out of the pass is one of
+// these, never a hand-off to the lexer (see the spec's invariant 1): whatever
+// `#{` the scanner was meant to catch is caught here, with its line.
+def mg_report(msg: str) -> long {
+    puts("error: " + msg + "\n");
+    exit(1);
+    0
+};
+
+// The helpers G carries, and the one they share. `y_`-prefixed, so a module
+// imported into the generator namespaces its own names (rename.y) and cannot
+// collide with them; the program's own flat top level can, and that is
+// mg_reserved's diagnostic.
+//
+// Each writes its piece to fd 3 framed as `<slot> <len>\n<body>`, which is what
+// lets the parent read a piece back in any order and with any bytes in it --
+// including newlines, which most of them have.
+def mg_helpers() -> [str] {
+    [
+"def ycc_meta_emit(slot: long, body: str) -> void {",
+"    let h = tostring(slot) + \" \" + tostring(len(body)) + \"\\n\";",
+"    let hb = bytes(h);",
+"    syscall(1, 3, &hb[0], len(hb));",
+"    let b = bytes(body);",
+"    if (len(b) > 0) { syscall(1, 3, &b[0], len(b)); 0; };",
+"    0",
+"};",
+"def ycc_meta_expr(slot: long, body: str) -> str {",
+"    ycc_meta_emit(slot, body);",
+"    body",
+"};",
+"def ycc_meta_stmt(slot: long, body: str) -> void {",
+"    ycc_meta_emit(slot, body);",
+"    0",
+"};",
+    ]
+};
+
+// G's text: the helpers, then the hoisted imports, then the files' own lines
+// with each block as a call. The imports go after the helpers and before the
+// body, so a hoisted module's own statements see the helpers.
+def meta_gtext() -> str {
+    let out: [str] = [];
+    let hs = mg_helpers();
+    let i = 0;
+    while (i < len(hs)) {
+        out += hs[i];
+        i = i + 1;
+    };
+    let k = 0;
+    while (k < len(mg_imp)) {
+        out += mg_imp[k];
+        k = k + 1;
+    };
+    join(out + mg_g, "\n") + "\n"
+};
+
+// How many lines of G's origin map are the helpers and the hoisted imports:
+// the generator's body starts here, so a line index has to know.
+def mg_ghead() -> long {
+    len(mg_helpers()) + len(mg_imp)
+};
+
+// How many lines the generator's body is: the files' own lines, one for one.
+def mg_glines() -> long {
+    len(mg_g)
+};
+
+// Where the block that holds slot `s` stands, as `file:line`.
+def mg_where(s: long) -> str {
+    let k = 0;
+    let ln = 0;
+    let f = 0;
+    while (k < len(mg_bslot)) {
+        if (mg_bslot[k] == s) { ln = mg_bline[k]; f = mg_bfile[k]; };
+        k = k + 1;
+    };
+    let path = mg_root;
+    if (f < len(mg_files)) { path = mg_files[f] };
+    path + ":" + tostring(ln)
+};
+
+// ── the piece table ─────────────────────────────────────────────────────
+
+// Split the pipe's bytes into pieces. A framing error means the generator did
+// not run our helpers, which cannot happen unless the pass is broken.
+def mg_unframe(data: str) -> long {
+    let n = len(data);
+    let i = 0;
+    let bad = false;
+    while (i < n && !bad) {
+        let j = i;
+        let go = true;
+        while (go && j < n && byte_at(data, j) != 10) { j = j + 1; };
+        if (j >= n) {
+            bad = true;
+        } else {
+            let head = data[i:j];
+            let sp = index_of(head, " ");
+            if (sp < 0) {
+                bad = true;
+            } else {
+                let slot = tonum(head[:sp]);
+                let take = tonum(head[sp + 1:]);
+                let body = data[j + 1:j + 1 + take];
+                if (take < 0 || len(body) != take || slot < 0 || slot >= mg_next) {
+                    bad = true;
+                } else {
+                    // the tables start empty and a piece may arrive in any
+                    // order, so they grow to the slot it names
+                    while (len(mg_piece) <= slot) { mg_piece += ""; mg_have += false; };
+                    mg_piece[slot] = body;
+                    mg_have[slot] = true;
+                    i = j + 1 + take;
+                };
+            };
+        };
+    };
+    if (bad) {
+        mg_report("the meta generator wrote a malformed piece to fd 3 (this is the pass's own framing, so it is a bug)");
+        1
+    } else {
+        0
+    }
+};
+
+// The first slot with no piece, or -1. A block at the top level always runs
+// (the top level IS the generator's program), so a gap means the generator
+// did not reach it -- and the message can name it.
+def mg_first_missing() -> long {
+    let at = 0 - 1;
+    let i = 0;
+    while (i < mg_next) {
+        if (!mg_have[i]) { at = i; };
+        i = i + 1;
+    };
+    at
+};
+
+// Read back what a run produced: check the child's fate, unframe, check every
+// piece, and report the first thing that is wrong. Returns false if the
+// generator died, having said as much as can be said.
+def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
+    let r = true;
+    // sized FIRST: mg_blame asks which slots have no piece, so a generator
+    // that died before writing anything must still leave the tables the right
+    // length (mg_unframe only grows them for the slots a piece names)
+    while (len(mg_piece) < mg_next) { mg_piece += ""; mg_have += false; };
+    if (sig > 0) {
+        mg_report("the meta generator died on signal " + tostring(sig) + mg_blame());
+    };
+    if (status != 0) {
+        mg_report("the meta generator exited " + tostring(status) + mg_blame());
+    };
+    if (len(out) > MG_MAX) {
+        mg_report("the meta generator emitted more than " + tostring(MG_MAX) + " bytes");
+    };
+    mg_unframe(from_bytes(out));
+    let i = 0;
+    while (i < mg_next) {
+        if (!mg_have[i]) {
+            mg_report("the block at " + mg_where(i) + " produced no output: every meta block runs once, in the generator's top level, so reaching it is not optional");
+        };
+        mg_check(i);
+        i = i + 1;
+    };
+    mg_ready = true;
+    r
+};
+
+// ", and the first block that produced nothing was at ..." when there is one.
+def mg_blame() -> str {
+    let m = mg_first_missing();
+    if (m < 0) { "" } else { ", and the first block that produced nothing was at " + mg_where(m) }
+};
+
+// The checks a piece must pass before it is spliced into the program's
+// source. Each names the block, because "the generator emitted something bad"
+// is not a message a reader can act on.
+def mg_check(s: long) -> long {
+    let p = "";
+    if (s < len(mg_piece)) { p = mg_piece[s] };
+    if (index_of(p, "#{") >= 0) {
+        mg_report("the block at " + mg_where(s) + " emitted a #{ … }# block: generated text is never re-scanned, so a block cannot emit one");
+    };
+    if (index_of(p, "\x00") >= 0) {
+        mg_report("the block at " + mg_where(s) + " emitted a NUL byte, which cannot be in a source file");
+    };
+    0
+};
+
+// A `#{` in the text the generator resolved -- which is to say in a module the
+// generator imported. G is compiled with the pass off, so such a block would
+// arrive at the lexer as a bare `#`, and "expected an expression, got '#'" is
+// not a message anyone can act on. Probed with the real scanner, with the
+// block table saved and put back, so the probe cannot perturb the program's
+// own pass.
+def mg_probe(src: str, dir: str) -> bool {
+    let n = mg_next;
+    let bs = mg_bslot;
+    let bf = mg_bfile;
+    let bl = mg_bline;
+    let bp = mg_bp;
+    let bo = mg_bpo;
+    let gn = mg_n;
+    let gi = len(mg_imp);
+    let gl = len(mg_g);
+    let was_quiet = sg_quiet;
+    sg_quiet = true;
+    meta_scan(src, 0, dir);
+    sg_quiet = was_quiet;
+    let hit = mg_n > gn;
+    mg_next = n;
+    mg_bslot = bs;
+    mg_bfile = bf;
+    mg_bline = bl;
+    mg_bp = bp;
+    mg_bpo = bo;
+    mg_n = gn;
+    mg_imp = mg_imp[0:gi];
+    mg_iol = mg_iol[0:gi];
+    mg_g = mg_g[0:gl];
+    mg_gol = mg_gol[0:gl];
+    hit
+};
+
+// `import a from "./b.y"` normalized the way native.y's norm_path does: the
+// splicer will normalize again on its own side, but this one decides WHICH file
+// the path means, so it has to collapse the "/./" a nested base dir carries.
+def mg_norm_path(p: str) -> str {
+    let parts = split(p, "/");
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(parts)) {
+        let seg = parts[i];
+        if (seg != ".") { out += seg; };
+        i = i + 1;
+    };
+    join(out, "/")
+};
+// ── the splice ──────────────────────────────────────────────────────────
+// A block's piece goes at the byte offset recorded when its `#{` was scanned,
+// in the P line recorded then. The line map is rebuilt here, not repaired: a
+// piece is text and may hold any number of newlines, so the lines after it
+// shift by however many it added, and every line the pass generates carries the
+// `#{` line -- which is the honest origin, there being no better one.
+
+// text's physical lines, and NOT split(): split drops ONE trailing empty
+// element, so split("a\n", "\n") is ["a"] and the line break a piece ends on
+// would be swallowed. A piece is generated text, and every byte of it counts.
+def mg_lines(text: str) -> [str] {
+    let out: [str] = [];
+    let n = len(text);
+    let start = 0;
+    let i = 0;
+    while (i < n) {
+        if (byte_at(text, i) == 10) {
+            out += text[start:i];
+            start = i + 1;
+        };
+        i = i + 1;
+    };
+    out += text[start:];
+    out
+};
+
+// Split the segments into physical lines: a segment's first part joins the
+// line being built if there is one, every part after the first starts a new
+// line (a newline was crossed), and the last line is flushed at the end.
+//
+// `segp[s]` says whether segment `s` is generated text, and `ngen` gets one
+// entry per line emitted saying whether that line is wholly generated. A line
+// is wholly generated when every segment feeding it is -- which is what lint's
+// "a top-level statement runs twice" check needs to tell the user's own
+// statement from the text a block put there.
+def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
+            nf: [long], nll: [long], ngen: [bool]) -> long {
+    let cur = "";
+    let curo = 0;
+    let cgen = true;
+    let s = 0;
+    while (s < len(segs)) {
+        let text = segs[s];
+        let o = sego[s];
+        let p = false;
+        if (s < len(segp)) { p = segp[s] };
+        let parts = mg_lines(text);
+        let k = 0;
+        while (k < len(parts)) {
+            if (k == 0) {
+                // this part joins the line being built: it is that line's
+                // first text if it is empty, and joins the rest otherwise
+                if (cur == "") { curo = o; cgen = p; } else { cgen = cgen && p; };
+            } else {
+                nl += cur;
+                nf += fid;
+                nll += curo;
+                ngen += cgen;
+                cur = "";
+                curo = o;
+                cgen = p;
+            };
+            cur += parts[k];
+            k = k + 1;
+        };
+        s = s + 1;
+    };
+    nl += cur;
+    nf += fid;
+    nll += curo;
+    ngen += cgen;
+    0
+};
+
+// Splice blocks [lo, hi) -- this file's -- into the scanned P. A no-op when the
+// pieces are not known yet (the collecting pass).
+def mg_splice(lo: long, hi: long) -> long {
+    if (!mg_ready) { 0 }
+    else {
+        let lines = sg_p;
+        let ols = sg_pol;
+        let nl: [str] = [];
+        let nf: [long] = [];
+        let nll: [long] = [];
+        let ngen: [bool] = [];
+        let i = 0;
+        while (i < len(lines)) {
+            mg_splice_line(lines[i], ols[i], i, lo, hi, nl, nf, nll, ngen);
+            i = i + 1;
+        };
+        sg_p = nl;
+        sg_pf = nf;
+        sg_pol = nll;
+        sg_gen = ngen;
+        0
+    }
+};
+
+// One line of P, with the pieces of the blocks that stand on it. `at` is the
+// line's index in sg_p and the block table is in the order the scanner found
+// the blocks, so the blocks for this line are the run that starts at the first
+// entry at or after `at` -- the run is skipped to, not merely tested for.
+def mg_splice_line(line: str, ol: long, at: long, lo: long, hi: long,
+                   nl: [str], nf: [long], nll: [long], ngen: [bool]) -> long {
+    let segs: [str] = [];
+    let sego: [long] = [];
+    let segp: [bool] = [];
+    let prev = 0;
+    let k = lo;
+    while (k < hi && mg_bp[k] < at) { k = k + 1; };
+    let any = false;
+    while (k < hi && mg_bp[k] == at) {
+        any = true;
+        let o = mg_bpo[k];
+        if (o >= prev && o <= len(line)) {
+            segs += line[prev:o];
+            sego += ol;
+            segp += false;
+            let s = mg_bslot[k];
+            segs += mg_piece[s];
+            sego += mg_bline[k];
+            segp += true;
+            prev = o;
+        };
+        k = k + 1;
+    };
+    if (!any) {
+        segs += line;
+        sego += ol;
+        segp += false;
+    } else {
+        segs += line[prev:];
+        sego += ol;
+        segp += false;
+    };
+    mg_emit(segs, sego, segp, sg_fid, nl, nf, nll, ngen)
+};
+export { run_image, RunRes, Img, elf_img,
+         meta_begin, mg_pass, mg_set, mg_setup, mg_on, mg_check, mg_report,
+         mg_probe, mg_take_pieces, meta_scan, Scan, scan_none,
+         meta_gtext, mg_ghead, mg_glines, mg_gol, mg_gbase, mg_gexec, mg_pkgs, mg_roots,
+         mg_root };
