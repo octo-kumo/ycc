@@ -1556,11 +1556,11 @@ def patch8(bytes: [byte], at: long, v: long) -> [byte] {
 // establishes a frame pointer, the total bytes it takes off the stack and
 // where that is in effect from, and one (prolog offset, register number) per
 // callee-saved register it pushed.
-type PeFrame = { start: long, end: long, fp: bool, alloc: long, alloc_off: long, pushes: [long], prolog: long };
+type PeFrame = { start: long, end: long, first: long, last: long, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long };
 // What pe_unwind hands back, and what pe_prologue_insn threads the prologue
 // scan through (go: false ends the prologue at that instruction).
 type PeUnwind = { pdata: [byte], xdata: [byte] };
-type PePro = { go: bool, fp: bool, alloc: long, alloc_off: long, pushes: [long], prolog: long };
+type PePro = { go: bool, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long };
 
 // The two unwind sections, or two empty arrays when there is nothing to say.
 def pe_unwind(items: [AsmItem], labels: [AsmLabel]) -> PeUnwind {
@@ -1578,7 +1578,7 @@ def pe_frames(items: [AsmItem], labels: [AsmLabel]) -> [PeFrame] {
     while (i < len(labels)) {
         let lb = labels[i];
         if (lb.sec == 0 && is_sym_label(lb.name, 0)) {
-            out += { start: lb.off, end: 0, fp: false, alloc: 0, alloc_off: 0, pushes: [], prolog: 0 };
+            out += { start: lb.off, end: 0, first: lb.at_item, last: 0, fp: false, fp_off: 0, alloc: 0, alloc_off: 0, pushes: [], prolog: 0 };
         };
         i = i + 1;
     };
@@ -1601,38 +1601,51 @@ def pe_nonvol(reg: long) -> bool {
 // than a guess.  (A wrong unwind record makes a debugger walk into the middle
 // of a frame; a short one makes it stop unwinding early, which is visible and
 // harmless.)
+// A frame's extent is its label to the next one's, and its ITEMS run from the
+// item index its label sits at to the next one's. Item offsets cannot be used
+// for this: relax_place only rewrites an item's `off` under -g, so without it
+// `off` is still pass 1's, before the branch relaxation that moved everything
+// (relax_place's own note). Counting items from `at_item` and adding lengths
+// is the one position that is right either way.
 def pe_frame_prologues(items: [AsmItem], frames: [PeFrame]) -> [PeFrame] {
     let n = len(frames);
     let i = 0;
     while (i < n) {
         let stop = 0;
-        if (i + 1 < n) { stop = frames[i + 1].start; };
-        frames[i] = pe_prologue(items, frames[i], stop);
+        let last = len(items);
+        if (i + 1 < n) {
+            stop = frames[i + 1].start;
+            last = frames[i + 1].first;
+        };
+        frames[i] = pe_prologue(items, frames[i], stop, last);
         i = i + 1;
     };
     frames
 };
 
-def pe_prologue(items: [AsmItem], f: PeFrame, stop: long) -> PeFrame {
+def pe_prologue(items: [AsmItem], f: PeFrame, stop: long, last: long) -> PeFrame {
     let alloc = 0;
     let alloc_off = 0;
     let pushes: [long] = [];
     let prolog = 0;
     let fp = false;
+    let fp_off = 0;
     let at = 0;
-    let k = 0;
+    let k = f.first;
     let open = true;
-    while (open && k < len(items)) {
+    while (open && k < last) {
         let it = items[k];
         k = k + 1;
-        if (it.sec == 0 && it.off >= f.start && it.off < stop) {
-            let r = pe_prologue_insn(it, at, fp, alloc, alloc_off, pushes, prolog);
+        if (it.sec == 0) {
+            let r = pe_prologue_insn(it, at, fp, fp_off, alloc, alloc_off, pushes, prolog);
             if (r.go) {
                 fp = r.fp;
+                fp_off = r.fp_off;
                 alloc = r.alloc;
                 alloc_off = r.alloc_off;
                 pushes = r.pushes;
                 prolog = r.prolog;
+                at = r.prolog;
             } else {
                 open = false;
             };
@@ -1640,6 +1653,7 @@ def pe_prologue(items: [AsmItem], f: PeFrame, stop: long) -> PeFrame {
     };
     f.end = stop;
     f.fp = fp;
+    f.fp_off = fp_off;
     f.alloc = alloc;
     f.alloc_off = alloc_off;
     f.pushes = pushes;
@@ -1651,30 +1665,32 @@ def pe_prologue(items: [AsmItem], f: PeFrame, stop: long) -> PeFrame {
 // false, ...} (it did not).  `off` is the instruction's offset within the
 // function; the CodeOffset a code carries is that instruction's last byte
 // plus one, which is where the effect is in force.
-def pe_prologue_insn(it: AsmItem, off: long, fp: bool, alloc: long, alloc_off: long, pushes: [long], prolog: long) -> PePro {
+def pe_prologue_insn(it: AsmItem, off: long, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long) -> PePro {
     let b = it.bytes;
     let n = len(b);
     let done = off + it.len;
-    let no = { go: false, fp: fp, alloc: alloc, alloc_off: alloc_off, pushes: pushes, prolog: prolog };
+    let no = { go: false, fp: fp, fp_off: fp_off, alloc: alloc, alloc_off: alloc_off, pushes: pushes, prolog: prolog };
     if (n < 1) {
         no
     } else if (b[0] == 0x55 || (b[0] >= 0x50 && b[0] <= 0x57)) {
         // push %reg (no REX: rax..rdi)
-        pe_prologue_push(b[0] - 0x50, done, fp, alloc, done, pushes, prolog)
+        pe_prologue_push(b[0] - 0x50, done, fp, fp_off, alloc, done, pushes, prolog)
     } else if (b[0] == 0x41 && n >= 2 && b[1] >= 0x50 && b[1] <= 0x57) {
         // push %r8..%r15
-        pe_prologue_push(b[1] - 0x50 + 8, done, fp, alloc, done, pushes, prolog)
+        pe_prologue_push(b[1] - 0x50 + 8, done, fp, fp_off, alloc, done, pushes, prolog)
     } else if (n >= 3 && b[0] == 0x48 && b[1] == 0x89 && b[2] == 0xe5) {
-        // mov %rsp,%rbp: the frame register, at the frame's base.
-        { go: true, fp: true, alloc: alloc, alloc_off: alloc_off, pushes: pushes, prolog: done }
+        // mov %rsp,%rbp: the frame register, established HERE -- so its code
+        // carries this instruction's offset, not the prologue's end, which
+        // may be several pushes and a `sub` later.
+        { go: true, fp: true, fp_off: done, alloc: alloc, alloc_off: alloc_off, pushes: pushes, prolog: done }
     } else if (n == 4 && b[0] == 0x48 && b[1] == 0x83 && b[2] == 0xec) {
         // sub $imm8,%rsp
-        { go: true, fp: fp, alloc: alloc + b[3], alloc_off: done, pushes: pushes, prolog: done }
+        { go: true, fp: fp, fp_off: fp_off, alloc: alloc + b[3], alloc_off: done, pushes: pushes, prolog: done }
     } else if (n == 7 && b[0] == 0x48 && b[1] == 0x81 && b[2] == 0xec) {
         // sub $imm32,%rsp
         let sz = enc.le32(b[3]);
         let v = sz[0] + 256 * sz[1] + 65536 * sz[2] + 16777216 * sz[3];
-        if (v < 0) { no } else { { go: true, fp: fp, alloc: alloc + v, alloc_off: done, pushes: pushes, prolog: done } }
+        if (v < 0) { no } else { { go: true, fp: fp, fp_off: fp_off, alloc: alloc + v, alloc_off: done, pushes: pushes, prolog: done } }
     } else {
         no
     }
@@ -1684,12 +1700,20 @@ def pe_prologue_insn(it: AsmItem, off: long, fp: bool, alloc: long, alloc_off: l
 // considers nonvolatile -- a UWOP_PUSH_NONVOL whose CodeOffset is where that
 // register becomes unreadable.  The pack is offset * 16 + register, which
 // keeps a frame's whole code list flat.
-def pe_prologue_push(reg: long, done: long, fp: bool, alloc: long, alloc_off: long, pushes: [long], prolog: long) -> PePro {
+def pe_prologue_push(reg: long, done: long, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long) -> PePro {
     let np = pushes;
+    let na = alloc;
     if (pe_nonvol(reg)) {
+        // A nonvolatile push gets UWOP_PUSH_NONVOL, which ALREADY says RSP
+        // went down by eight; counting it in the allocation as well would
+        // describe the same eight bytes twice and unwind 8 bytes too far.
         np = pushes + [(done + 1) * 16 + reg];
+    } else {
+        // A volatile push has no code of its own (that is what MASM's
+        // .allocstack 8 is for), so the allocation is what covers it.
+        na = alloc + 8;
     };
-    { go: true, fp: fp, alloc: alloc + 8, alloc_off: done, pushes: np, prolog: done }
+    { go: true, fp: fp, fp_off: fp_off, alloc: na, alloc_off: done, pushes: np, prolog: done }
 };
 
 // One RUNTIME_FUNCTION per frame and one UNWIND_INFO per frame, the .pdata
@@ -1710,53 +1734,76 @@ def pe_unwind_bytes(frames: [PeFrame], xbase: long) -> PeUnwind {
     { pdata: pdata, xdata: xdata }
 };
 
-// The codes of one frame, sorted by descending prolog offset.  Flat triples
-// (offset, op, info) so the list stays a plain [long]; the sort is an
-// insertion sort, and a frame has at most nine of them.
+// The codes of one frame, each a two-slot group packed into one long per
+// slot, SORTED BY DESCENDING PROLOG OFFSET -- the order the epilog undoes
+// them, and the order the unwinder scans (it walks the array for the first
+// entry whose offset is <= the RIP offset, then undoes the rest).
+//
+// The packing: byte 0 of a slot is its CodeOffset, byte 1 is UnwindOp in the
+// LOW nibble and OpInfo in the HIGH one. So a slot is
+//     offset + (op + info * 16) * 256
+// and the writer below splits it back into two bytes. Note that the groups
+// are sorted as UNITS, not slot by slot: UWOP_ALLOC_LARGE's second slot holds
+// the allocation size, not an offset, and it must stay glued to its first.
 def pe_codes(f: PeFrame) -> [long] {
-    let c: [long] = [];
-    if (f.alloc > 0) {
-        c = pe_codes_alloc(c, f.alloc, f.alloc_off);
-    };
+    let g: [[long]] = [];
     let i = 0;
     while (i < len(f.pushes)) {
-        c += [(f.pushes[i] / 16) * 256 + (f.pushes[i] % 16)];
+        // the push is packed as offset*16 + register (pe_prologue_push), and
+        // the register is OpInfo, i.e. the HIGH nibble: multiply by 16.
+        let packed = f.pushes[i];
+        g += [[(packed / 16) + (packed % 16) * 4096]];
         i = i + 1;
     };
-    if (f.fp) {
-        c += [(f.prolog - 3) * 256 + 3];
-    };
-    pe_codes_sorted(c)
+    if (f.fp) { g += [[f.fp_off + 1 + 3 * 256]]; };
+    if (f.alloc > 0) { g += pe_alloc(f.alloc, f.alloc_off); };
+    pe_codes_sorted(g, 0)
 };
 
-def pe_codes_alloc(c: [long], size: long, off: long) -> [long] {
+// One allocation's group. CodeOffset is "the end of the instruction that did
+// it, plus one" -- the start of the next one -- which is what makes the
+// unwinder's scan for the first code with offset <= rip-offset work.
+// UWOP_ALLOC_SMALL covers 8..128 bytes (info = size/8 - 1); above that it is
+// UWOP_ALLOC_LARGE with info 0 and size/8 in the next slot.
+def pe_alloc(size: long, off: long) -> [[long]] {
     if (size >= 8 && size <= 128) {
-        c += [off * 256 + 2 + (size / 8 - 1) * 16];
+        [[off + 1 + (2 + (size / 8 - 1) * 16) * 256]]
+    } else if (size > 128) {
+        [[off + 1 + 1 * 256, size / 8]]
     } else {
-        c += [off * 256 + 1];
-        c += [size / 8];
-    };
-    c
+        []
+    }
 };
 
-def pe_codes_sorted(c: [long]) -> [long] {
-    let out: [long] = [];
-    let i = 0;
-    while (i < len(c)) {
+// Insertion sort by descending CodeOffset (the low byte of a group's first
+// slot). A frame has at most nine groups.
+def pe_codes_sorted(g: [[long]], i: long) -> [long] {
+    let out: [[long]] = [];
+    let at = i;
+    while (at < len(g)) {
+        let cur = g[at];
         let j = len(out);
-        out += 0;                     // one slot to insert into
-        while (j > 0 && out[j - 1] % 256 < c[i] % 256) {
+        out += cur;                       // the slot to insert into
+        while (j > 0 && (out[j - 1][0] % 256) < (cur[0] % 256)) {
             out[j] = out[j - 1];
             j = j - 1;
         };
-        out[j] = c[i];
-        i = i + 1;
+        out[j] = cur;
+        at = at + 1;
     };
-    out
+    let slots: [long] = [];
+    let k = 0;
+    while (k < len(out)) {
+        let q = 0;
+        while (q < len(out[k])) { slots += out[k][q]; q = q + 1; };
+        k = k + 1;
+    };
+    slots
 };
 
 // One UNWIND_INFO: the 4-byte header, the codes, then the padding to an even
-// slot count.
+// slot count. With no flags there is no trailing handler or chained-info
+// DWORD, so a function with no codes is exactly 4 bytes.
 def pe_unwind_info(xdata: [byte], f: PeFrame) -> [byte] {
     let c = pe_codes(f);
     let n = len(c);

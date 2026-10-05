@@ -174,6 +174,13 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     let trailer: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
     let textlen = codesz + ro_len + len(trailer);
     let secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs);
+    // A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
+    // address is only known once pe_place has laid the sections out -- so the
+    // field is patched here, from the offsets within .xdata that
+    // asm.y pe_unwind_bytes recorded. Getting this wrong is invisible in the
+    // headers (the Exception directory itself is still right) and fatal at the
+    // first unwind, which is the worst place to find out.
+    let pdata2 = pe_fix_pdata(pdata, pe_find(secs, ".xdata").rva);
     let size_headers = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
     let size_image = pe_align(pe_text_rva(secs) + textlen, PE_SECT_ALIGN);
     let last = secs[len(secs) - 1];
@@ -199,7 +206,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     out = pe_payload(out, t, rodata);
     out = pe_payload(out, t, trailer);
     out = pe_pad(out, t.rawptr + t.rawsz);
-    out = pe_payload(out, pd, pdata);
+    out = pe_payload(out, pd, pdata2);
     out = pe_pad(out, pd.rawptr + pd.rawsz);
     out = pe_payload(out, xd, xdata);
     out = pe_pad(out, xd.rawptr + xd.rawsz);
@@ -219,6 +226,33 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
 // section whose RVA is not derived from a predecessor's end).
 def pe_text_rva(secs: [PeSecHdr]) -> long {
     pe_find(secs, ".text").rva
+};
+
+// Four little-endian bytes of a 32-bit value.
+def pe_le32(v: long) -> [byte] {
+    let out: [byte] = [];
+    out += v % 256;
+    out += v / 256 % 256;
+    out += v / 65536 % 256;
+    out += v / 16777216 % 256;
+    out
+};
+
+// Add `rva` to the UnwindData field of every 12-byte RUNTIME_FUNCTION. The
+// field is at offset 8; the other two are the function's begin and end
+// addresses, which are already section-relative and stay as they are.
+def pe_fix_pdata(pdata: [byte], rva: long) -> [byte] {
+    let out: [byte] = pdata;
+    let i = 0;
+    while (i + 11 < len(out)) {
+        let b = pe_le32(out[i + 8] + out[i + 9] * 256 + out[i + 10] * 65536 + out[i + 11] * 16777216 + rva);
+        out[i + 8] = b[0];
+        out[i + 9] = b[1];
+        out[i + 10] = b[2];
+        out[i + 11] = b[3];
+        i = i + 12;
+    };
+    out
 };
 
 // Where the COFF symbol table starts: past every section's file bytes.  The
@@ -334,9 +368,13 @@ def pe_optional(out: [byte], secs: [PeSecHdr], size_headers: long, size_image: l
     out
 };
 
-// One 40-byte section header.  The name is padded to 8 bytes with NULs: a
-// name of 8 or more bytes needs the "/N" string-table form, and no section
-// here is that long.
+// One 40-byte section header.  The name is 8 bytes, NUL-padded, and TRUNCATED
+// at 8: COFF has a "/N" form for a longer name, which costs a string table
+// and a PointerToStringTable in the header, and only the .debug_* names exceed
+// eight bytes ("debug_info"). Truncating loses the tail of those four names
+// and nothing else: a section name is informational, every consumer keys off
+// the section index or the type. A PE that needs the long form is a follow-up,
+// not a correctness problem here.
 def pe_shdr(out: [byte], s: PeSecHdr) -> [byte] {
     let nm = s.name;
     let i = 0;
