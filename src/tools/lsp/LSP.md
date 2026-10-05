@@ -1,7 +1,27 @@
 # LSP.md — a language server for Y, and the VS Code extension
 
-**Status: proposed, not implemented.** This document is the design and the
-requirement list. Nothing here has been built yet.
+**Status: built and running; §11's milestone table is the authority.** `yserve`
+exists, is driven by a VS Code extension in `vscode-y-lang/`, and is tested as a
+real process. M1 (R1, errors and warnings), M2 (R2, semantic tokens) and M3 (R3,
+formatting) are done; **M4's Stage A is done** (R4, R5, R6 — hover, go-to-
+definition, completion, from the open buffer's own declarations), measured at §11.3
+and costed at §9.2.
+
+This line used to read "proposed, not implemented … nothing here has been built
+yet", which was wrong from the moment M1 shipped and stayed wrong through four
+milestones. A design document that understates its own state is worse than one
+that has none: a reader checks whether it is real before reading it.
+
+What is **not** built, precisely:
+
+- **M4 Stage B / §9.2, the C2 compiler change** — cross-file navigation (a name
+  from an import answers `null`), inferred types in a hover, a record's own
+  fields after a `.`, and the semantic token classes that say what a name
+  *denotes*. Decided as worth doing, with the cost counted: §11.3.
+- **M5's packaging**, beyond the documentation rows: no `vsce` package, no
+  marketplace entry.
+- The requirement text below is unchanged and still the target; where a
+  requirement is partly delivered the status note at its head says which part.
 
 **On citations.** Compiler internals are named by **symbol** — `types.check_program`,
 `native.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
@@ -18,8 +38,9 @@ prints what it finds there:
 python3 src/tools/lsp/check-refs.py -v
 ```
 
-Run it after touching `src/y`. It is not wired into `make test`, because that is
-the compiler agent's file; §12 lists it as a follow-up.
+Run it after touching `src/y`. It used to say it was not wired into `make test`
+because that is the compiler agent's file; it is wired now, into
+`test/sh/test_lsp.sh` alongside `check-names.py`, so `make test` runs it.
 
 It supersedes the sketch at the end of `future.y`:
 
@@ -476,7 +497,7 @@ outliers against 1651 padded ones: the formatter writes the house style.
 continuations of R3.6a, ~46 the tight-brace outliers of R3.6b, and the rest
 blank-line collapsing and a trailing-newline normalisation (`labels.y` and
 `tags.y` ship without a final newline; R3.6 adds one). Idempotence -- the actual
-requirement of R3.5 -- holds over all 487 files that lex.
+requirement of R3.5 -- holds over every file in the tree that lexes.
 
 **R3.7** Rules live in one table, overridable per `y.lsp.format.*` settings:
 indent width, column limit, operator spacing.
@@ -1078,7 +1099,11 @@ Each ends green on `make test`.
 | ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
 | **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
-| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over 487 files; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
+| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over every `.y` file in
+the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
+which must be zero, and only *prints* the total, so the total moves as `src/y`
+moves without anything failing; this row used to quote 487, a number nothing
+checks; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
 | **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (62/62). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), a record's own fields after a `.`, the std/package globals `native.unit_iface` would give, and the semantic token legend's semantic classes. |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
