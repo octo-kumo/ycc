@@ -197,11 +197,8 @@ yow_out:
 # a second one, for the reason gen_exit's comment gives: rt.y calls exit() and
 # rt.y is compiled into the std pack, which one compiler writes for one target.
 # The argument arrives on the stack (the emitter pushes it), so 16(%rbp) is the
-# status -- pushed last, so lowest. NtTerminateProcess does not return; the
-# yosx_dead trap below it is the honest statement of that, reached only if the
-# kernel returns anyway.
+# status -- pushed last, so lowest.
 #=== replace: y_os_exit ===
-#=== add: yosx_dead ===
 y_os_exit:
     push %rbp
     mov %rsp, %rbp
@@ -209,10 +206,11 @@ y_os_exit:
     mov $-1, %r10
     mov $44, %eax
     syscall
-    mov %rbp, %rsp
-    pop %rbp
-    ret
-yosx_dead:
+# NtTerminateProcess does not return, and if it somehow does the program must
+# stop loudly rather than run on past its own exit -- so there is no `ret`
+# above and this trap is what actually follows the syscall. `div` by zero is
+# the trap the rest of the prelude already uses for an impossible condition
+# (y_long_tostr); the encoder has no ud2.
     xor %eax, %eax
     div %rax
 # The trap stubs. Each writes its message to the standard output and ends the
