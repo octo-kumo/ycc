@@ -141,9 +141,9 @@ type Run = {
     ninst: long, ncap: long,
     cur_pc: [long], cur_cap: [[long]], cur_n: long,
     nxt_pc: [long], nxt_cap: [[long]], nxt_n: long,
-    seen: [long], gen: long, wpc: [long], wcap: [[long]], sp: long,
+    seen: [long], gen: long, wpc: [long], wcap: [[long]],
     base: [long], hit: [long], hit_end: long, want_end: long,
-    free: [[long]], free_n: long, orig: long, kept: bool,
+    free: [[long]], free_n: long,
     ok: bool, matched: bool, look: long, subs: [Run]
 };
 
@@ -1272,12 +1272,16 @@ def new_run(re: Re, s: str) -> Run {
     let seen: [long] = [];
     let i = 0;
     while (i < len(re.prog)) { seen += 0; i = i + 1; };
+    let ncap = (re.groups + 1) * 2;
     { prog: re.prog, classes: re.classes, subject: s, end: len(s),
-      ninst: len(re.prog), ncap: (re.groups + 1) * 2,
+      ninst: len(re.prog), ncap: ncap,
       cur_pc: [], cur_cap: [], cur_n: 0, nxt_pc: [], nxt_cap: [], nxt_n: 0,
-      seen: seen, gen: 1, wpc: [], wcap: [], sp: 0,
-      base: [], hit: [], hit_end: 0, want_end: 0 - 1,
-      free: [], free_n: 0, orig: 0, kept: false,
+      seen: seen, gen: 1, wpc: [], wcap: [],
+      // both buffers start at their full width: the group-free match path
+      // writes hit's two slots directly rather than copying into a vector that
+      // has to grow first
+      base: [], hit: blank_caps([], ncap), hit_end: 0, want_end: 0 - 1,
+      free: [], free_n: 0,
       ok: false, matched: false, look: 0, subs: [] }
 };
 
@@ -1291,17 +1295,18 @@ def new_sub(r: Run, depth: long) -> Run {
     { prog: r.prog, classes: r.classes, subject: r.subject, end: r.end,
       ninst: r.ninst, ncap: r.ncap,
       cur_pc: [], cur_cap: [], cur_n: 0, nxt_pc: [], nxt_cap: [], nxt_n: 0,
-      seen: seen, gen: 1, wpc: [], wcap: [], sp: 0,
-      base: [], hit: [], hit_end: 0, want_end: 0 - 1,
-      free: [], free_n: 0, orig: 0, kept: false,
+      seen: seen, gen: 1, wpc: [], wcap: [],
+      base: [], hit: blank_caps([], r.ncap), hit_end: 0, want_end: 0 - 1,
+      free: [], free_n: 0,
       ok: false, matched: false, look: depth, subs: r.subs }
 };
 
 // n slots of "took no part", into dst (which grows once and is then reused).
 def blank_caps(dst: [long], n: long) -> [long] {
+    let dl = len(dst);
     let i = 0;
     while (i < n) {
-        if (i == len(dst)) { dst += 0 - 1; } else { dst[i] = 0 - 1; };
+        if (i < dl) { dst[i] = 0 - 1; } else { dst += 0 - 1; dl = dl + 1; };
         i = i + 1;
     };
     dst
@@ -1332,25 +1337,43 @@ def drop_caps(r: Run, c: [long]) -> long {
 };
 
 // How many entries of xs hold c itself (by address: two vectors with equal
-// contents are still two vectors).
-def count_holding(xs: [[long]], n: long, c: [long]) -> long {
+
+// The recycle's question — c is held by exactly one thread of cur and by none of
+// nxt — in one pass over each list. Two count_holding calls per thread became
+// one call and one pass, which on a group-heavy pattern is a tenth of the scan.
+def last_holder(cur: [[long]], ncur: long, nxt: [[long]], nnxt: long, c: [long]) -> bool {
     let a = ptr_addr(c.ptr);
-    let k = 0;
+    let mine = 0;
     let i = 0;
-    while (i < n) {
-        if (ptr_addr(xs[i].ptr) == a) { k = k + 1; };
+    while (i < ncur) {
+        if (ptr_addr(cur[i].ptr) == a) { mine = mine + 1; };
         i = i + 1;
     };
-    k
+    if (mine != 1) { return false; };
+    let j = 0;
+    while (j < nnxt) {
+        if (ptr_addr(nxt[j].ptr) == a) { return false; };
+        j = j + 1;
+    };
+    true
 };
 
 // src's captures into dst (which grows once and is then reused).
 def copy_caps(dst: [long], src: [long], n: long) -> long {
+    if (len(dst) == n && len(src) == n) {
+        // both already the right width: no slot needs a length test, which is
+        // most of what the general loop below spends
+        let i = 0;
+        while (i < n) { dst[i] = src[i]; i = i + 1; };
+        return 0;
+    };
+    let dl = len(dst);
+    let sl = len(src);
     let i = 0;
     while (i < n) {
         let v = 0 - 1;
-        if (i < len(src)) { v = src[i]; };
-        if (i == len(dst)) { dst += v; } else { dst[i] = v; };
+        if (i < sl) { v = src[i]; };
+        if (i < dl) { dst[i] = v; } else { dst += v; dl = dl + 1; };
         i = i + 1;
     };
     0
@@ -1358,9 +1381,10 @@ def copy_caps(dst: [long], src: [long], n: long) -> long {
 
 def clone_caps(c: [long], n: long) -> [long] {
     let out: [long] = [];
+    let cl = len(c);
     let i = 0;
     while (i < n) {
-        out += (if (i < len(c)) { c[i] } else { 0 - 1 });
+        out += (if (i < cl) { c[i] } else { 0 - 1 });
         i = i + 1;
     };
     out
@@ -1375,7 +1399,7 @@ def clone_caps(c: [long], n: long) -> [long] {
 // The walk is DEPTH-first, and it has to be: a breadth-first one reaches the
 // second branch of a split before the first branch's item, so `x*` would record
 // its empty match and stop before trying x, and a loop holding a group would
-// never queue its body. The stack lives in the Run (r.wpc/r.wcap/r.sp), grown
+// never queue its body. The stack lives in the Run (r.wpc/r.wcap), grown
 // once and reused, so the walk allocates nothing per call — an iterative stack
 // rather than recursion, because a lookahead's walk nests inside this one.
 //
@@ -1387,40 +1411,21 @@ def clone_caps(c: [long], n: long) -> [long] {
 // with no groups never reaches it.
 // The walk's own stack (see add): the closure path being followed, kept in the
 // Run so it grows once and is reused by every walk from then on.
-def push(r: Run, pc: long, caps: [long]) -> long {
-    if (r.sp == len(r.wpc)) {
-        r.wpc += pc;
-        r.wcap += caps;
-    } else {
-        r.wpc[r.sp] = pc;
-        r.wcap[r.sp] = caps;
-    };
-    r.sp = r.sp + 1;
-    0
-};
 
-// A thread queued at this position: the next step's list, in place.
-def queue(r: Run, pc: long, caps: [long]) -> long {
-    if (r.nxt_n == len(r.nxt_pc)) {
-        r.nxt_pc += pc;
-        r.nxt_cap += caps;
-    } else {
-        r.nxt_pc[r.nxt_n] = pc;
-        r.nxt_cap[r.nxt_n] = caps;
-    };
-    r.nxt_n = r.nxt_n + 1;
-    0
-};
 
+// push and queue, inlined: between them they are called ten million times an
+// 8 MB scan, and at ~30 instructions of call and argument shuffling apiece that
+// was a tenth of a group-free scan. The bodies are the two functions' verbatim.
 def add(r: Run, pc0: long, pos: long, caps: [long]) -> long {
-    r.sp = 0;
-    r.orig = ptr_addr(caps.ptr);
-    r.kept = false;
-    push(r, pc0, caps);
-    while (r.sp > 0) {
-        r.sp = r.sp - 1;
-        let pc = r.wpc[r.sp];
-        let c = r.wcap[r.sp];
+    let wpc = r.wpc;
+    let wcap = r.wcap;
+    let sp = 0;
+    if (len(wpc) == 0) { wpc += pc0; wcap += caps; } else { wpc[0] = pc0; wcap[0] = caps; };
+    sp = 1;
+    while (sp > 0) {
+        sp = sp - 1;
+        let pc = wpc[sp];
+        let c = wcap[sp];
         if (r.seen[pc] != r.gen) {
             r.seen[pc] = r.gen;
             let op = r.prog[pc];
@@ -1442,12 +1447,23 @@ def add(r: Run, pc0: long, pos: long, caps: [long]) -> long {
             } else if (op == 6) {
                 if (look_ok(r, r.prog[pc + 1], pc + 3, pos)) { n1 = r.prog[pc + 2]; };
             } else if (op == 1) {
-                queue(r, pc, c);
-                if (ptr_addr(c.ptr) == r.orig) { r.kept = true; };
+                let nxt_pc = r.nxt_pc;
+                let nxt_cap = r.nxt_cap;
+                let n = r.nxt_n;
+                if (n == len(nxt_pc)) { nxt_pc += pc; nxt_cap += c; } else {
+                    nxt_pc[n] = pc;
+                    nxt_cap[n] = c;
+                };
+                r.nxt_n = n + 1;
             } else if (r.want_end < 0 || pos == r.want_end) {
                 // 7 MATCH: this thread is the answer, and it cuts the rest
-                copy_caps(r.hit, c, r.ncap);
-                r.hit[1] = pos;
+                if (r.ncap == 2) {
+                    r.hit[0] = c[0];               // no groups: start and end
+                    r.hit[1] = pos;
+                } else {
+                    copy_caps(r.hit, c, r.ncap);
+                    r.hit[1] = pos;
+                };
                 r.hit_end = pos;
                 r.ok = true;
                 r.matched = true;
@@ -1455,8 +1471,14 @@ def add(r: Run, pc0: long, pos: long, caps: [long]) -> long {
             };
             // a MATCH short of r.want_end is not what full() asked for: keep
             // walking, the way a backtracker would try the next alternative
-            if (n2 >= 0) { push(r, n2, c); };
-            if (n1 >= 0) { push(r, n1, c1); };
+            if (n2 >= 0) {
+                if (sp == len(wpc)) { wpc += n2; wcap += c; } else { wpc[sp] = n2; wcap[sp] = c; };
+                sp = sp + 1;
+            };
+            if (n1 >= 0) {
+                if (sp == len(wpc)) { wpc += n1; wcap += c1; } else { wpc[sp] = n1; wcap[sp] = c1; };
+                sp = sp + 1;
+            };
         };
     };
     0
@@ -1473,17 +1495,38 @@ def step(r: Run, pos: long) -> long {
     r.gen = r.gen + 1;
     r.nxt_n = 0;
     r.ok = false;
+    // hoisted out of the loop: add() below writes the run's scratch but none of
+    // these, so a step reads them once instead of once a thread
+    let prog = r.prog;
+    let classes = r.classes;
+    let subject = r.subject;
+    let end = r.end;
+    let cur_pc = r.cur_pc;
+    let cur_cap = r.cur_cap;
+    let cur_n = r.cur_n;
     let i = 0;
-    while (i < r.cur_n && !r.ok) {
-        let pc = r.cur_pc[i];
-        let op = r.prog[pc];
+    while (i < cur_n && !r.ok) {
+        let pc = cur_pc[i];
+        let op = prog[pc];
         if (op == 1) {
-            if (pos < r.end && class_has(r.classes, r.prog[pc + 1], byte_at(r.subject, pos))) {
-                add(r, pc + 3, pos + 1, r.cur_cap[i]);
+            // the class bits read here, not through class_has: this is the
+            // hottest test in the machine, and the call cost it a tenth of a
+            // group-heavy scan
+            let k32 = prog[pc + 1] * 32;
+            if (pos < end) {
+                let c = byte_at(subject, pos);
+                if ((classes[k32 + (c >> 3)] & (1 << (c & 7))) != 0) {
+                    add(r, pc + 3, pos + 1, cur_cap[i]);
+                };
             };
         } else {
-            copy_caps(r.hit, r.cur_cap[i], r.ncap);
-            r.hit[1] = pos;
+            if (r.ncap == 2) {
+                r.hit[0] = cur_cap[i][0];         // no groups: start and end
+                r.hit[1] = pos;
+            } else {
+                copy_caps(r.hit, cur_cap[i], r.ncap);
+                r.hit[1] = pos;
+            };
             r.hit_end = pos;
             r.ok = true;
             r.matched = true;
@@ -1491,17 +1534,23 @@ def step(r: Run, pos: long) -> long {
         i = i + 1;
     };
     // A capture vector this step's threads were the last holders of goes back to
+    // the pool: no queued thread took it, and this step's list is about to be
+    // the write buffer. Only a pattern with groups has any, so a group-free scan
+    // pays nothing for the check.
+    //
+    // A capture vector this step's threads were the last holders of goes back to
     // the pool: one thread holds it alone (count 1) and no queued thread took
     // it. Only a pattern with groups has any, so a group-free scan pays nothing
     // for the check.
     if (r.ncap > 2) {
         let j = 0;
-        while (j < r.cur_n) {
-            let c = r.cur_cap[j];
-            if (count_holding(r.cur_cap, r.cur_n, c) == 1 &&
-                count_holding(r.nxt_cap, r.nxt_n, c) == 0) {
-                drop_caps(r, c);
-            };
+        let cur = r.cur_cap;
+        let ncur = r.cur_n;
+        let nxt = r.nxt_cap;
+        let nnxt = r.nxt_n;
+        while (j < ncur) {
+            let c = cur[j];
+            if (last_holder(cur, ncur, nxt, nnxt, c)) { drop_caps(r, c); };
             j = j + 1;
         };
     };
@@ -1536,7 +1585,13 @@ def run_from(r: Run, from: long, at: long, want_end: long) -> bool {
     r.gen = r.gen + 1;                          // this run's own stamp (see below)
     // the captures a fresh match starts from: r.base, refilled rather than
     // reallocated, since no SAVE writes into it (the first one clones)
-    let base = blank_caps(r.base, r.ncap);
+    let base = r.base;
+    if (len(base) == r.ncap) {
+        let i = 0;
+        while (i < r.ncap) { base[i] = 0 - 1; i = i + 1; };
+    } else {
+        base = blank_caps(base, r.ncap);
+    };
     base[0] = at;
     r.ok = false;
     r.matched = false;
@@ -1697,28 +1752,48 @@ def first_byte(re: Re) -> long {
 // matches wins, and within it the machine's priority order decides.
 def seek(re: Re, r: Run, s: str, from: long, one: long) -> long {
     let n = len(s);
+    let first = re.first;
     let last = n;
-    if (re.first >= 0) { last = n - 1; };    // a match has to consume a byte
+    if (first >= 0) { last = n - 1; };      // a match has to consume a byte
     let pos = from;
     let out = 0 - 1;
     let go = pos <= last;
+    // hoisted: this loop runs once per match, and the old one read re's fields
+    // through the record on every byte it skipped
+    let classes = re.classes;
+    let literal = re.literal;
+    let anchored = re.anchored;
+    let k32 = 0;
+    if (first >= 0) { k32 = first * 32; };
     while (go) {
-        if (re.first >= 0) {
-            let more = pos < n;
-            while (more && ((one >= 0 && byte_at(s, pos) != one) ||
-                            (one < 0 && !class_has(re.classes, re.first, byte_at(s, pos))))) {
-                pos = pos + 1;
-                more = pos < n;
+        if (first >= 0) {
+            // The skip: to the next byte a match can begin with. A compare when
+            // the set holds exactly one byte, the class's own bits otherwise —
+            // inlined, because calling class_has per skipped byte cost more than
+            // the step it was skipping towards.
+            if (one >= 0) {
+                while (pos < n && byte_at(s, pos) != one) { pos = pos + 1; };
+            } else {
+                let more = pos < n;
+                while (more) {
+                    let c = byte_at(s, pos);
+                    if ((classes[k32 + (c >> 3)] & (1 << (c & 7))) != 0) {
+                        more = false;
+                    } else {
+                        pos = pos + 1;
+                        more = pos < n;
+                    };
+                };
             };
-            if (!more) { go = false; };
+            if (pos > last) { go = false; };
         };
-        if (go && re.literal != "") {
-            let at2 = find_sub_from(s, re.literal, pos);
+        if (go && literal != "") {
+            let at2 = find_sub_from(s, literal, pos);
             if (at2 < 0) { go = false; } else { pos = at2; };
         };
         if (go) {
             if (run(r, pos)) { out = pos; go = false; }
-            else if (re.anchored) { go = false; }
+            else if (anchored) { go = false; }
             else {
                 pos = pos + 1;
                 if (pos > last) { go = false; };
