@@ -120,7 +120,7 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 
 ## Test suites (`test/sh/`)
 
-Seventeen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
+Eighteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, the same warnings, identical program behavior). `test_native.sh`,
@@ -205,6 +205,20 @@ very build was just compared (`make test`, `check`, `rebless` do);
   the TLS 1.3 client (`tls_cli.y`, std/tls.y) against `openssl s_server`
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
+- `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
+  `test/math/ulp_table.txt` (1596 cases — the pinned edges, the overflow and
+  flush points, both sides of 1, the poles, the signed zeros, and a seeded
+  1500-case spread — each line the function, its argument(s) and the reference
+  answer as IEEE-754 bit patterns), evaluates every case with both compilers and
+  **fails on anything more than 1 ulp from the reference**. The gap is counted
+  through the monotone key of a double's bits, so it is exact at zero, across a
+  sign change, for a subnormal, and infinite for a NaN. The worst gap and the
+  function it came from are printed, so a regression names itself.
+  `test/math/ulp_check.y` says in its own header why the tolerance is 1 and what
+  the four cases that used to sit over it were; `gen_ulp_table.py` wrote the
+  table from this platform's libm (mpmath is not installed here, and a platform
+  libm is the *relevant* reference anyway — the promise is to match what C
+  gives), and `gen_kernel.py` fits and checks the kernels' coefficients.
 - `test_coverage.sh` [coverage] — static, compiles nothing: every
   diagnostic the compiler can print has its message in a test
   expectation, every builtin in the manual is called by a checked test,
