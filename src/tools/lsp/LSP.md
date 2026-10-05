@@ -805,6 +805,15 @@ Three edits:
 1. **`types.Binding` gains `line` and `col`.** Every `st_bind` site has the
    node in hand. On `src/y/ycc.y` the binding list runs to several thousand
    entries, so this is a real but small memory cost — `make bench` will say.
+
+   Counted, so the shape of the work is known rather than guessed: `Binding` is
+   *constructed* in one place (`st_bind`, line 1112) and `st_bind` is called at
+   **15 sites** in `src/y/types.y`, all of which have the node in hand except
+   `check_program`'s intrinsic bindings, which have no position and would pass
+   −1. In the C twin `Binding` is a record literal, so the eight
+   `yr(7, "bindings", …)` state rebuilds (all eight `yr(7, …)` in the file) become
+   `yr(9, …)`, and the 17 `st_bind` calls gain the two arguments. That is the
+   whole of it — no call site is more than a line or two.
 2. **An expression type table behind a flag.** `let tc_index: bool = false;`
    in `types.y`, following the existing `lint_ofile` / `dbg_lines` /
    `rn_ofile` module-global pattern. When set, `typeof_expr` also records
@@ -816,6 +825,24 @@ Three edits:
    `uniq -> (line, col)`. The new entry returns `{ ast, defs }`;
    `rename_program_x` (`rename.rename_program_x`) becomes a thin wrapper returning
    `ast`, so `ycc.y`, `native.y` and `pkg.y` do not change.
+
+**The index shape already exists and should be reused.** `parser.NameIx`
+(`nameix_new` / `nameix_put` / `nameix_get`, parser.y 2324) is a string→long open
+hash map, and the checker already keeps one over its bindings: `types.tc_ix`,
+added with `ab5d529` ("Checker: a name index for lookup; lint shares it") so that
+`st_lookup` is O(1) instead of O(bindings) past 256 entries, and `lint.y` reads
+the same one. So edit 3 is a *second* `NameIx` mapping `uniq -> line * 65536 +
+col` beside the existing one, not a new structure — and whoever writes it should
+look at `tc_ix` first rather than inventing a container, which is the mistake that
+costs the most to unpick later.
+
+**The baseline to measure against.** `bench/compile_ir.sh refs/ycc.ref ./ynew`,
+run with nothing changed, is **+0.00%** on all thirteen benchmarks: `ycc.y`
+compiles itself in **4,705,071,230** instructions. Edit 1 adds two words per
+binding and edit 3 adds one map per program; the number to watch is `ycc.y`'s,
+because that is where the binding list is longest, and the number to watch for
+*not* moving is the eleven benchmarks that do not use the checker much. Measure
+before `make rebless`, as every other compiler change does.
 
 Plus **name positions** where they are missing, for R5.4: `Decl` needs the
 name token's line/col, and `Dot` the key's. The parser has the token at both
