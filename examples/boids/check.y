@@ -1076,7 +1076,7 @@ eq("  and none landed outside 0..999", if (hi - lo >= 0) { 1 } else { 0 }, 1);
 };
 
 // make_run(seed, frames) -> a flock run for `frames` frames at the SHIPPED
-// settings.  They are stated HERE rather than read from args.y, so this does not
+// settings.  They are stated HERE rather than read from args, so this does not
 // depend on the option table -- a change to a default would make the check test
 // something other than what ships.  They match boids.y's main() exactly:
 //   --boids 120 --size 60x40 --view 9 --sep 4

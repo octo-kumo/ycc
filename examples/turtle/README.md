@@ -86,7 +86,7 @@ watching where it goes.
 | `q` esc | quit |
 
 The render-loop discipline the closed waves converged on, and why each piece is
-here: the frame deadline belongs to `time.y`'s pacer and the keyboard is polled
+here: the frame deadline belongs to `tui`'s pacer and the keyboard is polled
 with **`term.read_key_timeout(0)`**, because `VTIME` counts deciseconds so any
 non-zero millisecond count rounds up to the next 100 ms — a 1..99 poll would put
 every frame a period late and report ~0.6 fps with a stuck frame counter, which
@@ -402,7 +402,7 @@ frames=264 heap 2026536 -> 2026696 delta=160      <- the same 160 bytes
   | `args.usage` / `ar_long` / `ar_short` / `ar_take` / `ar_left` / `ar_fail` | 31 | vendored, not on any frame path |
   | `fb.y_str_pad_right` | 1 | vendored |
 
-  `y_str_app` is 15, of which 6 are mine and 9 are `args.y`'s.  So: no `cat`
+  `y_str_app` is 15, of which 6 are mine and 9 are `args`'s.  So: no `cat`
   inside a loop on any per-frame path, and the one per-frame function that has
   ten of them (`hud`) demonstrably does not allocate — the interactive heap delta
   is **exactly 160 bytes for 114 frames and exactly 160 bytes for 264 frames**
@@ -468,17 +468,14 @@ workarounds, and they are visible in the code.
   `exit(...)`: `exit(check.run(n))` hands the failure count out, and the argument
   and script errors `exit(1)` after a message on stderr.
 
-## The frozen toolkit
+## The std units this uses
 
-`examples/_toolkit/` copied in with `cp`, byte-identical, never edited:
+The toolkit modules come from std; `fx.y` is the only one still vendored
+here, copied in byte-identical and never edited:
 
 | file | sha256 |
 |---|---|
 | `fx.y` | `4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058` |
-| `fb.y` | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` |
 
 Builds and runs with **`refs/ycc.ref` and nothing else**, whose sha256 at gate
 time is
@@ -531,6 +528,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

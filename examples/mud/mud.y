@@ -17,7 +17,7 @@
 //
 //   build: refs/ycc.ref mud.y -o mud
 //          (rnd.y world.y sockio.y server.y client.y driver.y props.y
-//           term.y time.y args.y must sit beside it)
+//           tui tui args must sit beside it)
 //   run:   ./mud --frames 20 --seed 1
 //
 // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@
 // defaults to 1 and the run is a pure function of (seed, frames, clients,
 // workers), so EXPECTED is a real assertion rather than a snapshot.  The kernel
 // picks the port (bind to 0) and that port is never printed: it differs every run
-// and printing it would make the output irreproducible for nothing.  time.y
+// and printing it would make the output irreproducible for nothing.  tui
 // appears only in `--live` (the frame pacer) and `--bench` (the rate report),
 // and the clock only in the `--time` line on stderr.
 //
@@ -62,8 +62,7 @@ import client;
 import driver;
 import props;
 import args;
-import term;
-import time;
+import tui;
 
 const OPTS: [args.Opt] = [
     { long: "frames", short: "f", kind: args.NUM, help: "commands per client in the deterministic run (default 20)" },
@@ -249,7 +248,7 @@ def bench(seed: long, want: long) -> long {
     let h0 = heap_used();
     let w0 = worker_growth(nw);
     let p0 = worst_worker(nw);
-    let t0 = time.now_us();
+    let t0 = clock_us();
     // The clients run ONE AT A TIME on purpose: the point is connections per
     // second through the pool, and eight client threads each waiting on their
     // own round trip would measure the scheduler instead.
@@ -265,7 +264,7 @@ def bench(seed: long, want: long) -> long {
         driver.run_client(i % client.MAXC, port, 6, 1, btx, brx, bhold, btv, bsa);
         i = i + 1;
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     let w1 = worker_growth(nw);
     let p1 = worst_worker(nw);
@@ -298,7 +297,7 @@ def bench(seed: long, want: long) -> long {
 
 let IN: [byte; 80] = [0; 80];       // the input line; never a str
 
-// TIOCGWINSZ into ONE module-level buffer.  term.size() returns a FRESH record on
+// TIOCGWINSZ into ONE module-level buffer.  tui.size() returns a FRESH record on
 // every call (~40 bytes, ORCHESTRATOR.md 2.3) and a per-frame resize poll that
 // calls it leaks; this does the ioctl into [byte; 64] and reads the four 16-bit
 // little-endian values out of it -- row FIRST, at bytes 0-1.
@@ -320,7 +319,7 @@ def live(seed: long, nw: long) -> long {
     sockio.set_timeout(fd, 30, tv);
     sockio.line_reset(hold);
     client.reset(0, "ranger", 0, 1);
-    if (!term.install_raw()) {
+    if (!tui.raw_mode()) {
         bad("cannot put the terminal in raw mode; use --frames N for the headless run");
     };
     driver.send_cmd(0, fd, tx, rx, hold, "login ", "ranger");
@@ -331,13 +330,13 @@ def live(seed: long, nw: long) -> long {
     let c = WS[2] + WS[3] * 256;
     if (r > 2) { rows = r };
     if (c > 2) { cols = c };
-    term.enter_screen();
+    tui.enter_screen();
     let ll = 0;
     let running = true;
-    let p = time.pacer_new(30);
+    let p = tui.pacer_new(30);
     let polls = 0;
     while (running) {
-        time.pacer_next(p);
+        tui.pacer_next(p);
         // read_key_timeout(0) -- NEVER a non-zero timeout.  VTIME counts
         // DECISECONDS, so any non-zero ms rounds UP to the next 100 ms
         // (ORCHESTRATOR.md 2.3, measured: five read_key_timeout(1) calls took
@@ -345,7 +344,7 @@ def live(seed: long, nw: long) -> long {
         // 100 ms per frame, drops every frame at the pacer, and reports a
         // fraction of the rate it is really achieving.  The pacer owns the
         // deadline; the key poll is non-blocking.
-        let k = term.read_key_timeout(0);
+        let k = tui.read_key_timeout(0);
         polls = polls + 1;
         if (k == 13 || k == 10) {
             let m = 0;
@@ -367,12 +366,12 @@ def live(seed: long, nw: long) -> long {
         };
         draw_live(rows, cols, ll);
     };
-    term.leave_screen();
-    term.restore();
+    tui.leave_screen();
+    tui.restore();
     sockio.shut(fd);
     driver.stop(nw);
     eputs("mud: " + tostring(polls) + " key polls at a "
-          + tostring(time.pacer_period_us(p) / 1000) + " ms period\n");
+          + tostring(tui.pacer_period_us(p) / 1000) + " ms period\n");
     0
 };
 
@@ -380,7 +379,7 @@ def live(seed: long, nw: long) -> long {
 // line.  Drawn from the SAME transcript region the headless run prints, so there
 // is one renderer and two sinks.
 //
-// ITS OWN FRAME BUFFER, AND NOT term's.  term.y's ESC_BUF is 64 bytes and its
+// ITS OWN FRAME BUFFER, AND NOT term's.  tui's ESC_BUF is 64 bytes and its
 // `sgr_*` emitters each do buf_reset() + flush() -- they are one-shot helpers,
 // not appenders.  A first version of this drew with them and so threw the whole
 // frame away every time it changed colour: `esc_clear()` and `esc_home()` went
@@ -391,7 +390,7 @@ def live(seed: long, nw: long) -> long {
 // what pty_check.py's captured bytes looked like before this was rewritten.
 //
 // So the frame is built here, in one module-level buffer allocated once, and
-// written with ONE write(2) per frame -- which is what term.y's own buffer
+// written with ONE write(2) per frame -- which is what tui's own buffer
 // policy asks a renderer to do, only with a buffer the size of a frame.  8 KiB
 // holds a 45-row pane at 160 columns with room for the escapes; the largest
 // frame this program can draw (rows - 3 lines of cols - 1 bytes, plus two
@@ -537,7 +536,7 @@ def main() -> long {
     if (nb < 0 || nb > 4000) { bad("--bench must be 0..4000") };
     if (docheck && dolive) { bad("--check and --live are different modes") };
     if (nb > 0 && dolive) { bad("--bench and --live are different modes") };
-    if (dolive && !term.is_tty(1)) {
+    if (dolive && !tui.is_tty(1)) {
         bad("--live needs a terminal; use --frames N for the headless run");
     };
     // A worker serves ONE session for its whole life (server.y: serve() loops
@@ -556,7 +555,7 @@ def main() -> long {
     // same room on purpose, so one worker is one short of what they need.  It
     // failed with "ada heard bo", which is true and useless.
     if (docheck && nw < 2) { bad("--check needs at least 2 workers") };
-    let t0 = time.now_us();
+    let t0 = clock_us();
     if (docheck) {
         props.run(seed, nw);
         if (props.TOTAL[0] != 0) { exit(1) };
@@ -568,7 +567,7 @@ def main() -> long {
         run(seed, frames, ncli, nw);
     };
     if (timing) {
-        eputs("mud: " + tostring((time.now_us() - t0) / 1000) + " ms, heap "
+        eputs("mud: " + tostring((clock_us() - t0) / 1000) + " ms, heap "
               + tostring(heap_used()) + "\n");
     };
     0

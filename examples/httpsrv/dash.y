@@ -1,3 +1,4 @@
+import tui;
 // dash.y -- the dashboard: turns one Stats record into a frame of bytes.
 //
 //   import dash;
@@ -13,9 +14,9 @@
 // bar. `plain` gives the transcript (no escapes, byte-diffable); false
 // gives the terminal its SGR.
 //
-// ── its own window size, not term.size() ──────────────────────────────
+// ── its own window size, not tui.size() ──────────────────────────────
 //
-// `term.size()` answers a **fresh record** every call (~40 bytes), so
+// `tui.size()` answers a **fresh record** every call (~40 bytes), so
 // polling it once a frame leaks 40 bytes a frame. winsize() below does the
 // TIOCGWINSZ ioctl into one module-level buffer and leaves rows/cols in
 // module globals: the same answer for free. (The ioctl is

@@ -382,15 +382,11 @@ checked rather than assumed (§3 of `ORCHESTRATOR.md`).
 
 ---
 
-## The frozen toolkit
+## The std units this uses
 
 | file | sha256 (prefix) | lines | what it is used for |
 |---|---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 | integer fixed point: `ONE`, `sin`, `cos`, `isqrt`, `abs`, `TWO_PI`. No floats, no state, no allocation |
-| `fb.y` | `95a7663b7f1c7a90` | 962 | the ANSI framebuffer: cells, SGR truecolor, per-row diffing, the coverage ramps (`shade_blocks`, `shade_half`, `shade_ascii`, `shade_braille`) |
-| `term.y` | `07135b31109fcecd` | 1156 | termios raw mode, window size, key and escape-sequence decode, alt screen, restore on every exit path |
-| `time.y` | `6050605cfcfb35db` | 245 | `clock_gettime`/`nanosleep` pacing and the fps meter |
-| `args.y` | `cdac36da1cf2cd85` | 19081 | flag parsing, `--flag=value`, the usage text, exit codes |
 
 **Vendored unmodified from `examples/_toolkit/` — all five are byte-identical to
 the canonical copies.** Nothing in this folder edits any of them. Where the
@@ -621,6 +617,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

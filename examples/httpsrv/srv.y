@@ -49,7 +49,6 @@
 // REAL measures: `rate` is 10000 / (ms between this request and the last
 // one), so it is the client's own polling rate seen from the server.
 
-import time;
 
 // ── the model ──────────────────────────────────────────────────────────
 
@@ -146,7 +145,7 @@ def draw() -> long {
         lcg = (lcg * 1103515245 + 12345) % 2147483648;
         ((lcg / 65536) % 90 + 10) * 100
     } else {
-        let now = time.now_ms();
+        let now = (clock_us() / 1000);
         let dt = now - last_ms;
         last_ms = now;
         let r = 0;
@@ -203,7 +202,7 @@ def boot(s0: long, m: long) {
     while (i < WN) { win[i] = 0; i = i + 1; };
     i = 0;
     while (i < WN) { push(draw()); i = i + 1; };
-    if (mode == REAL) { last_ms = time.now_ms(); };
+    if (mode == REAL) { last_ms = (clock_us() / 1000); };
     base_heap = heap_used();
 };
 

@@ -37,7 +37,6 @@
 //          identical columns twice, two seeds do not.
 
 import flock;
-import time;
 
 let RBUF: [byte] = [0; 4096];
 let RLEN = 0;
@@ -316,7 +315,7 @@ def run(s: flock.Flock, frames: long, dump: long, want_stats: bool, seed: long) 
     // Read AFTER the header: the only thing between the two readings is the
     // frame loop.  (life.y measures it the same way, for the same reason.)
     let h0 = heap_used();
-    let w0 = time.now_us();
+    let w0 = clock_us();
 
     // One row per frame while that fits, then a stride, so the table is the
     // same shape whatever --frames says.  The stride is a function of `frames`
@@ -347,7 +346,7 @@ def run(s: flock.Flock, frames: long, dump: long, want_stats: bool, seed: long) 
 
     // Read here, with the frames run and nothing of the summary built yet.
     let h1 = heap_used();
-    let wall = time.now_us() - w0;
+    let wall = clock_us() - w0;
     let pairs = s.pairs;
 
     puts("\nfinal frame, after " + tostring(frames) + " steps\n");

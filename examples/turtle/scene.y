@@ -1,7 +1,7 @@
 // scene.y -- the rasteriser: world units to terminal cells, and the pixels.
 //
 // Everything that touches a framebuffer lives here, so tlang.y stays free of
-// fb.y and can be asserted against by check.y with no surface at all.
+// tui and can be asserted against by check.y with no surface at all.
 //
 // ── the view ────────────────────────────────────────────────────────────────
 //
@@ -29,21 +29,21 @@
 // as the turtle wanders; fitting once means the view is the same for frame 1 and
 // for the finished drawing, which is also what makes a golden diff readable.
 
-import fb;
 import tlang;
+import tui;
 
 const DEFROWS: long = 24;
 const DEFCOLS: long = 80;
 const MAXSHIFT: long = 40;
 const MARGIN: long = 1;
 
-// The surface.  One fb.new for the whole run -- it allocates 1.5 MiB (six
+// The surface.  One tui.new for the whole run -- it allocates 1.5 MiB (six
 // 32768-long arrays) and that is the ONE allocation this program makes outside
-// the module-level fixed buffers.  fb.resize is allocation-free, so a terminal
+// the module-level fixed buffers.  tui.resize is allocation-free, so a terminal
 // resize mid-run costs nothing.
 let SR: long = DEFROWS;
 let SC: long = DEFCOLS;
-let SRF = fb.new(DEFROWS, DEFCOLS);
+let SRF = tui.new(DEFROWS, DEFCOLS);
 
 let SHX: long = 0;              // the two shifts
 let SHY: long = 0;
@@ -74,7 +74,7 @@ def cy(y: long) -> long { OY - (y >> SHY) };
 def fit(rows: long, cols: long, x0: long, y0: long, x1: long, y1: long) -> void {
     SR = rows;
     SC = cols;
-    SRF = fb.resize(SRF, rows, cols);
+    SRF = tui.resize(SRF, rows, cols);
     let cw = cols - 2 * MARGIN;
     let chh = rows - 2 * MARGIN;
     if (cw < 1) { cw = 1 };
@@ -120,16 +120,16 @@ def fit(rows: long, cols: long, x0: long, y0: long, x1: long, y1: long) -> void 
 def plot(r: long, c: long, col: long) -> void {
     if (r < 0 || r >= SR || c < 0 || c >= SC) { return };
     let i = r * SC + c;
-    if (SRF.ch[i] == fb.space) { INK = INK + 1 };
-    fb.put_at(SRF, i, byte_at(CG[col], 0), tlang.CRGB[col], fb.DEFAULT)
+    if (SRF.ch[i] == tui.space) { INK = INK + 1 };
+    tui.put_at(SRF, i, byte_at(CG[col], 0), tlang.CRGB[col], tui.DEFAULT)
 };
 
 // blank(r, c) -- put a space back, for erasing the cursor.
 def blank(r: long, c: long) -> void {
     if (r < 0 || r >= SR || c < 0 || c >= SC) { return };
     let i = r * SC + c;
-    if (SRF.ch[i] != fb.space) { INK = INK - 1 };
-    fb.put_at(SRF, i, fb.space, fb.DEFAULT, fb.DEFAULT)
+    if (SRF.ch[i] != tui.space) { INK = INK - 1 };
+    tui.put_at(SRF, i, tui.space, tui.DEFAULT, tui.DEFAULT)
 };
 
 // line(x0, y0, x1, y1, col) -- a segment, in whole units returned.
@@ -197,8 +197,8 @@ def draw_cursor(x: long, y: long, h: long) -> void {
     let c = cx(x);
     let i = r * SC + c;
     if (r >= 0 && r < SR && c >= 0 && c < SC) {
-        if (SRF.ch[i] == fb.space) { INK = INK + 1 };
-        fb.put_at(SRF, i, byte_at(CARROW[octant(h)], 0), tlang.CRGB[7], fb.DEFAULT)
+        if (SRF.ch[i] == tui.space) { INK = INK + 1 };
+        tui.put_at(SRF, i, byte_at(CARROW[octant(h)], 0), tlang.CRGB[7], tui.DEFAULT)
     };
     CURCELL = r * SC + c
 };
@@ -207,15 +207,15 @@ def erase_cursor() -> void {
     if (CURSOR == 0) { return };
     if (CURCELL < 0) { return };
     let i = CURCELL;
-    if (SRF.ch[i] != fb.space) { INK = INK - 1 };
-    fb.put_at(SRF, i, fb.space, fb.DEFAULT, fb.DEFAULT);
+    if (SRF.ch[i] != tui.space) { INK = INK - 1 };
+    tui.put_at(SRF, i, tui.space, tui.DEFAULT, tui.DEFAULT);
     CURCELL = 0 - 1
 };
 
 // ──────────────────────────────────────────────────────── the frame ───
 
 def clear_frame() -> void {
-    fb.clear(SRF, fb.DEFAULT);
+    tui.clear(SRF, tui.DEFAULT);
     INK = 0;
     CURCELL = 0 - 1
 };
@@ -262,7 +262,7 @@ def shift_y() -> long { SHY };
 def set_size(r: long, c: long) -> void {
     SR = r;
     SC = c;
-    SRF = fb.resize(SRF, r, c)
+    SRF = tui.resize(SRF, r, c)
 };
 
 // perturb() -- flip ONE cell in the middle of the surface: a space becomes a
@@ -275,12 +275,12 @@ def perturb() -> long {
     let c = SC / 2;
     if (r < 0 || r >= SR || c < 0 || c >= SC) { return 0 };
     let i = r * SC + c;
-    if (SRF.ch[i] == fb.space) {
+    if (SRF.ch[i] == tui.space) {
         INK = INK + 1;
-        fb.put_at(SRF, i, 64, tlang.CRGB[1], fb.DEFAULT)
+        tui.put_at(SRF, i, 64, tlang.CRGB[1], tui.DEFAULT)
     } else {
         INK = INK - 1;
-        fb.put_at(SRF, i, fb.space, fb.DEFAULT, fb.DEFAULT)
+        tui.put_at(SRF, i, tui.space, tui.DEFAULT, tui.DEFAULT)
     };
     1
 };
@@ -311,17 +311,17 @@ def poke(r: long, c: long, what: long) -> long {
     if (r < 0 || r >= SR || c < 0 || c >= SC) { return 0 };
     let i = r * SC + c;
     if (what == 0) {
-        if (SRF.ch[i] == fb.space) {
+        if (SRF.ch[i] == tui.space) {
             INK = INK + 1;
-            fb.put_at(SRF, i, 64, tlang.CRGB[1], fb.DEFAULT)
+            tui.put_at(SRF, i, 64, tlang.CRGB[1], tui.DEFAULT)
         } else {
             INK = INK - 1;
-            fb.put_at(SRF, i, fb.space, fb.DEFAULT, fb.DEFAULT)
+            tui.put_at(SRF, i, tui.space, tui.DEFAULT, tui.DEFAULT)
         }
     } else if (what == 1) {
-        fb.put_at(SRF, i, SRF.ch[i], tlang.CRGB[4], fb.DEFAULT)
+        tui.put_at(SRF, i, SRF.ch[i], tlang.CRGB[4], tui.DEFAULT)
     } else {
-        fb.put_at(SRF, i, SRF.ch[i], tlang.CRGB[1], tlang.CRGB[2])
+        tui.put_at(SRF, i, SRF.ch[i], tlang.CRGB[1], tlang.CRGB[2])
     };
     1
 };
@@ -335,7 +335,7 @@ def blank_cells() -> long {
     let k = 0;
     let tot = SR * SC;
     while (k < tot) {
-        if (SRF.ch[k] == fb.space) { n = n + 1 };
+        if (SRF.ch[k] == tui.space) { n = n + 1 };
         k = k + 1
     };
     n

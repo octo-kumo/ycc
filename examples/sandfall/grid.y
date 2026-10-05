@@ -605,7 +605,7 @@ def tally() {
 // checksum() -> long -- FNV-1a 64 over the whole store's material AND age bytes.
 // Used by the property check to compare two grids, and by the report.  It is
 // over the WHOLE store, border included, so a corrupted ghost border cannot
-// hide.  `long` multiply wraps (the same note fb.y's capture_checksum makes), so
+// hide.  `long` multiply wraps (the same note tui's capture_checksum makes), so
 // the FNV prime's high bits fold in as intended and there is no masking.
 def checksum() -> long {
     let h: long = -3750763034362895579;   // 14695981039346656037, signed

@@ -73,7 +73,6 @@
 
 import chess;
 import args;
-import time;
 
 // ===========================================================================
 // STATE
@@ -729,11 +728,11 @@ def bench(fen: str, depth: long) -> long {
     if (load(fen, depth) < 0) { return -1 };
     // Warm the pool and the caches with one untimed pass each, so the numbers
     // are steady-state.
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let warm1 = perft_st();
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let warm2 = if (nworkers > 1) { perft_mt() } else { warm1 };
-    let t2 = time.now_us();
+    let t2 = clock_us();
     print("  ", fen, " depth ", tostring(depth), ", ", tostring(nworkers), " worker",
         if (nworkers == 1) { "" } else { "s" });
     print("    one thread : ", tostring(warm1), " nodes in ", ms_of(t1 - t0), " ms  -> ",

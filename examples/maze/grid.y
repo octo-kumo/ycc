@@ -33,7 +33,7 @@ import rng;
 // (2w+1) x (2h+1) expansion of that, 403 x 403 = 162409 characters.  Array
 // sizes have to be integer literals (there is no expression in a type
 // position), so the numbers are spelled out below and these carry the same
-// values for the reader -- the same convention fb.y uses.
+// values for the reader -- the same convention tui uses.
 const MAXW = 201;
 const MAXH = 201;
 const NCELL = 40401;         // MAXW * MAXH
@@ -66,7 +66,7 @@ let rk: [long; 162409] = [0; 162409];  // render kinds, RW * RH of them
 // fills all three: astar.y imports grid, so the dependency runs one way, and a
 // pair of array parameters is not an option anyway (a fixed [long; N] is not a
 // [long], so it cannot be handed to a def at all -- the same rule that makes
-// term.y's termios buffers growable [byte]).
+// tui's termios buffers growable [byte]).
 //   sord  the solver's expansion order, sno of them: the ORDER cells were
 //         expanded in, which is what the --frames overlay animates
 //   solv  the current solution, cell 0 .. cell plen
@@ -545,7 +545,7 @@ def grid_stats() -> void {
 //
 // rk[] holds a KIND per rendered character, and exactly two painters read it:
 // one writes ASCII (the --no-tty path, which is what EXPECTED holds), one writes
-// cells and colours into an fb.Surface.  Keeping the geometry in one pass and
+// cells and colours into an tui.Surface.  Keeping the geometry in one pass and
 // the painting in two is what stops the two renderers from drifting apart --
 // and it is why the interactive view and the golden file are the same picture.
 
@@ -625,7 +625,7 @@ def grid_paint(shown: long, plen: long, pcell: long) -> void {
 
 // grid_paint_hash() -> long -- FNV-1a over the render kinds, so a frame line
 // carries a checksum of the picture and not just its length.  Same function
-// fb.y uses for its capture checksum.
+// tui uses for its capture checksum.
 def grid_paint_hash() -> long {
     let h: long = -3750763034362895579;      // 14695981039346656037, signed
     let n = RW * RH;

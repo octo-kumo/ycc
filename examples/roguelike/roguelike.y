@@ -8,7 +8,7 @@
 //   that go down.  No arguments means: the dungeon, the alt screen, and the
 //   arrow keys.  `--frames N --no-tty` is the deterministic run.
 //
-//   build:  ycc -o roguelike roguelike.y     (fx.y fb.y term.y time.y args.y
+//   build:  ycc -o roguelike roguelike.y     (fx.y tui tui tui args
 //                                              rules.y dungeon.y fov.y game.y
 //                                              view.y textout.y rnd.y must sit
 //                                              beside it)
@@ -29,7 +29,7 @@
 //   rules.y    the two record unions -- what a TILE is and what an ITEM is --
 //              and the monster table
 //   game.y     the state and the turn, written without `break` or `continue`
-//   view.y     one decision per tile, drawn two ways: fb.y for the terminal,
+//   view.y     one decision per tile, drawn two ways: tui for the terminal,
 //              ASCII for the deterministic dump
 //   textout.y  the fixed byte sink the deterministic path prints through
 //
@@ -43,9 +43,6 @@
 // getrandom: `clock_us` appears once, in the `--time` report on stderr, and
 // never in the output EXPECTED holds.
 
-import fb;
-import term;
-import time;
 import args;
 import rnd;
 import dungeon;
@@ -54,6 +51,7 @@ import rules;
 import game;
 import view;
 import textout;
+import tui;
 
 // ─────────────────────────────────────────────────────────────── the options ───
 
@@ -81,7 +79,7 @@ let OPTS: [args.Opt] = [
     { long: "time", short: "", kind: args.BOOL,
       help: "report wall clock, turns per second and the heap delta on stderr" }
 ];
-// NOTE: `--help` is NOT in the spec, on purpose.  args.y recognises it only
+// NOTE: `--help` is NOT in the spec, on purpose.  args recognises it only
 // when the spec does NOT declare it -- declaring a BOOL called "help" makes it
 // an ordinary flag, so `--help` stops printing the usage and the program falls
 // through to the interactive path and dies with "not a terminal".  args prints
@@ -387,15 +385,15 @@ let tcols: long = 80;
 let HELP: long = 0;
 
 // poll_winsize() -> long -- TIOCGWINSZ into a byte buffer of our own plus
-// term.rd16, which is the decode term.size() performs -- same answer, one
-// syscall, ZERO bytes of heap.  term.size() would do too, but it answers with a
+// tui.rd16, which is the decode tui.size() performs -- same answer, one
+// syscall, ZERO bytes of heap.  tui.size() would do too, but it answers with a
 // record and a record literal is evaluated onto the heap every time the
 // expression runs, so on a per-frame poll it would leak.  A [byte] has to be
 // growable to be passed at all: a [byte; N] is not a [byte] in Y.
 def poll_winsize() -> long {
-    if (syscall(16, 1, term.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
-    let r = term.rd16(WSB, 0);
-    let c = term.rd16(WSB, 2);
+    if (syscall(16, 1, tui.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
+    let r = tui.rd16(WSB, 0);
+    let c = tui.rd16(WSB, 2);
     if (r < 1 || c < 1) { return 0; };
     if (r == trows && c == tcols) { return 0; };
     trows = r;
@@ -415,11 +413,11 @@ const HELP_LINES: [str; 9] = [
     "   '#' lit wall   ':' wall you remember   '.' lit floor   ',' floor you remember"
 ];
 
-def draw_help(s: fb.Surface) -> void {
+def draw_help(s: tui.Surface) -> void {
     let r = 1;
     while (r < 10 && r < s.rows - 4) {
-        fb.fill_rect(s, r, 2, 1, s.cols - 4, 32, fb.rgb(150, 160, 170), fb.rgb(10, 10, 14));
-        fb.text(s, r, 3, HELP_LINES[r - 1], fb.rgb(170, 178, 186), fb.rgb(10, 10, 14));
+        tui.fill_rect(s, r, 2, 1, s.cols - 4, 32, tui.rgb(150, 160, 170), tui.rgb(10, 10, 14));
+        tui.text(s, r, 3, HELP_LINES[r - 1], tui.rgb(170, 178, 186), tui.rgb(10, 10, 14));
         r = r + 1;
     };
 };
@@ -464,7 +462,7 @@ def report(bytes_sum: long, h0: long) -> void {
 // except that a turn needs a key to happen, so on a terminal `--frames` ends the
 // run once N keys' worth of turns have gone by, and a `--frames` that the walk
 // can never reach (bumping a wall costs no turn) simply waits for more keys.
-def play(srf: fb.Surface, frame_limit: long) -> long {
+def play(srf: tui.Surface, frame_limit: long) -> long {
     // status row 0, the map from row 1, the pack, then the message log
     let rows = srf.rows;
     let cols = srf.cols;
@@ -486,32 +484,32 @@ def play(srf: fb.Surface, frame_limit: long) -> long {
         view.draw_status(srf, 0);
         view.draw_pack(srf, rows - 4);
         view.draw_msgs(srf, rows - 3);
-        bytes_sum = bytes_sum + fb.flush_diff(srf);
+        bytes_sum = bytes_sum + tui.flush_diff(srf);
 
         // A resize is looked for on the same beat as the input: Y has no
         // SIGWINCH, so the only way to follow one is to ask.
-        let k = term.read_key_timeout(40);
-        if (k == term.KEY_NONE) {
+        let k = tui.read_key_timeout(40);
+        if (k == tui.KEY_NONE) {
             if (poll_winsize() != 0) {
                 let nr = trows;
                 let nc = tcols;
                 if (nr < 10) { nr = 10; };
                 if (nc < 40) { nc = 40; };
-                if (nr > fb.MAX_ROWS) { nr = fb.MAX_ROWS; };
-                if (nc > fb.MAX_COLS) { nc = fb.MAX_COLS; };
-                srf = fb.resize(srf, nr, nc);
+                if (nr > tui.MAX_ROWS) { nr = tui.MAX_ROWS; };
+                if (nc > tui.MAX_COLS) { nc = tui.MAX_COLS; };
+                srf = tui.resize(srf, nr, nc);
                 view.invalidate();
                 frames = 0;
             };
-        } else if (k == term.KEY_ESC || k == ord("q") || k == ord("Q")) {
+        } else if (k == tui.KEY_ESC || k == ord("q") || k == ord("Q")) {
             quit = true;
-        } else if (k == term.KEY_UP) {
+        } else if (k == tui.KEY_UP) {
             game.step(0, 0 - 1);
-        } else if (k == term.KEY_DOWN) {
+        } else if (k == tui.KEY_DOWN) {
             game.step(0, 1);
-        } else if (k == term.KEY_LEFT) {
+        } else if (k == tui.KEY_LEFT) {
             game.step(0 - 1, 0);
-        } else if (k == term.KEY_RIGHT) {
+        } else if (k == tui.KEY_RIGHT) {
             game.step(1, 0);
         } else if (k >= 32 && k < 128 && MOVED[k] == 1) {
             game.step(MDX[k], MDY[k]);
@@ -525,7 +523,7 @@ def play(srf: fb.Surface, frame_limit: long) -> long {
         frames = frames + 1;
         if (frame_limit > 0 && game.TURNS >= frame_limit) {
             report(bytes_sum, ih0);
-            term.restore_all_exit(0);
+            tui.restore_all_exit(0);
         };
     };
     report(bytes_sum, ih0);
@@ -869,7 +867,7 @@ if (NOTTY != 0) {
     // /dev/null anyway so that nothing can accidentally write ANSI into the
     // bytes EXPECTED holds.
     let devnull = syscall(257, 0 - 100, "/dev/null", 1, 0, 0, 0);   // openat
-    if (devnull >= 0) { fb.set_fd(devnull); };
+    if (devnull >= 0) { tui.set_fd(devnull); };
     view.build_legend();
 
     if (game.setup(MAPW, MAPH, SEED, DEPTH_WANT) == 0) {
@@ -906,7 +904,7 @@ if (NOTTY != 0) {
     level_line();
 
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let f = 0;
     let spent_sum = 0;
     while (f < FRAMES) {
@@ -915,7 +913,7 @@ if (NOTTY != 0) {
         if (QUIET == 0) { digest(f + 1, spent); };
         f = f + 1;
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
 
     level_line();
@@ -956,33 +954,33 @@ if (NOTTY != 0) {
 
 // ═════════════════════════════════════════════════════ the interactive path ═══
 //
-// term.y's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
+// tui's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
 // leaves.  Y has no atexit and no signal handler, so every exit below is a call
-// to term.restore_all_exit() -- there is no path out of this loop that does not
+// to tui.restore_all_exit() -- there is no path out of this loop that does not
 // go through it.
-if (!term.raw_mode()) {
+if (!tui.raw_mode()) {
     eputs("roguelike: not a terminal; try --frames N --no-tty\n");
     exit(1)
 };
-term.enter_screen();
-term.arm_watchdog();
+tui.enter_screen();
+tui.arm_watchdog();
 
-let ws = term.size();
+let ws = tui.size();
 trows = ws.rows;
 tcols = ws.cols;
 let rows = trows;
 let cols = tcols;
 if (rows < 10) { rows = 10; };
 if (cols < 40) { cols = 40; };
-if (rows > fb.MAX_ROWS) { rows = fb.MAX_ROWS; };
-if (cols > fb.MAX_COLS) { cols = fb.MAX_COLS; };
-let srf = fb.new(rows, cols);
+if (rows > tui.MAX_ROWS) { rows = tui.MAX_ROWS; };
+if (cols > tui.MAX_COLS) { cols = tui.MAX_COLS; };
+let srf = tui.new(rows, cols);
 
 if (game.setup(MAPW, MAPH, SEED, DEPTH_WANT) == 0) {
     eputs("roguelike: the generator could not make a dungeon at that seed and size\n");
-    term.restore_all_exit(1)
+    tui.restore_all_exit(1)
 };
 
 view.invalidate();
 let ibytes = play(srf, FRAMES);
-term.restore_all_exit(0);
+tui.restore_all_exit(0);

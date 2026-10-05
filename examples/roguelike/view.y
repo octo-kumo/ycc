@@ -1,4 +1,4 @@
-// view.y -- drawing.  One function for the terminal (through fb.y) and one for
+// view.y -- drawing.  One function for the terminal (through tui) and one for
 // the deterministic text dump, both reading the same per-tile decision, so the
 // two can never disagree about what the player can see.
 //
@@ -29,7 +29,7 @@
 // NO ALLOCATION ON THE FRAME PATH
 // ===========================================================================
 //
-// `draw_window` and `draw_status` write only into the caller's fb.Surface and
+// `draw_window` and `draw_status` write only into the caller's tui.Surface and
 // into module-level scratch.  The status line formats its numbers a digit at a
 // time through a module-level [long; 12] rather than calling tostring() -- a
 // string built once a frame is 40 bytes a frame, which over an hour at 30 fps is
@@ -38,38 +38,38 @@
 // frame, is bounded by the message length, and is the price of naming the monster
 // you just hit.
 
-import fb;
 import dungeon;
 import fov;
 import game;
 import rules;
 import textout;
+import tui;
 
 type Glyph = { cp: long, fg: long, bg: long, lit: long, seen: long };
 
 let G: Glyph = { cp: 32, fg: 0, bg: 0, lit: 0, seen: 0 };
 
-// ---- the palette.  `let`, not `const`: fb.rgb is a call.
-let C_VOID = fb.rgb(3, 3, 5);
-let C_WALL_FAR = fb.rgb(30, 30, 36);
-let C_WALL_FAR_BG = fb.rgb(8, 8, 11);
-let C_WALL_NEAR = fb.rgb(74, 72, 68);
-let C_WALL_NEAR_BG = fb.rgb(15, 15, 19);
-let C_FLOOR_FAR = fb.rgb(58, 56, 50);
-let C_FLOOR_NEAR = fb.rgb(132, 130, 120);
-let C_DOOR = fb.rgb(170, 126, 60);
-let C_STAIRS = fb.rgb(255, 226, 120);
-let C_YOU = fb.rgb(255, 255, 224);
-let C_GOLD = fb.rgb(224, 198, 88);
-let C_POTION = fb.rgb(120, 210, 140);
-let C_SCROLL = fb.rgb(200, 190, 130);
-let C_DAGGER = fb.rgb(170, 190, 210);
-let C_HUD = fb.rgb(150, 158, 170);
-let C_HUD_DIM = fb.rgb(86, 92, 102);
-let C_HP = fb.rgb(220, 90, 90);
-let C_HP_OK = fb.rgb(140, 210, 140);
-let C_GOLD_HUD = fb.rgb(224, 198, 88);
-let C_MSG = fb.rgb(196, 186, 166);
+// ---- the palette.  `let`, not `const`: tui.rgb is a call.
+let C_VOID = tui.rgb(3, 3, 5);
+let C_WALL_FAR = tui.rgb(30, 30, 36);
+let C_WALL_FAR_BG = tui.rgb(8, 8, 11);
+let C_WALL_NEAR = tui.rgb(74, 72, 68);
+let C_WALL_NEAR_BG = tui.rgb(15, 15, 19);
+let C_FLOOR_FAR = tui.rgb(58, 56, 50);
+let C_FLOOR_NEAR = tui.rgb(132, 130, 120);
+let C_DOOR = tui.rgb(170, 126, 60);
+let C_STAIRS = tui.rgb(255, 226, 120);
+let C_YOU = tui.rgb(255, 255, 224);
+let C_GOLD = tui.rgb(224, 198, 88);
+let C_POTION = tui.rgb(120, 210, 140);
+let C_SCROLL = tui.rgb(200, 190, 130);
+let C_DAGGER = tui.rgb(170, 190, 210);
+let C_HUD = tui.rgb(150, 158, 170);
+let C_HUD_DIM = tui.rgb(86, 92, 102);
+let C_HP = tui.rgb(220, 90, 90);
+let C_HP_OK = tui.rgb(140, 210, 140);
+let C_GOLD_HUD = tui.rgb(224, 198, 88);
+let C_MSG = tui.rgb(196, 186, 166);
 
 // ---- the ASCII glyph set for the --no-tty dump.  The characters are chosen so
 // a remembered floor is distinguishable from a visible one WITHOUT colour:
@@ -120,26 +120,26 @@ def tile_at(x: long, y: long) -> Glyph {
     if (mine) {
         cp = T_YOU;
         fg = C_YOU;
-        bg = fb.rgb(26, 26, 32);
+        bg = tui.rgb(26, 26, 32);
     } else if (mi >= 0) {
         cp = rules.monster_glyph(game.MKIND[mi]);
         fg = rules.monster_colour(game.MKIND[mi]);
-        bg = if (lit == 1) { fb.rgb(26, 22, 26) } else { fb.rgb(9, 9, 12) };
+        bg = if (lit == 1) { tui.rgb(26, 22, 26) } else { tui.rgb(9, 9, 12) };
     } else if (lit == 1 && t == rules.T_STAIRS) {
         cp = T_STAIRS;
         fg = C_STAIRS;
-        bg = fb.rgb(24, 22, 16);
+        bg = tui.rgb(24, 22, 16);
     } else if (lit == 1 && is_item) {
         cp = item_ascii(game.ITEM[k]);
         fg = if (game.ITEM[k] == rules.K_GOLD) { C_GOLD }
              else if (game.ITEM[k] == rules.K_POTION) { C_POTION }
              else if (game.ITEM[k] == rules.K_SCROLL) { C_SCROLL }
              else { C_DAGGER };
-        bg = fb.rgb(22, 22, 26);
+        bg = tui.rgb(22, 22, 26);
     } else if (lit == 1 && t == rules.T_DOOR) {
         cp = T_DOOR;
         fg = C_DOOR;
-        bg = fb.rgb(20, 18, 14);
+        bg = tui.rgb(20, 18, 14);
     } else if (lit == 1 && t == rules.T_WALL) {
         // a lit wall: you can see its FACE, and it is drawn brighter than one
         // you only remember -- which is the whole point of having both arrays
@@ -153,20 +153,20 @@ def tile_at(x: long, y: long) -> Glyph {
             bg = C_WALL_FAR_BG;
         } else if (t == rules.T_STAIRS) {
             cp = T_STAIRS;
-            fg = fb.rgb(110, 100, 60);
-            bg = fb.rgb(10, 10, 13);
+            fg = tui.rgb(110, 100, 60);
+            bg = tui.rgb(10, 10, 13);
         } else if (t == rules.T_DOOR) {
             cp = T_DOOR;
-            fg = fb.rgb(90, 70, 40);
-            bg = fb.rgb(10, 10, 13);
+            fg = tui.rgb(90, 70, 40);
+            bg = tui.rgb(10, 10, 13);
         } else if (is_item) {
             cp = item_ascii(game.ITEM[k]);
-            fg = fb.rgb(80, 74, 56);
-            bg = fb.rgb(10, 10, 13);
+            fg = tui.rgb(80, 74, 56);
+            bg = tui.rgb(10, 10, 13);
         } else {
             cp = T_FLOOR_FAR;
             fg = C_FLOOR_FAR;
-            bg = fb.rgb(10, 10, 13);
+            bg = tui.rgb(10, 10, 13);
         };
     } else if (t == rules.T_WALL) {
         cp = T_VOID;
@@ -212,13 +212,13 @@ def cam_y(camh: long) -> long {
 
 // draw_window -- the camera.  The band is first filled edge to edge with the
 // void colour, so a terminal wider than the dungeon reads as "the map ends
-// here" rather than as stale pixels the framebuffer was never told about: fb.y
+// here" rather than as stale pixels the framebuffer was never told about: tui
 // leaves unwritten cells at SKIP, and a SKIP cell emits nothing at all, so the
 // terminal would keep whatever was on it from three frames ago.
-def draw_window(s: fb.Surface, top: long, camw: long, camh: long) -> void {
+def draw_window(s: tui.Surface, top: long, camw: long, camh: long) -> void {
     let r = 0;
     while (r < camh) {
-        fb.hline(s, top + r, 0, s.cols, 32, C_VOID, C_VOID);
+        tui.hline(s, top + r, 0, s.cols, 32, C_VOID, C_VOID);
         r = r + 1;
     };
     let x0 = cam_x(camw);
@@ -231,7 +231,7 @@ def draw_window(s: fb.Surface, top: long, camw: long, camh: long) -> void {
             let my = y0 + r;
             if (mx >= 0 && my >= 0 && mx < game.MAP_W && my < game.MAP_H) {
                 tile_at(mx, my);
-                fb.put(s, top + r, c, G.cp, G.fg, G.bg);
+                tui.put(s, top + r, c, G.cp, G.fg, G.bg);
             };
             c = c + 1;
         };
@@ -246,7 +246,7 @@ def draw_window(s: fb.Surface, top: long, camw: long, camh: long) -> void {
 // frame, 1.5 MB an hour at 30 fps.
 let DIG: [long; 12] = [48; 12];
 
-def sline(s: fb.Surface, row: long, col: long, v: long, fg: long, bg: long) -> long {
+def sline(s: tui.Surface, row: long, col: long, v: long, fg: long, bg: long) -> long {
     let q = if (v < 0) { 0 } else { v };
     let n = 0;
     while (q > 0 && n < 12) {
@@ -257,14 +257,14 @@ def sline(s: fb.Surface, row: long, col: long, v: long, fg: long, bg: long) -> l
     let at = col;
     let i = 12 - n;
     while (i < 12) {
-        fb.put(s, row, at, DIG[i], fg, bg);
+        tui.put(s, row, at, DIG[i], fg, bg);
         at = at + 1;
         i = i + 1;
     };
     at
 };
 
-def bar(s: fb.Surface, row: long, col: long, frac: long, len: long,
+def bar(s: tui.Surface, row: long, col: long, frac: long, len: long,
         fg: long, bg: long) -> long {
     // A run of cells, filled to `frac` percent.  No `break`: the loop runs the
     // whole bar and the condition decides what each cell is.
@@ -272,7 +272,7 @@ def bar(s: fb.Surface, row: long, col: long, frac: long, len: long,
     let at = col;
     while (k < len) {
         let on = k * 100 / len < frac;
-        fb.put(s, row, at, if (on) { 9608 } else { 9617 }, fg,
+        tui.put(s, row, at, if (on) { 9608 } else { 9617 }, fg,
                if (on) { fg } else { bg });
         at = at + 1;
         k = k + 1;
@@ -280,48 +280,48 @@ def bar(s: fb.Surface, row: long, col: long, frac: long, len: long,
     at
 };
 
-def draw_status(s: fb.Surface, row: long) -> void {
-    let bg = fb.rgb(12, 12, 16);
+def draw_status(s: tui.Surface, row: long) -> void {
+    let bg = tui.rgb(12, 12, 16);
     let c = 0;
     while (c < s.cols) {
-        fb.put(s, row, c, 32, C_HUD, bg);
+        tui.put(s, row, c, 32, C_HUD, bg);
         c = c + 1;
     };
     let c2 = 2;
-    fb.text(s, row, c2, "Y", C_HUD, bg);
+    tui.text(s, row, c2, "Y", C_HUD, bg);
     c2 = c2 + 2;
     c2 = sline(s, row, c2, game.DEPTH, C_STAIRS, bg);
-    fb.text(s, row, c2, "/", C_HUD_DIM, bg); c2 = c2 + 1;
+    tui.text(s, row, c2, "/", C_HUD_DIM, bg); c2 = c2 + 1;
     c2 = sline(s, row, c2, game.MAX_DEPTH, C_HUD_DIM, bg);
-    fb.text(s, row, c2, " T", C_HUD, bg); c2 = c2 + 2;
+    tui.text(s, row, c2, " T", C_HUD, bg); c2 = c2 + 2;
     c2 = sline(s, row, c2, game.TURNS, C_HUD, bg);
-    fb.text(s, row, c2, " HP", C_HUD, bg); c2 = c2 + 3;
+    tui.text(s, row, c2, " HP", C_HUD, bg); c2 = c2 + 3;
     let hpfg = if (game.P_HP * 4 <= game.P_MAXHP) { C_HP }
                else if (game.P_HP * 4 <= game.P_MAXHP * 2) { C_STAIRS }
                else { C_HP_OK };
-    c2 = bar(s, row, c2, game.P_HP * 100 / game.P_MAXHP, 8, hpfg, fb.rgb(40, 20, 20));
+    c2 = bar(s, row, c2, game.P_HP * 100 / game.P_MAXHP, 8, hpfg, tui.rgb(40, 20, 20));
     c2 = c2 + 1;
     c2 = sline(s, row, c2, game.P_HP, hpfg, bg);
-    fb.text(s, row, c2, "/", C_HUD_DIM, bg); c2 = c2 + 1;
+    tui.text(s, row, c2, "/", C_HUD_DIM, bg); c2 = c2 + 1;
     c2 = sline(s, row, c2, game.P_MAXHP, C_HUD_DIM, bg);
-    fb.text(s, row, c2, " hit", C_HUD, bg); c2 = c2 + 4;
+    tui.text(s, row, c2, " hit", C_HUD, bg); c2 = c2 + 4;
     c2 = sline(s, row, c2, game.attack_dmg(), C_DAGGER, bg);
-    fb.text(s, row, c2, " gold", C_HUD, bg); c2 = c2 + 5;
+    tui.text(s, row, c2, " gold", C_HUD, bg); c2 = c2 + 5;
     c2 = sline(s, row, c2, game.P_GOLD, C_GOLD_HUD, bg);
-    fb.text(s, row, c2, " foes", C_HUD, bg); c2 = c2 + 5;
+    tui.text(s, row, c2, " foes", C_HUD, bg); c2 = c2 + 5;
     c2 = sline(s, row, c2, game.alive_count(), C_HP, bg);
-    fb.text(s, row, c2, " seen", C_HUD, bg); c2 = c2 + 5;
+    tui.text(s, row, c2, " seen", C_HUD, bg); c2 = c2 + 5;
     c2 = sline(s, row, c2, game.explored_pct(), C_HUD, bg);
-    fb.text(s, row, c2, "%", C_HUD_DIM, bg); c2 = c2 + 1;
+    tui.text(s, row, c2, "%", C_HUD_DIM, bg); c2 = c2 + 1;
     if (game.STATUS == game.S_DEAD) {
-        fb.text(s, row, c2, " YOU ARE DEAD", C_HP, bg);
+        tui.text(s, row, c2, " YOU ARE DEAD", C_HP, bg);
         c2 = c2 + 12;
     } else if (game.STATUS == game.S_ESCAPED) {
-        fb.text(s, row, c2, " YOU ESCAPED", C_HP_OK, bg);
+        tui.text(s, row, c2, " YOU ESCAPED", C_HP_OK, bg);
         c2 = c2 + 12;
     };
     if (s.cols >= 56) {
-        fb.text(s, row, s.cols - 30, "hjkl yubn move  , grab  1-8 use  ? help",
+        tui.text(s, row, s.cols - 30, "hjkl yubn move  , grab  1-8 use  ? help",
                 C_HUD_DIM, bg);
     };
 };
@@ -329,31 +329,31 @@ def draw_status(s: fb.Surface, row: long) -> void {
 // draw_pack -- the pack along the bottom, one glyph and a count per slot.  The
 // numbers go through `sline`, so the whole panel is codepoints and integers and
 // never a formatted string.
-def draw_pack(s: fb.Surface, row: long) -> void {
-    let bg = fb.rgb(10, 10, 13);
+def draw_pack(s: tui.Surface, row: long) -> void {
+    let bg = tui.rgb(10, 10, 13);
     let c = 1;
     let z = 0;
     while (z < s.cols) {
-        fb.put(s, row, z, 32, C_HUD_DIM, bg);
+        tui.put(s, row, z, 32, C_HUD_DIM, bg);
         z = z + 1;
     };
-    fb.put(s, row, 0, 9553, C_HUD_DIM, bg);
+    tui.put(s, row, 0, 9553, C_HUD_DIM, bg);
     let k = 0;
     while (k < game.INV_SLOTS) {
         if (game.INV_FULL[k] == 1) {
-            fb.text(s, row, c, " [", C_HUD_DIM, bg);
+            tui.text(s, row, c, " [", C_HUD_DIM, bg);
             c = c + 2;
             c = sline(s, row, c, k + 1, C_HUD, bg);
-            fb.put(s, row, c, 93, C_HUD_DIM, bg);
+            tui.put(s, row, c, 93, C_HUD_DIM, bg);
             c = c + 1;
-            fb.put(s, row, c, item_ascii(game.INV_KIND[k]), C_GOLD, bg);
+            tui.put(s, row, c, item_ascii(game.INV_KIND[k]), C_GOLD, bg);
             c = c + 1;
             if (game.INVN[k] > 1) {
                 c = sline(s, row, c, game.INVN[k], C_HUD, bg);
-                fb.text(s, row, c, "]", C_HUD_DIM, bg);
+                tui.text(s, row, c, "]", C_HUD_DIM, bg);
                 c = c + 1;
             } else {
-                fb.put(s, row, c, 93, C_HUD_DIM, bg);
+                tui.put(s, row, c, 93, C_HUD_DIM, bg);
                 c = c + 1;
             };
         };
@@ -370,7 +370,7 @@ def draw_pack(s: fb.Surface, row: long) -> void {
 // measured 3064 bytes over six frames of play, which is a leak with a frame
 // count in it and exactly the sort of thing this example is claiming not to do.
 // So the log is drawn only when its CONTENTS change, which is once per message
-// and not once per frame.  `fb.flush_diff` would have thrown the bytes away
+// and not once per frame.  `tui.flush_diff` would have thrown the bytes away
 // anyway: the cells are identical.
 let MSGID: [long; 3] = [0 - 1; 3];
 let MSGSUB: [long; 3] = [0 - 1; 3];
@@ -389,11 +389,11 @@ def invalidate() -> void {
 };
 
 // draw_msgs -- the three most recent messages, newest at the bottom.
-def draw_msgs(s: fb.Surface, row: long) -> void {
-    let bg = fb.rgb(9, 9, 12);
+def draw_msgs(s: tui.Surface, row: long) -> void {
+    let bg = tui.rgb(9, 9, 12);
     let r = 0;
     while (r < 3) {
-        fb.hline(s, row + r, 0, s.cols, 32, C_HUD, bg);
+        tui.hline(s, row + r, 0, s.cols, 32, C_HUD, bg);
         r = r + 1;
     };
     let i = 0;
@@ -410,7 +410,7 @@ def draw_msgs(s: fb.Surface, row: long) -> void {
                 let n = game.message_line_bytes(i);
                 let j = 0;
                 while (j < n) {
-                    fb.put(s, msgrow, 2 + j, game.MSG_OUT[j], fg, bg);
+                    tui.put(s, msgrow, 2 + j, game.MSG_OUT[j], fg, bg);
                     j = j + 1;
                 };
             };

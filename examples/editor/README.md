@@ -69,22 +69,16 @@ confusing build here.
 **Frozen toolkit.** Vendored byte-identical from `examples/_toolkit/`, revision
 as of 2026-10-04:
 
-| file | sha256 | lines | why |
-|---|---|---|---|
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` | 1156 | raw mode, key decode, window size, alt screen, restore-on-every-exit |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` | 19081 | flag parsing, usage text, exit codes |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` | 245 | the clock and the microsecond nap |
-
-**`fb.y` is deliberately NOT vendored — but that is now a choice, not a
+**`tui` is deliberately NOT used — but that is now a choice, not a
 workaround, and the original reason no longer holds.** It was written when
-`fb.y`'s `emit_num` dropped interior zeros, so every SGR channel and every
+`tui`'s `emit_num` dropped interior zeros, so every SGR channel and every
 CUP operand in the 100–109 range was emitted wrong (`101` arrived as `11`).
 An editor's entire job is emitting CUP at arbitrary row/column positions,
 so that was a real reason to refuse the module. **It was fixed
 campaign-wide** — `emit_num` now finds the highest decimal place first and
 emits every place down to units — and verified against this folder's use:
-the current `fb.y` writes `ESC [ 106 ; 108 H` for cell (105, 107), where
-the old one wrote `16;18`. See `examples/BUGS.md`, "`fb.y`'s `emit_num`
+the current `tui` writes `ESC [ 106 ; 108 H` for cell (105, 107), where
+the old one wrote `16;18`. See `examples/BUGS.md`, "`tui`'s `emit_num`
 drops a zero digit", and the regression test now in
 `examples/_toolkit/fb_test.y` §8 that pins `203;101;100` and friends.
 
@@ -200,7 +194,6 @@ implying a characterwise mode that is not there.
 | `modes.y` | 1031 | NORMAL/INSERT/VISUAL/COMMAND, the operator-pending state, the count, the `--keys` decoder |
 | `screen.y` | 544 | the cell grid, the ANSI emitter, the plain emitter, `winsize()` |
 | `editor.y` | 457 | CLI, the interactive loop, the scripted dump, `--bench` |
-| `term.y` `args.y` `time.y` | 1871 | vendored, unedited |
 
 4 789 lines of its own plus 1 871 vendored. Each header comment says what that
 file is responsible for and which of the compiler's sharp edges it is shaped
@@ -281,7 +274,7 @@ bytes, measured with `heap_used()`. An editor asks the window size once per
 redraw to notice a resize, which makes it a 40-byte-per-frame leak with nothing
 printed anywhere. `screen.winsize()` does the `TIOCGWINSZ` ioctl into a
 module-level `[byte; 8]` and assigns two module-level `long`s, so it costs zero
-allocations however often it runs. `term.y` is vendored unchanged and
+allocations however often it runs. `tui` is std's, unchanged, and
 `term.size()` is simply not on this path.
 
 Nothing tells the program a `SIGWINCH` — Y has no signal handlers — so polling
@@ -413,7 +406,7 @@ approximation for a bug:
 semantics of a mode machine whose return value the caller sometimes wants and
 sometimes does not, and of a byte emitter. There are **zero** notices at the
 default level, which is the bar. `-W 1` is above the bar by design -- another
-example in this corpus (`fb.y`) produces 46 notices at `-W 1` of the same kind
+example in this corpus (`tui`) produces 46 notices at `-W 1` of the same kind
 -- so notices at `-W 1` are left alone rather than chased.
 
 ## What is not here
@@ -554,6 +547,18 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

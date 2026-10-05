@@ -8,7 +8,7 @@
 // are written, which is what makes 30 fps affordable: a settled frame emits a
 // few hundred bytes instead of a few hundred kilobytes.
 //
-//   build:  ycc -o donut donut.y     (fx.y fb.y term.y time.y args.y torus.y
+//   build:  ycc -o donut donut.y     (fx.y tui tui tui args torus.y
 //                                      and textout.y must sit beside it)
 //   run:    ./donut                  interactive, until q or Escape
 //          ./donut --frames 60 --no-tty   the deterministic run
@@ -17,12 +17,10 @@
 // palettes, the status line and the two frame loops.
 
 import fx;
-import fb;
-import term;
-import time;
 import args;
 import torus;
 import textout;
+import tui;
 
 // ─────────────────────────────────────────────────────────── the palettes ───
 //
@@ -32,31 +30,31 @@ import textout;
 // lerped along the mode's ramp by the luminance of the nearest subpixel the
 // surface won -- on a phosphor tint instead of neutral grey.
 //
-// These are `let`, not `const`: fb.rgb() is a call, and a const wants a
+// These are `let`, not `const`: tui.rgb() is a call, and a const wants a
 // compile-time value.  Top-level bindings do not warn (ORCHESTRATOR.md 2.11).
 let PAL_LO: [long; 5] = [
     0,
-    fb.rgb(20, 20, 24),          // gray
-    fb.rgb(10, 44, 16),          // green
-    fb.rgb(52, 22, 4),           // amber
-    fb.rgb(12, 34, 68)           // ice
+    tui.rgb(20, 20, 24),          // gray
+    tui.rgb(10, 44, 16),          // green
+    tui.rgb(52, 22, 4),           // amber
+    tui.rgb(12, 34, 68)           // ice
 ];
 let PAL_HI: [long; 5] = [
     0,
-    fb.rgb(240, 240, 240),
-    fb.rgb(150, 255, 172),
-    fb.rgb(255, 206, 96),
-    fb.rgb(172, 226, 255)
+    tui.rgb(240, 240, 240),
+    tui.rgb(150, 255, 172),
+    tui.rgb(255, 206, 96),
+    tui.rgb(172, 226, 255)
 ];
 let PAL_BG: [long; 5] = [
-    fb.rgb(0, 0, 0),
-    fb.rgb(6, 6, 8),
-    fb.rgb(2, 8, 4),
-    fb.rgb(10, 5, 1),
-    fb.rgb(2, 6, 14)
+    tui.rgb(0, 0, 0),
+    tui.rgb(6, 6, 8),
+    tui.rgb(2, 8, 4),
+    tui.rgb(10, 5, 1),
+    tui.rgb(2, 6, 14)
 ];
 let PAL_FLAT: [long; 5] = [1, 0, 0, 0, 0];          // 1 = one colour for all
-let PAL_MONO: [long; 5] = [fb.rgb(214, 214, 214), 0, 0, 0, 0];
+let PAL_MONO: [long; 5] = [tui.rgb(214, 214, 214), 0, 0, 0, 0];
 
 let NAMES: [str] = ["mono", "gray", "green", "amber", "ice"];
 let GLYPHS: [str] = ["ascii", "blocks", "half", "braille"];
@@ -117,7 +115,7 @@ let want_any: long = 0;
 // setter rather than a record passed per frame because a record literal costs
 // 64 bytes every time it is evaluated (ORCHESTRATOR.md 2.7), and this example's
 // whole claim is that a frame costs zero bytes of heap.
-def render(s: fb.Surface) -> void {
+def render(s: tui.Surface) -> void {
     if (paused == 0) {
         torus.torus_step(stepA * rate / 100, stepB * rate / 100)
     } else {
@@ -129,14 +127,14 @@ def render(s: fb.Surface) -> void {
 // ──────────────────────────────────────────── allocation-free size poll ───
 //
 // Y has no SIGWINCH, so a program that wants to follow a terminal resize has to
-// ask.  term.size() is the right call and it is used once, at start-up -- but on
+// ask.  tui.size() is the right call and it is used once, at start-up -- but on
 // a poll it is a leak: it ANSWERS WITH A RECORD, and a record literal is
 // evaluated onto the heap every time the expression runs (39 bytes measured,
 // see the note on DIG below), so a once-a-frame size check would leak 1.4 MB
 // an hour.
 //
-// So the poll is TIOCGWINSZ into a byte buffer of our own plus term.rd16, which
-// is the very decode term.size() performs -- same answer, one syscall, zero
+// So the poll is TIOCGWINSZ into a byte buffer of our own plus tui.rd16, which
+// is the very decode tui.size() performs -- same answer, one syscall, zero
 // bytes of heap.  A [byte] has to be growable to be passed at all: a [byte; N]
 // is not a [byte] in Y.
 let WSB: [byte] = [0; 64];
@@ -147,9 +145,9 @@ let tcols: long = 80;
 // its new size, 0 when it did not (or when the ioctl failed, or reported a
 // zero, which is what a pty with no TIOCSWINSZ looks like).
 def poll_winsize() -> long {
-    if (syscall(16, 1, term.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
-    let r = term.rd16(WSB, 0);
-    let c = term.rd16(WSB, 2);
+    if (syscall(16, 1, tui.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
+    let r = tui.rd16(WSB, 0);
+    let c = tui.rd16(WSB, 2);
     if (r < 1 || c < 1) { return 0; };
     if (r == trows && c == tcols) { return 0; };
     trows = r;
@@ -172,7 +170,7 @@ def poll_winsize() -> long {
 // never contain is a literal, not a record.
 let DIG: [long; 12] = [48; 12];
 
-def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
+def sline(s: tui.Surface, row: long, col: long, v: long) -> long {
     let d = DIG;
     let q = if (v < 0) { 0 } else { v };
     let n = 0;
@@ -184,33 +182,33 @@ def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
     let at = col;
     let i = 12 - n;
     while (i < 12) {
-        fb.put(s, row, at, d[i], 150, PAL_BG[cm]);
+        tui.put(s, row, at, d[i], 150, PAL_BG[cm]);
         at = at + 1;
         i = i + 1;
     };
     at
 };
 
-def hud(s: fb.Surface, row: long, frame: long, fps: long) -> void {
-    let dim = fb.rgb(88, 96, 104);
-    fb.put(s, row, 0, 9472, fb.rgb(34, 38, 42), PAL_BG[cm]);
-    for k in 1..s.cols { fb.put(s, row, k, 9472, fb.rgb(34, 38, 42), PAL_BG[cm]); };
+def hud(s: tui.Surface, row: long, frame: long, fps: long) -> void {
+    let dim = tui.rgb(88, 96, 104);
+    tui.put(s, row, 0, 9472, tui.rgb(34, 38, 42), PAL_BG[cm]);
+    for k in 1..s.cols { tui.put(s, row, k, 9472, tui.rgb(34, 38, 42), PAL_BG[cm]); };
     let c = 2;
-    fb.text(s, row, c, "donut", fb.rgb(150, 160, 170), PAL_BG[cm]);
+    tui.text(s, row, c, "donut", tui.rgb(150, 160, 170), PAL_BG[cm]);
     c = c + 6;
     c = sline(s, row, c, frame);
-    fb.text(s, row, c, "fps", dim, PAL_BG[cm]); c = c + 4;
+    tui.text(s, row, c, "fps", dim, PAL_BG[cm]); c = c + 4;
     c = sline(s, row, c, fps);
     c = c + 1;
-    fb.text(s, row, c, NAMES[cm], fb.rgb(205, 175, 95), PAL_BG[cm]);
+    tui.text(s, row, c, NAMES[cm], tui.rgb(205, 175, 95), PAL_BG[cm]);
     c = c + len(NAMES[cm]);
-    fb.text(s, row, c, "spin", dim, PAL_BG[cm]); c = c + 5;
+    tui.text(s, row, c, "spin", dim, PAL_BG[cm]); c = c + 5;
     c = sline(s, row, c, rate);
-    fb.text(s, row, c, "%", dim, PAL_BG[cm]); c = c + 2;
+    tui.text(s, row, c, "%", dim, PAL_BG[cm]); c = c + 2;
     if (paused != 0) {
-        fb.text(s, row, c, "PAUSED", fb.rgb(225, 185, 85), PAL_BG[cm]);
+        tui.text(s, row, c, "PAUSED", tui.rgb(225, 185, 85), PAL_BG[cm]);
     } else {
-        fb.text(s, row, c, "q quit   +/- spin   space pause", dim, PAL_BG[cm])
+        tui.text(s, row, c, "q quit   +/- spin   space pause", dim, PAL_BG[cm])
     }
 };
 
@@ -326,8 +324,8 @@ if (st == args.HELP) {
     puts("  green / amber / ice   the same fit on a phosphor tint\n");
     puts("\nglyph modes:\n");
     puts("  ascii    ' .:-=+*#@' by luminance -- the classic donut ramp (default)\n");
-    puts("  blocks   fb.y's shade-block ramp by luminance, 5 levels\n");
-    puts("  half     fb.y's half-block ramp by luminance, 4 levels\n");
+    puts("  blocks   tui's shade-block ramp by luminance, 5 levels\n");
+    puts("  half     tui's half-block ramp by luminance, 4 levels\n");
     puts("  braille  U+2800+mask by coverage: the honest 2x4 dots of each cell\n");
     puts("\nkeys, interactive:  q or Escape quit, +/- spin speed, space pause, r reset\n");
     exit(0)
@@ -354,7 +352,7 @@ let HAVE_SIZE = args.has("size");
 
 // The size, decided before anything is built: the geometry and the surface must
 // agree, so both come from the same two numbers.
-let ws = term.size();
+let ws = tui.size();
 trows = ws.rows;
 tcols = ws.cols;
 let grow = 0;
@@ -388,11 +386,11 @@ torus.torus_reset();
 let SAMPLES = torus.torus_setup(grow, gcol);
 let SR = torus.torus_rows();
 let SC = torus.torus_cols();
-let srf = fb.new(SR, SC);
+let srf = tui.new(SR, SC);
 
 // ══════════════════════════════════════════════ the deterministic path ═══
 //
-// The same draw and the same fb.flush_diff as the terminal path -- the ANSI
+// The same draw and the same tui.flush_diff as the terminal path -- the ANSI
 // stream is built and counted either way, which is what makes the byte column
 // in the digest evidence rather than a claim -- except that it goes to
 // /dev/null and the text goes to stdout instead.
@@ -402,8 +400,8 @@ let srf = fb.new(SR, SC);
 // nanosleep instead.  fpsWanted is an interactive knob.
 if (NOTTY != 0) {
     let devnull = syscall(257, 0 - 100, "/dev/null", 1, 0, 0, 0);   // openat
-    if (devnull >= 0) { fb.set_fd(devnull); };
-    fb.capture_on();
+    if (devnull >= 0) { tui.set_fd(devnull); };
+    tui.capture_on();
 
     textout.out_str("donut: frames=");
     textout.out_num(FRAMES);
@@ -425,18 +423,18 @@ if (NOTTY != 0) {
     textout.out_str("\n");
 
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let f = 0;
     while (f < FRAMES) {
         render(srf);
-        fb.capture_reset();
-        fb.flush_diff(srf);
+        tui.capture_reset();
+        tui.flush_diff(srf);
         textout.out_str("frame ");
         textout.out_pad(f, 4);
         textout.out_str(" bytes ");
-        textout.out_pad(fb.frame_bytes(), 8);
+        textout.out_pad(tui.frame_bytes(), 8);
         textout.out_str(" rows ");
-        textout.out_pad(fb.row_count(), 5);
+        textout.out_pad(tui.row_count(), 5);
         textout.out_str(" dots ");
         textout.out_pad(torus.torus_covered(), 8);
         textout.out_str(" clip ");
@@ -452,7 +450,7 @@ if (NOTTY != 0) {
         textout.out_str("\n");
         f = f + 1;
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     textout.out_flush();
 
@@ -485,20 +483,20 @@ if (NOTTY != 0) {
 
 // ═══════════════════════════════════════════════════ the interactive path ══
 //
-// term.y's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
+// tui's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
 // leaves.  Y has no atexit and no signal handler, so every exit below is a
-// call to term.restore_all_exit() -- there is no path out of this loop that
+// call to tui.restore_all_exit() -- there is no path out of this loop that
 // does not go through it.
-if (!term.raw_mode()) {
+if (!tui.raw_mode()) {
     eputs("donut: not a terminal; try --frames N --no-tty\n");
     exit(1)
 };
-term.enter_screen();
-term.arm_watchdog();
+tui.enter_screen();
+tui.arm_watchdog();
 
-let pacer = time.pacer_new(FPSWANT);
-let meter = time.fps_new();
-time.pacer_start(pacer);
+let pacer = tui.pacer_new(FPSWANT);
+let meter = tui.fps_new();
+tui.pacer_start(pacer);
 
 let frame = 0;
 let quit = false;
@@ -508,17 +506,17 @@ let bytes_sum = 0;
 let ih0 = heap_used();
 
 while (quit == false) {
-    let wait = time.pacer_next(pacer);
+    let wait = tui.pacer_next(pacer);
     if (wait >= 0) {
         render(srf);
-        hud(srf, SR - 1, frame, time.fps_x100(meter) / 100);
-        bytes = fb.flush_diff(srf);
+        hud(srf, SR - 1, frame, tui.fps_x100(meter) / 100);
+        bytes = tui.flush_diff(srf);
         bytes_sum = bytes_sum + bytes;
-        time.fps_tick(meter);
+        tui.fps_tick(meter);
         frame = frame + 1;
         if (FRAMES > 0 && frame >= FRAMES) {
-            report(frame, bytes_sum, time.fps_x100(meter) / 100, ih0, heap_used());
-            term.restore_all_exit(0)
+            report(frame, bytes_sum, tui.fps_x100(meter) / 100, ih0, heap_used());
+            tui.restore_all_exit(0)
         };
     };
 
@@ -531,8 +529,8 @@ while (quit == false) {
         checked = 0;
         // Keys come back as bytes, so they are compared as bytes: Y has no
         // char literal, and ord() is how a name becomes the byte it means.
-        let k = term.read_key_timeout(0);
-        if (k == ord("q") || k == ord("Q") || k == term.KEY_ESC) {
+        let k = tui.read_key_timeout(0);
+        if (k == ord("q") || k == ord("Q") || k == tui.KEY_ESC) {
             quit = true;
         } else if (k == ord("+") || k == ord("=")) {
             if (rate < 400) { rate = rate + 25; };
@@ -551,12 +549,12 @@ while (quit == false) {
             if (nc < 4) { nc = 4; };
             if (nc > torus.COLS_MAX) { nc = torus.COLS_MAX; };
             torus.torus_setup(nr, nc);
-            srf = fb.resize(srf, torus.torus_rows(), torus.torus_cols());
+            srf = tui.resize(srf, torus.torus_rows(), torus.torus_cols());
             SR = torus.torus_rows();
             SC = torus.torus_cols();
         };
     };
 };
 
-report(frame, bytes_sum, time.fps_x100(meter) / 100, ih0, heap_used());
-term.restore_all_exit(0);
+report(frame, bytes_sum, tui.fps_x100(meter) / 100, ih0, heap_used());
+tui.restore_all_exit(0);

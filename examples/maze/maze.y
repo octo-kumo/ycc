@@ -12,7 +12,7 @@
 //          ./maze --no-tty --frames 3 --seed 1    the deterministic run
 //
 // All of the algorithms are in grid.y and astar.y.  This file is the command
-// line, the two painters (ASCII into a byte sink, cells into an fb.Surface),
+// line, the two painters (ASCII into a byte sink, cells into an tui.Surface),
 // the comparison table, and the interactive loop.
 //
 // rng.y is NOT imported here: the seeding lives in the generators (grid.y), and
@@ -28,12 +28,10 @@
 // request, and the golden run stays byte-identical.
 
 import args;
-import fb;
-import term;
-import time;
 import grid;
 import astar;
 import sink;
+import tui;
 
 // ─────────────────────────────────────────────────────────────── the CLI ───
 
@@ -387,9 +385,9 @@ def timing_report() -> void {
     let g = 0;
     let goal = grid.NCE - 1;
     while (g < 3) {
-        let t0 = time.now_us();
+        let t0 = clock_us();
         run_gen(g, SEED);
-        let t1 = time.now_us();
+        let t1 = clock_us();
         eputs("maze: gen ");
         eputs(GENS[g]);
         eputs(" ");
@@ -400,14 +398,14 @@ def timing_report() -> void {
         g = g + 1
     };
     let h0 = heap_used();
-    let s0 = time.now_us();
+    let s0 = clock_us();
     let lb = astar.bfs(0, goal);
     let bexp = astar.pexp;
-    let m0 = time.now_us();
+    let m0 = clock_us();
     let la = astar.astar(0, goal);
     let aexp = astar.pexp;
     let apop = astar.ppop;
-    let m1 = time.now_us();
+    let m1 = clock_us();
     // Read the heap BEFORE the first tostring(): eputs(tostring(...)) allocates
     // about 32 bytes a call, so a delta taken afterwards reports the summary's
     // own strings as if the solvers had leaked them.
@@ -450,14 +448,14 @@ export { ascii_dump, timing_report };
 def soak(n: long) -> void {
     let goal = grid.NCE - 1;
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let last = 0;
     let i = 0;
     while (i < n) {
         last = astar.solve(SOLVER, 0, goal);
         i = i + 1
     };
-    let t1 = time.now_us();
+    let t1 = clock_us();
     let h1 = heap_used();
     let each = 0;
     if (n > 0) { each = (t1 - t0) / n; };
@@ -487,9 +485,9 @@ def soak(n: long) -> void {
 
 // ─────────────────────────────────────────────────── the interactive path ───
 //
-// term.y's pattern verbatim (its header is the authority): raw mode, alt
+// tui's pattern verbatim (its header is the authority): raw mode, alt
 // screen, watchdog, and ONE place that leaves.  Y has no atexit and no signal
-// handler, so every exit below is term.restore_all_exit().
+// handler, so every exit below is tui.restore_all_exit().
 //
 // The palette is one rgb() per kind, computed ONCE at module level.  A call in
 // the draw loop would be fine numerically and wrong in spirit: the claim this
@@ -512,13 +510,16 @@ let G_GOAL: long = 9679;
 
 let FBG: long = 0;
 
-// safe_ch(v) -> long -- one colour channel, moved off the values fb.y's SGR
+// safe_ch(v) -> long -- one colour channel, moved off the values tui's SGR
 // writer gets wrong.
 //
-// fb.y's `emit_num` drops a zero in the TENS place, so a channel of 205 reaches
+// tui's `emit_num` drops a zero in the TENS place, so a channel of 205 reaches
 // the terminal as 25 and 104 as 14 -- a silently wrong colour, not an error.
-// Filed in examples/BUGS.md ("fb.y's emit_num drops a zero digit").  The frozen
-// vendored copy cannot be edited, so the palette is nudged instead: any channel
+// Filed in examples/BUGS.md ("fb.y's emit_num drops a zero digit"), where the
+// title still names the module as it was when the defect was found.  std `tui`
+// COULD be edited to fix it -- that is what moved the other three modules out
+// of the folders -- but it would change the byte stream every drawing example
+// produces, so the palette is nudged here instead: any channel
 // with `v % 100 < 10` moves UP to the next value with no zero digit in it, so
 // 104 becomes 112 and 205 becomes 212.  The hues are within a couple of units of
 // what they were meant to be, and the picture is right on this compiler.
@@ -528,9 +529,9 @@ def safe_ch(v: long) -> long {
     q
 };
 
-// safe_rgb(r, g, b) -> long -- fb.rgb() through safe_ch().
+// safe_rgb(r, g, b) -> long -- tui.rgb() through safe_ch().
 def safe_rgb(r: long, g: long, b: long) -> long {
-    fb.rgb(safe_ch(r), safe_ch(g), safe_ch(b))
+    tui.rgb(safe_ch(r), safe_ch(g), safe_ch(b))
 };
 
 def palette() -> void {
@@ -578,15 +579,15 @@ def colour_of(k: long) -> long {
 // interactive path passes all of `grid.sno`: the search's footprint IS the
 // interesting half of this picture, dimmed behind the route.  (The --frames
 // path is the one that reveals it progressively.)
-def draw(s: fb.Surface, steps: long, pcell: long, showpath: long, shown: long) -> void {
+def draw(s: tui.Surface, steps: long, pcell: long, showpath: long, shown: long) -> void {
     grid.grid_paint(shown, if (showpath == 1) { steps } else { 0 }, pcell);
-    fb.fill(s, 32, FBG, BG);
+    tui.fill(s, 32, FBG, BG);
     let y = 0;
     while (y < grid.RH) {
         let x = 0;
         while (x < grid.RW) {
             let k = grid.rk[y * grid.RW + x];
-            fb.put(s, y, x, glyph_of(k), colour_of(k), BG);
+            tui.put(s, y, x, glyph_of(k), colour_of(k), BG);
             x = x + 1
         };
         y = y + 1
@@ -599,7 +600,7 @@ def draw(s: fb.Surface, steps: long, pcell: long, showpath: long, shown: long) -
 // does not.
 let DIG: [long; 20] = [48; 20];
 
-def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
+def sline(s: tui.Surface, row: long, col: long, v: long) -> long {
     let d = DIG;
     // The seed may be negative, and a HUD that printed `-1` as `1` would be
     // lying; there is no room for a minus sign in the column budget, so a
@@ -614,7 +615,7 @@ def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
     let at = col;
     let i = 20 - n;
     while (i < 20) {
-        fb.put(s, row, at, d[i], safe_rgb(180, 190, 205), BG);
+        tui.put(s, row, at, d[i], safe_rgb(180, 190, 205), BG);
         at = at + 1;
         i = i + 1
     };
@@ -627,43 +628,43 @@ def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
 // (DIG).  A HUD that called tostring() would allocate on the frame loop, and
 // this example's whole claim is that the frame loop does not.
 //
-// The hint text is only drawn when there is room for it: fb.text() does not
+// The hint text is only drawn when there is room for it: tui.text() does not
 // bound-check the column, so a line longer than the window silently wraps into
-// the next row and lands ON the maze.  fb.put() ignores an out-of-range cell,
+// the next row and lands ON the maze.  tui.put() ignores an out-of-range cell,
 // so the guard below is not about safety, it is about the picture.
 let HINT = "arrows/hjkl  g new  s solver  t path  q";
 
-def hud(s: fb.Surface, row: long, steps: long) -> void {
+def hud(s: tui.Surface, row: long, steps: long) -> void {
     let dim = safe_rgb(120, 130, 146);
     let c = 1;
     c = sline(s, row, c, grid.GW);
-    fb.text(s, row, c, "x", dim, BG); c = c + 1;
+    tui.text(s, row, c, "x", dim, BG); c = c + 1;
     c = sline(s, row, c, grid.GH);
     c = c + 2;
-    fb.text(s, row, c, "seed ", dim, BG); c = c + 5;
+    tui.text(s, row, c, "seed ", dim, BG); c = c + 5;
     c = sline(s, row, c, SEED);
     c = c + 2;
-    fb.text(s, row, c, GENS[GEN], safe_rgb(210, 180, 100), BG);
+    tui.text(s, row, c, GENS[GEN], safe_rgb(210, 180, 100), BG);
     c = c + len(GENS[GEN]) + 2;
-    fb.text(s, row, c, SOLVERS[SOLVER], safe_rgb(150, 210, 250), BG);
+    tui.text(s, row, c, SOLVERS[SOLVER], safe_rgb(150, 210, 250), BG);
     c = c + len(SOLVERS[SOLVER]) + 2;
-    fb.text(s, row, c, "route ", dim, BG); c = c + 6;
+    tui.text(s, row, c, "route ", dim, BG); c = c + 6;
     c = sline(s, row, c, steps);
     c = c + 2;
-    fb.text(s, row, c, "expanded ", dim, BG); c = c + 9;
+    tui.text(s, row, c, "expanded ", dim, BG); c = c + 9;
     c = sline(s, row, c, astar.pexp);
     if (c + 2 + len(HINT) <= s.cols) {
-        fb.text(s, row, c + 2, HINT, safe_rgb(96, 104, 118), BG)
+        tui.text(s, row, c + 2, HINT, safe_rgb(96, 104, 118), BG)
     }
 };
 
 def walk_to(px: long, py: long, k: long) -> long {
     let nx = px;
     let ny = py;
-    if (k == term.KEY_LEFT || k == ord("h")) { nx = px - 1; }
-    else if (k == term.KEY_RIGHT || k == ord("l")) { nx = px + 1; }
-    else if (k == term.KEY_UP || k == ord("k")) { ny = py - 1; }
-    else if (k == term.KEY_DOWN || k == ord("j")) { ny = py + 1; };
+    if (k == tui.KEY_LEFT || k == ord("h")) { nx = px - 1; }
+    else if (k == tui.KEY_RIGHT || k == ord("l")) { nx = px + 1; }
+    else if (k == tui.KEY_UP || k == ord("k")) { ny = py - 1; }
+    else if (k == tui.KEY_DOWN || k == ord("j")) { ny = py + 1; };
     let ok = 0;
     if (nx != px || ny != py) {
         // Only ever move into an open passage: the walk is the maze, not a
@@ -678,19 +679,19 @@ def walk_to(px: long, py: long, k: long) -> long {
 };
 
 def interactive() -> void {
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         eputs("maze: not a terminal; try --no-tty\n");
         exit(1)
     };
-    term.enter_screen();
-    term.arm_watchdog();
+    tui.enter_screen();
+    tui.arm_watchdog();
 
-    let pacer = time.pacer_new(FPSWANT);
-    time.pacer_start(pacer);
+    let pacer = tui.pacer_new(FPSWANT);
+    tui.pacer_start(pacer);
 
-    // The surface is allocated once and resized, never rebuilt: fb.resize
-    // allocates nothing (fb.y's own note).
-    let srf = fb.new(grid.RH + 1, grid.RW);
+    // The surface is allocated once and resized, never rebuilt: tui.resize
+    // allocates nothing (tui's own note).
+    let srf = tui.new(grid.RH + 1, grid.RW);
     let px = 0;
     let py = 0;
     let steps = 0;
@@ -703,11 +704,11 @@ def interactive() -> void {
     steps = astar.solve(SOLVER, 0, grid.NCE - 1);
 
     while (quit == false) {
-        let w = time.pacer_next(pacer);
+        let w = tui.pacer_next(pacer);
         if (w >= 0) {
             draw(srf, steps, py * grid.GW + px, showpath, grid.sno);
             hud(srf, grid.RH, steps);
-            bytes = bytes + fb.flush_diff(srf);
+            bytes = bytes + tui.flush_diff(srf);
             frames = frames + 1;
             if (FRAMES > 0 && frames >= FRAMES) {
                 // heap_used() is READ BEFORE anything is printed, because
@@ -726,13 +727,13 @@ def interactive() -> void {
                 eputs(" delta ");
                 eputs(tostring(h1 - ih0));
                 eputs("\n");
-                term.restore_all_exit(0)
+                tui.restore_all_exit(0)
             }
         };
 
         // Keys are polled every frame; read_key_timeout(0) never blocks.
-        let k = term.read_key_timeout(0);
-        if (k == ord("q") || k == ord("Q") || k == term.KEY_ESC) {
+        let k = tui.read_key_timeout(0);
+        if (k == ord("q") || k == ord("Q") || k == tui.KEY_ESC) {
             quit = true;
         } else if (k == ord("g")) {
             // `g` re-generates with the NEXT seed.  Still seeded, so the
@@ -755,10 +756,10 @@ def interactive() -> void {
             if (walk_to(px, py, k) == 1) {
                 px = mx;
                 py = my;
-                if (k == term.KEY_LEFT || k == ord("h")) { px = px - 1; }
-                else if (k == term.KEY_RIGHT || k == ord("l")) { px = px + 1; }
-                else if (k == term.KEY_UP || k == ord("k")) { py = py - 1; }
-                else if (k == term.KEY_DOWN || k == ord("j")) { py = py + 1; };
+                if (k == tui.KEY_LEFT || k == ord("h")) { px = px - 1; }
+                else if (k == tui.KEY_RIGHT || k == ord("l")) { px = px + 1; }
+                else if (k == tui.KEY_UP || k == ord("k")) { py = py - 1; }
+                else if (k == tui.KEY_DOWN || k == ord("j")) { py = py + 1; };
                 steps = astar.solve(SOLVER, py * grid.GW + px, grid.NCE - 1)
             }
         }
@@ -778,7 +779,7 @@ def interactive() -> void {
     eputs(" delta ");
     eputs(tostring(h1 - ih0));
     eputs("\n");
-    term.restore_all_exit(0)
+    tui.restore_all_exit(0)
 };
 
 // ───────────────────────────────────────────────────────────────── the run ───
@@ -834,7 +835,7 @@ if (FRAMES < 0) { die("--frames wants a count, not a negative number"); };
 // without it the terminal decides (or a fixed default when there is no
 // terminal, which is what makes the deterministic run reproducible on a machine
 // whose window happens to be a different shape).
-let ws = term.size();
+let ws = tui.size();
 let w = 0;
 let h = 0;
 if (args.has("size")) {
@@ -854,7 +855,7 @@ if (args.has("size")) {
     // 24-row window fits an 11-cell maze and an 80-column one fits 39.
     //
     // 99 columns and 99 rows is the CEILING, and it is a bug workaround rather
-    // than a taste: fb.y writes the CUP with the same emit_num that drops a zero
+    // than a taste: tui writes the CUP with the same emit_num that drops a zero
     // digit (examples/BUGS.md), so column 101 is emitted as 11 and everything
     // from there is written in the wrong place.  1..99 is exactly the range
     // emit_num gets right, so 49x11 in a 100-column window fills it and a

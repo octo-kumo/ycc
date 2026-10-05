@@ -51,9 +51,9 @@
 // results are in the README.
 
 import fx;
-import fb;
 import sink;
 import scene;
+import tui;
 
 // ─────────────────────────────────────────────────────────── the plumbing ──
 
@@ -1033,7 +1033,7 @@ def block_i() -> void {
 
 // ─────────────────────────────────── J: the capture checksum is sensitive ───
 //
-// fb.y's capture is the byte stream the framebuffer emitted, so its checksum is
+// tui's capture is the byte stream the framebuffer emitted, so its checksum is
 // a compact golden: it catches a single changed byte, which a human reading a
 // picture does not.  Two properties, and the second is the one that is usually
 // missing:
@@ -1050,20 +1050,20 @@ const PERT_MASK: long = 4210752;    // 0x404040: every channel, changed
 
 // paint(s) -- put every sample's colour into one cell, so the surface IS the
 // frame and any change to any sample has to reach the byte stream.  Without this
-// the surface is whatever fb.new left in it -- blank -- and the checksum is a
+// the surface is whatever tui.new left in it -- blank -- and the checksum is a
 // checksum of a blank: one that moves when nothing does and holds still when
 // something does.  That was the first version of this block, and it reported
 // three IDENTICAL checksums for the frame, the perturbed frame and the frame
 // again -- three passing assertions over an empty comparison, which is the exact
 // failure this file exists to rule out.
-def paint(s: fb.Surface) -> void {
+def paint(s: tui.Surface) -> void {
     let gw = scene.grid_w();
     let gh = scene.grid_h();
     let r = 0;
     while (r < gh) {
         let c = 0;
         while (c < gw) {
-            fb.put(s, r, c, 32, scene.scol(r * gw + c), fb.DEFAULT);
+            tui.put(s, r, c, 32, scene.scol(r * gw + c), tui.DEFAULT);
             c = c + 1;
         };
         r = r + 1;
@@ -1075,23 +1075,23 @@ def block_j() -> void {
     say("");
     say("J  the capture checksum moves when one pixel moves, and only then");
     let devnull = syscall(257, 0 - 100, "/dev/null", 1, 0, 0, 0);
-    if (devnull >= 0) { fb.set_fd(devnull); };
-    fb.capture_on();
+    if (devnull >= 0) { tui.set_fd(devnull); };
+    tui.capture_on();
     scene.set_target(0, 0 - 6554, 0 - 26214);
     scene.set_camera(0, 13107, 7 * Q);
     scene.set_bounces(3);
     scene.grid_setup(48, 20, 1, 1);
     let n = scene.rays();
-    let srf = fb.new(20, 48);
+    let srf = tui.new(20, 48);
     let cell = n / 2;
 
     scene.clear_perturb();
     scene.render(0, 0);
-    fb.capture_reset();
+    tui.capture_reset();
     paint(srf);
-    fb.flush(srf);
-    let len0 = fb.capture_len();
-    let ck0 = fb.capture_checksum();
+    tui.flush(srf);
+    let len0 = tui.capture_len();
+    let ck0 = tui.capture_checksum();
     sink.out_str("     plain frame:   ");
     num(len0);
     sink.out_str(" bytes captured, checksum ");
@@ -1100,11 +1100,11 @@ def block_j() -> void {
 
     scene.perturb(cell, PERT_MASK);
     scene.render(0, 0);
-    fb.capture_reset();
+    tui.capture_reset();
     paint(srf);
-    fb.flush(srf);
-    let len1 = fb.capture_len();
-    let ck1 = fb.capture_checksum();
+    tui.flush(srf);
+    let len1 = tui.capture_len();
+    let ck1 = tui.capture_checksum();
     sink.out_str("     pixel ");
     num(cell);
     sink.out_str(" flipped: ");
@@ -1115,11 +1115,11 @@ def block_j() -> void {
 
     scene.clear_perturb();
     scene.render(0, 0);
-    fb.capture_reset();
+    tui.capture_reset();
     paint(srf);
-    fb.flush(srf);
-    let len2 = fb.capture_len();
-    let ck2 = fb.capture_checksum();
+    tui.flush(srf);
+    let len2 = tui.capture_len();
+    let ck2 = tui.capture_checksum();
     sink.out_str("     back again:    ");
     num(len2);
     sink.out_str(" bytes captured, checksum ");
@@ -1142,11 +1142,11 @@ def block_j() -> void {
     // is deterministic, so a golden built on it means something.
     scene.perturb(cell, PERT_MASK);
     scene.render(0, 0);
-    fb.capture_reset();
+    tui.capture_reset();
     paint(srf);
-    fb.flush(srf);
-    ok(fb.capture_checksum() == ck1);
-    ok(fb.capture_len() == len1);
+    tui.flush(srf);
+    ok(tui.capture_checksum() == ck1);
+    ok(tui.capture_len() == len1);
     scene.clear_perturb();
     // And the perturbed SAMPLE's colour really is different, read back out of
     // the store rather than out of the capture: the checksum could in principle
@@ -1165,7 +1165,7 @@ def block_j() -> void {
     sink.out_hex16(pcol);
     sink.out_str(" perturbed\n");
     ok(pcol != ccol);
-    fb.capture_off();
+    tui.capture_off();
 };
 
 // ─────────────────────────────────────────────────────── the entry point ───

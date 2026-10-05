@@ -1,3 +1,4 @@
+import tui;
 // textout.y -- the deterministic text sink behind --no-tty.
 //
 // Everything the program prints on the --no-tty path goes through this file,
@@ -8,7 +9,7 @@
 // WHY NOT puts() AND f-strings.  Both would be correct and both would allocate
 // on the frame path, and the acceptance gate for this example is `heap_used()`
 // unchanged across 10000 turns (ORCHESTRATOR.md 2.7).  A buffer of bytes plus
-// fb.utf8_byte is the only way to write a frame of Unicode glyphs without
+// tui.utf8_byte is the only way to write a frame of Unicode glyphs without
 // touching the heap.
 //
 // ZERO ALLOCATION.  `ob` is a module-level fixed [byte; 65536] and nothing here
@@ -16,7 +17,6 @@
 // surface's cells, the same function fb.capture_* uses, so a printed digest is a
 // checksum of what was actually drawn rather than a claim about it.
 
-import fb;
 
 const OB_CAP: long = 65536;
 const FNV_SEED: long = -3750763034362895579;   // 14695981039346656037, signed
@@ -120,10 +120,10 @@ def out_glyph(cp: long) -> void {
     let c = cp;
     if (c < 0) { c = 32 };
     if (c > 1114111) { c = 65533 };
-    let n = fb.utf8_len(c);
+    let n = tui.utf8_len(c);
     let i = 0;
     while (i < n) {
-        out_byte(fb.utf8_byte(c, i));
+        out_byte(tui.utf8_byte(c, i));
         i = i + 1;
     }
 };
@@ -139,7 +139,7 @@ def out_flush() -> void {
 // grid_digest(s) -> long -- FNV-1a over every cell's codepoint AND its
 // foreground colour, so a frame that changed colour but not shape is a
 // different digest.
-def grid_digest(s: fb.Surface) -> long {
+def grid_digest(s: tui.Surface) -> long {
     let h: long = FNV_SEED;
     let n = s.rows * s.cols;
     let i = 0;

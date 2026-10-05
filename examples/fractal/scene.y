@@ -53,7 +53,7 @@
 // precomputed once per resize rather than rebuilt per frame.
 
 import fx;
-import fb;
+import tui;
 
 // ───────────────────────────────────────────────────────────── the format ───
 //
@@ -420,7 +420,7 @@ def trace(rx: long, ry: long, rz: long, invl: long) -> void {
             add = add + (((sd - GLOW1) * GLOW1_MAX) / (65536 - GLOW1));
         };
         if (add > 0) {
-            sk = fb.rgb(fb.r_of(sk) + add, fb.g_of(sk) + add, fb.b_of(sk) + add);
+            sk = tui.rgb(tui.r_of(sk) + add, tui.g_of(sk) + add, tui.b_of(sk) + add);
         };
     };
     MSKY = sk;
@@ -529,7 +529,7 @@ def trace(rx: long, ry: long, rz: long, invl: long) -> void {
     let fog = (t * FOGK) >> 20;
     if (fog > 255) { fog = 255; };
     if (fog < 0) { fog = 0; };
-    MCOL = fb.lerp_rgb(fb.rgb(rr, gg, bb), sk, fog);
+    MCOL = tui.lerp_rgb(tui.rgb(rr, gg, bb), sk, fog);
     MLUM = (dif255 * amb) / 255
 };
 
@@ -600,9 +600,9 @@ def sky_set(k: long, zr: long, zg: long, zb: long,
             let d = 40 - dd;
             band = ((d * 8) - ((d * d) / 4));
         };
-        SKR[base + u] = fb.clamp255(hr + (((zr - hr) * t2) / 128) + ((band * 92) / 255));
-        SKG[base + u] = fb.clamp255(hg + (((zg - hg) * t2) / 128) + ((band * 78) / 255));
-        SKB[base + u] = fb.clamp255(hb + (((zb - hb) * t2) / 128) + ((band * 60) / 255));
+        SKR[base + u] = tui.clamp255(hr + (((zr - hr) * t2) / 128) + ((band * 92) / 255));
+        SKG[base + u] = tui.clamp255(hg + (((zg - hg) * t2) / 128) + ((band * 78) / 255));
+        SKB[base + u] = tui.clamp255(hb + (((zb - hb) * t2) / 128) + ((band * 60) / 255));
         u = u + 1;
     }
 };
@@ -611,14 +611,14 @@ def sky_set(k: long, zr: long, zg: long, zb: long,
 def ramp_rgb(k: long, r0: long, g0: long, b0: long,
              r1: long, g1: long, b1: long) -> void {
     let base = k * 256;
-    let lo = fb.rgb(r0, g0, b0);
-    let hi = fb.rgb(r1, g1, b1);
+    let lo = tui.rgb(r0, g0, b0);
+    let hi = tui.rgb(r1, g1, b1);
     let u = 0;
     while (u < 256) {
-        let c = fb.lerp_rgb(lo, hi, u);
-        PR[base + u] = fb.r_of(c);
-        PG[base + u] = fb.g_of(c);
-        PB[base + u] = fb.b_of(c);
+        let c = tui.lerp_rgb(lo, hi, u);
+        PR[base + u] = tui.r_of(c);
+        PG[base + u] = tui.g_of(c);
+        PB[base + u] = tui.b_of(c);
         u = u + 1;
     }
 };
@@ -636,7 +636,7 @@ def palette_init() -> void {
     // Every cosine ramp wants a + b <= 1, or the top of the sweep clips: cos255
     // clamps, so a ramp whose sum exceeds 1 just loses its brightest eighth.
     // The sky colours below are 8-BIT, unlike everything else in this file,
-    // because fb.clamp255 is an 8-bit clamp and handing it a Q16 colour turns
+    // because tui.clamp255 is an 8-bit clamp and handing it a Q16 colour turns
     // the whole sky white.
     // 0 ember: a warm, dark base sweeping maroon -> orange -> gold
     ramp_cos(0, 590558003, 483183821, 0,
