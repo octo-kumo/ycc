@@ -430,7 +430,8 @@ tls_case() {
 # 404) and a session (cookies, a default header, one kept connection,
 # Connection: close).
 HTTP_EXPECTED="200 OK 11 hello world
-200 chunked b'ab' cdefgh 0
+200 chunked b'ab' abcdefgh 8
+twice hello world b'hello world' 4 4
 200 true hello world
 200 POST posted body
 custom value
