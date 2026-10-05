@@ -193,6 +193,50 @@ def trim_end_star(s: str) -> str {
 // ── the pass ────────────────────────────────────────────────────────────
 
 // Index one file's source.
+// Is this span the single punctuation character `c`?
+//
+// Compared by BYTE, not by `src[s.off:s.end] == "("`. The slice allocates, and
+// in_params walks up to 80 spans back for every identifier it is asked about:
+// over src/y that is millions of one-character allocations, and nothing in this
+// program frees.
+def is_char(s: Span, src: str, c: byte) -> bool {
+    let out = false;
+    if (s.end - s.off == 1) {
+        if (byte_at(src, s.off) == c) { out = true; };
+    };
+    out
+}
+
+// The punctuations the walks below look for, as bytes. Written as numbers
+// because a c'(' literal reads as a character and these are compared as bytes,
+// and a reader should not have to work out which.
+const CH_COMMA = 44;
+const CH_LP = 40;
+const CH_RP = 41;
+const CH_LB = 91;
+const CH_RB = 93;
+const CH_LC = 123;
+const CH_RC = 125;
+const CH_SEMI = 59;
+
+// Could span `i` be a parameter NAME? One step back: a parameter is always
+// immediately after a `(` or a `,`.
+//
+// The guard is not an optimisation, it is what makes the pass finish. Called for
+// every identifier in a file, `in_params` is ~2.2M calls over src/y, and it is
+// the runtime's FRAMES that exhaust the heap (nothing here frees): with no
+// guard at all, `index_src` reported "out of memory" on parser.y having indexed
+// eight parameters. One step back rejects all but the identifiers that really
+// can be parameters, so `in_params` runs a few hundred times per file.
+def maybe_param(sps: [Span], src: str, i: long) -> bool {
+    let out = false;
+    if (i > 0) {
+        let p = sps[i - 1];
+        if (is_char(p, src, CH_LP) || is_char(p, src, CH_COMMA)) { out = true; };
+    };
+    out
+}
+
 def index_src(src: str, path: str) -> FileIdx {
     let d = pos.doc_of(src);
     let r = scan.scan_full(src);
@@ -207,6 +251,20 @@ def index_src(src: str, path: str) -> FileIdx {
     // the pending `def`, so its `}` can close it
     let open_def: [IdxDecl] = [];
 
+    // The parameters of the `def` being read, which have no scope yet.
+    //
+    // A parameter's scope is its function's BODY, and the body's `{` comes after
+    // the parameter list closes -- so when the parameter is recorded the brace
+    // stack is empty and there is nothing to record, and `scope_start` stays -1,
+    // which would make the parameter visible for the rest of the file.
+    //
+    // Resolving it in a second pass, one backward walk per parameter to find the
+    // list's `(` and then the brace after it, is ~5.4M calls over src/y and ran
+    // the heap out on types.y. So it is done here instead: collect the parameters
+    // as they are read, and the `{` that opens the body IS their scope. One
+    // assignment each, no walk.
+    let pending_params: [IdxDecl] = [];
+
     let i = 0;
     while (i < len(sps)) {
         let s = sps[i];
@@ -219,22 +277,31 @@ def index_src(src: str, path: str) -> FileIdx {
             // `let` inside a block looked as though it were declared after the
             // block's first line, and a use on the `{` line was judged to be
             // before the scope it is in.
-            let op = pos.to_lsp(src, s.line, s.col);
-            opens += pack(op.line, op.character);
+            let op = pos.doc_to_lsp(d, s.line, s.col);
+            let pk = pack(op.line, op.character);
+            opens += pk;
+            if (len(pending_params) > 0) {
+                let q = 0;
+                while (q < len(pending_params)) {
+                    pending_params[q].scope_start = pk;
+                    q = q + 1;
+                };
+                pending_params = [];
+            };
             i = i + 1;
         } else if (s.kind == scan.K_punct && src[s.off:s.end] == "}") {
             depth = depth - 1;
             if (len(opens) > 0) {
                 let started = opens[len(opens) - 1];
                 opens = opens[0:len(opens) - 1];
-                let cl = pos.to_lsp(src, s.line, s.col);
+                let cl = pos.doc_to_lsp(d, s.line, s.col);
                 closed += started;
                 closed += pack(cl.line, cl.character);
             };
             if (len(open_def) > 0) {
                 let fin = open_def[len(open_def) - 1];
                 open_def = open_def[0:len(open_def) - 1];
-                let e = pos.to_lsp(src, s.line, s.col);
+                let e = pos.doc_to_lsp(d, s.line, s.col);
                 fin.end_line = e.line;
                 fin.end_ch = e.character;
             }
@@ -242,6 +309,7 @@ def index_src(src: str, path: str) -> FileIdx {
         } else {
             let w = scan_word(src, s);
             if (w == "def") {
+                pending_params = [];
                 let dd = decl_after(sps, src, i, path, D_DEF, depth, opens, d);
                 if (is_some(dd)) {
                     let one = dd!;
@@ -279,12 +347,21 @@ def index_src(src: str, path: str) -> FileIdx {
             } else if (w == "def" || w == "fn") {
                 i = i + 1;
             } else {
-                // A parameter: an identifier inside a `def`'s parameter list.
-                // Found by looking BACKWARD from an identifier to the enclosing
-                // `(` that is still inside the def's own header, which is what
-                // distinguishes `def f(a: long)` from `a` used in the body.
-                if (s.kind == scan.K_ident && depth > 0 && in_params(sps, src, i)) {
-                    let p = pos.to_lsp(src, s.line, s.col);
+                // A parameter: an identifier inside a `def`'s parameter list,
+                // found by looking BACKWARD to the `(` of the def's own header --
+                // in_params checks for `def` and the name before it, which is
+                // what separates `def f(a: long)` from `a` in the body.
+                //
+                // NO `depth > 0`, and dropping it was worth 40% of every file. A
+                // parameter list opens BEFORE the body's `{`, so the brace depth
+                // at a parameter is the depth of the def's own surroundings --
+                // zero at the top level -- and the test threw away exactly the
+                // parameters it was after. Measured over src/y, the most frequent
+                // name the whole index could not resolve was `st`, 5,451 times,
+                // then `node`, `k`, `line`, `col`: every parameter use in the
+                // compiler.
+                if (s.kind == scan.K_ident && maybe_param(sps, src, i) && in_params(sps, src, i)) {
+                    let p = pos.doc_to_lsp(d, s.line, s.col);
                     let one: IdxDecl = {
                         name: src[s.off:s.end], kind: D_PARAM, file: path,
                         line: p.line, ch: p.character,
@@ -293,6 +370,7 @@ def index_src(src: str, path: str) -> FileIdx {
                         depth: depth, scope_start: -1, order: i
                     };
                     decls += one;
+                    pending_params += one;
                 }
                 i = i + 1;
             }
@@ -319,7 +397,7 @@ def decl_after(sps: [Span], src: str, i: long, path: str, kind: long, depth: lon
     let ni = i + 1;
     if (ni < len(sps) && sps[ni].kind == scan.K_ident) {
         let nm = src[sps[ni].off:sps[ni].end];
-        let a = pos.to_lsp(src, sps[ni].line, sps[ni].col);
+        let a = pos.doc_to_lsp(d, sps[ni].line, sps[ni].col);
         let scope = -1;
         if (len(opens) > 0) { scope = opens[len(opens) - 1]; }
         let det = "";
@@ -497,20 +575,18 @@ def in_params(sps: [Span], src: str, i: long) -> bool {
     let steps = 0;
     while (k >= 0 && steps < 80) {
         let s = sps[k];
-        if (s.kind == scan.K_punct) {
-            let t = src[s.off:s.end];
-            if (t == ")" || t == "]" || t == "}") { level = level + 1; }
-            else if (t == "(") {
-                if (level == 0) {
-                    out = def_params_at(sps, src, k);
-                    k = -1;
-                } else { level = level - 1; }
-            } else if (t == ";") {
+        if (is_char(s, src, CH_RP) || is_char(s, src, CH_RB) || is_char(s, src, CH_RC)) {
+            level = level + 1;
+        } else if (is_char(s, src, CH_LP)) {
+            if (level == 0) {
+                out = def_params_at(sps, src, k);
                 k = -1;
-            } else if (t == "[" || t == "{") {
-                if (level == 0) { k = -1; }
-            }
-        }
+            } else { level = level - 1; }
+        } else if (is_char(s, src, CH_SEMI)) {
+            k = -1;
+        } else if (is_char(s, src, CH_LB) || is_char(s, src, CH_LC)) {
+            if (level == 0) { k = -1; }
+        };
         k = k - 1;
         steps = steps + 1;
     }

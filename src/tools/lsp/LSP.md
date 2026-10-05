@@ -1011,7 +1011,7 @@ Each ends green on `make test`.
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
 | **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
 | **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over 487 files; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done, Stage B not started.** `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `client-check.js` drives all three through the JSON-RPC library VS Code uses (53/53). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), string methods and record fields after a `.`, and the semantic token legend's semantic classes. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `client-check.js` drives all three through the JSON-RPC library VS Code uses (53/53). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), string methods and record fields after a `.`, and the semantic token legend's semantic classes. |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
 ### 11.1 Two bugs the work found in the compiler
@@ -1031,6 +1031,61 @@ Both are in `BUGS.md` with reproductions; the second is the expensive one.
 
 The second one is why `check-names.py` exists, and why it checks names rather than
 just definitions.
+
+### 11.3 The Stage B decision, on the number
+
+"Is Stage A good enough, or does Stage B (the C2 compiler change) earn its
+keep?" is a question about a number, so there is now a program that answers it:
+`src/tools/lsp/test/scope-coverage.y`, run over `src/y`. It reports what share
+of the corpus's identifier tokens `nav.find_decl` resolves, and — the part the
+decision turns on — how many of the misses are names that ARE declared, in
+another file.
+
+**The first number it gave was 46%, and that turned out to be two bugs rather
+than a limit.**
+
+1. **Parameters were never recorded at all.** The parameter branch required
+   `depth > 0`, but a parameter list opens *before* the body's `{`, so the brace
+   depth at a parameter is the depth of the def's own surroundings — zero at the
+   top level. The test threw away exactly what it was looking for, and every use
+   of every parameter missed. Measured, the most frequent name the index could
+   not resolve was `st`, 5,451 times, then `node`, `k`, `line`, `col`: the
+   compiler's own parameters. A parameter's scope is its function's *body*, which
+   opens after the list, so the brace stack is empty when the parameter is read;
+   the `{` that opens the body is recorded for the pending parameters as it
+   arrives, in the same pass.
+2. **`pos.to_lsp` rebuilt the whole line index on every call**, and
+   `index_src` calls it once per declaration. `line_bytes_from` already existed
+   for precisely this trap (see its comment: 4.8 s per call on parser.y), one
+   layer too low to catch `to_lsp`. So indexing `src/y/native.y` rebuilt an
+   11,000-entry table 3,576 times: **2,604 MB**, which is out of memory against
+   the 3.5 GB cap, and so no definition, hover or completion on any file that
+   size. `doc_to_lsp` takes the caller's `SrcDoc`; `to_lsp` delegates to it.
+   **32.6 MB**, and `sym.y` (the outline) had the same three call sites.
+
+46% → **61%** of 80,949 identifier tokens, and the corpus now indexes in 232 MB
+instead of dying.
+
+**The decision: Stage B is worth doing, and now it is affordable.** Of the 832
+distinct names Stage A cannot resolve:
+
+| | count | |
+|---|---|---|
+| declared in another `src/y` file | **699 (84%)** | exactly what Stage B closes |
+| a primitive type name | 5 | neither stage declares it — they are built in |
+| declared nowhere in the corpus | 128 | not visible to a correct resolver either |
+
+Stage A reads one buffer, so a name from an import is invisible to it by
+construction. That 84% is the ceiling, and it is high enough that cross-file
+navigation is the difference between a toy and a usable server — every program
+in this tree imports something.
+
+The order matters, and the measurement is what set it: Stage B is a compiler
+change, so it is `src/y` + the `src/c` twin + `make check` + `make rebless`, and
+it is only worth that if the thing it fixes is measured. Fixing Stage A's two
+bugs first was free by comparison and moved 15 points; Stage B is what remains,
+and it should be measured with `bench/compile_ir.sh` before the rebless, because
+`rename_program_x2` runs over the whole program on every compile.
 
 ### 11.2 Four bugs M4 found in the server
 

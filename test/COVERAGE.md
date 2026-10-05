@@ -187,6 +187,12 @@ reason.
 | 10-errors | Language server | Byte columns to UTF-16 characters both ways, with a 4-byte emoji on the line; a character position that names nothing is correctly not invertible | `lsp/test/t008_pos.y` |
 | 10-errors | Language server | The JSON-RPC surface: a request gets its id echoed, a notification gets no reply (unknown ones included), `initialize` is required first, the standard error codes, and formatting returns no edits for a buffer that does not lex or is already formatted | `lsp/test/t009_proto.y` |
 | 10-errors | Language server | The server as a process: framing never desyncs, the document store survives between messages, and an unterminated literal, a missing import or a 4000-line file does not kill it | `sh/test_lsp.sh`, `lsp/test/test-e2e.sh` (by hand: it needs a process) |
+| 10-errors | Language server | Semantic tokens: the delta encoding an editor receives decodes back to the absolute token list exactly (R2.4), over every `.y` file in the tree | `lsp/test/t010_sem.y` |
+| 10-errors | Language server | The outline: every `.y` file in the tree yields symbols, hierarchically, with `selectionRange` on the name | `lsp/test/t011_sym.y` |
+| 10-errors | Language server | Which declaration a name resolves to, and which names are visible where: a `let` is not visible before its own line, a `def` is, the innermost visible declaration wins, and at one depth the later wins | `lsp/test/t012_scope.y` |
+| 10-errors | Language server | Hover, go-to-definition and completion as the protocol shapes them: a location on the name, `null` where there is nothing, markdown contents, and `isIncomplete` | `lsp/test/t013_m4.y` |
+| 10-errors | Language server | The formatter is idempotent over the whole tree, and leaves `src/y/` alone as far as it can | `lsp/test/test-fmt.sh` |
+| 10-errors | Language server | The same server driven by the JSON-RPC library VS Code itself uses, and the extension activating and reaching Running against a real process | `lsp/test/test-e2e.sh` (by hand: it needs a process) |
 
 ## Untested diagnostics
 
