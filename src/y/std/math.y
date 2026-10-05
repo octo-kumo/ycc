@@ -1273,6 +1273,51 @@ def log1p(x: float) -> float {
 
 // ── asin, acos, atan2 ──────────────────────────────────────────────────────
 
+// 2*asin(sqrt((1-a)/2)) for 0.5 < a < 1, in TWO parts: the answer is
+// asin_half_hi and everything below it is asin_half_lo. It has to be two parts
+// because asin subtracts this from pi/2, and the subtraction's own rounding
+// would swallow the low half -- which is most of what makes asin an ulp
+// accurate rather than two.
+//
+// acos wants the same quantity and gets it whole, which is the whole reason it
+// is here rather than left inside asin: acos cannot go the other way round.
+// pi/2 - asin(x) cancels, because near x = 1 the answer is 3e-8 against a pi/2
+// and eight digits are gone before the answer is formed. acos(1 - 4e-17) came
+// out FORTY ulps out that way, and the reference table is what found it -- with
+// only eight arguments of its own inside [-1, 1] it had taken densifying the
+// spread to say so.
+let asin_half_hi: float = 0.0;
+let asin_half_lo: float = 0.0;
+
+def asin_half(a: float) -> float {
+    // 0.5 < a < 1 here, so z is in (0, 1/4] and s = sqrt(z) is never 0. `1 - a`
+    // is exact -- Sterbenz -- and halving is exact, so z is exact however close
+    // a is to 1: nothing is lost that a cleverer argument for the square root
+    // would have kept.
+    let z = (1.0 - a) * 0.5;
+    if (z == 0.0) {
+        // a == 1.0: the answer is 0, and the square root's residual below would
+        // be 0/0. asin never arrives here (it answers +-1 before this), but acos
+        // does -- acos(1.0) is 0, and it used to come back NaN.
+        asin_half_lo = 0.0;
+        asin_half_hi = 0.0;
+        0.0
+    } else {
+        let s = sqrt(z);
+        let p = poly_split(asin_k, asin_kl, z);
+        // two = 2*asin(s) = 2s + (2s)*z*P(z). The kernel is exact enough that
+        // the only rounding left in it is the one two_sum holds.
+        let hi = two_sum(2.0 * s, (2.0 * s) * z * p);
+        // The square root's own half-ulp, which (z - s*s)/(2s) is exactly: z -
+        // s*s is exact by Sterbenz again, and the first-order form is wrong by a
+        // relative 5e-17 of a number that is itself a fraction of an ulp -- so
+        // this is the sqrt put back, not an estimate of it.
+        asin_half_lo = ts_lo + 2.0 * ((z - s * s) / (2.0 * s)) * (1.0 + z * p);
+        asin_half_hi = hi;
+        hi
+    }
+};
+
 // asin(x) for |x| <= 0.5, as atan(x/sqrt(1-x*x)). The half-angle step below
 // handles the rest, and this range is where the division is well behaved.
 def asin_small(x: float) -> float {
@@ -1298,26 +1343,8 @@ def asin(x: float) -> float {
         let r = if (a <= 0.5) {
             asin_small(a)
         } else {
-            // 0.5 < a < 1 here, so z is in (0, 1/4] and s = sqrt(z) is never 0.
-            // `1 - a` is exact -- Sterbenz -- and halving is exact, so z is
-            // exact however close a is to 1: nothing is lost that a cleverer
-            // argument for the square root would have kept.
-            let z = (1.0 - a) * 0.5;
-            let s = sqrt(z);
-            let p = poly_split(asin_k, asin_kl, z);
-            // two = 2*asin(s) = 2s + (2s)*z*P(z), and it is kept in TWO parts.
-            // The kernel is exact enough that the only rounding left in it is
-            // the one two_sum holds, and holding it is the whole trick: `two`
-            // used to have to be a double before pi/2 - two could happen, and
-            // its half-ulp is a whole ulp of the answer. That one rounding was
-            // the two ulps.
-            let two_hi = two_sum(2.0 * s, (2.0 * s) * z * p);
-            let two_lo = ts_lo;
-            // The square root's own half-ulp, which (z - s*s)/(2s) is exactly:
-            // z - s*s is exact by Sterbenz again, and the first-order form is
-            // wrong by a relative 5e-17 of a number that is itself a fraction
-            // of an ulp -- so this is the sqrt put back, not an estimate of it.
-            two_lo = two_lo + 2.0 * ((z - s * s) / (2.0 * s)) * (1.0 + z * p);
+            let two_hi = asin_half(a);
+            let two_lo = asin_half_lo;
             // pi/2 - two, with `two` still in two parts: the two_sum answers
             // pi/2 - two_hi exactly, and both corrections are then subtracted
             // from the RESULT, which is where a few 1e-17s do not cancel
@@ -1335,9 +1362,37 @@ def acos(x: float) -> float {
     if (x != x || x > 1.0 || x < -1.0) {
         nan
     } else {
-        let a = asin(x);
-        let d = pi_over_2 - a;
-        d + ((pi_over_2 - d) - a)
+        let neg = x < 0.0;
+        let a = if (neg) { 0.0 - x } else { x };
+        let r = if (a > 0.5) {
+            // acos(a) = 2*asin(sqrt((1-a)/2)), which is the half-angle quantity
+            // asin_half already computes -- taken whole, and formed directly.
+            // NOT pi/2 - asin(a): near a = 1 that answer is 3e-8 against a
+            // pi/2, so eight digits cancel and acos(1 - 4e-17) lands forty ulps
+            // out. One addition of the two parts, which are of very different
+            // sizes, so the rounding is the answer's own half-ulp.
+            //
+            // `hi` is bound before the cell is read: asin_half fills that cell
+            // as a side effect, and reading it inside the same expression would
+            // leave the order the two operands are evaluated in deciding the
+            // answer. Fifteen of the 2076 cases were that, before the binding.
+            let hi = asin_half(a);
+            hi + asin_half_lo
+        } else {
+            // Below the half there is nothing to cancel: the answer is between
+            // pi/3 and pi/2, and asin(a) is small, so the subtraction is
+            // corrected the same way asin's own is.
+            let s = asin_small(a);
+            let d = pi_over_2 - s;
+            d + ((pi_over_2 - d) - s)
+        };
+        // acos(-x) = pi - acos(x), and THAT is not a cancellation either way:
+        // the answer is in [pi/2, pi] whether r is 3e-8 or pi/2, so the
+        // subtraction costs its own half-ulp and nothing else. (Getting here
+        // wrong is cheap to do and the table catches it immediately: 130 of the
+        // 2076 cases were this one missing sign, answering acos(-0.461) with
+        // the value for +0.461.)
+        if (neg) { pi - r } else { r }
     }
 };
 

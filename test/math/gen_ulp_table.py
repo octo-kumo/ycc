@@ -398,6 +398,22 @@ EXTRA = {name: spread(1000 + i, 60) for i, name in enumerate(
 # native fixture found (7.5) was 1e-12 out and the pinned list missed it
 EXTRA["cbrt"] = spread(4242, 80, 1.0, 8.0)
 
+# asin and acos get a spread over the domain they HAVE, on top of the general
+# one (which is what supplies their out-of-domain NaN cases and must stay). A
+# uniform value in [-8, 8] lands inside [-1, 1] about one time in eight, so the
+# general spread left each of them with EIGHT interior arguments -- and 59 of
+# each function's 77 cases were the |x| == 1 edge, which returns pi/2 before the
+# half-angle step does any work at all. That is eight cases gating a 24-term
+# polynomial: the sweep that chose the degree ran over 20,001 points and said 1
+# ulp, and the checked-in gate that has to agree with it said nothing.
+#
+# Half of [-1, 1] is the branch asin's kernel actually computes (|x| > 1/2 goes
+# through it, |x| <= 1/2 through atan), so 240 cases put about 120 of them on
+# the kernel and 120 on the branch beside it -- which is the first time both
+# sides of that boundary are checked by anything but the pinned list.
+EXTRA["asin"] = spread(1007, 60) + spread(1101, 240, -1.0, 1.0)
+EXTRA["acos"] = spread(1008, 60) + spread(1102, 240, -1.0, 1.0)
+
 
 def main():
     out = []
