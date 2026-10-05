@@ -32,6 +32,8 @@ import tags from "./tags.y";
 import arch from "./arch_x64.y";
 // For its aliases AsmLabel and AsmNum.
 import asm from "./asm.y";
+import insn from "./ir.y";
+import labels from "./labels.y";
 import types from "./types.y";
 import rename from "./rename.y";
 import lexer from "./lexer.y";
@@ -1597,86 +1599,6 @@ def strip_decl(node: Decl, imports: [str]) -> Node {
     }
 };
 
-// ── label identities ────────────────────────────────────────────────────
-// A label is a long: an index into `lbl_names`, the one place a label's name
-// exists. `lbl_new` mints one, `lname` reads the name back for the places that
-// still want text -- the emitted line (asm.y still lexes it), -S, -g's symbol
-// table, the pack and a diagnostic.
-//
-// Why it is an integer (OPTIMIZE.md Part 4 stage 1): a label's identity is
-// compared, not spelled. `e.label == st.self_label` decides whether a call is
-// a self-call, `namemap` decides whether a body is reachable, and the
-// assembler's labmap resolves every fixup -- all of that wants a number, and
-// today it pays for a string compare (or, once the emitter holds an operand
-// IR, for a name built at every use). With the name built once per site
-// instead, minting a label is an append to one array.
-//
-// One id per NAME, not per mint: the assembler resolves a label by name, so
-// two labels called `yfn_3_via_return$2` are one label, and every comparison
-// of two ids has to say so. A def's id is minted once -- compile_unit, where it
-// binds the def's env entry -- and handed to the hoisted table and to the body
-// (emit_one_fn); a plain counter would give those two a different number for
-// the same name, and is_self_call, which compares a callee's id with the
-// body's, would call a self-call an ordinary call: the tail call quietly
-// becomes a call and the frame grows per level.
-//
-// The table is per process and never reset: a name's id only has to agree with
-// itself, and a unit compiled from the pack has names, not ids (see Unit).
-let lbl_names: [str] = [];
-let lbl_ix: [AsmLabel] = [];
-let lbl_next = 0;
-
-// Re-index every name at twice the old size. labmap_put does not grow (a full
-// table drops entries), so the caller refills before it is half full. It
-// starts at 64, not at a size that fits the compiler: labmap_new builds one
-// record per slot, so a table sized for ycc.y costs every small compile
-// 1,024 of them (measured: +1.5% of a hello.y compile, half the cost of
-// this step).
-def lbl_reindex(cap: long) {
-    let m = asm.labmap_new(cap);
-    let i = 0;
-    while (i < len(lbl_names)) {
-        let r = asm.labmap_put(m, lbl_names[i], 1, i);
-        m = r.map;
-        i = i + 1;
-    };
-    lbl_ix = m
-};
-
-def lbl_new(name: str) -> long {
-    if (len(lbl_ix) == 0) { lbl_reindex(64); }
-    else { if (4 * (lbl_next + 1) > 3 * len(lbl_ix)) { lbl_reindex(4 * len(lbl_ix) + 64); }; };
-    let g = asm.labmap_get(lbl_ix, name);
-    if (g.sec >= 0) {
-        g.off
-    } else {
-        let r = asm.labmap_put(lbl_ix, name, 1, lbl_next);
-        lbl_ix = r.map;
-        let id = lbl_next;
-        lbl_names += name;
-        lbl_next = lbl_next + 1;
-        id
-    }
-};
-
-// A label no one else can name: a local (`yL_<fuid>_<n>`, and the fuid is
-// unique per body), which is 20,052 of the 26,000 labels a self-compile
-// mints. It needs no interning -- the name is built once and never asked for
-// again -- so it skips the table (measured: interning every label costs
-// +1.9% of a compile; skipping the locals' share of it is most of that).
-def lbl_fresh(name: str) -> long {
-    let id = lbl_next;
-    lbl_names += name;
-    lbl_next = lbl_next + 1;
-    id
-};
-
-// The name of label `id`; "" for -1, which is what a slot with no label (a
-// local, a mark) carries.
-def lname(id: long) -> str {
-    if (id < 0) { "" } else { lbl_names[id] }
-};
-
 // ── emit state ─────────────────────────────────────────────────────────
 // st: an EmitSt. env: FLAT list of Slots — names are unique
 // post-rename, so no scopes or shadowing. kind: "local"|"param" (frame
@@ -1694,27 +1616,50 @@ type EmitFunc = Func | EmitMain;
 // `blabels` is parallel to `bodies`: the name each body's text opens with,
 // which the linker shakes by (Unit.labels). The emitter knows both -- it wrote
 // them -- so no scan of the text is needed to recover them.
-type EmitSt = { out: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: long, end_label: long, fns: FnTab, bodies: [str], blabels: [str] };
+type EmitSt = { ir: [long], txt: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: long, end_label: long, fns: FnTab, bodies: [str], blabels: [str] };
 // The state after making a label (next_loc, ty_desc), and the label's id.
 type StLbl = { st: EmitSt, label: long };
 
 def st_new() -> EmitSt {
-    { out: [], rodata: [], uid: 1, fuid: 0, loc: 1, env: [],
+    { ir: [], txt: [], rodata: [], uid: 1, fuid: 0, loc: 1, env: [],
       slots: 0, self_label: -1, end_label: -1, fns: fntab_of([], []), bodies: [],
       blabels: [] }
 };
 
-def emit(st: EmitSt, line: str) -> EmitSt {
-    st.out += line;
-    { out: st.out, rodata: st.rodata, uid: st.uid,
+// The state with its IR buffer (and, where it changes, its raw lines)
+// replaced: every append to a body goes through one of these, the way every
+// append to `out` went through emit.
+def st_with(st: EmitSt, b: [long], txt: [str]) -> EmitSt {
+    { ir: b, txt: txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels }
 };
 
+def st_ir(st: EmitSt, b: [long]) -> EmitSt {
+    st_with(st, b, st.txt)
+};
+
+// One instruction: form `f` and its seven field words (see ir.y). The shapes
+// are written out at the call sites, so a site reads as the instruction it
+// emits -- `emit_insn(st, insn.F_MOV_0_R, insn.R_RBP, -1, 1, -24, -1, insn.R_RAX, 64)`
+// is `mov -24(%rbp), %rax`.
+def emit_insn(st: EmitSt, f: long, a: long, b: long, c: long, d: long, e: long, g: long, h: long) -> EmitSt {
+    st_ir(st, insn.ir_push(st.ir, f, a, b, c, d, e, g, h))
+};
+
+// A line the emitter still spells as text: a comment, or an instruction not
+// yet moved to the IR. It becomes an IR_TEXT item, so the body is one ordered
+// stream either way and ir_render_all puts the text back where it was.
+def emit(st: EmitSt, line: str) -> EmitSt {
+    let txt = st.txt;
+    txt += line;
+    st_with(st, insn.ir_push(st.ir, insn.IR_TEXT, len(txt) - 1, 0, 0, 0, 0, 0, 0), txt)
+};
+
 def next_uid(st: EmitSt) -> { st: EmitSt, uid: long } {
     let u = st.uid;
-    st = { out: st.out, rodata: st.rodata, uid: st.uid + 1,
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid + 1,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -1724,7 +1669,7 @@ def next_uid(st: EmitSt) -> { st: EmitSt, uid: long } {
 def next_loc(st: EmitSt) -> StLbl {
     let n = st.loc;
     let id = lbl_fresh(arch.arch_loc_label(st.fuid, n));
-    st = { out: st.out, rodata: st.rodata, uid: st.uid,
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc + 1, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -1926,7 +1871,7 @@ def env_define(st: EmitSt, name: str, kind: str, off: long, label: long, mark: s
     st.env += { name: name, kind: kind, off: off, label: label, mark: mark, typ: typ };
     env_index_add(env);
     let env = st.env;
-    { out: st.out, rodata: st.rodata, uid: st.uid,
+    { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels }
@@ -3123,7 +3068,7 @@ def gen_str_const(st: EmitSt, s: str) -> EmitSt {
     rod0 += esc_asm(s);
     st.rodata += [rod0];
     let rod = st.rodata;
-    st = { out: st.out, rodata: rod, uid: st.uid,
+    st = { ir: st.ir, txt: st.txt, rodata: rod, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -3243,7 +3188,7 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
         st = emit(st, "    mov %rdx, (%rax)");
         let boff = (st.slots + 1) * -8;
         st = emit(st, "    mov %rax, " + tostring(boff) + "(%rbp)");
-        let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
+        let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
           bodies: st.bodies, blabels: st.blabels };
@@ -3468,7 +3413,7 @@ def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
     let off = (st.slots + 1) * -8;
     st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
     st = emit(st, "    mov $0, " + tostring(off - 8) + "(%rbp)");
-    let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
+    let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -5455,7 +5400,7 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     // Slot layout: [var][limit]; the limit is evaluated once.
     let voff = (st.slots + 1) * -8;
     let loff = (st.slots + 2) * -8;
-    st = { out: st.out, rodata: st.rodata, uid: st.uid,
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -5498,7 +5443,7 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let voff = (st.slots + 1) * -8;
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
-    st = { out: st.out, rodata: st.rodata, uid: st.uid,
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -5590,7 +5535,7 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
         let off = (st.slots + 1) * -8;
         st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
         offs += off;
-        st = { out: st.out, rodata: st.rodata, uid: st.uid,
+        st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
           bodies: st.bodies, blabels: st.blabels };
@@ -5727,24 +5672,39 @@ def is_void_node(n: Node) -> bool {
 // The marker for line `ln` of the spliced program: its origin file's
 // `.file` number (the index + 1) and its line there, counted on past the
 // end of the map like origin_at. Line 0 is DWARF's "no source line".
-def loc_dir(ln: long) -> str {
+def loc_pos(ln: long) -> { file: long, line: long } {
     let f = dbg_file;
     let l = dbg_line;
     let n = len(f);
     if (ln < 1 || n == 0) {
-        ".loc 1 " + tostring(ln)
+        { file: 1, line: ln }
     } else {
         let k = ln;
         if (k > n) { k = n; }
-        ".loc " + tostring(f[k - 1] + 1) + " " + tostring(l[k - 1] + ln - k)
+        { file: f[k - 1] + 1, line: l[k - 1] + ln - k }
     }
+};
+
+// The marker as an IR item: the line table reads (file, line) as fields, not
+// out of the text (link_locs renumbered a `.loc` per body by splitting the
+// string; that goes with stage 2b).
+def emit_loc(st: EmitSt, ln: long) -> EmitSt {
+    let p = loc_pos(ln);
+    emit_insn(st, insn.IR_LOC, p.file, p.line, 0, 0, 0, 0, 0)
+};
+
+// The marker as an IR item appended to a buffer (the body assembled around the
+// function's own items, in emit_one_fn).
+def ir_loc(body: [long], ln: long) -> [long] {
+    let p = loc_pos(ln);
+    insn.ir_push(body, insn.IR_LOC, p.file, p.line, 0, 0, 0, 0, 0)
 };
 
 // A statement's marker, before its code. A bare `;` has no position (and
 // no code).
 def gen_loc_stmt(st: EmitSt, node: Node) -> EmitSt {
     if (dbg_lines) {
-        if (is_void_node(node)) { st } else { emit(st, loc_dir(node.line)) }
+        if (is_void_node(node)) { st } else { emit_loc(st, node.line) }
     } else {
         st
     }
@@ -5755,7 +5715,7 @@ def gen_loc_stmt(st: EmitSt, node: Node) -> EmitSt {
 def gen_loc_elif(st: EmitSt, els: Node) -> EmitSt {
     if (dbg_lines) {
         let k: long = els.k;
-        if (k == K.kw_if) { emit(st, loc_dir(els.line)) } else { st }
+        if (k == K.kw_if) { emit_loc(st, els.line) } else { st }
     } else {
         st
     }
@@ -5764,7 +5724,7 @@ def gen_loc_elif(st: EmitSt, els: Node) -> EmitSt {
 // A loop's back edge (its step, the counter's increment, the jump to the
 // test) belongs to the loop's own line, not to the body's last one.
 def gen_loc_loop(st: EmitSt, node: Node) -> EmitSt {
-    if (dbg_lines) { emit(st, loc_dir(node.line)) } else { st }
+    if (dbg_lines) { emit_loc(st, node.line) } else { st }
 };
 
 // The `.file N "path"` table the markers number into: one per origin
@@ -6476,7 +6436,7 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
     st = gen_make_closure(st, lbl, caps);
     let coff = (st.slots + 1) * -8;
     st = emit(st, "    mov %rax, " + tostring(coff) + "(%rbp)");
-    let st3 = { out: st.out, rodata: st.rodata, uid: st.uid,
+    let st3 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -6580,7 +6540,7 @@ def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
     } else {
         let off = (st.slots + 1) * -8;
         st = emit(st, "    mov %rax, " + tostring(off) + "(%rbp)");
-        let st2 = { out: st.out, rodata: st.rodata, uid: st.uid,
+        let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
           bodies: st.bodies, blabels: st.blabels };
@@ -7929,7 +7889,7 @@ def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
     let koff = (st.slots + 4) * -8;
-    st = { out: st.out, rodata: st.rodata, uid: st.uid,
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 4,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -7996,7 +7956,7 @@ def gen_arr_tostr_rax(st: EmitSt, elty: Type, path: [Type]) -> EmitSt {
     let soff = (st.slots + 1) * -8;
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
-    st = { out: st.out, rodata: st.rodata, uid: st.uid,
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -8684,7 +8644,7 @@ def gen_join_conv(st: EmitSt, node: Call, tostr_fn: str, esz: long) -> EmitSt {
     let soff = (st.slots + 1) * -8;
     let doff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
-    st = { out: st.out, rodata: st.rodata, uid: st.uid,
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: st.bodies, blabels: st.blabels };
@@ -8921,7 +8881,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // fresh per-function state; uid/rodata/fns flow through and back.
     // Bodies see every hoisted function and global through st.fns
     // (env_find), like the checker's fresh_func_scope.
-    let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
+    let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0,
       self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
       fns: st.fns, bodies: st.bodies, blabels: st.blabels };
@@ -9012,11 +8972,14 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     };
     f = gen_tail(f, func.body);
     let frame = arch.arch_frame(f.slots);
-    let code: [str] = [];
-    code += lname(label) + ":";
+    // The body is one IR stream: the prologue, what the body emitted, the
+    // epilogue (see ir.y). The text the linker and -S read is rendered from
+    // it, so nothing here is spelled twice.
+    let body: [long] = [];
+    body = insn.ir_push(body, insn.IR_LABEL, label, 0, 0, 0, 0, 0, 0);
     // -g: the prologue is the def's line; `_start` has none (line 0)
     if (dbg_lines) {
-        if (is_main) { code += loc_dir(0); } else { code += loc_dir(func.line); };
+        if (is_main) { body = ir_loc(body, 0); } else { body = ir_loc(body, func.line); };
     }
     if (is_main) {
         if (want_argv) {
@@ -9027,36 +8990,31 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
             // when the program never calls argv() (saves ~14s of startup:
             // y_cstr_to_str walks every byte of every arg).
             // NOTE: no bare (%rsp)/(%r12) — the encoder rejects rsp/r12 bases.
-            code += "    mov %rsp, %rax";
-            code += "    mov (%rax), %r15";
-            code += "    mov %rax, %r14";
-            code += "    add $8, %r14";
-            code += "    push %r14";
-            code += "    push %r15";
-            code += "    call y_argv_init";
-            code += "    add $16, %rsp";
+            body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RSP, 64, insn.R_RAX, 64, 0, 0, 0);
+            body = insn.ir_push(body, insn.F_MOV_0_R, insn.R_RAX, -1, 1, 0, -1, insn.R_R15, 64);
+            body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_R14, 64, 0, 0, 0);
+            body = insn.ir_push(body, insn.F_ADD_I_R, 8, insn.R_R14, 64, 0, 0, 0, 0);
+            body = insn.ir_push(body, insn.F_PUSH_R, insn.R_R14, 64, 0, 0, 0, 0, 0);
+            body = insn.ir_push(body, insn.F_PUSH_R, insn.R_R15, 64, 0, 0, 0, 0, 0);
+            body = insn.ir_push(body, insn.F_CALL_L, lbl_new("y_argv_init"), 0, 0, 0, 0, 0, 0);
+            body = insn.ir_push(body, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
         }
     }
-    code += "    push %rbp";
-    code += "    mov %rsp, %rbp";
+    body = insn.ir_push(body, insn.F_PUSH_R, insn.R_RBP, 64, 0, 0, 0, 0, 0);
+    body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RSP, 64, insn.R_RBP, 64, 0, 0, 0);
     if (frame > 0) {
-        code += "    sub $" + tostring(frame) + ", %rsp";
+        body = insn.ir_push(body, insn.F_SUB_I_R, frame, insn.R_RSP, 64, 0, 0, 0, 0);
     }
-    let fout: [str] = f.out;
-    let j = 0;
-    while (j < len(fout)) {
-        code += fout[j];
-        j = j + 1;
-    };
-    code += lname(f.end_label) + ":";
+    body = body + f.ir;
+    body = insn.ir_push(body, insn.IR_LABEL, f.end_label, 0, 0, 0, 0, 0, 0);
     if (is_main) {
-        code += "    mov $231, %rax";
-        code += "    xor %edi, %edi";
-        code += "    syscall";
+        body = insn.ir_push(body, insn.F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_RDI, 32, insn.R_RDI, 32, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
     } else {
-        code += "    mov %rbp, %rsp";
-        code += "    pop %rbp";
-        code += "    ret";
+        body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RBP, 64, insn.R_RSP, 64, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_POP_R, insn.R_RBP, 64, 0, 0, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_RET, 0, 0, 0, 0, 0, 0, 0);
     };
     // NOTE: append to f.bodies, NOT st.bodies. Emitting this body can add
     // bodies of its own (a nested capturing def is emitted at its creation
@@ -9066,7 +9024,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // rebinds only f.bodies (see NATIVE.md "rebind: a = push(a, v)"), so the
     // two compilers disagreed and ycc emitted calls to labels it never
     // defined.
-    f.bodies += join(code, "\n");
+    f.bodies += insn.ir_render_all(body, f.txt);
     let bodies = f.bodies;
     // The body's own label, which the linker shakes by (Unit.labels): the
     // first line of the text, known here rather than scanned for (the old
@@ -9077,7 +9035,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // and the linker shook by the wrong ones.
     f.blabels += lname(label);
     let blabels = f.blabels;
-    { out: st.out, rodata: f.rodata, uid: f.uid,
+    { ir: st.ir, txt: st.txt, rodata: f.rodata, uid: f.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
       bodies: bodies, blabels: blabels }
@@ -9090,7 +9048,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
 // a scope holding every known def plus the params. The emitter needs one,
 // because a call's result type decides e.g. whether `+` must stringify.
 def infer_fn_ret(st: EmitSt, func: Func) -> Type {
-    let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
+    let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
       fuid: 0, loc: 1, env: [], slots: 0,
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
       blabels: st.blabels };
@@ -9270,7 +9228,7 @@ def decl_name(d: Decl) -> str {
 // the declaration). Labels count from the unit's `gbase` (compile_unit),
 // so two units' globals never share one.
 def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
-    let f: EmitSt = { out: [], rodata: st.rodata, uid: st.uid,
+    let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
       fuid: 0, loc: 1, env: [], slots: 0,
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
       blabels: st.blabels };
@@ -9705,7 +9663,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         // assign labels + env entries (also pre-binds for calls); the
         // unit's uids count from its base
         let st = st_new();
-        st = { out: st.out, rodata: st.rodata, uid: base + 1,
+        st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: base + 1,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
           bodies: st.bodies, blabels: st.blabels };
@@ -9737,7 +9695,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let ids0: [long] = [];
         ids0 += hids;
         ids0 += xids;
-        st = { out: st.out, rodata: st.rodata, uid: st.uid,
+        st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fns0, ids0), bodies: st.bodies, blabels: st.blabels };
@@ -9748,7 +9706,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let fns1: [Sym] = [];
         fns1 += fixed1;
         fns1 += xfns;
-        st = { out: st.out, rodata: st.rodata, uid: st.uid,
+        st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fns1, ids0), bodies: st.bodies, blabels: st.blabels };
@@ -9762,7 +9720,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         idsA += ids0;
         idsA += gids;
         if (len(gl) > 0) {
-            st = { out: st.out, rodata: st.rodata, uid: st.uid,
+            st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
               fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
               self_label: st.self_label, end_label: st.end_label,
               fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
@@ -9773,7 +9731,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             fixedfns += xfns;
             fixedfns += gl;
         }
-        st = { out: st.out, rodata: st.rodata, uid: st.uid,
+        st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
           fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
