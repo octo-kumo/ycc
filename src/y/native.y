@@ -1791,10 +1791,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
             } else if (is_ns(ov, pkg_ns)) {
                 normnode({ k: K.id, v: ov + "." + okey, line: oline, col: ocol })
             } else {
-                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
             }
         } else {
-            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
         }
     } else if (k == K.un) {
         let un: Un = node;
@@ -1869,10 +1869,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
                 // (the checker says so of the qualified name)
                 normnode({ k: K.assign, name: id.v + "." + assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
             } else {
-                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
             }
         } else {
-            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
         }
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
@@ -1893,9 +1893,9 @@ def strip_ns(node: Node, imports: [str]) -> Node {
 
 def strip_decl(node: Decl, imports: [str]) -> Node {
     if (node.kind == "def") {
-        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     } else {
-        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: strip_type(node.typ, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: strip_type(node.typ, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     }
 };
 
@@ -5460,10 +5460,10 @@ def gen_cat_conv(st: EmitSt, node: Bin, lt: Type) -> EmitSt {
     st = r.st;
     let t1 = "y_t" + tostring(r.uid);
     let noelems: [Node] = [];
-    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl };
-    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl };
+    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl, nline: ln, ncol: cl };
+    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl, nline: ln, ncol: cl };
     let arr_type: ArrTy = lt;
-    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl };
+    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl, nline: ln, ncol: cl };
     let pa: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "l", ln, cl), line: ln, col: cl };
     let pb: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "r", ln, cl), line: ln, col: cl };
     let panode: Node = pa;
@@ -7957,12 +7957,12 @@ def gen_incdec_desugar(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
     if (node.pre) {
         // ++x -> { bind; let v = x + 1; x = v; v }
         let nv: Bin = { k: K.bin, op: binop, l: place, r: one, line: ln, col: cl };
-        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl, nline: ln, ncol: cl };
         let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
     } else {
         // x++ -> { bind; let v = x; x = v + 1; v }
-        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl, nline: ln, ncol: cl };
         let nv: Bin = { k: K.bin, op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
         let asg: Node = gen_place_assign(tgt, nv, t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
@@ -8088,7 +8088,7 @@ def gen_opassign_desugar(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     let bind: Node = gen_place_bind(tgt, t1, ln, cl);
     let rd: Node = gen_place_read(tgt, t1, ln, cl);
     let bin: Bin = { k: K.bin, op: op, l: rd, r: node.v, line: ln, col: cl };
-    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
+    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl, nline: ln, ncol: cl };
     let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
     let rest: [Node] = [];
     rest += d2;
@@ -8129,7 +8129,7 @@ def place_read_idx(tgt: Index, t1: str, ln: long, cl: long) -> Index {
 };
 
 def place_read_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Dot {
-    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl }
+    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def gen_place_read(tgt: Node, t1: str, ln: long, cl: long) -> Node {
@@ -8157,7 +8157,7 @@ def place_asg_idx(tgt: Index, valnode: Node, t1: str, ln: long, cl: long) -> Idx
 };
 
 def place_asg_dot(tgt: Dot, valnode: Node, t1: str, ln: long, cl: long) -> DotAssign {
-    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl }
+    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl, nline: tgt.nline, ncol: tgt.ncol }
 };
 
 def gen_place_assign(tgt: Node, valnode: Node, t1: str, ln: long, cl: long) -> Node {
@@ -8181,14 +8181,14 @@ def place_bind_id(tgt: Leaf, t1: str, ln: long, cl: long) -> Block {
 };
 
 def place_bind_idx_id(tgt: Index, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def place_bind_idx_nest(tgt: Index, t1: str, ln: long, cl: long) -> Block {
     // nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
     // `t1 + "a"` as well, so the place evaluates it exactly once.
-    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl };
-    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl };
+    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl, nline: ln, ncol: cl };
+    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl };
     block2(tba, tib, ln, cl)
 };
 
@@ -8204,7 +8204,7 @@ def place_bind_idx(tgt: Index, t1: str, ln: long, cl: long) -> Node {
 };
 
 def place_bind_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 // The synthetic `let` that runs the target's index/base exactly once (a
@@ -8261,9 +8261,9 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
         // { let tv = v; let ti = 0; let tn = len(tv);
         //   while (ti < tn) { place += tv[ti]; ti = ti + 1 }
         //   place }
-        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl };
-        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl };
-        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl };
+        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl, nline: ln, ncol: cl };
+        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
+        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
         let elem: Index = { k: K.index, arr: n_id(t1 + "v", ln, cl), idx: n_id(t1 + "i", ln, cl), line: ln, col: cl };
         let put: Node = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
         let step: Assign = { k: K.assign, name: t1 + "i", v: { k: K.bin, op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
@@ -11804,7 +11804,7 @@ def n_bool(v: str, line: long, col: long) -> Leaf {
 };
 
 def n_dot(obj: Node, key: str, line: long, col: long) -> Dot {
-    { k: K.dot, obj: obj, key: key, line: line, col: col }
+    { k: K.dot, obj: obj, key: key, line: line, col: col, nline: line, ncol: col }
 };
 
 def n_idx(arr: Node, idx: Node, line: long, col: long) -> Index {
@@ -11828,7 +11828,7 @@ def n_while(c: Node, b: Node, ln: long, cl: long) -> While {
 };
 
 def n_decl(name: str, v: Node, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def n_assign(name: str, v: Node, ln: long, cl: long) -> Assign {
