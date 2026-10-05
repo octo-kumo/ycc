@@ -1,14 +1,29 @@
-embed DATA from "s40x30.bin";
+// badapple.y -- Bad Apple!! in your terminal, 160x60 cells (30 fps),
+// white on black: the C reference (bad_apple160x60.c) ported faithfully,
+// down to its exact-match glyph families, its flip SGRs and its braille
+// fallback.  The other 160x60 player, badapple160x60.y, draws the same
+// picture with the termblocks matcher and adds the color modes.
+//
+// The video side is the original pipeline: a 40x30 binary mask,
+// WNC-adaptively arithmetic coded with one keyframe every 4 frames (that
+// coded stream is s40x30), the frames between keyframes rebuilt by
+// temporal dither, and the field bilinearly upsampled 16x to 640x480,
+// which is exactly 160x60 cells of 4x8 square subpixels.  Rows are diffed
+// against the last frame, so only what changed is written.
+//
+// Build:  ycc -o badapple badapple.y      (needs s40x30 next to it)
+// Run:    ./badapple                      (no options, as the C reference)
+
+embed DATA from "s40x30";
 
 let KB: [byte; 2400] = [0; 2400];
 let F: [byte; 1200] = [0; 1200];
 let R: [byte; 1200] = [0; 1200];
-let cm: [long; 160] = [0; 160];
-let obuf: [byte; 2080] = [0; 2080];
-let cup: [byte; 7] = [0; 7];
-let pbuf: [byte; 124800] = [0; 124800];
-let plen: [long; 60] = [0; 60];
-let P: [long; 8] = [0; 8];
+let obuf: [byte; 2088] = [0; 2088];      // ESC [ r c ; 1 H, then the row
+let pbuf: [byte; 124800] = [0; 124800];  // 60 rows of 2080, as last painted
+let plen: [long; 60] = [0; 60];           // how much of each was written
+let P: [long; 8] = [0; 8];                // the coder's probabilities
+let ts: [long; 2] = [0; 2];               // the shared timespec
 let QT: [long; 16] = [32, 0x2597, 0x2596, 0x2584, 0x259d, 0x2590, 0x259e, 0x259f, 0x2598, 0x259a, 0x258c, 0x2599, 0x2580, 0x259c, 0x259b, 0x2588];
 let framehome = "\x1b[1;1H";
 let dpos = 0;
@@ -17,11 +32,15 @@ let dbits = 0;
 let clo = 0;
 let chi = 0;
 let ccode = 0;
+// The row buffer opens with the CUP "ESC [ r c ; 1 H"; the row number goes
+// into bytes 2 and 3 when the row is flushed.
+let CUP = "\x1b[00;1H";
+
 def set_tables() {
     for i in 0..1200 {
         R[i] = ((i * 2654435761) & 4294967295) >> 24;
     };
-    cup[0] = 27; cup[1] = 91; cup[4] = 59; cup[5] = 49; cup[6] = 72;
+    for k in 0..7 { obuf[k] = byte_at(CUP, k) };
 };
 
 def gb() {
@@ -121,21 +140,50 @@ def ink(m: long) -> long {
     ((v * 0x01010101) >> 24) & 255
 };
 
+// clock_gettime(CLOCK_MONOTONIC) in microseconds, over one shared
+// timespec: the std clock_us()/sleep() pair allocates a two-word array on
+// every call, and the frame loop calls them twice.
+def now_us() -> long {
+    syscall(228, 1, &ts[0]);
+    ts[0] * 1000000 + ts[1] / 1000
+};
+
+// nanosleep(2) for microseconds.
+def nap_us(us: long) {
+    let s = us / 1000000;
+    ts[0] = s;
+    ts[1] = (us - s * 1000000) * 1000;
+    syscall(35, &ts[0], 0)
+};
+
 def paint_frame() -> void {
     for y in 0..60 {
-        for i in 0..8 {
-            let yy = y * 8 + i;
-            let fy = ((2 * yy + 1) >> 2) - 4;
-            if (fy < 0) { fy = 0; };
-            let c0 = fy >> 3;
-            let c1 = c0 + 1;
-            if (c1 > 29) { c1 = 29; };
-            let r0 = c0 * 40;
-            let r1 = c1 * 40;
-            let wy = fy & 7;
-            let wyy = 8 - wy;
-            for x in 0..160 {
-                let m = 0;
+        let o = 7;
+        let lasto = -1;
+        for x in 0..160 {
+            // One cell at a time, all 8 subpixel rows inside: the mask is
+            // finished before its glyph is chosen, so it stays in a local
+            // instead of being written out and read back per subpixel row.
+            let m = 0;
+            for i in 0..8 {
+                let yy = y * 8 + i;
+                // The C's sy0/sy1/syw, tabulated: 320x240 is exactly 4
+                // across by 8 down subpixels per cell, which on a 2:1 cell
+                // are square subpositions, and bilinear-then-threshold IS
+                // the linear-interpolation marching-squares level set, so
+                // the silhouette edge lands on a sub-cell contour rather
+                // than a pixel-snapped one.  The C clamps fy to 239 and fx
+                // to 319; the arithmetic peaks at 235 and 315, so only the
+                // low end can go out of range.
+                let fy = ((2 * yy + 1) >> 2) - 4;
+                if (fy < 0) { fy = 0; };
+                let c0 = fy >> 3;
+                let c1 = c0 + 1;
+                if (c1 > 29) { c1 = 29; };
+                let r0 = c0 * 40;
+                let r1 = c1 * 40;
+                let wy = fy & 7;
+                let wyy = 8 - wy;
                 for k in 0..4 {
                     let xx = x * 4 + k;
                     let fx = ((2 * xx + 1) >> 2) - 4;
@@ -151,16 +199,16 @@ def paint_frame() -> void {
                     let b1 = F[r1 + d1];
                     let v = (a0 * wxx + b0 * wx) * wyy
                         + (a1 * wxx + b1 * wx) * wy;
+                    // The C sharpens with (v - 32) * K + 32, K = 3, and
+                    // clamps to 0..64 before thresholding at 32.  That map
+                    // is increasing and fixes 32, and the clamp cannot
+                    // reach across the threshold (it bites below 22 and
+                    // above 43, where the test already agrees), so
+                    // thresholding v is the same decision.
                     let bit = if v >= 32 { 1 } else { 0 };
-                    m = m | (bit << k);
+                    m = m | (bit << (i * 4 + k));
                 };
-                if (i == 0) { cm[x] = m; } else { cm[x] = cm[x] | (m << (i * 4)); };
             };
-        };
-        let o = 0;
-        let lasto = -1;
-        for x in 0..160 {
-            let m = cm[x];
             let g = cls(m);
             let f = 0;
             if (g == 0) {
@@ -169,8 +217,12 @@ def paint_frame() -> void {
                 f = 1;
             };
             if (g == 0) {
-                if (ink(cm[x]) > 16) { f = 1; m = cm[x] ^ 4294967295; }
-                else { f = 0; m = cm[x]; };
+                // Neither orientation is a family: take the sparser one
+                // and paint it as braille.  m is the inverted mask here, so
+                // ink(m) < 16 is the C's "more than half ink" test on the
+                // mask itself.
+                if (ink(m) < 16) { f = 1; }
+                else { f = 0; m = m ^ 4294967295; };
                 g = braille(m);
             };
             if (f != lasto) {
@@ -181,6 +233,9 @@ def paint_frame() -> void {
                 };
                 lasto = f;
             };
+            // 3-byte UTF-8 for U+2500..U+28FF (Block Elements, Braille); a
+            // codepoint below 0x80 is itself -- SPACE IS NOT A GLYPH,
+            // three-byte-encoding U+0020 would be the U+2020 DAGGER.
             if (g == 32) {
                 obuf[o] = 32;
                 o = o + 1;
@@ -191,20 +246,22 @@ def paint_frame() -> void {
                 o = o + 3;
             };
         };
-        let rl = o;
+        // The row against the one the last frame left there: write it only
+        // when it changed, and keep pbuf in step either way.  The CUP sits
+        // in the head of the buffer, so a changed row is one write(2).
+        let rl = o - 7;
         let base = y * 2080;
         let n = 0;
         for i in 0..rl {
-            let nv = obuf[i];
+            let nv = obuf[i + 7];
             n = n | (pbuf[base + i] ^ nv);
             pbuf[base + i] = nv;
         };
         if (n != 0 || rl != plen[y]) {
             let tens = (y + 1) / 10;
-            cup[2] = 48 + tens;
-            cup[3] = 48 + (y + 1) - tens * 10;
-            syscall(1, 1, &cup[0], 7);
-            syscall(1, 1, &obuf[0], rl);
+            obuf[2] = 48 + tens;
+            obuf[3] = 48 + (y + 1) - tens * 10;
+            syscall(1, 1, &obuf[0], o);
             plen[y] = rl;
         };
     };
@@ -212,7 +269,7 @@ def paint_frame() -> void {
 
 let curb = 0;
 let tgtb = 1200;
-let sched = clock_us();
+let sched = now_us();
 let skip = false;
 let t = 0;
 
@@ -254,12 +311,14 @@ while (t < 6569) {
         paint_frame();
     };
     sched += 33333;
-    let d = sched - clock_us();
+    let d = sched - now_us();
     skip = d <= -33333;
     if (!skip) {
         while (d > 0) {
-            sleep(d / 1000000);
-            d = sched - clock_us();
+            // keep 1 ms in hand, as the C reference does, so a small
+            // overshoot cannot stretch the schedule
+            nap_us(if d > 1200 { d - 1000 } else { d });
+            d = sched - now_us();
         };
     };
     t ++;

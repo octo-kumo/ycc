@@ -1,0 +1,8 @@
+# The AoC input is per-account personal data: keep it out of git.
+# (The campaign's shared copy lives at examples/aoc/inputs/, which is
+# ignored by its own .gitignore; this vendored copy needs its own rule,
+# because the repo's `!examples/**/*.*` would otherwise re-include it.)
+input.txt
+
+# The built binary is a build artefact, not a source: `make`-style rule.
+day12
